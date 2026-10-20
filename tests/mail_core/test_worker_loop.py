@@ -125,3 +125,43 @@ def test_tick_failed_job_not_counted_as_handled():
     ):
         n = worker_main._tick("w-fail-count")
     assert n == 0
+
+
+def test_handle_job_sanitizes_error_in_update_account_sync_status():
+    import uuid
+    from mail_core.mail.domain.enums import JobType
+    from mail_core.mail.storage.models import Account, WorkerJob
+    from mail_core.worker.handlers import handle_job
+
+    account_id = uuid.uuid4()
+    job = WorkerJob(
+        account_id=account_id,
+        job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+        status="claimed",
+        payload={"account_id": str(account_id)},
+    )
+    job.id = uuid.uuid4()
+
+    mock_account = MagicMock(spec=Account)
+    mock_account.sync_enabled = True
+
+    session = MagicMock()
+    session.in_transaction.return_value = True
+    session.get.return_value = mock_account
+
+    sensitive_exc = ValueError("connection failed: postgresql://user:my_secret_password@host/db?token=ya29.secret")
+
+    with (
+        patch("mail_core.sync.engine.sync_account_folders", side_effect=sensitive_exc),
+        patch("mail_core.worker.handlers.update_account_sync_status") as mock_update_status,
+        patch("mail_core.worker.handlers.fail_job"),
+    ):
+        ok = handle_job(session, job, worker_id="test-worker")
+        assert ok is False
+        mock_update_status.assert_called_once()
+        call_kwargs = mock_update_status.call_args[1]
+        assert call_kwargs.get("status") == "failed" or mock_update_status.call_args[0][2] == "failed"
+        passed_error = call_kwargs.get("error", "")
+        assert "my_secret_password" not in passed_error
+        assert "[REDACTED]" in passed_error
+

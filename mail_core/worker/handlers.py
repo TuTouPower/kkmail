@@ -172,7 +172,7 @@ def handle_job(session: Session, job: WorkerJob, *, worker_id: str | None = None
         session.rollback()
         if account_id is not None:
             try:
-                update_account_sync_status(session, account_id, "failed", error=str(exc))
+                update_account_sync_status(session, account_id, "failed", error=safe_error(exc))
             except Exception:
                 pass
         fail_job(session, job, exc, worker_id=worker_id)
