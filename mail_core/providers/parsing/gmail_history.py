@@ -44,7 +44,12 @@ def _minimal_meta(message: dict[str, Any]) -> RemoteMessageMeta:
     )
 
 
-def parse_gmail_history(data: dict[str, Any], *, folder_label: str | None = None) -> DeltaPage:
+def parse_gmail_history(
+    data: dict[str, Any],
+    *,
+    folder_label: str | None = None,
+    start_history_id: str | None = None,
+) -> DeltaPage:
     """Normalize Gmail History list response.
 
     ``messagesDeleted`` → delete; ``messagesAdded`` → upsert;
@@ -110,9 +115,15 @@ def parse_gmail_history(data: dict[str, Any], *, folder_label: str | None = None
     history_id = str(data.get("historyId") or "")
     page_token = data.get("nextPageToken")
     cursor: dict[str, Any] = {}
-    if history_id:
-        cursor["historyId"] = history_id
     if page_token:
+        # Paging in progress: preserve initial startHistoryId
+        if start_history_id:
+            cursor["historyId"] = str(start_history_id)
+        elif history_id:
+            cursor["historyId"] = history_id
         cursor["pageToken"] = page_token
         return DeltaPage(changes=changes, next_cursor=cursor, exhausted=False)
+    # Final page: advance to head historyId
+    if history_id:
+        cursor["historyId"] = history_id
     return DeltaPage(changes=changes, next_cursor=cursor or None, exhausted=True)
