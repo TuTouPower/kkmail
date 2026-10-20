@@ -691,6 +691,7 @@ def test_refresh_token(client_id: str, refresh_token: str, proxy_url: str = None
                     proxy_url=proxy_url,
                     fallback_proxy_urls=fallback_proxy_urls,
                     include_original_scope_fallback=True,
+                    require_refresh_token=True,
                 )
             except Exception as exc:
                 errors.append(f'Graph 刷新请求异常: {str(exc)}')
