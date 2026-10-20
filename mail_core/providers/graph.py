@@ -240,8 +240,26 @@ class GraphProvider:
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
         if self.transport is None:
             raise GraphNotConfiguredError("Graph reconcile not wired yet")
-        data = self._call("RECONCILE", folder_remote_id, {"local": list(local_remote_ids)})
-        return list(data.get("actions") or [])
+        remote_ids: set[str] = set()
+        next_url: str | None = f"/me/mailFolders/{folder_remote_id}/messages"
+        params: dict[str, Any] | None = {"$select": "id"}
+        while next_url:
+            data = self._call("GET", next_url, params)
+            params = None
+            if "page" in data:
+                page = data["page"]
+                items = getattr(page, "items", []) or []
+                for it in items:
+                    remote_ids.add(str(getattr(it, "remote_id", "")))
+                cursor = getattr(page, "next_cursor", None)
+                next_url = cursor.get("next_link") if isinstance(cursor, dict) else None
+            else:
+                for item in data.get("value") or []:
+                    if item.get("id"):
+                        remote_ids.add(str(item["id"]))
+                next_url = data.get("@odata.nextLink") or data.get("next_link")
+        local = set(local_remote_ids)
+        return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote_ids)]
 
     def rate_limit_hint(self) -> RateLimitHint:
         return RateLimitHint(max_requests_per_minute=60, reason="graph default hint")
