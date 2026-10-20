@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from mail_core.api.deps import require_auth
+from mail_core.security.ratelimit import login_limiter
 from mail_core.security.auth import (
     SESSION_COOKIE_NAME,
     AuthConfigError,
@@ -53,9 +54,15 @@ def _clear_session_cookie(response: Response) -> None:
 
 
 @router.post("/login", response_model=LoginOut)
-def login(body: LoginIn, response: Response) -> LoginOut:
+def login(body: LoginIn, request: Request, response: Response) -> LoginOut:
+    client = request.client.host if request.client else "unknown"
+    wait = login_limiter.retry_after(client)
+    if wait:
+        raise HTTPException(status_code=429, detail="too many failed logins", headers={"Retry-After": str(wait)})
     if not verify_password(body.password):
+        login_limiter.record_failure(client)
         raise HTTPException(status_code=401, detail="invalid credentials")
+    login_limiter.reset(client)
     cookie_val, csrf = issue_session()
     _set_session_cookie(response, cookie_val)
     return LoginOut(csrf_token=csrf)

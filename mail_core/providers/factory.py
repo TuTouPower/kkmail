@@ -56,7 +56,7 @@ def build_provider(
         password = store.get_secret(account.credential_ref)
         host = cfg.get("imap_host") or cfg.get("host")
         user = cfg.get("imap_user") or cfg.get("username") or account.email
-        raw_ssl = cfg.get("use_ssl", cfg.get("imap_ssl", True))
+        raw_ssl = cfg.get("use_ssl", True)
         # TLS by default; plaintext IMAP only when explicitly configured (e.g. loopback test fixture).
         use_ssl = raw_ssl if isinstance(raw_ssl, bool) else str(raw_ssl).strip().lower() not in ("0", "false", "no", "off")
         port = int(cfg.get("imap_port") or cfg.get("port") or (993 if use_ssl else 143))

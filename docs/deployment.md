@@ -1,23 +1,39 @@
-# 部署指南（mail-core）
+# 部署
 
-Flask / 上游 outlookemail 镜像路径已移除。请只用 mail-core。
+kkmail 只有一种服务端形态：mail-core API + worker + PostgreSQL，SPA 由 API 同源提供。
 
-## 推荐：Docker Compose
+## Docker Compose
 
 ```bash
+export POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 export MAIL_CORE_SECRET_KEY="$(openssl rand -hex 32)"
-export MAIL_CORE_LOGIN_PASSWORD='换成强密码'
+export MAIL_CORE_LOGIN_PASSWORD='<强密码>'            # 或 MAIL_CORE_LOGIN_PASSWORD_HASH（bcrypt）
 export MAIL_CORE_BLOB_KEY_V1="$(python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())')"
 export MAIL_CORE_BACKUP_KEY="$(python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())')"
-export POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 
 docker compose -f docker-compose.mail-core.yml up --build -d
 ```
 
-API + SPA：`http://127.0.0.1:8000`
+- 访问：`http://127.0.0.1:8000`。compose 只把 API（8000）和 PostgreSQL（5433）发布到 `127.0.0.1`。
+- 所有密钥都是必填变量，缺失时 compose 直接报错；仓库不提供任何默认值。
+- `MAIL_CORE_BACKUP_KEY` 必须与 blob 密钥不同。密钥丢失 = 已归档邮件与凭据无法解密，请离线保存。
+- `migrate` 服务先执行 `alembic upgrade head`，`api` / `worker` 在其成功后启动；`/ready` 会在数据库不可达、schema 未到 head 或 LISTEN 未就绪时返回 503。
 
-详见根目录 `README.md`、`docs/mail-core-architecture.md`、`docs/mail-core-cutover.md`。
+## 对外暴露
 
-## CI
+不要把 8000 端口直接暴露到公网。需要远程访问时放在 TLS 反向代理之后，并：
 
-工作流模板在 `docs/ci/`；需人工复制到 `.github/workflows/`（仓库 workflow 写权限受限时）。
+- 设置 `MAIL_CORE_COOKIE_SECURE=1`；
+- 以 `uvicorn --proxy-headers --forwarded-allow-ips=<代理地址>` 运行，使登录限速按真实客户端地址生效；
+- 数据目录、PostgreSQL 数据与 blob 根目录放在加密卷上（Docker volume 本身不加密）。
+
+## 不使用 Docker
+
+```bash
+pip install -r requirements-mail-core.txt
+export MAIL_CORE_DATABASE_URL=postgresql+psycopg://<user>:<password>@127.0.0.1:5432/kkmail
+python -m mail_core --data-dir /var/lib/kkmail    # 迁移 + API + 内嵌 worker
+# 或拆分进程：python -m mail_core --no-worker  与  python -m mail_core.worker.main
+```
+
+`--data-dir` 下会生成并持久化会话 / blob / 备份密钥（0600）；已在环境变量中提供的密钥优先。

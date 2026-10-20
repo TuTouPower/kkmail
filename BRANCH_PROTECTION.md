@@ -30,9 +30,10 @@ Recommended settings:
 
 At minimum:
 
-- `build-and-push`
+- `tests / mail-core` (pytest against PostgreSQL, DB tests may not skip)
+- `frontend / check` (lint, tsc, vitest, build)
 
-If more CI checks are added later, include them here.
+Workflow definitions: `.github/workflows/tests.yml` and `frontend.yml` (templates mirrored in `docs/ci/`).
 
 ### Protect `dev`
 
@@ -61,14 +62,9 @@ To avoid excessive image publishing:
 
 Current repository policy implemented in Actions:
 
-- `docker-build-push.yml` triggers on:
-  - Python source changes
-  - `requirements.txt`
-  - `Dockerfile`
-  - `.dockerignore`
-  - `templates/**`
-  - workflow file changes
-- It does **not** trigger for README / changelog / release-doc-only edits
+- Image builds (`Dockerfile.mail-core`) trigger on changes under `mail_core/`, `frontend/`,
+  `requirements-mail-core.txt`, `Dockerfile.mail-core`, and the workflow file itself
+- They do **not** trigger for README / changelog / release-doc-only edits
 
 ## Release Policy
 

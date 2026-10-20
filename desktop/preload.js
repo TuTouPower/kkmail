@@ -3,7 +3,7 @@
  */
 const { contextBridge } = require('electron')
 
-contextBridge.exposeInMainWorld('outlookEmail', {
+contextBridge.exposeInMainWorld('kkmailDesktop', {
   platform: process.platform,
   versions: {
     electron: process.versions.electron,
