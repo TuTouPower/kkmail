@@ -115,6 +115,9 @@ def heartbeat_lease(
     return LeaseHandle(account_id, owner_id, fencing_token, row.lease_expires_at)
 
 
+renew_lease = heartbeat_lease
+
+
 def assert_fencing(session: Session, *, account_id: uuid.UUID, fencing_token: int) -> None:
     """Call inside the same short TX that commits checkpoints / message writes."""
     row = session.get(AccountSyncLease, account_id)
