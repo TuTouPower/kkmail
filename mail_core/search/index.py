@@ -37,40 +37,69 @@ def upsert_message_search(
     return row
 
 
+_MATCH = """
+    (
+        document @@ plainto_tsquery('simple', :q)
+        OR from_text ILIKE '%' || :q || '%'
+        OR subject ILIKE '%' || :q || '%'
+        OR similarity(from_text, :q) > 0.3
+    )
+"""
+
+
+def _filters(query: str, account_ids: list[uuid.UUID] | None) -> tuple[str, dict]:
+    params: dict = {"q": query}
+    account_filter = ""
+    if account_ids:
+        account_filter = "AND account_id = ANY(:account_ids)"
+        params["account_ids"] = account_ids
+    return account_filter, params
+
+
 def search_messages(
     session: Session,
     *,
     account_ids: list[uuid.UUID] | None,
     query: str,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[uuid.UUID]:
-    """Return message ids ranked by FTS, with trigram fallback on from_text."""
+    """Message ids ranked by FTS, with trigram/ILIKE fallback on subject + from_text.
+
+    Subject/from ILIKE are served by GIN trigram indexes (migration 0006).
+    """
     from sqlalchemy import text as sql_text
 
     if not query.strip():
         return []
-    params: dict = {"q": query, "limit": limit}
-    account_filter = ""
-    if account_ids:
-        account_filter = "AND account_id = ANY(:account_ids)"
-        params["account_ids"] = account_ids
-    # Prefer FTS; also allow fuzzy from_text via %
+    account_filter, params = _filters(query, account_ids)
+    params.update(limit=limit, offset=max(0, offset))
     rows = session.execute(
         sql_text(
             f"""
             SELECT message_id
             FROM message_search
-            WHERE (
-                document @@ plainto_tsquery('simple', :q)
-                OR from_text ILIKE '%' || :q || '%'
-                OR subject ILIKE '%' || :q || '%'
-                OR similarity(from_text, :q) > 0.3
-            )
+            WHERE {_MATCH}
             {account_filter}
-            ORDER BY ts_rank(document, plainto_tsquery('simple', :q)) DESC, updated_at DESC
-            LIMIT :limit
+            ORDER BY ts_rank(document, plainto_tsquery('simple', :q)) DESC, updated_at DESC, message_id DESC
+            LIMIT :limit OFFSET :offset
             """
         ),
         params,
     ).all()
     return [r[0] for r in rows]
+
+
+def count_messages(session: Session, *, account_ids: list[uuid.UUID] | None, query: str) -> int:
+    from sqlalchemy import text as sql_text
+
+    if not query.strip():
+        return 0
+    account_filter, params = _filters(query, account_ids)
+    return int(
+        session.execute(
+            sql_text(f"SELECT count(*) FROM message_search WHERE {_MATCH} {account_filter}"),
+            params,
+        ).scalar()
+        or 0
+    )
