@@ -34,16 +34,25 @@ class GcResult:
 def mark_unreferenced_blobs(session: Session, *, now: datetime | None = None) -> int:
     """Reconcile ref_count from links; stamp/clear ``gc_eligible_at``."""
     now = now or datetime.now(timezone.utc)
+    # Batch count links and attachments via GROUP BY to avoid N+1 queries (V4-02)
+    link_counts = dict(
+        session.execute(
+            select(MessageBlobLink.blob_id, func.count())
+            .group_by(MessageBlobLink.blob_id)
+        ).all()
+    )
+    att_counts = dict(
+        session.execute(
+            select(Attachment.blob_id, func.count())
+            .where(Attachment.blob_id.is_not(None))
+            .group_by(Attachment.blob_id)
+        ).all()
+    )
+
     blobs = list(session.scalars(select(MessageBlob)).all())
     marked = 0
     for blob in blobs:
-        link_n = session.scalar(
-            select(func.count()).select_from(MessageBlobLink).where(MessageBlobLink.blob_id == blob.id)
-        ) or 0
-        att_n = session.scalar(
-            select(func.count()).select_from(Attachment).where(Attachment.blob_id == blob.id)
-        ) or 0
-        n = int(link_n) + int(att_n)
+        n = int(link_counts.get(blob.id, 0)) + int(att_counts.get(blob.id, 0))
         prev = int(blob.ref_count)
         if prev != n:
             blob.ref_count = n
