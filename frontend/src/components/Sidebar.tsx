@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, FileText, Send, Settings, PanelLeft } from 'lucide-react'
 import { useMailStore } from '../store/mailStore'
+import SettingsModal from './SettingsModal'
 
 const folders = [
   { id: 'important', label: '重要', icon: Flag },
@@ -23,9 +25,9 @@ export default function Sidebar() {
     toggleGroup,
     collapsedAccounts,
     toggleAccount,
-    
     toggleSidebar,
   } = useMailStore()
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const allInboxUnread = messages.filter((m) => m.folder === 'inbox' && m.unread).length
   const unreadCount = messages.filter((m) => m.unread).length
@@ -138,11 +140,12 @@ export default function Sidebar() {
         </div>
       </div>
       <div className="sidebar-footer">
-        <button className="footer-btn" onClick={() => alert('设置面板（即将接入）')}>
+        <button className="footer-btn" onClick={() => setSettingsOpen(true)}>
           <Settings size={17} />
           <span>设置</span>
         </button>
       </div>
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </aside>
   )
 }
