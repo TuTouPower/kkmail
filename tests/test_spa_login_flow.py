@@ -61,3 +61,11 @@ def test_favicon_served_from_dist(fake_frontend_dist):
     res = client.get("/favicon.svg")
     assert res.status_code == 200
     assert res.mimetype == "image/svg+xml"
+
+
+def test_dist_dir_resolution_survives_shallow_entry_path(monkeypatch, tmp_path):
+    """In Docker the app lives at /app/web_outlook_app.py; parents[2] does not exist there."""
+    monkeypatch.delenv("KKMAIL_FRONTEND_DIST", raising=False)
+    monkeypatch.setitem(appmod._react_dist_dir.__globals__, "__file__", "/web_outlook_app.py")
+    result = appmod._react_dist_dir()
+    assert result.name == "dist"
