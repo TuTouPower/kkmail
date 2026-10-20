@@ -1,4 +1,4 @@
-import { mailCoreBaseUrl } from '../lib/mailCoreFlag'
+import { isMailCoreEnabled, mailCoreBaseUrl } from '../lib/mailCoreFlag'
 import type { MailItem } from './queries'
 
 export interface MailCoreMessage {
@@ -27,21 +27,82 @@ export interface MailCoreInboxQuery {
   signal?: AbortSignal
 }
 
-async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+const DEFAULT_TIMEOUT_MS = 30_000
+
+let mailCoreCsrf: string | null = null
+
+export function getMailCoreCsrf(): string | null {
+  return mailCoreCsrf
+}
+
+export function clearMailCoreAuth(): void {
+  mailCoreCsrf = null
+}
+
+function withTimeout(signal: AbortSignal | undefined, timeoutMs: number) {
+  const ctrl = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    ctrl.abort()
+  }, timeoutMs)
+  const onAbort = () => ctrl.abort()
+  if (signal) {
+    if (signal.aborted) ctrl.abort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
+  return {
+    signal: ctrl.signal,
+    timedOut: () => timedOut,
+    done: () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+    },
+  }
+}
+
+async function mailCoreFetch(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<Response> {
   const base = mailCoreBaseUrl()
-  const res = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' }, signal })
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal, headers: extraHeaders, ...rest } = init
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(extraHeaders as Record<string, string> | undefined),
+  }
+  const method = (rest.method || 'GET').toUpperCase()
+  const unsafe = method !== 'GET' && method !== 'HEAD'
+  if (unsafe && mailCoreCsrf) {
+    headers['X-CSRF-Token'] = mailCoreCsrf
+  }
+  const t = withTimeout(signal || undefined, timeoutMs)
+  try {
+    return await fetch(`${base}${path}`, {
+      ...rest,
+      signal: t.signal,
+      credentials: 'include',
+      headers,
+    })
+  } catch (err) {
+    if (t.timedOut()) {
+      throw new Error(`mail-core timeout after ${Math.round(timeoutMs / 1000)}s`)
+    }
+    throw err
+  } finally {
+    t.done()
+  }
+}
+
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await mailCoreFetch(path, { signal })
   if (!res.ok) {
     throw new Error(`mail-core ${res.status}: ${await res.text()}`)
   }
   return res.json() as Promise<T>
 }
 
-
 async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const base = mailCoreBaseUrl()
-  const res = await fetch(`${base}${path}`, {
+  const res = await mailCoreFetch(path, {
     method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
     signal,
   })
@@ -49,6 +110,47 @@ async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): P
     throw new Error(`mail-core ${res.status}: ${await res.text()}`)
   }
   return res.json() as Promise<T>
+}
+
+/** Establish mail-core Cookie session (same password as product login). */
+export async function mailCoreLogin(password: string, signal?: AbortSignal): Promise<{ csrf_token: string }> {
+  const res = await mailCoreFetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+    signal,
+  })
+  if (!res.ok) {
+    throw new Error(`mail-core login ${res.status}: ${await res.text()}`)
+  }
+  const data = (await res.json()) as { csrf_token: string }
+  mailCoreCsrf = data.csrf_token || null
+  return data
+}
+
+export async function mailCoreLogout(signal?: AbortSignal): Promise<void> {
+  try {
+    await mailCoreFetch('/api/auth/logout', { method: 'POST', signal })
+  } finally {
+    clearMailCoreAuth()
+  }
+}
+
+/** Refresh CSRF from /api/auth/me when a session cookie already exists. */
+export async function mailCoreEnsureSession(signal?: AbortSignal): Promise<boolean> {
+  try {
+    const res = await mailCoreFetch('/api/auth/me', { signal })
+    if (!res.ok) {
+      clearMailCoreAuth()
+      return false
+    }
+    const data = (await res.json()) as { csrf_token?: string }
+    mailCoreCsrf = data.csrf_token || null
+    return true
+  } catch {
+    clearMailCoreAuth()
+    return false
+  }
 }
 
 export function postMailCoreMessageRead(
@@ -94,7 +196,6 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
     id_mode: 'mail_core',
   }
 }
-
 
 export interface MailCoreAttachment {
   id: string
@@ -163,13 +264,13 @@ export function fetchMailCoreHealth(): Promise<{ status: string; service?: strin
   return getJson('/health')
 }
 
-/** Subscribe to mail-core SSE. Returns an unsubscribe function. */
+/** Subscribe to mail-core SSE. Returns an unsubscribe function. Cookie credentials only (no API key in query). */
 export function subscribeMailCoreEvents(
   onEvent: (event: string, data: unknown, id: string | null) => void,
   onError?: (err: Event) => void,
 ): () => void {
   const base = mailCoreBaseUrl()
-  const es = new EventSource(`${base}/api/events`)
+  const es = new EventSource(`${base}/api/events`, { withCredentials: true })
   const handler = (e: MessageEvent) => {
     let data: unknown = e.data
     try {
@@ -196,3 +297,5 @@ export function subscribeMailCoreEvents(
   es.onerror = (ev) => onError?.(ev)
   return () => es.close()
 }
+
+export { isMailCoreEnabled }

@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from mail_core.accounts import create_account
 from mail_core.api.app import app
+from tests.mail_core.conftest import TEST_API_KEY
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage import Folder, FolderStats, Message, MessageLocation, MessageSearch
 from mail_core.search.index import upsert_message_search
@@ -23,7 +24,7 @@ pytestmark = pytest.mark.skipif(
 
 def test_unified_inbox_folder_stats_search_and_thread():
     Session = get_session_factory()
-    client = TestClient(app)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     now = datetime.now(timezone.utc)
     with Session() as session:
         acc = create_account(session, email=f"api-{uuid.uuid4().hex[:8]}@ex.com", provider="imap")

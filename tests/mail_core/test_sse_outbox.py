@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from mail_core.api.app import app
+from tests.mail_core.conftest import TEST_API_KEY
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import OutboxEventType
 from mail_core.mail.storage import OutboxEvent
@@ -42,7 +43,7 @@ def test_dispatch_marks_outbox_and_sse_replays_last_event_id():
         types = [r.event_type for r in rows if r.id > first]
         assert OutboxEventType.SYNC_COMPLETED.value in types or any(r.id == second for r in rows)
 
-    client = TestClient(app)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     # StreamingResponse with TestClient: read a bit then stop
     with client.stream("GET", "/api/events", headers={"Last-Event-ID": str(first)}) as resp:
         assert resp.status_code == 200
@@ -63,7 +64,7 @@ def test_resync_hint_when_gap_huge(monkeypatch):
         session.add(OutboxEvent(event_type="sync.progress", payload={}))
         session.commit()
         head = session.scalar(select(OutboxEvent.id).order_by(OutboxEvent.id.desc()))
-    client = TestClient(app)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     with client.stream("GET", "/api/events", headers={"Last-Event-ID": str(max(0, head - 10))}) as resp:
         buf = ""
         for chunk in resp.iter_text():
