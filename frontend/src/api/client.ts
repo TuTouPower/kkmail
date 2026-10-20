@@ -154,22 +154,26 @@ export const api = {
     return request<EmailListResponse>(`/api/emails/${encodeURIComponent(email)}?${q}`)
   },
 
-  async getEmailDetail(email: string, messageId: string) {
-    return request<Record<string, unknown>>(`/api/email/${encodeURIComponent(email)}/${encodeURIComponent(messageId)}`)
+  async getEmailDetail(email: string, messageId: string, folder = 'inbox', idMode = '') {
+    const q = new URLSearchParams({ folder, method: idMode === 'imap' ? 'imap' : 'graph' })
+    if (idMode) q.set('id_mode', idMode)
+    return request<{ success?: boolean; email?: Record<string, unknown>; error?: unknown }>(
+      `/api/email/${encodeURIComponent(email)}/${encodeURIComponent(messageId)}?${q}`,
+    )
   },
 
-  async markRead(payload: { email?: string; message_ids?: string[]; read?: boolean }) {
-    return request<{ success?: boolean }>('/api/emails/mark-read', {
+  async markRead(payload: { email: string; folder?: string; method?: string; items: Array<{ id: string; folder?: string; id_mode?: string }> }) {
+    return request<{ success?: boolean; error?: unknown }>('/api/emails/mark-read', {
       method: 'POST',
       body: JSON.stringify(payload),
     })
   },
 
-  async deleteEmails(payload: unknown) {
+  async deleteEmails(payload: { email: string; folder?: string; items: Array<{ id: string; folder?: string; id_mode?: string }> }) {
     return request('/api/emails/delete', { method: 'POST', body: JSON.stringify(payload) })
   },
 
-  async sendOutlookMail(payload: { account_id?: number; to: string; subject: string; body: string }) {
+  async sendOutlookMail(payload: { account_id: number; recipients: string; subject: string; body: string }) {
     return request('/api/outlook/send-mail', { method: 'POST', body: JSON.stringify(payload) })
   },
 

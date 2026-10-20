@@ -1,24 +1,12 @@
-import { useState } from 'react'
-import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, FileText, Send, Settings, PanelLeft } from 'lucide-react'
-import { useMailStore } from '../store/mailStore'
+import { useQuery } from '@tanstack/react-query'
+import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle } from 'lucide-react'
+import { fetchAccounts, fetchGroups, queryKeys } from '../api/queries'
+import { FOLDERS, providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import SettingsModal from './SettingsModal'
-
-const folders = [
-  { id: 'important', label: '重要', icon: Flag },
-  { id: 'inbox', label: '收件箱', icon: Inbox },
-  { id: 'drafts', label: '草稿', icon: FileText },
-  { id: 'sent', label: '已发送', icon: Send },
-  { id: 'junk', label: '垃圾邮件', icon: MailOpen },
-  { id: 'trash', label: '废纸篓', icon: MailOpen },
-  { id: 'archive', label: '归档', icon: MailOpen },
-]
-
-const groupNames = ['个人邮箱', '工作邮箱', '其他邮箱']
+import { useState } from 'react'
 
 export default function Sidebar() {
   const {
-    accounts,
-    messages,
     view,
     setView,
     collapsedGroups,
@@ -29,9 +17,14 @@ export default function Sidebar() {
   } = useMailStore()
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  const allInboxUnread = messages.filter((m) => m.folder === 'inbox' && m.unread).length
-  const unreadCount = messages.filter((m) => m.unread).length
-  const flaggedCount = messages.filter((m) => m.flagged).length
+  const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
+  const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
+
+  const groups = groupsQuery.data || []
+  const accounts = accountsQuery.data || []
+  const grouped = groups.length
+    ? groups.map((g) => ({ group: g, members: accounts.filter((a) => a.group_id === g.id) }))
+    : [{ group: { id: 0, name: '全部账户' }, members: accounts }]
 
   return (
     <aside className="sidebar" aria-label="邮箱导航">
@@ -42,101 +35,92 @@ export default function Sidebar() {
       </div>
       <div className="sidebar-scroll">
         <div className="side-section">
-          <div className="section-label">
-            <span>个人收藏</span>
-          </div>
+          <div className="section-label"><span>个人收藏</span></div>
           <button className={`side-item ${view.type === 'allInbox' ? 'active' : ''}`} onClick={() => setView({ type: 'allInbox' })}>
             <Inbox size={17} />
             <span className="side-name">所有收件箱</span>
-            {allInboxUnread > 0 && <span className="side-count">{allInboxUnread}</span>}
+            <span className="side-count">{accounts.length}</span>
           </button>
-          <button className={`side-item ${view.type === 'unread' ? 'active' : ''}`} onClick={() => setView({ type: 'unread' })}>
+          <button className="side-item" onClick={() => setView({ type: 'allInbox' })}>
             <MailOpen size={17} />
             <span className="side-name">未读邮件</span>
-            {unreadCount > 0 && <span className="side-count">{unreadCount}</span>}
           </button>
-          <button className={`side-item ${view.type === 'flagged' ? 'active' : ''}`} onClick={() => setView({ type: 'flagged' })}>
+          <button className="side-item">
             <Flag size={17} />
             <span className="side-name">已标记</span>
-            {flaggedCount > 0 && <span className="side-count">{flaggedCount}</span>}
-          </button>
-          <button className={`side-item ${view.type === 'allDrafts' ? 'active' : ''}`} onClick={() => setView({ type: 'allDrafts' })}>
-            <FileText size={17} />
-            <span className="side-name">所有草稿</span>
-          </button>
-          <button className={`side-item ${view.type === 'allSent' ? 'active' : ''}`} onClick={() => setView({ type: 'allSent' })}>
-            <Send size={17} />
-            <span className="side-name">所有已发送邮件</span>
           </button>
         </div>
 
         <div className="side-section">
-          <div className="section-label">
-            <span>邮箱账户</span>
-          </div>
-          {groupNames.map((group) => {
-            const members = accounts.filter((a) => a.group === group)
-            const collapsed = collapsedGroups.has(group)
+          <div className="section-label"><span>邮箱账户</span></div>
+          {(groupsQuery.isLoading || accountsQuery.isLoading) && (
+            <div style={{ padding: '8px 10px', color: 'var(--muted)', fontSize: 12 }}>正在加载账户…</div>
+          )}
+          {(groupsQuery.error || accountsQuery.error) && (
+            <div style={{ padding: '8px 10px', color: 'var(--red)', fontSize: 12, display: 'flex', gap: 6 }}>
+              <AlertCircle size={14} /> 账户加载失败，请确认已登录且后端可用
+            </div>
+          )}
+          {grouped.map(({ group, members }) => {
+            const key = String(group.id)
+            const collapsed = collapsedGroups.includes(key)
             return (
-              <div className="account-group" key={group}>
+              <div className="account-group" key={key}>
                 <div className="account-group-head">
-                  <button className="group-toggle" onClick={() => toggleGroup(group)} title={collapsed ? '展开' : '折叠'}>
+                  <button className="group-toggle" onClick={() => toggleGroup(key)}>
                     {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                   </button>
-                  <span className="group-name">{group}</span>
+                  <span className="group-name">{group.name}</span>
                   <span className="group-count">{members.length}</span>
                 </div>
-                {!collapsed &&
-                  members.map((a) => {
-                    const isCollapsed = collapsedAccounts.has(a.id)
-                    const accountSelected = view.type === 'accountFolder' && view.accountId === a.id && view.folder === 'inbox'
-                    const unread = messages.filter((m) => m.accountId === a.id && m.folder === 'inbox' && m.unread).length
-                    return (
-                      <div key={a.id}>
-                        <div className="account-row">
-                          <button className="account-expand" onClick={() => toggleAccount(a.id)} aria-label={isCollapsed ? '展开' : '折叠'}>
-                            {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                          </button>
-                          <button
-                            className={`account-button ${accountSelected ? 'active' : ''}`}
-                            onClick={() => setView({ type: 'accountFolder', accountId: a.id, folder: 'inbox' })}
-                            title={a.email}
-                          >
-                            <span className="account-dot" style={{ background: a.color }}>
-                              {a.provider === '网易 163' ? '163' : a.provider === 'Outlook' ? 'O' : 'G'}
-                            </span>
-                            <span className="account-email">{a.email}</span>
-                            {unread > 0 && <span className="account-unread">{unread}</span>}
-                          </button>
-                        </div>
-                        {!isCollapsed && (
-                          <div className="folder-tree">
-                            {folders.map((f) => {
-                              const active = view.type === 'accountFolder' && view.accountId === a.id && view.folder === f.id
-                              const Icon = f.icon
-                              return (
-                                <button
-                                  key={f.id}
-                                  className={`side-item ${active ? 'active' : ''}`}
-                                  onClick={() => setView({ type: 'accountFolder', accountId: a.id, folder: f.id })}
-                                >
-                                  <Icon size={15} />
-                                  <span className="side-name">{f.label}</span>
-                                </button>
-                              )
-                            })}
-                          </div>
-                        )}
+                {!collapsed && members.map((a) => {
+                  const accKey = String(a.id)
+                  const isCollapsed = collapsedAccounts.includes(accKey)
+                  const selected = view.type === 'accountFolder' && view.accountId === a.id && view.folder === 'inbox'
+                  return (
+                    <div key={a.id}>
+                      <div className="account-row">
+                        <button className="account-expand" onClick={() => toggleAccount(accKey)}>
+                          {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                        </button>
+                        <button
+                          className={`account-button ${selected ? 'active' : ''}`}
+                          onClick={() => setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: 'inbox' })}
+                          title={a.email}
+                        >
+                          <span className="account-dot" style={{ background: a.group_color || providerColor(a.provider, a.account_type) }}>
+                            {providerBadge(a.provider, a.account_type)}
+                          </span>
+                          <span className="account-email">{a.email}</span>
+                        </button>
                       </div>
-                    )
-                  })}
+                      {!isCollapsed && (
+                        <div className="folder-tree">
+                          {FOLDERS.map((f) => {
+                            const active = view.type === 'accountFolder' && view.accountId === a.id && view.folder === f.api
+                            return (
+                              <button
+                                key={f.id}
+                                className={`side-item ${active ? 'active' : ''}`}
+                                onClick={() => setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: f.api })}
+                              >
+                                <Inbox size={15} />
+                                <span className="side-name">{f.label}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )
           })}
         </div>
         <div style={{ padding: '5px 9px 4px', color: 'var(--muted)', fontSize: 10, lineHeight: 1.6 }}>
-          演示数据仅保存在当前页面。<br />
-          账户接入、同步与发送尚未连接真实服务。
+          账户与邮件来自现有 Flask API。<br />
+          收件箱 / 垃圾邮件 / 废纸篓为上游当前支持的实时文件夹。
         </div>
       </div>
       <div className="sidebar-footer">
