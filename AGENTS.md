@@ -15,7 +15,7 @@
 | `frontend/src/api/` | `client.ts`（唯一 HTTP 传输：Cookie + CSRF + 超时）、`mailCore.ts`（邮件端点）、`queries.ts`（React Query 缓存） |
 | `desktop/` | Electron 主进程、`postgresManager.js` |
 | `tests/mail_core/` | pytest（大部分需要 PostgreSQL） |
-| `docs/` | 架构、部署、安全；`docs/ci/` 为 workflow 模板 |
+| `docs/` | 架构、部署、安全 |
 
 ## 开发与测试
 
@@ -45,7 +45,7 @@ cd ../desktop && npm ci && npm test
 - **HTTP** 一律走 `api/client.ts` 的 `apiRequest` / `postJson`：写请求自动带 `X-CSRF-Token`，拿不到令牌时直接失败。
 - **API 契约**：每个路由声明 `response_model`；错误用 `HTTPException`（`{"detail": ...}`）；路由只调用 `mail_core.mail.application` / `mail_core.accounts`，不直接访问 ORM 或 sync 内部。
 - **密钥**：不写默认值、不写示例密钥；缺失时拒绝启动。凭据只经 `CredentialStore`（默认数据库加密存储）；日志 / `last_error` 必须经 `mail_core.security.redact`。
-- **测试**不得连接非一次性数据库；新的 DB 用例沿用 `skipif(not MAIL_CORE_DATABASE_URL)` 标记（CI 用 `MAIL_CORE_REQUIRE_DB=1` 把 skip 变成错误）。
+- **测试**不得连接非一次性数据库；新的 DB 用例沿用 `skipif(not MAIL_CORE_DATABASE_URL)` 标记。`scripts/run-mail-core-tests.sh` 会设置 `MAIL_CORE_REQUIRE_DB=1`，没有数据库就失败而不是跳过。
 - **表单字段**要有 `id` 或 `name`；密码框带 `autoComplete` 且在 `<form>` 内。
 - **移动端断点 760px**：与 `lib/viewport.ts` 和 `design-system/tokens.css` 保持一致；导航走 store 的 `setView` / `openSmartView`。
 - **UI 文案中文**；图标按钮要有 `title` 与 `aria-label`；破坏性操作先 `confirmAction`。
