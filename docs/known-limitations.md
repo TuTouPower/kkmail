@@ -29,4 +29,4 @@
 
 - Backend: `pytest tests` (needs PostgreSQL; `scripts/run-mail-core-tests.sh`).
 - Frontend: `vitest` unit and component tests (jsdom).
-- There is no browser end-to-end suite.
+- End-to-end: Playwright smoke suite in `e2e/` (covers login, mailbox list, and message reader).
