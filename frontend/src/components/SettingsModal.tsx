@@ -116,6 +116,11 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
               const res = await api.setForwarding(ids, true)
               setToolStatus(res.message || res.error || '已请求开启转发')
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>全部开启转发</button>
+            <button type="button" onClick={async () => {
+              const ids = accounts.map((a) => a.id)
+              const res = await api.setForwarding(ids, false)
+              setToolStatus(res.message || res.error || '已请求关闭转发')
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>全部关闭转发</button>
           </div>
           {oauthUrl && <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all' }}>{oauthUrl}</div>}
           <input value={redirectedUrl} onChange={(e) => setRedirectedUrl(e.target.value)} placeholder="粘贴授权回调 URL" style={{ width: '100%', marginTop: 8, height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
