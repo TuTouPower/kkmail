@@ -1,6 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { api, type AccountSummary } from './client'
 import { mailKey } from '../lib/mailKey'
+import { postMailCoreMessageFlag, postMailCoreMessageRead } from './mailCore'
 
 export interface GroupItem {
   id: number
@@ -154,15 +155,20 @@ export function findCachedMail(key: string | null): MailItem | undefined {
     const hit = (list || []).find((m) => mailKey(m) === key)
     if (hit) return hit
   }
+  for (const [, list] of queryClient.getQueriesData<MailItem[]>({ queryKey: ['mail-core', 'inbox'] })) {
+    const hit = (list || []).find((m) => mailKey(m) === key)
+    if (hit) return hit
+  }
   return undefined
 }
 
 /** Optimistically update read state in every cached list (inbox, all-inbox, "all" folder). */
 export function setCachedReadState(keys: Iterable<string>, isRead: boolean) {
   const wanted = new Set(keys)
-  queryClient.setQueriesData<MailItem[]>({ queryKey: ['emails'] }, (list) =>
-    list?.map((m) => (wanted.has(mailKey(m)) && m.is_read !== isRead ? { ...m, is_read: isRead } : m)),
-  )
+  const patch = (list: MailItem[] | undefined) =>
+    list?.map((m) => (wanted.has(mailKey(m)) && m.is_read !== isRead ? { ...m, is_read: isRead } : m))
+  queryClient.setQueriesData<MailItem[]>({ queryKey: ['emails'] }, patch)
+  queryClient.setQueriesData<MailItem[]>({ queryKey: ['mail-core', 'inbox'] }, patch)
 }
 
 /** Mark messages read with an optimistic cache update; reverts on failure. */
@@ -171,26 +177,63 @@ export async function markReadOptimistic(items: MailItem[]) {
   if (!unread.length) return
   const keys = unread.map((m) => mailKey(m))
   setCachedReadState(keys, true)
+
+  const mailCoreItems = unread.filter((m) => (m.id_mode || '').includes('mail_core'))
+  const flaskItems = unread.filter((m) => !(m.id_mode || '').includes('mail_core'))
+
+  const tasks: Array<{ keys: string[]; run: () => Promise<void> }> = [
+    ...mailCoreItems.map((m) => ({
+      keys: [mailKey(m)],
+      run: async () => {
+        await postMailCoreMessageRead(m.id, true)
+      },
+    })),
+  ]
   const byAccount = new Map<string, MailItem[]>()
-  unread.forEach((m) => byAccount.set(m.accountEmail, [...(byAccount.get(m.accountEmail) || []), m]))
-  const results = await Promise.allSettled([...byAccount.entries()].map(async ([email, list]) => {
-    const res = await markEmailsRead(email, list, list[0]?.folder || 'inbox')
-    if (res && typeof res === 'object' && (res as { success?: boolean }).success === false) {
-      const err = (res as { error?: unknown }).error
-      throw new Error(typeof err === 'string' ? err : (err as { message?: string } | undefined)?.message || `${email} 标记失败`)
-    }
-  }))
-  const failed: string[] = []
+  flaskItems.forEach((m) => byAccount.set(m.accountEmail, [...(byAccount.get(m.accountEmail) || []), m]))
+  for (const [email, list] of byAccount.entries()) {
+    tasks.push({
+      keys: list.map((m) => mailKey(m)),
+      run: async () => {
+        const res = await markEmailsRead(email, list, list[0]?.folder || 'inbox')
+        if (res && typeof res === 'object' && (res as { success?: boolean }).success === false) {
+          const err = (res as { error?: unknown }).error
+          throw new Error(
+            typeof err === 'string'
+              ? err
+              : (err as { message?: string } | undefined)?.message || `${email} 标记失败`,
+          )
+        }
+      },
+    })
+  }
+
+  const results = await Promise.allSettled(tasks.map((t) => t.run()))
   const failedKeys: string[] = []
+  const failed: string[] = []
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
-      const [email, list] = [...byAccount.entries()][i]
-      failed.push(`${email}: ${r.reason instanceof Error ? r.reason.message : String((r.reason as { message?: string })?.message || r.reason)}`)
-      failedKeys.push(...list.map((m) => mailKey(m)))
+      failedKeys.push(...tasks[i].keys)
+      failed.push(r.reason instanceof Error ? r.reason.message : String(r.reason))
     }
   })
-  if (failedKeys.length) {
-    setCachedReadState(failedKeys, false)
-    throw new Error(failed.join('；'))
+  if (failedKeys.length) setCachedReadState([...new Set(failedKeys)], false)
+  if (failed.length) throw new Error(failed.join('；'))
+}
+
+/** Toggle flagged: optimistic local UI then POST mail-core when id_mode is mail_core. */
+export async function flagOptimistic(
+  item: MailItem,
+  nextFlagged: boolean,
+  applyLocal: (key: string) => void,
+): Promise<void> {
+  const key = mailKey(item)
+  applyLocal(key)
+  if (!(item.id_mode || '').includes('mail_core')) return
+  try {
+    await postMailCoreMessageFlag(item.id, nextFlagged)
+  } catch (err) {
+    applyLocal(key) // revert local toggle
+    throw err
   }
 }
