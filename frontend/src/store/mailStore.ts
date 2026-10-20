@@ -49,6 +49,16 @@ interface MailUiState {
   toggleFlag: (key: string) => void
 }
 
+// State every view switch must reset, shared by setView/openSmartView so the
+// two cannot drift: selection is dropped (IMAP UIDs repeat across folders),
+// the reader returns to the list, and the mobile drawer closes.
+const navigationReset = () => ({
+  selectedKey: null,
+  selectedIds: [] as string[],
+  mobileView: 'list' as const,
+  mobileSidebarOpen: false,
+})
+
 export const useMailStore = create<MailUiState>()(
   persist(
     (set) => ({
@@ -62,11 +72,8 @@ export const useMailStore = create<MailUiState>()(
       mobileView: 'list',
       setMobileView: (view) => set({ mobileView: view }),
       view: { type: 'allInbox' },
-      // Switching account/folder must drop selection: IMAP UIDs repeat across folders.
-      // Every navigation from the drawer goes through here, so closing the
-      // mobile drawer is guaranteed for all views/folders/accounts.
-      setView: (view) => set({ view, selectedKey: null, selectedIds: [], mobileView: 'list', mobileSidebarOpen: false }),
-      openSmartView: (filter) => set({ view: { type: 'allInbox' }, listFilter: filter, selectedKey: null, selectedIds: [], mobileView: 'list', mobileSidebarOpen: false }),
+      setView: (view) => set({ view, ...navigationReset() }),
+      openSmartView: (filter) => set({ view: { type: 'allInbox' }, listFilter: filter, ...navigationReset() }),
       selectedKey: null,
       setSelectedKey: (key) => set({ selectedKey: key }),
       search: '',
