@@ -266,6 +266,10 @@ def test_graph_list_folders_roles():
 
 def test_not_configured_without_credentials_transport():
     with pytest.raises(GmailNotConfiguredError):
+        GmailProvider(credential_ref="").list_folders()
+    with pytest.raises(GmailNotConfiguredError):
         GmailProvider(credential_ref="").delta_changes("INBOX", {"historyId": "1"})
+    with pytest.raises(GraphNotConfiguredError):
+        GraphProvider(credential_ref="").list_folders()
     with pytest.raises(GraphNotConfiguredError):
         GraphProvider(credential_ref="").fetch_mime("x")
