@@ -1,6 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <!-- 保持 45° 角的三个浅蓝色三角形，拉近间距并放大 -->
-  <g fill="#4FC3F7">
+  <!-- 圆形白色背景 -->
+  <circle cx="50" cy="50" r="50" fill="#FFFFFF" />
+  <!-- 保持 45° 角的三个深天蓝色三角形 (#0284C7，方案 3) -->
+  <g fill="#0284C7" transform="translate(50 50) scale(0.72) translate(-50 -50)">
     <!-- 左上三角形 -->
     <polygon points="21,6 65,6 21,50" />
     
