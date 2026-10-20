@@ -12,6 +12,7 @@ import { queryClient } from './api/queries'
 import './design-system/tokens.css'
 import { useIsWide } from './lib/viewport'
 import { workspaceGridColumns } from './lib/workspaceLayout'
+import MailCoreBridge from './components/MailCoreBridge'
 
 function resolveTheme(theme: 'dark' | 'light' | 'system'): 'dark' | 'light' {
   if (theme !== 'system') return theme
@@ -128,6 +129,7 @@ function App() {
         />
       )}
       <ComposeModal />
+      <MailCoreBridge />
     </div>
   )
 }
