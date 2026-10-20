@@ -24,6 +24,12 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const [status, setStatus] = useState('')
   const [toolStatus, setToolStatus] = useState('')
   const [section, setSection] = useState<'accounts' | 'appearance' | 'general'>('accounts')
+  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: async () => (await api.getSettings()).settings || {}, enabled: open })
+  const skinsQuery = useQuery({ queryKey: ['skins'], queryFn: async () => api.getSkins(), enabled: open && section === 'appearance' })
+  const [timezone, setTimezone] = useState('')
+  const [timeoutSeconds, setTimeoutSeconds] = useState('30')
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
   const logsQuery = useQuery({ queryKey: ['forwarding-logs'], queryFn: async () => (await api.getForwardingLogs()).logs || [], enabled: open && section === 'general' })
   const [tempMessages, setTempMessages] = useState<Array<{ id?: string; subject?: string; from_address?: string }>>([])
 
@@ -100,7 +106,19 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 22, fontSize: 16, fontWeight: 700 }}>标签与临时邮箱</div>
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>重新授权</div>
+            <select onChange={(e) => setAccountString(e.target.value)} style={{ height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+              <option value="">选择账户</option>
+              {accounts.map((a) => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
+            </select>
+            <button type="button" onClick={async () => {
+              const id = Number(accountString)
+              if (!id || !redirectedUrl) { setToolStatus('选择账户并粘贴回调 URL'); return }
+              const res = await api.reauthorizeAccount(id, redirectedUrl)
+              setToolStatus(res.success ? '已重新授权' : '重新授权失败')
+            }} style={{ marginLeft: 8, height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>提交重新授权</button>
+          </div>
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
             标签 {(tagsQuery.data || []).length} 个 · 临时邮箱 {(tempQuery.data || []).length} 个
           </div>
@@ -197,6 +215,19 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           </>}
           {section === 'appearance' && <>
           <div style={{ marginTop: 22, fontSize: 18, fontWeight: 720 }}>外观</div>
+          <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>皮肤（作用于旧界面）</div>
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
+            当前：{skinsQuery.data?.active_skin_id || 'classic'}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            {(skinsQuery.data?.skins || []).map((skin) => (
+              <button key={skin.id} type="button" onClick={async () => {
+                if (!skin.id) return
+                const res = await api.activateSkin(skin.id)
+                setToolStatus(res.success ? '皮肤已启用' : (res.error || '启用失败'))
+              }} style={{ height: 30, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>{skin.name || skin.id}</button>
+            ))}
+          </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
             <button onClick={() => setTheme('light')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'light' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
               <Sun size={18} /> 亮色
@@ -214,7 +245,23 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
                 const row = log as { id?: number; account_email?: string; status?: string; created_at?: string }
                 return <div key={row.id} style={{ fontSize: 12, padding: '4px 0', borderBottom: '1px solid var(--line)' }}>{row.account_email} · {row.status} · {row.created_at}</div>
               })}
-              <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>临时邮箱邮件</div>
+              <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>常规设置</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <input value={timezone || settingsQuery.data?.app_timezone || ''} onChange={(e) => setTimezone(e.target.value)} placeholder="时区 Asia/Shanghai" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                <input value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} placeholder="超时秒" style={{ width: 90, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                <button type="button" onClick={async () => {
+                  const res = await api.updateSettings({ app_timezone: timezone || settingsQuery.data?.app_timezone || 'Asia/Shanghai', mail_fetch_timeout_seconds: timeoutSeconds })
+                  setToolStatus(res.success ? '设置已保存' : (res.error || '保存失败'))
+                }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>保存</button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <input value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} type="password" placeholder="当前密码" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                <input value={newPassword} onChange={(e) => setNewPassword(e.target.value)} type="password" placeholder="新密码至少 8 位" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                <button type="button" onClick={async () => {
+                  const res = await api.updateSettings({ current_login_password: currentPassword, login_password: newPassword })
+                  setToolStatus(res.success ? '密码已更新' : (res.error || '更新失败'))
+                }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>改密</button>
+              </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                 {(tempQuery.data || []).slice(0, 4).map((item) => {
                   const address = item.email || item.address
