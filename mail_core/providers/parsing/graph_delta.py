@@ -20,6 +20,18 @@ def _parse_dt(raw: str | None) -> datetime:
 
 def _meta_from_graph(item: dict[str, Any]) -> RemoteMessageMeta:
     frm = (item.get("from") or {}).get("emailAddress") or {}
+    flag_obj = item.get("flag") or {}
+    is_flagged = flag_obj.get("flagStatus") == "flagged"
+    to_addrs = tuple(
+        str(r.get("emailAddress", {}).get("address") or "")
+        for r in item.get("toRecipients") or []
+        if (r.get("emailAddress") or {}).get("address")
+    ) or tuple(item.get("to_addresses") or ())
+    cc_addrs = tuple(
+        str(r.get("emailAddress", {}).get("address") or "")
+        for r in item.get("ccRecipients") or []
+        if (r.get("emailAddress") or {}).get("address")
+    ) or tuple(item.get("cc_addresses") or ())
     return RemoteMessageMeta(
         remote_id=str(item["id"]),
         subject=str(item.get("subject") or ""),
@@ -28,9 +40,12 @@ def _meta_from_graph(item: dict[str, Any]) -> RemoteMessageMeta:
         sort_time=_parse_dt(item.get("receivedDateTime") or item.get("lastModifiedDateTime")),
         is_read=bool(item.get("isRead", False)),
         has_attachments=bool(item.get("hasAttachments", False)),
+        is_flagged=is_flagged,
         internet_message_id=item.get("internetMessageId"),
         snippet=item.get("bodyPreview"),
         provider_thread_key=item.get("conversationId"),
+        to_addresses=to_addrs,
+        cc_addresses=cc_addrs,
     )
 
 
@@ -51,7 +66,14 @@ def parse_graph_delta(data: dict[str, Any]) -> DeltaPage:
             continue
         meta = _meta_from_graph(item)
         kind = "flag" if item.get("_flag_only") else "upsert"
-        changes.append(DeltaChange(kind=kind, remote_id=rid, meta=meta, flags={"is_read": meta.is_read}))
+        changes.append(
+            DeltaChange(
+                kind=kind,
+                remote_id=rid,
+                meta=meta,
+                flags={"is_read": meta.is_read, "is_flagged": meta.is_flagged},
+            )
+        )
 
     next_link = data.get("@odata.nextLink") or data.get("next_link")
     delta_link = data.get("@odata.deltaLink") or data.get("delta_link")

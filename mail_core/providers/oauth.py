@@ -186,9 +186,25 @@ class BearerTransport:
     base_url: str = ""
 
     def __call__(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+        if path.startswith("http://") or path.startswith("https://"):
+            url = path
+            if self.base_url:
+                from urllib.parse import urlparse
+
+                base_parts = urlparse(self.base_url)
+                url_parts = urlparse(url)
+                if (url_parts.scheme.lower(), url_parts.netloc.lower()) != (
+                    base_parts.scheme.lower(),
+                    base_parts.netloc.lower(),
+                ):
+                    raise OAuthError(
+                        f"cross-origin Bearer request denied: target origin {url_parts.scheme}://{url_parts.netloc} "
+                        f"does not match base origin {base_parts.scheme}://{base_parts.netloc}"
+                    )
+        else:
+            url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         token = self.token_client.get_access_token()
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        url = path if path.startswith("http") else f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         try:
             return self.inner(method, url, params, headers)
         except RateLimitedError:
@@ -204,32 +220,7 @@ class BearerTransport:
             raise
 
 
-def build_gmail_api_transport(
-    token_client: OAuthTokenClient,
-    *,
-    api_get: Callable[[str, str, dict[str, Any] | None, dict[str, str] | None], Any] | None = None,
-) -> BearerTransport:
-    """Bearer transport targeting Gmail REST (path like /gmail/v1/...)."""
 
-    def _inner(method: str, path: str, params: dict[str, Any] | None, headers: dict[str, str] | None) -> Any:
-        if api_get is None:
-            raise ProviderHttpError("Gmail API HTTP not configured", status=501)
-        return api_get(method, path, params, headers)
-
-    return BearerTransport(token_client=token_client, inner=_inner, base_url="https://gmail.googleapis.com")
-
-
-def build_graph_api_transport(
-    token_client: OAuthTokenClient,
-    *,
-    api_get: Callable[[str, str, dict[str, Any] | None, dict[str, str] | None], Any] | None = None,
-) -> BearerTransport:
-    def _inner(method: str, path: str, params: dict[str, Any] | None, headers: dict[str, str] | None) -> Any:
-        if api_get is None:
-            raise ProviderHttpError("Graph API HTTP not configured", status=501)
-        return api_get(method, path, params, headers)
-
-    return BearerTransport(token_client=token_client, inner=_inner, base_url="https://graph.microsoft.com/v1.0")
 
 
 
