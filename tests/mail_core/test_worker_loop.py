@@ -1,7 +1,17 @@
+import os
 import threading
 import time
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from mail_core.worker import main as worker_main
+
+pytestmark_db = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 
 def test_worker_stops_on_flag():
@@ -14,3 +24,58 @@ def test_worker_stops_on_flag():
     worker_main.request_stop()
     t.join(timeout=2)
     assert not t.is_alive()
+
+
+def test_reclaim_once_calls_reclaim_stale_claims():
+    with (
+        patch("mail_core.db.session.get_session_factory") as gs,
+        patch("mail_core.sync.jobs.reclaim_stale_claims", return_value=2) as rc,
+    ):
+        session = MagicMock()
+        session.__enter__ = MagicMock(return_value=session)
+        session.__exit__ = MagicMock(return_value=False)
+        gs.return_value = MagicMock(return_value=session)
+        n = worker_main._reclaim_once()
+        assert n == 2
+        rc.assert_called_once()
+        session.commit.assert_called()
+
+
+@pytestmark_db
+def test_tick_reclaims_stale_and_isolates_job_sessions():
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.enums import JobStatus, JobType
+    from mail_core.mail.storage.models import WorkerJob
+    from mail_core.sync.jobs import enqueue_job
+
+    Session = get_session_factory()
+    with Session() as session:
+        stale = WorkerJob(
+            job_type=JobType.OUTBOX_DISPATCH_WAKE.value,
+            payload={},
+            status=JobStatus.CLAIMED.value,
+            locked_by="dead-worker",
+            locked_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+            attempts=1,
+            priority=10,
+            run_after=datetime.now(timezone.utc) - timedelta(minutes=30),
+        )
+        session.add(stale)
+        j1 = enqueue_job(session, job_type=JobType.OUTBOX_DISPATCH_WAKE.value, payload={}, priority=10)
+        j2 = enqueue_job(session, job_type=JobType.OUTBOX_DISPATCH_WAKE.value, payload={}, priority=10)
+        session.commit()
+        stale_id, id1, id2 = stale.id, j1.id, j2.id
+
+    with patch("mail_core.realtime.notify.try_notify_outbox"):
+        handled = worker_main._tick("test-worker-iso")
+    assert handled >= 2
+
+    with Session() as session:
+        for jid in (stale_id, id1, id2):
+            row = session.get(WorkerJob, jid)
+            assert row is not None
+            # After reclaim + claim + handle, wake jobs should be DONE (or PENDING if
+            # reclaim landed after claim window — still not stuck CLAIMED forever).
+            assert row.status != JobStatus.CLAIMED.value or row.locked_by == "test-worker-iso"
+            if jid in (id1, id2):
+                assert row.status == JobStatus.DONE.value
