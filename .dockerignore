@@ -43,3 +43,10 @@ docker-compose.yml
 # 文档
 README.md
 *.md
+
+# Node / Electron build output (frontend is rebuilt in the image)
+**/node_modules
+frontend/dist
+desktop/release
+desktop/resources
+data
