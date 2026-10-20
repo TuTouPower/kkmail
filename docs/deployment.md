@@ -32,11 +32,29 @@ docker compose -f docker-compose.mail-core.yml up --build -d api worker   # 依�
 
 ## 不使用 Docker
 
+API 服务默认同源托管 React 前端页面（在 `frontend/dist/`）。非 Docker 部署时必须先构建 SPA：
+
 ```bash
+# 1. 构建前端 SPA 产物
+cd frontend
+npm ci
+npm run build
+cd ..
+
+# 2. 准备 Python 依赖并启动
 pip install -r requirements-mail-core.txt
 export MAIL_CORE_DATABASE_URL=postgresql+psycopg://<user>:<password>@127.0.0.1:5432/kkmail
 python -m mail_core --data-dir /var/lib/kkmail    # 迁移 + API + 内嵌 worker
-# 或拆分进程：python -m mail_core --no-worker  与  python -m mail_core.worker.main
+```
+
+若拆分独立进程部署，API 与 Worker 必须共享相同的 `--data-dir`（或相同的环境变量密钥配置及 blob 路径），确保两者使用相同的凭据与加解密配置：
+
+```bash
+# API 进程（提供 HTTP 服务与静态 SPA）
+python -m mail_core --data-dir /var/lib/kkmail --no-worker
+
+# Worker 进程（后台执行拉信同步与任务）
+MAIL_CORE_DATA_DIR=/var/lib/kkmail python -m mail_core.worker.main
 ```
 
 `--data-dir` 下会生成并持久化会话 / blob / 备份密钥（`secrets/`，0600），未配置登录密码时生成一次性 `initial-password.txt`；已在环境变量中提供的值优先。完整变量列表见 [mail_core/README.md](../mail_core/README.md)。

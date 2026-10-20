@@ -31,7 +31,7 @@
 
 ## 忘记登录密码
 
-- `--data-dir` 部署：停止服务，删除 `secrets/login-password.bcrypt`，未设置 `MAIL_CORE_LOGIN_PASSWORD*` 时重启会生成新的 `secrets/initial-password.txt`。
+- `--data-dir` 部署：停止服务，删除 `<data-dir>/secrets/login-password.bcrypt`，未设置 `MAIL_CORE_LOGIN_PASSWORD*` 时重启会生成新的 `<data-dir>/initial-password.txt`。
 - 环境变量部署：替换 `MAIL_CORE_LOGIN_PASSWORD_HASH` / `MAIL_CORE_LOGIN_PASSWORD` 后重启。
 
 ## 附件 / 原文读取报错
