@@ -1,6 +1,6 @@
 # Branch Protection & Release Recommendations
 
-This document records the recommended repository governance settings for `kkmail`.
+This document records the recommended repository governance settings for `kkmail`. Release steps are in [RELEASE.md](RELEASE.md); release notes come from [CHANGELOG.md](CHANGELOG.md).
 
 ## Goal
 
@@ -33,7 +33,7 @@ At minimum:
 - `tests / mail-core` (pytest against PostgreSQL, DB tests may not skip)
 - `frontend / check` (lint, tsc, vitest, build)
 
-Workflow definitions: `.github/workflows/tests.yml` and `frontend.yml` (templates mirrored in `docs/ci/`).
+Job definitions: the templates in [`docs/ci/`](docs/ci/README.md), installed as `.github/workflows/tests.yml` and `.github/workflows/frontend.yml`.
 
 ### Protect `dev`
 
@@ -60,11 +60,9 @@ To avoid excessive image publishing:
 - Documentation-only changes should not trigger image rebuilds
 - GitHub Release creation should happen only on `v*` tags
 
-Current repository policy implemented in Actions:
-
-- Image builds (`Dockerfile.mail-core`) trigger on changes under `mail_core/`, `frontend/`,
-  `requirements-mail-core.txt`, `Dockerfile.mail-core`, and the workflow file itself
-- They do **not** trigger for README / changelog / release-doc-only edits
+Recommended path filter for the image build (`Dockerfile.mail-core`): `mail_core/**`, `frontend/**`,
+`requirements-mail-core.txt`, `Dockerfile.mail-core`, and the workflow file itself. README, changelog and
+other doc-only edits should not rebuild the image.
 
 ## Release Policy
 
@@ -76,6 +74,5 @@ Current repository policy implemented in Actions:
 ## Optional Future Enhancements
 
 - Make `dev` the repository default branch for day-to-day development
-- Add a test workflow and require it on `main`
 - Add manual approval for production image publishing
 - Split `latest` and `stable` image semantics if needed

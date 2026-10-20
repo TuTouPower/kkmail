@@ -16,7 +16,7 @@ cd frontend && npm ci && npm run build && cd ..
 python -m mail_core --data-dir ./.kkmail-data   # 迁移 + API + 内嵌 worker，监听 127.0.0.1:8000
 ```
 
-`python -m mail_core` 首次运行会在 `--data-dir/secrets/` 生成会话、blob、备份密钥，以及一次性的 `initial-password.txt`（登录后修改密码即删除）。数据库连接由 `MAIL_CORE_DATABASE_URL` 指定，未设置时拒绝启动。
+`python -m mail_core --data-dir` 首次运行会在 `<data-dir>/secrets/` 生成会话、blob、备份密钥（0600），并在 `<data-dir>/initial-password.txt` 写入一次性初始密码（登录后修改密码即删除）。数据库连接由 `MAIL_CORE_DATABASE_URL` 指定，未设置时拒绝启动。
 
 ## 文档
 
