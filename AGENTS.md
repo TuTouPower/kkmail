@@ -5,6 +5,7 @@
 - 仓库 `TuTouPower/kkmail`（fork 自 assast/outlookEmail，后端已整体替换）。
 - 后端唯一实现：`mail_core/`（FastAPI + PostgreSQL + worker）。前端唯一实现：`frontend/`（React SPA，由 mail-core 同源提供）。桌面：`desktop/`（Electron + 本地 PostgreSQL + `python -m mail_core` sidecar）。
 - 产品范围不含发信、联系人、系统通知；不要新增这些入口。
+- **浏览器扩展永久 out of scope（wontfix）**：不要恢复 `browser-extension/`、`/api/extension/*` 或任何扩展交付计划。
 
 ## 目录
 
@@ -42,6 +43,7 @@ cd ../desktop && npm ci && npm test
 
 - **邮件 HTML** 只能经 `frontend/src/lib/mailBody.ts`（DOMPurify + sandbox iframe `srcDoc`）；是否 HTML 只看 `body_type`；禁止 `dangerouslySetInnerHTML`。
 - **消息标识** = mail-core 消息 UUID（`lib/mailKey.ts`）；账户用 UUID（`accountId`），不要用邮箱地址当 ID。
+- **单用户 · UUID 即能力**：实例无多租户/行级用户 ACL。在已认证的 Session / API Key 边界内，知道资源 UUID 即可访问该资源；不要按「防 IDOR 的多租户 ID」来实现或评审。详见 `docs/security.md` 与 `docs/mail-core-architecture.md` §11.4。
 - **HTTP** 一律走 `api/client.ts` 的 `apiRequest` / `postJson`：写请求自动带 `X-CSRF-Token`，拿不到令牌时直接失败。
 - **API 契约**：每个路由声明 `response_model`；错误用 `HTTPException`（`{"detail": ...}`）；路由只调用 `mail_core.mail.application` / `mail_core.accounts`，不直接访问 ORM 或 sync 内部。
 - **密钥**：不写默认值、不写示例密钥；缺失时拒绝启动。凭据只经 `CredentialStore`（默认数据库加密存储）；日志 / `last_error` 必须经 `mail_core.security.redact`。
