@@ -135,7 +135,32 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>生成 GPTMail</button>
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
-            {(tempQuery.data || []).slice(0, 8).map((item) => item.email || item.address).filter(Boolean).join(' · ') || '暂无临时邮箱'}
+            {(tempQuery.data || []).slice(0, 8).map((item) => {
+              const address = item.email || item.address
+              if (!address) return null
+              return (
+                <div key={address} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
+                  <span>{address}</span>
+                  <button type="button" onClick={async () => {
+                    await api.deleteTempEmail(address)
+                    await qc.invalidateQueries({ queryKey: ['temp-emails'] })
+                  }} style={{ border: 0, background: 'transparent', color: 'var(--danger)' }}>删除</button>
+                </div>
+              )
+            })}
+            {(tempQuery.data || []).length === 0 && '暂无临时邮箱'}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button type="button" onClick={async () => {
+              const res = await api.archiveProject(projectKey)
+              setToolStatus(res.success === false ? (res.error || '归档失败') : '项目已归档')
+              await qc.invalidateQueries({ queryKey: ['projects'] })
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>归档项目</button>
+            <button type="button" onClick={async () => {
+              const res = await api.deleteProject(projectKey)
+              setToolStatus(res.success === false ? (res.error || '删除失败') : '项目已删除')
+              await qc.invalidateQueries({ queryKey: ['projects'] })
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--danger)' }}>删除项目</button>
           </div>
           <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>项目</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
