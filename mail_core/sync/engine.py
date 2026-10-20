@@ -56,6 +56,8 @@ def sync_account_folders(
         account = session.get(Account, account_id)
         if account is None:
             raise ValueError(f"account {account_id} not found")
+        if not account.sync_enabled:
+            return {"status": "sync_disabled"}
         try:
             lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=lease_ttl)
         except LeaseBusy:
@@ -190,6 +192,8 @@ def sync_folder_metadata(
         folder = session.get(Folder, folder_id)
         if account is None or folder is None:
             raise ValueError("account/folder not found")
+        if not account.sync_enabled:
+            return {"status": "sync_disabled"}
         try:
             lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=lease_ttl)
         except LeaseBusy:

@@ -111,6 +111,8 @@ def enqueue_account_sync(session: Session, account_id: uuid.UUID) -> uuid.UUID:
     acc = session.get(Account, account_id)
     if acc is None:
         raise LookupError("account not found")
+    if not acc.sync_enabled:
+        raise ValueError("account sync is disabled")
     job = enqueue_job(
         session,
         job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
