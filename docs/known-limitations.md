@@ -18,10 +18,23 @@ Revisit when the backend exposes a flag API. Do not remove the Flagged control f
 
 The design system includes move and archive actions. Upstream mail routes support inbox, junk, trash, and all. There is no dedicated move-to-folder API. Archive is therefore not wired to a server folder. Move destinations that exist are limited to the folders the live API already supports.
 
-- Electron has packaging scripts, but Windows, macOS, and Linux installers are not yet produced as release artifacts.
-- The Python backend is not yet bundled as a PyInstaller sidecar.
-- Docker multi-stage build is defined, but this development environment has no Docker daemon.
+## Packaging status
+
+Verified in this development environment:
+
+- Linux AppImage and deb build with `cd desktop && npm run dist:linux`.
+- PyInstaller sidecar builds with `./scripts/build-sidecar.sh`.
+- Backend test suite: 754 passed.
+
+Blocked here:
+
+- No Docker daemon, so the multi-stage image was not run.
+- Windows packaging fails in this Linux environment during signing/app-builder execution.
+- macOS packages must be built on macOS.
+
+CI workflows are in `.github/workflows/desktop.yml` and `.github/workflows/tests.yml`.
+
+## Remaining product gaps
+
 - OAuth, forwarding, projects, temporary mail, and WebDAV backup are reachable from Settings, but the old `/legacy` UI still holds the complete advanced flows.
 - End-to-end browser tests are not yet in place.
-
-Sidecar build verified locally: desktop/resources/outlookemail-backend
