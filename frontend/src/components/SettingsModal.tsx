@@ -20,10 +20,12 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const [webdavUser, setWebdavUser] = useState('')
   const [webdavPass, setWebdavPass] = useState('')
   const [projectKey, setProjectKey] = useState('')
-  const [toolStatus, setToolStatus] = useState('')
   const [provider, setProvider] = useState('outlook')
   const [status, setStatus] = useState('')
+  const [toolStatus, setToolStatus] = useState('')
   const [section, setSection] = useState<'accounts' | 'appearance' | 'general'>('accounts')
+  const logsQuery = useQuery({ queryKey: ['forwarding-logs'], queryFn: async () => (await api.getForwardingLogs()).logs || [], enabled: open && section === 'general' })
+  const [tempMessages, setTempMessages] = useState<Array<{ id?: string; subject?: string; from_address?: string }>>([])
 
   if (!open) return null
 
@@ -200,8 +202,32 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           </div>
           </>}
           {section === 'general' && (
-            <div style={{ color: 'var(--muted)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Inbox size={14} /> 旧版完整管理界面仍可从 /legacy 进入。规范见仓库根目录 DESIGN.md。
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 720, margin: '0 0 10px' }}>通用</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>转发记录 {(logsQuery.data || []).length} 条</div>
+              {(logsQuery.data || []).slice(0, 6).map((log) => {
+                const row = log as { id?: number; account_email?: string; status?: string; created_at?: string }
+                return <div key={row.id} style={{ fontSize: 12, padding: '4px 0', borderBottom: '1px solid var(--line)' }}>{row.account_email} · {row.status} · {row.created_at}</div>
+              })}
+              <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>临时邮箱邮件</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                {(tempQuery.data || []).slice(0, 4).map((item) => {
+                  const address = item.email || item.address
+                  if (!address) return null
+                  return (
+                    <button key={address} type="button" onClick={async () => {
+                      const res = await api.getTempEmailMessages(address)
+                      setTempMessages(res.messages || [])
+                      setToolStatus(res.success === false ? (res.error || '读取失败') : `${address} 有 ${(res.messages || []).length} 封`)
+                    }} style={{ height: 30, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>{address}</button>
+                  )
+                })}
+              </div>
+              {tempMessages.slice(0, 5).map((m, i) => <div key={m.id || i} style={{ fontSize: 12, marginTop: 6 }}>{m.from_address} · {m.subject}</div>)}
+              <div style={{ marginTop: 18, color: 'var(--muted)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Inbox size={14} /> 旧版完整管理界面仍可从 /legacy 进入。规范见仓库根目录 DESIGN.md。
+              </div>
+              <button type="button" onClick={() => api.logout().finally(() => window.location.assign('/login'))} style={{ marginTop: 16, height: 32, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--danger)' }}>退出登录</button>
             </div>
           )}
         </div>
