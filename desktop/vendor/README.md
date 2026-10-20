@@ -1,30 +1,29 @@
 # PostgreSQL vendor binaries (desktop)
 
-Place official PostgreSQL **16** binaries under `pgsql/bin/` so Electron can start
-a local server without Docker:
+Place official PostgreSQL **16** binaries under `pgsql/bin/`:
 
 ```
 desktop/vendor/pgsql/bin/initdb
 desktop/vendor/pgsql/bin/pg_ctl
 desktop/vendor/pgsql/bin/postgres
-…
 ```
 
-## Fetch (development)
+**Do not commit the binary tree** (see `.gitignore`).
+
+## Linux (dev / CI)
 
 ```bash
-./scripts/fetch-pg-binaries.sh          # Linux x86_64 by default
-./scripts/fetch-pg-binaries.sh --os macos --arch arm64
+./scripts/fetch-pg-binaries.sh
+# uses theseus-rs portable builds; override with PG_VENDOR_URL=...
 ```
 
-The script downloads a community/EnterpriseDB-style portable tarball (or documents
-the manual URL when the mirror is unavailable) into `desktop/vendor/pgsql/`.
+`PostgresManager` resolves: `KKMAIL_PG_BIN` → `desktop/vendor/pgsql/bin` → `PATH`.
 
-**Do not commit the binary tree** (see `desktop/vendor/.gitignore`). CI and
-fresh clones stay stub-mode until this script (or `KKMAIL_PG_BIN`) is used.
+## macOS / Windows (download-at-build)
 
-## Runtime resolution order
+The fetch script prints instructions and exits 0 for `--os macos|windows`.
+Packaging / CI for those platforms should download the matching official or
+EnterpriseDB / Postgres.app binaries at **build time** and unpack into
+`desktop/vendor/pgsql/bin/` (or set `KKMAIL_PG_BIN`) before `electron-builder`.
 
-1. `KKMAIL_PG_BIN` / `PostgresManager({ pgBinDir })`
-2. `desktop/vendor/pgsql/bin`
-3. System `PATH` (`initdb` / `pg_ctl`)
+Do not assume a single cross-platform tarball URL.
