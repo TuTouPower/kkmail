@@ -6,6 +6,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Removed
+- Leftover empty `outlook_web/` package remnants (`__pycache__` only; no sources). Nothing imported it.
+
 ### Fixed
 - IMAP UIDVALIDITY is compared on metadata/delta; mismatch clears the checkpoint and rebuilds the folder.
 - Sync loops heartbeat the account lease between pages (default TTL 120s) and release the lease on provider errors.
