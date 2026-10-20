@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, MoreHorizontal, Paperclip } from 'lucide-react'
+import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, MoreHorizontal, Paperclip, Menu } from 'lucide-react'
 import { fetchAccounts, fetchEmails, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { api } from '../api/client'
 import { useMailStore } from '../store/mailStore'
@@ -25,6 +25,7 @@ export default function MessageList() {
     sortNewest,
     toggleSort,
     openCompose,
+    toggleMobileSidebar,
     selectedIds,
     toggleSelected,
     selectAll,
@@ -98,6 +99,9 @@ export default function MessageList() {
             <div className="list-count">{loading ? '正在拉取邮件…' : `${visible.length} 封邮件 · ${unreadCount} 封未读`}</div>
           </div>
           <div className="list-primary-actions">
+            <button className="list-primary-btn" title="账户导航" onClick={toggleMobileSidebar}>
+              <Menu size={16} />
+            </button>
             <button className="list-primary-btn" title="写邮件" onClick={() => openCompose('new')}>
               <PenSquare size={16} />
             </button>

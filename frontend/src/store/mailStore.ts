@@ -10,6 +10,9 @@ interface MailUiState {
   setTheme: (theme: 'dark' | 'light') => void
   sidebarCollapsed: boolean
   toggleSidebar: () => void
+  mobileSidebarOpen: boolean
+  toggleMobileSidebar: () => void
+  closeMobileSidebar: () => void
   mobileView: 'list' | 'detail'
   setMobileView: (view: 'list' | 'detail') => void
   view: ViewState
@@ -46,6 +49,9 @@ export const useMailStore = create<MailUiState>()(
       setTheme: (theme) => set({ theme }),
       sidebarCollapsed: false,
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      mobileSidebarOpen: false,
+      toggleMobileSidebar: () => set((s) => ({ mobileSidebarOpen: !s.mobileSidebarOpen })),
+      closeMobileSidebar: () => set({ mobileSidebarOpen: false }),
       mobileView: 'list',
       setMobileView: (view) => set({ mobileView: view }),
       view: { type: 'allInbox' },
