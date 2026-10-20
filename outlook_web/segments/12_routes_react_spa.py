@@ -57,7 +57,27 @@ def _spa_index_response() -> Response:
             skin_asset_hash=get_active_skin_asset_hash(),
             mail_fetch_timeout_seconds=get_mail_fetch_timeout_seconds(),
         ))
-    response = make_response(send_from_directory(dist, "index.html"))
+    html = index.read_text(encoding="utf-8")
+    # Cutover hook: when MAIL_CORE_DEFAULT=1, tell the SPA to prefer mail-core
+    # list/reader. Login and other Flask routes are unchanged.
+    if os.environ.get("MAIL_CORE_DEFAULT", "").strip().lower() in {"1", "true", "yes", "on"}:
+        import json
+
+        base = os.environ.get("MAIL_CORE_PUBLIC_BASE", "/mail-core").strip() or "/mail-core"
+        cfg = {"mailCoreDefault": True, "mailCoreBase": base}
+        snippet = (
+            "<script>window.__KKMAIL_CONFIG__="
+            + json.dumps(cfg)
+            + ";</script>"
+        )
+        if "</head>" in html:
+            html = html.replace("</head>", snippet + "</head>", 1)
+        else:
+            html = snippet + html
+        response = make_response(html)
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+    else:
+        response = make_response(send_from_directory(dist, "index.html"))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return response
 
