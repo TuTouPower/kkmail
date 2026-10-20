@@ -240,7 +240,7 @@ class GmailProvider:
         params: dict[str, Any] = {
             "startHistoryId": str(history_id),
             "labelId": folder_remote_id,
-            "historyTypes": "messageAdded,messageDeleted,labelAdded,labelRemoved",
+            "historyTypes": ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"],
         }
         if cursor.get("pageToken"):
             params["pageToken"] = cursor["pageToken"]
