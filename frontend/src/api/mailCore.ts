@@ -64,6 +64,70 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
   }
 }
 
+
+export interface MailCoreAttachment {
+  id: string
+  name: string
+  contentType?: string | null
+  size?: number | null
+  is_inline?: boolean
+}
+
+export interface MailCoreMessageDetail {
+  id: string
+  account_id: string
+  subject: string
+  from_address: string
+  from_name: string | null
+  from: string
+  to: string
+  cc: string
+  date: string
+  is_read: boolean
+  has_attachments: boolean
+  snippet: string | null
+  body: string
+  body_type: string
+  parse_error: string | null
+  attachments: MailCoreAttachment[]
+}
+
+export function fetchMailCoreMessage(messageId: string, signal?: AbortSignal): Promise<MailCoreMessageDetail> {
+  return getJson(`/api/mail/messages/${encodeURIComponent(messageId)}`, signal)
+}
+
+export function fetchMailCoreMessageBody(
+  messageId: string,
+  signal?: AbortSignal,
+): Promise<{ id: string; body: string; body_type: string; parse_error: string | null; snippet: string | null }> {
+  return getJson(`/api/mail/messages/${encodeURIComponent(messageId)}/body`, signal)
+}
+
+export function mailCoreAttachmentUrl(attachmentId: string): string {
+  return `${mailCoreBaseUrl()}/api/mail/attachments/${encodeURIComponent(attachmentId)}`
+}
+
+/** Map mail-core detail into Flask MailDetail shape for MessageReader. */
+export function mailCoreToMailDetail(d: MailCoreMessageDetail): import('./queries').MailDetail {
+  return {
+    id: d.id,
+    subject: d.subject,
+    from: d.from,
+    to: d.to,
+    cc: d.cc || undefined,
+    date: d.date,
+    body: d.body,
+    body_type: d.body_type === 'html' ? 'html' : d.body_type === 'text' ? 'text' : undefined,
+    has_attachments: d.has_attachments,
+    attachments: (d.attachments || []).map((a) => ({
+      id: a.id,
+      name: a.name,
+      size: a.size ?? undefined,
+      contentType: a.contentType ?? undefined,
+    })),
+  }
+}
+
 export function fetchMailCoreHealth(): Promise<{ status: string; service?: string }> {
   return getJson('/health')
 }
