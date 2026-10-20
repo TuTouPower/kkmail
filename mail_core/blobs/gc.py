@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from mail_core.blobs.archive import blob_root
-from mail_core.mail.storage.models import MessageBlob, MessageBlobLink
+from mail_core.mail.storage.models import Attachment, MessageBlob, MessageBlobLink
 
 log = logging.getLogger("mail_core.blobs.gc")
 
@@ -37,10 +37,13 @@ def mark_unreferenced_blobs(session: Session, *, now: datetime | None = None) ->
     blobs = list(session.scalars(select(MessageBlob)).all())
     marked = 0
     for blob in blobs:
-        n = session.scalar(
+        link_n = session.scalar(
             select(func.count()).select_from(MessageBlobLink).where(MessageBlobLink.blob_id == blob.id)
         ) or 0
-        n = int(n)
+        att_n = session.scalar(
+            select(func.count()).select_from(Attachment).where(Attachment.blob_id == blob.id)
+        ) or 0
+        n = int(link_n) + int(att_n)
         prev = int(blob.ref_count)
         if prev != n:
             blob.ref_count = n
