@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "OutlookEmail 控制台",
+  "name": "kkmail 控制台",
   "version": "0.1.0",
-  "description": "使用 Web 登录密码打开 OutlookEmail 控制台，并复用完整 Web 端功能。",
+  "description": "使用 Web 登录密码打开 kkmail 控制台，并复用完整 Web 端功能。",
   "action": {
-    "default_title": "OutlookEmail"
+    "default_title": "kkmail"
   },
   "background": {
     "service_worker": "background.js"
@@ -29,7 +29,7 @@
         "default": "Ctrl+Shift+E",
         "mac": "Command+Shift+E"
       },
-      "description": "打开 OutlookEmail 控制台面板"
+      "description": "打开 kkmail 控制台面板"
     }
   }
 }

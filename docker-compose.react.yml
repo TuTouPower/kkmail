@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: outlookemail:local
+    image: kkmail:local
     container_name: outlook-mail-reader
     ports:
       - "5000:5000"

@@ -1,9 +1,9 @@
 {
-  "name": "outlookemail-desktop",
+  "name": "kkmail-desktop",
   "version": "3.0.20",
-  "description": "OutlookEmail desktop shell \u2014 Electron hosts the shared React UI and Flask backend",
+  "description": "kkmail desktop shell \u2014 Electron hosts the shared React UI and Flask backend",
   "main": "main.js",
-  "homepage": "https://github.com/TuTouPower/outlookEmail",
+  "homepage": "https://github.com/TuTouPower/kkmail",
   "author": "TuTouPower <tutoupower@users.noreply.github.com>",
   "scripts": {
     "start": "electron .",
@@ -21,8 +21,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.tutoupower.outlookemail",
-    "productName": "OutlookEmail",
+    "appId": "com.tutoupower.kkmail",
+    "productName": "kkmail",
     "directories": {
       "output": "release"
     },
@@ -39,7 +39,7 @@
       {
         "from": "resources",
         "to": "backend",
-        "filter": ["outlookemail-backend*"]
+        "filter": ["kkmail-backend*"]
       }
     ],
     "mac": {
