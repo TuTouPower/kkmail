@@ -248,6 +248,7 @@ export default function MessageList() {
                 aria-checked={checked}
                 aria-label={`选择邮件：${m.subject}`}
                 onClick={(e) => { e.stopPropagation(); toggleSelected(key) }}
+                onKeyDown={(e) => e.stopPropagation()}
                 title="选择邮件"
               >
                 {checked && <Check size={12} />}
