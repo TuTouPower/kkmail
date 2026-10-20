@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Security
+from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer
 
 from mail_core.security.auth import (
     SESSION_COOKIE_NAME,
@@ -17,15 +18,26 @@ from mail_core.security.auth import (
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
+bearer_scheme = HTTPBearer(auto_error=False)
+cookie_scheme = APIKeyCookie(name=SESSION_COOKIE_NAME, auto_error=False)
 
-def authenticate_request(request: Request) -> AuthPrincipal:
-    bearer = extract_bearer(request.headers.get("Authorization"))
+
+def authenticate_request(
+    request: Request,
+    bearer_creds: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    cookie_token: str | None = Security(cookie_scheme),
+) -> AuthPrincipal:
+    bearer = (
+        bearer_creds.credentials
+        if isinstance(bearer_creds, HTTPAuthorizationCredentials)
+        else extract_bearer(request.headers.get("Authorization"))
+    )
     if bearer is not None:
         if api_key_matches(bearer):
             return AuthPrincipal(via="api_key")
         raise HTTPException(status_code=401, detail="invalid api key")
 
-    raw = request.cookies.get(SESSION_COOKIE_NAME)
+    raw = cookie_token if isinstance(cookie_token, str) else request.cookies.get(SESSION_COOKIE_NAME)
     if raw:
         data = read_session(raw)
         if data:
@@ -52,12 +64,20 @@ def enforce_csrf(request: Request, principal: AuthPrincipal) -> None:
         )
 
 
-def require_auth(request: Request) -> AuthPrincipal:
-    principal = authenticate_request(request)
+def require_auth(
+    request: Request,
+    bearer_creds: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    cookie_token: str | None = Security(cookie_scheme),
+) -> AuthPrincipal:
+    principal = authenticate_request(request, bearer_creds=bearer_creds, cookie_token=cookie_token)
     enforce_csrf(request, principal)
     return principal
 
 
-def require_auth_no_csrf(request: Request) -> AuthPrincipal:
+def require_auth_no_csrf(
+    request: Request,
+    bearer_creds: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    cookie_token: str | None = Security(cookie_scheme),
+) -> AuthPrincipal:
     """Authenticate without CSRF (SSE / safe reads already covered by require_auth)."""
-    return authenticate_request(request)
+    return authenticate_request(request, bearer_creds=bearer_creds, cookie_token=cookie_token)
