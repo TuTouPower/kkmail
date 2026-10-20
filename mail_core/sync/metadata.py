@@ -78,21 +78,39 @@ def _upsert_message(
     return existing
 
 
-def _recompute_folder_stats(session: Session, folder_id: uuid.UUID) -> None:
-    rows = session.scalars(
-        select(Message)
-        .join(MessageLocation, MessageLocation.message_id == Message.id)
-        .where(MessageLocation.folder_id == folder_id)
-    ).all()
-    total = len(rows)
-    unread = sum(1 for m in rows if not m.is_read)
+def recompute_folder_stats(session: Session, folder_id: uuid.UUID) -> None:
+    """Aggregate folder totals via SQL COUNT (no full ORM load)."""
+    from sqlalchemy import func
+
+    total = (
+        session.scalar(
+            select(func.count())
+            .select_from(MessageLocation)
+            .where(MessageLocation.folder_id == folder_id)
+        )
+        or 0
+    )
+    unread = (
+        session.scalar(
+            select(func.count())
+            .select_from(MessageLocation)
+            .join(Message, Message.id == MessageLocation.message_id)
+            .where(MessageLocation.folder_id == folder_id)
+            .where(Message.is_read.is_(False))
+        )
+        or 0
+    )
     stats = session.get(FolderStats, folder_id)
     if stats is None:
         stats = FolderStats(folder_id=folder_id)
         session.add(stats)
-    stats.total_count = total
-    stats.unread_count = unread
+    stats.total_count = int(total)
+    stats.unread_count = int(unread)
     stats.updated_at = datetime.now(timezone.utc)
+
+
+# Back-compat alias for sync internals still calling the private name.
+_recompute_folder_stats = recompute_folder_stats
 
 
 def apply_metadata_page(
