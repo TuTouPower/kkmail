@@ -18,6 +18,7 @@ from mail_core.mail.domain.enums import JobType, OutboxEventType, SyncPhase
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.factory import build_provider
 from mail_core.sync.jobs import enqueue_job
+from mail_core.providers.http import RateLimitedError
 from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, release_lease
 from mail_core.sync.metadata import apply_metadata_page
 
@@ -59,7 +60,30 @@ def sync_account_folders(
         )
 
     provider = build_provider(account_snapshot, store or get_credential_store())
-    remote_folders = list(provider.list_folders())  # network
+    try:
+        remote_folders = list(provider.list_folders())  # network
+    except RateLimitedError as exc:
+        delay = float(exc.retry_after_seconds or 60)
+        with Session() as session:
+            enqueue_job(
+                session,
+                job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+                account_id=account_id,
+                payload={},
+                priority=60,
+                run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
+            )
+            release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+            session.commit()
+        return {"status": "rate_limited", "retry_after": delay}
+    except Exception:
+        with Session() as session:
+            try:
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            except FencingMismatch:
+                session.rollback()
+        raise
 
     with Session() as session:
         try:
@@ -78,10 +102,12 @@ def sync_account_folders(
         session.add(run)
         upserted = 0
         folder_ids: list[uuid.UUID] = []
+        by_remote = {
+            f.remote_id: f
+            for f in session.scalars(select(Folder).where(Folder.account_id == account_id)).all()
+        }
         for rf in remote_folders:
-            existing = session.scalar(
-                select(Folder).where(Folder.account_id == account_id, Folder.remote_id == rf.remote_id)
-            )
+            existing = by_remote.get(rf.remote_id)
             if existing is None:
                 existing = Folder(
                     account_id=account_id,

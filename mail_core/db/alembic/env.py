@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -19,9 +18,10 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-db_url = os.environ.get("MAIL_CORE_DATABASE_URL")
-if db_url:
-    config.set_main_option("sqlalchemy.url", db_url)
+if not config.get_main_option("sqlalchemy.url"):
+    from mail_core.db.session import database_url
+
+    config.set_main_option("sqlalchemy.url", database_url().replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:

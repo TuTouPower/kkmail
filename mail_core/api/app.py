@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from mail_core import __version__
 from mail_core.api.accounts import router as accounts_router
@@ -42,7 +45,9 @@ async def lifespan(_app: FastAPI):
     validate_auth_config()
 
     listener = start_outbox_listener()
-    listener.wait_started(timeout=5)
+    if not listener.wait_started(timeout=5):
+        # Keep serving (listener reconnects in the background); /ready reports it.
+        logging.getLogger("mail_core.api").warning("outbox LISTEN not started within 5s; retrying in background")
     try:
         yield
     finally:
@@ -62,8 +67,6 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:8000",
         "http://localhost:8000",
-        "http://127.0.0.1:5000",
-        "http://localhost:5000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -75,29 +78,63 @@ app.include_router(sse_router, prefix="/api", tags=["realtime"], dependencies=[D
 app.include_router(mail_router, dependencies=[Depends(require_auth)])
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "service": "mail-core", "version": __version__}
+@lru_cache(maxsize=1)
+def _code_schema_head() -> str | None:
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    import mail_core.db as db_pkg
+
+    here = Path(db_pkg.__file__).resolve().parent
+    cfg = Config(str(here / "alembic.ini"))
+    cfg.set_main_option("script_location", str(here / "alembic"))
+    return ScriptDirectory.from_config(cfg).get_current_head()
 
 
-@app.get("/ready")
+class HealthOut(BaseModel):
+    status: str
+    service: str
+    version: str
+    schema_head: str | None
+
+
+class ReadyOut(BaseModel):
+    status: str
+    schema_revision: str | None = None
+    schema_head: str | None = None
+    listener: bool | None = None
+    reason: str | None = None
+
+
+@app.get("/health", response_model=HealthOut)
+def health() -> HealthOut:
+    return HealthOut(status="ok", service="mail-core", version=__version__, schema_head=_code_schema_head())
+
+
+@app.get("/ready", response_model=ReadyOut, responses={503: {"model": ReadyOut}})
 def ready():
-    """Liveness for orchestrators: requires DB connectivity."""
+    """Readiness: DB reachable, schema at code head, outbox listener running."""
     from fastapi.responses import JSONResponse
     from sqlalchemy import text
 
     from mail_core.db.session import get_engine
+    from mail_core.realtime.listener import get_outbox_listener
 
+    head = _code_schema_head()
     try:
-        engine = get_engine()
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        with get_engine().connect() as conn:
+            rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
     except Exception as exc:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "not_ready", "reason": "database", "detail": str(exc)[:200]},
-        )
-    return {"status": "ready"}
+        body = ReadyOut(status="not_ready", schema_head=head, reason=f"database: {type(exc).__name__}")
+        return JSONResponse(status_code=503, content=body.model_dump())
+    listener_ok = get_outbox_listener().is_alive
+    if rev != head:
+        body = ReadyOut(status="not_ready", schema_revision=rev, schema_head=head, listener=listener_ok, reason="schema_out_of_date")
+        return JSONResponse(status_code=503, content=body.model_dump())
+    if not listener_ok:
+        body = ReadyOut(status="not_ready", schema_revision=rev, schema_head=head, listener=False, reason="outbox_listener")
+        return JSONResponse(status_code=503, content=body.model_dump())
+    return ReadyOut(status="ready", schema_revision=rev, schema_head=head, listener=True)
 
 
 _DIST = _frontend_dist()

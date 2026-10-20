@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,7 +60,10 @@ class AttachmentPayload:
     content_type: str | None
     size_bytes: int | None
     content_sha256: str
-    data: bytes
+    open_stream: Callable[[], Iterator[bytes]]
+
+    def read_all(self) -> bytes:
+        return b"".join(self.open_stream())
 
 
 def resolve_attachment_bytes(
@@ -79,7 +83,9 @@ def resolve_attachment_bytes(
         raise AttachmentAccessError("blob record missing")
     digest = validate_content_digest(blob.content_sha256)
     # Never use storage_path from DB as a user-controlled path; re-derive from digest.
-    data = store.get(digest)
+    path = store.path_for(digest)
+    if not path.is_file():
+        raise AttachmentAccessError("attachment blob missing on disk")
     return AttachmentPayload(
         attachment_id=att.id,
         message_id=att.message_id,
@@ -87,7 +93,7 @@ def resolve_attachment_bytes(
         content_type=att.content_type,
         size_bytes=att.size_bytes,
         content_sha256=digest,
-        data=data,
+        open_stream=lambda: store.iter_plaintext(digest),
     )
 
 

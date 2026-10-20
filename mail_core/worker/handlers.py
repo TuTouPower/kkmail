@@ -132,6 +132,9 @@ def handle_job(session: Session, job: WorkerJob) -> None:
 
         fail_job(session, job, f"unknown job_type {job.job_type}")
     except Exception as exc:
-        log.exception("job %s failed", job.id)
+        from mail_core.security.redact import safe_error
+
+        log.error("job %s (%s) failed: %s", job.id, job.job_type, safe_error(exc))
+        log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()
-        fail_job(session, job, str(exc))
+        fail_job(session, job, exc)

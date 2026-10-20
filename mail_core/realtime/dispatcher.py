@@ -24,22 +24,34 @@ class OutboxDispatcher:
     """Polls undispatched rows and notifies subscribers."""
 
     poll_interval_s: float = 0.5
-    _subs: dict[str, list[asyncio.Queue]] = field(default_factory=lambda: defaultdict(list))
+    _subs: dict[str, list[tuple[asyncio.AbstractEventLoop, asyncio.Queue]]] = field(default_factory=lambda: defaultdict(list))
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    # Serialises dispatch_once across the LISTEN thread / worker wake jobs so one
+    # batch is never fanned out twice (FOR UPDATE SKIP LOCKED covers other processes).
+    _dispatch_lock: threading.Lock = field(default_factory=threading.Lock)
     _stop: bool = False
 
     def subscribe(self, *, account_id: str | None = None) -> asyncio.Queue:
+        """Register a queue bound to the caller's running event loop."""
         key = account_id or "*"
         q: asyncio.Queue = asyncio.Queue(maxsize=256)
+        loop = asyncio.get_running_loop()
         with self._lock:
-            self._subs[key].append(q)
+            self._subs[key].append((loop, q))
         return q
 
     def unsubscribe(self, q: asyncio.Queue, *, account_id: str | None = None) -> None:
         key = account_id or "*"
         with self._lock:
-            if q in self._subs.get(key, []):
-                self._subs[key].remove(q)
+            self._subs[key] = [(lp, qq) for (lp, qq) in self._subs.get(key, []) if qq is not q]
+
+    @staticmethod
+    def _put(q: asyncio.Queue, event: dict[str, Any]) -> None:
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            # Slow consumer — client resyncs via Last-Event-ID / resync hint.
+            log.warning("sse queue full; dropping event id=%s", event.get("id"))
 
     def _fanout(self, event: dict[str, Any]) -> None:
         account_id = event.get("account_id")
@@ -47,18 +59,18 @@ class OutboxDispatcher:
             targets = list(self._subs.get("*", []))
             if account_id:
                 targets.extend(self._subs.get(str(account_id), []))
-        for q in targets:
+        for loop, q in targets:
+            # asyncio.Queue is not thread-safe: hand off to the queue's own loop.
             try:
-                q.put_nowait(event)
-            except asyncio.QueueFull:
-                # Drop when slow consumer — client should resync via Last-Event-ID / hint.
-                log.warning("sse queue full; dropping event id=%s", event.get("id"))
+                loop.call_soon_threadsafe(self._put, q, event)
+            except RuntimeError:
+                pass  # loop closed; subscriber is going away
 
     def dispatch_once(self) -> int:
         from mail_core.db.session import get_session_factory
 
         Session = get_session_factory()
-        with Session() as session:
+        with self._dispatch_lock, Session() as session:
             rows = fetch_undispatched(session, limit=100)
             if not rows:
                 session.commit()
