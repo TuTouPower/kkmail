@@ -16,6 +16,13 @@ describe('mail body safety', () => {
     expect(out).not.toMatch(/<iframe|<form|<input|onload/i)
   })
 
+  it('removes forbidden multimedia and active tags (svg, math, video, audio, details)', () => {
+    const out = sanitizeMailHtml(
+      '<svg><circle /></svg><math><mi>x</mi></math><video src="v.mp4"><source src="v.mp4"><track></video><audio src="a.mp3"></audio><details><summary>s</summary>d</details>',
+    )
+    expect(out).not.toMatch(/<svg|<math|<video|<audio|<source|<track|<details/i)
+  })
+
   it('wraps output in a CSP document', () => {
     const doc = buildMailSrcdoc('<img src=x onerror=alert(1)>')
     expect(doc).toContain("default-src 'none'")
