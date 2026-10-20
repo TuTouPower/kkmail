@@ -200,6 +200,7 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
     ):
         session.delete(loc)
     session.delete(msg)
+    session.flush()
     _recompute_stats_for_folders(session, account_id=account_id, folder_ids=folder_ids)
     _wake_push(session, account_id)
     try_notify_outbox(session)
