@@ -13,6 +13,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - SPA 只对接 mail-core：单一 HTTP 客户端（Cookie + CSRF + 超时）、服务端搜索、服务端旗标；移除发信 / 撰写界面与 Flask 专属文件夹。
 
 ### Security
+- 桌面 Electron 会话加固：拒绝 `<webview>`、权限请求一律拒绝、注入限制性 CSP（`desktop/hardening.js`）。
 - 所有 API 需认证（Cookie Session + Bearer API Key + CSRF）；登录失败限速。
 - blob 使用流式 AES-GCM（`KKMS`）且必须配置密钥；账户凭据加密存入数据库；作业错误脱敏。
 - compose 只绑定 `127.0.0.1`，不含任何默认密码或密钥。
@@ -24,6 +25,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - 锁定决策写入文档：单用户实例下资源 UUID 为能力（capability），非多租户 IDOR 安全标识（`docs/security.md`、`docs/mail-core-architecture.md` §11.4、`AGENTS.md`、`docs/known-limitations.md`）；浏览器扩展永久 out of scope / wontfix。
 
 ### Tests
+- 桌面 `hardening.test.js`：CSP 合成、权限拒绝、打包文件列表。
 - OpenAPI → TypeScript：入库 `docs/openapi.json` 与 `frontend/src/api/generated/schema.ts`；`client.ts` / `mailCore.ts` 改用生成类型；本地 `export_openapi.py --check`、`npm run openapi:check` 与 `test_openapi_contract.py` 防漂移（无 GitHub CI）。
 - 前端补充 mail-core 客户端测试（Cookie 凭据、CSRF 复用、401 清令牌、超时与调用方取消、错误体解析、SSE 订阅）。
 

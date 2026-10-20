@@ -3,13 +3,18 @@
  * Starts local PostgreSQL + the mail-core sidecar on 127.0.0.1 and opens the React UI.
  * contextIsolation on, nodeIntegration off.
  */
-const { app, BrowserWindow, shell, dialog } = require('electron')
+const { app, BrowserWindow, shell, dialog, session } = require('electron')
 const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
 const net = require('net')
 const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl } = require('./paths')
+const {
+  mergeCspHeaders,
+  denyPermissionRequest,
+  denyPermissionCheck,
+} = require('./hardening')
 const { PostgresManager } = require('./postgresManager')
 
 const PORT = Number(process.env.OUTLOOK_DESKTOP_PORT || 18765)
@@ -146,6 +151,7 @@ function createWindow(url) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webviewTag: false,
     },
   })
   mainWindow.loadURL(url)
@@ -160,8 +166,25 @@ function createWindow(url) {
   })
 }
 
+function applySessionHardening() {
+  const ses = session.defaultSession
+  ses.setPermissionRequestHandler(denyPermissionRequest)
+  ses.setPermissionCheckHandler(denyPermissionCheck)
+  ses.webRequest.onHeadersReceived((details, callback) => {
+    callback({ responseHeaders: mergeCspHeaders(details.responseHeaders) })
+  })
+}
+
+// Deny <webview> tags entirely (unused; attacker-injected tags must not attach).
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('will-attach-webview', (event) => {
+    event.preventDefault()
+  })
+})
+
 app.whenReady().then(async () => {
   try {
+    applySessionHardening()
     const url = await startBackend()
     createWindow(url)
   } catch (err) {
