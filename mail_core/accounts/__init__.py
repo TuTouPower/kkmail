@@ -9,7 +9,18 @@ from mail_core.accounts.credentials import (
     save_json_secret,
     set_credential_store,
 )
-from mail_core.accounts.service import create_account, get_account, list_accounts
+from mail_core.accounts.service import (
+    create_account,
+    create_group,
+    delete_account,
+    delete_group,
+    enqueue_account_sync,
+    get_account,
+    list_accounts,
+    list_groups,
+    update_account,
+)
+from mail_core.accounts.settings_store import get_public_settings, update_public_settings
 
 __all__ = [
     "CompositeCredentialStore",
@@ -18,10 +29,18 @@ __all__ = [
     "EnvCredentialStore",
     "KeyringCredentialStore",
     "create_account",
+    "create_group",
+    "delete_account",
+    "delete_group",
+    "enqueue_account_sync",
     "get_account",
     "list_accounts",
+    "list_groups",
+    "update_account",
     "get_credential_store",
     "load_json_secret",
     "save_json_secret",
     "set_credential_store",
+    "get_public_settings",
+    "update_public_settings",
 ]

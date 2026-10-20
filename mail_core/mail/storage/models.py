@@ -30,6 +30,30 @@ def _uuid() -> uuid.UUID:
     return uuid.uuid4()
 
 
+class AccountGroup(Base):
+    """Sidebar account groups (minimal)."""
+
+    __tablename__ = "account_groups"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    color: Mapped[Optional[str]] = mapped_column(String(32))
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AppSetting(Base):
+    """Non-secret app settings (never store passwords/tokens here)."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class Account(Base):
     __tablename__ = "accounts"
 
@@ -39,6 +63,9 @@ class Account(Base):
     display_name: Mapped[Optional[str]] = mapped_column(String(255))
     # Opaque reference into OS Keychain / KMS — never store raw secrets here.
     credential_ref: Mapped[Optional[str]] = mapped_column(String(512))
+    group_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("account_groups.id", ondelete="SET NULL")
+    )
     sync_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     sync_status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'idle'"))
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
