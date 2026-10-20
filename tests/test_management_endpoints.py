@@ -1,9 +1,4 @@
-import os
-
-os.environ.setdefault("SECRET_KEY", "test-secret")
-os.environ.setdefault("LOGIN_PASSWORD", "[REDACTED]")
-
-import web_outlook_app as appmod  # noqa: E402
+import web_outlook_app as appmod
 
 
 def test_authenticated_management_endpoints():
