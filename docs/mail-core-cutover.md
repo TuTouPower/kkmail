@@ -29,3 +29,13 @@ images off); non-mail_core ids keep Flask detail.
 | Later | Retire mail-list paths | Full local authority |
 
 Do **not** treat the old SQLite mail cache as a source of truth.
+
+
+## Dev defaults
+
+`docker-compose.mail-core.yml` sets `MAIL_CORE_DEFAULT=1` and
+`MAIL_CORE_PUBLIC_BASE=http://127.0.0.1:8000` on the API service so a local
+SPA can prefer mail-core. Flask login/send remain on the product compose.
+
+Frontend builds may set `VITE_MAIL_CORE_DEFAULT=1` (see `frontend/.env.example`).
+Use `VITE_MAIL_CORE=0` to force the Flask list/reader path.
