@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import OutboxEventType, RemoteOperationStatus
 from mail_core.mail.storage.models import OutboxEvent, RemoteOperation
+from mail_core.security.redact import redact
 
 
 def _coalesce_existing(
@@ -149,7 +150,7 @@ def mark_remote_operation(
     op.updated_at = datetime.now(timezone.utc)
     op.next_attempt_at = next_attempt_at
     if error:
-        op.last_error = error[:2000]
+        op.last_error = redact(error[:2000])
     if status == RemoteOperationStatus.IN_PROGRESS:
         op.attempts = int(op.attempts) + 1
     session.add(
