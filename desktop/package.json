@@ -1,7 +1,7 @@
 {
   "name": "kkmail-desktop",
   "version": "3.0.20",
-  "description": "kkmail desktop shell \u2014 Electron hosts the shared React UI and Flask backend",
+  "description": "kkmail desktop shell — Electron hosts the shared React UI and Flask backend",
   "main": "main.js",
   "homepage": "https://github.com/TuTouPower/kkmail",
   "author": "TuTouPower <tutoupower@users.noreply.github.com>",
@@ -11,7 +11,8 @@
     "dist": "electron-builder",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux"
+    "dist:linux": "electron-builder --linux",
+    "test": "node paths.test.js"
   },
   "dependencies": {
     "electron-squirrel-startup": "^1.0.1"
@@ -29,6 +30,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "paths.js",
       "package.json"
     ],
     "extraResources": [
@@ -39,7 +41,9 @@
       {
         "from": "resources",
         "to": "backend",
-        "filter": ["kkmail-backend*"]
+        "filter": [
+          "kkmail-backend*"
+        ]
       }
     ],
     "mac": {
