@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 
 from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import JobType, OutboxEventType
+from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Folder, Message, MessageLocation, OutboxEvent
 from mail_core.sync.jobs import enqueue_job
-from mail_core.sync.metadata import recompute_folder_stats
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +135,13 @@ def set_message_flagged(
 
 
 def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
-    """Local-first trash: remove message metadata locally and enqueue remote trash."""
+    """Local-first trash: remove message metadata locally and enqueue remote trash.
+
+    Archive interaction: deleting the message cascades ``message_archive_state`` /
+    blob links (FK ON DELETE CASCADE). An in-flight archive batch re-reads the state
+    row and skips messages that vanished, so no FSM transition is needed here.
+    Read/flag mutations do not affect MIME archiving.
+    """
     msg = session.get(Message, message_id)
     if msg is None:
         raise LookupError("message not found")

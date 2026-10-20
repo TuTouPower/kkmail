@@ -27,7 +27,6 @@ from mail_core.mail.application.queries import (
     get_folder_stats,
     get_message_detail,
     list_folder_stats_for_account,
-    resolve_account_id_by_email,
     unified_inbox,
 )
 from mail_core.mail.application.search import search_messages_page
@@ -156,17 +155,11 @@ def api_unified_inbox(
     limit: int = Query(50, ge=1, le=200),
     cursor: str | None = Query(None, description="`next_cursor` from the previous page"),
     account_id: UUID | None = None,
-    account_email: str | None = Query(None, description="Filter by account email"),
 ) -> PageOut:
     Session = get_session_factory()
     with Session() as session:
-        resolved = account_id
-        if resolved is None and account_email:
-            resolved = resolve_account_id_by_email(session, account_email)
-            if resolved is None:
-                return PageOut(items=[], next_cursor=None)
         try:
-            page = unified_inbox(session, account_ids=[resolved] if resolved else None, limit=limit, cursor=cursor)
+            page = unified_inbox(session, account_ids=[account_id] if account_id else None, limit=limit, cursor=cursor)
         except InvalidCursor as exc:
             raise HTTPException(400, str(exc)) from exc
         emails = account_emails_by_id(session, [i.account_id for i in page.items])

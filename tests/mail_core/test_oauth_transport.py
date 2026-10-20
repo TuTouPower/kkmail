@@ -177,9 +177,30 @@ def test_oauth_error_on_token_failure():
         client.get_access_token()
 
 
-def test_keyring_store_stub_roundtrip():
+def test_keyring_store_has_no_silent_memory_fallback(monkeypatch):
+    import builtins
+
     from mail_core.accounts import KeyringCredentialStore
 
-    store = KeyringCredentialStore(fallback={})
-    store.put_secret("keyring:test/user", '{"a":1}')
-    assert store.get_secret("keyring:test/user") == '{"a":1}'
+    real_import = builtins.__import__
+
+    def no_keyring(name, *a, **kw):
+        if name == "keyring":
+            raise ImportError("no keyring")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_keyring)
+    store = KeyringCredentialStore()
+    with pytest.raises(RuntimeError, match="keyring"):
+        store.put_secret("keyring:test/user", '{"a":1}')
+
+
+def test_env_store_is_read_only(monkeypatch):
+    from mail_core.accounts import EnvCredentialStore, ReadOnlyCredentialRef
+
+    monkeypatch.setenv("KK_TEST_SECRET", "s3cret")
+    store = EnvCredentialStore()
+    assert store.get_secret("env:KK_TEST_SECRET") == "s3cret"
+    with pytest.raises(ReadOnlyCredentialRef):
+        store.put_secret("env:KK_TEST_SECRET", "other")
+    assert store.get_secret("env:KK_TEST_SECRET") == "s3cret"

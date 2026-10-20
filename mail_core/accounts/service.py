@@ -96,8 +96,12 @@ def delete_account(session: Session, account_id: uuid.UUID) -> None:
     acc = session.get(Account, account_id)
     if acc is None:
         raise LookupError("account not found")
+    ref = acc.credential_ref
     session.delete(acc)
     session.flush()
+    if ref and not ref.startswith("env:"):
+        # App-owned secret: remove it with the account (env refs are operator-managed).
+        get_credential_store().delete_secret(ref)
 
 
 def enqueue_account_sync(session: Session, account_id: uuid.UUID) -> uuid.UUID:
