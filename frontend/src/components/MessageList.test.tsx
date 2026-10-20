@@ -82,7 +82,7 @@ describe('<MessageList />', () => {
     await waitFor(() => expect(subjects(container)).toHaveLength(2))
     const row = container.querySelector('.message-row') as HTMLElement
     expect(row.getAttribute('tabindex')).toBe('0')
-    expect(row.getAttribute('role')).toBe('button')
+    expect(row.getAttribute('role')).toBeNull()
     row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     await waitFor(() => expect(useMailStore.getState().selectedKey).toBe('a'))
   })

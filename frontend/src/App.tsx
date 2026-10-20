@@ -19,10 +19,16 @@ function resolveTheme(theme: 'dark' | 'light' | 'system'): 'dark' | 'light' {
 }
 
 function App() {
-  const {
-    theme, mobileView, sidebarCollapsed, mobileSidebarOpen, closeMobileSidebar,
-    settingsOpen, sidebarWidth, listWidth, setSidebarWidth, setListWidth,
-  } = useMailStore()
+  const theme = useMailStore((s) => s.theme)
+  const mobileView = useMailStore((s) => s.mobileView)
+  const sidebarCollapsed = useMailStore((s) => s.sidebarCollapsed)
+  const mobileSidebarOpen = useMailStore((s) => s.mobileSidebarOpen)
+  const closeMobileSidebar = useMailStore((s) => s.closeMobileSidebar)
+  const settingsOpen = useMailStore((s) => s.settingsOpen)
+  const sidebarWidth = useMailStore((s) => s.sidebarWidth)
+  const listWidth = useMailStore((s) => s.listWidth)
+  const setSidebarWidth = useMailStore((s) => s.setSidebarWidth)
+  const setListWidth = useMailStore((s) => s.setListWidth)
   const [authed, setAuthed] = useState<boolean | null>(null)
   useMailCoreRealtime(authed === true)
 

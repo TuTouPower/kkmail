@@ -121,6 +121,34 @@ assert.throws(() => parsePort('nope'), /OUTLOOK_DESKTOP_PORT/)
   await waitForHealth(`http://127.0.0.1:${okPort}/health`, 3000, { requestTimeoutMs: 500 })
   ok.close()
 
+  // Health: instanceToken handshake verify
+  const handshakeToken = 'token-secret-test-123'
+  const tokenServer = http.createServer((_req, res) => {
+    res.setHeader('X-Instance-Token', handshakeToken)
+    res.statusCode = 200
+    res.end()
+  })
+  await new Promise((r) => tokenServer.listen(0, '127.0.0.1', r))
+  const tokenPort = tokenServer.address().port
+  await waitForHealth(`http://127.0.0.1:${tokenPort}/health`, 3000, {
+    instanceToken: handshakeToken,
+    requestTimeoutMs: 500,
+  })
+
+  // Health: instanceToken mismatch must fail
+  let tokenMismatchFailed = false
+  try {
+    await waitForHealth(`http://127.0.0.1:${tokenPort}/health`, 800, {
+      instanceToken: 'wrong-token',
+      requestTimeoutMs: 200,
+    })
+  } catch (e) {
+    tokenMismatchFailed = true
+    assert.match(String(e.message), /token mismatch|timeout/)
+  }
+  assert.ok(tokenMismatchFailed, 'instanceToken mismatch must fail')
+  tokenServer.close()
+
   console.log('desktop startup: ok')
 })().catch((err) => {
   console.error(err)

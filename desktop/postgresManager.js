@@ -256,7 +256,12 @@ PostgresManager.prototype.start = function start() {
       dataRoot: this.paths().dataRoot,
     }
   }
-  if (st.running) return { ok: true, alreadyRunning: true, ...this.status() }
+  if (st.running) {
+    const bins = this.hasBinaries()
+    const created = this.ensureDatabase(bins)
+    if (!created.ok) return created
+    return { ok: true, alreadyRunning: true, ...this.status() }
+  }
   const init = this.initIfNeeded()
   if (!init.ok) return init
   const bins = this.hasBinaries()
