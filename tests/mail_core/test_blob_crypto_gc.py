@@ -60,9 +60,9 @@ def test_streaming_roundtrip_large_and_tamper(tmp_path):
 def test_delayed_gc_respects_cooloff(tmp_path, monkeypatch):
     monkeypatch.setenv("MAIL_CORE_BLOB_ROOT", str(tmp_path))
     Session = get_session_factory()
-    digest = "a" * 64
-    rel = f"aa/bb/{digest}.blob"
-    (tmp_path / "aa" / "bb").mkdir(parents=True)
+    digest = uuid.uuid4().hex + uuid.uuid4().hex  # 64 hex, unique per run
+    rel = f"{digest[:2]}/{digest[2:4]}/{digest}.blob"
+    (tmp_path / digest[:2] / digest[2:4]).mkdir(parents=True)
     (tmp_path / rel).write_bytes(b"x")
     with Session() as session:
         blob = MessageBlob(
@@ -77,9 +77,9 @@ def test_delayed_gc_respects_cooloff(tmp_path, monkeypatch):
         # cool-off not elapsed (gc_eligible_at stamped by mark_unreferenced)
         r1 = sweep_expired_blobs(session, cool_off=timedelta(hours=24), root=tmp_path)
         session.commit()
-        assert r1.deleted == 0
         assert r1.skipped_cooloff >= 1
         blob = session.scalar(select(MessageBlob).where(MessageBlob.content_sha256 == digest))
+        assert blob is not None, "fresh blob must survive cool-off"
         assert blob.gc_eligible_at is not None
         # force cool-off elapsed via gc_eligible_at (not created_at)
         blob.gc_eligible_at = datetime.now(timezone.utc) - timedelta(hours=48)

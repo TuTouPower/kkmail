@@ -22,6 +22,7 @@ No send/SMTP. Access tokens are never logged.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -66,6 +67,7 @@ class OAuthTokenClient:
     http_post: TokenHttpFn | None = None
     skew_seconds: float = 60.0
     _cached: dict[str, Any] = field(default_factory=dict, repr=False)
+    _refresh_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def _load(self) -> dict[str, Any]:
         if self._cached:
@@ -108,43 +110,45 @@ class OAuthTokenClient:
             return False
 
     def get_access_token(self, *, force_refresh: bool = False) -> str:
-        data = self._load()
-        if not force_refresh and self._access_valid(data):
-            return str(data["access_token"])
-        refresh = data.get("refresh_token")
-        client_id = data.get("client_id")
-        client_secret = data.get("client_secret")
-        if not refresh or not client_id:
-            raise OAuthError("credential JSON missing refresh_token or client_id")
-        form = {
-            "grant_type": "refresh_token",
-            "refresh_token": str(refresh),
-            "client_id": str(client_id),
-        }
-        if client_secret:
-            form["client_secret"] = str(client_secret)
-        if data.get("scope"):
-            form["scope"] = str(data["scope"])
-        uri = self.token_uri()
-        if self.http_post is None:
-            raise OAuthError("no token HTTP client configured (inject http_post for tests / wire urllib)")
-        try:
-            resp = self.http_post("POST", uri, form, {"Content-Type": "application/x-www-form-urlencoded"})
-        except ProviderHttpError as exc:
-            raise OAuthError(f"token endpoint HTTP {exc.status}: {exc}") from exc
-        if resp.get("error"):
-            raise OAuthError(f"token endpoint error: {resp.get('error')} {resp.get('error_description')}")
-        access = resp.get("access_token")
-        if not access:
-            raise OAuthError("token endpoint returned no access_token")
-        data["access_token"] = access
-        if resp.get("refresh_token"):
-            data["refresh_token"] = resp["refresh_token"]
-        expires_in = resp.get("expires_in")
-        if expires_in is not None:
-            data["expires_at"] = time.time() + float(expires_in)
-        self._persist(data)
-        return str(access)
+        # Serialize refresh so concurrent callers share one token grant.
+        with self._refresh_lock:
+            data = self._load()
+            if not force_refresh and self._access_valid(data):
+                return str(data["access_token"])
+            refresh = data.get("refresh_token")
+            client_id = data.get("client_id")
+            client_secret = data.get("client_secret")
+            if not refresh or not client_id:
+                raise OAuthError("credential JSON missing refresh_token or client_id")
+            form = {
+                "grant_type": "refresh_token",
+                "refresh_token": str(refresh),
+                "client_id": str(client_id),
+            }
+            if client_secret:
+                form["client_secret"] = str(client_secret)
+            if data.get("scope"):
+                form["scope"] = str(data["scope"])
+            uri = self.token_uri()
+            if self.http_post is None:
+                raise OAuthError("no token HTTP client configured (inject http_post for tests / wire urllib)")
+            try:
+                resp = self.http_post("POST", uri, form, {"Content-Type": "application/x-www-form-urlencoded"})
+            except ProviderHttpError as exc:
+                raise OAuthError(f"token endpoint HTTP {exc.status}: {exc}") from exc
+            if resp.get("error"):
+                raise OAuthError(f"token endpoint error: {resp.get('error')} {resp.get('error_description')}")
+            access = resp.get("access_token")
+            if not access:
+                raise OAuthError("token endpoint returned no access_token")
+            data["access_token"] = access
+            if resp.get("refresh_token"):
+                data["refresh_token"] = resp["refresh_token"]
+            expires_in = resp.get("expires_in")
+            if expires_in is not None:
+                data["expires_at"] = time.time() + float(expires_in)
+            self._persist(data)
+            return str(access)
 
 
 def default_urllib_token_post(
@@ -168,6 +172,8 @@ def default_urllib_token_post(
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         raise ProviderHttpError(raw or str(exc), status=exc.code, body=raw) from exc
+    except urllib.error.URLError as exc:
+        raise ProviderHttpError(f"token transport error: {exc.reason}", status=None) from exc
 
 
 @dataclass
@@ -290,3 +296,5 @@ def urllib_json_request(
         if exc.code in (404, 410) and _url_is_sync_cursor_endpoint(url):
             raise CursorInvalidError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
         raise ProviderHttpError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
+    except urllib.error.URLError as exc:
+        raise ProviderHttpError(f"transport error: {exc.reason}", status=None) from exc
