@@ -35,7 +35,7 @@ def _reclaim_once() -> int:
         from mail_core.blobs.archive import reclaim_stale_archive_claims
         from mail_core.db.session import get_session_factory
         from mail_core.realtime.outbox import prune_dispatched
-        from mail_core.sync.jobs import reclaim_stale_claims
+        from mail_core.sync.jobs import prune_completed_jobs, reclaim_stale_claims
     except Exception as exc:  # pragma: no cover
         log.error("worker degraded: reclaim imports failed (%s); skipping reclaim", exc)
         return 0
@@ -52,8 +52,11 @@ def _reclaim_once() -> int:
             pruned = prune_dispatched(session, older_than=timedelta(days=7), limit=2000)
             if pruned:
                 log.info("pruned %s dispatched outbox row(s)", pruned)
+            pruned_jobs = prune_completed_jobs(session, older_than=timedelta(days=7), limit=1000)
+            if pruned_jobs:
+                log.info("pruned %s completed/failed worker job(s)", pruned_jobs)
             session.commit()
-            return n + a + pruned
+            return n + a + pruned + pruned_jobs
         except Exception:
             session.rollback()
             log.exception("reclaim_stale_claims failed")
