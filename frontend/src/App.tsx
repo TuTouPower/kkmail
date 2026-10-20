@@ -3,25 +3,40 @@ import { useMailStore } from './store/mailStore'
 import Sidebar from './components/Sidebar'
 import MessageList from './components/MessageList'
 import MessageReader from './components/MessageReader'
+import SettingsPage from './components/SettingsModal'
 import LoginPage from './components/LoginPage'
 import ComposeModal from './components/ComposeModal'
+import ColumnResize from './components/ColumnResize'
 import { UNAUTHORIZED_EVENT, api } from './api/client'
 import { queryClient } from './api/queries'
 import './design-system/tokens.css'
 import { useIsWide } from './lib/viewport'
 
+function resolveTheme(theme: 'dark' | 'light' | 'system'): 'dark' | 'light' {
+  if (theme !== 'system') return theme
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
 function App() {
-  const { theme, mobileView, sidebarCollapsed, mobileSidebarOpen, closeMobileSidebar } = useMailStore()
+  const {
+    theme, mobileView, sidebarCollapsed, mobileSidebarOpen, closeMobileSidebar,
+    settingsOpen, sidebarWidth, listWidth, setSidebarWidth, setListWidth,
+  } = useMailStore()
   const [authed, setAuthed] = useState<boolean | null>(null)
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme
+    const apply = () => { document.documentElement.dataset.theme = resolveTheme(theme) }
+    apply()
+    if (theme !== 'system') return
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = () => apply()
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
   }, [theme])
 
   const wide = useIsWide()
   const drawerOpen = mobileSidebarOpen && !wide
 
-  // Mobile drawer: Escape closes it and the page behind must not scroll.
   useEffect(() => {
     if (!drawerOpen) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMobileSidebar() }
@@ -34,7 +49,6 @@ function App() {
     }
   }, [drawerOpen, closeMobileSidebar])
 
-  // Leaving the mobile layout must not leave a stale open drawer behind.
   useEffect(() => {
     if (wide && mobileSidebarOpen) closeMobileSidebar()
   }, [wide, mobileSidebarOpen, closeMobileSidebar])
@@ -43,7 +57,6 @@ function App() {
     let cancelled = false
     api.checkSession()
       .then((ok) => { if (!cancelled) setAuthed(ok) })
-      // Network/server error: keep the shell usable; individual queries show errors.
       .catch(() => { if (!cancelled) setAuthed(true) })
     const onUnauthorized = () => setAuthed(false)
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
@@ -60,25 +73,54 @@ function App() {
     return <LoginPage onSuccess={() => { setAuthed(true); void queryClient.invalidateQueries() }} />
   }
 
+  const gridStyle = wide && !sidebarCollapsed
+    ? {
+        gridTemplateColumns: settingsOpen
+          ? `${sidebarWidth}px minmax(0, 1fr)`
+          : `${sidebarWidth}px ${listWidth}px minmax(0, 1fr)`,
+      }
+    : undefined
+
   return (
     <div
-      className={['app', drawerOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : ''].filter(Boolean).join(' ')}
+      className={['app', drawerOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : '', settingsOpen ? 'settings-mode' : ''].filter(Boolean).join(' ')}
       data-mobile-view={mobileView}
+      style={{
+        // CSS variables drive column widths for tokens.css fallbacks too.
+        ['--sidebar-w' as string]: `${sidebarWidth}px`,
+        ['--list-w' as string]: `${listWidth}px`,
+      }}
     >
-      <div className="workspace">
+      <div className="workspace" style={gridStyle}>
         <Sidebar />
+        {wide && !sidebarCollapsed && (
+          <ColumnResize
+            ariaLabel="调整侧栏宽度"
+            onDrag={(dx) => setSidebarWidth(sidebarWidth + dx)}
+          />
+        )}
         {drawerOpen && (
           <div
             className="drawer-backdrop"
             data-testid="drawer-backdrop"
             aria-hidden="true"
-            // Close on click (not pointerdown): the backdrop must still be under
-            // the pointer when the click fires, or the tap lands on the list.
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeMobileSidebar() }}
           />
         )}
-        <MessageList />
-        <MessageReader />
+        {settingsOpen ? (
+          <SettingsPage />
+        ) : (
+          <>
+            <MessageList />
+            {wide && (
+              <ColumnResize
+                ariaLabel="调整邮件列表宽度"
+                onDrag={(dx) => setListWidth(listWidth + dx)}
+              />
+            )}
+            <MessageReader />
+          </>
+        )}
       </div>
       <ComposeModal />
     </div>

@@ -1024,3 +1024,98 @@ button:disabled {
 .message-row.apple-card .subject {
   margin-top: 2px;
 }
+
+/* Column drag handles */
+.column-resize {
+  width: 5px;
+  margin: 0 -2px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 5;
+  background: transparent;
+  touch-action: none;
+  flex: 0 0 auto;
+}
+.column-resize:hover,
+.column-resize:focus-visible {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.workspace {
+  /* allow resize handles as extra grid tracks via explicit style from App */
+}
+
+/* Settings as full right-hand page */
+.settings-page {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--reader);
+  grid-column: 2 / -1;
+  overflow: hidden;
+}
+.settings-page-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+.settings-back {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  white-space: nowrap;
+}
+.settings-page-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+.settings-nav {
+  width: 180px;
+  flex: 0 0 auto;
+  padding: 12px 10px;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+}
+.settings-nav-item {
+  text-align: left;
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.settings-nav-item.active,
+.settings-nav-item[aria-current="page"] {
+  background: var(--selected);
+  color: var(--text);
+}
+.settings-page .settings-content {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 22px 24px 40px;
+}
+@media (max-width: 760px) {
+  .settings-page { grid-column: 1; }
+  .settings-page-body { flex-direction: column; }
+  .settings-nav {
+    width: 100%;
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+  }
+  .column-resize { display: none; }
+}
