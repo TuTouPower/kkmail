@@ -64,21 +64,16 @@ class GraphProvider:
 
     def list_folders(self) -> Sequence[RemoteFolder]:
         self._calls.append("list_folders")
-        if self.transport is not None:
-            data = self._call("GET", "/me/mailFolders", {})
-            return [
-                RemoteFolder(
-                    remote_id=f["id"],
-                    name=f.get("displayName") or f["id"],
-                    role=f.get("role") or "other",
-                )
-                for f in data.get("value") or []
-            ]
+        if self.transport is None:
+            raise GraphNotConfiguredError("Graph HTTP transport not configured")
+        data = self._call("GET", "/me/mailFolders", {})
         return [
-            RemoteFolder("inbox", "Inbox", "inbox"),
-            RemoteFolder("sentitems", "Sent Items", "sent"),
-            RemoteFolder("deleteditems", "Deleted Items", "trash"),
-            RemoteFolder("junkemail", "Junk Email", "junk"),
+            RemoteFolder(
+                remote_id=f["id"],
+                name=f.get("displayName") or f["id"],
+                role=f.get("role") or "other",
+            )
+            for f in data.get("value") or []
         ]
 
     def full_scan(self, folder_remote_id: str, cursor: dict[str, Any] | None) -> MetadataPage:
@@ -97,7 +92,7 @@ class GraphProvider:
         items = [c.meta for c in page.changes if c.meta is not None]
         return MetadataPage(items=items, next_cursor=page.next_cursor, exhausted=page.exhausted)
 
-    def fetch_mime(self, remote_id: str) -> bytes:
+    def fetch_mime(self, remote_id: str, *, folder_remote_id: str | None = None) -> bytes:
         if self.transport is None:
             raise GraphNotConfiguredError("Graph $value MIME not wired yet")
         data = self._call("GET", f"/me/messages/{remote_id}/$value", {})

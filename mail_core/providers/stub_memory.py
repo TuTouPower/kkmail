@@ -135,7 +135,7 @@ class MemoryProvider:
             exhausted=exhausted,
         )
 
-    def fetch_mime(self, remote_id: str) -> bytes:
+    def fetch_mime(self, remote_id: str, *, folder_remote_id: str | None = None) -> bytes:
         if remote_id not in self.mime:
             raise KeyError(remote_id)
         return self.mime[remote_id]
