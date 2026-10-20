@@ -118,10 +118,58 @@ class GraphProvider:
         return parse_graph_delta(data)
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
+        from mail_core.providers.remote_writeback import (
+            OP_MARK_READ,
+            OP_MOVE,
+            OP_SET_FLAG,
+            OP_TRASH,
+            normalize_op_type,
+            require_remote_id,
+        )
+
         if self.transport is None:
             raise GraphNotConfiguredError("Graph patch/move not wired yet")
-        data = self._call("PATCH", "/me/messages", {"op": op_type, **desired_state})
-        return RemoteOperationResult(success=bool(data.get("success", True)), remote_state=data.get("remote_state") or {})
+        try:
+            remote_id = require_remote_id(desired_state)
+        except ValueError as exc:
+            return RemoteOperationResult(success=False, error=str(exc))
+        op = normalize_op_type(op_type)
+        msg_path = f"/me/messages/{remote_id}"
+
+        if op == OP_MARK_READ:
+            want = bool(desired_state.get("is_read", True))
+            data = self._call("PATCH", msg_path, {"isRead": want})
+            return RemoteOperationResult(success=True, remote_state={"is_read": data.get("isRead", want)})
+
+        if op == OP_SET_FLAG:
+            want = bool(desired_state.get("is_flagged", True))
+            data = self._call("PATCH", msg_path, {"flag": {"flagStatus": "flagged" if want else "notFlagged"}})
+            return RemoteOperationResult(success=True, remote_state={"is_flagged": want, "flag": data.get("flag")})
+
+        if op == OP_MOVE:
+            dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
+            if not dest:
+                return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
+            data = self._call("POST", f"{msg_path}/move", {"destinationId": dest})
+            return RemoteOperationResult(
+                success=True,
+                remote_state={"folder_remote_id": data.get("parentFolderId") or dest, "id": data.get("id") or remote_id},
+            )
+
+        if op == OP_TRASH:
+            # Soft-delete: move to deleteditems when provided, else DELETE
+            trash = str(desired_state.get("trash_folder_remote_id") or "deleteditems")
+            try:
+                data = self._call("POST", f"{msg_path}/move", {"destinationId": trash})
+                return RemoteOperationResult(
+                    success=True,
+                    remote_state={"folder_remote_id": data.get("parentFolderId") or trash},
+                )
+            except Exception:
+                self._call("DELETE", msg_path, {})
+                return RemoteOperationResult(success=True, remote_state={"deleted": True})
+
+        return RemoteOperationResult(success=False, error=f"unsupported graph op {op_type}")
 
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
         if self.transport is None:

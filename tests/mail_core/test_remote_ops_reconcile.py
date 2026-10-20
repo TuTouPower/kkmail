@@ -129,3 +129,66 @@ def test_reconcile_skips_without_full_scan():
     finally:
         _restore(originals)
         set_credential_store(None)
+
+
+def test_push_flag_move_trash_memory():
+    store = DictCredentialStore({"r": "x"})
+    set_credential_store(store)
+    now = datetime.now(timezone.utc)
+    provider = MemoryProvider(
+        folders=[
+            RemoteFolder("INBOX", "INBOX", "inbox"),
+            RemoteFolder("Archive", "Archive", "archive"),
+            RemoteFolder("Trash", "Trash", "trash"),
+        ]
+    )
+    provider.seed(
+        "INBOX",
+        [
+            RemoteMessageMeta("1", "A", "a@b.c", "A", now, False, False, uid=1),
+            RemoteMessageMeta("2", "B", "a@b.c", "A", now, False, False, uid=2),
+        ],
+    )
+    originals = _patch_provider(provider)
+    Session = get_session_factory()
+    try:
+        with Session() as session:
+            acc = create_account(
+                session, email=f"rop3-{uuid.uuid4().hex[:8]}@ex.com", provider="memory", credential_ref="r"
+            )
+            session.commit()
+            account_id = acc.id
+        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        with Session() as session:
+            folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"] is True
+
+        with Session() as session:
+            enqueue_remote_operation(
+                session,
+                account_id=account_id,
+                entity_key="msg:1:flag",
+                op_type="set_flag",
+                desired_state={"remote_id": "1", "folder_remote_id": "INBOX", "is_flagged": True},
+            )
+            enqueue_remote_operation(
+                session,
+                account_id=account_id,
+                entity_key="msg:2:move",
+                op_type="move",
+                desired_state={
+                    "remote_id": "2",
+                    "folder_remote_id": "INBOX",
+                    "dest_folder_remote_id": "Archive",
+                },
+            )
+            session.commit()
+
+        pushed = push_remote_operations(account_id, worker_id="w", store=store, limit=10)
+        assert pushed["status"] == "ok"
+        assert pushed["pushed"] == 2
+        assert "1" in provider.flagged
+        assert any(m.remote_id == "2" for m in provider.messages.get("Archive", []))
+    finally:
+        _restore(originals)
+        set_credential_store(None)
