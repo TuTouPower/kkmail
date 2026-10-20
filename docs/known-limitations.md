@@ -23,13 +23,15 @@ The design system includes move and archive actions. Upstream mail routes suppor
 Verified in this development environment:
 
 - Linux AppImage and deb build with `cd desktop && npm run dist:linux`.
+- Windows unpacked app and zip build with signing disabled. NSIS installer needs Wine on Linux.
 - PyInstaller sidecar builds with `./scripts/build-sidecar.sh`.
-- Backend test suite: 754 passed.
+- Browser login into the React shell was verified against a local Flask server.
+- Backend test suite: 756 passed.
 
 Blocked here:
 
 - No Docker daemon, so the multi-stage image was not run.
-- Windows packaging fails in this Linux environment during signing/app-builder execution.
+- Windows NSIS installer requires Wine when built on Linux.
 - macOS packages must be built on macOS.
 
 CI workflows are in `.github/workflows/desktop.yml` and `.github/workflows/tests.yml`.
