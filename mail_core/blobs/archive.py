@@ -5,11 +5,14 @@ Never pre-creates millions of job rows; selects a limited batch each run.
 
 from __future__ import annotations
 
+import email
+from email.policy import default as default_policy
 import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import and_, or_, select, update
 
@@ -21,10 +24,12 @@ from mail_core.security.redact import safe_error
 from mail_core.mail.domain.enums import ArchiveState, JobType, OutboxEventType
 from mail_core.mail.storage.models import (
     Account,
+    Attachment,
     Message,
     MessageArchiveState,
     MessageBlob,
     MessageBlobLink,
+    MessageBody,
     OutboxEvent,
 )
 from mail_core.providers.factory import build_provider
@@ -39,6 +44,90 @@ DEFAULT_BATCH = 20
 
 def blob_root() -> Path:
     return Path(os.environ.get("MAIL_CORE_BLOB_ROOT", "[REDACTED]mail-core-blobs"))
+
+
+def parse_mime_content(
+    mime_bytes: bytes,
+) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+    """Parse raw MIME bytes into (text_plain, text_html, attachments)."""
+    msg = email.message_from_bytes(mime_bytes, policy=default_policy)
+    text_plain_parts: list[str] = []
+    text_html_parts: list[str] = []
+    attachments: list[dict[str, Any]] = []
+
+    part_index = 0
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+
+        disposition = part.get_content_disposition()
+        filename = part.get_filename()
+        content_id_raw = part.get("Content-ID")
+        content_id = content_id_raw.strip("<>") if content_id_raw else None
+        content_type = part.get_content_type() or "application/octet-stream"
+
+        is_attachment = disposition == "attachment" or filename is not None
+        is_inline_asset = (
+            disposition == "inline"
+            and (content_id is not None or not content_type.startswith("text/"))
+        ) or (
+            not disposition
+            and not filename
+            and not content_type.startswith("text/")
+        )
+
+        if is_attachment or is_inline_asset:
+            part_index += 1
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                raw_p = part.get_payload()
+                if isinstance(raw_p, str):
+                    payload = raw_p.encode("utf-8", errors="replace")
+                elif isinstance(raw_p, bytes):
+                    payload = raw_p
+                else:
+                    payload = b""
+
+            clean_filename = Path(filename).name if filename else ""
+            if not clean_filename:
+                param_name = part.get_param("name")
+                if param_name:
+                    clean_filename = Path(str(param_name)).name
+            if not clean_filename:
+                clean_filename = f"inline_{content_id}" if content_id else f"attachment_{part_index}.bin"
+
+            attachments.append(
+                {
+                    "filename": clean_filename[:512],
+                    "content_type": content_type[:255],
+                    "size_bytes": len(payload),
+                    "content_id": content_id[:255] if content_id else None,
+                    "is_inline": disposition == "inline" or bool(content_id),
+                    "data": payload,
+                }
+            )
+        else:
+            try:
+                content = part.get_content()
+            except Exception:
+                raw = part.get_payload(decode=True)
+                if isinstance(raw, bytes):
+                    content = raw.decode("utf-8", errors="replace")
+                elif isinstance(raw, str):
+                    content = raw
+                else:
+                    content = ""
+            if not isinstance(content, str):
+                content = str(content)
+
+            if content_type == "text/plain":
+                text_plain_parts.append(content)
+            elif content_type == "text/html":
+                text_html_parts.append(content)
+
+    text_plain = "\n\n".join(text_plain_parts) if text_plain_parts else None
+    text_html = "\n".join(text_html_parts) if text_html_parts else None
+    return text_plain, text_html, attachments
 
 
 def _priority_for(sort_time: datetime, *, now: datetime, recent_days: int) -> int:
@@ -314,6 +403,75 @@ def run_archive_batch(
                 session.add(MessageBlobLink(message_id=mid, blob_id=blob.id))
                 blob.ref_count = int(blob.ref_count) + 1
                 blob.gc_eligible_at = None
+
+            # Parse MIME body and attachments into domain models (V2-03)
+            try:
+                plain_text, html_text, parsed_attachments = parse_mime_content(mime)
+                body = session.get(MessageBody, mid)
+                if body is None:
+                    session.add(MessageBody(message_id=mid, text_plain=plain_text, text_html=html_text))
+                else:
+                    body.text_plain = plain_text
+                    body.text_html = html_text
+                    body.parse_error = None
+                    body.updated_at = datetime.now(timezone.utc)
+
+                if parsed_attachments:
+                    msg_record = session.get(Message, mid)
+                    if msg_record is not None:
+                        msg_record.has_attachments = True
+
+                    existing_atts = session.scalars(
+                        select(Attachment).where(Attachment.message_id == mid)
+                    ).all()
+                    existing_keys = {
+                        (att.filename, att.content_id) for att in existing_atts
+                    }
+
+                    for att_info in parsed_attachments:
+                        key = (att_info["filename"], att_info["content_id"])
+                        if key in existing_keys:
+                            continue
+                        existing_keys.add(key)
+
+                        att_write = blob_store.put(att_info["data"])
+                        att_blob = session.scalar(
+                            select(MessageBlob).where(
+                                MessageBlob.content_sha256 == att_write.content_sha256,
+                                MessageBlob.key_version == att_write.key_version,
+                            )
+                        )
+                        if att_blob is None:
+                            att_blob = MessageBlob(
+                                content_sha256=att_write.content_sha256,
+                                key_version=att_write.key_version,
+                                size_bytes=att_write.size_bytes,
+                                storage_path=att_write.storage_path,
+                                ref_count=0,
+                            )
+                            session.add(att_blob)
+                            session.flush()
+
+                        attachment = Attachment(
+                            message_id=mid,
+                            blob_id=att_blob.id,
+                            filename=att_info["filename"],
+                            content_type=att_info["content_type"],
+                            size_bytes=att_info["size_bytes"],
+                            content_id=att_info["content_id"],
+                            is_inline=att_info["is_inline"],
+                        )
+                        session.add(attachment)
+                        att_blob.ref_count = int(att_blob.ref_count) + 1
+                        att_blob.gc_eligible_at = None
+            except Exception as parse_exc:
+                log.warning("archive mime parse error for message %s: %s", mid, safe_error(parse_exc))
+                body = session.get(MessageBody, mid)
+                if body is None:
+                    session.add(MessageBody(message_id=mid, parse_error=safe_error(parse_exc)[:2000]))
+                else:
+                    body.parse_error = safe_error(parse_exc)[:2000]
+
             apply_transition(st, ArchiveState.ARCHIVE_COMPLETE)
             st.claimed_by = None
             st.updated_at = datetime.now(timezone.utc)
