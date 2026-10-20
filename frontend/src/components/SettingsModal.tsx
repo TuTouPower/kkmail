@@ -31,6 +31,9 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const logsQuery = useQuery({ queryKey: ['forwarding-logs'], queryFn: async () => (await api.getForwardingLogs()).logs || [], enabled: open && section === 'general' })
+  const sharesQuery = useQuery({ queryKey: ['shares'], queryFn: async () => (await api.getEmailShares()).shares || [], enabled: open && section === 'general' })
+  const [groupName, setGroupName] = useState('')
+  const [tagName, setTagName] = useState('')
   const [tempMessages, setTempMessages] = useState<Array<{ id?: string; subject?: string; from_address?: string }>>([])
 
   if (!open) return null
@@ -120,7 +123,31 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             }} style={{ marginLeft: 8, height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>提交重新授权</button>
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
+          <div style={{ marginTop: 12, fontSize: 14, fontWeight: 700 }}>分组与标签</div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="新分组名称" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+            <button type="button" onClick={async () => {
+              const res = await api.createGroup({ name: groupName })
+              setToolStatus(res.success ? '分组已创建' : (res.error || '创建失败'))
+              setGroupName('')
+              await qc.invalidateQueries({ queryKey: queryKeys.groups })
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>创建分组</button>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input value={tagName} onChange={(e) => setTagName(e.target.value)} placeholder="新标签" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+            <button type="button" onClick={async () => {
+              const res = await api.createTag(tagName)
+              setToolStatus(res.success ? '标签已创建' : (res.error || '创建失败'))
+              setTagName('')
+              await qc.invalidateQueries({ queryKey: ['tags'] })
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>创建标签</button>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
             标签 {(tagsQuery.data || []).length} 个 · 临时邮箱 {(tempQuery.data || []).length} 个
+            {(tagsQuery.data || []).map((t) => (
+              <button key={t.id} type="button" onClick={async () => { await api.deleteTag(t.id); await qc.invalidateQueries({ queryKey: ['tags'] }) }} style={{ marginLeft: 6, border: 0, background: 'transparent', color: 'var(--danger)' }}>{t.name} ×</button>
+            ))}
+          </div>
           </div>
           <div style={{ marginTop: 22, fontSize: 16, fontWeight: 700 }}>OAuth / 转发 / 项目</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
@@ -245,7 +272,17 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
                 const row = log as { id?: number; account_email?: string; status?: string; created_at?: string }
                 return <div key={row.id} style={{ fontSize: 12, padding: '4px 0', borderBottom: '1px solid var(--line)' }}>{row.account_email} · {row.status} · {row.created_at}</div>
               })}
-              <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>常规设置</div>
+              <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>令牌刷新与邮件分享</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button type="button" onClick={async () => {
+                  const res = await api.refreshAll()
+                  setToolStatus(res.message || res.error || '已请求刷新全部令牌')
+                }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>刷新全部令牌</button>
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
+                分享 {(sharesQuery.data || []).length} 条
+                {(sharesQuery.data || []).slice(0, 5).map((s) => ` · ${s.email || s.id}`)}
+              </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                 <input value={timezone || settingsQuery.data?.app_timezone || ''} onChange={(e) => setTimezone(e.target.value)} placeholder="时区 Asia/Shanghai" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
                 <input value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} placeholder="超时秒" style={{ width: 90, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />

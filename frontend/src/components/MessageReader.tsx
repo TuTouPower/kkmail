@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Reply, Forward, MailOpen, Trash2, Flag, Folder, MoreHorizontal, ArrowLeft } from 'lucide-react'
+import { Reply, ReplyAll, Forward, MailOpen, Trash2, Flag, Folder, Archive, ShieldAlert, ArrowLeft } from 'lucide-react'
 import { api } from '../api/client'
 import { fetchAccounts, fetchEmailDetail, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
@@ -55,12 +55,12 @@ export default function MessageReader() {
             body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
             accountId: selected.accountId,
           })}><Reply size={15} /></button>
-          <button className="reader-action" title="全部回复" onClick={() => openCompose('reply', {
+          <button className="reader-action" title="全部回复" aria-label="回复全部" onClick={() => openCompose('reply', {
             to: [selected.from, detail?.to || selected.to].filter(Boolean).join(', '),
             subject: `Re: ${detail?.subject || selected.subject}`,
             body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
             accountId: selected.accountId,
-          })}>全</button>
+          })}><ReplyAll size={15} /></button>
           <button className="reader-action" title="转发" onClick={() => openCompose('forward', {
             subject: `Fwd: ${detail?.subject || selected.subject}`,
             body: `\n\n—— 转发邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
@@ -68,14 +68,16 @@ export default function MessageReader() {
           })}><Forward size={15} /></button>
           <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
           <button className="reader-action" title="标为已读" onClick={markCurrent}><MailOpen size={15} /></button>
-          <button className="reader-action" title="删除" onClick={async () => {
+          <button className="reader-action" title="归档（后端暂无归档接口）" aria-label="归档"><Archive size={15} /></button>
+          <button className="reader-action" title="移到废纸篓" aria-label="移到废纸篓" onClick={async () => {
             if (!selected) return
             await api.deleteEmails({ email: selected.accountEmail, folder: selected.folder || 'inbox', items: [{ id: selected.id, folder: selected.folder, id_mode: selected.id_mode }] })
             await queryClient.invalidateQueries({ queryKey: ['emails'] })
           }}><Trash2 size={15} /></button>
-          <button className="reader-action" title={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记'} onClick={() => selectedKey && toggleFlag(selectedKey)}><Flag size={15} /></button>
-          <button className="reader-action" title="移动"><Folder size={15} /></button>
-          <button className="reader-action" title="更多"><MoreHorizontal size={15} /></button>
+          <button className="reader-action" title="标记为垃圾邮件（后端暂无移动接口）" aria-label="标记为垃圾邮件"><ShieldAlert size={15} /></button>
+          <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
+          <button className="reader-action" title="移动到文件夹（后端暂无移动接口）" aria-label="移动到文件夹"><Folder size={15} /></button>
+          <button className="reader-action" title={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-label="标记邮件" onClick={() => selectedKey && toggleFlag(selectedKey)}><Flag size={15} /></button>
         </div>
       </div>
       <div className="reader-scroll">
