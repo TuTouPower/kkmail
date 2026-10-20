@@ -129,9 +129,18 @@ class OutboxDispatcher:
         """
         account_id = event.get("account_id")
         with self._lock:
-            targets = list(self._subs.get("*", []))
             if account_id:
+                targets = list(self._subs.get("*", []))
                 targets.extend(self._subs.get(str(account_id), []))
+            else:
+                # Broadcast global events (account_id is None) to all active subscribers
+                seen_q_ids = set()
+                targets = []
+                for sub_list in self._subs.values():
+                    for loop, q in sub_list:
+                        if id(q) not in seen_q_ids:
+                            seen_q_ids.add(id(q))
+                            targets.append((loop, q))
         if not targets:
             return True
         ok = True
