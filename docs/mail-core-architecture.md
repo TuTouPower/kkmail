@@ -7,7 +7,7 @@
 | 文档状态 | **已定稿，供实现** |
 | 受众 | 产品负责人（锋 张）、后续实现者 |
 | 产品 | kkmail 邮件内核（mail-core）重写 |
-| 范围边界 | **本阶段不含**：发送（compose/send）、联系人、系统通知推送 |
+| 范围边界 | **本阶段不含**：发送（compose/send）、联系人、系统通知推送。**永久不做**：浏览器扩展（Chrome/Firefox 等）— cancelled / wontfix，永不交付 |
 | 数据策略 | 旧邮件缓存**不作为真相源**；新建邮件库（greenfield）；账号/设置/凭证仅做高层迁移 |
 | 架构形态 | 模块化单体（modular monolith）+ 独立 Worker；统一邮件模型 |
 | 修订原则 | 保留原提案全部支柱；仅吸收已确认的六项修订，不重新争论 FastAPI vs Flask，不放弃 Gmail |
@@ -85,6 +85,7 @@
 - Kafka / RabbitMQ / NATS
 - 微服务拆分与独立部署的 sync-service
 - WebSocket（实时通道选定 SSE）
+- **浏览器扩展**（永久 out of scope / wontfix；旧 `browser-extension/` 与 `/api/extension/*` 已删除，不再恢复）
 
 ---
 
@@ -476,7 +477,7 @@ metadata_synced → archive_pending → archive_in_progress → archive_complete
 | `message_locations` | 消息与文件夹关系（多标签场景） |
 | `message_bodies` | 解析后的文本/HTML 摘要引用（非权威） |
 | `message_blobs` | MIME/部件与内容哈希、加密密钥版本 |
-| `attachments` | 附件元数据；下载仅按 ID |
+| `attachments` | 附件元数据；下载仅按 UUID（能力模型，见 §11.4） |
 | `threads` | 线程实体 |
 | `thread_messages` | 线程成员 |
 | `sync_checkpoints` | 每账号/文件夹游标 |
@@ -502,7 +503,7 @@ metadata_synced → archive_pending → archive_in_progress → archive_complete
 | 解析 | 解析结果可丢可重算；解析失败保留 MIME |
 | GC | **延迟 GC**：引用计数/不可达标记后冷相删除；进行中的备份与重试需防误删 |
 | 备份 | 备份范围 = **PostgreSQL + blob 树**；备份包**独立密钥**加密 |
-| 附件访问 | API 仅接受 attachment ID；**禁止**路径型参数读盘 |
+| 附件访问 | API 仅接受 attachment UUID（单用户能力模型，见 §11.4）；**禁止**路径型参数读盘 |
 
 ### 10.3 核心不变量
 
@@ -536,13 +537,21 @@ metadata_synced → archive_pending → archive_in_progress → archive_complete
 | Docker | Volume **不**等于加密；部署文档**必须**要求主机磁盘/卷加密 |
 | 桌面 | 依赖 OS 磁盘加密 + Keychain；安装目录不含邮件数据 |
 
-### 11.4 应用层控件
+### 11.4 单用户与资源 UUID（能力模型）
 
-- 附件下载：仅 ID；鉴权到账号/消息可见性。
+mail-core 是**单用户实例**：一个登录密码 +（可选）Bearer API Key 保护整个实例；没有多租户、用户表或按用户的行级 ACL。
+
+在已通过 Cookie Session 或 API Key 认证的边界内，**资源 UUID 即能力（capability）**：知道消息 / 附件 / 账户等资源的 UUID，即可对该资源执行对应 API 操作。UUID **不是**多租户场景下的「IDOR 安全」标识——不要按「猜到 ID 也不能跨用户读」来评审或实现；实例级认证是唯一访问边界。未认证请求一律 401。
+
+附件下载仍**仅接受 UUID**（禁止路径型参数读盘）；这防的是路径穿越与任意文件读取，不是按账号的多租户隔离。
+
+### 11.5 应用层控件
+
+- 附件下载：仅 UUID；见上一节能力模型（非多租户可见性 ACL）。
 - HTML 邮件：**沙箱隔离**渲染；**远程图片默认关闭**。
 - 无受控网络/代理时，禁止公网暴露 API。
 
-### 11.5 密钥轮换
+### 11.6 密钥轮换
 
 - Blob 密钥版本写入 `message_blobs`（或密钥元表）；轮换可后台重封装。
 - 轮换不得阻塞同步；失败可重试。

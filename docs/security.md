@@ -10,6 +10,12 @@
 - 修改密码：`POST /api/auth/password`（需当前密码，新密码至少 8 位）。
 - `/health`、`/ready`、`/api/auth/login` 与 FastAPI 自带的 `/docs`、`/openapi.json` 不需要认证；后两者只暴露接口结构，不含数据。
 
+## 授权模型（单用户 · UUID 即能力）
+
+实例是**单用户**的：没有用户账户、角色或多租户隔离。Cookie Session 与 Bearer API Key 在实例内拥有同等完整访问权。
+
+在该认证边界内，消息、附件、账户等资源的 **UUID 是能力（capability）**——持有有效会话/密钥且知道 UUID，即可调用对应 API。不要把这些 UUID 当作多租户下的「防 IDOR」标识来设计或审计；实例级认证是唯一边界。附件仍只允许按 UUID 下载（拒绝路径参数），目的是防路径穿越，不是按账号的行级 ACL。
+
 ## 加密与密钥
 
 | 数据 | 保护 |
@@ -31,7 +37,11 @@
 ## 邮件内容
 
 - HTML 正文经 DOMPurify 清洗后放入 sandbox iframe（`srcDoc`），默认不加载远程图片。
-- 附件只能按 UUID 下载，响应带 `Content-Disposition: attachment` 与 `X-Content-Type-Options: nosniff`；路径形式的访问被拒绝。
+- 附件只能按 UUID 下载，响应带 `Content-Disposition: attachment` 与 `X-Content-Type-Options: nosniff`；路径形式的访问被拒绝（见上文「UUID 即能力」）。
+
+## 产品范围（安全相关）
+
+- **浏览器扩展永久不做**（cancelled / wontfix）：不提供扩展、不维护 `/api/extension/*` 登录桥，也不再恢复旧 `browser-extension/` 代码路径。客户端仅为同源 SPA 与桌面 Electron。
 
 ## 日志
 

@@ -292,7 +292,7 @@ components:
 
 ## Overview
 
-Mail is a multi-account email workspace inspired by the clarity, density, and restrained native feel of Apple Mail. It should feel focused, reliable, quiet, and efficient—not like a dashboard full of cards. The product is intended to run as a desktop application on macOS, Windows, and Linux, and as a responsive web application served from Docker. The same design language must work with a mouse, keyboard, touch input, and narrow mobile viewports.
+Mail is a multi-account email workspace inspired by the clarity, density, and restrained native feel of Apple Mail. It should feel focused, reliable, quiet, and efficient—not like a dashboard full of cards. The product is intended to run as a desktop application on macOS, Windows, and Linux, and as a responsive web application served from Docker. The same design language must work with a mouse, keyboard, touch input, and narrow mobile viewports. A browser extension is permanently out of scope (wontfix)—do not design extension chrome, side panels, or extension-only flows.
 
 The interface prioritizes the email itself. Avoid a permanent branded masthead: no decorative logo or product-name row at the top of the workspace. Use available vertical space for mail navigation, message lists, and reading. The sidebar starts with a compact collapse control above Personal Favorites. Settings live behind one settings entry at the bottom of the sidebar; account management and appearance preferences belong inside that settings surface rather than scattered across the main chrome.
 
