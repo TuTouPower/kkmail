@@ -1,5 +1,6 @@
 import { QueryClient } from '@tanstack/react-query'
 import { api, type AccountSummary } from './client'
+import { mailKey } from '../lib/mailKey'
 
 export interface GroupItem {
   id: number
@@ -84,7 +85,7 @@ export async function fetchAccounts(): Promise<AccountSummary[]> {
 /** The unified inbox fans out one request per account, so it is capped. */
 export const ALL_INBOX_ACCOUNT_LIMIT = 8
 
-function mapMail(raw: Record<string, unknown>, accountEmail: string, accountId?: number): MailItem {
+function mapMail(raw: Record<string, unknown>, accountEmail: string, accountId: number | undefined, listFolder: string): MailItem {
   return {
     id: String(raw.id || ''),
     subject: String(raw.subject || '无主题'),
@@ -94,26 +95,30 @@ function mapMail(raw: Record<string, unknown>, accountEmail: string, accountId?:
     is_read: Boolean(raw.is_read),
     has_attachments: Boolean(raw.has_attachments),
     body_preview: String(raw.body_preview || ''),
-    folder: String(raw.folder || ''),
+    // Always carry a concrete folder: IMAP UIDs are only unique per folder.
+    folder: String(raw.folder || (listFolder === 'all' ? 'inbox' : listFolder)),
     id_mode: String(raw.id_mode || ''),
     accountEmail,
     accountId,
   }
 }
 
-export async function fetchEmails(email: string, folder = 'inbox', accountId?: number): Promise<MailItem[]> {
-  const res = await api.getEmails(email, { folder, top: 40 })
+/** One slow/broken account must not hang the UI forever. */
+export const MAIL_FETCH_TIMEOUT_MS = 45_000
+
+export async function fetchEmails(email: string, folder = 'inbox', accountId?: number, signal?: AbortSignal): Promise<MailItem[]> {
+  const res = await api.getEmails(email, { folder, top: 40 }, { signal, timeoutMs: MAIL_FETCH_TIMEOUT_MS })
   if (res.success === false) {
     const err = res.error
     const message = typeof err === 'string' ? err : (err as { message?: string } | undefined)?.message || '获取邮件失败'
     throw new Error(message)
   }
   const rows = (res.emails || res.messages || res.items || []) as Record<string, unknown>[]
-  return rows.map((row) => mapMail(row, email, accountId))
+  return rows.map((row) => mapMail(row, email, accountId, folder))
 }
 
-export async function fetchEmailDetail(email: string, messageId: string, folder = 'inbox', idMode = ''): Promise<MailDetail> {
-  const res = await api.getEmailDetail(email, messageId, folder, idMode)
+export async function fetchEmailDetail(email: string, messageId: string, folder = 'inbox', idMode = '', signal?: AbortSignal): Promise<MailDetail> {
+  const res = await api.getEmailDetail(email, messageId, folder, idMode, { signal, timeoutMs: MAIL_FETCH_TIMEOUT_MS })
   if (res.success === false) {
     const err = res.error
     const message = typeof err === 'string' ? err : (err as { message?: string } | undefined)?.message || '获取邮件详情失败'
@@ -133,4 +138,52 @@ export async function markEmailsRead(email: string, items: Array<{ id: string; f
       id_mode: item.id_mode || '',
     })),
   })
+}
+
+/** Find a message in any cached list by its mailKey. */
+export function findCachedMail(key: string | null): MailItem | undefined {
+  if (!key) return undefined
+  for (const [, list] of queryClient.getQueriesData<MailItem[]>({ queryKey: ['emails'] })) {
+    const hit = (list || []).find((m) => mailKey(m) === key)
+    if (hit) return hit
+  }
+  return undefined
+}
+
+/** Optimistically update read state in every cached list (inbox, all-inbox, "all" folder). */
+export function setCachedReadState(keys: Iterable<string>, isRead: boolean) {
+  const wanted = new Set(keys)
+  queryClient.setQueriesData<MailItem[]>({ queryKey: ['emails'] }, (list) =>
+    list?.map((m) => (wanted.has(mailKey(m)) && m.is_read !== isRead ? { ...m, is_read: isRead } : m)),
+  )
+}
+
+/** Mark messages read with an optimistic cache update; reverts on failure. */
+export async function markReadOptimistic(items: MailItem[]) {
+  const unread = items.filter((m) => !m.is_read && m.id)
+  if (!unread.length) return
+  const keys = unread.map((m) => mailKey(m))
+  setCachedReadState(keys, true)
+  const byAccount = new Map<string, MailItem[]>()
+  unread.forEach((m) => byAccount.set(m.accountEmail, [...(byAccount.get(m.accountEmail) || []), m]))
+  const results = await Promise.allSettled([...byAccount.entries()].map(async ([email, list]) => {
+    const res = await markEmailsRead(email, list, list[0]?.folder || 'inbox')
+    if (res && typeof res === 'object' && (res as { success?: boolean }).success === false) {
+      const err = (res as { error?: unknown }).error
+      throw new Error(typeof err === 'string' ? err : (err as { message?: string } | undefined)?.message || `${email} 标记失败`)
+    }
+  }))
+  const failed: string[] = []
+  const failedKeys: string[] = []
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      const [email, list] = [...byAccount.entries()][i]
+      failed.push(`${email}: ${r.reason instanceof Error ? r.reason.message : String((r.reason as { message?: string })?.message || r.reason)}`)
+      failedKeys.push(...list.map((m) => mailKey(m)))
+    }
+  })
+  if (failedKeys.length) {
+    setCachedReadState(failedKeys, false)
+    throw new Error(failed.join('；'))
+  }
 }
