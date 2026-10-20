@@ -2,23 +2,35 @@ import os
 import sys
 import tempfile
 
-
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-# Isolate every test run from real data. This runs before any test module imports
-# web_outlook_app, so the app never opens ./data/outlook_accounts.db. Set
-# KKMAIL_TEST_DATABASE_PATH to pin a specific throwaway DB when debugging.
+# Isolate any residual SQLite paths (legacy).
 _TEST_DB_DIR = tempfile.mkdtemp(prefix="kkmail-tests-")
 os.environ["DATABASE_PATH"] = os.environ.get(
     "KKMAIL_TEST_DATABASE_PATH", os.path.join(_TEST_DB_DIR, "test.db")
 )
 os.environ.setdefault("SECRET_KEY", "test-secret")
-os.environ.setdefault("LOGIN_PASSWORD", "admin123")
+os.environ.setdefault("LOGIN_PASSWORD", "test-login-password")
 
 
 import pytest  # noqa: E402
+
+
+def pytest_ignore_collect(collection_path, path=None):  # path= for older pytest
+    """Flask backend removed — do not collect legacy root tests."""
+    p = str(collection_path)
+    norm = p.replace("\\", "/")
+    if "/tests/mail_core/" in norm:
+        return False
+    if norm.rstrip("/").endswith("/tests") or norm.rstrip("/").endswith("/tests/conftest.py"):
+        return False
+    if "/tests/" in norm and norm.endswith(".py"):
+        # Skip all non-mail_core tests under tests/
+        if "/tests/mail_core/" not in norm:
+            return True
+    return None
 
 
 @pytest.fixture
