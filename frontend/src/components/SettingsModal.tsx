@@ -71,6 +71,16 @@ export default function SettingsPage() {
         {section === 'accounts' && (
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>账户（{accounts.length}）</div>
+            {accountsQuery.isError && (
+              <div role="alert" style={{ color: 'var(--red)', fontSize: 12, marginBottom: 10 }}>
+                加载账户失败：{errorMessage(accountsQuery.error, '未知错误')}
+              </div>
+            )}
+            {groupsQuery.isError && (
+              <div role="alert" style={{ color: 'var(--red)', fontSize: 12, marginBottom: 10 }}>
+                加载分组失败：{errorMessage(groupsQuery.error, '未知错误')}
+              </div>
+            )}
             {accounts.map((a) => (
               <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: '1px solid var(--line)' }}>
                 <span className="account-dot" style={{ background: a.group_color || providerColor(a.provider, a.account_type) }}>{providerBadge(a.provider, a.account_type)}</span>
@@ -141,6 +151,11 @@ export default function SettingsPage() {
         {section === 'general' && (
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>通用</div>
+            {settingsQuery.isError && (
+              <div role="alert" style={{ color: 'var(--red)', fontSize: 12, marginBottom: 10 }}>
+                加载设置失败：{errorMessage(settingsQuery.error, '未知错误')}
+              </div>
+            )}
             <label style={{ fontSize: 12, color: 'var(--muted)' }}>时区</label>
             <input value={timezone ?? savedTimezone} onChange={(e) => setTimezone(e.target.value)} placeholder="Asia/Shanghai" style={{ width: '100%', height: 34, marginTop: 4, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
             <label style={{ fontSize: 12, color: 'var(--muted)', display: 'block', marginTop: 10 }}>拉信超时（秒）</label>

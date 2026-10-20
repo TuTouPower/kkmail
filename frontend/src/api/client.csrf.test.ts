@@ -56,6 +56,33 @@ describe('CSRF handling', () => {
     await apiRequest('/api/groups')
     expect(fetchMock).toHaveBeenCalledOnce()
   })
+
+  it('coalesces concurrent CSRF fetches (singleflight)', async () => {
+    let meCalls = 0
+    let release!: (v: Response) => void
+    const gate = new Promise<Response>((resolve) => { release = resolve })
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/api/auth/me')) {
+        meCalls += 1
+        return gate
+      }
+      return json(200, { ok: true })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const a = postJson('/api/mail/messages/1/flag', { is_flagged: true })
+    const b = postJson('/api/mail/messages/2/flag', { is_flagged: true })
+    // Allow microtasks to start both requests and share one /me
+    await Promise.resolve()
+    expect(meCalls).toBe(1)
+    release(json(200, { csrf_token: 'shared' }))
+    await Promise.all([a, b])
+    expect(meCalls).toBe(1)
+    const writeCalls = fetchMock.mock.calls.filter((c) => !String(c[0]).endsWith('/api/auth/me'))
+    expect(writeCalls).toHaveLength(2)
+    for (const [, init] of writeCalls) {
+      expect((init.headers as Record<string, string>)['X-CSRF-Token']).toBe('shared')
+    }
+  })
 })
 
 describe('errors and timeouts', () => {

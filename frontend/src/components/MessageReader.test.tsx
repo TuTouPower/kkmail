@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MessageReader from './MessageReader'
 import { useMailStore } from '../store/mailStore'
 import { __resetCsrfForTests } from '../api/client'
-import { queryClient, queryKeys, type MailItem } from '../api/queries'
+import { ALL_ACCOUNTS, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { cleanup, click, render, waitFor } from '../test/render'
 
 function json(body: unknown, status = 200) {
@@ -44,7 +44,7 @@ beforeEach(() => {
     }
     return json({ detail: 'unexpected' }, 404)
   }))
-  queryClient.setQueryData(queryKeys.inbox('all'), [item])
+  queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item])
   useMailStore.setState({ selectedKey: 'm-1' })
 })
 
@@ -72,7 +72,7 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
     await click(container.querySelector('[aria-label=标记邮件]'))
     await waitFor(() => expect(posts).toEqual([{ url: '/api/mail/messages/m-1/flag', body: { is_flagged: true } }]))
-    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox('all'))?.[0].is_flagged).toBe(true)
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_flagged).toBe(true)
     await waitFor(() => expect(container.querySelector('[aria-label=取消标记]')).not.toBeNull())
   })
 })

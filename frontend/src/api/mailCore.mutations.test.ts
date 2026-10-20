@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { __resetCsrfForTests } from './client'
 import { fetchMailCoreInbox, fetchMailCoreSearch, postMailCoreMessageFlag, postMailCoreMessageRead } from './mailCore'
-import { flagOptimistic, markReadOptimistic, queryClient, queryKeys, type MailItem } from './queries'
+import { ALL_ACCOUNTS, flagOptimistic, markReadOptimistic, queryClient, queryKeys, type MailItem } from './queries'
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -75,29 +75,38 @@ describe('list queries', () => {
 
 describe('optimistic updates', () => {
   it('markReadOptimistic reverts on failure', async () => {
-    queryClient.setQueryData(queryKeys.inbox('all'), [item()])
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item()])
     stubFetch(() => json(500, { detail: 'boom' }))
     await expect(markReadOptimistic([item()])).rejects.toThrow('boom')
-    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox('all'))?.[0].is_read).toBe(false)
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_read).toBe(false)
   })
 
   it('markReadOptimistic keeps the read state on success', async () => {
-    queryClient.setQueryData(queryKeys.inbox('all'), [item()])
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item()])
     stubFetch(() => json(200, { id: 'uuid-1', is_read: true }))
     await markReadOptimistic([item()])
-    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox('all'))?.[0].is_read).toBe(true)
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_read).toBe(true)
   })
 
   it('flagOptimistic patches every cached list and reverts on failure', async () => {
-    queryClient.setQueryData(queryKeys.inbox('all'), [item()])
-    queryClient.setQueryData(queryKeys.search('s', 'all'), [item()])
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item()])
+    queryClient.setQueryData(queryKeys.search('s', ALL_ACCOUNTS), [item()])
     stubFetch(() => json(200, { id: 'uuid-1', is_flagged: true }))
     await flagOptimistic(item(), true)
-    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox('all'))?.[0].is_flagged).toBe(true)
-    expect(queryClient.getQueryData<MailItem[]>(queryKeys.search('s', 'all'))?.[0].is_flagged).toBe(true)
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_flagged).toBe(true)
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.search('s', ALL_ACCOUNTS))?.[0].is_flagged).toBe(true)
 
     stubFetch(() => json(503, { detail: 'down' }))
     await expect(flagOptimistic(item({ is_flagged: true }), false)).rejects.toMatchObject({ status: 503 })
-    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox('all'))?.[0].is_flagged).toBe(true)
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_flagged).toBe(true)
+  })
+
+  it('flagOptimistic restores the prior cache snapshot (not a blind re-toggle)', async () => {
+    // Cache already flagged; caller passes a stale item that still says false and asks for true.
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item({ is_flagged: true })])
+    stubFetch(() => json(503, { detail: 'down' }))
+    await expect(flagOptimistic(item({ is_flagged: false }), true)).rejects.toMatchObject({ status: 503 })
+    // Prior snapshot was true — must not become !nextFlagged (false).
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_flagged).toBe(true)
   })
 })
