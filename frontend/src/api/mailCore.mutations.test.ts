@@ -24,10 +24,10 @@ describe('postMailCoreMessageRead / Flag', () => {
     const out = await postMailCoreMessageRead('m1', true)
     expect(out.is_read).toBe(true)
     expect(fetchMock).toHaveBeenCalledOnce()
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(String(url)).toContain('/api/mail/messages/m1/read')
-    expect(init?.method).toBe('POST')
-    expect(JSON.parse(String(init?.body))).toEqual({ is_read: true })
+    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(String(call[0])).toContain('/api/mail/messages/m1/read')
+    expect(call[1]?.method).toBe('POST')
+    expect(JSON.parse(String(call[1]?.body))).toEqual({ is_read: true })
   })
 
   it('POSTs flag body', async () => {
@@ -40,9 +40,9 @@ describe('postMailCoreMessageRead / Flag', () => {
     vi.stubGlobal('fetch', fetchMock)
     const out = await postMailCoreMessageFlag('m1', true)
     expect(out.is_flagged).toBe(true)
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(String(url)).toContain('/api/mail/messages/m1/flag')
-    expect(JSON.parse(String(init?.body))).toEqual({ is_flagged: true })
+    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(String(call[0])).toContain('/api/mail/messages/m1/flag')
+    expect(JSON.parse(String(call[1]?.body))).toEqual({ is_flagged: true })
   })
 })
 
@@ -68,7 +68,7 @@ describe('markReadOptimistic mail-core', () => {
     await expect(markReadOptimistic([item])).rejects.toThrow()
     const cached = queryClient.getQueryData<MailItem[]>(['mail-core', 'inbox'])
     expect(cached?.[0]?.is_read).toBe(false)
-    expect(String(fetchMock.mock.calls[0][0])).toContain('/read')
+    expect(String((fetchMock.mock.calls[0] as unknown as [string])[0])).toContain('/read')
   })
 
   it('keeps optimistic read when POST succeeds', async () => {

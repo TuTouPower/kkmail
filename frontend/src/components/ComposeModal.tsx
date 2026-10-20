@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
-import { api } from '../api/client'
 import { fetchAccounts, queryKeys } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
-import { ensureSuccess, errorMessage } from '../lib/actions'
+import { errorMessage } from '../lib/actions'
 import { canSendFrom } from '../lib/accounts'
 import { parseSendRecipients } from '../lib/recipients'
 
@@ -20,7 +19,7 @@ function ComposeForm() {
   const { setComposeOpen, composeMode, composeDraft, view } = useMailStore()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
-  const [accountId, setAccountId] = useState(() => composeDraft.accountId || (view.type === 'accountFolder' ? view.accountId : 0))
+  const [accountId, setAccountId] = useState(() => composeDraft.accountId || (view.type === 'accountFolder' ? view.accountId : ''))
   const [to, setTo] = useState(composeDraft.to)
   const [cc, setCc] = useState('')
   const [subject, setSubject] = useState(composeDraft.subject)
@@ -47,7 +46,7 @@ function ComposeForm() {
         setStatus(parsed.error)
         return
       }
-      ensureSuccess(await api.sendOutlookMail({ account_id: accountId, recipients: parsed.recipients, subject, body }), '发送失败')
+      throw new Error('发送尚未迁移到 mail-core（产品范围外）')
       setStatus('已提交发送（Graph 返回 202 表示已受理，不代表已送达）')
       setTimeout(() => setComposeOpen(false), 900)
     } catch (err: unknown) {
@@ -74,7 +73,7 @@ function ComposeForm() {
         <div style={{ padding: '8px 18px' }}>
           <label style={{ display: 'flex', gap: 12, alignItems: 'center', minHeight: 40, borderBottom: '1px solid var(--line)' }}>
             <span style={{ flex: '0 0 64px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>发件账户</span>
-            <select name="accountId" value={accountId || ''} onChange={(e) => setAccountId(Number(e.target.value))} style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }}>
+            <select name="accountId" value={accountId || ''} onChange={(e) => setAccountId(e.target.value)} style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }}>
               <option value="">选择发件账户</option>
               {accounts.map((a) => (
                 <option key={a.id} value={a.id} disabled={!canSendFrom(a)}>

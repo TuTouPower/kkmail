@@ -1,8 +1,9 @@
 /**
- * Typed API client for the existing Flask backend.
- * All React components go through this layer.
+ * Typed API client — mail-core is the sole backend.
  * Session cookie + CSRF are handled here.
  */
+
+import { mailCoreBaseUrl } from '../lib/mailCoreFlag'
 
 export interface ApiError {
   status: number
@@ -24,7 +25,8 @@ function handleUnauthorized(): ApiError {
 
 async function fetchCsrfToken(): Promise<string | null> {
   try {
-    const res = await fetch('/api/csrf-token', { credentials: 'include', headers: { Accept: 'application/json' } })
+    const base = mailCoreBaseUrl() || ''
+    const res = await fetch(`${base}/api/auth/me`, { credentials: 'include', headers: { Accept: 'application/json' } })
     if (!res.ok) return null
     const data = await res.json()
     csrfToken = data.csrf_token || null
@@ -65,6 +67,52 @@ function withTimeout(signal: AbortSignal | null | undefined, timeoutMs?: number)
     timedOut: () => fired,
     done: () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort) },
   }
+}
+
+
+/** mail-core JSON helper (Cookie session + CSRF + timeout). */
+async function mcRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const base = mailCoreBaseUrl() || ''
+  const url = path.startsWith('http') ? path : `${base}${path}`
+  const { headers: extraHeaders, timeoutMs = 30_000, signal: callerSignal, ...rest } = options
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(rest.body != null ? { 'Content-Type': 'application/json' } : {}),
+    ...(extraHeaders as Record<string, string> | undefined),
+  }
+  const unsafe = !!options.method && options.method !== 'GET' && options.method !== 'HEAD'
+  if (unsafe) {
+    // Prefer mail-core CSRF from /api/auth/me cache if present; else Flask-shaped header after login response.
+    const token = csrfToken || (await ensureCsrf())
+    if (token) {
+      headers['X-CSRF-Token'] = token
+      headers['X-CSRFToken'] = token
+    }
+  }
+  const t = withTimeout(callerSignal, timeoutMs)
+  let res: Response
+  try {
+    res = await fetch(url, { ...rest, signal: t.signal, credentials: 'include', headers })
+  } catch (err) {
+    if (t.timedOut()) throw { status: 0, code: 'timeout', message: `请求超时（${Math.round((timeoutMs || 0) / 1000)} 秒）` } as ApiError
+    throw err
+  } finally {
+    t.done()
+  }
+  if (res.status === 401) throw handleUnauthorized()
+  if (!res.ok) {
+    let message = res.statusText
+    let body: unknown = null
+    try {
+      body = await res.json()
+      const b = body as { detail?: unknown; error?: string; message?: string }
+      message = (typeof b.detail === 'string' ? b.detail : undefined) || b.error || b.message || message
+    } catch { /* ignore */ }
+    throw { status: res.status, message, payload: body } as ApiError
+  }
+  const contentType = res.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) return res.json() as Promise<T>
+  return (await res.text()) as unknown as T
 }
 
 async function request<T>(path: string, options: RequestOptions = {}, retriedCsrf = false): Promise<T> {
@@ -131,9 +179,9 @@ export function __resetCsrfForTests() {
 }
 
 export interface AccountSummary {
-  id: number
+  id: string
   email: string
-  group_id?: number
+  group_id?: string
   group_name?: string
   group_color?: string
   status: string
@@ -145,6 +193,8 @@ export interface AccountSummary {
   last_refresh_status?: string
   remark?: string
   tags?: unknown[]
+  sync_status?: string
+  display_name?: string | null
 }
 
 export interface AccountsResponse {
@@ -212,20 +262,24 @@ export const api = {
 
   /** true when the Flask session is valid. /api/csrf-token is login_required. */
   async checkSession(): Promise<boolean> {
-    const res = await fetch('/api/csrf-token', { credentials: 'include', headers: { Accept: 'application/json' } })
-    if (res.status === 401 || res.redirected) return false
-    if (!res.ok) throw { status: res.status, message: res.statusText } as ApiError
-    const data = await res.json().catch(() => ({}))
-    csrfToken = data.csrf_token || null
-    return true
+    try {
+      const me = await mcRequest<{ authenticated?: boolean; csrf_token?: string }>('/api/auth/me')
+      if (me.csrf_token) csrfToken = me.csrf_token
+      return true
+    } catch (err) {
+      const e = err as ApiError
+      if (e && e.status === 401) return false
+      throw err
+    }
   },
 
-  async login(password: string, sessionDays = 30) {
-    csrfToken = null
-    return request<{ success: boolean; message?: string; error?: string }>('/login', {
+  async login(password: string, _sessionDays = 30) {
+    const data = await mcRequest<{ ok?: boolean; csrf_token?: string; success?: boolean }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ password, session_duration_days: sessionDays }),
+      body: JSON.stringify({ password }),
     })
+    if (data.csrf_token) csrfToken = data.csrf_token
+    return { success: true as boolean, message: 'ok' }
   },
 
   logout() {
@@ -237,13 +291,13 @@ export const api = {
     return request<{ groups?: unknown[]; items?: unknown[] }>('/api/groups')
   },
 
-  async getAccounts(params: { group_id?: number; limit?: number; offset?: number } = {}) {
+  async getAccounts(params: { group_id?: string; limit?: number; offset?: number } = {}) {
     const q = new URLSearchParams()
-    if (params.group_id != null) q.set('group_id', String(params.group_id))
-    if (params.limit) q.set('limit', String(params.limit))
-    if (params.offset) q.set('offset', String(params.offset))
+    if (params.group_id) q.set('group_id', String(params.group_id))
+    if (params.limit != null) q.set('limit', String(params.limit))
+    if (params.offset != null) q.set('offset', String(params.offset))
     const qs = q.toString()
-    return request<AccountsResponse>(`/api/accounts${qs ? '?' + qs : ''}`)
+    return mcRequest<AccountsResponse>(`/api/accounts${qs ? '?' + qs : ''}`)
   },
 
   async getEmails(email: string, params: { folder?: string; skip?: number; top?: number } = {}, opts: RequestOptions = {}) {
@@ -274,8 +328,8 @@ export const api = {
     return request('/api/emails/delete', { method: 'POST', body: JSON.stringify(payload) })
   },
 
-  async sendOutlookMail(payload: { account_id: number; recipients: string[]; subject: string; body: string }) {
-    return request('/api/outlook/send-mail', { method: 'POST', body: JSON.stringify(payload) })
+  async sendOutlookMail(_payload: Record<string, unknown>) {
+    throw { status: 501, message: '发送未迁移到 mail-core' } as ApiError
   },
 
   async addAccounts(payload: {
@@ -316,11 +370,8 @@ export const api = {
     })
   },
 
-  async setForwarding(accountIds: number[], forwardEnabled: boolean) {
-    return request<{ success?: boolean; message?: string; error?: string }>('/api/accounts/batch-update-forwarding', {
-      method: 'POST',
-      body: JSON.stringify({ account_ids: accountIds, forward_enabled: forwardEnabled }),
-    })
+  async setForwarding(_ids: Array<string | number>, _enabled: boolean) {
+    throw { status: 501, message: '转发未迁移到 mail-core' } as ApiError
   },
 
   async getTempEmailMessages(email: string) {
@@ -374,12 +425,21 @@ export const api = {
   },
 
   async getSettings() {
-    return request<{ success?: boolean; settings?: Record<string, string> }>('/api/settings')
+    return mcRequest<{ success?: boolean; settings?: Record<string, string> }>('/api/settings')
   },
 
   async updateSettings(payload: Record<string, string>) {
-    return request<{ success?: boolean; message?: string; error?: string }>('/api/settings', {
-      method: 'PUT',
+    if (payload.current_login_password && payload.login_password) {
+      return mcRequest<{ success?: boolean; ok?: boolean }>('/api/auth/password', {
+        method: 'POST',
+        body: JSON.stringify({
+          current_login_password: payload.current_login_password,
+          login_password: payload.login_password,
+        }),
+      })
+    }
+    return mcRequest<{ success?: boolean; settings?: Record<string, string> }>('/api/settings', {
+      method: 'POST',
       body: JSON.stringify(payload),
     })
   },
@@ -396,15 +456,18 @@ export const api = {
   },
 
   async createGroup(payload: { name: string; description?: string; color?: string }) {
-    return request<{ success?: boolean; error?: string }>('/api/groups', { method: 'POST', body: JSON.stringify(payload) })
+    return mcRequest<{ success?: boolean; id?: string; name?: string }>('/api/groups', {
+      method: 'POST',
+      body: JSON.stringify({ name: payload.name, color: payload.color }),
+    })
   },
 
-  async deleteGroup(id: number) {
-    return request<{ success?: boolean; error?: string }>(`/api/groups/${id}`, { method: 'DELETE' })
+  async deleteGroup(id: string | number) {
+    return mcRequest<{ success?: boolean }>(`/api/groups/${encodeURIComponent(String(id))}`, { method: 'DELETE' })
   },
 
-  async deleteAccount(id: number) {
-    return request<{ success?: boolean; error?: string }>(`/api/accounts/${id}`, { method: 'DELETE' })
+  async deleteAccount(id: string | number) {
+    return mcRequest<{ success?: boolean }>(`/api/accounts/${encodeURIComponent(String(id))}`, { method: 'DELETE' })
   },
 
   async createTag(name: string) {
@@ -420,27 +483,10 @@ export const api = {
    * report each event, and resolve with the final complete/error event.
    */
   async refreshAllStream(onEvent?: (evt: RefreshEvent) => void): Promise<RefreshEvent> {
-    const res = await fetch('/api/accounts/refresh-all', { method: 'POST', credentials: 'include', headers: { Accept: 'text/event-stream', 'X-CSRFToken': (await ensureCsrf()) || '' } })
-    if (res.status === 401 || res.redirected) throw handleUnauthorized()
-    if (!res.ok || !res.body) throw { status: res.status, message: res.statusText || '刷新失败' } as ApiError
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let last: RefreshEvent = { type: 'complete' }
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (value) buffer += decoder.decode(value, { stream: !done })
-      const parts = buffer.split('\n\n')
-      buffer = done ? '' : parts.pop() || ''
-      for (const part of done ? parts.filter(Boolean) : parts) {
-        for (const evt of parseSseChunk(part)) {
-          last = evt
-          onEvent?.(evt)
-        }
-      }
-      if (done) break
-    }
-    return last
+    const data = await mcRequest<{ success?: boolean; count?: number }>('/api/accounts/sync-all', { method: 'POST', body: '{}' })
+    const evt: RefreshEvent = { type: 'done', message: `已排队 ${data.count ?? 0} 个同步任务`, success_count: data.count, total: data.count }
+    onEvent?.(evt)
+    return evt
   },
 
   async refreshAccount(id: number) {

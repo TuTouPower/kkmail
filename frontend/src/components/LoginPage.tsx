@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { api } from '../api/client'
-import { isMailCoreEnabled, mailCoreLogin } from '../api/mailCore'
 
 export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
   const [password, setPassword] = useState('')
@@ -12,23 +11,7 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
     setError('')
     setLoading(true)
     try {
-      const res = await api.login(password)
-      if (!res.success) {
-        setError(res.error || '登录失败')
-        return
-      }
-      if (isMailCoreEnabled()) {
-        try {
-          await mailCoreLogin(password)
-        } catch (mcErr: unknown) {
-          const message =
-            mcErr && typeof mcErr === 'object' && 'message' in mcErr
-              ? String((mcErr as { message: string }).message)
-              : 'mail-core 登录失败'
-          setError(message)
-          return
-        }
-      }
+      await api.login(password)
       onSuccess()
     } catch (err: unknown) {
       const message = err && typeof err === 'object' && 'message' in err ? String((err as { message: string }).message) : '登录失败'
@@ -52,7 +35,7 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
         }}
       >
         <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.3px', marginBottom: 6 }}>kkmail</div>
-        <p style={{ margin: '0 0 20px', color: 'var(--muted)', fontSize: 13 }}>多账号邮箱 · Apple Mail 风格</p>
+        <p style={{ margin: '0 0 20px', color: 'var(--muted)', fontSize: 13 }}>多账号邮箱 · mail-core</p>
         <input type="text" name="username" autoComplete="username" value="kkmail" readOnly hidden aria-hidden="true" />
         <label htmlFor="login-password" style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>登录密码</label>
         <input id="login-password" name="password"
@@ -88,7 +71,7 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
         >
           {loading ? '登录中…' : '登录'}
         </button>
-        <div style={{ marginTop: 14, fontSize: 11, color: 'var(--muted)' }}>登录密码见部署环境变量 LOGIN_PASSWORD（无公开默认值）</div>
+        <div style={{ marginTop: 14, fontSize: 11, color: 'var(--muted)' }}>密码见 MAIL_CORE_LOGIN_PASSWORD / LOGIN_PASSWORD</div>
       </form>
     </div>
   )
