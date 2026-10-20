@@ -21,6 +21,7 @@ from mail_core.providers.base import MetadataPage, RemoteMessageMeta
 from mail_core.sync.checkpoints import commit_checkpoint
 from mail_core.sync.leases import assert_fencing
 from mail_core.search.index import upsert_message_search
+from mail_core.threading.rules import assign_thread_for_message
 from mail_core.realtime.notify import try_notify_outbox
 
 
@@ -107,6 +108,12 @@ def apply_metadata_page(
     for meta in page.items:
         msg = _upsert_message(session, account_id=account_id, folder_id=folder_id, meta=meta)
         upsert_message_search(session, message_id=msg.id, body_text=meta.snippet or "")
+        if meta.internet_message_id or meta.provider_thread_key:
+            assign_thread_for_message(
+                session,
+                message=msg,
+                provider_thread_key=meta.provider_thread_key,
+            )
         session.add(
             OutboxEvent(
                 event_type=OutboxEventType.MESSAGE_UPSERTED.value,
