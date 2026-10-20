@@ -21,6 +21,7 @@ from mail_core.accounts.service import (
     list_accounts,
     list_groups,
     update_account,
+    update_account_sync_status,
 )
 from mail_core.accounts.settings_store import get_public_settings, update_public_settings
 
@@ -41,6 +42,7 @@ __all__ = [
     "list_accounts",
     "list_groups",
     "update_account",
+    "update_account_sync_status",
     "get_credential_store",
     "load_json_secret",
     "save_json_secret",
