@@ -23,6 +23,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const [toolStatus, setToolStatus] = useState('')
   const [provider, setProvider] = useState('outlook')
   const [status, setStatus] = useState('')
+  const [section, setSection] = useState<'accounts' | 'appearance' | 'general'>('accounts')
 
   if (!open) return null
 
@@ -60,7 +61,15 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             <X size={16} />
           </button>
         </div>
+        <div style={{ display: 'flex', gap: 6, padding: '8px 16px', borderBottom: '1px solid var(--line)' }}>
+          {([['accounts', '账户管理'], ['appearance', '外观'], ['general', '通用']] as const).map(([id, label]) => (
+            <button key={id} type="button" onClick={() => setSection(id)} style={{ height: 32, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)', background: section === id ? 'var(--selected)' : 'transparent', fontWeight: 600 }}>
+              {label}
+            </button>
+          ))}
+        </div>
         <div style={{ minWidth: 0, flex: 1, overflow: 'auto', padding: '22px 24px' }}>
+          {section === 'accounts' && <>
           <div style={{ fontSize: 18, fontWeight: 720, margin: '0 0 6px' }}>账户管理</div>
           <p style={{ margin: '0 0 12px', color: 'var(--muted)', fontSize: 12 }}>添加账户走现有导入接口。OAuth 完整向导仍可在 /legacy 完成。</p>
           <form onSubmit={addAccount} style={{ border: '1px solid var(--line)', borderRadius: 11, padding: 12, marginBottom: 14 }}>
@@ -153,6 +162,8 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
               setToolStatus(res.success ? (res.message || '已上传备份') : (res.error || '上传失败'))
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>立即备份</button>
           </div>
+          </>}
+          {section === 'appearance' && <>
           <div style={{ marginTop: 22, fontSize: 18, fontWeight: 720 }}>外观</div>
           <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
             <button onClick={() => setTheme('light')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'light' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
@@ -162,9 +173,12 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
               <Moon size={18} /> 深夜
             </button>
           </div>
-          <div style={{ marginTop: 18, color: 'var(--muted)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Inbox size={14} /> 旧版完整管理界面仍可从 /legacy 进入。
-          </div>
+          </>}
+          {section === 'general' && (
+            <div style={{ color: 'var(--muted)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Inbox size={14} /> 旧版完整管理界面仍可从 /legacy 进入。规范见仓库根目录 DESIGN.md。
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 16px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)' }}>
           <button onClick={onClose} style={{ height: 35, padding: '0 15px', border: 0, borderRadius: 9, background: 'var(--blue)', color: '#fff', fontWeight: 650 }}>完成</button>
