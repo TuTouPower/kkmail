@@ -14,9 +14,16 @@ Current behavior:
 
 Revisit when the backend exposes a flag API. Do not remove the Flagged control from the design without approval.
 
-## Move and archive
+## Apple Mail demo alignment
 
-The design system includes move and archive actions. Upstream mail routes support inbox, junk, trash, and all. There is no dedicated move-to-folder API. Archive is therefore not wired to a server folder. Move destinations that exist are limited to the folders the live API already supports.
+The new interface follows `DESIGN.md` and the earlier Apple Mail demo:
+
+- Three-column workspace, collapsible sidebar, settings only at bottom left.
+- List toolbar has search, clear search, All/Unread/Flagged, Mark All as Read, sort.
+- Reader toolbar has reply, reply all, forward, mark read, archive, trash, junk, move, flag.
+- Mobile uses a drawer and a back control.
+
+Archive, junk, and move are present for design parity. Upstream mail routes still only support inbox, junk, and trash as live folders, and there is no move API. Trash is wired to delete. The others stay visible and disabled in behavior until a backend move API exists.
 
 ## Packaging status
 
