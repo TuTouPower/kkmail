@@ -19,7 +19,9 @@ from urllib.parse import quote, unquote, urlparse, urlunparse
 from mail_core.backup.crypto import (
     BackupCryptoError,
     decrypt_bytes,
+    decrypt_file,
     encrypt_bytes,
+    encrypt_file,
     load_backup_key,
     load_backup_keyring,
 )
@@ -275,16 +277,19 @@ def create_backup_package(
         return out
 
     key, version = load_backup_key()
-    # Tar the plain directory into memory / temp then encrypt
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tar:
-        for path in sorted(plain.rglob("*")):
-            if path.is_file():
-                tar.add(path, arcname=str(path.relative_to(plain)))
-    sealed = encrypt_bytes(buf.getvalue(), key=key, key_version=version)
     out.mkdir(parents=True, exist_ok=True)
+    # Stream tar to temporary file on disk (avoid buffering full DB + blobs in memory)
+    tar_tmp = out / f".archive_{uuid.uuid4().hex}.tar"
     kkbak = out / "backup.kkbak"
-    kkbak.write_bytes(sealed)
+    try:
+        with tarfile.open(tar_tmp, mode="w") as tar:
+            for path in sorted(plain.rglob("*")):
+                if path.is_file() and path != tar_tmp:
+                    tar.add(path, arcname=str(path.relative_to(plain)))
+        encrypt_file(tar_tmp, kkbak, key=key, key_version=version)
+    finally:
+        if tar_tmp.exists():
+            tar_tmp.unlink()
     sealed_manifest = BackupManifest(
         created_at=manifest.created_at,
         database_url_redacted=manifest.database_url_redacted,
@@ -347,10 +352,10 @@ def _check_plain_members(
     return checked
 
 
-def _extract_plain_tar(plaintext: bytes, extract_dir: Path, errors: list[str]) -> bool:
-    """Extract inner backup tar with path-traversal / allowlist checks."""
+def _extract_tar_file(tar_path: Path, extract_dir: Path, errors: list[str]) -> bool:
+    """Extract inner backup tar from disk with path-traversal / allowlist checks."""
     try:
-        with tarfile.open(fileobj=io.BytesIO(plaintext), mode="r") as tar:
+        with tarfile.open(tar_path, mode="r") as tar:
             for info in tar.getmembers():
                 name = info.name
                 if name.endswith("/"):
@@ -372,6 +377,17 @@ def _extract_plain_tar(plaintext: bytes, extract_dir: Path, errors: list[str]) -
         errors.append(f"inner tar extract failed: {exc}")
         return False
     return True
+
+
+def _extract_plain_tar(plaintext: bytes, extract_dir: Path, errors: list[str]) -> bool:
+    """Extract inner backup tar with path-traversal / allowlist checks."""
+    tmp_path = extract_dir / f".tmp_{uuid.uuid4().hex}.tar"
+    try:
+        tmp_path.write_bytes(plaintext)
+        return _extract_tar_file(tmp_path, extract_dir, errors)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
 
 def verify_backup_package(
@@ -436,23 +452,26 @@ def verify_backup_package(
             if _safe_member_relpath(name, allowlist=_OUTER_MEMBER_ALLOWLIST) is None:
                 errors.append(f"disallowed outer member name: {name!r}")
 
+        extract_dir = root / ".verify_extract"
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+        extract_dir.mkdir(parents=True)
+        decrypted_tar = extract_dir / f".decrypted_{uuid.uuid4().hex}.tar"
         try:
             keyring = load_backup_keyring(env)
-            plaintext, key_version = decrypt_bytes(kkbak.read_bytes(), keyring=keyring)
+            key_version = decrypt_file(kkbak, decrypted_tar, keyring=keyring)
         except Exception as exc:
             errors.append(f"decrypt failed: {exc}")
             return RestoreVerifyResult(
                 ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
             )
-        extract_dir = root / ".verify_extract"
-        if extract_dir.exists():
-            shutil.rmtree(extract_dir)
-        extract_dir.mkdir(parents=True)
         try:
-            if not _extract_plain_tar(plaintext, extract_dir, errors):
+            if not _extract_tar_file(decrypted_tar, extract_dir, errors):
                 return RestoreVerifyResult(
                     ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
                 )
+            if decrypted_tar.exists():
+                decrypted_tar.unlink()
             return _verify_plain_tree(
                 extract_dir,
                 checked=checked,
