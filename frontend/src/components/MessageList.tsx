@@ -1,7 +1,7 @@
+import { useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, MoreHorizontal, Paperclip, Menu, X } from 'lucide-react'
 import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
-import { useState } from 'react'
 import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
 import { api } from '../api/client'
 import { useMailStore } from '../store/mailStore'

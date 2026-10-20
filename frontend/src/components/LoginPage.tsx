@@ -35,7 +35,7 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
           boxShadow: 'var(--shadow)',
         }}
       >
-        <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.3px', marginBottom: 6 }}>Mail</div>
+        <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.3px', marginBottom: 6 }}>kkmail</div>
         <p style={{ margin: '0 0 20px', color: 'var(--muted)', fontSize: 13 }}>多账号邮箱 · Apple Mail 风格</p>
         <label style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>登录密码</label>
         <input
