@@ -149,9 +149,23 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
-  app.isQuitting = true
+function stopBackend() {
   if (backend && backend.exitCode === null && !backend.killed) {
     backend.kill()
   }
+}
+
+app.on('before-quit', () => {
+  app.isQuitting = true
+  stopBackend()
 })
+
+// SIGTERM/SIGINT (logout, `kill`, Ctrl+C) skip before-quit; never leave the backend orphaned.
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  process.on(signal, () => {
+    app.isQuitting = true
+    stopBackend()
+    app.quit()
+  })
+}
+process.on('exit', stopBackend)
