@@ -4,12 +4,18 @@ import { formatListDate, formatReaderDate } from './listDate'
 describe('formatListDate', () => {
   const now = Date.parse('2026-10-20T21:00:00+08:00')
   it('shows HH:mm within one day', () => {
-    expect(formatListDate('2026-10-20T15:30:00+08:00', now)).toMatch(/15:30/)
+    const input = '2026-10-20T15:30:00+08:00'
+    const expected = new Date(input).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+    const out = formatListDate(input, now)
+    expect(out).toMatch(/^\d{2}:\d{2}$/)
+    expect(out).toBe(expected)
   })
   it('shows weekday + date when older than one day', () => {
-    const out = formatListDate('2026-10-16T10:00:00+08:00', now)
-    expect(out).toMatch(/10/)
-    expect(out).toMatch(/16/)
+    const input = '2026-10-16T10:00:00+08:00'
+    const out = formatListDate(input, now)
+    const d = new Date(input)
+    expect(out).toContain(String(d.getMonth() + 1))
+    expect(out).toContain(String(d.getDate()))
     expect(out).not.toMatch(/:/)
   })
 })
