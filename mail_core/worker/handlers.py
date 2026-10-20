@@ -99,8 +99,19 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             complete_job(session, job)
             return
 
+        if job.job_type == JobType.SYNC_FOLDER_DELTA.value:
+            if account_id is None:
+                raise ValueError("account_id required")
+            folder_id = uuid.UUID(str(payload["folder_id"]))
+            from mail_core.sync.delta import sync_folder_delta
+
+            session.commit()
+            result = sync_folder_delta(account_id, folder_id, worker_id=worker_id, store=store)
+            log.info("sync_folder_delta %s", result)
+            complete_job(session, job)
+            return
+
         if job.job_type in {
-            JobType.SYNC_FOLDER_DELTA.value,
             JobType.GC_BLOBS.value,
             JobType.BACKUP_RUN.value,
         }:
