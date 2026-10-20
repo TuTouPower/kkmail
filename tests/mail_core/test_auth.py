@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,10 +26,14 @@ def test_unauthenticated_mail_returns_401():
     assert res.status_code == 401
 
 
+DATABASE_URL = os.environ.get("MAIL_CORE_DATABASE_URL")
+
+
 def test_health_public():
     assert TestClient(app).get("/health").status_code == 200
 
 
+@pytest.mark.skipif(not DATABASE_URL, reason="database required")
 def test_api_key_ok(api_client):
     res = api_client.get("/api/mail/inbox")
     assert res.status_code != 401
@@ -39,6 +45,7 @@ def test_invalid_api_key_401():
     assert client.get("/api/mail/inbox").status_code == 401
 
 
+@pytest.mark.skipif(not DATABASE_URL, reason="database required")
 def test_session_login_and_me():
     client = TestClient(app)
     bad = client.post("/api/auth/login", json={"password": "nope"})
@@ -59,6 +66,7 @@ def test_session_login_and_me():
     assert inbox.status_code != 401
 
 
+@pytest.mark.skipif(not DATABASE_URL, reason="database required")
 def test_csrf_rejection_on_mutating_session():
     client = TestClient(app)
     login = client.post("/api/auth/login", json={"password": TEST_LOGIN_PASSWORD})
