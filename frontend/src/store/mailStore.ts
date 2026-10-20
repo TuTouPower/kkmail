@@ -18,7 +18,10 @@ interface MailUiState {
   mobileView: 'list' | 'detail'
   setMobileView: (view: 'list' | 'detail') => void
   view: ViewState
+  /** Switch view; also resets selection and closes the mobile drawer. */
   setView: (view: ViewState) => void
+  /** 所有收件箱 / 未读邮件 / 已标记 entries in the sidebar. */
+  openSmartView: (filter: 'all' | 'unread' | 'flagged') => void
   selectedKey: string | null
   setSelectedKey: (key: string | null) => void
   search: string
@@ -60,7 +63,10 @@ export const useMailStore = create<MailUiState>()(
       setMobileView: (view) => set({ mobileView: view }),
       view: { type: 'allInbox' },
       // Switching account/folder must drop selection: IMAP UIDs repeat across folders.
-      setView: (view) => set({ view, selectedKey: null, selectedIds: [], mobileView: 'list' }),
+      // Every navigation from the drawer goes through here, so closing the
+      // mobile drawer is guaranteed for all views/folders/accounts.
+      setView: (view) => set({ view, selectedKey: null, selectedIds: [], mobileView: 'list', mobileSidebarOpen: false }),
+      openSmartView: (filter) => set({ view: { type: 'allInbox' }, listFilter: filter, selectedKey: null, selectedIds: [], mobileView: 'list', mobileSidebarOpen: false }),
       selectedKey: null,
       setSelectedKey: (key) => set({ selectedKey: key }),
       search: '',
