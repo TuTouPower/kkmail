@@ -1,56 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
-  <defs>
-    <style>
-      /* 1. 左侧竖柱：冰川浅天蓝系（高明度浅色，深浅模式皆宜） */
-      .pillar-light { fill: #7CC4FA; }
-      .pillar-shadow { fill: #3B82F6; }
-
-      /* 2. 右上折纸信封翼：亮湛蓝与天青蓝系（多切面立体过渡） */
-      .wing-light { fill: #38BDF8; }
-      .wing-main { fill: #0EA5E9; }
-      .wing-crease { fill: #0284C7; }
-
-      /* 3. 纸飞机核心组件：高饱和度深宝蓝系（突出视觉焦点，不偏黑） */
-      .plane-main { fill: #1D4ED8; }
-      .plane-fold { fill: #1E40AF; }
-
-      /* 4. 右下折纸支臂：经典皇家钴蓝系（稳固右侧视觉重心） */
-      .leg-main { fill: #3B82F6; }
-      .leg-shadow { fill: #2563EB; }
-    </style>
-  </defs>
-
-  <!-- 全透明背景：居中置于 512x512 标准图标画布 -->
-  <g id="k-origami-blue-icon" transform="translate(-269, -9)">
-    <!-- 1. 左侧冰川浅蓝竖柱 -->
-    <rect x="311" y="110" width="129" height="310" class="pillar-light" />
-    <!-- 竖柱右侧折纸投影 -->
-    <polygon points="354,261 440,330 440,348" class="pillar-shadow" />
-
-    <!-- 2. 右下角皇家钴蓝折纸支臂 -->
-    <!-- 右下支臂主切面 -->
-    <polygon points="440,330 533,257 625,335 677,335 677,420 548,420" class="leg-main" />
-    <!-- 右下支臂上部交界暗面 -->
-    <polygon points="440,330 533,257 562,282" class="leg-shadow" />
-    <!-- 右下支臂折角切面 -->
-    <polygon points="548,420 677,335 677,420" class="leg-shadow" />
-
-    <!-- 3. 右上角亮湛蓝折纸信封与纸飞机支臂 -->
-    <!-- 左下湛蓝连接切面 -->
-    <polygon points="354,261 533,257 440,330" class="wing-main" />
-    <!-- 右上主体湛蓝背景翼 -->
-    <polygon points="547,110 738,110 599,190 533,257" class="wing-main" />
-    <!-- 纸飞机右侧湛蓝机翼 -->
-    <polygon points="738,110 599,190 680,219" class="wing-main" />
-    <!-- 折纸内凹深天青折痕面 -->
-    <polygon points="354,261 513,240 547,110 533,257" class="wing-crease" />
-    <!-- 左上亮天青受光主切面 -->
-    <polygon points="354,261 547,110 513,240" class="wing-light" />
-
-    <!-- 4. 纸飞机深宝蓝核心组件 -->
-    <!-- 纸飞机底部折影 -->
-    <polygon points="599,190 599,229 632,204" class="plane-fold" />
-    <!-- 纸飞机深宝蓝左翼 -->
-    <polygon points="738,110 552,170 599,190" class="plane-main" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- 保持 45° 角的三个浅蓝色三角形，拉近间距并放大 -->
+  <g fill="#4FC3F7">
+    <!-- 左上三角形 -->
+    <polygon points="21,6 65,6 21,50" />
+    
+    <!-- 左下三角形 -->
+    <polygon points="21,50 65,94 21,94" />
+    
+    <!-- 右侧大三角形 -->
+    <polygon points="79,6 79,94 35,50" />
   </g>
 </svg>
