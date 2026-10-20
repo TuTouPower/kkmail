@@ -258,6 +258,14 @@ export const api = {
     })
   },
 
+  async archiveProject(projectKey: string) {
+    return request<{ success?: boolean; error?: string }>(`/api/projects/${encodeURIComponent(projectKey)}/archive`, { method: 'POST' })
+  },
+
+  async deleteProject(projectKey: string) {
+    return request<{ success?: boolean; error?: string }>(`/api/projects/${encodeURIComponent(projectKey)}`, { method: 'DELETE' })
+  },
+
   attachmentUrl(email: string, messageId: string, attachmentId: string, folder = 'inbox', idMode = '') {
     const q = new URLSearchParams({ folder, method: idMode === 'imap' ? 'imap' : 'graph' })
     if (idMode) q.set('id_mode', idMode)

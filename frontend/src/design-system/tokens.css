@@ -1,33 +1,42 @@
-/* Apple Mail inspired design system tokens */
+/* Tokens from DESIGN.md at the repository root. Do not invent alternate colors. */
 :root {
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
-  --blue: #0a84ff;
-  --blue-strong: #007aff;
-  --green: #30d158;
-  --red: #ff453a;
-  --orange: #ff9f0a;
-  --radius: 12px;
-  --topbar-h: 0px; /* no global topbar */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  --primary: #0066CC;
+  --primary-hover: #0058B8;
+  --accent: #0A84FF;
+  --secondary: #555961;
+  --tertiary: #30D158;
+  --warning: #FF9F0A;
+  --on-primary: #FFFFFF;
+  --blue: var(--primary);
+  --blue-strong: var(--primary);
+  --green: var(--tertiary);
+  --orange: var(--warning);
+  --radius: 8px;
+  --topbar-h: 0px;
   --sidebar-w: 270px;
+  --sidebar-collapsed-w: 48px;
   --list-w: 350px;
 }
 
 html[data-theme="dark"] {
   color-scheme: dark;
   --canvas: #171819;
-  --topbar: #202123;
-  --sidebar: #1c1d1f;
+  --sidebar: #1C1D1F;
   --list: #202123;
-  --reader: #1d1f20;
-  --surface: #27292b;
+  --reader: #1D1F20;
+  --surface: #27292B;
   --surface-2: #303235;
   --surface-hover: #343639;
-  --selected: #34383d;
-  --line: rgba(255, 255, 255, 0.095);
-  --line-strong: rgba(255, 255, 255, 0.16);
-  --text: #f3f4f5;
-  --muted: #96999e;
-  --subtle: #c0c2c5;
+  --selected: #34383D;
+  --line: #3A3C3F;
+  --line-strong: #3A3C3F;
+  --text: #F3F4F5;
+  --muted: #96999E;
+  --subtle: #C0C2C5;
+  --red: #FF6B65;
+  --danger: #FF6B65;
   --blue-soft: rgba(10, 132, 255, 0.18);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
   --mail-body: #fff;
@@ -36,21 +45,22 @@ html[data-theme="dark"] {
 
 html[data-theme="light"] {
   color-scheme: light;
-  --canvas: #e9eaed;
-  --topbar: #f7f7f9;
-  --sidebar: #f2f3f5;
-  --list: #fff;
-  --reader: #fff;
-  --surface: #fff;
-  --surface-2: #f4f5f7;
-  --surface-hover: #e9ebef;
-  --selected: #e5e7eb;
-  --line: rgba(30, 32, 36, 0.10);
-  --line-strong: rgba(30, 32, 36, 0.17);
-  --text: #1d1d1f;
-  --muted: #85878d;
+  --canvas: #E9EAED;
+  --sidebar: #F2F3F5;
+  --list: #FFFFFF;
+  --reader: #FFFFFF;
+  --surface: #FFFFFF;
+  --surface-2: #F4F5F7;
+  --surface-hover: #E9EBEF;
+  --selected: #E5E7EB;
+  --line: #DADCE0;
+  --line-strong: #DADCE0;
+  --text: #1D1D1F;
+  --muted: #686A70;
   --subtle: #555961;
-  --blue-soft: rgba(0, 122, 255, 0.11);
+  --red: #D92D20;
+  --danger: #D92D20;
+  --blue-soft: rgba(0, 102, 204, 0.12);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
   --mail-body: #fff;
   --mail-body-text: #202124;
@@ -88,7 +98,7 @@ button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -581,7 +591,7 @@ button:disabled {
   gap: 9px;
   padding: 12px 10px 11px;
   margin: 2px 0;
-  border-radius: 11px;
+  border-radius: 8px;
   border: 1px solid transparent;
   cursor: pointer;
   min-width: 0;
@@ -592,8 +602,8 @@ button:disabled {
 }
 
 .message-row.selected {
-  background: var(--blue);
-  color: #fff;
+  background: var(--primary);
+  color: var(--on-primary);
 }
 
 .message-row.selected .sender,
@@ -601,7 +611,7 @@ button:disabled {
 .message-row.selected .preview,
 .message-row.selected .mail-account-tag,
 .message-row.selected .message-date {
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--on-primary);
 }
 
 .message-row.selected .preview {
@@ -696,7 +706,7 @@ button:disabled {
   height: 6px;
   width: 6px;
   border-radius: 50%;
-  background: var(--blue);
+  background: var(--accent);
   flex: 0 0 auto;
 }
 
