@@ -19,7 +19,14 @@ describe('mail body safety', () => {
   it('wraps output in a CSP document', () => {
     const doc = buildMailSrcdoc('<img src=x onerror=alert(1)>')
     expect(doc).toContain("default-src 'none'")
+    expect(doc).toContain('img-src https: http: data: cid:')
     expect(doc).not.toMatch(/onerror/i)
+  })
+
+  it('mail-core can disable remote images via CSP', () => {
+    const doc = buildMailSrcdoc('<img src="https://evil/x.png">', { loadRemoteImages: false })
+    expect(doc).toContain('img-src data: cid:')
+    expect(doc).not.toContain('img-src https:')
   })
 
   it('sandbox never allows scripts or same-origin', () => {
