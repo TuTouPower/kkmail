@@ -70,8 +70,10 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
     is_flagged: m.is_flagged,
     has_attachments: m.has_attachments,
     body_preview: m.snippet || undefined,
-    folder: 'inbox',
-    accountEmail: m.account_email || '',
+    // folder_id is the list identity; never invent 'inbox' (search may span roles).
+    folder: m.folder_id || undefined,
+    // email vs id must stay split — never fall back account_id into accountEmail.
+    accountEmail: m.account_email ?? '',
     accountId: m.account_id,
   }
 }

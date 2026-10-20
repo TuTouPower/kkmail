@@ -110,6 +110,26 @@ function errorFromBody(status: number, statusText: string, body: unknown): ApiEr
   return { status, message, payload: body }
 }
 
+
+/** Reject when the shared timeout aborts, so hung body parses cannot outlive timeoutMs. */
+function underTimeout<T>(work: Promise<T>, signal: AbortSignal, timeoutMs: number, timedOut: () => boolean): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const fail = () => {
+      reject({ status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` } as ApiError)
+    }
+    if (timedOut() || signal.aborted) {
+      fail()
+      return
+    }
+    const onAbort = () => fail()
+    signal.addEventListener('abort', onAbort, { once: true })
+    work.then(
+      (v) => { signal.removeEventListener('abort', onAbort); resolve(v) },
+      (e) => { signal.removeEventListener('abort', onAbort); reject(e) },
+    )
+  })
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}, retriedCsrf = false): Promise<T> {
   const url = `${apiBaseUrl()}${path}`
   const { headers: extraHeaders, timeoutMs = DEFAULT_TIMEOUT_MS, signal: callerSignal, ...rest } = options
@@ -129,31 +149,36 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}, 
     headers['X-CSRF-Token'] = token
   }
   const tmo = withTimeout(callerSignal, timeoutMs)
-  let res: Response
   try {
-    res = await fetch(url, { ...rest, method, signal: tmo.signal, credentials: 'include', headers })
+    const res = await fetch(url, { ...rest, method, signal: tmo.signal, credentials: 'include', headers })
+    if (res.status === 401) throw handleUnauthorized()
+    if (!res.ok) {
+      let body: unknown = null
+      try {
+        body = await underTimeout(res.json(), tmo.signal, timeoutMs, tmo.timedOut)
+      } catch (err) {
+        if (tmo.timedOut()) throw err
+        /* non-JSON or empty error body */
+      }
+      if (unsafe && !retriedCsrf && isCsrfFailure(res.status, body)) {
+        csrfToken = null
+        tmo.done()
+        return apiRequest<T>(path, options, true)
+      }
+      throw errorFromBody(res.status, res.statusText, body)
+    }
+    if (res.status === 204) return undefined as T
+    const contentType = res.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      return await underTimeout(res.json() as Promise<T>, tmo.signal, timeoutMs, tmo.timedOut)
+    }
+    return await underTimeout(res.text() as Promise<unknown>, tmo.signal, timeoutMs, tmo.timedOut) as T
   } catch (err) {
     if (tmo.timedOut()) throw { status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` } as ApiError
     throw err
   } finally {
     tmo.done()
   }
-  if (res.status === 401) throw handleUnauthorized()
-  if (!res.ok) {
-    let body: unknown = null
-    try {
-      body = await res.json()
-    } catch { /* non-JSON error body */ }
-    if (unsafe && !retriedCsrf && isCsrfFailure(res.status, body)) {
-      csrfToken = null
-      return apiRequest<T>(path, options, true)
-    }
-    throw errorFromBody(res.status, res.statusText, body)
-  }
-  if (res.status === 204) return undefined as T
-  const contentType = res.headers.get('content-type') || ''
-  if (contentType.includes('application/json')) return res.json() as Promise<T>
-  return (await res.text()) as unknown as T
 }
 
 export function postJson<T>(path: string, body: unknown = {}, opts: RequestOptions = {}): Promise<T> {

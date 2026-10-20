@@ -24,6 +24,8 @@ describe('mailCoreToMailItem', () => {
     expect(item.accountId).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
     expect(item.is_flagged).toBe(true)
     expect(item.has_attachments).toBe(true)
+    expect(item.folder).toBe('f1')
+    expect(item.accountEmail).not.toBe(item.accountId)
   })
 })
 
