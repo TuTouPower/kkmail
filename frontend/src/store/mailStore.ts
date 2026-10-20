@@ -5,7 +5,7 @@ export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward'
 
 export type ViewState =
   | { type: 'allInbox' }
-  | { type: 'accountFolder'; accountId: number; email: string; folder: string }
+  | { type: 'accountFolder'; accountId: string; email: string; folder: string }
 
 interface MailUiState {
   theme: 'dark' | 'light' | 'system'
@@ -45,7 +45,7 @@ interface MailUiState {
   /** Bumped on every openCompose so the form remounts with the new draft. */
   composeSeq: number
   composeMode: ComposeMode
-  composeDraft: { to: string; subject: string; body: string; accountId?: number }
+  composeDraft: { to: string; subject: string; body: string; accountId?: string }
   openCompose: (mode?: ComposeMode, draft?: Partial<MailUiState['composeDraft']>) => void
   setComposeOpen: (open: boolean) => void
   selectedIds: string[]
