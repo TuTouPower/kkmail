@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from mail_core.accounts import (
@@ -42,7 +42,6 @@ class AccountOut(BaseModel):
 
 
 class AccountsPage(BaseModel):
-    success: bool = True
     accounts: list[AccountOut]
     total: int
     limit: int
@@ -81,13 +80,26 @@ class GroupCreateIn(BaseModel):
     color: str | None = None
 
 
+class GroupsOut(BaseModel):
+    groups: list[GroupOut]
+
+
+class SyncJobOut(BaseModel):
+    job_id: str
+
+
+class SyncAllOut(BaseModel):
+    job_ids: list[str]
+    count: int
+
+
 class SettingsOut(BaseModel):
-    success: bool = True
     settings: dict[str, str]
 
 
 class SettingsUpdateIn(BaseModel):
-    # Only whitelisted public keys are applied; secrets are rejected.
+    """Public settings patch. Unknown / secret keys are rejected by the service."""
+
     settings: dict[str, str] = Field(default_factory=dict)
 
 
@@ -182,8 +194,8 @@ def api_update_account(account_id: UUID, body: AccountUpdateIn):
         return _account_out(acc, gmap)
 
 
-@router.delete("/api/accounts/{account_id}")
-def api_delete_account(account_id: UUID):
+@router.delete("/api/accounts/{account_id}", status_code=204, response_class=Response)
+def api_delete_account(account_id: UUID) -> Response:
     Session = get_session_factory()
     with Session() as session:
         try:
@@ -191,11 +203,11 @@ def api_delete_account(account_id: UUID):
             session.commit()
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
-    return {"success": True}
+    return Response(status_code=204)
 
 
-@router.post("/api/accounts/{account_id}/sync")
-def api_sync_account(account_id: UUID):
+@router.post("/api/accounts/{account_id}/sync", response_model=SyncJobOut)
+def api_sync_account(account_id: UUID) -> SyncJobOut:
     Session = get_session_factory()
     with Session() as session:
         try:
@@ -203,40 +215,42 @@ def api_sync_account(account_id: UUID):
             session.commit()
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
-    return {"success": True, "job_id": str(job_id)}
+    return SyncJobOut(job_id=str(job_id))
 
 
-@router.post("/api/accounts/sync-all")
-def api_sync_all_accounts():
+_SYNC_ALL_PAGE = 500
+
+
+@router.post("/api/accounts/sync-all", response_model=SyncAllOut)
+def api_sync_all_accounts() -> SyncAllOut:
+    """Enqueue a sync for every sync-enabled account (paged; deduped by the job queue)."""
     Session = get_session_factory()
     job_ids: list[str] = []
     with Session() as session:
-        rows, _ = list_accounts(session, limit=500, offset=0)
-        for acc in rows:
-            if not acc.sync_enabled:
-                continue
-            jid = enqueue_account_sync(session, acc.id)
-            job_ids.append(str(jid))
+        offset = 0
+        while True:
+            rows, total = list_accounts(session, limit=_SYNC_ALL_PAGE, offset=offset)
+            for acc in rows:
+                if acc.sync_enabled:
+                    job_ids.append(str(enqueue_account_sync(session, acc.id)))
+            offset += len(rows)
+            if not rows or offset >= total:
+                break
         session.commit()
-    return {"success": True, "job_ids": job_ids, "count": len(job_ids)}
+    return SyncAllOut(job_ids=job_ids, count=len(job_ids))
 
 
-@router.get("/api/groups")
-def api_list_groups():
+@router.get("/api/groups", response_model=GroupsOut)
+def api_list_groups() -> GroupsOut:
     Session = get_session_factory()
     with Session() as session:
-        rows = list_groups(session)
-        return {
-            "success": True,
-            "groups": [
-                GroupOut(id=str(g.id), name=g.name, color=g.color, account_count=n).model_dump()
-                for g, n in rows
-            ],
-        }
+        return GroupsOut(
+            groups=[GroupOut(id=str(g.id), name=g.name, color=g.color, account_count=n) for g, n in list_groups(session)]
+        )
 
 
 @router.post("/api/groups", response_model=GroupOut)
-def api_create_group(body: GroupCreateIn):
+def api_create_group(body: GroupCreateIn) -> GroupOut:
     Session = get_session_factory()
     with Session() as session:
         g = create_group(session, name=body.name, color=body.color)
@@ -244,8 +258,8 @@ def api_create_group(body: GroupCreateIn):
         return GroupOut(id=str(g.id), name=g.name, color=g.color, account_count=0)
 
 
-@router.delete("/api/groups/{group_id}")
-def api_delete_group(group_id: UUID):
+@router.delete("/api/groups/{group_id}", status_code=204, response_class=Response)
+def api_delete_group(group_id: UUID) -> Response:
     Session = get_session_factory()
     with Session() as session:
         try:
@@ -253,29 +267,24 @@ def api_delete_group(group_id: UUID):
             session.commit()
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
-    return {"success": True}
+    return Response(status_code=204)
 
 
 @router.get("/api/settings", response_model=SettingsOut)
-def api_get_settings():
+def api_get_settings() -> SettingsOut:
     Session = get_session_factory()
     with Session() as session:
         return SettingsOut(settings=get_public_settings(session))
 
 
 @router.put("/api/settings", response_model=SettingsOut)
-@router.post("/api/settings", response_model=SettingsOut)
-async def api_update_settings(request: Request):
+def api_update_settings(body: SettingsUpdateIn) -> SettingsOut:
     """Update public settings only. Password changes use POST /api/auth/password."""
-    data = await request.json()
-    if not isinstance(data, dict):
-        raise HTTPException(400, "expected JSON object")
-    if "current_login_password" in data or "login_password" in data:
-        raise HTTPException(400, "use POST /api/auth/password to change login password")
-    patch = data.get("settings") if isinstance(data.get("settings"), dict) else data
-    patch = {str(k): str(v) for k, v in patch.items()}
     Session = get_session_factory()
     with Session() as session:
-        settings = update_public_settings(session, patch)
+        try:
+            settings = update_public_settings(session, body.settings)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         session.commit()
         return SettingsOut(settings=settings)

@@ -44,9 +44,11 @@ def get_public_settings(session: Session) -> dict[str, str]:
 
 
 def update_public_settings(session: Session, patch: dict[str, str]) -> dict[str, str]:
+    """Apply a patch of public settings. Unknown or secret keys raise ValueError."""
+    rejected = sorted(k for k in patch if k not in PUBLIC_SETTING_KEYS or _is_secret_key(k))
+    if rejected:
+        raise ValueError(f"unsupported setting keys: {', '.join(rejected)}")
     for key, value in patch.items():
-        if key not in PUBLIC_SETTING_KEYS or _is_secret_key(key):
-            continue
         row = session.get(AppSetting, key)
         if row is None:
             row = AppSetting(key=key, value=str(value))

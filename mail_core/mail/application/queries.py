@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,7 +32,57 @@ class MessageListItem:
 @dataclass(frozen=True, slots=True)
 class MessagePage:
     items: list[MessageListItem]
-    next_cursor: dict[str, Any] | None
+    # Opaque keyset token; pass back verbatim as ``cursor``.
+    next_cursor: str | None
+
+
+class InvalidCursor(ValueError):
+    """Cursor token is malformed."""
+
+
+def encode_cursor(sort_time: datetime, message_id: uuid.UUID) -> str:
+    raw = f"{sort_time.isoformat()}|{message_id}".encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def decode_cursor(token: str) -> tuple[datetime, uuid.UUID]:
+    try:
+        pad = "=" * (-len(token) % 4)
+        st, mid = base64.urlsafe_b64decode(token + pad).decode().split("|", 1)
+        return datetime.fromisoformat(st), uuid.UUID(mid)
+    except Exception as exc:  # noqa: BLE001 - any decode failure is the same client error
+        raise InvalidCursor("invalid cursor") from exc
+
+
+def _list_item(m: Message, folder_id: uuid.UUID | None) -> MessageListItem:
+    return MessageListItem(
+        id=m.id,
+        account_id=m.account_id,
+        subject=m.subject,
+        from_address=m.from_address,
+        from_name=m.from_name,
+        sort_time=m.sort_time,
+        is_read=m.is_read,
+        is_flagged=m.is_flagged,
+        has_attachments=m.has_attachments,
+        snippet=m.snippet,
+        folder_id=folder_id,
+    )
+
+
+def messages_by_ids(session: Session, ids: list[uuid.UUID]) -> list[MessageListItem]:
+    """Hydrate list rows for ``ids`` preserving the given order (one query)."""
+    if not ids:
+        return []
+    rows = session.execute(
+        select(Message, MessageLocation.folder_id)
+        .outerjoin(MessageLocation, MessageLocation.message_id == Message.id)
+        .where(Message.id.in_(ids))
+    ).all()
+    by_id: dict[uuid.UUID, MessageListItem] = {}
+    for m, fid in rows:
+        by_id.setdefault(m.id, _list_item(m, fid))
+    return [by_id[i] for i in ids if i in by_id]
 
 
 def get_folder_stats(session: Session, folder_id: uuid.UUID) -> FolderStats | None:
@@ -65,9 +116,9 @@ def list_messages_keyset(
     *,
     folder_ids: list[uuid.UUID],
     limit: int = 50,
-    cursor_sort_time: datetime | None = None,
-    cursor_message_id: uuid.UUID | None = None,
+    cursor: str | None = None,
 ) -> MessagePage:
+    cursor_sort_time, cursor_message_id = decode_cursor(cursor) if cursor else (None, None)
     if not folder_ids:
         return MessagePage(items=[], next_cursor=None)
     stmt = (
@@ -86,26 +137,11 @@ def list_messages_keyset(
     rows = list(session.execute(stmt).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    items = [
-        MessageListItem(
-            id=m.id,
-            account_id=m.account_id,
-            subject=m.subject,
-            from_address=m.from_address,
-            from_name=m.from_name,
-            sort_time=m.sort_time,
-            is_read=m.is_read,
-            is_flagged=m.is_flagged,
-            has_attachments=m.has_attachments,
-            snippet=m.snippet,
-            folder_id=fid,
-        )
-        for m, fid in rows
-    ]
+    items = [_list_item(m, fid) for m, fid in rows]
     next_cursor = None
     if has_more and items:
         last = items[-1]
-        next_cursor = {"sort_time": last.sort_time.isoformat(), "message_id": str(last.id)}
+        next_cursor = encode_cursor(last.sort_time, last.id)
     return MessagePage(items=items, next_cursor=next_cursor)
 
 
@@ -114,8 +150,7 @@ def unified_inbox(
     *,
     account_ids: list[uuid.UUID] | None = None,
     limit: int = 50,
-    cursor_sort_time: datetime | None = None,
-    cursor_message_id: uuid.UUID | None = None,
+    cursor: str | None = None,
 ) -> MessagePage:
     """Backend-aggregated inbox across accounts (role=inbox folders)."""
     stmt = select(Folder.id).where(Folder.role == "inbox")
@@ -126,8 +161,7 @@ def unified_inbox(
         session,
         folder_ids=folder_ids,
         limit=limit,
-        cursor_sort_time=cursor_sort_time,
-        cursor_message_id=cursor_message_id,
+        cursor=cursor,
     )
 
 
@@ -151,6 +185,7 @@ class MessageDetail:
     cc_addresses: list[Any]
     sort_time: datetime
     is_read: bool
+    is_flagged: bool
     has_attachments: bool
     snippet: str | None
     body_text: str | None
@@ -187,6 +222,7 @@ def get_message_detail(session: Session, message_id: uuid.UUID) -> MessageDetail
         cc_addresses=list(msg.cc_addresses or []),
         sort_time=msg.sort_time,
         is_read=msg.is_read,
+        is_flagged=msg.is_flagged,
         has_attachments=msg.has_attachments,
         snippet=msg.snippet,
         body_text=text_plain,
