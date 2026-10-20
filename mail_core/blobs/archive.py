@@ -356,6 +356,7 @@ def run_archive_batch(
             session.commit()
 
     quota = check_quota(root, soft_limit_bytes=soft_i, hard_limit_bytes=hard_i)
+    current_used_bytes = quota.used_bytes
     if quota.hard_exceeded or quota.soft_exceeded:
         with Session() as session:
             # Nothing claimed yet — emit pause event and stop (soft + hard).
@@ -407,9 +408,10 @@ def run_archive_batch(
     provider_cache: dict[uuid.UUID, object] = {}
 
     for idx, (mid, remote_id, msg_account_id) in enumerate(work):
-        # Re-check quota before each download
-        quota = check_quota(root, soft_limit_bytes=soft_i, hard_limit_bytes=hard_i)
-        if quota.hard_exceeded or quota.soft_exceeded:
+        # Incremental quota check: avoid per-message full disk walk (V4-01)
+        soft_exceeded = soft_i is not None and current_used_bytes >= soft_i
+        hard_exceeded = hard_i is not None and current_used_bytes >= hard_i
+        if soft_exceeded or hard_exceeded:
             with Session() as session:
                 # O(n) slice from current index — avoid work.index (O(n²) over the loop).
                 remaining = [w[0] for w in work[idx:]]
@@ -424,7 +426,7 @@ def run_archive_batch(
                 "status": "paused_quota",
                 "completed": completed,
                 "failed": failed,
-                "used_bytes": quota.used_bytes,
+                "used_bytes": current_used_bytes,
             }
 
         if msg_account_id not in provider_cache:
@@ -458,6 +460,7 @@ def run_archive_batch(
         try:
             mime = provider.fetch_mime(remote_id)  # network
             write = blob_store.put(mime)
+            current_used_bytes += write.size_bytes
         except Exception as exc:
             log.warning("archive fetch failed message=%s: %s", mid, safe_error(exc))
             with Session() as session:
@@ -550,6 +553,7 @@ def run_archive_batch(
                         existing_keys.add(key)
 
                         att_write = blob_store.put(att_info["data"])
+                        current_used_bytes += att_write.size_bytes
                         att_blob = session.scalar(
                             select(MessageBlob).where(
                                 MessageBlob.content_sha256 == att_write.content_sha256,
