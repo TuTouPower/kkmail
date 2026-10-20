@@ -31,6 +31,7 @@
       "output": "release"
     },
     "files": [
+      "icon.svg",
       "main.js",
       "package.json",
       "paths.js",
