@@ -1,0 +1,5 @@
+# Large official PostgreSQL binaries — fetch with scripts/fetch-pg-binaries.sh
+pgsql/
+*.tar.gz
+*.tar.bz2
+*.zip
