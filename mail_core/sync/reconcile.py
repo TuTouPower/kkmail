@@ -15,7 +15,6 @@ from mail_core.mail.storage.models import Account, Folder, FolderStats, Message,
 from mail_core.providers.factory import build_provider
 from mail_core.sync.engine import local_remote_ids_for_folder
 from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, assert_fencing, release_lease
-from mail_core.sync.checkpoints import commit_checkpoint
 from mail_core.mail.storage.models import SyncCheckpoint
 
 log = logging.getLogger("mail_core.sync.reconcile")
@@ -27,8 +26,14 @@ def reconcile_folder(
     *,
     worker_id: str,
     store: CredentialStore | None = None,
-    lease_ttl: timedelta = timedelta(seconds=60),
+    lease_ttl: timedelta = timedelta(seconds=120),
 ) -> dict:
+    """Reconcile local vs remote IDs after a complete scan.
+
+    Provider I/O errors release the lease and surface as ``provider_error``
+    (no silent empty-delete). Select/SEARCH failures in IMAP raise rather than
+    returning an empty action list.
+    """
     Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
     with Session() as session:
         account = session.get(Account, account_id)
@@ -55,7 +60,17 @@ def reconcile_folder(
         )
 
     provider = build_provider(account_snapshot, store or get_credential_store())
-    actions = list(provider.reconcile(remote_folder, local_ids))  # network / full scan inside provider
+    try:
+        actions = list(provider.reconcile(remote_folder, local_ids))  # network / full scan inside provider
+    except Exception as exc:
+        log.exception("reconcile provider I/O failed for folder %s: %s", folder_id, type(exc).__name__)
+        with Session() as session:
+            try:
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            except FencingMismatch:
+                session.rollback()
+        return {"status": "provider_error", "error": f"{type(exc).__name__}: {exc}"}
 
     deleted = 0
     with Session() as session:
