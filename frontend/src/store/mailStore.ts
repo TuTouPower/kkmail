@@ -1,117 +1,96 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export interface Account {
-  id: string
-  email: string
-  provider: string
-  group: string
-  color: string
-}
+export type ViewState =
+  | { type: 'allInbox' }
+  | { type: 'accountFolder'; accountId: number; email: string; folder: string }
 
-export interface Message {
-  id: number
-  accountId: string
-  folder: string
-  sender: string
-  initial: string
-  color: string
-  subject: string
-  preview: string
-  date: string
-  time: string
-  unread: boolean
-  flagged: boolean
-  attachments: number
-  body: string
-  attachmentName?: string
-  attachmentSize?: string
-}
-
-interface MailState {
+interface MailUiState {
   theme: 'dark' | 'light'
   setTheme: (theme: 'dark' | 'light') => void
   sidebarCollapsed: boolean
   toggleSidebar: () => void
   mobileView: 'list' | 'detail'
   setMobileView: (view: 'list' | 'detail') => void
-  selectedId: number | null
-  setSelectedId: (id: number | null) => void
+  view: ViewState
+  setView: (view: ViewState) => void
+  selectedKey: string | null
+  setSelectedKey: (key: string | null) => void
   search: string
   setSearch: (q: string) => void
   listFilter: 'all' | 'unread' | 'flagged'
   setListFilter: (f: 'all' | 'unread' | 'flagged') => void
   sortNewest: boolean
   toggleSort: () => void
-  view: { type: string; accountId?: string; folder?: string }
-  setView: (view: MailState['view']) => void
-  collapsedGroups: Set<string>
+  collapsedGroups: string[]
   toggleGroup: (group: string) => void
-  collapsedAccounts: Set<string>
+  collapsedAccounts: string[]
   toggleAccount: (id: string) => void
-  accounts: Account[]
-  messages: Message[]
-  markAllVisibleRead: () => void
+  composeOpen: boolean
+  setComposeOpen: (open: boolean) => void
 }
 
-// Demo data matching the HTML prototype
-const demoAccounts: Account[] = [
-  { id: 'gmail-main', email: 'demo1@example.com', provider: 'Gmail', group: '个人邮箱', color: '#4285f4' },
-  { id: 'gmail-zhang', email: 'demo2@example.com', provider: 'Gmail', group: '个人邮箱', color: '#4285f4' },
-  { id: 'outlook-work', email: 'work@example.com', provider: 'Outlook', group: '工作邮箱', color: '#0879d9' },
-  { id: '163-main', email: 'redacted_mobile@example.com', provider: '网易 163', group: '其他邮箱', color: '#d94b47' },
-]
-
-const demoMessages: Message[] = [
-  { id: 1, accountId: 'gmail-main', folder: 'inbox', sender: 'Spotify', initial: 'S', color: '#7196d1', subject: 'Take the party with you. Get 2 free months of Premium.', preview: "Your soundtrack's coming with you, wherever you go. Enjoy two months on us.", date: '2026/10/20', time: '16:44', unread: true, flagged: false, attachments: 0, body: '<p>Enjoy 2 free months of Premium.</p>' },
-  { id: 2, accountId: 'gmail-main', folder: 'inbox', sender: 'Discord', initial: 'D', color: '#5865f2', subject: 'maedahbatool 在 Community 中提到了你', preview: '您有 3 条新消息 · announcements 查看最新讨论', date: '2026/10/20', time: '09:22', unread: true, flagged: false, attachments: 0, body: '<p>你好！maedahbatool 提到了你。</p>' },
-  { id: 3, accountId: 'outlook-work', folder: 'inbox', sender: 'Microsoft 365', initial: 'M', color: '#0879d9', subject: 'Your weekly productivity summary', preview: 'Here is what happened across your Microsoft 365 workspace.', date: '2026/10/20', time: '14:06', unread: true, flagged: false, attachments: 0, body: '<p>Weekly summary ready.</p>' },
-  { id: 4, accountId: '163-main', folder: 'inbox', sender: '网易邮箱团队', initial: '网', color: '#d94b47', subject: '网易邮箱安全中心提醒', preview: '您的邮箱安全设置有一项待确认，请及时查看。', date: '2026/10/20', time: '10:27', unread: true, flagged: false, attachments: 0, body: '<p>请检查安全设置。</p>' },
-]
-
-export const useMailStore = create<MailState>()(
+export const useMailStore = create<MailUiState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       theme: 'dark',
       setTheme: (theme) => set({ theme }),
       sidebarCollapsed: false,
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       mobileView: 'list',
       setMobileView: (view) => set({ mobileView: view }),
-      selectedId: 1,
-      setSelectedId: (id) => set({ selectedId: id }),
+      view: { type: 'allInbox' },
+      setView: (view) => set({ view, selectedKey: null, mobileView: 'list' }),
+      selectedKey: null,
+      setSelectedKey: (key) => set({ selectedKey: key }),
       search: '',
       setSearch: (q) => set({ search: q }),
       listFilter: 'all',
       setListFilter: (f) => set({ listFilter: f }),
       sortNewest: true,
       toggleSort: () => set((s) => ({ sortNewest: !s.sortNewest })),
-      view: { type: 'allInbox' },
-      setView: (view) => set({ view, selectedId: null }),
-      collapsedGroups: new Set(),
+      collapsedGroups: [],
       toggleGroup: (group) =>
-        set((s) => {
-          const next = new Set(s.collapsedGroups)
-          next.has(group) ? next.delete(group) : next.add(group)
-          return { collapsedGroups: next }
-        }),
-      collapsedAccounts: new Set(['gmail-zhang']),
+        set((s) => ({
+          collapsedGroups: s.collapsedGroups.includes(group)
+            ? s.collapsedGroups.filter((g) => g !== group)
+            : [...s.collapsedGroups, group],
+        })),
+      collapsedAccounts: [],
       toggleAccount: (id) =>
-        set((s) => {
-          const next = new Set(s.collapsedAccounts)
-          next.has(id) ? next.delete(id) : next.add(id)
-          return { collapsedAccounts: next }
-        }),
-      accounts: demoAccounts,
-      messages: demoMessages,
-      markAllVisibleRead: () => {
-        const { messages } = get()
-        // Simplified: mark all currently "visible" as read
-        set({
-          messages: messages.map((m) => ({ ...m, unread: false })),
-        })
-      },
+        set((s) => ({
+          collapsedAccounts: s.collapsedAccounts.includes(id)
+            ? s.collapsedAccounts.filter((x) => x !== id)
+            : [...s.collapsedAccounts, id],
+        })),
+      composeOpen: false,
+      setComposeOpen: (open) => set({ composeOpen: open }),
     }),
-    { name: 'mail-demo-storage', partialize: (s) => ({ theme: s.theme }) }
-  )
+    { name: 'mail-ui-storage', partialize: (s) => ({ theme: s.theme }) },
+  ),
 )
+
+export const FOLDERS = [
+  { id: 'inbox', label: '收件箱', api: 'inbox' },
+  { id: 'junkemail', label: '垃圾邮件', api: 'junkemail' },
+  { id: 'deleteditems', label: '废纸篓', api: 'deleteditems' },
+  { id: 'all', label: '全部', api: 'all' },
+] as const
+
+export function providerBadge(provider?: string, accountType?: string) {
+  const p = (provider || accountType || '').toLowerCase()
+  if (p.includes('163') || p.includes('netease')) return '163'
+  if (p.includes('outlook') || p.includes('hotmail') || p.includes('live')) return 'O'
+  if (p.includes('gmail') || p.includes('google')) return 'G'
+  if (p.includes('qq')) return 'Q'
+  return (p.slice(0, 1) || 'M').toUpperCase()
+}
+
+export function providerColor(provider?: string, accountType?: string) {
+  const p = (provider || accountType || '').toLowerCase()
+  if (p.includes('163') || p.includes('netease')) return '#d94b47'
+  if (p.includes('outlook') || p.includes('hotmail')) return '#0879d9'
+  if (p.includes('gmail') || p.includes('google')) return '#4285f4'
+  if (p.includes('qq')) return '#12b7f5'
+  return '#6d8fd1'
+}
