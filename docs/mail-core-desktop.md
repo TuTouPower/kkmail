@@ -51,3 +51,24 @@ export KKMAIL_MAIL_CORE_PG=1   # Electron main 在启动 Flask 后尝试 start()
 ## 与 Docker 的关系
 
 桌面与 Docker **同一 PG 主版本目标、同一 Alembic schema**。开发可用 `docker-compose.mail-core.yml` / `docker run postgres:16`；桌面路径用本地子进程。
+
+## Packaging scaffold (electron-builder)
+
+```bash
+cd desktop
+npm install --legacy-peer-deps
+# optional: ../scripts/fetch-pg-binaries.sh   # Linux only
+npm run pack:linux          # --linux dir; soft-ok if no vendor PG
+npm run dist:linux:dir      # same via electron-builder
+```
+
+`extraResources` copies `vendor/pgsql` → `resources/pgsql` when present. Runtime
+`PostgresManager` still honors `KKMAIL_PG_BIN` and falls back to stub.
+
+### macOS / Windows
+
+- Use `npm run dist:mac` / `npm run dist:win` on the matching host or CI runner.
+- Fetch or place PG binaries at **build time** into `desktop/vendor/pgsql/bin`
+  (see `desktop/vendor/README.md`). The Linux fetch script does not auto-download
+  for mac/win.
+- CI must not fail when `vendor/pgsql` is absent.
