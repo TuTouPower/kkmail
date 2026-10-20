@@ -1,0 +1,26 @@
+{
+  "target": "TuTouPower/kkmail (full tree)",
+  "sha": "b2956445574ebf171c1e73526421f0d46ccac3a3",
+  "ts": "20261021_011116",
+  "skill": "intensive-review",
+  "isPrivate": false,
+  "verdict": "BLOCK",
+  "counts": {
+    "Critical": 4,
+    "High": 36,
+    "Medium": 45,
+    "Low": 22,
+    "Info": 11,
+    "total": 118
+  },
+  "expected_reports": [
+    "bundle_cross_validation.md",
+    "bundle_v1_security_v2_correctness.md",
+    "bundle_v3_contracts_v4_perf.md",
+    "bundle_v5_arch_v6_robust.md",
+    "bundle_v7_tests_v8_docs.md",
+    "bundle_zz_findings_machine.md",
+    "review_intensive.md"
+  ],
+  "updated_at": "2026-10-21T01:18:00+08:00"
+}
