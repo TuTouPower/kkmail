@@ -37,9 +37,11 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
       >
         <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.3px', marginBottom: 6 }}>kkmail</div>
         <p style={{ margin: '0 0 20px', color: 'var(--muted)', fontSize: 13 }}>多账号邮箱 · Apple Mail 风格</p>
-        <label style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>登录密码</label>
-        <input
+        <input type="text" name="username" autoComplete="username" value="kkmail" readOnly hidden aria-hidden="true" />
+        <label htmlFor="login-password" style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>登录密码</label>
+        <input id="login-password" name="password"
           type="password"
+          autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           autoFocus
