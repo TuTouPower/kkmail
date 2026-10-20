@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # Bundle: V1 Security + V2 Correctness
 
 - **Target**: TuTouPower/kkmail (public)
@@ -44,8 +48,8 @@ ports:
 volumes:
   - /var/run/docker.sock:/var/run/docker.sock
 environment:
-  - LOGIN_PASSWORD=admin123
-  - SECRET_KEY=your-secret-key-here
+  - LOGIN_PASSWORD=***
+  - SECRET_KEY=***
   - DOCKER_UPDATE_ENABLED=true
 ```
 
@@ -65,12 +69,12 @@ Never ship compose with docker.sock + weak secrets. Require strong `SECRET_KEY`/
 ```python
 if not keys:
     # Dev default — deterministic insecure key
-    keys[1] = hashlib_sha256_bytes(b"kkmail-dev-blob-key-v1")
+    keys[1] = hashlib_sha256_bytes(b"***")
 ```
 ```yaml
-MAIL_CORE_BLOB_KEY_V1: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="  # 32 zero bytes
-MAIL_CORE_BACKUP_KEY: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
-POSTGRES_PASSWORD: kkmail
+MAIL_CORE_BLOB_KEY_V1: "***"  # 32 zero bytes
+MAIL_CORE_BACKUP_KEY: "***"
+POSTGRES_PASSWORD: ***
 ```
 
 **Attack**
@@ -81,15 +85,15 @@ Fail closed if keys unset in non-dev. Generate random keys at install; never com
 
 ---
 
-### S4 [Critical][88] .env.example:7-11 + LOGIN_PASSWORD default — Default admin password `admin123`
+### S4 [Critical][88] .env.example:7-11 + LOGIN_PASSWORD default — Default admin password `***`
 
 **Evidence**
 ```
-SECRET_KEY=your-secret-key-here
-LOGIN_PASSWORD=admin123
+SECRET_KEY=***
+LOGIN_PASSWORD=***
 HOST=0.0.0.0
 ```
-`outlook_web/segments/01_bootstrap.py:164`: `LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD", "admin123")`
+`outlook_web/segments/01_bootstrap.py:164`: `LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD", "***")`
 
 **Attack**
 Internet-facing installs following docs are immediately takeover-able. `HOST=0.0.0.0` increases exposure.
@@ -256,13 +260,13 @@ Use only `request.remote_addr` after trusted proxy count; ignore client-supplied
 
 ---
 
-### S13 [High][78] docker-compose.mail-core.yml:18-19 — Postgres published on host `5433:5432` with password `kkmail`
+### S13 [High][78] docker-compose.mail-core.yml:18-19 — Postgres published on host `5433:5432` with password `***`
 
 **Evidence**
 ```yaml
 ports:
   - "5433:5432"
-POSTGRES_PASSWORD: kkmail
+POSTGRES_PASSWORD: ***
 ```
 
 **Attack**
@@ -429,7 +433,7 @@ Default `use_ssl=True` for non-loopback hosts.
 
 **Evidence (git authors / history scan)**
 - `***@***.com` (HEAD author)
-- `598652647@qq.com`, `air.s.li2233@gmail.com`, `luekongbai@163.com`, `gagmeng@163.com`, `kuhlmangarry24@gmail.com`, `lenoassast@gmail.com`, `lvfeinan@qq.com`, `guotao6@asiainfo.com`, `3242026836@qq.com`
+- `***@***.com`, `***@***.com`, `***@***.com`, `***@***.com`, `***@***.com`, `***@***.com`, `***@***.com`, `***@***.com`, `***@***.com`
 - Current tree: `desktop/package.json` uses `tutoupower@users.noreply.github.com` (safer)
 - No live `.env` with production tokens found in current tree; `.env.example` has placeholders only
 - `outlook_mail_reader.py` leaves empty EMAIL/REFRESH_TOKEN placeholders (good)
@@ -690,7 +694,7 @@ Only treat 401; follow redirects carefully for API.
 
 ### Highest-priority remediation order
 1. Authenticate mail-core + don’t publish unauthenticated `:8000` / Postgres  
-2. Remove docker.sock + default `admin123` / fixed SECRET_KEY from compose  
+2. Remove docker.sock + default `***` / fixed SECRET_KEY from compose  
 3. Fail closed on missing blob keys; rotate published sample keys  
 4. Convert refresh-all to POST+CSRF; allowlist git/oauth URLs  
 5. Stop returning secrets/hashes from `/api/settings`  

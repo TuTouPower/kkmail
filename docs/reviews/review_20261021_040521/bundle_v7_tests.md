@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # Intensive Review — 视角 7：测试与规格
 
 - Target：当前全库，非 diff；`daca631aec54c30ce02cdb5e6499ae196dc3a72d`。

@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # 视角 5：架构与可维护性
 
 - 范围：HEAD `daca631aec54c30ce02cdb5e6499ae196dc3a72d` 当前全库；按 bundle.json 确定性清单检查模块结构，Python AST 扫描全部生产定义/引用，结合调用链与关联测试复核。非 diff 审阅，当前仍存在问题计入。
