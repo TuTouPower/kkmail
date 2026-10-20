@@ -31,6 +31,7 @@ _EXPORTS: dict[str, str] = {
     "reclaim_stale_claims": "mail_core.sync.jobs",
     "reconcile_folder": "mail_core.sync.reconcile",
     "release_lease": "mail_core.sync.leases",
+    "renew_lease": "mail_core.sync.leases",
     "sync_account_folders": "mail_core.sync.engine",
     "sync_folder_delta": "mail_core.sync.delta",
     "sync_folder_metadata": "mail_core.sync.engine",
