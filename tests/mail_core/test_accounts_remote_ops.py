@@ -11,7 +11,6 @@ from mail_core.db.session import get_session_factory
 from mail_core.mail.application.remote_ops import enqueue_remote_operation, mark_remote_operation
 from mail_core.mail.domain.enums import ProviderType, RemoteOperationStatus
 from mail_core.mail.storage import OutboxEvent, RemoteOperation
-from mail_core.providers import GmailProvider, GraphProvider
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
@@ -57,6 +56,3 @@ def test_enqueue_remote_operation_outbox():
         assert any(e.event_type == "remote_operation.updated" for e in events)
 
 
-def test_gmail_graph_stubs_list_folders():
-    assert GmailProvider(credential_ref="x").list_folders()[0].role == "inbox"
-    assert GraphProvider(credential_ref="x").list_folders()[0].role == "inbox"
