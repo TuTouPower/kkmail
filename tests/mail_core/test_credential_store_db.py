@@ -33,7 +33,7 @@ def test_roundtrip_is_encrypted_and_durable():
     assert DbCredentialStore(keyring=_ring()).get_secret(ref) == secret
     with get_session_factory()() as session:
         row = session.get(CredentialSecret, ref)
-        assert row is not None and row.key_version == 1
+        assert row.key_version == 1
         assert b"rt-very-secret" not in row.ciphertext
 
     # Rotation: re-put under v2; old version still decryptable via keyring.

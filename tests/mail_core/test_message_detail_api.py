@@ -71,7 +71,6 @@ def test_get_message_detail_query_and_api():
     Session = get_session_factory()
     with Session() as session:
         detail = get_message_detail(session, mid)
-        assert detail is not None
         assert detail.body_type == "html"
         assert detail.body_html and "hi" in detail.body_html
         assert len(detail.attachments) == 1
