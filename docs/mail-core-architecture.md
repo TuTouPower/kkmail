@@ -664,8 +664,9 @@ flowchart LR
 
 ### 14.3 契约
 
-- FastAPI OpenAPI 为唯一 HTTP 契约源。
-- CI 校验：生成的 TS 类型与前端编译通过。
+- FastAPI OpenAPI 为唯一 HTTP 契约源；`docs/openapi.json` 入库。
+- 前端 HTTP DTO 来自 `openapi-typescript`（`frontend/src/api/generated/schema.ts`），经 `schemaTypes.ts` 别名给 `client.ts` / `mailCore.ts` 使用；禁止手写与 OpenAPI 漂移的 DTO。
+- **本地校验**（无 GitHub Actions）：`python scripts/export_openapi.py --check`、`cd frontend && npm run openapi:check`、`pytest tests/mail_core/test_openapi_contract.py`；前端 `npm test` 会跑 `openapi:check`。
 - 版本策略：破坏性变更走显式版本或迁移说明（本阶段尽量避免）。
 
 ### 14.4 桌面壳
@@ -702,6 +703,9 @@ flowchart LR
 - 搜索：中英文、特殊字符、`pg_trgm` 模糊
 
 ### 15.3 CI 三层
+
+> 当前仓库已移除 GitHub Actions；下列为架构目标分层。契约漂移由本地 pytest / `npm run openapi:check` 门禁。
+
 
 | 层 | 触发 | 内容 | 门禁 |
 |---|---|---|---|
