@@ -10,7 +10,7 @@ import './design-system/tokens.css'
 import './App.css'
 
 function App() {
-  const { theme, mobileView, sidebarCollapsed } = useMailStore()
+  const { theme, mobileView, sidebarCollapsed, mobileSidebarOpen } = useMailStore()
   const [appEl, setAppEl] = useState<HTMLDivElement | null>(null)
   const [authed, setAuthed] = useState<boolean | null>(null)
 
@@ -39,7 +39,7 @@ function App() {
   }
 
   return (
-    <div className="app" ref={setAppEl} data-mobile-view="list">
+    <div className={`app ${mobileSidebarOpen ? 'sidebar-open' : ''}`} ref={setAppEl} data-mobile-view="list">
       <div className="workspace">
         <Sidebar />
         <MessageList />
