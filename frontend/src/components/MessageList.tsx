@@ -21,23 +21,21 @@ export const SEARCH_DEBOUNCE_MS = 250
 const LIST_LIMIT = 100
 
 export default function MessageList() {
-  const {
-    view,
-    selectedKey,
-    setSelectedKey,
-    setMobileView,
-    search,
-    setSearch,
-    listFilter,
-    setListFilter,
-    sortNewest,
-    toggleSort,
-    toggleMobileSidebar,
-    selectedIds,
-    toggleSelected,
-    selectAll,
-    clearSelected,
-  } = useMailStore()
+  const view = useMailStore((s) => s.view)
+  const selectedKey = useMailStore((s) => s.selectedKey)
+  const setSelectedKey = useMailStore((s) => s.setSelectedKey)
+  const setMobileView = useMailStore((s) => s.setMobileView)
+  const search = useMailStore((s) => s.search)
+  const setSearch = useMailStore((s) => s.setSearch)
+  const listFilter = useMailStore((s) => s.listFilter)
+  const setListFilter = useMailStore((s) => s.setListFilter)
+  const sortNewest = useMailStore((s) => s.sortNewest)
+  const toggleSort = useMailStore((s) => s.toggleSort)
+  const toggleMobileSidebar = useMailStore((s) => s.toggleMobileSidebar)
+  const selectedIds = useMailStore((s) => s.selectedIds)
+  const toggleSelected = useMailStore((s) => s.toggleSelected)
+  const selectAll = useMailStore((s) => s.selectAll)
+  const clearSelected = useMailStore((s) => s.clearSelected)
 
   const [searchInput, setSearchInput] = useState(search)
 
