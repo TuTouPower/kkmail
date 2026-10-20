@@ -3,12 +3,13 @@ import { useQueries, useQuery } from '@tanstack/react-query'
 import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, MoreHorizontal, Paperclip, Menu, X } from 'lucide-react'
 import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
+import { parseMailDate, compareMailDates } from '../lib/mailDate'
 import { api } from '../api/client'
 import { useMailStore } from '../store/mailStore'
 
 function formatWhen(value?: string) {
   if (!value) return ''
-  const d = new Date(value)
+  const d = new Date(parseMailDate(value))
   if (Number.isNaN(d.getTime())) return value.slice(5, 16)
   return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
@@ -67,11 +68,7 @@ export default function MessageList() {
       }
       return true
     })
-    .sort((a, b) => {
-      const aa = a.date || ''
-      const bb = b.date || ''
-      return sortNewest ? bb.localeCompare(aa) : aa.localeCompare(bb)
-    })
+    .sort((a, b) => compareMailDates(a.date, b.date, sortNewest))
 
   const [actionStatus, setActionStatus] = useState('')
   const truncatedAccounts = view.type === 'allInbox' ? Math.max(0, accounts.length - ALL_INBOX_ACCOUNT_LIMIT) : 0
