@@ -1,7 +1,7 @@
 {
   "name": "kkmail-desktop",
   "version": "3.0.20",
-  "description": "kkmail desktop shell \u2014 Electron hosts the React UI and the mail-core backend",
+  "description": "kkmail desktop shell — Electron hosts the React UI and the mail-core backend",
   "main": "main.js",
   "homepage": "https://github.com/TuTouPower/kkmail",
   "author": "TuTouPower <tutoupower@users.noreply.github.com>",
@@ -21,8 +21,8 @@
     "electron-squirrel-startup": "^1.0.1"
   },
   "devDependencies": {
-    "electron": "^33.2.0",
-    "electron-builder": "^25.1.8"
+    "electron": "^44.9.2",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.tutoupower.kkmail",

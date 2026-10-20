@@ -3,7 +3,7 @@
  * Linux --dir packaging scaffold for mail-core desktop.
  * - Includes vendor/pgsql when present (fetched via scripts/fetch-pg-binaries.sh)
  * - Creates stub dirs so electron-builder does not fail on missing paths
- * - Soft-exits 0 when Electron binary download is unavailable (CI without cache)
+ * - Soft-exits 0 when Electron binary download / pack fails unless KKMAIL_PACK_STRICT=1
  */
 const { spawnSync } = require('child_process')
 const fs = require('fs')
@@ -47,9 +47,9 @@ if (r.status === 0) {
 }
 
 console.warn('electron-builder exited', r.status)
-// Soft-ok: missing Electron cache / network in CI must not fail the scaffold job
+// Soft-ok for local scaffold: missing Electron cache / network should warn, not fail
 if (process.env.KKMAIL_PACK_STRICT === '1') {
   process.exit(r.status || 1)
 }
-console.log('pack:linux soft-ok (set KKMAIL_PACK_STRICT=1 to fail hard)')
+console.warn('pack:linux soft-ok (set KKMAIL_PACK_STRICT=1 to fail hard)')
 process.exit(0)

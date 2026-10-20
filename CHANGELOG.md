@@ -7,6 +7,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## [Unreleased]
 
 ### Changed
+- 桌面 Electron 从 33 升级到 44.9.x（当前 npm latest / 受支持主版本）；`electron-builder` 升至 26.x。Electron 44 起不再提供 Windows ia32 / Linux armv7l 预构建包。
 - 后端整体替换为 mail-core（FastAPI + PostgreSQL + worker）；Flask 应用、旧版 `templates/` / `static/` UI、浏览器扩展、上游镜像与打包脚本全部删除，无兼容层。
 - 桌面版启动本地 PostgreSQL（SCRAM、随机密码）与 `python -m mail_core` sidecar，按安装生成密钥与一次性初始密码。
 - SPA 只对接 mail-core：单一 HTTP 客户端（Cookie + CSRF + 超时）、服务端搜索、服务端旗标；移除发信 / 撰写界面与 Flask 专属文件夹。
