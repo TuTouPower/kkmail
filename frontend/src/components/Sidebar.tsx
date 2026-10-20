@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle, Trash2, ShieldAlert, Layers } from 'lucide-react'
-import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchGroups, queryKeys, type MailItem } from '../api/queries'
-import { FOLDERS, providerBadge, providerColor, useMailStore } from '../store/mailStore'
+import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle } from 'lucide-react'
+import { fetchAccounts, fetchGroups, queryKeys, type MailItem } from '../api/queries'
+import { providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
 
 export default function Sidebar() {
@@ -10,8 +10,6 @@ export default function Sidebar() {
     setView,
     collapsedGroups,
     toggleGroup,
-    collapsedAccounts,
-    toggleAccount,
     toggleSidebar,
     closeMobileSidebar,
     listFilter,
@@ -25,9 +23,9 @@ export default function Sidebar() {
 
   const groups = groupsQuery.data || []
   const accounts = accountsQuery.data || []
-  // Observe mail-core unified inbox cache for unread badges (populated by MessageList).
+  // Unread badges are derived from the cached unified inbox page (populated by MessageList).
   const inboxCache = useQuery({
-    queryKey: ['mail-core', 'inbox', 'all'],
+    queryKey: queryKeys.inbox('all'),
     queryFn: async () => [] as MailItem[],
     enabled: false,
   })
@@ -35,9 +33,9 @@ export default function Sidebar() {
   const unreadByAccount = new Map<string, number>()
   for (const m of inboxRows) {
     if (m.is_read) continue
-    unreadByAccount.set(m.accountEmail, (unreadByAccount.get(m.accountEmail) || 0) + 1)
+    if (m.accountId) unreadByAccount.set(m.accountId, (unreadByAccount.get(m.accountId) || 0) + 1)
   }
-  const allInboxUnread = accounts.slice(0, ALL_INBOX_ACCOUNT_LIMIT).reduce((n, a) => n + (unreadByAccount.get(a.email) || 0), 0)
+  const allInboxUnread = [...unreadByAccount.values()].reduce((n, c) => n + c, 0)
   const inAllInbox = view.type === 'allInbox'
   const grouped = groups.length
     ? groups.map((g) => ({ group: g, members: accounts.filter((a) => a.group_id === g.id) }))
@@ -97,56 +95,27 @@ export default function Sidebar() {
                   <span className="group-count">{members.length}</span>
                 </div>
                 {!collapsed && members.map((a) => {
-                  const accKey = String(a.id)
-                  const isCollapsed = collapsedAccounts.includes(accKey)
-                  const selected = view.type === 'accountFolder' && view.accountId === a.id && view.folder === 'inbox'
+                  const selected = view.type === 'account' && view.accountId === a.id
+                  const unread = unreadByAccount.get(a.id)
                   return (
-                    <div key={a.id}>
-                      <div className="account-row">
-                        <button className="account-expand" onClick={() => toggleAccount(accKey)} aria-label={isCollapsed ? `展开 ${a.email}` : `折叠 ${a.email}`} aria-expanded={!isCollapsed}>
-                          {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                        </button>
-                        <button
-                          className={`account-button ${selected ? 'active' : ''}`}
-                          onClick={() => { setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: 'inbox' }) }}
-                          title={a.email}
-                        >
-                          <span className="account-dot" style={{ background: a.group_color || providerColor(a.provider, a.account_type) }}>
-                            {providerBadge(a.provider, a.account_type)}
-                          </span>
-                          <span className="account-email">{a.email}</span>
-                        </button>
-                      </div>
-                      {!isCollapsed && (
-                        <div className="folder-tree">
-                          {FOLDERS.map((f) => {
-                            const active = view.type === 'accountFolder' && view.accountId === a.id && view.folder === f.api
-                            const FolderIcon = f.id === 'inbox' ? Inbox : f.id === 'junkemail' ? ShieldAlert : f.id === 'deleteditems' ? Trash2 : Layers
-                            const unread = f.id === 'inbox' ? unreadByAccount.get(a.email) : undefined
-                            return (
-                              <button
-                                key={f.id}
-                                className={`side-item ${active ? 'active' : ''}`}
-                                onClick={() => { setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: f.api }) }}
-                              >
-                                <FolderIcon size={15} />
-                                <span className="side-name">{f.label}</span>
-                                {!!unread && <span className="side-count unread-badge" aria-label={`${unread} 封未读`}>{unread}</span>}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      )}
+                    <div className="account-row" key={a.id}>
+                      <button
+                        className={`account-button ${selected ? 'active' : ''}`}
+                        onClick={() => { setView({ type: 'account', accountId: a.id, email: a.email }) }}
+                        title={a.email}
+                      >
+                        <span className="account-dot" style={{ background: a.group_color || providerColor(a.provider, a.account_type) }}>
+                          {providerBadge(a.provider, a.account_type)}
+                        </span>
+                        <span className="account-email">{a.email}</span>
+                        {!!unread && <span className="side-count unread-badge" aria-label={`${unread} 封未读`}>{unread}</span>}
+                      </button>
                     </div>
                   )
                 })}
               </div>
             )
           })}
-        </div>
-        <div style={{ padding: '5px 9px 4px', color: 'var(--muted)', fontSize: 10, lineHeight: 1.6 }}>
-          账户与邮件来自现有 Flask API。<br />
-          收件箱 / 垃圾邮件 / 废纸篓为上游当前支持的实时文件夹。
         </div>
       </div>
       <div className="sidebar-footer">

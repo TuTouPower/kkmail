@@ -1,15 +1,13 @@
 import { useEffect } from 'react'
 import { subscribeMailCoreEvents } from '../api/mailCore'
 import { queryClient } from '../api/queries'
-import { isMailCoreEnabled } from '../lib/mailCoreFlag'
 
-/** Events that mean inbox / folder list may be stale. */
+/** Events that mean cached message lists may be stale. */
 export const MAIL_CORE_INBOX_INVALIDATE_EVENTS = new Set([
   'message.upserted',
   'message.removed',
   'folder.stats_updated',
-  'mail.changed',
-  'folder.stats.changed',
+  'remote_operation.updated',
   'client.resync_hint',
   'sync.completed',
 ])
@@ -18,22 +16,17 @@ export function shouldInvalidateMailCoreInbox(eventType: string): boolean {
   return MAIL_CORE_INBOX_INVALIDATE_EVENTS.has(eventType)
 }
 
-/**
- * When VITE_MAIL_CORE (or runtime flag) is on, subscribe to mail-core SSE and
- * invalidate/refetch the mail-core inbox query on message / folder-stats events.
- */
-export function useMailCoreRealtime(): void {
+/** While signed in, subscribe to mail-core SSE and refetch message lists on relevant events. */
+export function useMailCoreRealtime(enabled: boolean): void {
   useEffect(() => {
-    if (!isMailCoreEnabled()) return
-    const stop = subscribeMailCoreEvents(
+    if (!enabled) return
+    return subscribeMailCoreEvents(
       (type) => {
-        if (!shouldInvalidateMailCoreInbox(type)) return
-        void queryClient.invalidateQueries({ queryKey: ['mail-core', 'inbox'] })
+        if (shouldInvalidateMailCoreInbox(type)) void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
       },
       () => {
-        /* disconnect; EventSource reconnects; no action */
+        /* EventSource reconnects on its own */
       },
     )
-    return stop
-  }, [])
+  }, [enabled])
 }

@@ -5,15 +5,12 @@ import MessageList from './components/MessageList'
 import MessageReader from './components/MessageReader'
 import SettingsPage from './components/SettingsModal'
 import LoginPage from './components/LoginPage'
-import ComposeModal from './components/ComposeModal'
 import ColumnResize from './components/ColumnResize'
 import { UNAUTHORIZED_EVENT, api } from './api/client'
-import { clearMailCoreAuth } from './api/mailCore'
 import { queryClient } from './api/queries'
 import './design-system/tokens.css'
 import { useIsWide } from './lib/viewport'
 import { workspaceGridColumns } from './lib/workspaceLayout'
-import MailCoreBridge from './components/MailCoreBridge'
 import { useMailCoreRealtime } from './hooks/useMailCoreRealtime'
 
 function resolveTheme(theme: 'dark' | 'light' | 'system'): 'dark' | 'light' {
@@ -27,7 +24,7 @@ function App() {
     settingsOpen, sidebarWidth, listWidth, setSidebarWidth, setListWidth,
   } = useMailStore()
   const [authed, setAuthed] = useState<boolean | null>(null)
-  useMailCoreRealtime()
+  useMailCoreRealtime(authed === true)
 
   useEffect(() => {
     const apply = () => { document.documentElement.dataset.theme = resolveTheme(theme) }
@@ -63,10 +60,7 @@ function App() {
     api.checkSession()
       .then((ok) => { if (!cancelled) setAuthed(ok) })
       .catch(() => { if (!cancelled) setAuthed(false) })
-    const onUnauthorized = () => {
-      clearMailCoreAuth()
-      setAuthed(false)
-    }
+    const onUnauthorized = () => setAuthed(false)
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
     return () => {
       cancelled = true
@@ -134,8 +128,6 @@ function App() {
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeMobileSidebar() }}
         />
       )}
-      <ComposeModal />
-      <MailCoreBridge />
     </div>
   )
 }

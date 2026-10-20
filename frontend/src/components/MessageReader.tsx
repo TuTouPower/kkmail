@@ -1,19 +1,17 @@
 import { useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Reply, ReplyAll, Forward, MailOpen, Trash2, Flag, Folder, Archive, ShieldAlert, ArrowLeft } from 'lucide-react'
-import { api } from '../api/client'
-import { fetchAccounts, findCachedMail, flagOptimistic, markReadOptimistic, queryClient, queryKeys, type MailItem } from '../api/queries'
-import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail } from '../api/mailCore'
+import { MailOpen, Trash2, Flag, ArrowLeft } from 'lucide-react'
+import { fetchAccounts, findCachedMail, flagOptimistic, markReadOptimistic, queryClient, queryKeys, removeCachedMail } from '../api/queries'
+import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
-import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
-import { replyAllRecipients, replyRecipient } from '../lib/recipients'
-import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, htmlToText, isHtmlBody } from '../lib/mailBody'
+import { confirmAction, errorMessage } from '../lib/actions'
+import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, isHtmlBody } from '../lib/mailBody'
 import { formatReaderDate } from '../lib/listDate'
 import { displayName } from '../lib/displayName'
 
 export default function MessageReader() {
-  const { selectedKey, openCompose, flaggedIds, toggleFlag, setMobileView } = useMailStore()
+  const { selectedKey, setMobileView } = useMailStore()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
   const [actionStatus, setActionStatus] = useState('')
@@ -51,7 +49,6 @@ export default function MessageReader() {
   const detail = detailQuery.data
   const body = detail?.body || selected.body_preview || ''
   const html = !!detail?.body && isHtmlBody(detail.body_type)
-  const quotedBody = html ? htmlToText(body) : body
 
   async function markCurrent() {
     if (!selected) return
@@ -65,18 +62,24 @@ export default function MessageReader() {
 
   async function trashCurrent() {
     if (!selected) return
-    const folder = selected.folder || 'inbox'
-    const warning = folder === 'deleteditems' ? '废纸篓中的邮件将被永久删除，无法恢复。' : '邮件将移到废纸篓（IMAP 账户可能直接永久删除）。'
-    if (!confirmAction(`删除「${selected.subject}」？${warning}`)) return
+    if (!confirmAction(`将「${selected.subject}」移到废纸篓？`)) return
     try {
-      ensureSuccess(await api.deleteEmails({ email: selected.accountEmail, folder, items: [{ id: selected.id, folder, id_mode: selected.id_mode || '' }] }), '删除失败')
+      await postMailCoreMessageTrash(selected.id)
       setActionStatus('')
-      const gone = mailKey(selected)
-      queryClient.setQueriesData<MailItem[]>({ queryKey: ['emails'] }, (list) => list?.filter((m) => mailKey(m) !== gone))
-      queryClient.setQueriesData<MailItem[]>({ queryKey: ['mail-core', 'inbox'] }, (list) => list?.filter((m) => mailKey(m) !== gone))
-      await queryClient.invalidateQueries({ queryKey: ['mail-core', 'inbox'] })
+      removeCachedMail([mailKey(selected)])
+      await queryClient.invalidateQueries({ queryKey: ['mail-core'] })
     } catch (err) {
       setActionStatus(errorMessage(err, '删除失败'))
+    }
+  }
+
+  async function toggleFlagged() {
+    if (!selected) return
+    try {
+      await flagOptimistic(selected, !selected.is_flagged)
+      setActionStatus('')
+    } catch (err) {
+      setActionStatus(errorMessage(err, '标记失败'))
     }
   }
 
@@ -86,37 +89,15 @@ export default function MessageReader() {
         <button className="reader-action mobile-only" title="返回列表" aria-label="返回列表" onClick={() => setMobileView('list')}><ArrowLeft size={18} /></button>
         <div className="reader-location">{selected.accountEmail}</div>
         <div className="reader-toolbar-actions">
-          <button className="reader-action" title="回复" aria-label="回复" onClick={() => openCompose('reply', {
-            to: replyRecipient(detail?.from || selected.from),
-            subject: `Re: ${detail?.subject || selected.subject}`,
-            body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
-            accountId: selected.accountId,
-          })}><Reply size={18} /></button>
-          <button className="reader-action" title="回复全部" aria-label="回复全部" onClick={() => openCompose('replyAll', {
-            to: replyAllRecipients(detail?.from || selected.from, [detail?.to || selected.to, detail?.cc], selected.accountEmail),
-            subject: `Re: ${detail?.subject || selected.subject}`,
-            body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
-            accountId: selected.accountId,
-          })}><ReplyAll size={18} /></button>
-          <button className="reader-action" title="转发" aria-label="转发" onClick={() => openCompose('forward', {
-            subject: `Fwd: ${detail?.subject || selected.subject}`,
-            body: `\n\n—— 转发邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
-            accountId: selected.accountId,
-          })}><Forward size={18} /></button>
-          <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
           <button className="reader-action" title="标为已读" aria-label="标为已读" onClick={markCurrent} disabled={selected.is_read}><MailOpen size={18} /></button>
-          <button className="reader-action" title="归档（后端暂无归档接口）" aria-label="归档" disabled aria-disabled="true"><Archive size={18} /></button>
           <button className="reader-action" title="移到废纸篓" aria-label="移到废纸篓" onClick={trashCurrent}><Trash2 size={18} /></button>
-          <button className="reader-action" title="标记为垃圾邮件（后端暂无移动接口）" aria-label="标记为垃圾邮件" disabled aria-disabled="true"><ShieldAlert size={18} /></button>
-          <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
-          <button className="reader-action" title="移动到文件夹（后端暂无移动接口）" aria-label="移动到文件夹" disabled aria-disabled="true"><Folder size={18} /></button>
-          <button className="reader-action" title={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-label={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-pressed={flaggedIds.includes(selectedKey || '')} onClick={() => {
-              if (!selected || !selectedKey) return
-              const next = !flaggedIds.includes(selectedKey)
-              void flagOptimistic(selected, next, toggleFlag).catch((err) =>
-                setActionStatus(errorMessage(err, '标记失败')),
-              )
-            }}><Flag size={18} /></button>
+          <button
+            className="reader-action"
+            title={selected.is_flagged ? '取消标记' : '标记邮件'}
+            aria-label={selected.is_flagged ? '取消标记' : '标记邮件'}
+            aria-pressed={selected.is_flagged}
+            onClick={toggleFlagged}
+          ><Flag size={18} /></button>
         </div>
       </div>
       <div className="reader-scroll">
