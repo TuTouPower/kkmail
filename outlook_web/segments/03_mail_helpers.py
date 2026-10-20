@@ -420,9 +420,16 @@ def is_graph_token_scope_retryable_response(response) -> bool:
 
 def request_graph_token_response(client_id: str, refresh_token: str, proxy_url: str = None,
                                  fallback_proxy_urls: Optional[List[str]] = None,
-                                 include_original_scope_fallback: bool = False):
-    """请求 Graph token，优先使用授权时的显式委托 scope，避免 .default 依赖应用预配置权限。"""
+                                 include_original_scope_fallback: bool = False,
+                                 require_refresh_token: bool = False):
+    """请求 Graph token，优先使用授权时的显式委托 scope，避免 .default 依赖应用预配置权限。
+
+    require_refresh_token 为真时，.default 若只带回 access_token、没有新的 refresh_token，
+    不把这次 200 当成结束。否则后续能轮换 refresh_token 的原始 scope 请求发不出去，
+    调用方会记刷新成功却不落库。
+    """
     last_response = None
+    access_only_response = None
     candidates = get_graph_token_scope_candidates(include_original_scope_fallback)
     for index, (_label, scope) in enumerate(candidates):
         data = {
@@ -442,11 +449,22 @@ def request_graph_token_response(client_id: str, refresh_token: str, proxy_url: 
         )
         last_response = response
         if response.status_code == 200:
+            if require_refresh_token and scope == GRAPH_DEFAULT_TOKEN_SCOPE:
+                rotated_refresh_token = ''
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = {}
+                if isinstance(payload, dict):
+                    rotated_refresh_token = str(payload.get('refresh_token') or '').strip()
+                if not rotated_refresh_token:
+                    access_only_response = response
+                    continue
             return response
         if index == len(candidates) - 1 or not is_graph_token_scope_retryable_response(response):
-            return response
+            return access_only_response or response
 
-    return last_response
+    return access_only_response or last_response
 
 
 def get_with_proxy_fallback(url: str, *, proxy_url: str = None,

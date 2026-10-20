@@ -2806,6 +2806,116 @@ class RefreshTokenProxyFallbackTests(unittest.TestCase):
         self.assertIsNotNone(refreshed)
         self.assertEqual(refreshed['refresh_token'], 'M.C556_SN1.0.U.default-rotated')
 
+    def test_refresh_account_continues_after_default_scope_omits_refresh_token(self):
+        class FakeResponse:
+            def __init__(self, status_code, payload):
+                self.status_code = status_code
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+        unauthorized_scope_response = FakeResponse(400, {
+            'error': 'invalid_grant',
+            'error_description': (
+                'AADSTS70000: The request was denied because one or more scopes requested '
+                'are unauthorized or expired. The user must first sign in and grant the '
+                'client application access to the requested scope.'
+            ),
+        })
+        default_without_rotation = FakeResponse(200, {
+            'access_token': 'access-token',
+            'token_type': 'Bearer',
+            'scope': 'https://graph.microsoft.com/.default https://graph.microsoft.com/Mail.ReadWrite',
+        })
+        original_rotated = FakeResponse(200, {
+            'access_token': 'access-token',
+            'refresh_token': 'M.C556_SN1.0.U.original-rotated',
+        })
+
+        with patch.object(
+            web_outlook_app.requests,
+            'request',
+            side_effect=[
+                unauthorized_scope_response,
+                unauthorized_scope_response,
+                unauthorized_scope_response,
+                default_without_rotation,
+                original_rotated,
+            ],
+        ) as mocked_request:
+            response = self.client.post(f'/api/accounts/{self.account_id}/refresh')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload['success'])
+
+        request_data = [call.kwargs['data'] for call in mocked_request.call_args_list]
+        self.assertEqual(len(request_data), 5)
+        self.assertEqual(request_data[3]['scope'], 'https://graph.microsoft.com/.default')
+        self.assertNotIn('scope', request_data[4])
+
+        with self.app.app_context():
+            refreshed = web_outlook_app.get_account_by_id(self.account_id)
+            account_row = web_outlook_app.get_db().execute(
+                '''
+                SELECT last_refresh_status, refresh_token_updated_at
+                FROM accounts
+                WHERE id = ?
+                ''',
+                (self.account_id,),
+            ).fetchone()
+
+        self.assertIsNotNone(refreshed)
+        self.assertEqual(refreshed['refresh_token'], 'M.C556_SN1.0.U.original-rotated')
+        self.assertEqual(account_row['last_refresh_status'], 'success')
+        self.assertIsNotNone(account_row['refresh_token_updated_at'])
+
+    def test_refresh_account_keeps_default_access_token_when_original_scope_fails(self):
+        class FakeResponse:
+            def __init__(self, status_code, payload):
+                self.status_code = status_code
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+        unauthorized_scope_response = FakeResponse(400, {
+            'error': 'invalid_grant',
+            'error_description': (
+                'AADSTS70000: The request was denied because one or more scopes requested '
+                'are unauthorized or expired.'
+            ),
+        })
+        default_without_rotation = FakeResponse(200, {
+            'access_token': 'access-token',
+        })
+
+        with patch.object(
+            web_outlook_app.requests,
+            'request',
+            side_effect=[
+                unauthorized_scope_response,
+                unauthorized_scope_response,
+                unauthorized_scope_response,
+                default_without_rotation,
+                unauthorized_scope_response,
+            ],
+        ) as mocked_request:
+            response = self.client.post(f'/api/accounts/{self.account_id}/refresh')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload['success'])
+        self.assertEqual(mocked_request.call_count, 5)
+        self.assertNotIn('scope', mocked_request.call_args_list[4].kwargs['data'])
+
+        with self.app.app_context():
+            refreshed = web_outlook_app.get_account_by_id(self.account_id)
+
+        self.assertIsNotNone(refreshed)
+        self.assertEqual(refreshed['refresh_token'], '0.AXEA_refresh')
+
     def test_refresh_account_falls_back_to_imap_after_graph_refresh_fails(self):
         class FakeResponse:
             def __init__(self, status_code, payload):
