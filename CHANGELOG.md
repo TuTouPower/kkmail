@@ -16,6 +16,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - blob 使用流式 AES-GCM（`KKMS`）且必须配置密钥；账户凭据加密存入数据库；作业错误脱敏。
 - compose 只绑定 `127.0.0.1`，不含任何默认密码或密钥。
 
+### Documentation
+- 文档与当前代码对齐：唯一部署入口 `docs/deployment.md`；HTTP API 以运行中的 `/docs` / `/openapi.json` 为准，`docs/api.md` 只保留认证、CSRF、分页与 SSE 约定；CI 改为 `docs/ci/` 模板（PostgreSQL pytest 不允许 skip，前端 lint / tsc / vitest / build）。
+
+### Tests
+- 前端补充 mail-core 客户端测试（Cookie 凭据、CSRF 复用、401 清令牌、超时与调用方取消、错误体解析、SSE 订阅）。
+
 ## [3.0.20] - 2026-10-18
 
 ### Added
