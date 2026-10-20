@@ -10,10 +10,12 @@ from mail_core.providers.base import (
     RemoteOperationResult,
     StubProvider,
 )
+from mail_core.providers.imap import ImapProvider
 
 __all__ = [
     "DeltaChange",
     "DeltaPage",
+    "ImapProvider",
     "MailProvider",
     "MetadataPage",
     "RateLimitHint",
