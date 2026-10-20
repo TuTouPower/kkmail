@@ -43,10 +43,27 @@ export default function MessageList() {
 
   const singleEmail = view.type === 'accountFolder' ? view.email : ''
   const singleFolder = view.type === 'accountFolder' ? view.folder : 'inbox'
+  // Prefer mail-core inbox when flagged; Flask remains legacy fallback on error/off.
+  const preferMailCoreList =
+    mailCore && (view.type === 'allInbox' || (view.type === 'accountFolder' && view.folder === 'inbox'))
+  const mailCoreQuery = useQuery({
+    queryKey: ['mail-core', 'inbox', view.type === 'accountFolder' ? view.accountId : 'all'],
+    queryFn: ({ signal }) =>
+      fetchMailCoreInbox({
+        limit: 100,
+        accountId: view.type === 'accountFolder' ? String(view.accountId || '') || undefined : undefined,
+        signal,
+      }).then((page) => page.items.map(mailCoreToMailItem)),
+    enabled: preferMailCoreList,
+    retry: false,
+  })
+  const useMailCoreList = preferMailCoreList && !mailCoreQuery.isError
+  const flaskFallback = !useMailCoreList
+
   const singleQuery = useQuery({
     queryKey: queryKeys.emails(singleEmail, singleFolder),
     queryFn: ({ signal }) => fetchEmails(singleEmail, singleFolder, view.type === 'accountFolder' ? view.accountId : undefined, signal),
-    enabled: view.type === 'accountFolder' && !!singleEmail && !(mailCore && singleFolder === 'inbox'),
+    enabled: flaskFallback && view.type === 'accountFolder' && !!singleEmail,
     retry: false,
   })
 
@@ -58,24 +75,9 @@ export default function MessageList() {
     queries: allAccounts.map((a) => ({
       queryKey: queryKeys.emails(a.email, 'inbox'),
       queryFn: ({ signal }: { signal: AbortSignal }) => fetchEmails(a.email, 'inbox', a.id, signal),
-      enabled: !mailCore && view.type === 'allInbox',
+      enabled: flaskFallback && view.type === 'allInbox',
       retry: false,
     })),
-  })
-
-  // Optional mail-core unified inbox (keyset). Flask path stays default when flag is off.
-  const useMailCoreList =
-    mailCore && (view.type === 'allInbox' || (view.type === 'accountFolder' && view.folder === 'inbox'))
-  const mailCoreQuery = useQuery({
-    queryKey: ['mail-core', 'inbox', view.type === 'accountFolder' ? view.accountId : 'all'],
-    queryFn: ({ signal }) =>
-      fetchMailCoreInbox({
-        limit: 100,
-        accountId: view.type === 'accountFolder' ? String(view.accountId || '') || undefined : undefined,
-        signal,
-      }).then((page) => page.items.map(mailCoreToMailItem)),
-    enabled: useMailCoreList,
-    retry: false,
   })
 
   const raw: MailItem[] = useMailCoreList
@@ -107,7 +109,7 @@ export default function MessageList() {
       ? singleQuery.isLoading && !singleQuery.data
       : accountsQuery.isLoading || (pendingAccounts > 0 && raw.length === 0)
   const failures: string[] = useMailCoreList
-    ? (mailCoreQuery.error ? [errorMessage(mailCoreQuery.error, String(mailCoreQuery.error))] : [])
+    ? []
     : view.type === 'accountFolder'
       ? (singleQuery.error ? [errorMessage(singleQuery.error, String(singleQuery.error))] : [])
       : allQueries.flatMap((q, i) => (q.error ? [`${allAccounts[i]?.email}：${errorMessage(q.error, String(q.error))}`] : []))

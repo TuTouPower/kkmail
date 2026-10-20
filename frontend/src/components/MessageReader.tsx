@@ -23,23 +23,31 @@ export default function MessageReader() {
   useSyncExternalStore((cb) => cache.subscribe(cb), () => findCachedMail(selectedKey))
   const selected = findCachedMail(selectedKey)
 
-  const useMailCoreDetail = isMailCoreEnabled() && (!!selected?.id_mode?.includes('mail_core') || selected?.id_mode === 'mail_core')
+  const preferMailCoreDetail = isMailCoreEnabled() && (!!selected?.id_mode?.includes('mail_core') || selected?.id_mode === 'mail_core')
   const detailQuery = useQuery({
     queryKey: selected
-      ? (useMailCoreDetail
-          ? ['mail-core', 'detail', selected.id]
-          : queryKeys.detail(selected.accountEmail, selected.id, selected.folder || 'inbox', selected.id_mode || ''))
+      ? ['detail', preferMailCoreDetail ? 'mail-core' : 'flask', selected.accountEmail, selected.id, selected.folder || 'inbox', selected.id_mode || '']
       : ['detail', 'none'],
     queryFn: async ({ signal }) => {
-      if (useMailCoreDetail) {
-        const d = await fetchMailCoreMessage(selected!.id, signal)
-        return mailCoreToMailDetail(d)
+      if (preferMailCoreDetail) {
+        try {
+          const d = await fetchMailCoreMessage(selected!.id, signal)
+          return mailCoreToMailDetail(d)
+        } catch (err) {
+          // Legacy Flask fallback when mail-core detail is unavailable.
+          if (selected!.accountEmail && selected!.id_mode !== 'mail_core') {
+            return fetchEmailDetail(selected!.accountEmail, selected!.id, selected!.folder || 'inbox', selected!.id_mode || '', signal)
+          }
+          // mail_core ids are UUIDs — Flask cannot serve them; rethrow.
+          throw err
+        }
       }
       return fetchEmailDetail(selected!.accountEmail, selected!.id, selected!.folder || 'inbox', selected!.id_mode || '', signal)
     },
     retry: false,
-    enabled: !!selected?.id && (!!selected?.accountEmail || useMailCoreDetail),
+    enabled: !!selected?.id && (!!selected?.accountEmail || preferMailCoreDetail),
   })
+  const useMailCoreDetail = preferMailCoreDetail && !detailQuery.isError
 
   if (!selected) {
     return (
