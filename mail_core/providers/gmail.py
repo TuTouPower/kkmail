@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from mail_core.providers.base import (
+    DeltaChange,
     DeltaPage,
     MetadataPage,
     RateLimitHint,
