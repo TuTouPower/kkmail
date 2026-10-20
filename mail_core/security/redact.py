@@ -42,7 +42,17 @@ def safe_error(exc: BaseException | str | None) -> str:
 
     if isinstance(exc, ProviderHttpError):
         status = f" status={exc.status}" if exc.status is not None else ""
-        # str(exc) can be the raw body for some transports; keep only the first line.
-        first = (str(exc).splitlines() or [""])[0][:120]
-        return redact(f"{type(exc).__name__}{status}: {first}")
+        first = (str(exc).splitlines() or [""])[0].strip()
+        is_raw_body = False
+        if exc.body is not None:
+            if isinstance(exc.body, str) and exc.body.strip() and (exc.body.strip() == first or exc.body.strip() in str(exc)):
+                is_raw_body = True
+            elif str(exc).strip() == str(exc.body).strip():
+                is_raw_body = True
+        if first.startswith(("{", "[", "<")) or ('{"' in first) or ("<html" in first.lower()):
+            is_raw_body = True
+
+        if is_raw_body or not first:
+            return f"{type(exc).__name__}{status}"
+        return redact(f"{type(exc).__name__}{status}: {first[:120]}")
     return redact(f"{type(exc).__name__}: {exc}")
