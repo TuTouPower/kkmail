@@ -10,11 +10,15 @@ from mail_core.providers.base import (
     RemoteOperationResult,
     StubProvider,
 )
+from mail_core.providers.gmail import GmailProvider
+from mail_core.providers.graph import GraphProvider
 from mail_core.providers.imap import ImapProvider
 
 __all__ = [
     "DeltaChange",
     "DeltaPage",
+    "GmailProvider",
+    "GraphProvider",
     "ImapProvider",
     "MailProvider",
     "MetadataPage",
