@@ -1,0 +1,253 @@
+"""OAuth2 token refresh + Bearer HTTP transport for Gmail / Graph.
+
+credential_ref points at a JSON secret (via CredentialStore)::
+
+    {
+      "refresh_token": "...",
+      "client_id": "...",
+      "client_secret": "...",
+      "token_uri": "https://oauth2.googleapis.com/token",
+      "access_token": "...",          # optional cache
+      "expires_at": 1710000000.0,    # unix seconds, optional
+      "scope": "..."                 # optional
+    }
+
+Graph commonly uses::
+
+    "token_uri": "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+
+No send/SMTP. Access tokens are never logged.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable
+from urllib.parse import urlencode
+
+from mail_core.accounts.credentials import (
+    CredentialStore,
+    load_json_secret,
+    save_json_secret,
+)
+from mail_core.providers.http import CursorInvalidError, ProviderHttpError, RateLimitedError
+
+log = logging.getLogger("mail_core.providers.oauth")
+
+GMAIL_TOKEN_URI = "https://oauth2.googleapis.com/token"
+GRAPH_TOKEN_URI = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+
+TokenHttpFn = Callable[[str, str, dict[str, str], dict[str, str] | None], dict[str, Any]]
+# (method, url, form_body, headers) -> JSON dict
+
+
+class OAuthError(RuntimeError):
+    """Token endpoint failure."""
+
+
+@dataclass
+class OAuthTokenClient:
+    """Refresh-token grant with optional persistence back to CredentialStore."""
+
+    credential_ref: str
+    store: CredentialStore
+    provider: str = "gmail"  # gmail | graph
+    http_post: TokenHttpFn | None = None
+    skew_seconds: float = 60.0
+    _cached: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def _load(self) -> dict[str, Any]:
+        if self._cached:
+            return self._cached
+        data = load_json_secret(self.store, self.credential_ref)
+        self._cached = dict(data)
+        return self._cached
+
+    def _persist(self, data: dict[str, Any]) -> None:
+        self._cached = dict(data)
+        try:
+            save_json_secret(self.store, self.credential_ref, data)
+        except Exception as exc:  # noqa: BLE001 — persistence is best-effort
+            log.warning("could not persist refreshed token for %s: %s", self.credential_ref, type(exc).__name__)
+
+    def token_uri(self) -> str:
+        data = self._load()
+        if data.get("token_uri"):
+            return str(data["token_uri"])
+        return GMAIL_TOKEN_URI if self.provider == "gmail" else GRAPH_TOKEN_URI
+
+    def _access_valid(self, data: dict[str, Any]) -> bool:
+        token = data.get("access_token")
+        exp = data.get("expires_at")
+        if not token:
+            return False
+        if exp is None:
+            return True
+        return float(exp) > time.time() + self.skew_seconds
+
+    def get_access_token(self, *, force_refresh: bool = False) -> str:
+        data = self._load()
+        if not force_refresh and self._access_valid(data):
+            return str(data["access_token"])
+        refresh = data.get("refresh_token")
+        client_id = data.get("client_id")
+        client_secret = data.get("client_secret")
+        if not refresh or not client_id:
+            raise OAuthError("credential JSON missing refresh_token or client_id")
+        form = {
+            "grant_type": "refresh_token",
+            "refresh_token": str(refresh),
+            "client_id": str(client_id),
+        }
+        if client_secret:
+            form["client_secret"] = str(client_secret)
+        if data.get("scope"):
+            form["scope"] = str(data["scope"])
+        uri = self.token_uri()
+        if self.http_post is None:
+            raise OAuthError("no token HTTP client configured (inject http_post for tests / wire urllib)")
+        try:
+            resp = self.http_post("POST", uri, form, {"Content-Type": "application/x-www-form-urlencoded"})
+        except ProviderHttpError as exc:
+            raise OAuthError(f"token endpoint HTTP {exc.status}: {exc}") from exc
+        if resp.get("error"):
+            raise OAuthError(f"token endpoint error: {resp.get('error')} {resp.get('error_description')}")
+        access = resp.get("access_token")
+        if not access:
+            raise OAuthError("token endpoint returned no access_token")
+        data["access_token"] = access
+        if resp.get("refresh_token"):
+            data["refresh_token"] = resp["refresh_token"]
+        expires_in = resp.get("expires_in")
+        if expires_in is not None:
+            data["expires_at"] = time.time() + float(expires_in)
+        self._persist(data)
+        return str(access)
+
+
+def default_urllib_token_post(
+    method: str,
+    url: str,
+    form: dict[str, str],
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Stdlib token POST (used when no injectable http_post is given at runtime)."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    body = urlencode(form).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method=method or "POST")
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — operator-configured token URI
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise ProviderHttpError(raw or str(exc), status=exc.code, body=raw) from exc
+
+
+@dataclass
+class BearerTransport:
+    """Wraps an underlying JSON transport with OAuth Bearer + status mapping."""
+
+    token_client: OAuthTokenClient
+    inner: Callable[[str, str, dict[str, Any] | None, dict[str, str] | None], Any]
+    # inner(method, path, params, headers) -> dict | raises ProviderHttpError
+    base_url: str = ""
+
+    def __call__(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+        token = self.token_client.get_access_token()
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        url = path if path.startswith("http") else f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
+        try:
+            return self.inner(method, url, params, headers)
+        except RateLimitedError:
+            raise
+        except CursorInvalidError:
+            raise
+        except ProviderHttpError as exc:
+            if exc.status == 401:
+                # One forced refresh then retry
+                token = self.token_client.get_access_token(force_refresh=True)
+                headers["Authorization"] = f"Bearer {token}"
+                return self.inner(method, url, params, headers)
+            raise
+
+
+def build_gmail_api_transport(
+    token_client: OAuthTokenClient,
+    *,
+    api_get: Callable[[str, str, dict[str, Any] | None, dict[str, str] | None], Any] | None = None,
+) -> BearerTransport:
+    """Bearer transport targeting Gmail REST (path like /gmail/v1/...)."""
+
+    def _inner(method: str, path: str, params: dict[str, Any] | None, headers: dict[str, str] | None) -> Any:
+        if api_get is None:
+            raise ProviderHttpError("Gmail API HTTP not configured", status=501)
+        return api_get(method, path, params, headers)
+
+    return BearerTransport(token_client=token_client, inner=_inner, base_url="https://gmail.googleapis.com")
+
+
+def build_graph_api_transport(
+    token_client: OAuthTokenClient,
+    *,
+    api_get: Callable[[str, str, dict[str, Any] | None, dict[str, str] | None], Any] | None = None,
+) -> BearerTransport:
+    def _inner(method: str, path: str, params: dict[str, Any] | None, headers: dict[str, str] | None) -> Any:
+        if api_get is None:
+            raise ProviderHttpError("Graph API HTTP not configured", status=501)
+        return api_get(method, path, params, headers)
+
+    return BearerTransport(token_client=token_client, inner=_inner, base_url="https://graph.microsoft.com/v1.0")
+
+
+
+def urllib_json_request(
+    method: str,
+    url: str,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Any:
+    """Generic JSON HTTP for Gmail/Graph API calls (stdlib)."""
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    if params:
+        # For GET, attach query; for POST with dict body use JSON
+        if method.upper() == "GET":
+            q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
+            url = f"{url}?{q}" if q else url
+            data = None
+        else:
+            data = json.dumps(params).encode("utf-8")
+    else:
+        data = None
+    req = urllib.request.Request(url, data=data, method=method.upper())
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    if data is not None and method.upper() != "GET":
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+            raw = resp.read()
+            if not raw:
+                return {}
+            ctype = resp.headers.get("Content-Type", "")
+            if "application/json" in ctype or raw[:1] in (b"{", b"["):
+                return json.loads(raw.decode("utf-8"))
+            return {"raw_bytes": raw}
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        hdrs = {k: v for k, v in exc.headers.items()} if exc.headers else {}
+        if exc.code == 429:
+            raise RateLimitedError(body or str(exc), status=429, body=body, headers=hdrs) from exc
+        if exc.code in (404, 410):
+            raise CursorInvalidError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
+        raise ProviderHttpError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
