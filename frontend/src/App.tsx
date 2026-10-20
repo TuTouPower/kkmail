@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar'
 import MessageList from './components/MessageList'
 import MessageReader from './components/MessageReader'
 import LoginPage from './components/LoginPage'
+import ComposeModal from './components/ComposeModal'
 import { api } from './api/client'
 import './design-system/tokens.css'
 import './App.css'
@@ -44,6 +45,7 @@ function App() {
         <MessageList />
         <MessageReader />
       </div>
+      <ComposeModal />
     </div>
   )
 }
