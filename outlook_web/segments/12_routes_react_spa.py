@@ -27,14 +27,9 @@ def _react_dist_dir() -> Path:
 @login_required
 def legacy_index():
     """旧版模板界面，作为迁移期回退。"""
-    return redirect("/") if not (Path(app.template_folder) / "index.html").is_file() else render_template(
-        "index.html",
-        app_version=APP_VERSION,
-        changelog_url=CHANGELOG_URL,
-        frontend_asset_hash=get_frontend_asset_hash(),
-        skin_asset_hash=get_active_skin_asset_hash(),
-        mail_fetch_timeout_seconds=get_mail_fetch_timeout_seconds(),
-    )
+    if not (Path(app.template_folder) / "index.html").is_file():
+        return redirect("/")
+    return index()
 
 
 def _spa_index_response() -> Response:
