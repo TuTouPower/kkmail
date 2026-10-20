@@ -270,7 +270,8 @@ def change_login_password(*, current: str, new: str) -> None:
     hashed_str = hashed.decode("utf-8")
 
     # Persist directly into database (Decision Plan A)
-    _persist_db_password_hash(hashed_str)
+    if not _persist_db_password_hash(hashed_str):
+        raise AuthConfigError("failed to persist password to database")
 
     # Refresh in-memory cache
     _password_hash = hashed
