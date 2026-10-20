@@ -56,7 +56,7 @@
 | 3 | 全量 MIME 归档洪峰 | **有界调度器**：元数据先同步；近期优先；磁盘配额与背压；**不**预先插入百万级 task 行；受控下载 + 原子落地。 | 一次为全库生成归档任务行；无配额无限拉取；把归档与元数据同步绑死在同一阶段 |
 | 4 | 加密 | **加密卷/文件系统**承载 PG 数据目录与 FTS；Blob **应用层加密**（密钥版本与轮换）；密码/OAuth 进 OS Keychain 或外部 KMS 派生密钥；备份独立密钥加密。 | 对可搜索正文做字段级加密（与 FTS 冲突）；假设 Docker volume 自带加密；明文落盘凭证 |
 | 5 | 同步进度 / 未读新鲜度 | **SSE + 持久化事件 Outbox**。业务变更与 Outbox 同行事务写入；LISTEN/NOTIFY 仅唤醒分发器；`Last-Event-ID` 断线续传；过期则提示 resync。 | WebSocket 作为本阶段实时通道；仅内存推送无持久化；轮询作为唯一进度机制 |
-| 6 | 测试真实度 | **PostgreSQL + Dovecot + API Mock + 固定 fixtures**。三级 CI：每 commit / 每 PR 协议层 / 定时混沌与负载。 | 仅 mock 内存 DB；跳过 IMAP 协议级测试；把负载测试塞进每次 commit |
+| 6 | 测试真实度 | **PostgreSQL + Dovecot + API Mock + 固定 fixtures**。质量分层见 §15（**本地**跑 L1/L2；本仓无 GitHub Actions）。 | 仅 mock 内存 DB；跳过 IMAP 协议级测试；把负载测试塞进每次 commit |
 
 ---
 
@@ -68,14 +68,14 @@
 |---|---|---|
 | 前端 | React + TypeScript + Vite | SPA；桌面装入 Electron，Web 同源 API |
 | 数据获取 / 虚拟列表 | TanStack Query + TanStack Virtual | 服务端游标分页；大文件夹虚拟滚动 |
-| API | FastAPI + Pydantic | OpenAPI 为契约源；生成 TS 类型 |
+| API | FastAPI + Pydantic | OpenAPI 为契约源；生成 TS 类型（**本地** check，无 GitHub CI） |
 | ORM / 迁移 | SQLAlchemy 2 + Alembic | 同步与异步会话策略在实现阶段固定一套并贯彻 |
 | 数据库 | PostgreSQL | 桌面与 Docker **同一主版本** |
 | 全文检索 | PostgreSQL FTS + `pg_trgm` | 不引入 ES |
 | MIME 解析 | Python `email` 标准库（及必要时受控辅助库） | MIME blob 为权威；解析结果可重建 |
 | 后台 | 独立 Worker + PostgreSQL 任务表 | 无 Redis/Kafka |
 | Blob | 内容寻址文件系统（SHA-256） | 应用层加密包装 |
-| 契约 | OpenAPI → TypeScript types | 前后端单一真相 |
+| 契约 | OpenAPI → TypeScript types | 前后端单一真相；落地与本地校验见 §14.3 |
 | 编排 | Docker Compose：`web` / `worker` / `postgres` | 桌面路径见第 4 节，不依赖 Docker |
 
 ### 3.2 明确不引入（本阶段）
@@ -664,9 +664,9 @@ flowchart LR
 
 ### 14.3 契约
 
-- FastAPI OpenAPI 为唯一 HTTP 契约源；`docs/openapi.json` 入库。
+- FastAPI OpenAPI 为唯一 HTTP 契约源；`docs/openapi.json` 入库（已落地，见 [api.md](./api.md)）。
 - 前端 HTTP DTO 来自 `openapi-typescript`（`frontend/src/api/generated/schema.ts`），经 `schemaTypes.ts` 别名给 `client.ts` / `mailCore.ts` 使用；禁止手写与 OpenAPI 漂移的 DTO。
-- **本地校验**（无 GitHub Actions）：`python scripts/export_openapi.py --check`、`cd frontend && npm run openapi:check`、`pytest tests/mail_core/test_openapi_contract.py`；前端 `npm test` 会跑 `openapi:check`。
+- **本地校验**（**不是** GitHub CI）：`python scripts/export_openapi.py --check`、`cd frontend && npm run openapi:check`、`pytest tests/mail_core/test_openapi_contract.py`；前端 `npm test` 会跑 `openapi:check`。
 - 版本策略：破坏性变更走显式版本或迁移说明（本阶段尽量避免）。
 
 ### 14.4 桌面壳
@@ -702,21 +702,20 @@ flowchart LR
 - 归档：配额临界、重试耗尽
 - 搜索：中英文、特殊字符、`pg_trgm` 模糊
 
-### 15.3 CI 三层
+### 15.3 本地质量分层（无 GitHub Actions）
 
-> 当前仓库已移除 GitHub Actions；下列为架构目标分层。契约漂移由本地 pytest / `npm run openapi:check` 门禁。
+> 仓库**没有** `.github/workflows`，也不计划用本任务恢复它们。下表是架构上的质量分层与**本机建议命令**，**不是**合并门禁，也不是已落地的 GitHub CI。契约漂移靠本地 `export_openapi.py --check` / `npm run openapi:check` / `pytest tests/mail_core/test_openapi_contract.py`。
 
-
-| 层 | 触发 | 内容 | 门禁 |
+| 层 | 何时跑 | 内容 | 性质 |
 |---|---|---|---|
-| L1 每 commit | push/commit | 单元 + 静态检查 + 迁移 dry-run + 前端类型/ lint | **阻断合并** |
-| L2 每 PR 协议 | pull request | 真实 PG + Dovecot + Provider API mocks + 契约测试 + 互斥/归档关键路径 | **阻断合并** |
-| L3 定时混沌/负载 | schedule | 多 worker 竞态加长跑、归档洪峰、大邮箱 fixtures、故障注入 | **不阻断日常 PR**；失败建缺陷并通知 |
+| L1 快速 | 每次提交前 | 单元 + 静态检查 + 迁移 dry-run + 前端 lint / tsc / vitest + `openapi:check` | **本地建议**（见 `AGENTS.md`） |
+| L2 协议 | 改同步 / 提供商 / schema 前 | 真实 PG + Dovecot + provider mocks + 契约 / 互斥 / 归档关键路径（`scripts/run-mail-core-tests.sh`） | **本地建议** |
+| L3 加长 / 混沌 | 按需（运维自建） | 多 worker 竞态加长跑、归档洪峰、大邮箱 fixtures、故障注入 | **可选**；本仓不提供 GitHub `schedule` |
 
-### 15.4 PR Gate vs 定时负载
+### 15.4 本地门禁 vs 加长负载
 
-- PR 必须绿：正确性、协议兼容、迁移、互斥。
-- 负载/混沌在定时流水线；结果趋势化，不把小时级压测塞进每次 commit。
+- 合并前在本机跑 L1；触及同步 / IMAP / 提供商时再跑 L2。见 `AGENTS.md`、`BRANCH_PROTECTION.md`（无 GitHub required checks）。
+- 负载 / 混沌不要塞进每次提交；若需要 L3，在自建环境跑，不要把「已有 GitHub CI 门禁」写成现状。
 
 ---
 
@@ -737,7 +736,7 @@ flowchart LR
 11. **Outbox + SSE + Last-Event-ID**。
 12. **前端列表/阅读/乐观操作/沙箱 HTML**。
 13. **桌面打包**：PG 二进制、自动启停、数据目录、卸载保留数据。
-14. **CI 三层铺齐**；L3 定时任务上线。
+14. **本地 L1/L2 习惯固化**；L3 仅在自建环境按需运行（本仓无 GitHub CI）。
 
 ### 16.2 阶段性验收门槛（必须可演示）
 
@@ -780,7 +779,7 @@ kkmail 邮件内核重写定稿为：
 - **桌面与 Docker 共享同一 PG 主版本与 schema**；桌面由 Electron 管理 PG 子进程，数据在安装目录外，卸载默认不删邮件。
 - **正确性机制**：checkpoint 与写入同事务；删除不靠猜测；三层互斥（SKIP LOCKED + lease + fencing）；MIME 有界归档与配额；SSE + 事务 Outbox。
 - **安全**：加密卷承载库与 FTS；Blob 应用层加密；密钥进 Keychain/KMS；备份独立密钥。
-- **质量**：真实 PG + Dovecot + mocks + fixtures；CI 分每 commit / 每 PR 协议 / 定时混沌三层。
+- **质量**：真实 PG + Dovecot + mocks + fixtures；质量分层见 §15（本地建议跑 L1/L2；本仓无 GitHub Actions）。
 
 本文件即为实现与验收的依据。偏离六项不可含糊决策或第 17 节范围，须先修订本文档。
 

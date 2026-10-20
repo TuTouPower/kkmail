@@ -1,11 +1,26 @@
 # HTTP API
 
-The API reference is generated from the code and is always current:
+Authoritative HTTP contract for **mail-core** (the only backend):
 
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
+- Live Swagger UI: `http://127.0.0.1:8000/docs`
+- Live OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
+- Committed schema: [`docs/openapi.json`](./openapi.json)
+- Module / env overview: [`mail_core/README.md`](../mail_core/README.md)
 
 Mail, account, group, settings, health and login routes declare a `response_model`, so the schema documents their request and response bodies. `POST /api/auth/logout` and `POST /api/auth/password` return `{"ok": true}`. `/docs` and `/openapi.json` are served without authentication; they describe the API shape only.
+
+There is **no Flask API** and no `/api/extension/*`. Do not treat deleted upstream docs or routes as current.
+
+## Route surface
+
+| Path | Auth | Role |
+| --- | --- | --- |
+| `/api/auth/*`, `/api/accounts`, `/api/groups`, `/api/settings`, `/api/mail/*`, `/api/events` | Session cookie or Bearer (login excepted) | Business API |
+| `/health`, `/ready` | none | Liveness / readiness |
+| `/docs`, `/openapi.json`, `/redoc` | none | Schema browsers |
+| `/`, `/assets/*` | none | SPA static files when `KKMAIL_FRONTEND_DIST` is set |
+
+Most authenticated business routes live under `/api/*`. Health, OpenAPI UI, and the SPA are intentionally outside that prefix.
 
 ## Contract source (OpenAPI → TypeScript)
 
@@ -22,7 +37,7 @@ python scripts/export_openapi.py
 cd frontend && npm run openapi:gen
 ```
 
-Local drift checks (no GitHub Actions):
+**Local** drift checks (this repo has **no** GitHub Actions):
 
 ```bash
 python scripts/export_openapi.py --check
