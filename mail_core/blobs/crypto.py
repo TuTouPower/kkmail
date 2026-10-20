@@ -59,7 +59,7 @@ def load_keyring_from_env(env: dict[str, str] | None = None) -> Keyring:
     if not keys:
         # Dev default — deterministic insecure key; override in production.
         keys[1] = hashlib_sha256_bytes(b"kkmail-dev-blob-key-v1")
-    active = int(env.get("MAIL_CORE_BLOB_KEY_VERSION") or max(keys))
+    active = int(env.get("MAIL_CORE_BLOB_KEY_VERSION") or env.get("MAIL_CORE_BLOB_ACTIVE_VERSION") or max(keys))
     if active not in keys:
         raise BlobCryptoError(f"active key version {active} missing from keyring")
     return Keyring(keys=keys, active_version=active)

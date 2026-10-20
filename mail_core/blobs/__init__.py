@@ -5,6 +5,9 @@ from mail_core.blobs.quota import QuotaStatus, check_quota, dir_size_bytes
 from mail_core.blobs.store import BlobStore, BlobWriteResult, InvalidBlobDigest
 
 __all__ = [
+    "RewrapResult",
+    "rewrap_all_blobs",
+    "run_rewrap",
     "BlobStore",
     "BlobWriteResult",
     "InvalidBlobDigest",
@@ -18,3 +21,4 @@ __all__ = [
     "run_gc_blobs",
     "sweep_expired_blobs",
 ]
+from mail_core.blobs.rotate import RewrapResult, rewrap_all_blobs, run_rewrap
