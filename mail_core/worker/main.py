@@ -13,6 +13,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [mail-
 log = logging.getLogger("mail_core.worker")
 
 _stop = False
+CLAIM_BATCH = 5
 
 
 def _handle_stop(signum: int, _frame: object) -> None:
@@ -26,46 +27,85 @@ def request_stop() -> None:
     _stop = True
 
 
-def _tick(worker_id: str) -> int:
-    """Claim and handle one batch. Returns number of jobs handled. No-op if DB down."""
+def _reclaim_once() -> int:
+    """Periodically return stuck CLAIMED jobs to PENDING."""
     try:
         from datetime import timedelta
 
         from mail_core.db.session import get_session_factory
-        from mail_core.sync.jobs import claim_jobs, reclaim_stale_claims
-        from mail_core.worker.handlers import handle_job
+        from mail_core.sync.jobs import reclaim_stale_claims
     except Exception as exc:  # pragma: no cover
-        log.warning("worker imports failed: %s", exc)
+        log.warning("reclaim imports failed: %s", exc)
         return 0
 
     Session = get_session_factory()
-    handled = 0
     with Session() as session:
         try:
             n = reclaim_stale_claims(session, older_than=timedelta(minutes=5), limit=100)
             if n:
                 log.info("reclaimed %s stale CLAIMED job(s)", n)
             session.commit()
+            return n
         except Exception:
             session.rollback()
             log.exception("reclaim_stale_claims failed")
+            return 0
+
+
+def _tick(worker_id: str) -> int:
+    """Claim a batch, commit claims, then handle each job in its own session.
+
+    One job per session avoids a failed job rolling back siblings and keeps
+    network-heavy handlers from holding a multi-job transaction open.
+    """
+    try:
+        from mail_core.db.session import get_session_factory
+        from mail_core.mail.storage.models import WorkerJob
+        from mail_core.sync.jobs import claim_jobs, fail_job
+        from mail_core.worker.handlers import handle_job
+    except Exception as exc:  # pragma: no cover
+        log.warning("worker imports failed: %s", exc)
+        return 0
+
+    _reclaim_once()
+
+    Session = get_session_factory()
+    job_ids: list = []
     with Session() as session:
         jobs = claim_jobs(session, worker_id=worker_id, limit=CLAIM_BATCH)
-        for job in jobs:
+        job_ids = [j.id for j in jobs]
+        session.commit()
+
+    handled = 0
+    for job_id in job_ids:
+        with Session() as session:
+            job = session.get(WorkerJob, job_id)
+            if job is None:
+                continue
             try:
                 handle_job(session, job)
                 handled += 1
+                # Handlers may have committed already; commit any leftover work.
+                if session.in_transaction():
+                    session.commit()
             except Exception as exc:  # pragma: no cover
                 from mail_core.security.redact import safe_error
-                from mail_core.sync.jobs import fail_job
 
-                log.error("job %s failed: %s", job.id, safe_error(exc))
-                fail_job(session, job, exc)
-        session.commit()
+                log.error("job %s failed: %s", job_id, safe_error(exc))
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+                try:
+                    # Re-load after rollback so fail_job can persist.
+                    job = session.get(WorkerJob, job_id)
+                    if job is not None:
+                        fail_job(session, job, exc)
+                        session.commit()
+                except Exception:
+                    session.rollback()
+                    log.exception("fail_job after error also failed for %s", job_id)
     return handled
-
-
-CLAIM_BATCH = 5
 
 
 def next_poll_delay(handled: int, previous: float, *, base: float, max_idle: float) -> float:
