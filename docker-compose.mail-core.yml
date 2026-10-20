@@ -3,6 +3,11 @@
 # Docker volume ≠ encryption. Flask product shell is NOT started here.
 # Cutover: MAIL_CORE_DEFAULT=1 so a co-located SPA/Flask can prefer mail-core
 # list/reader (Flask remains login/send fallback — see docs/mail-core-cutover.md).
+#
+# Required before `docker compose -f docker-compose.mail-core.yml up`:
+#   export MAIL_CORE_BLOB_KEY_V1="$(python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
+#   export MAIL_CORE_BACKUP_KEY="$(python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
+# Backup key MUST differ from the blob key. Do not ship sample all-A keys.
 version: "3.9"
 # Note: if `docker compose` plugin is unavailable, equivalent for Postgres only:
 #   docker run -d --name kkmail-mail-core-pg -e POSTGRES_USER=kkmail \
@@ -46,12 +51,14 @@ services:
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:kkmail@postgres:5432/kkmail_mail
       MAIL_CORE_DEFAULT: "1"
       MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:8000"
-      # Dev-only keys — replace in real deployments; backup key MUST differ from blob key.
-      MAIL_CORE_BLOB_KEY_V1: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      # Required: 32-byte AES key, base64-encoded. Generate:
+      #   python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())'
+      MAIL_CORE_BLOB_KEY_V1: ${MAIL_CORE_BLOB_KEY_V1:?set MAIL_CORE_BLOB_KEY_V1 (base64 32-byte key)}
       MAIL_CORE_BLOB_ACTIVE_VERSION: "1"
-      MAIL_CORE_BACKUP_KEY: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+      MAIL_CORE_BACKUP_KEY: ${MAIL_CORE_BACKUP_KEY:?set MAIL_CORE_BACKUP_KEY (must differ from blob key)}
     ports:
-      - "8000:8000"
+      # Host bind loopback only — do not publish the API on 0.0.0.0.
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,6 +69,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    # 0.0.0.0 inside the container network; host publish is 127.0.0.1 only (above).
     command: ["uvicorn", "mail_core.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
 
   worker:
@@ -71,9 +79,9 @@ services:
     container_name: kkmail-mail-core-worker
     environment:
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:kkmail@postgres:5432/kkmail_mail
-      MAIL_CORE_BLOB_KEY_V1: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      MAIL_CORE_BLOB_KEY_V1: ${MAIL_CORE_BLOB_KEY_V1:?set MAIL_CORE_BLOB_KEY_V1 (base64 32-byte key)}
       MAIL_CORE_BLOB_ACTIVE_VERSION: "1"
-      MAIL_CORE_BACKUP_KEY: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+      MAIL_CORE_BACKUP_KEY: ${MAIL_CORE_BACKUP_KEY:?set MAIL_CORE_BACKUP_KEY (must differ from blob key)}
       MAIL_CORE_WORKER_ID: "compose-worker-1"
     depends_on:
       postgres:
