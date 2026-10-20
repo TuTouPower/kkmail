@@ -104,6 +104,21 @@ def _check_uidvalidity(cursor: dict[str, Any] | None, uidvalidity: int | None) -
             status=None,
         )
 
+
+def _get_server_uidvalidity(c: imaplib.IMAP4, folder: str) -> int | None:
+    if not hasattr(c, "status"):
+        return None
+    try:
+        status = c.status(folder, "(UIDVALIDITY)")
+        if status[0] == "OK" and status[1] and status[1][0]:
+            blob = status[1][0].decode() if isinstance(status[1][0], bytes) else str(status[1][0])
+            m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
+            if m:
+                return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
 @dataclass
 class ImapProvider:
     host: str
@@ -263,6 +278,7 @@ class ImapProvider:
         else:
             folder = folder_remote_id
             uid_str = str(remote_id)
+            _uv = None
         if not folder:
             raise ValueError(
                 "IMAP fetch_mime requires folder_remote_id= or a namespaced remote_id "
@@ -273,6 +289,10 @@ class ImapProvider:
             typ, _ = c.select(folder, readonly=True)
             if typ != "OK":
                 raise RuntimeError(f"select {folder} failed for fetch_mime")
+            if _uv is not None and _uv > 0:
+                srv_uv = _get_server_uidvalidity(c, folder)
+                if srv_uv is not None and srv_uv != _uv:
+                    raise RuntimeError(f"UIDVALIDITY mismatch for {folder}: expected {_uv}, got {srv_uv}")
             typ, data = c.uid("FETCH", uid_str, "(BODY.PEEK[])")
             if typ != "OK" or not data or data[0] is None:
                 raise RuntimeError(f"fetch mime {remote_id} failed")
@@ -451,6 +471,16 @@ class ImapProvider:
             typ, _ = c.select(folder)
             if typ != "OK":
                 return RemoteOperationResult(success=False, error=f"select {folder} failed")
+
+            if parsed is not None:
+                _uv = parsed[0]
+                if _uv > 0:
+                    srv_uv = _get_server_uidvalidity(c, folder)
+                    if srv_uv is not None and srv_uv != _uv:
+                        return RemoteOperationResult(
+                            success=False,
+                            error=f"UIDVALIDITY mismatch for {folder}: expected {_uv}, got {srv_uv}",
+                        )
 
             if op == OP_MARK_READ:
                 want_read = bool(desired_state.get("is_read", True))
