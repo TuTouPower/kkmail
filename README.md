@@ -768,7 +768,11 @@ MIT License - 详见 [LICENSE](LICENSE)
 本项目仅供学习、研究和技术交流使用，请遵守相关平台和服务条款，不要用于违规、滥用或非法用途。
 因使用本项目产生的任何风险和后果，由使用者自行承担。
 
-## Apple Mail frontend
+## Design and limits
+
+The frontend design system is `DESIGN.md`. Do not change visual rules without approval.
+
+Known unfinished product rules are in `docs/known-limitations.md`. Flagged mail is local-only until the backend exposes a flag API.
 
 The React UI lives in `frontend/`. Flask serves `frontend/dist` at `/` when present, and the previous interface remains at `/legacy`.
 
@@ -794,3 +798,9 @@ Upstream sync:
 ```bash
 ./scripts/sync-upstream.sh
 ```
+
+## Desktop packages
+
+Linux AppImage and deb are produced by `cd desktop && npm run dist:linux`.
+Windows and macOS packages are produced by the matching `dist:win` / `dist:mac` scripts and the desktop workflow.
+The PyInstaller sidecar is built with `./scripts/build-sidecar.sh` before packaging a release that should not depend on a system Python.
