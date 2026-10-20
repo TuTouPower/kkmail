@@ -1,0 +1,16 @@
+services:
+  outlook-mail-reader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: outlookemail:local
+    container_name: outlook-mail-reader
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - LOGIN_PASSWORD=[REDACTED]
+      - SECRET_KEY=change-me-before-public-deploy
+      - FLASK_ENV=production
+    restart: unless-stopped

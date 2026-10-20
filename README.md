@@ -767,3 +767,30 @@ MIT License - 详见 [LICENSE](LICENSE)
 ## 免责声明
 本项目仅供学习、研究和技术交流使用，请遵守相关平台和服务条款，不要用于违规、滥用或非法用途。
 因使用本项目产生的任何风险和后果，由使用者自行承担。
+
+## Apple Mail frontend
+
+The React UI lives in `frontend/`. Flask serves `frontend/dist` at `/` when present, and the previous interface remains at `/legacy`.
+
+```bash
+cd frontend && npm install --legacy-peer-deps && npm run build
+SECRET_KEY=dev LOGIN_PASSWORD=[REDACTED] python web_outlook_app.py
+```
+
+Docker with the new UI:
+
+```bash
+docker compose -f docker-compose.react.yml up -d --build
+```
+
+Desktop shell:
+
+```bash
+cd desktop && npm install && npm start
+```
+
+Upstream sync:
+
+```bash
+./scripts/sync-upstream.sh
+```
