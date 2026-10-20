@@ -483,17 +483,36 @@ export interface components {
             email: string;
             /** Group Id */
             group_id?: string | null;
-            /** Provider */
-            provider: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "imap" | "gmail" | "graph" | "memory" | "stub";
+        };
+        /** AccountFolderStatsItemOut */
+        AccountFolderStatsItemOut: {
+            /**
+             * Folder Id
+             * Format: uuid
+             */
+            folder_id: string;
+            /** Name */
+            name: string;
+            /** Remote Id */
+            remote_id: string;
+            /** Role */
+            role: string;
+            /** Total Count */
+            total_count: number;
+            /** Unread Count */
+            unread_count: number;
         };
         /** AccountFolderStatsOut */
         AccountFolderStatsOut: {
             /** Account Id */
             account_id: string;
             /** Folders */
-            folders: {
-                [key: string]: unknown;
-            }[];
+            folders: components["schemas"]["AccountFolderStatsItemOut"][];
         };
         /** AccountOut */
         AccountOut: {
@@ -1185,13 +1204,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description SSE event stream */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/event-stream": unknown;
                 };
             };
             /** @description Validation Error */
