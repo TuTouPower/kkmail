@@ -41,12 +41,17 @@ pg.stop()
 ./scripts/fetch-pg-binaries.sh
 # macOS/Windows: download-at-build（见 desktop/vendor/README.md）
 # 或手动解压到 desktop/vendor/pgsql/bin/
-export KKMAIL_MAIL_CORE_PG=1   # Electron main 在启动 Flask 后尝试 start()
 ```
 
 详见 [`desktop/vendor/README.md`](../desktop/vendor/README.md)。
 
-无二进制时：`start()` 仍会创建数据目录并返回 `{ stub: true }`，Flask 默认路径不受影响。
+无二进制时：`start()` 创建数据目录并返回 `{ stub: true }`，`main.js` 将其视为致命错误并提示（mail-core 是唯一后端，没有无 PG 的回退）。
+
+## 启动顺序
+
+1. `PostgresManager.start()`：loopback 集群，`scram-sha-256`，每次安装随机密码（`secrets/pg-password`，0600），首次 `createdb kkmail_mail`。
+2. 启动 `python -m mail_core --data-dir <dataRoot>`（打包后为 sidecar `kkmail-backend`）：生成/加载 `secrets/` 下 session/blob/backup 密钥，`alembic upgrade head`，API + 内嵌 worker 绑定 `127.0.0.1`。
+3. `/health` 就绪后打开窗口；首次运行显示一次随机初始登录密码，修改密码后 `initial-password.txt` 被删除。
 
 ## 与 Docker 的关系
 

@@ -9,21 +9,39 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-DEFAULT_DATABASE_URL = "postgresql+psycopg://kkmail:kkmail@127.0.0.1:5433/kkmail_mail"
-
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
 
 
+class DatabaseConfigError(RuntimeError):
+    """MAIL_CORE_DATABASE_URL missing — no built-in credential default."""
+
+
 def database_url() -> str:
-    return os.environ.get("MAIL_CORE_DATABASE_URL", DEFAULT_DATABASE_URL)
+    url = (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip()
+    if not url:
+        raise DatabaseConfigError("MAIL_CORE_DATABASE_URL is required")
+    return url
+
+
+def _pool_kwargs() -> dict:
+    return {
+        "pool_pre_ping": True,
+        "pool_size": int(os.environ.get("MAIL_CORE_DB_POOL_SIZE") or 10),
+        "max_overflow": int(os.environ.get("MAIL_CORE_DB_MAX_OVERFLOW") or 10),
+        "pool_timeout": float(os.environ.get("MAIL_CORE_DB_POOL_TIMEOUT") or 30),
+        "pool_recycle": int(os.environ.get("MAIL_CORE_DB_POOL_RECYCLE") or 1800),
+    }
 
 
 def get_engine(url: str | None = None) -> Engine:
     global _engine, _SessionLocal
     resolved = url or database_url()
-    if _engine is None or str(_engine.url) != resolved:
-        _engine = create_engine(resolved, pool_pre_ping=True, future=True)
+    # Compare unmasked URLs (str(engine.url) masks the password and never matches).
+    if _engine is None or _engine.url.render_as_string(hide_password=False) != resolved:
+        if _engine is not None:
+            _engine.dispose()
+        _engine = create_engine(resolved, future=True, **_pool_kwargs())
         _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False, future=True)
     return _engine
 

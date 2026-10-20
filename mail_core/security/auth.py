@@ -217,3 +217,6 @@ def change_login_password(*, current: str, new: str) -> None:
         path = Path(path_raw)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(hashed)
+    from mail_core.runtime.bootstrap import clear_initial_password
+
+    clear_initial_password(os.environ.get("MAIL_CORE_DATA_DIR"))
