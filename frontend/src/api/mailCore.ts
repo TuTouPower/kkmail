@@ -36,6 +36,37 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   return res.json() as Promise<T>
 }
 
+
+async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  const base = mailCoreBaseUrl()
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+    signal,
+  })
+  if (!res.ok) {
+    throw new Error(`mail-core ${res.status}: ${await res.text()}`)
+  }
+  return res.json() as Promise<T>
+}
+
+export function postMailCoreMessageRead(
+  messageId: string,
+  isRead = true,
+  signal?: AbortSignal,
+): Promise<{ id: string; is_read: boolean }> {
+  return postJson(`/api/mail/messages/${encodeURIComponent(messageId)}/read`, { is_read: isRead }, signal)
+}
+
+export function postMailCoreMessageFlag(
+  messageId: string,
+  isFlagged = true,
+  signal?: AbortSignal,
+): Promise<{ id: string; is_flagged: boolean }> {
+  return postJson(`/api/mail/messages/${encodeURIComponent(messageId)}/flag`, { is_flagged: isFlagged }, signal)
+}
+
 export function fetchMailCoreInbox(opts: MailCoreInboxQuery | number = 40): Promise<MailCoreInboxPage> {
   const q = typeof opts === 'number' ? { limit: opts } : opts
   const params = new URLSearchParams()
@@ -152,6 +183,8 @@ export function subscribeMailCoreEvents(
     'message.upserted',
     'message.removed',
     'folder.stats_updated',
+    'mail.changed',
+    'folder.stats.changed',
     'sync.progress',
     'sync.completed',
     'client.resync_hint',
