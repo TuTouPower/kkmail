@@ -49,6 +49,13 @@ class OutboxDispatcher:
         with self._lock:
             self._subs[key] = [(lp, qq) for (lp, qq) in self._subs.get(key, []) if qq is not q]
 
+    def _isolate(self, q: asyncio.Queue) -> None:
+        """Isolate a slow consumer whose queue filled up so it does not block the global outbox."""
+        log.warning("isolating slow consumer queue %s", id(q))
+        with self._lock:
+            for key in list(self._subs.keys()):
+                self._subs[key] = [(lp, qq) for (lp, qq) in self._subs[key] if qq is not q]
+
     def has_local_subscribers(self) -> bool:
         with self._lock:
             return any(bool(v) for v in self._subs.values())
@@ -86,23 +93,32 @@ class OutboxDispatcher:
         except RuntimeError:
             running = None
         if running is loop:
-            return self._put(q, event)
+            ok = self._put(q, event)
+            if not ok:
+                self._isolate(q)
+            return ok
 
         fut: concurrent.futures.Future[bool] = concurrent.futures.Future()
 
         def _run() -> None:
             try:
-                fut.set_result(self._put(q, event))
+                res = self._put(q, event)
+                fut.set_result(res)
             except Exception as exc:  # noqa: BLE001
                 fut.set_exception(exc)
 
         try:
             loop.call_soon_threadsafe(_run)
         except RuntimeError:
+            self._isolate(q)
             return False  # loop closed; subscriber is going away
         try:
-            return bool(fut.result(timeout=0.5))
+            ok = bool(fut.result(timeout=0.5))
+            if not ok:
+                self._isolate(q)
+            return ok
         except Exception:
+            self._isolate(q)
             return False
 
     def _fanout(self, event: dict[str, Any]) -> bool:
