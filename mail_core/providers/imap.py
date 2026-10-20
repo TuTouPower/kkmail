@@ -203,10 +203,24 @@ class ImapProvider:
             if typ != "OK":
                 # Never treat a failed SEARCH as "folder exhausted" — that silently stops sync.
                 raise RuntimeError(f"UID SEARCH {folder_remote_id} failed: {typ}")
-            uids = [int(x) for x in (data[0] or b"").split() if x]
-            uids = [u for u in uids if u >= start]
             batch_size = int((cursor or {}).get("page_size") or 50)
-            batch = uids[:batch_size]
+            batch: list[int] = []
+            has_more = False
+            for chunk in (data or ()):
+                if not chunk:
+                    continue
+                raw_chunk = chunk if isinstance(chunk, bytes) else str(chunk).encode()
+                for m in re.finditer(rb"\d+", raw_chunk):
+                    val = int(m.group(0))
+                    if val < start:
+                        continue
+                    if len(batch) < batch_size:
+                        batch.append(val)
+                    else:
+                        has_more = True
+                        break
+                if has_more:
+                    break
             items: list[RemoteMessageMeta] = []
             for uid in batch:
                 typ, fetched = c.uid(
@@ -263,7 +277,7 @@ class ImapProvider:
                     exhausted=True,
                 )
             next_uid = batch[-1] + 1
-            exhausted = len(uids) <= batch_size
+            exhausted = not has_more
             return MetadataPage(
                 items=items,
                 next_cursor={"uid_next": next_uid, "uidvalidity": uidvalidity, "page_size": batch_size},
