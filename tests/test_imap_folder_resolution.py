@@ -2400,7 +2400,7 @@ class AssetRenderingTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             session['logged_in'] = True
 
-        response = self.client.get('/')
+        response = self.client.get('/legacy')
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
