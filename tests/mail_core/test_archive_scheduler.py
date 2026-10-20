@@ -41,6 +41,8 @@ def test_archive_batch_completes_and_respects_hard_quota(tmp_path, monkeypatch):
     def _build(account, store=None):
         return provider
 
+    original_engine = engine_mod.build_provider
+    original_archive = archive_mod.build_provider
     engine_mod.build_provider = _build
     archive_mod.build_provider = _build
     Session = get_session_factory()
@@ -102,4 +104,6 @@ def test_archive_batch_completes_and_respects_hard_quota(tmp_path, monkeypatch):
         )
         assert paused["status"] == "paused_quota"
     finally:
+        engine_mod.build_provider = original_engine
+        archive_mod.build_provider = original_archive
         set_credential_store(None)
