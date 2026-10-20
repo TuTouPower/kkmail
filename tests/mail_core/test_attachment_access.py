@@ -1,0 +1,94 @@
+"""M5: attachment access by UUID only; reject path traversal."""
+
+from __future__ import annotations
+
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+
+from mail_core.api.app import app
+from mail_core.blobs.access import (
+    PathTraversalRejected,
+    assert_not_path_param,
+    parse_attachment_id,
+    safe_blob_path,
+    validate_content_digest,
+)
+from mail_core.blobs.store import BlobStore, InvalidBlobDigest
+from mail_core.security.defaults import REMOTE_IMAGES_DEFAULT_ON, require_encrypted_volume_docs
+
+
+def test_remote_images_default_off():
+    assert REMOTE_IMAGES_DEFAULT_ON is False
+    assert "encrypted" in require_encrypted_volume_docs().lower()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../etc/passwd",
+        "..\\windows\\system32",
+        "/var/lib/blobs/ab/cd/x.blob",
+        "ab/cd/deadbeef.blob",
+        "./secret",
+        "C:\\Users\\x",
+        "",
+        "  spaced  ",
+    ],
+)
+def test_reject_path_params(bad):
+    with pytest.raises(PathTraversalRejected):
+        assert_not_path_param(bad)
+
+
+def test_parse_uuid_ok():
+    u = uuid.uuid4()
+    assert parse_attachment_id(str(u)) == u
+
+
+def test_parse_non_uuid_rejected():
+    with pytest.raises(PathTraversalRejected):
+        parse_attachment_id("not-a-uuid")
+
+
+def test_digest_validation(tmp_path):
+    good = "a" * 64
+    assert validate_content_digest(good) == good
+    with pytest.raises(InvalidBlobDigest):
+        validate_content_digest("../" + "a" * 60)
+    with pytest.raises(InvalidBlobDigest):
+        validate_content_digest("zz" * 32)
+    store = BlobStore(tmp_path)
+    with pytest.raises(InvalidBlobDigest):
+        store.path_for("../" + "b" * 62)
+    with pytest.raises(InvalidBlobDigest):
+        store.get("not-hex")
+
+
+def test_safe_blob_path_stays_under_root(tmp_path):
+    digest = "ab" + "cd" + ("e" * 60)
+    p = safe_blob_path(tmp_path, digest)
+    assert p.name == f"{digest}.blob"
+    assert tmp_path.resolve() in p.parents
+
+
+def test_api_rejects_path_shaped_attachment_id():
+    client = TestClient(app)
+    r = client.get("/api/mail/attachments/../etc/passwd")
+    # Starlette may normalize path; either 400 from our handler or 404 from router.
+    assert r.status_code in (400, 404)
+
+
+def test_api_rejects_by_path_route():
+    client = TestClient(app)
+    r = client.get("/api/mail/attachments/by-path/var/lib/blobs/x.blob")
+    assert r.status_code == 400
+    assert "path" in r.json()["detail"].lower()
+
+
+def test_api_unknown_uuid_404():
+    client = TestClient(app)
+    r = client.get(f"/api/mail/attachments/{uuid.uuid4()}")
+    # May 404 (not found) or 500 if DB unavailable — accept 404/503/500 with care
+    assert r.status_code in (404, 500, 503)

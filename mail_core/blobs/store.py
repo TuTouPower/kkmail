@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from mail_core.blobs.crypto import Keyring, load_keyring_from_env, unwrap, wrap
+
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+class InvalidBlobDigest(ValueError):
+    """Digest is not a 64-char lowercase hex SHA-256."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,11 +48,23 @@ class BlobStore:
     def hash_plaintext(self, data: bytes) -> str:
         return hashlib.sha256(data).hexdigest()
 
+    def _normalize_digest(self, digest: str) -> str:
+        d = (digest or "").lower().strip()
+        if not _HEX64.match(d):
+            raise InvalidBlobDigest("content digest must be 64 hex chars")
+        return d
+
     def _rel_path(self, digest: str) -> str:
+        digest = self._normalize_digest(digest)
         return f"{digest[:2]}/{digest[2:4]}/{digest}.blob"
 
     def path_for(self, digest: str) -> Path:
-        return self.root / self._rel_path(digest)
+        rel = self._rel_path(digest)
+        full = (self.root / rel).resolve()
+        root = self.root.resolve()
+        if root not in full.parents:
+            raise InvalidBlobDigest("resolved path escapes blob root")
+        return full
 
     def exists(self, digest: str) -> bool:
         return self.path_for(digest).is_file()
