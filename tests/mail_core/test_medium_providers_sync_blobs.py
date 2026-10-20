@@ -72,9 +72,10 @@ def test_imap_timeout_passed_to_connect(monkeypatch):
     seen = {}
 
     class FakeIMAP:
-        def __init__(self, host, port, timeout=None):
+        def __init__(self, host, port, timeout=None, ssl_context=None):
             seen["timeout"] = timeout
             seen["host"] = host
+            seen["ssl_context"] = ssl_context
 
         def login(self, *a):
             return ("OK", [b""])
@@ -90,6 +91,7 @@ def test_imap_timeout_passed_to_connect(monkeypatch):
     with pytest.raises(RuntimeError, match="LIST failed"):
         p.list_folders()
     assert seen["timeout"] == 12.5
+    assert seen["ssl_context"] is not None
 
 
 def test_imap_fetch_failure_raises_not_advance(monkeypatch):
@@ -231,3 +233,178 @@ def test_scripts_prefer_python3_and_venv():
     assert "command -v python3" in start
     side = Path("scripts/build-sidecar.sh").read_text()
     assert ".venv/bin/python" in side
+
+
+def test_imap_decode_header_unknown_charset():
+    from mail_core.providers.imap import _decode_header
+
+    raw = "=?unknown-custom-charset?B?dGVzdA==?="
+    decoded = _decode_header(raw)
+    assert decoded == "test"
+
+
+def test_imap_list_folders_case_insensitive_inbox(monkeypatch):
+    class FakeIMAPList:
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "Inbox"', b'(\\HasNoChildren) "/" "Sent"']
+
+        def logout(self):
+            return "OK", []
+
+    prov = ImapProvider("h", 993, "u", "p", use_ssl=False)
+    monkeypatch.setattr(prov, "_connect", lambda: FakeIMAPList())
+    folders = prov.list_folders()
+    inbox = next(f for f in folders if f.name == "Inbox")
+    assert inbox.role == "inbox"
+
+
+def test_imap_fetch_metadata_page_bounded_search_pagination(monkeypatch):
+    class FakeIMAPLarge:
+        def select(self, *a, **k):
+            return "OK", [b"1"]
+
+        def status(self, *a, **k):
+            return "OK", [b"INBOX (UIDVALIDITY 10)"]
+
+        def uid(self, cmd, *args):
+            if cmd == "SEARCH":
+                # 1000 UIDs
+                return "OK", [b" ".join(str(i).encode() for i in range(1, 1001))]
+            if cmd == "FETCH":
+                uid = args[0]
+                return "OK", [
+                    (
+                        b"FLAGS (\\Seen)",
+                        f"From: a@b.com\r\nSubject: Test {uid}\r\nDate: Wed, 21 Oct 2026 00:00:00 +0000\r\n\r\n".encode(),
+                    )
+                ]
+            return "NO", []
+
+        def logout(self):
+            return "OK", []
+
+    prov = ImapProvider("h", 993, "u", "p", use_ssl=False)
+    monkeypatch.setattr(prov, "_connect", lambda: FakeIMAPLarge())
+    page = prov.fetch_metadata_page("INBOX", {"uid_next": 1, "page_size": 2})
+    assert len(page.items) == 2
+    assert page.items[0].uid == 1
+    assert page.items[1].uid == 2
+    assert not page.exhausted
+    assert page.next_cursor["uid_next"] == 3
+
+
+def test_build_provider_imap_json_credentials_unpack():
+    from mail_core.accounts.credentials import DictCredentialStore
+    from mail_core.mail.storage.models import Account
+    from mail_core.providers.factory import build_provider
+
+    store = DictCredentialStore({
+        "ref-dict": {"password": "real-secret-from-dict"},
+        "ref-json": '{"password": "real-secret-from-json"}',
+    })
+
+    acc1 = Account(
+        email="a@b.com",
+        provider="imap",
+        credential_ref="ref-dict",
+        config={"imap_host": "mail.test", "port": 993},
+    )
+    p1 = build_provider(acc1, store)
+    assert p1.password == "real-secret-from-dict"
+
+    acc2 = Account(
+        email="a@b.com",
+        provider="imap",
+        credential_ref="ref-json",
+        config={"imap_host": "mail.test", "port": 993},
+    )
+    p2 = build_provider(acc2, store)
+    assert p2.password == "real-secret-from-json"
+
+
+def test_create_account_duplicate_does_not_overwrite_credentials(monkeypatch):
+    from unittest.mock import MagicMock
+    from mail_core.accounts.credentials import DictCredentialStore, set_credential_store
+    from mail_core.accounts.service import create_account
+
+    store = DictCredentialStore({"account:existing@test.com": {"password": "old-password"}})
+    set_credential_store(store)
+
+    mock_session = MagicMock()
+    # First flush triggers unique constraint violation
+    mock_session.flush.side_effect = RuntimeError("duplicate key value violates unique constraint")
+
+    with pytest.raises(RuntimeError, match="duplicate key"):
+        create_account(
+            mock_session,
+            email="existing@test.com",
+            provider="imap",
+            credentials={"password": "hacked-password"},
+        )
+
+    # Verify existing secret was not touched/overwritten
+    assert store.get_secret("account:existing@test.com") == {"password": "old-password"}
+
+
+def test_enqueue_account_sync_raises_when_disabled():
+    from unittest.mock import MagicMock
+    from mail_core.accounts.service import enqueue_account_sync
+    from mail_core.mail.storage.models import Account
+
+    mock_session = MagicMock()
+    acc = Account(email="dis@ex.com", provider="imap", sync_enabled=False)
+    mock_session.get.return_value = acc
+
+    with pytest.raises(ValueError, match="account sync is disabled"):
+        enqueue_account_sync(mock_session, uuid.uuid4())
+
+
+def test_handle_job_skips_when_sync_disabled():
+    from unittest.mock import MagicMock, patch
+    from mail_core.mail.domain.enums import JobType
+    from mail_core.mail.storage.models import Account, WorkerJob
+    from mail_core.worker.handlers import handle_job
+
+    mock_session = MagicMock()
+    acc = Account(email="dis@ex.com", provider="imap", sync_enabled=False)
+    mock_session.get.return_value = acc
+
+    job = WorkerJob(
+        id=uuid.uuid4(),
+        job_type=JobType.SYNC_FOLDER_DELTA.value,
+        account_id=uuid.uuid4(),
+        payload={"folder_id": str(uuid.uuid4())},
+    )
+
+    with patch("mail_core.worker.handlers.complete_job") as mock_complete:
+        res = handle_job(mock_session, job)
+        assert res is True
+        mock_complete.assert_called_once()
+
+
+def test_update_account_sync_status():
+    from unittest.mock import MagicMock
+    from mail_core.accounts.service import update_account_sync_status
+    from mail_core.mail.storage.models import Account
+
+    mock_session = MagicMock()
+    acc = Account(
+        email="s@ex.com",
+        provider="imap",
+        sync_status="running",
+        config={"last_sync_error": "prev error"},
+    )
+    mock_session.get.return_value = acc
+
+    # 1. Update to idle
+    res = update_account_sync_status(mock_session, uuid.uuid4(), "idle")
+    assert res is not None
+    assert res.sync_status == "idle"
+    assert "last_synced_at" in (res.config or {})
+    assert "last_sync_error" not in (res.config or {})
+
+    # 2. Update to failed
+    res_failed = update_account_sync_status(mock_session, uuid.uuid4(), "failed", error="timeout connecting")
+    assert res_failed is not None
+    assert res_failed.sync_status == "failed"
+    assert res_failed.config.get("last_sync_error") == "timeout connecting"
