@@ -46,3 +46,32 @@ def commit_checkpoint(
     row.updated_at = datetime.now(timezone.utc)
     session.flush()
     return row
+
+
+def invalidate_checkpoint_for_rebuild(
+    session: Session,
+    *,
+    account_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    fencing_token: int,
+) -> SyncCheckpoint:
+    """Clear cursor tokens after UIDVALIDITY / historyId / delta invalidation.
+
+    Forces a controlled metadata rebuild; never silent-delete (architecture §7.3).
+    """
+    assert_fencing(session, account_id=account_id, fencing_token=fencing_token)
+    row = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
+    if row is None:
+        row = SyncCheckpoint(account_id=account_id, folder_id=folder_id)
+        session.add(row)
+    row.cursor = {}
+    row.uidvalidity = None
+    row.modseq = None
+    row.history_id = None
+    row.delta_link = None
+    row.full_scan_complete = False
+    row.fencing_token = fencing_token
+    row.updated_at = datetime.now(timezone.utc)
+    session.flush()
+    return row
+
