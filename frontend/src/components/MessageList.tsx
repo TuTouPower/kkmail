@@ -308,7 +308,6 @@ export default function MessageList() {
           return (
             <article
               key={key}
-              role="button"
               tabIndex={0}
               aria-selected={selectedKey === key}
               aria-label={`邮件：${m.subject || '（无主题）'}，来自 ${displayName(m.from)}`}
