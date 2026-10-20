@@ -256,3 +256,38 @@ def test_imap_list_folders_case_insensitive_inbox(monkeypatch):
     folders = prov.list_folders()
     inbox = next(f for f in folders if f.name == "Inbox")
     assert inbox.role == "inbox"
+
+
+def test_imap_fetch_metadata_page_bounded_search_pagination(monkeypatch):
+    class FakeIMAPLarge:
+        def select(self, *a, **k):
+            return "OK", [b"1"]
+
+        def status(self, *a, **k):
+            return "OK", [b"INBOX (UIDVALIDITY 10)"]
+
+        def uid(self, cmd, *args):
+            if cmd == "SEARCH":
+                # 1000 UIDs
+                return "OK", [b" ".join(str(i).encode() for i in range(1, 1001))]
+            if cmd == "FETCH":
+                uid = args[0]
+                return "OK", [
+                    (
+                        b"FLAGS (\\Seen)",
+                        f"From: a@b.com\r\nSubject: Test {uid}\r\nDate: Wed, 21 Oct 2026 00:00:00 +0000\r\n\r\n".encode(),
+                    )
+                ]
+            return "NO", []
+
+        def logout(self):
+            return "OK", []
+
+    prov = ImapProvider("h", 993, "u", "p", use_ssl=False)
+    monkeypatch.setattr(prov, "_connect", lambda: FakeIMAPLarge())
+    page = prov.fetch_metadata_page("INBOX", {"uid_next": 1, "page_size": 2})
+    assert len(page.items) == 2
+    assert page.items[0].uid == 1
+    assert page.items[1].uid == 2
+    assert not page.exhausted
+    assert page.next_cursor["uid_next"] == 3
