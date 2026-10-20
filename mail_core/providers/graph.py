@@ -41,12 +41,19 @@ _GRAPH_WELL_KNOWN_ROLES: dict[str, str] = {
 }
 
 
-def graph_folder_role(folder: dict[str, Any]) -> str:
-    """Prefer explicit role, else Graph ``wellKnownName``, else ``other``."""
+def graph_folder_role(folder: dict[str, Any], inbox_id: str | None = None) -> str:
+    """Prefer explicit role, else inbox_id match, else Graph ``wellKnownName``, else ``other``."""
     if folder.get("role"):
         return str(folder["role"])
+    if inbox_id and folder.get("id") == inbox_id:
+        return "inbox"
     well = (folder.get("wellKnownName") or "").lower()
-    return _GRAPH_WELL_KNOWN_ROLES.get(well, "other")
+    if well in _GRAPH_WELL_KNOWN_ROLES:
+        return _GRAPH_WELL_KNOWN_ROLES[well]
+    disp = (folder.get("displayName") or "").strip().lower()
+    if disp == "inbox":
+        return "inbox"
+    return "other"
 
 
 def _raise_mapped(exc: ProviderHttpError) -> None:
@@ -89,12 +96,19 @@ class GraphProvider:
         self._calls.append("list_folders")
         if self.transport is None:
             raise GraphNotConfiguredError("Graph HTTP transport not configured")
+        inbox_id: str | None = None
+        try:
+            inbox_data = self._call("GET", "/me/mailFolders/inbox", {})
+            if isinstance(inbox_data, dict) and inbox_data.get("id"):
+                inbox_id = str(inbox_data["id"])
+        except Exception:
+            pass
         data = self._call("GET", "/me/mailFolders", {})
         return [
             RemoteFolder(
                 remote_id=f["id"],
                 name=f.get("displayName") or f["id"],
-                role=graph_folder_role(f),
+                role=graph_folder_role(f, inbox_id=inbox_id),
             )
             for f in data.get("value") or []
         ]
