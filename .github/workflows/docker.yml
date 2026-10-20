@@ -1,0 +1,17 @@
+name: docker
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "Dockerfile"
+      - "frontend/**"
+      - "requirements.txt"
+      - ".github/workflows/docker.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build multi-stage image
+        run: docker build -t outlookemail:ci .
