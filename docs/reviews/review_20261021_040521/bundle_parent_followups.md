@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # 主任务调用链补查
 
 - 范围：当前全库 HEAD `daca631aec54c30ce02cdb5e6499ae196dc3a72d`；主体分视角完成后的调用点补查。

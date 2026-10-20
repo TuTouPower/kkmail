@@ -150,11 +150,11 @@ if _DIST is not None:
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
 
-    @app.get("/")
+    @app.get("/", include_in_schema=False)
     def spa_index():
         return FileResponse(_DIST / "index.html")
 
-    @app.get("/{full_path:path}")
+    @app.get("/{full_path:path}", include_in_schema=False)
     def spa_fallback(full_path: str):
         # Do not swallow API/health
         if full_path.startswith(("api/", "health", "ready", "docs", "openapi.json", "assets/")):

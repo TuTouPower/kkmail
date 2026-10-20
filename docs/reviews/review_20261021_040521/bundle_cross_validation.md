@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # Intensive Review — 独立交叉验证（证伪）
 
 目标：全库 HEAD `daca631aec54c30ce02cdb5e6499ae196dc3a72d`，不是 diff。基于 intensive-review §4/5/6，逐条回读 C/H 所需源码、调用方、测试及已声明限制；不因早于 HEAD 而过滤。序号 Vn-xx 按原报告 C/H 列表顺序计数。只写本报告，未修改源/测试，未运行完整测试、DB、真实账户或真实网络攻击。

@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # Intensive Review — Perspectives 5 (Architecture/Maintainability) + 6 (Robustness/Observability)
 
 - **Target**: TuTouPower/kkmail

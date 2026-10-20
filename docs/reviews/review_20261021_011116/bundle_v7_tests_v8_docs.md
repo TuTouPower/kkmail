@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # Intensive Review — perspectives 7 (Tests/Spec) + 8 (Documentation) — TuTouPower/kkmail @ b2956445574ebf171c1e73526421f0d46ccac3a3 2026-10-21
 
 ## Summary
@@ -117,11 +121,11 @@
 ### 视角8 — 文档规范
 
 #### [H][90] `README.md` (811 行) ↔ `docs/deployment.md` — 部署双权威 / 非最短入口
-- **证据**: README「快速开始」完整复制 Docker/`LOGIN_PASSWORD=admin123`/`SECRET_KEY` compose 片段（如 `README.md:69-70,106-107,139-140`），与 `docs/deployment.md:30-31,96-97,125` 同内容平行维护。视角8：README 应最短入口 + 相对链接；同一流程仅一处完整定义。
+- **证据**: README「快速开始」完整复制 Docker/`LOGIN_PASSWORD=***`/`SECRET_KEY` compose 片段（如 `README.md:69-70,106-107,139-140`），与 `docs/deployment.md:30-31,96-97,125` 同内容平行维护。视角8：README 应最短入口 + 相对链接；同一流程仅一处完整定义。
 - **修复**: README 保留 10–20 行最短路径 + 链接 `docs/deployment.md`；删除重复 compose 长块。
 
-#### [M][85] 弱默认口令 `admin123` 作为文档示例默认值
-- **证据**: `README.md`、`docs/deployment.md`、`.env.example:11`、`AGENTS` 测试 env 多处 `LOGIN_PASSWORD=admin123`。skill：示例脱敏且无弱默认 secret；部署文档表「默认 `admin123`」易被照抄进生产。
+#### [M][85] 弱默认口令 `***` 作为文档示例默认值
+- **证据**: `README.md`、`docs/deployment.md`、`.env.example:11`、`AGENTS` 测试 env 多处 `LOGIN_PASSWORD=***`。skill：示例脱敏且无弱默认 secret；部署文档表「默认 `***`」易被照抄进生产。
 - **修复**: 示例改为 `LOGIN_PASSWORD='<change-me>'` 或强制首次随机；明确「示例不可用于公网」。
 
 #### [M][88] `docs/mail-core-status.md` — 会话/代理口吻残留
@@ -154,7 +158,7 @@
 - `docs/known-limitations.md` 显式记录未完成产品规则（方向正确，内容需随 mail-core 更新）。
 - `docs/mail-core-status.md` 试图只列「需用户介入」项（结构好，语气需中性化）。
 - `AGENTS.md` 非 Trellis 段对安全约定（mailBody、mailKey、CSRF、测试库隔离）清晰，适合代理。
-- `.env.example` 存在且多为占位（除 admin123）。
+- `.env.example` 存在且多为占位（除 ***）。
 
 ---
 
