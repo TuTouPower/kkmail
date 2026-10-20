@@ -14,6 +14,8 @@ COPY requirements-mail-core.txt .
 RUN pip install --no-cache-dir -r requirements-mail-core.txt
 COPY mail_core ./mail_core
 COPY --from=frontend /fe/dist ./frontend/dist
+RUN useradd --system --uid 10001 --home-dir /app kkmail && chown -R kkmail /app
+USER kkmail
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     KKMAIL_FRONTEND_DIST=/app/frontend/dist

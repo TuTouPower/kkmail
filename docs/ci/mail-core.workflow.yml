@@ -1,112 +1,47 @@
-name: mail-core
+name: tests
 
+# Canonical copy: .github/workflows/tests.yml (this file mirrors it).
 on:
   push:
-    paths:
-      - "mail_core/**"
-      - "tests/mail_core/**"
-      - "requirements-mail-core.txt"
-      - "Dockerfile.mail-core"
-      - "docker-compose.mail-core.yml"
-      - "scripts/run-mail-core-tests.sh"
-      - "scripts/start-mail-core-imap.sh"
-      - "scripts/mail-core-chaos-lease.sh"
-      - "scripts/mail-core-backup-restore-drill.sh"
-      - "scripts/fetch-pg-binaries.sh"
-      - ".github/workflows/mail-core.yml"
+    branches: [main, dev]
   pull_request:
-    paths:
-      - "mail_core/**"
-      - "tests/mail_core/**"
-      - "requirements-mail-core.txt"
-      - "Dockerfile.mail-core"
-      - "docker-compose.mail-core.yml"
-      - "scripts/run-mail-core-tests.sh"
-      - "scripts/start-mail-core-imap.sh"
-      - "scripts/mail-core-chaos-lease.sh"
-      - "scripts/mail-core-backup-restore-drill.sh"
-      - "scripts/fetch-pg-binaries.sh"
-      - ".github/workflows/mail-core.yml"
 
 jobs:
-  pytest-pg:
+  mail-core:
     runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: kkmail
-          POSTGRES_PASSWORD: kkmail
-          POSTGRES_DB: kkmail_mail
+          POSTGRES_USER: kkmail_ci
+          # Ephemeral per-run container; not a secret, never reused.
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          POSTGRES_DB: kkmail_test
         ports:
           - 5433:5432
         options: >-
-          --health-cmd "pg_isready -U kkmail -d kkmail_mail"
+          --health-cmd "pg_isready -U kkmail_ci -d kkmail_test"
           --health-interval 3s
           --health-timeout 3s
           --health-retries 20
     env:
-      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:kkmail@127.0.0.1:5433/kkmail_mail
-      MAIL_CORE_BLOB_KEY_V1: ${{ secrets.MAIL_CORE_BLOB_KEY_V1 || 'dGVzdC1ibG9iLWtleS0zMi1ieXRlcyEhISE=' }}
-      MAIL_CORE_SECRET_KEY: test-mail-core-secret-key-ci-only
-      MAIL_CORE_LOGIN_PASSWORD: test-login-password
-      MAIL_CORE_API_KEYS: test-api-key-for-pytest
-      MAIL_CORE_BLOB_ACTIVE_VERSION: "1"
-      MAIL_CORE_BACKUP_KEY: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
+      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail_ci:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5433/kkmail_test
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Install mail-core deps
-        run: pip install -r requirements-mail-core.txt
-      - name: Migrate schema
-        run: alembic -c mail_core/db/alembic.ini upgrade head
-      - name: Pytest mail_core
-        run: pytest tests/mail_core -q --tb=line
-
-  imap-l2:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: kkmail
-          POSTGRES_PASSWORD: kkmail
-          POSTGRES_DB: kkmail_mail
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd "pg_isready -U kkmail -d kkmail_mail"
-          --health-interval 3s
-          --health-timeout 3s
-          --health-retries 20
-    env:
-      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:kkmail@127.0.0.1:5433/kkmail_mail
-      MAIL_CORE_IMAP_HOST: 127.0.0.1
-      MAIL_CORE_IMAP_PORT: "1143"
-      MAIL_CORE_IMAP_USER: alice@kkmail.test
-      MAIL_CORE_IMAP_PASS: alice-imap-pass
-      MAIL_CORE_BLOB_KEY_V1: ${{ secrets.MAIL_CORE_BLOB_KEY_V1 || 'dGVzdC1ibG9iLWtleS0zMi1ieXRlcyEhISE=' }}
-      MAIL_CORE_SECRET_KEY: test-mail-core-secret-key-ci-only
-      MAIL_CORE_LOGIN_PASSWORD: test-login-password
-      MAIL_CORE_API_KEYS: test-api-key-for-pytest
-      MAIL_CORE_BLOB_ACTIVE_VERSION: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build and start Dovecot fixture
-        run: docker compose -f docker-compose.mail-core.yml up -d --build imap
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - run: pip install -r requirements-mail-core.txt
-      - run: alembic -c mail_core/db/alembic.ini upgrade head
-      - name: Wait for IMAP
+      - name: Start IMAP fixture (Dovecot)
         run: |
-          for i in $(seq 1 30); do
-            (echo > /dev/tcp/127.0.0.1/1143) >/dev/null 2>&1 && exit 0
-            sleep 1
-          done
-          echo "IMAP not up"; exit 1
-      - name: IMAP live + sync tests
-        run: pytest tests/mail_core/test_imap_provider_live.py tests/mail_core/test_imap_sync_loop.py -q --tb=line
+          docker build -t kkmail-imap-fixture tests/mail_core/fixtures/dovecot
+          docker run -d --name imap -p 127.0.0.1:1143:143 kkmail-imap-fixture
+          for i in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/1143) >/dev/null 2>&1 && break; sleep 1; done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements-mail-core.txt
+            requirements-dev.txt
+      # Generates per-run keys, migrates, runs the full suite; DB-backed tests may not skip.
+      - run: ./scripts/run-mail-core-tests.sh
+        env:
+          MAIL_CORE_IMAP_HOST: 127.0.0.1
+          MAIL_CORE_IMAP_PORT: "1143"

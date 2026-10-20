@@ -19,6 +19,10 @@ os.environ.setdefault("MAIL_CORE_LOGIN_PASSWORD", "test-login-password")
 os.environ.setdefault("MAIL_CORE_API_KEYS", "test-api-key-for-pytest")
 
 TEST_API_KEY = "test-api-key-for-pytest"
+
+# CI sets MAIL_CORE_REQUIRE_DB=1 so Postgres-backed tests can never silently skip.
+if os.environ.get("MAIL_CORE_REQUIRE_DB") == "1" and not os.environ.get("MAIL_CORE_DATABASE_URL"):
+    raise pytest.UsageError("MAIL_CORE_REQUIRE_DB=1 but MAIL_CORE_DATABASE_URL is not set")
 TEST_LOGIN_PASSWORD = "test-login-password"
 
 
@@ -33,3 +37,14 @@ def api_client(auth_headers):
     from mail_core.api.app import app
 
     return TestClient(app, headers=auth_headers)
+
+
+def pytest_collection_modifyitems(config, items):
+    """With MAIL_CORE_REQUIRE_DB=1, any skip caused by a missing DB URL is an error."""
+    if os.environ.get("MAIL_CORE_REQUIRE_DB") != "1":
+        return
+    for item in items:
+        for mark in item.iter_markers("skipif"):
+            reason = str(mark.kwargs.get("reason", ""))
+            if "MAIL_CORE_DATABASE_URL" in reason and mark.args and mark.args[0]:
+                raise pytest.UsageError(f"{item.nodeid} would skip ({reason}) under MAIL_CORE_REQUIRE_DB=1")

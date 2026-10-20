@@ -1,8 +1,6 @@
 """Hard defaults for mail-core clients (architecture M5).
 
-Flask SPA MessageReader keeps its existing remote-image CSP when not using
-mail-core; mail-core readers MUST pass loadRemoteImages=false unless the user
-explicitly opts in.
+Readers block remote images unless the user explicitly opts in.
 """
 
 from __future__ import annotations

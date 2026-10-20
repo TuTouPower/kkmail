@@ -113,3 +113,30 @@ def test_auth_config_requires_secret(monkeypatch):
     reset_auth_caches()
     with pytest.raises(AuthConfigError, match="SECRET_KEY"):
         validate_auth_config()
+
+
+def test_login_rate_limited_per_client():
+    from mail_core.security.ratelimit import login_limiter
+
+    login_limiter.reset()
+    client = TestClient(app)
+    try:
+        for _ in range(login_limiter.max_failures):
+            assert client.post("/api/auth/login", json={"password": "wrong"}).status_code == 401
+        blocked = client.post("/api/auth/login", json={"password": TEST_LOGIN_PASSWORD})
+        assert blocked.status_code == 429
+        assert int(blocked.headers["Retry-After"]) >= 1
+    finally:
+        login_limiter.reset()
+    assert client.post("/api/auth/login", json={"password": TEST_LOGIN_PASSWORD}).status_code == 200
+
+
+def test_limiter_window_expires():
+    from mail_core.security.ratelimit import LoginRateLimiter
+
+    lim = LoginRateLimiter(max_failures=2, window_s=10)
+    lim.record_failure("a", now=0)
+    lim.record_failure("a", now=1)
+    assert lim.retry_after("a", now=2) > 0
+    assert lim.retry_after("b", now=2) == 0
+    assert lim.retry_after("a", now=12) == 0

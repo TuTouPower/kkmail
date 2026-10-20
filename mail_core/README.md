@@ -1,133 +1,61 @@
 # mail-core
 
-Greenfield mail kernel for kkmail. Spec: [`docs/mail-core-architecture.md`](../docs/mail-core-architecture.md).
+The kkmail backend. Spec: [`docs/mail-core-architecture.md`](../docs/mail-core-architecture.md). Deployment: [`docs/deployment.md`](../docs/deployment.md).
 
-Flask (`web_outlook_app.py`) is **unchanged** and remains the default product path.
-
-## Run API + Worker + PostgreSQL together
-
-### 1. Dependencies
+## Run
 
 ```bash
-pip install -r requirements-mail-core.txt
+pip install -r requirements-dev.txt
+export MAIL_CORE_DATABASE_URL=postgresql+psycopg://<user>:<password>@127.0.0.1:5432/<db>
+python -m mail_core --data-dir ./.kkmail-data
 ```
 
-### 2. PostgreSQL 16
+`python -m mail_core` runs the migrations, starts the worker in the same process, then starts the API with uvicorn.
 
-**Option A — Docker Compose** (dev; postgres + api + worker):
+| Option | Env | Default |
+| --- | --- | --- |
+| `--host` / `--port` | `MAIL_CORE_HOST` / `MAIL_CORE_PORT` | `127.0.0.1` / `8000` |
+| `--data-dir` | `MAIL_CORE_DATA_DIR` | (none). When set, missing secrets are generated (0600) and the blob and backup dirs are placed under it. |
+| `--no-worker` | `MAIL_CORE_EMBEDDED_WORKER=0` | Embedded worker is on. To run it separately: `python -m mail_core.worker.main`. |
+| `--skip-migrations` | `MAIL_CORE_SKIP_MIGRATIONS=1` | Migrations run at start. |
 
-```bash
-# full stack
-docker compose -f docker-compose.mail-core.yml up -d --build
-# postgres only
-docker compose -f docker-compose.mail-core.yml up -d postgres
-# if compose plugin missing:
-# docker run -d --name kkmail-mail-core-pg \
-#   -e POSTGRES_USER=kkmail -e POSTGRES_PASSWORD=kkmail \
-#   -e POSTGRES_DB=kkmail_mail -p 5433:5432 postgres:16
-```
+## Configuration
 
-API listens on `http://127.0.0.1:8000`. Flask is not started by this compose file.
-
-**Option B — Desktop Electron child process** (stub until binaries ship):
-
-See [`docs/mail-core-desktop.md`](../docs/mail-core-desktop.md). Data lives under
-`userData/mail-core-data/` (outside the install dir). Set `KKMAIL_MAIL_CORE_PG=1`.
-
-### 3. Environment
-
-```bash
-export MAIL_CORE_DATABASE_URL=postgresql+psycopg://kkmail:kkmail@127.0.0.1:5433/kkmail_mail
-
-# Blob AES-GCM keyring (KKMB) — NOT the backup key
-export MAIL_CORE_BLOB_KEY_V1="$(python -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
-export MAIL_CORE_BLOB_ACTIVE_VERSION=1
-
-# Backup package key (KKBK) — MUST be separate from blob keys
-export MAIL_CORE_BACKUP_KEY="$(python -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
-
-# Optional paths
-# export MAIL_CORE_BLOB_ROOT=/var/lib/kkmail/blobs
-# export MAIL_CORE_BACKUP_DIR=/var/lib/kkmail/backups
-```
-
-**Production:** place PG data + blob root on an **encrypted volume**
-(OS disk encryption / LUKS / FileVault / BitLocker). A Docker named volume alone
-does **not** satisfy architecture §11 / M5.
-
-### 4. Schema
-
-```bash
-alembic -c mail_core/db/alembic.ini upgrade head
-```
-
-### 5. Start processes (three terminals)
-
-```bash
-# API (LISTEN/NOTIFY outbox fan-out starts in lifespan)
-uvicorn mail_core.api.app:app --reload --host 127.0.0.1 --port 8000
-
-# Worker (SKIP LOCKED jobs + account leases)
-python -m mail_core.worker.main
-
-# Postgres already running from step 2
-```
-
-Health: `curl -s http://127.0.0.1:8000/health`
-
-### 6. SPA bridge (optional)
-
-```bash
-# frontend/.env.local
-VITE_MAIL_CORE=1
-# VITE_MAIL_CORE_BASE=http://127.0.0.1:8000
-```
-
-When the flag is off, the Flask default mail UI is unchanged.
-
-### 7. Backup / restore stub
-
-```bash
-python -c "from mail_core.backup import create_backup_package; print(create_backup_package())"
-# Restore verify: mail_core.backup.verify_backup_package(path)
-```
+| Env | Purpose |
+| --- | --- |
+| `MAIL_CORE_DATABASE_URL` | **Required.** There is no default. |
+| `MAIL_CORE_SECRET_KEY` | Session signing key. Required unless `--data-dir` is set. |
+| `MAIL_CORE_LOGIN_PASSWORD_HASH` / `MAIL_CORE_LOGIN_PASSWORD` | Login password. |
+| `MAIL_CORE_API_KEYS` | Bearer keys for integrations. |
+| `MAIL_CORE_BLOB_KEY_V1` / `MAIL_CORE_BLOB_KEYS` / `MAIL_CORE_BLOB_ACTIVE_VERSION` | Blob and credential encryption keyring. |
+| `MAIL_CORE_BACKUP_KEY` / `MAIL_CORE_BACKUP_KEYS` | Backup key. Must differ from the blob key. |
+| `MAIL_CORE_BLOB_ROOT`, `MAIL_CORE_BACKUP_DIR` | Storage paths. |
+| `MAIL_CORE_DB_POOL_SIZE`, `_MAX_OVERFLOW`, `_POOL_TIMEOUT`, `_POOL_RECYCLE` | Connection pool. Defaults: 10 / 10 / 30 s / 1800 s. |
+| `MAIL_CORE_WORKER_POLL_S`, `MAIL_CORE_WORKER_MAX_IDLE_S` | Worker poll base and idle back-off ceiling. |
+| `MAIL_CORE_COOKIE_SECURE`, `MAIL_CORE_COOKIE_SAMESITE`, `MAIL_CORE_SESSION_MAX_AGE` | Session cookie. |
+| `MAIL_CORE_LOGIN_MAX_FAILURES`, `MAIL_CORE_LOGIN_WINDOW_S` | Failed-login limit. |
+| `KKMAIL_FRONTEND_DIST` | SPA directory served at `/`. |
 
 ## Layout
 
 | Path | Role |
-|---|---|
-| `api/` | FastAPI (inbox, search, SSE, attachments by UUID) |
-| `worker/` | Job loop |
-| `sync/` | Leases, delta, IMAP/Gmail/Graph adapters |
-| `blobs/` | Encrypted content-addressed store + GC |
-| `backup/` | PG + blobs package with separate AES-GCM key |
-| `realtime/` | Outbox + LISTEN |
-| `desktop/` (repo root) | Electron PG lifecycle scaffold |
-
-## Security notes (M5)
-
-- Attachments: `GET /api/mail/attachments/{uuid}` only — path params rejected.
-- Remote images: mail-core default **off** (`mail_core.security.REMOTE_IMAGES_DEFAULT_ON`).
-- Blob digests validated as 64-hex; paths cannot escape blob root.
-- Backup key ≠ blob keyring.
+| --- | --- |
+| `api/` | FastAPI routers: `auth_routes`, `accounts`, `mail`, `sse`. Routes call the application layer only. |
+| `mail/application/` | Read models, search, mutations, remote operations, attachments. |
+| `mail/domain/`, `mail/storage/` | Enums, the archive FSM, ORM models, folder stats. |
+| `accounts/` | Accounts, groups, settings, and credential stores (DB-encrypted, `env:` read-only, `keyring:`). |
+| `sync/` | Leases and fencing, jobs, metadata and delta apply, the engine. |
+| `providers/` | IMAP, Gmail and Graph providers, OAuth, remote write-back. |
+| `worker/` | Job loop and handlers. |
+| `blobs/` | KKMS streaming AEAD store, archive scheduler, GC, key rotation. |
+| `backup/` | KKBK backup packages. |
+| `realtime/` | Outbox dispatcher and LISTEN/NOTIFY. |
+| `security/` | Auth, redaction, login rate limit. |
+| `runtime/` | `--data-dir` secret bootstrap. |
 
 ## Tests
 
 ```bash
-pytest tests/mail_core/ -q
+export MAIL_CORE_DATABASE_URL=...   # disposable database
+scripts/run-mail-core-tests.sh      # migrate + full pytest; DB-backed tests are not allowed to skip
 ```
-
-Cutover notes: [`docs/mail-core-cutover.md`](../docs/mail-core-cutover.md).
-Desktop PG: [`docs/mail-core-desktop.md`](../docs/mail-core-desktop.md).
-
-## SPA cutover
-
-Prefer mail-core list/reader without rebuilding the SPA:
-
-```bash
-export MAIL_CORE_DEFAULT=1
-# optional: MAIL_CORE_PUBLIC_BASE=http://127.0.0.1:8000
-```
-
-Or build with `VITE_MAIL_CORE=1` / `VITE_MAIL_CORE_DEFAULT=1`. See `docs/mail-core-cutover.md`.
-Flask login remains unchanged; list falls back to Flask if mail-core errors.
