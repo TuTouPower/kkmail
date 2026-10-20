@@ -87,7 +87,7 @@ function createWindow(url) {
     height: 840,
     minWidth: 900,
     minHeight: 600,
-    title: 'Mail',
+    title: 'kkmail',
     backgroundColor: '#171819',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -110,7 +110,7 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error(err)
     const { dialog } = require('electron')
-    dialog.showErrorBox('OutlookEmail 无法启动', String(err && err.message ? err.message : err))
+    dialog.showErrorBox('kkmail 无法启动', String(err && err.message ? err.message : err))
     app.quit()
   }
 })

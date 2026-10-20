@@ -1,6 +1,6 @@
-# OutlookEmail 浏览器扩展使用说明
+# kkmail 浏览器扩展使用说明
 
-这是 OutlookEmail 的 Chrome / Edge 浏览器扩展。扩展使用 Web 端登录密码建立正常 Web Session，不使用对外 API Key；所有管理请求仍走服务端现有的 Session + CSRF 保护。
+这是 kkmail 的 Chrome / Edge 浏览器扩展。扩展使用 Web 端登录密码建立正常 Web Session，不使用对外 API Key；所有管理请求仍走服务端现有的 Session + CSRF 保护。
 
 扩展默认在浏览器侧边栏中运行，不会切换当前网页标签页。
 
@@ -18,14 +18,14 @@
 2. 打开“开发者模式”。
 3. 点击“加载已解压的扩展程序”。
 4. 选择本仓库里的 `browser-extension` 目录。
-5. 安装完成后，工具栏会出现 `OutlookEmail` 扩展入口。
+5. 安装完成后，工具栏会出现 `kkmail` 扩展入口。
 
 ## 更新扩展
 
 代码更新后，需要在扩展管理页手动重新加载：
 
 1. 打开 `chrome://extensions/` 或 `edge://extensions/`。
-2. 找到 `OutlookEmail 控制台`。
+2. 找到 `kkmail 控制台`。
 3. 点击“重新加载”按钮。
 4. 重新打开侧边栏。
 
@@ -33,11 +33,11 @@
 
 ## 首次配置
 
-1. 点击浏览器工具栏里的 OutlookEmail 扩展图标，打开侧边栏。
+1. 点击浏览器工具栏里的 kkmail 扩展图标，打开侧边栏。
 2. 填写“服务地址”，例如：
    - 本地运行：`http://127.0.0.1:5000`
    - 服务器部署：`https://your-domain.example`
-3. 填写“Web 登录密码”，也就是登录 OutlookEmail Web 页面使用的密码。
+3. 填写“Web 登录密码”，也就是登录 kkmail Web 页面使用的密码。
 4. 按需勾选“记住密码到本机浏览器”。
 5. 点击“保存配置”，或直接点击上方功能入口开始使用。
 
@@ -219,7 +219,7 @@ Token 页用于辅助获取 Microsoft OAuth Refresh Token，并可直接保存�
 
 ### 提示需要允许访问服务地址
 
-这是浏览器扩展的站点权限提示。允许后扩展才能请求你的 OutlookEmail 服务。
+这是浏览器扩展的站点权限提示。允许后扩展才能请求你的 kkmail 服务。
 
 ### 临时邮箱分组显示暂无账号
 
