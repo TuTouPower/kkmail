@@ -89,8 +89,8 @@ def test_memory_provider_sync_folders_and_metadata():
         assert result["folders"] >= 1
 
         with Session() as session:
-            folder = session.scalar(select(Folder).where(Folder.account_id == account_id))
-            assert folder is not None
+            folder = session.scalar(select(Folder).where(Folder.account_id == account_id, Folder.role == "inbox"))
+            assert folder.remote_id.upper() == "INBOX"
             folder_id = folder.id
 
         meta = sync_folder_metadata(account_id, folder_id, worker_id="w-test", store=store, max_pages=10)

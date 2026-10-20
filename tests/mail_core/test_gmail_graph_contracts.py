@@ -51,7 +51,6 @@ def test_parse_graph_delta_pagination_and_removed():
     assert page1.next_cursor["next_link"].endswith("skiptoken=2")
     kinds = {c.remote_id: c.kind for c in page1.changes}
     assert kinds == {"m1": "upsert", "gone": "delete"}
-    assert page1.changes[0].meta is not None
     assert page1.changes[0].meta.subject == "Hello"
 
     page2 = parse_graph_delta(
@@ -102,7 +101,7 @@ def test_parse_gmail_history_pagination_add_delete_flag():
     by_id = {c.remote_id: c for c in page.changes}
     assert by_id["old"].kind == "delete"
     assert by_id["m1"].kind == "upsert"
-    assert by_id["m1"].meta is not None and by_id["m1"].meta.subject == "Subj"
+    assert by_id["m1"].meta.subject == "Subj"
     assert by_id["m2"].kind == "flag"
     assert by_id["m2"].flags.get("is_read") is True
 

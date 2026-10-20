@@ -42,4 +42,5 @@ def test_application_layer_exports_resolve():
     import mail_core.mail.application as app_layer
 
     for name in app_layer.__all__:
-        assert getattr(app_layer, name) is not None, name
+        obj = getattr(app_layer, name)
+        assert callable(obj) or isinstance(obj, type), name
