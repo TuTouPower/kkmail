@@ -37,7 +37,9 @@ pg.stop()
 获取开发用二进制：
 
 ```bash
+# Linux
 ./scripts/fetch-pg-binaries.sh
+# macOS/Windows: download-at-build（见 desktop/vendor/README.md）
 # 或手动解压到 desktop/vendor/pgsql/bin/
 export KKMAIL_MAIL_CORE_PG=1   # Electron main 在启动 Flask 后尝试 start()
 ```
