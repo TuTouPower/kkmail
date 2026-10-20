@@ -114,7 +114,11 @@ class MailProvider(Protocol):
 
 
 class StubProvider:
-    """In-memory stub for unit tests — not a real protocol client."""
+    """Unit-test double only — never returned by ``build_provider``.
+
+    Production ``stub`` / ``memory`` accounts use ``MemoryProvider``. Do not wire
+    this class into the sync engine; silent empty pages would look like a finished sync.
+    """
 
     def __init__(self, folders: Sequence[RemoteFolder] | None = None) -> None:
         self._folders = list(folders or [RemoteFolder("INBOX", "INBOX", "inbox")])
