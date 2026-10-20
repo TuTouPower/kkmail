@@ -250,7 +250,6 @@ class ImapProvider:
                 addr, name = _parse_from(from_raw)
                 to_raw = _decode_header(headers.get("To"))
                 cc_raw = _decode_header(headers.get("Cc"))
-                import email.utils
                 to_addresses = tuple(a for _, a in email.utils.getaddresses([to_raw]) if a) if to_raw else ()
                 cc_addresses = tuple(a for _, a in email.utils.getaddresses([cc_raw]) if a) if cc_raw else ()
                 date_raw = headers.get("Date")

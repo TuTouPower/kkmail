@@ -26,6 +26,34 @@ if os.environ.get("MAIL_CORE_REQUIRE_DB") == "1" and not os.environ.get("MAIL_CO
 TEST_LOGIN_PASSWORD = "test-login-password"
 
 
+@pytest.fixture(autouse=True)
+def _reset_auth_state_for_tests():
+    from mail_core.security.auth import reset_auth_caches
+    reset_auth_caches()
+    if os.environ.get("MAIL_CORE_DATABASE_URL"):
+        try:
+            from mail_core.db.session import get_session_factory
+            from mail_core.mail.storage.models import AuthCredential
+            Session = get_session_factory()
+            with Session() as session:
+                session.query(AuthCredential).delete()
+                session.commit()
+        except Exception:
+            pass
+    yield
+    reset_auth_caches()
+    if os.environ.get("MAIL_CORE_DATABASE_URL"):
+        try:
+            from mail_core.db.session import get_session_factory
+            from mail_core.mail.storage.models import AuthCredential
+            Session = get_session_factory()
+            with Session() as session:
+                session.query(AuthCredential).delete()
+                session.commit()
+        except Exception:
+            pass
+
+
 @pytest.fixture
 def auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {TEST_API_KEY}"}
