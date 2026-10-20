@@ -132,3 +132,55 @@ def set_message_flagged(
         operation_id=op.id,
         is_flagged=is_flagged,
     )
+
+
+def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
+    """Local-first trash: remove message metadata locally and enqueue remote trash."""
+    msg = session.get(Message, message_id)
+    if msg is None:
+        raise LookupError("message not found")
+    folder, _loc = _primary_location(session, message_id)
+    desired = {
+        "remote_id": msg.remote_id,
+        "folder_remote_id": folder.remote_id if folder else "INBOX",
+        "trash_folder_remote_id": "Trash",
+    }
+    op = enqueue_remote_operation(
+        session,
+        account_id=msg.account_id,
+        entity_key=f"msg:{msg.remote_id}:trash",
+        op_type="trash",
+        desired_state=desired,
+        idempotency_key=f"{msg.id}:trash",
+    )
+    account_id = msg.account_id
+    folder_id = folder.id if folder else None
+    session.add(
+        OutboxEvent(
+            event_type=OutboxEventType.MESSAGE_REMOVED.value,
+            account_id=account_id,
+            payload={"message_id": str(message_id)},
+        )
+    )
+    # Drop local rows (cascade attachments/locations via ORM relationships or explicit).
+    for loc in list(
+        session.scalars(select(MessageLocation).where(MessageLocation.message_id == message_id)).all()
+    ):
+        session.delete(loc)
+    session.delete(msg)
+    if folder_id is not None:
+        recompute_folder_stats(session, folder_id)
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
+                account_id=account_id,
+                payload={"folder_id": str(folder_id)},
+            )
+        )
+    _wake_push(session, account_id)
+    session.flush()
+    return MutationResult(
+        message_id=message_id,
+        account_id=account_id,
+        operation_id=op.id,
+    )
