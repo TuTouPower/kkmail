@@ -1,0 +1,742 @@
+{
+  "files": [
+    ".github/workflows/desktop.yml",
+    ".github/workflows/docker-build-push.yml",
+    ".github/workflows/docker.yml",
+    ".github/workflows/frontend.yml",
+    ".github/workflows/sync-main-to-dev.yml",
+    ".github/workflows/tests.yml",
+    ".github/workflows/upstream-sync.yml",
+    "AGENTS.md",
+    "BRANCH_PROTECTION.md",
+    "DESIGN.md",
+    "Dockerfile",
+    "README.md",
+    "RELEASE.md",
+    "browser-extension/README.md",
+    "browser-extension/api-client.js",
+    "browser-extension/background.js",
+    "browser-extension/manifest.json",
+    "browser-extension/popup.css",
+    "browser-extension/popup.js",
+    "browser-extension/sidepanel.css",
+    "browser-extension/sidepanel.js",
+    "browser-extension/storage.js",
+    "desktop/README.md",
+    "desktop/main.js",
+    "desktop/package.json",
+    "desktop/paths.js",
+    "desktop/postgresManager.js",
+    "desktop/preload.js",
+    "desktop/scripts/pack-linux.js",
+    "docker-compose.build.yml",
+    "docker-compose.mail-core.yml",
+    "docker-compose.react.yml",
+    "docker-compose.yml",
+    "docs/api.md",
+    "docs/ci/mail-core.workflow.yml",
+    "docs/deployment.md",
+    "docs/known-limitations.md",
+    "docs/local-mail-retention.md",
+    "docs/mail-core-architecture.md",
+    "docs/mail-core-cutover.md",
+    "docs/mail-core-desktop.md",
+    "docs/mail-core-status.md",
+    "docs/reviews/review_20261021_011116/_meta.json",
+    "docs/security.md",
+    "docs/skin-example/skin.json",
+    "docs/skin-example/theme.css",
+    "docs/skins.md",
+    "docs/sql/2026-08-18-add-outlook-authorization-channel.sql",
+    "docs/troubleshooting.md",
+    "docs/upgrade.md",
+    "frontend/src/App.tsx",
+    "frontend/src/api/client.ts",
+    "frontend/src/api/mailCore.ts",
+    "frontend/src/api/queries.ts",
+    "frontend/src/components/ColumnResize.tsx",
+    "frontend/src/components/ComposeModal.tsx",
+    "frontend/src/components/LoginPage.tsx",
+    "frontend/src/components/MailCoreBridge.tsx",
+    "frontend/src/components/MessageList.tsx",
+    "frontend/src/components/MessageReader.tsx",
+    "frontend/src/components/SettingsModal.tsx",
+    "frontend/src/components/Sidebar.tsx",
+    "frontend/src/design-system/tokens.css",
+    "frontend/src/hooks/useMailCoreRealtime.ts",
+    "frontend/src/index.css",
+    "frontend/src/lib/accounts.ts",
+    "frontend/src/lib/actions.ts",
+    "frontend/src/lib/displayName.ts",
+    "frontend/src/lib/listDate.ts",
+    "frontend/src/lib/listTitle.ts",
+    "frontend/src/lib/mailBody.ts",
+    "frontend/src/lib/mailCoreFlag.ts",
+    "frontend/src/lib/mailDate.ts",
+    "frontend/src/lib/mailKey.ts",
+    "frontend/src/lib/previewText.ts",
+    "frontend/src/lib/recipients.ts",
+    "frontend/src/lib/viewport.ts",
+    "frontend/src/lib/workspaceLayout.ts",
+    "frontend/src/main.tsx",
+    "frontend/src/store/mailStore.ts",
+    "mail_core/README.md",
+    "mail_core/__init__.py",
+    "mail_core/accounts/__init__.py",
+    "mail_core/accounts/credentials.py",
+    "mail_core/accounts/service.py",
+    "mail_core/api/__init__.py",
+    "mail_core/api/app.py",
+    "mail_core/api/mail.py",
+    "mail_core/api/sse.py",
+    "mail_core/backup/__init__.py",
+    "mail_core/backup/crypto.py",
+    "mail_core/backup/package.py",
+    "mail_core/blobs/__init__.py",
+    "mail_core/blobs/access.py",
+    "mail_core/blobs/archive.py",
+    "mail_core/blobs/crypto.py",
+    "mail_core/blobs/gc.py",
+    "mail_core/blobs/quota.py",
+    "mail_core/blobs/rotate.py",
+    "mail_core/blobs/store.py",
+    "mail_core/db/__init__.py",
+    "mail_core/db/alembic/env.py",
+    "mail_core/db/alembic/versions/20261020_0001_baseline.py",
+    "mail_core/db/alembic/versions/20261020_0002_mail_core_unified_schema.py",
+    "mail_core/db/alembic/versions/20261021_0003_message_fts.py",
+    "mail_core/db/base.py",
+    "mail_core/db/session.py",
+    "mail_core/mail/__init__.py",
+    "mail_core/mail/application/__init__.py",
+    "mail_core/mail/application/mutations.py",
+    "mail_core/mail/application/queries.py",
+    "mail_core/mail/application/remote_ops.py",
+    "mail_core/mail/domain/__init__.py",
+    "mail_core/mail/domain/archive.py",
+    "mail_core/mail/domain/enums.py",
+    "mail_core/mail/domain/models.py",
+    "mail_core/mail/storage/__init__.py",
+    "mail_core/mail/storage/models.py",
+    "mail_core/providers/__init__.py",
+    "mail_core/providers/base.py",
+    "mail_core/providers/factory.py",
+    "mail_core/providers/gmail.py",
+    "mail_core/providers/graph.py",
+    "mail_core/providers/http.py",
+    "mail_core/providers/imap.py",
+    "mail_core/providers/oauth.py",
+    "mail_core/providers/parsing/__init__.py",
+    "mail_core/providers/parsing/gmail_history.py",
+    "mail_core/providers/parsing/graph_delta.py",
+    "mail_core/providers/remote_writeback.py",
+    "mail_core/providers/stub_memory.py",
+    "mail_core/realtime/__init__.py",
+    "mail_core/realtime/dispatcher.py",
+    "mail_core/realtime/listener.py",
+    "mail_core/realtime/notify.py",
+    "mail_core/realtime/outbox.py",
+    "mail_core/search/__init__.py",
+    "mail_core/search/index.py",
+    "mail_core/security/__init__.py",
+    "mail_core/security/defaults.py",
+    "mail_core/sync/__init__.py",
+    "mail_core/sync/checkpoints.py",
+    "mail_core/sync/delta.py",
+    "mail_core/sync/engine.py",
+    "mail_core/sync/jobs.py",
+    "mail_core/sync/leases.py",
+    "mail_core/sync/metadata.py",
+    "mail_core/sync/reconcile.py",
+    "mail_core/sync/remote_push.py",
+    "mail_core/threading/__init__.py",
+    "mail_core/threading/rules.py",
+    "mail_core/worker/__init__.py",
+    "mail_core/worker/handlers.py",
+    "mail_core/worker/main.py",
+    "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/.openspec.yaml",
+    "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/design.md",
+    "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/proposal.md",
+    "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/specs/cloudflare-all-mail-view/spec.md",
+    "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/specs/email-address-fallback-resolution/spec.md",
+    "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/tasks.md",
+    "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/.openspec.yaml",
+    "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/design.md",
+    "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/proposal.md",
+    "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/specs/cloudflare-all-mail-view/spec.md",
+    "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/specs/cloudflare-channel-management/spec.md",
+    "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/tasks.md",
+    "openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/.openspec.yaml",
+    "openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/design.md",
+    "openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/proposal.md",
+    "openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/specs/refresh-management-batch-actions/spec.md",
+    "openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/tasks.md",
+    "openspec/changes/archive/2026-06-17-support-account-reauthorization/.openspec.yaml",
+    "openspec/changes/archive/2026-06-17-support-account-reauthorization/design.md",
+    "openspec/changes/archive/2026-06-17-support-account-reauthorization/proposal.md",
+    "openspec/changes/archive/2026-06-17-support-account-reauthorization/specs/account-reauthorization/spec.md",
+    "openspec/changes/archive/2026-06-17-support-account-reauthorization/tasks.md",
+    "openspec/changes/archive/2026-06-18-support-three-level-groups/.openspec.yaml",
+    "openspec/changes/archive/2026-06-18-support-three-level-groups/design.md",
+    "openspec/changes/archive/2026-06-18-support-three-level-groups/proposal.md",
+    "openspec/changes/archive/2026-06-18-support-three-level-groups/specs/group-tree-ui/spec.md",
+    "openspec/changes/archive/2026-06-18-support-three-level-groups/specs/hierarchical-groups/spec.md",
+    "openspec/changes/archive/2026-06-18-support-three-level-groups/tasks.md",
+    "openspec/config.yaml",
+    "openspec/specs/account-reauthorization/spec.md",
+    "openspec/specs/cloudflare-all-mail-view/spec.md",
+    "openspec/specs/cloudflare-channel-management/spec.md",
+    "openspec/specs/email-address-fallback-resolution/spec.md",
+    "openspec/specs/group-tree-ui/spec.md",
+    "openspec/specs/hierarchical-groups/spec.md",
+    "openspec/specs/refresh-management-batch-actions/spec.md",
+    "outlook_mail_reader.py",
+    "scripts/build-macos-dmg.sh",
+    "scripts/build-sidecar.sh",
+    "scripts/fetch-pg-binaries.sh",
+    "scripts/mail-core-backup-restore-drill.sh",
+    "scripts/mail-core-chaos-lease.sh",
+    "scripts/reset_login_password.py",
+    "scripts/run-mail-core-tests.sh",
+    "scripts/start-mail-core-imap.sh",
+    "scripts/sync-upstream.sh",
+    "web_outlook_app.py"
+  ],
+  "bundles": [
+    {
+      "id": "dir:._a",
+      "files": [
+        "AGENTS.md",
+        "BRANCH_PROTECTION.md",
+        "DESIGN.md",
+        "Dockerfile",
+        "README.md",
+        "RELEASE.md",
+        "docker-compose.build.yml",
+        "docker-compose.mail-core.yml"
+      ]
+    },
+    {
+      "id": "dir:._b",
+      "files": [
+        "docker-compose.react.yml",
+        "docker-compose.yml",
+        "outlook_mail_reader.py",
+        "web_outlook_app.py"
+      ]
+    },
+    {
+      "id": "dir:.github/workflows",
+      "files": [
+        ".github/workflows/desktop.yml",
+        ".github/workflows/docker-build-push.yml",
+        ".github/workflows/docker.yml",
+        ".github/workflows/frontend.yml",
+        ".github/workflows/sync-main-to-dev.yml",
+        ".github/workflows/tests.yml",
+        ".github/workflows/upstream-sync.yml"
+      ]
+    },
+    {
+      "id": "dir:browser-extension_a",
+      "files": [
+        "browser-extension/README.md",
+        "browser-extension/api-client.js",
+        "browser-extension/background.js",
+        "browser-extension/manifest.json",
+        "browser-extension/popup.css",
+        "browser-extension/popup.js",
+        "browser-extension/sidepanel.css",
+        "browser-extension/sidepanel.js"
+      ]
+    },
+    {
+      "id": "dir:browser-extension_b",
+      "files": [
+        "browser-extension/storage.js"
+      ]
+    },
+    {
+      "id": "dir:desktop",
+      "files": [
+        "desktop/README.md",
+        "desktop/main.js",
+        "desktop/package.json",
+        "desktop/paths.js",
+        "desktop/postgresManager.js",
+        "desktop/preload.js"
+      ]
+    },
+    {
+      "id": "dir:desktop/scripts",
+      "files": [
+        "desktop/scripts/pack-linux.js"
+      ]
+    },
+    {
+      "id": "dir:docs_a",
+      "files": [
+        "docs/api.md",
+        "docs/deployment.md",
+        "docs/known-limitations.md",
+        "docs/local-mail-retention.md",
+        "docs/mail-core-architecture.md",
+        "docs/mail-core-cutover.md",
+        "docs/mail-core-desktop.md",
+        "docs/mail-core-status.md"
+      ]
+    },
+    {
+      "id": "dir:docs_b",
+      "files": [
+        "docs/security.md",
+        "docs/skins.md",
+        "docs/troubleshooting.md",
+        "docs/upgrade.md"
+      ]
+    },
+    {
+      "id": "dir:docs/ci",
+      "files": [
+        "docs/ci/mail-core.workflow.yml"
+      ]
+    },
+    {
+      "id": "dir:docs/reviews/review_20261021_011116",
+      "files": [
+        "docs/reviews/review_20261021_011116/_meta.json"
+      ]
+    },
+    {
+      "id": "dir:docs/skin-example",
+      "files": [
+        "docs/skin-example/skin.json",
+        "docs/skin-example/theme.css"
+      ]
+    },
+    {
+      "id": "dir:docs/sql",
+      "files": [
+        "docs/sql/2026-08-18-add-outlook-authorization-channel.sql"
+      ]
+    },
+    {
+      "id": "dir:frontend/src",
+      "files": [
+        "frontend/src/App.tsx",
+        "frontend/src/index.css",
+        "frontend/src/main.tsx"
+      ]
+    },
+    {
+      "id": "dir:frontend/src/api",
+      "files": [
+        "frontend/src/api/client.ts",
+        "frontend/src/api/mailCore.ts",
+        "frontend/src/api/queries.ts"
+      ]
+    },
+    {
+      "id": "dir:frontend/src/components",
+      "files": [
+        "frontend/src/components/ColumnResize.tsx",
+        "frontend/src/components/ComposeModal.tsx",
+        "frontend/src/components/LoginPage.tsx",
+        "frontend/src/components/MailCoreBridge.tsx",
+        "frontend/src/components/MessageList.tsx",
+        "frontend/src/components/MessageReader.tsx",
+        "frontend/src/components/SettingsModal.tsx",
+        "frontend/src/components/Sidebar.tsx"
+      ]
+    },
+    {
+      "id": "dir:frontend/src/design-system",
+      "files": [
+        "frontend/src/design-system/tokens.css"
+      ]
+    },
+    {
+      "id": "dir:frontend/src/hooks",
+      "files": [
+        "frontend/src/hooks/useMailCoreRealtime.ts"
+      ]
+    },
+    {
+      "id": "dir:frontend/src/lib_a",
+      "files": [
+        "frontend/src/lib/accounts.ts",
+        "frontend/src/lib/actions.ts",
+        "frontend/src/lib/displayName.ts",
+        "frontend/src/lib/listDate.ts",
+        "frontend/src/lib/listTitle.ts",
+        "frontend/src/lib/mailBody.ts",
+        "frontend/src/lib/mailCoreFlag.ts",
+        "frontend/src/lib/mailDate.ts"
+      ]
+    },
+    {
+      "id": "dir:frontend/src/lib_b",
+      "files": [
+        "frontend/src/lib/mailKey.ts",
+        "frontend/src/lib/previewText.ts",
+        "frontend/src/lib/recipients.ts",
+        "frontend/src/lib/viewport.ts",
+        "frontend/src/lib/workspaceLayout.ts"
+      ]
+    },
+    {
+      "id": "dir:frontend/src/store",
+      "files": [
+        "frontend/src/store/mailStore.ts"
+      ]
+    },
+    {
+      "id": "dir:mail_core",
+      "files": [
+        "mail_core/README.md",
+        "mail_core/__init__.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/accounts",
+      "files": [
+        "mail_core/accounts/__init__.py",
+        "mail_core/accounts/credentials.py",
+        "mail_core/accounts/service.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/api",
+      "files": [
+        "mail_core/api/__init__.py",
+        "mail_core/api/app.py",
+        "mail_core/api/mail.py",
+        "mail_core/api/sse.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/backup",
+      "files": [
+        "mail_core/backup/__init__.py",
+        "mail_core/backup/crypto.py",
+        "mail_core/backup/package.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/blobs",
+      "files": [
+        "mail_core/blobs/__init__.py",
+        "mail_core/blobs/access.py",
+        "mail_core/blobs/archive.py",
+        "mail_core/blobs/crypto.py",
+        "mail_core/blobs/gc.py",
+        "mail_core/blobs/quota.py",
+        "mail_core/blobs/rotate.py",
+        "mail_core/blobs/store.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/db",
+      "files": [
+        "mail_core/db/__init__.py",
+        "mail_core/db/base.py",
+        "mail_core/db/session.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/db/alembic",
+      "files": [
+        "mail_core/db/alembic/env.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/db/alembic/versions",
+      "files": [
+        "mail_core/db/alembic/versions/20261020_0001_baseline.py",
+        "mail_core/db/alembic/versions/20261020_0002_mail_core_unified_schema.py",
+        "mail_core/db/alembic/versions/20261021_0003_message_fts.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/mail",
+      "files": [
+        "mail_core/mail/__init__.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/mail/application",
+      "files": [
+        "mail_core/mail/application/__init__.py",
+        "mail_core/mail/application/mutations.py",
+        "mail_core/mail/application/queries.py",
+        "mail_core/mail/application/remote_ops.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/mail/domain",
+      "files": [
+        "mail_core/mail/domain/__init__.py",
+        "mail_core/mail/domain/archive.py",
+        "mail_core/mail/domain/enums.py",
+        "mail_core/mail/domain/models.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/mail/storage",
+      "files": [
+        "mail_core/mail/storage/__init__.py",
+        "mail_core/mail/storage/models.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/providers_a",
+      "files": [
+        "mail_core/providers/__init__.py",
+        "mail_core/providers/base.py",
+        "mail_core/providers/factory.py",
+        "mail_core/providers/gmail.py",
+        "mail_core/providers/graph.py",
+        "mail_core/providers/http.py",
+        "mail_core/providers/imap.py",
+        "mail_core/providers/oauth.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/providers_b",
+      "files": [
+        "mail_core/providers/remote_writeback.py",
+        "mail_core/providers/stub_memory.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/providers/parsing",
+      "files": [
+        "mail_core/providers/parsing/__init__.py",
+        "mail_core/providers/parsing/gmail_history.py",
+        "mail_core/providers/parsing/graph_delta.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/realtime",
+      "files": [
+        "mail_core/realtime/__init__.py",
+        "mail_core/realtime/dispatcher.py",
+        "mail_core/realtime/listener.py",
+        "mail_core/realtime/notify.py",
+        "mail_core/realtime/outbox.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/search",
+      "files": [
+        "mail_core/search/__init__.py",
+        "mail_core/search/index.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/security",
+      "files": [
+        "mail_core/security/__init__.py",
+        "mail_core/security/defaults.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/sync_a",
+      "files": [
+        "mail_core/sync/__init__.py",
+        "mail_core/sync/checkpoints.py",
+        "mail_core/sync/delta.py",
+        "mail_core/sync/engine.py",
+        "mail_core/sync/jobs.py",
+        "mail_core/sync/leases.py",
+        "mail_core/sync/metadata.py",
+        "mail_core/sync/reconcile.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/sync_b",
+      "files": [
+        "mail_core/sync/remote_push.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/threading",
+      "files": [
+        "mail_core/threading/__init__.py",
+        "mail_core/threading/rules.py"
+      ]
+    },
+    {
+      "id": "dir:mail_core/worker",
+      "files": [
+        "mail_core/worker/__init__.py",
+        "mail_core/worker/handlers.py",
+        "mail_core/worker/main.py"
+      ]
+    },
+    {
+      "id": "dir:openspec",
+      "files": [
+        "openspec/config.yaml"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view",
+      "files": [
+        "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/.openspec.yaml",
+        "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/design.md",
+        "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/proposal.md",
+        "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/tasks.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/specs/cloudflare-all-mail-view",
+      "files": [
+        "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/specs/cloudflare-all-mail-view/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/specs/email-address-fallback-resolution",
+      "files": [
+        "openspec/changes/archive/2026-05-18-add-cloudflare-all-mail-view/specs/email-address-fallback-resolution/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-06-07-add-cloudflare-channel-management",
+      "files": [
+        "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/.openspec.yaml",
+        "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/design.md",
+        "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/proposal.md",
+        "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/tasks.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/specs/cloudflare-all-mail-view",
+      "files": [
+        "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/specs/cloudflare-all-mail-view/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/specs/cloudflare-channel-management",
+      "files": [
+        "openspec/changes/archive/2026-06-07-add-cloudflare-channel-management/specs/cloudflare-channel-management/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management",
+      "files": [
+        "openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/.openspec.yaml",
+        "openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/design.md",
+        "openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/proposal.md",
+        "openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/tasks.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/specs/refresh-management-batch-actions",
+      "files": [
+        "openspec/changes/archive/2026-06-17-migrate-batch-selection-to-refresh-management/specs/refresh-management-batch-actions/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-06-17-support-account-reauthorization",
+      "files": [
+        "openspec/changes/archive/2026-06-17-support-account-reauthorization/.openspec.yaml",
+        "openspec/changes/archive/2026-06-17-support-account-reauthorization/design.md",
+        "openspec/changes/archive/2026-06-17-support-account-reauthorization/proposal.md",
+        "openspec/changes/archive/2026-06-17-support-account-reauthorization/tasks.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-06-17-support-account-reauthorization/specs/account-reauthorization",
+      "files": [
+        "openspec/changes/archive/2026-06-17-support-account-reauthorization/specs/account-reauthorization/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-06-18-support-three-level-groups",
+      "files": [
+        "openspec/changes/archive/2026-06-18-support-three-level-groups/.openspec.yaml",
+        "openspec/changes/archive/2026-06-18-support-three-level-groups/design.md",
+        "openspec/changes/archive/2026-06-18-support-three-level-groups/proposal.md",
+        "openspec/changes/archive/2026-06-18-support-three-level-groups/tasks.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-06-18-support-three-level-groups/specs/group-tree-ui",
+      "files": [
+        "openspec/changes/archive/2026-06-18-support-three-level-groups/specs/group-tree-ui/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/changes/archive/2026-06-18-support-three-level-groups/specs/hierarchical-groups",
+      "files": [
+        "openspec/changes/archive/2026-06-18-support-three-level-groups/specs/hierarchical-groups/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/specs/account-reauthorization",
+      "files": [
+        "openspec/specs/account-reauthorization/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/specs/cloudflare-all-mail-view",
+      "files": [
+        "openspec/specs/cloudflare-all-mail-view/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/specs/cloudflare-channel-management",
+      "files": [
+        "openspec/specs/cloudflare-channel-management/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/specs/email-address-fallback-resolution",
+      "files": [
+        "openspec/specs/email-address-fallback-resolution/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/specs/group-tree-ui",
+      "files": [
+        "openspec/specs/group-tree-ui/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/specs/hierarchical-groups",
+      "files": [
+        "openspec/specs/hierarchical-groups/spec.md"
+      ]
+    },
+    {
+      "id": "dir:openspec/specs/refresh-management-batch-actions",
+      "files": [
+        "openspec/specs/refresh-management-batch-actions/spec.md"
+      ]
+    },
+    {
+      "id": "dir:scripts_a",
+      "files": [
+        "scripts/build-macos-dmg.sh",
+        "scripts/build-sidecar.sh",
+        "scripts/fetch-pg-binaries.sh",
+        "scripts/mail-core-backup-restore-drill.sh",
+        "scripts/mail-core-chaos-lease.sh",
+        "scripts/reset_login_password.py",
+        "scripts/run-mail-core-tests.sh",
+        "scripts/start-mail-core-imap.sh"
+      ]
+    },
+    {
+      "id": "dir:scripts_b",
+      "files": [
+        "scripts/sync-upstream.sh"
+      ]
+    }
+  ],
+  "stats": {
+    "files": 201,
+    "bundles": 66
+  }
+}
