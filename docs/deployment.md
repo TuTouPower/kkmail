@@ -27,7 +27,7 @@ docker compose -f docker-compose.mail-core.yml up --build -d api worker   # 依�
 不要把 8000 端口直接暴露到公网。需要远程访问时放在 TLS 反向代理之后，并：
 
 - 设置 `MAIL_CORE_COOKIE_SECURE=1`；
-- 让 uvicorn 信任代理的 `X-Forwarded-For`（compose 中给 `api` 加环境变量 `FORWARDED_ALLOW_IPS=<代理地址>`，或命令行 `--forwarded-allow-ips=<代理地址>`），使登录限速按真实客户端地址生效；
+- 让 uvicorn 信任代理的 `X-Forwarded-For`（uvicorn 不读取环境变量，需在启动命令中传递命令行参数 `--forwarded-allow-ips=<代理地址>`；在 Docker Compose 中可通过覆盖 `api` 服务的 `command` 传入此参数），使登录限速按真实客户端地址生效；
 - 数据目录、PostgreSQL 数据与 blob 根目录放在加密卷上（Docker volume 本身不加密）。
 
 ## 不使用 Docker
@@ -47,14 +47,24 @@ export MAIL_CORE_DATABASE_URL=postgresql+psycopg://<user>:<password>@127.0.0.1:5
 python -m mail_core --data-dir /var/lib/kkmail    # 迁移 + API + 内嵌 worker
 ```
 
-若拆分独立进程部署，API 与 Worker 必须共享相同的 `--data-dir`（或相同的环境变量密钥配置及 blob 路径），确保两者使用相同的凭据与加解密配置：
+若拆分独立进程部署，API 与 Worker 必须共享相同的数据库连接、密钥配置与 blob 路径（Worker 独立进程不会自动解析 `--data-dir`，需通过环境变量提供所需密钥与路径）：
 
 ```bash
 # API 进程（提供 HTTP 服务与静态 SPA）
 python -m mail_core --data-dir /var/lib/kkmail --no-worker
 
 # Worker 进程（后台执行拉信同步与任务）
-MAIL_CORE_DATA_DIR=/var/lib/kkmail python -m mail_core.worker.main
+# 方式 A：通过环境变量加载共享密钥与存储目录
+export MAIL_CORE_DATABASE_URL=postgresql+psycopg://<user>:<password>@127.0.0.1:5432/kkmail
+export MAIL_CORE_BLOB_KEY_V1="$(cat /var/lib/kkmail/secrets/blob-v1.key)"
+export MAIL_CORE_BLOB_ROOT=/var/lib/kkmail/blobs
+export MAIL_CORE_BACKUP_KEY="$(cat /var/lib/kkmail/secrets/backup.key)"
+export MAIL_CORE_BACKUP_DIR=/var/lib/kkmail/backups
+python -m mail_core.worker.main
+
+# 方式 B：通过 bootstrap 共享加载同一数据目录并启动 worker
+export MAIL_CORE_DATABASE_URL=postgresql+psycopg://<user>:<password>@127.0.0.1:5432/kkmail
+python -c "from mail_core.runtime.bootstrap import bootstrap_data_dir; bootstrap_data_dir('/var/lib/kkmail'); from mail_core.worker.main import run; run()"
 ```
 
 `--data-dir` 下会生成并持久化会话 / blob / 备份密钥（`secrets/`，0600），未配置登录密码时生成一次性 `initial-password.txt`；已在环境变量中提供的值优先。完整变量列表见 [mail_core/README.md](../mail_core/README.md)。
