@@ -9,7 +9,12 @@ import sys
 import bcrypt
 import pytest
 
-from mail_core.runtime.bootstrap import INITIAL_PASSWORD_FILE, bootstrap_data_dir, clear_initial_password
+from mail_core.runtime.bootstrap import (
+    INITIAL_PASSWORD_FILE,
+    _read_or_create,
+    bootstrap_data_dir,
+    clear_initial_password,
+)
 
 
 def test_generates_and_persists_secrets(tmp_path):
@@ -50,3 +55,21 @@ def test_clear_initial_password(tmp_path):
     clear_initial_password(tmp_path)
     assert not (tmp_path / INITIAL_PASSWORD_FILE).exists()
     clear_initial_password(tmp_path)  # idempotent
+
+
+def test_read_or_create_concurrent_race_eliminated(tmp_path):
+    import concurrent.futures
+    import uuid
+
+    target_file = tmp_path / "secrets" / "race.key"
+
+    def worker():
+        return _read_or_create(target_file, lambda: str(uuid.uuid4()))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(lambda _: worker(), range(16)))
+
+    # All threads must get the exact same secret value
+    assert len(set(results)) == 1
+    assert target_file.read_text().strip() == results[0]
+
