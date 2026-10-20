@@ -2,8 +2,6 @@ import { useQueries, useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle, Trash2, ShieldAlert, Layers } from 'lucide-react'
 import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, fetchGroups, queryKeys, type MailItem } from '../api/queries'
 import { FOLDERS, providerBadge, providerColor, useMailStore } from '../store/mailStore'
-import SettingsModal from './SettingsModal'
-import { useState } from 'react'
 import { useIsWide } from '../lib/viewport'
 
 export default function Sidebar() {
@@ -18,8 +16,8 @@ export default function Sidebar() {
     closeMobileSidebar,
     listFilter,
     openSmartView,
+    openSettings,
   } = useMailStore()
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const wide = useIsWide()
 
   const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
@@ -154,12 +152,11 @@ export default function Sidebar() {
         </div>
       </div>
       <div className="sidebar-footer">
-        <button className="footer-btn" onClick={() => setSettingsOpen(true)}>
+        <button className="footer-btn" onClick={() => openSettings()}>
           <Settings size={17} />
           <span>设置</span>
         </button>
       </div>
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </aside>
   )
 }
