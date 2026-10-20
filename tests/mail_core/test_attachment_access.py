@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mail_core.api.app import app
+from tests.mail_core.conftest import TEST_API_KEY
 from mail_core.blobs.access import (
     PathTraversalRejected,
     assert_not_path_param,
@@ -74,21 +75,21 @@ def test_safe_blob_path_stays_under_root(tmp_path):
 
 
 def test_api_rejects_path_shaped_attachment_id():
-    client = TestClient(app)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     r = client.get("/api/mail/attachments/../etc/passwd")
     # Starlette may normalize path; either 400 from our handler or 404 from router.
     assert r.status_code in (400, 404)
 
 
 def test_api_rejects_by_path_route():
-    client = TestClient(app)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     r = client.get("/api/mail/attachments/by-path/var/lib/blobs/x.blob")
     assert r.status_code == 400
     assert "path" in r.json()["detail"].lower()
 
 
 def test_api_unknown_uuid_404():
-    client = TestClient(app)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     r = client.get(f"/api/mail/attachments/{uuid.uuid4()}")
     # May 404 (not found) or 500 if DB unavailable — accept 404/503/500 with care
     assert r.status_code in (404, 500, 503)

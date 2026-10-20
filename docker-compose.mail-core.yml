@@ -7,6 +7,8 @@
 # Required before `docker compose -f docker-compose.mail-core.yml up`:
 #   export MAIL_CORE_BLOB_KEY_V1="$(python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
 #   export POSTGRES_PASSWORD="$(openssl rand -hex 16)"
+#   export MAIL_CORE_SECRET_KEY="$(openssl rand -hex 32)"
+#   export MAIL_CORE_LOGIN_PASSWORD='(set-a-strong-password)'  # or MAIL_CORE_LOGIN_PASSWORD_HASH
 #   export MAIL_CORE_BACKUP_KEY="$(python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
 # Backup key MUST differ from the blob key. Do not ship sample all-A keys.
 version: "3.9"
@@ -52,6 +54,14 @@ services:
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
       MAIL_CORE_DEFAULT: "1"
       MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:8000"
+      # Auth: Cookie session signing. Provide MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt)
+      # or MAIL_CORE_LOGIN_PASSWORD / LOGIN_PASSWORD — process refuses to start without one.
+      MAIL_CORE_SECRET_KEY: ${MAIL_CORE_SECRET_KEY:?set MAIL_CORE_SECRET_KEY (openssl rand -hex 32)}
+      MAIL_CORE_LOGIN_PASSWORD_HASH: ${MAIL_CORE_LOGIN_PASSWORD_HASH:-}
+      MAIL_CORE_LOGIN_PASSWORD: ${MAIL_CORE_LOGIN_PASSWORD:-}
+      LOGIN_PASSWORD: ${LOGIN_PASSWORD:-}
+      # Optional Bearer keys for integrations (comma-separated or JSON list)
+      MAIL_CORE_API_KEYS: ${MAIL_CORE_API_KEYS:-}
       # Required: 32-byte AES key, base64-encoded. Generate:
       #   python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())'
       MAIL_CORE_BLOB_KEY_V1: ${MAIL_CORE_BLOB_KEY_V1:?set MAIL_CORE_BLOB_KEY_V1 (base64 32-byte key)}

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from mail_core import __version__
+from mail_core.api.auth_routes import router as auth_router
+from mail_core.api.deps import require_auth
 from mail_core.api.mail import router as mail_router
 from mail_core.api.sse import router as sse_router
 
@@ -16,9 +18,11 @@ from mail_core.api.sse import router as sse_router
 async def lifespan(_app: FastAPI):
     from mail_core.blobs.crypto import load_keyring_from_env
     from mail_core.realtime.listener import start_outbox_listener, stop_outbox_listener
+    from mail_core.security.auth import validate_auth_config
 
-    # Fail fast: refuse to serve if blob encryption keys are missing.
+    # Fail fast: refuse to serve without blob keys or auth config.
     load_keyring_from_env()
+    validate_auth_config()
 
     listener = start_outbox_listener()
     listener.wait_started(timeout=5)
@@ -41,8 +45,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(sse_router, prefix="/api", tags=["realtime"])
-app.include_router(mail_router)
+app.include_router(auth_router)
+app.include_router(sse_router, prefix="/api", tags=["realtime"], dependencies=[Depends(require_auth)])
+app.include_router(mail_router, dependencies=[Depends(require_auth)])
 
 
 @app.get("/health")
@@ -52,4 +57,5 @@ def health() -> dict[str, str]:
 
 @app.get("/ready")
 def ready() -> dict[str, str]:
+    # Commit 4 will probe DB; keep shape stable.
     return {"status": "ready"}
