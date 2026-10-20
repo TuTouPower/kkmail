@@ -111,8 +111,17 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             complete_job(session, job)
             return
 
+        if job.job_type == JobType.GC_BLOBS.value:
+            from mail_core.blobs.gc import run_gc_blobs
+
+            session.commit()
+            hours = float(payload.get("cool_off_hours") or 24)
+            result = run_gc_blobs(cool_off_hours=hours, dry_run=bool(payload.get("dry_run")))
+            log.info("gc_blobs %s", result)
+            complete_job(session, job)
+            return
+
         if job.job_type in {
-            JobType.GC_BLOBS.value,
             JobType.BACKUP_RUN.value,
         }:
             log.info("deferred handler for %s id=%s", job.job_type, job.id)
