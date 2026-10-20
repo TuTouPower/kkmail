@@ -15,6 +15,7 @@ from mail_core.mail.domain.enums import JobType, OutboxEventType, SyncPhase
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
 from mail_core.providers.base import DeltaPage
 from mail_core.providers.factory import build_provider
+from mail_core.providers.http import CursorInvalidError, RateLimitedError
 from mail_core.sync.checkpoints import commit_checkpoint
 from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, assert_fencing, release_lease
@@ -107,6 +108,8 @@ def apply_delta_page(
         cursor=cursor,
         uidvalidity=cursor.get("uidvalidity"),
         modseq=cursor.get("modseq"),
+        history_id=cursor.get("historyId") or cursor.get("history_id"),
+        delta_link=cursor.get("delta_link"),
         full_scan_complete=True,  # delta assumes baseline already complete
     )
     session.flush()
@@ -155,6 +158,10 @@ def sync_folder_delta(
         cursor = dict(cp.cursor or {})
         if cp.modseq is not None and "modseq" not in cursor:
             cursor["modseq"] = int(cp.modseq)
+        if cp.history_id and "historyId" not in cursor and "history_id" not in cursor:
+            cursor["historyId"] = cp.history_id
+        if cp.delta_link and "delta_link" not in cursor and "next_link" not in cursor:
+            cursor["delta_link"] = cp.delta_link
         account_snapshot = Account(
             id=account.id,
             email=account.email,
@@ -169,7 +176,34 @@ def sync_folder_delta(
     exhausted = False
     pages = 0
     while pages < max_pages:
-        page = provider.delta_changes(remote_id, cursor)  # network
+        try:
+            page = provider.delta_changes(remote_id, cursor)  # network
+        except CursorInvalidError as exc:
+            with Session() as session:
+                enqueue_job(
+                    session,
+                    job_type=JobType.SYNC_FOLDER_METADATA.value,
+                    account_id=account_id,
+                    payload={"folder_id": str(folder_id), "reason": "cursor_invalid", "detail": str(exc)},
+                    priority=40,
+                )
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            return {"status": "cursor_invalid", "pages": pages, **totals}
+        except RateLimitedError as exc:
+            delay = float(exc.retry_after_seconds or 60)
+            with Session() as session:
+                enqueue_job(
+                    session,
+                    job_type=JobType.SYNC_FOLDER_DELTA.value,
+                    account_id=account_id,
+                    payload={"folder_id": str(folder_id)},
+                    priority=60,
+                    run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
+                )
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            return {"status": "rate_limited", "retry_after": delay, "pages": pages, **totals}
         with Session() as session:
             try:
                 result = apply_delta_page(
