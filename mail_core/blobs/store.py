@@ -79,6 +79,12 @@ class BlobStore:
             try:
                 with dest.open("rb") as fh:
                     disk_version = read_key_version(fh)
+                    fh.seek(0)
+                    h = hashlib.sha256()
+                    for chunk in iter_unwrap(fh, keyring=self.keyring):
+                        h.update(chunk)
+                    if h.hexdigest() != digest:
+                        raise BlobCryptoError("existing blob hash mismatch")
                 return BlobWriteResult(digest, len(data), rel, disk_version)
             except Exception:
                 pass

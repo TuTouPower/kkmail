@@ -527,6 +527,7 @@ def run_archive_batch(
                 blob.gc_eligible_at = None
 
             # Parse MIME body and attachments into domain models (V2-03)
+            parsed_attachments = []
             try:
                 plain_text, html_text, parsed_attachments = parse_mime_content(mime)
                 body = session.get(MessageBody, mid)
@@ -537,8 +538,17 @@ def run_archive_batch(
                     body.text_html = html_text
                     body.parse_error = None
                     body.updated_at = datetime.now(timezone.utc)
+            except Exception as parse_exc:
+                log.warning("archive mime parse error for message %s: %s", mid, safe_error(parse_exc))
+                body = session.get(MessageBody, mid)
+                if body is None:
+                    session.add(MessageBody(message_id=mid, parse_error=safe_error(parse_exc)[:2000]))
+                else:
+                    body.parse_error = safe_error(parse_exc)[:2000]
 
-                if parsed_attachments:
+            storage_failed = False
+            if parsed_attachments:
+                try:
                     msg_record = session.get(Message, mid)
                     if msg_record is not None:
                         msg_record.has_attachments = True
@@ -587,13 +597,25 @@ def run_archive_batch(
                         session.add(attachment)
                         att_blob.ref_count = int(att_blob.ref_count) + 1
                         att_blob.gc_eligible_at = None
-            except Exception as parse_exc:
-                log.warning("archive mime parse error for message %s: %s", mid, safe_error(parse_exc))
-                body = session.get(MessageBody, mid)
-                if body is None:
-                    session.add(MessageBody(message_id=mid, parse_error=safe_error(parse_exc)[:2000]))
-                else:
-                    body.parse_error = safe_error(parse_exc)[:2000]
+                except Exception as store_exc:
+                    log.warning("archive attachment storage error for message %s: %s", mid, safe_error(store_exc))
+                    session.rollback()
+                    st = session.get(MessageArchiveState, mid)
+                    if st is not None:
+                        st.retry_count = int(st.retry_count) + 1
+                        st.last_error = safe_error(store_exc)
+                        apply_transition(
+                            st,
+                            ArchiveState.ARCHIVE_FAILED if st.retry_count >= 5 else ArchiveState.ARCHIVE_PENDING,
+                        )
+                        st.claimed_by = None
+                        st.updated_at = datetime.now(timezone.utc)
+                    session.commit()
+                    failed += 1
+                    storage_failed = True
+
+            if storage_failed:
+                continue
 
             apply_transition(st, ArchiveState.ARCHIVE_COMPLETE)
             st.claimed_by = None

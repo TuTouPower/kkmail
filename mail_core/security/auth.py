@@ -47,9 +47,10 @@ class AuthPrincipal:
 
 def reset_auth_caches() -> None:
     """Test helper: clear cached password hash / API keys."""
-    global _password_hash, _api_keys
+    global _password_hash, _api_keys, _session_epoch
     _password_hash = None
     _api_keys = None
+    _session_epoch = 1
 
 
 def require_secret_key() -> str:
@@ -122,7 +123,7 @@ def _fetch_db_password_hash() -> str | None:
 
 def _persist_db_password_hash(hash_str: str) -> bool:
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
-        return False
+        return True
     try:
         from mail_core.db.session import get_session_factory
         from mail_core.mail.storage.models import AuthCredential
@@ -131,7 +132,7 @@ def _persist_db_password_hash(hash_str: str) -> bool:
         with Session() as session:
             cred = session.get(AuthCredential, "default")
             if cred is None:
-                cred = AuthCredential(id="default", login_password_hash=hash_str)
+                cred = AuthCredential(id="default", login_password_hash=hash_str, session_epoch=_session_epoch)
                 session.add(cred)
             else:
                 cred.login_password_hash = hash_str
@@ -202,16 +203,71 @@ def validate_auth_config() -> None:
     load_api_keys()  # validate JSON if present
 
 
+def get_session_epoch() -> int:
+    """Fetch authoritative session epoch from database or memory cache."""
+    global _session_epoch
+    if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
+        return _session_epoch
+    try:
+        from mail_core.db.session import get_session_factory
+        from mail_core.mail.storage.models import AuthCredential
+
+        Session = get_session_factory()
+        with Session() as session:
+            cred = session.get(AuthCredential, "default")
+            if cred is None:
+                cred = AuthCredential(
+                    id="default",
+                    login_password_hash="",
+                    session_epoch=_session_epoch,
+                )
+                session.add(cred)
+                session.commit()
+                return _session_epoch
+            if cred.session_epoch is None:
+                cred.session_epoch = _session_epoch
+                session.commit()
+                return _session_epoch
+            _session_epoch = cred.session_epoch
+            return _session_epoch
+    except Exception as exc:
+        log.warning("could not fetch session epoch from database: %s", exc)
+        return _session_epoch
+
+
 def invalidate_all_sessions() -> None:
-    """Invalidate all active sessions by incrementing the session epoch."""
+    """Invalidate all active sessions by incrementing the session epoch in database and memory."""
     global _session_epoch
     _session_epoch += 1
+    if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
+        return
+    try:
+        from mail_core.db.session import get_session_factory
+        from mail_core.mail.storage.models import AuthCredential
+
+        Session = get_session_factory()
+        with Session() as session:
+            cred = session.get(AuthCredential, "default")
+            if cred is None:
+                cred = AuthCredential(
+                    id="default",
+                    login_password_hash="",
+                    session_epoch=_session_epoch,
+                )
+                session.add(cred)
+            else:
+                cred.session_epoch = (cred.session_epoch or 1) + 1
+                _session_epoch = cred.session_epoch
+            session.commit()
+    except Exception as exc:
+        log.warning("could not increment session epoch in database: %s", exc)
 
 
 def issue_session() -> tuple[str, str]:
     """Return (signed_cookie_value, csrf_token)."""
     csrf = secrets.token_urlsafe(32)
-    token = _serializer().dumps({"v": 1, "csrf": csrf, "epoch": _session_epoch})
+    epoch = get_session_epoch()
+    token = _serializer().dumps({"v": 1, "csrf": csrf, "epoch": epoch})
     return token, csrf
 
 
@@ -222,7 +278,8 @@ def read_session(cookie_value: str) -> dict[str, Any] | None:
         return None
     if not isinstance(data, dict) or data.get("v") != 1:
         return None
-    if data.get("epoch") != _session_epoch:
+    current_epoch = get_session_epoch()
+    if data.get("epoch") != current_epoch:
         return None
     csrf = data.get("csrf")
     if not isinstance(csrf, str) or not csrf:
@@ -270,7 +327,8 @@ def change_login_password(*, current: str, new: str) -> None:
     hashed_str = hashed.decode("utf-8")
 
     # Persist directly into database (Decision Plan A)
-    _persist_db_password_hash(hashed_str)
+    if not _persist_db_password_hash(hashed_str):
+        raise AuthConfigError("failed to persist password to database")
 
     # Refresh in-memory cache
     _password_hash = hashed

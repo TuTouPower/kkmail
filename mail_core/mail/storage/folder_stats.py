@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.mail.storage.models import FolderStats, Message, MessageLocation
@@ -24,7 +25,14 @@ def recompute_folder_stats(session: Session, folder_id: uuid.UUID) -> FolderStat
     stats = session.get(FolderStats, folder_id)
     if stats is None:
         stats = FolderStats(folder_id=folder_id)
-        session.add(stats)
+        try:
+            with session.begin_nested():
+                session.add(stats)
+                session.flush()
+        except IntegrityError:
+            stats = session.get(FolderStats, folder_id)
+            if stats is None:
+                raise
     stats.total_count = int(total or 0)
     stats.unread_count = int(unread or 0)
     stats.updated_at = datetime.now(timezone.utc)
