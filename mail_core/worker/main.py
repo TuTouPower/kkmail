@@ -68,6 +68,7 @@ def _tick(worker_id: str) -> int:
     """
     try:
         from mail_core.db.session import get_session_factory
+        from mail_core.mail.domain.enums import JobStatus
         from mail_core.mail.storage.models import WorkerJob
         from mail_core.sync.jobs import claim_jobs, fail_job
         from mail_core.worker.handlers import handle_job
@@ -78,20 +79,38 @@ def _tick(worker_id: str) -> int:
     _reclaim_once()
 
     Session = get_session_factory()
-    job_ids: list = []
+    claim_tokens: list[tuple] = []
     with Session() as session:
         jobs = claim_jobs(session, worker_id=worker_id, limit=CLAIM_BATCH)
-        job_ids = [j.id for j in jobs]
+        claim_tokens = [(j.id, j.locked_by, j.locked_at) for j in jobs]
         session.commit()
 
     handled = 0
-    for job_id in job_ids:
+    for job_id, expected_owner, claim_time in claim_tokens:
         with Session() as session:
             job = session.get(WorkerJob, job_id)
             if job is None:
                 continue
+            if expected_owner is not None:
+                if job.status != JobStatus.CLAIMED.value or job.locked_by != expected_owner:
+                    log.warning(
+                        "job %s claim lost before execution (status=%s, locked_by=%s, expected=%s); skipping",
+                        job_id,
+                        job.status,
+                        job.locked_by,
+                        expected_owner,
+                    )
+                    continue
+                if claim_time is not None and job.locked_at is not None and job.locked_at != claim_time:
+                    log.warning(
+                        "job %s claim lock timestamp mismatch (%s != %s); skipping",
+                        job_id,
+                        job.locked_at,
+                        claim_time,
+                    )
+                    continue
             try:
-                ok = handle_job(session, job)
+                ok = handle_job(session, job, worker_id=worker_id)
                 # Handlers may have committed already; commit any leftover work
                 # (including fail_job flushes when ok is False).
                 if session.in_transaction():

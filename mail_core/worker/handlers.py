@@ -28,14 +28,14 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
     return False
 
 
-def handle_job(session: Session, job: WorkerJob) -> bool:
+def handle_job(session: Session, job: WorkerJob, *, worker_id: str | None = None) -> bool:
     """Dispatch. Sync handlers open their own short transactions + network I/O.
 
     Returns True when the job completed successfully, False when it was failed
     internally (``fail_job`` already applied). The claim transaction should be
     committed before heavy work; main.py commits after handle_job returns.
     """
-    worker_id = job.locked_by or "worker"
+    worker_id = worker_id or job.locked_by or "worker"
     payload = dict(job.payload or {})
     account_id = job.account_id
     store = get_credential_store()
