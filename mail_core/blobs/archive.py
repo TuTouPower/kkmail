@@ -34,7 +34,14 @@ from mail_core.mail.storage.models import (
 )
 from mail_core.providers.factory import build_provider
 from mail_core.sync.jobs import enqueue_job
-from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, assert_fencing, release_lease
+from mail_core.sync.leases import (
+    FencingMismatch,
+    LeaseBusy,
+    acquire_lease,
+    assert_fencing,
+    release_lease,
+    renew_lease,
+)
 
 log = logging.getLogger("mail_core.blobs.archive")
 
@@ -421,6 +428,21 @@ def run_archive_batch(
                 )
             provider_cache[msg_account_id] = build_provider(snap, store or get_credential_store())
         provider = provider_cache[msg_account_id]
+
+        # Heartbeat account lease during batch downloads (R10)
+        if account_id is not None and fencing is not None:
+            try:
+                with Session() as session:
+                    renew_lease(
+                        session,
+                        account_id=account_id,
+                        owner_id=worker_id,
+                        fencing_token=fencing,
+                        ttl=timedelta(seconds=120),
+                    )
+                    session.commit()
+            except FencingMismatch:
+                return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
 
         try:
             mime = provider.fetch_mime(remote_id)  # network
