@@ -6,7 +6,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.mail.storage.models import AccountSyncLease
@@ -40,35 +41,55 @@ def acquire_lease(
     ttl: timedelta = timedelta(seconds=30),
     now: datetime | None = None,
 ) -> LeaseHandle:
-    """Short-transaction acquire: insert or steal expired lease; bump fencing_token."""
+    """Short-transaction acquire: insert or steal expired lease; bump fencing_token.
+
+    Uses ``SELECT … FOR UPDATE`` so two workers cannot both believe they hold the
+    same non-expired lease. Insert races are retried after ``IntegrityError``.
+    """
     now = now or _utcnow()
     expires = now + ttl
-    row = session.get(AccountSyncLease, account_id)
-    if row is None:
-        token = 1
-        session.add(
-            AccountSyncLease(
-                account_id=account_id,
-                owner_id=owner_id,
-                lease_expires_at=expires,
-                heartbeat_at=now,
-                fencing_token=token,
-            )
-        )
+    for _ in range(5):
+        row = session.execute(
+            select(AccountSyncLease)
+            .where(AccountSyncLease.account_id == account_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+
+        if row is None:
+            token = 1
+            try:
+                with session.begin_nested():
+                    session.add(
+                        AccountSyncLease(
+                            account_id=account_id,
+                            owner_id=owner_id,
+                            lease_expires_at=expires,
+                            heartbeat_at=now,
+                            fencing_token=token,
+                        )
+                    )
+                    session.flush()
+            except IntegrityError:
+                # Concurrent insert won the PK; retry with FOR UPDATE.
+                continue
+            return LeaseHandle(account_id, owner_id, token, expires)
+
+        exp = row.lease_expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if row.owner_id != owner_id and exp > now:
+            raise LeaseBusy(f"account {account_id} held by {row.owner_id} until {row.lease_expires_at}")
+
+        # Renew for same owner OR steal expired lease — always increment fencing.
+        token = int(row.fencing_token) + 1
+        row.owner_id = owner_id
+        row.lease_expires_at = expires
+        row.heartbeat_at = now
+        row.fencing_token = token
         session.flush()
         return LeaseHandle(account_id, owner_id, token, expires)
 
-    if row.owner_id != owner_id and row.lease_expires_at > now:
-        raise LeaseBusy(f"account {account_id} held by {row.owner_id} until {row.lease_expires_at}")
-
-    # Renew for same owner OR steal expired lease — always increment fencing.
-    token = int(row.fencing_token) + 1
-    row.owner_id = owner_id
-    row.lease_expires_at = expires
-    row.heartbeat_at = now
-    row.fencing_token = token
-    session.flush()
-    return LeaseHandle(account_id, owner_id, token, expires)
+    raise LeaseBusy(f"account {account_id} acquire raced; try again")
 
 
 def heartbeat_lease(
@@ -81,7 +102,11 @@ def heartbeat_lease(
     now: datetime | None = None,
 ) -> LeaseHandle:
     now = now or _utcnow()
-    row = session.get(AccountSyncLease, account_id)
+    row = session.execute(
+        select(AccountSyncLease)
+        .where(AccountSyncLease.account_id == account_id)
+        .with_for_update()
+    ).scalar_one_or_none()
     if row is None or row.owner_id != owner_id or int(row.fencing_token) != fencing_token:
         raise FencingMismatch("lease heartbeat rejected")
     row.heartbeat_at = now
@@ -109,7 +134,11 @@ def release_lease(
     now: datetime | None = None,
 ) -> None:
     now = now or _utcnow()
-    row = session.get(AccountSyncLease, account_id)
+    row = session.execute(
+        select(AccountSyncLease)
+        .where(AccountSyncLease.account_id == account_id)
+        .with_for_update()
+    ).scalar_one_or_none()
     if row is None:
         return
     if row.owner_id != owner_id or int(row.fencing_token) != fencing_token:
