@@ -271,6 +271,7 @@ class RemoteOperation(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     last_error: Mapped[Optional[str]] = mapped_column(Text)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
