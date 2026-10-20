@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -109,7 +109,10 @@ class ReadyOut(BaseModel):
 
 
 @app.get("/health", response_model=HealthOut)
-def health() -> HealthOut:
+def health(response: Response) -> HealthOut:
+    token = os.environ.get("KKMAIL_INSTANCE_TOKEN")
+    if token:
+        response.headers["X-Instance-Token"] = token
     return HealthOut(status="ok", service="mail-core", version=__version__, schema_head=_code_schema_head())
 
 
