@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from mail_core.mail.storage.models import OutboxEvent
@@ -45,6 +45,12 @@ def fetch_since(
     limit: int = 100,
     account_id=None,
 ) -> list[OutboxEvent]:
+    """Replay rows after ``last_event_id``.
+
+    When ``account_id`` is set, include that account's events **and** global
+    rows (``account_id IS NULL``) so account-filtered SSE matches live fan-out,
+    which already delivers NULL-account events to every subscriber.
+    """
     stmt = (
         select(OutboxEvent)
         .where(OutboxEvent.id > last_event_id)
@@ -52,7 +58,9 @@ def fetch_since(
         .limit(limit)
     )
     if account_id is not None:
-        stmt = stmt.where(OutboxEvent.account_id == account_id)
+        stmt = stmt.where(
+            or_(OutboxEvent.account_id == account_id, OutboxEvent.account_id.is_(None))
+        )
     return list(session.scalars(stmt).all())
 
 
@@ -65,6 +73,35 @@ def mark_dispatched(session: Session, event_ids: Sequence[int], *, now: datetime
         .where(OutboxEvent.id.in_(list(event_ids)))
         .values(dispatched_at=now)
     )
+
+
+def prune_dispatched(
+    session: Session,
+    *,
+    older_than: timedelta = timedelta(days=7),
+    limit: int = 5000,
+    now: datetime | None = None,
+) -> int:
+    """Delete old **dispatched** outbox rows (architecture §13 delayed trim).
+
+    Never touches undispatched rows. Caps each call at ``limit`` ids so workers
+    can prune incrementally without long locks.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - older_than
+    ids = list(
+        session.scalars(
+            select(OutboxEvent.id)
+            .where(OutboxEvent.dispatched_at.is_not(None))
+            .where(OutboxEvent.dispatched_at < cutoff)
+            .order_by(OutboxEvent.id.asc())
+            .limit(limit)
+        ).all()
+    )
+    if not ids:
+        return 0
+    session.execute(delete(OutboxEvent).where(OutboxEvent.id.in_(ids)))
+    return len(ids)
 
 
 def to_item(row: OutboxEvent) -> OutboxItem:

@@ -15,12 +15,12 @@ from mail_core.sync.jobs import complete_job, fail_job
 log = logging.getLogger("mail_core.worker.handlers")
 
 
-def handle_job(session: Session, job: WorkerJob) -> None:
+def handle_job(session: Session, job: WorkerJob) -> bool:
     """Dispatch. Sync handlers open their own short transactions + network I/O.
 
-    The claim transaction should be committed before heavy work; main.py commits
-    after handle_job returns. Sync engines manage their own sessions, so we mark
-    the job complete here after the engine returns.
+    Returns True when the job completed successfully, False when it was failed
+    internally (``fail_job`` already applied). The claim transaction should be
+    committed before heavy work; main.py commits after handle_job returns.
     """
     worker_id = job.locked_by or "worker"
     payload = dict(job.payload or {})
@@ -39,7 +39,7 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             result = sync_account_folders(account_id, worker_id=worker_id, store=store)
             log.info("sync_account_folders %s", result)
             complete_job(session, job)
-            return
+            return True
 
         if job.job_type == JobType.SYNC_FOLDER_METADATA.value:
             if account_id is None:
@@ -51,7 +51,7 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             result = sync_folder_metadata(account_id, folder_id, worker_id=worker_id, store=store)
             log.info("sync_folder_metadata %s", result)
             complete_job(session, job)
-            return
+            return True
 
         if job.job_type == JobType.RECONCILE_FOLDER.value:
             if account_id is None:
@@ -63,7 +63,7 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             result = reconcile_folder(account_id, folder_id, worker_id=worker_id, store=store)
             log.info("reconcile_folder %s", result)
             complete_job(session, job)
-            return
+            return True
 
         if job.job_type == JobType.REMOTE_OPERATION_PUSH.value:
             if account_id is None:
@@ -74,7 +74,7 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             result = push_remote_operations(account_id, worker_id=worker_id, store=store)
             log.info("remote_operation_push %s", result)
             complete_job(session, job)
-            return
+            return True
 
         if job.job_type == JobType.ARCHIVE_MIME_BATCH.value:
             from mail_core.blobs.archive import run_archive_batch
@@ -88,7 +88,7 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             )
             log.info("archive_mime_batch %s", result)
             complete_job(session, job)
-            return
+            return True
 
         if job.job_type == JobType.OUTBOX_DISPATCH_WAKE.value:
             # Worker must NOT mark_dispatched — that steals events from the API
@@ -98,7 +98,7 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             try_notify_outbox(session)
             complete_job(session, job)
             log.info("outbox_dispatch_wake notified API listener")
-            return
+            return True
 
         if job.job_type == JobType.SYNC_FOLDER_DELTA.value:
             if account_id is None:
@@ -110,7 +110,7 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             result = sync_folder_delta(account_id, folder_id, worker_id=worker_id, store=store)
             log.info("sync_folder_delta %s", result)
             complete_job(session, job)
-            return
+            return True
 
         if job.job_type == JobType.GC_BLOBS.value:
             from mail_core.blobs.gc import run_gc_blobs
@@ -120,7 +120,7 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             result = run_gc_blobs(cool_off_hours=hours, dry_run=bool(payload.get("dry_run")))
             log.info("gc_blobs %s", result)
             complete_job(session, job)
-            return
+            return True
 
         if job.job_type == JobType.BACKUP_RUN.value:
             from mail_core.backup.package import run_backup
@@ -129,9 +129,10 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             result = run_backup(output_dir=payload.get("output_dir"))
             log.info("backup_run %s", result)
             complete_job(session, job)
-            return
+            return True
 
         fail_job(session, job, f"unknown job_type {job.job_type}")
+        return False
     except Exception as exc:
         from mail_core.security.redact import safe_error
 
@@ -139,3 +140,4 @@ def handle_job(session: Session, job: WorkerJob) -> None:
         log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()
         fail_job(session, job, exc)
+        return False
