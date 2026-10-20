@@ -10,7 +10,7 @@ import email.header
 import email.utils
 import imaplib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Sequence
@@ -108,9 +108,17 @@ class ImapProvider:
     host: str
     port: int
     username: str
-    password: str
+    password: str = field(repr=False)
     use_ssl: bool = True
     timeout: float = 30.0
+
+    def __repr__(self) -> str:
+        # Never leak IMAP password via logging / traceback repr.
+        return (
+            f"ImapProvider(host={self.host!r}, port={self.port}, "
+            f"username={self.username!r}, password=***, use_ssl={self.use_ssl}, "
+            f"timeout={self.timeout})"
+        )
 
     def _connect(self) -> imaplib.IMAP4:
         timeout = float(self.timeout)

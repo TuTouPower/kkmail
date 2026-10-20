@@ -18,6 +18,10 @@ python -m mail_core --data-dir ./.kkmail-data   # 迁移 + API + 内嵌 worker�
 
 `python -m mail_core --data-dir` 首次运行会在 `<data-dir>/secrets/` 生成会话、blob、备份密钥（0600），并在 `<data-dir>/initial-password.txt` 写入一次性初始密码（登录后修改密码即删除）。数据库连接由 `MAIL_CORE_DATABASE_URL` 指定，未设置时拒绝启动。
 
+## 安全要点（读一遍）
+
+实例是**单用户**的：登录会话或 Bearer API Key 是唯一边界。消息 / 附件 / 账户的 **UUID 即能力（capability）**——知道 UUID 就能调用对应 API，没有多租户行级 ACL。详见 [docs/security.md](docs/security.md)。
+
 ## 文档
 
 | 主题 | 文档 |

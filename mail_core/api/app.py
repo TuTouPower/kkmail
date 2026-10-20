@@ -46,8 +46,10 @@ async def lifespan(_app: FastAPI):
 
     listener = start_outbox_listener()
     if not listener.wait_started(timeout=5):
-        # Keep serving (listener reconnects in the background); /ready reports it.
-        logging.getLogger("mail_core.api").warning("outbox LISTEN not started within 5s; retrying in background")
+        # Keep serving so operators can hit /ready; do not pretend LISTEN is up.
+        logging.getLogger("mail_core.api").error(
+            "outbox LISTEN not started within 5s; /ready will stay not_ready until LISTEN succeeds"
+        )
     try:
         yield
     finally:
@@ -127,7 +129,9 @@ def ready():
     except Exception as exc:
         body = ReadyOut(status="not_ready", schema_head=head, reason=f"database: {type(exc).__name__}")
         return JSONResponse(status_code=503, content=body.model_dump())
-    listener_ok = get_outbox_listener().is_alive
+    listener = get_outbox_listener()
+    # Thread alive-but-reconnecting is not ready; require a successful LISTEN.
+    listener_ok = listener.listen_ready
     if rev != head:
         body = ReadyOut(status="not_ready", schema_revision=rev, schema_head=head, listener=listener_ok, reason="schema_out_of_date")
         return JSONResponse(status_code=503, content=body.model_dump())

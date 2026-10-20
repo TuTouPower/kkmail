@@ -46,10 +46,19 @@ def encode_cursor(sort_time: datetime, message_id: uuid.UUID) -> str:
 
 
 def decode_cursor(token: str) -> tuple[datetime, uuid.UUID]:
+    """Decode opaque keyset token. Both halves are required — never partially apply."""
     try:
         pad = "=" * (-len(token) % 4)
-        st, mid = base64.urlsafe_b64decode(token + pad).decode().split("|", 1)
+        raw = base64.urlsafe_b64decode(token + pad).decode()
+        if "|" not in raw:
+            raise InvalidCursor("invalid cursor")
+        st, mid = raw.split("|", 1)
+        if not st.strip() or not mid.strip():
+            # Partial keyset (time without id or id without time) must not be ignored.
+            raise InvalidCursor("invalid cursor")
         return datetime.fromisoformat(st), uuid.UUID(mid)
+    except InvalidCursor:
+        raise
     except Exception as exc:  # noqa: BLE001 - any decode failure is the same client error
         raise InvalidCursor("invalid cursor") from exc
 
@@ -118,7 +127,8 @@ def list_messages_keyset(
     limit: int = 50,
     cursor: str | None = None,
 ) -> MessagePage:
-    cursor_sort_time, cursor_message_id = decode_cursor(cursor) if cursor else (None, None)
+    # Opaque cursor is atomic: decode raises InvalidCursor unless both halves exist.
+    cursor_pair = decode_cursor(cursor) if cursor else None
     if not folder_ids:
         return MessagePage(items=[], next_cursor=None)
     stmt = (
@@ -126,7 +136,8 @@ def list_messages_keyset(
         .join(MessageLocation, MessageLocation.message_id == Message.id)
         .where(MessageLocation.folder_id.in_(folder_ids))
     )
-    if cursor_sort_time is not None and cursor_message_id is not None:
+    if cursor_pair is not None:
+        cursor_sort_time, cursor_message_id = cursor_pair
         stmt = stmt.where(
             or_(
                 Message.sort_time < cursor_sort_time,

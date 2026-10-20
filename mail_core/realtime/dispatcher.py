@@ -9,6 +9,7 @@ the API process.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import threading
 from collections import defaultdict
@@ -53,33 +54,83 @@ class OutboxDispatcher:
             return any(bool(v) for v in self._subs.values())
 
     @staticmethod
-    def _put(q: asyncio.Queue, event: dict[str, Any]) -> None:
+    def _put(q: asyncio.Queue, event: dict[str, Any]) -> bool:
+        """Enqueue ``event``. On QueueFull, push a resync hint instead and return False."""
         try:
             q.put_nowait(event)
+            return True
         except asyncio.QueueFull:
-            # Slow consumer — client resyncs via Last-Event-ID / resync hint.
             log.warning("sse queue full; dropping event id=%s", event.get("id"))
+            hint = {
+                "id": event.get("id"),
+                "event": "client.resync_hint",
+                "account_id": event.get("account_id"),
+                "data": {"reason": "sse_queue_full", "dropped_event_id": event.get("id")},
+                "created_at": event.get("created_at"),
+            }
+            try:
+                # Make room for the hint so the client knows to resync.
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                q.put_nowait(hint)
+            except asyncio.QueueFull:
+                log.warning("sse queue full; could not deliver resync hint id=%s", event.get("id"))
+            return False
 
-    def _fanout(self, event: dict[str, Any]) -> None:
+    def _fanout_one(self, loop: asyncio.AbstractEventLoop, q: asyncio.Queue, event: dict[str, Any]) -> bool:
+        """Put on the subscriber loop. Same-thread: call directly (avoid deadlock)."""
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            return self._put(q, event)
+
+        fut: concurrent.futures.Future[bool] = concurrent.futures.Future()
+
+        def _run() -> None:
+            try:
+                fut.set_result(self._put(q, event))
+            except Exception as exc:  # noqa: BLE001
+                fut.set_exception(exc)
+
+        try:
+            loop.call_soon_threadsafe(_run)
+        except RuntimeError:
+            return False  # loop closed; subscriber is going away
+        try:
+            return bool(fut.result(timeout=0.5))
+        except Exception:
+            return False
+
+    def _fanout(self, event: dict[str, Any]) -> bool:
+        """Deliver to local subscribers. Returns True if every target accepted the event.
+
+        No subscribers → True (idle drain may mark). Any QueueFull drop → False
+        (do **not** mark dispatched; a resync hint was queued for that client).
+        """
         account_id = event.get("account_id")
         with self._lock:
             targets = list(self._subs.get("*", []))
             if account_id:
                 targets.extend(self._subs.get(str(account_id), []))
+        if not targets:
+            return True
+        ok = True
         for loop, q in targets:
-            # asyncio.Queue is not thread-safe: hand off to the queue's own loop.
-            try:
-                loop.call_soon_threadsafe(self._put, q, event)
-            except RuntimeError:
-                pass  # loop closed; subscriber is going away
+            if not self._fanout_one(loop, q, event):
+                ok = False
+        return ok
 
     def dispatch_once(self, *, require_subscribers: bool = False) -> int:
-        """Fan out undispatched rows to local subscribers and mark them dispatched.
+        """Fan out undispatched rows to local subscribers and mark successful ones.
 
-        When ``require_subscribers`` is True (or when this process has none), skip
-        marking so a worker / idle process cannot steal events from the API.
-        API LISTEN path uses the default (False) so idle drain still marks rows;
-        live clients catch up via Last-Event-ID replay.
+        When ``require_subscribers`` is True and this process has none, skip
+        entirely so a worker / idle process cannot steal events from the API.
+        Events dropped due to a full SSE queue are left undispatched and the
+        slow client receives ``client.resync_hint``.
         """
         if require_subscribers and not self.has_local_subscribers():
             return 0
@@ -92,7 +143,7 @@ class OutboxDispatcher:
             if not rows:
                 session.commit()
                 return 0
-            ids = []
+            ids: list[int] = []
             for row in rows:
                 item = to_item(row)
                 payload = {
@@ -102,8 +153,8 @@ class OutboxDispatcher:
                     "data": item.payload,
                     "created_at": item.created_at.isoformat(),
                 }
-                self._fanout(payload)
-                ids.append(item.id)
+                if self._fanout(payload):
+                    ids.append(item.id)
             mark_dispatched(session, ids)
             session.commit()
             return len(ids)
