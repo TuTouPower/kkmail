@@ -35,3 +35,34 @@ function testEnsureDirsWritesMarker() {
 testDefaultDataRootOutsideInstall()
 testEnsureDirsWritesMarker()
 console.log('postgresManager.test.js: ok')
+
+function testVendorBinDirDefault() {
+  const { defaultVendorBinDir } = require('./postgresManager')
+  const d = defaultVendorBinDir()
+  assert.ok(d.includes(`${path.sep}vendor${path.sep}pgsql${path.sep}bin`))
+}
+
+function testRealBinarySmokeOrSkip() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-real-'))
+  const vendorBin = path.join(__dirname, 'vendor', 'pgsql', 'bin')
+  const mgr = new PostgresManager({
+    dataRoot,
+    pgBinDir: fs.existsSync(path.join(vendorBin, 'pg_ctl')) ? vendorBin : path.join(dataRoot, 'no-bin'),
+    port: 55432,
+  })
+  const st = mgr.status()
+  if (st.stub) {
+    console.log('postgresManager.test.js: skip real start/stop (no PG binaries in vendor or PATH)')
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+    return
+  }
+  const started = mgr.start()
+  assert.ok(started.ok, started.reason || JSON.stringify(started))
+  const stopped = mgr.stop()
+  assert.ok(stopped.ok || stopped.stopped)
+  fs.rmSync(dataRoot, { recursive: true, force: true })
+  console.log('postgresManager.test.js: real start/stop smoke ok')
+}
+
+testVendorBinDirDefault()
+testRealBinarySmokeOrSkip()
