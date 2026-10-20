@@ -6,8 +6,17 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 
+from mail_core.blobs.access import (
+    AttachmentAccessError,
+    PathTraversalRejected,
+    parse_attachment_id,
+    resolve_attachment_bytes,
+)
+from mail_core.blobs.archive import blob_root
+from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.queries import (
     get_folder_stats,
@@ -106,3 +115,34 @@ def api_search(q: str = Query(..., min_length=1), account_id: UUID | None = None
             limit=limit,
         )
         return {"query": q, "message_ids": [str(i) for i in ids]}
+
+
+@router.get("/attachments/{attachment_id}")
+def api_get_attachment(attachment_id: str):
+    """Download attachment by UUID only — path parameters are rejected (M5)."""
+    try:
+        aid = parse_attachment_id(attachment_id)
+    except PathTraversalRejected as exc:
+        raise HTTPException(400, str(exc)) from exc
+    Session = get_session_factory()
+    store = BlobStore(blob_root())
+    with Session() as session:
+        try:
+            payload = resolve_attachment_bytes(session, aid, store=store)
+        except AttachmentAccessError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        headers = {
+            "Content-Disposition": f'attachment; filename="{payload.filename}"',
+            "X-Content-SHA256": payload.content_sha256,
+        }
+        media = payload.content_type or "application/octet-stream"
+        return Response(content=payload.data, media_type=media, headers=headers)
+
+
+@router.get("/attachments/by-path/{path:path}")
+def api_get_attachment_by_path_rejected(path: str):
+    """Explicitly reject path-shaped attachment access (architecture M5)."""
+    raise HTTPException(
+        400,
+        "attachment access by filesystem path is forbidden; use attachment UUID",
+    )
