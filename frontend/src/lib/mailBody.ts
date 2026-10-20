@@ -9,7 +9,11 @@ export function isHtmlBody(bodyType?: string): boolean {
 export function sanitizeMailHtml(html: string): string {
   return DOMPurify.sanitize(html || '', {
     WHOLE_DOCUMENT: false,
-    FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'base', 'meta', 'link'],
+    FORBID_TAGS: [
+      'script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button',
+      'textarea', 'select', 'base', 'meta', 'link', 'svg', 'math', 'video',
+      'audio', 'source', 'track', 'details',
+    ],
     FORBID_ATTR: ['srcset', 'formaction', 'action'],
     ALLOW_UNKNOWN_PROTOCOLS: false,
   })
