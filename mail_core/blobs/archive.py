@@ -224,20 +224,31 @@ def reclaim_stale_archive_claims(
     return len(rows)
 
 
-def _pause_quota(session, message_ids: list[uuid.UUID], account_id: uuid.UUID | None) -> None:
+def _pause_quota(
+    session,
+    message_ids: list[uuid.UUID],
+    account_id: uuid.UUID | None,
+    worker_id: str | None = None,
+) -> None:
+    paused_count = 0
     for mid in message_ids:
         st = session.get(MessageArchiveState, mid)
         if st is None:
+            continue
+        if worker_id is not None and st.claimed_by != worker_id:
+            continue
+        if st.state != ArchiveState.ARCHIVE_IN_PROGRESS.value:
             continue
         apply_transition(st, ArchiveState.ARCHIVE_PAUSED_QUOTA)
         st.pause_reason = "quota"
         st.claimed_by = None
         st.updated_at = datetime.now(timezone.utc)
+        paused_count += 1
     session.add(
         OutboxEvent(
             event_type=OutboxEventType.ARCHIVE_PAUSED_QUOTA.value,
             account_id=account_id,
-            payload={"count": len(message_ids)},
+            payload={"count": paused_count},
         )
     )
 
@@ -402,7 +413,7 @@ def run_archive_batch(
             with Session() as session:
                 # O(n) slice from current index — avoid work.index (O(n²) over the loop).
                 remaining = [w[0] for w in work[idx:]]
-                _pause_quota(session, remaining, account_id)
+                _pause_quota(session, remaining, account_id, worker_id=worker_id)
                 if account_id is not None and fencing is not None:
                     try:
                         release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
@@ -450,8 +461,17 @@ def run_archive_batch(
         except Exception as exc:
             log.warning("archive fetch failed message=%s: %s", mid, safe_error(exc))
             with Session() as session:
+                if account_id is not None and fencing is not None:
+                    try:
+                        assert_fencing(session, account_id=account_id, fencing_token=fencing)
+                    except FencingMismatch:
+                        return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
                 st = session.get(MessageArchiveState, mid)
-                if st is not None:
+                if (
+                    st is not None
+                    and st.claimed_by == worker_id
+                    and st.state == ArchiveState.ARCHIVE_IN_PROGRESS.value
+                ):
                     st.retry_count = int(st.retry_count) + 1
                     st.last_error = safe_error(exc)
                     apply_transition(
@@ -471,7 +491,11 @@ def run_archive_batch(
                 except FencingMismatch:
                     return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
             st = session.get(MessageArchiveState, mid)
-            if st is None or st.state != ArchiveState.ARCHIVE_IN_PROGRESS.value:
+            if (
+                st is None
+                or st.state != ArchiveState.ARCHIVE_IN_PROGRESS.value
+                or st.claimed_by != worker_id
+            ):
                 continue
             blob = session.scalar(
                 select(MessageBlob).where(
