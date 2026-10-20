@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # Intensive Review — 视角 2：正确性
 
 目标：全库当前状态，非 diff。HEAD `daca631aec54c30ce02cdb5e6499ae196dc3a72d`。日期 `2026-10-21T04:12:53+08:00`。Findings：Critical 1 / High 22 / Medium 13。

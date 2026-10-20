@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # Cross-validation (Critical/High light falsification)
 
 - **Target**: TuTouPower/kkmail (public)
@@ -26,7 +30,7 @@ None. All four Criticals (S1–S4) AGREE.
 
 ## CONNECT pairs
 
-- S2 ↔ S4 (default admin123 / weak SECRET_KEY)
+- S2 ↔ S4 (default *** / weak SECRET_KEY)
 - V4-H9 ↔ V6-R2 (reclaim_stale_claims unused — dedup machine line)
 - C1 ↔ V6-R6 (outlook_mail_reader.py NameError + secret prints)
 - C3 ↔ S25 Info (expires_at None)
@@ -40,9 +44,9 @@ None. All four Criticals (S1–S4) AGREE.
 | FindingID | Sev | OrigConf | NewConf | Disposition | Counter-evidence or confirm note | file:line |
 |---|---|---:|---:|---|---|---|
 | S1 | Critical | 95 | 97 | AGREE | Confirmed: FastAPI app has CORS only, no auth dependency on mail/sse routers; compose binds 0.0.0.0:8000. Architecture doc prefers loopback but compose contradicts. Raised conf. | mail_core/api/app.py:33-41 |
-| S2 | Critical | 92 | 92 | AGREE | Confirmed docker.sock + LOGIN_PASSWORD=admin123 + SECRET_KEY=your-secret-key-here + DOCKER_UPDATE_ENABLED in default docker-compose.yml. Note: file comments redirect kkmail users to docker-compose.react.yml (which requires env secrets) — still ships insecure defaults as compose.yml. CONNECT S4. | docker-compose.yml:8-18 |
+| S2 | Critical | 92 | 92 | AGREE | Confirmed docker.sock + LOGIN_PASSWORD=*** + SECRET_KEY=*** + DOCKER_UPDATE_ENABLED in default docker-compose.yml. Note: file comments redirect kkmail users to docker-compose.react.yml (which requires env secrets) — still ships insecure defaults as compose.yml. CONNECT S4. | docker-compose.yml:8-18 |
 | S3 | Critical | 90 | 92 | AGREE | Confirmed deterministic hashlib fallback when keys unset; compose ships AAAA…/BBBB… sample keys. Raised conf. | mail_core/blobs/crypto.py:59-61 |
-| S4 | Critical | 88 | 90 | AGREE | Confirmed .env.example + LOGIN_PASSWORD=os.getenv(...,"admin123") at 01_bootstrap.py:164. CONNECT S2 (same default password in compose). | .env.example:7-11; outlook_web/segments/01_bootstrap.py:164 |
+| S4 | Critical | 88 | 90 | AGREE | Confirmed .env.example + LOGIN_PASSWORD=os.getenv(...,"***") at 01_bootstrap.py:164. CONNECT S2 (same default password in compose). | .env.example:7-11; outlook_web/segments/01_bootstrap.py:164 |
 | S5 | High | 90 | 88 | AGREE | Confirmed GET /api/accounts/refresh-all @login_required. SameSite=Lax blocks cross-site <img> subresource CSRF but still sends cookie on top-level GET navigations — state-changing GET remains CSRF-able. Slight conf trim. | outlook_web/segments/05_routes_refresh_mail.py:1606-1610 |
 | S6 | High | 88 | 88 | AGREE | Confirmed normalize_git_skin_url only checks empty/length/leading-/newlines then git clone; no scheme/host allowlist. | outlook_web/segments/01_bootstrap.py:3267-3304 |
 | S7 | High | 85 | 85 | AGREE | Confirmed token_uri() returns credential JSON token_uri then urlopen; requires write to credential store (not anonymous HTTP). Still SSRF/exfil if credential_ref compromised. | mail_core/providers/oauth.py:75-146 |
@@ -51,7 +55,7 @@ None. All four Criticals (S1–S4) AGREE.
 | S10 | High | 80 | 82 | AGREE | Confirmed api_key from query args; CORS * on /api/external/*. Raised conf slightly. | outlook_web/segments/03_mail_helpers.py:3326-3345; 01_bootstrap.py:122-129 |
 | S11 | High | 78 | 78 | AGREE | Confirmed SESSION_COOKIE_HTTPONLY+Lax only; no SECURE. Permanent sessions use datetime.max. CONNECT C10. | outlook_web/segments/01_bootstrap.py:79-81,3365-3371 |
 | S12 | High | 75 | 82 | AGREE | Confirmed login uses X-Forwarded-For leftmost despite ProxyFix(x_for=1) already setting remote_addr — bypasses trusted hop. Raised conf. | outlook_web/segments/04_routes_groups_accounts.py:12-19 |
-| S13 | High | 78 | 80 | AGREE | Confirmed ports 5433:5432 + POSTGRES_PASSWORD=kkmail in mail-core compose. | docker-compose.mail-core.yml:18-19 |
+| S13 | High | 78 | 80 | AGREE | Confirmed ports 5433:5432 + POSTGRES_PASSWORD=*** in mail-core compose. | docker-compose.mail-core.yml:18-19 |
 | C1 | High | 92 | 95 | AGREE | Confirmed outlook_mail_reader.py:41 uses os.getenv with no import os. CONNECT R6 (same file secret prints). | outlook_mail_reader.py:41 |
 | C2 | High | 85 | 70 | CHALLENGED | Code paths differ (verify_password vs verify_login_password) but init_db hashes LOGIN_PASSWORD into settings on first start (01_bootstrap ~1990-2006), so normal /login uses bcrypt and works. Divergence only if login_password setting missing/empty (plaintext env fallback). Lower conf; keep finding. | outlook_web/segments/04_routes_groups_accounts.py:43-44 |
 | C3 | High | 80 | 82 | AGREE | Confirmed _access_valid returns True when expires_at is None. CONNECT S25 Info. | mail_core/providers/oauth.py:81-88 |
@@ -79,4 +83,4 @@ None. All four Criticals (S1–S4) AGREE.
 | V7-H2 | High | 92 | 95 | AGREE | Confirmed frontend.yml only npm run build. Raised conf. | .github/workflows/frontend.yml:24-25 |
 | V7-H3 | High | 90 | 92 | AGREE | Confirmed composeGraphMailBtn only in legacy templates/static; SPA Sidebar groups by group_id flat (no parent_id tree indent). Raised conf. | tests/test_outlook_graph_send_mail_frontend.py; frontend/src/components/Sidebar.tsx |
 | V7-H4 | High | 88 | 95 | AGREE | Confirmed AGENTS.md Trellis block; .trellis/ and .agents/ absent. Raised conf. | AGENTS.md:1-21 |
-| V8-H5 | High | 90 | 90 | AGREE | Confirmed README ~811 lines duplicates deployment compose/admin123 examples also in docs/deployment.md. Labeled High in bundle (under Medium section heading — severity tag wins). | README.md; docs/deployment.md |
+| V8-H5 | High | 90 | 90 | AGREE | Confirmed README ~811 lines duplicates deployment compose/*** examples also in docs/deployment.md. Labeled High in bundle (under Medium section heading — severity tag wins). | README.md; docs/deployment.md |

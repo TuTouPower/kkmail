@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # intensive-review rubric — kkmail @ 608e284
 
 全库当前态审阅。工作区干净，HEAD = origin/main = `608e284f75f1da1540138728b3bf328b194a9720`。没有 diff 可当范围。当前代码里的问题全部计入。不要因为「以前就这样」丢弃。
