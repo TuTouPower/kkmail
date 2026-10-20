@@ -200,6 +200,32 @@ export const api = {
     return request<{ success?: boolean; emails?: Array<{ id: number; email?: string; address?: string; provider?: string }> }>('/api/temp-emails')
   },
 
+  async getProjects() {
+    return request<{ success?: boolean; data?: { projects?: Array<{ project_key?: string; name?: string; status?: string }> } }>('/api/projects')
+  },
+
+  async getOauthUrl() {
+    return request<{ success?: boolean; auth_url?: string; client_id?: string; redirect_uri?: string }>('/api/oauth/auth-url')
+  },
+
+  async exchangeOauth(redirectedUrl: string) {
+    return request<{ success?: boolean; error?: string; refresh_token?: string }>('/api/oauth/exchange-token', {
+      method: 'POST',
+      body: JSON.stringify({ redirected_url: redirectedUrl }),
+    })
+  },
+
+  async setForwarding(accountIds: number[], forwardEnabled: boolean) {
+    return request<{ success?: boolean; message?: string; error?: string }>('/api/accounts/batch-update-forwarding', {
+      method: 'POST',
+      body: JSON.stringify({ account_ids: accountIds, forward_enabled: forwardEnabled }),
+    })
+  },
+
+  async getForwardingLogs() {
+    return request<{ success?: boolean; logs?: unknown[] }>('/api/accounts/forwarding-logs')
+  },
+
   attachmentUrl(email: string, messageId: string, attachmentId: string, folder = 'inbox', idMode = '') {
     const q = new URLSearchParams({ folder, method: idMode === 'imap' ? 'imap' : 'graph' })
     if (idMode) q.set('id_mode', idMode)
