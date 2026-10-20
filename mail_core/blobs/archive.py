@@ -235,6 +235,75 @@ def _pause_quota(session, message_ids: list[uuid.UUID], account_id: uuid.UUID | 
     )
 
 
+def resume_quota_paused_archives(
+    session=None,
+    *,
+    account_id: uuid.UUID | None = None,
+    limit: int | None = None,
+) -> int:
+    """Reset ARCHIVE_PAUSED_QUOTA messages to ARCHIVE_PENDING and enqueue archive job."""
+    Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
+
+    def _do_resume(s) -> int:
+        stmt = (
+            select(MessageArchiveState)
+            .where(MessageArchiveState.state == ArchiveState.ARCHIVE_PAUSED_QUOTA.value)
+            .order_by(MessageArchiveState.updated_at.asc())
+        )
+        if account_id is not None:
+            stmt = stmt.join(Message, Message.id == MessageArchiveState.message_id).where(
+                Message.account_id == account_id
+            )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        stmt = stmt.with_for_update(skip_locked=True)
+        rows = list(s.scalars(stmt).all())
+        now = datetime.now(timezone.utc)
+        for st in rows:
+            apply_transition(st, ArchiveState.ARCHIVE_PENDING)
+            st.pause_reason = None
+            st.claimed_by = None
+            st.claimed_at = None
+            st.updated_at = now
+
+        if rows:
+            if account_id is not None:
+                enqueue_job(
+                    s,
+                    job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                    account_id=account_id,
+                    priority=50,
+                )
+            else:
+                mids = [st.message_id for st in rows]
+                acc_ids = list(s.scalars(select(Message.account_id).where(Message.id.in_(mids)).distinct()).all())
+                for aid in acc_ids:
+                    enqueue_job(
+                        s,
+                        job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                        account_id=aid,
+                        priority=50,
+                    )
+            s.add(
+                OutboxEvent(
+                    event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
+                    account_id=account_id,
+                    payload={"resumed_from_quota": len(rows)},
+                )
+            )
+        return len(rows)
+
+    if session is not None:
+        count = _do_resume(session)
+        session.flush()
+        return count
+    else:
+        with Session() as s:
+            count = _do_resume(s)
+            s.commit()
+            return count
+
+
 def run_archive_batch(
     *,
     account_id: uuid.UUID | None,
