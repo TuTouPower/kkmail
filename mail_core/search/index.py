@@ -42,7 +42,7 @@ _MATCH = """
         document @@ plainto_tsquery('simple', :q)
         OR from_text ILIKE '%' || :q || '%'
         OR subject ILIKE '%' || :q || '%'
-        OR similarity(from_text, :q) > 0.3
+        OR from_text % :q
     )
 """
 

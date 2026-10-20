@@ -135,9 +135,10 @@ def test_pg_dump_uses_pgpassword_not_argv(tmp_path, monkeypatch):
     def fake_which(name):
         return "/usr/bin/pg_dump" if name == "pg_dump" else None
 
-    def fake_run(argv, check=True, capture_output=True, env=None):
+    def fake_run(argv, check=True, capture_output=True, env=None, timeout=None, **kwargs):
         seen["argv"] = list(argv)
         seen["env_pw"] = (env or {}).get("PGPASSWORD")
+        seen["timeout"] = timeout
         class R:
             returncode = 0
         # Write a tiny custom-format-ish file so sha works
