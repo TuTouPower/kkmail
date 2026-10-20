@@ -237,7 +237,7 @@ def api_get_message(message_id: UUID) -> MessageDetailOut:
             is_flagged=d.is_flagged,
             has_attachments=d.has_attachments,
             snippet=d.snippet,
-            body=(d.body_html if d.body_type == "html" else (d.body_text or "")) or "",
+            body=d.body,
             body_type=d.body_type,
             parse_error=d.parse_error,
             attachments=[
