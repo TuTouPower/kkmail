@@ -320,3 +320,27 @@ def test_build_provider_imap_json_credentials_unpack():
     )
     p2 = build_provider(acc2, store)
     assert p2.password == "real-secret-from-json"
+
+
+def test_create_account_duplicate_does_not_overwrite_credentials(monkeypatch):
+    from unittest.mock import MagicMock
+    from mail_core.accounts.credentials import DictCredentialStore, set_credential_store
+    from mail_core.accounts.service import create_account
+
+    store = DictCredentialStore({"account:existing@test.com": {"password": "old-password"}})
+    set_credential_store(store)
+
+    mock_session = MagicMock()
+    # First flush triggers unique constraint violation
+    mock_session.flush.side_effect = RuntimeError("duplicate key value violates unique constraint")
+
+    with pytest.raises(RuntimeError, match="duplicate key"):
+        create_account(
+            mock_session,
+            email="existing@test.com",
+            provider="imap",
+            credentials={"password": "hacked-password"},
+        )
+
+    # Verify existing secret was not touched/overwritten
+    assert store.get_secret("account:existing@test.com") == {"password": "old-password"}
