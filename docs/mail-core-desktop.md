@@ -61,14 +61,15 @@ pg.stop()
 
 ```bash
 cd desktop
-npm install --legacy-peer-deps
+npm ci
 # optional: ../scripts/fetch-pg-binaries.sh   # Linux only
 npm run pack:linux          # --linux dir; soft-ok if no vendor PG
 npm run dist:linux:dir      # same via electron-builder
 ```
 
-`extraResources` copies `vendor/pgsql` → `resources/pgsql` when present. Runtime
-`PostgresManager` still honors `KKMAIL_PG_BIN` and falls back to stub.
+`extraResources` copies `vendor/pgsql` → `resources/pgsql` when present. At runtime
+`PostgresManager` also honors `KKMAIL_PG_BIN`; a package built without PostgreSQL binaries
+reports `stub: true` and the app refuses to start.
 
 ### macOS / Windows
 
@@ -76,4 +77,4 @@ npm run dist:linux:dir      # same via electron-builder
 - Fetch or place PG binaries at **build time** into `desktop/vendor/pgsql/bin`
   (see `desktop/vendor/README.md`). The Linux fetch script does not auto-download
   for mac/win.
-- CI must not fail when `vendor/pgsql` is absent.
+- Packaging (`pack:linux`) still succeeds when `vendor/pgsql` is absent, but that build cannot run.

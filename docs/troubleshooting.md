@@ -7,11 +7,12 @@
 | `DatabaseConfigError: MAIL_CORE_DATABASE_URL ...` | 未设置数据库 URL。compose 内由服务环境提供；直跑需自行导出。 |
 | `blob encryption keys required` | 设置 `MAIL_CORE_BLOB_KEY_V1`，或用 `--data-dir` 让 mail-core 生成并持久化。 |
 | `Set MAIL_CORE_LOGIN_PASSWORD_HASH ...` | 未配置登录密码（见 [security.md](security.md)）。 |
+| `MAIL_CORE_SECRET_KEY or SECRET_KEY is required ...` | 未配置会话签名密钥（`openssl rand -hex 32`），或用 `--data-dir` 自动生成。 |
 | compose：`set POSTGRES_PASSWORD` 等 | compose 的必填变量缺失，按 [deployment.md](deployment.md) 导出。 |
 
 ## `/ready` 返回 503
 
-`detail` 指明原因：
+响应体的 `reason` 字段指明原因：
 
 - `database: <异常类型>` — PostgreSQL 不可达或认证失败。
 - `schema_out_of_date` — 先执行 `alembic -c mail_core/db/alembic.ini upgrade head`（`python -m mail_core` 默认自动执行）。`/health` 的 `schema_head` 是代码期望的版本。

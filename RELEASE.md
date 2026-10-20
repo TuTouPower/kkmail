@@ -1,5 +1,7 @@
 # 发版说明
 
+分支保护与必需检查见 [BRANCH_PROTECTION.md](BRANCH_PROTECTION.md)；变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 分支与版本
 
 - 开发：`dev`；稳定：`main`。版本号 `MAJOR.MINOR.PATCH`，写在 `VERSION` 与 `CHANGELOG.md`（`## [X.Y.Z] - YYYY-MM-DD`）。

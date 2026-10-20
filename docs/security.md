@@ -2,12 +2,13 @@
 
 ## 认证
 
-- **登录**：单一登录密码。使用 `MAIL_CORE_LOGIN_PASSWORD_HASH`（bcrypt，推荐）或 `MAIL_CORE_LOGIN_PASSWORD`（启动时哈希）；桌面 / `python -m mail_core --data-dir` 在未提供时生成随机初始密码写入 `secrets/initial-password.txt`，修改密码后删除。两者都没有时进程拒绝启动。
+- **登录**：单一登录密码。使用 `MAIL_CORE_LOGIN_PASSWORD_HASH`（bcrypt，推荐）或 `MAIL_CORE_LOGIN_PASSWORD`（启动时哈希）；桌面 / `python -m mail_core --data-dir` 在未提供时生成随机初始密码写入 `<data-dir>/initial-password.txt`（哈希存于 `secrets/login-password.bcrypt`），修改密码后删除该文件。两者都没有时进程拒绝启动。
 - **会话**：签名 Cookie（`MAIL_CORE_SECRET_KEY`，必填），`HttpOnly`，`SameSite=Lax`（`MAIL_CORE_COOKIE_SAMESITE`），有效期 `MAIL_CORE_SESSION_MAX_AGE`（默认 30 天）。经 HTTPS 访问时设置 `MAIL_CORE_COOKIE_SECURE=1`。
 - **CSRF**：Cookie 会话下所有写请求必须带 `X-CSRF-Token`；前端拿不到令牌时不会发出写请求。
 - **API Key**：`MAIL_CORE_API_KEYS`（逗号分隔或 JSON 列表），`Authorization: Bearer`；不接受查询串里的 key。
-- **登录限速**：同一客户端地址在 `MAIL_CORE_LOGIN_WINDOW_S`（默认 300s）内失败 `MAIL_CORE_LOGIN_MAX_FAILURES`（默认 10）次后返回 429。按套接字对端地址计数，不信任 `X-Forwarded-For`；在反向代理后请用 `--proxy-headers --forwarded-allow-ips`。
-- 修改密码：`POST /api/auth/password`（需当前密码）。
+- **登录限速**：同一客户端地址在 `MAIL_CORE_LOGIN_WINDOW_S`（默认 300s）内失败 `MAIL_CORE_LOGIN_MAX_FAILURES`（默认 10）次后返回 429。按套接字对端地址计数，不信任 `X-Forwarded-For`；在反向代理后请用 `--forwarded-allow-ips`（或 `FORWARDED_ALLOW_IPS`）只信任代理地址。
+- 修改密码：`POST /api/auth/password`（需当前密码，新密码至少 8 位）。
+- `/health`、`/ready`、`/api/auth/login` 与 FastAPI 自带的 `/docs`、`/openapi.json` 不需要认证；后两者只暴露接口结构，不含数据。
 
 ## 加密与密钥
 

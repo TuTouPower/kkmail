@@ -1,6 +1,6 @@
 name: frontend
 
-# Canonical copy: .github/workflows/frontend.yml (this file mirrors it).
+# Template: install as .github/workflows/frontend.yml (see docs/ci/README.md).
 on:
   push:
     branches: [main, dev]
