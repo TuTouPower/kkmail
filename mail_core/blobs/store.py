@@ -76,8 +76,12 @@ class BlobStore:
         rel = self._rel_path(digest)
         dest = self.root / rel
         if dest.is_file():
-            # Already stored — report active key version used for new writes.
-            return BlobWriteResult(digest, len(data), rel, self.key_version)
+            try:
+                with dest.open("rb") as fh:
+                    disk_version = read_key_version(fh)
+                return BlobWriteResult(digest, len(data), rel, disk_version)
+            except Exception:
+                pass
         dest.parent.mkdir(parents=True, exist_ok=True)
         payload = wrap(data, keyring=self.keyring, key_version=self.key_version)
         fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=".tmp-")
