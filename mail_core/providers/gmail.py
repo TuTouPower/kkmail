@@ -359,8 +359,31 @@ class GmailProvider:
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
         if self.transport is None:
             raise GmailNotConfiguredError("Gmail reconcile not wired yet")
-        data = self._call("RECONCILE", folder_remote_id, {"local": list(local_remote_ids)})
-        return list(data.get("actions") or [])
+        remote_ids: set[str] = set()
+        page_token: str | None = None
+        while True:
+            params: dict[str, Any] = {"labelIds": folder_remote_id, "maxResults": 500}
+            if page_token:
+                params["pageToken"] = page_token
+            data = self._call("GET", f"/gmail/v1/users/{self.user_id}/messages", params)
+            if "page" in data:
+                page = data["page"]
+                items = getattr(page, "items", []) or []
+                for it in items:
+                    remote_ids.add(str(getattr(it, "remote_id", "")))
+                cursor = getattr(page, "next_cursor", None)
+                page_token = cursor.get("pageToken") if isinstance(cursor, dict) else None
+                if not page_token:
+                    break
+            else:
+                for m in data.get("messages") or []:
+                    if m.get("id"):
+                        remote_ids.add(str(m["id"]))
+                page_token = data.get("nextPageToken")
+                if not page_token:
+                    break
+        local = set(local_remote_ids)
+        return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote_ids)]
 
     def rate_limit_hint(self) -> RateLimitHint:
         return RateLimitHint(max_requests_per_minute=250, reason="gmail default quota hint")
