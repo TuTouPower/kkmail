@@ -16,7 +16,8 @@ from sqlalchemy import and_, or_, select, update
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.blobs.quota import check_quota
 from mail_core.blobs.store import BlobStore
-from mail_core.mail.domain.archive import assert_transition
+from mail_core.mail.domain.archive import apply_transition
+from mail_core.security.redact import safe_error
 from mail_core.mail.domain.enums import ArchiveState, JobType, OutboxEventType
 from mail_core.mail.storage.models import (
     Account,
@@ -80,11 +81,9 @@ def claim_archive_batch(
     for state, msg in rows:
         # Promote metadata_synced → pending → in_progress
         if state.state == ArchiveState.METADATA_SYNCED.value:
-            assert_transition(ArchiveState.METADATA_SYNCED, ArchiveState.ARCHIVE_PENDING)
-            state.state = ArchiveState.ARCHIVE_PENDING.value
+            apply_transition(state, ArchiveState.ARCHIVE_PENDING)
             state.priority = _priority_for(msg.sort_time, now=now, recent_days=recent_days)
-        assert_transition(ArchiveState(state.state), ArchiveState.ARCHIVE_IN_PROGRESS)
-        state.state = ArchiveState.ARCHIVE_IN_PROGRESS.value
+        apply_transition(state, ArchiveState.ARCHIVE_IN_PROGRESS)
         state.claimed_by = worker_id
         state.claimed_at = now
         state.updated_at = now
@@ -98,7 +97,7 @@ def _pause_quota(session, message_ids: list[uuid.UUID], account_id: uuid.UUID | 
         st = session.get(MessageArchiveState, mid)
         if st is None:
             continue
-        st.state = ArchiveState.ARCHIVE_PAUSED_QUOTA.value
+        apply_transition(st, ArchiveState.ARCHIVE_PAUSED_QUOTA)
         st.pause_reason = "hard_quota"
         st.claimed_by = None
         st.updated_at = datetime.now(timezone.utc)
@@ -226,16 +225,16 @@ def run_archive_batch(
             mime = provider.fetch_mime(remote_id)  # network
             write = blob_store.put(mime)
         except Exception as exc:
-            log.warning("archive fetch failed message=%s: %s", mid, exc)
+            log.warning("archive fetch failed message=%s: %s", mid, safe_error(exc))
             with Session() as session:
                 st = session.get(MessageArchiveState, mid)
                 if st is not None:
                     st.retry_count = int(st.retry_count) + 1
-                    st.last_error = str(exc)
-                    if st.retry_count >= 5:
-                        st.state = ArchiveState.ARCHIVE_FAILED.value
-                    else:
-                        st.state = ArchiveState.ARCHIVE_PENDING.value
+                    st.last_error = safe_error(exc)
+                    apply_transition(
+                        st,
+                        ArchiveState.ARCHIVE_FAILED if st.retry_count >= 5 else ArchiveState.ARCHIVE_PENDING,
+                    )
                     st.claimed_by = None
                     st.updated_at = datetime.now(timezone.utc)
                 session.commit()
@@ -263,17 +262,15 @@ def run_archive_batch(
                     key_version=write.key_version,
                     size_bytes=write.size_bytes,
                     storage_path=write.storage_path,
-                    ref_count=1,
+                    ref_count=0,
                 )
                 session.add(blob)
                 session.flush()
-            else:
-                blob.ref_count = int(blob.ref_count) + 1
-            existing_link = session.get(MessageBlobLink, mid)
-            if existing_link is None:
+            if session.get(MessageBlobLink, mid) is None:
+                # ref_count tracks links: only a new link takes a reference.
                 session.add(MessageBlobLink(message_id=mid, blob_id=blob.id))
-            assert_transition(ArchiveState.ARCHIVE_IN_PROGRESS, ArchiveState.ARCHIVE_COMPLETE)
-            st.state = ArchiveState.ARCHIVE_COMPLETE.value
+                blob.ref_count = int(blob.ref_count) + 1
+            apply_transition(st, ArchiveState.ARCHIVE_COMPLETE)
             st.claimed_by = None
             st.updated_at = datetime.now(timezone.utc)
             completed += 1

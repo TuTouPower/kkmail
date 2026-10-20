@@ -71,5 +71,29 @@ def test_apply_metadata_page_writes_messages_stats_outbox_checkpoint():
         stats = session.get(FolderStats, folder.id)
         assert stats.total_count == 2
         assert stats.unread_count == 1
-        outbox_n = session.scalar(select(func.count()).select_from(OutboxEvent).where(OutboxEvent.account_id == acc.id))
-        assert outbox_n >= 3  # 2 upserts + stats
+        events = session.scalars(
+            select(OutboxEvent).where(OutboxEvent.account_id == acc.id).order_by(OutboxEvent.id)
+        ).all()
+        # One batched upsert event per page (not per message) + one stats event.
+        assert [e.event_type for e in events] == ["message.upserted", "folder.stats_updated"]
+        assert sorted(events[0].payload["message_ids"]) == sorted(str(m.id) for m in msgs)
+
+        # Re-applying an unchanged page writes no message updates and no upsert event.
+        before = {m.id: m.updated_at for m in msgs}
+        again = apply_metadata_page(
+            session,
+            account_id=acc.id,
+            folder_id=folder.id,
+            fencing_token=lease.fencing_token,
+            page=page,
+        )
+        session.commit()
+        assert again.upserted == 2
+        for m in session.scalars(select(Message).where(Message.account_id == acc.id)):
+            assert m.updated_at == before[m.id]
+        n_upsert = session.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.account_id == acc.id, OutboxEvent.event_type == "message.upserted")
+        )
+        assert n_upsert == 1

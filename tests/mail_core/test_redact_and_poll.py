@@ -36,3 +36,10 @@ def test_poll_delay_backoff():
         d = next_poll_delay(0, d, base=2.0, max_idle=10.0)
         seen.append(d)
     assert seen == [4.0, 8.0, 10.0, 10.0, 10.0]
+
+
+def test_application_layer_exports_resolve():
+    import mail_core.mail.application as app_layer
+
+    for name in app_layer.__all__:
+        assert getattr(app_layer, name) is not None, name

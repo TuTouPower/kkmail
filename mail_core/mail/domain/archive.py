@@ -46,3 +46,12 @@ def can_transition(current: ArchiveState, new: ArchiveState) -> bool:
 def assert_transition(current: ArchiveState, new: ArchiveState) -> None:
     if not can_transition(current, new):
         raise IllegalArchiveTransition(f"{current} -> {new} is not allowed")
+
+
+def apply_transition(row, new: ArchiveState) -> None:
+    """Validate and apply ``row.state -> new`` (``row`` has a ``state`` str attribute).
+
+    Every archive state write goes through here so the FSM is the single authority.
+    """
+    assert_transition(ArchiveState(row.state), new)
+    row.state = new.value
