@@ -29,7 +29,7 @@ describe('mobile drawer closes on every navigation', () => {
   })
 
   it.each(['all', 'unread', 'flagged'] as const)('smart view %s closes the drawer and sets the filter', (filter) => {
-    useMailStore.setState({ view: { type: 'accountFolder', accountId: '1', email: 'a@x', folder: 'junkemail' } })
+    useMailStore.setState({ view: { type: 'account', accountId: '1', email: 'a@x' } })
     s().openSmartView(filter)
     expectNavigationReset()
     expect(s().listFilter).toBe(filter)
@@ -44,9 +44,9 @@ describe('mobile drawer closes on every navigation', () => {
     expect(s().listFilter).toBe('unread')
   })
 
-  it.each(['inbox', 'junkemail', 'deleteditems', 'all'])('account folder %s closes the drawer', (folder) => {
-    s().setView({ type: 'accountFolder', accountId: '2', email: 'b@x', folder })
+  it('selecting an account closes the drawer', () => {
+    s().setView({ type: 'account', accountId: '2', email: 'b@x' })
     expectNavigationReset()
-    expect(s().view).toEqual({ type: 'accountFolder', accountId: '2', email: 'b@x', folder })
+    expect(s().view).toEqual({ type: 'account', accountId: '2', email: 'b@x' })
   })
 })
