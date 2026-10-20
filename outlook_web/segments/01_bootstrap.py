@@ -198,8 +198,9 @@ try:
 except Exception:
     APP_VERSION = '1.0.0'
 
-REPOSITORY_OWNER = os.getenv('REPOSITORY_OWNER', 'assast')
-REPOSITORY_NAME = os.getenv('REPOSITORY_NAME', 'outlookEmail')
+# kkmail fork: version check and in-app update follow this fork, not upstream assast/outlookEmail.
+REPOSITORY_OWNER = os.getenv('REPOSITORY_OWNER', 'TuTouPower')
+REPOSITORY_NAME = os.getenv('REPOSITORY_NAME', 'kkmail')
 CHANGELOG_URL = os.getenv(
     'CHANGELOG_URL',
     f'https://github.com/{REPOSITORY_OWNER}/{REPOSITORY_NAME}/blob/main/CHANGELOG.md',
