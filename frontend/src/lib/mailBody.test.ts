@@ -23,10 +23,11 @@ describe('mail body safety', () => {
     expect(out).not.toMatch(/<svg|<math|<video|<audio|<source|<track|<details/i)
   })
 
-  it('wraps output in a CSP document', () => {
+  it('wraps output in a CSP document with rel="noopener noreferrer" base', () => {
     const doc = buildMailSrcdoc('<img src=x onerror=alert(1)>')
     expect(doc).toContain("default-src 'none'")
     expect(doc).toContain('img-src data: cid:')
+    expect(doc).toContain('<base target="_blank" rel="noopener noreferrer">')
     expect(doc).not.toMatch(/onerror/i)
   })
 
@@ -35,9 +36,11 @@ describe('mail body safety', () => {
     expect(buildMailSrcdoc('<img src="https://x/y.png">', { loadRemoteImages: true })).toContain('img-src https: http: data: cid:')
   })
 
-  it('sandbox never allows scripts or same-origin', () => {
+  it('sandbox never allows scripts, same-origin, or escape-sandbox', () => {
     expect(MAIL_IFRAME_SANDBOX).not.toContain('allow-scripts')
     expect(MAIL_IFRAME_SANDBOX).not.toContain('allow-same-origin')
+    expect(MAIL_IFRAME_SANDBOX).not.toContain('allow-popups-to-escape-sandbox')
+    expect(MAIL_IFRAME_SANDBOX).toBe('allow-popups')
   })
 
   it('detects html only from body_type', () => {
