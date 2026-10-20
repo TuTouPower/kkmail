@@ -35,6 +35,8 @@ interface MailUiState {
   toggleSelected: (key: string) => void
   clearSelected: () => void
   selectAll: (keys: string[]) => void
+  flaggedIds: string[]
+  toggleFlag: (key: string) => void
 }
 
 export const useMailStore = create<MailUiState>()(
@@ -91,7 +93,12 @@ export const useMailStore = create<MailUiState>()(
           selectedIds: s.selectedIds.includes(key) ? s.selectedIds.filter((id) => id !== key) : [...s.selectedIds, key],
         })),
       clearSelected: () => set({ selectedIds: [] }),
-      selectAll: (keys) => set({ selectedIds: keys }),
+      selectAll: (keys: string[]) => set({ selectedIds: keys }),
+      flaggedIds: [],
+      toggleFlag: (key) =>
+        set((s) => ({
+          flaggedIds: s.flaggedIds.includes(key) ? s.flaggedIds.filter((id) => id !== key) : [...s.flaggedIds, key],
+        })),
     }),
     { name: 'mail-ui-storage', partialize: (s) => ({ theme: s.theme }) },
   ),
