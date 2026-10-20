@@ -7,6 +7,7 @@ import web_outlook_app as appmod  # noqa: E402
 
 
 def test_authenticated_management_endpoints():
+    appmod.login_attempts.clear()
     client = appmod.app.test_client()
     login = client.post("/login", json={"password": "[REDACTED]"})
     assert login.get_json()["success"] is True
