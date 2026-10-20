@@ -98,11 +98,11 @@ def apply_delta_page(
     # Changes are batched; the *last* change per remote id wins (upsert→delete deletes,
     # delete→upsert keeps the message), matching sequential application.
     last_kind = {c.remote_id: c.kind for c in page.changes}
-    upserts = [
-        c
-        for c in page.changes
-        if c.kind == "upsert" and c.meta is not None and last_kind.get(c.remote_id) != "delete"
-    ]
+    last_upserts: dict[str, Any] = {}
+    for c in page.changes:
+        if c.kind == "upsert" and c.meta is not None and last_kind.get(c.remote_id) != "delete":
+            last_upserts[c.remote_id] = c
+    upserts = list(last_upserts.values())
     flag_changes = [
         c
         for c in page.changes
