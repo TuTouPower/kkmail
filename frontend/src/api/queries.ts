@@ -183,35 +183,12 @@ export async function markReadOptimistic(items: MailItem[]) {
   const keys = unread.map((m) => mailKey(m))
   setCachedReadState(keys, true)
 
-  const mailCoreItems = unread.filter((m) => (m.id_mode || '').includes('mail_core'))
-  const flaskItems = unread.filter((m) => !(m.id_mode || '').includes('mail_core'))
-
-  const tasks: Array<{ keys: string[]; run: () => Promise<void> }> = [
-    ...mailCoreItems.map((m) => ({
-      keys: [mailKey(m)],
-      run: async () => {
-        await postMailCoreMessageRead(m.id, true)
-      },
-    })),
-  ]
-  const byAccount = new Map<string, MailItem[]>()
-  flaskItems.forEach((m) => byAccount.set(m.accountEmail, [...(byAccount.get(m.accountEmail) || []), m]))
-  for (const [email, list] of byAccount.entries()) {
-    tasks.push({
-      keys: list.map((m) => mailKey(m)),
-      run: async () => {
-        const res = await markEmailsRead(email, list, list[0]?.folder || 'inbox')
-        if (res && typeof res === 'object' && (res as { success?: boolean }).success === false) {
-          const err = (res as { error?: unknown }).error
-          throw new Error(
-            typeof err === 'string'
-              ? err
-              : (err as { message?: string } | undefined)?.message || `${email} 标记失败`,
-          )
-        }
-      },
-    })
-  }
+  const tasks: Array<{ keys: string[]; run: () => Promise<void> }> = unread.map((m) => ({
+    keys: [mailKey(m)],
+    run: async () => {
+      await postMailCoreMessageRead(m.id, true)
+    },
+  }))
 
   const results = await Promise.allSettled(tasks.map((t) => t.run()))
   const failedKeys: string[] = []

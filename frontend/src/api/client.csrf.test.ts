@@ -17,24 +17,25 @@ describe('CSRF handling', () => {
     let posts = 0
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
       const h = (init.headers || {}) as Record<string, string>
-      calls.push({ url, token: h['X-CSRFToken'] })
-      if (url === '/api/csrf-token') return json(200, { csrf_token: `tok${++tokenN}` })
+      calls.push({ url, token: h['X-CSRFToken'] || h['X-CSRF-Token'] })
+      if (String(url).endsWith('/api/auth/me')) return json(200, { csrf_token: `tok${++tokenN}`, authenticated: true })
       posts += 1
       if (posts === 1) return json(400, { success: false, error: 'CSRF 校验失败，请刷新页面后重试', csrf_error: true })
-      return json(200, { success: true })
+      return json(200, { success: true, id: '1', is_read: true })
     }))
     const res = await api.markRead({ email: 'a@x', items: [{ id: '1' }] })
     expect(res).toEqual({ success: true })
-    const writes = calls.filter((c) => c.url === '/api/emails/mark-read')
+    const writes = calls.filter((c) => String(c.url).includes('/api/mail/messages/1/read'))
     expect(writes.map((c) => c.token)).toEqual(['tok1', 'tok2'])
   })
 
   it('does not loop when the retry also fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (url === '/api/csrf-token') return json(200, { csrf_token: 't' })
+      if (String(url).endsWith('/api/auth/me')) return json(200, { csrf_token: 't', authenticated: true })
       return json(400, { success: false, error: 'CSRF 校验失败', csrf_error: true })
     }))
     await expect(api.markRead({ email: 'a@x', items: [{ id: '1' }] })).rejects.toMatchObject({ status: 400 })
+    // me + write + me + write
     expect((fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(4)
   })
 
