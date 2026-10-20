@@ -15,12 +15,20 @@ export function sanitizeMailHtml(html: string): string {
   })
 }
 
+export type MailSrcdocOptions = {
+  /** When false, CSP blocks http(s) images (mail-core M5 default). Flask MessageReader keeps default true. */
+  loadRemoteImages?: boolean
+}
+
 /**
  * Build the srcdoc for the sandboxed reader iframe. A strict CSP blocks scripts
  * even if sanitization ever misses something; links open in a new tab.
+ * Flask default: loadRemoteImages=true (unchanged). mail-core readers should pass false.
  */
-export function buildMailSrcdoc(html: string): string {
-  const csp = "default-src 'none'; img-src https: http: data: cid:; style-src 'unsafe-inline'; font-src https: data:"
+export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): string {
+  const loadRemote = opts.loadRemoteImages !== false
+  const imgSrc = loadRemote ? "img-src https: http: data: cid:" : "img-src data: cid:"
+  const csp = `default-src 'none'; ${imgSrc}; style-src 'unsafe-inline'; font-src https: data:`
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank"><style>body{margin:0;font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;word-wrap:break-word}img{max-width:100%;height:auto}</style></head><body>${sanitizeMailHtml(html)}</body></html>`
 }
 
