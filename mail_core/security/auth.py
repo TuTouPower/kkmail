@@ -14,6 +14,7 @@ Env contract:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ from typing import Any, Literal
 
 import bcrypt
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+
+log = logging.getLogger("mail_core.security.auth")
 
 SESSION_COOKIE_NAME = "kkmail_mc_session"
 CSRF_HEADER_NAMES = ("X-CSRF-Token", "X-CSRFToken")
@@ -100,14 +103,61 @@ def load_api_keys() -> frozenset[str]:
     return _api_keys
 
 
+def _fetch_db_password_hash() -> str | None:
+    if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
+        return None
+    try:
+        from mail_core.db.session import get_session_factory
+        from mail_core.mail.storage.models import AuthCredential
+
+        Session = get_session_factory()
+        with Session() as session:
+            cred = session.get(AuthCredential, "default")
+            if cred is not None and cred.login_password_hash:
+                return cred.login_password_hash
+    except Exception:
+        return None
+    return None
+
+
+def _persist_db_password_hash(hash_str: str) -> bool:
+    if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
+        return False
+    try:
+        from mail_core.db.session import get_session_factory
+        from mail_core.mail.storage.models import AuthCredential
+
+        Session = get_session_factory()
+        with Session() as session:
+            cred = session.get(AuthCredential, "default")
+            if cred is None:
+                cred = AuthCredential(id="default", login_password_hash=hash_str)
+                session.add(cred)
+            else:
+                cred.login_password_hash = hash_str
+            session.commit()
+            return True
+    except Exception as exc:
+        log.warning("could not persist password hash to database: %s", exc)
+        return False
+
+
 def get_login_password_hash() -> bytes:
     global _password_hash
     if _password_hash is not None:
         return _password_hash
 
+    # Priority 1: Query database (Decision Plan A: authoritative source)
+    db_hash = _fetch_db_password_hash()
+    if db_hash:
+        _password_hash = db_hash.encode("utf-8")
+        return _password_hash
+
+    # Priority 2: Bootstrap from environment on first boot
     hashed = (os.environ.get("MAIL_CORE_LOGIN_PASSWORD_HASH") or "").strip()
     if hashed:
         _password_hash = hashed.encode("utf-8")
+        _persist_db_password_hash(hashed)
         return _password_hash
 
     path_raw = (os.environ.get("MAIL_CORE_PASSWORD_HASH_PATH") or "").strip()
@@ -116,6 +166,7 @@ def get_login_password_hash() -> bytes:
         if path.is_file():
             _password_hash = path.read_bytes().strip()
             if _password_hash:
+                _persist_db_password_hash(_password_hash.decode("utf-8"))
                 return _password_hash
 
     plain = (os.environ.get("MAIL_CORE_LOGIN_PASSWORD") or "").strip()
@@ -123,6 +174,7 @@ def get_login_password_hash() -> bytes:
         raise AuthConfigError("Set MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt) or MAIL_CORE_LOGIN_PASSWORD for mail-core login")
 
     _password_hash = bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt())
+    _persist_db_password_hash(_password_hash.decode("utf-8"))
     if path_raw:
         path = Path(path_raw)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -206,7 +258,7 @@ def csrf_header_value(headers: Any) -> str | None:
 
 
 def change_login_password(*, current: str, new: str) -> None:
-    """Verify current password and replace the cached bcrypt hash (and optional file)."""
+    """Verify current password and persist new bcrypt hash to database and cache."""
     import bcrypt
 
     global _password_hash
@@ -215,6 +267,12 @@ def change_login_password(*, current: str, new: str) -> None:
     if len(new) < 8:
         raise AuthConfigError("new password must be at least 8 characters")
     hashed = bcrypt.hashpw(new.encode("utf-8"), bcrypt.gensalt())
+    hashed_str = hashed.decode("utf-8")
+
+    # Persist directly into database (Decision Plan A)
+    _persist_db_password_hash(hashed_str)
+
+    # Refresh in-memory cache
     _password_hash = hashed
     path_raw = (os.environ.get("MAIL_CORE_PASSWORD_HASH_PATH") or "").strip()
     if path_raw:

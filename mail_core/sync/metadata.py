@@ -51,6 +51,7 @@ class UpsertOutcome:
     message: Message
     created: bool
     changed: bool
+    location_created: bool = False
 
 
 def upsert_messages(
@@ -90,6 +91,7 @@ def upsert_messages(
     for meta in metas:
         msg = existing.get(meta.remote_id)
         created = msg is None
+        location_created = False
         if created:
             msg = Message(account_id=account_id, remote_id=meta.remote_id, sort_time=meta.sort_time)
             session.add(msg)
@@ -97,15 +99,17 @@ def upsert_messages(
             session.add(MessageArchiveState(message_id=msg.id, state=ArchiveState.METADATA_SYNCED.value))
             session.add(MessageLocation(message_id=msg.id, folder_id=folder_id, uid=meta.uid))
             existing[meta.remote_id] = msg
+            location_created = True
         else:
             loc = locs.get(msg.id)
             if loc is None:
                 loc = MessageLocation(message_id=msg.id, folder_id=folder_id, uid=meta.uid)
                 session.add(loc)
                 locs[msg.id] = loc
+                location_created = True
             elif meta.uid is not None and loc.uid != meta.uid:
                 loc.uid = meta.uid
-        changed = created
+        changed = created or location_created
         for field in _META_FIELDS:
             value = getattr(meta, field)
             if getattr(msg, field) != value:
@@ -118,7 +122,7 @@ def upsert_messages(
                 changed = True
         if changed:
             msg.updated_at = now
-        out.append(UpsertOutcome(message=msg, created=created, changed=changed))
+        out.append(UpsertOutcome(message=msg, created=created, changed=changed, location_created=location_created))
     session.flush()
     return out
 
@@ -144,7 +148,10 @@ def apply_metadata_page(
     assert_fencing(session, account_id=account_id, fencing_token=fencing_token)
     outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=list(page.items))
     touched: list[uuid.UUID] = []
+    folder_stats_dirty = False
     for o, meta in zip(outcomes, page.items):
+        if o.location_created:
+            folder_stats_dirty = True
         if not o.changed:
             continue
         touched.append(o.message.id)
@@ -165,6 +172,8 @@ def apply_metadata_page(
             )
     if touched:
         session.add(messages_upserted_event(account_id, folder_id, touched))
+        folder_stats_dirty = True
+    if folder_stats_dirty:
         recompute_folder_stats(session, folder_id)
         session.add(
             OutboxEvent(

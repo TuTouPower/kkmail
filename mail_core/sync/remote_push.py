@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.application.remote_ops import mark_remote_operation, reclaim_stale_in_progress
-from mail_core.mail.domain.enums import RemoteOperationStatus
+from mail_core.mail.domain.enums import JobType, RemoteOperationStatus
 from mail_core.mail.storage.models import Account, RemoteOperation
 from mail_core.providers.factory import build_provider
+from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import (
     FencingMismatch,
     LeaseBusy,
@@ -23,6 +24,42 @@ from mail_core.sync.leases import (
 )
 
 log = logging.getLogger("mail_core.sync.remote_push")
+
+DEFAULT_MAX_REMOTE_OP_ATTEMPTS = 5
+
+
+def is_transient_error(exc: Exception | None = None, err_msg: str | None = None) -> bool:
+    if exc is not None:
+        if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+            return True
+        name = type(exc).__name__.lower()
+        if any(term in name for term in ("timeout", "connect", "network", "socket")):
+            return True
+        status_code = getattr(exc, "status_code", None)
+        if status_code is None and hasattr(exc, "response"):
+            status_code = getattr(getattr(exc, "response"), "status_code", None)
+        if isinstance(status_code, int) and (status_code == 429 or status_code >= 500):
+            return True
+    if err_msg:
+        err_lower = err_msg.lower()
+        if any(
+            term in err_lower
+            for term in (
+                "timeout",
+                "timed out",
+                "connection",
+                "rate limit",
+                "429",
+                "500",
+                "502",
+                "503",
+                "504",
+                "server error",
+                "temporar",
+            )
+        ):
+            return True
+    return False
 
 
 def push_remote_operations(
@@ -55,11 +92,18 @@ def push_remote_operations(
         reclaimed = reclaim_stale_in_progress(session, older_than=timedelta(minutes=15), limit=limit)
         if reclaimed:
             log.info("reclaimed %s stale in_progress remote op(s)", reclaimed)
+        now = datetime.now(timezone.utc)
         ops = list(
             session.scalars(
                 select(RemoteOperation)
                 .where(RemoteOperation.account_id == account_id)
                 .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
+                .where(
+                    or_(
+                        RemoteOperation.next_attempt_at.is_(None),
+                        RemoteOperation.next_attempt_at <= now,
+                    )
+                )
                 .order_by(RemoteOperation.created_at.asc())
                 .limit(limit)
             ).all()
@@ -97,10 +141,12 @@ def push_remote_operations(
                 assert_fencing(session, account_id=account_id, fencing_token=fencing)
             except FencingMismatch:
                 return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
-            op = session.get(RemoteOperation, op_id)
+            op = session.get(RemoteOperation, op_id, with_for_update=True)
             if op is None or op.status != RemoteOperationStatus.PENDING.value:
                 continue
             mark_remote_operation(session, op, status=RemoteOperationStatus.IN_PROGRESS)
+            claimed_desired = dict(op.desired_state or {})
+            claimed_updated_at = op.updated_at
             try:
                 heartbeat_lease(
                     session,
@@ -114,12 +160,14 @@ def push_remote_operations(
                 return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
             session.commit()
 
+        caught_exc: Exception | None = None
         try:
-            result = provider.apply_remote_operation(op_type, desired)  # network
+            result = provider.apply_remote_operation(op_type, claimed_desired)  # network
             ok = bool(result.success)
             err = result.error
         except Exception as exc:  # noqa: BLE001 — isolate per-op provider failures
             log.exception("remote push op %s failed: %s", op_id, type(exc).__name__)
+            caught_exc = exc
             ok = False
             err = f"{type(exc).__name__}: {exc}"
 
@@ -129,17 +177,64 @@ def push_remote_operations(
             except FencingMismatch:
                 # Side effect may have landed remotely; leave IN_PROGRESS for reconcile.
                 return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
-            op = session.get(RemoteOperation, op_id)
+            op = session.get(RemoteOperation, op_id, with_for_update=True)
             if op is None:
                 continue
+
+            # CAS check: must still be IN_PROGRESS and desired_state / revision must match what was claimed
+            if (
+                op.status != RemoteOperationStatus.IN_PROGRESS.value
+                or dict(op.desired_state or {}) != claimed_desired
+                or op.updated_at != claimed_updated_at
+            ):
+                log.info(
+                    "remote op %s modified during push; preserving PENDING and reenqueuing push",
+                    op_id,
+                )
+                op.status = RemoteOperationStatus.PENDING.value
+                enqueue_job(
+                    session,
+                    job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                    account_id=account_id,
+                    payload={},
+                    priority=40,
+                    dedupe_key=f"remote-op-push:{account_id}",
+                )
+                session.commit()
+                continue
             if ok:
-                mark_remote_operation(session, op, status=RemoteOperationStatus.DONE)
+                mark_remote_operation(session, op, status=RemoteOperationStatus.DONE, next_attempt_at=None)
                 pushed += 1
             else:
-                mark_remote_operation(
-                    session, op, status=RemoteOperationStatus.FAILED, error=err or "push failed"
-                )
-                failed += 1
+                now_retry = datetime.now(timezone.utc)
+                if is_transient_error(caught_exc, err) and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS:
+                    delay = min(3600, 2 ** max(0, int(op.attempts) - 1))
+                    next_attempt = now_retry + timedelta(seconds=delay)
+                    mark_remote_operation(
+                        session,
+                        op,
+                        status=RemoteOperationStatus.PENDING,
+                        error=err or "transient failure",
+                        next_attempt_at=next_attempt,
+                    )
+                    enqueue_job(
+                        session,
+                        job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                        account_id=account_id,
+                        payload={},
+                        priority=40,
+                        run_after=next_attempt,
+                        dedupe_key=f"remote-op-push:{account_id}",
+                    )
+                else:
+                    mark_remote_operation(
+                        session,
+                        op,
+                        status=RemoteOperationStatus.FAILED,
+                        error=err or "push failed",
+                        next_attempt_at=None,
+                    )
+                    failed += 1
             try:
                 heartbeat_lease(
                     session,
@@ -156,7 +251,49 @@ def push_remote_operations(
     with Session() as session:
         try:
             release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-            session.commit()
         except FencingMismatch:
             pass
+        now_end = datetime.now(timezone.utc)
+        has_due_pending = session.scalar(
+            select(RemoteOperation.id)
+            .where(RemoteOperation.account_id == account_id)
+            .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
+            .where(
+                or_(
+                    RemoteOperation.next_attempt_at.is_(None),
+                    RemoteOperation.next_attempt_at <= now_end,
+                )
+            )
+            .limit(1)
+        ) is not None
+        if has_due_pending:
+            enqueue_job(
+                session,
+                job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                account_id=account_id,
+                payload={},
+                priority=40,
+                dedupe_key=f"remote-op-push:{account_id}",
+            )
+        else:
+            next_due = session.scalar(
+                select(func.min(RemoteOperation.next_attempt_at))
+                .where(RemoteOperation.account_id == account_id)
+                .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
+                .where(RemoteOperation.next_attempt_at > now_end)
+            )
+            if next_due:
+                enqueue_job(
+                    session,
+                    job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                    account_id=account_id,
+                    payload={},
+                    priority=40,
+                    run_after=next_due,
+                    dedupe_key=f"remote-op-push:{account_id}",
+                )
+        session.commit()
     return {"status": "ok", "pushed": pushed, "failed": failed}
+
+
+push_pending_remote_operations = push_remote_operations
