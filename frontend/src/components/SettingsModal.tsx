@@ -19,7 +19,7 @@ export default function SettingsPage() {
   const [section, setSection] = useState<'accounts' | 'appearance' | 'general'>('accounts')
   const [status, setStatus] = useState('')
   const [email, setEmail] = useState('')
-  const [provider, setProvider] = useState('imap')
+  const [provider, setProvider] = useState<'gmail' | 'imap' | 'graph' | 'memory' | 'stub'>('imap')
   const [credJson, setCredJson] = useState('')
   const [imapHost, setImapHost] = useState('')
   const [imapPort, setImapPort] = useState('993')
@@ -101,7 +101,7 @@ export default function SettingsPage() {
             <div style={{ marginTop: 18, fontWeight: 700 }}>添加账户</div>
             <p style={{ fontSize: 12, color: 'var(--muted)' }}>credentials 为 JSON（如 refresh_token / client_id），写入凭证库，接口不会回显。</p>
             <input id="account-email" name="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-            <select id="account-provider" name="provider" value={provider} onChange={(e) => setProvider(e.target.value)} style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+            <select id="account-provider" name="provider" value={provider} onChange={(e) => setProvider(e.target.value as 'gmail' | 'imap' | 'graph' | 'memory' | 'stub')} style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
               <option value="imap">imap</option>
               <option value="gmail">gmail</option>
               <option value="graph">graph</option>
