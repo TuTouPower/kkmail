@@ -1,14 +1,4 @@
-/** Feature flag for the mail-core greenfield list/reader bridge.
- *
- * Enable when any of:
- * - `VITE_MAIL_CORE=1` (explicit build flag)
- * - `VITE_MAIL_CORE_DEFAULT=1` (cutover build: mail-core preferred)
- * - runtime `window.__KKMAIL_CONFIG__.mailCoreDefault === true`
- *   (Flask injects this when env `MAIL_CORE_DEFAULT=1` — no rebuild required)
- *
- * Explicit `VITE_MAIL_CORE=0` / `false` / `off` forces Flask-only.
- * Login and non-mail routes are unaffected.
- */
+/** mail-core is the sole backend. Flag kept for tests / optional off switch. */
 
 export type KkmailRuntimeConfig = {
   mailCoreDefault?: boolean
@@ -35,18 +25,16 @@ function parseFlag(raw: unknown): 'on' | 'off' | 'unset' {
 }
 
 export function isMailCoreEnabled(): boolean {
-  // mail-core is the sole backend; only an explicit off flag disables the bridge.
   const explicit = parseFlag(import.meta.env.VITE_MAIL_CORE)
   if (explicit === 'off') return false
   return true
 }
 
-/** Base URL for mail-core FastAPI. Empty = same-origin `/mail-core` proxy. */
+/** Base URL for mail-core FastAPI. Empty = same-origin. */
 export function mailCoreBaseUrl(): string {
   const runtime = runtimeConfig().mailCoreBase
   if (runtime && String(runtime).trim()) return String(runtime).replace(/\/$/, '')
   const raw = String(import.meta.env.VITE_MAIL_CORE_BASE || '').trim()
   if (raw) return raw.replace(/\/$/, '')
-  // Same-origin: SPA and API both served by mail-core (Flask proxy path removed).
   return ''
 }

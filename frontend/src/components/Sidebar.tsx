@@ -1,6 +1,6 @@
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle, Trash2, ShieldAlert, Layers } from 'lucide-react'
-import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, fetchGroups, queryKeys, type MailItem } from '../api/queries'
+import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchGroups, queryKeys, type MailItem } from '../api/queries'
 import { FOLDERS, providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
 
@@ -25,25 +25,23 @@ export default function Sidebar() {
 
   const groups = groupsQuery.data || []
   const accounts = accountsQuery.data || []
-  // Read-only observers of the cached inbox lists (never fetch from here), so
-  // badges follow the list exactly, including optimistic "read" updates.
-  const inboxCaches = useQueries({
-    queries: accounts.map((a) => ({
-      queryKey: queryKeys.emails(a.email, 'inbox'),
-      queryFn: ({ signal }: { signal: AbortSignal }) => fetchEmails(a.email, 'inbox', a.id, signal),
-      enabled: false,
-    })),
+  // Observe mail-core unified inbox cache for unread badges (populated by MessageList).
+  const inboxCache = useQuery({
+    queryKey: ['mail-core', 'inbox', 'all'],
+    queryFn: async () => [] as MailItem[],
+    enabled: false,
   })
-  const unreadByAccount = new Map<string, number | undefined>()
-  accounts.forEach((a, i) => {
-    const data = inboxCaches[i]?.data as MailItem[] | undefined
-    unreadByAccount.set(a.email, data ? data.filter((m) => !m.is_read).length : undefined)
-  })
+  const inboxRows = (inboxCache.data || []) as MailItem[]
+  const unreadByAccount = new Map<string, number>()
+  for (const m of inboxRows) {
+    if (m.is_read) continue
+    unreadByAccount.set(m.accountEmail, (unreadByAccount.get(m.accountEmail) || 0) + 1)
+  }
   const allInboxUnread = accounts.slice(0, ALL_INBOX_ACCOUNT_LIMIT).reduce((n, a) => n + (unreadByAccount.get(a.email) || 0), 0)
   const inAllInbox = view.type === 'allInbox'
   const grouped = groups.length
     ? groups.map((g) => ({ group: g, members: accounts.filter((a) => a.group_id === g.id) }))
-    : [{ group: { id: 0, name: '全部账户' }, members: accounts }]
+    : [{ group: { id: '0', name: '全部账户' }, members: accounts }]
 
   return (
     <aside className="sidebar" aria-label="邮箱导航" role={wide ? undefined : 'dialog'} aria-modal={wide ? undefined : true}>

@@ -175,6 +175,13 @@ export function postMailCoreMessageFlag(
   return postJson(`/api/mail/messages/${encodeURIComponent(messageId)}/flag`, { is_flagged: isFlagged }, signal)
 }
 
+export function postMailCoreMessageTrash(
+  messageId: string,
+  signal?: AbortSignal,
+): Promise<{ id: string; success?: boolean }> {
+  return postJson(`/api/mail/messages/${encodeURIComponent(messageId)}/trash`, {}, signal)
+}
+
 export function fetchMailCoreInbox(opts: MailCoreInboxQuery | number = 40): Promise<MailCoreInboxPage> {
   const q = typeof opts === 'number' ? { limit: opts } : opts
   const params = new URLSearchParams()
