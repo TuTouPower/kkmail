@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from mail_core.mail.storage.models import Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
+from mail_core.mail.storage.models import Account, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +22,7 @@ class MessageListItem:
     from_name: str | None
     sort_time: datetime
     is_read: bool
+    is_flagged: bool
     has_attachments: bool
     snippet: str | None
     folder_id: uuid.UUID | None
@@ -94,6 +95,7 @@ def list_messages_keyset(
             from_name=m.from_name,
             sort_time=m.sort_time,
             is_read=m.is_read,
+            is_flagged=m.is_flagged,
             has_attachments=m.has_attachments,
             snippet=m.snippet,
             folder_id=fid,
@@ -202,3 +204,20 @@ def get_message_detail(session: Session, message_id: uuid.UUID) -> MessageDetail
             for a in atts
         ],
     )
+
+
+def resolve_account_id_by_email(session: Session, email: str) -> uuid.UUID | None:
+    raw = (email or "").strip()
+    if not raw:
+        return None
+    found = session.scalar(select(Account.id).where(Account.email == raw).limit(1))
+    if found:
+        return found
+    return session.scalar(select(Account.id).where(Account.email == raw.lower()).limit(1))
+
+
+def account_emails_by_id(session: Session, account_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+    if not account_ids:
+        return {}
+    rows = session.execute(select(Account.id, Account.email).where(Account.id.in_(account_ids))).all()
+    return {rid: email for rid, email in rows}
