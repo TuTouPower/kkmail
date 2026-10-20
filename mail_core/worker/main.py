@@ -56,6 +56,11 @@ def _tick(worker_id: str) -> int:
 def run(poll_interval_s: float | None = None) -> None:
     global _stop
     _stop = False
+    from mail_core.blobs.crypto import load_keyring_from_env
+
+    # Fail fast: worker must not process jobs without blob keys.
+    load_keyring_from_env()
+
     interval = poll_interval_s if poll_interval_s is not None else float(os.environ.get("MAIL_CORE_WORKER_POLL_S", "2"))
     worker_id = os.environ.get("MAIL_CORE_WORKER_ID") or f"worker-{uuid.uuid4().hex[:8]}"
     if threading.current_thread() is threading.main_thread():
