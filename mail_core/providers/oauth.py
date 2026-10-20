@@ -227,13 +227,32 @@ def build_graph_api_transport(
 
 
 
+def _url_is_sync_cursor_endpoint(url: str) -> bool:
+    """True for Gmail History / Graph delta URLs where 404/410 mean cursor invalid.
+
+    Labels, message get, MIME ``$value``, send, etc. must *not* map to
+    ``CursorInvalidError`` — those are ordinary resource misses.
+    """
+    u = (url or "").lower()
+    if "/history" in u:
+        return True
+    if "messages/delta" in u or "/delta?" in u or u.rstrip("/").endswith("/delta"):
+        return True
+    if "deltatoken=" in u:
+        return True
+    return False
+
+
 def urllib_json_request(
     method: str,
     url: str,
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
 ) -> Any:
-    """Generic JSON HTTP for Gmail/Graph API calls (stdlib)."""
+    """Generic JSON HTTP for Gmail/Graph API calls (stdlib).
+
+    Maps 404/410 → ``CursorInvalidError`` only for History / delta endpoints.
+    """
     import json
     import urllib.error
     import urllib.parse
@@ -268,6 +287,6 @@ def urllib_json_request(
         hdrs = {k: v for k, v in exc.headers.items()} if exc.headers else {}
         if exc.code == 429:
             raise RateLimitedError(body or str(exc), status=429, body=body, headers=hdrs) from exc
-        if exc.code in (404, 410):
+        if exc.code in (404, 410) and _url_is_sync_cursor_endpoint(url):
             raise CursorInvalidError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
         raise ProviderHttpError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
