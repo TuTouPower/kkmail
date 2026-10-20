@@ -6,7 +6,7 @@
 - **会话**：签名 Cookie（`MAIL_CORE_SECRET_KEY`，必填），`HttpOnly`，`SameSite=Lax`（`MAIL_CORE_COOKIE_SAMESITE`），有效期 `MAIL_CORE_SESSION_MAX_AGE`（默认 30 天）。经 HTTPS 访问时设置 `MAIL_CORE_COOKIE_SECURE=1`。
 - **CSRF**：Cookie 会话下所有写请求必须带 `X-CSRF-Token`；前端拿不到令牌时不会发出写请求。
 - **API Key**：`MAIL_CORE_API_KEYS`（逗号分隔或 JSON 列表），`Authorization: Bearer`；不接受查询串里的 key。
-- **登录限速**：同一客户端地址在 `MAIL_CORE_LOGIN_WINDOW_S`（默认 300s）内失败 `MAIL_CORE_LOGIN_MAX_FAILURES`（默认 10）次后返回 429。按套接字对端地址计数，不信任 `X-Forwarded-For`；在反向代理后请用 `--forwarded-allow-ips`（或 `FORWARDED_ALLOW_IPS`）只信任代理地址。
+- **登录限速**：同一客户端地址在 `MAIL_CORE_LOGIN_WINDOW_S`（默认 300s）内失败 `MAIL_CORE_LOGIN_MAX_FAILURES`（默认 10）次后返回 429。按套接字对端地址计数，不信任 `X-Forwarded-For`；在反向代理后请在 uvicorn 启动命令中使用命令行参数 `--forwarded-allow-ips=<代理地址>` 只信任代理地址（uvicorn 不读取环境变量）。
 - 修改密码：`POST /api/auth/password`（需当前密码，新密码至少 8 位）。
 - `/health`、`/ready`、`/api/auth/login` 与 FastAPI 自带的 `/docs`、`/openapi.json` 不需要认证；后两者只暴露接口结构，不含数据。
 
