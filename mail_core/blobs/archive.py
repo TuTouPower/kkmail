@@ -164,14 +164,18 @@ def claim_archive_batch(
                     ArchiveState.METADATA_SYNCED.value,
                     ArchiveState.ARCHIVE_PENDING.value,
                 ]
-            )
+            ),
+            MessageArchiveState.claimed_by.is_(None),
+            MessageArchiveState.retry_count < 5,
         )
-        .order_by(MessageArchiveState.priority.asc(), Message.sort_time.desc())
-        .limit(limit)
-        .with_for_update(of=MessageArchiveState, skip_locked=True)
     )
     if account_id is not None:
         stmt = stmt.where(Message.account_id == account_id)
+    stmt = (
+        stmt.order_by(MessageArchiveState.priority.asc(), Message.sort_time.desc())
+        .limit(limit)
+        .with_for_update(of=MessageArchiveState, skip_locked=True)
+    )
     rows = list(session.execute(stmt).all())
     claimed: list[uuid.UUID] = []
     for state, msg in rows:
