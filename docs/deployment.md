@@ -27,8 +27,8 @@ docker run -d \
   --name outlook-mail-reader \
   -p 5000:5000 \
   -v $(pwd)/data:/app/data \
-  -e LOGIN_PASSWORD=[REDACTED] \
-  -e SECRET_KEY=your-secret-key-here \
+  -e LOGIN_PASSWORD='(set-a-strong-password)' \
+  -e SECRET_KEY="$(openssl rand -hex 32)" \
   ghcr.io/assast/outlookemail:latest
 
 # 查看日志
@@ -43,7 +43,7 @@ docker rm outlook-mail-reader
 - 创建数据目录
 - 初始化数据库
 - 创建默认分组和临时邮箱分组
-- 设置默认密码（[REDACTED]）
+- 自行设置强登录密码（无默认口令）
 
 ## 方式三：使用 Python 直接运行
 
@@ -56,8 +56,8 @@ cd outlookEmail
 pip install -r requirements.txt
 
 # 设置环境变量
-export LOGIN_PASSWORD=[REDACTED]
-export SECRET_KEY=your-secret-key-here
+export LOGIN_PASSWORD='(set-a-strong-password)'
+export SECRET_KEY="$(openssl rand -hex 32)"
 export PORT=5000
 
 # 运行应用
@@ -93,8 +93,8 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - LOGIN_PASSWORD=[REDACTED]
-      - SECRET_KEY=your-secret-key-here
+      - LOGIN_PASSWORD='(set-a-strong-password)'
+      - SECRET_KEY="$(openssl rand -hex 32)"
       - FLASK_ENV=production
       - GPTMAIL_API_KEY=your-api-key
     restart: unless-stopped
@@ -122,7 +122,7 @@ docker-compose down
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
 | `SECRET_KEY` | Session 密钥（服务器部署强烈建议固定设置） | Windows `exe` 首次启动会自动生成并持久化；Docker / Python / 生产环境请显式设置固定值，不要随意修改，否则会导致已存储敏感数据无法解密 |
-| `LOGIN_PASSWORD` | 登录密码 | `[REDACTED]` |
+| `LOGIN_PASSWORD` | 登录密码（必填） | （无默认；自行设置） |
 | `FLASK_ENV` | 运行环境 | `production` |
 | `LOG_LEVEL` | 全局日志级别（`DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`）。默认 `INFO` 会输出出站 `[代理]` 详情（含 Resin Platform/Account，密码已打码）。批量拉信或 Token 刷新时日志较多，生产环境若只需告警可设 `LOG_LEVEL=WARNING` 降噪 | `INFO` |
 | `PORT` | 应用端口 | `5000` |
@@ -199,7 +199,7 @@ docker run -d \
   --name outlook-mail-reader \
   -p 5000:5000 \
   -v $(pwd)/data:/app/data \
-  -e LOGIN_PASSWORD=[REDACTED] \
+  -e LOGIN_PASSWORD='(set-a-strong-password)' \
   outlook-mail-reader
 ```
 

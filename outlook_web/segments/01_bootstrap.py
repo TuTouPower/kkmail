@@ -160,8 +160,8 @@ else:
     def csrf_exempt(f):
         return f
 
-# 登录密码配置（可以修改为你想要的密码）
-LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD", "[REDACTED]")
+# 登录密码：首次初始化写入 DB 时必填；无公开默认值
+LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD") or ""
 
 # ==================== 配置 ====================
 # Token 端点
@@ -1999,7 +1999,12 @@ def init_db():
                 UPDATE settings SET value = ? WHERE key = 'login_password'
             ''', (hashed_password,))
     else:
-        # 首次初始化，哈希默认密码
+        # 首次初始化：必须提供 LOGIN_PASSWORD（无默认口令）
+        if not LOGIN_PASSWORD:
+            raise RuntimeError(
+                "LOGIN_PASSWORD environment variable is required on first start. "
+                "Set a strong password; there is no default."
+            )
         hashed_password = hash_password(LOGIN_PASSWORD)
         cursor.execute('''
             INSERT INTO settings (key, value)

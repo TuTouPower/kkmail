@@ -6,22 +6,23 @@
 #
 # Required before `docker compose -f docker-compose.mail-core.yml up`:
 #   export MAIL_CORE_BLOB_KEY_V1="$(python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
+#   export POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 #   export MAIL_CORE_BACKUP_KEY="$(python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
 # Backup key MUST differ from the blob key. Do not ship sample all-A keys.
 version: "3.9"
 # Note: if `docker compose` plugin is unavailable, equivalent for Postgres only:
 #   docker run -d --name kkmail-mail-core-pg -e POSTGRES_USER=kkmail \
-#     -e POSTGRES_PASSWORD=kkmail -e POSTGRES_DB=kkmail_mail -p 5433:5432 postgres:16
+#     -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" -e POSTGRES_DB=kkmail_mail -p 127.0.0.1:5433:5432 postgres:16
 services:
   postgres:
     image: postgres:16
     container_name: kkmail-mail-core-pg
     environment:
       POSTGRES_USER: kkmail
-      POSTGRES_PASSWORD: kkmail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       POSTGRES_DB: kkmail_mail
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - kkmail_mail_core_pg:/var/lib/postgresql/data
     healthcheck:
@@ -35,7 +36,7 @@ services:
       context: .
       dockerfile: Dockerfile.mail-core
     environment:
-      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:kkmail@postgres:5432/kkmail_mail
+      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,7 +49,7 @@ services:
       dockerfile: Dockerfile.mail-core
     container_name: kkmail-mail-core-api
     environment:
-      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:kkmail@postgres:5432/kkmail_mail
+      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
       MAIL_CORE_DEFAULT: "1"
       MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:8000"
       # Required: 32-byte AES key, base64-encoded. Generate:
@@ -78,7 +79,7 @@ services:
       dockerfile: Dockerfile.mail-core
     container_name: kkmail-mail-core-worker
     environment:
-      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:kkmail@postgres:5432/kkmail_mail
+      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
       MAIL_CORE_BLOB_KEY_V1: ${MAIL_CORE_BLOB_KEY_V1:?set MAIL_CORE_BLOB_KEY_V1 (base64 32-byte key)}
       MAIL_CORE_BLOB_ACTIVE_VERSION: "1"
       MAIL_CORE_BACKUP_KEY: ${MAIL_CORE_BACKUP_KEY:?set MAIL_CORE_BACKUP_KEY (must differ from blob key)}

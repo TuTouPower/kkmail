@@ -8,7 +8,7 @@
 ## 📦 快速开始
 ### 体验站点（可能非最新版本）
 https://aso.de5.net
-[REDACTED]
+（体验站为公共演示，口令见站点说明；请勿存放真实数据）
 注意：体验站点请勿修改密码或存放实际数据，部署在无持久化的服务上，数据随时可能丢失恢复初始状态；并且由于大家都能登录看到，并且好像有进程在扫描，所以非常可能存在账号被盗的风险
 
 ## 🌿 版本管理与发布
@@ -36,7 +36,7 @@ Windows 桌面版发现新版本后，可在页面顶部的版本入口点击「
 - Windows 数据默认保存在 `%APPDATA%\OutlookEmail`
 - 在线升级要求当前 EXE 所在目录可写，不会申请管理员权限；如果目录不可写，请先把程序移动到普通可写目录
 - 新版本启动失败时会自动恢复旧版本；如果升级期间断电，可将同目录的 `*.old.exe` 手动改回原文件名恢复
-- 默认登录密码仍然是 `[REDACTED]`，首次登录后建议立即修改
+- 必须自行设置 `LOGIN_PASSWORD` 与 `SECRET_KEY`（无公开默认口令）；首次登录后建议立即修改
 
 ### 方式二：下载 macOS 安装包
 
@@ -53,7 +53,7 @@ Windows 桌面版发现新版本后，可在页面顶部的版本入口点击「
 - macOS 数据默认保存在 `~/Library/Application Support/OutlookEmail`
 - 如果 macOS 提示Apple无法验证“OutlookEmail”是否包含可能危害Mac安全或泄漏隐私的恶意软件。可执行下面命令然后重试
   `sudo xattr -rd com.apple.quarantine /Applications/OutlookEmail.app` 
-- 默认登录密码仍然是 `[REDACTED]`，首次登录后建议立即修改
+- 必须自行设置 `LOGIN_PASSWORD` 与 `SECRET_KEY`（无公开默认口令）；首次登录后建议立即修改
 
 ### 方式三：使用 Docker（推荐服务器部署）
 
@@ -66,8 +66,8 @@ docker run -d \
   --name outlook-mail-reader \
   -p 5000:5000 \
   -v $(pwd)/data:/app/data \
-  -e LOGIN_PASSWORD=[REDACTED] \
-  -e SECRET_KEY=your-secret-key-here \
+  -e LOGIN_PASSWORD='(set-a-strong-password)' \
+  -e SECRET_KEY="$(openssl rand -hex 32)" \
   ghcr.io/assast/outlookemail:latest
 ```
 
@@ -77,7 +77,8 @@ docker run -d \
 git clone https://github.com/TuTouPower/kkmail.git
 cd kkmail
 pip install -r requirements.txt
-export SECRET_KEY=your-secret-key-here
+export SECRET_KEY="$(openssl rand -hex 32)"
+export LOGIN_PASSWORD='(set-a-strong-password)'
 python web_outlook_app.py
 ```
 
@@ -103,8 +104,8 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - LOGIN_PASSWORD=[REDACTED]
-      - SECRET_KEY=your-secret-key-here
+      - LOGIN_PASSWORD='(set-a-strong-password)'
+      - SECRET_KEY="$(openssl rand -hex 32)"
       - FLASK_ENV=production
     restart: unless-stopped
 ```
@@ -136,8 +137,8 @@ services:
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - LOGIN_PASSWORD=[REDACTED]
-      - SECRET_KEY=your-secret-key-here
+      - LOGIN_PASSWORD='(set-a-strong-password)'
+      - SECRET_KEY="$(openssl rand -hex 32)"
       - FLASK_ENV=production
       - DOCKER_UPDATE_ENABLED=true
       - DOCKER_UPDATE_CONTAINER=outlook-mail-reader
@@ -171,7 +172,7 @@ python -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
 - `SECRET_KEY`：填入上面生成的随机串（务必修改，勿用占位值；首尾空白会被忽略）
-- `LOGIN_PASSWORD`：首次初始化时的登录密码，默认 `[REDACTED]`，建议改为强密码；**已写入数据库后**再改此变量不会覆盖当前密码。忘记密码请用 `scripts/reset_login_password.py`（见 [故障排除](docs/troubleshooting.md) / [安全配置](docs/security.md)）
+- `LOGIN_PASSWORD`：首次初始化时的登录密码（**必须自行设置**，无默认值）；**已写入数据库后**再改此变量不会覆盖当前密码。忘记密码请用 `scripts/reset_login_password.py`（见 [故障排除](docs/troubleshooting.md) / [安全配置](docs/security.md)）
 
 可选：如需调整 Gunicorn 线程数 / 超时，在 `.env.local` 中追加 `GUNICORN_THREADS`、`GUNICORN_TIMEOUT`（不填则使用默认值 4 / 300）。
 
@@ -782,7 +783,7 @@ The React UI lives in `frontend/`. Flask serves `frontend/dist` at `/` when pres
 
 ```bash
 cd frontend && npm ci --legacy-peer-deps && npm run build
-SECRET_KEY=dev LOGIN_PASSWORD=[REDACTED] python web_outlook_app.py
+SECRET_KEY=dev LOGIN_PASSWORD='(set-a-strong-password)' python web_outlook_app.py
 ```
 
 Docker with the new UI:
