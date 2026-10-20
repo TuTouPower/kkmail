@@ -27,7 +27,14 @@ interface MailUiState {
   collapsedAccounts: string[]
   toggleAccount: (id: string) => void
   composeOpen: boolean
+  composeMode: 'new' | 'reply' | 'forward'
+  composeDraft: { to: string; subject: string; body: string; accountId?: number }
+  openCompose: (mode?: 'new' | 'reply' | 'forward', draft?: Partial<MailUiState['composeDraft']>) => void
   setComposeOpen: (open: boolean) => void
+  selectedIds: string[]
+  toggleSelected: (key: string) => void
+  clearSelected: () => void
+  selectAll: (keys: string[]) => void
 }
 
 export const useMailStore = create<MailUiState>()(
@@ -64,7 +71,27 @@ export const useMailStore = create<MailUiState>()(
             : [...s.collapsedAccounts, id],
         })),
       composeOpen: false,
+      composeMode: 'new',
+      composeDraft: { to: '', subject: '', body: '' },
+      openCompose: (mode = 'new', draft = {}) =>
+        set({
+          composeOpen: true,
+          composeMode: mode,
+          composeDraft: {
+            to: draft.to || '',
+            subject: draft.subject || '',
+            body: draft.body || '',
+            accountId: draft.accountId,
+          },
+        }),
       setComposeOpen: (open) => set({ composeOpen: open }),
+      selectedIds: [],
+      toggleSelected: (key) =>
+        set((s) => ({
+          selectedIds: s.selectedIds.includes(key) ? s.selectedIds.filter((id) => id !== key) : [...s.selectedIds, key],
+        })),
+      clearSelected: () => set({ selectedIds: [] }),
+      selectAll: (keys) => set({ selectedIds: keys }),
     }),
     { name: 'mail-ui-storage', partialize: (s) => ({ theme: s.theme }) },
   ),
