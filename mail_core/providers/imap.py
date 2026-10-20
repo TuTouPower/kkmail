@@ -203,6 +203,7 @@ class ImapProvider:
                     )
                 meta_s = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
                 is_read = "\\Seen" in meta_s
+                is_flagged = "\\Flagged" in meta_s
                 header_text = header_bytes.decode("utf-8", errors="replace") if isinstance(header_bytes, bytes) else str(header_bytes)
                 headers = email.message_from_string(header_text)
                 subject = _decode_header(headers.get("Subject"))
@@ -225,6 +226,7 @@ class ImapProvider:
                         sort_time=sort_time,
                         is_read=is_read,
                         has_attachments=False,
+                        is_flagged=is_flagged,
                         internet_message_id=headers.get("Message-ID"),
                         uid=uid,
                         in_reply_to=headers.get("In-Reply-To"),
