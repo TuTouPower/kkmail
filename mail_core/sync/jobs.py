@@ -7,7 +7,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import JobStatus
@@ -74,8 +75,32 @@ def enqueue_job(
         status=JobStatus.PENDING.value,
         dedupe_key=dedupe_key,
     )
-    session.add(job)
-    session.flush()
+    if dedupe_key:
+        try:
+            with session.begin_nested():
+                session.add(job)
+                session.flush()
+        except IntegrityError:
+            existing = session.scalar(
+                select(WorkerJob)
+                .where(WorkerJob.dedupe_key == dedupe_key)
+                .where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
+                .limit(1)
+            )
+            if existing is not None:
+                return existing
+            latest = session.scalar(
+                select(WorkerJob)
+                .where(WorkerJob.dedupe_key == dedupe_key)
+                .order_by(WorkerJob.created_at.desc())
+                .limit(1)
+            )
+            if latest is not None:
+                return latest
+            raise
+    else:
+        session.add(job)
+        session.flush()
     return job
 
 
@@ -177,3 +202,29 @@ def reclaim_stale_claims(
             job.last_error = (prev + suffix)[:2000]
     session.flush()
     return len(rows)
+
+
+def prune_completed_jobs(
+    session: Session,
+    *,
+    older_than: timedelta = timedelta(days=7),
+    now: datetime | None = None,
+    limit: int = 1000,
+) -> int:
+    """Delete DONE and terminal FAILED jobs updated before cutoff to bound table growth."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - older_than
+    ids = list(
+        session.scalars(
+            select(WorkerJob.id)
+            .where(WorkerJob.status.in_([JobStatus.DONE.value, JobStatus.FAILED.value]))
+            .where(WorkerJob.updated_at < cutoff)
+            .order_by(WorkerJob.updated_at.asc())
+            .limit(max(1, int(limit)))
+        ).all()
+    )
+    if not ids:
+        return 0
+    session.execute(delete(WorkerJob).where(WorkerJob.id.in_(ids)))
+    session.flush()
+    return len(ids)

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 from uuid import UUID
@@ -40,6 +41,27 @@ def _format_sse(event_id: int, event: str, data: dict) -> str:
 class _ReplayPlan:
     frames: list[tuple[int, str, dict[str, Any]]]
     cursor: int
+
+
+class BoundedSet:
+    """Fixed-capacity set to dedupe stream events without unbounded memory growth."""
+
+    def __init__(self, maxsize: int = 1000) -> None:
+        self.maxsize = maxsize
+        self._set: set[int] = set()
+        self._order: deque[int] = deque()
+
+    def add(self, item: int) -> None:
+        if item in self._set:
+            return
+        self._set.add(item)
+        self._order.append(item)
+        if len(self._order) > self.maxsize:
+            old = self._order.popleft()
+            self._set.discard(old)
+
+    def __contains__(self, item: int) -> bool:
+        return item in self._set
 
 
 def _build_replay(cursor: int, account_id: UUID | None, *, malformed: bool) -> _ReplayPlan:
@@ -143,7 +165,7 @@ async def stream_events(
         # and are not lost between DB read and live-tail. Dedupe by event id below.
         dispatcher = get_dispatcher()
         queue = dispatcher.subscribe(account_id=str(account_id) if account_id else None)
-        seen: set[int] = set()
+        seen = BoundedSet(maxsize=1000)
         cursor_local = cursor
         try:
             plan = await asyncio.to_thread(_build_replay, cursor, account_id, malformed=malformed)

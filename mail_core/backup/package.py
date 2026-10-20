@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import tarfile
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +19,9 @@ from urllib.parse import quote, unquote, urlparse, urlunparse
 from mail_core.backup.crypto import (
     BackupCryptoError,
     decrypt_bytes,
+    decrypt_file,
     encrypt_bytes,
+    encrypt_file,
     load_backup_key,
     load_backup_keyring,
 )
@@ -139,7 +142,18 @@ def _verify_manifest_file_checksum(man_path: Path, sha_path: Path, errors: list[
     if not sha_path.is_file():
         errors.append(f"{sha_path.name} missing")
         return
-    expected = sha_path.read_text(encoding="utf-8").split()[0]
+    raw = sha_path.read_text(encoding="utf-8").strip()
+    if not raw:
+        errors.append(f"{sha_path.name} is empty")
+        return
+    parts = raw.split()
+    if not parts:
+        errors.append(f"{sha_path.name} invalid format")
+        return
+    expected = parts[0]
+    if len(expected) != 64:
+        errors.append(f"{sha_path.name} invalid sha256: {expected!r}")
+        return
     actual = _sha256_file(man_path)
     if expected != actual:
         errors.append(f"{sha_path.name} mismatch: expected {expected}, got {actual}")
@@ -160,18 +174,33 @@ def _pg_dump_to(dest: Path, url: str, *, allow_stub: bool = False) -> str:
         # Prefer PGPASSWORD; also drop any inherited PGPASSFILE so a stale pgpass
         # cannot override the intended credentials for this dump.
         env.pop("PGPASSFILE", None)
+        env["PGCONNECT_TIMEOUT"] = os.environ.get("MAIL_CORE_PG_CONNECT_TIMEOUT", "10")
         if password is not None:
             env["PGPASSWORD"] = password
         else:
             env.pop("PGPASSWORD", None)
+        dump_timeout = float(os.environ.get("MAIL_CORE_PG_DUMP_TIMEOUT", "300"))
+        cmd = [
+            pg_dump,
+            "--format=custom",
+            "--lock-wait-timeout=30000",
+            "--file",
+            str(dest),
+            dsn,
+        ]
         try:
             subprocess.run(
-                [pg_dump, "--format=custom", "--file", str(dest), dsn],
+                cmd,
                 check=True,
                 capture_output=True,
                 env=env,
+                timeout=dump_timeout,
             )
             return "custom"
+        except subprocess.TimeoutExpired as exc:
+            log.warning("pg_dump timed out after %ss", dump_timeout)
+            if not allow_stub:
+                raise RuntimeError(f"pg_dump timed out after {dump_timeout}s") from exc
         except subprocess.CalledProcessError as exc:
             detail = exc.stderr.decode(errors="replace")[:500] if exc.stderr else str(exc)
             log.warning("pg_dump failed: %s", detail)
@@ -254,20 +283,28 @@ def create_backup_package(
     (plain / "MANIFEST.sha256").write_text(f"{_sha256_file(man_path)}  MANIFEST.json\n", encoding="utf-8")
 
     if not do_encrypt:
+        # Clean up any stale sealed artifacts from previous runs
+        for stale_name in ("backup.kkbak", "backup.kkbak.sha256"):
+            stale_f = out / stale_name
+            if stale_f.exists():
+                stale_f.unlink()
         log.info("backup package written to %s (plaintext)", out)
         return out
 
     key, version = load_backup_key()
-    # Tar the plain directory into memory / temp then encrypt
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tar:
-        for path in sorted(plain.rglob("*")):
-            if path.is_file():
-                tar.add(path, arcname=str(path.relative_to(plain)))
-    sealed = encrypt_bytes(buf.getvalue(), key=key, key_version=version)
     out.mkdir(parents=True, exist_ok=True)
+    # Stream tar to temporary file on disk (avoid buffering full DB + blobs in memory)
+    tar_tmp = out / f".archive_{uuid.uuid4().hex}.tar"
     kkbak = out / "backup.kkbak"
-    kkbak.write_bytes(sealed)
+    try:
+        with tarfile.open(tar_tmp, mode="w") as tar:
+            for path in sorted(plain.rglob("*")):
+                if path.is_file() and path != tar_tmp:
+                    tar.add(path, arcname=str(path.relative_to(plain)))
+        encrypt_file(tar_tmp, kkbak, key=key, key_version=version)
+    finally:
+        if tar_tmp.exists():
+            tar_tmp.unlink()
     sealed_manifest = BackupManifest(
         created_at=manifest.created_at,
         database_url_redacted=manifest.database_url_redacted,
@@ -322,16 +359,18 @@ def _check_plain_members(
             )
         digest = _sha256_file(path)
         expected = str(meta.get("sha256") or "")
-        if expected and digest != expected:
-            errors.append(f"checksum mismatch for {name}")
+        if not expected or len(expected) != 64:
+            errors.append(f"invalid or missing sha256 for {name}")
+        elif digest != expected:
+            errors.append(f"checksum mismatch for {name}: expected {expected}, got {digest}")
         checked += 1
     return checked
 
 
-def _extract_plain_tar(plaintext: bytes, extract_dir: Path, errors: list[str]) -> bool:
-    """Extract inner backup tar with path-traversal / allowlist checks."""
+def _extract_tar_file(tar_path: Path, extract_dir: Path, errors: list[str]) -> bool:
+    """Extract inner backup tar from disk with path-traversal / allowlist checks."""
     try:
-        with tarfile.open(fileobj=io.BytesIO(plaintext), mode="r") as tar:
+        with tarfile.open(tar_path, mode="r") as tar:
             for info in tar.getmembers():
                 name = info.name
                 if name.endswith("/"):
@@ -355,6 +394,17 @@ def _extract_plain_tar(plaintext: bytes, extract_dir: Path, errors: list[str]) -
     return True
 
 
+def _extract_plain_tar(plaintext: bytes, extract_dir: Path, errors: list[str]) -> bool:
+    """Extract inner backup tar with path-traversal / allowlist checks."""
+    tmp_path = extract_dir / f".tmp_{uuid.uuid4().hex}.tar"
+    try:
+        tmp_path.write_bytes(plaintext)
+        return _extract_tar_file(tmp_path, extract_dir, errors)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
 def verify_backup_package(
     package_dir: str | Path,
     *,
@@ -374,9 +424,19 @@ def verify_backup_package(
     kkbak = root / "backup.kkbak"
     extract_dir: Path | None = None
 
-    if kkbak.is_file():
+    outer_man = root / "MANIFEST.json"
+    is_sealed = False
+    if outer_man.is_file():
+        try:
+            outer_data = json.loads(outer_man.read_text(encoding="utf-8"))
+            is_sealed = bool(outer_data.get("encrypted"))
+        except Exception:
+            is_sealed = kkbak.is_file()
+    else:
+        is_sealed = kkbak.is_file()
+
+    if is_sealed and kkbak.is_file():
         # --- Outer sealed integrity (previously skipped) ---
-        outer_man = root / "MANIFEST.json"
         if not outer_man.is_file():
             return RestoreVerifyResult(
                 ok=False, members_checked=0, errors=["outer MANIFEST.json missing"]
@@ -407,23 +467,26 @@ def verify_backup_package(
             if _safe_member_relpath(name, allowlist=_OUTER_MEMBER_ALLOWLIST) is None:
                 errors.append(f"disallowed outer member name: {name!r}")
 
+        extract_dir = root / ".verify_extract"
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+        extract_dir.mkdir(parents=True)
+        decrypted_tar = extract_dir / f".decrypted_{uuid.uuid4().hex}.tar"
         try:
             keyring = load_backup_keyring(env)
-            plaintext, key_version = decrypt_bytes(kkbak.read_bytes(), keyring=keyring)
+            key_version = decrypt_file(kkbak, decrypted_tar, keyring=keyring)
         except Exception as exc:
             errors.append(f"decrypt failed: {exc}")
             return RestoreVerifyResult(
                 ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
             )
-        extract_dir = root / ".verify_extract"
-        if extract_dir.exists():
-            shutil.rmtree(extract_dir)
-        extract_dir.mkdir(parents=True)
         try:
-            if not _extract_plain_tar(plaintext, extract_dir, errors):
+            if not _extract_tar_file(decrypted_tar, extract_dir, errors):
                 return RestoreVerifyResult(
                     ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
                 )
+            if decrypted_tar.exists():
+                decrypted_tar.unlink()
             return _verify_plain_tree(
                 extract_dir,
                 checked=checked,
@@ -469,8 +532,11 @@ def _verify_plain_tree(
             backup_key_version=key_version,
         )
     _verify_manifest_file_checksum(man_path, work / "MANIFEST.sha256", errors)
+    members = manifest.get("members") or {}
+    if "postgres.dump" not in members:
+        errors.append("required member postgres.dump missing from manifest")
     checked += _check_plain_members(
-        work, manifest.get("members") or {}, allow_stub=allow_stub, errors=errors
+        work, members, allow_stub=allow_stub, errors=errors
     )
     return RestoreVerifyResult(
         ok=not errors,
@@ -482,16 +548,52 @@ def _verify_plain_tree(
 
 def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) -> dict:
     dest = Path(output_dir or os.environ.get("MAIL_CORE_BACKUP_DIR") or "[REDACTED]mail-core-backup")
-    path = create_backup_package(dest, encrypt=encrypt)
-    verify = verify_backup_package(path)
-    return {
-        "status": "ok" if verify.ok else "verify_failed",
-        "path": str(path),
-        "files": sorted(p.name for p in path.iterdir() if p.name != ".verify_extract"),
-        "verify": {
-            "ok": verify.ok,
-            "members_checked": verify.members_checked,
-            "errors": verify.errors,
-            "backup_key_version": verify.backup_key_version,
-        },
-    }
+    do_encrypt = True if encrypt is None else encrypt
+    if do_encrypt:
+        # Enforce strict encryption in production: refuse to run without backup keys
+        load_backup_key()
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = dest.parent / f".staging_{dest.name}_{uuid.uuid4().hex}"
+    try:
+        path = create_backup_package(staging_dir, encrypt=do_encrypt)
+        verify = verify_backup_package(path)
+        if not verify.ok:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            return {
+                "status": "verify_failed",
+                "path": str(dest),
+                "files": [],
+                "verify": {
+                    "ok": False,
+                    "members_checked": verify.members_checked,
+                    "errors": verify.errors,
+                    "backup_key_version": verify.backup_key_version,
+                },
+            }
+        # Atomic replace: swap staging directory into dest
+        old_dir = dest.parent / f".old_{dest.name}_{uuid.uuid4().hex}"
+        if dest.exists():
+            dest.rename(old_dir)
+        try:
+            staging_dir.rename(dest)
+            if old_dir.exists():
+                shutil.rmtree(old_dir, ignore_errors=True)
+        except Exception:
+            if old_dir.exists():
+                old_dir.rename(dest)
+            raise
+        return {
+            "status": "ok",
+            "path": str(dest),
+            "files": sorted(p.name for p in dest.iterdir() if p.name != ".verify_extract"),
+            "verify": {
+                "ok": True,
+                "members_checked": verify.members_checked,
+                "errors": verify.errors,
+                "backup_key_version": verify.backup_key_version,
+            },
+        }
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
