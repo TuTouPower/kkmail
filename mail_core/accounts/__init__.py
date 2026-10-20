@@ -23,7 +23,12 @@ from mail_core.accounts.service import (
     update_account,
     update_account_sync_status,
 )
-from mail_core.accounts.settings_store import get_public_settings, update_public_settings
+from mail_core.accounts.settings_store import (
+    get_app_setting,
+    get_fetch_timeout_seconds,
+    get_public_settings,
+    update_public_settings,
+)
 
 __all__ = [
     "CompositeCredentialStore",
@@ -47,6 +52,8 @@ __all__ = [
     "load_json_secret",
     "save_json_secret",
     "set_credential_store",
+    "get_app_setting",
+    "get_fetch_timeout_seconds",
     "get_public_settings",
     "update_public_settings",
 ]
