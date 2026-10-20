@@ -20,6 +20,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Documentation
 - 文档与当前代码对齐：唯一部署入口 `docs/deployment.md`；HTTP API 以运行中的 `/docs` / `/openapi.json` 为准，`docs/api.md` 只保留认证、CSRF、分页与 SSE 约定。
 - 删除全部 GitHub Actions 和 `docs/ci/` 模板。仓库不再跑远程测试、构建、发版或上游同步。
+- 锁定决策写入文档：单用户实例下资源 UUID 为能力（capability），非多租户 IDOR 安全标识（`docs/security.md`、`docs/mail-core-architecture.md` §11.4、`AGENTS.md`、`docs/known-limitations.md`）；浏览器扩展永久 out of scope / wontfix。
 
 ### Tests
 - 前端补充 mail-core 客户端测试（Cookie 凭据、CSRF 复用、401 清令牌、超时与调用方取消、错误体解析、SSE 订阅）。

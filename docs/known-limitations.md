@@ -2,7 +2,9 @@
 
 ## Product scope
 
-- **Single user.** One login password protects the instance; there are no user accounts or roles. Bearer API keys have the same full access.
+- **Single user.** One login password protects the instance; there are no user accounts or roles. Bearer API keys have the same full access. Within that boundary, resource UUIDs (messages, attachments, accounts, …) are **capabilities**: knowing the UUID grants API access. They are not multi-tenant, IDOR-safe identifiers.
+
+- **No browser extension (wontfix).** A browser extension will never ship. The old `browser-extension/` tree and `/api/extension/*` bridge are gone and must not be reintroduced.
 
 - **No sending.** Compose, reply, forward, contacts and notifications are out of scope, and the SPA has no compose UI.
 - **Folders.** The SPA shows each account's inbox and the unified inbox. The backend syncs all folders, but the HTTP API exposes inbox lists only (`/api/mail/inbox`).
