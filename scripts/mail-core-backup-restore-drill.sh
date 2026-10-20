@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="${PYTHONPATH:-$ROOT}"
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  PYTHON="$ROOT/.venv/bin/python"
+else
+  PYTHON="$(command -v python3)"
+fi
 
 OUT_RAW="${1:-[REDACTED]backup-drill}"
 # Refuse empty / filesystem roots / path traversal before any rm -rf.
@@ -30,12 +35,12 @@ rm -rf -- "$OUT"
 mkdir -p "$OUT"
 
 # Ensure backup key differs from blob key
-export MAIL_CORE_BACKUP_KEY="${MAIL_CORE_BACKUP_KEY:-$(python -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')}"
+export MAIL_CORE_BACKUP_KEY="${MAIL_CORE_BACKUP_KEY:-$( "$PYTHON" -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')}"
 export MAIL_CORE_BLOB_KEY_V1="${MAIL_CORE_BLOB_KEY_V1:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
 export KKMAIL_DRILL_OUT="$OUT"
 
 # Heredoc is single-quoted so Path is not built from untrusted shell expansion.
-python - <<'PY'
+"$PYTHON" - <<'PY'
 import os
 from pathlib import Path
 
