@@ -5,7 +5,7 @@ import { fetchAccounts, fetchEmailDetail, markEmailsRead, queryClient, queryKeys
 import { useMailStore } from '../store/mailStore'
 
 export default function MessageReader() {
-  const { selectedKey, openCompose } = useMailStore()
+  const { selectedKey, openCompose, flaggedIds, toggleFlag } = useMailStore()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
   const cachedLists = queryClient.getQueriesData<MailItem[]>({ queryKey: ['emails'] })
@@ -54,6 +54,12 @@ export default function MessageReader() {
             body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
             accountId: selected.accountId,
           })}><Reply size={15} /></button>
+          <button className="reader-action" title="全部回复" onClick={() => openCompose('reply', {
+            to: [selected.from, detail?.to || selected.to].filter(Boolean).join(', '),
+            subject: `Re: ${detail?.subject || selected.subject}`,
+            body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
+            accountId: selected.accountId,
+          })}>全</button>
           <button className="reader-action" title="转发" onClick={() => openCompose('forward', {
             subject: `Fwd: ${detail?.subject || selected.subject}`,
             body: `\n\n—— 转发邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
@@ -66,7 +72,7 @@ export default function MessageReader() {
             await api.deleteEmails({ email: selected.accountEmail, folder: selected.folder || 'inbox', items: [{ id: selected.id, folder: selected.folder, id_mode: selected.id_mode }] })
             await queryClient.invalidateQueries({ queryKey: ['emails'] })
           }}><Trash2 size={15} /></button>
-          <button className="reader-action" title="标记"><Flag size={15} /></button>
+          <button className="reader-action" title={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记'} onClick={() => selectedKey && toggleFlag(selectedKey)}><Flag size={15} /></button>
           <button className="reader-action" title="移动"><Folder size={15} /></button>
           <button className="reader-action" title="更多"><MoreHorizontal size={15} /></button>
         </div>
