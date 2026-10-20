@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchMailCoreHealth, fetchMailCoreInbox, subscribeMailCoreEvents, type MailCoreMessage } from '../api/mailCore'
+import { queryClient } from '../api/queries'
 import { isMailCoreEnabled, mailCoreBaseUrl } from '../lib/mailCoreFlag'
 
 /**
@@ -32,7 +33,16 @@ export default function MailCoreBridge() {
     const stop = subscribeMailCoreEvents(
       (type) => {
         setSseNote(`SSE: ${type}`)
-        if (type === 'message.upserted' || type === 'client.resync_hint' || type === 'sync.completed') {
+        const refresh =
+          type === 'message.upserted' ||
+          type === 'message.removed' ||
+          type === 'folder.stats_updated' ||
+          type === 'mail.changed' ||
+          type === 'folder.stats.changed' ||
+          type === 'client.resync_hint' ||
+          type === 'sync.completed'
+        if (refresh) {
+          void queryClient.invalidateQueries({ queryKey: ['mail-core', 'inbox'] })
           void reload()
         }
       },

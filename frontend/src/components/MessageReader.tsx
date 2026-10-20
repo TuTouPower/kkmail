@@ -2,7 +2,7 @@ import { useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Reply, ReplyAll, Forward, MailOpen, Trash2, Flag, Folder, Archive, ShieldAlert, ArrowLeft } from 'lucide-react'
 import { api } from '../api/client'
-import { fetchAccounts, fetchEmailDetail, findCachedMail, markReadOptimistic, queryClient, queryKeys, type MailItem } from '../api/queries'
+import { fetchAccounts, fetchEmailDetail, findCachedMail, flagOptimistic, markReadOptimistic, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail } from '../api/mailCore'
 import { isMailCoreEnabled } from '../lib/mailCoreFlag'
 import { mailKey } from '../lib/mailKey'
@@ -124,7 +124,13 @@ export default function MessageReader() {
           <button className="reader-action" title="标记为垃圾邮件（后端暂无移动接口）" aria-label="标记为垃圾邮件" disabled aria-disabled="true"><ShieldAlert size={18} /></button>
           <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
           <button className="reader-action" title="移动到文件夹（后端暂无移动接口）" aria-label="移动到文件夹" disabled aria-disabled="true"><Folder size={18} /></button>
-          <button className="reader-action" title={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-label={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-pressed={flaggedIds.includes(selectedKey || '')} onClick={() => selectedKey && toggleFlag(selectedKey)}><Flag size={18} /></button>
+          <button className="reader-action" title={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-label={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-pressed={flaggedIds.includes(selectedKey || '')} onClick={() => {
+              if (!selected || !selectedKey) return
+              const next = !flaggedIds.includes(selectedKey)
+              void flagOptimistic(selected, next, toggleFlag).catch((err) =>
+                setActionStatus(errorMessage(err, '标记失败')),
+              )
+            }}><Flag size={18} /></button>
         </div>
       </div>
       <div className="reader-scroll">
