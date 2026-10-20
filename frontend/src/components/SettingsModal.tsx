@@ -16,6 +16,10 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const [accountString, setAccountString] = useState('')
   const [oauthUrl, setOauthUrl] = useState('')
   const [redirectedUrl, setRedirectedUrl] = useState('')
+  const [webdavUrl, setWebdavUrl] = useState('')
+  const [webdavUser, setWebdavUser] = useState('')
+  const [webdavPass, setWebdavPass] = useState('')
+  const [projectKey, setProjectKey] = useState('')
   const [toolStatus, setToolStatus] = useState('')
   const [provider, setProvider] = useState('outlook')
   const [status, setStatus] = useState('')
@@ -113,6 +117,42 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             {(projectsQuery.data || []).slice(0, 5).map((p) => ` · ${p.name || p.project_key || '未命名'}`)}
           </div>
           {toolStatus && <div style={{ marginTop: 8, fontSize: 12 }}>{toolStatus}</div>}
+          <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>临时邮箱</div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button type="button" onClick={async () => {
+              const res = await api.generateTempEmail({ provider: 'gptmail' })
+              setToolStatus(res.email ? `已生成 ${res.email}` : (res.error || '生成失败'))
+              await qc.invalidateQueries({ queryKey: ['temp-emails'] })
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>生成 GPTMail</button>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
+            {(tempQuery.data || []).slice(0, 8).map((item) => item.email || item.address).filter(Boolean).join(' · ') || '暂无临时邮箱'}
+          </div>
+          <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>项目</div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input value={projectKey} onChange={(e) => setProjectKey(e.target.value)} placeholder="project key" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+            <button type="button" onClick={async () => {
+              const res = await api.startProject({ project_key: projectKey, name: projectKey })
+              setToolStatus(res.success === false ? (res.error || '创建失败') : '项目已启动')
+              await qc.invalidateQueries({ queryKey: ['projects'] })
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>启动项目</button>
+          </div>
+          <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>WebDAV 备份</div>
+          <input value={webdavUrl} onChange={(e) => setWebdavUrl(e.target.value)} placeholder="https://dav.example.com/backup/" style={{ width: '100%', marginTop: 8, height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input value={webdavUser} onChange={(e) => setWebdavUser(e.target.value)} placeholder="用户名" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+            <input value={webdavPass} onChange={(e) => setWebdavPass(e.target.value)} type="password" placeholder="密码" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button type="button" onClick={async () => {
+              const res = await api.testWebdav({ url: webdavUrl, username: webdavUser, password: webdavPass })
+              setToolStatus(res.success ? 'WebDAV 测试成功' : (res.error || '测试失败'))
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>测试备份</button>
+            <button type="button" onClick={async () => {
+              const res = await api.uploadWebdav({ url: webdavUrl, username: webdavUser, password: webdavPass })
+              setToolStatus(res.success ? (res.message || '已上传备份') : (res.error || '上传失败'))
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>立即备份</button>
+          </div>
           <div style={{ marginTop: 22, fontSize: 18, fontWeight: 720 }}>外观</div>
           <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
             <button onClick={() => setTheme('light')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'light' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
