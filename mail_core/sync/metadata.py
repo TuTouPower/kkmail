@@ -39,6 +39,7 @@ _META_FIELDS = (
     "sort_time",
     "is_read",
     "has_attachments",
+    "is_flagged",
     "internet_message_id",
     "snippet",
     "size_bytes",
