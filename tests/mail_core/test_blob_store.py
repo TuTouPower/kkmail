@@ -29,3 +29,22 @@ def test_put_returns_actual_disk_key_version(tmp_path, monkeypatch):
     store2 = BlobStore(tmp_path)
     r2 = store2.put(data)
     assert r2.key_version == 1  # Reports physical disk version, not active version 2!
+
+
+def test_put_verifies_integrity_and_rewrites_corrupted_blob(tmp_path):
+    store = BlobStore(tmp_path)
+    data = b"Some test data for corruption self-healing"
+    res1 = store.put(data)
+    assert store.get(res1.content_sha256) == data
+
+    # Intentionally corrupt the file on disk (truncate or overwrite with garbage)
+    blob_file = store.path_for(res1.content_sha256)
+    assert blob_file.is_file()
+    blob_file.write_bytes(b"corrupted truncated data")
+
+    # Calling put again on the same data should detect the corruption and rewrite the valid blob
+    res2 = store.put(data)
+    assert res2.content_sha256 == res1.content_sha256
+    # Verify that get() now succeeds and returns the original data
+    assert store.get(res2.content_sha256) == data
+
