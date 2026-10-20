@@ -15,7 +15,7 @@ from mail_core.mail.application.attachments import (
     load_attachment,
 )
 from mail_core.db.session import get_session_factory
-from mail_core.mail.application.mutations import set_message_flagged, set_message_read
+from mail_core.mail.application.mutations import set_message_flagged, set_message_read, trash_message
 from mail_core.api.http_headers import content_disposition_attachment
 from mail_core.mail.application.queries import (
     account_emails_by_id,
@@ -232,6 +232,24 @@ def api_set_message_flag(message_id: UUID, body: FlagBody | None = None):
             "is_flagged": result.is_flagged,
         }
 
+
+
+@router.post("/messages/{message_id}/trash")
+def api_trash_message(message_id: UUID):
+    """Local-first trash + enqueue remote_operations trash."""
+    Session = get_session_factory()
+    with Session() as session:
+        try:
+            result = trash_message(session, message_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        session.commit()
+        return {
+            "id": str(result.message_id),
+            "account_id": str(result.account_id),
+            "operation_id": str(result.operation_id),
+            "success": True,
+        }
 
 
 @router.get("/attachments/{attachment_id}")
