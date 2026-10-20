@@ -37,8 +37,15 @@ export default function Sidebar() {
   }
   const allInboxUnread = [...unreadByAccount.values()].reduce((n, c) => n + c, 0)
   const inAllInbox = view.type === 'allInbox'
+  const groupIds = new Set(groups.map((g) => g.id))
+  const ungroupedAccounts = accounts.filter((a) => !a.group_id || !groupIds.has(a.group_id))
   const grouped = groups.length
-    ? groups.map((g) => ({ group: g, members: accounts.filter((a) => a.group_id === g.id) }))
+    ? [
+        ...groups.map((g) => ({ group: g, members: accounts.filter((a) => a.group_id === g.id) })),
+        ...(ungroupedAccounts.length
+          ? [{ group: { id: '__ungrouped__', name: '未分组账户' }, members: ungroupedAccounts }]
+          : []),
+      ]
     : [{ group: { id: '0', name: '全部账户' }, members: accounts }]
 
   return (
