@@ -13,19 +13,26 @@ export default function ColumnResize({
     e.preventDefault()
     lastX.current = e.clientX
     const target = e.currentTarget
-    target.setPointerCapture(e.pointerId)
+    const pointerId = e.pointerId
+    target.setPointerCapture(pointerId)
     const move = (ev: PointerEvent) => {
       const dx = ev.clientX - lastX.current
       lastX.current = ev.clientX
       if (dx) onDrag(dx)
     }
-    const up = (ev: PointerEvent) => {
-      target.releasePointerCapture(ev.pointerId)
+    const end = () => {
       window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+      try {
+        if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+      } catch {
+        /* capture already lost */
+      }
     }
     window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
   }, [onDrag])
 
   return (

@@ -52,7 +52,7 @@ export default function SettingsPage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
         <SettingsIcon size={18} />
         <div style={{ fontWeight: 700, flex: 1 }}>设置</div>
-        <button type="button" onClick={onClose} aria-label="关闭" style={{ border: 0, background: 'transparent', color: 'var(--muted)' }}><X size={18} /></button>
+        <button type="button" onClick={onClose} title="关闭" aria-label="关闭" style={{ border: 0, background: 'transparent', color: 'var(--muted)' }}><X size={18} /></button>
       </div>
       <div style={{ display: 'flex', gap: 8, padding: '10px 16px', borderBottom: '1px solid var(--line)' }}>
         {([
