@@ -110,6 +110,53 @@ def test_imap_writeback_uses_uid_store_and_move():
     assert ("uid", "MOVE", ("10", "Trash")) in calls
 
 
+def test_imap_move_trash_refuse_unsafe_expunge():
+    calls = []
+
+    class FakeIMAPFailMove:
+        def select(self, folder):
+            calls.append(("select", folder))
+            return ("OK", [b"1"])
+
+        def uid(self, cmd, *args):
+            calls.append(("uid", cmd, args))
+            if cmd == "MOVE":
+                return ("NO", [b"MOVE not supported"])
+            return ("OK", [b""])
+
+        def expunge(self):
+            calls.append(("expunge",))
+            return ("OK", [b""])
+
+        def logout(self):
+            calls.append(("logout",))
+            return ("OK", [b""])
+
+    provider = ImapProvider(host="127.0.0.1", port=1143, username="u", password="p", use_ssl=False)
+    provider._connect = MagicMock(return_value=FakeIMAPFailMove())  # type: ignore[method-assign]
+
+    # OP_MOVE fails without expunge/Deleted
+    r_move = provider.apply_remote_operation(
+        "move",
+        {"remote_id": "10", "folder_remote_id": "INBOX", "dest_folder_remote_id": "Archive"},
+    )
+    assert not r_move.success
+    assert "IMAP server does not support atomic MOVE/delete" in (r_move.error or "")
+    assert not any(c[0] == "expunge" for c in calls)
+    assert not any(c[0] == "uid" and c[1] == "STORE" for c in calls)
+
+    calls.clear()
+    # OP_TRASH fails without expunge/Deleted
+    r_trash = provider.apply_remote_operation(
+        "trash",
+        {"remote_id": "10", "folder_remote_id": "INBOX", "trash_folder_remote_id": "Trash"},
+    )
+    assert not r_trash.success
+    assert "IMAP server does not support atomic MOVE/delete" in (r_trash.error or "")
+    assert not any(c[0] == "expunge" for c in calls)
+    assert not any(c[0] == "uid" and c[1] == "STORE" for c in calls)
+
+
 def test_gmail_writeback_via_transport_mocks():
     seen: list[tuple] = []
 
