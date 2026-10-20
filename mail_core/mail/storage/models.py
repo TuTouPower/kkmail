@@ -108,7 +108,10 @@ class Message(Base):
 
 class MessageLocation(Base):
     __tablename__ = "message_locations"
-    __table_args__ = (UniqueConstraint("message_id", "folder_id", name="uq_message_locations"),)
+    __table_args__ = (
+        UniqueConstraint("message_id", "folder_id", name="uq_message_locations"),
+        Index("ix_message_locations_folder_id", "folder_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
@@ -279,11 +282,15 @@ class WorkerJob(Base):
     """PostgreSQL task table — claimed with FOR UPDATE SKIP LOCKED."""
 
     __tablename__ = "worker_jobs"
-    __table_args__ = (Index("ix_worker_jobs_claim", "status", "run_after", "priority"),)
+    __table_args__ = (
+        Index("ix_worker_jobs_claim", "status", "run_after", "priority"),
+        Index("ix_worker_jobs_dedupe_active", "dedupe_key", unique=True, postgresql_where=text("dedupe_key IS NOT NULL AND status IN ('pending', 'claimed')")),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
     account_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"))
+    dedupe_key: Mapped[Optional[str]] = mapped_column(String(128))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))
     priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("100"))

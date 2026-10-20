@@ -12,7 +12,7 @@ from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import JobType, OutboxEventType
 from mail_core.mail.storage.models import Folder, Message, MessageLocation, OutboxEvent
 from mail_core.sync.jobs import enqueue_job
-from mail_core.sync.metadata import _recompute_folder_stats
+from mail_core.sync.metadata import recompute_folder_stats
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +39,7 @@ def _wake_push(session: Session, account_id: uuid.UUID) -> None:
         account_id=account_id,
         payload={},
         priority=40,
+        dedupe_key=f"remote-op-push:{account_id}",
     )
 
 
@@ -74,7 +75,7 @@ def set_message_read(
         )
     )
     if folder is not None:
-        _recompute_folder_stats(session, folder.id)
+        recompute_folder_stats(session, folder.id)
         session.add(
             OutboxEvent(
                 event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
