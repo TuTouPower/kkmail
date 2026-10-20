@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check } from 'lucide-react'
 import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, markReadOptimistic, queryClient, queryKeys, type MailItem } from '../api/queries'
+import { fetchMailCoreInbox, mailCoreToMailItem } from '../api/mailCore'
+import { isMailCoreEnabled } from '../lib/mailCoreFlag'
 import { mailKey } from '../lib/mailKey'
 import { listTitle } from '../lib/listTitle'
 import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
@@ -34,6 +36,8 @@ export default function MessageList() {
     clearSelected,
   } = useMailStore()
 
+  const mailCore = isMailCoreEnabled()
+
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
 
@@ -42,7 +46,7 @@ export default function MessageList() {
   const singleQuery = useQuery({
     queryKey: queryKeys.emails(singleEmail, singleFolder),
     queryFn: ({ signal }) => fetchEmails(singleEmail, singleFolder, view.type === 'accountFolder' ? view.accountId : undefined, signal),
-    enabled: view.type === 'accountFolder' && !!singleEmail,
+    enabled: view.type === 'accountFolder' && !!singleEmail && !(mailCore && singleFolder === 'inbox'),
     retry: false,
   })
 
@@ -54,14 +58,31 @@ export default function MessageList() {
     queries: allAccounts.map((a) => ({
       queryKey: queryKeys.emails(a.email, 'inbox'),
       queryFn: ({ signal }: { signal: AbortSignal }) => fetchEmails(a.email, 'inbox', a.id, signal),
-      enabled: view.type === 'allInbox',
+      enabled: !mailCore && view.type === 'allInbox',
       retry: false,
     })),
   })
 
-  const raw: MailItem[] = view.type === 'accountFolder'
-    ? (singleQuery.data || [])
-    : allQueries.flatMap((q) => q.data || [])
+  // Optional mail-core unified inbox (keyset). Flask path stays default when flag is off.
+  const useMailCoreList =
+    mailCore && (view.type === 'allInbox' || (view.type === 'accountFolder' && view.folder === 'inbox'))
+  const mailCoreQuery = useQuery({
+    queryKey: ['mail-core', 'inbox', view.type === 'accountFolder' ? view.accountId : 'all'],
+    queryFn: ({ signal }) =>
+      fetchMailCoreInbox({
+        limit: 100,
+        accountId: view.type === 'accountFolder' ? String(view.accountId || '') || undefined : undefined,
+        signal,
+      }).then((page) => page.items.map(mailCoreToMailItem)),
+    enabled: useMailCoreList,
+    retry: false,
+  })
+
+  const raw: MailItem[] = useMailCoreList
+    ? (mailCoreQuery.data || [])
+    : view.type === 'accountFolder'
+      ? (singleQuery.data || [])
+      : allQueries.flatMap((q) => q.data || [])
 
   const searched = search
     ? raw.filter((m) => [m.from, m.subject, m.body_preview, m.accountEmail].join(' ').toLowerCase().includes(search.toLowerCase()))
@@ -80,10 +101,16 @@ export default function MessageList() {
   // so it matches the sidebar badge, which sums the same cached lists.
   const unreadCount = searched.filter((m) => !m.is_read).length
   const pendingAccounts = view.type === 'allInbox' ? allQueries.filter((q) => q.isLoading).length : 0
-  const loading = view.type === 'accountFolder' ? singleQuery.isLoading && !singleQuery.data : accountsQuery.isLoading || (pendingAccounts > 0 && raw.length === 0)
-  const failures: string[] = view.type === 'accountFolder'
-    ? (singleQuery.error ? [errorMessage(singleQuery.error, String(singleQuery.error))] : [])
-    : allQueries.flatMap((q, i) => (q.error ? [`${allAccounts[i]?.email}：${errorMessage(q.error, String(q.error))}`] : []))
+  const loading = useMailCoreList
+    ? mailCoreQuery.isLoading && !mailCoreQuery.data
+    : view.type === 'accountFolder'
+      ? singleQuery.isLoading && !singleQuery.data
+      : accountsQuery.isLoading || (pendingAccounts > 0 && raw.length === 0)
+  const failures: string[] = useMailCoreList
+    ? (mailCoreQuery.error ? [errorMessage(mailCoreQuery.error, String(mailCoreQuery.error))] : [])
+    : view.type === 'accountFolder'
+      ? (singleQuery.error ? [errorMessage(singleQuery.error, String(singleQuery.error))] : [])
+      : allQueries.flatMap((q, i) => (q.error ? [`${allAccounts[i]?.email}：${errorMessage(q.error, String(q.error))}`] : []))
   const countLabel = loading
     ? '正在拉取邮件…'
     : `${visible.length} 封邮件 · ${unreadCount} 封未读${pendingAccounts ? ` · ${pendingAccounts} 个账户加载中` : ''}`
@@ -111,6 +138,10 @@ export default function MessageList() {
   function refreshView() {
     // Soft refresh: mark stale and refetch, but keep showing cached rows
     // (placeholderData + invalidate, not resetQueries).
+    if (useMailCoreList) {
+      void queryClient.invalidateQueries({ queryKey: ['mail-core', 'inbox'], refetchType: 'active' })
+      return
+    }
     if (view.type === 'accountFolder') {
       void queryClient.invalidateQueries({ queryKey: queryKeys.emails(view.email, view.folder), refetchType: 'active' })
     } else {
