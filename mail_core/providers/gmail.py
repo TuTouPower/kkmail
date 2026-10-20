@@ -158,14 +158,64 @@ class GmailProvider:
         return parse_gmail_history(data, folder_label=folder_remote_id)
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
+        from mail_core.providers.remote_writeback import (
+            OP_MARK_READ,
+            OP_MOVE,
+            OP_SET_FLAG,
+            OP_TRASH,
+            normalize_op_type,
+            require_remote_id,
+        )
+
         if self.transport is None:
             raise GmailNotConfiguredError("Gmail modify not wired yet")
-        data = self._call(
-            "POST",
-            f"/gmail/v1/users/{self.user_id}/messages/modify",
-            {"op": op_type, **desired_state},
-        )
-        return RemoteOperationResult(success=bool(data.get("success", True)), remote_state=data.get("remote_state") or {})
+        try:
+            remote_id = require_remote_id(desired_state)
+        except ValueError as exc:
+            return RemoteOperationResult(success=False, error=str(exc))
+        op = normalize_op_type(op_type)
+        base = f"/gmail/v1/users/{self.user_id}/messages/{remote_id}"
+
+        if op == OP_MARK_READ:
+            want = bool(desired_state.get("is_read", True))
+            body = {"removeLabelIds": ["UNREAD"]} if want else {"addLabelIds": ["UNREAD"]}
+            data = self._call("POST", f"{base}/modify", body)
+            return RemoteOperationResult(
+                success=True,
+                remote_state={"is_read": want, "labelIds": data.get("labelIds") or []},
+            )
+
+        if op == OP_SET_FLAG:
+            want = bool(desired_state.get("is_flagged", True))
+            body = {"addLabelIds": ["STARRED"]} if want else {"removeLabelIds": ["STARRED"]}
+            data = self._call("POST", f"{base}/modify", body)
+            return RemoteOperationResult(
+                success=True,
+                remote_state={"is_flagged": want, "labelIds": data.get("labelIds") or []},
+            )
+
+        if op == OP_MOVE:
+            dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
+            src = str(desired_state.get("folder_remote_id") or "")
+            if not dest:
+                return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
+            body: dict[str, Any] = {"addLabelIds": [dest]}
+            if src:
+                body["removeLabelIds"] = [src]
+            data = self._call("POST", f"{base}/modify", body)
+            return RemoteOperationResult(
+                success=True,
+                remote_state={"folder_remote_id": dest, "labelIds": data.get("labelIds") or []},
+            )
+
+        if op == OP_TRASH:
+            data = self._call("POST", f"{base}/trash", {})
+            return RemoteOperationResult(
+                success=True,
+                remote_state={"labelIds": data.get("labelIds") or ["TRASH"]},
+            )
+
+        return RemoteOperationResult(success=False, error=f"unsupported gmail op {op_type}")
 
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
         if self.transport is None:
