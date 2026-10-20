@@ -1,6 +1,7 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, MoreHorizontal, Paperclip } from 'lucide-react'
 import { fetchAccounts, fetchEmails, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
+import { api } from '../api/client'
 import { useMailStore } from '../store/mailStore'
 
 function formatWhen(value?: string) {
@@ -128,8 +129,24 @@ export default function MessageList() {
               全选
             </button>
             {selectedIds.length > 0 && (
+              <button className="sort-btn" onClick={async () => {
+                const chosen = visible.filter((m) => selectedIds.includes(`${m.accountEmail}:${m.id}`))
+                const groups = new Map<string, MailItem[]>()
+                chosen.forEach((m) => {
+                  const list = groups.get(m.accountEmail) || []
+                  list.push(m)
+                  groups.set(m.accountEmail, list)
+                })
+                await Promise.all([...groups.entries()].map(([email, items]) => api.deleteEmails({ email, folder: items[0]?.folder || 'inbox', items })))
+                clearSelected()
+                await queryClient.invalidateQueries({ queryKey: ['emails'] })
+              }} title="删除所选">
+                删除所选
+              </button>
+            )}
+            {selectedIds.length > 0 && (
               <button className="sort-btn" onClick={clearSelected} title="取消选择">
-                已选 {selectedIds.length}
+                取消 {selectedIds.length}
               </button>
             )}
             <button className="sort-btn" onClick={toggleSort} title="切换邮件排序">

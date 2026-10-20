@@ -226,6 +226,38 @@ export const api = {
     return request<{ success?: boolean; logs?: unknown[] }>('/api/accounts/forwarding-logs')
   },
 
+  async generateTempEmail(payload: { provider?: string; prefix?: string; domain?: string } = {}) {
+    return request<{ success?: boolean; email?: string; message?: string; error?: string }>('/api/temp-emails/generate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async deleteTempEmail(email: string) {
+    return request(`/api/temp-emails/${encodeURIComponent(email)}`, { method: 'DELETE' })
+  },
+
+  async startProject(payload: { project_key: string; name?: string; description?: string }) {
+    return request<{ success?: boolean; error?: string }>('/api/projects/start', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async testWebdav(config: { url: string; username?: string; password?: string }) {
+    return request<{ success?: boolean; error?: string; message?: string }>('/api/settings/test-webdav-backup', {
+      method: 'POST',
+      body: JSON.stringify({ config }),
+    })
+  },
+
+  async uploadWebdav(config: { url: string; username?: string; password?: string }) {
+    return request<{ success?: boolean; error?: string; message?: string }>('/api/settings/upload-webdav-backup', {
+      method: 'POST',
+      body: JSON.stringify({ config }),
+    })
+  },
+
   attachmentUrl(email: string, messageId: string, attachmentId: string, folder = 'inbox', idMode = '') {
     const q = new URLSearchParams({ folder, method: idMode === 'imap' ? 'imap' : 'graph' })
     if (idMode) q.set('id_mode', idMode)
