@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { api } from '../api/client'
 import { fetchAccounts, queryKeys } from '../api/queries'
 import { providerBadge, providerColor, useMailStore } from '../store/mailStore'
+import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
 
 export default function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { theme, setTheme } = useMailStore()
@@ -26,8 +27,11 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const [section, setSection] = useState<'accounts' | 'appearance' | 'general'>('accounts')
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: async () => (await api.getSettings()).settings || {}, enabled: open })
   const skinsQuery = useQuery({ queryKey: ['skins'], queryFn: async () => api.getSkins(), enabled: open && section === 'appearance' })
-  const [timezone, setTimezone] = useState('')
-  const [timeoutSeconds, setTimeoutSeconds] = useState('30')
+  const [timezone, setTimezone] = useState<string | null>(null)
+  const [timeoutSeconds, setTimeoutSeconds] = useState<string | null>(null)
+  const [reauthId, setReauthId] = useState('')
+  const [oauthResult, setOauthResult] = useState<{ client_id?: string; refresh_token?: string } | null>(null)
+  const [refreshProgress, setRefreshProgress] = useState('')
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const logsQuery = useQuery({ queryKey: ['forwarding-logs'], queryFn: async () => (await api.getForwardingLogs()).logs || [], enabled: open && section === 'general' })
@@ -37,6 +41,23 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const [tempMessages, setTempMessages] = useState<Array<{ id?: string; subject?: string; from_address?: string }>>([])
 
   if (!open) return null
+
+  /** Run an action, surface errors (including HTTP 200 + success:false) in the status line. */
+  async function run(label: string, fn: () => Promise<unknown>, ok: string, invalidate?: readonly unknown[]) {
+    try {
+      ensureSuccess(await fn(), `${label}失败`)
+      setToolStatus(ok)
+    } catch (err) {
+      setToolStatus(errorMessage(err, `${label}失败`))
+    } finally {
+      if (invalidate) await qc.invalidateQueries({ queryKey: invalidate })
+    }
+  }
+
+  const savedTimezone = settingsQuery.data?.app_timezone || ''
+  const savedTimeout = settingsQuery.data?.mail_fetch_timeout_seconds || ''
+  const timezoneValue = timezone ?? savedTimezone
+  const timeoutValue = timeoutSeconds ?? savedTimeout
 
   async function addAccount(e: React.FormEvent) {
     e.preventDefault()
@@ -111,15 +132,14 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           </div>
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>重新授权</div>
-            <select onChange={(e) => setAccountString(e.target.value)} style={{ height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+            <select value={reauthId} onChange={(e) => setReauthId(e.target.value)} style={{ height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
               <option value="">选择账户</option>
               {accounts.map((a) => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
             </select>
             <button type="button" onClick={async () => {
-              const id = Number(accountString)
-              if (!id || !redirectedUrl) { setToolStatus('选择账户并粘贴回调 URL'); return }
-              const res = await api.reauthorizeAccount(id, redirectedUrl)
-              setToolStatus(res.success ? '已重新授权' : '重新授权失败')
+              const id = Number(reauthId)
+              if (!id || !redirectedUrl) { setToolStatus('选择账户并在下方粘贴授权回调 URL'); return }
+              await run('重新授权', () => api.reauthorizeAccount(id, redirectedUrl), '已重新授权', queryKeys.accounts)
             }} style={{ marginLeft: 8, height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>提交重新授权</button>
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
@@ -127,52 +147,71 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="新分组名称" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
             <button type="button" onClick={async () => {
-              const res = await api.createGroup({ name: groupName })
-              setToolStatus(res.success ? '分组已创建' : (res.error || '创建失败'))
+              if (!groupName.trim()) { setToolStatus('请输入分组名称'); return }
+              await run('创建分组', () => api.createGroup({ name: groupName.trim() }), '分组已创建', queryKeys.groups)
               setGroupName('')
-              await qc.invalidateQueries({ queryKey: queryKeys.groups })
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>创建分组</button>
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <input value={tagName} onChange={(e) => setTagName(e.target.value)} placeholder="新标签" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
             <button type="button" onClick={async () => {
-              const res = await api.createTag(tagName)
-              setToolStatus(res.success ? '标签已创建' : (res.error || '创建失败'))
+              if (!tagName.trim()) { setToolStatus('请输入标签名称'); return }
+              await run('创建标签', () => api.createTag(tagName.trim()), '标签已创建', ['tags'])
               setTagName('')
-              await qc.invalidateQueries({ queryKey: ['tags'] })
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>创建标签</button>
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
             标签 {(tagsQuery.data || []).length} 个 · 临时邮箱 {(tempQuery.data || []).length} 个
             {(tagsQuery.data || []).map((t) => (
-              <button key={t.id} type="button" onClick={async () => { await api.deleteTag(t.id); await qc.invalidateQueries({ queryKey: ['tags'] }) }} style={{ marginLeft: 6, border: 0, background: 'transparent', color: 'var(--danger)' }}>{t.name} ×</button>
+              <button key={t.id} type="button" onClick={async () => {
+                if (!confirmAction(`删除标签「${t.name}」？已打在账号上的该标签也会移除。`)) return
+                await run('删除标签', () => api.deleteTag(t.id), '标签已删除', ['tags'])
+              }} style={{ marginLeft: 6, border: 0, background: 'transparent', color: 'var(--danger)' }}>{t.name} ×</button>
             ))}
           </div>
           </div>
           <div style={{ marginTop: 22, fontSize: 16, fontWeight: 700 }}>OAuth / 转发 / 项目</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
             <button type="button" onClick={async () => {
-              const res = await api.getOauthUrl()
-              setOauthUrl(res.auth_url || '')
-              if (res.auth_url) window.open(res.auth_url, '_blank', 'noopener')
+              try {
+                const res = ensureSuccess(await api.getOauthUrl(), '获取授权链接失败')
+                setOauthUrl(res.auth_url || '')
+                if (res.auth_url) window.open(res.auth_url, '_blank', 'noopener')
+              } catch (err) {
+                setToolStatus(errorMessage(err, '获取授权链接失败'))
+              }
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>打开 Outlook 授权</button>
             <button type="button" onClick={async () => {
               const ids = accounts.map((a) => a.id)
-              const res = await api.setForwarding(ids, true)
-              setToolStatus(res.message || res.error || '已请求开启转发')
+              if (!ids.length) { setToolStatus('暂无账户'); return }
+              if (!confirmAction(`对全部 ${ids.length} 个账户开启邮件转发？`)) return
+              await run('开启转发', () => api.setForwarding(ids, true), `已对 ${ids.length} 个账户开启转发`, queryKeys.accounts)
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>全部开启转发</button>
             <button type="button" onClick={async () => {
               const ids = accounts.map((a) => a.id)
-              const res = await api.setForwarding(ids, false)
-              setToolStatus(res.message || res.error || '已请求关闭转发')
+              if (!ids.length) { setToolStatus('暂无账户'); return }
+              if (!confirmAction(`对全部 ${ids.length} 个账户关闭邮件转发？`)) return
+              await run('关闭转发', () => api.setForwarding(ids, false), `已对 ${ids.length} 个账户关闭转发`, queryKeys.accounts)
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>全部关闭转发</button>
           </div>
           {oauthUrl && <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all' }}>{oauthUrl}</div>}
           <input value={redirectedUrl} onChange={(e) => setRedirectedUrl(e.target.value)} placeholder="粘贴授权回调 URL" style={{ width: '100%', marginTop: 8, height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
           <button type="button" onClick={async () => {
-            const res = await api.exchangeOauth(redirectedUrl)
-            setToolStatus(res.success ? '已换取 token' : (res.error || '换取失败'))
+            setOauthResult(null)
+            try {
+              const res = ensureSuccess(await api.exchangeOauth(redirectedUrl), '换取失败')
+              setOauthResult({ client_id: res.client_id, refresh_token: res.refresh_token })
+              setToolStatus('已换取 Refresh Token，请复制保存或用于导入账户')
+            } catch (err) {
+              setToolStatus(errorMessage(err, '换取失败'))
+            }
           }} style={{ marginTop: 8, height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>换取 Refresh Token</button>
+          {oauthResult?.refresh_token && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--muted)' }}>Client ID：{oauthResult.client_id || '（默认应用）'}</div>
+              <textarea readOnly value={oauthResult.refresh_token} onFocus={(e) => e.currentTarget.select()} aria-label="Refresh Token" style={{ width: '100%', minHeight: 60, marginTop: 4, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: 8, fontSize: 11 }} />
+            </div>
+          )}
           <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
             项目 {(projectsQuery.data || []).length} 个
             {(projectsQuery.data || []).slice(0, 5).map((p) => ` · ${p.name || p.project_key || '未命名'}`)}
@@ -181,8 +220,12 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>临时邮箱</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <button type="button" onClick={async () => {
-              const res = await api.generateTempEmail({ provider: 'gptmail' })
-              setToolStatus(res.email ? `已生成 ${res.email}` : (res.error || '生成失败'))
+              try {
+                const res = ensureSuccess(await api.generateTempEmail({ provider: 'gptmail' }), '生成失败')
+                setToolStatus(res.email ? `已生成 ${res.email}` : (res.message || '已生成'))
+              } catch (err) {
+                setToolStatus(errorMessage(err, '生成失败'))
+              }
               await qc.invalidateQueries({ queryKey: ['temp-emails'] })
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>生成 GPTMail</button>
           </div>
@@ -194,34 +237,34 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
                 <div key={address} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
                   <span>{address}</span>
                   <button type="button" onClick={async () => {
-                    await api.deleteTempEmail(address)
-                    await qc.invalidateQueries({ queryKey: ['temp-emails'] })
+                    if (!confirmAction(`删除临时邮箱 ${address}？其邮件也会一并删除。`)) return
+                    await run('删除临时邮箱', () => api.deleteTempEmail(address), `已删除 ${address}`, ['temp-emails'])
                   }} style={{ border: 0, background: 'transparent', color: 'var(--danger)' }}>删除</button>
                 </div>
               )
             })}
             {(tempQuery.data || []).length === 0 && '暂无临时邮箱'}
           </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <button type="button" onClick={async () => {
-              const res = await api.archiveProject(projectKey)
-              setToolStatus(res.success === false ? (res.error || '归档失败') : '项目已归档')
-              await qc.invalidateQueries({ queryKey: ['projects'] })
-            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>归档项目</button>
-            <button type="button" onClick={async () => {
-              const res = await api.deleteProject(projectKey)
-              setToolStatus(res.success === false ? (res.error || '删除失败') : '项目已删除')
-              await qc.invalidateQueries({ queryKey: ['projects'] })
-            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--danger)' }}>删除项目</button>
-          </div>
           <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>项目</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <input value={projectKey} onChange={(e) => setProjectKey(e.target.value)} placeholder="project key" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
             <button type="button" onClick={async () => {
-              const res = await api.startProject({ project_key: projectKey, name: projectKey })
-              setToolStatus(res.success === false ? (res.error || '创建失败') : '项目已启动')
-              await qc.invalidateQueries({ queryKey: ['projects'] })
+              const key = projectKey.trim()
+              if (!key) { setToolStatus('请输入 project key'); return }
+              await run('启动项目', () => api.startProject({ project_key: key, name: key }), '项目已启动', ['projects'])
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>启动项目</button>
+            <button type="button" onClick={async () => {
+              const key = projectKey.trim()
+              if (!key) { setToolStatus('请输入 project key'); return }
+              if (!confirmAction(`归档项目 ${key}？`)) return
+              await run('归档项目', () => api.archiveProject(key), '项目已归档', ['projects'])
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>归档项目</button>
+            <button type="button" onClick={async () => {
+              const key = projectKey.trim()
+              if (!key) { setToolStatus('请输入 project key'); return }
+              if (!confirmAction(`永久删除项目 ${key}？此操作不可撤销。`)) return
+              await run('删除项目', () => api.deleteProject(key), '项目已删除', ['projects'])
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--danger)' }}>删除项目</button>
           </div>
           <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>WebDAV 备份</div>
           <input value={webdavUrl} onChange={(e) => setWebdavUrl(e.target.value)} placeholder="https://dav.example.com/backup/" style={{ width: '100%', marginTop: 8, height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
@@ -231,12 +274,10 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <button type="button" onClick={async () => {
-              const res = await api.testWebdav({ url: webdavUrl, username: webdavUser, password: webdavPass })
-              setToolStatus(res.success ? 'WebDAV 测试成功' : (res.error || '测试失败'))
+              await run('WebDAV 测试', () => api.testWebdav({ url: webdavUrl, username: webdavUser, password: webdavPass }), 'WebDAV 测试成功')
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>测试备份</button>
             <button type="button" onClick={async () => {
-              const res = await api.uploadWebdav({ url: webdavUrl, username: webdavUser, password: webdavPass })
-              setToolStatus(res.success ? (res.message || '已上传备份') : (res.error || '上传失败'))
+              await run('WebDAV 备份', () => api.uploadWebdav({ url: webdavUrl, username: webdavUser, password: webdavPass }), '已上传备份')
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>立即备份</button>
           </div>
           </>}
@@ -250,8 +291,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             {(skinsQuery.data?.skins || []).map((skin) => (
               <button key={skin.id} type="button" onClick={async () => {
                 if (!skin.id) return
-                const res = await api.activateSkin(skin.id)
-                setToolStatus(res.success ? '皮肤已启用' : (res.error || '启用失败'))
+                await run('启用皮肤', () => api.activateSkin(skin.id!), '皮肤已启用', ['skins'])
               }} style={{ height: 30, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>{skin.name || skin.id}</button>
             ))}
           </div>
@@ -275,28 +315,50 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
               <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>令牌刷新与邮件分享</div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                 <button type="button" onClick={async () => {
-                  const res = await api.refreshAll()
-                  setToolStatus(res.message || res.error || '已请求刷新全部令牌')
+                  if (!confirmAction('刷新全部账户的令牌？账户多时会持续一段时间。')) return
+                  setRefreshProgress('开始刷新…')
+                  try {
+                    const summary = await api.refreshAllStream((evt) => {
+                      if (evt.type === 'progress') setRefreshProgress(`进度 ${evt.current ?? 0}/${evt.total ?? 0} · 成功 ${evt.success_count ?? 0} · 失败 ${evt.failed_count ?? 0}`)
+                    })
+                    setRefreshProgress('')
+                    setToolStatus(summary.type === 'error'
+                      ? (summary.message || '刷新失败')
+                      : `刷新完成：成功 ${summary.success_count ?? 0}，失败 ${summary.failed_count ?? 0}`)
+                  } catch (err) {
+                    setRefreshProgress('')
+                    setToolStatus(errorMessage(err, '刷新失败'))
+                  }
+                  await qc.invalidateQueries({ queryKey: queryKeys.accounts })
                 }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>刷新全部令牌</button>
+                {refreshProgress && <span style={{ alignSelf: 'center', fontSize: 12, color: 'var(--muted)' }}>{refreshProgress}</span>}
               </div>
               <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
                 分享 {(sharesQuery.data || []).length} 条
                 {(sharesQuery.data || []).slice(0, 5).map((s) => ` · ${s.email || s.id}`)}
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <input value={timezone || settingsQuery.data?.app_timezone || ''} onChange={(e) => setTimezone(e.target.value)} placeholder="时区 Asia/Shanghai" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-                <input value={timeoutSeconds} onChange={(e) => setTimeoutSeconds(e.target.value)} placeholder="超时秒" style={{ width: 90, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                <input value={timezoneValue} onChange={(e) => setTimezone(e.target.value)} placeholder="时区 Asia/Shanghai" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                <input value={timeoutValue} onChange={(e) => setTimeoutSeconds(e.target.value)} placeholder="超时秒" style={{ width: 90, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
                 <button type="button" onClick={async () => {
-                  const res = await api.updateSettings({ app_timezone: timezone || settingsQuery.data?.app_timezone || 'Asia/Shanghai', mail_fetch_timeout_seconds: timeoutSeconds })
-                  setToolStatus(res.success ? '设置已保存' : (res.error || '保存失败'))
+                  // Only send fields the user actually changed, so untouched settings keep their stored values.
+                  const payload: Record<string, string> = {}
+                  if (timezone !== null && timezone.trim() && timezone.trim() !== savedTimezone) payload.app_timezone = timezone.trim()
+                  if (timeoutSeconds !== null && timeoutSeconds.trim() && timeoutSeconds.trim() !== savedTimeout) payload.mail_fetch_timeout_seconds = timeoutSeconds.trim()
+                  if (!Object.keys(payload).length) { setToolStatus('没有需要保存的改动'); return }
+                  await run('保存设置', () => api.updateSettings(payload), '设置已保存', ['settings'])
+                  setTimezone(null)
+                  setTimeoutSeconds(null)
                 }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>保存</button>
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                 <input value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} type="password" placeholder="当前密码" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
                 <input value={newPassword} onChange={(e) => setNewPassword(e.target.value)} type="password" placeholder="新密码至少 8 位" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
                 <button type="button" onClick={async () => {
-                  const res = await api.updateSettings({ current_login_password: currentPassword, login_password: newPassword })
-                  setToolStatus(res.success ? '密码已更新' : (res.error || '更新失败'))
+                  if (!currentPassword || newPassword.length < 8) { setToolStatus('请输入当前密码，新密码至少 8 位'); return }
+                  await run('修改密码', () => api.updateSettings({ current_login_password: currentPassword, login_password: newPassword }), '密码已更新')
+                  setCurrentPassword('')
+                  setNewPassword('')
                 }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>改密</button>
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
@@ -305,9 +367,14 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
                   if (!address) return null
                   return (
                     <button key={address} type="button" onClick={async () => {
-                      const res = await api.getTempEmailMessages(address)
-                      setTempMessages(res.messages || [])
-                      setToolStatus(res.success === false ? (res.error || '读取失败') : `${address} 有 ${(res.messages || []).length} 封`)
+                      try {
+                        const res = ensureSuccess(await api.getTempEmailMessages(address), '读取失败')
+                        setTempMessages(res.messages || [])
+                        setToolStatus(`${address} 有 ${(res.messages || []).length} 封`)
+                      } catch (err) {
+                        setTempMessages([])
+                        setToolStatus(errorMessage(err, '读取失败'))
+                      }
                     }} style={{ height: 30, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>{address}</button>
                   )
                 })}
@@ -316,7 +383,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
               <div style={{ marginTop: 18, color: 'var(--muted)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Inbox size={14} /> 旧版完整管理界面仍可从 /legacy 进入。规范见仓库根目录 DESIGN.md。
               </div>
-              <button type="button" onClick={() => api.logout().finally(() => window.location.assign('/login'))} style={{ marginTop: 16, height: 32, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--danger)' }}>退出登录</button>
+              <button type="button" onClick={() => api.logout()} style={{ marginTop: 16, height: 32, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--danger)' }}>退出登录</button>
             </div>
           )}
         </div>
