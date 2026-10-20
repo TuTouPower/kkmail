@@ -73,19 +73,16 @@ class GmailProvider:
 
     def list_folders(self) -> Sequence[RemoteFolder]:
         self._calls.append("list_folders")
-        if self.transport is not None:
-            data = self._call("GET", f"/gmail/v1/users/{self.user_id}/labels", {})
-            labels = data.get("labels") or []
-            out: list[RemoteFolder] = []
-            for lab in labels:
-                name = lab.get("name") or lab.get("id")
-                role = "inbox" if name == "INBOX" else "other"
-                out.append(RemoteFolder(remote_id=lab["id"], name=name, role=role))
-            return out
-        return [
-            RemoteFolder("INBOX", "INBOX", "inbox"),
-            RemoteFolder("CATEGORY_PERSONAL", "Personal", "other"),
-        ]
+        if self.transport is None:
+            raise GmailNotConfiguredError("Gmail HTTP transport not configured")
+        data = self._call("GET", f"/gmail/v1/users/{self.user_id}/labels", {})
+        labels = data.get("labels") or []
+        out: list[RemoteFolder] = []
+        for lab in labels:
+            name = lab.get("name") or lab.get("id")
+            role = "inbox" if name == "INBOX" else "other"
+            out.append(RemoteFolder(remote_id=lab["id"], name=name, role=role))
+        return out
 
     def full_scan(self, folder_remote_id: str, cursor: dict[str, Any] | None) -> MetadataPage:
         return self.fetch_metadata_page(folder_remote_id, cursor)
@@ -123,7 +120,7 @@ class GmailProvider:
             exhausted=not bool(token),
         )
 
-    def fetch_mime(self, remote_id: str) -> bytes:
+    def fetch_mime(self, remote_id: str, *, folder_remote_id: str | None = None) -> bytes:
         if self.transport is None:
             raise GmailNotConfiguredError("Gmail raw MIME fetch not wired yet")
         data = self._call(
