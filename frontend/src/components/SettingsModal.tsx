@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, Sun, Moon, Inbox, Settings as SettingsIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { fetchAccounts, queryKeys } from '../api/queries'
 import { providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
+import { IMPORT_PROVIDERS, importFormatHint } from '../lib/accounts'
 
 export default function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { theme, setTheme } = useMailStore()
@@ -40,6 +41,13 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const [tagName, setTagName] = useState('')
   const [tempMessages, setTempMessages] = useState<Array<{ id?: string; subject?: string; from_address?: string }>>([])
 
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
   if (!open) return null
 
   /** Run an action, surface errors (including HTTP 200 + success:false) in the status line. */
@@ -66,7 +74,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
       const res = await api.addAccounts({
         account_string: accountString,
         provider,
-        account_format: provider === 'imap' || provider === 'gmail' || provider === '163' ? 'imap' : 'client_id_refresh_token',
+        account_format: 'client_id_refresh_token',
       })
       if (res.success) {
         setStatus(res.message || '已添加')
@@ -85,33 +93,39 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
       style={{ position: 'fixed', inset: 0, zIndex: 110, background: 'rgba(0,0,0,.46)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18, backdropFilter: 'blur(5px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <section style={{ width: 'min(760px, 100%)', height: 'min(680px, 88dvh)', display: 'flex', flexDirection: 'column', background: 'var(--surface)', border: '1px solid var(--line-strong)', borderRadius: 15, boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="settings-title" style={{ width: 'min(760px, 100%)', height: 'min(680px, 88dvh)', display: 'flex', flexDirection: 'column', background: 'var(--surface)', border: '1px solid var(--line-strong)', borderRadius: 15, boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid var(--line)', background: 'var(--surface-2)' }}>
           <SettingsIcon size={16} />
-          <strong style={{ flex: 1, fontSize: 13 }}>设置</strong>
-          <button onClick={onClose} style={{ height: 28, width: 28, display: 'grid', placeItems: 'center', border: 0, borderRadius: 7, background: 'transparent', color: 'var(--muted)' }}>
+          <strong id="settings-title" style={{ flex: 1, fontSize: 13 }}>设置</strong>
+          <button type="button" title="关闭（Esc）" aria-label="关闭设置" onClick={onClose} style={{ height: 28, width: 28, display: 'grid', placeItems: 'center', border: 0, borderRadius: 7, background: 'transparent', color: 'var(--muted)' }}>
             <X size={16} />
           </button>
         </div>
         <div style={{ display: 'flex', gap: 6, padding: '8px 16px', borderBottom: '1px solid var(--line)' }}>
           {([['accounts', '账户管理'], ['appearance', '外观'], ['general', '通用']] as const).map(([id, label]) => (
-            <button key={id} type="button" onClick={() => setSection(id)} style={{ height: 32, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)', background: section === id ? 'var(--selected)' : 'transparent', fontWeight: 600 }}>
+            <button key={id} type="button" onClick={() => { setSection(id); setToolStatus('') }} style={{ height: 32, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)', background: section === id ? 'var(--selected)' : 'transparent', fontWeight: 600 }}>
               {label}
             </button>
           ))}
         </div>
         <div style={{ minWidth: 0, flex: 1, overflow: 'auto', padding: '22px 24px' }}>
+          {toolStatus && (
+            <div role="status" aria-live="polite" style={{ position: 'sticky', top: -22, zIndex: 2, margin: '-6px 0 12px', padding: '8px 12px', borderRadius: 9, fontSize: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: /失败|错误|无效/.test(toolStatus) ? 'var(--red)' : 'var(--text)', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ flex: 1 }}>{toolStatus}</span>
+              <button type="button" aria-label="关闭提示" title="关闭提示" onClick={() => setToolStatus('')} style={{ border: 0, background: 'transparent', color: 'var(--muted)' }}><X size={13} /></button>
+            </div>
+          )}
           {section === 'accounts' && <>
           <div style={{ fontSize: 18, fontWeight: 720, margin: '0 0 6px' }}>账户管理</div>
           <p style={{ margin: '0 0 12px', color: 'var(--muted)', fontSize: 12 }}>添加账户走现有导入接口。OAuth 完整向导仍可在 /legacy 完成。</p>
           <form onSubmit={addAccount} style={{ border: '1px solid var(--line)', borderRadius: 11, padding: 12, marginBottom: 14 }}>
-            <select value={provider} onChange={(e) => setProvider(e.target.value)} style={{ height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', marginBottom: 8 }}>
-              <option value="outlook">Outlook / Graph</option>
-              <option value="gmail">Gmail IMAP</option>
-              <option value="163">网易 163</option>
-              <option value="imap">自定义 IMAP</option>
+            <label className="field-label" htmlFor="import-provider">账户类型</label>
+            <select id="import-provider" value={provider} onChange={(e) => setProvider(e.target.value)} style={{ height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', marginBottom: 8 }}>
+              {IMPORT_PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select>
-            <textarea value={accountString} onChange={(e) => setAccountString(e.target.value)} placeholder="每行一个账号，格式与旧版导入一致" style={{ width: '100%', minHeight: 72, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: 8 }} />
+            <label className="field-label" htmlFor="import-lines">账号（每行一个）</label>
+            <textarea id="import-lines" aria-describedby="import-hint" value={accountString} onChange={(e) => setAccountString(e.target.value)} placeholder={importFormatHint(provider).placeholder} style={{ width: '100%', minHeight: 72, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: 8 }} />
+            <div id="import-hint" className="field-hint">{importFormatHint(provider).help}</div>
             <button type="submit" style={{ marginTop: 8, height: 32, padding: '0 12px', border: 0, borderRadius: 8, background: 'var(--blue)', color: '#fff' }}>添加账户</button>
             {status && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>{status}</div>}
           </form>
@@ -216,7 +230,6 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             项目 {(projectsQuery.data || []).length} 个
             {(projectsQuery.data || []).slice(0, 5).map((p) => ` · ${p.name || p.project_key || '未命名'}`)}
           </div>
-          {toolStatus && <div style={{ marginTop: 8, fontSize: 12 }}>{toolStatus}</div>}
           <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>临时邮箱</div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <button type="button" onClick={async () => {
@@ -283,9 +296,19 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           </>}
           {section === 'appearance' && <>
           <div style={{ marginTop: 22, fontSize: 18, fontWeight: 720 }}>外观</div>
-          <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>皮肤（作用于旧界面）</div>
-          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
-            当前：{skinsQuery.data?.active_skin_id || 'classic'}
+          <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>新界面主题</div>
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>当前：{theme === 'dark' ? '深夜' : '亮色'}</div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+            <button type="button" aria-pressed={theme === 'light'} onClick={() => setTheme('light')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'light' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
+              <Sun size={18} /> 亮色
+            </button>
+            <button type="button" aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'dark' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
+              <Moon size={18} /> 深夜
+            </button>
+          </div>
+          <div style={{ marginTop: 22, fontSize: 14, fontWeight: 700 }}>旧版界面皮肤</div>
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>
+            仅作用于 /legacy 旧版界面，不影响当前界面。旧版当前皮肤：{skinsQuery.data?.active_skin_id || 'classic'}
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
             {(skinsQuery.data?.skins || []).map((skin) => (
@@ -294,14 +317,6 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
                 await run('启用皮肤', () => api.activateSkin(skin.id!), '皮肤已启用', ['skins'])
               }} style={{ height: 30, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>{skin.name || skin.id}</button>
             ))}
-          </div>
-          <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-            <button onClick={() => setTheme('light')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'light' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
-              <Sun size={18} /> 亮色
-            </button>
-            <button onClick={() => setTheme('dark')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'dark' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
-              <Moon size={18} /> 深夜
-            </button>
           </div>
           </>}
           {section === 'general' && (
@@ -337,16 +352,22 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
                 分享 {(sharesQuery.data || []).length} 条
                 {(sharesQuery.data || []).slice(0, 5).map((s) => ` · ${s.email || s.id}`)}
               </div>
+              <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>时区与拉取超时</div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <input value={timezoneValue} onChange={(e) => setTimezone(e.target.value)} placeholder="时区 Asia/Shanghai" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-                <input value={timeoutValue} onChange={(e) => setTimeoutSeconds(e.target.value)} placeholder="超时秒" style={{ width: 90, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                <label className="field-label" htmlFor="settings-timezone" style={{ flex: 1, margin: 0 }}>时区（IANA 名称）</label>
+                <label className="field-label" htmlFor="settings-timeout" style={{ width: 90, margin: 0 }}>拉取超时（秒）</label>
+                <span style={{ width: 52 }} />
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <input id="settings-timezone" value={timezoneValue} onChange={(e) => setTimezone(e.target.value)} placeholder="Asia/Shanghai" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                <input id="settings-timeout" inputMode="numeric" value={timeoutValue} onChange={(e) => setTimeoutSeconds(e.target.value)} placeholder="30" style={{ width: 90, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
                 <button type="button" onClick={async () => {
                   // Only send fields the user actually changed, so untouched settings keep their stored values.
                   const payload: Record<string, string> = {}
                   if (timezone !== null && timezone.trim() && timezone.trim() !== savedTimezone) payload.app_timezone = timezone.trim()
                   if (timeoutSeconds !== null && timeoutSeconds.trim() && timeoutSeconds.trim() !== savedTimeout) payload.mail_fetch_timeout_seconds = timeoutSeconds.trim()
                   if (!Object.keys(payload).length) { setToolStatus('没有需要保存的改动'); return }
-                  await run('保存设置', () => api.updateSettings(payload), '设置已保存', ['settings'])
+                  await run('保存设置', () => api.updateSettings(payload), `设置已保存${payload.app_timezone ? `：时区 ${payload.app_timezone}` : ''}${payload.mail_fetch_timeout_seconds ? `，超时 ${payload.mail_fetch_timeout_seconds} 秒` : ''}`, ['settings'])
                   setTimezone(null)
                   setTimeoutSeconds(null)
                 }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>保存</button>
