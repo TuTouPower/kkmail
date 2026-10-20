@@ -120,7 +120,7 @@ renew_lease = heartbeat_lease
 
 def assert_fencing(session: Session, *, account_id: uuid.UUID, fencing_token: int) -> None:
     """Call inside the same short TX that commits checkpoints / message writes."""
-    row = session.get(AccountSyncLease, account_id)
+    row = session.get(AccountSyncLease, account_id, with_for_update=True)
     if row is None or int(row.fencing_token) != fencing_token:
         raise FencingMismatch(
             f"fencing token {fencing_token} rejected; current="

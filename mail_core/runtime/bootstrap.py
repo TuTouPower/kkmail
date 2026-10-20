@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import os
 import secrets
+import time
 from pathlib import Path
 
 import bcrypt
@@ -24,7 +25,16 @@ def _read_or_create(path: Path, factory) -> str:
             return value
     value = factory()
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        for _ in range(10):
+            existing = path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+            time.sleep(0.01)
+        return path.read_text(encoding="utf-8").strip()
+
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(value + "\n")
     return value

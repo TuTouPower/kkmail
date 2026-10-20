@@ -5,12 +5,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import OutboxEventType, RemoteOperationStatus
 from mail_core.mail.storage.models import OutboxEvent, RemoteOperation
+from mail_core.security.redact import redact
 
 
 def _coalesce_existing(
@@ -25,7 +26,10 @@ def _coalesce_existing(
     now = datetime.now(timezone.utc)
     if existing.status == RemoteOperationStatus.DONE.value:
         existing.created_at = now
-    existing.desired_state = desired_state
+    new_desired = dict(desired_state)
+    current_rev = int((existing.desired_state or {}).get("revision") or 0)
+    new_desired["revision"] = current_rev + 1
+    existing.desired_state = new_desired
     existing.op_type = op_type
     existing.entity_key = entity_key
     existing.status = RemoteOperationStatus.PENDING.value
@@ -39,6 +43,7 @@ def _coalesce_existing(
                 "operation_id": str(existing.id),
                 "status": existing.status,
                 "op_type": op_type,
+                "revision": new_desired["revision"],
                 "upsert": True,
             },
         )
@@ -78,29 +83,46 @@ def enqueue_remote_operation(
                 desired_state=desired_state,
             )
 
-    pending = session.scalar(
+    active_op = session.scalar(
         select(RemoteOperation)
         .where(RemoteOperation.account_id == account_id)
         .where(RemoteOperation.entity_key == entity_key)
-        .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
-        .order_by(RemoteOperation.created_at.asc())
+        .where(
+            RemoteOperation.status.in_(
+                [
+                    RemoteOperationStatus.PENDING.value,
+                    RemoteOperationStatus.IN_PROGRESS.value,
+                ]
+            )
+        )
+        .order_by(
+            case(
+                (RemoteOperation.status == RemoteOperationStatus.PENDING.value, 0),
+                else_=1,
+            ),
+            RemoteOperation.created_at.asc(),
+        )
         .limit(1)
     )
-    if pending is not None:
+    if active_op is not None:
         return _coalesce_existing(
             session,
-            pending,
+            active_op,
             account_id=account_id,
             entity_key=entity_key,
             op_type=op_type,
             desired_state=desired_state,
         )
 
+    initial_desired = dict(desired_state)
+    if "revision" not in initial_desired:
+        initial_desired["revision"] = 1
+
     op = RemoteOperation(
         account_id=account_id,
         entity_key=entity_key,
         op_type=op_type,
-        desired_state=desired_state,
+        desired_state=initial_desired,
         status=RemoteOperationStatus.PENDING.value,
         idempotency_key=idempotency_key,
     )
@@ -149,7 +171,7 @@ def mark_remote_operation(
     op.updated_at = datetime.now(timezone.utc)
     op.next_attempt_at = next_attempt_at
     if error:
-        op.last_error = error[:2000]
+        op.last_error = redact(error[:2000])
     if status == RemoteOperationStatus.IN_PROGRESS:
         op.attempts = int(op.attempts) + 1
     session.add(

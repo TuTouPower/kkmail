@@ -65,3 +65,26 @@ def test_composite_routes_plain_refs_to_db(monkeypatch):
     store.put_secret(ref, "x")
     assert DbCredentialStore().get_secret(ref) == "x"
     store.delete_secret(ref)
+
+
+def test_account_credentials_transactional_atomicity():
+    from mail_core.accounts.service import create_account, delete_account
+    from mail_core.accounts.credentials import set_credential_store
+    set_credential_store(DbCredentialStore(keyring=_ring()))
+
+    Session = get_session_factory()
+    # 1. Rollback on create: credentials must also be rolled back
+    with Session() as session:
+        acc = create_account(
+            session,
+            email=f"rollback-{uuid.uuid4().hex[:8]}@example.com",
+            provider="imap",
+            credentials={"password": "secret_pwd"},
+        )
+        ref = acc.credential_ref
+        session.rollback()
+
+    # Outside the rolled back session, credential must NOT exist
+    with pytest.raises(KeyError):
+        DbCredentialStore(keyring=_ring()).get_secret(ref)
+
