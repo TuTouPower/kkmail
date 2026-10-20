@@ -28,6 +28,7 @@ _EXPORTS: dict[str, str] = {
     "fail_job": "mail_core.sync.jobs",
     "heartbeat_lease": "mail_core.sync.leases",
     "push_remote_operations": "mail_core.sync.remote_push",
+    "prune_completed_jobs": "mail_core.sync.jobs",
     "reclaim_stale_claims": "mail_core.sync.jobs",
     "reconcile_folder": "mail_core.sync.reconcile",
     "release_lease": "mail_core.sync.leases",
