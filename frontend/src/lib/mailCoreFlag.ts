@@ -35,13 +35,10 @@ function parseFlag(raw: unknown): 'on' | 'off' | 'unset' {
 }
 
 export function isMailCoreEnabled(): boolean {
+  // mail-core is the sole backend; only an explicit off flag disables the bridge.
   const explicit = parseFlag(import.meta.env.VITE_MAIL_CORE)
   if (explicit === 'off') return false
-  if (explicit === 'on') return true
-  const buildDefault = parseFlag(import.meta.env.VITE_MAIL_CORE_DEFAULT)
-  if (buildDefault === 'on') return true
-  if (runtimeConfig().mailCoreDefault) return true
-  return false
+  return true
 }
 
 /** Base URL for mail-core FastAPI. Empty = same-origin `/mail-core` proxy. */
@@ -50,5 +47,6 @@ export function mailCoreBaseUrl(): string {
   if (runtime && String(runtime).trim()) return String(runtime).replace(/\/$/, '')
   const raw = String(import.meta.env.VITE_MAIL_CORE_BASE || '').trim()
   if (raw) return raw.replace(/\/$/, '')
-  return '/mail-core'
+  // Same-origin: SPA and API both served by mail-core (Flask proxy path removed).
+  return ''
 }

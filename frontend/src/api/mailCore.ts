@@ -200,7 +200,7 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
     body_preview: m.snippet || undefined,
     folder: 'inbox',
     // Never treat UUID account_id as an email address.
-    accountEmail: m.account_email || undefined,
+    accountEmail: m.account_email || '',
     accountId: undefined,
     id_mode: 'mail_core',
   }

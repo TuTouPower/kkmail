@@ -7,17 +7,16 @@ describe('mailCoreFlag', () => {
     if (typeof window !== 'undefined') delete window.__KKMAIL_CONFIG__
   })
 
-  it('exports helpers', () => {
-    expect(typeof isMailCoreEnabled()).toBe('boolean')
-    expect(mailCoreBaseUrl()).toMatch(/mail-core|http/)
+  it('mail-core enabled by default', () => {
+    expect(isMailCoreEnabled()).toBe(true)
   })
 
-  it('runtime MAIL_CORE_DEFAULT enables without rebuild', () => {
-    window.__KKMAIL_CONFIG__ = { mailCoreDefault: true, mailCoreBase: 'http://127.0.0.1:8000' }
-    // Only asserts runtime path when Vite env did not force off (vitest default unset)
-    if (!String(import.meta.env.VITE_MAIL_CORE || '')) {
-      expect(isMailCoreEnabled()).toBe(true)
-      expect(mailCoreBaseUrl()).toBe('http://127.0.0.1:8000')
-    }
+  it('runtime base overrides same-origin default', () => {
+    window.__KKMAIL_CONFIG__ = { mailCoreBase: 'http://127.0.0.1:8000' }
+    expect(mailCoreBaseUrl()).toBe('http://127.0.0.1:8000')
+  })
+
+  it('same-origin default is empty string', () => {
+    expect(mailCoreBaseUrl()).toBe('')
   })
 })
