@@ -79,6 +79,23 @@ assert.throws(() => parsePort('nope'), /OUTLOOK_DESKTOP_PORT/)
   }
 }
 
+{
+  // child.killed true does not count as dead if exitCode is still null and no exit event fired
+  const child = new EventEmitter()
+  child.pid = 999999
+  child.exitCode = null
+  child.killed = true
+  child.kill = () => {}
+  const r = stopChildTree(child, { escalateAfterMs: 50 })
+  assert.ok(!r.alreadyDead, 'child.killed alone must not mean already dead')
+
+  // Now emit exit
+  child.emit('exit', 0, null)
+  child.exitCode = 0
+  const rDead = stopChildTree(child, { escalateAfterMs: 50 })
+  assert.ok(rDead.alreadyDead, 'exitCode !== null must mean already dead')
+}
+
 ;(async () => {
   const p = await freePort(0)
   assert.ok(p >= 1 && p <= 65535)
