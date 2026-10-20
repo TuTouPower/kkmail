@@ -125,11 +125,10 @@ def unlink_gc_paths(
     races where a concurrent archive re-referenced the same digest (V2-21 / R12).
     """
     n = 0
-    Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
-
     own_session = None
     if session is None:
         try:
+            Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
             own_session = Session()
             check_session = own_session
         except Exception:
@@ -143,7 +142,10 @@ def unlink_gc_paths(
                 if not path.is_file():
                     continue
                 digest = path.stem.lower()
-                if len(digest) == 64 and check_session is not None:
+                if len(digest) == 64:
+                    if check_session is None:
+                        log.warning("gc unlink safety check has no db session for %s; skipping", path)
+                        continue
                     try:
                         live_refs = check_session.scalar(
                             select(func.count())
@@ -154,7 +156,8 @@ def unlink_gc_paths(
                             log.info("gc unlink skipped newly referenced blob: %s", path)
                             continue
                     except Exception as exc:
-                        log.warning("gc unlink safety check query error for %s: %s", path, exc)
+                        log.warning("gc unlink safety check query error for %s: %s (skipping)", path, exc)
+                        continue
                 path.unlink()
                 n += 1
             except OSError as exc:

@@ -92,3 +92,21 @@ def test_delayed_gc_respects_cooloff(tmp_path, monkeypatch):
         from mail_core.blobs.gc import unlink_gc_paths
         unlink_gc_paths(paths)
         assert not (tmp_path / rel).exists()
+
+
+def test_unlink_gc_paths_fails_closed_on_db_exception(tmp_path):
+    from unittest.mock import MagicMock
+    from mail_core.blobs.gc import unlink_gc_paths
+
+    digest = "a" * 64
+    fake_file = tmp_path / f"{digest}.blob"
+    fake_file.write_bytes(b"important data")
+
+    broken_session = MagicMock()
+    broken_session.scalar.side_effect = RuntimeError("DB connection dropped")
+
+    unlinked_count = unlink_gc_paths([fake_file], session=broken_session)
+    assert unlinked_count == 0
+    # The file must NOT have been unlinked!
+    assert fake_file.is_file()
+
