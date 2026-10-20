@@ -1,8 +1,4 @@
-"""Content-addressed blob store stubs (architecture §10.2).
-
-Plaintext SHA-256 addresses objects; ciphertext is written under an
-application-layer encryption wrapper (key_version). Real crypto lands later.
-"""
+"""Content-addressed encrypted blob store (architecture §10.2)."""
 
 from __future__ import annotations
 
@@ -11,6 +7,8 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from mail_core.blobs.crypto import Keyring, load_keyring_from_env, unwrap, wrap
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,13 +22,20 @@ class BlobWriteResult:
 class BlobStore:
     """Filesystem layout: {root}/{ab}/{cd}/{sha256}.blob
 
-    Writes are atomic (temp file + rename). Encryption is a stub that currently
-    stores plaintext with key_version=0 so tests can exercise the path.
+    Writes are atomic (temp file + rename). Plaintext SHA-256 addresses the
+    object; on-disk bytes are AES-GCM wrapped with a versioned key.
     """
 
-    def __init__(self, root: str | Path, *, key_version: int = 0) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        key_version: int | None = None,
+        keyring: Keyring | None = None,
+    ) -> None:
         self.root = Path(root)
-        self.key_version = key_version
+        self.keyring = keyring or load_keyring_from_env()
+        self.key_version = key_version if key_version is not None else self.keyring.active_version
         self.root.mkdir(parents=True, exist_ok=True)
 
     def hash_plaintext(self, data: bytes) -> str:
@@ -50,10 +55,10 @@ class BlobStore:
         rel = self._rel_path(digest)
         dest = self.root / rel
         if dest.is_file():
+            # Already stored — report active key version used for new writes.
             return BlobWriteResult(digest, len(data), rel, self.key_version)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        # Stub "encryption": identity transform; real AES-GCM comes later.
-        payload = self._wrap(data)
+        payload = wrap(data, keyring=self.keyring, key_version=self.key_version)
         fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=".tmp-")
         try:
             with os.fdopen(fd, "wb") as fh:
@@ -71,10 +76,9 @@ class BlobStore:
 
     def get(self, digest: str) -> bytes:
         raw = self.path_for(digest).read_bytes()
-        return self._unwrap(raw)
-
-    def _wrap(self, plaintext: bytes) -> bytes:
+        plaintext, _version = unwrap(raw, keyring=self.keyring)
         return plaintext
 
-    def _unwrap(self, ciphertext: bytes) -> bytes:
-        return ciphertext
+    def get_with_version(self, digest: str) -> tuple[bytes, int]:
+        raw = self.path_for(digest).read_bytes()
+        return unwrap(raw, keyring=self.keyring)
