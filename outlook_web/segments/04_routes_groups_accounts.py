@@ -150,14 +150,22 @@ def extension_login(token):
 
 @app.route('/favicon.ico')
 def favicon():
-    """返回内联 SVG favicon，避免 500 错误"""
-    svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-        <rect width="100" height="100" rx="20" fill="#1a1a1a"/>
-        <text x="50" y="55" font-size="60" text-anchor="middle" dominant-baseline="middle">📧</text>
-    </svg>'''
-    response = make_response(svg)
+    """浏览器默认请求 /favicon.ico。与 SPA 使用同一张透明图标。"""
+    for icon in (
+        Path(app.root_path) / 'frontend' / 'dist' / 'favicon.svg',
+        Path(app.root_path) / 'frontend' / 'public' / 'favicon.svg',
+    ):
+        if icon.is_file():
+            response = make_response(icon.read_text(encoding='utf-8'))
+            response.headers['Content-Type'] = 'image/svg+xml'
+            response.headers['Cache-Control'] = 'public, max-age=86400'
+            return response
+    response = make_response(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+        '<rect width="32" height="32" fill="#12355B"/></svg>'
+    )
     response.headers['Content-Type'] = 'image/svg+xml'
-    response.headers['Cache-Control'] = 'public, max-age=31536000'
+    response.headers['Cache-Control'] = 'public, max-age=86400'
     return response
 
 
