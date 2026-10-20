@@ -5,6 +5,7 @@
 - **Single user.** One login password protects the instance; there are no user accounts or roles. Bearer API keys have the same full access. Within that boundary, resource UUIDs (messages, attachments, accounts, …) are **capabilities**: knowing the UUID grants API access. They are not multi-tenant, IDOR-safe identifiers.
 
 - **No browser extension (wontfix).** A browser extension will never ship. The old `browser-extension/` tree and `/api/extension/*` bridge are gone and must not be reintroduced.
+- **No system skins.** Flask-era `data/skins/`, `docs/skins.md`, and skin `preview.png` packages are removed; appearance is limited to the SPA light/dark/system theme.
 
 - **No sending.** Compose, reply, forward, contacts and notifications are out of scope, and the SPA has no compose UI.
 - **Folders.** The SPA shows each account's inbox and the unified inbox. The backend syncs all folders, but the HTTP API exposes inbox lists only (`/api/mail/inbox`).
@@ -20,6 +21,7 @@
 
 ## Desktop packaging
 
+- **Last packaging check (docs):** 2026-10-21 — Linux `pack:linux` scaffold verified locally as soft-ok without vendored PostgreSQL (build succeeds, runtime refuses to start until `desktop/vendor/pgsql` is present). macOS/Windows unsigned paths not re-verified on that date.
 - The Linux AppImage and deb include a vendored PostgreSQL (`scripts/fetch-pg-binaries.sh`) and the PyInstaller mail-core sidecar (`scripts/build-sidecar.sh`).
 - macOS (dmg) and Windows (nsis) packages are unsigned builds, and their PostgreSQL binaries must be placed in `desktop/vendor/pgsql/bin` at build time (the fetch script is Linux-only). Without them the desktop app refuses to start.
 

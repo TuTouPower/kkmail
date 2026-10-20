@@ -4,6 +4,7 @@ import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Fla
 import { accountScope, fetchAccounts, markReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMessageTrash } from '../api/mailCore'
 import { hasMailId, mailKey } from '../lib/mailKey'
+import { MOBILE_MAX_WIDTH } from '../lib/viewport'
 import { listTitle } from '../lib/listTitle'
 import { confirmAction, errorMessage } from '../lib/actions'
 import { compareMailDates } from '../lib/mailDate'
@@ -95,7 +96,7 @@ export default function MessageList() {
 
   function openMessage(m: MailItem) {
     setSelectedKey(mailKey(m))
-    if (window.innerWidth <= 760) setMobileView('detail')
+    if (window.innerWidth <= MOBILE_MAX_WIDTH) setMobileView('detail')
     if (!m.is_read) {
       markReadOptimistic([m]).catch((err) => setActionStatus(`标记已读失败：${errorMessage(err)}`))
     }

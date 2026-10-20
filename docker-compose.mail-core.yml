@@ -9,7 +9,6 @@
 #   export MAIL_CORE_LOGIN_PASSWORD='(set-a-strong-password)'  # or MAIL_CORE_LOGIN_PASSWORD_HASH
 #   export MAIL_CORE_BACKUP_KEY="$(python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
 # Backup key MUST differ from the blob key. Do not ship sample all-A keys.
-version: "3.9"
 # Note: if `docker compose` plugin is unavailable, equivalent for Postgres only:
 #   docker run -d --name kkmail-mail-core-pg -e POSTGRES_USER=kkmail \
 #     -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" -e POSTGRES_DB=kkmail_mail -p 127.0.0.1:5433:5432 postgres:16
