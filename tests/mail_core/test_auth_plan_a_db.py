@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import bcrypt
 
 from mail_core.security.auth import (
+    AuthConfigError,
     change_login_password,
     get_login_password_hash,
     reset_auth_caches,
@@ -77,3 +78,21 @@ def test_auth_plan_a_database_persistence():
         assert bcrypt.checkpw(b"new_changed_password_2026", h2)
         assert verify_password("new_changed_password_2026")
         assert not verify_password("initial_env_password")
+
+
+def test_change_login_password_fails_closed_on_db_error():
+    reset_auth_caches()
+    with (
+        patch.dict(os.environ, {"MAIL_CORE_DATABASE_URL": "postgresql://test/db", "MAIL_CORE_LOGIN_PASSWORD": "initial_password_1"}),
+        patch("mail_core.security.auth._persist_db_password_hash", return_value=False),
+    ):
+        get_login_password_hash()
+        assert verify_password("initial_password_1")
+
+        with pytest.raises(AuthConfigError, match="failed to persist password to database"):
+            change_login_password(current="initial_password_1", new="new_password_fails_to_save")
+
+        # Memory cache and verification must remain unchanged
+        assert verify_password("initial_password_1")
+        assert not verify_password("new_password_fails_to_save")
+
