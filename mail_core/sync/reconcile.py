@@ -80,6 +80,7 @@ def reconcile_folder(
             )
             if loc is not None:
                 session.delete(loc)
+                session.flush()
             remaining = session.scalar(
                 select(MessageLocation).where(MessageLocation.message_id == msg.id)
             )
