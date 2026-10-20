@@ -247,7 +247,36 @@ class GmailProvider:
         data = self._call("GET", f"/gmail/v1/users/{self.user_id}/history", params)
         if "page" in data:
             return data["page"]
-        return parse_gmail_history(data, folder_label=folder_remote_id)
+        page = parse_gmail_history(data, folder_label=folder_remote_id)
+        hydrated_changes: list[DeltaChange] = []
+        for change in page.changes:
+            if change.kind == "upsert":
+                try:
+                    detail = self._call(
+                        "GET",
+                        f"/gmail/v1/users/{self.user_id}/messages/{change.remote_id}",
+                        {
+                            "format": "metadata",
+                            "metadataHeaders": list(_GMAIL_META_HEADERS),
+                        },
+                    )
+                    if isinstance(detail, dict) and detail.get("id"):
+                        meta = _meta_from_gmail_message(detail)
+                        change = DeltaChange(
+                            kind="upsert",
+                            remote_id=change.remote_id,
+                            meta=meta,
+                            flags=change.flags,
+                        )
+                except Exception:
+                    if not change.meta or (not change.meta.subject and not change.meta.from_address):
+                        raise
+            hydrated_changes.append(change)
+        return DeltaPage(
+            changes=hydrated_changes,
+            next_cursor=page.next_cursor,
+            exhausted=page.exhausted,
+        )
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
         from mail_core.providers.remote_writeback import (
