@@ -12,7 +12,7 @@ from mail_core.accounts import create_account
 from mail_core.api.app import app
 from tests.mail_core.conftest import TEST_API_KEY
 from mail_core.db.session import get_session_factory
-from mail_core.mail.storage import Folder, FolderStats, Message, MessageLocation, MessageSearch
+from mail_core.mail.storage import Folder, FolderStats, Message, MessageLocation, MessageSearch, Thread
 from mail_core.search.index import upsert_message_search
 from mail_core.threading.rules import assign_thread_for_message, normalize_subject
 
@@ -79,7 +79,8 @@ def test_unified_inbox_folder_stats_search_and_thread():
     assert normalize_subject("Re: Hello") == "hello"
     with Session() as session:
         msg = session.get(Message, message_id)
-        assert msg.thread_id is not None
+        thread = session.get(Thread, msg.thread_id)
+        assert thread.account_id == msg.account_id
+        assert thread.subject_norm == normalize_subject("Hello Project Phoenix")
         row = session.get(MessageSearch, message_id)
-        assert row is not None
         assert "Phoenix" in row.subject
