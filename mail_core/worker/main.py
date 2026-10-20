@@ -29,8 +29,10 @@ def request_stop() -> None:
 def _tick(worker_id: str) -> int:
     """Claim and handle one batch. Returns number of jobs handled. No-op if DB down."""
     try:
+        from datetime import timedelta
+
         from mail_core.db.session import get_session_factory
-        from mail_core.sync.jobs import claim_jobs
+        from mail_core.sync.jobs import claim_jobs, reclaim_stale_claims
         from mail_core.worker.handlers import handle_job
     except Exception as exc:  # pragma: no cover
         log.warning("worker imports failed: %s", exc)
@@ -38,6 +40,15 @@ def _tick(worker_id: str) -> int:
 
     Session = get_session_factory()
     handled = 0
+    with Session() as session:
+        try:
+            n = reclaim_stale_claims(session, older_than=timedelta(minutes=5), limit=100)
+            if n:
+                log.info("reclaimed %s stale CLAIMED job(s)", n)
+            session.commit()
+        except Exception:
+            session.rollback()
+            log.exception("reclaim_stale_claims failed")
     with Session() as session:
         jobs = claim_jobs(session, worker_id=worker_id, limit=5)
         for job in jobs:

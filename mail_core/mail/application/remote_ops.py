@@ -5,11 +5,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mail_core.mail.domain.enums import RemoteOperationStatus
+from mail_core.mail.domain.enums import OutboxEventType, RemoteOperationStatus
 from mail_core.mail.storage.models import OutboxEvent, RemoteOperation
-from mail_core.mail.domain.enums import OutboxEventType
 
 
 def enqueue_remote_operation(
@@ -21,6 +21,27 @@ def enqueue_remote_operation(
     desired_state: dict,
     idempotency_key: str | None = None,
 ) -> RemoteOperation:
+    """Enqueue or upsert by ``idempotency_key`` (unique) to avoid IntegrityError storms."""
+    if idempotency_key:
+        existing = session.scalar(
+            select(RemoteOperation).where(RemoteOperation.idempotency_key == idempotency_key).limit(1)
+        )
+        if existing is not None:
+            existing.desired_state = desired_state
+            existing.op_type = op_type
+            existing.entity_key = entity_key
+            existing.status = RemoteOperationStatus.PENDING.value
+            existing.updated_at = datetime.now(timezone.utc)
+            session.add(
+                OutboxEvent(
+                    event_type=OutboxEventType.REMOTE_OPERATION_UPDATED.value,
+                    account_id=account_id,
+                    payload={"operation_id": str(existing.id), "status": existing.status, "op_type": op_type, "upsert": True},
+                )
+            )
+            session.flush()
+            return existing
+
     op = RemoteOperation(
         account_id=account_id,
         entity_key=entity_key,
@@ -51,7 +72,7 @@ def mark_remote_operation(
     op.status = status.value
     op.updated_at = datetime.now(timezone.utc)
     if error:
-        op.last_error = error
+        op.last_error = error[:2000]
     if status == RemoteOperationStatus.IN_PROGRESS:
         op.attempts = int(op.attempts) + 1
     session.add(

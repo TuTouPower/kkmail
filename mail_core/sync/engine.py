@@ -243,10 +243,28 @@ def sync_folder_metadata(
     return {"status": "ok", "upserted": total, "exhausted": exhausted, "pages": pages}
 
 
-def local_remote_ids_for_folder(session: Session, folder_id: uuid.UUID) -> list[str]:
-    rows = session.execute(
+def local_remote_ids_for_folder(
+    session: Session,
+    folder_id: uuid.UUID,
+    *,
+    batch_size: int = 5_000,
+    max_ids: int | None = 500_000,
+) -> list[str]:
+    """Collect remote_ids for a folder using chunked fetches (bounded).
+
+    ``max_ids`` caps memory; reconcile callers should treat truncation as a signal
+    to re-run with a higher cap or folder-scoped strategy.
+    """
+    out: list[str] = []
+    stmt = (
         select(Message.remote_id)
         .join(MessageLocation, MessageLocation.message_id == Message.id)
         .where(MessageLocation.folder_id == folder_id)
-    ).all()
-    return [r[0] for r in rows]
+        .order_by(Message.id.asc())
+        .execution_options(yield_per=batch_size)
+    )
+    for (rid,) in session.execute(stmt):
+        out.append(rid)
+        if max_ids is not None and len(out) >= max_ids:
+            break
+    return out
