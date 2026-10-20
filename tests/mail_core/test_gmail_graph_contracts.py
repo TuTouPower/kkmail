@@ -75,13 +75,6 @@ def test_parse_gmail_history_pagination_add_delete_flag():
                                 "id": "m1",
                                 "threadId": "t1",
                                 "labelIds": ["INBOX", "UNREAD"],
-                                "snippet": "yo",
-                                "payload": {
-                                    "headers": [
-                                        {"name": "Subject", "value": "Subj"},
-                                        {"name": "From", "value": "Ann <ann@ex.com>"},
-                                    ]
-                                },
                             }
                         }
                     ],
@@ -101,7 +94,7 @@ def test_parse_gmail_history_pagination_add_delete_flag():
     by_id = {c.remote_id: c for c in page.changes}
     assert by_id["old"].kind == "delete"
     assert by_id["m1"].kind == "upsert"
-    assert by_id["m1"].meta.subject == "Subj"
+    assert by_id["m1"].remote_id == "m1"
     assert by_id["m2"].kind == "flag"
     assert by_id["m2"].flags.get("is_read") is True
 
@@ -142,17 +135,45 @@ def test_gmail_raw_history_via_fixture_transport():
                 {
                     "id": "1",
                     "messagesAdded": [
-                        {"message": {"id": "n1", "labelIds": ["INBOX"], "snippet": "x", "subject": "N"}}
+                        {"message": {"id": "n1", "threadId": "t1", "labelIds": ["INBOX"]}}
                     ],
                 }
             ],
             "historyId": "9",
         },
     )
+    fx.add(
+        "GET",
+        "/gmail/v1/users/me/messages/n1",
+        {
+            "id": "n1",
+            "threadId": "t1",
+            "labelIds": ["INBOX", "UNREAD", "STARRED"],
+            "internalDate": "1710000000000",
+            "snippet": "hello world",
+            "payload": {
+                "headers": [
+                    {"name": "Subject", "value": "Hydrated Subject"},
+                    {"name": "From", "value": "Sender <sender@example.com>"},
+                    {"name": "To", "value": "User <user@example.com>"},
+                ]
+            },
+        },
+    )
     page = GmailProvider(credential_ref="cred", transport=fx).delta_changes("INBOX", {"historyId": "1"})
     assert page.exhausted
-    assert page.changes[0].remote_id == "n1"
     assert page.next_cursor["historyId"] == "9"
+    assert len(page.changes) == 1
+    c = page.changes[0]
+    assert c.kind == "upsert"
+    assert c.remote_id == "n1"
+    assert c.meta is not None
+    assert c.meta.subject == "Hydrated Subject"
+    assert c.meta.from_address == "sender@example.com"
+    assert c.meta.from_name == "Sender"
+    assert c.meta.to_addresses == ("user@example.com",)
+    assert c.meta.is_read is False
+    assert c.meta.is_flagged is True
 
 
 def test_gmail_429_and_invalid_history():
@@ -265,17 +286,35 @@ def test_graph_429_and_sync_state_not_found():
 
 def test_graph_list_folders_roles():
     def transport(method, path, params):
-        return {
-            "value": [
-                {"id": "aa", "displayName": "Inbox", "role": "inbox"},
-                {"id": "bb", "displayName": "Archive", "role": "archive"},
-                {"id": "cc", "displayName": "Sent Items", "wellKnownName": "sentitems"},
-                {"id": "dd", "displayName": "Custom"},
-            ]
-        }
+        if path == "/me/mailFolders/inbox":
+            return {"id": "folder-inbox-id", "displayName": "Inbox", "childFolderCount": 0}
+        if path == "/me/mailFolders":
+            return {
+                "value": [
+                    {"id": "folder-inbox-id", "displayName": "Inbox", "childFolderCount": 0},
+                    {"id": "folder-archive-id", "displayName": "Archive", "childFolderCount": 0},
+                    {"id": "folder-sent-id", "displayName": "Sent Items", "childFolderCount": 0},
+                    {"id": "folder-custom-id", "displayName": "Custom", "childFolderCount": 1},
+                ]
+            }
+        if path == "/me/mailFolders/folder-custom-id/childFolders":
+            return {
+                "value": [
+                    {
+                        "id": "folder-sub-id",
+                        "displayName": "Sub Folder",
+                        "childFolderCount": 0,
+                    }
+                ]
+            }
+        return {}
 
     folders = GraphProvider(credential_ref="x", transport=transport).list_folders()
-    assert [f.role for f in folders] == ["inbox", "archive", "sent", "other"]
+    by_id = {f.remote_id: f for f in folders}
+    assert by_id["folder-inbox-id"].role == "inbox"
+    assert by_id["folder-inbox-id"].parent_remote_id is None
+    assert by_id["folder-custom-id"].role == "other"
+    assert by_id["folder-sub-id"].parent_remote_id == "folder-custom-id"
 
 
 def test_not_configured_without_credentials_transport():
@@ -287,3 +326,40 @@ def test_not_configured_without_credentials_transport():
         GraphProvider(credential_ref="").list_folders()
     with pytest.raises(GraphNotConfiguredError):
         GraphProvider(credential_ref="").fetch_mime("x")
+
+
+def test_graph_and_gmail_reconcile_use_standard_queries():
+    graph_calls = []
+
+    def graph_transport(method, path, params):
+        graph_calls.append((method, path, params))
+        assert method == "GET"
+        assert "/messages" in path
+        return {
+            "value": [{"id": "m1"}, {"id": "m2"}],
+        }
+
+    gp = GraphProvider(credential_ref="x", transport=graph_transport)
+    actions = gp.reconcile("inbox-id", ["m1", "m2", "m3"])
+    assert len(actions) == 1
+    assert actions[0].kind == "delete"
+    assert actions[0].remote_id == "m3"
+    assert graph_calls[0][0] == "GET"
+
+    gmail_calls = []
+
+    def gmail_transport(method, path, params):
+        gmail_calls.append((method, path, params))
+        assert method == "GET"
+        assert "/messages" in path
+        return {
+            "messages": [{"id": "gm1"}],
+        }
+
+    gmp = GmailProvider(credential_ref="x", transport=gmail_transport)
+    g_actions = gmp.reconcile("INBOX", ["gm1", "gm_stale"])
+    assert len(g_actions) == 1
+    assert g_actions[0].kind == "delete"
+    assert g_actions[0].remote_id == "gm_stale"
+    assert gmail_calls[0][0] == "GET"
+

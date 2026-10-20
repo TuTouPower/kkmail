@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from mail_core.providers.base import (
+    DeltaChange,
     DeltaPage,
     MetadataPage,
     RateLimitHint,
@@ -75,12 +76,22 @@ def _raise_mapped(exc: ProviderHttpError) -> None:
 
 _GMAIL_META_HEADERS = (
     "From",
+    "To",
+    "Cc",
     "Subject",
     "Date",
     "Message-ID",
     "In-Reply-To",
     "References",
 )
+
+
+def _parse_address_list(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    import email.utils
+
+    return tuple(addr for _, addr in email.utils.getaddresses([raw]) if addr)
 
 
 def _meta_from_gmail_message(message: dict[str, Any]) -> RemoteMessageMeta:
@@ -109,6 +120,8 @@ def _meta_from_gmail_message(message: dict[str, Any]) -> RemoteMessageMeta:
     else:
         sort_time = datetime.now(timezone.utc)
     label_ids = set(message.get("labelIds") or [])
+    to_addrs = _parse_address_list(headers.get("to"))
+    cc_addrs = _parse_address_list(headers.get("cc"))
     return RemoteMessageMeta(
         remote_id=str(message["id"]),
         subject=str(subject),
@@ -117,9 +130,12 @@ def _meta_from_gmail_message(message: dict[str, Any]) -> RemoteMessageMeta:
         sort_time=sort_time,
         is_read="UNREAD" not in label_ids,
         has_attachments=False,
+        is_flagged="STARRED" in label_ids,
         internet_message_id=headers.get("message-id"),
         snippet=message.get("snippet"),
         provider_thread_key=message.get("threadId"),
+        to_addresses=to_addrs,
+        cc_addresses=cc_addrs,
         in_reply_to=headers.get("in-reply-to"),
         references=headers.get("references"),
     )
@@ -167,9 +183,21 @@ class GmailProvider:
         self._calls.append("fetch_metadata_page")
         if self.transport is None:
             raise GmailNotConfiguredError("Gmail API metadata fetch not wired yet")
+        cur = dict(cursor or {})
+        baseline_history_id = cur.get("historyId")
+        if not baseline_history_id and not cur.get("pageToken"):
+            # Record baseline history watermark before full scan starts
+            try:
+                profile = self._call("GET", f"/gmail/v1/users/{self.user_id}/profile", {})
+                hid = profile.get("historyId") if isinstance(profile, dict) else None
+                if hid:
+                    baseline_history_id = str(hid)
+            except Exception:
+                pass
+
         params: dict[str, Any] = {"labelIds": folder_remote_id, "maxResults": 50}
-        if cursor and cursor.get("pageToken"):
-            params["pageToken"] = cursor["pageToken"]
+        if cur.get("pageToken"):
+            params["pageToken"] = cur["pageToken"]
         data = self._call("GET", f"/gmail/v1/users/{self.user_id}/messages", params)
         if "page" in data:
             return data["page"]
@@ -196,15 +224,17 @@ class GmailProvider:
         if token:
             next_cursor["pageToken"] = token
         exhausted = not bool(token)
-        if exhausted:
-            # Stamp historyId so metadata apply can persist checkpoint.history_id.
+        if not baseline_history_id and exhausted:
+            # Fallback stamp historyId if start probe failed
             try:
                 profile = self._call("GET", f"/gmail/v1/users/{self.user_id}/profile", {})
                 hid = profile.get("historyId") if isinstance(profile, dict) else None
                 if hid:
-                    next_cursor["historyId"] = str(hid)
+                    baseline_history_id = str(hid)
             except Exception:
                 pass
+        if baseline_history_id:
+            next_cursor["historyId"] = baseline_history_id
         return MetadataPage(
             items=items,
             next_cursor=next_cursor or None,
@@ -240,14 +270,47 @@ class GmailProvider:
         params: dict[str, Any] = {
             "startHistoryId": str(history_id),
             "labelId": folder_remote_id,
-            "historyTypes": "messageAdded,messageDeleted,labelAdded,labelRemoved",
+            "historyTypes": ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"],
         }
         if cursor.get("pageToken"):
             params["pageToken"] = cursor["pageToken"]
         data = self._call("GET", f"/gmail/v1/users/{self.user_id}/history", params)
         if "page" in data:
             return data["page"]
-        return parse_gmail_history(data, folder_label=folder_remote_id)
+        page = parse_gmail_history(
+            data,
+            folder_label=folder_remote_id,
+            start_history_id=str(history_id),
+        )
+        hydrated_changes: list[DeltaChange] = []
+        for change in page.changes:
+            if change.kind == "upsert":
+                try:
+                    detail = self._call(
+                        "GET",
+                        f"/gmail/v1/users/{self.user_id}/messages/{change.remote_id}",
+                        {
+                            "format": "metadata",
+                            "metadataHeaders": list(_GMAIL_META_HEADERS),
+                        },
+                    )
+                    if isinstance(detail, dict) and detail.get("id"):
+                        meta = _meta_from_gmail_message(detail)
+                        change = DeltaChange(
+                            kind="upsert",
+                            remote_id=change.remote_id,
+                            meta=meta,
+                            flags=change.flags,
+                        )
+                except Exception:
+                    if not change.meta or (not change.meta.subject and not change.meta.from_address):
+                        raise
+            hydrated_changes.append(change)
+        return DeltaPage(
+            changes=hydrated_changes,
+            next_cursor=page.next_cursor,
+            exhausted=page.exhausted,
+        )
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
         from mail_core.providers.remote_writeback import (
@@ -312,8 +375,31 @@ class GmailProvider:
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
         if self.transport is None:
             raise GmailNotConfiguredError("Gmail reconcile not wired yet")
-        data = self._call("RECONCILE", folder_remote_id, {"local": list(local_remote_ids)})
-        return list(data.get("actions") or [])
+        remote_ids: set[str] = set()
+        page_token: str | None = None
+        while True:
+            params: dict[str, Any] = {"labelIds": folder_remote_id, "maxResults": 500}
+            if page_token:
+                params["pageToken"] = page_token
+            data = self._call("GET", f"/gmail/v1/users/{self.user_id}/messages", params)
+            if "page" in data:
+                page = data["page"]
+                items = getattr(page, "items", []) or []
+                for it in items:
+                    remote_ids.add(str(getattr(it, "remote_id", "")))
+                cursor = getattr(page, "next_cursor", None)
+                page_token = cursor.get("pageToken") if isinstance(cursor, dict) else None
+                if not page_token:
+                    break
+            else:
+                for m in data.get("messages") or []:
+                    if m.get("id"):
+                        remote_ids.add(str(m["id"]))
+                page_token = data.get("nextPageToken")
+                if not page_token:
+                    break
+        local = set(local_remote_ids)
+        return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote_ids)]
 
     def rate_limit_hint(self) -> RateLimitHint:
         return RateLimitHint(max_requests_per_minute=250, reason="gmail default quota hint")
