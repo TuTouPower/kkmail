@@ -4,11 +4,14 @@ import type { MailItem } from './queries'
 export interface MailCoreMessage {
   id: string
   account_id: string
+  /** Mailbox email when API hydrates it (prefer over treating UUID as email). */
+  account_email?: string | null
   subject: string
   from_address: string
   from_name: string | null
   sort_time: string
   is_read: boolean
+  is_flagged?: boolean
   has_attachments: boolean
   snippet: string | null
   folder_id: string | null
@@ -21,7 +24,10 @@ export interface MailCoreInboxPage {
 
 export interface MailCoreInboxQuery {
   limit?: number
+  /** mail-core account UUID */
   accountId?: string
+  /** Prefer this over Flask numeric ids when filtering one mailbox */
+  accountEmail?: string
   cursorSortTime?: string
   cursorMessageId?: string
   signal?: AbortSignal
@@ -174,6 +180,7 @@ export function fetchMailCoreInbox(opts: MailCoreInboxQuery | number = 40): Prom
   const params = new URLSearchParams()
   params.set('limit', String(q.limit ?? 40))
   if (q.accountId) params.set('account_id', q.accountId)
+  if (q.accountEmail) params.set('account_email', q.accountEmail)
   if (q.cursorSortTime) params.set('cursor_sort_time', q.cursorSortTime)
   if (q.cursorMessageId) params.set('cursor_message_id', q.cursorMessageId)
   return getJson(`/api/mail/inbox?${params.toString()}`, q.signal)
@@ -188,10 +195,12 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
     from,
     date: m.sort_time,
     is_read: m.is_read,
+    is_flagged: m.is_flagged,
     has_attachments: m.has_attachments,
     body_preview: m.snippet || undefined,
     folder: 'inbox',
-    accountEmail: m.account_id,
+    // Never treat UUID account_id as an email address.
+    accountEmail: m.account_email || undefined,
     accountId: undefined,
     id_mode: 'mail_core',
   }
