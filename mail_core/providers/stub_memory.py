@@ -27,6 +27,7 @@ class MemoryProvider:
     modseq: dict[str, int] = field(default_factory=dict)
     # folder -> list of (modseq, DeltaChange)
     change_log: dict[str, list[tuple[int, DeltaChange]]] = field(default_factory=dict)
+    flagged: set[str] = field(default_factory=set)
 
     @classmethod
     def from_config(cls, cfg: dict[str, Any]) -> MemoryProvider:
@@ -90,6 +91,23 @@ class MemoryProvider:
             )
             return
 
+    def move_message(self, from_folder: str, to_folder: str, remote_id: str) -> bool:
+        msgs = self.messages.get(from_folder, [])
+        found = None
+        keep = []
+        for m in msgs:
+            if m.remote_id == remote_id:
+                found = m
+            else:
+                keep.append(m)
+        if found is None:
+            return False
+        self.messages[from_folder] = keep
+        self.messages.setdefault(to_folder, []).append(found)
+        self._bump(from_folder, DeltaChange(kind="delete", remote_id=remote_id))
+        self._bump(to_folder, DeltaChange(kind="upsert", remote_id=remote_id, meta=found))
+        return True
+
     def remove_message(self, folder_remote_id: str, remote_id: str) -> None:
         self.messages[folder_remote_id] = [m for m in self.messages.get(folder_remote_id, []) if m.remote_id != remote_id]
         self.mime.pop(remote_id, None)
@@ -137,16 +155,71 @@ class MemoryProvider:
         )
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
-        remote_id = str(desired_state.get("remote_id") or "")
+        from mail_core.providers.remote_writeback import (
+            OP_MARK_READ,
+            OP_MOVE,
+            OP_SET_FLAG,
+            OP_TRASH,
+            normalize_op_type,
+            require_remote_id,
+        )
+
+        try:
+            remote_id = require_remote_id(desired_state)
+        except ValueError as exc:
+            return RemoteOperationResult(success=False, error=str(exc))
         folder = str(desired_state.get("folder_remote_id") or "INBOX")
-        if op_type == "mark_read":
-            self.flag_message(folder, remote_id, is_read=bool(desired_state.get("is_read", True)))
-            return RemoteOperationResult(success=True, remote_state={"is_read": bool(desired_state.get("is_read", True))})
-        if op_type == "delete":
+        op = normalize_op_type(op_type)
+
+        if op == OP_MARK_READ:
+            want = bool(desired_state.get("is_read", True))
+            self.flag_message(folder, remote_id, is_read=want)
+            return RemoteOperationResult(success=True, remote_state={"is_read": want})
+
+        if op == OP_SET_FLAG:
+            want = bool(desired_state.get("is_flagged", True))
+            if want:
+                self.flagged.add(remote_id)
+            else:
+                self.flagged.discard(remote_id)
+            # Emit a flag change for sync consumers
+            for m in self.messages.get(folder, []):
+                if m.remote_id == remote_id:
+                    self._bump(
+                        folder,
+                        DeltaChange(kind="flag", remote_id=remote_id, meta=m, flags={"is_flagged": want}),
+                    )
+                    break
+            return RemoteOperationResult(success=True, remote_state={"is_flagged": want})
+
+        if op == OP_MOVE:
+            dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
+            if not dest:
+                return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
+            ok = self.move_message(folder, dest, remote_id)
+            return RemoteOperationResult(
+                success=ok,
+                idempotent_noop=not ok,
+                error=None if ok else "message not found",
+                remote_state={"folder_remote_id": dest} if ok else {},
+            )
+
+        if op == OP_TRASH:
+            trash = str(desired_state.get("trash_folder_remote_id") or "Trash")
+            # Prefer move-to-trash when folder exists; else hard delete
+            roles = {f.remote_id: f.role for f in self.folders}
+            if trash in self.messages or trash in roles or any(f.role == "trash" for f in self.folders):
+                if any(f.role == "trash" for f in self.folders) and trash not in self.messages:
+                    trash = next(f.remote_id for f in self.folders if f.role == "trash")
+                self.messages.setdefault(trash, [])
+                ok = self.move_message(folder, trash, remote_id)
+                if ok:
+                    return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
             before = len(self.messages.get(folder, []))
             self.remove_message(folder, remote_id)
             after = len(self.messages.get(folder, []))
             return RemoteOperationResult(success=True, idempotent_noop=before == after)
+
         return RemoteOperationResult(success=False, error=f"unsupported op {op_type}")
 
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
