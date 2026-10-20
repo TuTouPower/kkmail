@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # kkmail 全量审查问题真实性核验与源头溯源总报告
 
 - **审查基线**：最新审查目录 `docs/reviews/review_20261021_040521/`
