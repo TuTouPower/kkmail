@@ -34,27 +34,95 @@ export function extractMessageIds(data: unknown): string[] {
   return []
 }
 
+export const REALTIME_THROTTLE_MS = 150
+
+export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REALTIME_THROTTLE_MS) {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let invalidateMailCore = false
+  let invalidateAllDetails = false
+  const detailIdsToInvalidate = new Set<string>()
+
+  function flush() {
+    if (timer !== null) {
+      clearTimeout(timer)
+      timer = null
+    }
+    if (invalidateMailCore) {
+      invalidateMailCore = false
+      void qc.invalidateQueries({ queryKey: ['mail-core'] })
+    }
+    if (invalidateAllDetails) {
+      invalidateAllDetails = false
+      detailIdsToInvalidate.clear()
+      void qc.invalidateQueries({ queryKey: ['detail', 'mail-core'] })
+    } else if (detailIdsToInvalidate.size > 0) {
+      const ids = Array.from(detailIdsToInvalidate)
+      detailIdsToInvalidate.clear()
+      for (const id of ids) {
+        void qc.invalidateQueries({ queryKey: ['detail', 'mail-core', id] })
+      }
+    }
+  }
+
+  function schedule() {
+    if (timer === null) {
+      timer = setTimeout(flush, delayMs)
+    }
+  }
+
+  function handleEvent(type: string, data: unknown) {
+    let scheduled = false
+    if (shouldInvalidateMailCoreInbox(type)) {
+      invalidateMailCore = true
+      scheduled = true
+    }
+    if (type === 'message.upserted' || type === 'message.removed') {
+      const ids = extractMessageIds(data)
+      if (ids.length) {
+        for (const id of ids) detailIdsToInvalidate.add(id)
+      } else {
+        invalidateAllDetails = true
+      }
+      scheduled = true
+    }
+    if (scheduled) {
+      schedule()
+    }
+  }
+
+  function cancel() {
+    if (timer !== null) {
+      clearTimeout(timer)
+      timer = null
+    }
+    detailIdsToInvalidate.clear()
+    invalidateMailCore = false
+    invalidateAllDetails = false
+  }
+
+  return {
+    handleEvent,
+    flush,
+    cancel,
+  }
+}
+
 /** While signed in, subscribe to mail-core SSE and refetch message lists on relevant events. */
 export function useMailCoreRealtime(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return
-    return subscribeMailCoreEvents(
+    const throttler = createThrottledInvalidator(queryClient)
+    const unsubscribe = subscribeMailCoreEvents(
       (type, data) => {
-        if (shouldInvalidateMailCoreInbox(type)) void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
-        if (type === 'message.upserted' || type === 'message.removed') {
-          const ids = extractMessageIds(data)
-          if (ids.length) {
-            for (const id of ids) {
-              void queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core', id] })
-            }
-          } else {
-            void queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core'] })
-          }
-        }
+        throttler.handleEvent(type, data)
       },
       () => {
         /* EventSource reconnects on its own */
       },
     )
+    return () => {
+      unsubscribe()
+      throttler.cancel()
+    }
   }, [enabled])
 }
