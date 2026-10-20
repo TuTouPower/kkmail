@@ -20,6 +20,7 @@ export interface MailItem {
   to?: string
   date?: string
   is_read: boolean
+  is_flagged?: boolean
   has_attachments: boolean
   body_preview?: string
   folder?: string

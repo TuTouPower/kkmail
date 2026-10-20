@@ -47,7 +47,10 @@ jobs:
           --health-retries 20
     env:
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:kkmail@127.0.0.1:5433/kkmail_mail
-      MAIL_CORE_BLOB_KEY_V1: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      MAIL_CORE_BLOB_KEY_V1: ${{ secrets.MAIL_CORE_BLOB_KEY_V1 || 'dGVzdC1ibG9iLWtleS0zMi1ieXRlcyEhISE=' }}
+      MAIL_CORE_SECRET_KEY: test-mail-core-secret-key-ci-only
+      MAIL_CORE_LOGIN_PASSWORD: test-login-password
+      MAIL_CORE_API_KEYS: test-api-key-for-pytest
       MAIL_CORE_BLOB_ACTIVE_VERSION: "1"
       MAIL_CORE_BACKUP_KEY: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
     steps:
@@ -84,7 +87,10 @@ jobs:
       MAIL_CORE_IMAP_PORT: "1143"
       MAIL_CORE_IMAP_USER: alice@kkmail.test
       MAIL_CORE_IMAP_PASS: alice-imap-pass
-      MAIL_CORE_BLOB_KEY_V1: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      MAIL_CORE_BLOB_KEY_V1: ${{ secrets.MAIL_CORE_BLOB_KEY_V1 || 'dGVzdC1ibG9iLWtleS0zMi1ieXRlcyEhISE=' }}
+      MAIL_CORE_SECRET_KEY: test-mail-core-secret-key-ci-only
+      MAIL_CORE_LOGIN_PASSWORD: test-login-password
+      MAIL_CORE_API_KEYS: test-api-key-for-pytest
       MAIL_CORE_BLOB_ACTIVE_VERSION: "1"
     steps:
       - uses: actions/checkout@v4
