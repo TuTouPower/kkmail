@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from sqlalchemy import select
 
@@ -44,11 +44,11 @@ def push_remote_operations(
                 .limit(limit)
             ).all()
         )
+        work: list[tuple[uuid.UUID, str, dict]] = []
         for op in ops:
             mark_remote_operation(session, op, status=RemoteOperationStatus.IN_PROGRESS)
-        session.commit()
+            work.append((op.id, op.op_type, dict(op.desired_state or {})))
         fencing = lease.fencing_token
-        op_ids = [op.id for op in ops]
         account_snapshot = Account(
             id=account.id,
             email=account.email,
@@ -56,53 +56,42 @@ def push_remote_operations(
             credential_ref=account.credential_ref,
             config=dict(account.config or {}),
         )
+        session.commit()
 
-    if not op_ids:
+    if not work:
         with Session() as session:
-            release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-            session.commit()
-        return {"status": "ok", "pushed": 0}
+            try:
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            except FencingMismatch:
+                pass
+        return {"status": "ok", "pushed": 0, "failed": 0}
 
     provider = build_provider(account_snapshot, store or get_credential_store())
     pushed = 0
     failed = 0
+    results: list[tuple[uuid.UUID, bool, str | None]] = []
+    for op_id, op_type, desired in work:
+        result = provider.apply_remote_operation(op_type, desired)  # network
+        results.append((op_id, result.success, result.error))
+
     with Session() as session:
         try:
             assert_fencing(session, account_id=account_id, fencing_token=fencing)
         except FencingMismatch:
-            return {"status": "fencing_mismatch"}
-        for op_id in op_ids:
+            return {"status": "fencing_mismatch", "pushed": 0, "failed": 0}
+        for op_id, ok, err in results:
             op = session.get(RemoteOperation, op_id)
             if op is None:
                 continue
-            # Network per op — still outside long locks; we hold no row lock on provider call
-            desired = dict(op.desired_state or {})
-            # Re-fetch detached fields
-            op_type = op.op_type
-            session.commit()  # release before network
-            result = provider.apply_remote_operation(op_type, desired)
-            with Session() as s2:
-                try:
-                    assert_fencing(s2, account_id=account_id, fencing_token=fencing)
-                except FencingMismatch:
-                    return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
-                op2 = s2.get(RemoteOperation, op_id)
-                if op2 is None:
-                    continue
-                if result.success:
-                    mark_remote_operation(s2, op2, status=RemoteOperationStatus.DONE)
-                    pushed += 1
-                else:
-                    mark_remote_operation(
-                        s2, op2, status=RemoteOperationStatus.FAILED, error=result.error or "push failed"
-                    )
-                    failed += 1
-                s2.commit()
-
-    with Session() as session:
-        try:
-            release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-            session.commit()
-        except FencingMismatch:
-            pass
+            if ok:
+                mark_remote_operation(session, op, status=RemoteOperationStatus.DONE)
+                pushed += 1
+            else:
+                mark_remote_operation(
+                    session, op, status=RemoteOperationStatus.FAILED, error=err or "push failed"
+                )
+                failed += 1
+        release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+        session.commit()
     return {"status": "ok", "pushed": pushed, "failed": failed}
