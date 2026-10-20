@@ -199,6 +199,7 @@ class MessageBlobLink(Base):
     """Binds a message to its authoritative MIME blob once archive_complete."""
 
     __tablename__ = "message_blob_links"
+    __table_args__ = (Index("ix_message_blob_links_blob_id", "blob_id"),)
 
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
     blob_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("message_blobs.id", ondelete="RESTRICT"), nullable=False)
