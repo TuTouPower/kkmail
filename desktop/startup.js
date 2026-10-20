@@ -1,8 +1,98 @@
-/** Port / health helpers for the Electron main process (pure enough to unit-test). */
+/** Port / health / child-process helpers for the Electron main process (unit-testable). */
 const http = require('http')
 const net = require('net')
+const { spawn } = require('child_process')
 
 const DEFAULT_PORT = 18765
+
+/** Exact env keys the mail-core / PG children may inherit from the parent. */
+const ENV_ALLOW_EXACT = new Set([
+  'PATH',
+  'PATHEXT',
+  'HOME',
+  'USER',
+  'USERPROFILE',
+  'USERNAME',
+  'LOGNAME',
+  'TMP',
+  'TEMP',
+  'TMPDIR',
+  'LANG',
+  'LANGUAGE',
+  'TZ',
+  'DISPLAY',
+  'SystemRoot',
+  'SYSTEMROOT',
+  'WINDIR',
+  'ComSpec',
+  'COMSPEC',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'PROGRAMDATA',
+  'ProgramData',
+  'ProgramFiles',
+  'ProgramFiles(x86)',
+  'PROGRAMFILES',
+  'PROGRAMFILES(X86)',
+  'PYTHONPATH',
+  'PYTHONHOME',
+  'PYTHONNOUSERSITE',
+  'PYTHONUTF8',
+  'PYTHONIOENCODING',
+  'PYTHON',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'REQUESTS_CA_BUNDLE',
+  'CURL_CA_BUNDLE',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'XDG_DATA_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_RUNTIME_DIR',
+  'LD_LIBRARY_PATH',
+  'DYLD_LIBRARY_PATH',
+  'DYLD_FALLBACK_LIBRARY_PATH',
+])
+
+const ENV_ALLOW_PREFIX = ['LC_', 'MAIL_CORE_', 'KKMAIL_']
+
+/**
+ * Build a child env from an allowlist of parent keys, then apply extras (overwrite).
+ * Prevents leaking parent secrets (tokens, CI creds, shell history vars) into mail-core.
+ */
+function scrubEnv(parentEnv, extras = {}) {
+  const out = {}
+  const src = parentEnv || {}
+  for (const key of Object.keys(src)) {
+    if (ENV_ALLOW_EXACT.has(key) || ENV_ALLOW_PREFIX.some((p) => key.startsWith(p))) {
+      const v = src[key]
+      if (v != null) out[key] = v
+    }
+  }
+  for (const [k, v] of Object.entries(extras || {})) {
+    if (v == null) delete out[k]
+    else out[k] = v
+  }
+  return out
+}
+
+/** Redact known secrets and URL userinfo from log lines. */
+function redactSecrets(text, secrets = []) {
+  let out = String(text == null ? '' : text)
+  for (const secret of secrets) {
+    if (!secret || String(secret).length < 4) continue
+    const s = String(secret)
+    out = out.split(s).join('[REDACTED]')
+  }
+  out = out.replace(/postgresql(\+[\w]+)?:\/\/[^\s"'<>]+/gi, 'postgresql://[REDACTED]')
+  out = out.replace(/:\/\/[^/\s]*:[^@/\s]+@/g, '://[REDACTED]@')
+  return out
+}
 
 function parsePort(raw, fallback = DEFAULT_PORT) {
   const n = Number(raw == null || raw === '' ? fallback : raw)
@@ -72,10 +162,66 @@ function waitForHealth(url, timeoutMs = 30000, opts = {}) {
   })
 }
 
+/**
+ * SIGTERM the child (process group on Unix when detached), then SIGKILL / taskkill /T after escalateAfterMs.
+ * Idempotent: safe to call repeatedly; only the first call schedules escalation.
+ */
+function stopChildTree(child, opts = {}) {
+  const escalateAfterMs = opts.escalateAfterMs ?? 4000
+  const log = opts.log || (() => {})
+  if (!child || child.exitCode !== null || child.killed) {
+    return { ok: true, alreadyDead: true }
+  }
+  if (child._kkmailStopping) return { ok: true, alreadyStopping: true }
+  child._kkmailStopping = true
+  const pid = child.pid
+  const softKill = () => {
+    try {
+      if (process.platform === 'win32') {
+        child.kill()
+      } else if (pid) {
+        try {
+          process.kill(-pid, 'SIGTERM')
+        } catch (_) {
+          child.kill('SIGTERM')
+        }
+      }
+    } catch (err) {
+      log(`soft kill failed: ${err && err.message ? err.message : err}`)
+    }
+  }
+  const hardKill = () => {
+    if (child.exitCode !== null || child.killed) return
+    try {
+      if (process.platform === 'win32' && pid) {
+        spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      } else if (pid) {
+        try {
+          process.kill(-pid, 'SIGKILL')
+        } catch (_) {
+          try { child.kill('SIGKILL') } catch (__) { /* gone */ }
+        }
+      }
+    } catch (err) {
+      log(`hard kill failed: ${err && err.message ? err.message : err}`)
+    }
+  }
+  softKill()
+  const timer = setTimeout(hardKill, escalateAfterMs)
+  if (typeof timer.unref === 'function') timer.unref()
+  child.once('exit', () => clearTimeout(timer))
+  return { ok: true, pid, escalateAfterMs }
+}
+
 module.exports = {
   DEFAULT_PORT,
+  ENV_ALLOW_EXACT,
+  ENV_ALLOW_PREFIX,
   parsePort,
   tryListen,
   freePort,
   waitForHealth,
+  scrubEnv,
+  redactSecrets,
+  stopChildTree,
 }
