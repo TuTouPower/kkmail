@@ -4,6 +4,7 @@ import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, fetchGroups, query
 import { FOLDERS, providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import SettingsModal from './SettingsModal'
 import { useState } from 'react'
+import { useIsWide } from '../lib/viewport'
 
 export default function Sidebar() {
   const {
@@ -19,6 +20,7 @@ export default function Sidebar() {
     setListFilter,
   } = useMailStore()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const wide = useIsWide()
 
   const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
@@ -46,9 +48,15 @@ export default function Sidebar() {
     : [{ group: { id: 0, name: '全部账户' }, members: accounts }]
 
   return (
-    <aside className="sidebar" aria-label="邮箱导航">
+    <aside className="sidebar" aria-label="邮箱导航" role={wide ? undefined : 'dialog'} aria-modal={wide ? undefined : true}>
       <div className="sidebar-head">
-        <button className="sidebar-toggle" onClick={toggleSidebar} title="折叠侧边栏" aria-label="折叠或展开侧边栏">
+        <button
+          className="sidebar-toggle"
+          // On mobile the sidebar is an overlay drawer: this button closes it.
+          onClick={wide ? toggleSidebar : closeMobileSidebar}
+          title={wide ? '折叠侧边栏' : '关闭侧边栏'}
+          aria-label={wide ? '折叠或展开侧边栏' : '关闭侧边栏'}
+        >
           <PanelLeft size={18} />
         </button>
       </div>
