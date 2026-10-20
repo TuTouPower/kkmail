@@ -87,3 +87,41 @@ def test_tick_reclaims_stale_and_isolates_job_sessions():
             # Fresh pending wake jobs must actually be handled to DONE (not a tautology).
             assert row.status == JobStatus.DONE.value, (jid, row.status, row.last_error)
             assert row.locked_by == "test-worker-iso" or row.locked_by is None
+
+
+def test_tick_failed_job_not_counted_as_handled():
+    """handle_job False (fail_job path) must not increment handled / skew backoff."""
+    import uuid
+
+    from mail_core.mail.storage.models import WorkerJob
+
+    job = WorkerJob(job_type="no_such_type_xyz", payload={})
+    job.id = uuid.uuid4()
+
+    class _S:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, *_a, **_k):
+            return job
+
+        def in_transaction(self):
+            return True
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    with (
+        patch("mail_core.worker.main._reclaim_once", return_value=0),
+        patch("mail_core.db.session.get_session_factory", return_value=lambda: _S()),
+        patch("mail_core.sync.jobs.claim_jobs", return_value=[job]),
+        patch("mail_core.worker.handlers.handle_job", return_value=False),
+    ):
+        n = worker_main._tick("w-fail-count")
+    assert n == 0
