@@ -91,12 +91,13 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             return
 
         if job.job_type == JobType.OUTBOX_DISPATCH_WAKE.value:
-            from mail_core.realtime.dispatcher import get_dispatcher
+            # Worker must NOT mark_dispatched — that steals events from the API
+            # process (no local SSE subscribers here). Only wake the API LISTEN.
+            from mail_core.realtime.notify import try_notify_outbox
 
-            session.commit()
-            n = get_dispatcher().dispatch_once()
-            log.info("outbox_dispatch_wake dispatched=%s", n)
+            try_notify_outbox(session)
             complete_job(session, job)
+            log.info("outbox_dispatch_wake notified API listener")
             return
 
         if job.job_type == JobType.SYNC_FOLDER_DELTA.value:
