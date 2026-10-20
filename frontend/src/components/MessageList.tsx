@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, MoreHorizontal, Paperclip, Menu } from 'lucide-react'
+import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, MoreHorizontal, Paperclip, Menu, X } from 'lucide-react'
 import { fetchAccounts, fetchEmails, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { api } from '../api/client'
 import { useMailStore } from '../store/mailStore'
@@ -116,7 +116,8 @@ export default function MessageList() {
         </div>
         <label className="list-search">
           <Search size={16} />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索当前列表" aria-label="搜索当前列表" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索所有邮箱" aria-label="搜索所有邮箱" />
+          {search && <button className="list-primary-btn" title="清除搜索" aria-label="清除搜索" onClick={() => setSearch('')}><X size={14} /></button>}
         </label>
         <div className="list-controls">
           <div className="segmented">
