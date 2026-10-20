@@ -5,11 +5,12 @@
  * Electron resources dir). Uninstall must not delete this directory by default.
  *
  * When no postgres/initdb/pg_ctl binaries are present, methods return
- * { ok: false, stub: true, reason } so the shell can still boot Flask-only.
+ * { ok: false, stub: true, reason }; main.js treats that as a fatal startup error.
  */
 
 const fs = require('fs')
 const path = require('path')
+const crypto = require('crypto')
 const { spawn, spawnSync } = require('child_process')
 
 const DEFAULT_PORT = 54329
@@ -60,9 +61,28 @@ function PostgresManager(options = {}) {
   this.port = Number(options.port || process.env.KKMAIL_PG_PORT || DEFAULT_PORT)
   this.user = options.user || 'kkmail'
   this.database = options.database || 'kkmail_mail'
-  this.password = options.password || process.env.KKMAIL_PG_PASSWORD || 'kkmail'
+  this._passwordOverride = options.password || process.env.KKMAIL_PG_PASSWORD || ''
   this._child = null
   this._log = options.log || console
+}
+
+/** Per-install random PG password persisted (0600) under the data root. */
+PostgresManager.prototype.password = function password() {
+  if (this._passwordOverride) return this._passwordOverride
+  const file = path.join(this.dataRoot, 'secrets', 'pg-password')
+  try {
+    const v = fs.readFileSync(file, 'utf8').trim()
+    if (v) return v
+  } catch (_) { /* create below */ }
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const v = crypto.randomBytes(24).toString('hex')
+  fs.writeFileSync(file, v + '\n', { encoding: 'utf8', mode: 0o600 })
+  return v
+}
+
+PostgresManager.prototype.databaseUrl = function databaseUrl() {
+  const pw = encodeURIComponent(this.password())
+  return `postgresql+psycopg://${this.user}:${pw}@127.0.0.1:${this.port}/${this.database}`
 }
 
 PostgresManager.prototype.paths = function paths() {
@@ -116,6 +136,7 @@ PostgresManager.prototype.hasBinaries = function hasBinaries() {
     initdb: pick('initdb'),
     pg_ctl: pick('pg_ctl'),
     postgres: pick('postgres'),
+    createdb: pick('createdb'),
   }
 }
 
@@ -157,10 +178,10 @@ PostgresManager.prototype.initIfNeeded = function initIfNeeded() {
   }
   fs.mkdirSync(p.pgData, { recursive: true })
   const pwFile = path.join(this.dataRoot, '.pgpass-init')
-  fs.writeFileSync(pwFile, this.password, { encoding: 'utf8', mode: 0o600 })
+  fs.writeFileSync(pwFile, this.password(), { encoding: 'utf8', mode: 0o600 })
   const r = spawnSync(
     bins.initdb,
-    ['-D', p.pgData, '-U', this.user, '--pwfile', pwFile, '-A', 'password', '--locale=C', '--encoding=UTF8'],
+    ['-D', p.pgData, '-U', this.user, '--pwfile', pwFile, '-A', 'scram-sha-256', '--locale=C', '--encoding=UTF8'],
     { encoding: 'utf8' },
   )
   try { fs.unlinkSync(pwFile) } catch (_) { /* ignore */ }
@@ -197,7 +218,25 @@ PostgresManager.prototype.start = function start() {
   if (r.status !== 0) {
     return { ok: false, reason: r.stderr || r.stdout || 'pg_ctl start failed' }
   }
+  const created = this.ensureDatabase(bins)
+  if (!created.ok) return created
   return { ok: true, started: true, ...this.status() }
+}
+
+/** Create the application database once (initdb only creates `postgres`). */
+PostgresManager.prototype.ensureDatabase = function ensureDatabase(bins) {
+  const marker = path.join(this.dataRoot, 'secrets', 'db-created')
+  if (fs.existsSync(marker)) return { ok: true }
+  if (!bins.createdb) return { ok: false, reason: 'createdb binary not found next to pg_ctl' }
+  const r = spawnSync(
+    bins.createdb,
+    ['-h', '127.0.0.1', '-p', String(this.port), '-U', this.user, this.database],
+    { encoding: 'utf8', env: { ...process.env, PGPASSWORD: this.password() } },
+  )
+  const out = `${r.stderr || ''}${r.stdout || ''}`
+  if (r.status !== 0 && !/already exists/.test(out)) return { ok: false, reason: out || 'createdb failed' }
+  fs.writeFileSync(marker, new Date().toISOString() + '\n', { mode: 0o600 })
+  return { ok: true }
 }
 
 PostgresManager.prototype.stop = function stop() {
