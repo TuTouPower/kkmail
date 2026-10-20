@@ -1,3 +1,1 @@
-"""Segmented Outlook web app package."""
-
-__all__ = []
+"""Outlook web package stub (Flask removed)."""
