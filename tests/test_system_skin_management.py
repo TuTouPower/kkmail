@@ -218,7 +218,7 @@ class SystemSkinManagementTests(unittest.TestCase):
         self.assertIn('classic', fallback_response.get_data(as_text=True))
 
     def test_settings_page_contains_skin_management_ui(self):
-        response = self.client.get('/')
+        response = self.client.get('/legacy')
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertIn('id="activeSkinStylesheet"', html)
@@ -226,7 +226,7 @@ class SystemSkinManagementTests(unittest.TestCase):
         self.assertIn('settingsSkinUploadFile', html)
 
     def test_index_versions_frontend_css_and_scripts(self):
-        response = self.client.get('/')
+        response = self.client.get('/legacy')
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         asset_hash = web_outlook_app.get_frontend_asset_hash()
