@@ -366,6 +366,12 @@ def sync_folder_metadata(
                 priority=60,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=2),
             )
+            enqueue_job(
+                session,
+                job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                account_id=account_id,
+                priority=40,
+            )
             session.add(
                 OutboxEvent(
                     event_type=OutboxEventType.SYNC_COMPLETED.value,
