@@ -1,9 +1,11 @@
 """Blob key rotation: decrypt with old version, re-wrap with active key (architecture §11).
 
-Crash safety: each file is rewritten via fsync + atomic replace, then that digest's
-``MessageBlob.key_version`` is committed before the next file. A crash leaves at most
-one digest with file/DB temporarily divergent; the on-disk KKMS header is authoritative
-and the next rotate pass re-syncs the row.
+Crash safety: each file is rewritten via fsync + atomic replace. When running with internal
+sessions (session=None), that digest's ``MessageBlob.key_version`` is committed before the
+next file. When an external session is passed, changes are flushed without committing,
+leaving transaction commit boundaries to the caller. A crash leaves at most one digest
+with file/DB temporarily divergent; the on-disk KKMS header is authoritative and the
+next rotate pass re-syncs the row.
 """
 
 from __future__ import annotations
@@ -110,7 +112,12 @@ def rewrap_all_blobs(
     session: Session | None = None,
     limit: int | None = None,
 ) -> RewrapResult:
-    """Walk blob store; after each successful rewrite, commit that digest's key_version."""
+    """Walk blob store and re-encrypt files to target_version.
+
+    When ``session`` is None, commits each digest's updated key_version after each
+    file rewrite. When an external ``session`` is provided, flushes changes without
+    committing so the caller controls the transaction boundary.
+    """
     keyring = keyring or load_keyring_from_env()
     target = target_version if target_version is not None else keyring.active_version
     root = Path(root or blob_root())
