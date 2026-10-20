@@ -14,3 +14,17 @@ python -m mail_core.worker.main
 ```
 
 Legacy Flask app is unchanged; see `docs/mail-core-cutover.md`.
+
+
+## SPA bridge (optional)
+
+Enable the experimental mail-core inbox panel in the React SPA:
+
+```bash
+# frontend/.env.local
+VITE_MAIL_CORE=1
+# optional absolute base; default uses Vite proxy /mail-core → :8000
+# VITE_MAIL_CORE_BASE=http://127.0.0.1:8000
+```
+
+Flask default mail UI remains unchanged when the flag is off.

@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from mail_core import __version__
 from mail_core.api.mail import router as mail_router
@@ -28,6 +29,13 @@ app = FastAPI(
     version=__version__,
     description="Local-authoritative mail kernel API (greenfield). See docs/mail-core-architecture.md.",
     lifespan=lifespan,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:5000", "http://localhost:5000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 app.include_router(sse_router, prefix="/api", tags=["realtime"])
 app.include_router(mail_router)
