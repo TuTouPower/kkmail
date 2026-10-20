@@ -393,6 +393,8 @@ Borders are thin and low-contrast at rest, but must become more visible on hover
 - **Filter chips:** All, Unread, and Flagged are mutually exclusive. Use a selected surface and text weight to indicate the active filter.
 - **Unread state:** use a small blue dot and stronger sender/subject weight. Do not make the unread state depend on bold text alone.
 - **Flagged state:** use the flag icon and an accessible label. The icon should not compete with the sender or timestamp.
+
+> Implementation note (2026-10-20): the upstream Flask mail API does not expose a server-side flagged/starred state. The Flagged filter and flag button are local UI state only and are not synchronized to the mailbox. Revisit when the backend provides a flag API. Do not change this design rule without approval.
 - **Attachments:** show a compact attachment indicator in the list and a clear file name/type/size treatment in the reader.
 - **Empty state:** explain why no messages are shown and offer a relevant next action, such as clearing search or changing folders.
 

@@ -48,6 +48,16 @@ function waitForHealth(url, timeoutMs = 20000) {
   })
 }
 
+function backendCommand() {
+  const packaged = path.join(process.resourcesPath || '', 'backend', 'outlookemail-backend')
+  if (process.resourcesPath && require('fs').existsSync(packaged)) {
+    return { cmd: packaged, args: [], cwd: path.dirname(packaged) }
+  }
+  const root = repoRoot()
+  const py = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
+  return { cmd: py, args: [path.join(root, 'web_outlook_app.py')], cwd: root }
+}
+
 async function startBackend() {
   const port = await freePort(PORT)
   const root = repoRoot()
@@ -58,9 +68,9 @@ async function startBackend() {
     PORT: String(port),
     HOST: HOST,
   }
-  const py = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
-  backend = spawn(py, [path.join(root, 'web_outlook_app.py')], {
-    cwd: root,
+  const target = backendCommand()
+  backend = spawn(target.cmd, target.args, {
+    cwd: target.cwd || root,
     env,
     stdio: 'inherit',
   })
