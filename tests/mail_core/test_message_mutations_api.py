@@ -78,3 +78,62 @@ def test_mark_read_and_flag_enqueue_ops():
 
     missing = client.post(f"/api/mail/messages/{uuid.uuid4()}/read", json={"is_read": True})
     assert missing.status_code == 404
+
+
+def test_mark_read_recomputes_all_locations_and_is_idempotent():
+    from mail_core.mail.application.mutations import set_message_read
+    from mail_core.mail.storage.models import FolderStats, OutboxEvent
+    from unittest.mock import patch
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc = Account(email=f"mut2-{uuid.uuid4().hex[:8]}@ex.com", provider="memory", credential_ref="r")
+        session.add(acc)
+        session.flush()
+        f1 = Folder(account_id=acc.id, remote_id="INBOX", name="INBOX", role="inbox")
+        f2 = Folder(account_id=acc.id, remote_id="Archive", name="Archive", role="archive")
+        session.add_all([f1, f2])
+        session.flush()
+        msg = Message(
+            account_id=acc.id,
+            remote_id="rid-multi",
+            subject="Hi",
+            from_address="a@b.c",
+            sort_time=datetime.now(timezone.utc),
+            is_read=False,
+            is_flagged=False,
+        )
+        session.add(msg)
+        session.flush()
+        session.add(MessageLocation(message_id=msg.id, folder_id=f1.id, uid=1))
+        session.add(MessageLocation(message_id=msg.id, folder_id=f2.id, uid=2))
+        session.commit()
+        mid, fid1, fid2, aid = msg.id, f1.id, f2.id, acc.id
+
+    with Session() as session:
+        with patch("mail_core.mail.application.mutations.try_notify_outbox") as notify:
+            r1 = set_message_read(session, mid, is_read=True)
+            r2 = set_message_read(session, mid, is_read=True)  # same idempotency key
+            session.commit()
+            assert r1.operation_id == r2.operation_id
+            notify.assert_called()
+
+        stats1 = session.get(FolderStats, fid1)
+        stats2 = session.get(FolderStats, fid2)
+        assert stats1 is not None and stats2 is not None
+        assert stats1.unread_count == 0
+        assert stats2.unread_count == 0
+
+        ops = list(session.scalars(select(RemoteOperation).where(RemoteOperation.account_id == aid)))
+        assert sum(1 for o in ops if o.op_type == "mark_read") == 1
+
+        folder_events = list(
+            session.scalars(
+                select(OutboxEvent).where(
+                    OutboxEvent.account_id == aid,
+                    OutboxEvent.event_type == "folder.stats_updated",
+                )
+            )
+        )
+        folder_ids = {e.payload.get("folder_id") for e in folder_events}
+        assert str(fid1) in folder_ids and str(fid2) in folder_ids
