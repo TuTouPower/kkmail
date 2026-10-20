@@ -5,7 +5,7 @@
 ## 项目概况
 
 - kkmail 是 [assast/outlookEmail](https://github.com/assast/outlookEmail) 的二次开发（fork），仓库 `TuTouPower/kkmail`。
-- **邮件内核是 `mail_core/`（FastAPI + Postgres + worker）**；Flask `web_outlook_app.py` / `outlook_web/segments/` 正在退役，仅暂时承接账号管理/OAuth/设置等尚未迁完的路由。
+- **邮件内核是 `mail_core/`（FastAPI + Postgres + worker）**；Flask `web_outlook_app.py` / `outlook_web/segments/` 已删除；勿再恢复 exec segment 结构。
 - 远端：`origin` = TuTouPower/kkmail，`upstream` = assast/outlookEmail。
 - 新功能只进 `mail_core/` 与 `frontend/`；不要再扩大 Flask segment 表面积。产物名与数据目录仍可能沿用上游 `OutlookEmail`。
 
@@ -16,7 +16,7 @@
 | `mail_core/` | **主后端**：FastAPI API、worker、同步、blob、鉴权（Cookie Session + Bearer API Key） |
 | `frontend/` | React SPA（唯一 UI）。构建产物 `frontend/dist` |
 | `docker-compose.mail-core.yml` | Postgres + API + worker 开发栈（密钥均需环境变量） |
-| `web_outlook_app.py` / `outlook_web/segments/` | **遗留 Flask 壳**（exec 多 segment）；计划删除 |
+| `web_outlook_app.py` / `outlook_web/segments/` | 已删除（`web_outlook_app.py` 仅为提示 shim） |
 | `templates/`、`static/` | 遗留 UI（`/legacy`）；勿再扩展 |
 | `desktop/` | Electron 壳 |
 | `tests/mail_core/` | mail-core pytest；根 `tests/` 多为 Flask 遗留契约 |
