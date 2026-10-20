@@ -178,6 +178,43 @@ def test_imap_modseq_emits_flag_changes(monkeypatch):
     assert flag.remote_id == rid
 
 
+def test_imap_delta_changes_capping_and_pagination(monkeypatch):
+    class FakeImapBulk:
+        def select(self, folder, readonly=True):
+            return "OK", [b"1"]
+
+        def status(self, folder, query):
+            return "OK", [b'INBOX (HIGHESTMODSEQ 100 UIDVALIDITY 7)']
+
+        def logout(self):
+            return "OK", []
+
+        def uid(self, cmd, *args):
+            if cmd == "SEARCH":
+                # Return 250 flag UIDs (< 1000)
+                uids_bytes = b" ".join(str(i).encode() for i in range(1, 251))
+                return "OK", [uids_bytes]
+            if cmd == "FETCH":
+                return "OK", [(b"1 (FLAGS (\\Seen) UID 1)", b"")]
+            return "NO", []
+
+    monkeypatch.setattr(ImapProvider, "_connect", lambda self: FakeImapBulk())
+    p = ImapProvider(host="h", port=993, username="u", password="p")
+    # First page: 250 flag changes capped at 200, modseq NOT bumped to 100
+    page1 = p.delta_changes("INBOX", {"modseq": 40, "uidvalidity": 7, "uid_next": 1000})
+    assert len(page1.changes) == 200
+    assert not page1.exhausted
+    assert page1.next_cursor.get("modseq") == 40
+    assert page1.next_cursor.get("flag_uid_after") == 200
+
+    # Second page: process remaining 50 flag changes, now exhausted and modseq bumped
+    page2 = p.delta_changes("INBOX", page1.next_cursor)
+    assert len(page2.changes) == 50
+    assert page2.exhausted
+    assert page2.next_cursor.get("modseq") == 100
+    assert "flag_uid_after" not in page2.next_cursor
+
+
 def test_rewrap_cleans_tmp_on_failure(tmp_path, monkeypatch):
     k1 = base64.b64encode(os.urandom(32)).decode()
     monkeypatch.setenv("MAIL_CORE_BLOB_KEYS", f'{{"1": "{k1}"}}')
