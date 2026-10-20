@@ -7,6 +7,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## [Unreleased]
 
 ### Removed
+- Unused frontend deps `@radix-ui/*` and `clsx` (never imported).
+- Dead SPA CSS for compose/settings modal dialogs; duplicate ≤760px sidebar rules merged.
+- Flask-era system skins docs (`docs/skins.md`, `preview.png` packages) already gone; documented as wontfix in known-limitations.
 - Leftover empty `outlook_web/` package remnants (`__pycache__` only; no sources). Nothing imported it.
 
 ### Fixed

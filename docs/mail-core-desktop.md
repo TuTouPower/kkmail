@@ -73,6 +73,15 @@ npm run dist:linux:dir      # same via electron-builder
 `PostgresManager` also honors `KKMAIL_PG_BIN`; a package built without PostgreSQL binaries
 reports `stub: true` and the app refuses to start.
 
+### `pack:linux` soft-ok（本地脚手架）
+
+`npm run pack:linux`（`desktop/scripts/pack-linux.js`）在以下情况仍以 **退出码 0** 结束，并打印 `soft-ok` 警告（便于无 CI 的本地打包）：
+
+- 未安装 `electron-builder` / Electron 二进制下载失败 / builder 非 0 退出
+- 缺少 `vendor/pgsql`（包能打出来，但运行时 `PostgresManager` 为 `stub: true`，应用拒绝启动）
+
+需要硬失败时设置 `KKMAIL_PACK_STRICT=1`。有完整 PostgreSQL 与前端 `dist` 时再用该脚本做可运行产物。
+
 ### macOS / Windows
 
 - Use `npm run dist:mac` / `npm run dist:win` on the matching host.

@@ -85,7 +85,7 @@ function App() {
 
   return (
     <div
-      className={['app', drawerOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : '', settingsOpen ? 'settings-mode' : ''].filter(Boolean).join(' ')}
+      className={['app', drawerOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : ''].filter(Boolean).join(' ')}
       data-mobile-view={mobileView}
       style={{
         ['--sidebar-w' as string]: `${sidebarWidth}px`,
