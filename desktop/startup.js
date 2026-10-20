@@ -162,6 +162,14 @@ function waitForHealth(url, timeoutMs = 30000, opts = {}) {
   })
 }
 
+function isChildDead(child) {
+  if (!child) return true
+  if (child.exitCode !== null && child.exitCode !== undefined) return true
+  if (child.signalCode !== null && child.signalCode !== undefined) return true
+  if (child._kkmailExited) return true
+  return false
+}
+
 /**
  * SIGTERM the child (process group on Unix when detached), then SIGKILL / taskkill /T after escalateAfterMs.
  * Idempotent: safe to call repeatedly; only the first call schedules escalation.
@@ -169,8 +177,12 @@ function waitForHealth(url, timeoutMs = 30000, opts = {}) {
 function stopChildTree(child, opts = {}) {
   const escalateAfterMs = opts.escalateAfterMs ?? 4000
   const log = opts.log || (() => {})
-  if (!child || child.exitCode !== null || child.killed) {
+  if (isChildDead(child)) {
     return { ok: true, alreadyDead: true }
+  }
+  if (typeof child.once === 'function') {
+    child.once('exit', () => { child._kkmailExited = true })
+    child.once('close', () => { child._kkmailExited = true })
   }
   if (child._kkmailStopping) return { ok: true, alreadyStopping: true }
   child._kkmailStopping = true
@@ -191,7 +203,7 @@ function stopChildTree(child, opts = {}) {
     }
   }
   const hardKill = () => {
-    if (child.exitCode !== null || child.killed) return
+    if (isChildDead(child)) return
     try {
       if (process.platform === 'win32' && pid) {
         spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
@@ -209,7 +221,10 @@ function stopChildTree(child, opts = {}) {
   softKill()
   const timer = setTimeout(hardKill, escalateAfterMs)
   if (typeof timer.unref === 'function') timer.unref()
-  child.once('exit', () => clearTimeout(timer))
+  if (typeof child.once === 'function') {
+    child.once('exit', () => clearTimeout(timer))
+    child.once('close', () => clearTimeout(timer))
+  }
   return { ok: true, pid, escalateAfterMs }
 }
 
