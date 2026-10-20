@@ -39,7 +39,7 @@ def create_account(
 
     if credentials is not None:
         ref = credential_ref or f"account:{acc.id}"
-        save_json_secret(get_credential_store(), ref, credentials)
+        save_json_secret(get_credential_store(), ref, credentials, session=session)
         acc.credential_ref = ref
         session.flush()
 
@@ -93,7 +93,7 @@ def update_account(
     if credentials is not None:
         ref = acc.credential_ref or f"account:{acc.id}"
         acc.credential_ref = ref
-        save_json_secret(get_credential_store(), ref, credentials)
+        save_json_secret(get_credential_store(), ref, credentials, session=session)
     session.flush()
     return acc
 
@@ -107,7 +107,11 @@ def delete_account(session: Session, account_id: uuid.UUID) -> None:
     session.flush()
     if ref and not ref.startswith("env:"):
         # App-owned secret: remove it with the account (env refs are operator-managed).
-        get_credential_store().delete_secret(ref)
+        store = get_credential_store()
+        try:
+            store.delete_secret(ref, session=session)
+        except TypeError:
+            store.delete_secret(ref)
 
 
 def enqueue_account_sync(session: Session, account_id: uuid.UUID) -> uuid.UUID:

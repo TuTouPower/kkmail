@@ -91,7 +91,7 @@ class DbCredentialStore:
             pt = AESGCM(self._key(row.key_version)).decrypt(row.nonce, row.ciphertext, credential_ref.encode())
             return pt.decode()
 
-    def put_secret(self, credential_ref: str, secret: str) -> None:
+    def put_secret(self, credential_ref: str, secret: str, *, session: Any = None) -> None:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         from mail_core.mail.storage.models import CredentialSecret
@@ -99,23 +99,40 @@ class DbCredentialStore:
         version = self._ring().active_version
         nonce = os.urandom(12)
         ct = AESGCM(self._key(version)).encrypt(nonce, secret.encode(), credential_ref.encode())
-        with self._sessions()() as session:
+        if session is not None:
             row = session.get(CredentialSecret, credential_ref)
             if row is None:
                 row = CredentialSecret(ref=credential_ref, key_version=version, nonce=nonce, ciphertext=ct)
                 session.add(row)
             else:
                 row.key_version, row.nonce, row.ciphertext = version, nonce, ct
-            session.commit()
+            session.flush()
+            return
 
-    def delete_secret(self, credential_ref: str) -> None:
+        with self._sessions()() as s:
+            row = s.get(CredentialSecret, credential_ref)
+            if row is None:
+                row = CredentialSecret(ref=credential_ref, key_version=version, nonce=nonce, ciphertext=ct)
+                s.add(row)
+            else:
+                row.key_version, row.nonce, row.ciphertext = version, nonce, ct
+            s.commit()
+
+    def delete_secret(self, credential_ref: str, *, session: Any = None) -> None:
         from mail_core.mail.storage.models import CredentialSecret
 
-        with self._sessions()() as session:
+        if session is not None:
             row = session.get(CredentialSecret, credential_ref)
             if row is not None:
                 session.delete(row)
-                session.commit()
+                session.flush()
+            return
+
+        with self._sessions()() as s:
+            row = s.get(CredentialSecret, credential_ref)
+            if row is not None:
+                s.delete(row)
+                s.commit()
 
 
 class DictCredentialStore:
@@ -127,7 +144,7 @@ class DictCredentialStore:
     def put(self, credential_ref: str, secret: str) -> None:
         self.put_secret(credential_ref, secret)
 
-    def put_secret(self, credential_ref: str, secret: str) -> None:
+    def put_secret(self, credential_ref: str, secret: str, *, session: Any = None) -> None:
         self._mapping[credential_ref] = secret
 
     def get_secret(self, credential_ref: str) -> str:
@@ -136,7 +153,7 @@ class DictCredentialStore:
         except KeyError as exc:
             raise KeyError(f"unknown credential_ref {credential_ref!r}") from exc
 
-    def delete_secret(self, credential_ref: str) -> None:
+    def delete_secret(self, credential_ref: str, *, session: Any = None) -> None:
         self._mapping.pop(credential_ref, None)
 
 
@@ -206,11 +223,19 @@ class CompositeCredentialStore:
     def get_secret(self, credential_ref: str) -> str:
         return self._pick(credential_ref).get_secret(credential_ref)
 
-    def put_secret(self, credential_ref: str, secret: str) -> None:
-        self._pick(credential_ref).put_secret(credential_ref, secret)
+    def put_secret(self, credential_ref: str, secret: str, *, session: Any = None) -> None:
+        target = self._pick(credential_ref)
+        try:
+            target.put_secret(credential_ref, secret, session=session)
+        except TypeError:
+            target.put_secret(credential_ref, secret)
 
-    def delete_secret(self, credential_ref: str) -> None:
-        self._pick(credential_ref).delete_secret(credential_ref)
+    def delete_secret(self, credential_ref: str, *, session: Any = None) -> None:
+        target = self._pick(credential_ref)
+        try:
+            target.delete_secret(credential_ref, session=session)
+        except TypeError:
+            target.delete_secret(credential_ref)
 
 
 def load_json_secret(store: CredentialStore, credential_ref: str) -> dict[str, Any]:
@@ -221,8 +246,17 @@ def load_json_secret(store: CredentialStore, credential_ref: str) -> dict[str, A
     return data
 
 
-def save_json_secret(store: CredentialStore, credential_ref: str, data: dict[str, Any]) -> None:
-    store.put_secret(credential_ref, json.dumps(data))
+def save_json_secret(
+    store: CredentialStore,
+    credential_ref: str,
+    data: dict[str, Any],
+    *,
+    session: Any = None,
+) -> None:
+    try:
+        store.put_secret(credential_ref, json.dumps(data), session=session)
+    except TypeError:
+        store.put_secret(credential_ref, json.dumps(data))
 
 
 _default_store: CredentialStore | None = None
