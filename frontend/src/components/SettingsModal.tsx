@@ -13,7 +13,7 @@ export default function SettingsPage() {
   const qc = useQueryClient()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
-  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: async () => (await api.getSettings()).settings || {} })
+  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: async () => (await api.getSettings()).settings })
   const accounts = accountsQuery.data || []
   const groups = groupsQuery.data || []
   const [section, setSection] = useState<'accounts' | 'appearance' | 'general'>('accounts')
@@ -78,7 +78,7 @@ export default function SettingsPage() {
                   <div style={{ fontWeight: 650 }}>{a.email}</div>
                   <div style={{ fontSize: 11, color: 'var(--muted)' }}>{a.provider} · {a.sync_status || a.status}{a.group_name ? ` · ${a.group_name}` : ''}</div>
                 </div>
-                <button type="button" onClick={() => run('同步', () => api.refreshAllStream(), '已排队同步', queryKeys.accounts)} style={{ height: 28, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>同步</button>
+                <button type="button" onClick={() => run('同步', () => api.syncAccount(a.id), '已排队同步', queryKeys.accounts)} style={{ height: 28, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>同步</button>
                 <button type="button" onClick={async () => {
                   if (!confirmAction(`删除账户 ${a.email}？`)) return
                   await run('删除账户', () => api.deleteAccount(a.id), '已删除', queryKeys.accounts)
@@ -99,7 +99,7 @@ export default function SettingsPage() {
               if (credJson.trim()) {
                 try { credentials = JSON.parse(credJson) } catch { setStatus('credentials JSON 无效'); return }
               }
-              await run('添加账户', () => api.addAccountsMailCore({ email, provider, credentials }), '账户已添加', queryKeys.accounts)
+              await run('添加账户', () => api.addAccount({ email, provider, credentials }), '账户已添加', queryKeys.accounts)
               setEmail(''); setCredJson('')
             }} style={{ marginTop: 8, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>添加</button>
 
@@ -120,7 +120,7 @@ export default function SettingsPage() {
                 setGroupName('')
               }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>创建</button>
             </div>
-            <button type="button" onClick={() => run('全量同步', () => api.refreshAllStream(), '同步任务已排队', queryKeys.accounts)} style={{ marginTop: 16, height: 34, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)' }}>同步全部账户</button>
+            <button type="button" onClick={() => run('全量同步', async () => setStatus(`已排队 ${(await api.syncAll()).count} 个同步任务`), '同步任务已排队', queryKeys.accounts)} style={{ marginTop: 16, height: 34, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)' }}>同步全部账户</button>
           </div>
         )}
 
@@ -149,13 +149,14 @@ export default function SettingsPage() {
               const payload: Record<string, string> = {}
               if (timezone !== null && timezone.trim() && timezone.trim() !== savedTimezone) payload.app_timezone = timezone.trim()
               if (timeoutSeconds !== null && timeoutSeconds.trim() && timeoutSeconds.trim() !== savedTimeout) payload.mail_fetch_timeout_seconds = timeoutSeconds.trim()
+              if (!Object.keys(payload).length) { setStatus('没有改动'); return }
               await run('保存设置', () => api.updateSettings(payload), '设置已保存', ['settings'])
             }} style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>保存</button>
 
             <div style={{ marginTop: 22, fontWeight: 700 }}>修改登录密码</div>
             <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="当前密码" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
             <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="新密码（≥8）" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-            <button type="button" onClick={() => run('修改密码', () => api.updateSettings({ current_login_password: currentPassword, login_password: newPassword }), '密码已更新')} style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>更新密码</button>
+            <button type="button" onClick={() => run('修改密码', () => api.changePassword(currentPassword, newPassword), '密码已更新')} style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>更新密码</button>
           </div>
         )}
         {status && <div style={{ marginTop: 16, fontSize: 12, color: 'var(--muted)' }}>{status}</div>}

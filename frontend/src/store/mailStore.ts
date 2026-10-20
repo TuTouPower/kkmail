@@ -1,11 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward'
-
 export type ViewState =
   | { type: 'allInbox' }
-  | { type: 'accountFolder'; accountId: string; email: string; folder: string }
+  | { type: 'account'; accountId: string; email: string }
 
 interface MailUiState {
   theme: 'dark' | 'light' | 'system'
@@ -39,26 +37,14 @@ interface MailUiState {
   toggleSort: () => void
   collapsedGroups: string[]
   toggleGroup: (group: string) => void
-  collapsedAccounts: string[]
-  toggleAccount: (id: string) => void
-  composeOpen: boolean
-  /** Bumped on every openCompose so the form remounts with the new draft. */
-  composeSeq: number
-  composeMode: ComposeMode
-  composeDraft: { to: string; subject: string; body: string; accountId?: string }
-  openCompose: (mode?: ComposeMode, draft?: Partial<MailUiState['composeDraft']>) => void
-  setComposeOpen: (open: boolean) => void
   selectedIds: string[]
   toggleSelected: (key: string) => void
   clearSelected: () => void
   selectAll: (keys: string[]) => void
-  flaggedIds: string[]
-  toggleFlag: (key: string) => void
 }
 
 // State every view switch must reset, shared by setView/openSmartView so the
-// two cannot drift: selection is dropped (IMAP UIDs repeat across folders),
-// the reader returns to the list, and the mobile drawer closes.
+// two cannot drift: selection is dropped, the reader returns to the list, and the mobile drawer closes.
 const navigationReset = () => ({
   selectedKey: null,
   selectedIds: [] as string[],
@@ -104,30 +90,6 @@ export const useMailStore = create<MailUiState>()(
             ? s.collapsedGroups.filter((g) => g !== group)
             : [...s.collapsedGroups, group],
         })),
-      collapsedAccounts: [],
-      toggleAccount: (id) =>
-        set((s) => ({
-          collapsedAccounts: s.collapsedAccounts.includes(id)
-            ? s.collapsedAccounts.filter((x) => x !== id)
-            : [...s.collapsedAccounts, id],
-        })),
-      composeOpen: false,
-      composeSeq: 0,
-      composeMode: 'new',
-      composeDraft: { to: '', subject: '', body: '' },
-      openCompose: (mode = 'new', draft = {}) =>
-        set((s) => ({
-          composeOpen: true,
-          composeSeq: s.composeSeq + 1,
-          composeMode: mode,
-          composeDraft: {
-            to: draft.to || '',
-            subject: draft.subject || '',
-            body: draft.body || '',
-            accountId: draft.accountId,
-          },
-        })),
-      setComposeOpen: (open) => set({ composeOpen: open }),
       selectedIds: [],
       toggleSelected: (key) =>
         set((s) => ({
@@ -135,22 +97,10 @@ export const useMailStore = create<MailUiState>()(
         })),
       clearSelected: () => set({ selectedIds: [] }),
       selectAll: (keys: string[]) => set({ selectedIds: keys }),
-      flaggedIds: [],
-      toggleFlag: (key) =>
-        set((s) => ({
-          flaggedIds: s.flaggedIds.includes(key) ? s.flaggedIds.filter((id) => id !== key) : [...s.flaggedIds, key],
-        })),
     }),
     { name: 'mail-ui-storage', partialize: (s) => ({ theme: s.theme, sidebarWidth: s.sidebarWidth, listWidth: s.listWidth }) },
   ),
 )
-
-export const FOLDERS = [
-  { id: 'inbox', label: '收件箱', api: 'inbox' },
-  { id: 'junkemail', label: '垃圾邮件', api: 'junkemail' },
-  { id: 'deleteditems', label: '废纸篓', api: 'deleteditems' },
-  { id: 'all', label: '全部', api: 'all' },
-] as const
 
 export function providerBadge(provider?: string, accountType?: string) {
   const p = (provider || accountType || '').toLowerCase()

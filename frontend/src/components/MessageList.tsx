@@ -1,18 +1,20 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check } from 'lucide-react'
-import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, markReadOptimistic, queryClient, queryKeys, type MailItem } from '../api/queries'
-import { fetchMailCoreInbox, mailCoreToMailItem } from '../api/mailCore'
+import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag } from 'lucide-react'
+import { fetchAccounts, markReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
+import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMessageTrash } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
 import { listTitle } from '../lib/listTitle'
-import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
+import { confirmAction, errorMessage } from '../lib/actions'
 import { compareMailDates } from '../lib/mailDate'
 import { displayName } from '../lib/displayName'
 import { formatListDate } from '../lib/listDate'
 import { previewText } from '../lib/previewText'
-import { api } from '../api/client'
 import { useMailStore } from '../store/mailStore'
 
+/** Server-side search kicks in from this many characters. */
+export const SEARCH_MIN_CHARS = 2
+const LIST_LIMIT = 100
 
 export default function MessageList() {
   const {
@@ -24,10 +26,8 @@ export default function MessageList() {
     setSearch,
     listFilter,
     setListFilter,
-    flaggedIds,
     sortNewest,
     toggleSort,
-    openCompose,
     toggleMobileSidebar,
     selectedIds,
     toggleSelected,
@@ -38,41 +38,38 @@ export default function MessageList() {
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
 
-  const singleFolder = view.type === 'accountFolder' ? view.folder : 'inbox'
-  // mail-core is the sole list backend (inbox + all-inbox).
-  const preferMailCoreList =
-    view.type === 'allInbox' || (view.type === 'accountFolder' && view.folder === 'inbox')
-  const mailCoreQuery = useQuery({
-    queryKey: ['mail-core', 'inbox', view.type === 'accountFolder' ? view.accountId : 'all'],
+  const accountId = view.type === 'account' ? view.accountId : undefined
+  const term = search.trim()
+  const searching = term.length >= SEARCH_MIN_CHARS
+  const inboxQuery = useQuery({
+    queryKey: queryKeys.inbox(accountId || 'all'),
     queryFn: ({ signal }) =>
-      fetchMailCoreInbox({
-        limit: 100,
-        accountEmail: view.type === 'accountFolder' ? view.email || undefined : undefined,
-        signal,
-      }).then((page) => page.items.map(mailCoreToMailItem)),
-    enabled: preferMailCoreList,
+      fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, signal }).then((page) => page.items.map(mailCoreToMailItem)),
+    enabled: !searching,
     retry: false,
   })
-  const raw: MailItem[] = preferMailCoreList ? (mailCoreQuery.data || []) : []
+  const searchQuery = useQuery({
+    queryKey: queryKeys.search(term, accountId || 'all'),
+    queryFn: ({ signal }) =>
+      fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, signal }).then((page) => page.items.map(mailCoreToMailItem)),
+    enabled: searching,
+    retry: false,
+  })
+  const active = searching ? searchQuery : inboxQuery
+  const raw: MailItem[] = active.data || []
 
-  const searched = search
-    ? raw.filter((m) => [m.from, m.subject, m.body_preview, m.accountEmail].join(' ').toLowerCase().includes(search.toLowerCase()))
-    : raw
-  const visible = searched
+  const visible = raw
     .filter((m) => {
       if (listFilter === 'unread' && m.is_read) return false
-      if (listFilter === 'flagged' && !flaggedIds.includes(mailKey(m))) return false
+      if (listFilter === 'flagged' && !m.is_flagged) return false
       return true
     })
     .sort((a, b) => compareMailDates(a.date, b.date, sortNewest))
 
   const [actionStatus, setActionStatus] = useState('')
-  const truncatedAccounts = view.type === 'allInbox' ? Math.max(0, accounts.length - ALL_INBOX_ACCOUNT_LIMIT) : 0
-  const unreadCount = searched.filter((m) => !m.is_read).length
-  const loading = mailCoreQuery.isLoading && !mailCoreQuery.data
-  const failures: string[] = mailCoreQuery.error
-    ? [errorMessage(mailCoreQuery.error, String(mailCoreQuery.error))]
-    : []
+  const unreadCount = raw.filter((m) => !m.is_read).length
+  const loading = active.isLoading && !active.data
+  const failure = active.error ? errorMessage(active.error, '加载邮件失败') : ''
   const countLabel = loading
     ? '正在拉取邮件…'
     : `${visible.length} 封邮件 · ${unreadCount} 封未读`
@@ -98,44 +95,27 @@ export default function MessageList() {
   }
 
   function refreshView() {
-    void queryClient.invalidateQueries({ queryKey: ['mail-core', 'inbox'], refetchType: 'active' })
+    void queryClient.invalidateQueries({ queryKey: ['mail-core'], refetchType: 'active' })
   }
 
   async function deleteSelected() {
     const chosen = visible.filter((m) => selectedIds.includes(mailKey(m)))
     if (!chosen.length) return
-    const inTrash = chosen.some((m) => (m.folder || singleFolder) === 'deleteditems')
-    const warning = inTrash ? '废纸篓中的邮件将被永久删除，无法恢复。' : '邮件将移到废纸篓（IMAP 账户可能直接永久删除）。'
-    if (!confirmAction(`删除所选 ${chosen.length} 封邮件？${warning}`)) return
-    const groups = new Map<string, MailItem[]>()
-    chosen.forEach((m) => {
-      const list = groups.get(m.accountEmail) || []
-      list.push(m)
-      groups.set(m.accountEmail, list)
-    })
-    const entries = [...groups.entries()]
-    const results = await Promise.allSettled(entries.map(async ([email, items]) => ensureSuccess(await api.deleteEmails({
-      email,
-      folder: items[0]?.folder || singleFolder,
-      items: items.map((m) => ({ id: m.id, folder: m.folder || singleFolder, id_mode: m.id_mode || '' })),
-    }), `${email} 删除失败`)))
-    const failedEmails = new Set<string>()
-    const messages: string[] = []
-    results.forEach((r, i) => {
-      if (r.status === 'rejected') {
-        failedEmails.add(entries[i][0])
-        messages.push(errorMessage(r.reason))
-      }
-    })
-    // Keep failed items selected so the user can retry.
+    if (!confirmAction(`将所选 ${chosen.length} 封邮件移到废纸篓？`)) return
+    const results = await Promise.allSettled(chosen.map((m) => postMailCoreMessageTrash(m.id)))
+    const ok = chosen.filter((_, i) => results[i].status === 'fulfilled')
+    const failed = chosen.filter((_, i) => results[i].status === 'rejected')
+    removeCachedMail(ok.map(mailKey))
     clearSelected()
-    if (failedEmails.size) {
-      selectAll(chosen.filter((m) => failedEmails.has(m.accountEmail)).map((m) => mailKey(m)))
-      setActionStatus(`删除失败：${messages.join('；')}`)
+    if (failed.length) {
+      // Keep failed items selected so the user can retry.
+      selectAll(failed.map(mailKey))
+      const first = results.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined
+      setActionStatus(`${failed.length} 封删除失败：${errorMessage(first?.reason)}`)
     } else {
       setActionStatus(`已删除 ${chosen.length} 封邮件`)
     }
-    await queryClient.invalidateQueries({ queryKey: ['mail-core', 'inbox'] })
+    await queryClient.invalidateQueries({ queryKey: ['mail-core'] })
   }
 
   return (
@@ -150,9 +130,6 @@ export default function MessageList() {
             <button className="list-primary-btn mobile-only" title="账户导航" aria-label="账户导航" onClick={toggleMobileSidebar}>
               <Menu size={16} />
             </button>
-            <button className="list-primary-btn" title="写邮件" aria-label="写邮件" onClick={() => openCompose('new')}>
-              <PenSquare size={16} />
-            </button>
             <button className="list-primary-btn" title="刷新" aria-label="刷新" onClick={refreshView}>
               <RefreshCw size={16} />
             </button>
@@ -160,7 +137,7 @@ export default function MessageList() {
         </div>
         <label className="list-search">
           <Search size={16} />
-          <input name="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索当前列表" aria-label="搜索当前列表" />
+          <input name="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索邮件（主题 / 发件人 / 正文）" aria-label="搜索邮件" />
           {search && <button className="list-primary-btn" title="清除搜索" aria-label="清除搜索" onClick={() => setSearch('')}><X size={14} /></button>}
         </label>
         {selecting ? (
@@ -198,20 +175,11 @@ export default function MessageList() {
         )}
       </div>
       <div className={`message-list ${selecting ? 'selecting' : ''}`}>
-        {truncatedAccounts > 0 && (
-          <div role="note" className="list-note">
-            所有收件箱仅汇总前 {ALL_INBOX_ACCOUNT_LIMIT} 个账户，另有 {truncatedAccounts} 个账户未包含；请在左侧选择单个账户查看。
-          </div>
-        )}
         {actionStatus && <div role="status" className={`list-note ${actionStatus.includes('失败') ? 'error' : ''}`}>{actionStatus}</div>}
-        {failures.map((f) => (
-          <div key={f} role="alert" className="list-note error">
-            {view.type === 'allInbox' ? `账户加载失败 · ${f}` : f}
-          </div>
-        ))}
+        {failure && <div role="alert" className="list-note error">{failure}</div>}
         {!loading && visible.length === 0 && (
           <div style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
-            {accounts.length === 0 ? '还没有账户。在设置中添加账户后，这里会显示真实邮件。' : '没有找到邮件'}
+            {accounts.length === 0 ? '还没有账户。在设置中添加账户后，这里会显示邮件。' : searching ? '没有匹配的邮件' : '没有邮件'}
           </div>
         )}
         {visible.map((m) => {
@@ -240,6 +208,7 @@ export default function MessageList() {
                     {displayName(m.from)}
                   </span>
                   <div className="message-meta">
+                    {m.is_flagged && <Flag size={12} aria-label="已标记" />}
                     {m.has_attachments && <Paperclip size={12} aria-label="有附件" />}
                     <time className="message-date">{formatListDate(m.date)}</time>
                   </div>

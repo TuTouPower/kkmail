@@ -8,9 +8,6 @@ export interface GroupItem {
   name: string
   color?: string
   account_count?: number
-  descendant_account_count?: number
-  parent_id?: string | null
-  level?: number
 }
 
 export interface MailItem {
@@ -20,12 +17,12 @@ export interface MailItem {
   to?: string
   date?: string
   is_read: boolean
-  is_flagged?: boolean
+  is_flagged: boolean
   has_attachments: boolean
   body_preview?: string
   folder?: string
-  id_mode?: string
   accountEmail: string
+  /** mail-core account UUID */
   accountId?: string
 }
 
@@ -37,16 +34,12 @@ export interface MailDetail {
   cc?: string
   date?: string
   body?: string
-  body_type?: string
+  body_type?: 'html' | 'text'
   attachments?: Array<{ id?: string; name?: string; size?: number; contentType?: string }>
   has_attachments?: boolean
-  folder?: string
-  id_mode?: string
 }
 
-/** Soft-refresh window: list data stays fresh for 5 minutes, and
- *  invalidateQueries keeps showing the previous payload while refetching.
- *  Soft refresh (toolbar) only marks stale; hard refresh can still `resetQueries`. */
+/** Lists stay fresh for 5 minutes; SSE events invalidate earlier. */
 export const MAIL_STALE_TIME_MS = 5 * 60_000
 
 export const queryClient = new QueryClient({
@@ -61,161 +54,89 @@ export const queryClient = new QueryClient({
   },
 })
 
+/** Every cached message list lives under this prefix (inbox + search). */
+export const MAIL_LIST_PREFIX = ['mail-core'] as const
+
 export const queryKeys = {
   groups: ['groups'] as const,
   accounts: ['accounts'] as const,
-  emails: (email: string, folder: string) => ['emails', email, folder] as const,
-  detail: (email: string, id: string, folder: string, idMode: string) => ['detail', email, id, folder, idMode] as const,
+  inbox: (accountId: string | 'all') => ['mail-core', 'inbox', accountId] as const,
+  search: (q: string, accountId: string | 'all') => ['mail-core', 'search', accountId, q] as const,
 }
 
 export async function fetchGroups(): Promise<GroupItem[]> {
   const res = await api.getGroups()
-  return ((res.groups || []) as GroupItem[]).map((g) => ({ ...g, id: String(g.id) }))
+  return res.groups.map((g) => ({ ...g, id: String(g.id) }))
 }
 
 const ACCOUNT_PAGE_SIZE = 200
 const ACCOUNT_MAX_PAGES = 100
 
-/** Load every account page; the backend paginates with limit/offset/has_more. */
+/** Load every account page (limit/offset/has_more). */
 export async function fetchAccounts(): Promise<AccountSummary[]> {
   const all: AccountSummary[] = []
   for (let page = 0; page < ACCOUNT_MAX_PAGES; page++) {
     const res = await api.getAccounts({ limit: ACCOUNT_PAGE_SIZE, offset: all.length })
-    if (res.success === false) throw new Error('获取账户失败')
-    const rows = (res.accounts || res.items || []).map((a) => ({
-      ...a,
-      id: String(a.id),
-      group_id: a.group_id != null ? String(a.group_id) : undefined,
-    }))
-    all.push(...rows)
-    const total = typeof res.total === 'number' ? res.total : undefined
-    if (!rows.length || res.has_more === false || (total !== undefined && all.length >= total)) break
-    if (res.has_more === undefined && total === undefined && rows.length < ACCOUNT_PAGE_SIZE) break
+    all.push(...res.accounts)
+    if (!res.accounts.length || !res.has_more) break
   }
   return all
-}
-
-/** The unified inbox fans out one request per account, so it is capped. */
-export const ALL_INBOX_ACCOUNT_LIMIT = 8
-
-function mapMail(raw: Record<string, unknown>, accountEmail: string, accountId: string | undefined, listFolder: string): MailItem {
-  return {
-    id: String(raw.id || ''),
-    subject: String(raw.subject || '无主题'),
-    from: String(raw.from || '未知'),
-    to: String(raw.to || ''),
-    date: String(raw.date || ''),
-    is_read: Boolean(raw.is_read),
-    has_attachments: Boolean(raw.has_attachments),
-    body_preview: String(raw.body_preview || ''),
-    // Always carry a concrete folder: IMAP UIDs are only unique per folder.
-    folder: String(raw.folder || (listFolder === 'all' ? 'inbox' : listFolder)),
-    id_mode: String(raw.id_mode || ''),
-    accountEmail,
-    accountId,
-  }
-}
-
-/** One slow/broken account must not hang the UI forever. */
-export const MAIL_FETCH_TIMEOUT_MS = 45_000
-
-export async function fetchEmails(email: string, folder = 'inbox', accountId?: string, signal?: AbortSignal): Promise<MailItem[]> {
-  const res = await api.getEmails(email, { folder, top: 40 }, { signal, timeoutMs: MAIL_FETCH_TIMEOUT_MS })
-  if (res.success === false) {
-    const err = res.error
-    const message = typeof err === 'string' ? err : (err as { message?: string } | undefined)?.message || '获取邮件失败'
-    throw new Error(message)
-  }
-  const rows = (res.emails || res.messages || res.items || []) as Record<string, unknown>[]
-  return rows.map((row) => mapMail(row, email, accountId, folder))
-}
-
-export async function fetchEmailDetail(email: string, messageId: string, folder = 'inbox', idMode = '', signal?: AbortSignal): Promise<MailDetail> {
-  const res = await api.getEmailDetail(email, messageId, folder, idMode, { signal, timeoutMs: MAIL_FETCH_TIMEOUT_MS })
-  if (res.success === false) {
-    const err = res.error
-    const message = typeof err === 'string' ? err : (err as { message?: string } | undefined)?.message || '获取邮件详情失败'
-    throw new Error(message)
-  }
-  return (res.email as MailDetail) || {}
-}
-
-export async function markEmailsRead(email: string, items: Array<{ id: string; folder?: string; id_mode?: string }>, folder = 'inbox') {
-  return api.markRead({
-    email,
-    folder,
-    method: 'graph',
-    items: items.map((item) => ({
-      id: item.id,
-      folder: item.folder || folder,
-      id_mode: item.id_mode || '',
-    })),
-  })
 }
 
 /** Find a message in any cached list by its mailKey. */
 export function findCachedMail(key: string | null): MailItem | undefined {
   if (!key) return undefined
-  for (const [, list] of queryClient.getQueriesData<MailItem[]>({ queryKey: ['emails'] })) {
-    const hit = (list || []).find((m) => mailKey(m) === key)
-    if (hit) return hit
-  }
-  for (const [, list] of queryClient.getQueriesData<MailItem[]>({ queryKey: ['mail-core', 'inbox'] })) {
+  for (const [, list] of queryClient.getQueriesData<MailItem[]>({ queryKey: MAIL_LIST_PREFIX })) {
     const hit = (list || []).find((m) => mailKey(m) === key)
     if (hit) return hit
   }
   return undefined
 }
 
-/** Optimistically update read state in every cached list (inbox, all-inbox, "all" folder). */
-export function setCachedReadState(keys: Iterable<string>, isRead: boolean) {
+function patchCachedMail(keys: Iterable<string>, patch: Partial<MailItem>) {
   const wanted = new Set(keys)
-  const patch = (list: MailItem[] | undefined) =>
-    list?.map((m) => (wanted.has(mailKey(m)) && m.is_read !== isRead ? { ...m, is_read: isRead } : m))
-  queryClient.setQueriesData<MailItem[]>({ queryKey: ['emails'] }, patch)
-  queryClient.setQueriesData<MailItem[]>({ queryKey: ['mail-core', 'inbox'] }, patch)
+  queryClient.setQueriesData<MailItem[]>({ queryKey: MAIL_LIST_PREFIX }, (list) =>
+    list?.map((m) => (wanted.has(mailKey(m)) ? { ...m, ...patch } : m)),
+  )
 }
 
-/** Mark messages read with an optimistic cache update; reverts on failure. */
+/** Drop messages from every cached list (e.g. after trash). */
+export function removeCachedMail(keys: Iterable<string>) {
+  const gone = new Set(keys)
+  queryClient.setQueriesData<MailItem[]>({ queryKey: MAIL_LIST_PREFIX }, (list) => list?.filter((m) => !gone.has(mailKey(m))))
+}
+
+export function setCachedReadState(keys: Iterable<string>, isRead: boolean) {
+  patchCachedMail(keys, { is_read: isRead })
+}
+
+/** Mark messages read with an optimistic cache update; reverts failures. */
 export async function markReadOptimistic(items: MailItem[]) {
   const unread = items.filter((m) => !m.is_read && m.id)
   if (!unread.length) return
-  const keys = unread.map((m) => mailKey(m))
-  setCachedReadState(keys, true)
-
-  const tasks: Array<{ keys: string[]; run: () => Promise<void> }> = unread.map((m) => ({
-    keys: [mailKey(m)],
-    run: async () => {
-      await postMailCoreMessageRead(m.id, true)
-    },
-  }))
-
-  const results = await Promise.allSettled(tasks.map((t) => t.run()))
+  setCachedReadState(unread.map(mailKey), true)
+  const results = await Promise.allSettled(unread.map((m) => postMailCoreMessageRead(m.id, true)))
   const failedKeys: string[] = []
   const failed: string[] = []
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
-      failedKeys.push(...tasks[i].keys)
-      failed.push(r.reason instanceof Error ? r.reason.message : String(r.reason))
+      failedKeys.push(mailKey(unread[i]))
+      const reason = r.reason as { message?: unknown } | undefined
+      failed.push(typeof reason?.message === 'string' ? reason.message : String(r.reason))
     }
   })
-  if (failedKeys.length) setCachedReadState([...new Set(failedKeys)], false)
+  if (failedKeys.length) setCachedReadState(failedKeys, false)
   if (failed.length) throw new Error(failed.join('；'))
 }
 
-/** Toggle flagged: optimistic local UI then POST mail-core when id_mode is mail_core. */
-export async function flagOptimistic(
-  item: MailItem,
-  nextFlagged: boolean,
-  applyLocal: (key: string) => void,
-): Promise<void> {
+/** Toggle the server-side flag with an optimistic cache update; reverts on failure. */
+export async function flagOptimistic(item: MailItem, nextFlagged: boolean): Promise<void> {
   const key = mailKey(item)
-  applyLocal(key)
-  if (!(item.id_mode || '').includes('mail_core')) return
+  patchCachedMail([key], { is_flagged: nextFlagged })
   try {
     await postMailCoreMessageFlag(item.id, nextFlagged)
   } catch (err) {
-    applyLocal(key) // revert local toggle
+    patchCachedMail([key], { is_flagged: !nextFlagged })
     throw err
   }
 }
