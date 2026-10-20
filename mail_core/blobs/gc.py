@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from mail_core.blobs.archive import blob_root
-from mail_core.mail.storage.models import MessageBlob, MessageBlobLink
+from mail_core.mail.storage.models import Attachment, MessageBlob, MessageBlobLink
 
 log = logging.getLogger("mail_core.blobs.gc")
 
@@ -34,13 +34,25 @@ class GcResult:
 def mark_unreferenced_blobs(session: Session, *, now: datetime | None = None) -> int:
     """Reconcile ref_count from links; stamp/clear ``gc_eligible_at``."""
     now = now or datetime.now(timezone.utc)
+    # Batch count links and attachments via GROUP BY to avoid N+1 queries (V4-02)
+    link_counts = dict(
+        session.execute(
+            select(MessageBlobLink.blob_id, func.count())
+            .group_by(MessageBlobLink.blob_id)
+        ).all()
+    )
+    att_counts = dict(
+        session.execute(
+            select(Attachment.blob_id, func.count())
+            .where(Attachment.blob_id.is_not(None))
+            .group_by(Attachment.blob_id)
+        ).all()
+    )
+
     blobs = list(session.scalars(select(MessageBlob)).all())
     marked = 0
     for blob in blobs:
-        n = session.scalar(
-            select(func.count()).select_from(MessageBlobLink).where(MessageBlobLink.blob_id == blob.id)
-        ) or 0
-        n = int(n)
+        n = int(link_counts.get(blob.id, 0)) + int(att_counts.get(blob.id, 0))
         prev = int(blob.ref_count)
         if prev != n:
             blob.ref_count = n
@@ -102,16 +114,55 @@ def sweep_expired_blobs(
     )
 
 
-def unlink_gc_paths(paths: tuple[Path, ...] | list[Path]) -> int:
-    """Phase 2: remove files after DB commit. Returns unlink count."""
+def unlink_gc_paths(
+    paths: tuple[Path, ...] | list[Path],
+    *,
+    session: Session | None = None,
+) -> int:
+    """Phase 2: remove files after DB commit. Returns unlink count.
+
+    Performs a second safety check against the DB before unlinking to prevent
+    races where a concurrent archive re-referenced the same digest (V2-21 / R12).
+    """
     n = 0
-    for path in paths:
+    Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
+
+    own_session = None
+    if session is None:
         try:
-            if path.is_file():
+            own_session = Session()
+            check_session = own_session
+        except Exception:
+            check_session = None
+    else:
+        check_session = session
+
+    try:
+        for path in paths:
+            try:
+                if not path.is_file():
+                    continue
+                digest = path.stem.lower()
+                if len(digest) == 64 and check_session is not None:
+                    try:
+                        live_refs = check_session.scalar(
+                            select(func.count())
+                            .select_from(MessageBlob)
+                            .where(MessageBlob.content_sha256 == digest)
+                        ) or 0
+                        if int(live_refs) > 0:
+                            log.info("gc unlink skipped newly referenced blob: %s", path)
+                            continue
+                    except Exception as exc:
+                        log.warning("gc unlink safety check query error for %s: %s", path, exc)
                 path.unlink()
                 n += 1
-        except OSError as exc:
-            log.warning("gc unlink failed %s: %s", path, exc)
+            except OSError as exc:
+                log.warning("gc unlink failed %s: %s", path, exc)
+    finally:
+        if own_session is not None:
+            own_session.close()
+
     return n
 
 
