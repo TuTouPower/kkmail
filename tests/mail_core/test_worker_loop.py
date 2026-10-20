@@ -71,11 +71,19 @@ def test_tick_reclaims_stale_and_isolates_job_sessions():
     assert handled >= 2
 
     with Session() as session:
-        for jid in (stale_id, id1, id2):
+        stale_row = session.get(WorkerJob, stale_id)
+        assert stale_row is not None
+        # Stale claim must have been reclaimed (PENDING) or re-handled to DONE — never left
+        # CLAIMED by the dead worker.
+        assert stale_row.status in (JobStatus.PENDING.value, JobStatus.DONE.value)
+        if stale_row.status == JobStatus.CLAIMED.value:
+            raise AssertionError("stale job still CLAIMED after reclaim tick")
+        if stale_row.locked_by == "dead-worker":
+            raise AssertionError("stale job still locked by dead-worker")
+
+        for jid in (id1, id2):
             row = session.get(WorkerJob, jid)
             assert row is not None
-            # After reclaim + claim + handle, wake jobs should be DONE (or PENDING if
-            # reclaim landed after claim window — still not stuck CLAIMED forever).
-            assert row.status != JobStatus.CLAIMED.value or row.locked_by == "test-worker-iso"
-            if jid in (id1, id2):
-                assert row.status == JobStatus.DONE.value
+            # Fresh pending wake jobs must actually be handled to DONE (not a tautology).
+            assert row.status == JobStatus.DONE.value, (jid, row.status, row.last_error)
+            assert row.locked_by == "test-worker-iso" or row.locked_by is None

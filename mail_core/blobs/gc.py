@@ -28,6 +28,7 @@ class GcResult:
     deleted: int
     skipped_cooloff: int
     paths_to_unlink: tuple[Path, ...] = ()
+    would_delete: int = 0  # dry_run candidates; never counted in ``deleted``
 
 
 def mark_unreferenced_blobs(session: Session, *, now: datetime | None = None) -> int:
@@ -70,8 +71,10 @@ def sweep_expired_blobs(
     """
     now = now or datetime.now(timezone.utc)
     root = root or blob_root()
-    marked = mark_unreferenced_blobs(session, now=now)
+    # dry_run must not mutate ref_count / gc_eligible_at; only count candidates.
+    marked = 0 if dry_run else mark_unreferenced_blobs(session, now=now)
     deleted = 0
+    would_delete = 0
     skipped = 0
     paths: list[Path] = []
     blobs = list(session.scalars(select(MessageBlob).where(MessageBlob.ref_count <= 0)).all())
@@ -83,9 +86,11 @@ def sweep_expired_blobs(
             skipped += 1
             continue
         path = root / blob.storage_path
-        if not dry_run:
-            paths.append(path)
-            session.delete(blob)
+        if dry_run:
+            would_delete += 1
+            continue
+        paths.append(path)
+        session.delete(blob)
         deleted += 1
     session.flush()
     return GcResult(
@@ -93,6 +98,7 @@ def sweep_expired_blobs(
         deleted=deleted,
         skipped_cooloff=skipped,
         paths_to_unlink=tuple(paths),
+        would_delete=would_delete,
     )
 
 
@@ -114,12 +120,16 @@ def run_gc_blobs(*, cool_off_hours: float = 24.0, dry_run: bool = False) -> dict
     with Session() as session:
         result = sweep_expired_blobs(session, cool_off=timedelta(hours=cool_off_hours), dry_run=dry_run)
         paths = result.paths_to_unlink
-        session.commit()
+        if dry_run:
+            session.rollback()  # never persist side effects from a dry run
+        else:
+            session.commit()
     unlinked = 0 if dry_run else unlink_gc_paths(paths)
     return {
         "status": "ok",
         "marked": result.marked,
         "deleted": result.deleted,
+        "would_delete": result.would_delete,
         "skipped": result.skipped_cooloff,
         "unlinked": unlinked,
         "dry_run": dry_run,

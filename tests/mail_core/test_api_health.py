@@ -57,8 +57,10 @@ def _engine_with_revision(rev):
 
 
 class _Listener:
-    def __init__(self, alive):
+    def __init__(self, alive, listen_ready=None):
         self.is_alive = alive
+        # /ready requires a successful LISTEN, not merely a reconnecting thread.
+        self.listen_ready = alive if listen_ready is None else listen_ready
 
 
 def test_ready_ok_when_db_at_head_and_listener_alive(monkeypatch):
@@ -84,3 +86,16 @@ def test_ready_503_when_listener_down(monkeypatch):
     res = TestClient(app).get("/ready")
     assert res.status_code == 503
     assert res.json()["reason"] == "outbox_listener"
+
+
+def test_ready_503_when_listener_alive_but_not_listening(monkeypatch):
+    """Reconnect loop running without a successful LISTEN must not report ready."""
+    monkeypatch.setattr("mail_core.db.session.get_engine", lambda url=None: _engine_with_revision(_code_schema_head()))
+    monkeypatch.setattr(
+        "mail_core.realtime.listener.get_outbox_listener",
+        lambda: _Listener(True, listen_ready=False),
+    )
+    res = TestClient(app).get("/ready")
+    assert res.status_code == 503
+    assert res.json()["reason"] == "outbox_listener"
+

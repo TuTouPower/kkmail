@@ -28,10 +28,11 @@ def request_stop() -> None:
 
 
 def _reclaim_once() -> int:
-    """Periodically return stuck CLAIMED jobs to PENDING."""
+    """Periodically return stuck CLAIMED jobs and archive claims to PENDING."""
     try:
         from datetime import timedelta
 
+        from mail_core.blobs.archive import reclaim_stale_archive_claims
         from mail_core.db.session import get_session_factory
         from mail_core.sync.jobs import reclaim_stale_claims
     except Exception as exc:  # pragma: no cover
@@ -44,8 +45,11 @@ def _reclaim_once() -> int:
             n = reclaim_stale_claims(session, older_than=timedelta(minutes=5), limit=100)
             if n:
                 log.info("reclaimed %s stale CLAIMED job(s)", n)
+            a = reclaim_stale_archive_claims(session, older_than=timedelta(minutes=15), limit=100)
+            if a:
+                log.info("reclaimed %s stale archive_in_progress claim(s)", a)
             session.commit()
-            return n
+            return n + a
         except Exception:
             session.rollback()
             log.exception("reclaim_stale_claims failed")

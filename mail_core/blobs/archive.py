@@ -92,6 +92,42 @@ def claim_archive_batch(
     return claimed
 
 
+def reclaim_stale_archive_claims(
+    session,
+    *,
+    older_than: timedelta = timedelta(minutes=15),
+    now: datetime | None = None,
+    limit: int = 100,
+) -> int:
+    """Return stuck ``archive_in_progress`` rows to ``archive_pending``.
+
+    Workers that die mid-fetch leave claims forever; reclaim so another batch can retry.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - older_than
+    stmt = (
+        select(MessageArchiveState)
+        .where(MessageArchiveState.state == ArchiveState.ARCHIVE_IN_PROGRESS.value)
+        .where(MessageArchiveState.claimed_at.is_not(None))
+        .where(MessageArchiveState.claimed_at < cutoff)
+        .order_by(MessageArchiveState.claimed_at.asc())
+        .with_for_update(skip_locked=True)
+        .limit(max(1, int(limit)))
+    )
+    rows = list(session.scalars(stmt).all())
+    for st in rows:
+        apply_transition(st, ArchiveState.ARCHIVE_PENDING)
+        st.claimed_by = None
+        st.claimed_at = None
+        st.updated_at = now
+        suffix = "|reclaimed_stale_archive_claim"
+        prev = st.last_error or ""
+        if suffix not in prev:
+            st.last_error = (prev + suffix)[:2000]
+    session.flush()
+    return len(rows)
+
+
 def _pause_quota(session, message_ids: list[uuid.UUID], account_id: uuid.UUID | None) -> None:
     for mid in message_ids:
         st = session.get(MessageArchiveState, mid)

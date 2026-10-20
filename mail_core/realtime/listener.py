@@ -49,6 +49,11 @@ class OutboxListenThread:
     def is_alive(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
+    @property
+    def listen_ready(self) -> bool:
+        """True only after a successful LISTEN (not merely that the reconnect thread runs)."""
+        return self.is_alive and self._started.is_set()
+
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
