@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from mail_core.api.app import app
+from tests.mail_core.conftest import TEST_API_KEY
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.queries import get_message_detail
 from mail_core.mail.storage.models import Account, Attachment, Message, MessageBody
@@ -75,7 +76,7 @@ def test_get_message_detail_query_and_api():
         assert detail.body_html and "hi" in detail.body_html
         assert len(detail.attachments) == 1
 
-    client = TestClient(app)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     r = client.get(f"/api/mail/messages/{mid}")
     assert r.status_code == 200
     data = r.json()
@@ -94,7 +95,7 @@ def test_get_message_detail_query_and_api():
 
 def test_get_message_plain_only():
     mid = _seed_message(html=None, plain="plain body")
-    client = TestClient(app)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     data = client.get(f"/api/mail/messages/{mid}").json()
     assert data["body_type"] == "text"
     assert data["body"] == "plain body"

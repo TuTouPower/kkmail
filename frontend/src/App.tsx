@@ -7,7 +7,7 @@ import SettingsPage from './components/SettingsModal'
 import LoginPage from './components/LoginPage'
 import ComposeModal from './components/ComposeModal'
 import ColumnResize from './components/ColumnResize'
-import { UNAUTHORIZED_EVENT, api } from './api/client'
+import { UNAUTHORIZED_EVENT, api } from './api/client'\nimport { isMailCoreEnabled, mailCoreEnsureSession, clearMailCoreAuth } from './api/mailCore'
 import { queryClient } from './api/queries'
 import './design-system/tokens.css'
 import { useIsWide } from './lib/viewport'
@@ -60,9 +60,18 @@ function App() {
   useEffect(() => {
     let cancelled = false
     api.checkSession()
-      .then((ok) => { if (!cancelled) setAuthed(ok) })
+      .then(async (ok) => {
+        if (cancelled) return
+        if (ok && isMailCoreEnabled()) {
+          await mailCoreEnsureSession()
+        }
+        if (!cancelled) setAuthed(ok)
+      })
       .catch(() => { if (!cancelled) setAuthed(true) })
-    const onUnauthorized = () => setAuthed(false)
+    const onUnauthorized = () => {
+      clearMailCoreAuth()
+      setAuthed(false)
+    }
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
     return () => {
       cancelled = true

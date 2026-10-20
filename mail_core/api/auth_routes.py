@@ -1,0 +1,70 @@
+"""Login / logout / me for mail-core."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel, Field
+
+from mail_core.api.deps import require_auth
+from mail_core.security.auth import (
+    SESSION_COOKIE_NAME,
+    AuthPrincipal,
+    cookie_samesite,
+    cookie_secure,
+    issue_session,
+    session_max_age,
+    verify_password,
+)
+
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+class LoginIn(BaseModel):
+    password: str = Field(min_length=1)
+
+
+class LoginOut(BaseModel):
+    ok: bool = True
+    csrf_token: str
+
+
+class MeOut(BaseModel):
+    authenticated: bool = True
+    via: str
+    csrf_token: str | None = None
+
+
+def _set_session_cookie(response: Response, value: str) -> None:
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=value,
+        httponly=True,
+        secure=cookie_secure(),
+        samesite=cookie_samesite(),  # type: ignore[arg-type]
+        path="/",
+        max_age=session_max_age(),
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+
+
+@router.post("/login", response_model=LoginOut)
+def login(body: LoginIn, response: Response) -> LoginOut:
+    if not verify_password(body.password):
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    cookie_val, csrf = issue_session()
+    _set_session_cookie(response, cookie_val)
+    return LoginOut(csrf_token=csrf)
+
+
+@router.post("/logout")
+def logout(response: Response, _principal: AuthPrincipal = Depends(require_auth)) -> dict[str, bool]:
+    _clear_session_cookie(response)
+    return {"ok": True}
+
+
+@router.get("/me", response_model=MeOut)
+def me(principal: AuthPrincipal = Depends(require_auth)) -> MeOut:
+    return MeOut(via=principal.via, csrf_token=principal.csrf_token)
