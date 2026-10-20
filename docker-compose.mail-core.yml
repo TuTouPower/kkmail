@@ -1,6 +1,8 @@
 # Development stack for mail-core: PostgreSQL + API + Worker.
 # Host disk/volume encryption is REQUIRED in production (see docs/mail-core-architecture.md §11).
-# Docker volume ≠ encryption. Flask default app is NOT started here.
+# Docker volume ≠ encryption. Flask product shell is NOT started here.
+# Cutover: MAIL_CORE_DEFAULT=1 so a co-located SPA/Flask can prefer mail-core
+# list/reader (Flask remains login/send fallback — see docs/mail-core-cutover.md).
 version: "3.9"
 # Note: if `docker compose` plugin is unavailable, equivalent for Postgres only:
 #   docker run -d --name kkmail-mail-core-pg -e POSTGRES_USER=kkmail \
@@ -42,6 +44,8 @@ services:
     container_name: kkmail-mail-core-api
     environment:
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:kkmail@postgres:5432/kkmail_mail
+      MAIL_CORE_DEFAULT: "1"
+      MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:8000"
       # Dev-only keys — replace in real deployments; backup key MUST differ from blob key.
       MAIL_CORE_BLOB_KEY_V1: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
       MAIL_CORE_BLOB_ACTIVE_VERSION: "1"
