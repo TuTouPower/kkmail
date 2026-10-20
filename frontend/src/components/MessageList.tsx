@@ -22,7 +22,11 @@ export default function MessageList() {
     setListFilter,
     sortNewest,
     toggleSort,
-    setComposeOpen,
+    openCompose,
+    selectedIds,
+    toggleSelected,
+    selectAll,
+    clearSelected,
   } = useMailStore()
 
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
@@ -91,7 +95,7 @@ export default function MessageList() {
             <div className="list-count">{loading ? '正在拉取邮件…' : `${visible.length} 封邮件 · ${unreadCount} 封未读`}</div>
           </div>
           <div className="list-primary-actions">
-            <button className="list-primary-btn" title="写邮件" onClick={() => setComposeOpen(true)}>
+            <button className="list-primary-btn" title="写邮件" onClick={() => openCompose('new')}>
               <PenSquare size={16} />
             </button>
             <button
@@ -120,6 +124,14 @@ export default function MessageList() {
               <CheckCircle size={13} />
               <span className="mark-label">全部已读</span>
             </button>
+            <button className="sort-btn" onClick={() => selectAll(visible.map((m) => `${m.accountEmail}:${m.id}`))} title="选择当前列表">
+              全选
+            </button>
+            {selectedIds.length > 0 && (
+              <button className="sort-btn" onClick={clearSelected} title="取消选择">
+                已选 {selectedIds.length}
+              </button>
+            )}
             <button className="sort-btn" onClick={toggleSort} title="切换邮件排序">
               <SortAsc size={14} />
               <span>{sortNewest ? '最新优先' : '最早优先'}</span>
@@ -142,12 +154,20 @@ export default function MessageList() {
           return (
             <article
               key={key}
-              className={`message-row ${selectedKey === key ? 'selected' : ''} ${!m.is_read ? 'unread' : ''}`}
+              className={`message-row ${selectedKey === key ? 'selected' : ''} ${!m.is_read ? 'unread' : ''} ${selectedIds.includes(key) ? 'checked' : ''}`}
               onClick={() => {
                 setSelectedKey(key)
                 if (window.innerWidth <= 760) setMobileView('detail')
               }}
             >
+              <button
+                className="message-check"
+                style={{ opacity: selectedIds.includes(key) ? 1 : undefined }}
+                onClick={(e) => { e.stopPropagation(); toggleSelected(key) }}
+                title="选择邮件"
+              >
+                {selectedIds.includes(key) ? '✓' : ''}
+              </button>
               <div className="avatar" style={{ background: '#6d8fd1' }}>{(m.from || '?').slice(0, 1).toUpperCase()}</div>
               <div className="message-content">
                 <div className="message-top">
