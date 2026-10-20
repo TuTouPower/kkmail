@@ -111,16 +111,51 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
 export function useMailCoreRealtime(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return
+
+    let hasConnectedOnce = false
+    let isReconnecting = false
+
     const throttler = createThrottledInvalidator(queryClient)
+
+    const onOnline = () => {
+      void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+      }
+    }
+
+    window.addEventListener('online', onOnline)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
     const unsubscribe = subscribeMailCoreEvents(
       (type, data) => {
+        if (isReconnecting) {
+          isReconnecting = false
+          void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+        }
         throttler.handleEvent(type, data)
       },
+      (err) => {
+        isReconnecting = true
+        const target = err.target as EventSource | null
+        if (target && target.readyState === EventSource.CLOSED) {
+          console.warn('[SSE] EventSource closed with terminal error, realtime sync may be stalled.')
+        }
+      },
       () => {
-        /* EventSource reconnects on its own */
+        if (hasConnectedOnce || isReconnecting) {
+          void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+        }
+        hasConnectedOnce = true
+        isReconnecting = false
       },
     )
+
     return () => {
+      window.removeEventListener('online', onOnline)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       unsubscribe()
       throttler.cancel()
     }

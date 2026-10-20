@@ -100,7 +100,7 @@ verify_archive_sha256() {
   if [[ -z "$expected" || ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
     echo "No usable SHA-256 for $url" >&2
     echo "Set PG_VENDOR_SHA256=<64-hex> (required when the mirror has no sidecar checksum)." >&2
-    exit 1
+    return 1
   fi
   local actual
   actual="$(sha256sum "$archive" | awk '{print $1}')"
@@ -108,7 +108,7 @@ verify_archive_sha256() {
     echo "SHA-256 mismatch for PostgreSQL archive" >&2
     echo "  expected: $expected" >&2
     echo "  actual:   $actual" >&2
-    exit 1
+    return 1
   fi
   echo "SHA-256 OK ($actual)"
 }

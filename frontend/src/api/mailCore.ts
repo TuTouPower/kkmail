@@ -126,6 +126,7 @@ export const MAIL_CORE_EVENTS = [
 export function subscribeMailCoreEvents(
   onEvent: (event: string, data: unknown, id: string | null) => void,
   onError?: (err: Event) => void,
+  onOpen?: () => void,
 ): () => void {
   const es = new EventSource(`${apiBaseUrl()}/api/events`, { withCredentials: true })
   const handler = (e: MessageEvent) => {
@@ -141,6 +142,7 @@ export function subscribeMailCoreEvents(
   // listener (or relying on both) historically double-dispatched the same SSE frame.
   // Backend always emits an explicit event: field (see mail_core/api/sse.py).
   for (const name of MAIL_CORE_EVENTS) es.addEventListener(name, handler as EventListener)
+  if (onOpen) es.onopen = () => onOpen()
   es.onerror = (ev) => onError?.(ev)
   return () => es.close()
 }

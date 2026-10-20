@@ -1,21 +1,46 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle } from 'lucide-react'
+import { apiRequest } from '../api/client'
 import { ALL_ACCOUNTS, fetchAccounts, fetchGroups, queryKeys, type MailItem } from '../api/queries'
 import { providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
 
+interface FolderStatsItem {
+  unread_count?: number
+  total_count?: number
+  role?: string
+}
+
+async function fetchAccountFolders(accountId: string, signal?: AbortSignal): Promise<number> {
+  let res: unknown
+  try {
+    res = await apiRequest(`/api/accounts/${encodeURIComponent(accountId)}/folders`, { signal })
+  } catch {
+    try {
+      res = await apiRequest(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`, { signal })
+    } catch {
+      return 0
+    }
+  }
+  const folders: FolderStatsItem[] = Array.isArray(res)
+    ? res
+    : Array.isArray((res as { folders?: unknown })?.folders)
+      ? (res as { folders: FolderStatsItem[] }).folders
+      : []
+  const inboxFolder = folders.find((f) => f.role === 'inbox')
+  return inboxFolder?.unread_count ?? folders.reduce((sum, f) => sum + (f.unread_count || 0), 0)
+}
+
 export default function Sidebar() {
-  const {
-    view,
-    setView,
-    collapsedGroups,
-    toggleGroup,
-    toggleSidebar,
-    closeMobileSidebar,
-    listFilter,
-    openSmartView,
-    openSettings,
-  } = useMailStore()
+  const view = useMailStore((s) => s.view)
+  const setView = useMailStore((s) => s.setView)
+  const collapsedGroups = useMailStore((s) => s.collapsedGroups)
+  const toggleGroup = useMailStore((s) => s.toggleGroup)
+  const toggleSidebar = useMailStore((s) => s.toggleSidebar)
+  const closeMobileSidebar = useMailStore((s) => s.closeMobileSidebar)
+  const listFilter = useMailStore((s) => s.listFilter)
+  const openSmartView = useMailStore((s) => s.openSmartView)
+  const openSettings = useMailStore((s) => s.openSettings)
   const wide = useIsWide()
 
   const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
@@ -23,18 +48,36 @@ export default function Sidebar() {
 
   const groups = groupsQuery.data || []
   const accounts = accountsQuery.data || []
-  // Unread badges are derived from the cached unified inbox page (populated by MessageList).
+
+  const folderStatsQuery = useQuery({
+    queryKey: ['mail-core', 'sidebar-folder-stats', accounts.map((a) => a.id).sort().join(',')],
+    queryFn: async ({ signal }) => {
+      const statsMap = new Map<string, number>()
+      await Promise.all(
+        accounts.map(async (a) => {
+          const count = await fetchAccountFolders(a.id, signal)
+          statsMap.set(a.id, count)
+        }),
+      )
+      return statsMap
+    },
+    enabled: accounts.length > 0,
+  })
+
+  // Fallback to cached unified inbox page if server stats not yet loaded
   const inboxCache = useQuery({
     queryKey: queryKeys.inbox(ALL_ACCOUNTS),
     queryFn: async () => [] as MailItem[],
     enabled: false,
   })
   const inboxRows = (inboxCache.data || []) as MailItem[]
-  const unreadByAccount = new Map<string, number>()
+  const fallbackUnread = new Map<string, number>()
   for (const m of inboxRows) {
     if (m.is_read) continue
-    if (m.accountId) unreadByAccount.set(m.accountId, (unreadByAccount.get(m.accountId) || 0) + 1)
+    if (m.accountId) fallbackUnread.set(m.accountId, (fallbackUnread.get(m.accountId) || 0) + 1)
   }
+
+  const unreadByAccount = folderStatsQuery.data ?? fallbackUnread
   const allInboxUnread = [...unreadByAccount.values()].reduce((n, c) => n + c, 0)
   const inAllInbox = view.type === 'allInbox'
   const groupIds = new Set(groups.map((g) => g.id))

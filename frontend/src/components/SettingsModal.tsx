@@ -19,7 +19,7 @@ export default function SettingsPage() {
   const [section, setSection] = useState<'accounts' | 'appearance' | 'general'>('accounts')
   const [status, setStatus] = useState('')
   const [email, setEmail] = useState('')
-  const [provider, setProvider] = useState('imap')
+  const [provider, setProvider] = useState<'gmail' | 'imap' | 'graph' | 'memory' | 'stub'>('imap')
   const [credJson, setCredJson] = useState('')
   const [imapHost, setImapHost] = useState('')
   const [imapPort, setImapPort] = useState('993')
@@ -101,7 +101,7 @@ export default function SettingsPage() {
             <div style={{ marginTop: 18, fontWeight: 700 }}>添加账户</div>
             <p style={{ fontSize: 12, color: 'var(--muted)' }}>credentials 为 JSON（如 refresh_token / client_id），写入凭证库，接口不会回显。</p>
             <input id="account-email" name="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-            <select id="account-provider" name="provider" value={provider} onChange={(e) => setProvider(e.target.value)} style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+            <select id="account-provider" name="provider" value={provider} onChange={(e) => setProvider(e.target.value as 'gmail' | 'imap' | 'graph' | 'memory' | 'stub')} style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
               <option value="imap">imap</option>
               <option value="gmail">gmail</option>
               <option value="graph">graph</option>
@@ -234,9 +234,32 @@ export default function SettingsPage() {
             }} style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>保存</button>
 
             <div style={{ marginTop: 22, fontWeight: 700 }}>修改登录密码</div>
-            <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="当前密码" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="新密码（≥8）" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-            <button type="button" onClick={() => run('修改密码', () => api.changePassword(currentPassword, newPassword), '密码已更新')} style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>更新密码</button>
+            <form onSubmit={(e) => {
+              e.preventDefault()
+              run('修改密码', () => api.changePassword(currentPassword, newPassword), '密码已更新')
+            }}>
+              <input
+                id="current-password"
+                name="current-password"
+                type="password"
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="当前密码"
+                style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }}
+              />
+              <input
+                id="new-password"
+                name="new-password"
+                type="password"
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="新密码（≥8）"
+                style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }}
+              />
+              <button type="submit" style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>更新密码</button>
+            </form>
           </div>
         )}
         {status && <div style={{ marginTop: 16, fontSize: 12, color: 'var(--muted)' }}>{status}</div>}
