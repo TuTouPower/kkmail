@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 from sqlalchemy import select
@@ -77,3 +77,32 @@ def fail_job(session: Session, job: WorkerJob, error: str) -> None:
     job.status = JobStatus.FAILED.value
     job.last_error = error
     session.flush()
+
+
+def reclaim_stale_claims(
+    session: Session,
+    *,
+    older_than: timedelta = timedelta(minutes=5),
+    now: datetime | None = None,
+) -> int:
+    """Return CLAIMED jobs whose lock is older than ``older_than`` to PENDING.
+
+    Models a worker dying mid-job without completing/failing the row.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - older_than
+    stmt = (
+        select(WorkerJob)
+        .where(WorkerJob.status == JobStatus.CLAIMED.value)
+        .where(WorkerJob.locked_at.is_not(None))
+        .where(WorkerJob.locked_at < cutoff)
+        .with_for_update(skip_locked=True)
+    )
+    rows = list(session.scalars(stmt).all())
+    for job in rows:
+        job.status = JobStatus.PENDING.value
+        job.locked_by = None
+        job.locked_at = None
+        job.last_error = (job.last_error or "") + "|reclaimed_stale_claim"
+    session.flush()
+    return len(rows)
