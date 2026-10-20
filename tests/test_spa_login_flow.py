@@ -7,6 +7,7 @@ import web_outlook_app as appmod  # noqa: E402
 
 
 def test_login_then_spa_and_accounts():
+    appmod.login_attempts.clear()
     client = appmod.app.test_client()
     login = client.post("/login", json={"password": "admin123"})
     assert login.status_code == 200
