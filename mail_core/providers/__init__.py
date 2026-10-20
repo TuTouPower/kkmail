@@ -10,9 +10,11 @@ from mail_core.providers.base import (
     RemoteOperationResult,
     StubProvider,
 )
+from mail_core.providers.factory import build_provider
 from mail_core.providers.gmail import GmailProvider
 from mail_core.providers.graph import GraphProvider
 from mail_core.providers.imap import ImapProvider
+from mail_core.providers.stub_memory import MemoryProvider
 
 __all__ = [
     "DeltaChange",
@@ -21,6 +23,7 @@ __all__ = [
     "GraphProvider",
     "ImapProvider",
     "MailProvider",
+    "MemoryProvider",
     "MetadataPage",
     "RateLimitHint",
     "ReconcileAction",
@@ -28,4 +31,5 @@ __all__ = [
     "RemoteMessageMeta",
     "RemoteOperationResult",
     "StubProvider",
+    "build_provider",
 ]
