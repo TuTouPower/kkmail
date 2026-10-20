@@ -296,3 +296,16 @@ class WorkerJob(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class MessageSearch(Base):
+    """FTS projection — searchable fields are not field-encrypted (architecture §11.2)."""
+
+    __tablename__ = "message_search"
+
+    message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    from_text: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    body_text: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
