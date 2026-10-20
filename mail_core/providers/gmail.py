@@ -117,6 +117,7 @@ def _meta_from_gmail_message(message: dict[str, Any]) -> RemoteMessageMeta:
         sort_time=sort_time,
         is_read="UNREAD" not in label_ids,
         has_attachments=False,
+        is_flagged="STARRED" in label_ids,
         internet_message_id=headers.get("message-id"),
         snippet=message.get("snippet"),
         provider_thread_key=message.get("threadId"),
