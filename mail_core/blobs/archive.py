@@ -496,6 +496,24 @@ def run_archive_batch(
                          "soft_limit_bytes": soft_i, "hard_limit_bytes": hard_i},
                 priority=90,
             )
+        elif failed > 0:
+            # Batch fully failed: continue scheduling retries with backoff (V2-30 / R08)
+            session.add(
+                OutboxEvent(
+                    event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
+                    account_id=account_id,
+                    payload={"completed": completed, "failed": failed},
+                )
+            )
+            enqueue_job(
+                session,
+                job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                account_id=account_id,
+                payload={"batch_size": limit, "recent_days": recent_days,
+                         "soft_limit_bytes": soft_i, "hard_limit_bytes": hard_i},
+                priority=90,
+                run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
+            )
         if account_id is not None and fencing is not None:
             try:
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
