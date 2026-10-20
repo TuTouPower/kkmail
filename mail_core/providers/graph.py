@@ -103,15 +103,37 @@ class GraphProvider:
                 inbox_id = str(inbox_data["id"])
         except Exception:
             pass
-        data = self._call("GET", "/me/mailFolders", {})
-        return [
-            RemoteFolder(
-                remote_id=f["id"],
-                name=f.get("displayName") or f["id"],
-                role=graph_folder_role(f, inbox_id=inbox_id),
-            )
-            for f in data.get("value") or []
-        ]
+
+        def _fetch_all_pages(url: str) -> list[dict[str, Any]]:
+            items: list[dict[str, Any]] = []
+            current_url: str | None = url
+            while current_url:
+                data = self._call("GET", current_url, {})
+                items.extend(data.get("value") or [])
+                current_url = data.get("@odata.nextLink") or data.get("next_link")
+            return items
+
+        def _collect(url: str, parent_id: str | None, visited: set[str]) -> list[RemoteFolder]:
+            folders: list[RemoteFolder] = []
+            for f in _fetch_all_pages(url):
+                fid = str(f["id"])
+                if fid in visited:
+                    continue
+                visited.add(fid)
+                folders.append(
+                    RemoteFolder(
+                        remote_id=fid,
+                        name=f.get("displayName") or fid,
+                        role=graph_folder_role(f, inbox_id=inbox_id),
+                        parent_remote_id=parent_id,
+                    )
+                )
+                if int(f.get("childFolderCount") or 0) > 0:
+                    child_url = f"/me/mailFolders/{fid}/childFolders"
+                    folders.extend(_collect(child_url, parent_id=fid, visited=visited))
+            return folders
+
+        return _collect("/me/mailFolders", None, set())
 
     def full_scan(self, folder_remote_id: str, cursor: dict[str, Any] | None) -> MetadataPage:
         return self.fetch_metadata_page(folder_remote_id, cursor)
