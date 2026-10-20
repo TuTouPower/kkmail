@@ -85,9 +85,12 @@ def test_get_message_detail_query_and_api():
     assert "hi" in data["body"]
     assert data["attachments"][0]["name"] == "note.txt"
 
-    b = client.get(f"/api/mail/messages/{mid}/body")
-    assert b.status_code == 200
-    assert b.json()["body_type"] == "html"
+    assert data["from"] and data["is_flagged"] is False
+    # Body-only duplicate endpoint is gone; GET /messages/{id} is the reader source.
+    assert client.get(f"/api/mail/messages/{mid}/body").status_code == 404
+    # read/flag require an explicit body (no implicit True).
+    assert client.post(f"/api/mail/messages/{mid}/read").status_code == 422
+    assert client.post(f"/api/mail/messages/{mid}/flag", json={}).status_code == 422
 
     missing = client.get(f"/api/mail/messages/{uuid.uuid4()}")
     assert missing.status_code == 404

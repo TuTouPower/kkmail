@@ -183,6 +183,7 @@ class MessageBlobLink(Base):
 
 class Attachment(Base):
     __tablename__ = "attachments"
+    __table_args__ = (Index("ix_attachments_message_id", "message_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)

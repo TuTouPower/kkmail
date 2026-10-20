@@ -50,7 +50,6 @@ services:
     container_name: kkmail-mail-core-api
     environment:
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
-      MAIL_CORE_DEFAULT: "1"
       MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:8000"
       # Auth: Cookie session signing. Provide MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt)
       # or MAIL_CORE_LOGIN_PASSWORD / LOGIN_PASSWORD — process refuses to start without one.

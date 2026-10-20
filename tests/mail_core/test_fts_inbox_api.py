@@ -68,7 +68,13 @@ def test_unified_inbox_folder_stats_search_and_thread():
 
     search = client.get("/api/mail/search", params={"q": "phoenix", "account_id": str(account_id)})
     assert search.status_code == 200
-    assert str(message_id) in search.json()["message_ids"]
+    sj = search.json()
+    assert sj["total"] >= 1 and sj["offset"] == 0
+    hit = next(i for i in sj["items"] if i["id"] == str(message_id))
+    assert hit["subject"] and "is_flagged" in hit
+
+    bad = client.get("/api/mail/inbox", params={"cursor": "%%%not-a-cursor"})
+    assert bad.status_code == 400
 
     assert normalize_subject("Re: Hello") == "hello"
     with Session() as session:
