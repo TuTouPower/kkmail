@@ -11,7 +11,7 @@ from pathlib import Path
 
 from collections.abc import Iterator
 
-from mail_core.blobs.crypto import BlobCryptoError, Keyring, iter_unwrap, load_keyring_from_env, read_key_version, unwrap, wrap
+from mail_core.blobs.crypto import BlobCryptoError, Keyring, iter_unwrap, load_keyring_from_env, read_key_version, wrap
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -96,17 +96,14 @@ class BlobStore:
         return BlobWriteResult(digest, len(data), rel, self.key_version)
 
     def get(self, digest: str) -> bytes:
-        digest = self._normalize_digest(digest)
-        plaintext, _version = unwrap(self.path_for(digest).read_bytes(), keyring=self.keyring)
-        if self.hash_plaintext(plaintext) != digest:
-            raise BlobCryptoError("blob content does not match its digest")
-        return plaintext
+        """Assemble plaintext via streaming decrypt (same path as attachment download)."""
+        return b"".join(self.iter_plaintext(digest))
 
     def get_with_version(self, digest: str) -> tuple[bytes, int]:
         digest = self._normalize_digest(digest)
-        plaintext, version = unwrap(self.path_for(digest).read_bytes(), keyring=self.keyring)
-        if self.hash_plaintext(plaintext) != digest:
-            raise BlobCryptoError("blob content does not match its digest")
+        with self.path_for(digest).open("rb") as fh:
+            version = read_key_version(fh)
+        plaintext = b"".join(self.iter_plaintext(digest))
         return plaintext, version
 
     def key_version_of(self, digest: str) -> int:

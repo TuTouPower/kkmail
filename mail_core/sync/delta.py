@@ -28,6 +28,8 @@ from mail_core.sync.leases import (
 )
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.sync.metadata import messages_upserted_event, upsert_messages
+from mail_core.search.index import upsert_message_search
+from mail_core.threading.rules import assign_thread_for_message
 
 log = logging.getLogger("mail_core.sync.delta")
 
@@ -107,7 +109,26 @@ def apply_delta_page(
         if c.kind == "flag" and last_kind.get(c.remote_id) == "flag"
     ]
     outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=[c.meta for c in upserts])
-    touched = [o.message.id for o in outcomes if o.changed]
+    touched: list[uuid.UUID] = []
+    for o, change in zip(outcomes, upserts):
+        if not o.changed:
+            continue
+        touched.append(o.message.id)
+        upsert_message_search(session, message_id=o.message.id)
+        meta = change.meta
+        if meta is not None and (
+            meta.internet_message_id
+            or meta.provider_thread_key
+            or meta.in_reply_to
+            or meta.references
+        ):
+            assign_thread_for_message(
+                session,
+                message=o.message,
+                in_reply_to=meta.in_reply_to,
+                references=meta.references,
+                provider_thread_key=meta.provider_thread_key,
+            )
     upserted = len(upserts)
     flag_count, flag_touched = _apply_flag_patches(
         session, account_id=account_id, folder_id=folder_id, changes=flag_changes
@@ -146,15 +167,18 @@ def apply_delta_page(
                 )
                 session.delete(msg)
                 deleted += 1
-    recompute_folder_stats(session, folder_id)
-    session.add(
-        OutboxEvent(
-            event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
-            account_id=account_id,
-            payload={"folder_id": str(folder_id)},
+    # Only emit stats/outbox when something actually changed (idempotent replay).
+    if touched or deleted:
+        recompute_folder_stats(session, folder_id)
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
+                account_id=account_id,
+                payload={"folder_id": str(folder_id)},
+            )
         )
-    )
     cursor = page.next_cursor or {}
+    # Never force full_scan_complete=True here — preserve baseline flag set by metadata sync.
     commit_checkpoint(
         session,
         account_id=account_id,
@@ -165,7 +189,7 @@ def apply_delta_page(
         modseq=cursor.get("modseq"),
         history_id=cursor.get("historyId") or cursor.get("history_id"),
         delta_link=cursor.get("delta_link"),
-        full_scan_complete=True,  # delta assumes baseline already complete
+        full_scan_complete=None,
     )
     session.flush()
     return DeltaApplyResult(

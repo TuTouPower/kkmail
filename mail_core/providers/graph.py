@@ -121,7 +121,16 @@ class GraphProvider:
         data = self._call("GET", f"/me/messages/{remote_id}/$value", {})
         if isinstance(data, (bytes, bytearray)):
             return bytes(data)
-        return bytes(data["raw_bytes"])
+        if isinstance(data, dict):
+            raw = data.get("raw_bytes")
+            if isinstance(raw, (bytes, bytearray)):
+                return bytes(raw)
+            raw_s = data.get("raw")
+            if isinstance(raw_s, (bytes, bytearray)):
+                return bytes(raw_s)
+            if isinstance(raw_s, str) and raw_s:
+                return raw_s.encode("utf-8", errors="surrogateescape")
+        raise RuntimeError("Graph $value response missing MIME bytes")
 
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:
         self._calls.append("delta_changes")
