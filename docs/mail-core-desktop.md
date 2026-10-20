@@ -80,3 +80,14 @@ reports `stub: true` and the app refuses to start.
   (see `desktop/vendor/README.md`). The Linux fetch script does not auto-download
   for mac/win.
 - Packaging (`pack:linux`) still succeeds when `vendor/pgsql` is absent, but that build cannot run.
+
+## 会话安全（Electron）
+
+`main.js` 在 `app.whenReady` 时调用 `applySessionHardening()`（逻辑在 `hardening.js`）：
+
+1. `will-attach-webview` → `preventDefault`（且 `webviewTag: false`）
+2. 权限请求 / 检查全部拒绝
+3. `session.webRequest.onHeadersReceived` 注入限制性 CSP
+
+详见 `docs/security.md`「桌面 Electron」。
+

@@ -17,4 +17,10 @@ Startup sequence (`main.js`):
 
 External links open in the system browser only for `http(s):`/`mailto:`; other navigation away from the local origin is blocked. Never expose the local port beyond `127.0.0.1`.
 
+Session hardening (`hardening.js`, applied in `main.js`):
+
+- `will-attach-webview` always prevented (`webviewTag: false`)
+- permission request/check handlers deny all prompts
+- restrictive Content-Security-Policy on every response (`default-src 'self'`, no `object`/`frame-ancestors`, connect only to self)
+
 `npm test` checks sidecar paths, packaging config, and the PostgreSQL manager.
