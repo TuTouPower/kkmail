@@ -1,14 +1,18 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Reply, ReplyAll, Forward, MailOpen, Trash2, Flag, Folder, Archive, ShieldAlert, ArrowLeft } from 'lucide-react'
 import { api } from '../api/client'
 import { fetchAccounts, fetchEmailDetail, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
+import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
+import { replyAllRecipients, replyRecipient } from '../lib/recipients'
 import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, htmlToText, isHtmlBody } from '../lib/mailBody'
 
 export default function MessageReader() {
   const { selectedKey, openCompose, flaggedIds, toggleFlag, setMobileView } = useMailStore()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
+  const [actionStatus, setActionStatus] = useState('')
   const cachedLists = queryClient.getQueriesData<MailItem[]>({ queryKey: ['emails'] })
   const selected = cachedLists
     .flatMap(([, list]) => list || [])
@@ -41,8 +45,27 @@ export default function MessageReader() {
 
   async function markCurrent() {
     if (!selected) return
-    await markEmailsRead(selected.accountEmail, [selected], selected.folder || 'inbox')
+    try {
+      ensureSuccess(await markEmailsRead(selected.accountEmail, [selected], selected.folder || 'inbox'), '标记失败')
+      setActionStatus('')
+    } catch (err) {
+      setActionStatus(errorMessage(err, '标记失败'))
+    }
     await queryClient.invalidateQueries({ queryKey: ['emails'] })
+  }
+
+  async function trashCurrent() {
+    if (!selected) return
+    const folder = selected.folder || 'inbox'
+    const warning = folder === 'deleteditems' ? '废纸篓中的邮件将被永久删除，无法恢复。' : '邮件将移到废纸篓（IMAP 账户可能直接永久删除）。'
+    if (!confirmAction(`删除「${selected.subject}」？${warning}`)) return
+    try {
+      ensureSuccess(await api.deleteEmails({ email: selected.accountEmail, folder, items: [{ id: selected.id, folder, id_mode: selected.id_mode || '' }] }), '删除失败')
+      setActionStatus('')
+      await queryClient.invalidateQueries({ queryKey: ['emails'] })
+    } catch (err) {
+      setActionStatus(errorMessage(err, '删除失败'))
+    }
   }
 
   return (
@@ -52,13 +75,13 @@ export default function MessageReader() {
         <div className="reader-location">{selected.accountEmail}</div>
         <div className="reader-toolbar-actions">
           <button className="reader-action" title="回复" onClick={() => openCompose('reply', {
-            to: selected.from.includes('@') ? selected.from : '',
+            to: replyRecipient(detail?.from || selected.from),
             subject: `Re: ${detail?.subject || selected.subject}`,
             body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
             accountId: selected.accountId,
           })}><Reply size={15} /></button>
           <button className="reader-action" title="全部回复" aria-label="回复全部" onClick={() => openCompose('reply', {
-            to: [selected.from, detail?.to || selected.to].filter(Boolean).join(', '),
+            to: replyAllRecipients(detail?.from || selected.from, [detail?.to || selected.to, detail?.cc], selected.accountEmail),
             subject: `Re: ${detail?.subject || selected.subject}`,
             body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
             accountId: selected.accountId,
@@ -70,15 +93,11 @@ export default function MessageReader() {
           })}><Forward size={15} /></button>
           <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
           <button className="reader-action" title="标为已读" onClick={markCurrent}><MailOpen size={15} /></button>
-          <button className="reader-action" title="归档（后端暂无归档接口）" aria-label="归档"><Archive size={15} /></button>
-          <button className="reader-action" title="移到废纸篓" aria-label="移到废纸篓" onClick={async () => {
-            if (!selected) return
-            await api.deleteEmails({ email: selected.accountEmail, folder: selected.folder || 'inbox', items: [{ id: selected.id, folder: selected.folder, id_mode: selected.id_mode }] })
-            await queryClient.invalidateQueries({ queryKey: ['emails'] })
-          }}><Trash2 size={15} /></button>
-          <button className="reader-action" title="标记为垃圾邮件（后端暂无移动接口）" aria-label="标记为垃圾邮件"><ShieldAlert size={15} /></button>
+          <button className="reader-action" title="归档（后端暂无归档接口）" aria-label="归档" disabled aria-disabled="true"><Archive size={15} /></button>
+          <button className="reader-action" title="移到废纸篓" aria-label="移到废纸篓" onClick={trashCurrent}><Trash2 size={15} /></button>
+          <button className="reader-action" title="标记为垃圾邮件（后端暂无移动接口）" aria-label="标记为垃圾邮件" disabled aria-disabled="true"><ShieldAlert size={15} /></button>
           <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
-          <button className="reader-action" title="移动到文件夹（后端暂无移动接口）" aria-label="移动到文件夹"><Folder size={15} /></button>
+          <button className="reader-action" title="移动到文件夹（后端暂无移动接口）" aria-label="移动到文件夹" disabled aria-disabled="true"><Folder size={15} /></button>
           <button className="reader-action" title={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-label="标记邮件" onClick={() => selectedKey && toggleFlag(selectedKey)}><Flag size={15} /></button>
         </div>
       </div>
@@ -92,6 +111,7 @@ export default function MessageReader() {
           <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 16 }}>
             收件人：{detail?.to || selected.to || accounts.find((a) => a.email === selected.accountEmail)?.email || selected.accountEmail}
           </div>
+          {actionStatus && <div role="status" style={{ color: 'var(--red)', fontSize: 12, marginBottom: 8 }}>{actionStatus}</div>}
           {detailQuery.isLoading && <div style={{ color: 'var(--muted)' }}>正在加载正文…</div>}
           {detailQuery.error && <div style={{ color: 'var(--red)' }}>{String((detailQuery.error as Error).message)}</div>}
           {html ? (
