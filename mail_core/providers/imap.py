@@ -360,32 +360,55 @@ class ImapProvider:
                                 exhausted=True,
                             )
                         uid_next = int(cursor.get("uid_next") or 1)
+                        flag_uid_after = int(cursor.get("flag_uid_after") or 0)
                         # New UIDs: full metadata upsert; older UIDs: flag-only.
-                        new_uids = [u for u in changed_uids if u >= uid_next]
-                        flag_uids = [u for u in changed_uids if u < uid_next]
-                        if flag_uids:
+                        new_uids = sorted([u for u in changed_uids if u >= uid_next])
+                        flag_uids = sorted([u for u in changed_uids if u < uid_next and u > flag_uid_after])
+
+                        batch_flag_uids = flag_uids[:200]
+                        has_more_flags = len(flag_uids) > 200
+                        if batch_flag_uids:
                             changes.extend(
-                                self._fetch_flags_for_uids(c, folder_remote_id, uv, flag_uids[:200])
+                                self._fetch_flags_for_uids(c, folder_remote_id, uv, batch_flag_uids)
                             )
+
+                        next_cursor = dict(cursor)
+                        if uidvalidity is not None:
+                            next_cursor["uidvalidity"] = uidvalidity
+
+                        has_more_new = False
                         if new_uids:
                             # Page via temporary cursor starting at the lowest new UID.
+                            batch_size = min(50, len(new_uids))
                             page = self.fetch_metadata_page(
                                 folder_remote_id,
-                                {**cursor, "uid_next": min(new_uids), "page_size": min(50, len(new_uids))},
+                                {**cursor, "uid_next": min(new_uids), "page_size": batch_size},
                             )
                             changes.extend(
                                 DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items
                             )
-                            next_cursor = dict(page.next_cursor or {})
+                            p_next = page.next_cursor.get("uid_next")
+                            if p_next is not None:
+                                next_cursor["uid_next"] = p_next
+                                has_more_new = not page.exhausted or any(u >= p_next for u in new_uids)
+                            else:
+                                has_more_new = not page.exhausted
+
+                        if has_more_flags:
+                            next_cursor["flag_uid_after"] = batch_flag_uids[-1]
+                            next_cursor["modseq"] = since_modseq
                         else:
-                            next_cursor = dict(cursor)
-                        next_cursor["modseq"] = highest
-                        if uidvalidity is not None:
-                            next_cursor["uidvalidity"] = uidvalidity
+                            next_cursor.pop("flag_uid_after", None)
+                            if has_more_new:
+                                next_cursor["modseq"] = since_modseq
+                            else:
+                                next_cursor["modseq"] = highest
+
+                        exhausted = not (has_more_flags or has_more_new)
                         return DeltaPage(
                             changes=changes,
                             next_cursor=next_cursor,
-                            exhausted=len(changed_uids) <= 200 and not new_uids,
+                            exhausted=exhausted,
                         )
                 except Exception:
                     pass
@@ -394,7 +417,7 @@ class ImapProvider:
             page = self.fetch_metadata_page(folder_remote_id, cursor)
             changes = [DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items]
             next_cursor = dict(page.next_cursor or {})
-            if highest is not None:
+            if highest is not None and page.exhausted:
                 next_cursor["modseq"] = highest
             if uidvalidity is not None:
                 next_cursor["uidvalidity"] = uidvalidity
