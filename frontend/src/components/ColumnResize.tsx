@@ -8,6 +8,8 @@ export default function ColumnResize({
   onDrag: (deltaX: number) => void
 }) {
   const lastX = useRef(0)
+  const onDragRef = useRef(onDrag)
+  onDragRef.current = onDrag
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -18,7 +20,7 @@ export default function ColumnResize({
     const move = (ev: PointerEvent) => {
       const dx = ev.clientX - lastX.current
       lastX.current = ev.clientX
-      if (dx) onDrag(dx)
+      if (dx) onDragRef.current(dx)
     }
     const end = () => {
       window.removeEventListener('pointermove', move)
@@ -33,7 +35,7 @@ export default function ColumnResize({
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', end)
     window.addEventListener('pointercancel', end)
-  }, [onDrag])
+  }, [])
 
   return (
     <div

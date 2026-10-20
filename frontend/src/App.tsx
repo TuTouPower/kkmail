@@ -101,7 +101,7 @@ function App() {
         {wide && !sidebarCollapsed && (
           <ColumnResize
             ariaLabel="调整侧栏宽度"
-            onDrag={(dx) => setSidebarWidth(sidebarWidth + dx)}
+            onDrag={(dx) => setSidebarWidth(useMailStore.getState().sidebarWidth + dx)}
           />
         )}
         {settingsOpen ? (
@@ -112,7 +112,7 @@ function App() {
             {wide && (
               <ColumnResize
                 ariaLabel="调整邮件列表宽度"
-                onDrag={(dx) => setListWidth(listWidth + dx)}
+                onDrag={(dx) => setListWidth(useMailStore.getState().listWidth + dx)}
               />
             )}
             <MessageReader />
