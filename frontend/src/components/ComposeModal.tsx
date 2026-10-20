@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { api } from '../api/client'
@@ -6,15 +6,24 @@ import { fetchAccounts, queryKeys } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
 
 export default function ComposeModal() {
-  const { composeOpen, setComposeOpen, view } = useMailStore()
+  const { composeOpen, setComposeOpen, composeMode, composeDraft, view } = useMailStore()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts, enabled: composeOpen })
   const accounts = accountsQuery.data || []
-  const [accountId, setAccountId] = useState<number>(view.type === 'accountFolder' ? view.accountId : 0)
+  const [accountId, setAccountId] = useState(0)
   const [to, setTo] = useState('')
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [status, setStatus] = useState('')
   const [sending, setSending] = useState(false)
+
+  useEffect(() => {
+    if (!composeOpen) return
+    setTo(composeDraft.to)
+    setSubject(composeDraft.subject)
+    setBody(composeDraft.body)
+    setAccountId(composeDraft.accountId || (view.type === 'accountFolder' ? view.accountId : 0))
+    setStatus('')
+  }, [composeOpen, composeDraft, view])
 
   if (!composeOpen) return null
 
@@ -33,11 +42,13 @@ export default function ComposeModal() {
     }
   }
 
+  const title = composeMode === 'reply' ? '回复' : composeMode === 'forward' ? '转发' : '新邮件'
+
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 120, background: 'rgba(0,0,0,.46)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18 }} onClick={(e) => { if (e.target === e.currentTarget) setComposeOpen(false) }}>
       <form onSubmit={submit} style={{ width: 'min(720px, 100%)', background: 'var(--surface)', border: '1px solid var(--line-strong)', borderRadius: 15, overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid var(--line)' }}>
-          <strong style={{ flex: 1 }}>新邮件</strong>
+          <strong style={{ flex: 1 }}>{title}</strong>
           <button type="button" onClick={() => setComposeOpen(false)} style={{ border: 0, background: 'transparent', color: 'var(--muted)' }}><X size={16} /></button>
         </div>
         <div style={{ padding: '8px 18px' }}>

@@ -5,7 +5,7 @@ import { fetchAccounts, fetchEmailDetail, markEmailsRead, queryClient, queryKeys
 import { useMailStore } from '../store/mailStore'
 
 export default function MessageReader() {
-  const { selectedKey, setComposeOpen } = useMailStore()
+  const { selectedKey, openCompose } = useMailStore()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
   const cachedLists = queryClient.getQueriesData<MailItem[]>({ queryKey: ['emails'] })
@@ -48,8 +48,17 @@ export default function MessageReader() {
       <div className="reader-toolbar">
         <div className="reader-location">{selected.accountEmail}</div>
         <div className="reader-toolbar-actions">
-          <button className="reader-action" title="回复" onClick={() => setComposeOpen(true)}><Reply size={15} /></button>
-          <button className="reader-action" title="转发" onClick={() => setComposeOpen(true)}><Forward size={15} /></button>
+          <button className="reader-action" title="回复" onClick={() => openCompose('reply', {
+            to: selected.from.includes('@') ? selected.from : '',
+            subject: `Re: ${detail?.subject || selected.subject}`,
+            body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
+            accountId: selected.accountId,
+          })}><Reply size={15} /></button>
+          <button className="reader-action" title="转发" onClick={() => openCompose('forward', {
+            subject: `Fwd: ${detail?.subject || selected.subject}`,
+            body: `\n\n—— 转发邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
+            accountId: selected.accountId,
+          })}><Forward size={15} /></button>
           <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
           <button className="reader-action" title="标为已读" onClick={markCurrent}><MailOpen size={15} /></button>
           <button className="reader-action" title="删除" onClick={async () => {
@@ -81,12 +90,17 @@ export default function MessageReader() {
           )}
           {(detail?.attachments || []).length > 0 && (
             <div className="attachment-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
-              {detail!.attachments!.map((att, i) => (
-                <div key={att.id || i} className="attachment" style={{ padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 9 }}>
-                  <strong>{att.name || '附件'}</strong>
-                  {att.size ? <small style={{ display: 'block', color: 'var(--muted)' }}>{att.size} B</small> : null}
-                </div>
-              ))}
+              {detail!.attachments!.map((att, i) => {
+                const href = att.id
+                  ? api.attachmentUrl(selected.accountEmail, selected.id, att.id, selected.folder || 'inbox', selected.id_mode || '')
+                  : undefined
+                return (
+                  <a key={att.id || i} href={href} style={{ padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 9, color: 'inherit', textDecoration: 'none' }}>
+                    <strong>{att.name || '附件'}</strong>
+                    {att.size ? <small style={{ display: 'block', color: 'var(--muted)' }}>{att.size} B</small> : null}
+                  </a>
+                )
+              })}
             </div>
           )}
         </div>
