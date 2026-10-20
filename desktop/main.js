@@ -10,6 +10,7 @@ const { spawn } = require('child_process')
 const http = require('http')
 const net = require('net')
 const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl } = require('./paths')
+const { PostgresManager } = require('./postgresManager')
 
 const PORT = Number(process.env.OUTLOOK_DESKTOP_PORT || 18765)
 const HOST = '127.0.0.1'
@@ -103,6 +104,18 @@ async function startBackend() {
     }
   })
   await waitForHealth(`http://${HOST}:${port}/login`)
+  // Optional mail-core PG lifecycle (data dir outside install). Does not replace Flask.
+  if (process.env.KKMAIL_MAIL_CORE_PG === '1') {
+    const pg = new PostgresManager({ app })
+    const result = pg.start()
+    if (result.stub) {
+      console.warn('[mail-core] PostgreSQL binaries not available; data dir ready at', result.dataRoot)
+    } else if (!result.ok) {
+      console.warn('[mail-core] PostgreSQL start failed:', result.reason)
+    } else {
+      console.log('[mail-core] PostgreSQL ready at', result.dataRoot, 'port', result.port)
+    }
+  }
   return `http://${HOST}:${port}/`
 }
 
@@ -149,6 +162,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+function stopMailCorePg() {
+  if (process.env.KKMAIL_MAIL_CORE_PG === '1') {
+    try { new PostgresManager({ app }).stop() } catch (err) { console.warn('[mail-core] pg stop', err) }
+  }
+}
 function stopBackend() {
   if (backend && backend.exitCode === null && !backend.killed) {
     backend.kill()
@@ -157,6 +175,7 @@ function stopBackend() {
 
 app.on('before-quit', () => {
   app.isQuitting = true
+  stopMailCorePg()
   stopBackend()
 })
 
@@ -164,8 +183,12 @@ app.on('before-quit', () => {
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   process.on(signal, () => {
     app.isQuitting = true
+    stopMailCorePg()
     stopBackend()
     app.quit()
   })
 }
-process.on('exit', stopBackend)
+process.on('exit', () => {
+  stopMailCorePg()
+  stopBackend()
+})
