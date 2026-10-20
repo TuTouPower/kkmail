@@ -8,6 +8,8 @@ import { useMailStore } from '../store/mailStore'
 import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
 import { replyAllRecipients, replyRecipient } from '../lib/recipients'
 import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, htmlToText, isHtmlBody } from '../lib/mailBody'
+import { formatReaderDate } from '../lib/listDate'
+import { displayName } from '../lib/displayName'
 
 export default function MessageReader() {
   const { selectedKey, openCompose, flaggedIds, toggleFlag, setMobileView } = useMailStore()
@@ -74,7 +76,7 @@ export default function MessageReader() {
   return (
     <section className="reader-pane" aria-label="邮件正文">
       <div className="reader-toolbar">
-        <button className="reader-action mobile-only" title="返回列表" aria-label="返回列表" onClick={() => setMobileView('list')}><ArrowLeft size={15} /></button>
+        <button className="reader-action mobile-only" title="返回列表" aria-label="返回列表" onClick={() => setMobileView('list')}><ArrowLeft size={18} /></button>
         <div className="reader-location">{selected.accountEmail}</div>
         <div className="reader-toolbar-actions">
           <button className="reader-action" title="回复" aria-label="回复" onClick={() => openCompose('reply', {
@@ -82,34 +84,34 @@ export default function MessageReader() {
             subject: `Re: ${detail?.subject || selected.subject}`,
             body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
             accountId: selected.accountId,
-          })}><Reply size={15} /></button>
+          })}><Reply size={18} /></button>
           <button className="reader-action" title="回复全部" aria-label="回复全部" onClick={() => openCompose('replyAll', {
             to: replyAllRecipients(detail?.from || selected.from, [detail?.to || selected.to, detail?.cc], selected.accountEmail),
             subject: `Re: ${detail?.subject || selected.subject}`,
             body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
             accountId: selected.accountId,
-          })}><ReplyAll size={15} /></button>
+          })}><ReplyAll size={18} /></button>
           <button className="reader-action" title="转发" aria-label="转发" onClick={() => openCompose('forward', {
             subject: `Fwd: ${detail?.subject || selected.subject}`,
             body: `\n\n—— 转发邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
             accountId: selected.accountId,
-          })}><Forward size={15} /></button>
+          })}><Forward size={18} /></button>
           <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
-          <button className="reader-action" title="标为已读" aria-label="标为已读" onClick={markCurrent} disabled={selected.is_read}><MailOpen size={15} /></button>
-          <button className="reader-action" title="归档（后端暂无归档接口）" aria-label="归档" disabled aria-disabled="true"><Archive size={15} /></button>
-          <button className="reader-action" title="移到废纸篓" aria-label="移到废纸篓" onClick={trashCurrent}><Trash2 size={15} /></button>
-          <button className="reader-action" title="标记为垃圾邮件（后端暂无移动接口）" aria-label="标记为垃圾邮件" disabled aria-disabled="true"><ShieldAlert size={15} /></button>
+          <button className="reader-action" title="标为已读" aria-label="标为已读" onClick={markCurrent} disabled={selected.is_read}><MailOpen size={18} /></button>
+          <button className="reader-action" title="归档（后端暂无归档接口）" aria-label="归档" disabled aria-disabled="true"><Archive size={18} /></button>
+          <button className="reader-action" title="移到废纸篓" aria-label="移到废纸篓" onClick={trashCurrent}><Trash2 size={18} /></button>
+          <button className="reader-action" title="标记为垃圾邮件（后端暂无移动接口）" aria-label="标记为垃圾邮件" disabled aria-disabled="true"><ShieldAlert size={18} /></button>
           <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
-          <button className="reader-action" title="移动到文件夹（后端暂无移动接口）" aria-label="移动到文件夹" disabled aria-disabled="true"><Folder size={15} /></button>
-          <button className="reader-action" title={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-label={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-pressed={flaggedIds.includes(selectedKey || '')} onClick={() => selectedKey && toggleFlag(selectedKey)}><Flag size={15} /></button>
+          <button className="reader-action" title="移动到文件夹（后端暂无移动接口）" aria-label="移动到文件夹" disabled aria-disabled="true"><Folder size={18} /></button>
+          <button className="reader-action" title={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-label={flaggedIds.includes(selectedKey || '') ? '取消标记' : '标记邮件'} aria-pressed={flaggedIds.includes(selectedKey || '')} onClick={() => selectedKey && toggleFlag(selectedKey)}><Flag size={18} /></button>
         </div>
       </div>
       <div className="reader-scroll">
         <div className="message-paper">
           <div className="detail-subject">{detail?.subject || selected.subject}</div>
           <div style={{ fontSize: 12, marginBottom: 8 }}>
-            <strong>{detail?.from || selected.from}</strong>
-            <span style={{ color: 'var(--muted)' }}> · {detail?.date || selected.date}</span>
+            <strong>{displayName(detail?.from || selected.from)}</strong>
+            <span style={{ color: 'var(--muted)' }}> · {formatReaderDate(detail?.date || selected.date)}</span>
           </div>
           <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: detail?.cc ? 4 : 16, overflowWrap: 'anywhere' }}>
             收件人：{detail?.to || selected.to || accounts.find((a) => a.email === selected.accountEmail)?.email || selected.accountEmail}
