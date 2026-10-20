@@ -6,4 +6,8 @@ describe('mail list cache policy', () => {
     expect(MAIL_STALE_TIME_MS).toBeGreaterThanOrEqual(5 * 60_000)
     expect(queryClient.getDefaultOptions().queries?.staleTime).toBe(MAIL_STALE_TIME_MS)
   })
+
+  it('does not set global placeholderData (detail must not keep previous body)', () => {
+    expect(queryClient.getDefaultOptions().queries?.placeholderData).toBeUndefined()
+  })
 })
