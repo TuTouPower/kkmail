@@ -56,3 +56,33 @@ def test_enqueue_remote_operation_outbox():
         assert any(e.event_type == "remote_operation.updated" for e in events)
 
 
+
+
+def test_enqueue_remote_operation_upserts_same_idempotency_key():
+    Session = get_session_factory()
+    with Session() as session:
+        acc = create_account(session, email=f"rop-up-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        session.flush()
+        key = f"idem-upsert-{uuid.uuid4().hex}"
+        op1 = enqueue_remote_operation(
+            session,
+            account_id=acc.id,
+            entity_key="msg:1:read",
+            op_type="mark_read",
+            desired_state={"is_read": True},
+            idempotency_key=key,
+        )
+        session.flush()
+        op2 = enqueue_remote_operation(
+            session,
+            account_id=acc.id,
+            entity_key="msg:1:read",
+            op_type="mark_read",
+            desired_state={"is_read": True, "retry": 1},
+            idempotency_key=key,
+        )
+        session.commit()
+        assert op1.id == op2.id
+        loaded = session.get(RemoteOperation, op1.id)
+        assert loaded.desired_state.get("retry") == 1
+        assert loaded.status == RemoteOperationStatus.PENDING.value

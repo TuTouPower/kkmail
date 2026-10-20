@@ -12,6 +12,7 @@ from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import JobType, OutboxEventType
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Folder, Message, MessageLocation, OutboxEvent
+from mail_core.realtime.notify import try_notify_outbox
 from mail_core.sync.jobs import enqueue_job
 
 
@@ -30,6 +31,32 @@ def _primary_location(session: Session, message_id: uuid.UUID) -> tuple[Folder |
         return None, None
     folder = session.get(Folder, loc.folder_id)
     return folder, loc
+
+
+def _all_location_folder_ids(session: Session, message_id: uuid.UUID) -> list[uuid.UUID]:
+    """Every folder that currently holds this message (multi-location safe)."""
+    return list(
+        session.scalars(
+            select(MessageLocation.folder_id).where(MessageLocation.message_id == message_id).distinct()
+        ).all()
+    )
+
+
+def _recompute_stats_for_folders(
+    session: Session,
+    *,
+    account_id: uuid.UUID,
+    folder_ids: list[uuid.UUID],
+) -> None:
+    for folder_id in folder_ids:
+        recompute_folder_stats(session, folder_id)
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
+                account_id=account_id,
+                payload={"folder_id": str(folder_id)},
+            )
+        )
 
 
 def _wake_push(session: Session, account_id: uuid.UUID) -> None:
@@ -53,6 +80,7 @@ def set_message_read(
     if msg is None:
         raise LookupError("message not found")
     msg.is_read = is_read
+    folder_ids = _all_location_folder_ids(session, message_id)
     folder, _loc = _primary_location(session, message_id)
     desired = {
         "remote_id": msg.remote_id,
@@ -74,16 +102,9 @@ def set_message_read(
             payload={"message_id": str(msg.id), "is_read": is_read},
         )
     )
-    if folder is not None:
-        recompute_folder_stats(session, folder.id)
-        session.add(
-            OutboxEvent(
-                event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
-                account_id=msg.account_id,
-                payload={"folder_id": str(folder.id)},
-            )
-        )
+    _recompute_stats_for_folders(session, account_id=msg.account_id, folder_ids=folder_ids)
     _wake_push(session, msg.account_id)
+    try_notify_outbox(session)
     session.flush()
     return MutationResult(
         message_id=msg.id,
@@ -103,6 +124,7 @@ def set_message_flagged(
     if msg is None:
         raise LookupError("message not found")
     msg.is_flagged = is_flagged
+    folder_ids = _all_location_folder_ids(session, message_id)
     folder, _loc = _primary_location(session, message_id)
     desired = {
         "remote_id": msg.remote_id,
@@ -124,7 +146,11 @@ def set_message_flagged(
             payload={"message_id": str(msg.id), "is_flagged": is_flagged},
         )
     )
+    # Flag changes do not alter unread/total, but keep all locations consistent
+    # if a future stats column depends on them / multi-folder mirrors.
+    _recompute_stats_for_folders(session, account_id=msg.account_id, folder_ids=folder_ids)
     _wake_push(session, msg.account_id)
+    try_notify_outbox(session)
     session.flush()
     return MutationResult(
         message_id=msg.id,
@@ -145,6 +171,7 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
     msg = session.get(Message, message_id)
     if msg is None:
         raise LookupError("message not found")
+    folder_ids = _all_location_folder_ids(session, message_id)
     folder, _loc = _primary_location(session, message_id)
     desired = {
         "remote_id": msg.remote_id,
@@ -160,7 +187,6 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
         idempotency_key=f"{msg.id}:trash",
     )
     account_id = msg.account_id
-    folder_id = folder.id if folder else None
     session.add(
         OutboxEvent(
             event_type=OutboxEventType.MESSAGE_REMOVED.value,
@@ -174,16 +200,9 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
     ):
         session.delete(loc)
     session.delete(msg)
-    if folder_id is not None:
-        recompute_folder_stats(session, folder_id)
-        session.add(
-            OutboxEvent(
-                event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
-                account_id=account_id,
-                payload={"folder_id": str(folder_id)},
-            )
-        )
+    _recompute_stats_for_folders(session, account_id=account_id, folder_ids=folder_ids)
     _wake_push(session, account_id)
+    try_notify_outbox(session)
     session.flush()
     return MutationResult(
         message_id=message_id,
