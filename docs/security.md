@@ -1,14 +1,14 @@
 # 🔐 安全配置
 
-## 1. 修改默认密码
+## 1. 设置登录密码
 
 **方式一：首次部署时通过环境变量（仅初始化）**
 
 在 `docker-compose.yml` 中：
 ```yaml
 environment:
-  - LOGIN_PASSWORD=your_secure_password_here
-  - SECRET_KEY=your-random-secret-key-here
+  - LOGIN_PASSWORD=${LOGIN_PASSWORD:?set LOGIN_PASSWORD}
+  - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY}
 ```
 
 `LOGIN_PASSWORD` 只在数据库**尚无** `settings.login_password` 时用于写入初始哈希。实例已经启动并写过库之后，仅修改该环境变量**不会**改变当前登录密码。
