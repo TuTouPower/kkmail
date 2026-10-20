@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { MailOpen, Trash2, Flag, ArrowLeft } from 'lucide-react'
 import { fetchAccounts, findCachedMail, flagOptimistic, markReadOptimistic, queryClient, queryKeys, removeCachedMail } from '../api/queries'
@@ -15,6 +15,10 @@ export default function MessageReader() {
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
   const [actionStatus, setActionStatus] = useState('')
+  const [loadRemoteImages, setLoadRemoteImages] = useState(false)
+  useEffect(() => {
+    setLoadRemoteImages(false)
+  }, [selectedKey])
   // Re-render when any cached list changes (optimistic read/delete updates).
   const cache = queryClient.getQueryCache()
   useSyncExternalStore((cb) => cache.subscribe(cb), () => findCachedMail(selectedKey))
@@ -117,14 +121,24 @@ export default function MessageReader() {
           {detailQuery.isLoading && <div style={{ color: 'var(--muted)' }}>正在加载正文…</div>}
           {detailQuery.error && <div style={{ color: 'var(--red)' }}>{String((detailQuery.error as Error).message)}</div>}
           {html ? (
-            <iframe
-              className="email-body email-body-frame"
-              title="邮件正文"
-              sandbox={MAIL_IFRAME_SANDBOX}
-              referrerPolicy="no-referrer"
-              srcDoc={buildMailSrcdoc(body, { loadRemoteImages: false })}
-              style={{ width: '100%', minHeight: 420, border: 0, background: '#fff', borderRadius: 8 }}
-            />
+            <>
+              {!loadRemoteImages && /<img\b[^>]+src\s*=\s*["']https?:/i.test(body) && (
+                <div style={{ fontSize: 12, marginBottom: 10, padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel, #f7f7f8)' }}>
+                  远程图片已拦截（防追踪）。
+                  <button type="button" style={{ marginLeft: 8 }} onClick={() => setLoadRemoteImages(true)}>
+                    仅此邮件允许加载
+                  </button>
+                </div>
+              )}
+              <iframe
+                className="email-body email-body-frame"
+                title="邮件正文"
+                sandbox={MAIL_IFRAME_SANDBOX}
+                referrerPolicy="no-referrer"
+                srcDoc={buildMailSrcdoc(body, { loadRemoteImages })}
+                style={{ width: '100%', minHeight: 420, border: 0, background: '#fff', borderRadius: 8 }}
+              />
+            </>
           ) : (
             <div className="email-body email-body-text">{body}</div>
           )}
