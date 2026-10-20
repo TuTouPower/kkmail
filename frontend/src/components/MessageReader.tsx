@@ -11,7 +11,8 @@ import { formatReaderDate } from '../lib/listDate'
 import { displayName } from '../lib/displayName'
 
 export default function MessageReader() {
-  const { selectedKey, setMobileView } = useMailStore()
+  const selectedKey = useMailStore((s) => s.selectedKey)
+  const setMobileView = useMailStore((s) => s.setMobileView)
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
   const [actionStatus, setActionStatus] = useState('')

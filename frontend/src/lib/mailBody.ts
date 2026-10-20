@@ -33,11 +33,11 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
   const loadRemote = opts.loadRemoteImages === true
   const imgSrc = loadRemote ? "img-src https: http: data: cid:" : "img-src data: cid:"
   const csp = `default-src 'none'; ${imgSrc}; style-src 'unsafe-inline'; font-src https: data:`
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank"><style>body{margin:0;font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;word-wrap:break-word}img{max-width:100%;height:auto}</style></head><body>${sanitizeMailHtml(html)}</body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>body{margin:0;font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;word-wrap:break-word}img{max-width:100%;height:auto}</style></head><body>${sanitizeMailHtml(html)}</body></html>`
 }
 
-/** iframe sandbox flags: no allow-scripts, no allow-same-origin. */
-export const MAIL_IFRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox'
+/** iframe sandbox flags: no allow-scripts, no allow-same-origin, no allow-popups-to-escape-sandbox. */
+export const MAIL_IFRAME_SANDBOX = 'allow-popups'
 
 /** Turn HTML into readable text for reply/forward quoting. */
 export function htmlToText(html: string): string {
