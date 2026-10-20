@@ -3,6 +3,7 @@ import { useQueries, useQuery } from '@tanstack/react-query'
 import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check } from 'lucide-react'
 import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, markReadOptimistic, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { mailKey } from '../lib/mailKey'
+import { listTitle } from '../lib/listTitle'
 import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
 import { parseMailDate, compareMailDates } from '../lib/mailDate'
 import { api } from '../api/client'
@@ -91,9 +92,7 @@ export default function MessageList() {
     : `${visible.length} 封邮件 · ${unreadCount} 封未读${pendingAccounts ? ` · ${pendingAccounts} 个账户加载中` : ''}`
   const selecting = selectedIds.length > 0
 
-  const title = view.type === 'allInbox'
-    ? '所有收件箱'
-    : `${view.email} · ${view.folder === 'junkemail' ? '垃圾邮件' : view.folder === 'deleteditems' ? '废纸篓' : view.folder === 'all' ? '全部' : '收件箱'}`
+  const title = listTitle(view, listFilter)
 
   async function markAll() {
     try {
@@ -179,7 +178,7 @@ export default function MessageList() {
         </div>
         <label className="list-search">
           <Search size={16} />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索当前列表" aria-label="搜索当前列表" />
+          <input name="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索当前列表" aria-label="搜索当前列表" />
           {search && <button className="list-primary-btn" title="清除搜索" aria-label="清除搜索" onClick={() => setSearch('')}><X size={14} /></button>}
         </label>
         {selecting ? (
