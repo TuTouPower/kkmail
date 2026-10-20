@@ -880,6 +880,7 @@ button:disabled {
 }
 
 .sidebar-collapsed .workspace {
+  /* Prefer inline gridTemplateColumns from App (includes resize tracks). */
   grid-template-columns: 48px var(--list-w) minmax(0, 1fr);
 }
 
@@ -1025,33 +1026,34 @@ button:disabled {
   margin-top: 2px;
 }
 
-/* Column drag handles */
+/* Column drag handles — each is its own grid track (see workspaceGridColumns). */
 .column-resize {
-  width: 5px;
-  margin: 0 -2px;
+  width: 100%;
+  min-width: 5px;
+  max-width: 5px;
+  margin: 0;
   cursor: col-resize;
   position: relative;
   z-index: 5;
+  align-self: stretch;
   background: transparent;
   touch-action: none;
-  flex: 0 0 auto;
+  border: 0;
+  padding: 0;
 }
 .column-resize:hover,
 .column-resize:focus-visible {
   background: color-mix(in srgb, var(--accent) 55%, transparent);
 }
-.workspace {
-  /* allow resize handles as extra grid tracks via explicit style from App */
-}
 
-/* Settings as full right-hand page */
+/* Settings fills every track after the sidebar (+ optional resize handle). */
 .settings-page {
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--reader);
-  grid-column: 2 / -1;
+  grid-column: auto / -1;
   overflow: hidden;
 }
 .settings-page-head {
