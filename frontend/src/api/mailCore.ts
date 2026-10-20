@@ -1,4 +1,5 @@
 import { mailCoreBaseUrl } from '../lib/mailCoreFlag'
+import type { MailItem } from './queries'
 
 export interface MailCoreMessage {
   id: string
@@ -18,17 +19,49 @@ export interface MailCoreInboxPage {
   next_cursor: { sort_time?: string; message_id?: string } | null
 }
 
-async function getJson<T>(path: string): Promise<T> {
+export interface MailCoreInboxQuery {
+  limit?: number
+  accountId?: string
+  cursorSortTime?: string
+  cursorMessageId?: string
+  signal?: AbortSignal
+}
+
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const base = mailCoreBaseUrl()
-  const res = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' } })
+  const res = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' }, signal })
   if (!res.ok) {
     throw new Error(`mail-core ${res.status}: ${await res.text()}`)
   }
   return res.json() as Promise<T>
 }
 
-export function fetchMailCoreInbox(limit = 40): Promise<MailCoreInboxPage> {
-  return getJson(`/api/mail/inbox?limit=${limit}`)
+export function fetchMailCoreInbox(opts: MailCoreInboxQuery | number = 40): Promise<MailCoreInboxPage> {
+  const q = typeof opts === 'number' ? { limit: opts } : opts
+  const params = new URLSearchParams()
+  params.set('limit', String(q.limit ?? 40))
+  if (q.accountId) params.set('account_id', q.accountId)
+  if (q.cursorSortTime) params.set('cursor_sort_time', q.cursorSortTime)
+  if (q.cursorMessageId) params.set('cursor_message_id', q.cursorMessageId)
+  return getJson(`/api/mail/inbox?${params.toString()}`, q.signal)
+}
+
+/** Map mail-core inbox rows into the SPA MailItem shape (Flask list UI). */
+export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
+  const from = m.from_name ? `${m.from_name} <${m.from_address}>` : m.from_address
+  return {
+    id: m.id,
+    subject: m.subject,
+    from,
+    date: m.sort_time,
+    is_read: m.is_read,
+    has_attachments: m.has_attachments,
+    body_preview: m.snippet || undefined,
+    folder: 'inbox',
+    accountEmail: m.account_id,
+    accountId: undefined,
+    id_mode: 'mail_core',
+  }
 }
 
 export function fetchMailCoreHealth(): Promise<{ status: string; service?: string }> {
@@ -51,7 +84,6 @@ export function subscribeMailCoreEvents(
     }
     onEvent(e.type || 'message', data, e.lastEventId || null)
   }
-  // Named events from server
   for (const name of [
     'message.upserted',
     'message.removed',
