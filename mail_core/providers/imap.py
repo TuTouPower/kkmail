@@ -263,28 +263,85 @@ class ImapProvider:
                 pass
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
-        remote_id = str(desired_state.get("remote_id") or "")
+        from mail_core.providers.remote_writeback import (
+            OP_MARK_READ,
+            OP_MOVE,
+            OP_SET_FLAG,
+            OP_TRASH,
+            normalize_op_type,
+            require_remote_id,
+        )
+
+        try:
+            remote_id = require_remote_id(desired_state)
+        except ValueError as exc:
+            return RemoteOperationResult(success=False, error=str(exc))
         folder = str(desired_state.get("folder_remote_id") or "INBOX")
-        if not remote_id:
-            return RemoteOperationResult(success=False, error="missing remote_id")
+        op = normalize_op_type(op_type)
         c = self._connect()
         try:
             typ, _ = c.select(folder)
             if typ != "OK":
                 return RemoteOperationResult(success=False, error=f"select {folder} failed")
-            if op_type == "mark_read":
+
+            if op == OP_MARK_READ:
                 want_read = bool(desired_state.get("is_read", True))
                 flag_op = "+FLAGS" if want_read else "-FLAGS"
                 typ, _ = c.uid("STORE", remote_id, flag_op, r"(\Seen)")
                 if typ != "OK":
-                    return RemoteOperationResult(success=False, error="STORE FLAGS failed")
+                    return RemoteOperationResult(success=False, error="STORE Seen failed")
                 return RemoteOperationResult(success=True, remote_state={"is_read": want_read})
-            if op_type == "delete":
+
+            if op == OP_SET_FLAG:
+                want = bool(desired_state.get("is_flagged", True))
+                flag_op = "+FLAGS" if want else "-FLAGS"
+                typ, _ = c.uid("STORE", remote_id, flag_op, r"(\Flagged)")
+                if typ != "OK":
+                    return RemoteOperationResult(success=False, error="STORE Flagged failed")
+                return RemoteOperationResult(success=True, remote_state={"is_flagged": want})
+
+            if op == OP_MOVE:
+                dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
+                if not dest:
+                    return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
+                # Prefer UID MOVE (RFC 6851); fall back to COPY + delete.
+                typ, _ = c.uid("MOVE", remote_id, dest)
+                if typ != "OK":
+                    typ, _ = c.uid("COPY", remote_id, dest)
+                    if typ != "OK":
+                        return RemoteOperationResult(success=False, error=f"COPY/MOVE to {dest} failed")
+                    typ, _ = c.uid("STORE", remote_id, "+FLAGS", r"(\Deleted)")
+                    if typ != "OK":
+                        return RemoteOperationResult(success=False, error="STORE Deleted after COPY failed")
+                    try:
+                        c.expunge()
+                    except Exception:
+                        pass
+                return RemoteOperationResult(success=True, remote_state={"folder_remote_id": dest})
+
+            if op == OP_TRASH:
+                trash = str(desired_state.get("trash_folder_remote_id") or "Trash")
+                # Try move into trash mailbox first
+                typ, _ = c.uid("MOVE", remote_id, trash)
+                if typ == "OK":
+                    return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
+                typ, _ = c.uid("COPY", remote_id, trash)
+                if typ == "OK":
+                    c.uid("STORE", remote_id, "+FLAGS", r"(\Deleted)")
+                    try:
+                        c.expunge()
+                    except Exception:
+                        pass
+                    return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
                 typ, _ = c.uid("STORE", remote_id, "+FLAGS", r"(\Deleted)")
                 if typ != "OK":
                     return RemoteOperationResult(success=False, error="STORE Deleted failed")
-                c.expunge()
+                try:
+                    c.expunge()
+                except Exception:
+                    pass
                 return RemoteOperationResult(success=True)
+
             return RemoteOperationResult(success=False, error=f"imap apply not implemented: {op_type}")
         finally:
             try:
