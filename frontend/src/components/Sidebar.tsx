@@ -1,9 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle } from 'lucide-react'
-import { fetchAccounts, fetchGroups, queryKeys } from '../api/queries'
+import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, fetchGroups, queryKeys, type MailItem } from '../api/queries'
 import { FOLDERS, providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import SettingsModal from './SettingsModal'
 import { useState } from 'react'
+import { useIsWide } from '../lib/viewport'
 
 export default function Sidebar() {
   const {
@@ -15,38 +16,63 @@ export default function Sidebar() {
     toggleAccount,
     toggleSidebar,
     closeMobileSidebar,
+    listFilter,
+    setListFilter,
   } = useMailStore()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const wide = useIsWide()
 
   const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
 
   const groups = groupsQuery.data || []
   const accounts = accountsQuery.data || []
+  // Read-only observers of the cached inbox lists (never fetch from here), so
+  // badges follow the list exactly, including optimistic "read" updates.
+  const inboxCaches = useQueries({
+    queries: accounts.map((a) => ({
+      queryKey: queryKeys.emails(a.email, 'inbox'),
+      queryFn: ({ signal }: { signal: AbortSignal }) => fetchEmails(a.email, 'inbox', a.id, signal),
+      enabled: false,
+    })),
+  })
+  const unreadByAccount = new Map<string, number | undefined>()
+  accounts.forEach((a, i) => {
+    const data = inboxCaches[i]?.data as MailItem[] | undefined
+    unreadByAccount.set(a.email, data ? data.filter((m) => !m.is_read).length : undefined)
+  })
+  const allInboxUnread = accounts.slice(0, ALL_INBOX_ACCOUNT_LIMIT).reduce((n, a) => n + (unreadByAccount.get(a.email) || 0), 0)
+  const inAllInbox = view.type === 'allInbox'
   const grouped = groups.length
     ? groups.map((g) => ({ group: g, members: accounts.filter((a) => a.group_id === g.id) }))
     : [{ group: { id: 0, name: '全部账户' }, members: accounts }]
 
   return (
-    <aside className="sidebar" aria-label="邮箱导航">
+    <aside className="sidebar" aria-label="邮箱导航" role={wide ? undefined : 'dialog'} aria-modal={wide ? undefined : true}>
       <div className="sidebar-head">
-        <button className="sidebar-toggle" onClick={toggleSidebar} title="折叠侧边栏" aria-label="折叠或展开侧边栏">
+        <button
+          className="sidebar-toggle"
+          // On mobile the sidebar is an overlay drawer: this button closes it.
+          onClick={wide ? toggleSidebar : closeMobileSidebar}
+          title={wide ? '折叠侧边栏' : '关闭侧边栏'}
+          aria-label={wide ? '折叠或展开侧边栏' : '关闭侧边栏'}
+        >
           <PanelLeft size={18} />
         </button>
       </div>
       <div className="sidebar-scroll">
         <div className="side-section">
           <div className="section-label"><span>个人收藏</span></div>
-          <button className={`side-item ${view.type === 'allInbox' ? 'active' : ''}`} onClick={() => { setView({ type: 'allInbox' }); closeMobileSidebar() }}>
+          <button className={`side-item ${inAllInbox && listFilter === 'all' ? 'active' : ''}`} onClick={() => { setView({ type: 'allInbox' }); setListFilter('all'); closeMobileSidebar() }}>
             <Inbox size={17} />
             <span className="side-name">所有收件箱</span>
-            <span className="side-count">{accounts.length}</span>
+            {allInboxUnread > 0 && <span className="side-count unread-badge" title={`${allInboxUnread} 封未读`} aria-label={`${allInboxUnread} 封未读`}>{allInboxUnread}</span>}
           </button>
-          <button className="side-item" onClick={() => setView({ type: 'allInbox' })}>
+          <button className={`side-item ${inAllInbox && listFilter === 'unread' ? 'active' : ''}`} onClick={() => { setView({ type: 'allInbox' }); setListFilter('unread'); closeMobileSidebar() }}>
             <MailOpen size={17} />
             <span className="side-name">未读邮件</span>
           </button>
-          <button className="side-item">
+          <button className={`side-item ${inAllInbox && listFilter === 'flagged' ? 'active' : ''}`} onClick={() => { setView({ type: 'allInbox' }); setListFilter('flagged'); closeMobileSidebar() }}>
             <Flag size={17} />
             <span className="side-name">已标记</span>
           </button>
@@ -68,7 +94,7 @@ export default function Sidebar() {
             return (
               <div className="account-group" key={key}>
                 <div className="account-group-head">
-                  <button className="group-toggle" onClick={() => toggleGroup(key)}>
+                  <button className="group-toggle" onClick={() => toggleGroup(key)} aria-label={collapsed ? `展开分组 ${group.name}` : `折叠分组 ${group.name}`} aria-expanded={!collapsed}>
                     {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                   </button>
                   <span className="group-name">{group.name}</span>
@@ -81,7 +107,7 @@ export default function Sidebar() {
                   return (
                     <div key={a.id}>
                       <div className="account-row">
-                        <button className="account-expand" onClick={() => toggleAccount(accKey)}>
+                        <button className="account-expand" onClick={() => toggleAccount(accKey)} aria-label={isCollapsed ? `展开 ${a.email}` : `折叠 ${a.email}`} aria-expanded={!isCollapsed}>
                           {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                         </button>
                         <button
@@ -93,6 +119,7 @@ export default function Sidebar() {
                             {providerBadge(a.provider, a.account_type)}
                           </span>
                           <span className="account-email">{a.email}</span>
+                          {!!unreadByAccount.get(a.email) && <span className="side-count unread-badge" aria-label={`${unreadByAccount.get(a.email)} 封未读`}>{unreadByAccount.get(a.email)}</span>}
                         </button>
                       </div>
                       {!isCollapsed && (

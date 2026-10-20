@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
+export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward'
+
 export type ViewState =
   | { type: 'allInbox' }
   | { type: 'accountFolder'; accountId: number; email: string; folder: string }
@@ -30,9 +32,11 @@ interface MailUiState {
   collapsedAccounts: string[]
   toggleAccount: (id: string) => void
   composeOpen: boolean
-  composeMode: 'new' | 'reply' | 'forward'
+  /** Bumped on every openCompose so the form remounts with the new draft. */
+  composeSeq: number
+  composeMode: ComposeMode
   composeDraft: { to: string; subject: string; body: string; accountId?: number }
-  openCompose: (mode?: 'new' | 'reply' | 'forward', draft?: Partial<MailUiState['composeDraft']>) => void
+  openCompose: (mode?: ComposeMode, draft?: Partial<MailUiState['composeDraft']>) => void
   setComposeOpen: (open: boolean) => void
   selectedIds: string[]
   toggleSelected: (key: string) => void
@@ -55,7 +59,8 @@ export const useMailStore = create<MailUiState>()(
       mobileView: 'list',
       setMobileView: (view) => set({ mobileView: view }),
       view: { type: 'allInbox' },
-      setView: (view) => set({ view, selectedKey: null, mobileView: 'list' }),
+      // Switching account/folder must drop selection: IMAP UIDs repeat across folders.
+      setView: (view) => set({ view, selectedKey: null, selectedIds: [], mobileView: 'list' }),
       selectedKey: null,
       setSelectedKey: (key) => set({ selectedKey: key }),
       search: '',
@@ -79,11 +84,13 @@ export const useMailStore = create<MailUiState>()(
             : [...s.collapsedAccounts, id],
         })),
       composeOpen: false,
+      composeSeq: 0,
       composeMode: 'new',
       composeDraft: { to: '', subject: '', body: '' },
       openCompose: (mode = 'new', draft = {}) =>
-        set({
+        set((s) => ({
           composeOpen: true,
+          composeSeq: s.composeSeq + 1,
           composeMode: mode,
           composeDraft: {
             to: draft.to || '',
@@ -91,7 +98,7 @@ export const useMailStore = create<MailUiState>()(
             body: draft.body || '',
             accountId: draft.accountId,
           },
-        }),
+        })),
       setComposeOpen: (open) => set({ composeOpen: open }),
       selectedIds: [],
       toggleSelected: (key) =>

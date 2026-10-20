@@ -1,40 +1,54 @@
 /**
  * Electron main process.
- * Starts the existing Flask backend on 127.0.0.1 and opens the React UI.
+ * Starts the Flask backend on 127.0.0.1 and opens the React UI.
  * contextIsolation on, nodeIntegration off.
  */
-const { app, BrowserWindow, shell } = require('electron')
+const { app, BrowserWindow, shell, dialog } = require('electron')
+const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
 const http = require('http')
 const net = require('net')
+const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl } = require('./paths')
 
 const PORT = Number(process.env.OUTLOOK_DESKTOP_PORT || 18765)
 const HOST = '127.0.0.1'
 let backend = null
+let backendExit = null
 let mainWindow = null
+let appOrigin = ''
 
 function repoRoot() {
-  // desktop/ -> repo root in dev; resources path when packaged later
   return path.resolve(__dirname, '..')
 }
 
-function freePort(preferred) {
+function tryListen(port) {
   return new Promise((resolve) => {
     const srv = net.createServer()
-    srv.once('error', () => resolve(preferred + 1))
+    srv.once('error', () => resolve(null))
     srv.once('listening', () => {
-      const { port } = srv.address()
-      srv.close(() => resolve(port))
+      const { port: bound } = srv.address()
+      srv.close(() => resolve(bound))
     })
-    srv.listen(preferred, HOST)
+    srv.listen(port, HOST)
   })
 }
 
-function waitForHealth(url, timeoutMs = 20000) {
+async function freePort(preferred) {
+  const exact = await tryListen(preferred)
+  if (exact) return exact
+  // Let the OS pick any free port instead of guessing preferred + 1.
+  return tryListen(0)
+}
+
+function waitForHealth(url, timeoutMs = 30000) {
   const started = Date.now()
   return new Promise((resolve, reject) => {
     const tick = () => {
+      if (backendExit) {
+        reject(backendExit)
+        return
+      }
       const req = http.get(url, (res) => {
         res.resume()
         resolve(true)
@@ -49,39 +63,51 @@ function waitForHealth(url, timeoutMs = 20000) {
 }
 
 function backendCommand() {
-  const packaged = path.join(process.resourcesPath || '', 'backend', 'outlookemail-backend')
-  if (process.resourcesPath && require('fs').existsSync(packaged)) {
-    return { cmd: packaged, args: [], cwd: path.dirname(packaged) }
+  const packaged = sidecarPath(process.resourcesPath, process.platform)
+  if (packaged && fs.existsSync(packaged)) {
+    return { cmd: packaged, args: [], cwd: path.dirname(packaged), packaged: true }
+  }
+  if (app.isPackaged) {
+    throw new Error(`找不到内置后端: ${packaged}`)
   }
   const root = repoRoot()
   const py = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
-  return { cmd: py, args: [path.join(root, 'web_outlook_app.py')], cwd: root }
+  return { cmd: py, args: [path.join(root, 'web_outlook_app.py')], cwd: root, packaged: false }
 }
 
 async function startBackend() {
   const port = await freePort(PORT)
-  const root = repoRoot()
+  const target = backendCommand()
   const env = {
     ...process.env,
-    SECRET_KEY: process.env.SECRET_KEY || 'desktop-local-secret-change-me',
-    LOGIN_PASSWORD: process.env.LOGIN_PASSWORD || '[REDACTED]',
+    // No SECRET_KEY / LOGIN_PASSWORD defaults: the frozen backend generates and
+    // persists a per-install secret, and the login password lives in the DB.
     PORT: String(port),
-    HOST: HOST,
+    HOST,
+    KKMAIL_SIDECAR: '1',
   }
-  const target = backendCommand()
-  backend = spawn(target.cmd, target.args, {
-    cwd: target.cwd || root,
-    env,
-    stdio: 'inherit',
+  const dist = target.packaged
+    ? frontendDistPath(process.resourcesPath)
+    : path.join(repoRoot(), 'frontend', 'dist')
+  if (dist) env.KKMAIL_FRONTEND_DIST = dist
+
+  backend = spawn(target.cmd, target.args, { cwd: target.cwd, env, stdio: 'inherit' })
+  backend.on('error', (err) => {
+    backendExit = new Error(`后端启动失败: ${err.message}`)
   })
-  backend.on('exit', (code) => {
-    if (code && code !== 0) console.error('backend exited', code)
+  backend.on('exit', (code, signal) => {
+    if (!backendExit) backendExit = new Error(`后端已退出 (code=${code}, signal=${signal})`)
+    if (mainWindow && !app.isQuitting) {
+      dialog.showErrorBox('kkmail 后端已退出', String(backendExit.message))
+      app.quit()
+    }
   })
   await waitForHealth(`http://${HOST}:${port}/login`)
   return `http://${HOST}:${port}/`
 }
 
 function createWindow(url) {
+  appOrigin = new URL(url).origin
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -98,8 +124,13 @@ function createWindow(url) {
   })
   mainWindow.loadURL(url)
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
-    shell.openExternal(target)
+    if (isAllowedExternalUrl(target)) shell.openExternal(target)
     return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, target) => {
+    if (isLocalAppUrl(target, appOrigin)) return
+    event.preventDefault()
+    if (isAllowedExternalUrl(target)) shell.openExternal(target)
   })
 }
 
@@ -109,7 +140,6 @@ app.whenReady().then(async () => {
     createWindow(url)
   } catch (err) {
     console.error(err)
-    const { dialog } = require('electron')
     dialog.showErrorBox('kkmail 无法启动', String(err && err.message ? err.message : err))
     app.quit()
   }
@@ -119,8 +149,23 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
-  if (backend && !backend.killed) {
-    backend.kill('SIGTERM')
+function stopBackend() {
+  if (backend && backend.exitCode === null && !backend.killed) {
+    backend.kill()
   }
+}
+
+app.on('before-quit', () => {
+  app.isQuitting = true
+  stopBackend()
 })
+
+// SIGTERM/SIGINT (logout, `kill`, Ctrl+C) skip before-quit; never leave the backend orphaned.
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  process.on(signal, () => {
+    app.isQuitting = true
+    stopBackend()
+    app.quit()
+  })
+}
+process.on('exit', stopBackend)
