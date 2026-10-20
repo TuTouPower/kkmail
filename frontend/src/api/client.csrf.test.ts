@@ -61,7 +61,7 @@ describe('CSRF handling', () => {
     let meCalls = 0
     let release!: (v: Response) => void
     const gate = new Promise<Response>((resolve) => { release = resolve })
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (String(url).endsWith('/api/auth/me')) {
         meCalls += 1
         return gate
@@ -80,7 +80,7 @@ describe('CSRF handling', () => {
     const writeCalls = fetchMock.mock.calls.filter((c) => !String(c[0]).endsWith('/api/auth/me'))
     expect(writeCalls).toHaveLength(2)
     for (const [, init] of writeCalls) {
-      expect((init.headers as Record<string, string>)['X-CSRF-Token']).toBe('shared')
+      expect(((init?.headers || {}) as Record<string, string>)['X-CSRF-Token']).toBe('shared')
     }
   })
 })
