@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag } from 'lucide-react'
 import { accountScope, fetchAccounts, markReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
@@ -15,6 +15,7 @@ import { useMailStore } from '../store/mailStore'
 
 /** Server-side search kicks in from this many characters. */
 export const SEARCH_MIN_CHARS = 2
+export const SEARCH_DEBOUNCE_MS = 250
 const LIST_LIMIT = 100
 
 export default function MessageList() {
@@ -35,6 +36,20 @@ export default function MessageList() {
     selectAll,
     clearSelected,
   } = useMailStore()
+
+  const [searchInput, setSearchInput] = useState(search)
+
+  useEffect(() => {
+    setSearchInput(search)
+  }, [search])
+
+  useEffect(() => {
+    if (searchInput === search) return
+    const timer = setTimeout(() => {
+      setSearch(searchInput)
+    }, SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [searchInput, search, setSearch])
 
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
@@ -145,8 +160,26 @@ export default function MessageList() {
         </div>
         <label className="list-search">
           <Search size={16} />
-          <input name="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索邮件（主题 / 发件人 / 正文）" aria-label="搜索邮件" />
-          {search && <button className="list-primary-btn" title="清除搜索" aria-label="清除搜索" onClick={() => setSearch('')}><X size={14} /></button>}
+          <input
+            name="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="搜索邮件（主题 / 发件人 / 正文）"
+            aria-label="搜索邮件"
+          />
+          {searchInput && (
+            <button
+              className="list-primary-btn"
+              title="清除搜索"
+              aria-label="清除搜索"
+              onClick={() => {
+                setSearchInput('')
+                setSearch('')
+              }}
+            >
+              <X size={14} />
+            </button>
+          )}
         </label>
         {selecting ? (
           <div className="list-controls selection-bar" role="toolbar" aria-label="多选操作">
