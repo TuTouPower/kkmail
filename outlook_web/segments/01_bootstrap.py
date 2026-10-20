@@ -3286,37 +3286,10 @@ def normalize_git_skin_ref(value: str) -> str:
 
 
 def install_git_skin_package(git_url: str, git_ref: str = '', expected_skin_id: str = '') -> Dict[str, Any]:
-    normalized_url = normalize_git_skin_url(git_url)
-    normalized_ref = normalize_git_skin_ref(git_ref)
-    if not shutil.which('git'):
-        raise SkinValidationError('当前环境未安装 git，无法从仓库安装皮肤')
-
-    with tempfile.TemporaryDirectory(prefix='outlook-skin-git-') as temp_root:
-        repo_dir = Path(temp_root) / 'repo'
-        command = ['git', 'clone', '--depth', '1']
-        if normalized_ref:
-            command.extend(['--branch', normalized_ref])
-        command.extend([normalized_url, str(repo_dir)])
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=90,
-            check=False,
-        )
-        if result.returncode != 0:
-            message = (result.stderr or result.stdout or 'git clone 失败').strip()
-            raise SkinValidationError(f'拉取 Git 皮肤失败: {sanitize_error_details(message)}')
-
-        git_dir = repo_dir / '.git'
-        if git_dir.exists():
-            shutil.rmtree(git_dir, ignore_errors=True)
-        return install_skin_from_directory(
-            repo_dir,
-            SKIN_SOURCE_GIT,
-            source_config={'git_url': normalized_url, 'git_ref': normalized_ref},
-            expected_skin_id=expected_skin_id,
-        )
+    """Disabled: unrestricted git URL was an SSRF/internal-git risk. Use ZIP upload only."""
+    raise RuntimeError(
+        "git skin install is disabled for security; upload a skin ZIP instead"
+    )
 
 
 def update_git_skin_package(skin_id: str) -> Dict[str, Any]:

@@ -29,7 +29,6 @@ SEGMENT_FILES = (
     "06_routes_temp_email.py",
     "07_routes_oauth_settings_external.py",
     "08_forwarding_scheduler_errors.py",
-    "09_routes_system_update.py",
     "10_routes_email_shares.py",
     "11_routes_graph_oauth.py",
     "12_routes_react_spa.py",
