@@ -18,10 +18,10 @@ describe('findCachedMail', () => {
     const newerItem: MailItem = { id: 'm-1', subject: 'New', from: 'a@x.test', accountEmail: 'a@x.test', is_read: true, is_flagged: true, has_attachments: false }
 
     const oldQuery = queryClient.getQueryCache().build(queryClient, { queryKey: queryKeys.inbox('old-scope') })
-    oldQuery.setData([olderItem], { updatedAt: 1000 })
+    oldQuery.setData([olderItem], { updatedAt: 1000, manual: true })
 
     const newQuery = queryClient.getQueryCache().build(queryClient, { queryKey: queryKeys.inbox('new-scope') })
-    newQuery.setData([newerItem], { updatedAt: 2000 })
+    newQuery.setData([newerItem], { updatedAt: 2000, manual: true })
 
     const hit = findCachedMail('m-1')
     expect(hit?.subject).toBe('New')
@@ -35,10 +35,10 @@ describe('findCachedMail', () => {
     const itemInCurrent: MailItem = { id: 'm-2', subject: 'Current Scope', from: 'a@x.test', accountEmail: 'a@x.test', is_read: true, is_flagged: false, has_attachments: false }
 
     const otherQuery = queryClient.getQueryCache().build(queryClient, { queryKey: queryKeys.inbox('other-scope') })
-    otherQuery.setData([itemInOther], { updatedAt: 9000 })
+    otherQuery.setData([itemInOther], { updatedAt: 9000, manual: true })
 
     const currentQuery = queryClient.getQueryCache().build(queryClient, { queryKey: queryKeys.inbox('current-acc') })
-    currentQuery.setData([itemInCurrent], { updatedAt: 1000 })
+    currentQuery.setData([itemInCurrent], { updatedAt: 1000, manual: true })
 
     const hit = findCachedMail('m-2')
     expect(hit?.subject).toBe('Current Scope')
