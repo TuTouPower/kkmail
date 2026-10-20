@@ -22,4 +22,6 @@ assert.ok(!isAllowedExternalUrl('http://user@evil.example/'))
 assert.ok(isAllowedExternalUrl('https://example.com/path'))
 assert.ok(isLocalAppUrl('http://127.0.0.1:18765/app', 'http://127.0.0.1:18765'))
 assert.ok(!isLocalAppUrl('http://evil.test/', 'http://127.0.0.1:18765'))
+assert.ok(!pkg.dependencies || !pkg.dependencies['electron-squirrel-startup'],
+  'electron-squirrel-startup unused (nsis target); must not be declared')
 console.log('desktop paths: ok')
