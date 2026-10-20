@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import JobStatus
@@ -74,8 +75,32 @@ def enqueue_job(
         status=JobStatus.PENDING.value,
         dedupe_key=dedupe_key,
     )
-    session.add(job)
-    session.flush()
+    if dedupe_key:
+        try:
+            with session.begin_nested():
+                session.add(job)
+                session.flush()
+        except IntegrityError:
+            existing = session.scalar(
+                select(WorkerJob)
+                .where(WorkerJob.dedupe_key == dedupe_key)
+                .where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
+                .limit(1)
+            )
+            if existing is not None:
+                return existing
+            latest = session.scalar(
+                select(WorkerJob)
+                .where(WorkerJob.dedupe_key == dedupe_key)
+                .order_by(WorkerJob.created_at.desc())
+                .limit(1)
+            )
+            if latest is not None:
+                return latest
+            raise
+    else:
+        session.add(job)
+        session.flush()
     return job
 
 
