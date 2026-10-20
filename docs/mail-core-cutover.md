@@ -22,5 +22,6 @@ See root `README.md` and `docker-compose.mail-core.yml`.
 | password | `POST /api/auth/password` |
 | sync | `POST /api/accounts/sync-all`, `POST /api/accounts/{id}/sync` |
 | mail list/detail | `/api/mail/*` + SSE `/api/events` |
+| trash | `POST /api/mail/messages/{id}/trash` |
 
 Send / forwarding / temp-mail / shares are out of scope (501 / removed).
