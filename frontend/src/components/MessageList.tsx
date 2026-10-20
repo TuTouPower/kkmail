@@ -21,6 +21,7 @@ export default function MessageList() {
     setSearch,
     listFilter,
     setListFilter,
+    flaggedIds,
     sortNewest,
     toggleSort,
     openCompose,
@@ -56,6 +57,7 @@ export default function MessageList() {
   const visible = raw
     .filter((m) => {
       if (listFilter === 'unread' && m.is_read) return false
+      if (listFilter === 'flagged' && !flaggedIds.includes(`${m.accountEmail}:${m.id}`)) return false
       if (search) {
         const hay = [m.from, m.subject, m.body_preview, m.accountEmail].join(' ').toLowerCase()
         if (!hay.includes(search.toLowerCase())) return false
@@ -114,9 +116,9 @@ export default function MessageList() {
         </label>
         <div className="list-controls">
           <div className="segmented">
-            {(['all', 'unread'] as const).map((f) => (
+            {(['all', 'unread', 'flagged'] as const).map((f) => (
               <button key={f} className={`segment-btn ${listFilter === f ? 'active' : ''}`} onClick={() => setListFilter(f)}>
-                {f === 'all' ? '全部' : '未读'}
+                {f === 'all' ? '全部' : f === 'unread' ? '未读' : '已标记'}
               </button>
             ))}
           </div>
