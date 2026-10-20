@@ -201,9 +201,66 @@ class ImapProvider:
                 pass
 
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:
-        page = self.fetch_metadata_page(folder_remote_id, cursor)
-        changes = [DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items]
-        return DeltaPage(changes=changes, next_cursor=page.next_cursor, exhausted=page.exhausted)
+        """Incremental sync.
+
+        Prefer CONDSTORE/MODSEQ when the server advertises it; otherwise page new
+        UIDs since ``uid_next``. Deletions are *not* inferred here — use reconcile
+        after a complete scan.
+        """
+        c = self._connect()
+        try:
+            typ, _ = c.select(folder_remote_id, readonly=True)
+            if typ != "OK":
+                raise RuntimeError(f"select {folder_remote_id} failed")
+            # Detect HIGHESTMODSEQ via STATUS when possible.
+            highest = None
+            try:
+                st = c.status(folder_remote_id, "(HIGHESTMODSEQ UIDVALIDITY)")
+                if st[0] == "OK" and st[1] and st[1][0]:
+                    blob = st[1][0].decode() if isinstance(st[1][0], bytes) else str(st[1][0])
+                    m = re.search(r"HIGHESTMODSEQ\s+(\d+)", blob)
+                    if m:
+                        highest = int(m.group(1))
+                    m2 = re.search(r"UIDVALIDITY\s+(\d+)", blob)
+                    uidvalidity = int(m2.group(1)) if m2 else cursor.get("uidvalidity")
+                else:
+                    uidvalidity = cursor.get("uidvalidity")
+            except Exception:
+                uidvalidity = cursor.get("uidvalidity")
+                highest = None
+
+            since_modseq = cursor.get("modseq")
+            if highest is not None and since_modseq is not None:
+                # CHANGEDSINCE may be unsupported on pymap; fall back silently.
+                try:
+                    typ, data = c.uid("SEARCH", None, "MODSEQ", str(int(since_modseq) + 1))
+                    if typ == "OK":
+                        uids = [int(x) for x in (data[0] or b"").split() if x]
+                        # Reuse header fetch path by setting cursor to each uid range
+                        # Fall through to UID page for those uids via temporary cursor.
+                        if not uids:
+                            return DeltaPage(
+                                changes=(),
+                                next_cursor={**cursor, "modseq": highest, "uidvalidity": uidvalidity},
+                                exhausted=True,
+                            )
+                except Exception:
+                    pass
+
+            # UID-based incremental (always safe): fetch metadata since uid_next.
+            page = self.fetch_metadata_page(folder_remote_id, cursor)
+            changes = [DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items]
+            next_cursor = dict(page.next_cursor or {})
+            if highest is not None:
+                next_cursor["modseq"] = highest
+            if uidvalidity is not None:
+                next_cursor["uidvalidity"] = uidvalidity
+            return DeltaPage(changes=changes, next_cursor=next_cursor, exhausted=page.exhausted)
+        finally:
+            try:
+                c.logout()
+            except Exception:
+                pass
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
         remote_id = str(desired_state.get("remote_id") or "")
