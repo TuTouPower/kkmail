@@ -7,6 +7,30 @@ The API reference is generated from the code and is always current:
 
 Mail, account, group, settings, health and login routes declare a `response_model`, so the schema documents their request and response bodies. `POST /api/auth/logout` and `POST /api/auth/password` return `{"ok": true}`. `/docs` and `/openapi.json` are served without authentication; they describe the API shape only.
 
+## Contract source (OpenAPI → TypeScript)
+
+Committed artifacts (regenerate when `response_model` / routes change):
+
+- `docs/openapi.json` — dumped from `mail_core.api.app:app.openapi()` (no server required)
+- `frontend/src/api/generated/schema.ts` — `openapi-typescript` output
+- `frontend/src/api/schemaTypes.ts` — thin aliases used by `client.ts` / `mailCore.ts`
+
+```bash
+scripts/gen-openapi.sh
+# equivalent:
+python scripts/export_openapi.py
+cd frontend && npm run openapi:gen
+```
+
+Local drift checks (no GitHub Actions):
+
+```bash
+python scripts/export_openapi.py --check
+cd frontend && npm run openapi:check
+pytest tests/mail_core/test_openapi_contract.py -q
+cd frontend && npm test   # vitest + openapi:check
+```
+
 ## Conventions
 
 - **Auth:** a session cookie (`kkmail_mc_session`, `HttpOnly`) from `POST /api/auth/login` (`{"password": "..."}`), or `Authorization: Bearer <key>` (keys in `MAIL_CORE_API_KEYS`). Every route except `/health`, `/ready` and login requires one of them; otherwise the response is 401. An invalid Bearer key is rejected even if a valid cookie is also sent. API keys are never accepted in the query string.
