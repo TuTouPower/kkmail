@@ -79,6 +79,15 @@ def sync_account_folders(
     except RateLimitedError as exc:
         delay = float(exc.retry_after_seconds or 60)
         with Session() as session:
+            acc = session.get(Account, account_id)
+            if acc is not None:
+                acc.sync_status = "failed"
+                cfg = dict(acc.config or {})
+                cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
+                cfg["last_sync_error"] = str(exc)
+                acc.config = cfg
+                if hasattr(acc, "last_synced_at"):
+                    setattr(acc, "last_synced_at", datetime.now(timezone.utc))
             enqueue_job(
                 session,
                 job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
@@ -90,12 +99,23 @@ def sync_account_folders(
             release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
             session.commit()
         return {"status": "rate_limited", "retry_after": delay}
-    except Exception:
+    except Exception as exc:
         with Session() as session:
             try:
+                acc = session.get(Account, account_id)
+                if acc is not None:
+                    acc.sync_status = "failed"
+                    cfg = dict(acc.config or {})
+                    cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
+                    cfg["last_sync_error"] = str(exc)
+                    acc.config = cfg
+                    if hasattr(acc, "last_synced_at"):
+                        setattr(acc, "last_synced_at", datetime.now(timezone.utc))
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
                 session.commit()
             except FencingMismatch:
+                session.rollback()
+            except Exception:
                 session.rollback()
         raise
 
@@ -153,6 +173,15 @@ def sync_account_folders(
         run.status = "done"
         run.finished_at = datetime.now(timezone.utc)
         run.stats = {"folders": len(folder_ids), "upserted": upserted}
+        acc = session.get(Account, account_id)
+        if acc is not None:
+            acc.sync_status = "idle"
+            cfg = dict(acc.config or {})
+            cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
+            cfg.pop("last_sync_error", None)
+            acc.config = cfg
+            if hasattr(acc, "last_synced_at"):
+                setattr(acc, "last_synced_at", datetime.now(timezone.utc))
         release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
         session.commit()
         return {"status": "ok", "folders": len(folder_ids), "upserted": upserted}
