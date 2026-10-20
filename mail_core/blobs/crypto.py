@@ -1,7 +1,11 @@
 """Application-layer blob encryption (AES-256-GCM) with key versions.
 
-Wire format (ciphertext file contents):
-  magic(4)=b'KKMB' | key_version(u32 BE) | nonce(12) | ciphertext+tag
+Wire format (chunked AEAD, streamable; one format, no plaintext fallback):
+  header  = magic(4)=b'KKMS' | key_version(u32 BE) | nonce_prefix(8)
+  frame_i = ct_len(u32 BE) | AES-GCM(plaintext chunk ≤ 64 KiB)
+  nonce_i = nonce_prefix | i(u32 BE);  AAD_i = header | i(u32 BE) | final(u8)
+The final flag in the AAD makes truncation / frame reordering detectable.
+Payloads without the magic are rejected (BlobCryptoError).
 
 Plaintext SHA-256 remains the content-address key (architecture §10.2).
 Keys are loaded from MAIL_CORE_BLOB_KEYS JSON: {"1": "<base64 32-byte key>", ...}
@@ -18,12 +22,18 @@ import base64
 import json
 import os
 import struct
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from typing import BinaryIO
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-MAGIC = b"KKMB"
-NONCE_LEN = 12
+MAGIC = b"KKMS"
+NONCE_PREFIX_LEN = 8
+HEADER_LEN = 4 + 4 + NONCE_PREFIX_LEN
+CHUNK_SIZE = 64 * 1024
+TAG_LEN = 16
 
 
 class BlobCryptoError(Exception):
@@ -74,23 +84,105 @@ def load_keyring_from_env(env: dict[str, str] | None = None) -> Keyring:
     return Keyring(keys=keys, active_version=active)
 
 
-def wrap(plaintext: bytes, *, keyring: Keyring, key_version: int | None = None) -> bytes:
+def _aad(header: bytes, index: int, final: bool) -> bytes:
+    return header + struct.pack(">IB", index, 1 if final else 0)
+
+
+def _nonce(prefix: bytes, index: int) -> bytes:
+    return prefix + struct.pack(">I", index)
+
+
+def iter_wrap(chunks: Iterable[bytes], *, keyring: Keyring, key_version: int | None = None) -> Iterator[bytes]:
+    """Encrypt an iterable of plaintext pieces into framed ciphertext pieces."""
     version = key_version if key_version is not None else keyring.active_version
-    key = keyring.get(version)
-    nonce = os.urandom(NONCE_LEN)
-    ct = AESGCM(key).encrypt(nonce, plaintext, associated_data=MAGIC + struct.pack(">I", version))
-    return MAGIC + struct.pack(">I", version) + nonce + ct
+    aead = AESGCM(keyring.get(version))
+    prefix = os.urandom(NONCE_PREFIX_LEN)
+    header = MAGIC + struct.pack(">I", version) + prefix
+    yield header
+    index = 0
+    buf = bytearray()
+    it = iter(chunks)
+    exhausted = False
+    while True:
+        while len(buf) <= CHUNK_SIZE and not exhausted:
+            try:
+                buf.extend(next(it))
+            except StopIteration:
+                exhausted = True
+        final = exhausted and len(buf) <= CHUNK_SIZE
+        piece = bytes(buf[:CHUNK_SIZE])
+        del buf[:CHUNK_SIZE]
+        ct = aead.encrypt(_nonce(prefix, index), piece, _aad(header, index, final))
+        yield struct.pack(">I", len(ct)) + ct
+        index += 1
+        if final:
+            return
+        if index >= 0xFFFFFFFF:  # pragma: no cover - 256 TiB
+            raise BlobCryptoError("blob too large")
+
+
+def wrap(plaintext: bytes, *, keyring: Keyring, key_version: int | None = None) -> bytes:
+    return b"".join(iter_wrap([plaintext], keyring=keyring, key_version=key_version))
+
+
+def _read_exact(fh: BinaryIO, n: int) -> bytes:
+    data = fh.read(n)
+    if len(data) != n:
+        raise BlobCryptoError("ciphertext truncated")
+    return data
+
+
+def read_key_version(fh: BinaryIO) -> int:
+    header = fh.read(HEADER_LEN)
+    if len(header) < HEADER_LEN or header[:4] != MAGIC:
+        raise BlobCryptoError("not an encrypted kkmail blob (missing KKMS header)")
+    return struct.unpack(">I", header[4:8])[0]
+
+
+def iter_unwrap(fh: BinaryIO, *, keyring: Keyring) -> Iterator[bytes]:
+    """Decrypt a framed blob incrementally (bounded memory: one chunk at a time)."""
+    header = fh.read(HEADER_LEN)
+    if len(header) < HEADER_LEN or header[:4] != MAGIC:
+        raise BlobCryptoError("not an encrypted kkmail blob (missing KKMS header)")
+    version = struct.unpack(">I", header[4:8])[0]
+    prefix = header[8:HEADER_LEN]
+    aead = AESGCM(keyring.get(version))
+    index = 0
+    while True:
+        raw_len = fh.read(4)
+        if not raw_len:
+            raise BlobCryptoError("ciphertext truncated (no final frame)")
+        (ct_len,) = struct.unpack(">I", _pad4(raw_len))
+        if ct_len < TAG_LEN or ct_len > CHUNK_SIZE + TAG_LEN:
+            raise BlobCryptoError("invalid frame length")
+        ct = _read_exact(fh, ct_len)
+        try:
+            pt = aead.decrypt(_nonce(prefix, index), ct, _aad(header, index, False))
+            final = False
+        except InvalidTag:
+            try:
+                pt = aead.decrypt(_nonce(prefix, index), ct, _aad(header, index, True))
+            except InvalidTag as exc:
+                raise BlobCryptoError("blob authentication failed") from exc
+            final = True
+        yield pt
+        index += 1
+        if final:
+            if fh.read(1):
+                raise BlobCryptoError("trailing data after final frame")
+            return
+
+
+def _pad4(raw: bytes) -> bytes:
+    if len(raw) != 4:
+        raise BlobCryptoError("ciphertext truncated")
+    return raw
 
 
 def unwrap(payload: bytes, *, keyring: Keyring) -> tuple[bytes, int]:
-    if len(payload) < 4 or payload[:4] != MAGIC:
-        # Legacy identity stub (pre-encryption) — treat as plaintext key_version=0
-        return payload, 0
-    if len(payload) < 4 + 4 + NONCE_LEN + 16:
-        raise BlobCryptoError("ciphertext too short")
-    version = struct.unpack(">I", payload[4:8])[0]
-    nonce = payload[8 : 8 + NONCE_LEN]
-    ct = payload[8 + NONCE_LEN :]
-    key = keyring.get(version)
-    pt = AESGCM(key).decrypt(nonce, ct, associated_data=MAGIC + struct.pack(">I", version))
-    return pt, version
+    import io
+
+    fh = io.BytesIO(payload)
+    version = read_key_version(fh)
+    fh.seek(0)
+    return b"".join(iter_unwrap(fh, keyring=keyring)), version

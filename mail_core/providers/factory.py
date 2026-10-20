@@ -55,9 +55,11 @@ def build_provider(
             raise ValueError("imap account missing credential_ref")
         password = store.get_secret(account.credential_ref)
         host = cfg.get("imap_host") or cfg.get("host")
-        port = int(cfg.get("imap_port") or cfg.get("port") or 143)
         user = cfg.get("imap_user") or cfg.get("username") or account.email
-        use_ssl = bool(cfg.get("use_ssl") or cfg.get("imap_ssl") or False)
+        raw_ssl = cfg.get("use_ssl", cfg.get("imap_ssl", True))
+        # TLS by default; plaintext IMAP only when explicitly configured (e.g. loopback test fixture).
+        use_ssl = raw_ssl if isinstance(raw_ssl, bool) else str(raw_ssl).strip().lower() not in ("0", "false", "no", "off")
+        port = int(cfg.get("imap_port") or cfg.get("port") or (993 if use_ssl else 143))
         if not host:
             raise ValueError("imap account config missing imap_host")
         return ImapProvider(host=host, port=port, username=user, password=password, use_ssl=use_ssl)

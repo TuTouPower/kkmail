@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from mail_core.blobs.crypto import MAGIC, load_keyring_from_env, unwrap, wrap
+from mail_core.blobs.crypto import MAGIC, BlobCryptoError, load_keyring_from_env, unwrap, wrap
 from mail_core.blobs.gc import sweep_expired_blobs
 from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory
@@ -28,14 +28,32 @@ def test_aes_gcm_roundtrip_and_key_version(tmp_path, monkeypatch):
     assert store.get(result.content_sha256) == data
     pt, ver = store.get_with_version(result.content_sha256)
     assert ver == 1 and pt == data
-    # identity legacy still readable
-    legacy = tmp_path / "aa" / "bb" / ("c" * 64 + ".blob")
-    # write legacy plaintext path via unwrap path: put file without magic
+    # Non-KKMS payloads (e.g. plaintext) are rejected, never served.
     digest = store.hash_plaintext(b"legacy")
     path = store.path_for(digest)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"legacy")
-    assert store.get(digest) == b"legacy"
+    with pytest.raises(BlobCryptoError):
+        store.get(digest)
+
+
+def test_streaming_roundtrip_large_and_tamper(tmp_path):
+    store = BlobStore(tmp_path)
+    data = os.urandom(3 * 64 * 1024 + 123)
+    put = store.put(data)
+    chunks = list(store.iter_plaintext(put.content_sha256))
+    assert len(chunks) == 4 and max(len(c) for c in chunks) <= 64 * 1024
+    assert b"".join(chunks) == data
+    path = store.path_for(put.content_sha256)
+    raw = bytearray(path.read_bytes())
+    raw[-1] ^= 0x01
+    path.write_bytes(bytes(raw))
+    with pytest.raises(BlobCryptoError):
+        list(store.iter_plaintext(put.content_sha256))
+    # Truncating whole trailing frames is detected via the final-frame flag.
+    path.write_bytes(wrap(data, keyring=store.keyring)[: 16 + 4 + 64 * 1024 + 16])
+    with pytest.raises(BlobCryptoError):
+        list(store.iter_plaintext(put.content_sha256))
 
 
 @pytest.mark.skipif(not os.environ.get("MAIL_CORE_DATABASE_URL"), reason="PG required")

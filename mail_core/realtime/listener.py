@@ -85,7 +85,7 @@ class OutboxListenThread:
                     got = False
                     for notify in conn.notifies(timeout=self.idle_timeout_s, stop_after=50):
                         got = True
-                        log.debug("NOTIFY %s payload=%r", notify.channel, notify.payload)
+                        log.debug("NOTIFY %s (%d bytes)", notify.channel, len(notify.payload or ""))
                         if self._stop.is_set():
                             break
                         try:
@@ -99,11 +99,12 @@ class OutboxListenThread:
                             self.dispatcher.dispatch_once()
                         except Exception:
                             log.exception("idle dispatch failed")
-            except Exception:
+            except Exception as exc:
                 self._started.clear()
                 if self._stop.is_set():
                     break
-                log.exception("LISTEN loop error; reconnecting in %ss", self.reconnect_s)
+                # Type only: driver messages can embed DSN fragments / payloads.
+                log.warning("LISTEN loop error (%s); reconnecting in %ss", type(exc).__name__, self.reconnect_s)
                 time.sleep(self.reconnect_s)
             finally:
                 if conn is not None:

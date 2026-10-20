@@ -50,18 +50,31 @@ def _tick(worker_id: str) -> int:
             session.rollback()
             log.exception("reclaim_stale_claims failed")
     with Session() as session:
-        jobs = claim_jobs(session, worker_id=worker_id, limit=5)
+        jobs = claim_jobs(session, worker_id=worker_id, limit=CLAIM_BATCH)
         for job in jobs:
             try:
                 handle_job(session, job)
                 handled += 1
             except Exception as exc:  # pragma: no cover
-                log.exception("job %s failed", job.id)
+                from mail_core.security.redact import safe_error
                 from mail_core.sync.jobs import fail_job
 
-                fail_job(session, job, str(exc))
+                log.error("job %s failed: %s", job.id, safe_error(exc))
+                fail_job(session, job, exc)
         session.commit()
     return handled
+
+
+CLAIM_BATCH = 5
+
+
+def next_poll_delay(handled: int, previous: float, *, base: float, max_idle: float) -> float:
+    """Deep queue (full batch) → poll again immediately; idle → exponential back-off."""
+    if handled >= CLAIM_BATCH:
+        return 0.0
+    if handled > 0:
+        return base
+    return min(max_idle, max(base, previous * 2 if previous else base))
 
 
 def run(poll_interval_s: float | None = None) -> None:
@@ -77,15 +90,22 @@ def run(poll_interval_s: float | None = None) -> None:
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGINT, _handle_stop)
         signal.signal(signal.SIGTERM, _handle_stop)
-    log.info("worker %s starting (poll=%ss)", worker_id, interval)
+    max_idle = float(os.environ.get("MAIL_CORE_WORKER_MAX_IDLE_S") or max(interval, 10.0))
+    log.info("worker %s starting (poll=%ss, max_idle=%ss)", worker_id, interval, max_idle)
+    sleep_s = interval
     while not _stop:
+        n = 0
         try:
             n = _tick(worker_id)
             if n:
                 log.info("handled %s job(s)", n)
-        except Exception:
-            log.exception("tick failed")
-        time.sleep(interval)
+        except Exception as exc:
+            from mail_core.security.redact import safe_error
+
+            log.error("tick failed: %s", safe_error(exc))
+        sleep_s = next_poll_delay(n, sleep_s, base=interval, max_idle=max_idle)
+        if sleep_s:
+            time.sleep(sleep_s)
     log.info("worker loop stopped")
 
 
