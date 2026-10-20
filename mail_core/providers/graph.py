@@ -231,9 +231,15 @@ class GraphProvider:
                 )
             except (RateLimitedError, CursorInvalidError):
                 raise
-            except ProviderHttpError:
-                self._call("DELETE", msg_path, {})
-                return RemoteOperationResult(success=True, remote_state={"deleted": True})
+            except ProviderHttpError as exc:
+                if exc.status == 404:
+                    try:
+                        self._call("DELETE", msg_path, {})
+                    except ProviderHttpError as del_exc:
+                        if del_exc.status != 404:
+                            raise
+                    return RemoteOperationResult(success=True, remote_state={"deleted": True})
+                return RemoteOperationResult(success=False, error=str(exc))
 
         return RemoteOperationResult(success=False, error=f"unsupported graph op {op_type}")
 
