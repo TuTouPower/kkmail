@@ -22,10 +22,9 @@ function handleUnauthorized(): ApiError {
   return { status: 401, message: '登录已过期，请重新登录' }
 }
 
-async function ensureCsrf(): Promise<string | null> {
-  if (csrfToken) return csrfToken
+async function fetchCsrfToken(): Promise<string | null> {
   try {
-    const res = await fetch('/api/csrf-token', { credentials: 'include' })
+    const res = await fetch('/api/csrf-token', { credentials: 'include', headers: { Accept: 'application/json' } })
     if (!res.ok) return null
     const data = await res.json()
     csrfToken = data.csrf_token || null
@@ -35,25 +34,64 @@ async function ensureCsrf(): Promise<string | null> {
   }
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const { headers: extraHeaders, ...rest } = options
+async function ensureCsrf(): Promise<string | null> {
+  return csrfToken || fetchCsrfToken()
+}
+
+export interface RequestOptions extends RequestInit {
+  /** Abort the request after this many ms and throw a timeout ApiError. */
+  timeoutMs?: number
+}
+
+function isCsrfFailure(status: number, body: unknown): boolean {
+  if (status !== 400 || !body || typeof body !== 'object') return false
+  const b = body as { csrf_error?: unknown; error?: unknown }
+  return b.csrf_error === true || (typeof b.error === 'string' && b.error.includes('CSRF'))
+}
+
+/** Combine the caller's AbortSignal (e.g. from React Query) with a timeout. */
+function withTimeout(signal: AbortSignal | null | undefined, timeoutMs?: number) {
+  if (!timeoutMs) return { signal: signal || undefined, timedOut: () => false, done: () => {} }
+  const ctrl = new AbortController()
+  let fired = false
+  const timer = setTimeout(() => { fired = true; ctrl.abort() }, timeoutMs)
+  const onAbort = () => ctrl.abort()
+  if (signal) {
+    if (signal.aborted) ctrl.abort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
+  return {
+    signal: ctrl.signal,
+    timedOut: () => fired,
+    done: () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort) },
+  }
+}
+
+async function request<T>(path: string, options: RequestOptions = {}, retriedCsrf = false): Promise<T> {
+  const { headers: extraHeaders, timeoutMs, signal: callerSignal, ...rest } = options
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(rest.body != null ? { 'Content-Type': 'application/json' } : {}),
     ...(extraHeaders as Record<string, string> | undefined),
   }
 
-  if (options.method && options.method !== 'GET' && options.method !== 'HEAD') {
+  const unsafe = !!options.method && options.method !== 'GET' && options.method !== 'HEAD'
+  if (unsafe) {
     const token = await ensureCsrf()
     if (token) headers['X-CSRFToken'] = token
   }
 
-  // Spread caller options first so the merged headers (with CSRF) always win.
-  const res = await fetch(path, {
-    ...rest,
-    credentials: 'include',
-    headers,
-  })
+  const t = withTimeout(callerSignal, timeoutMs)
+  let res: Response
+  try {
+    // Spread caller options first so the merged headers (with CSRF) always win.
+    res = await fetch(path, { ...rest, signal: t.signal, credentials: 'include', headers })
+  } catch (err) {
+    if (t.timedOut()) throw { status: 0, code: 'timeout', message: `请求超时（${Math.round((timeoutMs || 0) / 1000)} 秒）` } as ApiError
+    throw err
+  } finally {
+    t.done()
+  }
 
   if (res.status === 401 || res.redirected) {
     throw handleUnauthorized()
@@ -61,13 +99,23 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     let message = res.statusText
+    let body: unknown = null
     try {
-      const body = await res.json()
-      message = body.error?.message || body.error || body.message || message
+      body = await res.json()
+      const b = body as { error?: { message?: string } | string; message?: string }
+      message = (typeof b.error === 'object' ? b.error?.message : b.error) || b.message || message
     } catch {
       /* ignore */
     }
-    throw { status: res.status, message } as ApiError
+    // Flask's cookie session is rewritten by every response, so a request that
+    // started before the CSRF token was stored can drop it from the session.
+    // Fetch a fresh token (re-stores it) and retry the write once.
+    if (unsafe && !retriedCsrf && isCsrfFailure(res.status, body)) {
+      csrfToken = null
+      await fetchCsrfToken()
+      return request<T>(path, options, true)
+    }
+    throw { status: res.status, message, payload: body } as ApiError
   }
 
   const contentType = res.headers.get('content-type') || ''
@@ -75,6 +123,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     return res.json() as Promise<T>
   }
   return (await res.text()) as unknown as T
+}
+
+/** Test hook. */
+export function __resetCsrfForTests() {
+  csrfToken = null
 }
 
 export interface AccountSummary {
@@ -193,19 +246,20 @@ export const api = {
     return request<AccountsResponse>(`/api/accounts${qs ? '?' + qs : ''}`)
   },
 
-  async getEmails(email: string, params: { folder?: string; skip?: number; top?: number } = {}) {
+  async getEmails(email: string, params: { folder?: string; skip?: number; top?: number } = {}, opts: RequestOptions = {}) {
     const q = new URLSearchParams()
     q.set('folder', params.folder || 'inbox')
     q.set('skip', String(params.skip ?? 0))
     q.set('top', String(params.top ?? 30))
-    return request<EmailListResponse>(`/api/emails/${encodeURIComponent(email)}?${q}`)
+    return request<EmailListResponse>(`/api/emails/${encodeURIComponent(email)}?${q}`, opts)
   },
 
-  async getEmailDetail(email: string, messageId: string, folder = 'inbox', idMode = '') {
+  async getEmailDetail(email: string, messageId: string, folder = 'inbox', idMode = '', opts: RequestOptions = {}) {
     const q = new URLSearchParams({ folder, method: idMode === 'imap' ? 'imap' : 'graph' })
     if (idMode) q.set('id_mode', idMode)
     return request<{ success?: boolean; email?: Record<string, unknown>; error?: unknown }>(
       `/api/email/${encodeURIComponent(email)}/${encodeURIComponent(messageId)}?${q}`,
+      opts,
     )
   },
 
