@@ -222,6 +222,8 @@ def sync_folder_delta(
         folder = session.get(Folder, folder_id)
         if account is None or folder is None:
             raise ValueError("account/folder not found")
+        if not account.sync_enabled:
+            return {"status": "sync_disabled"}
         cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
         if cp is None or not cp.full_scan_complete:
             return {"status": "skipped", "reason": "baseline_incomplete"}
