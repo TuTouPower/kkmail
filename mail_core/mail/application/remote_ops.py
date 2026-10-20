@@ -29,6 +29,7 @@ def _coalesce_existing(
     existing.op_type = op_type
     existing.entity_key = entity_key
     existing.status = RemoteOperationStatus.PENDING.value
+    existing.next_attempt_at = None
     existing.updated_at = now
     session.add(
         OutboxEvent(
@@ -142,9 +143,11 @@ def mark_remote_operation(
     *,
     status: RemoteOperationStatus,
     error: str | None = None,
+    next_attempt_at: datetime | None = None,
 ) -> None:
     op.status = status.value
     op.updated_at = datetime.now(timezone.utc)
+    op.next_attempt_at = next_attempt_at
     if error:
         op.last_error = error[:2000]
     if status == RemoteOperationStatus.IN_PROGRESS:
@@ -184,6 +187,7 @@ def reclaim_stale_in_progress(
     )
     for op in rows:
         op.status = RemoteOperationStatus.PENDING.value
+        op.next_attempt_at = None
         op.updated_at = now
         op.last_error = (op.last_error or "")[:1800]
         suffix = "|reclaimed_stale_in_progress"
