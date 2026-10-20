@@ -21,6 +21,9 @@ class SearchPage:
     next_offset: int | None
 
 
+MAX_SEARCH_OFFSET = 10_000
+
+
 def search_message_ids(
     session: Session,
     *,
@@ -45,10 +48,15 @@ def search_messages_page(
     has_more = len(ids) > limit
     ids = ids[:limit]
     total = _count_messages(session, account_ids=account_ids, query=query)
+    next_offset: int | None = None
+    if has_more:
+        cand = offset + limit
+        if cand <= MAX_SEARCH_OFFSET:
+            next_offset = cand
     return SearchPage(
         query=query,
         items=messages_by_ids(session, ids),
         total=total,
         offset=offset,
-        next_offset=offset + limit if has_more else None,
+        next_offset=next_offset,
     )

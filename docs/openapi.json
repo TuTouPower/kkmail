@@ -30,6 +30,7 @@
           "display_name": {
             "anyOf": [
               {
+                "maxLength": 255,
                 "type": "string"
               },
               {
@@ -57,8 +58,13 @@
             "title": "Group Id"
           },
           "provider": {
-            "maxLength": 32,
-            "minLength": 2,
+            "enum": [
+              "imap",
+              "gmail",
+              "graph",
+              "memory",
+              "stub"
+            ],
             "title": "Provider",
             "type": "string"
           }
@@ -70,6 +76,45 @@
         "title": "AccountCreateIn",
         "type": "object"
       },
+      "AccountFolderStatsItemOut": {
+        "properties": {
+          "folder_id": {
+            "format": "uuid",
+            "title": "Folder Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "remote_id": {
+            "title": "Remote Id",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          },
+          "unread_count": {
+            "title": "Unread Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "folder_id",
+          "role",
+          "name",
+          "total_count",
+          "unread_count",
+          "remote_id"
+        ],
+        "title": "AccountFolderStatsItemOut",
+        "type": "object"
+      },
       "AccountFolderStatsOut": {
         "properties": {
           "account_id": {
@@ -78,8 +123,7 @@
           },
           "folders": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/AccountFolderStatsItemOut"
             },
             "title": "Folders",
             "type": "array"
@@ -224,6 +268,7 @@
           "display_name": {
             "anyOf": [
               {
+                "maxLength": 255,
                 "type": "string"
               },
               {
@@ -395,6 +440,7 @@
           "color": {
             "anyOf": [
               {
+                "maxLength": 32,
                 "type": "string"
               },
               {
@@ -1131,6 +1177,17 @@
         "title": "ValidationError",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "APIKeyCookie": {
+        "in": "cookie",
+        "name": "kkmail_mc_session",
+        "type": "apiKey"
+      },
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -1223,6 +1280,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api List Accounts",
         "tags": [
           "accounts"
@@ -1262,6 +1327,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Create Account",
         "tags": [
           "accounts"
@@ -1284,6 +1357,14 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Sync All Accounts",
         "tags": [
           "accounts"
@@ -1320,6 +1401,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Delete Account",
         "tags": [
           "accounts"
@@ -1371,6 +1460,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Update Account",
         "tags": [
           "accounts"
@@ -1414,6 +1511,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Sync Account",
         "tags": [
           "accounts"
@@ -1476,6 +1581,14 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Logout",
         "tags": [
           "auth"
@@ -1497,6 +1610,14 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Me",
         "tags": [
           "auth"
@@ -1538,6 +1659,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Change Password",
         "tags": [
           "auth"
@@ -1604,11 +1733,9 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
-              }
+              "text/event-stream": {}
             },
-            "description": "Successful Response"
+            "description": "SSE event stream"
           },
           "422": {
             "content": {
@@ -1621,6 +1748,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Stream Events",
         "tags": [
           "realtime"
@@ -1642,6 +1777,14 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api List Groups",
         "tags": [
           "accounts"
@@ -1681,6 +1824,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Create Group",
         "tags": [
           "accounts"
@@ -1717,6 +1868,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Delete Group",
         "tags": [
           "accounts"
@@ -1760,6 +1919,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Folder Stats",
         "tags": [
           "mail"
@@ -1799,6 +1966,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Get Attachment",
         "tags": [
           "mail"
@@ -1842,6 +2017,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api One Folder Stats",
         "tags": [
           "mail"
@@ -1922,6 +2105,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Unified Inbox",
         "tags": [
           "mail"
@@ -1966,6 +2157,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Get Message",
         "tags": [
           "mail"
@@ -2020,6 +2219,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Set Message Flag",
         "tags": [
           "mail"
@@ -2074,6 +2281,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Set Message Read",
         "tags": [
           "mail"
@@ -2118,6 +2333,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Trash Message",
         "tags": [
           "mail"
@@ -2204,6 +2427,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Search",
         "tags": [
           "mail"
@@ -2225,6 +2456,14 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Get Settings",
         "tags": [
           "accounts"
@@ -2265,6 +2504,14 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "summary": "Api Update Settings",
         "tags": [
           "accounts"
