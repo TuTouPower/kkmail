@@ -1,6 +1,8 @@
-# 多邮箱邮件管理工具
+# kkmail
 
-一个面向多邮箱账号场景的邮件管理工具，支持通过 Outlook/Hotmail OAuth、Microsoft Graph API 和标准 IMAP 统一读取、管理和转发邮件，并提供 Web 界面、Chrome/Edge 浏览器扩展，用于分组管理、账号管理、邮件查看和对外 API 调用。当前支持 Outlook/Hotmail、Gmail、QQ、163、126、Yahoo、阿里邮箱以及自定义 IMAP 邮箱，同时集成 GPTMail、DuckMail、Cloudflare Temp Email 多提供商临时邮箱能力。
+基于 [assast/outlookEmail](https://github.com/assast/outlookEmail) 的二次开发。仓库地址：https://github.com/TuTouPower/kkmail
+
+一个面向多邮箱账号场景的邮件管理工具，支持通过 Outlook/Hotmail OAuth、Microsoft Graph API 和标准 IMAP 统一读取、管理和转发邮件，并提供 Apple Mail 风格的 Web 界面、Electron 桌面壳和 Chrome/Edge 浏览器扩展。
 
 注意：改密码会导致auth失效，需要重新授权
 ## 📦 快速开始
@@ -17,7 +19,7 @@ admin123
 
 ### 方式一：下载 Windows `exe`(win可用)
 
-从 GitHub Releases 下载对应版本的 `OutlookEmail-windows-x64-*.zip`，解压后直接运行 `OutlookEmail.exe` 即可。
+从 GitHub Releases 下载对应版本的 `kkmail-windows-x64-*.zip`，解压后直接运行 `kkmail.exe` 即可。
 
 Windows 桌面版发现新版本后，可在页面顶部的版本入口点击「立即升级」。确认后应用会把现有 Release ZIP 下载到当前 EXE 所在目录，显示下载百分比和速度，完成后自动替换并重启；下载阶段可以取消。
 
@@ -29,14 +31,14 @@ Windows 桌面版发现新版本后，可在页面顶部的版本入口点击「
 
 说明：
 
-- Windows 数据默认保存在 `%APPDATA%\OutlookEmail`
+- Windows 数据默认保存在 `%APPDATA%\kkmail`
 - 在线升级要求当前 EXE 所在目录可写，不会申请管理员权限；如果目录不可写，请先把程序移动到普通可写目录
 - 新版本启动失败时会自动恢复旧版本；如果升级期间断电，可将同目录的 `*.old.exe` 手动改回原文件名恢复
 - 默认登录密码仍然是 `admin123`，首次登录后建议立即修改
 
 ### 方式二：下载 macOS 安装包
 
-从 GitHub Releases 下载对应架构的 `OutlookEmail-macos-*-*.dmg`，打开后把 `OutlookEmail.app` 拖到 `Applications` 即可。
+从 GitHub Releases 下载对应架构的 `kkmail-macos-*-*.dmg`，打开后把 `kkmail.app` 拖到 `Applications` 即可。
 
 桌面版首次启动会自动：
 
@@ -46,9 +48,9 @@ Windows 桌面版发现新版本后，可在页面顶部的版本入口点击「
 
 说明：
 
-- macOS 数据默认保存在 `~/Library/Application Support/OutlookEmail`
-- 如果 macOS 提示Apple无法验证“OutlookEmail”是否包含可能危害Mac安全或泄漏隐私的恶意软件。可执行下面命令然后重试
-  `sudo xattr -rd com.apple.quarantine /Applications/OutlookEmail.app` 
+- macOS 数据默认保存在 `~/Library/Application Support/kkmail`
+- 如果 macOS 提示Apple无法验证“kkmail”是否包含可能危害Mac安全或泄漏隐私的恶意软件。可执行下面命令然后重试
+  `sudo xattr -rd com.apple.quarantine /Applications/kkmail.app` 
 - 默认登录密码仍然是 `admin123`，首次登录后建议立即修改
 
 ### 方式三：使用 Docker（推荐服务器部署）
@@ -71,7 +73,7 @@ docker run -d \
 
 ```bash
 git clone https://github.com/assast/outlookEmail.git
-cd outlookEmail
+cd kkmail
 pip install -r requirements.txt
 export SECRET_KEY=your-secret-key-here
 python web_outlook_app.py
@@ -605,7 +607,7 @@ socks5h://outlook.{mail}@127.0.0.1:2260
 使用方式：
 
 1. 点击扩展图标
-2. 填写 OutlookEmail 服务地址和 Web 登录密码
+2. 填写 kkmail 服务地址和 Web 登录密码
 3. 点击“保存配置”，或直接点侧边栏里的功能入口
 
 扩展会在浏览器侧边栏内提供原生操作面板，当前网页标签不会被切走。现在可直接使用邮箱、导入、刷新、Token、导出、标签和设置等功能。完整安装、配置、功能和故障排查说明见 [浏览器扩展使用说明](browser-extension/README.md)。
@@ -734,7 +736,7 @@ https://support.google.com/mail/answer/185833?hl=zh-Hans
 
 ```bash
 git clone https://github.com/assast/outlookEmail.git
-cd outlookEmail
+cd kkmail
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt

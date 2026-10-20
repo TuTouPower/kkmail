@@ -1,6 +1,6 @@
 # Branch Protection & Release Recommendations
 
-This document records the recommended repository governance settings for `outlookEmail`.
+This document records the recommended repository governance settings for `kkmail`.
 
 ## Goal
 
