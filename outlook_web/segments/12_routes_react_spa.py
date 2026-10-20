@@ -17,9 +17,15 @@ def _react_dist_dir() -> Path:
     override = os.getenv("KKMAIL_FRONTEND_DIST", "").strip()
     if override:
         candidates.append(Path(override))
+    candidates.append(resource_path("frontend", "dist"))
+    # Segments are exec'd into web_outlook_app, so __file__ may be the entry
+    # module at a shallow path such as /app/web_outlook_app.py (Docker).
+    # Walk up a few parents instead of indexing parents[2], which raised
+    # IndexError there and turned every page into a 500.
+    here = Path(__file__).resolve()
+    candidates += [parent / "frontend" / "dist" for parent in list(here.parents)[:3]]
     candidates += [
-        resource_path("frontend", "dist"),
-        Path(__file__).resolve().parents[2] / "frontend" / "dist",
+        Path(app.root_path) / "frontend" / "dist",
         Path(app.root_path).parent / "frontend" / "dist",
         Path.cwd() / "frontend" / "dist",
     ]
