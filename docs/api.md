@@ -7,7 +7,7 @@ Authoritative HTTP contract for **mail-core** (the only backend):
 - Committed schema: [`docs/openapi.json`](./openapi.json)
 - Module / env overview: [`mail_core/README.md`](../mail_core/README.md)
 
-Mail, account, group, settings, health and login routes declare a `response_model`, so the schema documents their request and response bodies. `POST /api/auth/logout` and `POST /api/auth/password` return `{"ok": true}`. `/docs` and `/openapi.json` are served without authentication; they describe the API shape only.
+Mail, account, group, settings, health and login routes declare a `response_model`, so the schema documents their request and response bodies. `POST /api/auth/logout` returns `{"ok": true}`, and `POST /api/auth/password` returns `{"ok": true, "success": true}`. `/docs` and `/openapi.json` are served without authentication; they describe the API shape only.
 
 There is **no Flask API** and no `/api/extension/*`. Do not treat deleted upstream docs or routes as current.
 
