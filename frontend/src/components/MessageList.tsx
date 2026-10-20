@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag } from 'lucide-react'
+import { apiRequest } from '../api/client'
 import { accountScope, fetchAccounts, markReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMessageTrash } from '../api/mailCore'
+import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
 import { hasMailId, mailKey } from '../lib/mailKey'
 import { MOBILE_MAX_WIDTH } from '../lib/viewport'
 import { listTitle } from '../lib/listTitle'
@@ -58,28 +60,105 @@ export default function MessageList() {
   const term = search.trim()
   const searching = term.length >= SEARCH_MIN_CHARS
   const listScope = accountScope(accountId)
+
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [nextOffset, setNextOffset] = useState<number | null>(null)
+  const [searchTotal, setSearchTotal] = useState<number | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+
+  useEffect(() => {
+    setNextCursor(null)
+    setNextOffset(null)
+    setSearchTotal(null)
+  }, [listScope, term])
+
   const inboxQuery = useQuery<MailItem[]>({
     queryKey: queryKeys.inbox(listScope),
-    queryFn: ({ signal }) =>
-      fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, signal }).then((page) =>
-        page.items.filter(hasMailId).map(mailCoreToMailItem),
-      ),
+    queryFn: async ({ signal }) => {
+      const page = await fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, signal })
+      setNextCursor(page.next_cursor ?? null)
+      return page.items.filter(hasMailId).map(mailCoreToMailItem)
+    },
     enabled: !searching,
     retry: false,
     placeholderData: keepPreviousData,
   })
   const searchQuery = useQuery<MailItem[]>({
     queryKey: queryKeys.search(term, listScope),
-    queryFn: ({ signal }) =>
-      fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, signal }).then((page) =>
-        page.items.filter(hasMailId).map(mailCoreToMailItem),
-      ),
+    queryFn: async ({ signal }) => {
+      const page = await fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, signal })
+      setNextOffset(page.next_offset ?? null)
+      setSearchTotal(page.total)
+      return page.items.filter(hasMailId).map(mailCoreToMailItem)
+    },
     enabled: searching,
     retry: false,
     placeholderData: keepPreviousData,
   })
+
+  const folderStatsQuery = useQuery({
+    queryKey: ['mail-core', 'folder-stats', accountId ?? 'all'],
+    queryFn: async () => {
+      if (accountId) {
+        const stats = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`).catch(() => null)
+        if (!stats) return null
+        const inboxFolder = stats.folders.find((f: AccountFolderStatsItemOut) => f.role === 'inbox')
+        return inboxFolder ? inboxFolder.total_count : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0)
+      }
+      const statsList = await Promise.all(
+        accounts.map((a) =>
+          apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(a.id)}/folder-stats`).catch(() => null),
+        ),
+      )
+      let total = 0
+      let hasAny = false
+      for (const s of statsList) {
+        if (!s) continue
+        hasAny = true
+        const inboxFolder = s.folders.find((f: AccountFolderStatsItemOut) => f.role === 'inbox')
+        total += inboxFolder ? inboxFolder.total_count : s.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0)
+      }
+      return hasAny ? total : null
+    },
+    enabled: accounts.length > 0 && !searching,
+  })
+
   const active = searching ? searchQuery : inboxQuery
   const raw: MailItem[] = active.data || []
+
+  const hasMore = searching ? nextOffset !== null : nextCursor !== null
+  const totalCount = searching ? searchTotal : (folderStatsQuery.data ?? null)
+
+  async function handleLoadMore() {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    try {
+      if (searching) {
+        if (nextOffset === null) return
+        const res = await fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, offset: nextOffset })
+        setNextOffset(res.next_offset ?? null)
+        setSearchTotal(res.total)
+        const newItems = res.items.filter(hasMailId).map(mailCoreToMailItem)
+        queryClient.setQueryData<MailItem[]>(queryKeys.search(term, listScope), (old = []) => {
+          const seen = new Set(old.map((m) => m.id))
+          return [...old, ...newItems.filter((m) => !seen.has(m.id))]
+        })
+      } else {
+        if (!nextCursor) return
+        const res = await fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, cursor: nextCursor })
+        setNextCursor(res.next_cursor ?? null)
+        const newItems = res.items.filter(hasMailId).map(mailCoreToMailItem)
+        queryClient.setQueryData<MailItem[]>(queryKeys.inbox(listScope), (old = []) => {
+          const seen = new Set(old.map((m) => m.id))
+          return [...old, ...newItems.filter((m) => !seen.has(m.id))]
+        })
+      }
+    } catch (err) {
+      setActionStatus(errorMessage(err, '加载更多失败'))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   const visible = raw
     .filter((m) => {
@@ -271,6 +350,38 @@ export default function MessageList() {
             </article>
           )
         })}
+        {!loading && (visible.length > 0 || hasMore) && (
+          <div className="list-pagination" style={{ padding: '16px', textAlign: 'center' }}>
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+              {totalCount !== null
+                ? `已加载 ${visible.length} 封 / 共 ${Math.max(totalCount, visible.length)} 封`
+                : `已加载 ${visible.length} 封`}
+            </div>
+            {hasMore ? (
+              <button
+                type="button"
+                className="load-more-btn"
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+                style={{
+                  padding: '6px 16px',
+                  fontSize: 13,
+                  borderRadius: 6,
+                  border: '1px solid var(--line)',
+                  background: 'var(--surface-2)',
+                  color: 'var(--text)',
+                  cursor: loadingMore ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {loadingMore ? '正在加载…' : '加载更多'}
+              </button>
+            ) : (
+              visible.length > 0 && (
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>已加载全部邮件</span>
+              )
+            )}
+          </div>
+        )}
       </div>
     </section>
   )
