@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { __resetCsrfForTests, apiRequest, postJson } from './client'
+import { __resetCsrfForTests, api, apiRequest, postJson } from './client'
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -120,5 +120,23 @@ describe('errors and timeouts', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(401, { detail: 'authentication required' })))
     await expect(apiRequest('/api/groups')).rejects.toMatchObject({ status: 401 })
     expect(seen).toHaveBeenCalledOnce()
+  })
+
+  it('times out hung CSRF fetch during unsafe requests', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit = {}) => new Promise((_res, rej) => {
+      init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
+    })))
+    await expect(postJson('/api/mail/messages/1/trash', {}, { timeoutMs: 30 })).rejects.toMatchObject({
+      code: 'csrf_unavailable',
+    })
+  })
+
+  it('times out hung login requests', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit = {}) => new Promise((_res, rej) => {
+      init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
+    })))
+    await expect(api.login('secret', { timeoutMs: 30 })).rejects.toMatchObject({
+      code: 'timeout',
+    })
   })
 })
