@@ -24,6 +24,48 @@ from mail_core.sync.metadata import messages_upserted_event, upsert_messages
 
 log = logging.getLogger("mail_core.sync.delta")
 
+def _apply_flag_patches(
+    session: Session,
+    *,
+    account_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    changes: list,
+) -> tuple[int, list[uuid.UUID]]:
+    """Patch is_read / is_flagged only — never upsert stub meta that wipes subject/from."""
+    touched: list[uuid.UUID] = []
+    flagged = 0
+    for change in changes:
+        flags = dict(change.flags or {})
+        if change.meta is not None:
+            # Prefer explicit flags dict; fall back to meta.is_read when providers only set meta.
+            if "is_read" not in flags:
+                flags["is_read"] = change.meta.is_read
+        if not flags:
+            continue
+        msg = session.scalar(
+            select(Message).where(Message.account_id == account_id, Message.remote_id == change.remote_id)
+        )
+        if msg is None:
+            continue
+        changed = False
+        if "is_read" in flags:
+            want = bool(flags["is_read"])
+            if msg.is_read != want:
+                msg.is_read = want
+                changed = True
+        if "is_flagged" in flags:
+            want = bool(flags["is_flagged"])
+            if msg.is_flagged != want:
+                msg.is_flagged = want
+                changed = True
+        if changed:
+            msg.updated_at = datetime.now(timezone.utc)
+            touched.append(msg.id)
+            flagged += 1
+    return flagged, touched
+
+
+
 
 @dataclass(frozen=True, slots=True)
 class DeltaApplyResult:
@@ -50,12 +92,21 @@ def apply_delta_page(
     upserts = [
         c
         for c in page.changes
-        if c.kind in ("upsert", "flag") and c.meta is not None and last_kind.get(c.remote_id) != "delete"
+        if c.kind == "upsert" and c.meta is not None and last_kind.get(c.remote_id) != "delete"
+    ]
+    flag_changes = [
+        c
+        for c in page.changes
+        if c.kind == "flag" and last_kind.get(c.remote_id) == "flag"
     ]
     outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=[c.meta for c in upserts])
     touched = [o.message.id for o in outcomes if o.changed]
-    upserted = sum(1 for c in upserts if c.kind == "upsert")
-    flagged = len(upserts) - upserted
+    upserted = len(upserts)
+    flag_count, flag_touched = _apply_flag_patches(
+        session, account_id=account_id, folder_id=folder_id, changes=flag_changes
+    )
+    flagged = flag_count
+    touched.extend(flag_touched)
     if touched:
         session.add(messages_upserted_event(account_id, folder_id, touched))
     for change in page.changes:
