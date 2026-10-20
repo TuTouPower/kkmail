@@ -10,12 +10,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
-
 from mail_core.db.session import get_session_factory
-from mail_core.mail.storage.models import OutboxEvent
 from mail_core.realtime.dispatcher import get_dispatcher
-from mail_core.realtime.outbox import fetch_since, to_item
+from mail_core.realtime.outbox import fetch_since, head_event_id, to_item
 
 log = logging.getLogger("mail_core.api.sse")
 router = APIRouter()
@@ -49,7 +46,7 @@ async def stream_events(
         Session = get_session_factory()
         # Gap check → resync hint
         with Session() as session:
-            head = session.scalar(select(func.max(OutboxEvent.id))) or 0
+            head = head_event_id(session)
             if cursor > 0 and head - cursor > RESYNC_GAP:
                 payload = {"reason": "gap_too_large", "head": head, "last_event_id": cursor}
                 yield _format_sse(head, "client.resync_hint", payload)
