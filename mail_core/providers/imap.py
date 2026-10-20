@@ -10,6 +10,7 @@ import email.header
 import email.utils
 import imaplib
 import re
+import ssl
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -123,7 +124,10 @@ class ImapProvider:
     def _connect(self) -> imaplib.IMAP4:
         timeout = float(self.timeout)
         if self.use_ssl:
-            client: imaplib.IMAP4 = imaplib.IMAP4_SSL(self.host, self.port, timeout=timeout)
+            ssl_context = ssl.create_default_context()
+            client: imaplib.IMAP4 = imaplib.IMAP4_SSL(
+                self.host, self.port, ssl_context=ssl_context, timeout=timeout
+            )
         else:
             client = imaplib.IMAP4(self.host, self.port, timeout=timeout)
         client.login(self.username, self.password)
