@@ -13,6 +13,7 @@ import './design-system/tokens.css'
 import { useIsWide } from './lib/viewport'
 import { workspaceGridColumns } from './lib/workspaceLayout'
 import MailCoreBridge from './components/MailCoreBridge'
+import { useMailCoreRealtime } from './hooks/useMailCoreRealtime'
 
 function resolveTheme(theme: 'dark' | 'light' | 'system'): 'dark' | 'light' {
   if (theme !== 'system') return theme
@@ -25,6 +26,7 @@ function App() {
     settingsOpen, sidebarWidth, listWidth, setSidebarWidth, setListWidth,
   } = useMailStore()
   const [authed, setAuthed] = useState<boolean | null>(null)
+  useMailCoreRealtime()
 
   useEffect(() => {
     const apply = () => { document.documentElement.dataset.theme = resolveTheme(theme) }
