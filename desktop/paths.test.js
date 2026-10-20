@@ -1,0 +1,22 @@
+const assert = require('assert')
+const path = require('path')
+const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl } = require('./paths')
+const pkg = require('./package.json')
+
+assert.strictEqual(sidecarPath('/r', 'linux'), path.join('/r', 'backend', 'kkmail-backend'))
+assert.strictEqual(sidecarPath('/r', 'win32'), path.join('/r', 'backend', 'kkmail-backend.exe'))
+assert.strictEqual(sidecarPath('', 'linux'), '')
+assert.strictEqual(frontendDistPath('/r'), path.join('/r', 'frontend', 'dist'))
+
+const backendRes = pkg.build.extraResources.find((r) => r.to === 'backend')
+assert.ok(backendRes.filter.some((f) => 'kkmail-backend'.startsWith(f.replace('*', ''))), 'extraResources filter must match sidecar name')
+assert.ok(pkg.build.files.includes('paths.js'), 'paths.js must be packaged')
+
+assert.ok(isAllowedExternalUrl('https://example.com'))
+assert.ok(isAllowedExternalUrl('mailto:a@b.c'))
+assert.ok(!isAllowedExternalUrl('file:///etc/passwd'))
+assert.ok(!isAllowedExternalUrl('javascript:alert(1)'))
+assert.ok(!isAllowedExternalUrl('ms-msdt:/id'))
+assert.ok(isLocalAppUrl('http://127.0.0.1:18765/app', 'http://127.0.0.1:18765'))
+assert.ok(!isLocalAppUrl('http://evil.test/', 'http://127.0.0.1:18765'))
+console.log('desktop paths: ok')

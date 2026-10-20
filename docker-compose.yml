@@ -1,6 +1,8 @@
 version: '3.8'
 services:
   outlook-mail-reader:
+    # 上游镜像，不含 kkmail 的 React 界面与修复；要用 kkmail 请改用 docker-compose.react.yml 本地构建。
+    # 注意：DOCKER_UPDATE_ENABLED 会把容器更新为该上游镜像。
     image: ghcr.io/assast/outlookemail:latest
     container_name: outlook-mail-reader
     ports:
