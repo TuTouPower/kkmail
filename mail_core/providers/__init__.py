@@ -33,3 +33,4 @@ __all__ = [
     "StubProvider",
     "build_provider",
 ]
+from mail_core.providers.http import CursorInvalidError, RateLimitedError, ProviderHttpError
