@@ -8,10 +8,41 @@ from mail_core.providers.base import MailProvider
 from mail_core.providers.gmail import GmailProvider
 from mail_core.providers.graph import GraphProvider
 from mail_core.providers.imap import ImapProvider
+from mail_core.providers.oauth import (
+    BearerTransport,
+    OAuthTokenClient,
+    default_urllib_token_post,
+    urllib_json_request,
+)
 from mail_core.providers.stub_memory import MemoryProvider
 
 
-def build_provider(account: Account, store: CredentialStore | None = None) -> MailProvider:
+def _oauth_transport(
+    *,
+    credential_ref: str,
+    store: CredentialStore,
+    provider: str,
+    token_http=None,
+    api_http=None,
+) -> BearerTransport:
+    client = OAuthTokenClient(
+        credential_ref=credential_ref,
+        store=store,
+        provider=provider,
+        http_post=token_http or default_urllib_token_post,
+    )
+    base = "https://gmail.googleapis.com" if provider == "gmail" else "https://graph.microsoft.com/v1.0"
+    api = api_http or urllib_json_request
+    return BearerTransport(token_client=client, inner=api, base_url=base)
+
+
+def build_provider(
+    account: Account,
+    store: CredentialStore | None = None,
+    *,
+    token_http=None,
+    api_http=None,
+) -> MailProvider:
     store = store or get_credential_store()
     provider = (account.provider or "").lower()
     cfg = dict(account.config or {})
@@ -32,9 +63,29 @@ def build_provider(account: Account, store: CredentialStore | None = None) -> Ma
         return ImapProvider(host=host, port=port, username=user, password=password, use_ssl=use_ssl)
 
     if provider == "gmail":
-        return GmailProvider(credential_ref=account.credential_ref or "")
+        ref = account.credential_ref or ""
+        if not ref:
+            return GmailProvider(credential_ref="")
+        transport = _oauth_transport(
+            credential_ref=ref,
+            store=store,
+            provider="gmail",
+            token_http=token_http,
+            api_http=api_http,
+        )
+        return GmailProvider(credential_ref=ref, transport=transport)
 
     if provider == "graph":
-        return GraphProvider(credential_ref=account.credential_ref or "")
+        ref = account.credential_ref or ""
+        if not ref:
+            return GraphProvider(credential_ref="")
+        transport = _oauth_transport(
+            credential_ref=ref,
+            store=store,
+            provider="graph",
+            token_http=token_http,
+            api_http=api_http,
+        )
+        return GraphProvider(credential_ref=ref, transport=transport)
 
     raise ValueError(f"unknown provider type {account.provider!r}")
