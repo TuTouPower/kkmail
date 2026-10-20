@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # Intensive Review — 视角 6：健壮性与可观测性
 
 - Target：当前整个仓库，非 diff；主 bundle 为 168 files / 23508 lines。

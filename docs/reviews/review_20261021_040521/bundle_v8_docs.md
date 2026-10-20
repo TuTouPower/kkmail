@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # Intensive Review — 视角 8：文档规范
 
 - 审阅目标：当前全库代码、文档、示例与注释；不是 HEAD diff。

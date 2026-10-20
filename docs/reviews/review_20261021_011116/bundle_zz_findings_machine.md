@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+
 # Machine-readable findings (post cross-validation)
 
 - Target: TuTouPower/kkmail @ b2956445574ebf171c1e73526421f0d46ccac3a3
@@ -6,9 +10,9 @@
 - CHALLENGED Highs retained with lowered conf: C2, C4, V6-R5.
 
 - [Critical][97] mail_core/api/app.py:33 — mail-core API/SSE unauthenticated; compose publishes :8000 on 0.0.0.0
-- [Critical][92] docker-compose.yml:8 — docker.sock mount + default [REDACTED]/SECRET_KEY + DOCKER_UPDATE_ENABLED
+- [Critical][92] docker-compose.yml:8 — docker.sock mount + default ***/SECRET_KEY + DOCKER_UPDATE_ENABLED
 - [Critical][92] mail_core/blobs/crypto.py:59 — deterministic/hardcoded blob encryption keys (dev fallback + compose samples)
-- [Critical][90] .env.example:7 — default LOGIN_PASSWORD=[REDACTED] (env + bootstrap); CONNECT S2
+- [Critical][90] .env.example:7 — default LOGIN_PASSWORD=*** (env + bootstrap); CONNECT S2
 - [High][98] web_outlook_app.py:23 — Flask god-namespace via exec of 12 segments (~26.6k LOC shared globals)
 - [High][97] .github/workflows/tests.yml:20 — CI runs only 2 pytest modules; omits mail_core and full suite
 - [High][97] frontend/src/store/mailStore.ts:8 — Flask accountId number passed as mail-core account_id UUID (422)
@@ -40,7 +44,7 @@
 - [High][82] mail_core/providers/oauth.py:81 — missing expires_at treated as non-expiring access token
 - [High][82] outlook_web/segments/03_mail_helpers.py:3326 — API key accepted via query string; CORS * on /api/external
 - [High][82] outlook_web/segments/04_routes_groups_accounts.py:12 — login rate limit trusts X-Forwarded-For leftmost (bypasses ProxyFix)
-- [High][80] docker-compose.mail-core.yml:18 — Postgres published on host 5433:5432 with password kkmail
+- [High][80] docker-compose.mail-core.yml:18 — Postgres published on host 5433:5432 with password ***
 - [High][78] outlook_web/segments/01_bootstrap.py:79 — missing SESSION_COOKIE_SECURE; permanent sessions use datetime.max
 - [High][72] outlook_web/segments/03_mail_helpers.py:295 — request_with_proxy_failover lacks default timeout (callers usually pass; CHALLENGED)
 - [High][70] outlook_web/segments/04_routes_groups_accounts.py:43 — /login verify_password vs extension verify_login_password (CHALLENGED: init hashes)
@@ -50,7 +54,7 @@
 - [Medium][88] docs/mail-core-status.md:9 — mail-core-status.md retains agent/session tone
 - [Medium][88] mail_core/api/mail.py:109 — search API returns only IDs; no hydrate/cursor/total contract
 - [Medium][88] mail_core/search/index.py:58 — subject ILIKE/similarity without subject trigram index
-- [Medium][85] README.md:69 — weak default [REDACTED] as documentation example default
+- [Medium][85] README.md:69 — weak default *** as documentation example default
 - [Medium][85] mail_core/api/mail.py:87 — most mail-core routes lack response_model; bare-string errors
 - [Medium][85] mail_core/sync/engine.py:81 — sync folder discovery N+1 SELECT per remote folder
 - [Medium][85] openspec/specs/ — OpenSpec Purpose TBD placeholders (cloudflare-*/email-address-fallback)
