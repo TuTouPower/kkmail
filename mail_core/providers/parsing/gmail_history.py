@@ -76,19 +76,36 @@ def parse_gmail_history(data: dict[str, Any], *, folder_label: str | None = None
             labels = set(entry.get("labelIds") or [])
             if not rid or rid in seen_delete:
                 continue
+            if folder_label and folder_label in labels:
+                meta = _minimal_meta({**msg, "labelIds": list(set(msg.get("labelIds") or []) | labels)})
+                changes.append(DeltaChange(kind="upsert", remote_id=rid, meta=meta))
+                continue
+            flag_updates: dict[str, Any] = {}
             if "UNREAD" in labels:
-                meta = _minimal_meta({**msg, "labelIds": list(set(msg.get("labelIds") or []) | {"UNREAD"})})
-                changes.append(DeltaChange(kind="flag", remote_id=rid, meta=meta, flags={"is_read": False}))
+                flag_updates["is_read"] = False
+            if "STARRED" in labels:
+                flag_updates["is_flagged"] = True
+            if flag_updates:
+                meta = _minimal_meta({**msg, "labelIds": list(set(msg.get("labelIds") or []) | labels)})
+                changes.append(DeltaChange(kind="flag", remote_id=rid, meta=meta, flags=flag_updates))
         for entry in hist.get("labelsRemoved") or []:
             msg = entry.get("message") or {}
             rid = str(msg.get("id") or "")
             labels = set(entry.get("labelIds") or [])
             if not rid or rid in seen_delete:
                 continue
+            if folder_label and folder_label in labels:
+                changes.append(DeltaChange(kind="delete", remote_id=rid))
+                continue
+            flag_updates: dict[str, Any] = {}
             if "UNREAD" in labels:
-                remaining = set(msg.get("labelIds") or []) - {"UNREAD"}
+                flag_updates["is_read"] = True
+            if "STARRED" in labels:
+                flag_updates["is_flagged"] = False
+            if flag_updates:
+                remaining = set(msg.get("labelIds") or []) - labels
                 meta = _minimal_meta({**msg, "labelIds": list(remaining)})
-                changes.append(DeltaChange(kind="flag", remote_id=rid, meta=meta, flags={"is_read": True}))
+                changes.append(DeltaChange(kind="flag", remote_id=rid, meta=meta, flags=flag_updates))
 
     history_id = str(data.get("historyId") or "")
     page_token = data.get("nextPageToken")
