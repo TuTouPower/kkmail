@@ -41,12 +41,19 @@ _GRAPH_WELL_KNOWN_ROLES: dict[str, str] = {
 }
 
 
-def graph_folder_role(folder: dict[str, Any]) -> str:
-    """Prefer explicit role, else Graph ``wellKnownName``, else ``other``."""
+def graph_folder_role(folder: dict[str, Any], inbox_id: str | None = None) -> str:
+    """Prefer explicit role, else inbox_id match, else Graph ``wellKnownName``, else ``other``."""
     if folder.get("role"):
         return str(folder["role"])
+    if inbox_id and folder.get("id") == inbox_id:
+        return "inbox"
     well = (folder.get("wellKnownName") or "").lower()
-    return _GRAPH_WELL_KNOWN_ROLES.get(well, "other")
+    if well in _GRAPH_WELL_KNOWN_ROLES:
+        return _GRAPH_WELL_KNOWN_ROLES[well]
+    disp = (folder.get("displayName") or "").strip().lower()
+    if disp == "inbox":
+        return "inbox"
+    return "other"
 
 
 def _raise_mapped(exc: ProviderHttpError) -> None:
@@ -89,15 +96,44 @@ class GraphProvider:
         self._calls.append("list_folders")
         if self.transport is None:
             raise GraphNotConfiguredError("Graph HTTP transport not configured")
-        data = self._call("GET", "/me/mailFolders", {})
-        return [
-            RemoteFolder(
-                remote_id=f["id"],
-                name=f.get("displayName") or f["id"],
-                role=graph_folder_role(f),
-            )
-            for f in data.get("value") or []
-        ]
+        inbox_id: str | None = None
+        try:
+            inbox_data = self._call("GET", "/me/mailFolders/inbox", {})
+            if isinstance(inbox_data, dict) and inbox_data.get("id"):
+                inbox_id = str(inbox_data["id"])
+        except Exception:
+            pass
+
+        def _fetch_all_pages(url: str) -> list[dict[str, Any]]:
+            items: list[dict[str, Any]] = []
+            current_url: str | None = url
+            while current_url:
+                data = self._call("GET", current_url, {})
+                items.extend(data.get("value") or [])
+                current_url = data.get("@odata.nextLink") or data.get("next_link")
+            return items
+
+        def _collect(url: str, parent_id: str | None, visited: set[str]) -> list[RemoteFolder]:
+            folders: list[RemoteFolder] = []
+            for f in _fetch_all_pages(url):
+                fid = str(f["id"])
+                if fid in visited:
+                    continue
+                visited.add(fid)
+                folders.append(
+                    RemoteFolder(
+                        remote_id=fid,
+                        name=f.get("displayName") or fid,
+                        role=graph_folder_role(f, inbox_id=inbox_id),
+                        parent_remote_id=parent_id,
+                    )
+                )
+                if int(f.get("childFolderCount") or 0) > 0:
+                    child_url = f"/me/mailFolders/{fid}/childFolders"
+                    folders.extend(_collect(child_url, parent_id=fid, visited=visited))
+            return folders
+
+        return _collect("/me/mailFolders", None, set())
 
     def full_scan(self, folder_remote_id: str, cursor: dict[str, Any] | None) -> MetadataPage:
         return self.fetch_metadata_page(folder_remote_id, cursor)
@@ -204,8 +240,26 @@ class GraphProvider:
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
         if self.transport is None:
             raise GraphNotConfiguredError("Graph reconcile not wired yet")
-        data = self._call("RECONCILE", folder_remote_id, {"local": list(local_remote_ids)})
-        return list(data.get("actions") or [])
+        remote_ids: set[str] = set()
+        next_url: str | None = f"/me/mailFolders/{folder_remote_id}/messages"
+        params: dict[str, Any] | None = {"$select": "id"}
+        while next_url:
+            data = self._call("GET", next_url, params)
+            params = None
+            if "page" in data:
+                page = data["page"]
+                items = getattr(page, "items", []) or []
+                for it in items:
+                    remote_ids.add(str(getattr(it, "remote_id", "")))
+                cursor = getattr(page, "next_cursor", None)
+                next_url = cursor.get("next_link") if isinstance(cursor, dict) else None
+            else:
+                for item in data.get("value") or []:
+                    if item.get("id"):
+                        remote_ids.add(str(item["id"]))
+                next_url = data.get("@odata.nextLink") or data.get("next_link")
+        local = set(local_remote_ids)
+        return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote_ids)]
 
     def rate_limit_hint(self) -> RateLimitHint:
         return RateLimitHint(max_requests_per_minute=60, reason="graph default hint")
