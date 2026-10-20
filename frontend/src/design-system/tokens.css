@@ -892,3 +892,52 @@ button:disabled {
 .sidebar-collapsed .sidebar-footer {
   display: none;
 }
+
+/* --- list header / selection / checkbox fixes (review 2026-10-20) --- */
+.list-pane { min-width: 0; }
+.list-header { min-width: 0; }
+.list-controls { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+.list-control-group { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; }
+.segmented { flex: 0 0 auto; }
+.segment-btn { white-space: nowrap; flex: 0 0 auto; }
+.sort-btn:disabled { opacity: 0.4; }
+.sort-btn.danger { color: var(--red); }
+.selection-bar { justify-content: space-between; }
+.selection-count { font-size: 11px; font-weight: 650; color: var(--text); white-space: nowrap; }
+
+.message-check {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: 8px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--on-primary, #fff);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.message-row:hover .message-check,
+.message-row:focus-within .message-check,
+.message-list.selecting .message-check,
+.message-row.checked .message-check { opacity: 1; }
+.message-row.checked .message-check { background: var(--primary); border-color: var(--primary); }
+.message-row.checked { border-color: color-mix(in srgb, var(--primary) 35%, transparent); }
+
+.list-note { padding: 8px 14px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.list-note.error { color: var(--red); }
+
+.side-count.unread-badge { color: var(--accent); font-weight: 700; }
+
+.mobile-only { display: none !important; }
+@media (max-width: 760px) {
+  .mobile-only { display: grid !important; }
+}
+
+.email-body-text { white-space: pre-wrap; text-align: start; }
+.field-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.field-hint { font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 4px; white-space: pre-line; }
