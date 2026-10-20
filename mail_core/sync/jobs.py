@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -202,3 +202,29 @@ def reclaim_stale_claims(
             job.last_error = (prev + suffix)[:2000]
     session.flush()
     return len(rows)
+
+
+def prune_completed_jobs(
+    session: Session,
+    *,
+    older_than: timedelta = timedelta(days=7),
+    now: datetime | None = None,
+    limit: int = 1000,
+) -> int:
+    """Delete DONE and terminal FAILED jobs updated before cutoff to bound table growth."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - older_than
+    ids = list(
+        session.scalars(
+            select(WorkerJob.id)
+            .where(WorkerJob.status.in_([JobStatus.DONE.value, JobStatus.FAILED.value]))
+            .where(WorkerJob.updated_at < cutoff)
+            .order_by(WorkerJob.updated_at.asc())
+            .limit(max(1, int(limit)))
+        ).all()
+    )
+    if not ids:
+        return 0
+    session.execute(delete(WorkerJob).where(WorkerJob.id.in_(ids)))
+    session.flush()
+    return len(ids)
