@@ -234,9 +234,32 @@ export default function SettingsPage() {
             }} style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>保存</button>
 
             <div style={{ marginTop: 22, fontWeight: 700 }}>修改登录密码</div>
-            <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="当前密码" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="新密码（≥8）" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-            <button type="button" onClick={() => run('修改密码', () => api.changePassword(currentPassword, newPassword), '密码已更新')} style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>更新密码</button>
+            <form onSubmit={(e) => {
+              e.preventDefault()
+              run('修改密码', () => api.changePassword(currentPassword, newPassword), '密码已更新')
+            }}>
+              <input
+                id="current-password"
+                name="current-password"
+                type="password"
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="当前密码"
+                style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }}
+              />
+              <input
+                id="new-password"
+                name="new-password"
+                type="password"
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="新密码（≥8）"
+                style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }}
+              />
+              <button type="submit" style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>更新密码</button>
+            </form>
           </div>
         )}
         {status && <div style={{ marginTop: 16, fontSize: 12, color: 'var(--muted)' }}>{status}</div>}
