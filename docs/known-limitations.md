@@ -23,3 +23,5 @@ The design system includes move and archive actions. Upstream mail routes suppor
 - Docker multi-stage build is defined, but this development environment has no Docker daemon.
 - OAuth, forwarding, projects, temporary mail, and WebDAV backup are reachable from Settings, but the old `/legacy` UI still holds the complete advanced flows.
 - End-to-end browser tests are not yet in place.
+
+Sidecar build verified locally: desktop/resources/outlookemail-backend
