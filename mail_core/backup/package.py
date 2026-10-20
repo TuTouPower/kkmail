@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import tarfile
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -482,16 +483,52 @@ def _verify_plain_tree(
 
 def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) -> dict:
     dest = Path(output_dir or os.environ.get("MAIL_CORE_BACKUP_DIR") or "[REDACTED]mail-core-backup")
-    path = create_backup_package(dest, encrypt=encrypt)
-    verify = verify_backup_package(path)
-    return {
-        "status": "ok" if verify.ok else "verify_failed",
-        "path": str(path),
-        "files": sorted(p.name for p in path.iterdir() if p.name != ".verify_extract"),
-        "verify": {
-            "ok": verify.ok,
-            "members_checked": verify.members_checked,
-            "errors": verify.errors,
-            "backup_key_version": verify.backup_key_version,
-        },
-    }
+    do_encrypt = True if encrypt is None else encrypt
+    if do_encrypt:
+        # Enforce strict encryption in production: refuse to run without backup keys
+        load_backup_key()
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = dest.parent / f".staging_{dest.name}_{uuid.uuid4().hex}"
+    try:
+        path = create_backup_package(staging_dir, encrypt=do_encrypt)
+        verify = verify_backup_package(path)
+        if not verify.ok:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            return {
+                "status": "verify_failed",
+                "path": str(dest),
+                "files": [],
+                "verify": {
+                    "ok": False,
+                    "members_checked": verify.members_checked,
+                    "errors": verify.errors,
+                    "backup_key_version": verify.backup_key_version,
+                },
+            }
+        # Atomic replace: swap staging directory into dest
+        old_dir = dest.parent / f".old_{dest.name}_{uuid.uuid4().hex}"
+        if dest.exists():
+            dest.rename(old_dir)
+        try:
+            staging_dir.rename(dest)
+            if old_dir.exists():
+                shutil.rmtree(old_dir, ignore_errors=True)
+        except Exception:
+            if old_dir.exists():
+                old_dir.rename(dest)
+            raise
+        return {
+            "status": "ok",
+            "path": str(dest),
+            "files": sorted(p.name for p in dest.iterdir() if p.name != ".verify_extract"),
+            "verify": {
+                "ok": True,
+                "members_checked": verify.members_checked,
+                "errors": verify.errors,
+                "backup_key_version": verify.backup_key_version,
+            },
+        }
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
