@@ -274,7 +274,7 @@ export const api = {
     return request('/api/emails/delete', { method: 'POST', body: JSON.stringify(payload) })
   },
 
-  async sendOutlookMail(payload: { account_id: number; recipients: string; subject: string; body: string }) {
+  async sendOutlookMail(payload: { account_id: number; recipients: string[]; subject: string; body: string }) {
     return request('/api/outlook/send-mail', { method: 'POST', body: JSON.stringify(payload) })
   },
 
