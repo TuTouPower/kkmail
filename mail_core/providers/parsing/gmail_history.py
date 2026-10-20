@@ -8,6 +8,14 @@ from typing import Any
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
 
 
+def _parse_address_list(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    import email.utils
+
+    return tuple(addr for _, addr in email.utils.getaddresses([raw]) if addr)
+
+
 def _minimal_meta(message: dict[str, Any]) -> RemoteMessageMeta:
     """Build meta from a History message stub or fuller fixture payload."""
     headers = {h["name"].lower(): h["value"] for h in (message.get("payload") or {}).get("headers") or [] if "name" in h}
@@ -28,6 +36,8 @@ def _minimal_meta(message: dict[str, Any]) -> RemoteMessageMeta:
     else:
         sort_time = datetime.now(timezone.utc)
     label_ids = set(message.get("labelIds") or [])
+    to_addrs = tuple(message.get("to_addresses") or ()) or _parse_address_list(headers.get("to"))
+    cc_addrs = tuple(message.get("cc_addresses") or ()) or _parse_address_list(headers.get("cc"))
     return RemoteMessageMeta(
         remote_id=str(message["id"]),
         subject=str(subject),
@@ -40,6 +50,8 @@ def _minimal_meta(message: dict[str, Any]) -> RemoteMessageMeta:
         internet_message_id=headers.get("message-id") or message.get("internet_message_id"),
         snippet=message.get("snippet"),
         provider_thread_key=message.get("threadId"),
+        to_addresses=to_addrs,
+        cc_addresses=cc_addrs,
         in_reply_to=headers.get("in-reply-to"),
         references=headers.get("references"),
     )

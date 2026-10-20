@@ -75,12 +75,22 @@ def _raise_mapped(exc: ProviderHttpError) -> None:
 
 _GMAIL_META_HEADERS = (
     "From",
+    "To",
+    "Cc",
     "Subject",
     "Date",
     "Message-ID",
     "In-Reply-To",
     "References",
 )
+
+
+def _parse_address_list(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    import email.utils
+
+    return tuple(addr for _, addr in email.utils.getaddresses([raw]) if addr)
 
 
 def _meta_from_gmail_message(message: dict[str, Any]) -> RemoteMessageMeta:
@@ -109,6 +119,8 @@ def _meta_from_gmail_message(message: dict[str, Any]) -> RemoteMessageMeta:
     else:
         sort_time = datetime.now(timezone.utc)
     label_ids = set(message.get("labelIds") or [])
+    to_addrs = _parse_address_list(headers.get("to"))
+    cc_addrs = _parse_address_list(headers.get("cc"))
     return RemoteMessageMeta(
         remote_id=str(message["id"]),
         subject=str(subject),
@@ -121,6 +133,8 @@ def _meta_from_gmail_message(message: dict[str, Any]) -> RemoteMessageMeta:
         internet_message_id=headers.get("message-id"),
         snippet=message.get("snippet"),
         provider_thread_key=message.get("threadId"),
+        to_addresses=to_addrs,
+        cc_addresses=cc_addrs,
         in_reply_to=headers.get("in-reply-to"),
         references=headers.get("references"),
     )
