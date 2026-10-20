@@ -24,3 +24,13 @@ Session hardening (`hardening.js`, applied in `main.js`):
 - restrictive Content-Security-Policy on every response (`default-src 'self'`, no `object`/`frame-ancestors`, connect only to self)
 
 `npm test` checks sidecar paths, packaging config, and the PostgreSQL manager.
+
+Child-process hardening (`startup.js` / `postgresManager.js`):
+
+- mail-core and `pg_ctl`/`createdb` get an **allowlisted** env (`scrubEnv`) plus explicit `MAIL_CORE_*` / `PG*` extras — parent secrets are not inherited
+- backend **stdio is piped** to `mail-core-data/mail-core.log` with password / DB-URL redaction (no `inherit`)
+- shutdown is **single-flight**: SIGTERM the process group (Unix) or the child, escalate to SIGKILL / `taskkill /T /F` after 4s; `PostgresManager.stop()` is idempotent
+- PG binary probes are **cached** with a spawn timeout; `KKMAIL_PG_PORT` must be an integer 1–65535 before writing `postgresql.conf`
+- initdb `--pwfile` lives under `secrets/` mode `0600` and is unlinked in `finally` (legacy `.pgpass-init` cleaned on start)
+- data root prefers Electron `userData`, else `~/.kkmail`, else `XDG_DATA_HOME` / per-uid tmp — never shared `/tmp/.kkmail`
+
