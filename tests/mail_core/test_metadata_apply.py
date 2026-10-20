@@ -97,3 +97,157 @@ def test_apply_metadata_page_writes_messages_stats_outbox_checkpoint():
             .where(OutboxEvent.account_id == acc.id, OutboxEvent.event_type == "message.upserted")
         )
         assert n_upsert == 1
+
+
+def test_metadata_apply_preserves_fts_body_and_skips_outbox_on_replay():
+    """Snippet must not overwrite MessageBody-backed FTS; replay must not flood outbox."""
+    from mail_core.mail.storage.models import MessageBody, MessageSearch, SyncCheckpoint
+    from mail_core.search.index import upsert_message_search
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc = Account(email=f"fts-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        session.add(acc)
+        session.flush()
+        folder = Folder(account_id=acc.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        session.flush()
+        lease = acquire_lease(session, account_id=acc.id, owner_id="w1", ttl=timedelta(minutes=5))
+        page = MetadataPage(
+            items=[
+                RemoteMessageMeta(
+                    remote_id="201",
+                    subject="Hello",
+                    from_address="a@b.c",
+                    from_name="A",
+                    sort_time=datetime.now(timezone.utc),
+                    is_read=False,
+                    has_attachments=False,
+                    snippet="short-snippet",
+                    uid=201,
+                ),
+            ],
+            next_cursor={"uid_next": 202, "uidvalidity": 1},
+            exhausted=False,
+        )
+        apply_metadata_page(
+            session,
+            account_id=acc.id,
+            folder_id=folder.id,
+            fencing_token=lease.fencing_token,
+            page=page,
+        )
+        session.flush()
+        msg = session.scalar(select(Message).where(Message.account_id == acc.id))
+        session.add(MessageBody(message_id=msg.id, text_plain="full archived body text here"))
+        session.flush()
+        upsert_message_search(session, message_id=msg.id)  # index full body
+        session.commit()
+        mid = msg.id
+        account_id = acc.id
+        folder_id = folder.id
+
+    with Session() as session:
+        lease = acquire_lease(session, account_id=account_id, owner_id="w1", ttl=timedelta(minutes=5))
+        # Subject change triggers search upsert — must keep body_text from MessageBody
+        page2 = MetadataPage(
+            items=[
+                RemoteMessageMeta(
+                    remote_id="201",
+                    subject="Hello again",
+                    from_address="a@b.c",
+                    from_name="A",
+                    sort_time=datetime.now(timezone.utc),
+                    is_read=False,
+                    has_attachments=False,
+                    snippet="short-snippet",
+                    uid=201,
+                ),
+            ],
+            next_cursor={"uid_next": 202, "uidvalidity": 1},
+            exhausted=True,
+        )
+        apply_metadata_page(
+            session,
+            account_id=account_id,
+            folder_id=folder_id,
+            fencing_token=lease.fencing_token,
+            page=page2,
+        )
+        session.commit()
+        row = session.get(MessageSearch, mid)
+        assert row is not None
+        assert "full archived body" in (row.body_text or "")
+        assert "short-snippet" not in (row.body_text or "") or "full archived" in row.body_text
+
+        # Identical replay: no new outbox rows
+        before = session.scalar(select(func.count()).select_from(OutboxEvent).where(OutboxEvent.account_id == account_id))
+        apply_metadata_page(
+            session,
+            account_id=account_id,
+            folder_id=folder_id,
+            fencing_token=lease.fencing_token,
+            page=page2,
+        )
+        session.commit()
+        after = session.scalar(select(func.count()).select_from(OutboxEvent).where(OutboxEvent.account_id == account_id))
+        assert after == before
+
+
+def test_delta_apply_preserves_full_scan_complete_and_indexes():
+    from mail_core.providers.base import DeltaChange, DeltaPage
+    from mail_core.mail.storage.models import MessageSearch, SyncCheckpoint
+    from mail_core.sync.delta import apply_delta_page
+    from mail_core.sync.checkpoints import commit_checkpoint
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc = Account(email=f"delta-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        session.add(acc)
+        session.flush()
+        folder = Folder(account_id=acc.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        session.flush()
+        lease = acquire_lease(session, account_id=acc.id, owner_id="w1", ttl=timedelta(minutes=5))
+        commit_checkpoint(
+            session,
+            account_id=acc.id,
+            folder_id=folder.id,
+            fencing_token=lease.fencing_token,
+            cursor={"uid_next": 1},
+            full_scan_complete=False,  # incomplete baseline
+        )
+        page = DeltaPage(
+            changes=[
+                DeltaChange(
+                    kind="upsert",
+                    remote_id="301",
+                    meta=RemoteMessageMeta(
+                        remote_id="301",
+                        subject="D",
+                        from_address="a@b.c",
+                        from_name=None,
+                        sort_time=datetime.now(timezone.utc),
+                        is_read=True,
+                        has_attachments=False,
+                        internet_message_id="<m301@x>",
+                        uid=301,
+                    ),
+                )
+            ],
+            next_cursor={"uid_next": 302},
+            exhausted=True,
+        )
+        apply_delta_page(
+            session,
+            account_id=acc.id,
+            folder_id=folder.id,
+            fencing_token=lease.fencing_token,
+            page=page,
+        )
+        session.commit()
+        cp = session.get(SyncCheckpoint, {"account_id": acc.id, "folder_id": folder.id})
+        assert cp.full_scan_complete is False  # must NOT force True
+        msg = session.scalar(select(Message).where(Message.account_id == acc.id))
+        assert session.get(MessageSearch, msg.id) is not None
+

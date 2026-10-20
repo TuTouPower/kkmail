@@ -100,7 +100,9 @@ services:
 
 
   imap:
-    # L2 IMAP fixture (Dovecot). Port 1143 on host → 143 in container.
+    # L2 IMAP test fixture (Dovecot). Opt-in only — not part of the default stack.
+    #   docker compose -f docker-compose.mail-core.yml --profile imap up -d imap
+    profiles: ["imap"]
     build:
       context: ./tests/mail_core/fixtures/dovecot
     container_name: kkmail-mail-core-imap

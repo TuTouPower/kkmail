@@ -133,7 +133,9 @@ class ImapProvider:
         c = self._connect()
         try:
             typ, data = c.list()
-            if typ != "OK" or not data:
+            if typ != "OK":
+                raise RuntimeError(f"IMAP LIST failed: {typ}")
+            if not data:
                 return [RemoteFolder("INBOX", "INBOX", "inbox")]
             folders: list[RemoteFolder] = []
             for raw in data:
@@ -188,13 +190,17 @@ class ImapProvider:
                     "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)])",
                 )
                 if typ != "OK" or not fetched or fetched[0] is None:
-                    continue
+                    # Do not advance uid_next past a failed FETCH — raise so the
+                    # caller retries from the same cursor (architecture: no silent skip).
+                    raise RuntimeError(f"UID FETCH {folder_remote_id} uid={uid} failed: {typ}")
                 flags_blob = fetched[0]
                 if isinstance(flags_blob, tuple):
                     meta_bytes = flags_blob[0]
                     header_bytes = flags_blob[1] if len(flags_blob) > 1 else b""
                 else:
-                    continue
+                    raise RuntimeError(
+                        f"UID FETCH {folder_remote_id} uid={uid}: unexpected payload shape"
+                    )
                 meta_s = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
                 is_read = "\\Seen" in meta_s
                 header_text = header_bytes.decode("utf-8", errors="replace") if isinstance(header_bytes, bytes) else str(header_bytes)
