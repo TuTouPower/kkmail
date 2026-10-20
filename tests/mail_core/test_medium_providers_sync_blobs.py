@@ -233,3 +233,11 @@ def test_scripts_prefer_python3_and_venv():
     assert "command -v python3" in start
     side = Path("scripts/build-sidecar.sh").read_text()
     assert ".venv/bin/python" in side
+
+
+def test_imap_decode_header_unknown_charset():
+    from mail_core.providers.imap import _decode_header
+
+    raw = "=?unknown-custom-charset?B?dGVzdA==?="
+    decoded = _decode_header(raw)
+    assert decoded == "test"
