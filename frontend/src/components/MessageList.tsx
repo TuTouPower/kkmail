@@ -51,7 +51,8 @@ export default function MessageList() {
     queryFn: ({ signal }) =>
       fetchMailCoreInbox({
         limit: 100,
-        accountId: view.type === 'accountFolder' ? String(view.accountId || '') || undefined : undefined,
+        // mail-core uses UUID account_id; Flask sidebar still has numeric ids — filter by email.
+        accountEmail: view.type === 'accountFolder' ? view.email || undefined : undefined,
         signal,
       }).then((page) => page.items.map(mailCoreToMailItem)),
     enabled: preferMailCoreList,
