@@ -6,6 +6,13 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+- IMAP UIDVALIDITY is compared on metadata/delta; mismatch clears the checkpoint and rebuilds the folder.
+- Sync loops heartbeat the account lease between pages (default TTL 120s) and release the lease on provider errors.
+- `remote_push` isolates per-op failures and asserts fencing before each provider side effect.
+- `urllib_json_request` maps 404/410 → CursorInvalid only for History/delta URLs; Gmail/Graph folder roles cover system labels / wellKnownName.
+
+
 ### Changed
 - 桌面 Electron 从 33 升级到 44.9.x（当前 npm latest / 受支持主版本）；`electron-builder` 升至 26.x。Electron 44 起不再提供 Windows ia32 / Linux armv7l 预构建包。
 - 后端整体替换为 mail-core（FastAPI + PostgreSQL + worker）；Flask 应用、旧版 `templates/` / `static/` UI、浏览器扩展、上游镜像与打包脚本全部删除，无兼容层。
