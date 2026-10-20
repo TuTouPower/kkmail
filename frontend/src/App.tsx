@@ -11,6 +11,7 @@ import { UNAUTHORIZED_EVENT, api } from './api/client'
 import { queryClient } from './api/queries'
 import './design-system/tokens.css'
 import { useIsWide } from './lib/viewport'
+import { workspaceGridColumns } from './lib/workspaceLayout'
 
 function resolveTheme(theme: 'dark' | 'light' | 'system'): 'dark' | 'light' {
   if (theme !== 'system') return theme
@@ -73,38 +74,33 @@ function App() {
     return <LoginPage onSuccess={() => { setAuthed(true); void queryClient.invalidateQueries() }} />
   }
 
-  const gridStyle = wide && !sidebarCollapsed
-    ? {
-        gridTemplateColumns: settingsOpen
-          ? `${sidebarWidth}px minmax(0, 1fr)`
-          : `${sidebarWidth}px ${listWidth}px minmax(0, 1fr)`,
-      }
-    : undefined
+  const gridColumns = workspaceGridColumns({
+    wide,
+    sidebarCollapsed,
+    settingsOpen,
+    sidebarWidth,
+    listWidth,
+  })
 
   return (
     <div
       className={['app', drawerOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : '', settingsOpen ? 'settings-mode' : ''].filter(Boolean).join(' ')}
       data-mobile-view={mobileView}
       style={{
-        // CSS variables drive column widths for tokens.css fallbacks too.
         ['--sidebar-w' as string]: `${sidebarWidth}px`,
         ['--list-w' as string]: `${listWidth}px`,
       }}
     >
-      <div className="workspace" style={gridStyle}>
+      <div
+        className="workspace"
+        data-testid="mail-workspace"
+        style={gridColumns ? { gridTemplateColumns: gridColumns } : undefined}
+      >
         <Sidebar />
         {wide && !sidebarCollapsed && (
           <ColumnResize
             ariaLabel="调整侧栏宽度"
             onDrag={(dx) => setSidebarWidth(sidebarWidth + dx)}
-          />
-        )}
-        {drawerOpen && (
-          <div
-            className="drawer-backdrop"
-            data-testid="drawer-backdrop"
-            aria-hidden="true"
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeMobileSidebar() }}
           />
         )}
         {settingsOpen ? (
@@ -122,6 +118,15 @@ function App() {
           </>
         )}
       </div>
+      {/* Outside the grid so it never consumes a track when the drawer opens. */}
+      {drawerOpen && (
+        <div
+          className="drawer-backdrop"
+          data-testid="drawer-backdrop"
+          aria-hidden="true"
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeMobileSidebar() }}
+        />
+      )}
       <ComposeModal />
     </div>
   )
