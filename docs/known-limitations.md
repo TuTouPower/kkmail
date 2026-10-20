@@ -50,3 +50,12 @@ CI workflows are in `.github/workflows/desktop.yml` and `.github/workflows/tests
 
 - OAuth, forwarding, projects, temporary mail, and WebDAV backup are reachable from Settings, but the old `/legacy` UI still holds the complete advanced flows.
 - End-to-end browser tests are not yet in place.
+
+
+## Mail list cache
+
+The React SPA keeps mail lists in `@tanstack/react-query` memory:
+
+- `staleTime` is 5 minutes (`MAIL_STALE_TIME_MS`); within that window navigation reuses the cache.
+- Soft refresh (toolbar 刷新) calls `invalidateQueries` and keeps showing the previous list via `placeholderData` while refetching.
+- There is still no durable IndexedDB/SQLite mail cache; a full page reload re-fetches from IMAP/Graph.

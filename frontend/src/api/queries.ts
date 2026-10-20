@@ -42,12 +42,19 @@ export interface MailDetail {
   id_mode?: string
 }
 
+/** Soft-refresh window: list data stays fresh for 5 minutes, and
+ *  invalidateQueries keeps showing the previous payload while refetching.
+ *  Soft refresh (toolbar) only marks stale; hard refresh can still `resetQueries`. */
+export const MAIL_STALE_TIME_MS = 5 * 60_000
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      staleTime: 15_000,
+      staleTime: MAIL_STALE_TIME_MS,
+      gcTime: 30 * 60_000,
       refetchOnWindowFocus: false,
+      placeholderData: (previousData: unknown) => previousData,
     },
   },
 })

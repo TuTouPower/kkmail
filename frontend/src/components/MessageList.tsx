@@ -80,7 +80,7 @@ export default function MessageList() {
   // so it matches the sidebar badge, which sums the same cached lists.
   const unreadCount = searched.filter((m) => !m.is_read).length
   const pendingAccounts = view.type === 'allInbox' ? allQueries.filter((q) => q.isLoading).length : 0
-  const loading = view.type === 'accountFolder' ? singleQuery.isLoading : accountsQuery.isLoading || (pendingAccounts > 0 && raw.length === 0)
+  const loading = view.type === 'accountFolder' ? singleQuery.isLoading && !singleQuery.data : accountsQuery.isLoading || (pendingAccounts > 0 && raw.length === 0)
   const failures: string[] = view.type === 'accountFolder'
     ? (singleQuery.error ? [errorMessage(singleQuery.error, String(singleQuery.error))] : [])
     : allQueries.flatMap((q, i) => (q.error ? [`${allAccounts[i]?.email}：${errorMessage(q.error, String(q.error))}`] : []))
@@ -109,10 +109,12 @@ export default function MessageList() {
   }
 
   function refreshView() {
+    // Soft refresh: mark stale and refetch, but keep showing cached rows
+    // (placeholderData + invalidate, not resetQueries).
     if (view.type === 'accountFolder') {
-      queryClient.invalidateQueries({ queryKey: queryKeys.emails(view.email, view.folder) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.emails(view.email, view.folder), refetchType: 'active' })
     } else {
-      queryClient.invalidateQueries({ queryKey: ['emails'] })
+      void queryClient.invalidateQueries({ queryKey: ['emails'], refetchType: 'active' })
     }
   }
 
