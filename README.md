@@ -19,7 +19,9 @@ https://aso.de5.net
 
 ### 方式一：下载 Windows `exe`(win可用)
 
-从 GitHub Releases 下载对应版本的 `kkmail-windows-x64-*.zip`，解压后直接运行 `kkmail.exe` 即可。
+从 GitHub Releases 下载对应版本的 `OutlookEmail-windows-x64-*.zip`，解压后直接运行 `OutlookEmail.exe` 即可。
+
+> 说明：kkmail 沿用上游的打包产物名与数据目录名（`OutlookEmail`），以便与上游版本的本地数据互通；应用内版本检查与升级指向本仓库 `TuTouPower/kkmail` 的 Release。
 
 Windows 桌面版发现新版本后，可在页面顶部的版本入口点击「立即升级」。确认后应用会把现有 Release ZIP 下载到当前 EXE 所在目录，显示下载百分比和速度，完成后自动替换并重启；下载阶段可以取消。
 
@@ -31,14 +33,14 @@ Windows 桌面版发现新版本后，可在页面顶部的版本入口点击「
 
 说明：
 
-- Windows 数据默认保存在 `%APPDATA%\kkmail`
+- Windows 数据默认保存在 `%APPDATA%\OutlookEmail`
 - 在线升级要求当前 EXE 所在目录可写，不会申请管理员权限；如果目录不可写，请先把程序移动到普通可写目录
 - 新版本启动失败时会自动恢复旧版本；如果升级期间断电，可将同目录的 `*.old.exe` 手动改回原文件名恢复
 - 默认登录密码仍然是 `[REDACTED]`，首次登录后建议立即修改
 
 ### 方式二：下载 macOS 安装包
 
-从 GitHub Releases 下载对应架构的 `kkmail-macos-*-*.dmg`，打开后把 `kkmail.app` 拖到 `Applications` 即可。
+从 GitHub Releases 下载对应架构的 `OutlookEmail-macos-*-*.dmg`，打开后把 `OutlookEmail.app` 拖到 `Applications` 即可。
 
 桌面版首次启动会自动：
 
@@ -48,9 +50,9 @@ Windows 桌面版发现新版本后，可在页面顶部的版本入口点击「
 
 说明：
 
-- macOS 数据默认保存在 `~/Library/Application Support/kkmail`
-- 如果 macOS 提示Apple无法验证“kkmail”是否包含可能危害Mac安全或泄漏隐私的恶意软件。可执行下面命令然后重试
-  `sudo xattr -rd com.apple.quarantine /Applications/kkmail.app` 
+- macOS 数据默认保存在 `~/Library/Application Support/OutlookEmail`
+- 如果 macOS 提示Apple无法验证“OutlookEmail”是否包含可能危害Mac安全或泄漏隐私的恶意软件。可执行下面命令然后重试
+  `sudo xattr -rd com.apple.quarantine /Applications/OutlookEmail.app` 
 - 默认登录密码仍然是 `[REDACTED]`，首次登录后建议立即修改
 
 ### 方式三：使用 Docker（推荐服务器部署）
@@ -72,7 +74,7 @@ docker run -d \
 ### 方式四：使用 Python 直接运行
 
 ```bash
-git clone https://github.com/assast/outlookEmail.git
+git clone https://github.com/TuTouPower/kkmail.git
 cd kkmail
 pip install -r requirements.txt
 export SECRET_KEY=your-secret-key-here
@@ -735,7 +737,7 @@ https://support.google.com/mail/answer/185833?hl=zh-Hans
 欢迎提交 Issue 和 Pull Request！
 
 ```bash
-git clone https://github.com/assast/outlookEmail.git
+git clone https://github.com/TuTouPower/kkmail.git
 cd kkmail
 python -m venv venv
 source venv/bin/activate
