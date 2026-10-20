@@ -215,6 +215,14 @@ def sync_folder_metadata(
                 payload={"folder_id": str(folder_id)},
                 priority=80,
             )
+            enqueue_job(
+                session,
+                job_type=JobType.SYNC_FOLDER_DELTA.value,
+                account_id=account_id,
+                payload={"folder_id": str(folder_id)},
+                priority=60,
+                run_after=datetime.now(timezone.utc) + timedelta(seconds=2),
+            )
             session.add(
                 OutboxEvent(
                     event_type=OutboxEventType.SYNC_COMPLETED.value,
