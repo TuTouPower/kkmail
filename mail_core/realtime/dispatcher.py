@@ -1,6 +1,9 @@
 """In-process outbox dispatcher with subscriber fan-out.
 
-LISTEN/NOTIFY wake is optional; workers can also run ``outbox_dispatch_wake`` jobs.
+LISTEN/NOTIFY wake is owned by the API process. Workers must only ``pg_notify``
+(see ``outbox_dispatch_wake``) — they must not call ``dispatch_once``, or they
+would ``mark_dispatched`` with no local SSE subscribers and steal events from
+the API process.
 """
 
 from __future__ import annotations
@@ -21,13 +24,13 @@ Subscriber = Callable[[dict[str, Any]], None]
 
 @dataclass
 class OutboxDispatcher:
-    """Polls undispatched rows and notifies subscribers."""
+    """Polls undispatched rows and notifies local subscribers only."""
 
     poll_interval_s: float = 0.5
     _subs: dict[str, list[tuple[asyncio.AbstractEventLoop, asyncio.Queue]]] = field(default_factory=lambda: defaultdict(list))
     _lock: threading.Lock = field(default_factory=threading.Lock)
-    # Serialises dispatch_once across the LISTEN thread / worker wake jobs so one
-    # batch is never fanned out twice (FOR UPDATE SKIP LOCKED covers other processes).
+    # Serialises dispatch_once across the LISTEN thread so one batch is never
+    # fanned out twice (FOR UPDATE SKIP LOCKED covers other API workers).
     _dispatch_lock: threading.Lock = field(default_factory=threading.Lock)
     _stop: bool = False
 
@@ -44,6 +47,10 @@ class OutboxDispatcher:
         key = account_id or "*"
         with self._lock:
             self._subs[key] = [(lp, qq) for (lp, qq) in self._subs.get(key, []) if qq is not q]
+
+    def has_local_subscribers(self) -> bool:
+        with self._lock:
+            return any(bool(v) for v in self._subs.values())
 
     @staticmethod
     def _put(q: asyncio.Queue, event: dict[str, Any]) -> None:
@@ -66,7 +73,17 @@ class OutboxDispatcher:
             except RuntimeError:
                 pass  # loop closed; subscriber is going away
 
-    def dispatch_once(self) -> int:
+    def dispatch_once(self, *, require_subscribers: bool = False) -> int:
+        """Fan out undispatched rows to local subscribers and mark them dispatched.
+
+        When ``require_subscribers`` is True (or when this process has none), skip
+        marking so a worker / idle process cannot steal events from the API.
+        API LISTEN path uses the default (False) so idle drain still marks rows;
+        live clients catch up via Last-Event-ID replay.
+        """
+        if require_subscribers and not self.has_local_subscribers():
+            return 0
+
         from mail_core.db.session import get_session_factory
 
         Session = get_session_factory()
