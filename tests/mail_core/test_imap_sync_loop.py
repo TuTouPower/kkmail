@@ -137,8 +137,8 @@ def test_live_imap_sync_via_worker_handler():
         session.commit()
         account_id = acc.id
 
-    # Drive worker claim loop for folders + a few metadata pages
-    for _ in range(8):
+    # Drive worker claim loop for folders + metadata + reconcile
+    for _ in range(20):
         with Session() as session:
             jobs = claim_jobs(session, worker_id="imap-worker", limit=1, account_id=account_id)
             if not jobs:
@@ -151,5 +151,5 @@ def test_live_imap_sync_via_worker_handler():
         folders = session.scalars(select(Folder).where(Folder.account_id == account_id)).all()
         assert any(f.remote_id.upper() == "INBOX" for f in folders)
         msgs = session.scalars(select(Message).where(Message.account_id == account_id)).all()
-        assert len(msgs) >= 1
+        assert len(msgs) >= 1, "expected IMAP metadata sync to persist messages"
     set_credential_store(None)
