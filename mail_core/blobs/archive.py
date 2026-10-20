@@ -264,7 +264,6 @@ def resume_quota_paused_archives(
     limit: int | None = None,
 ) -> int:
     """Reset ARCHIVE_PAUSED_QUOTA messages to ARCHIVE_PENDING and enqueue archive job."""
-    Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
 
     def _do_resume(s) -> int:
         stmt = (
@@ -320,6 +319,7 @@ def resume_quota_paused_archives(
         session.flush()
         return count
     else:
+        Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
         with Session() as s:
             count = _do_resume(s)
             s.commit()
