@@ -272,6 +272,32 @@ export const api = {
     return request<{ success?: boolean; error?: string }>(`/api/projects/${encodeURIComponent(projectKey)}`, { method: 'DELETE' })
   },
 
+  async getSettings() {
+    return request<{ success?: boolean; settings?: Record<string, string> }>('/api/settings')
+  },
+
+  async updateSettings(payload: Record<string, string>) {
+    return request<{ success?: boolean; message?: string; error?: string }>('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async reauthorizeAccount(accountId: number, redirectedUrl: string) {
+    return request<{ success?: boolean; error?: unknown }>(`/api/accounts/${accountId}/reauthorize`, {
+      method: 'POST',
+      body: JSON.stringify({ redirected_url: redirectedUrl }),
+    })
+  },
+
+  async getSkins() {
+    return request<{ success?: boolean; skins?: Array<{ id?: string; name?: string }>; active_skin_id?: string }>('/api/skins')
+  },
+
+  async activateSkin(skinId: string) {
+    return request<{ success?: boolean; error?: string }>(`/api/skins/${encodeURIComponent(skinId)}/activate`, { method: 'POST' })
+  },
+
   attachmentUrl(email: string, messageId: string, attachmentId: string, folder = 'inbox', idMode = '') {
     const q = new URLSearchParams({ folder, method: idMode === 'imap' ? 'imap' : 'graph' })
     if (idMode) q.set('id_mode', idMode)
