@@ -17,6 +17,22 @@ function testDefaultDataRootOutsideInstall() {
   assert.ok(!root.includes('app.asar'))
 }
 
+
+function testPasswordPersisted0600() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-pw-'))
+  const mgr = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
+  const a = mgr.password()
+  assert.ok(a && a.length >= 32)
+  const file = path.join(dataRoot, 'secrets', 'pg-password')
+  assert.ok(fs.existsSync(file))
+  const mode = fs.statSync(file).mode & 0o777
+  assert.strictEqual(mode, 0o600)
+  const mgr2 = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
+  assert.strictEqual(mgr2.password(), a)
+  assert.notStrictEqual(a, 'kkmail')
+  fs.rmSync(dataRoot, { recursive: true, force: true })
+}
+
 function testEnsureDirsWritesMarker() {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-'))
   const mgr = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
@@ -34,6 +50,7 @@ function testEnsureDirsWritesMarker() {
 
 testDefaultDataRootOutsideInstall()
 testEnsureDirsWritesMarker()
+testPasswordPersisted0600()
 console.log('postgresManager.test.js: ok')
 
 function testVendorBinDirDefault() {
