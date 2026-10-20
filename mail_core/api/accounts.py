@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -49,10 +49,13 @@ class AccountsPage(BaseModel):
     has_more: bool
 
 
+AllowedProvider = Literal["imap", "gmail", "graph", "memory", "stub"]
+
+
 class AccountCreateIn(BaseModel):
     email: str = Field(min_length=3, max_length=320)
-    provider: str = Field(min_length=2, max_length=32)
-    display_name: str | None = None
+    provider: AllowedProvider
+    display_name: str | None = Field(default=None, max_length=255)
     group_id: UUID | None = None
     config: dict[str, Any] | None = None
     # Written to credential store; never returned.
@@ -60,7 +63,7 @@ class AccountCreateIn(BaseModel):
 
 
 class AccountUpdateIn(BaseModel):
-    display_name: str | None = None
+    display_name: str | None = Field(default=None, max_length=255)
     group_id: UUID | None = None
     clear_group: bool = False
     sync_enabled: bool | None = None
@@ -77,7 +80,7 @@ class GroupOut(BaseModel):
 
 class GroupCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
-    color: str | None = None
+    color: str | None = Field(default=None, max_length=32)
 
 
 class GroupsOut(BaseModel):
