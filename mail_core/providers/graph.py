@@ -175,7 +175,8 @@ class GraphProvider:
             )
 
         if op == OP_TRASH:
-            # Soft-delete: move to deleteditems when provided, else DELETE
+            # Soft-delete: move to deleteditems when provided, else DELETE.
+            # Never swallow RateLimitedError / CursorInvalidError into a hard DELETE.
             trash = str(desired_state.get("trash_folder_remote_id") or "deleteditems")
             try:
                 data = self._call("POST", f"{msg_path}/move", {"destinationId": trash})
@@ -183,7 +184,9 @@ class GraphProvider:
                     success=True,
                     remote_state={"folder_remote_id": data.get("parentFolderId") or trash},
                 )
-            except Exception:
+            except (RateLimitedError, CursorInvalidError):
+                raise
+            except ProviderHttpError:
                 self._call("DELETE", msg_path, {})
                 return RemoteOperationResult(success=True, remote_state={"deleted": True})
 

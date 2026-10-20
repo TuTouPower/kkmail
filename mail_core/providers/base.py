@@ -35,6 +35,8 @@ class RemoteMessageMeta:
     size_bytes: int | None = None
     to_addresses: tuple[str, ...] = ()
     cc_addresses: tuple[str, ...] = ()
+    in_reply_to: str | None = None
+    references: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
