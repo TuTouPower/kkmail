@@ -3,35 +3,23 @@
 import { apiBaseUrl } from '../lib/apiBase'
 import { apiRequest, postJson } from './client'
 import type { MailDetail, MailItem } from './queries'
+import type {
+  MailCoreAttachment,
+  MailCoreInboxPage,
+  MailCoreMessage,
+  MailCoreMessageDetail,
+  MailCoreSearchPage,
+  MutationResult,
+} from './schemaTypes'
 
-export interface MailCoreMessage {
-  id: string
-  account_id: string
-  account_email: string | null
-  subject: string
-  from_address: string
-  from_name: string | null
-  sort_time: string
-  is_read: boolean
-  is_flagged: boolean
-  has_attachments: boolean
-  snippet: string | null
-  folder_id: string | null
-}
-
-export interface MailCoreInboxPage {
-  items: MailCoreMessage[]
-  /** Opaque keyset token; pass back as `cursor`. */
-  next_cursor: string | null
-}
-
-export interface MailCoreSearchPage {
-  query: string
-  items: MailCoreMessage[]
-  total: number
-  offset: number
-  next_offset: number | null
-}
+export type {
+  MailCoreAttachment,
+  MailCoreInboxPage,
+  MailCoreMessage,
+  MailCoreMessageDetail,
+  MailCoreSearchPage,
+  MutationResult,
+} from './schemaTypes'
 
 export interface MailCoreInboxQuery {
   limit?: number
@@ -39,15 +27,6 @@ export interface MailCoreInboxQuery {
   accountId?: string
   cursor?: string
   signal?: AbortSignal
-}
-
-export interface MutationResult {
-  id: string
-  account_id: string
-  operation_id: string
-  is_read?: boolean | null
-  is_flagged?: boolean | null
-  success: boolean
 }
 
 export function postMailCoreMessageRead(messageId: string, isRead: boolean, signal?: AbortSignal): Promise<MutationResult> {
@@ -97,40 +76,16 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
   }
 }
 
-export interface MailCoreAttachment {
-  id: string
-  name: string
-  contentType: string | null
-  size: number | null
-  is_inline: boolean
-}
-
-export interface MailCoreMessageDetail {
-  id: string
-  account_id: string
-  subject: string
-  from_address: string
-  from_name: string | null
-  from: string
-  to: string
-  cc: string
-  date: string
-  is_read: boolean
-  is_flagged: boolean
-  has_attachments: boolean
-  snippet: string | null
-  body: string
-  body_type: 'html' | 'text' | 'empty'
-  parse_error: string | null
-  attachments: MailCoreAttachment[]
-}
-
 export function fetchMailCoreMessage(messageId: string, signal?: AbortSignal): Promise<MailCoreMessageDetail> {
   return apiRequest(`/api/mail/messages/${encodeURIComponent(messageId)}`, { signal })
 }
 
 export function mailCoreAttachmentUrl(attachmentId: string): string {
   return `${apiBaseUrl()}/api/mail/attachments/${encodeURIComponent(attachmentId)}`
+}
+
+function detailBodyType(raw: string): MailDetail['body_type'] {
+  return raw === 'html' || raw === 'text' ? raw : undefined
 }
 
 /** Map mail-core detail into the reader's MailDetail shape. */
@@ -143,9 +98,9 @@ export function mailCoreToMailDetail(d: MailCoreMessageDetail): MailDetail {
     cc: d.cc || undefined,
     date: d.date,
     body: d.body,
-    body_type: d.body_type === 'empty' ? undefined : d.body_type,
+    body_type: detailBodyType(d.body_type),
     has_attachments: d.has_attachments,
-    attachments: d.attachments.map((a) => ({
+    attachments: d.attachments.map((a: MailCoreAttachment) => ({
       id: a.id,
       name: a.name,
       size: a.size ?? undefined,
