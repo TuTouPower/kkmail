@@ -61,6 +61,38 @@ def test_imap_fetch_metadata_page_raises_on_uidvalidity_change(monkeypatch):
         prov.fetch_metadata_page("INBOX", {"uid_next": 1, "uidvalidity": 1})
 
 
+def test_imap_fetch_mime_and_writeback_uidvalidity_mismatch(monkeypatch):
+    from mail_core.providers import imap as imap_mod
+
+    class FakeIMAP:
+        def select(self, *a, **k):
+            return ("OK", [b"1"])
+
+        def status(self, folder, items):
+            return ("OK", [b'"INBOX" (UIDVALIDITY 99)'])
+
+        def uid(self, *a, **k):
+            return ("OK", [(b"flags", b"headers")])
+
+        def logout(self):
+            return ("OK", [])
+
+    prov = imap_mod.ImapProvider("h", 993, "u", "p", use_ssl=False)
+    monkeypatch.setattr(prov, "_connect", lambda: FakeIMAP())
+
+    # Namespaced remote_id with UIDVALIDITY 1 differs from server's 99
+    rid = imap_mod.format_imap_remote_id("INBOX", 1, 100)
+
+    # fetch_mime should raise on mismatch
+    with pytest.raises(RuntimeError, match="UIDVALIDITY mismatch"):
+        prov.fetch_mime(rid)
+
+    # apply_remote_operation should return failure on mismatch
+    res = prov.apply_remote_operation("mark_read", {"remote_id": rid, "is_read": True})
+    assert not res.success
+    assert "UIDVALIDITY mismatch" in (res.error or "")
+
+
 @pytestmark_db
 def test_sync_folder_metadata_rebuilds_on_cursor_invalid():
     store = DictCredentialStore({"r": "x"})
