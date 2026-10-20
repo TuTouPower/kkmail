@@ -20,6 +20,7 @@ from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.queries import (
     get_folder_stats,
+    get_message_detail,
     list_folder_stats_for_account,
     unified_inbox,
 )
@@ -115,6 +116,63 @@ def api_search(q: str = Query(..., min_length=1), account_id: UUID | None = None
             limit=limit,
         )
         return {"query": q, "message_ids": [str(i) for i in ids]}
+
+@router.get("/messages/{message_id}")
+def api_get_message(message_id: UUID):
+    """Message metadata + parsed body + attachments (by UUID)."""
+    Session = get_session_factory()
+    with Session() as session:
+        detail = get_message_detail(session, message_id)
+        if detail is None:
+            raise HTTPException(404, "message not found")
+        body = detail.body_html if detail.body_type == "html" else (detail.body_text or "")
+        return {
+            "id": str(detail.id),
+            "account_id": str(detail.account_id),
+            "subject": detail.subject,
+            "from_address": detail.from_address,
+            "from_name": detail.from_name,
+            "from": (f"{detail.from_name} <{detail.from_address}>" if detail.from_name else detail.from_address),
+            "to": ", ".join(str(x) for x in detail.to_addresses) if detail.to_addresses else "",
+            "cc": ", ".join(str(x) for x in detail.cc_addresses) if detail.cc_addresses else "",
+            "date": detail.sort_time.isoformat(),
+            "is_read": detail.is_read,
+            "has_attachments": detail.has_attachments,
+            "snippet": detail.snippet,
+            "body": body,
+            "body_type": detail.body_type,
+            "parse_error": detail.parse_error,
+            "attachments": [
+                {
+                    "id": str(a.id),
+                    "name": a.filename,
+                    "contentType": a.content_type,
+                    "size": a.size_bytes,
+                    "is_inline": a.is_inline,
+                }
+                for a in detail.attachments
+            ],
+        }
+
+
+@router.get("/messages/{message_id}/body")
+def api_get_message_body(message_id: UUID):
+    """Body-only view for the reader (same source as GET /messages/{id})."""
+    Session = get_session_factory()
+    with Session() as session:
+        detail = get_message_detail(session, message_id)
+        if detail is None:
+            raise HTTPException(404, "message not found")
+        body = detail.body_html if detail.body_type == "html" else (detail.body_text or "")
+        return {
+            "id": str(detail.id),
+            "body": body,
+            "body_type": detail.body_type,
+            "parse_error": detail.parse_error,
+            "snippet": detail.snippet,
+        }
+
+
 
 
 @router.get("/attachments/{attachment_id}")
