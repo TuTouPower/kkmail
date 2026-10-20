@@ -121,10 +121,12 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             complete_job(session, job)
             return
 
-        if job.job_type in {
-            JobType.BACKUP_RUN.value,
-        }:
-            log.info("deferred handler for %s id=%s", job.job_type, job.id)
+        if job.job_type == JobType.BACKUP_RUN.value:
+            from mail_core.backup.package import run_backup
+
+            session.commit()
+            result = run_backup(output_dir=payload.get("output_dir"))
+            log.info("backup_run %s", result)
             complete_job(session, job)
             return
 
