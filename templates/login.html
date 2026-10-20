@@ -142,9 +142,10 @@
         <div class="error-message" id="errorMessage"></div>
         
         <form id="loginForm" onsubmit="handleLogin(event)">
+            <input type="text" name="username" autocomplete="username" value="kkmail" hidden readonly aria-hidden="true">
             <div class="form-group">
                 <label class="form-label" for="password">登录密码</label>
-                <input type="password" class="form-input" id="password" placeholder="请输入密码" autofocus required>
+                <input type="password" class="form-input" id="password" name="password" autocomplete="current-password" placeholder="请输入密码" autofocus required>
             </div>
             <div class="form-group">
                 <label class="form-label" for="sessionDuration">登录有效期</label>
