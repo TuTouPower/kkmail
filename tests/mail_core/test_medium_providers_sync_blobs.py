@@ -344,3 +344,39 @@ def test_create_account_duplicate_does_not_overwrite_credentials(monkeypatch):
 
     # Verify existing secret was not touched/overwritten
     assert store.get_secret("account:existing@test.com") == {"password": "old-password"}
+
+
+def test_enqueue_account_sync_raises_when_disabled():
+    from unittest.mock import MagicMock
+    from mail_core.accounts.service import enqueue_account_sync
+    from mail_core.mail.storage.models import Account
+
+    mock_session = MagicMock()
+    acc = Account(email="dis@ex.com", provider="imap", sync_enabled=False)
+    mock_session.get.return_value = acc
+
+    with pytest.raises(ValueError, match="account sync is disabled"):
+        enqueue_account_sync(mock_session, uuid.uuid4())
+
+
+def test_handle_job_skips_when_sync_disabled():
+    from unittest.mock import MagicMock, patch
+    from mail_core.mail.domain.enums import JobType
+    from mail_core.mail.storage.models import Account, WorkerJob
+    from mail_core.worker.handlers import handle_job
+
+    mock_session = MagicMock()
+    acc = Account(email="dis@ex.com", provider="imap", sync_enabled=False)
+    mock_session.get.return_value = acc
+
+    job = WorkerJob(
+        id=uuid.uuid4(),
+        job_type=JobType.SYNC_FOLDER_DELTA.value,
+        account_id=uuid.uuid4(),
+        payload={"folder_id": str(uuid.uuid4())},
+    )
+
+    with patch("mail_core.worker.handlers.complete_job") as mock_complete:
+        res = handle_job(mock_session, job)
+        assert res is True
+        mock_complete.assert_called_once()
