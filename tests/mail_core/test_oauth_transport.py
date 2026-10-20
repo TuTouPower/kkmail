@@ -28,7 +28,7 @@ def test_refresh_token_grant_persists_access_token():
                     "refresh_token": "rt-1",
                     "client_id": "cid",
                     "client_secret": "sec",
-                    "token_uri": "https://oauth.test/token",
+                    "token_uri": "https://oauth2.googleapis.com/token",
                 }
             )
         }
@@ -65,7 +65,7 @@ def test_bearer_transport_attaches_header_and_retries_401():
                     "refresh_token": "rt",
                     "client_id": "c",
                     "client_secret": "s",
-                    "token_uri": "https://oauth.test/token",
+                    "token_uri": "https://oauth2.googleapis.com/token",
                     "access_token": "stale",
                     "expires_at": time.time() + 9999,
                 }
@@ -107,7 +107,7 @@ def test_factory_wires_gmail_oauth_and_not_configured_without_ref():
                     "refresh_token": "rt",
                     "client_id": "c",
                     "client_secret": "s",
-                    "token_uri": "https://oauth.test/token",
+                    "token_uri": "https://oauth2.googleapis.com/token",
                 }
             )
         }
@@ -145,7 +145,7 @@ def test_factory_wires_graph_oauth():
                     "refresh_token": "rt",
                     "client_id": "c",
                     "client_secret": "s",
-                    "token_uri": "https://login.test/token",
+                    "token_uri": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
                 }
             )
         }

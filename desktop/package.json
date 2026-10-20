@@ -1,7 +1,7 @@
 {
   "name": "kkmail-desktop",
   "version": "3.0.20",
-  "description": "kkmail desktop shell \u2014 Electron hosts the shared React UI and Flask backend",
+  "description": "kkmail desktop shell \u2014 Electron hosts the React UI and the mail-core backend",
   "main": "main.js",
   "homepage": "https://github.com/TuTouPower/kkmail",
   "author": "TuTouPower <tutoupower@users.noreply.github.com>",

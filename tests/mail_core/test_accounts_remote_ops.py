@@ -31,7 +31,8 @@ def test_create_account_stores_credential_ref_only():
         session.commit()
         assert acc.credential_ref.startswith("keychain:")
         assert "password" not in (acc.config or {})
-        assert any(a.id == acc.id for a in list_accounts(session))
+        rows, _total = list_accounts(session, limit=500)
+        assert any(a.id == acc.id for a in rows)
 
 
 def test_enqueue_remote_operation_outbox():
