@@ -135,7 +135,13 @@ def handle_job(session: Session, job: WorkerJob, *, worker_id: str | None = None
             from mail_core.sync.delta import sync_folder_delta
 
             session.commit()
-            result = sync_folder_delta(account_id, folder_id, worker_id=worker_id, store=store)
+            result = sync_folder_delta(
+                account_id,
+                folder_id,
+                worker_id=worker_id,
+                store=store,
+                poll_round=int(payload.get("poll_round") or 0),
+            )
             log.info("sync_folder_delta %s", result)
             return _evaluate_result(session, job, result, worker_id)
 
