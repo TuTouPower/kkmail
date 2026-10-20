@@ -1,7 +1,7 @@
 from mail_core.sync.checkpoints import commit_checkpoint
 from mail_core.sync.delta import DeltaApplyResult, apply_delta_page, sync_folder_delta
 from mail_core.sync.engine import sync_account_folders, sync_folder_metadata
-from mail_core.sync.jobs import claim_jobs, complete_job, enqueue_job, fail_job
+from mail_core.sync.jobs import reclaim_stale_claims, claim_jobs, complete_job, enqueue_job, fail_job
 from mail_core.sync.leases import (
     FencingMismatch,
     LeaseBusy,
@@ -16,6 +16,7 @@ from mail_core.sync.reconcile import reconcile_folder
 from mail_core.sync.remote_push import push_remote_operations
 
 __all__ = [
+    "reclaim_stale_claims",
     "DeltaApplyResult",
     "FencingMismatch",
     "LeaseBusy",
