@@ -247,7 +247,11 @@ class GmailProvider:
         data = self._call("GET", f"/gmail/v1/users/{self.user_id}/history", params)
         if "page" in data:
             return data["page"]
-        page = parse_gmail_history(data, folder_label=folder_remote_id)
+        page = parse_gmail_history(
+            data,
+            folder_label=folder_remote_id,
+            start_history_id=str(history_id),
+        )
         hydrated_changes: list[DeltaChange] = []
         for change in page.changes:
             if change.kind == "upsert":
