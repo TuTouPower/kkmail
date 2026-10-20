@@ -8,8 +8,9 @@ import uuid
 from sqlalchemy.orm import Session
 
 from mail_core.accounts.credentials import get_credential_store
+from mail_core.accounts.service import update_account_sync_status
 from mail_core.mail.domain.enums import JobType
-from mail_core.mail.storage.models import WorkerJob
+from mail_core.mail.storage.models import Account, WorkerJob
 from mail_core.sync.jobs import complete_job, fail_job
 
 log = logging.getLogger("mail_core.worker.handlers")
@@ -28,6 +29,22 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
     store = get_credential_store()
 
     try:
+        if job.job_type in (
+            JobType.SYNC_ACCOUNT_FOLDERS.value,
+            JobType.SYNC_FOLDER_METADATA.value,
+            JobType.SYNC_FOLDER_DELTA.value,
+            JobType.RECONCILE_FOLDER.value,
+        ):
+            if account_id is None:
+                log.info("job %s missing account_id, marking complete", job.id)
+                complete_job(session, job, worker_id=worker_id)
+                return True
+            acc = session.get(Account, account_id)
+            if acc is None or not acc.sync_enabled:
+                log.info("account %s not found or sync disabled, skipping job %s", account_id, job.id)
+                complete_job(session, job, worker_id=worker_id)
+                return True
+
         if job.job_type == JobType.SYNC_ACCOUNT_FOLDERS.value:
             if account_id is None:
                 raise ValueError("account_id required")
@@ -38,6 +55,10 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
             session.commit()
             result = sync_account_folders(account_id, worker_id=worker_id, store=store)
             log.info("sync_account_folders %s", result)
+            if result.get("status") in ("ok", "sync_disabled"):
+                update_account_sync_status(session, account_id, "idle")
+            elif result.get("status") in ("rate_limited", "lease_busy", "provider_error"):
+                update_account_sync_status(session, account_id, "failed", error=str(result.get("status")))
             complete_job(session, job, worker_id=worker_id)
             return True
 
@@ -139,5 +160,10 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
         log.error("job %s (%s) failed: %s", job.id, job.job_type, safe_error(exc))
         log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()
+        if account_id is not None:
+            try:
+                update_account_sync_status(session, account_id, "failed", error=str(exc))
+            except Exception:
+                pass
         fail_job(session, job, exc, worker_id=worker_id)
         return False

@@ -10,6 +10,7 @@ import email.header
 import email.utils
 import imaplib
 import re
+import ssl
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -49,9 +50,12 @@ def _decode_header(raw: str | None) -> str:
     out: list[str] = []
     for chunk, charset in parts:
         if isinstance(chunk, bytes):
-            out.append(chunk.decode(charset or "utf-8", errors="replace"))
+            try:
+                out.append(chunk.decode(charset or "utf-8", errors="replace"))
+            except LookupError:
+                out.append(chunk.decode("utf-8", errors="replace"))
         else:
-            out.append(chunk)
+            out.append(str(chunk))
     return "".join(out)
 
 
@@ -103,6 +107,21 @@ def _check_uidvalidity(cursor: dict[str, Any] | None, uidvalidity: int | None) -
             status=None,
         )
 
+
+def _get_server_uidvalidity(c: imaplib.IMAP4, folder: str) -> int | None:
+    if not hasattr(c, "status"):
+        return None
+    try:
+        status = c.status(folder, "(UIDVALIDITY)")
+        if status[0] == "OK" and status[1] and status[1][0]:
+            blob = status[1][0].decode() if isinstance(status[1][0], bytes) else str(status[1][0])
+            m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
+            if m:
+                return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
 @dataclass
 class ImapProvider:
     host: str
@@ -123,7 +142,10 @@ class ImapProvider:
     def _connect(self) -> imaplib.IMAP4:
         timeout = float(self.timeout)
         if self.use_ssl:
-            client: imaplib.IMAP4 = imaplib.IMAP4_SSL(self.host, self.port, timeout=timeout)
+            ssl_context = ssl.create_default_context()
+            client: imaplib.IMAP4 = imaplib.IMAP4_SSL(
+                self.host, self.port, ssl_context=ssl_context, timeout=timeout
+            )
         else:
             client = imaplib.IMAP4(self.host, self.port, timeout=timeout)
         client.login(self.username, self.password)
@@ -144,7 +166,10 @@ class ImapProvider:
                 line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
                 m = re.search(r' "?"?([^"]+)"?\s*$', line)
                 name = m.group(1).strip() if m else line.rsplit(" ", 1)[-1].strip('"')
-                role = _FOLDER_ROLE.get(name, "other")
+                if name.upper() == "INBOX":
+                    role = "inbox"
+                else:
+                    role = _FOLDER_ROLE.get(name, "other")
                 folders.append(RemoteFolder(remote_id=name, name=name, role=role))
             if not any(f.remote_id.upper() == "INBOX" for f in folders):
                 folders.insert(0, RemoteFolder("INBOX", "INBOX", "inbox"))
@@ -178,10 +203,24 @@ class ImapProvider:
             if typ != "OK":
                 # Never treat a failed SEARCH as "folder exhausted" — that silently stops sync.
                 raise RuntimeError(f"UID SEARCH {folder_remote_id} failed: {typ}")
-            uids = [int(x) for x in (data[0] or b"").split() if x]
-            uids = [u for u in uids if u >= start]
             batch_size = int((cursor or {}).get("page_size") or 50)
-            batch = uids[:batch_size]
+            batch: list[int] = []
+            has_more = False
+            for chunk in (data or ()):
+                if not chunk:
+                    continue
+                raw_chunk = chunk if isinstance(chunk, bytes) else str(chunk).encode()
+                for m in re.finditer(rb"\d+", raw_chunk):
+                    val = int(m.group(0))
+                    if val < start:
+                        continue
+                    if len(batch) < batch_size:
+                        batch.append(val)
+                    else:
+                        has_more = True
+                        break
+                if has_more:
+                    break
             items: list[RemoteMessageMeta] = []
             for uid in batch:
                 typ, fetched = c.uid(
@@ -238,7 +277,7 @@ class ImapProvider:
                     exhausted=True,
                 )
             next_uid = batch[-1] + 1
-            exhausted = len(uids) <= batch_size
+            exhausted = not has_more
             return MetadataPage(
                 items=items,
                 next_cursor={"uid_next": next_uid, "uidvalidity": uidvalidity, "page_size": batch_size},
@@ -259,6 +298,7 @@ class ImapProvider:
         else:
             folder = folder_remote_id
             uid_str = str(remote_id)
+            _uv = None
         if not folder:
             raise ValueError(
                 "IMAP fetch_mime requires folder_remote_id= or a namespaced remote_id "
@@ -269,6 +309,10 @@ class ImapProvider:
             typ, _ = c.select(folder, readonly=True)
             if typ != "OK":
                 raise RuntimeError(f"select {folder} failed for fetch_mime")
+            if _uv is not None and _uv > 0:
+                srv_uv = _get_server_uidvalidity(c, folder)
+                if srv_uv is not None and srv_uv != _uv:
+                    raise RuntimeError(f"UIDVALIDITY mismatch for {folder}: expected {_uv}, got {srv_uv}")
             typ, data = c.uid("FETCH", uid_str, "(BODY.PEEK[])")
             if typ != "OK" or not data or data[0] is None:
                 raise RuntimeError(f"fetch mime {remote_id} failed")
@@ -356,32 +400,55 @@ class ImapProvider:
                                 exhausted=True,
                             )
                         uid_next = int(cursor.get("uid_next") or 1)
+                        flag_uid_after = int(cursor.get("flag_uid_after") or 0)
                         # New UIDs: full metadata upsert; older UIDs: flag-only.
-                        new_uids = [u for u in changed_uids if u >= uid_next]
-                        flag_uids = [u for u in changed_uids if u < uid_next]
-                        if flag_uids:
+                        new_uids = sorted([u for u in changed_uids if u >= uid_next])
+                        flag_uids = sorted([u for u in changed_uids if u < uid_next and u > flag_uid_after])
+
+                        batch_flag_uids = flag_uids[:200]
+                        has_more_flags = len(flag_uids) > 200
+                        if batch_flag_uids:
                             changes.extend(
-                                self._fetch_flags_for_uids(c, folder_remote_id, uv, flag_uids[:200])
+                                self._fetch_flags_for_uids(c, folder_remote_id, uv, batch_flag_uids)
                             )
+
+                        next_cursor = dict(cursor)
+                        if uidvalidity is not None:
+                            next_cursor["uidvalidity"] = uidvalidity
+
+                        has_more_new = False
                         if new_uids:
                             # Page via temporary cursor starting at the lowest new UID.
+                            batch_size = min(50, len(new_uids))
                             page = self.fetch_metadata_page(
                                 folder_remote_id,
-                                {**cursor, "uid_next": min(new_uids), "page_size": min(50, len(new_uids))},
+                                {**cursor, "uid_next": min(new_uids), "page_size": batch_size},
                             )
                             changes.extend(
                                 DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items
                             )
-                            next_cursor = dict(page.next_cursor or {})
+                            p_next = page.next_cursor.get("uid_next")
+                            if p_next is not None:
+                                next_cursor["uid_next"] = p_next
+                                has_more_new = not page.exhausted or any(u >= p_next for u in new_uids)
+                            else:
+                                has_more_new = not page.exhausted
+
+                        if has_more_flags:
+                            next_cursor["flag_uid_after"] = batch_flag_uids[-1]
+                            next_cursor["modseq"] = since_modseq
                         else:
-                            next_cursor = dict(cursor)
-                        next_cursor["modseq"] = highest
-                        if uidvalidity is not None:
-                            next_cursor["uidvalidity"] = uidvalidity
+                            next_cursor.pop("flag_uid_after", None)
+                            if has_more_new:
+                                next_cursor["modseq"] = since_modseq
+                            else:
+                                next_cursor["modseq"] = highest
+
+                        exhausted = not (has_more_flags or has_more_new)
                         return DeltaPage(
                             changes=changes,
                             next_cursor=next_cursor,
-                            exhausted=len(changed_uids) <= 200 and not new_uids,
+                            exhausted=exhausted,
                         )
                 except Exception:
                     pass
@@ -390,7 +457,7 @@ class ImapProvider:
             page = self.fetch_metadata_page(folder_remote_id, cursor)
             changes = [DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items]
             next_cursor = dict(page.next_cursor or {})
-            if highest is not None:
+            if highest is not None and page.exhausted:
                 next_cursor["modseq"] = highest
             if uidvalidity is not None:
                 next_cursor["uidvalidity"] = uidvalidity
@@ -425,6 +492,16 @@ class ImapProvider:
             if typ != "OK":
                 return RemoteOperationResult(success=False, error=f"select {folder} failed")
 
+            if parsed is not None:
+                _uv = parsed[0]
+                if _uv > 0:
+                    srv_uv = _get_server_uidvalidity(c, folder)
+                    if srv_uv is not None and srv_uv != _uv:
+                        return RemoteOperationResult(
+                            success=False,
+                            error=f"UIDVALIDITY mismatch for {folder}: expected {_uv}, got {srv_uv}",
+                        )
+
             if op == OP_MARK_READ:
                 want_read = bool(desired_state.get("is_read", True))
                 flag_op = "+FLAGS" if want_read else "-FLAGS"
@@ -445,43 +522,25 @@ class ImapProvider:
                 dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
                 if not dest:
                     return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
-                # Prefer UID MOVE (RFC 6851); fall back to COPY + delete.
+                # Prefer UID MOVE (RFC 6851); never STORE \Deleted or expunge entire mailbox
                 typ, _ = c.uid("MOVE", uid_str, dest)
                 if typ != "OK":
-                    typ, _ = c.uid("COPY", uid_str, dest)
-                    if typ != "OK":
-                        return RemoteOperationResult(success=False, error=f"COPY/MOVE to {dest} failed")
-                    typ, _ = c.uid("STORE", uid_str, "+FLAGS", r"(\Deleted)")
-                    if typ != "OK":
-                        return RemoteOperationResult(success=False, error="STORE Deleted after COPY failed")
-                    try:
-                        c.expunge()
-                    except Exception:
-                        pass
+                    return RemoteOperationResult(
+                        success=False,
+                        error="IMAP server does not support atomic MOVE/delete",
+                    )
                 return RemoteOperationResult(success=True, remote_state={"folder_remote_id": dest})
 
             if op == OP_TRASH:
                 trash = str(desired_state.get("trash_folder_remote_id") or "Trash")
-                # Try move into trash mailbox first
+                # Try move into trash mailbox first; never STORE \Deleted or expunge entire mailbox
                 typ, _ = c.uid("MOVE", uid_str, trash)
-                if typ == "OK":
-                    return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
-                typ, _ = c.uid("COPY", uid_str, trash)
-                if typ == "OK":
-                    c.uid("STORE", uid_str, "+FLAGS", r"(\Deleted)")
-                    try:
-                        c.expunge()
-                    except Exception:
-                        pass
-                    return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
-                typ, _ = c.uid("STORE", uid_str, "+FLAGS", r"(\Deleted)")
                 if typ != "OK":
-                    return RemoteOperationResult(success=False, error="STORE Deleted failed")
-                try:
-                    c.expunge()
-                except Exception:
-                    pass
-                return RemoteOperationResult(success=True)
+                    return RemoteOperationResult(
+                        success=False,
+                        error="IMAP server does not support atomic MOVE/delete",
+                    )
+                return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
 
             return RemoteOperationResult(success=False, error=f"imap apply not implemented: {op_type}")
         finally:

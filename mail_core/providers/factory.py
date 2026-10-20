@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.storage.models import Account
 from mail_core.providers.base import MailProvider
@@ -53,7 +55,20 @@ def build_provider(
     if provider == "imap":
         if not account.credential_ref:
             raise ValueError("imap account missing credential_ref")
-        password = store.get_secret(account.credential_ref)
+        secret = store.get_secret(account.credential_ref)
+        if isinstance(secret, dict):
+            password = str(secret.get("password") or secret.get("secret") or "")
+        elif isinstance(secret, str) and secret.strip().startswith("{"):
+            try:
+                data = json.loads(secret)
+                if isinstance(data, dict):
+                    password = str(data.get("password") or data.get("secret") or secret)
+                else:
+                    password = secret
+            except Exception:
+                password = secret
+        else:
+            password = str(secret or "")
         host = cfg.get("imap_host") or cfg.get("host")
         user = cfg.get("imap_user") or cfg.get("username") or account.email
         raw_ssl = cfg.get("use_ssl", True)
