@@ -294,6 +294,46 @@ export const api = {
     return request<{ success?: boolean; skins?: Array<{ id?: string; name?: string }>; active_skin_id?: string }>('/api/skins')
   },
 
+  async createGroup(payload: { name: string; description?: string; color?: string }) {
+    return request<{ success?: boolean; error?: string }>('/api/groups', { method: 'POST', body: JSON.stringify(payload) })
+  },
+
+  async deleteGroup(id: number) {
+    return request<{ success?: boolean; error?: string }>(`/api/groups/${id}`, { method: 'DELETE' })
+  },
+
+  async deleteAccount(id: number) {
+    return request<{ success?: boolean; error?: string }>(`/api/accounts/${id}`, { method: 'DELETE' })
+  },
+
+  async createTag(name: string) {
+    return request<{ success?: boolean; error?: string }>('/api/tags', { method: 'POST', body: JSON.stringify({ name }) })
+  },
+
+  async deleteTag(id: number) {
+    return request<{ success?: boolean; error?: string }>(`/api/tags/${id}`, { method: 'DELETE' })
+  },
+
+  async refreshAll() {
+    return request<{ success?: boolean; message?: string; error?: string }>('/api/accounts/refresh-all')
+  },
+
+  async refreshAccount(id: number) {
+    return request<{ success?: boolean; error?: string }>(`/api/accounts/${id}/refresh`, { method: 'POST' })
+  },
+
+  async getEmailShares() {
+    return request<{ success?: boolean; shares?: Array<{ id: number; token?: string; email?: string; status?: string }> }>('/api/email-shares')
+  },
+
+  async createEmailShare(payload: { account_id: number; duration_minutes?: number; max_email_count?: number }) {
+    return request<{ success?: boolean; error?: string; share?: { url?: string } }>('/api/email-shares', { method: 'POST', body: JSON.stringify(payload) })
+  },
+
+  async cancelEmailShare(id: number) {
+    return request<{ success?: boolean; error?: string }>(`/api/email-shares/${id}/cancel`, { method: 'POST' })
+  },
+
   async activateSkin(skinId: string) {
     return request<{ success?: boolean; error?: string }>(`/api/skins/${encodeURIComponent(skinId)}/activate`, { method: 'POST' })
   },
