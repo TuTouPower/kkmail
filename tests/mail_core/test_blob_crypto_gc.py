@@ -74,16 +74,21 @@ def test_delayed_gc_respects_cooloff(tmp_path, monkeypatch):
         )
         session.add(blob)
         session.commit()
-        # cool-off not elapsed
+        # cool-off not elapsed (gc_eligible_at stamped by mark_unreferenced)
         r1 = sweep_expired_blobs(session, cool_off=timedelta(hours=24), root=tmp_path)
         session.commit()
         assert r1.deleted == 0
         assert r1.skipped_cooloff >= 1
-        # force old created_at
         blob = session.scalar(select(MessageBlob).where(MessageBlob.content_sha256 == digest))
-        blob.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+        assert blob.gc_eligible_at is not None
+        # force cool-off elapsed via gc_eligible_at (not created_at)
+        blob.gc_eligible_at = datetime.now(timezone.utc) - timedelta(hours=48)
         session.commit()
         r2 = sweep_expired_blobs(session, cool_off=timedelta(hours=24), root=tmp_path)
+        paths = r2.paths_to_unlink
         session.commit()
         assert r2.deleted == 1
+        # Phase 2 unlink after commit
+        from mail_core.blobs.gc import unlink_gc_paths
+        unlink_gc_paths(paths)
         assert not (tmp_path / rel).exists()

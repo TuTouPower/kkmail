@@ -423,19 +423,40 @@ def verify_backup_package(
         if extract_dir.exists():
             shutil.rmtree(extract_dir)
         extract_dir.mkdir(parents=True)
-        if not _extract_plain_tar(plaintext, extract_dir, errors):
-            shutil.rmtree(extract_dir, ignore_errors=True)
-            return RestoreVerifyResult(
-                ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
+        try:
+            if not _extract_plain_tar(plaintext, extract_dir, errors):
+                return RestoreVerifyResult(
+                    ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
+                )
+            return _verify_plain_tree(
+                extract_dir,
+                checked=checked,
+                errors=errors,
+                key_version=key_version,
+                allow_stub=allow_stub,
             )
-        work = extract_dir
-    else:
-        work = root
+        finally:
+            shutil.rmtree(extract_dir, ignore_errors=True)
 
+    return _verify_plain_tree(
+        root,
+        checked=checked,
+        errors=errors,
+        key_version=key_version,
+        allow_stub=allow_stub,
+    )
+
+
+def _verify_plain_tree(
+    work: Path,
+    *,
+    checked: int,
+    errors: list[str],
+    key_version: int | None,
+    allow_stub: bool,
+) -> RestoreVerifyResult:
     man_path = work / "MANIFEST.json"
     if not man_path.is_file():
-        if extract_dir is not None:
-            shutil.rmtree(extract_dir, ignore_errors=True)
         return RestoreVerifyResult(
             ok=False,
             members_checked=checked,
@@ -445,8 +466,6 @@ def verify_backup_package(
     try:
         manifest = json.loads(man_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        if extract_dir is not None:
-            shutil.rmtree(extract_dir, ignore_errors=True)
         return RestoreVerifyResult(
             ok=False,
             members_checked=checked,
@@ -454,14 +473,9 @@ def verify_backup_package(
             backup_key_version=key_version,
         )
     _verify_manifest_file_checksum(man_path, work / "MANIFEST.sha256", errors)
-
     checked += _check_plain_members(
         work, manifest.get("members") or {}, allow_stub=allow_stub, errors=errors
     )
-
-    if extract_dir is not None:
-        shutil.rmtree(extract_dir, ignore_errors=True)
-
     return RestoreVerifyResult(
         ok=not errors,
         members_checked=checked,

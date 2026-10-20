@@ -270,6 +270,7 @@ def run_archive_batch(
                 # ref_count tracks links: only a new link takes a reference.
                 session.add(MessageBlobLink(message_id=mid, blob_id=blob.id))
                 blob.ref_count = int(blob.ref_count) + 1
+                blob.gc_eligible_at = None
             apply_transition(st, ArchiveState.ARCHIVE_COMPLETE)
             st.claimed_by = None
             st.updated_at = datetime.now(timezone.utc)
