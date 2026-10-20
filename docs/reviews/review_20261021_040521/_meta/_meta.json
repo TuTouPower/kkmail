@@ -16,14 +16,26 @@
     "bundle_cross_validation.md",
     "review_intensive.md"
   ],
-  "phase": "reviewing",
-  "done": [],
-  "pending": [],
-  "elapsed_sec": 0,
-  "source": "prepare_outdir",
+  "phase": "timeout",
+  "done": [
+    "bundle_v1_security.md",
+    "bundle_v2_correctness.md",
+    "bundle_v3_contracts.md",
+    "bundle_v4_performance.md",
+    "bundle_v5_architecture.md",
+    "bundle_v6_robustness.md",
+    "bundle_v7_tests.md",
+    "bundle_v8_docs.md",
+    "bundle_cross_validation.md"
+  ],
+  "pending": [
+    "review_intensive.md"
+  ],
+  "elapsed_sec": 7200,
+  "source": "deadman",
   "deadman_pid": 23324,
-  "deadman_fired": false,
-  "updated_at": "2026-10-20T20:05:21Z",
+  "deadman_fired": true,
+  "updated_at": "2026-10-20T22:05:21Z",
   "scope": {
     "sha": "daca631aec54c30ce02cdb5e6499ae196dc3a72d",
     "target": "当前仓库全部代码与文档",
@@ -160,5 +172,6 @@
       "tests/mail_core/test_worker_loop.py",
       "tests/scripts/test_fetch_pg_binaries_helpers.sh"
     ]
-  }
+  },
+  "remaining_sec": 0
 }
