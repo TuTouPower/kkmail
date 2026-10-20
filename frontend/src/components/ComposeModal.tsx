@@ -6,6 +6,7 @@ import { fetchAccounts, queryKeys } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
 import { ensureSuccess, errorMessage } from '../lib/actions'
 import { canSendFrom } from '../lib/accounts'
+import { parseSendRecipients } from '../lib/recipients'
 
 export default function ComposeModal() {
   const composeOpen = useMailStore((s) => s.composeOpen)
@@ -41,8 +42,12 @@ function ComposeForm() {
     setSending(true)
     setStatus('')
     try {
-      const recipients = [to, cc].filter(Boolean).join(', ')
-      ensureSuccess(await api.sendOutlookMail({ account_id: accountId, recipients, subject, body }), '发送失败')
+      const parsed = parseSendRecipients([to, cc].filter(Boolean).join('\n'))
+      if (parsed.error) {
+        setStatus(parsed.error)
+        return
+      }
+      ensureSuccess(await api.sendOutlookMail({ account_id: accountId, recipients: parsed.recipients, subject, body }), '发送失败')
       setStatus('已提交发送（Graph 返回 202 表示已受理，不代表已送达）')
       setTimeout(() => setComposeOpen(false), 900)
     } catch (err: unknown) {
