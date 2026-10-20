@@ -9,7 +9,7 @@ from datetime import timedelta
 from sqlalchemy import select
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
-from mail_core.mail.application.remote_ops import mark_remote_operation
+from mail_core.mail.application.remote_ops import mark_remote_operation, reclaim_stale_in_progress
 from mail_core.mail.domain.enums import RemoteOperationStatus
 from mail_core.mail.storage.models import Account, RemoteOperation
 from mail_core.providers.factory import build_provider
@@ -52,6 +52,9 @@ def push_remote_operations(
             lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=lease_ttl)
         except LeaseBusy:
             return {"status": "lease_busy"}
+        reclaimed = reclaim_stale_in_progress(session, older_than=timedelta(minutes=15), limit=limit)
+        if reclaimed:
+            log.info("reclaimed %s stale in_progress remote op(s)", reclaimed)
         ops = list(
             session.scalars(
                 select(RemoteOperation)

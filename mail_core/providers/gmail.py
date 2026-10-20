@@ -72,6 +72,59 @@ def _raise_mapped(exc: ProviderHttpError) -> None:
     raise exc
 
 
+
+_GMAIL_META_HEADERS = (
+    "From",
+    "Subject",
+    "Date",
+    "Message-ID",
+    "In-Reply-To",
+    "References",
+)
+
+
+def _meta_from_gmail_message(message: dict[str, Any]) -> RemoteMessageMeta:
+    """Build RemoteMessageMeta from messages.get format=metadata (or richer)."""
+    from datetime import datetime, timezone
+
+    headers = {
+        h["name"].lower(): h["value"]
+        for h in (message.get("payload") or {}).get("headers") or []
+        if "name" in h
+    }
+    subject = headers.get("subject") or ""
+    from_raw = headers.get("from") or ""
+    from_name = None
+    frm = from_raw
+    if "<" in from_raw and ">" in from_raw:
+        name_part, _, rest = from_raw.partition("<")
+        from_name = name_part.strip().strip('"') or None
+        frm = rest.rstrip(">").strip()
+    sort_raw = message.get("internalDate")
+    if sort_raw is not None:
+        try:
+            sort_time = datetime.fromtimestamp(int(sort_raw) / 1000.0, tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            sort_time = datetime.now(timezone.utc)
+    else:
+        sort_time = datetime.now(timezone.utc)
+    label_ids = set(message.get("labelIds") or [])
+    return RemoteMessageMeta(
+        remote_id=str(message["id"]),
+        subject=str(subject),
+        from_address=str(frm),
+        from_name=from_name,
+        sort_time=sort_time,
+        is_read="UNREAD" not in label_ids,
+        has_attachments=False,
+        internet_message_id=headers.get("message-id"),
+        snippet=message.get("snippet"),
+        provider_thread_key=message.get("threadId"),
+        in_reply_to=headers.get("in-reply-to"),
+        references=headers.get("references"),
+    )
+
+
 @dataclass
 class GmailProvider:
     credential_ref: str
@@ -120,27 +173,42 @@ class GmailProvider:
         data = self._call("GET", f"/gmail/v1/users/{self.user_id}/messages", params)
         if "page" in data:
             return data["page"]
-        # Minimal list shape → empty page stub (full metadata needs messages.get)
         msgs = data.get("messages") or []
-        items = [
-            RemoteMessageMeta(
-                remote_id=m["id"],
-                subject="",
-                from_address="",
-                from_name=None,
-                sort_time=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
-                is_read=True,
-                has_attachments=False,
-                provider_thread_key=m.get("threadId"),
+        items: list[RemoteMessageMeta] = []
+        for stub in msgs:
+            mid = stub.get("id")
+            if not mid:
+                continue
+            # Batch-detail: one messages.get(metadata) per id (no fabricated empty meta).
+            detail = self._call(
+                "GET",
+                f"/gmail/v1/users/{self.user_id}/messages/{mid}",
+                {
+                    "format": "metadata",
+                    "metadataHeaders": list(_GMAIL_META_HEADERS),
+                },
             )
-            for m in msgs
-            if m.get("id")
-        ]
+            if not isinstance(detail, dict) or not detail.get("id"):
+                detail = {**stub, **(detail if isinstance(detail, dict) else {})}
+            items.append(_meta_from_gmail_message(detail))
         token = data.get("nextPageToken")
+        next_cursor: dict[str, Any] = {}
+        if token:
+            next_cursor["pageToken"] = token
+        exhausted = not bool(token)
+        if exhausted:
+            # Stamp historyId so metadata apply can persist checkpoint.history_id.
+            try:
+                profile = self._call("GET", f"/gmail/v1/users/{self.user_id}/profile", {})
+                hid = profile.get("historyId") if isinstance(profile, dict) else None
+                if hid:
+                    next_cursor["historyId"] = str(hid)
+            except Exception:
+                pass
         return MetadataPage(
             items=items,
-            next_cursor={"pageToken": token} if token else None,
-            exhausted=not bool(token),
+            next_cursor=next_cursor or None,
+            exhausted=exhausted,
         )
 
     def fetch_mime(self, remote_id: str, *, folder_remote_id: str | None = None) -> bytes:

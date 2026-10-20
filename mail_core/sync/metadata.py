@@ -148,8 +148,19 @@ def apply_metadata_page(
             continue
         touched.append(o.message.id)
         upsert_message_search(session, message_id=o.message.id, body_text=meta.snippet or "")
-        if o.created and (meta.internet_message_id or meta.provider_thread_key):
-            assign_thread_for_message(session, message=o.message, provider_thread_key=meta.provider_thread_key)
+        if o.created and (
+            meta.internet_message_id
+            or meta.provider_thread_key
+            or meta.in_reply_to
+            or meta.references
+        ):
+            assign_thread_for_message(
+                session,
+                message=o.message,
+                in_reply_to=meta.in_reply_to,
+                references=meta.references,
+                provider_thread_key=meta.provider_thread_key,
+            )
     if touched:
         session.add(messages_upserted_event(account_id, folder_id, touched))
     recompute_folder_stats(session, folder_id)
@@ -168,6 +179,9 @@ def apply_metadata_page(
         fencing_token=fencing_token,
         cursor=cursor,
         uidvalidity=cursor.get("uidvalidity"),
+        modseq=cursor.get("modseq"),
+        history_id=cursor.get("historyId") or cursor.get("history_id"),
+        delta_link=cursor.get("delta_link"),
         full_scan_complete=page.exhausted,
     )
     try_notify_outbox(session)
