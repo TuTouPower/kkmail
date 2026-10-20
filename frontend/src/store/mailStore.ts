@@ -30,6 +30,8 @@ interface MailUiState {
   collapsedAccounts: string[]
   toggleAccount: (id: string) => void
   composeOpen: boolean
+  /** Bumped on every openCompose so the form remounts with the new draft. */
+  composeSeq: number
   composeMode: 'new' | 'reply' | 'forward'
   composeDraft: { to: string; subject: string; body: string; accountId?: number }
   openCompose: (mode?: 'new' | 'reply' | 'forward', draft?: Partial<MailUiState['composeDraft']>) => void
@@ -79,11 +81,13 @@ export const useMailStore = create<MailUiState>()(
             : [...s.collapsedAccounts, id],
         })),
       composeOpen: false,
+      composeSeq: 0,
       composeMode: 'new',
       composeDraft: { to: '', subject: '', body: '' },
       openCompose: (mode = 'new', draft = {}) =>
-        set({
+        set((s) => ({
           composeOpen: true,
+          composeSeq: s.composeSeq + 1,
           composeMode: mode,
           composeDraft: {
             to: draft.to || '',
@@ -91,7 +95,7 @@ export const useMailStore = create<MailUiState>()(
             body: draft.body || '',
             accountId: draft.accountId,
           },
-        }),
+        })),
       setComposeOpen: (open) => set({ composeOpen: open }),
       selectedIds: [],
       toggleSelected: (key) =>
