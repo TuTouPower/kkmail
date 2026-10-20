@@ -33,7 +33,26 @@ class GmailNotConfiguredError(NotImplementedError):
     """Raised until a real Gmail HTTP transport is supplied."""
 
 
+# Gmail system label id/name → FolderRole value
+_GMAIL_LABEL_ROLES: dict[str, str] = {
+    "INBOX": "inbox",
+    "SENT": "sent",
+    "DRAFT": "drafts",
+    "TRASH": "trash",
+    "SPAM": "junk",
+}
+
+
+def gmail_label_role(label_id: str | None, name: str | None = None) -> str:
+    """Map Gmail system labels to FolderRole; user labels stay ``other``."""
+    for key in (label_id, name):
+        if key and key in _GMAIL_LABEL_ROLES:
+            return _GMAIL_LABEL_ROLES[key]
+    return "other"
+
+
 def _raise_mapped(exc: ProviderHttpError) -> None:
+    """Map transport errors. 404/410 → CursorInvalid only for history/sync semantics."""
     status = exc.status or 0
     body = exc.body
     text = str(body).lower() if body is not None else str(exc).lower()
@@ -44,7 +63,11 @@ def _raise_mapped(exc: ProviderHttpError) -> None:
             body=body,
             headers=exc.headers,
         ) from exc
-    if status in (404, 410) or "historyid" in text or "not found" in text or "sync" in text and "invalid" in text:
+    # Do not treat every resource 404 (labels, messages.get) as cursor invalid.
+    if "historyid" in text or (
+        status in (404, 410)
+        and ("history" in text or ("sync" in text and "invalid" in text))
+    ):
         raise CursorInvalidError(str(exc), status=status, body=body, headers=exc.headers) from exc
     raise exc
 
@@ -80,7 +103,7 @@ class GmailProvider:
         out: list[RemoteFolder] = []
         for lab in labels:
             name = lab.get("name") or lab.get("id")
-            role = "inbox" if name == "INBOX" else "other"
+            role = gmail_label_role(lab.get("id"), name)
             out.append(RemoteFolder(remote_id=lab["id"], name=name, role=role))
         return out
 
