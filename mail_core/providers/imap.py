@@ -50,9 +50,12 @@ def _decode_header(raw: str | None) -> str:
     out: list[str] = []
     for chunk, charset in parts:
         if isinstance(chunk, bytes):
-            out.append(chunk.decode(charset or "utf-8", errors="replace"))
+            try:
+                out.append(chunk.decode(charset or "utf-8", errors="replace"))
+            except LookupError:
+                out.append(chunk.decode("utf-8", errors="replace"))
         else:
-            out.append(chunk)
+            out.append(str(chunk))
     return "".join(out)
 
 
