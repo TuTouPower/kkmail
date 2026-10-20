@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Reply, ReplyAll, Forward, MailOpen, Trash2, Flag, Folder, Archive, ShieldAlert, ArrowLeft } from 'lucide-react'
 import { api } from '../api/client'
 import { fetchAccounts, fetchEmailDetail, findCachedMail, markReadOptimistic, queryClient, queryKeys, type MailItem } from '../api/queries'
+import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail } from '../api/mailCore'
+import { isMailCoreEnabled } from '../lib/mailCoreFlag'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
 import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
@@ -21,11 +23,22 @@ export default function MessageReader() {
   useSyncExternalStore((cb) => cache.subscribe(cb), () => findCachedMail(selectedKey))
   const selected = findCachedMail(selectedKey)
 
+  const useMailCoreDetail = isMailCoreEnabled() && (!!selected?.id_mode?.includes('mail_core') || selected?.id_mode === 'mail_core')
   const detailQuery = useQuery({
-    queryKey: selected ? queryKeys.detail(selected.accountEmail, selected.id, selected.folder || 'inbox', selected.id_mode || '') : ['detail', 'none'],
-    queryFn: ({ signal }) => fetchEmailDetail(selected!.accountEmail, selected!.id, selected!.folder || 'inbox', selected!.id_mode || '', signal),
+    queryKey: selected
+      ? (useMailCoreDetail
+          ? ['mail-core', 'detail', selected.id]
+          : queryKeys.detail(selected.accountEmail, selected.id, selected.folder || 'inbox', selected.id_mode || ''))
+      : ['detail', 'none'],
+    queryFn: async ({ signal }) => {
+      if (useMailCoreDetail) {
+        const d = await fetchMailCoreMessage(selected!.id, signal)
+        return mailCoreToMailDetail(d)
+      }
+      return fetchEmailDetail(selected!.accountEmail, selected!.id, selected!.folder || 'inbox', selected!.id_mode || '', signal)
+    },
     retry: false,
-    enabled: !!selected?.id && !!selected?.accountEmail,
+    enabled: !!selected?.id && (!!selected?.accountEmail || useMailCoreDetail),
   })
 
   if (!selected) {
@@ -128,7 +141,7 @@ export default function MessageReader() {
               title="邮件正文"
               sandbox={MAIL_IFRAME_SANDBOX}
               referrerPolicy="no-referrer"
-              srcDoc={buildMailSrcdoc(body)}
+              srcDoc={buildMailSrcdoc(body, { loadRemoteImages: !useMailCoreDetail })}
               style={{ width: '100%', minHeight: 420, border: 0, background: '#fff', borderRadius: 8 }}
             />
           ) : (
@@ -138,7 +151,9 @@ export default function MessageReader() {
             <div className="attachment-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
               {detail!.attachments!.map((att, i) => {
                 const href = att.id
-                  ? api.attachmentUrl(selected.accountEmail, selected.id, att.id, selected.folder || 'inbox', selected.id_mode || '')
+                  ? (useMailCoreDetail
+                      ? mailCoreAttachmentUrl(att.id)
+                      : api.attachmentUrl(selected.accountEmail, selected.id, att.id, selected.folder || 'inbox', selected.id_mode || ''))
                   : undefined
                 return (
                   <a key={att.id || i} href={href} style={{ padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 9, color: 'inherit', textDecoration: 'none' }}>
