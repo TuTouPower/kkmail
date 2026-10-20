@@ -7,7 +7,7 @@ describe('listTitle', () => {
     expect(listTitle({ type: 'allInbox' }, 'unread')).toBe('未读邮件')
     expect(listTitle({ type: 'allInbox' }, 'flagged')).toBe('已标记')
   })
-  it('names account folders', () => {
-    expect(listTitle({ type: 'accountFolder', accountId: '1', email: 'a@x', folder: 'junkemail' }, 'all')).toBe('a@x · 垃圾邮件')
+  it('names the account inbox', () => {
+    expect(listTitle({ type: 'account', accountId: '1', email: 'a@x' }, 'all')).toBe('a@x · 收件箱')
   })
 })

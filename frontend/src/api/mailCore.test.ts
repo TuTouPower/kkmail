@@ -21,9 +21,8 @@ describe('mailCoreToMailItem', () => {
     expect(item.id).toBe('uuid-1')
     expect(item.from).toContain('Ann')
     expect(item.accountEmail).toBe('box@ex.com')
-    expect(item.accountId).toBeUndefined()
+    expect(item.accountId).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
     expect(item.is_flagged).toBe(true)
-    expect(item.id_mode).toBe('mail_core')
     expect(item.has_attachments).toBe(true)
   })
 })
@@ -41,6 +40,7 @@ describe('mailCoreToMailDetail', () => {
       cc: '',
       date: '2024-01-01T00:00:00Z',
       is_read: true,
+      is_flagged: false,
       has_attachments: false,
       snippet: null,
       body: '<p>x</p>',
