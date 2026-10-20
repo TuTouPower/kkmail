@@ -177,8 +177,33 @@ export const api = {
     return request('/api/outlook/send-mail', { method: 'POST', body: JSON.stringify(payload) })
   },
 
-  async getVersion() {
-    return request<{ version_status?: unknown }>('/api/version-status')
+  async addAccounts(payload: {
+    account_string: string
+    group_id?: number
+    account_format?: string
+    provider?: string
+    imap_host?: string
+    imap_port?: number
+    remark?: string
+  }) {
+    return request<{ success?: boolean; message?: string; error?: string; added_count?: number }>('/api/accounts', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  async getTags() {
+    return request<{ success?: boolean; tags?: Array<{ id: number; name: string; color?: string }> }>('/api/tags')
+  },
+
+  async getTempEmails() {
+    return request<{ success?: boolean; emails?: Array<{ id: number; email?: string; address?: string; provider?: string }> }>('/api/temp-emails')
+  },
+
+  attachmentUrl(email: string, messageId: string, attachmentId: string, folder = 'inbox', idMode = '') {
+    const q = new URLSearchParams({ folder, method: idMode === 'imap' ? 'imap' : 'graph' })
+    if (idMode) q.set('id_mode', idMode)
+    return `/api/email/${encodeURIComponent(email)}/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}?${q}`
   },
 }
 
