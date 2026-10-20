@@ -1,9 +1,11 @@
 from mail_core.accounts.credentials import (
     CompositeCredentialStore,
     CredentialStore,
+    DbCredentialStore,
     DictCredentialStore,
     EnvCredentialStore,
     KeyringCredentialStore,
+    ReadOnlyCredentialRef,
     get_credential_store,
     load_json_secret,
     save_json_secret,
@@ -25,9 +27,11 @@ from mail_core.accounts.settings_store import get_public_settings, update_public
 __all__ = [
     "CompositeCredentialStore",
     "CredentialStore",
+    "DbCredentialStore",
     "DictCredentialStore",
     "EnvCredentialStore",
     "KeyringCredentialStore",
+    "ReadOnlyCredentialRef",
     "create_account",
     "create_group",
     "delete_account",

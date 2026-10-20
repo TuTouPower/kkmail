@@ -1,0 +1,52 @@
+"""Application layer: the only entry point HTTP routes use for mail reads and mutations.
+
+Exports are resolved lazily (PEP 562) so importing a submodule does not pull in the
+whole sync/provider graph.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
+_EXPORTS: dict[str, str] = {
+    # queries
+    "InvalidCursor": "queries",
+    "MessageDetail": "queries",
+    "MessageListItem": "queries",
+    "MessagePage": "queries",
+    "account_emails_by_id": "queries",
+    "get_folder_stats": "queries",
+    "get_message_detail": "queries",
+    "list_folder_stats_for_account": "queries",
+    "list_messages_keyset": "queries",
+    "messages_by_ids": "queries",
+    "unified_inbox": "queries",
+    # search
+    "SearchPage": "search",
+    "search_message_ids": "search",
+    "search_messages_page": "search",
+    # mutations
+    "MutationResult": "mutations",
+    "set_message_flagged": "mutations",
+    "set_message_read": "mutations",
+    "trash_message": "mutations",
+    # remote operations
+    "enqueue_remote_operation": "remote_ops",
+    "mark_remote_operation": "remote_ops",
+    # attachments
+    "AttachmentAccessError": "attachments",
+    "PathTraversalRejected": "attachments",
+    "load_attachment": "attachments",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    mod = _EXPORTS.get(name)
+    if mod is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f"{__name__}.{mod}"), name)
+    globals()[name] = value
+    return value

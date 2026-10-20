@@ -19,7 +19,8 @@ from mail_core.providers.http import CursorInvalidError, RateLimitedError
 from mail_core.sync.checkpoints import commit_checkpoint
 from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, assert_fencing, release_lease
-from mail_core.sync.metadata import _recompute_folder_stats, _upsert_message
+from mail_core.mail.storage.folder_stats import recompute_folder_stats
+from mail_core.sync.metadata import messages_upserted_event, upsert_messages
 
 log = logging.getLogger("mail_core.sync.delta")
 
@@ -43,28 +44,24 @@ def apply_delta_page(
 ) -> DeltaApplyResult:
     assert_fencing(session, account_id=account_id, fencing_token=fencing_token)
     upserted = deleted = flagged = 0
+    # Changes are batched; the *last* change per remote id wins (upsert→delete deletes,
+    # delete→upsert keeps the message), matching sequential application.
+    last_kind = {c.remote_id: c.kind for c in page.changes}
+    upserts = [
+        c
+        for c in page.changes
+        if c.kind in ("upsert", "flag") and c.meta is not None and last_kind.get(c.remote_id) != "delete"
+    ]
+    outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=[c.meta for c in upserts])
+    touched = [o.message.id for o in outcomes if o.changed]
+    upserted = sum(1 for c in upserts if c.kind == "upsert")
+    flagged = len(upserts) - upserted
+    if touched:
+        session.add(messages_upserted_event(account_id, folder_id, touched))
     for change in page.changes:
-        if change.kind == "upsert" and change.meta is not None:
-            msg = _upsert_message(session, account_id=account_id, folder_id=folder_id, meta=change.meta)
-            session.add(
-                OutboxEvent(
-                    event_type=OutboxEventType.MESSAGE_UPSERTED.value,
-                    account_id=account_id,
-                    payload={"message_id": str(msg.id), "folder_id": str(folder_id)},
-                )
-            )
-            upserted += 1
-        elif change.kind == "flag" and change.meta is not None:
-            msg = _upsert_message(session, account_id=account_id, folder_id=folder_id, meta=change.meta)
-            session.add(
-                OutboxEvent(
-                    event_type=OutboxEventType.MESSAGE_UPSERTED.value,
-                    account_id=account_id,
-                    payload={"message_id": str(msg.id), "folder_id": str(folder_id), "flag": True},
-                )
-            )
-            flagged += 1
-        elif change.kind == "delete":
+        if change.kind in ("upsert", "flag"):
+            continue
+        if change.kind == "delete" and last_kind.get(change.remote_id) == "delete":
             # Explicit delete from provider delta only (never inferred from incomplete scan).
             msg = session.scalar(
                 select(Message).where(Message.account_id == account_id, Message.remote_id == change.remote_id)
@@ -91,7 +88,7 @@ def apply_delta_page(
                 )
                 session.delete(msg)
                 deleted += 1
-    _recompute_folder_stats(session, folder_id)
+    recompute_folder_stats(session, folder_id)
     session.add(
         OutboxEvent(
             event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,

@@ -42,6 +42,23 @@ class AccountGroup(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class CredentialSecret(Base):
+    """Provider credentials (OAuth tokens / IMAP passwords), AES-GCM encrypted at rest.
+
+    Key = HKDF(blob key[key_version], info="kkmail/credential-store/v1"); AAD = ref.
+    """
+
+    __tablename__ = "credential_secrets"
+
+    ref: Mapped[str] = mapped_column(String(512), primary_key=True)
+    key_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class AppSetting(Base):
     """Non-secret app settings (never store passwords/tokens here)."""
 

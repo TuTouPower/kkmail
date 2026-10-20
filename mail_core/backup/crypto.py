@@ -31,8 +31,9 @@ def _b64key(raw: str) -> bytes:
     return key
 
 
-def load_backup_key(env: dict[str, str] | None = None) -> tuple[bytes, int]:
-    env = env or os.environ
+def load_backup_keyring(env: dict[str, str] | None = None) -> dict[int, bytes]:
+    """Parse every configured backup key once: {version: key}."""
+    env = os.environ if env is None else env
     keys: dict[int, bytes] = {}
     blob = env.get("MAIL_CORE_BACKUP_KEYS")
     if blob:
@@ -41,26 +42,18 @@ def load_backup_key(env: dict[str, str] | None = None) -> tuple[bytes, int]:
     if env.get("MAIL_CORE_BACKUP_KEY"):
         keys.setdefault(1, _b64key(env["MAIL_CORE_BACKUP_KEY"]))
     if not keys:
-        raise BackupCryptoError(
-            "MAIL_CORE_BACKUP_KEY or MAIL_CORE_BACKUP_KEYS required to encrypt backups"
-        )
+        raise BackupCryptoError("MAIL_CORE_BACKUP_KEY or MAIL_CORE_BACKUP_KEYS required to encrypt backups")
+    return keys
+
+
+def load_backup_key(env: dict[str, str] | None = None) -> tuple[bytes, int]:
+    """Active (key, version) for writing new backups."""
+    env = os.environ if env is None else env
+    keys = load_backup_keyring(env)
     version = int(env.get("MAIL_CORE_BACKUP_KEY_VERSION") or max(keys))
     if version not in keys:
         raise BackupCryptoError(f"backup key version {version} missing")
     return keys[version], version
-
-
-def load_backup_keyring(env: dict[str, str] | None = None) -> dict[int, bytes]:
-    env = env or os.environ
-    key, version = load_backup_key(env)
-    keys = {version: key}
-    blob = env.get("MAIL_CORE_BACKUP_KEYS")
-    if blob:
-        for k, v in json.loads(blob).items():
-            keys[int(k)] = _b64key(v)
-    if env.get("MAIL_CORE_BACKUP_KEY"):
-        keys.setdefault(1, _b64key(env["MAIL_CORE_BACKUP_KEY"]))
-    return keys
 
 
 def encrypt_bytes(plaintext: bytes, *, key: bytes, key_version: int) -> bytes:

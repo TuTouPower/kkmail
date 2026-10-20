@@ -242,16 +242,6 @@ def get_message_detail(session: Session, message_id: uuid.UUID) -> MessageDetail
     )
 
 
-def resolve_account_id_by_email(session: Session, email: str) -> uuid.UUID | None:
-    raw = (email or "").strip()
-    if not raw:
-        return None
-    found = session.scalar(select(Account.id).where(Account.email == raw).limit(1))
-    if found:
-        return found
-    return session.scalar(select(Account.id).where(Account.email == raw.lower()).limit(1))
-
-
 def account_emails_by_id(session: Session, account_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
     if not account_ids:
         return {}
