@@ -241,3 +241,18 @@ def test_imap_decode_header_unknown_charset():
     raw = "=?unknown-custom-charset?B?dGVzdA==?="
     decoded = _decode_header(raw)
     assert decoded == "test"
+
+
+def test_imap_list_folders_case_insensitive_inbox(monkeypatch):
+    class FakeIMAPList:
+        def list(self):
+            return "OK", [b'(\\HasNoChildren) "/" "Inbox"', b'(\\HasNoChildren) "/" "Sent"']
+
+        def logout(self):
+            return "OK", []
+
+    prov = ImapProvider("h", 993, "u", "p", use_ssl=False)
+    monkeypatch.setattr(prov, "_connect", lambda: FakeIMAPList())
+    folders = prov.list_folders()
+    inbox = next(f for f in folders if f.name == "Inbox")
+    assert inbox.role == "inbox"
