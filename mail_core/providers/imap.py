@@ -206,7 +206,34 @@ class ImapProvider:
         return DeltaPage(changes=changes, next_cursor=page.next_cursor, exhausted=page.exhausted)
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
-        return RemoteOperationResult(success=False, error=f"imap apply not implemented: {op_type}")
+        remote_id = str(desired_state.get("remote_id") or "")
+        folder = str(desired_state.get("folder_remote_id") or "INBOX")
+        if not remote_id:
+            return RemoteOperationResult(success=False, error="missing remote_id")
+        c = self._connect()
+        try:
+            typ, _ = c.select(folder)
+            if typ != "OK":
+                return RemoteOperationResult(success=False, error=f"select {folder} failed")
+            if op_type == "mark_read":
+                want_read = bool(desired_state.get("is_read", True))
+                flag_op = "+FLAGS" if want_read else "-FLAGS"
+                typ, _ = c.uid("STORE", remote_id, flag_op, r"(\Seen)")
+                if typ != "OK":
+                    return RemoteOperationResult(success=False, error="STORE FLAGS failed")
+                return RemoteOperationResult(success=True, remote_state={"is_read": want_read})
+            if op_type == "delete":
+                typ, _ = c.uid("STORE", remote_id, "+FLAGS", r"(\Deleted)")
+                if typ != "OK":
+                    return RemoteOperationResult(success=False, error="STORE Deleted failed")
+                c.expunge()
+                return RemoteOperationResult(success=True)
+            return RemoteOperationResult(success=False, error=f"imap apply not implemented: {op_type}")
+        finally:
+            try:
+                c.logout()
+            except Exception:
+                pass
 
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
         """Return delete actions for local IDs missing remotely — caller must have completed a full scan."""
