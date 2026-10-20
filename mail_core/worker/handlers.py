@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from mail_core.accounts.credentials import get_credential_store
 from mail_core.mail.domain.enums import JobType
-from mail_core.mail.storage.models import WorkerJob
+from mail_core.mail.storage.models import Account, WorkerJob
 from mail_core.sync.jobs import complete_job, fail_job
 
 log = logging.getLogger("mail_core.worker.handlers")
@@ -28,6 +28,22 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
     store = get_credential_store()
 
     try:
+        if job.job_type in (
+            JobType.SYNC_ACCOUNT_FOLDERS.value,
+            JobType.SYNC_FOLDER_METADATA.value,
+            JobType.SYNC_FOLDER_DELTA.value,
+            JobType.RECONCILE_FOLDER.value,
+        ):
+            if account_id is None:
+                log.info("job %s missing account_id, marking complete", job.id)
+                complete_job(session, job, worker_id=worker_id)
+                return True
+            acc = session.get(Account, account_id)
+            if acc is None or not acc.sync_enabled:
+                log.info("account %s not found or sync disabled, skipping job %s", account_id, job.id)
+                complete_job(session, job, worker_id=worker_id)
+                return True
+
         if job.job_type == JobType.SYNC_ACCOUNT_FOLDERS.value:
             if account_id is None:
                 raise ValueError("account_id required")
