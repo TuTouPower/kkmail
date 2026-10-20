@@ -66,6 +66,18 @@ describe('errors and timeouts', () => {
     await expect(apiRequest('/api/groups', { timeoutMs: 20 })).rejects.toMatchObject({ code: 'timeout' })
   })
 
+  it('times out a hung body parse after headers arrive', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      status: 200,
+      statusText: 'OK',
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: () => new Promise(() => { /* never settles */ }),
+      text: () => new Promise(() => { /* never settles */ }),
+    })))
+    await expect(apiRequest('/api/groups', { timeoutMs: 30 })).rejects.toMatchObject({ code: 'timeout' })
+  })
+
   it('surfaces FastAPI detail strings and validation errors', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(404, { detail: 'message not found' })))
     await expect(apiRequest('/api/mail/messages/x')).rejects.toMatchObject({ status: 404, message: 'message not found' })

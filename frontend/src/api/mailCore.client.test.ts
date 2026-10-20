@@ -159,7 +159,7 @@ describe('mail endpoints', () => {
     }
     expect(mailCoreToMailItem(row)).toEqual({
       id: 'u', subject: '', from: 'x@y.z', date: '2024-01-01T00:00:00Z', is_read: true, is_flagged: false,
-      has_attachments: false, body_preview: undefined, folder: 'inbox', accountEmail: '', accountId: 'acc',
+      has_attachments: false, body_preview: undefined, folder: undefined, accountEmail: '', accountId: 'acc',
     })
   })
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag } from 'lucide-react'
 import { fetchAccounts, markReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMessageTrash } from '../api/mailCore'
@@ -41,19 +41,21 @@ export default function MessageList() {
   const accountId = view.type === 'account' ? view.accountId : undefined
   const term = search.trim()
   const searching = term.length >= SEARCH_MIN_CHARS
-  const inboxQuery = useQuery({
+  const inboxQuery = useQuery<MailItem[]>({
     queryKey: queryKeys.inbox(accountId || 'all'),
     queryFn: ({ signal }) =>
       fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, signal }).then((page) => page.items.map(mailCoreToMailItem)),
     enabled: !searching,
     retry: false,
+    placeholderData: keepPreviousData,
   })
-  const searchQuery = useQuery({
+  const searchQuery = useQuery<MailItem[]>({
     queryKey: queryKeys.search(term, accountId || 'all'),
     queryFn: ({ signal }) =>
       fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, signal }).then((page) => page.items.map(mailCoreToMailItem)),
     enabled: searching,
     retry: false,
+    placeholderData: keepPreviousData,
   })
   const active = searching ? searchQuery : inboxQuery
   const raw: MailItem[] = active.data || []
