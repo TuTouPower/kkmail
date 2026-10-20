@@ -36,12 +36,15 @@
 
 ## 邮件内容
 
-- HTML 正文经 DOMPurify 清洗后放入 sandbox iframe（`srcDoc`），默认不加载远程图片。
+- HTML 正文经 `frontend/src/lib/mailBody.ts`（DOMPurify：`FORBID_TAGS` / `FORBID_ATTR`，禁止未知协议）清洗后放入 sandbox iframe（`srcDoc`）。
+- iframe `sandbox="allow-popups allow-popups-to-escape-sandbox"`：**无** `allow-scripts`、**无** `allow-same-origin`。
+- 远程图片默认不加载（srcdoc CSP `img-src data: cid:`）；阅读器提供**一次性**允许加载。
 - 附件只能按 UUID 下载，响应带 `Content-Disposition: attachment` 与 `X-Content-Type-Options: nosniff`；路径形式的访问被拒绝（见上文「UUID 即能力」）。
 
 ## 产品范围（安全相关）
 
 - **浏览器扩展永久不做**（cancelled / wontfix）：不提供扩展、不维护 `/api/extension/*` 登录桥，也不再恢复旧 `browser-extension/` 代码路径。客户端仅为同源 SPA 与桌面 Electron。
+- **已删除的 Flask 面**：旧 upstream 的上传暂存账号 / `outlook-upload-accounts` 明文密码列表、二次验证导出桥、Gunicorn `:5000` 管理面等均已不存在。勿再按历史 `docs/api.md` 或 Flask 段落实装/审计那些接口。
 
 
 ## 桌面 Electron
