@@ -109,7 +109,11 @@ def _release_sse_slot() -> None:
         _sse_active = max(0, _sse_active - 1)
 
 
-@router.get("/events")
+@router.get(
+    "/events",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"text/event-stream": {}}, "description": "SSE event stream"}},
+)
 async def stream_events(
     request: Request,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
