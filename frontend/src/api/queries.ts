@@ -57,11 +57,23 @@ export const queryClient = new QueryClient({
 /** Every cached message list lives under this prefix (inbox + search). */
 export const MAIL_LIST_PREFIX = ['mail-core'] as const
 
+/**
+ * Query-key scope for the unified inbox. Reserved so it cannot collide with a
+ * real account UUID (or the literal string "all").
+ */
+export const ALL_ACCOUNTS = '__all__' as const
+
+/** Normalize an optional account id into a query-key scope segment. */
+export function accountScope(accountId?: string | null): string {
+  const id = typeof accountId === 'string' ? accountId.trim() : ''
+  return id || ALL_ACCOUNTS
+}
+
 export const queryKeys = {
   groups: ['groups'] as const,
   accounts: ['accounts'] as const,
-  inbox: (accountId: string | 'all') => ['mail-core', 'inbox', accountId] as const,
-  search: (q: string, accountId: string | 'all') => ['mail-core', 'search', accountId, q] as const,
+  inbox: (accountId: string = ALL_ACCOUNTS) => ['mail-core', 'inbox', accountScope(accountId)] as const,
+  search: (q: string, accountId: string = ALL_ACCOUNTS) => ['mail-core', 'search', accountScope(accountId), q] as const,
 }
 
 export async function fetchGroups(): Promise<GroupItem[]> {
@@ -134,14 +146,17 @@ export async function markReadOptimistic(items: MailItem[]) {
   if (failed.length) throw new Error(failed.join('；'))
 }
 
-/** Toggle the server-side flag with an optimistic cache update; reverts on failure. */
+/** Toggle the server-side flag with an optimistic cache update; restores the prior snapshot on failure. */
 export async function flagOptimistic(item: MailItem, nextFlagged: boolean): Promise<void> {
   const key = mailKey(item)
+  const cached = findCachedMail(key)
+  const priorFlagged = cached?.is_flagged ?? item.is_flagged
   patchCachedMail([key], { is_flagged: nextFlagged })
   try {
     await postMailCoreMessageFlag(item.id, nextFlagged)
   } catch (err) {
-    patchCachedMail([key], { is_flagged: !nextFlagged })
+    // Restore the captured prior value — do not blind re-toggle (!nextFlagged).
+    patchCachedMail([key], { is_flagged: priorFlagged })
     throw err
   }
 }

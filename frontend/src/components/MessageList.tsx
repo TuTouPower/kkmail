@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag } from 'lucide-react'
-import { fetchAccounts, markReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
+import { accountScope, fetchAccounts, markReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMessageTrash } from '../api/mailCore'
-import { mailKey } from '../lib/mailKey'
+import { hasMailId, mailKey } from '../lib/mailKey'
 import { listTitle } from '../lib/listTitle'
 import { confirmAction, errorMessage } from '../lib/actions'
 import { compareMailDates } from '../lib/mailDate'
@@ -41,18 +41,23 @@ export default function MessageList() {
   const accountId = view.type === 'account' ? view.accountId : undefined
   const term = search.trim()
   const searching = term.length >= SEARCH_MIN_CHARS
+  const listScope = accountScope(accountId)
   const inboxQuery = useQuery<MailItem[]>({
-    queryKey: queryKeys.inbox(accountId || 'all'),
+    queryKey: queryKeys.inbox(listScope),
     queryFn: ({ signal }) =>
-      fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, signal }).then((page) => page.items.map(mailCoreToMailItem)),
+      fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, signal }).then((page) =>
+        page.items.filter(hasMailId).map(mailCoreToMailItem),
+      ),
     enabled: !searching,
     retry: false,
     placeholderData: keepPreviousData,
   })
   const searchQuery = useQuery<MailItem[]>({
-    queryKey: queryKeys.search(term, accountId || 'all'),
+    queryKey: queryKeys.search(term, listScope),
     queryFn: ({ signal }) =>
-      fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, signal }).then((page) => page.items.map(mailCoreToMailItem)),
+      fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, signal }).then((page) =>
+        page.items.filter(hasMailId).map(mailCoreToMailItem),
+      ),
     enabled: searching,
     retry: false,
     placeholderData: keepPreviousData,
@@ -190,8 +195,18 @@ export default function MessageList() {
           return (
             <article
               key={key}
+              role="button"
+              tabIndex={0}
+              aria-selected={selectedKey === key}
+              aria-label={`邮件：${m.subject || '（无主题）'}，来自 ${displayName(m.from)}`}
               className={`message-row apple-card ${selectedKey === key ? 'selected' : ''} ${!m.is_read ? 'unread' : ''} ${checked ? 'checked' : ''}`}
               onClick={() => openMessage(m)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  openMessage(m)
+                }
+              }}
             >
               <button
                 className="message-check"

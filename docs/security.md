@@ -36,9 +36,11 @@
 
 ## 邮件内容
 
-- HTML 正文经 `frontend/src/lib/mailBody.ts`（DOMPurify：`FORBID_TAGS` / `FORBID_ATTR`，禁止未知协议）清洗后放入 sandbox iframe（`srcDoc`）。
+- HTML 正文只经 `frontend/src/lib/mailBody.ts` 的 `sanitizeMailHtml` → `buildMailSrcdoc` 进入 sandbox iframe（`srcDoc`）。实现与文档对齐点：
+  - DOMPurify：`WHOLE_DOCUMENT: false`；`FORBID_TAGS` 含 `script` / `style` / `iframe` / `object` / `embed` / `form` / `input` / `button` / `textarea` / `select` / `base` / `meta` / `link`；`FORBID_ATTR` 含 `srcset` / `formaction` / `action`；`ALLOW_UNKNOWN_PROTOCOLS: false`。
+  - 是否按 HTML 渲染只看后端 `body_type`（`isHtmlBody`），禁止内容嗅探与 `dangerouslySetInnerHTML`。
 - iframe `sandbox="allow-popups allow-popups-to-escape-sandbox"`：**无** `allow-scripts`、**无** `allow-same-origin`。
-- 远程图片默认不加载（srcdoc CSP `img-src data: cid:`）；阅读器提供**一次性**允许加载。
+- 远程图片默认不加载（srcdoc CSP `img-src data: cid:`）；阅读器提供**一次性**允许加载（`loadRemoteImages`）。
 - 附件只能按 UUID 下载，响应带 `Content-Disposition: attachment` 与 `X-Content-Type-Options: nosniff`；路径形式的访问被拒绝（见上文「UUID 即能力」）。
 
 ## 产品范围（安全相关）

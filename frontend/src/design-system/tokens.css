@@ -597,6 +597,11 @@ button:disabled {
   min-width: 0;
 }
 
+.message-row:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 .message-row:hover {
   background: var(--surface-hover);
 }

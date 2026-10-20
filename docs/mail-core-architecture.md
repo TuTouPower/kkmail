@@ -54,7 +54,7 @@
 | 1 | Desktop vs Docker 数据层 | **非双库**；统一 PostgreSQL。桌面由 Electron 管理本地 PG 二进制为子进程；Docker Compose 跑同一主版本 PG。同一 schema / Alembic 迁移 / 应用代码。 | 嵌入式 SQLite 与 PG 双实现；Electron 进程内嵌 PG；桌面与服务器两套 ORM/SQL |
 | 2 | 多 Worker 同邮箱 | **DB lease + 账号互斥 + fencing token**。`SKIP LOCKED` 领取任务；`account_sync_leases` 持有租约；重获时 fencing_token 递增；过期 worker 可完成网络 I/O，但**不得**提交 cursor/状态。 | Redis 分布式锁；“乐观碰运气”；持 DB 行锁做网络 I/O |
 | 3 | 全量 MIME 归档洪峰 | **有界调度器**：元数据先同步；近期优先；磁盘配额与背压；**不**预先插入百万级 task 行；受控下载 + 原子落地。 | 一次为全库生成归档任务行；无配额无限拉取；把归档与元数据同步绑死在同一阶段 |
-| 4 | 加密 | **加密卷/文件系统**承载 PG 数据目录与 FTS；Blob **应用层加密**（密钥版本与轮换）；密码/OAuth 进 OS Keychain 或外部 KMS 派生密钥；备份独立密钥加密。 | 对可搜索正文做字段级加密（与 FTS 冲突）；假设 Docker volume 自带加密；明文落盘凭证 |
+| 4 | 加密 | **加密卷/文件系统**承载 PG 数据目录与 FTS；Blob **应用层加密**（密钥版本与轮换）；密码/OAuth **目标**进 OS Keychain 或外部 KMS（**尚未落地**；现状为 `credential_secrets` + 由 blob 密钥 HKDF 派生的应用层 AES-GCM，见 status）；备份独立密钥加密。 | 对可搜索正文做字段级加密（与 FTS 冲突）；假设 Docker volume 自带加密；明文落盘凭证 |
 | 5 | 同步进度 / 未读新鲜度 | **SSE + 持久化事件 Outbox**。业务变更与 Outbox 同行事务写入；LISTEN/NOTIFY 仅唤醒分发器；`Last-Event-ID` 断线续传；过期则提示 resync。 | WebSocket 作为本阶段实时通道；仅内存推送无持久化；轮询作为唯一进度机制 |
 | 6 | 测试真实度 | **PostgreSQL + Dovecot + API Mock + 固定 fixtures**。质量分层见 §15（**本地**跑 L1/L2；本仓无 GitHub Actions）。 | 仅 mock 内存 DB；跳过 IMAP 协议级测试；把负载测试塞进每次 commit |
 
@@ -67,7 +67,7 @@
 | 层 | 选型 | 说明 |
 |---|---|---|
 | 前端 | React + TypeScript + Vite | SPA；桌面装入 Electron，Web 同源 API |
-| 数据获取 / 虚拟列表 | TanStack Query + TanStack Virtual | 服务端游标分页；大文件夹虚拟滚动 |
+| 数据获取 | TanStack Query | 服务端游标分页；**未**引入 TanStack Virtual（大文件夹仍整页渲染，见 known-limitations） |
 | API | FastAPI + Pydantic | OpenAPI 为契约源；生成 TS 类型（**本地** check，无 GitHub CI） |
 | ORM / 迁移 | SQLAlchemy 2 + Alembic | 同步与异步会话策略在实现阶段固定一套并贯彻 |
 | 数据库 | PostgreSQL | 桌面与 Docker **同一主版本** |
@@ -96,7 +96,7 @@
 ```mermaid
 flowchart TB
   subgraph Client["客户端"]
-    UI["React UI\nTanStack Query / Virtual"]
+    UI["React UI\nTanStack Query"]
   end
 
   subgraph Core["mail-core 模块化单体"]
@@ -116,7 +116,7 @@ flowchart TB
   subgraph Data["统一数据面"]
     PG[(PostgreSQL\n同一主版本/schema)]
     Blob["Content-addressed Blobs\n应用层加密"]
-    Key["OS Keychain / KMS"]
+    Key["凭证加密\n(目标 Keychain/KMS;\n现状 credential_secrets)"]
   end
 
   UI --> API
@@ -160,25 +160,24 @@ flowchart TB
 |---|---|
 | PG 形态 | Electron **不**把 PostgreSQL 嵌进渲染/主进程；由 Electron **管理本地 PostgreSQL 官方二进制为子进程** |
 | 版本一致性 | 与 Docker 使用**同一 PG 主版本**、同一 schema、同一 Alembic 迁移、同一应用代码 |
-| 进程编排 | 应用启动时自动拉起：PostgreSQL → 迁移（如需）→ API → Worker；退出时有序停止 |
+| 进程编排 | 应用启动时自动拉起：PostgreSQL → `mail_core --data-dir`（迁移 + API + **embedded worker** 同进程）；无 PG 二进制则拒绝启动；退出时有序停止 |
 | 数据目录 | OS 应用数据目录（如 macOS `Application Support`、Windows `%APPDATA%`、Linux `XDG_DATA_HOME`），**在安装目录之外** |
 | 用户依赖 | **不要求用户安装 Docker** |
 | 卸载策略 | 默认卸载**不得删除**邮件数据目录；需显式“清除本地邮件数据”动作 |
 | 成本与义务 | 维护各平台 PG 二进制分发；进程生命周期与崩溃拉起；跨主版本升级走 `pg_upgrade` 或受控备份/恢复流程 |
-| 密钥 | 密码/OAuth 进 OS Keychain；磁盘依赖 OS 全盘/卷加密（见第 11 节） |
+| 密钥 | **目标** OS Keychain/KMS；**现状** `credential_secrets`（blob 密钥派生）。磁盘依赖 OS 全盘/卷加密（见第 11 节） |
 
-桌面进程关系：
+桌面进程关系（**现状 / PG-only**）：
+
+Electron 只编排 **PostgreSQL 子进程** + **单个** `python -m mail_core --data-dir`（API 与 **内嵌 worker** 同进程）。无 PG 二进制时直接失败（`stub` 致命），没有无库回退。OS Keychain/KMS **尚未接入**（凭证见 `credential_secrets`）。详见 [mail-core-desktop.md](./mail-core-desktop.md)、[mail-core-status.md](./mail-core-status.md)。
 
 ```mermaid
 flowchart LR
   E["Electron Main"] --> PG["postgres 子进程"]
-  E --> API["API 子进程"]
-  E --> W["Worker 子进程"]
-  API --> PG
-  W --> PG
-  API --> Blob["加密 Blob 目录"]
-  W --> Blob
-  E --> KC["OS Keychain"]
+  E --> MC["mail_core 子进程\nAPI + embedded worker"]
+  MC --> PG
+  MC --> Blob["加密 Blob 目录"]
+  MC --> Cred["credential_secrets\n(非 Keychain)"]
 ```
 
 ### 4.4 网络暴露
@@ -521,7 +520,7 @@ metadata_synced → archive_pending → archive_in_progress → archive_complete
 |---|---|
 | PostgreSQL 数据目录 + FTS 索引 | 置于**加密卷/加密文件系统** |
 | Blob | **应用层加密**，支持密钥版本与轮换 |
-| 密码 / OAuth refresh token | OS Keychain，或外部 KMS 派生键加密后仅存引用 |
+| 密码 / OAuth refresh token | **目标** OS Keychain / 外部 KMS 引用；**现状** `credential_secrets` 表（AES-GCM，密钥由 blob keyring HKDF 派生） |
 | 备份 | 使用**与主存储分离的备份密钥**加密 |
 
 ### 11.2 字段加密 vs FTS（明确取舍）
@@ -535,7 +534,7 @@ metadata_synced → archive_pending → archive_in_progress → archive_complete
 | 环境 | 要求 |
 |---|---|
 | Docker | Volume **不**等于加密；部署文档**必须**要求主机磁盘/卷加密 |
-| 桌面 | 依赖 OS 磁盘加密 + Keychain；安装目录不含邮件数据 |
+| 桌面 | 依赖 OS 磁盘加密；Keychain **目标未落地**；安装目录不含邮件数据 |
 
 ### 11.4 单用户与资源 UUID（能力模型）
 
@@ -582,9 +581,10 @@ mail-core 是**单用户实例**：一个登录密码 +（可选）Bearer API Ke
 
 ### 12.4 统一收件箱
 
-- **后端聚合**：多账号 inbox 角色文件夹的消息视图由 API 提供。
+- **后端聚合**：多账号 inbox 角色文件夹的消息视图由 API 提供（`GET /api/mail/inbox`）。
 - 依赖 `folder_stats` 与消息位置；前端不做 N 次账号客户端合并作为真相。
 - 未读角标以服务端统计为准，SSE 增量修正。
+- **现状差距**：列表已走后端统一 inbox；SPA 侧栏未读角标仍来自缓存的首屏列表行（非 `folder_stats`）。见 [known-limitations.md](./known-limitations.md)「Unified inbox / unread badges」。
 
 ### 12.5 `folder_stats`
 
@@ -724,7 +724,7 @@ flowchart LR
 ### 16.1 推荐实施顺序
 
 1. **骨架**：仓库结构、Docker Compose、PG、Alembic 基线、FastAPI Hello、Worker 空循环。
-2. **账号与密钥**：accounts + Keychain/KMS 引用；桌面 PG 子进程 PoC。
+2. **账号与密钥**：accounts + 凭证加密（**目标** Keychain/KMS；现状 `credential_secrets`）；桌面 PG 子进程 PoC。
 3. **统一模型与表**：messages/folders/locations/stats/checkpoints。
 4. **IMAP 适配 + Dovecot 测试床**：元数据同步、checkpoint 同事务。
 5. **Lease + fencing + SKIP LOCKED**：多 worker 验收测试。
@@ -747,7 +747,7 @@ flowchart LR
 | M3 归档 | 列表完成 ≠ 归档完成；硬配额暂停可恢复 |
 | M4 实时 | 未读与同步进度经 SSE；杀客户端重连后 `Last-Event-ID` 续传或 resync |
 | M5 安全 | 附件无路径穿越；远程图片默认关；部署文档含加密卷要求 |
-| M6 桌面 | 无 Docker 安装包可启 PG+API+Worker；卸载默认保留邮件数据 |
+| M6 桌面 | 无 Docker 安装包可启 **PG + mail_core（API+embedded worker）**；无 PG 则拒绝启动；卸载默认保留邮件数据 |
 
 ---
 
@@ -778,7 +778,7 @@ kkmail 邮件内核重写定稿为：
 - **本地 PostgreSQL 为唯一邮件权威**；同步与归档是子系统；协议细节隔离在适配层。
 - **桌面与 Docker 共享同一 PG 主版本与 schema**；桌面由 Electron 管理 PG 子进程，数据在安装目录外，卸载默认不删邮件。
 - **正确性机制**：checkpoint 与写入同事务；删除不靠猜测；三层互斥（SKIP LOCKED + lease + fencing）；MIME 有界归档与配额；SSE + 事务 Outbox。
-- **安全**：加密卷承载库与 FTS；Blob 应用层加密；密钥进 Keychain/KMS；备份独立密钥。
+- **安全**：加密卷承载库与 FTS；Blob 应用层加密；密钥 **目标** Keychain/KMS（现状 `credential_secrets`）；备份独立密钥。
 - **质量**：真实 PG + Dovecot + mocks + fixtures；质量分层见 §15（本地建议跑 L1/L2；本仓无 GitHub Actions）。
 
 本文件即为实现与验收的依据。偏离六项不可含糊决策或第 17 节范围，须先修订本文档。

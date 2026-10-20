@@ -76,4 +76,15 @@ describe('<MessageList />', () => {
     await render(<MessageList />)
     await waitFor(() => expect(calls.some((u) => u.includes('account_id=acc-1'))).toBe(true))
   })
+
+  it('message rows are keyboard operable (Enter selects)', async () => {
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toHaveLength(2))
+    const row = container.querySelector('.message-row') as HTMLElement
+    expect(row.getAttribute('tabindex')).toBe('0')
+    expect(row.getAttribute('role')).toBe('button')
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await waitFor(() => expect(useMailStore.getState().selectedKey).toBe('a'))
+  })
 })
+
