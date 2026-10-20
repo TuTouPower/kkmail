@@ -99,6 +99,8 @@ app.whenReady().then(async () => {
     createWindow(url)
   } catch (err) {
     console.error(err)
+    const { dialog } = require('electron')
+    dialog.showErrorBox('OutlookEmail 无法启动', String(err && err.message ? err.message : err))
     app.quit()
   }
 })

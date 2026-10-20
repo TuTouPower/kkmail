@@ -12,7 +12,11 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const tagsQuery = useQuery({ queryKey: ['tags'], queryFn: async () => (await api.getTags()).tags || [], enabled: open })
   const tempQuery = useQuery({ queryKey: ['temp-emails'], queryFn: async () => (await api.getTempEmails()).emails || [], enabled: open })
   const accounts = accountsQuery.data || []
+  const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: async () => (await api.getProjects()).data?.projects || [], enabled: open })
   const [accountString, setAccountString] = useState('')
+  const [oauthUrl, setOauthUrl] = useState('')
+  const [redirectedUrl, setRedirectedUrl] = useState('')
+  const [toolStatus, setToolStatus] = useState('')
   const [provider, setProvider] = useState('outlook')
   const [status, setStatus] = useState('')
 
@@ -85,6 +89,30 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
             标签 {(tagsQuery.data || []).length} 个 · 临时邮箱 {(tempQuery.data || []).length} 个
           </div>
+          <div style={{ marginTop: 22, fontSize: 16, fontWeight: 700 }}>OAuth / 转发 / 项目</div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+            <button type="button" onClick={async () => {
+              const res = await api.getOauthUrl()
+              setOauthUrl(res.auth_url || '')
+              if (res.auth_url) window.open(res.auth_url, '_blank', 'noopener')
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>打开 Outlook 授权</button>
+            <button type="button" onClick={async () => {
+              const ids = accounts.map((a) => a.id)
+              const res = await api.setForwarding(ids, true)
+              setToolStatus(res.message || res.error || '已请求开启转发')
+            }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>全部开启转发</button>
+          </div>
+          {oauthUrl && <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all' }}>{oauthUrl}</div>}
+          <input value={redirectedUrl} onChange={(e) => setRedirectedUrl(e.target.value)} placeholder="粘贴授权回调 URL" style={{ width: '100%', marginTop: 8, height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+          <button type="button" onClick={async () => {
+            const res = await api.exchangeOauth(redirectedUrl)
+            setToolStatus(res.success ? '已换取 token' : (res.error || '换取失败'))
+          }} style={{ marginTop: 8, height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>换取 Refresh Token</button>
+          <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
+            项目 {(projectsQuery.data || []).length} 个
+            {(projectsQuery.data || []).slice(0, 5).map((p) => ` · ${p.name || p.project_key || '未命名'}`)}
+          </div>
+          {toolStatus && <div style={{ marginTop: 8, fontSize: 12 }}>{toolStatus}</div>}
           <div style={{ marginTop: 22, fontSize: 18, fontWeight: 720 }}>外观</div>
           <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
             <button onClick={() => setTheme('light')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'light' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
