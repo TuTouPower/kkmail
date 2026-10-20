@@ -76,8 +76,21 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             complete_job(session, job)
             return
 
+        if job.job_type == JobType.ARCHIVE_MIME_BATCH.value:
+            from mail_core.blobs.archive import run_archive_batch
+
+            session.commit()
+            result = run_archive_batch(
+                account_id=account_id,
+                worker_id=worker_id,
+                store=store,
+                payload=payload,
+            )
+            log.info("archive_mime_batch %s", result)
+            complete_job(session, job)
+            return
+
         if job.job_type in {
-            JobType.ARCHIVE_MIME_BATCH.value,
             JobType.SYNC_FOLDER_DELTA.value,
             JobType.OUTBOX_DISPATCH_WAKE.value,
             JobType.GC_BLOBS.value,
