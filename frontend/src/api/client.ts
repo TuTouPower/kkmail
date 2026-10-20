@@ -328,6 +328,17 @@ export const api = {
     return request('/api/emails/delete', { method: 'POST', body: JSON.stringify(payload) })
   },
 
+  async addAccountsMailCore(payload: {
+    email: string
+    provider: string
+    display_name?: string
+    group_id?: string
+    credentials?: Record<string, unknown>
+    config?: Record<string, unknown>
+  }) {
+    return mcRequest('/api/accounts', { method: 'POST', body: JSON.stringify(payload) })
+  },
+
   async sendOutlookMail(_payload: Record<string, unknown>) {
     throw { status: 501, message: '发送未迁移到 mail-core' } as ApiError
   },
