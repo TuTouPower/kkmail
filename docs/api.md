@@ -34,21 +34,21 @@ Committed artifacts (regenerate when `response_model` / routes change):
 scripts/gen-openapi.sh
 # equivalent:
 python scripts/export_openapi.py
-cd frontend && npm run openapi:gen
+(cd frontend && npm run openapi:gen)
 ```
 
 **Local** drift checks (this repo has **no** GitHub Actions):
 
 ```bash
 python scripts/export_openapi.py --check
-cd frontend && npm run openapi:check
+(cd frontend && npm run openapi:check)
 pytest tests/mail_core/test_openapi_contract.py -q
-cd frontend && npm test   # vitest + openapi:check
+(cd frontend && npm test)   # vitest + openapi:check
 ```
 
 ## Conventions
 
-- **Auth:** a session cookie (`kkmail_mc_session`, `HttpOnly`) from `POST /api/auth/login` (`{"password": "..."}`), or `Authorization: Bearer <key>` (keys in `MAIL_CORE_API_KEYS`). Every route except `/health`, `/ready` and login requires one of them; otherwise the response is 401. An invalid Bearer key is rejected even if a valid cookie is also sent. API keys are never accepted in the query string.
+- **Auth:** a session cookie (`kkmail_mc_session`, `HttpOnly`) from `POST /api/auth/login` (`{"password": "..."}`), or `Authorization: Bearer <key>` (keys in `MAIL_CORE_API_KEYS`). Public endpoints without authentication are `/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc`, `POST /api/auth/login`, and SPA static assets (`/`, `/assets/*`). All other routes require an active session or a valid Bearer token; otherwise the response is 401. An invalid Bearer key is rejected even if a valid cookie is also sent. API keys are never accepted in the query string.
 - **Login rate limit:** repeated failures from one client address return 429 with `Retry-After`.
 - **CSRF:** with a cookie session, `POST/PUT/PATCH/DELETE` must send `X-CSRF-Token` (the token from login or `GET /api/auth/me`). Bearer requests are exempt.
 - **Errors:** FastAPI's shape, `{"detail": "..."}`. Validation errors return 422 with a list in `detail`. A CSRF failure returns 403 with `{"detail": {"error": "...", "csrf_error": true}}`.
