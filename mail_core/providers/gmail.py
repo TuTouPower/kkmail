@@ -167,9 +167,21 @@ class GmailProvider:
         self._calls.append("fetch_metadata_page")
         if self.transport is None:
             raise GmailNotConfiguredError("Gmail API metadata fetch not wired yet")
+        cur = dict(cursor or {})
+        baseline_history_id = cur.get("historyId")
+        if not baseline_history_id and not cur.get("pageToken"):
+            # Record baseline history watermark before full scan starts
+            try:
+                profile = self._call("GET", f"/gmail/v1/users/{self.user_id}/profile", {})
+                hid = profile.get("historyId") if isinstance(profile, dict) else None
+                if hid:
+                    baseline_history_id = str(hid)
+            except Exception:
+                pass
+
         params: dict[str, Any] = {"labelIds": folder_remote_id, "maxResults": 50}
-        if cursor and cursor.get("pageToken"):
-            params["pageToken"] = cursor["pageToken"]
+        if cur.get("pageToken"):
+            params["pageToken"] = cur["pageToken"]
         data = self._call("GET", f"/gmail/v1/users/{self.user_id}/messages", params)
         if "page" in data:
             return data["page"]
@@ -196,15 +208,17 @@ class GmailProvider:
         if token:
             next_cursor["pageToken"] = token
         exhausted = not bool(token)
-        if exhausted:
-            # Stamp historyId so metadata apply can persist checkpoint.history_id.
+        if not baseline_history_id and exhausted:
+            # Fallback stamp historyId if start probe failed
             try:
                 profile = self._call("GET", f"/gmail/v1/users/{self.user_id}/profile", {})
                 hid = profile.get("historyId") if isinstance(profile, dict) else None
                 if hid:
-                    next_cursor["historyId"] = str(hid)
+                    baseline_history_id = str(hid)
             except Exception:
                 pass
+        if baseline_history_id:
+            next_cursor["historyId"] = baseline_history_id
         return MetadataPage(
             items=items,
             next_cursor=next_cursor or None,
