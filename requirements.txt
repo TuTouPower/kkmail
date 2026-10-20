@@ -1,2 +1,0 @@
-# Flask stack removed. Install mail-core deps:
-#   pip install -r requirements-mail-core.txt

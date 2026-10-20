@@ -1,168 +1,38 @@
-# 🛠️ 故障排查与常见问题
+# 故障排查
 
-## 故障排查
+## 启动即退出
 
-### 容器无法启动
+| 报错 | 原因 / 处理 |
+| --- | --- |
+| `DatabaseConfigError: MAIL_CORE_DATABASE_URL ...` | 未设置数据库 URL。compose 内由服务环境提供；直跑需自行导出。 |
+| `blob encryption keys required` | 设置 `MAIL_CORE_BLOB_KEY_V1`，或用 `--data-dir` 让 mail-core 生成并持久化。 |
+| `Set MAIL_CORE_LOGIN_PASSWORD_HASH ...` | 未配置登录密码（见 [security.md](security.md)）。 |
+| compose：`set POSTGRES_PASSWORD` 等 | compose 的必填变量缺失，按 [deployment.md](deployment.md) 导出。 |
 
-**检查步骤：**
+## `/ready` 返回 503
 
-```bash
-# 1. 查看容器状态
-docker ps -a
+`detail` 指明原因：
 
-# 2. 查看应用日志
-docker logs outlook-mail-reader
+- `database: <异常类型>` — PostgreSQL 不可达或认证失败。
+- `schema_out_of_date` — 先执行 `alembic -c mail_core/db/alembic.ini upgrade head`（`python -m mail_core` 默认自动执行）。`/health` 的 `schema_head` 是代码期望的版本。
+- `outbox_listener` — LISTEN 连接未建立，实时推送不可用；检查数据库连接数与权限。
 
-# 3. 检查端口占用
-lsof -i :5000
+## 账户不同步
 
-# 4. 重新拉取镜像并重启
-docker pull ghcr.io/assast/outlookemail:latest
-docker-compose down
-docker-compose up -d
-```
+1. 设置页查看账户 `sync_status`；worker 是否在运行（compose `worker` 服务或 `python -m mail_core` 内嵌 worker）。
+2. 查询失败作业：`SELECT job_type, attempts, last_error FROM worker_jobs WHERE status='failed' ORDER BY updated_at DESC LIMIT 20;`（错误已脱敏）。
+3. 429 / 限流会自动退避重排，不需要手动处理。
+4. IMAP：确认服务器支持 993/TLS；明文 143 需在账户 `config` 中显式 `use_ssl: false`。
 
-**正确的日志应该显示：**
-```
-============================================================
-Outlook 邮件 Web 应用已初始化
-数据库文件: data/outlook_accounts.db
-GPTMail API: https://mail.chatgpt.org.uk
-============================================================
-```
+## 登录返回 429
 
-### 数据库表不存在错误
+失败次数过多，按 `Retry-After` 等待；阈值见 [security.md](security.md)。
 
-**错误信息：** `sqlite3.OperationalError: no such table: settings`
+## 忘记登录密码
 
-**原因：** 数据库未初始化或损坏
+- `--data-dir` 部署：停止服务，删除 `secrets/login-password.bcrypt`，未设置 `MAIL_CORE_LOGIN_PASSWORD*` 时重启会生成新的 `secrets/initial-password.txt`。
+- 环境变量部署：替换 `MAIL_CORE_LOGIN_PASSWORD_HASH` / `MAIL_CORE_LOGIN_PASSWORD` 后重启。
 
-**解决方法：**
+## 附件 / 原文读取报错
 
-```bash
-# 方法 1：删除旧数据库，重新初始化
-docker-compose down
-rm -rf data/outlook_accounts.db
-docker-compose up -d
-
-# 方法 2：手动初始化数据库
-docker exec outlook-mail-reader python -c "from web_outlook_app import init_db; init_db()"
-docker-compose restart
-
-# 方法 3：使用最新镜像
-docker pull ghcr.io/assast/outlookemail:latest
-docker-compose down
-docker-compose up -d
-```
-
-### 无法获取邮件
-
-**可能原因：**
-1. Refresh Token 过期或无效
-2. Client ID 错误
-3. API 权限不足
-4. 网络连接问题
-
-**解决方法：**
-
-1. **重新获取 Refresh Token** - 使用内置的 OAuth2 助手重新获取
-2. **检查 API 权限** - 确保已添加所需的 API 权限
-3. **查看详细错误** - 打开浏览器开发者工具（F12），查看 Network 标签
-
-### 502 错误（Nginx）
-
-**原因：** 应用未正常启动或端口配置错误
-
-```bash
-docker ps
-docker-compose logs
-curl http://localhost:5000/login
-sudo nginx -t
-docker-compose restart
-sudo systemctl reload nginx
-```
-
-### 临时邮箱功能不可用
-
-1. **更新 API Key** - 在「⚙️ 设置」中更新 GPTMail API Key
-2. **检查服务状态** - 访问 GPTMail 官网确认服务状态
-
-### Session 过期问题
-
-1. **服务器部署时设置固定 SECRET_KEY**
-   ```yaml
-   environment:
-     - SECRET_KEY=your-fixed-secret-key-here
-   ```
-   使用 `python -c 'import secrets; print(secrets.token_hex(32))'` 生成
-
-   如果使用 Windows `exe`，程序会在首次启动时自动生成并保存固定 `SECRET_KEY`，不要删除对应数据目录下的密钥文件。
-
-2. Web 登录默认有效期为 30 天，也可以在登录页选择 7 天、90 天、180 天或永久有效；重启应用不会导致 Session 失效（使用固定 SECRET_KEY）
-
-### 数据库锁定错误
-
-**错误信息：** `sqlite3.OperationalError: database is locked`
-
-```bash
-docker-compose restart
-lsof data/outlook_accounts.db
-cp data/outlook_accounts.db data/outlook_accounts.db.backup
-docker-compose down
-docker-compose up -d
-```
-
----
-
-## 常见问题
-
-### Q: 为什么无法获取邮件？
-A: 请检查：(1) Refresh Token 是否有效 (2) Client ID 是否正确 (3) Azure 应用 API 权限 (4) 网络连接 (5) 尝试重新获取 Token
-
-### Q: 如何获取 Refresh Token？
-A: 使用内置 OAuth2 助手：点击「获取 Token」→「生成授权链接」→ 浏览器授权 → 复制授权后 URL → 粘贴换取 Token
-
-### Q: 临时邮箱功能如何使用？
-A: 点击「临时邮箱」分组 → 「生成临时邮箱」→ 选择邮箱 →「获取邮件」
-
-### Q: 如何修改登录密码？
-A: **还记得当前密码时**，在 Web 界面「⚙️ 设置」中修改（须填写当前密码）。环境变量 `LOGIN_PASSWORD` **仅在首次初始化**（数据库尚无 `login_password`）时写入默认值；应用已运行并写过库之后，只改 env **不会**覆盖当前登录密码。
-
-### Q: 忘记 Web 登录密码怎么办？
-A: 使用官方重置脚本（**不需要**旧密码，需要能访问数据库/容器的主机权限）：
-
-```bash
-# 建议先停止服务（非强制），并确认 DATABASE_PATH（默认 data/outlook_accounts.db）
-python scripts/reset_login_password.py
-
-# Docker 示例（容器名按实际修改；必须 -it 以进入交互终端）
-docker exec -it outlook-mail-reader python scripts/reset_login_password.py
-# 若 compose 服务名为 outlook-mail：
-# docker exec -it outlook-mail python scripts/reset_login_password.py
-```
-
-按提示输入并确认新密码（至少 8 位）。成功后：
-
-- 用**新密码**登录；既有 Web / 扩展会话会失效
-- 密码保存在数据库 `settings.login_password`（bcrypt），**不是**靠改 `LOGIN_PASSWORD` 环境变量恢复
-- 脚本不支持 `--password` 或管道传入密码，须在交互 TTY 中运行
-
-更完整的安全边界说明见 [security.md](./security.md)。
-
-### Q: 数据存储在哪里？
-A: SQLite 数据库 `data/outlook_accounts.db`，建议定期备份
-
-### Q: 支持哪些邮件文件夹？
-A: 收件箱（Inbox）、垃圾邮件（Junk Email）、已删除邮件（Deleted Items）
-
-### Q: 如何批量导入邮箱？
-A: 默认格式：`邮箱----密码----client_id----refresh_token`，每行一个；也支持在导入弹窗中切换为 `邮箱----密码----refresh_token----client_id`
-
-### Q: 如何导出邮箱账号？
-A: (1) 导出单个分组 (2) 导出所有 (3) 导出选中分组 (4) 在邮箱列表批量选择后导出选中账号
-
-### Q: 批量选择怎么拖拽？Mac 触控板没有反应怎么办？
-A: 先点击邮箱面板顶部的「☑」进入批量选择模式，然后在账号行或左侧选择框上按住并上下拖动。只按住 `Shift` 点击适合连续范围选择，不等同于拖拽；如果要用触控板拖拽，需要保持按下状态经过多行账号。
-
-### Q: Docker 容器无法启动怎么办？
-A: (1) `docker logs outlook-mail-reader` (2) 检查端口 (3) 检查目录权限 (4) 拉取最新镜像
+`blob content does not match its digest` 或 `InvalidTag` 表示 blob 文件被篡改或截断，或使用了错误的 blob 密钥版本；确认 `MAIL_CORE_BLOB_KEYS` 包含写入时的版本。

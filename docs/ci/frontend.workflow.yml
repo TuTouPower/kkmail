@@ -1,18 +1,19 @@
 name: frontend
 
-# Template — copy to .github/workflows/frontend.yml when workflow scope allows.
+# Canonical copy: .github/workflows/frontend.yml (this file mirrors it).
 on:
   push:
+    branches: [main, dev]
     paths:
       - "frontend/**"
-      - "docs/ci/frontend.workflow.yml"
+      - ".github/workflows/frontend.yml"
   pull_request:
     paths:
       - "frontend/**"
-      - "docs/ci/frontend.workflow.yml"
+      - ".github/workflows/frontend.yml"
 
 jobs:
-  lint-test-build:
+  check:
     runs-on: ubuntu-latest
     defaults:
       run:

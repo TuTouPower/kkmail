@@ -1,61 +1,25 @@
 # Known limitations
 
-Recorded so unfinished product rules are not silently dropped.
+## Product scope
 
-## Flagged mail
+- **No sending.** Compose, reply, forward, contacts and notifications are out of scope, and the SPA has no compose UI.
+- **Folders.** The SPA shows each account's inbox and the unified inbox. The backend syncs all folders, but the HTTP API exposes inbox lists only (`/api/mail/inbox`).
+- **Archive, junk and move** have no API. Trash is supported: it is local-first and the remote trash is queued.
+- **Flags are server-side.** `is_flagged` is stored in mail-core and written back to IMAP, Gmail and Graph via `remote_operations`. The 已标记 filter reads that field.
 
-The design system requires a Flagged filter and a flag action. Upstream `assast/outlookEmail` does not provide a server-side flagged or starred field on `/api/emails` or `/api/email`.
+## Lists and search
 
-Current behavior:
+- The list view loads the newest 100 messages per view. Keyset pagination (`next_cursor`) is available in the API, but the SPA does not page further yet.
+- Search uses the server: PostgreSQL full-text search plus trigram matching on subject and sender. It starts from two characters.
+- Sidebar unread badges come from the cached unified-inbox page, so they count unread messages among the loaded rows only.
 
-- Flagging a message stores the key in local UI state.
-- The Flagged filter only sees that local state.
-- Flags are not written to Graph, IMAP, or SQLite.
+## Desktop packaging
 
-Revisit when the backend exposes a flag API. Do not remove the Flagged control from the design without approval.
+- The Linux AppImage and deb include a vendored PostgreSQL (`scripts/fetch-pg-binaries.sh`) and the PyInstaller mail-core sidecar (`scripts/build-sidecar.sh`).
+- macOS and Windows packages are unsigned builds.
 
-## Apple Mail demo alignment
+## Tests
 
-The new interface follows `DESIGN.md` and the earlier Apple Mail demo:
-
-- Three-column workspace, collapsible sidebar, settings only at bottom left.
-- List toolbar has search, clear search, All/Unread/Flagged, Mark All as Read, sort.
-- Reader toolbar has reply, reply all, forward, mark read, archive, trash, junk, move, flag.
-- Mobile uses a drawer and a back control.
-
-Archive, junk, and move are present for design parity. Upstream mail routes still only support inbox, junk, and trash as live folders, and there is no move API. Trash is wired to delete (with confirmation). The other three buttons are rendered `disabled` until a backend move API exists.
-
-The unified "所有收件箱" view fetches at most 8 accounts (one request per account) and shows a notice when more accounts exist.
-
-## Packaging status
-
-Verified in this development environment:
-
-- Linux AppImage and deb build with `cd desktop && npm run dist:linux`.
-- Windows unpacked app and zip build with signing disabled. NSIS installer needs Wine on Linux.
-- PyInstaller sidecar builds with `./scripts/build-sidecar.sh` and, with `KKMAIL_SIDECAR=1`, serves the bundled SPA without opening a tray or browser.
-- Linux unpacked Electron app starts the bundled sidecar, generates a per-install `secret_key.txt`, and stops the sidecar on SIGTERM.
-- Browser login into the React shell was verified against a local Flask server.
-- Backend test suite: full `pytest` passes; frontend `oxlint --deny-warnings`, `vitest`, and `vite build` pass.
-
-Blocked here:
-
-- No Docker daemon, so the multi-stage image was not run.
-- Windows NSIS installer requires Wine when built on Linux.
-- macOS packages must be built on macOS.
-
-CI workflows are in `.github/workflows/desktop.yml` and `.github/workflows/tests.yml`.
-
-## Remaining product gaps
-
-- OAuth, forwarding, projects, temporary mail, and WebDAV backup are reachable from Settings, but the old `/legacy` UI still holds the complete advanced flows.
-- End-to-end browser tests are not yet in place.
-
-
-## Mail list cache
-
-The React SPA keeps mail lists in `@tanstack/react-query` memory:
-
-- `staleTime` is 5 minutes (`MAIL_STALE_TIME_MS`); within that window navigation reuses the cache.
-- Soft refresh (toolbar 刷新) calls `invalidateQueries` and keeps showing the previous list via `placeholderData` while refetching.
-- There is still no durable IndexedDB/SQLite mail cache; a full page reload re-fetches from IMAP/Graph.
+- Backend: `pytest tests` (needs PostgreSQL; `scripts/run-mail-core-tests.sh`).
+- Frontend: `vitest` unit and component tests (jsdom).
+- There is no browser end-to-end suite.
