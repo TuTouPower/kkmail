@@ -21,6 +21,7 @@ _EXPORTS: dict[str, str] = {
     "assert_fencing": "mail_core.sync.leases",
     "claim_jobs": "mail_core.sync.jobs",
     "commit_checkpoint": "mail_core.sync.checkpoints",
+    "invalidate_checkpoint_for_rebuild": "mail_core.sync.checkpoints",
     "complete_job": "mail_core.sync.jobs",
     "enqueue_job": "mail_core.sync.jobs",
     "fail_job": "mail_core.sync.jobs",

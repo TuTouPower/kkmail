@@ -17,9 +17,17 @@ from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.domain.enums import JobType, OutboxEventType, SyncPhase
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.factory import build_provider
+from mail_core.providers.http import CursorInvalidError, RateLimitedError
+from mail_core.sync.checkpoints import invalidate_checkpoint_for_rebuild
 from mail_core.sync.jobs import enqueue_job
-from mail_core.providers.http import RateLimitedError
-from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, release_lease
+from mail_core.sync.leases import (
+    FencingMismatch,
+    LeaseBusy,
+    acquire_lease,
+    assert_fencing,
+    heartbeat_lease,
+    release_lease,
+)
 from mail_core.sync.metadata import apply_metadata_page
 
 log = logging.getLogger("mail_core.sync.engine")
@@ -36,9 +44,13 @@ def sync_account_folders(
     *,
     worker_id: str,
     store: CredentialStore | None = None,
-    lease_ttl: timedelta = timedelta(seconds=60),
+    lease_ttl: timedelta = timedelta(seconds=120),
 ) -> dict:
-    """Discover remote folders, upsert local Folder rows, enqueue metadata jobs."""
+    """Discover remote folders, upsert local Folder rows, enqueue metadata jobs.
+
+    ``lease_ttl`` defaults to 120s to cover folder-list RTT; callers that hold the
+    lease across multi-page metadata/delta loops must also call ``heartbeat_lease``.
+    """
     Session = _session_factory()
     with Session() as session:
         account = session.get(Account, account_id)
@@ -87,8 +99,6 @@ def sync_account_folders(
 
     with Session() as session:
         try:
-            from mail_core.sync.leases import assert_fencing
-
             assert_fencing(session, account_id=account_id, fencing_token=fencing)
         except FencingMismatch:
             return {"status": "fencing_mismatch"}
@@ -146,16 +156,34 @@ def sync_account_folders(
         return {"status": "ok", "folders": len(folder_ids), "upserted": upserted}
 
 
+def _release_lease_quiet(
+    session,
+    *,
+    account_id: uuid.UUID,
+    worker_id: str,
+    fencing_token: int,
+) -> None:
+    try:
+        release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing_token)
+    except FencingMismatch:
+        session.rollback()
+
+
 def sync_folder_metadata(
     account_id: uuid.UUID,
     folder_id: uuid.UUID,
     *,
     worker_id: str,
     store: CredentialStore | None = None,
-    lease_ttl: timedelta = timedelta(seconds=60),
+    lease_ttl: timedelta = timedelta(seconds=120),
     max_pages: int = 20,
 ) -> dict:
-    """Pull metadata pages until exhausted or max_pages; enqueue reconcile when done."""
+    """Pull metadata pages until exhausted or max_pages; enqueue reconcile when done.
+
+    Heartbeats the account lease between pages so long folders do not expire the
+    120s default TTL mid-loop (architecture §7.5). Provider I/O exceptions always
+    release the lease before propagating.
+    """
     Session = _session_factory()
     with Session() as session:
         account = session.get(Account, account_id)
@@ -187,49 +215,105 @@ def sync_folder_metadata(
         )
         cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
         cursor = dict(cp.cursor) if cp else {}
+        if cp is not None and cp.uidvalidity is not None and "uidvalidity" not in cursor:
+            cursor["uidvalidity"] = int(cp.uidvalidity)
         session.commit()
 
     provider = build_provider(account_snapshot, store or get_credential_store())
     total = 0
     exhausted = False
     pages = 0
-    while pages < max_pages:
-        page = provider.fetch_metadata_page(remote_id, cursor)  # network
+    try:
+        while pages < max_pages:
+            page = provider.fetch_metadata_page(remote_id, cursor)  # network
+            with Session() as session:
+                try:
+                    result = apply_metadata_page(
+                        session,
+                        account_id=account_id,
+                        folder_id=folder_id,
+                        fencing_token=fencing,
+                        page=page,
+                    )
+                except FencingMismatch:
+                    return {"status": "fencing_mismatch", "upserted": total}
+                session.add(
+                    OutboxEvent(
+                        event_type=OutboxEventType.SYNC_PROGRESS.value,
+                        account_id=account_id,
+                        payload={
+                            "phase": SyncPhase.METADATA.value,
+                            "folder_id": str(folder_id),
+                            "upserted": result.upserted,
+                            "exhausted": result.exhausted,
+                        },
+                    )
+                )
+                # Heartbeat after each page commit so long scans keep the lease.
+                try:
+                    heartbeat_lease(
+                        session,
+                        account_id=account_id,
+                        owner_id=worker_id,
+                        fencing_token=fencing,
+                        ttl=lease_ttl,
+                    )
+                except FencingMismatch:
+                    session.rollback()
+                    return {"status": "fencing_mismatch", "upserted": total}
+                session.commit()
+                total += result.upserted
+                cursor = result.cursor
+                exhausted = result.exhausted
+            pages += 1
+            if exhausted:
+                break
+    except CursorInvalidError as exc:
         with Session() as session:
             try:
-                result = apply_metadata_page(
-                    session,
-                    account_id=account_id,
-                    folder_id=folder_id,
-                    fencing_token=fencing,
-                    page=page,
+                assert_fencing(session, account_id=account_id, fencing_token=fencing)
+                invalidate_checkpoint_for_rebuild(
+                    session, account_id=account_id, folder_id=folder_id, fencing_token=fencing
                 )
-            except FencingMismatch:
-                return {"status": "fencing_mismatch", "upserted": total}
-            session.add(
-                OutboxEvent(
-                    event_type=OutboxEventType.SYNC_PROGRESS.value,
+                enqueue_job(
+                    session,
+                    job_type=JobType.SYNC_FOLDER_METADATA.value,
                     account_id=account_id,
                     payload={
-                        "phase": SyncPhase.METADATA.value,
                         "folder_id": str(folder_id),
-                        "upserted": result.upserted,
-                        "exhausted": result.exhausted,
+                        "reason": "cursor_invalid",
+                        "detail": str(exc),
                     },
+                    priority=40,
                 )
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            except FencingMismatch:
+                session.rollback()
+                return {"status": "fencing_mismatch", "upserted": total}
+        return {"status": "cursor_invalid", "upserted": total, "pages": pages}
+    except RateLimitedError as exc:
+        delay = float(exc.retry_after_seconds or 60)
+        with Session() as session:
+            enqueue_job(
+                session,
+                job_type=JobType.SYNC_FOLDER_METADATA.value,
+                account_id=account_id,
+                payload={"folder_id": str(folder_id)},
+                priority=50,
+                run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
             )
+            _release_lease_quiet(session, account_id=account_id, worker_id=worker_id, fencing_token=fencing)
             session.commit()
-            total += result.upserted
-            cursor = result.cursor
-            exhausted = result.exhausted
-        pages += 1
-        if exhausted:
-            break
+        return {"status": "rate_limited", "retry_after": delay, "upserted": total, "pages": pages}
+    except Exception:
+        with Session() as session:
+            _release_lease_quiet(session, account_id=account_id, worker_id=worker_id, fencing_token=fencing)
+            session.commit()
+        raise
 
     with Session() as session:
         try:
-            from mail_core.sync.leases import assert_fencing
-
             assert_fencing(session, account_id=account_id, fencing_token=fencing)
         except FencingMismatch:
             return {"status": "fencing_mismatch", "upserted": total}
