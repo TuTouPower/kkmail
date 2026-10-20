@@ -16,12 +16,45 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
 from mail_core.blobs.archive import blob_root
 from mail_core.blobs.crypto import Keyring, iter_unwrap, iter_wrap, load_keyring_from_env, read_key_version
 from mail_core.db.session import get_session_factory
-from mail_core.mail.storage.models import MessageBlob
+from mail_core.mail.storage.models import CredentialSecret, MessageBlob
 
 log = logging.getLogger("mail_core.blobs.rotate")
+
+_CRED_HKDF_INFO = b"kkmail/credential-store/v1"
+
+
+def _cred_key(keyring: Keyring, version: int) -> bytes:
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=_CRED_HKDF_INFO).derive(
+        keyring.get(version)
+    )
+
+
+def _rewrap_credential_secrets(session: Session, keyring: Keyring, target_version: int) -> int:
+    secrets = list(
+        session.scalars(
+            select(CredentialSecret).where(CredentialSecret.key_version != target_version)
+        ).all()
+    )
+    rewrapped = 0
+    for secret in secrets:
+        old_k = _cred_key(keyring, secret.key_version)
+        pt = AESGCM(old_k).decrypt(secret.nonce, secret.ciphertext, secret.ref.encode())
+        new_k = _cred_key(keyring, target_version)
+        new_nonce = os.urandom(12)
+        new_ct = AESGCM(new_k).encrypt(new_nonce, pt, secret.ref.encode())
+        secret.key_version = target_version
+        secret.nonce = new_nonce
+        secret.ciphertext = new_ct
+        rewrapped += 1
+    session.flush()
+    return rewrapped
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +132,19 @@ def rewrap_all_blobs(
             except Exception as exc:  # noqa: BLE001
                 log.warning("rewrap DB sync disabled: %s", exc)
                 db_sync = False
+
+    if db_sync:
+        try:
+            if own_session:
+                with SessionFactory() as sess:
+                    _rewrap_credential_secrets(sess, keyring, target)
+                    sess.commit()
+            else:
+                assert session is not None
+                _rewrap_credential_secrets(session, keyring, target)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"credential_secrets: {type(exc).__name__}: {exc}")
+            log.warning("rewrap credential secrets failed: %s", exc)
 
     for path in paths:
         scanned += 1
