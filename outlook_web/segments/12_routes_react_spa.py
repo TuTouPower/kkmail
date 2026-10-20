@@ -93,3 +93,15 @@ def react_assets(filename):
     # Explicit legacy routes (/assets/index.css, /assets/active-skin.css) match first;
     # anything else missing is a real 404, not a redirect into /static.
     abort(404)
+
+
+@app.route("/favicon.svg")
+def react_favicon():
+    """index.html references /favicon.svg; serve it from the Vite dist (public/)."""
+    dist = _react_dist_dir()
+    icon = dist / "favicon.svg"
+    if icon.is_file():
+        response = make_response(send_from_directory(dist, "favicon.svg", mimetype="image/svg+xml"))
+        response.headers["Cache-Control"] = "public, max-age=86400"
+        return response
+    abort(404)
