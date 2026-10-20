@@ -53,3 +53,11 @@ def test_unauthenticated_root_redirects_to_login(fake_frontend_dist):
 
 def test_frontend_dist_env_override(fake_frontend_dist):
     assert appmod._react_dist_dir() == fake_frontend_dist
+
+
+def test_favicon_served_from_dist(fake_frontend_dist):
+    (fake_frontend_dist / "favicon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+    client = appmod.app.test_client()
+    res = client.get("/favicon.svg")
+    assert res.status_code == 200
+    assert res.mimetype == "image/svg+xml"

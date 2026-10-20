@@ -31,4 +31,6 @@ RUN mkdir -p /app/data
 EXPOSE 5000
 
 # Single worker, multiple threads. Upstream stores some task state in-process.
-CMD ["sh", "-c", "gunicorn -k gthread -w 1 --threads ${GUNICORN_THREADS:-4} -b 0.0.0.0:${PORT:-5000} --timeout ${GUNICORN_TIMEOUT:-300} --graceful-timeout 30 --access-logfile - --error-logfile - --capture-output web_outlook_app:app"]
+# Mail fetches are slow I/O (IMAP/Graph), so keep enough threads that a few
+# slow accounts cannot starve navigation requests.
+CMD ["sh", "-c", "gunicorn -k gthread -w 1 --threads ${GUNICORN_THREADS:-16} -b 0.0.0.0:${PORT:-5000} --timeout ${GUNICORN_TIMEOUT:-300} --graceful-timeout 30 --access-logfile - --error-logfile - --capture-output web_outlook_app:app"]
