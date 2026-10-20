@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.domain.enums import OutboxEventType
-from mail_core.mail.storage.models import Account, Folder, FolderStats, Message, MessageLocation, OutboxEvent
+from mail_core.mail.storage.folder_stats import recompute_folder_stats
+from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent
 from mail_core.providers.factory import build_provider
 from mail_core.sync.engine import local_remote_ids_for_folder
 from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, assert_fencing, release_lease
@@ -111,17 +112,8 @@ def reconcile_folder(
                 )
                 session.delete(msg)
                 deleted += 1
-        # refresh stats
-        rows = session.scalars(
-            select(Message)
-            .join(MessageLocation, MessageLocation.message_id == Message.id)
-            .where(MessageLocation.folder_id == folder_id)
-        ).all()
-        stats = session.get(FolderStats, folder_id) or FolderStats(folder_id=folder_id)
-        session.add(stats)
-        stats.total_count = len(rows)
-        stats.unread_count = sum(1 for m in rows if not m.is_read)
-        stats.updated_at = datetime.now(timezone.utc)
+        # refresh stats via SQL aggregate count
+        recompute_folder_stats(session, folder_id)
         session.add(
             OutboxEvent(
                 event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,

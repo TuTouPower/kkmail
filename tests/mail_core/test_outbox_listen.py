@@ -29,7 +29,7 @@ def test_listen_thread_dispatches_on_notify():
 
     def _fanout(event):
         seen.append(int(event["id"]))
-        original(event)
+        return original(event)
 
     dispatcher._fanout = _fanout  # type: ignore[method-assign]
 

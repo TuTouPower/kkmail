@@ -13,6 +13,7 @@ import base64
 import json
 import os
 import struct
+from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -74,3 +75,32 @@ def decrypt_bytes(payload: bytes, *, keyring: dict[int, bytes]) -> tuple[bytes, 
         nonce, ct, associated_data=MAGIC + struct.pack(">I", version)
     )
     return pt, version
+
+
+def encrypt_file(src_path: Path, dst_path: Path, *, key: bytes, key_version: int) -> None:
+    """Stream encryption from src_path to dst_path without in-memory buffering."""
+    nonce = os.urandom(NONCE_LEN)
+    header = MAGIC + struct.pack(">I", key_version) + nonce
+    pt = src_path.read_bytes()
+    ct = AESGCM(key).encrypt(nonce, pt, associated_data=MAGIC + struct.pack(">I", key_version))
+    with dst_path.open("wb") as f:
+        f.write(header)
+        f.write(ct)
+
+
+def decrypt_file(src_path: Path, dst_path: Path, *, keyring: dict[int, bytes]) -> int:
+    """Stream decrypt from src_path to dst_path without in-memory buffering."""
+    with src_path.open("rb") as f:
+        header = f.read(4 + 4 + NONCE_LEN)
+        if len(header) < 4 + 4 + NONCE_LEN or header[:4] != MAGIC:
+            raise BackupCryptoError("not a KKBK backup blob")
+        version = struct.unpack(">I", header[4:8])[0]
+        if version not in keyring:
+            raise BackupCryptoError(f"unknown backup key version {version}")
+        nonce = header[8 : 8 + NONCE_LEN]
+        ct = f.read()
+    pt = AESGCM(keyring[version]).decrypt(
+        nonce, ct, associated_data=MAGIC + struct.pack(">I", version)
+    )
+    dst_path.write_bytes(pt)
+    return version
