@@ -1,0 +1,10 @@
+Return-Path: <bob@example.com>
+From: Bob <bob@example.com>
+To: alice@kkmail.test
+Subject: Fixture hello
+Date: Wed, 21 Oct 2026 00:00:00 +0000
+Message-ID: <fixture-1@kkmail.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hello from L2 IMAP fixture.

@@ -8,6 +8,8 @@ on:
       - "requirements-mail-core.txt"
       - "Dockerfile.mail-core"
       - "docker-compose.mail-core.yml"
+      - "scripts/run-mail-core-tests.sh"
+      - "scripts/start-mail-core-imap.sh"
       - ".github/workflows/mail-core.yml"
   pull_request:
     paths:
@@ -16,6 +18,8 @@ on:
       - "requirements-mail-core.txt"
       - "Dockerfile.mail-core"
       - "docker-compose.mail-core.yml"
+      - "scripts/run-mail-core-tests.sh"
+      - "scripts/start-mail-core-imap.sh"
       - ".github/workflows/mail-core.yml"
 
 jobs:
@@ -51,3 +55,46 @@ jobs:
         run: alembic -c mail_core/db/alembic.ini upgrade head
       - name: Pytest mail_core
         run: pytest tests/mail_core -q --tb=line
+
+  imap-l2:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kkmail
+          POSTGRES_PASSWORD: kkmail
+          POSTGRES_DB: kkmail_mail
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U kkmail -d kkmail_mail"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:kkmail@127.0.0.1:5433/kkmail_mail
+      MAIL_CORE_IMAP_HOST: 127.0.0.1
+      MAIL_CORE_IMAP_PORT: "1143"
+      MAIL_CORE_IMAP_USER: alice@kkmail.test
+      MAIL_CORE_IMAP_PASS: alice-imap-pass
+      MAIL_CORE_BLOB_KEY_V1: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      MAIL_CORE_BLOB_ACTIVE_VERSION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start Dovecot fixture
+        run: docker compose -f docker-compose.mail-core.yml up -d --build imap
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements-mail-core.txt
+      - run: alembic -c mail_core/db/alembic.ini upgrade head
+      - name: Wait for IMAP
+        run: |
+          for i in $(seq 1 30); do
+            (echo > /dev/tcp/127.0.0.1/1143) >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          echo "IMAP not up"; exit 1
+      - name: IMAP live + sync tests
+        run: pytest tests/mail_core/test_imap_provider_live.py tests/mail_core/test_imap_sync_loop.py -q --tb=line

@@ -79,5 +79,19 @@ services:
     command: ["python", "-m", "mail_core.worker.main"]
     restart: unless-stopped
 
+
+  imap:
+    # L2 IMAP fixture (Dovecot). Port 1143 on host → 143 in container.
+    build:
+      context: ./tests/mail_core/fixtures/dovecot
+    container_name: kkmail-mail-core-imap
+    ports:
+      - "1143:143"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 143 || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
 volumes:
   kkmail_mail_core_pg:
