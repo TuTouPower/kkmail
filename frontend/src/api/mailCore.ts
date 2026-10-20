@@ -137,8 +137,10 @@ export function subscribeMailCoreEvents(
     }
     onEvent(e.type || 'message', data, e.lastEventId || null)
   }
+  // Named events only. Do not also set es.onmessage: pairing it with a 'message'
+  // listener (or relying on both) historically double-dispatched the same SSE frame.
+  // Backend always emits an explicit event: field (see mail_core/api/sse.py).
   for (const name of MAIL_CORE_EVENTS) es.addEventListener(name, handler as EventListener)
-  es.onmessage = handler
   es.onerror = (ev) => onError?.(ev)
   return () => es.close()
 }

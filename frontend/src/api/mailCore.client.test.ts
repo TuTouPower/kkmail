@@ -209,6 +209,8 @@ describe('SSE subscription', () => {
     expect(es.url).not.toContain('key')
     expect(es.init).toEqual({ withCredentials: true })
     expect([...es.listeners.keys()]).toEqual([...MAIL_CORE_EVENTS])
+    expect(es.listeners.has('message')).toBe(false)
+    expect(es.onmessage).toBeNull()
 
     es.listeners.get('message.upserted')!({ type: 'message.upserted', data: '{"id":"m1"}', lastEventId: '7' } as unknown as Event)
     es.listeners.get('sync.error')!({ type: 'sync.error', data: 'not json', lastEventId: '' } as unknown as Event)
