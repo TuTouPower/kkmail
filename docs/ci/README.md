@@ -1,11 +1,11 @@
-# CI workflows
+# CI workflow templates
 
-| Workflow | Job | Runs |
-| --- | --- | --- |
-| `.github/workflows/tests.yml` | `mail-core` | PostgreSQL 16 service, a Dovecot IMAP fixture, and `scripts/run-mail-core-tests.sh` (migrate, then the full `pytest tests` with `MAIL_CORE_REQUIRE_DB=1`) |
-| `.github/workflows/frontend.yml` | `check` | `oxlint`, `tsc -b`, `vitest` (unit and jsdom component tests), and `vite build` |
+| Template | Install as | Job | Runs |
+| --- | --- | --- | --- |
+| `mail-core.workflow.yml` | `.github/workflows/tests.yml` | `mail-core` | PostgreSQL 16 service, a Dovecot IMAP fixture, and `scripts/run-mail-core-tests.sh` (generates per-run keys, `alembic upgrade head`, then the full `pytest tests` with `MAIL_CORE_REQUIRE_DB=1`, so DB-backed tests error instead of skipping) |
+| `frontend.workflow.yml` | `.github/workflows/frontend.yml` | `check` | `npm ci`, `oxlint --deny-warnings`, `tsc -b`, `vitest` (unit and jsdom component tests), and `vite build` |
 
-The `*.workflow.yml` files in this directory mirror the `.github/workflows` files above. Change them together.
+Copy a template to its install path unchanged; keep the two copies identical when either changes.
 
 To run the same checks locally:
 

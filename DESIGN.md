@@ -286,7 +286,7 @@ components:
     textColor: "{colors.neutral}"
 ---
 
-> **Scope:** this file is the UI design system (tokens, components, layout). System architecture lives in [docs/mail-core-architecture.md](docs/mail-core-architecture.md); backend modules in [mail_core/README.md](mail_core/README.md).
+> **Scope:** this file is the UI design system (tokens, components, layout) and is not a system design. System architecture lives in [docs/mail-core-architecture.md](docs/mail-core-architecture.md); backend modules in [mail_core/README.md](mail_core/README.md). The action inventory below (compose, reply, forward, archive, junk, move, standard folders) is the visual reference for where controls belong; what the product actually ships is listed in [docs/known-limitations.md](docs/known-limitations.md). Tokens are implemented in `frontend/src/design-system/tokens.css`.
 
 # Mail Multi-Account — Design System
 
