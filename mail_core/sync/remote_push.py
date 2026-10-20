@@ -98,10 +98,12 @@ def push_remote_operations(
                 assert_fencing(session, account_id=account_id, fencing_token=fencing)
             except FencingMismatch:
                 return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
-            op = session.get(RemoteOperation, op_id)
+            op = session.get(RemoteOperation, op_id, with_for_update=True)
             if op is None or op.status != RemoteOperationStatus.PENDING.value:
                 continue
             mark_remote_operation(session, op, status=RemoteOperationStatus.IN_PROGRESS)
+            claimed_desired = dict(op.desired_state or {})
+            claimed_updated_at = op.updated_at
             try:
                 heartbeat_lease(
                     session,
@@ -116,7 +118,7 @@ def push_remote_operations(
             session.commit()
 
         try:
-            result = provider.apply_remote_operation(op_type, desired)  # network
+            result = provider.apply_remote_operation(op_type, claimed_desired)  # network
             ok = bool(result.success)
             err = result.error
         except Exception as exc:  # noqa: BLE001 — isolate per-op provider failures
@@ -130,8 +132,30 @@ def push_remote_operations(
             except FencingMismatch:
                 # Side effect may have landed remotely; leave IN_PROGRESS for reconcile.
                 return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
-            op = session.get(RemoteOperation, op_id)
+            op = session.get(RemoteOperation, op_id, with_for_update=True)
             if op is None:
+                continue
+
+            # CAS check: must still be IN_PROGRESS and desired_state / revision must match what was claimed
+            if (
+                op.status != RemoteOperationStatus.IN_PROGRESS.value
+                or dict(op.desired_state or {}) != claimed_desired
+                or op.updated_at != claimed_updated_at
+            ):
+                log.info(
+                    "remote op %s modified during push; preserving PENDING and reenqueuing push",
+                    op_id,
+                )
+                op.status = RemoteOperationStatus.PENDING.value
+                enqueue_job(
+                    session,
+                    job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                    account_id=account_id,
+                    payload={},
+                    priority=40,
+                    dedupe_key=f"remote-op-push:{account_id}",
+                )
+                session.commit()
                 continue
             if ok:
                 mark_remote_operation(session, op, status=RemoteOperationStatus.DONE)
