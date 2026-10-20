@@ -137,15 +137,26 @@ def test_live_imap_sync_via_worker_handler():
         session.commit()
         account_id = acc.id
 
-    # Drive worker claim loop for folders + metadata + reconcile
-    for _ in range(20):
-        with Session() as session:
-            jobs = claim_jobs(session, worker_id="imap-worker", limit=1, account_id=account_id)
-            if not jobs:
+    # Prefer engine entrypoints (same as worker handlers) so monkeypatched
+    # MemoryProvider tests cannot starve real IMAP if restore is missed.
+    from mail_core.providers.factory import build_provider as real_build
+    import mail_core.sync.engine as engine_mod
+    import mail_core.sync.reconcile as reconcile_mod
+    prev_e, prev_r = engine_mod.build_provider, reconcile_mod.build_provider
+    engine_mod.build_provider = real_build
+    reconcile_mod.build_provider = real_build
+    try:
+        for _ in range(20):
+            with Session() as session:
+                jobs = claim_jobs(session, worker_id="imap-worker", limit=1, account_id=account_id)
+                if not jobs:
+                    session.commit()
+                    break
+                handle_job(session, jobs[0])
                 session.commit()
-                break
-            handle_job(session, jobs[0])
-            session.commit()
+    finally:
+        engine_mod.build_provider = prev_e
+        reconcile_mod.build_provider = prev_r
 
     with Session() as session:
         folders = session.scalars(select(Folder).where(Folder.account_id == account_id)).all()
