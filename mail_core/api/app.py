@@ -158,7 +158,11 @@ if _DIST is not None:
             from fastapi import HTTPException
 
             raise HTTPException(404)
-        candidate = _DIST / full_path
-        if candidate.is_file():
-            return FileResponse(candidate)
+        dist_root = _DIST.resolve()
+        try:
+            candidate = (_DIST / full_path).resolve()
+            if candidate.is_relative_to(dist_root) and candidate.is_file():
+                return FileResponse(candidate)
+        except Exception:
+            pass
         return FileResponse(_DIST / "index.html")
