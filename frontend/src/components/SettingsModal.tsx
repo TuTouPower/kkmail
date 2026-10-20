@@ -48,7 +48,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--surface)', color: 'var(--text)' }}>
+    <div className="settings-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--surface)', color: 'var(--text)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
         <SettingsIcon size={18} />
         <div style={{ fontWeight: 700, flex: 1 }}>设置</div>
@@ -109,8 +109,15 @@ export default function SettingsPage() {
               if (credJson.trim()) {
                 try { credentials = JSON.parse(credJson) } catch { setStatus('credentials JSON 无效'); return }
               }
-              await run('添加账户', () => api.addAccount({ email, provider, credentials }), '账户已添加', queryKeys.accounts)
-              setEmail(''); setCredJson('')
+              setStatus('添加账户…')
+              try {
+                await api.addAccount({ email, provider, credentials })
+                setStatus('账户已添加')
+                setEmail(''); setCredJson('')
+                await qc.invalidateQueries({ queryKey: queryKeys.accounts })
+              } catch (err) {
+                setStatus(errorMessage(err, '添加账户失败'))
+              }
             }} style={{ marginTop: 8, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>添加</button>
 
             <div style={{ marginTop: 22, fontWeight: 700 }}>分组</div>
