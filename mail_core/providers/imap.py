@@ -25,6 +25,7 @@ from mail_core.providers.base import (
     RemoteMessageMeta,
     RemoteOperationResult,
 )
+from mail_core.providers.http import CursorInvalidError
 
 _FOLDER_ROLE = {
     "INBOX": "inbox",
@@ -85,6 +86,23 @@ def imap_uid_for_command(remote_id: str) -> str:
     return str(parsed[2]) if parsed else str(remote_id)
 
 
+def _check_uidvalidity(cursor: dict[str, Any] | None, uidvalidity: int | None) -> None:
+    """Raise CursorInvalidError when server UIDVALIDITY differs from checkpoint cursor.
+
+    Callers must rebuild the folder (clear cursor + full_scan) — never continue
+    with the old UID namespace (architecture §7.3).
+    """
+    if uidvalidity is None:
+        return
+    prev = (cursor or {}).get("uidvalidity")
+    if prev is None:
+        return
+    if int(prev) != int(uidvalidity):
+        raise CursorInvalidError(
+            f"UIDVALIDITY changed: was {prev}, now {uidvalidity}",
+            status=None,
+        )
+
 @dataclass
 class ImapProvider:
     host: str
@@ -144,6 +162,7 @@ class ImapProvider:
                 m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
                 if m:
                     uidvalidity = int(m.group(1))
+            _check_uidvalidity(cursor, uidvalidity)
             start = int((cursor or {}).get("uid_next") or 1)
             typ, data = c.uid("SEARCH", None, f"UID {start}:*")
             if typ != "OK":
@@ -277,6 +296,8 @@ class ImapProvider:
                 uidvalidity = cursor.get("uidvalidity")
                 highest = None
 
+            _check_uidvalidity(cursor, uidvalidity if uidvalidity is not None else None)
+
             since_modseq = cursor.get("modseq")
             if highest is not None and since_modseq is not None:
                 # CHANGEDSINCE may be unsupported on pymap; fall back silently.
@@ -405,7 +426,7 @@ class ImapProvider:
         try:
             typ, _ = c.select(folder_remote_id, readonly=True)
             if typ != "OK":
-                return ()
+                raise RuntimeError(f"select {folder_remote_id} failed during reconcile: {typ}")
             uidvalidity = 0
             status = c.status(folder_remote_id, "(UIDVALIDITY)")
             if status[0] == "OK" and status[1] and status[1][0]:
@@ -415,7 +436,7 @@ class ImapProvider:
                     uidvalidity = int(m.group(1))
             typ, data = c.uid("SEARCH", None, "ALL")
             if typ != "OK":
-                return ()
+                raise RuntimeError(f"UID SEARCH {folder_remote_id} failed during reconcile: {typ}")
             remote_uids = []
             for x in (data[0] or b"").split():
                 s = x.decode() if isinstance(x, bytes) else str(x)

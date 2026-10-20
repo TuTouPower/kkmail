@@ -16,9 +16,16 @@ from mail_core.mail.storage.models import Account, Folder, Message, MessageLocat
 from mail_core.providers.base import DeltaPage
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
-from mail_core.sync.checkpoints import commit_checkpoint
+from mail_core.sync.checkpoints import commit_checkpoint, invalidate_checkpoint_for_rebuild
 from mail_core.sync.jobs import enqueue_job
-from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, assert_fencing, release_lease
+from mail_core.sync.leases import (
+    FencingMismatch,
+    LeaseBusy,
+    acquire_lease,
+    assert_fencing,
+    heartbeat_lease,
+    release_lease,
+)
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.sync.metadata import messages_upserted_event, upsert_messages
 
@@ -176,9 +183,15 @@ def sync_folder_delta(
     *,
     worker_id: str,
     store: CredentialStore | None = None,
-    lease_ttl: timedelta = timedelta(seconds=60),
+    lease_ttl: timedelta = timedelta(seconds=120),
     max_pages: int = 20,
 ) -> dict:
+    """Apply provider delta pages under fencing.
+
+    Heartbeats between pages (default TTL 120s). On ``CursorInvalidError`` the
+    checkpoint is cleared and a metadata rebuild is enqueued. Generic provider
+    errors release the lease and re-raise after an explicit retry job.
+    """
     Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
     with Session() as session:
         account = session.get(Account, account_id)
@@ -210,6 +223,8 @@ def sync_folder_delta(
             cursor["historyId"] = cp.history_id
         if cp.delta_link and "delta_link" not in cursor and "next_link" not in cursor:
             cursor["delta_link"] = cp.delta_link
+        if cp.uidvalidity is not None and "uidvalidity" not in cursor:
+            cursor["uidvalidity"] = int(cp.uidvalidity)
         account_snapshot = Account(
             id=account.id,
             email=account.email,
@@ -223,20 +238,39 @@ def sync_folder_delta(
     totals = {"upserted": 0, "deleted": 0, "flagged": 0}
     exhausted = False
     pages = 0
+
+    def _release_quiet(session) -> None:
+        try:
+            release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+        except FencingMismatch:
+            session.rollback()
+
     while pages < max_pages:
         try:
             page = provider.delta_changes(remote_id, cursor)  # network
         except CursorInvalidError as exc:
             with Session() as session:
-                enqueue_job(
-                    session,
-                    job_type=JobType.SYNC_FOLDER_METADATA.value,
-                    account_id=account_id,
-                    payload={"folder_id": str(folder_id), "reason": "cursor_invalid", "detail": str(exc)},
-                    priority=40,
-                )
-                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-                session.commit()
+                try:
+                    assert_fencing(session, account_id=account_id, fencing_token=fencing)
+                    invalidate_checkpoint_for_rebuild(
+                        session, account_id=account_id, folder_id=folder_id, fencing_token=fencing
+                    )
+                    enqueue_job(
+                        session,
+                        job_type=JobType.SYNC_FOLDER_METADATA.value,
+                        account_id=account_id,
+                        payload={
+                            "folder_id": str(folder_id),
+                            "reason": "cursor_invalid",
+                            "detail": str(exc),
+                        },
+                        priority=40,
+                    )
+                    release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                    session.commit()
+                except FencingMismatch:
+                    session.rollback()
+                    return {"status": "fencing_mismatch", "pages": pages, **totals}
             return {"status": "cursor_invalid", "pages": pages, **totals}
         except RateLimitedError as exc:
             delay = float(exc.retry_after_seconds or 60)
@@ -249,9 +283,33 @@ def sync_folder_delta(
                     priority=60,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                 )
-                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                _release_quiet(session)
                 session.commit()
             return {"status": "rate_limited", "retry_after": delay, "pages": pages, **totals}
+        except Exception as exc:
+            log.exception("delta provider I/O failed for folder %s: %s", folder_id, type(exc).__name__)
+            with Session() as session:
+                enqueue_job(
+                    session,
+                    job_type=JobType.SYNC_FOLDER_DELTA.value,
+                    account_id=account_id,
+                    payload={
+                        "folder_id": str(folder_id),
+                        "reason": "provider_error",
+                        "detail": f"{type(exc).__name__}: {exc}",
+                    },
+                    priority=60,
+                    run_after=datetime.now(timezone.utc) + timedelta(seconds=15),
+                )
+                _release_quiet(session)
+                session.commit()
+            return {
+                "status": "provider_error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "pages": pages,
+                **totals,
+            }
+
         with Session() as session:
             try:
                 result = apply_delta_page(
@@ -275,6 +333,17 @@ def sync_folder_delta(
                     },
                 )
             )
+            try:
+                heartbeat_lease(
+                    session,
+                    account_id=account_id,
+                    owner_id=worker_id,
+                    fencing_token=fencing,
+                    ttl=lease_ttl,
+                )
+            except FencingMismatch:
+                session.rollback()
+                return {"status": "fencing_mismatch", **totals}
             session.commit()
             totals["upserted"] += result.upserted
             totals["deleted"] += result.deleted
