@@ -60,16 +60,16 @@ function ComposeForm() {
       : 'IMAP 账户暂不支持发信，请选择 Outlook 账号'
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 120, background: 'rgba(0,0,0,.46)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18 }} onClick={(e) => { if (e.target === e.currentTarget) setComposeOpen(false) }}>
-      <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="compose-title" style={{ width: 'min(720px, 100%)', background: 'var(--surface)', border: '1px solid var(--line-strong)', borderRadius: 15, overflow: 'hidden' }}>
+    <div className="modal-overlay" style={{ position: 'fixed', inset: 0, zIndex: 120, background: 'rgba(0,0,0,.46)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18 }} onClick={(e) => { if (e.target === e.currentTarget) setComposeOpen(false) }}>
+      <form className="compose-dialog" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="compose-title" style={{ width: 'min(720px, 100%)', background: 'var(--surface)', border: '1px solid var(--line-strong)', borderRadius: 15, overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid var(--line)' }}>
           <strong id="compose-title" style={{ flex: 1 }}>{title}</strong>
           <button type="button" title="关闭（Esc）" aria-label="关闭" onClick={() => setComposeOpen(false)} style={{ border: 0, background: 'transparent', color: 'var(--muted)' }}><X size={16} /></button>
         </div>
         <div style={{ padding: '8px 18px' }}>
           <label style={{ display: 'flex', gap: 12, alignItems: 'center', minHeight: 40, borderBottom: '1px solid var(--line)' }}>
-            <span style={{ width: 64, color: 'var(--muted)' }}>发件账户</span>
-            <select value={accountId || ''} onChange={(e) => setAccountId(Number(e.target.value))} style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }}>
+            <span style={{ flex: '0 0 64px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>发件账户</span>
+            <select name="accountId" value={accountId || ''} onChange={(e) => setAccountId(Number(e.target.value))} style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }}>
               <option value="">选择发件账户</option>
               {accounts.map((a) => (
                 <option key={a.id} value={a.id} disabled={!canSendFrom(a)}>
@@ -79,23 +79,23 @@ function ComposeForm() {
             </select>
           </label>
           <label style={{ display: 'flex', gap: 12, alignItems: 'center', minHeight: 40, borderBottom: '1px solid var(--line)' }}>
-            <span style={{ width: 64, color: 'var(--muted)' }}>收件人</span>
-            <input value={to} onChange={(e) => setTo(e.target.value)} required placeholder="name@example.com" style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }} />
+            <span style={{ flex: '0 0 64px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>收件人</span>
+            <input name="to" value={to} onChange={(e) => setTo(e.target.value)} required placeholder="name@example.com" style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }} />
           </label>
           <label style={{ display: 'flex', gap: 12, alignItems: 'center', minHeight: 40, borderBottom: '1px solid var(--line)' }}>
-            <span style={{ width: 64, color: 'var(--muted)' }}>抄送</span>
-            <input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="可选，多个地址用逗号分隔（发送时并入收件人）" style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }} />
+            <span style={{ flex: '0 0 64px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>抄送</span>
+            <input name="cc" value={cc} onChange={(e) => setCc(e.target.value)} placeholder="可选，多个地址用逗号分隔（发送时并入收件人）" style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }} />
           </label>
           <label style={{ display: 'flex', gap: 12, alignItems: 'center', minHeight: 40, borderBottom: '1px solid var(--line)' }}>
-            <span style={{ width: 64, color: 'var(--muted)' }}>主题</span>
-            <input value={subject} onChange={(e) => setSubject(e.target.value)} style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }} />
+            <span style={{ flex: '0 0 64px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>主题</span>
+            <input name="subject" value={subject} onChange={(e) => setSubject(e.target.value)} style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }} />
           </label>
         </div>
-        <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="撰写邮件…" style={{ width: '100%', minHeight: 180, border: 0, background: 'var(--surface)', padding: 18, resize: 'vertical' }} />
-        <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid var(--line)', alignItems: 'center' }}>
+        <textarea name="body" value={body} onChange={(e) => setBody(e.target.value)} placeholder="撰写邮件…" style={{ width: '100%', minHeight: 180, border: 0, background: 'var(--surface)', padding: 18, resize: 'vertical' }} />
+        <div className="dialog-actions" style={{ padding: 12, borderTop: '1px solid var(--line)' }}>
           <button type="submit" disabled={sending || !canSend} style={{ height: 35, padding: '0 15px', border: 0, borderRadius: 9, background: 'var(--blue)', color: '#fff' }}>{sending ? '发送中…' : '发送'}</button>
           <button type="button" onClick={() => setComposeOpen(false)} style={{ height: 35, padding: '0 12px', border: '1px solid var(--line)', borderRadius: 9, background: 'var(--surface)' }}>取消</button>
-          <span role="status" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--muted)' }}>{status || hint}</span>
+          <span role="status" className="dialog-hint">{status || hint}</span>
         </div>
       </form>
     </div>

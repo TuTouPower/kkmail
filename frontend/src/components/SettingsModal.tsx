@@ -90,10 +90,11 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
 
   return (
     <div
+      className="modal-overlay"
       style={{ position: 'fixed', inset: 0, zIndex: 110, background: 'rgba(0,0,0,.46)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18, backdropFilter: 'blur(5px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <section role="dialog" aria-modal="true" aria-labelledby="settings-title" style={{ width: 'min(760px, 100%)', height: 'min(680px, 88dvh)', display: 'flex', flexDirection: 'column', background: 'var(--surface)', border: '1px solid var(--line-strong)', borderRadius: 15, boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
+      <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" style={{ display: 'flex', flexDirection: 'column', background: 'var(--surface)', border: '1px solid var(--line-strong)', borderRadius: 15, boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid var(--line)', background: 'var(--surface-2)' }}>
           <SettingsIcon size={16} />
           <strong id="settings-title" style={{ flex: 1, fontSize: 13 }}>设置</strong>
@@ -101,14 +102,14 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             <X size={16} />
           </button>
         </div>
-        <div style={{ display: 'flex', gap: 6, padding: '8px 16px', borderBottom: '1px solid var(--line)' }}>
+        <div className="settings-tabs" role="tablist" style={{ display: 'flex', gap: 6, padding: '8px 16px', borderBottom: '1px solid var(--line)', overflowX: 'auto' }}>
           {([['accounts', '账户管理'], ['appearance', '外观'], ['general', '通用']] as const).map(([id, label]) => (
-            <button key={id} type="button" onClick={() => { setSection(id); setToolStatus('') }} style={{ height: 32, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)', background: section === id ? 'var(--selected)' : 'transparent', fontWeight: 600 }}>
+            <button key={id} type="button" role="tab" aria-selected={section === id} onClick={() => { setSection(id); setToolStatus('') }} style={{ whiteSpace: 'nowrap', flex: '0 0 auto', height: 32, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)', background: section === id ? 'var(--selected)' : 'transparent', fontWeight: 600 }}>
               {label}
             </button>
           ))}
         </div>
-        <div style={{ minWidth: 0, flex: 1, overflow: 'auto', padding: '22px 24px' }}>
+        <div className="settings-content">
           {toolStatus && (
             <div role="status" aria-live="polite" style={{ position: 'sticky', top: -22, zIndex: 2, margin: '-6px 0 12px', padding: '8px 12px', borderRadius: 9, fontSize: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: /失败|错误|无效/.test(toolStatus) ? 'var(--red)' : 'var(--text)', display: 'flex', gap: 8, alignItems: 'center' }}>
               <span style={{ flex: 1 }}>{toolStatus}</span>
@@ -146,7 +147,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           </div>
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>重新授权</div>
-            <select value={reauthId} onChange={(e) => setReauthId(e.target.value)} style={{ height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+            <select name="reauthId" value={reauthId} onChange={(e) => setReauthId(e.target.value)} style={{ height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
               <option value="">选择账户</option>
               {accounts.map((a) => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
             </select>
@@ -158,16 +159,16 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
           <div style={{ marginTop: 12, fontSize: 14, fontWeight: 700 }}>分组与标签</div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="新分组名称" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+          <div className="settings-row">
+            <input name="groupName" value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="新分组名称" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
             <button type="button" onClick={async () => {
               if (!groupName.trim()) { setToolStatus('请输入分组名称'); return }
               await run('创建分组', () => api.createGroup({ name: groupName.trim() }), '分组已创建', queryKeys.groups)
               setGroupName('')
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>创建分组</button>
           </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <input value={tagName} onChange={(e) => setTagName(e.target.value)} placeholder="新标签" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+          <div className="settings-row">
+            <input name="tagName" value={tagName} onChange={(e) => setTagName(e.target.value)} placeholder="新标签" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
             <button type="button" onClick={async () => {
               if (!tagName.trim()) { setToolStatus('请输入标签名称'); return }
               await run('创建标签', () => api.createTag(tagName.trim()), '标签已创建', ['tags'])
@@ -209,7 +210,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>全部关闭转发</button>
           </div>
           {oauthUrl && <div style={{ marginTop: 8, fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all' }}>{oauthUrl}</div>}
-          <input value={redirectedUrl} onChange={(e) => setRedirectedUrl(e.target.value)} placeholder="粘贴授权回调 URL" style={{ width: '100%', marginTop: 8, height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+          <input name="redirectedUrl" value={redirectedUrl} onChange={(e) => setRedirectedUrl(e.target.value)} placeholder="粘贴授权回调 URL" style={{ width: '100%', marginTop: 8, height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
           <button type="button" onClick={async () => {
             setOauthResult(null)
             try {
@@ -223,7 +224,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           {oauthResult?.refresh_token && (
             <div style={{ marginTop: 8 }}>
               <div style={{ fontSize: 11, color: 'var(--muted)' }}>Client ID：{oauthResult.client_id || '（默认应用）'}</div>
-              <textarea readOnly value={oauthResult.refresh_token} onFocus={(e) => e.currentTarget.select()} aria-label="Refresh Token" style={{ width: '100%', minHeight: 60, marginTop: 4, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: 8, fontSize: 11 }} />
+              <textarea name="oauthResult-refresh-token" readOnly value={oauthResult.refresh_token} onFocus={(e) => e.currentTarget.select()} aria-label="Refresh Token" style={{ width: '100%', minHeight: 60, marginTop: 4, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: 8, fontSize: 11 }} />
             </div>
           )}
           <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
@@ -231,7 +232,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             {(projectsQuery.data || []).slice(0, 5).map((p) => ` · ${p.name || p.project_key || '未命名'}`)}
           </div>
           <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>临时邮箱</div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <div className="settings-row">
             <button type="button" onClick={async () => {
               try {
                 const res = ensureSuccess(await api.generateTempEmail({ provider: 'gptmail' }), '生成失败')
@@ -259,8 +260,8 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             {(tempQuery.data || []).length === 0 && '暂无临时邮箱'}
           </div>
           <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>项目</div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <input value={projectKey} onChange={(e) => setProjectKey(e.target.value)} placeholder="project key" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+          <div className="settings-row">
+            <input name="projectKey" value={projectKey} onChange={(e) => setProjectKey(e.target.value)} placeholder="project key" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
             <button type="button" onClick={async () => {
               const key = projectKey.trim()
               if (!key) { setToolStatus('请输入 project key'); return }
@@ -280,12 +281,13 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--danger)' }}>删除项目</button>
           </div>
           <div style={{ marginTop: 18, fontSize: 15, fontWeight: 700 }}>WebDAV 备份</div>
-          <input value={webdavUrl} onChange={(e) => setWebdavUrl(e.target.value)} placeholder="https://dav.example.com/backup/" style={{ width: '100%', marginTop: 8, height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <input value={webdavUser} onChange={(e) => setWebdavUser(e.target.value)} placeholder="用户名" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-            <input value={webdavPass} onChange={(e) => setWebdavPass(e.target.value)} type="password" placeholder="密码" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+          <form autoComplete="off" onSubmit={(e) => e.preventDefault()}>
+          <input name="webdavUrl" value={webdavUrl} onChange={(e) => setWebdavUrl(e.target.value)} placeholder="https://dav.example.com/backup/" style={{ width: '100%', marginTop: 8, height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+          <div className="settings-row">
+            <input name="webdavUser" value={webdavUser} onChange={(e) => setWebdavUser(e.target.value)} autoComplete="off" aria-label="WebDAV 用户名" placeholder="用户名" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+            <input name="webdavPass" value={webdavPass} onChange={(e) => setWebdavPass(e.target.value)} type="password" autoComplete="new-password" aria-label="WebDAV 密码" placeholder="密码" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
           </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <div className="settings-row">
             <button type="button" onClick={async () => {
               await run('WebDAV 测试', () => api.testWebdav({ url: webdavUrl, username: webdavUser, password: webdavPass }), 'WebDAV 测试成功')
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>测试备份</button>
@@ -293,6 +295,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
               await run('WebDAV 备份', () => api.uploadWebdav({ url: webdavUrl, username: webdavUser, password: webdavPass }), '已上传备份')
             }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>立即备份</button>
           </div>
+          </form>
           </>}
           {section === 'appearance' && <>
           <div style={{ marginTop: 22, fontSize: 18, fontWeight: 720 }}>外观</div>
@@ -328,7 +331,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
                 return <div key={row.id} style={{ fontSize: 12, padding: '4px 0', borderBottom: '1px solid var(--line)' }}>{row.account_email} · {row.status} · {row.created_at}</div>
               })}
               <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>令牌刷新与邮件分享</div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <div className="settings-row">
                 <button type="button" onClick={async () => {
                   if (!confirmAction('刷新全部账户的令牌？账户多时会持续一段时间。')) return
                   setRefreshProgress('开始刷新…')
@@ -353,14 +356,15 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
                 {(sharesQuery.data || []).slice(0, 5).map((s) => ` · ${s.email || s.id}`)}
               </div>
               <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>时区与拉取超时</div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <label className="field-label" htmlFor="settings-timezone" style={{ flex: 1, margin: 0 }}>时区（IANA 名称）</label>
-                <label className="field-label" htmlFor="settings-timeout" style={{ width: 90, margin: 0 }}>拉取超时（秒）</label>
-                <span style={{ width: 52 }} />
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                <input id="settings-timezone" value={timezoneValue} onChange={(e) => setTimezone(e.target.value)} placeholder="Asia/Shanghai" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-                <input id="settings-timeout" inputMode="numeric" value={timeoutValue} onChange={(e) => setTimeoutSeconds(e.target.value)} placeholder="30" style={{ width: 90, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+              <div className="settings-row" style={{ alignItems: 'flex-end' }}>
+                <label className="settings-field" style={{ flex: '1 1 160px' }}>
+                  <span className="field-label">时区（IANA 名称）</span>
+                  <input id="settings-timezone" value={timezoneValue} onChange={(e) => setTimezone(e.target.value)} placeholder="Asia/Shanghai" style={{ width: '100%', height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                </label>
+                <label className="settings-field" style={{ flex: '0 1 110px' }}>
+                  <span className="field-label">拉取超时（秒）</span>
+                  <input id="settings-timeout" inputMode="numeric" value={timeoutValue} onChange={(e) => setTimeoutSeconds(e.target.value)} placeholder="30" style={{ width: '100%', height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                </label>
                 <button type="button" onClick={async () => {
                   // Only send fields the user actually changed, so untouched settings keep their stored values.
                   const payload: Record<string, string> = {}
@@ -372,16 +376,18 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
                   setTimeoutSeconds(null)
                 }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>保存</button>
               </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <input value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} type="password" placeholder="当前密码" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-                <input value={newPassword} onChange={(e) => setNewPassword(e.target.value)} type="password" placeholder="新密码至少 8 位" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-                <button type="button" onClick={async () => {
-                  if (!currentPassword || newPassword.length < 8) { setToolStatus('请输入当前密码，新密码至少 8 位'); return }
-                  await run('修改密码', () => api.updateSettings({ current_login_password: currentPassword, login_password: newPassword }), '密码已更新')
-                  setCurrentPassword('')
-                  setNewPassword('')
-                }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>改密</button>
-              </div>
+              <form className="settings-row" onSubmit={async (e) => {
+                e.preventDefault()
+                if (!currentPassword || newPassword.length < 8) { setToolStatus('请输入当前密码，新密码至少 8 位'); return }
+                await run('修改密码', () => api.updateSettings({ current_login_password: currentPassword, login_password: newPassword }), '密码已更新')
+                setCurrentPassword('')
+                setNewPassword('')
+              }}>
+                <input type="text" name="username" autoComplete="username" value="kkmail" readOnly hidden />
+                <input value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} type="password" name="current-password" autoComplete="current-password" aria-label="当前密码" placeholder="当前密码" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                <input value={newPassword} onChange={(e) => setNewPassword(e.target.value)} type="password" name="new-password" autoComplete="new-password" aria-label="新密码" placeholder="新密码至少 8 位" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+                <button type="submit" style={{ height: 32, padding: '0 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>改密</button>
+              </form>
               <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                 {(tempQuery.data || []).slice(0, 4).map((item) => {
                   const address = item.email || item.address
