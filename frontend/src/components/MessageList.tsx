@@ -5,16 +5,13 @@ import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, markReadOptimistic
 import { mailKey } from '../lib/mailKey'
 import { listTitle } from '../lib/listTitle'
 import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
-import { parseMailDate, compareMailDates } from '../lib/mailDate'
+import { compareMailDates } from '../lib/mailDate'
+import { displayName } from '../lib/displayName'
+import { formatListDate } from '../lib/listDate'
+import { previewText } from '../lib/previewText'
 import { api } from '../api/client'
 import { useMailStore } from '../store/mailStore'
 
-function formatWhen(value?: string) {
-  if (!value) return ''
-  const d = new Date(parseMailDate(value))
-  if (Number.isNaN(d.getTime())) return value.slice(5, 16)
-  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
 
 export default function MessageList() {
   const {
@@ -238,7 +235,7 @@ export default function MessageList() {
           return (
             <article
               key={key}
-              className={`message-row ${selectedKey === key ? 'selected' : ''} ${!m.is_read ? 'unread' : ''} ${checked ? 'checked' : ''}`}
+              className={`message-row apple-card ${selectedKey === key ? 'selected' : ''} ${!m.is_read ? 'unread' : ''} ${checked ? 'checked' : ''}`}
               onClick={() => openMessage(m)}
             >
               <button
@@ -251,21 +248,19 @@ export default function MessageList() {
               >
                 {checked && <Check size={12} />}
               </button>
-              <div className="avatar" style={{ background: '#6d8fd1' }}>{(m.from || '?').slice(0, 1).toUpperCase()}</div>
               <div className="message-content">
                 <div className="message-top">
                   <span className="sender">
-                    {!m.is_read && <span className="unread-dot" aria-label="未读" style={{ display: 'inline-block', marginRight: 5, verticalAlign: 'middle' }} />}
-                    {m.from}
+                    {!m.is_read && <span className="unread-dot" aria-label="未读" />}
+                    {displayName(m.from)}
                   </span>
-                  <time className="message-date">{formatWhen(m.date)}</time>
+                  <div className="message-meta">
+                    {m.has_attachments && <Paperclip size={12} aria-label="有附件" />}
+                    <time className="message-date">{formatListDate(m.date)}</time>
+                  </div>
                 </div>
                 <div className="subject">{m.subject}</div>
-                <div className="preview">{m.body_preview}</div>
-                <div className="message-bottom">
-                  <span className="mail-account-tag">{m.accountEmail}</span>
-                  {m.has_attachments && <Paperclip size={12} aria-label="有附件" />}
-                </div>
+                <div className="preview">{previewText(m.body_preview)}</div>
               </div>
             </article>
           )

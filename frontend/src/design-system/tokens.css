@@ -996,3 +996,31 @@ button:disabled {
 .settings-field { display: flex; flex-direction: column; min-width: 0; }
 .settings-row > * { min-width: 0; }
 .settings-content button { white-space: nowrap; }
+
+/* Apple Mail–style 3-line list cards */
+.message-row.apple-card {
+  gap: 8px;
+  padding: 10px 12px 11px;
+  align-items: flex-start;
+}
+.message-row.apple-card .avatar { display: none; }
+.message-row.apple-card .mail-account-tag { display: none; }
+.message-row.apple-card .message-bottom { display: none; }
+.message-row.apple-card .unread-dot {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.message-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.message-row.apple-card .preview {
+  -webkit-line-clamp: 2;
+  margin-top: 2px;
+}
+.message-row.apple-card .subject {
+  margin-top: 2px;
+}
