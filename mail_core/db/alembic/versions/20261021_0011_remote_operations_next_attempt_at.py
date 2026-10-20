@@ -1,7 +1,7 @@
 """remote operations retry: add next_attempt_at column
 
-Revision ID: 20261021_0010
-Revises: 20261021_0009
+Revision ID: 20261021_0011
+Revises: 20261021_0010
 """
 
 from __future__ import annotations
@@ -9,8 +9,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "20261021_0010"
-down_revision = "20261021_0009"
+revision = "20261021_0011"
+down_revision = "20261021_0010"
 branch_labels = None
 depends_on = None
 
