@@ -1603,7 +1603,7 @@ def stream_selected_refresh_events(account_ids: List[int]):
         release_token_refresh_run_lock(lock_acquired)
 
 
-@app.route('/api/accounts/refresh-all', methods=['GET'])
+@app.route('/api/accounts/refresh-all', methods=['POST'])
 @login_required
 def api_refresh_all_accounts():
     """刷新所有账号的 token（流式响应，实时返回进度）"""

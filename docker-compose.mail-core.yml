@@ -109,7 +109,7 @@ services:
       context: ./tests/mail_core/fixtures/dovecot
     container_name: kkmail-mail-core-imap
     ports:
-      - "1143:143"
+      - "127.0.0.1:1143:143"
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 143 || exit 1"]
       interval: 3s

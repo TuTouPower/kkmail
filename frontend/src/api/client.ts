@@ -420,7 +420,7 @@ export const api = {
    * report each event, and resolve with the final complete/error event.
    */
   async refreshAllStream(onEvent?: (evt: RefreshEvent) => void): Promise<RefreshEvent> {
-    const res = await fetch('/api/accounts/refresh-all', { credentials: 'include', headers: { Accept: 'text/event-stream' } })
+    const res = await fetch('/api/accounts/refresh-all', { method: 'POST', credentials: 'include', headers: { Accept: 'text/event-stream', 'X-CSRFToken': (await ensureCsrf()) || '' } })
     if (res.status === 401 || res.redirected) throw handleUnauthorized()
     if (!res.ok || !res.body) throw { status: res.status, message: res.statusText || '刷新失败' } as ApiError
     const reader = res.body.getReader()

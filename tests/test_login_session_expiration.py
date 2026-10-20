@@ -188,7 +188,7 @@ class LoginSessionExpirationTests(unittest.TestCase):
         self.assertEqual(self._login(api_client, now, duration).status_code, 200)
         with patch.object(web_outlook_app, 'get_login_session_now', return_value=deadline):
             api_response = api_client.get('/api/settings')
-            sse_response = api_client.get('/api/accounts/refresh-all')
+            sse_response = api_client.post('/api/accounts/refresh-all')
         self.assertEqual(api_response.status_code, 401)
         self.assertTrue(api_response.get_json()['need_login'])
         self.assertEqual(sse_response.status_code, 401)
