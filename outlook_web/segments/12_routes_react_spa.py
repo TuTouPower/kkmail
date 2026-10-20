@@ -2,18 +2,30 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from flask import Response, redirect, send_from_directory
+from flask import Response, abort, redirect, send_from_directory
 
 if TYPE_CHECKING:
     from web_outlook_app import *  # noqa: F403
 
 
 def _react_dist_dir() -> Path:
-    candidates = [
-        Path(__file__).resolve().parents[2] / "frontend" / "dist",
+    candidates = []
+    override = os.getenv("KKMAIL_FRONTEND_DIST", "").strip()
+    if override:
+        candidates.append(Path(override))
+    candidates.append(resource_path("frontend", "dist"))
+    # Segments are exec'd into web_outlook_app, so __file__ may be the entry
+    # module at a shallow path such as /app/web_outlook_app.py (Docker).
+    # Walk up a few parents instead of indexing parents[2], which raised
+    # IndexError there and turned every page into a 500.
+    here = Path(__file__).resolve()
+    candidates += [parent / "frontend" / "dist" for parent in list(here.parents)[:3]]
+    candidates += [
+        Path(app.root_path) / "frontend" / "dist",
         Path(app.root_path).parent / "frontend" / "dist",
         Path.cwd() / "frontend" / "dist",
     ]
@@ -84,5 +96,18 @@ def react_assets(filename):
     asset = dist / "assets" / filename
     if asset.is_file():
         return send_from_directory(dist / "assets", filename)
-    # Let Flask's normal static handler or existing /assets routes respond.
-    return redirect(f"/static/{filename}")
+    # Explicit legacy routes (/assets/index.css, /assets/active-skin.css) match first;
+    # anything else missing is a real 404, not a redirect into /static.
+    abort(404)
+
+
+@app.route("/favicon.svg")
+def react_favicon():
+    """index.html references /favicon.svg; serve it from the Vite dist (public/)."""
+    dist = _react_dist_dir()
+    icon = dist / "favicon.svg"
+    if icon.is_file():
+        response = make_response(send_from_directory(dist, "favicon.svg", mimetype="image/svg+xml"))
+        response.headers["Cache-Control"] = "public, max-age=86400"
+        return response
+    abort(404)

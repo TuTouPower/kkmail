@@ -23,7 +23,9 @@ The new interface follows `DESIGN.md` and the earlier Apple Mail demo:
 - Reader toolbar has reply, reply all, forward, mark read, archive, trash, junk, move, flag.
 - Mobile uses a drawer and a back control.
 
-Archive, junk, and move are present for design parity. Upstream mail routes still only support inbox, junk, and trash as live folders, and there is no move API. Trash is wired to delete. The others stay visible and disabled in behavior until a backend move API exists.
+Archive, junk, and move are present for design parity. Upstream mail routes still only support inbox, junk, and trash as live folders, and there is no move API. Trash is wired to delete (with confirmation). The other three buttons are rendered `disabled` until a backend move API exists.
+
+The unified "所有收件箱" view fetches at most 8 accounts (one request per account) and shows a notice when more accounts exist.
 
 ## Packaging status
 
@@ -31,9 +33,10 @@ Verified in this development environment:
 
 - Linux AppImage and deb build with `cd desktop && npm run dist:linux`.
 - Windows unpacked app and zip build with signing disabled. NSIS installer needs Wine on Linux.
-- PyInstaller sidecar builds with `./scripts/build-sidecar.sh`.
+- PyInstaller sidecar builds with `./scripts/build-sidecar.sh` and, with `KKMAIL_SIDECAR=1`, serves the bundled SPA without opening a tray or browser.
+- Linux unpacked Electron app starts the bundled sidecar, generates a per-install `secret_key.txt`, and stops the sidecar on SIGTERM.
 - Browser login into the React shell was verified against a local Flask server.
-- Backend test suite: 756 passed.
+- Backend test suite: full `pytest` passes; frontend `oxlint --deny-warnings`, `vitest`, and `vite build` pass.
 
 Blocked here:
 

@@ -13,10 +13,18 @@ export interface ApiError {
 
 let csrfToken: string | null = null
 
-async function ensureCsrf(): Promise<string | null> {
-  if (csrfToken) return csrfToken
+export const UNAUTHORIZED_EVENT = 'kkmail:unauthorized'
+
+/** Session expired: drop the cached CSRF token and let the app show the login screen. */
+function handleUnauthorized(): ApiError {
+  csrfToken = null
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+  return { status: 401, message: '登录已过期，请重新登录' }
+}
+
+async function fetchCsrfToken(): Promise<string | null> {
   try {
-    const res = await fetch('/api/csrf-token', { credentials: 'include' })
+    const res = await fetch('/api/csrf-token', { credentials: 'include', headers: { Accept: 'application/json' } })
     if (!res.ok) return null
     const data = await res.json()
     csrfToken = data.csrf_token || null
@@ -26,36 +34,88 @@ async function ensureCsrf(): Promise<string | null> {
   }
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function ensureCsrf(): Promise<string | null> {
+  return csrfToken || fetchCsrfToken()
+}
+
+export interface RequestOptions extends RequestInit {
+  /** Abort the request after this many ms and throw a timeout ApiError. */
+  timeoutMs?: number
+}
+
+function isCsrfFailure(status: number, body: unknown): boolean {
+  if (status !== 400 || !body || typeof body !== 'object') return false
+  const b = body as { csrf_error?: unknown; error?: unknown }
+  return b.csrf_error === true || (typeof b.error === 'string' && b.error.includes('CSRF'))
+}
+
+/** Combine the caller's AbortSignal (e.g. from React Query) with a timeout. */
+function withTimeout(signal: AbortSignal | null | undefined, timeoutMs?: number) {
+  if (!timeoutMs) return { signal: signal || undefined, timedOut: () => false, done: () => {} }
+  const ctrl = new AbortController()
+  let fired = false
+  const timer = setTimeout(() => { fired = true; ctrl.abort() }, timeoutMs)
+  const onAbort = () => ctrl.abort()
+  if (signal) {
+    if (signal.aborted) ctrl.abort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
+  return {
+    signal: ctrl.signal,
+    timedOut: () => fired,
+    done: () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort) },
+  }
+}
+
+async function request<T>(path: string, options: RequestOptions = {}, retriedCsrf = false): Promise<T> {
+  const { headers: extraHeaders, timeoutMs, signal: callerSignal, ...rest } = options
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> | undefined),
+    Accept: 'application/json',
+    ...(rest.body != null ? { 'Content-Type': 'application/json' } : {}),
+    ...(extraHeaders as Record<string, string> | undefined),
   }
 
-  if (options.method && options.method !== 'GET' && options.method !== 'HEAD') {
+  const unsafe = !!options.method && options.method !== 'GET' && options.method !== 'HEAD'
+  if (unsafe) {
     const token = await ensureCsrf()
     if (token) headers['X-CSRFToken'] = token
   }
 
-  const res = await fetch(path, {
-    credentials: 'include',
-    headers,
-    ...options,
-  })
+  const t = withTimeout(callerSignal, timeoutMs)
+  let res: Response
+  try {
+    // Spread caller options first so the merged headers (with CSRF) always win.
+    res = await fetch(path, { ...rest, signal: t.signal, credentials: 'include', headers })
+  } catch (err) {
+    if (t.timedOut()) throw { status: 0, code: 'timeout', message: `请求超时（${Math.round((timeoutMs || 0) / 1000)} 秒）` } as ApiError
+    throw err
+  } finally {
+    t.done()
+  }
 
   if (res.status === 401 || res.redirected) {
-    throw { status: 401, message: '未登录' } as ApiError
+    throw handleUnauthorized()
   }
 
   if (!res.ok) {
     let message = res.statusText
+    let body: unknown = null
     try {
-      const body = await res.json()
-      message = body.error?.message || body.error || body.message || message
+      body = await res.json()
+      const b = body as { error?: { message?: string } | string; message?: string }
+      message = (typeof b.error === 'object' ? b.error?.message : b.error) || b.message || message
     } catch {
       /* ignore */
     }
-    throw { status: res.status, message } as ApiError
+    // Flask's cookie session is rewritten by every response, so a request that
+    // started before the CSRF token was stored can drop it from the session.
+    // Fetch a fresh token (re-stores it) and retry the write once.
+    if (unsafe && !retriedCsrf && isCsrfFailure(res.status, body)) {
+      csrfToken = null
+      await fetchCsrfToken()
+      return request<T>(path, options, true)
+    }
+    throw { status: res.status, message, payload: body } as ApiError
   }
 
   const contentType = res.headers.get('content-type') || ''
@@ -63,6 +123,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     return res.json() as Promise<T>
   }
   return (await res.text()) as unknown as T
+}
+
+/** Test hook. */
+export function __resetCsrfForTests() {
+  csrfToken = null
 }
 
 export interface AccountSummary {
@@ -88,6 +153,7 @@ export interface AccountsResponse {
   total?: number
   limit?: number
   offset?: number
+  has_more?: boolean
   items?: AccountSummary[]
 }
 
@@ -116,21 +182,55 @@ export interface EmailListResponse {
   error?: unknown
 }
 
+export interface RefreshEvent {
+  type: string
+  current?: number
+  total?: number
+  success_count?: number
+  failed_count?: number
+  message?: string
+  email?: string
+}
+
+export function parseSseChunk(chunk: string): RefreshEvent[] {
+  const events: RefreshEvent[] = []
+  for (const line of chunk.split('\n')) {
+    if (!line.startsWith('data:')) continue
+    try {
+      events.push(JSON.parse(line.slice(5).trim()) as RefreshEvent)
+    } catch {
+      /* ignore keep-alive or partial lines */
+    }
+  }
+  return events
+}
+
 export const api = {
   async getCsrf() {
     return ensureCsrf()
   },
 
+  /** true when the Flask session is valid. /api/csrf-token is login_required. */
+  async checkSession(): Promise<boolean> {
+    const res = await fetch('/api/csrf-token', { credentials: 'include', headers: { Accept: 'application/json' } })
+    if (res.status === 401 || res.redirected) return false
+    if (!res.ok) throw { status: res.status, message: res.statusText } as ApiError
+    const data = await res.json().catch(() => ({}))
+    csrfToken = data.csrf_token || null
+    return true
+  },
+
   async login(password: string, sessionDays = 30) {
+    csrfToken = null
     return request<{ success: boolean; message?: string; error?: string }>('/login', {
       method: 'POST',
       body: JSON.stringify({ password, session_duration_days: sessionDays }),
     })
   },
 
-  async logout() {
+  logout() {
     csrfToken = null
-    window.location.href = '/logout'
+    window.location.assign('/logout')
   },
 
   async getGroups() {
@@ -146,19 +246,20 @@ export const api = {
     return request<AccountsResponse>(`/api/accounts${qs ? '?' + qs : ''}`)
   },
 
-  async getEmails(email: string, params: { folder?: string; skip?: number; top?: number } = {}) {
+  async getEmails(email: string, params: { folder?: string; skip?: number; top?: number } = {}, opts: RequestOptions = {}) {
     const q = new URLSearchParams()
     q.set('folder', params.folder || 'inbox')
     q.set('skip', String(params.skip ?? 0))
     q.set('top', String(params.top ?? 30))
-    return request<EmailListResponse>(`/api/emails/${encodeURIComponent(email)}?${q}`)
+    return request<EmailListResponse>(`/api/emails/${encodeURIComponent(email)}?${q}`, opts)
   },
 
-  async getEmailDetail(email: string, messageId: string, folder = 'inbox', idMode = '') {
+  async getEmailDetail(email: string, messageId: string, folder = 'inbox', idMode = '', opts: RequestOptions = {}) {
     const q = new URLSearchParams({ folder, method: idMode === 'imap' ? 'imap' : 'graph' })
     if (idMode) q.set('id_mode', idMode)
     return request<{ success?: boolean; email?: Record<string, unknown>; error?: unknown }>(
       `/api/email/${encodeURIComponent(email)}/${encodeURIComponent(messageId)}?${q}`,
+      opts,
     )
   },
 
@@ -209,7 +310,7 @@ export const api = {
   },
 
   async exchangeOauth(redirectedUrl: string) {
-    return request<{ success?: boolean; error?: string; refresh_token?: string }>('/api/oauth/exchange-token', {
+    return request<{ success?: boolean; error?: string; refresh_token?: string; client_id?: string }>('/api/oauth/exchange-token', {
       method: 'POST',
       body: JSON.stringify({ redirected_url: redirectedUrl }),
     })
@@ -314,8 +415,32 @@ export const api = {
     return request<{ success?: boolean; error?: string }>(`/api/tags/${id}`, { method: 'DELETE' })
   },
 
-  async refreshAll() {
-    return request<{ success?: boolean; message?: string; error?: string }>('/api/accounts/refresh-all')
+  /**
+   * /api/accounts/refresh-all is a text/event-stream. Read it incrementally,
+   * report each event, and resolve with the final complete/error event.
+   */
+  async refreshAllStream(onEvent?: (evt: RefreshEvent) => void): Promise<RefreshEvent> {
+    const res = await fetch('/api/accounts/refresh-all', { credentials: 'include', headers: { Accept: 'text/event-stream' } })
+    if (res.status === 401 || res.redirected) throw handleUnauthorized()
+    if (!res.ok || !res.body) throw { status: res.status, message: res.statusText || '刷新失败' } as ApiError
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let last: RefreshEvent = { type: 'complete' }
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (value) buffer += decoder.decode(value, { stream: !done })
+      const parts = buffer.split('\n\n')
+      buffer = done ? '' : parts.pop() || ''
+      for (const part of done ? parts.filter(Boolean) : parts) {
+        for (const evt of parseSseChunk(part)) {
+          last = evt
+          onEvent?.(evt)
+        }
+      }
+      if (done) break
+    }
+    return last
   },
 
   async refreshAccount(id: number) {
