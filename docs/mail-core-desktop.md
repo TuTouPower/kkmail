@@ -22,18 +22,27 @@ const { PostgresManager } = require('./postgresManager')
 const pg = new PostgresManager({ app }) // Electron app
 pg.ensureDirs()
 pg.status()   // { stub, running, dataRoot, port, binaries }
-pg.start()    // stub=true when binaries missing
+pg.start()    // uses vendor/PATH binaries when present; else stub:true
 pg.stop()
 ```
 
-## 二进制
+## 二进制（vendor 打包路径）
 
-当前发行包**尚未内置** PostgreSQL 官方二进制。设置：
+解析顺序：
+
+1. `KKMAIL_PG_BIN` / `PostgresManager({ pgBinDir })`
+2. `desktop/vendor/pgsql/bin`（官方二进制；**不进 git**）
+3. 系统 `PATH` 上的 `initdb` / `pg_ctl`
+
+获取开发用二进制：
 
 ```bash
-export KKMAIL_PG_BIN=/path/to/pgsql/bin
+./scripts/fetch-pg-binaries.sh
+# 或手动解压到 desktop/vendor/pgsql/bin/
 export KKMAIL_MAIL_CORE_PG=1   # Electron main 在启动 Flask 后尝试 start()
 ```
+
+详见 [`desktop/vendor/README.md`](../desktop/vendor/README.md)。
 
 无二进制时：`start()` 仍会创建数据目录并返回 `{ stub: true }`，Flask 默认路径不受影响。
 

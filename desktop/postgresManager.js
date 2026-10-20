@@ -14,6 +14,11 @@ const { spawn, spawnSync } = require('child_process')
 
 const DEFAULT_PORT = 54329
 
+/** Official PG binaries land in desktop/vendor/pgsql/bin via scripts/fetch-pg-binaries.sh */
+function defaultVendorBinDir() {
+  return path.join(__dirname, 'vendor', 'pgsql', 'bin')
+}
+
 function defaultMailDataRoot(app) {
   // Electron app.getPath('userData') is already outside the install directory.
   const base = app && typeof app.getPath === 'function'
@@ -34,7 +39,7 @@ function resolveBin(name, hintDir) {
 function PostgresManager(options = {}) {
   this.app = options.app || null
   this.dataRoot = options.dataRoot || defaultMailDataRoot(this.app)
-  this.pgBinDir = options.pgBinDir || process.env.KKMAIL_PG_BIN || ''
+  this.pgBinDir = options.pgBinDir || process.env.KKMAIL_PG_BIN || defaultVendorBinDir()
   this.port = Number(options.port || process.env.KKMAIL_PG_PORT || DEFAULT_PORT)
   this.user = options.user || 'kkmail'
   this.database = options.database || 'kkmail_mail'
@@ -77,18 +82,23 @@ PostgresManager.prototype.ensureDirs = function ensureDirs() {
 }
 
 PostgresManager.prototype.hasBinaries = function hasBinaries() {
-  const initdb = resolveBin('initdb', this.pgBinDir)
-  const pgCtl = resolveBin('pg_ctl', this.pgBinDir)
-  const postgres = resolveBin('postgres', this.pgBinDir)
   const check = (bin) => {
+    if (!bin) return false
     if (path.isAbsolute(bin) || bin.includes(path.sep)) return fs.existsSync(bin)
     const r = spawnSync(bin, ['--version'], { encoding: 'utf8' })
     return r.status === 0
   }
+  const pick = (name) => {
+    const fromHint = resolveBin(name, this.pgBinDir)
+    if (check(fromHint) && (path.isAbsolute(fromHint) || fromHint.includes(path.sep))) return fromHint
+    // Fall back to PATH (dev machines with system postgres)
+    if (check(name)) return name
+    return null
+  }
   return {
-    initdb: check(initdb) ? initdb : null,
-    pg_ctl: check(pgCtl) ? pgCtl : null,
-    postgres: check(postgres) ? postgres : null,
+    initdb: pick('initdb'),
+    pg_ctl: pick('pg_ctl'),
+    postgres: pick('postgres'),
   }
 }
 
@@ -191,5 +201,6 @@ module.exports = {
   DEFAULT_PORT,
   PostgresManager,
   defaultMailDataRoot,
+  defaultVendorBinDir,
   resolveBin,
 }
