@@ -14,15 +14,20 @@ pip install -r requirements-mail-core.txt
 
 ### 2. PostgreSQL 16
 
-**Option A — Docker Compose** (dev):
+**Option A — Docker Compose** (dev; postgres + api + worker):
 
 ```bash
+# full stack
+docker compose -f docker-compose.mail-core.yml up -d --build
+# postgres only
 docker compose -f docker-compose.mail-core.yml up -d postgres
 # if compose plugin missing:
 # docker run -d --name kkmail-mail-core-pg \
 #   -e POSTGRES_USER=kkmail -e POSTGRES_PASSWORD=kkmail \
 #   -e POSTGRES_DB=kkmail_mail -p 5433:5432 postgres:16
 ```
+
+API listens on `http://127.0.0.1:8000`. Flask is not started by this compose file.
 
 **Option B — Desktop Electron child process** (stub until binaries ship):
 

@@ -1,0 +1,13 @@
+# Lightweight image for mail-core API + worker (not the Flask product image).
+FROM python:3.13-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements-mail-core.txt .
+RUN pip install --no-cache-dir -r requirements-mail-core.txt
+COPY mail_core ./mail_core
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    MAIL_CORE_DATABASE_URL=postgresql+psycopg://kkmail:kkmail@postgres:5432/kkmail_mail
+EXPOSE 8000
+CMD ["uvicorn", "mail_core.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
