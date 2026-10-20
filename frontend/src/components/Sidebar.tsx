@@ -17,7 +17,7 @@ export default function Sidebar() {
     toggleSidebar,
     closeMobileSidebar,
     listFilter,
-    setListFilter,
+    openSmartView,
   } = useMailStore()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const wide = useIsWide()
@@ -63,16 +63,16 @@ export default function Sidebar() {
       <div className="sidebar-scroll">
         <div className="side-section">
           <div className="section-label"><span>个人收藏</span></div>
-          <button className={`side-item ${inAllInbox && listFilter === 'all' ? 'active' : ''}`} onClick={() => { setView({ type: 'allInbox' }); setListFilter('all'); closeMobileSidebar() }}>
+          <button className={`side-item ${inAllInbox && listFilter === 'all' ? 'active' : ''}`} onClick={() => openSmartView('all')}>
             <Inbox size={17} />
             <span className="side-name">所有收件箱</span>
             {allInboxUnread > 0 && <span className="side-count unread-badge" title={`${allInboxUnread} 封未读`} aria-label={`${allInboxUnread} 封未读`}>{allInboxUnread}</span>}
           </button>
-          <button className={`side-item ${inAllInbox && listFilter === 'unread' ? 'active' : ''}`} onClick={() => { setView({ type: 'allInbox' }); setListFilter('unread'); closeMobileSidebar() }}>
+          <button className={`side-item ${inAllInbox && listFilter === 'unread' ? 'active' : ''}`} onClick={() => openSmartView('unread')}>
             <MailOpen size={17} />
             <span className="side-name">未读邮件</span>
           </button>
-          <button className={`side-item ${inAllInbox && listFilter === 'flagged' ? 'active' : ''}`} onClick={() => { setView({ type: 'allInbox' }); setListFilter('flagged'); closeMobileSidebar() }}>
+          <button className={`side-item ${inAllInbox && listFilter === 'flagged' ? 'active' : ''}`} onClick={() => openSmartView('flagged')}>
             <Flag size={17} />
             <span className="side-name">已标记</span>
           </button>
@@ -112,7 +112,7 @@ export default function Sidebar() {
                         </button>
                         <button
                           className={`account-button ${selected ? 'active' : ''}`}
-                          onClick={() => { setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: 'inbox' }); closeMobileSidebar() }}
+                          onClick={() => { setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: 'inbox' }) }}
                           title={a.email}
                         >
                           <span className="account-dot" style={{ background: a.group_color || providerColor(a.provider, a.account_type) }}>
@@ -130,7 +130,7 @@ export default function Sidebar() {
                               <button
                                 key={f.id}
                                 className={`side-item ${active ? 'active' : ''}`}
-                                onClick={() => { setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: f.api }); closeMobileSidebar() }}
+                                onClick={() => { setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: f.api }) }}
                               >
                                 <Inbox size={15} />
                                 <span className="side-name">{f.label}</span>
