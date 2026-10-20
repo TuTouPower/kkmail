@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from mail_core.mail.storage.models import Folder, FolderStats, Message, MessageLocation
+from mail_core.mail.storage.models import Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,4 +126,79 @@ def unified_inbox(
         limit=limit,
         cursor_sort_time=cursor_sort_time,
         cursor_message_id=cursor_message_id,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentItem:
+    id: uuid.UUID
+    filename: str
+    content_type: str | None
+    size_bytes: int | None
+    is_inline: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MessageDetail:
+    id: uuid.UUID
+    account_id: uuid.UUID
+    subject: str
+    from_address: str
+    from_name: str | None
+    to_addresses: list[Any]
+    cc_addresses: list[Any]
+    sort_time: datetime
+    is_read: bool
+    has_attachments: bool
+    snippet: str | None
+    body_text: str | None
+    body_html: str | None
+    body_type: str  # html | text | empty
+    parse_error: str | None
+    attachments: list[AttachmentItem]
+
+
+def get_message_detail(session: Session, message_id: uuid.UUID) -> MessageDetail | None:
+    """Return message metadata + parsed body (if archived/parsed) + attachment list."""
+    msg = session.get(Message, message_id)
+    if msg is None:
+        return None
+    body = session.get(MessageBody, message_id)
+    text_html = body.text_html if body else None
+    text_plain = body.text_plain if body else None
+    if text_html:
+        body_type = "html"
+    elif text_plain:
+        body_type = "text"
+    else:
+        body_type = "empty"
+    atts = list(
+        session.scalars(select(Attachment).where(Attachment.message_id == message_id).order_by(Attachment.filename)).all()
+    )
+    return MessageDetail(
+        id=msg.id,
+        account_id=msg.account_id,
+        subject=msg.subject,
+        from_address=msg.from_address,
+        from_name=msg.from_name,
+        to_addresses=list(msg.to_addresses or []),
+        cc_addresses=list(msg.cc_addresses or []),
+        sort_time=msg.sort_time,
+        is_read=msg.is_read,
+        has_attachments=msg.has_attachments,
+        snippet=msg.snippet,
+        body_text=text_plain,
+        body_html=text_html,
+        body_type=body_type,
+        parse_error=body.parse_error if body else None,
+        attachments=[
+            AttachmentItem(
+                id=a.id,
+                filename=a.filename,
+                content_type=a.content_type,
+                size_bytes=a.size_bytes,
+                is_inline=a.is_inline,
+            )
+            for a in atts
+        ],
     )
