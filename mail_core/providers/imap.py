@@ -187,7 +187,7 @@ class ImapProvider:
                 typ, fetched = c.uid(
                     "FETCH",
                     str(uid),
-                    "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)])",
+                    "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)])",
                 )
                 if typ != "OK" or not fetched or fetched[0] is None:
                     # Do not advance uid_next past a failed FETCH — raise so the
@@ -209,6 +209,11 @@ class ImapProvider:
                 subject = _decode_header(headers.get("Subject"))
                 from_raw = _decode_header(headers.get("From"))
                 addr, name = _parse_from(from_raw)
+                to_raw = _decode_header(headers.get("To"))
+                cc_raw = _decode_header(headers.get("Cc"))
+                import email.utils
+                to_addresses = tuple(a for _, a in email.utils.getaddresses([to_raw]) if a) if to_raw else ()
+                cc_addresses = tuple(a for _, a in email.utils.getaddresses([cc_raw]) if a) if cc_raw else ()
                 date_raw = headers.get("Date")
                 try:
                     sort_time = parsedate_to_datetime(date_raw) if date_raw else datetime.now(timezone.utc)
@@ -229,6 +234,8 @@ class ImapProvider:
                         is_flagged=is_flagged,
                         internet_message_id=headers.get("Message-ID"),
                         uid=uid,
+                        to_addresses=to_addresses,
+                        cc_addresses=cc_addresses,
                         in_reply_to=headers.get("In-Reply-To"),
                         references=headers.get("References"),
                     )

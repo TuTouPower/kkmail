@@ -76,6 +76,7 @@ class MemoryProvider:
                 sort_time=m.sort_time,
                 is_read=is_read,
                 has_attachments=m.has_attachments,
+                is_flagged=m.is_flagged,
                 internet_message_id=m.internet_message_id,
                 snippet=m.snippet,
                 provider_thread_key=m.provider_thread_key,
