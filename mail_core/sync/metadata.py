@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import ArchiveState, OutboxEventType
+from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import (
-    FolderStats,
     Message,
     MessageArchiveState,
     MessageLocation,
@@ -32,85 +32,103 @@ class MetadataApplyResult:
     cursor: dict
 
 
-def _upsert_message(
+_META_FIELDS = (
+    "subject",
+    "from_address",
+    "from_name",
+    "sort_time",
+    "is_read",
+    "has_attachments",
+    "internet_message_id",
+    "snippet",
+    "size_bytes",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class UpsertOutcome:
+    message: Message
+    created: bool
+    changed: bool
+
+
+def upsert_messages(
     session: Session,
     *,
     account_id: uuid.UUID,
     folder_id: uuid.UUID,
-    meta: RemoteMessageMeta,
-) -> Message:
-    existing = session.scalar(
-        select(Message).where(Message.account_id == account_id, Message.remote_id == meta.remote_id)
-    )
-    if existing is None:
-        existing = Message(account_id=account_id, remote_id=meta.remote_id, sort_time=meta.sort_time)
-        session.add(existing)
-        session.flush()
-        session.add(MessageArchiveState(message_id=existing.id, state=ArchiveState.METADATA_SYNCED.value))
-        session.add(
-            MessageLocation(message_id=existing.id, folder_id=folder_id, uid=meta.uid)
+    metas: list[RemoteMessageMeta],
+) -> list[UpsertOutcome]:
+    """Upsert a page of remote metadata with two batched lookups.
+
+    Rows whose metadata did not change are left untouched (no UPDATE), so callers can
+    skip search/thread/outbox work for them.
+    """
+    if not metas:
+        return []
+    remote_ids = [m.remote_id for m in metas]
+    existing = {
+        m.remote_id: m
+        for m in session.scalars(
+            select(Message).where(Message.account_id == account_id, Message.remote_id.in_(remote_ids))
         )
-    else:
-        loc = session.scalar(
-            select(MessageLocation).where(
-                MessageLocation.message_id == existing.id,
-                MessageLocation.folder_id == folder_id,
+    }
+    locs: dict[uuid.UUID, MessageLocation] = {}
+    if existing:
+        locs = {
+            loc.message_id: loc
+            for loc in session.scalars(
+                select(MessageLocation).where(
+                    MessageLocation.folder_id == folder_id,
+                    MessageLocation.message_id.in_([m.id for m in existing.values()]),
+                )
             )
-        )
-        if loc is None:
-            session.add(MessageLocation(message_id=existing.id, folder_id=folder_id, uid=meta.uid))
-        elif meta.uid is not None:
-            loc.uid = meta.uid
-
-    existing.subject = meta.subject
-    existing.from_address = meta.from_address
-    existing.from_name = meta.from_name
-    existing.sort_time = meta.sort_time
-    existing.is_read = meta.is_read
-    existing.has_attachments = meta.has_attachments
-    existing.internet_message_id = meta.internet_message_id
-    existing.snippet = meta.snippet
-    existing.size_bytes = meta.size_bytes
-    existing.to_addresses = list(meta.to_addresses)
-    existing.cc_addresses = list(meta.cc_addresses)
-    existing.updated_at = datetime.now(timezone.utc)
+        }
+    now = datetime.now(timezone.utc)
+    out: list[UpsertOutcome] = []
+    for meta in metas:
+        msg = existing.get(meta.remote_id)
+        created = msg is None
+        if created:
+            msg = Message(account_id=account_id, remote_id=meta.remote_id, sort_time=meta.sort_time)
+            session.add(msg)
+            session.flush()
+            session.add(MessageArchiveState(message_id=msg.id, state=ArchiveState.METADATA_SYNCED.value))
+            session.add(MessageLocation(message_id=msg.id, folder_id=folder_id, uid=meta.uid))
+            existing[meta.remote_id] = msg
+        else:
+            loc = locs.get(msg.id)
+            if loc is None:
+                loc = MessageLocation(message_id=msg.id, folder_id=folder_id, uid=meta.uid)
+                session.add(loc)
+                locs[msg.id] = loc
+            elif meta.uid is not None and loc.uid != meta.uid:
+                loc.uid = meta.uid
+        changed = created
+        for field in _META_FIELDS:
+            value = getattr(meta, field)
+            if getattr(msg, field) != value:
+                setattr(msg, field, value)
+                changed = True
+        for field in ("to_addresses", "cc_addresses"):
+            value = list(getattr(meta, field))
+            if list(getattr(msg, field) or []) != value:
+                setattr(msg, field, value)
+                changed = True
+        if changed:
+            msg.updated_at = now
+        out.append(UpsertOutcome(message=msg, created=created, changed=changed))
     session.flush()
-    return existing
+    return out
 
 
-def recompute_folder_stats(session: Session, folder_id: uuid.UUID) -> None:
-    """Aggregate folder totals via SQL COUNT (no full ORM load)."""
-    from sqlalchemy import func
-
-    total = (
-        session.scalar(
-            select(func.count())
-            .select_from(MessageLocation)
-            .where(MessageLocation.folder_id == folder_id)
-        )
-        or 0
+def messages_upserted_event(account_id: uuid.UUID, folder_id: uuid.UUID, ids: list[uuid.UUID]) -> OutboxEvent:
+    """One outbox event per page (not per message)."""
+    return OutboxEvent(
+        event_type=OutboxEventType.MESSAGE_UPSERTED.value,
+        account_id=account_id,
+        payload={"folder_id": str(folder_id), "message_ids": [str(i) for i in ids]},
     )
-    unread = (
-        session.scalar(
-            select(func.count())
-            .select_from(MessageLocation)
-            .join(Message, Message.id == MessageLocation.message_id)
-            .where(MessageLocation.folder_id == folder_id)
-            .where(Message.is_read.is_(False))
-        )
-        or 0
-    )
-    stats = session.get(FolderStats, folder_id)
-    if stats is None:
-        stats = FolderStats(folder_id=folder_id)
-        session.add(stats)
-    stats.total_count = int(total)
-    stats.unread_count = int(unread)
-    stats.updated_at = datetime.now(timezone.utc)
-
-
-# Back-compat alias for sync internals still calling the private name.
-_recompute_folder_stats = recompute_folder_stats
 
 
 def apply_metadata_page(
@@ -123,23 +141,18 @@ def apply_metadata_page(
 ) -> MetadataApplyResult:
     """Network I/O must happen *before* this call. Writes + cursor share one TX."""
     assert_fencing(session, account_id=account_id, fencing_token=fencing_token)
-    for meta in page.items:
-        msg = _upsert_message(session, account_id=account_id, folder_id=folder_id, meta=meta)
-        upsert_message_search(session, message_id=msg.id, body_text=meta.snippet or "")
-        if meta.internet_message_id or meta.provider_thread_key:
-            assign_thread_for_message(
-                session,
-                message=msg,
-                provider_thread_key=meta.provider_thread_key,
-            )
-        session.add(
-            OutboxEvent(
-                event_type=OutboxEventType.MESSAGE_UPSERTED.value,
-                account_id=account_id,
-                payload={"message_id": str(msg.id), "folder_id": str(folder_id)},
-            )
-        )
-    _recompute_folder_stats(session, folder_id)
+    outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=list(page.items))
+    touched: list[uuid.UUID] = []
+    for o, meta in zip(outcomes, page.items):
+        if not o.changed:
+            continue
+        touched.append(o.message.id)
+        upsert_message_search(session, message_id=o.message.id, body_text=meta.snippet or "")
+        if o.created and (meta.internet_message_id or meta.provider_thread_key):
+            assign_thread_for_message(session, message=o.message, provider_thread_key=meta.provider_thread_key)
+    if touched:
+        session.add(messages_upserted_event(account_id, folder_id, touched))
+    recompute_folder_stats(session, folder_id)
     session.add(
         OutboxEvent(
             event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,

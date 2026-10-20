@@ -12,12 +12,20 @@ class CredentialStore(Protocol):
 
     def put_secret(self, credential_ref: str, secret: str) -> None: ...
 
+    def delete_secret(self, credential_ref: str) -> None: ...
+
+
+class ReadOnlyCredentialRef(ValueError):
+    """The ref points at operator-managed configuration that the app must not rewrite."""
+
 
 class EnvCredentialStore:
     """Refs shaped as ``env:VAR_NAME`` read from the process environment.
 
-    ``put_secret`` updates ``os.environ`` (process-local; for refresh token
-    rotation in long-lived workers). Prefer KeyringCredentialStore for durable writes.
+    Read-only: env refs are operator-managed. Writing (e.g. OAuth refresh-token
+    rotation) raises ``ReadOnlyCredentialRef`` instead of silently mutating
+    ``os.environ`` (which would be lost on restart and invisible to other processes).
+    Use the default database-backed store for credentials the app must update.
     """
 
     def get_secret(self, credential_ref: str) -> str:
@@ -30,9 +38,84 @@ class EnvCredentialStore:
         return val
 
     def put_secret(self, credential_ref: str, secret: str) -> None:
-        if not credential_ref.startswith("env:"):
-            raise ValueError(f"unsupported credential_ref scheme: {credential_ref!r}")
-        os.environ[credential_ref[4:]] = secret
+        raise ReadOnlyCredentialRef(f"credential_ref {credential_ref!r} is read-only (env)")
+
+    def delete_secret(self, credential_ref: str) -> None:
+        raise ReadOnlyCredentialRef(f"credential_ref {credential_ref!r} is read-only (env)")
+
+
+_CRED_HKDF_INFO = b"kkmail/credential-store/v1"
+
+
+class DbCredentialStore:
+    """Durable store in ``credential_secrets``; AES-256-GCM with a key derived from the blob keyring.
+
+    Shared by API and worker processes. Each call uses its own short transaction.
+    """
+
+    def __init__(self, *, keyring=None, session_factory=None) -> None:  # noqa: ANN001 - lazy types
+        self._keyring = keyring
+        self._session_factory = session_factory
+
+    def _ring(self):
+        if self._keyring is None:
+            from mail_core.blobs.crypto import load_keyring_from_env
+
+            self._keyring = load_keyring_from_env()
+        return self._keyring
+
+    def _sessions(self):
+        if self._session_factory is None:
+            from mail_core.db.session import get_session_factory
+
+            self._session_factory = get_session_factory()
+        return self._session_factory
+
+    def _key(self, version: int) -> bytes:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+        return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=_CRED_HKDF_INFO).derive(
+            self._ring().get(version)
+        )
+
+    def get_secret(self, credential_ref: str) -> str:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        from mail_core.mail.storage.models import CredentialSecret
+
+        with self._sessions()() as session:
+            row = session.get(CredentialSecret, credential_ref)
+            if row is None:
+                raise KeyError(f"unknown credential_ref {credential_ref!r}")
+            pt = AESGCM(self._key(row.key_version)).decrypt(row.nonce, row.ciphertext, credential_ref.encode())
+            return pt.decode()
+
+    def put_secret(self, credential_ref: str, secret: str) -> None:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        from mail_core.mail.storage.models import CredentialSecret
+
+        version = self._ring().active_version
+        nonce = os.urandom(12)
+        ct = AESGCM(self._key(version)).encrypt(nonce, secret.encode(), credential_ref.encode())
+        with self._sessions()() as session:
+            row = session.get(CredentialSecret, credential_ref)
+            if row is None:
+                row = CredentialSecret(ref=credential_ref, key_version=version, nonce=nonce, ciphertext=ct)
+                session.add(row)
+            else:
+                row.key_version, row.nonce, row.ciphertext = version, nonce, ct
+            session.commit()
+
+    def delete_secret(self, credential_ref: str) -> None:
+        from mail_core.mail.storage.models import CredentialSecret
+
+        with self._sessions()() as session:
+            row = session.get(CredentialSecret, credential_ref)
+            if row is not None:
+                session.delete(row)
+                session.commit()
 
 
 class DictCredentialStore:
@@ -53,24 +136,26 @@ class DictCredentialStore:
         except KeyError as exc:
             raise KeyError(f"unknown credential_ref {credential_ref!r}") from exc
 
+    def delete_secret(self, credential_ref: str) -> None:
+        self._mapping.pop(credential_ref, None)
+
 
 class KeyringCredentialStore:
-    """OS keyring stub. Uses the ``keyring`` package when installed; otherwise
-    falls back to an in-memory map (tests / boxes without keyring).
+    """OS keyring via the optional ``keyring`` package (no in-memory fallback).
 
     Refs: ``keyring:service/user`` or bare ``keyring:name`` (service=kkmail).
     """
 
-    def __init__(self, *, service: str = "kkmail", fallback: dict[str, str] | None = None) -> None:
+    def __init__(self, *, service: str = "kkmail") -> None:
         self.service = service
-        self._fallback = dict(fallback or {})
-        self._backend: Any | None
+
+    @staticmethod
+    def _backend():
         try:
             import keyring  # type: ignore
-
-            self._backend = keyring
-        except ImportError:
-            self._backend = None
+        except ImportError as exc:
+            raise RuntimeError("keyring: credential refs need the 'keyring' package installed") from exc
+        return keyring
 
     def _parse(self, credential_ref: str) -> tuple[str, str]:
         if not credential_ref.startswith("keyring:"):
@@ -83,49 +168,49 @@ class KeyringCredentialStore:
 
     def get_secret(self, credential_ref: str) -> str:
         svc, user = self._parse(credential_ref)
-        if self._backend is not None:
-            val = self._backend.get_password(svc, user)
-            if val is not None:
-                return val
-        if credential_ref in self._fallback:
-            return self._fallback[credential_ref]
-        raise KeyError(f"keyring secret missing for {credential_ref!r}")
+        val = self._backend().get_password(svc, user)
+        if val is None:
+            raise KeyError(f"keyring secret missing for {credential_ref!r}")
+        return val
 
     def put_secret(self, credential_ref: str, secret: str) -> None:
         svc, user = self._parse(credential_ref)
-        if self._backend is not None:
-            self._backend.set_password(svc, user, secret)
-        self._fallback[credential_ref] = secret
+        self._backend().set_password(svc, user, secret)
+
+    def delete_secret(self, credential_ref: str) -> None:
+        svc, user = self._parse(credential_ref)
+        self._backend().delete_password(svc, user)
 
 
 class CompositeCredentialStore:
-    """Dispatch by ref scheme: env: / keyring: / everything else → dict."""
+    """Dispatch by ref scheme: ``env:`` (read-only) / ``keyring:`` / everything else → database."""
 
     def __init__(
         self,
         *,
         env: EnvCredentialStore | None = None,
         keyring: KeyringCredentialStore | None = None,
-        mapping: dict[str, str] | None = None,
+        db: CredentialStore | None = None,
     ) -> None:
         self.env = env or EnvCredentialStore()
         self.keyring = keyring or KeyringCredentialStore()
-        self.dict = DictCredentialStore(mapping)
+        self.db = db or DbCredentialStore()
+
+    def _pick(self, credential_ref: str) -> CredentialStore:
+        if credential_ref.startswith("env:"):
+            return self.env
+        if credential_ref.startswith("keyring:"):
+            return self.keyring
+        return self.db
 
     def get_secret(self, credential_ref: str) -> str:
-        if credential_ref.startswith("env:"):
-            return self.env.get_secret(credential_ref)
-        if credential_ref.startswith("keyring:"):
-            return self.keyring.get_secret(credential_ref)
-        return self.dict.get_secret(credential_ref)
+        return self._pick(credential_ref).get_secret(credential_ref)
 
     def put_secret(self, credential_ref: str, secret: str) -> None:
-        if credential_ref.startswith("env:"):
-            self.env.put_secret(credential_ref, secret)
-        elif credential_ref.startswith("keyring:"):
-            self.keyring.put_secret(credential_ref, secret)
-        else:
-            self.dict.put_secret(credential_ref, secret)
+        self._pick(credential_ref).put_secret(credential_ref, secret)
+
+    def delete_secret(self, credential_ref: str) -> None:
+        self._pick(credential_ref).delete_secret(credential_ref)
 
 
 def load_json_secret(store: CredentialStore, credential_ref: str) -> dict[str, Any]:
