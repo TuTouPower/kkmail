@@ -66,9 +66,14 @@ class ImapProvider:
     username: str
     password: str
     use_ssl: bool = False
+    timeout: float = 30.0
 
     def _connect(self) -> imaplib.IMAP4:
-        client: imaplib.IMAP4 = imaplib.IMAP4_SSL(self.host, self.port) if self.use_ssl else imaplib.IMAP4(self.host, self.port)
+        timeout = float(self.timeout)
+        if self.use_ssl:
+            client: imaplib.IMAP4 = imaplib.IMAP4_SSL(self.host, self.port, timeout=timeout)
+        else:
+            client = imaplib.IMAP4(self.host, self.port, timeout=timeout)
         client.login(self.username, self.password)
         return client
 
