@@ -22,6 +22,16 @@ def _meta_from_graph(item: dict[str, Any]) -> RemoteMessageMeta:
     frm = (item.get("from") or {}).get("emailAddress") or {}
     flag_obj = item.get("flag") or {}
     is_flagged = flag_obj.get("flagStatus") == "flagged"
+    to_addrs = tuple(
+        str(r.get("emailAddress", {}).get("address") or "")
+        for r in item.get("toRecipients") or []
+        if (r.get("emailAddress") or {}).get("address")
+    ) or tuple(item.get("to_addresses") or ())
+    cc_addrs = tuple(
+        str(r.get("emailAddress", {}).get("address") or "")
+        for r in item.get("ccRecipients") or []
+        if (r.get("emailAddress") or {}).get("address")
+    ) or tuple(item.get("cc_addresses") or ())
     return RemoteMessageMeta(
         remote_id=str(item["id"]),
         subject=str(item.get("subject") or ""),
@@ -34,6 +44,8 @@ def _meta_from_graph(item: dict[str, Any]) -> RemoteMessageMeta:
         internet_message_id=item.get("internetMessageId"),
         snippet=item.get("bodyPreview"),
         provider_thread_key=item.get("conversationId"),
+        to_addresses=to_addrs,
+        cc_addresses=cc_addrs,
     )
 
 
