@@ -53,7 +53,8 @@
       "target": [
         "nsis",
         "zip"
-      ]
+      ],
+      "signAndEditExecutable": false
     },
     "linux": {
       "target": [
