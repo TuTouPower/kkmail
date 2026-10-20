@@ -9,14 +9,11 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from mail_core.blobs.access import (
+from mail_core.mail.application.attachments import (
     AttachmentAccessError,
     PathTraversalRejected,
-    parse_attachment_id,
-    resolve_attachment_bytes,
+    load_attachment,
 )
-from mail_core.blobs.archive import blob_root
-from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.mutations import set_message_flagged, set_message_read
 from mail_core.api.http_headers import content_disposition_attachment
@@ -28,7 +25,7 @@ from mail_core.mail.application.queries import (
     resolve_account_id_by_email,
     unified_inbox,
 )
-from mail_core.search.index import search_messages
+from mail_core.mail.application.search import search_message_ids
 
 router = APIRouter(prefix="/api/mail", tags=["mail"])
 
@@ -124,7 +121,7 @@ def api_one_folder_stats(folder_id: UUID):
 def api_search(q: str = Query(..., min_length=1), account_id: UUID | None = None, limit: int = Query(50, ge=1, le=200)):
     Session = get_session_factory()
     with Session() as session:
-        ids = search_messages(
+        ids = search_message_ids(
             session,
             account_ids=[account_id] if account_id else None,
             query=q,
@@ -240,15 +237,12 @@ def api_set_message_flag(message_id: UUID, body: FlagBody | None = None):
 @router.get("/attachments/{attachment_id}")
 def api_get_attachment(attachment_id: str):
     """Download attachment by UUID only — path parameters are rejected (M5)."""
-    try:
-        aid = parse_attachment_id(attachment_id)
-    except PathTraversalRejected as exc:
-        raise HTTPException(400, str(exc)) from exc
     Session = get_session_factory()
-    store = BlobStore(blob_root())
     with Session() as session:
         try:
-            payload = resolve_attachment_bytes(session, aid, store=store)
+            payload = load_attachment(session, attachment_id)
+        except PathTraversalRejected as exc:
+            raise HTTPException(400, str(exc)) from exc
         except AttachmentAccessError as exc:
             raise HTTPException(404, str(exc)) from exc
         headers = {

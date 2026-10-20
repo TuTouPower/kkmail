@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 from mail_core.api.deps import require_auth
 from mail_core.security.auth import (
     SESSION_COOKIE_NAME,
+    AuthConfigError,
     AuthPrincipal,
+    change_login_password,
     cookie_samesite,
     cookie_secure,
     issue_session,
@@ -68,3 +70,18 @@ def logout(response: Response, _principal: AuthPrincipal = Depends(require_auth)
 @router.get("/me", response_model=MeOut)
 def me(principal: AuthPrincipal = Depends(require_auth)) -> MeOut:
     return MeOut(via=principal.via, csrf_token=principal.csrf_token)
+
+
+
+class PasswordChangeIn(BaseModel):
+    current_login_password: str = Field(min_length=1)
+    login_password: str = Field(min_length=8)
+
+
+@router.post("/password")
+def change_password(body: PasswordChangeIn, _principal: AuthPrincipal = Depends(require_auth)) -> dict[str, bool]:
+    try:
+        change_login_password(current=body.current_login_password, new=body.login_password)
+    except AuthConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "success": True}

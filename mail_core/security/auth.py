@@ -199,3 +199,21 @@ def csrf_header_value(headers: Any) -> str | None:
         if val:
             return val
     return None
+
+
+def change_login_password(*, current: str, new: str) -> None:
+    """Verify current password and replace the cached bcrypt hash (and optional file)."""
+    import bcrypt
+
+    global _password_hash
+    if not verify_password(current):
+        raise AuthConfigError("current password incorrect")
+    if len(new) < 8:
+        raise AuthConfigError("new password must be at least 8 characters")
+    hashed = bcrypt.hashpw(new.encode("utf-8"), bcrypt.gensalt())
+    _password_hash = hashed
+    path_raw = (os.environ.get("MAIL_CORE_PASSWORD_HASH_PATH") or "").strip()
+    if path_raw:
+        path = Path(path_raw)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(hashed)
