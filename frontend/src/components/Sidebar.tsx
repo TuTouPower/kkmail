@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle } from 'lucide-react'
+import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle, Trash2, ShieldAlert, Layers } from 'lucide-react'
 import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, fetchGroups, queryKeys, type MailItem } from '../api/queries'
 import { FOLDERS, providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import SettingsModal from './SettingsModal'
@@ -119,21 +119,23 @@ export default function Sidebar() {
                             {providerBadge(a.provider, a.account_type)}
                           </span>
                           <span className="account-email">{a.email}</span>
-                          {!!unreadByAccount.get(a.email) && <span className="side-count unread-badge" aria-label={`${unreadByAccount.get(a.email)} 封未读`}>{unreadByAccount.get(a.email)}</span>}
                         </button>
                       </div>
                       {!isCollapsed && (
                         <div className="folder-tree">
                           {FOLDERS.map((f) => {
                             const active = view.type === 'accountFolder' && view.accountId === a.id && view.folder === f.api
+                            const FolderIcon = f.id === 'inbox' ? Inbox : f.id === 'junkemail' ? ShieldAlert : f.id === 'deleteditems' ? Trash2 : Layers
+                            const unread = f.id === 'inbox' ? unreadByAccount.get(a.email) : undefined
                             return (
                               <button
                                 key={f.id}
                                 className={`side-item ${active ? 'active' : ''}`}
                                 onClick={() => { setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: f.api }) }}
                               >
-                                <Inbox size={15} />
+                                <FolderIcon size={15} />
                                 <span className="side-name">{f.label}</span>
+                                {!!unread && <span className="side-count unread-badge" aria-label={`${unread} 封未读`}>{unread}</span>}
                               </button>
                             )
                           })}
