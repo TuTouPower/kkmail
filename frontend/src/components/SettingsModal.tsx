@@ -7,8 +7,11 @@ import { providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
 import { IMPORT_PROVIDERS, importFormatHint } from '../lib/accounts'
 
-export default function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { theme, setTheme } = useMailStore()
+/** Settings as a full right-hand page (list+reader replaced). Kept filename for fewer churn, default export name SettingsPage. */
+export default function SettingsPage() {
+  const { theme, setTheme, closeSettings } = useMailStore()
+  const open = true
+  const onClose = closeSettings
   const qc = useQueryClient()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts, enabled: open })
   const tagsQuery = useQuery({ queryKey: ['tags'], queryFn: async () => (await api.getTags()).tags || [], enabled: open })
@@ -27,7 +30,6 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const [toolStatus, setToolStatus] = useState('')
   const [section, setSection] = useState<'accounts' | 'appearance' | 'general'>('accounts')
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: async () => (await api.getSettings()).settings || {}, enabled: open })
-  const skinsQuery = useQuery({ queryKey: ['skins'], queryFn: async () => api.getSkins(), enabled: open && section === 'appearance' })
   const [timezone, setTimezone] = useState<string | null>(null)
   const [timeoutSeconds, setTimeoutSeconds] = useState<string | null>(null)
   const [reauthId, setReauthId] = useState('')
@@ -42,13 +44,10 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   const [tempMessages, setTempMessages] = useState<Array<{ id?: string; subject?: string; from_address?: string }>>([])
 
   useEffect(() => {
-    if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
-  if (!open) return null
+  }, [onClose])
 
   /** Run an action, surface errors (including HTTP 200 + success:false) in the status line. */
   async function run(label: string, fn: () => Promise<unknown>, ok: string, invalidate?: readonly unknown[]) {
@@ -89,26 +88,20 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
   }
 
   return (
-    <div
-      className="modal-overlay"
-      style={{ position: 'fixed', inset: 0, zIndex: 110, background: 'rgba(0,0,0,.46)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18, backdropFilter: 'blur(5px)' }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" style={{ display: 'flex', flexDirection: 'column', background: 'var(--surface)', border: '1px solid var(--line-strong)', borderRadius: 15, boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid var(--line)', background: 'var(--surface-2)' }}>
-          <SettingsIcon size={16} />
-          <strong id="settings-title" style={{ flex: 1, fontSize: 13 }}>设置</strong>
-          <button type="button" title="关闭（Esc）" aria-label="关闭设置" onClick={onClose} style={{ height: 28, width: 28, display: 'grid', placeItems: 'center', border: 0, borderRadius: 7, background: 'transparent', color: 'var(--muted)' }}>
-            <X size={16} />
-          </button>
-        </div>
-        <div className="settings-tabs" role="tablist" style={{ display: 'flex', gap: 6, padding: '8px 16px', borderBottom: '1px solid var(--line)', overflowX: 'auto' }}>
+    <section className="settings-page" aria-label="设置" aria-labelledby="settings-title">
+      <div className="settings-page-head">
+        <SettingsIcon size={18} />
+        <strong id="settings-title" style={{ flex: 1, fontSize: 16 }}>设置</strong>
+        <button type="button" className="settings-back" title="返回邮件" aria-label="返回邮件" onClick={onClose}>返回邮件</button>
+      </div>
+      <div className="settings-page-body">
+        <nav className="settings-nav" aria-label="设置分区">
           {([['accounts', '账户管理'], ['appearance', '外观'], ['general', '通用']] as const).map(([id, label]) => (
-            <button key={id} type="button" role="tab" aria-selected={section === id} onClick={() => { setSection(id); setToolStatus('') }} style={{ whiteSpace: 'nowrap', flex: '0 0 auto', height: 32, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)', background: section === id ? 'var(--selected)' : 'transparent', fontWeight: 600 }}>
+            <button key={id} type="button" className={`settings-nav-item ${section === id ? 'active' : ''}`} aria-current={section === id ? 'page' : undefined} onClick={() => { setSection(id); setToolStatus('') }}>
               {label}
             </button>
           ))}
-        </div>
+        </nav>
         <div className="settings-content">
           {toolStatus && (
             <div role="status" aria-live="polite" style={{ position: 'sticky', top: -22, zIndex: 2, margin: '-6px 0 12px', padding: '8px 12px', borderRadius: 9, fontSize: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: /失败|错误|无效/.test(toolStatus) ? 'var(--red)' : 'var(--text)', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -298,28 +291,22 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
           </form>
           </>}
           {section === 'appearance' && <>
-          <div style={{ marginTop: 22, fontSize: 18, fontWeight: 720 }}>外观</div>
-          <div style={{ marginTop: 16, fontSize: 14, fontWeight: 700 }}>新界面主题</div>
-          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>当前：{theme === 'dark' ? '深夜' : '亮色'}</div>
-          <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+          <div style={{ fontSize: 18, fontWeight: 720, margin: '0 0 6px' }}>外观</div>
+          <p style={{ margin: '0 0 14px', color: 'var(--muted)', fontSize: 12 }}>控制新界面主题。旧版 /legacy 皮肤入口已移除。</p>
+          <div style={{ marginTop: 8, fontSize: 14, fontWeight: 700 }}>主题</div>
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>
+            当前：{theme === 'system' ? '跟随系统' : theme === 'dark' ? '深夜' : '亮色'}
+          </div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
             <button type="button" aria-pressed={theme === 'light'} onClick={() => setTheme('light')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'light' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
               <Sun size={18} /> 亮色
             </button>
             <button type="button" aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'dark' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
               <Moon size={18} /> 深夜
             </button>
-          </div>
-          <div style={{ marginTop: 22, fontSize: 14, fontWeight: 700 }}>旧版界面皮肤</div>
-          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>
-            仅作用于 /legacy 旧版界面，不影响当前界面。旧版当前皮肤：{skinsQuery.data?.active_skin_id || 'classic'}
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-            {(skinsQuery.data?.skins || []).map((skin) => (
-              <button key={skin.id} type="button" onClick={async () => {
-                if (!skin.id) return
-                await run('启用皮肤', () => api.activateSkin(skin.id!), '皮肤已启用', ['skins'])
-              }} style={{ height: 30, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>{skin.name || skin.id}</button>
-            ))}
+            <button type="button" aria-pressed={theme === 'system'} onClick={() => setTheme('system')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, borderRadius: 11, border: `1px solid ${theme === 'system' ? 'var(--blue)' : 'var(--line)'}`, background: 'var(--surface)' }}>
+              <SettingsIcon size={18} /> 跟随系统
+            </button>
           </div>
           </>}
           {section === 'general' && (
@@ -414,10 +401,7 @@ export default function SettingsModal({ open, onClose }: { open: boolean; onClos
             </div>
           )}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 16px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)' }}>
-          <button onClick={onClose} style={{ height: 35, padding: '0 15px', border: 0, borderRadius: 9, background: 'var(--blue)', color: '#fff', fontWeight: 650 }}>完成</button>
-        </div>
-      </section>
-    </div>
+      </div>
+    </section>
   )
 }

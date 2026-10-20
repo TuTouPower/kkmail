@@ -52,3 +52,12 @@ def test_password_fields_have_autocomplete():
             if 'type="password"' in attrs and "autoComplete=" not in attrs:
                 missing.append(f"{path.name}:{line}")
     assert not missing, f"password inputs without autoComplete: {missing}"
+
+
+def test_settings_page_has_no_skin_controls():
+    src = (COMPONENTS / "SettingsModal.tsx").read_text(encoding="utf-8")
+    assert "activateSkin" not in src
+    assert "getSkins" not in src
+    assert "跟随系统" in src
+    assert "settings-page" in src
+    assert "modal-overlay" not in src
