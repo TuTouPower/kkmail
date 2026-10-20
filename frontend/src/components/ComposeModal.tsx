@@ -11,6 +11,7 @@ export default function ComposeModal() {
   const accounts = accountsQuery.data || []
   const [accountId, setAccountId] = useState(0)
   const [to, setTo] = useState('')
+  const [cc, setCc] = useState('')
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [status, setStatus] = useState('')
@@ -32,7 +33,8 @@ export default function ComposeModal() {
     setSending(true)
     setStatus('')
     try {
-      await api.sendOutlookMail({ account_id: accountId, recipients: to, subject, body })
+      const recipients = [to, cc].filter(Boolean).join(', ')
+      await api.sendOutlookMail({ account_id: accountId, recipients, subject, body })
       setStatus('已提交发送（Graph 返回 202 表示已受理，不代表已送达）')
       setTimeout(() => setComposeOpen(false), 900)
     } catch (err: unknown) {
@@ -62,6 +64,10 @@ export default function ComposeModal() {
           <label style={{ display: 'flex', gap: 12, alignItems: 'center', minHeight: 40, borderBottom: '1px solid var(--line)' }}>
             <span style={{ width: 64, color: 'var(--muted)' }}>收件人</span>
             <input value={to} onChange={(e) => setTo(e.target.value)} required placeholder="name@example.com" style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }} />
+          </label>
+          <label style={{ display: 'flex', gap: 12, alignItems: 'center', minHeight: 40, borderBottom: '1px solid var(--line)' }}>
+            <span style={{ width: 64, color: 'var(--muted)' }}>抄送</span>
+            <input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="可选，Graph 基础发信会合并到收件人" style={{ flex: 1, border: 0, background: 'transparent', padding: '10px 0' }} />
           </label>
           <label style={{ display: 'flex', gap: 12, alignItems: 'center', minHeight: 40, borderBottom: '1px solid var(--line)' }}>
             <span style={{ width: 64, color: 'var(--muted)' }}>主题</span>
