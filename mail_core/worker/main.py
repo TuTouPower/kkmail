@@ -37,7 +37,7 @@ def _reclaim_once() -> int:
         from mail_core.realtime.outbox import prune_dispatched
         from mail_core.sync.jobs import reclaim_stale_claims
     except Exception as exc:  # pragma: no cover
-        log.warning("reclaim imports failed: %s", exc)
+        log.error("worker degraded: reclaim imports failed (%s); skipping reclaim", exc)
         return 0
 
     Session = get_session_factory()
@@ -72,7 +72,7 @@ def _tick(worker_id: str) -> int:
         from mail_core.sync.jobs import claim_jobs, fail_job
         from mail_core.worker.handlers import handle_job
     except Exception as exc:  # pragma: no cover
-        log.warning("worker imports failed: %s", exc)
+        log.error("worker degraded: tick imports failed (%s); skipping claim batch", exc)
         return 0
 
     _reclaim_once()

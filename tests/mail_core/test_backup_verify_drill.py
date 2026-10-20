@@ -1,4 +1,8 @@
-"""Encrypted backup create + verify drill (no live pg_restore)."""
+"""Encrypted backup create + verify drill.
+
+Does **not** run live ``pg_restore`` — only package create + checksum verify
+(with optional stub dump). Rename from restore_drill to avoid implying a DB restore.
+"""
 
 from __future__ import annotations
 

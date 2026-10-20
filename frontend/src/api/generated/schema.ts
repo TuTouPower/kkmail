@@ -171,7 +171,7 @@ export interface paths {
         };
         /**
          * Stream Events
-         * @description Server-Sent Events stream. Replay from Last-Event-ID then live-tail.
+         * @description Server-Sent Events stream. Subscribe first, replay, then live-tail (dedupe by eid).
          */
         get: operations["stream_events_api_events_get"];
         put?: never;
@@ -743,6 +743,14 @@ export interface components {
              */
             success: boolean;
         };
+        /** OkOut */
+        OkOut: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+        };
         /** PageOut */
         PageOut: {
             /** Items */
@@ -759,6 +767,19 @@ export interface components {
             current_login_password: string;
             /** Login Password */
             login_password: string;
+        };
+        /** PasswordChangeOut */
+        PasswordChangeOut: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /**
+             * Success
+             * @default true
+             */
+            success: boolean;
         };
         /** ReadBody */
         ReadBody: {
@@ -1091,9 +1112,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
+                    "application/json": components["schemas"]["OkOut"];
                 };
             };
         };
@@ -1137,9 +1156,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
+                    "application/json": components["schemas"]["PasswordChangeOut"];
                 };
             };
             /** @description Validation Error */

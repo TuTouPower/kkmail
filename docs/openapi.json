@@ -839,6 +839,17 @@
         "title": "MutationOut",
         "type": "object"
       },
+      "OkOut": {
+        "properties": {
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "title": "OkOut",
+        "type": "object"
+      },
       "PageOut": {
         "properties": {
           "items": {
@@ -885,6 +896,22 @@
           "login_password"
         ],
         "title": "PasswordChangeIn",
+        "type": "object"
+      },
+      "PasswordChangeOut": {
+        "properties": {
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "success": {
+            "default": true,
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "title": "PasswordChangeOut",
         "type": "object"
       },
       "ReadBody": {
@@ -1442,11 +1469,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "title": "Response Logout Api Auth Logout Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/OkOut"
                 }
               }
             },
@@ -1498,11 +1521,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "title": "Response Change Password Api Auth Password Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/PasswordChangeOut"
                 }
               }
             },
@@ -1527,7 +1546,7 @@
     },
     "/api/events": {
       "get": {
-        "description": "Server-Sent Events stream. Replay from Last-Event-ID then live-tail.",
+        "description": "Server-Sent Events stream. Subscribe first, replay, then live-tail (dedupe by eid).",
         "operationId": "stream_events_api_events_get",
         "parameters": [
           {

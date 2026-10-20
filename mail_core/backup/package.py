@@ -65,10 +65,6 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 # Members written into a plain backup directory (inner tar for sealed packages).
 _PLAIN_MEMBER_ALLOWLIST = frozenset({"postgres.dump", "blobs.tar"})
 # Outer sealed package directory may also list the ciphertext blob.
