@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from mail_core.mail.storage.models import OutboxEvent
@@ -19,6 +19,11 @@ class OutboxItem:
     account_id: str | None
     payload: dict[str, Any]
     created_at: datetime
+
+
+def head_event_id(session: Session) -> int:
+    """Highest outbox event id (0 when empty)."""
+    return int(session.scalar(select(func.max(OutboxEvent.id))) or 0)
 
 
 def fetch_undispatched(session: Session, *, limit: int = 100) -> list[OutboxEvent]:
