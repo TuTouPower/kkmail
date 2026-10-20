@@ -2,6 +2,7 @@ import { QueryClient } from '@tanstack/react-query'
 import { api, type AccountSummary } from './client'
 import { mailKey } from '../lib/mailKey'
 import { postMailCoreMessageFlag, postMailCoreMessageRead } from './mailCore'
+import { useMailStore } from '../store/mailStore'
 
 export interface GroupItem {
   id: string
@@ -100,13 +101,36 @@ export async function fetchAccounts(): Promise<AccountSummary[]> {
   return all
 }
 
-/** Find a message in any cached list by its mailKey. */
+/** Find a message in cached lists by its mailKey, prioritizing current view and latest updated lists. */
 export function findCachedMail(key: string | null): MailItem | undefined {
   if (!key) return undefined
-  for (const [, list] of queryClient.getQueriesData<MailItem[]>({ queryKey: MAIL_LIST_PREFIX })) {
-    const hit = (list || []).find((m) => mailKey(m) === key)
-    if (hit) return hit
+
+  let currentScope: string | undefined
+  try {
+    const view = useMailStore.getState().view
+    const accountId = view.type === 'account' ? view.accountId : undefined
+    currentScope = accountScope(accountId)
+  } catch {
+    /* ignore if outside react/store */
   }
+
+  const queries = queryClient.getQueryCache().findAll({ queryKey: MAIL_LIST_PREFIX })
+  const sorted = [...queries].sort((a, b) => {
+    const aCurrent = currentScope ? a.queryKey.includes(currentScope) : false
+    const bCurrent = currentScope ? b.queryKey.includes(currentScope) : false
+    if (aCurrent && !bCurrent) return -1
+    if (!aCurrent && bCurrent) return 1
+    return (b.state.dataUpdatedAt || 0) - (a.state.dataUpdatedAt || 0)
+  })
+
+  for (const q of sorted) {
+    const list = q.state.data as MailItem[] | undefined
+    if (Array.isArray(list)) {
+      const hit = list.find((m) => mailKey(m) === key)
+      if (hit) return hit
+    }
+  }
+
   return undefined
 }
 
