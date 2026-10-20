@@ -10,9 +10,10 @@ from sqlalchemy import select
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.application.remote_ops import mark_remote_operation, reclaim_stale_in_progress
-from mail_core.mail.domain.enums import RemoteOperationStatus
+from mail_core.mail.domain.enums import JobType, RemoteOperationStatus
 from mail_core.mail.storage.models import Account, RemoteOperation
 from mail_core.providers.factory import build_provider
+from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import (
     FencingMismatch,
     LeaseBusy,
@@ -156,7 +157,25 @@ def push_remote_operations(
     with Session() as session:
         try:
             release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-            session.commit()
         except FencingMismatch:
             pass
+        has_pending = session.scalar(
+            select(RemoteOperation.id)
+            .where(RemoteOperation.account_id == account_id)
+            .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
+            .limit(1)
+        ) is not None
+        if has_pending:
+            enqueue_job(
+                session,
+                job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                account_id=account_id,
+                payload={},
+                priority=40,
+                dedupe_key=f"remote-op-push:{account_id}",
+            )
+        session.commit()
     return {"status": "ok", "pushed": pushed, "failed": failed}
+
+
+push_pending_remote_operations = push_remote_operations
