@@ -8,13 +8,20 @@ export type ViewState =
   | { type: 'accountFolder'; accountId: number; email: string; folder: string }
 
 interface MailUiState {
-  theme: 'dark' | 'light'
-  setTheme: (theme: 'dark' | 'light') => void
+  theme: 'dark' | 'light' | 'system'
+  setTheme: (theme: 'dark' | 'light' | 'system') => void
   sidebarCollapsed: boolean
   toggleSidebar: () => void
   mobileSidebarOpen: boolean
   toggleMobileSidebar: () => void
   closeMobileSidebar: () => void
+  settingsOpen: boolean
+  openSettings: () => void
+  closeSettings: () => void
+  sidebarWidth: number
+  listWidth: number
+  setSidebarWidth: (w: number) => void
+  setListWidth: (w: number) => void
   mobileView: 'list' | 'detail'
   setMobileView: (view: 'list' | 'detail') => void
   view: ViewState
@@ -57,6 +64,7 @@ const navigationReset = () => ({
   selectedIds: [] as string[],
   mobileView: 'list' as const,
   mobileSidebarOpen: false,
+  settingsOpen: false,
 })
 
 export const useMailStore = create<MailUiState>()(
@@ -69,6 +77,13 @@ export const useMailStore = create<MailUiState>()(
       mobileSidebarOpen: false,
       toggleMobileSidebar: () => set((s) => ({ mobileSidebarOpen: !s.mobileSidebarOpen })),
       closeMobileSidebar: () => set({ mobileSidebarOpen: false }),
+      settingsOpen: false,
+      openSettings: () => set({ settingsOpen: true, mobileSidebarOpen: false, mobileView: 'list' }),
+      closeSettings: () => set({ settingsOpen: false }),
+      sidebarWidth: 260,
+      listWidth: 360,
+      setSidebarWidth: (w) => set({ sidebarWidth: Math.min(420, Math.max(180, Math.round(w))) }),
+      setListWidth: (w) => set({ listWidth: Math.min(560, Math.max(260, Math.round(w))) }),
       mobileView: 'list',
       setMobileView: (view) => set({ mobileView: view }),
       view: { type: 'allInbox' },
@@ -126,7 +141,7 @@ export const useMailStore = create<MailUiState>()(
           flaggedIds: s.flaggedIds.includes(key) ? s.flaggedIds.filter((id) => id !== key) : [...s.flaggedIds, key],
         })),
     }),
-    { name: 'mail-ui-storage', partialize: (s) => ({ theme: s.theme }) },
+    { name: 'mail-ui-storage', partialize: (s) => ({ theme: s.theme, sidebarWidth: s.sidebarWidth, listWidth: s.listWidth }) },
   ),
 )
 
