@@ -88,7 +88,13 @@ export default function Sidebar() {
             return (
               <div className="account-group" key={key}>
                 <div className="account-group-head">
-                  <button className="group-toggle" onClick={() => toggleGroup(key)} aria-label={collapsed ? `展开分组 ${group.name}` : `折叠分组 ${group.name}`} aria-expanded={!collapsed}>
+                  <button
+                    className="group-toggle"
+                    onClick={() => toggleGroup(key)}
+                    title={collapsed ? `展开分组 ${group.name}` : `折叠分组 ${group.name}`}
+                    aria-label={collapsed ? `展开分组 ${group.name}` : `折叠分组 ${group.name}`}
+                    aria-expanded={!collapsed}
+                  >
                     {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                   </button>
                   <span className="group-name">{group.name}</span>
