@@ -13,6 +13,15 @@ export interface ApiError {
 
 let csrfToken: string | null = null
 
+export const UNAUTHORIZED_EVENT = 'kkmail:unauthorized'
+
+/** Session expired: drop the cached CSRF token and let the app show the login screen. */
+function handleUnauthorized(): ApiError {
+  csrfToken = null
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+  return { status: 401, message: '登录已过期，请重新登录' }
+}
+
 async function ensureCsrf(): Promise<string | null> {
   if (csrfToken) return csrfToken
   try {
@@ -27,9 +36,11 @@ async function ensureCsrf(): Promise<string | null> {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const { headers: extraHeaders, ...rest } = options
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> | undefined),
+    Accept: 'application/json',
+    ...(rest.body != null ? { 'Content-Type': 'application/json' } : {}),
+    ...(extraHeaders as Record<string, string> | undefined),
   }
 
   if (options.method && options.method !== 'GET' && options.method !== 'HEAD') {
@@ -37,14 +48,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     if (token) headers['X-CSRFToken'] = token
   }
 
+  // Spread caller options first so the merged headers (with CSRF) always win.
   const res = await fetch(path, {
+    ...rest,
     credentials: 'include',
     headers,
-    ...options,
   })
 
   if (res.status === 401 || res.redirected) {
-    throw { status: 401, message: '未登录' } as ApiError
+    throw handleUnauthorized()
   }
 
   if (!res.ok) {
@@ -116,21 +128,55 @@ export interface EmailListResponse {
   error?: unknown
 }
 
+export interface RefreshEvent {
+  type: string
+  current?: number
+  total?: number
+  success_count?: number
+  failed_count?: number
+  message?: string
+  email?: string
+}
+
+export function parseSseChunk(chunk: string): RefreshEvent[] {
+  const events: RefreshEvent[] = []
+  for (const line of chunk.split('\n')) {
+    if (!line.startsWith('data:')) continue
+    try {
+      events.push(JSON.parse(line.slice(5).trim()) as RefreshEvent)
+    } catch {
+      /* ignore keep-alive or partial lines */
+    }
+  }
+  return events
+}
+
 export const api = {
   async getCsrf() {
     return ensureCsrf()
   },
 
+  /** true when the Flask session is valid. /api/csrf-token is login_required. */
+  async checkSession(): Promise<boolean> {
+    const res = await fetch('/api/csrf-token', { credentials: 'include', headers: { Accept: 'application/json' } })
+    if (res.status === 401 || res.redirected) return false
+    if (!res.ok) throw { status: res.status, message: res.statusText } as ApiError
+    const data = await res.json().catch(() => ({}))
+    csrfToken = data.csrf_token || null
+    return true
+  },
+
   async login(password: string, sessionDays = 30) {
+    csrfToken = null
     return request<{ success: boolean; message?: string; error?: string }>('/login', {
       method: 'POST',
       body: JSON.stringify({ password, session_duration_days: sessionDays }),
     })
   },
 
-  async logout() {
+  logout() {
     csrfToken = null
-    window.location.href = '/logout'
+    window.location.assign('/logout')
   },
 
   async getGroups() {
@@ -209,7 +255,7 @@ export const api = {
   },
 
   async exchangeOauth(redirectedUrl: string) {
-    return request<{ success?: boolean; error?: string; refresh_token?: string }>('/api/oauth/exchange-token', {
+    return request<{ success?: boolean; error?: string; refresh_token?: string; client_id?: string }>('/api/oauth/exchange-token', {
       method: 'POST',
       body: JSON.stringify({ redirected_url: redirectedUrl }),
     })
@@ -314,8 +360,32 @@ export const api = {
     return request<{ success?: boolean; error?: string }>(`/api/tags/${id}`, { method: 'DELETE' })
   },
 
-  async refreshAll() {
-    return request<{ success?: boolean; message?: string; error?: string }>('/api/accounts/refresh-all')
+  /**
+   * /api/accounts/refresh-all is a text/event-stream. Read it incrementally,
+   * report each event, and resolve with the final complete/error event.
+   */
+  async refreshAllStream(onEvent?: (evt: RefreshEvent) => void): Promise<RefreshEvent> {
+    const res = await fetch('/api/accounts/refresh-all', { credentials: 'include', headers: { Accept: 'text/event-stream' } })
+    if (res.status === 401 || res.redirected) throw handleUnauthorized()
+    if (!res.ok || !res.body) throw { status: res.status, message: res.statusText || '刷新失败' } as ApiError
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let last: RefreshEvent = { type: 'complete' }
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (value) buffer += decoder.decode(value, { stream: !done })
+      const parts = buffer.split('\n\n')
+      buffer = done ? '' : parts.pop() || ''
+      for (const part of done ? parts.filter(Boolean) : parts) {
+        for (const evt of parseSseChunk(part)) {
+          last = evt
+          onEvent?.(evt)
+        }
+      }
+      if (done) break
+    }
+    return last
   },
 
   async refreshAccount(id: number) {

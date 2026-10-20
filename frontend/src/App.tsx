@@ -5,7 +5,8 @@ import MessageList from './components/MessageList'
 import MessageReader from './components/MessageReader'
 import LoginPage from './components/LoginPage'
 import ComposeModal from './components/ComposeModal'
-import { api } from './api/client'
+import { UNAUTHORIZED_EVENT, api } from './api/client'
+import { queryClient } from './api/queries'
 import './design-system/tokens.css'
 import './App.css'
 
@@ -26,16 +27,24 @@ function App() {
   }, [mobileView, sidebarCollapsed, appEl])
 
   useEffect(() => {
-    api.getCsrf()
-      .then((token) => setAuthed(!!token || token === null))
-      .catch(() => setAuthed(false))
+    let cancelled = false
+    api.checkSession()
+      .then((ok) => { if (!cancelled) setAuthed(ok) })
+      // Network/server error: keep the shell usable; individual queries show errors.
+      .catch(() => { if (!cancelled) setAuthed(true) })
+    const onUnauthorized = () => setAuthed(false)
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    return () => {
+      cancelled = true
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    }
   }, [])
 
   if (authed === null) {
     return <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', color: 'var(--muted)' }}>正在检查登录状态…</div>
   }
   if (!authed) {
-    return <LoginPage onSuccess={() => setAuthed(true)} />
+    return <LoginPage onSuccess={() => { setAuthed(true); void queryClient.invalidateQueries() }} />
   }
 
   return (
