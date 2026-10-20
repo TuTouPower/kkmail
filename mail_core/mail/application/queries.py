@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from mail_core.mail.domain.enums import FolderRole
 from mail_core.mail.storage.models import Account, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
 
 
@@ -164,7 +165,7 @@ def unified_inbox(
     cursor: str | None = None,
 ) -> MessagePage:
     """Backend-aggregated inbox across accounts (role=inbox folders)."""
-    stmt = select(Folder.id).where(Folder.role == "inbox")
+    stmt = select(Folder.id).where(Folder.role == FolderRole.INBOX.value)
     if account_ids:
         stmt = stmt.where(Folder.account_id.in_(account_ids))
     folder_ids = list(session.scalars(stmt).all())
@@ -174,6 +175,15 @@ def unified_inbox(
         limit=limit,
         cursor=cursor,
     )
+
+
+def select_display_body(text_html: str | None, text_plain: str | None) -> tuple[str, str]:
+    """Prefer HTML, then plain text. Returns ``(body, body_type)`` where type is html|text|empty."""
+    if text_html:
+        return text_html, "html"
+    if text_plain:
+        return text_plain, "text"
+    return "", "empty"
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +211,7 @@ class MessageDetail:
     snippet: str | None
     body_text: str | None
     body_html: str | None
+    body: str
     body_type: str  # html | text | empty
     parse_error: str | None
     attachments: list[AttachmentItem]
@@ -214,12 +225,7 @@ def get_message_detail(session: Session, message_id: uuid.UUID) -> MessageDetail
     body = session.get(MessageBody, message_id)
     text_html = body.text_html if body else None
     text_plain = body.text_plain if body else None
-    if text_html:
-        body_type = "html"
-    elif text_plain:
-        body_type = "text"
-    else:
-        body_type = "empty"
+    display_body, body_type = select_display_body(text_html, text_plain)
     atts = list(
         session.scalars(select(Attachment).where(Attachment.message_id == message_id).order_by(Attachment.filename)).all()
     )
@@ -238,6 +244,7 @@ def get_message_detail(session: Session, message_id: uuid.UUID) -> MessageDetail
         snippet=msg.snippet,
         body_text=text_plain,
         body_html=text_html,
+        body=display_body,
         body_type=body_type,
         parse_error=body.parse_error if body else None,
         attachments=[
