@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.blobs.archive import blob_root
-from mail_core.blobs.crypto import Keyring, load_keyring_from_env, unwrap, wrap
+from mail_core.blobs.crypto import Keyring, iter_unwrap, iter_wrap, load_keyring_from_env, read_key_version
 from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import MessageBlob
@@ -34,13 +35,16 @@ def rewrap_blob_file(
 ) -> tuple[bool, int]:
     """Re-encrypt one on-disk blob. Returns (rewritten, new_or_old_version)."""
     target = target_version if target_version is not None else keyring.active_version
-    raw = path.read_bytes()
-    plaintext, old_ver = unwrap(raw, keyring=keyring)
-    if old_ver == target and raw.startswith(b"KKMB"):
+    with path.open("rb") as fh:
+        old_ver = read_key_version(fh)
+    if old_ver == target:
         return False, old_ver
-    sealed = wrap(plaintext, keyring=keyring, key_version=target)
     tmp = path.with_suffix(path.suffix + ".rewrap")
-    tmp.write_bytes(sealed)
+    with path.open("rb") as src, tmp.open("wb") as dst:
+        for piece in iter_wrap(iter_unwrap(src, keyring=keyring), keyring=keyring, key_version=target):
+            dst.write(piece)
+        dst.flush()
+        os.fsync(dst.fileno())
     tmp.replace(path)
     return True, target
 

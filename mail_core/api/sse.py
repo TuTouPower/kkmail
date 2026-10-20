@@ -73,13 +73,9 @@ async def stream_events(
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except asyncio.TimeoutError:
-                    # comment keepalive
+                    # Comment keepalive only. Dispatch is owned by the LISTEN thread
+                    # (single dispatcher; no per-connection polling / dual dispatch).
                     yield ": keepalive\n\n"
-                    # opportunistic dispatch tick so solo-process demos work without a worker
-                    try:
-                        await asyncio.to_thread(dispatcher.dispatch_once)
-                    except Exception:
-                        log.exception("sse dispatch tick failed")
                     continue
                 if account_id and event.get("account_id") and event["account_id"] != str(account_id):
                     continue

@@ -1,15 +1,16 @@
 from fastapi.testclient import TestClient
 
-from mail_core.api.app import app
+from mail_core.api.app import _code_schema_head, app
 
 
-def test_health():
-    client = TestClient(app)
-    res = client.get("/health")
+def test_health_reports_schema_head():
+    res = TestClient(app).get("/health")
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "ok"
     assert body["service"] == "mail-core"
+    assert body["schema_head"] == _code_schema_head()
+    assert body["schema_head"]
 
 
 def test_ready_without_db_returns_503(monkeypatch):
@@ -23,10 +24,21 @@ def test_ready_without_db_returns_503(monkeypatch):
     monkeypatch.setattr("mail_core.db.session.get_engine", lambda url=None: Boom())
     res = TestClient(app).get("/ready")
     assert res.status_code == 503
-    assert res.json()["status"] == "not_ready"
+    body = res.json()
+    assert body["status"] == "not_ready"
+    assert body["reason"] == "database: OperationalError"
+    assert "db down" not in res.text  # no driver detail leak
 
 
-def test_ready_ok_when_db_connects(monkeypatch):
+class _Result:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar(self):
+        return self._value
+
+
+def _engine_with_revision(rev):
     class Conn:
         def __enter__(self):
             return self
@@ -35,13 +47,40 @@ def test_ready_ok_when_db_connects(monkeypatch):
             return False
 
         def execute(self, *_a, **_k):
-            return None
+            return _Result(rev)
 
-    class OkEngine:
+    class Engine:
         def connect(self):
             return Conn()
 
-    monkeypatch.setattr("mail_core.db.session.get_engine", lambda url=None: OkEngine())
+    return Engine()
+
+
+class _Listener:
+    def __init__(self, alive):
+        self.is_alive = alive
+
+
+def test_ready_ok_when_db_at_head_and_listener_alive(monkeypatch):
+    monkeypatch.setattr("mail_core.db.session.get_engine", lambda url=None: _engine_with_revision(_code_schema_head()))
+    monkeypatch.setattr("mail_core.realtime.listener.get_outbox_listener", lambda: _Listener(True))
     res = TestClient(app).get("/ready")
     assert res.status_code == 200
     assert res.json()["status"] == "ready"
+    assert res.json()["schema_revision"] == _code_schema_head()
+
+
+def test_ready_503_when_schema_behind(monkeypatch):
+    monkeypatch.setattr("mail_core.db.session.get_engine", lambda url=None: _engine_with_revision("old"))
+    monkeypatch.setattr("mail_core.realtime.listener.get_outbox_listener", lambda: _Listener(True))
+    res = TestClient(app).get("/ready")
+    assert res.status_code == 503
+    assert res.json()["reason"] == "schema_out_of_date"
+
+
+def test_ready_503_when_listener_down(monkeypatch):
+    monkeypatch.setattr("mail_core.db.session.get_engine", lambda url=None: _engine_with_revision(_code_schema_head()))
+    monkeypatch.setattr("mail_core.realtime.listener.get_outbox_listener", lambda: _Listener(False))
+    res = TestClient(app).get("/ready")
+    assert res.status_code == 503
+    assert res.json()["reason"] == "outbox_listener"
