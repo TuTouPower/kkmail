@@ -1,1 +1,43 @@
 """ORM models package — imported by Alembic env for metadata."""
+
+from mail_core.mail.storage.models import (
+    Account,
+    AccountSyncLease,
+    Attachment,
+    Folder,
+    FolderStats,
+    Message,
+    MessageArchiveState,
+    MessageBlob,
+    MessageBlobLink,
+    MessageBody,
+    MessageLocation,
+    OutboxEvent,
+    RemoteOperation,
+    SyncCheckpoint,
+    SyncRun,
+    Thread,
+    ThreadMessage,
+    WorkerJob,
+)
+
+__all__ = [
+    "Account",
+    "AccountSyncLease",
+    "Attachment",
+    "Folder",
+    "FolderStats",
+    "Message",
+    "MessageArchiveState",
+    "MessageBlob",
+    "MessageBlobLink",
+    "MessageBody",
+    "MessageLocation",
+    "OutboxEvent",
+    "RemoteOperation",
+    "SyncCheckpoint",
+    "SyncRun",
+    "Thread",
+    "ThreadMessage",
+    "WorkerJob",
+]

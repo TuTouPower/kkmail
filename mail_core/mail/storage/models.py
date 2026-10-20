@@ -1,0 +1,298 @@
+"""SQLAlchemy ORM models for mail-core (architecture §10)."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any, Optional
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from mail_core.db.base import Base
+
+
+def _uuid() -> uuid.UUID:
+    return uuid.uuid4()
+
+
+class Account(Base):
+    __tablename__ = "accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    display_name: Mapped[Optional[str]] = mapped_column(String(255))
+    # Opaque reference into OS Keychain / KMS — never store raw secrets here.
+    credential_ref: Mapped[Optional[str]] = mapped_column(String(512))
+    sync_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    sync_status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'idle'"))
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class Folder(Base):
+    __tablename__ = "folders"
+    __table_args__ = (UniqueConstraint("account_id", "remote_id", name="uq_folders_account_remote"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    remote_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'other'"))
+    parent_remote_id: Mapped[Optional[str]] = mapped_column(String(512))
+    sync_status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'idle'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class Thread(Base):
+    __tablename__ = "threads"
+    __table_args__ = (UniqueConstraint("account_id", "provider_thread_key", name="uq_threads_account_provider_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    provider_thread_key: Mapped[Optional[str]] = mapped_column(String(512))
+    subject_norm: Mapped[Optional[str]] = mapped_column(String(998))
+    sort_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class Message(Base):
+    __tablename__ = "messages"
+    __table_args__ = (
+        UniqueConstraint("account_id", "remote_id", name="uq_messages_account_remote"),
+        Index("ix_messages_account_sort", "account_id", "sort_time"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    remote_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    internet_message_id: Mapped[Optional[str]] = mapped_column(String(998))
+    thread_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("threads.id", ondelete="SET NULL"))
+    subject: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    from_address: Mapped[str] = mapped_column(String(320), nullable=False, server_default=text("''"))
+    from_name: Mapped[Optional[str]] = mapped_column(String(255))
+    to_addresses: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    cc_addresses: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    sort_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    is_flagged: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    has_attachments: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    snippet: Mapped[Optional[str]] = mapped_column(Text)
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class MessageLocation(Base):
+    __tablename__ = "message_locations"
+    __table_args__ = (UniqueConstraint("message_id", "folder_id", name="uq_message_locations"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
+    folder_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="CASCADE"), nullable=False)
+    uid: Mapped[Optional[int]] = mapped_column(BigInteger)
+
+
+class MessageBody(Base):
+    """Parsed text/HTML references — not authoritative (MIME blob is)."""
+
+    __tablename__ = "message_bodies"
+
+    message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    text_plain: Mapped[Optional[str]] = mapped_column(Text)
+    text_html: Mapped[Optional[str]] = mapped_column(Text)
+    parse_error: Mapped[Optional[str]] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class MessageBlob(Base):
+    __tablename__ = "message_blobs"
+    __table_args__ = (UniqueConstraint("content_sha256", "key_version", name="uq_message_blobs_hash_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    key_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Relative path under blob root; never expose as user-controlled API path.
+    storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    ref_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class MessageBlobLink(Base):
+    """Binds a message to its authoritative MIME blob once archive_complete."""
+
+    __tablename__ = "message_blob_links"
+
+    message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    blob_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("message_blobs.id", ondelete="RESTRICT"), nullable=False)
+
+
+class Attachment(Base):
+    __tablename__ = "attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
+    blob_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("message_blobs.id", ondelete="SET NULL"))
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(255))
+    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger)
+    content_id: Mapped[Optional[str]] = mapped_column(String(255))
+    is_inline: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+
+
+class ThreadMessage(Base):
+    __tablename__ = "thread_messages"
+    __table_args__ = (UniqueConstraint("thread_id", "message_id", name="uq_thread_messages"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    thread_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("threads.id", ondelete="CASCADE"), nullable=False)
+    message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+
+class SyncCheckpoint(Base):
+    __tablename__ = "sync_checkpoints"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    folder_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="CASCADE"), primary_key=True)
+    cursor: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    uidvalidity: Mapped[Optional[int]] = mapped_column(BigInteger)
+    modseq: Mapped[Optional[int]] = mapped_column(BigInteger)
+    history_id: Mapped[Optional[str]] = mapped_column(String(128))
+    delta_link: Mapped[Optional[str]] = mapped_column(Text)
+    full_scan_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # Last fencing token that successfully committed this checkpoint.
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class SyncRun(Base):
+    __tablename__ = "sync_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    folder_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="SET NULL"))
+    phase: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    stats: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    fencing_token: Mapped[Optional[int]] = mapped_column(BigInteger)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class RemoteOperation(Base):
+    __tablename__ = "remote_operations"
+    __table_args__ = (Index("ix_remote_operations_pending", "account_id", "status", "entity_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    entity_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    op_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    desired_state: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class FolderStats(Base):
+    __tablename__ = "folder_stats"
+
+    folder_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="CASCADE"), primary_key=True)
+    total_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    unread_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AccountSyncLease(Base):
+    """Account-level sync lease + fencing token (architecture §7.5)."""
+
+    __tablename__ = "account_sync_leases"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+
+
+class OutboxEvent(Base):
+    """Transactional outbox row (architecture §13.2)."""
+
+    __tablename__ = "outbox"
+    __table_args__ = (Index("ix_outbox_undispatched", "dispatched_at", "id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class MessageArchiveState(Base):
+    """Per-message MIME archive state machine (architecture §8.4)."""
+
+    __tablename__ = "message_archive_state"
+
+    message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'metadata_synced'"))
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    pause_reason: Mapped[Optional[str]] = mapped_column(String(255))
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    claimed_by: Mapped[Optional[str]] = mapped_column(String(128))
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class WorkerJob(Base):
+    """PostgreSQL task table — claimed with FOR UPDATE SKIP LOCKED."""
+
+    __tablename__ = "worker_jobs"
+    __table_args__ = (Index("ix_worker_jobs_claim", "status", "run_after", "priority"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    job_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("100"))
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    locked_by: Mapped[Optional[str]] = mapped_column(String(128))
+    locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
