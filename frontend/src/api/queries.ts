@@ -4,12 +4,12 @@ import { mailKey } from '../lib/mailKey'
 import { postMailCoreMessageFlag, postMailCoreMessageRead } from './mailCore'
 
 export interface GroupItem {
-  id: number
+  id: string
   name: string
   color?: string
   account_count?: number
   descendant_account_count?: number
-  parent_id?: number | null
+  parent_id?: string | null
   level?: number
 }
 
@@ -26,7 +26,7 @@ export interface MailItem {
   folder?: string
   id_mode?: string
   accountEmail: string
-  accountId?: number
+  accountId?: string
 }
 
 export interface MailDetail {
@@ -70,7 +70,7 @@ export const queryKeys = {
 
 export async function fetchGroups(): Promise<GroupItem[]> {
   const res = await api.getGroups()
-  return (res.groups as GroupItem[]) || []
+  return ((res.groups || []) as GroupItem[]).map((g) => ({ ...g, id: String(g.id) }))
 }
 
 const ACCOUNT_PAGE_SIZE = 200
@@ -82,7 +82,11 @@ export async function fetchAccounts(): Promise<AccountSummary[]> {
   for (let page = 0; page < ACCOUNT_MAX_PAGES; page++) {
     const res = await api.getAccounts({ limit: ACCOUNT_PAGE_SIZE, offset: all.length })
     if (res.success === false) throw new Error('获取账户失败')
-    const rows = res.accounts || res.items || []
+    const rows = (res.accounts || res.items || []).map((a) => ({
+      ...a,
+      id: String(a.id),
+      group_id: a.group_id != null ? String(a.group_id) : undefined,
+    }))
     all.push(...rows)
     const total = typeof res.total === 'number' ? res.total : undefined
     if (!rows.length || res.has_more === false || (total !== undefined && all.length >= total)) break
@@ -94,7 +98,7 @@ export async function fetchAccounts(): Promise<AccountSummary[]> {
 /** The unified inbox fans out one request per account, so it is capped. */
 export const ALL_INBOX_ACCOUNT_LIMIT = 8
 
-function mapMail(raw: Record<string, unknown>, accountEmail: string, accountId: number | undefined, listFolder: string): MailItem {
+function mapMail(raw: Record<string, unknown>, accountEmail: string, accountId: string | undefined, listFolder: string): MailItem {
   return {
     id: String(raw.id || ''),
     subject: String(raw.subject || '无主题'),
@@ -115,7 +119,7 @@ function mapMail(raw: Record<string, unknown>, accountEmail: string, accountId: 
 /** One slow/broken account must not hang the UI forever. */
 export const MAIL_FETCH_TIMEOUT_MS = 45_000
 
-export async function fetchEmails(email: string, folder = 'inbox', accountId?: number, signal?: AbortSignal): Promise<MailItem[]> {
+export async function fetchEmails(email: string, folder = 'inbox', accountId?: string, signal?: AbortSignal): Promise<MailItem[]> {
   const res = await api.getEmails(email, { folder, top: 40 }, { signal, timeoutMs: MAIL_FETCH_TIMEOUT_MS })
   if (res.success === false) {
     const err = res.error
