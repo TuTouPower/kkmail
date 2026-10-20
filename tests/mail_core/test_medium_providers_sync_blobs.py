@@ -291,3 +291,32 @@ def test_imap_fetch_metadata_page_bounded_search_pagination(monkeypatch):
     assert page.items[1].uid == 2
     assert not page.exhausted
     assert page.next_cursor["uid_next"] == 3
+
+
+def test_build_provider_imap_json_credentials_unpack():
+    from mail_core.accounts.credentials import DictCredentialStore
+    from mail_core.mail.storage.models import Account
+    from mail_core.providers.factory import build_provider
+
+    store = DictCredentialStore({
+        "ref-dict": {"password": "real-secret-from-dict"},
+        "ref-json": '{"password": "real-secret-from-json"}',
+    })
+
+    acc1 = Account(
+        email="a@b.com",
+        provider="imap",
+        credential_ref="ref-dict",
+        config={"imap_host": "mail.test", "port": 993},
+    )
+    p1 = build_provider(acc1, store)
+    assert p1.password == "real-secret-from-dict"
+
+    acc2 = Account(
+        email="a@b.com",
+        provider="imap",
+        credential_ref="ref-json",
+        config={"imap_host": "mail.test", "port": 993},
+    )
+    p2 = build_provider(acc2, store)
+    assert p2.password == "real-secret-from-json"
