@@ -230,12 +230,13 @@ def run_archive_batch(
     failed = 0
     provider_cache: dict[uuid.UUID, object] = {}
 
-    for mid, remote_id, msg_account_id in work:
+    for idx, (mid, remote_id, msg_account_id) in enumerate(work):
         # Re-check quota before each download
         quota = check_quota(root, soft_limit_bytes=soft_i, hard_limit_bytes=hard_i)
         if quota.hard_exceeded or quota.soft_exceeded:
             with Session() as session:
-                remaining = [mid] + [w[0] for w in work[work.index((mid, remote_id, msg_account_id)) + 1 :]]
+                # O(n) slice from current index — avoid work.index (O(n²) over the loop).
+                remaining = [w[0] for w in work[idx:]]
                 _pause_quota(session, remaining, account_id)
                 if account_id is not None and fencing is not None:
                     try:

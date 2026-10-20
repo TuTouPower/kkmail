@@ -37,6 +37,10 @@ class MeOut(BaseModel):
     csrf_token: str | None = None
 
 
+class OkOut(BaseModel):
+    ok: bool = True
+
+
 def _set_session_cookie(response: Response, value: str) -> None:
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
@@ -68,10 +72,10 @@ def login(body: LoginIn, request: Request, response: Response) -> LoginOut:
     return LoginOut(csrf_token=csrf)
 
 
-@router.post("/logout")
-def logout(response: Response, _principal: AuthPrincipal = Depends(require_auth)) -> dict[str, bool]:
+@router.post("/logout", response_model=OkOut)
+def logout(response: Response, _principal: AuthPrincipal = Depends(require_auth)) -> OkOut:
     _clear_session_cookie(response)
-    return {"ok": True}
+    return OkOut()
 
 
 @router.get("/me", response_model=MeOut)
@@ -85,10 +89,15 @@ class PasswordChangeIn(BaseModel):
     login_password: str = Field(min_length=8)
 
 
-@router.post("/password")
-def change_password(body: PasswordChangeIn, _principal: AuthPrincipal = Depends(require_auth)) -> dict[str, bool]:
+class PasswordChangeOut(BaseModel):
+    ok: bool = True
+    success: bool = True
+
+
+@router.post("/password", response_model=PasswordChangeOut)
+def change_password(body: PasswordChangeIn, _principal: AuthPrincipal = Depends(require_auth)) -> PasswordChangeOut:
     try:
         change_login_password(current=body.current_login_password, new=body.login_password)
     except AuthConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "success": True}
+    return PasswordChangeOut()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Generator
+from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -52,6 +53,7 @@ def get_session_factory(url: str | None = None) -> sessionmaker[Session]:
     return _SessionLocal
 
 
+@contextmanager
 def session_scope(url: str | None = None) -> Generator[Session, None, None]:
     factory = get_session_factory(url)
     session = factory()
