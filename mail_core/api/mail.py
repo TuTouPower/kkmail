@@ -18,6 +18,7 @@ from mail_core.blobs.access import (
 from mail_core.blobs.archive import blob_root
 from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory
+from mail_core.mail.application.mutations import set_message_flagged, set_message_read
 from mail_core.mail.application.queries import (
     get_folder_stats,
     get_message_detail,
@@ -172,6 +173,53 @@ def api_get_message_body(message_id: UUID):
             "snippet": detail.snippet,
         }
 
+
+
+
+class ReadBody(BaseModel):
+    is_read: bool = True
+
+
+class FlagBody(BaseModel):
+    is_flagged: bool = True
+
+
+@router.post("/messages/{message_id}/read")
+def api_set_message_read(message_id: UUID, body: ReadBody | None = None):
+    """Local-first mark read/unread + enqueue remote_operations mark_read."""
+    want = True if body is None else bool(body.is_read)
+    Session = get_session_factory()
+    with Session() as session:
+        try:
+            result = set_message_read(session, message_id, is_read=want)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        session.commit()
+        return {
+            "id": str(result.message_id),
+            "account_id": str(result.account_id),
+            "operation_id": str(result.operation_id),
+            "is_read": result.is_read,
+        }
+
+
+@router.post("/messages/{message_id}/flag")
+def api_set_message_flag(message_id: UUID, body: FlagBody | None = None):
+    """Local-first flag/unflag + enqueue remote_operations set_flag."""
+    want = True if body is None else bool(body.is_flagged)
+    Session = get_session_factory()
+    with Session() as session:
+        try:
+            result = set_message_flagged(session, message_id, is_flagged=want)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        session.commit()
+        return {
+            "id": str(result.message_id),
+            "account_id": str(result.account_id),
+            "operation_id": str(result.operation_id),
+            "is_flagged": result.is_flagged,
+        }
 
 
 
