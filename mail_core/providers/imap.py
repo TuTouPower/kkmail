@@ -166,7 +166,10 @@ class ImapProvider:
                 line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
                 m = re.search(r' "?"?([^"]+)"?\s*$', line)
                 name = m.group(1).strip() if m else line.rsplit(" ", 1)[-1].strip('"')
-                role = _FOLDER_ROLE.get(name, "other")
+                if name.upper() == "INBOX":
+                    role = "inbox"
+                else:
+                    role = _FOLDER_ROLE.get(name, "other")
                 folders.append(RemoteFolder(remote_id=name, name=name, role=role))
             if not any(f.remote_id.upper() == "INBOX" for f in folders):
                 folders.insert(0, RemoteFolder("INBOX", "INBOX", "inbox"))
