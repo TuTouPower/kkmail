@@ -19,10 +19,13 @@ from mail_core.blobs.archive import blob_root
 from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.mutations import set_message_flagged, set_message_read
+from mail_core.api.http_headers import content_disposition_attachment
 from mail_core.mail.application.queries import (
+    account_emails_by_id,
     get_folder_stats,
     get_message_detail,
     list_folder_stats_for_account,
+    resolve_account_id_by_email,
     unified_inbox,
 )
 from mail_core.search.index import search_messages
@@ -33,11 +36,13 @@ router = APIRouter(prefix="/api/mail", tags=["mail"])
 class MessageOut(BaseModel):
     id: str
     account_id: str
+    account_email: str | None = None
     subject: str
     from_address: str
     from_name: str | None
     sort_time: datetime
     is_read: bool
+    is_flagged: bool = False
     has_attachments: bool
     snippet: str | None
     folder_id: str | None
@@ -54,26 +59,35 @@ def api_unified_inbox(
     cursor_sort_time: datetime | None = None,
     cursor_message_id: UUID | None = None,
     account_id: UUID | None = None,
+    account_email: str | None = Query(None, description="Filter by account email (preferred over Flask numeric ids)"),
 ):
     Session = get_session_factory()
     with Session() as session:
+        resolved = account_id
+        if resolved is None and account_email:
+            resolved = resolve_account_id_by_email(session, account_email)
+            if resolved is None:
+                return PageOut(items=[], next_cursor=None)
         page = unified_inbox(
             session,
-            account_ids=[account_id] if account_id else None,
+            account_ids=[resolved] if resolved else None,
             limit=limit,
             cursor_sort_time=cursor_sort_time,
             cursor_message_id=cursor_message_id,
         )
+        emails = account_emails_by_id(session, [i.account_id for i in page.items])
         return PageOut(
             items=[
                 MessageOut(
                     id=str(i.id),
                     account_id=str(i.account_id),
+                    account_email=emails.get(i.account_id),
                     subject=i.subject,
                     from_address=i.from_address,
                     from_name=i.from_name,
                     sort_time=i.sort_time,
                     is_read=i.is_read,
+                    is_flagged=i.is_flagged,
                     has_attachments=i.has_attachments,
                     snippet=i.snippet,
                     folder_id=str(i.folder_id) if i.folder_id else None,
@@ -238,7 +252,7 @@ def api_get_attachment(attachment_id: str):
         except AttachmentAccessError as exc:
             raise HTTPException(404, str(exc)) from exc
         headers = {
-            "Content-Disposition": f'attachment; filename="{payload.filename}"',
+            "Content-Disposition": content_disposition_attachment(payload.filename),
             "X-Content-SHA256": payload.content_sha256,
         }
         media = payload.content_type or "application/octet-stream"

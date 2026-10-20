@@ -39,6 +39,15 @@ log = logging.getLogger("mail_core.providers.oauth")
 GMAIL_TOKEN_URI = "https://oauth2.googleapis.com/token"
 GRAPH_TOKEN_URI = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
+# Operator-supplied token_uri must match an allowlisted HTTPS host prefix (SSRF).
+ALLOWED_TOKEN_URI_PREFIXES = (
+    "https://oauth2.googleapis.com/",
+    "https://www.googleapis.com/oauth2/",
+    "https://login.microsoftonline.com/",
+    "https://login.live.com/",
+    "https://login.microsoft.com/",
+)
+
 TokenHttpFn = Callable[[str, str, dict[str, str], dict[str, str] | None], dict[str, Any]]
 # (method, url, form_body, headers) -> JSON dict
 
@@ -75,17 +84,28 @@ class OAuthTokenClient:
     def token_uri(self) -> str:
         data = self._load()
         if data.get("token_uri"):
-            return str(data["token_uri"])
-        return GMAIL_TOKEN_URI if self.provider == "gmail" else GRAPH_TOKEN_URI
+            uri = str(data["token_uri"]).strip()
+        else:
+            uri = GMAIL_TOKEN_URI if self.provider == "gmail" else GRAPH_TOKEN_URI
+        if not any(uri.startswith(p) for p in ALLOWED_TOKEN_URI_PREFIXES):
+            raise OAuthError(
+                "token_uri is not on the HTTPS provider allowlist "
+                f"(got host path starting {uri[:48]!r}…)"
+            )
+        return uri
 
     def _access_valid(self, data: dict[str, Any]) -> bool:
         token = data.get("access_token")
         exp = data.get("expires_at")
         if not token:
             return False
+        # Missing expires_at must NOT mean forever-valid — force refresh.
         if exp is None:
-            return True
-        return float(exp) > time.time() + self.skew_seconds
+            return False
+        try:
+            return float(exp) > time.time() + self.skew_seconds
+        except (TypeError, ValueError):
+            return False
 
     def get_access_token(self, *, force_refresh: bool = False) -> str:
         data = self._load()
