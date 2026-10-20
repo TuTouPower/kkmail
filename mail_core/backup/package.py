@@ -174,18 +174,33 @@ def _pg_dump_to(dest: Path, url: str, *, allow_stub: bool = False) -> str:
         # Prefer PGPASSWORD; also drop any inherited PGPASSFILE so a stale pgpass
         # cannot override the intended credentials for this dump.
         env.pop("PGPASSFILE", None)
+        env["PGCONNECT_TIMEOUT"] = os.environ.get("MAIL_CORE_PG_CONNECT_TIMEOUT", "10")
         if password is not None:
             env["PGPASSWORD"] = password
         else:
             env.pop("PGPASSWORD", None)
+        dump_timeout = float(os.environ.get("MAIL_CORE_PG_DUMP_TIMEOUT", "300"))
+        cmd = [
+            pg_dump,
+            "--format=custom",
+            "--lock-wait-timeout=30000",
+            "--file",
+            str(dest),
+            dsn,
+        ]
         try:
             subprocess.run(
-                [pg_dump, "--format=custom", "--file", str(dest), dsn],
+                cmd,
                 check=True,
                 capture_output=True,
                 env=env,
+                timeout=dump_timeout,
             )
             return "custom"
+        except subprocess.TimeoutExpired as exc:
+            log.warning("pg_dump timed out after %ss", dump_timeout)
+            if not allow_stub:
+                raise RuntimeError(f"pg_dump timed out after {dump_timeout}s") from exc
         except subprocess.CalledProcessError as exc:
             detail = exc.stderr.decode(errors="replace")[:500] if exc.stderr else str(exc)
             log.warning("pg_dump failed: %s", detail)
