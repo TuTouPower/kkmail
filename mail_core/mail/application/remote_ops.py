@@ -22,11 +22,14 @@ def _coalesce_existing(
     op_type: str,
     desired_state: dict,
 ) -> RemoteOperation:
+    now = datetime.now(timezone.utc)
+    if existing.status == RemoteOperationStatus.DONE.value:
+        existing.created_at = now
     existing.desired_state = desired_state
     existing.op_type = op_type
     existing.entity_key = entity_key
     existing.status = RemoteOperationStatus.PENDING.value
-    existing.updated_at = datetime.now(timezone.utc)
+    existing.updated_at = now
     session.add(
         OutboxEvent(
             event_type=OutboxEventType.REMOTE_OPERATION_UPDATED.value,
