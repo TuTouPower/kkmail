@@ -1,0 +1,32 @@
+# Development stack for mail-core (PG + optional web/worker).
+# Host disk/volume encryption is REQUIRED in production (see docs/mail-core-architecture.md §11).
+# Docker volume ≠ encryption.
+version: "3.9"
+services:
+  postgres:
+    image: postgres:16
+    container_name: kkmail-mail-core-pg
+    environment:
+      POSTGRES_USER: kkmail
+      POSTGRES_PASSWORD: kkmail
+      POSTGRES_DB: kkmail_mail
+    ports:
+      - "5433:5432"
+    volumes:
+      - kkmail_mail_core_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kkmail -d kkmail_mail"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Skeletons — run against the same image/code once packages are installed.
+  # web:
+  #   build: .
+  #   command: uvicorn mail_core.api.app:app --host 0.0.0.0 --port 8000
+  # worker:
+  #   build: .
+  #   command: python -m mail_core.worker.main
+
+volumes:
+  kkmail_mail_core_pg:
