@@ -2,9 +2,8 @@ import { useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Reply, ReplyAll, Forward, MailOpen, Trash2, Flag, Folder, Archive, ShieldAlert, ArrowLeft } from 'lucide-react'
 import { api } from '../api/client'
-import { fetchAccounts, fetchEmailDetail, findCachedMail, flagOptimistic, markReadOptimistic, queryClient, queryKeys, type MailItem } from '../api/queries'
+import { fetchAccounts, findCachedMail, flagOptimistic, markReadOptimistic, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail } from '../api/mailCore'
-import { isMailCoreEnabled } from '../lib/mailCoreFlag'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
 import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
@@ -23,31 +22,17 @@ export default function MessageReader() {
   useSyncExternalStore((cb) => cache.subscribe(cb), () => findCachedMail(selectedKey))
   const selected = findCachedMail(selectedKey)
 
-  const preferMailCoreDetail = isMailCoreEnabled() && (!!selected?.id_mode?.includes('mail_core') || selected?.id_mode === 'mail_core')
   const detailQuery = useQuery({
     queryKey: selected
-      ? ['detail', preferMailCoreDetail ? 'mail-core' : 'flask', selected.accountEmail, selected.id, selected.folder || 'inbox', selected.id_mode || '']
+      ? ['detail', 'mail-core', selected.id]
       : ['detail', 'none'],
     queryFn: async ({ signal }) => {
-      if (preferMailCoreDetail) {
-        try {
-          const d = await fetchMailCoreMessage(selected!.id, signal)
-          return mailCoreToMailDetail(d)
-        } catch (err) {
-          // Legacy Flask fallback when mail-core detail is unavailable.
-          if (selected!.accountEmail && selected!.id_mode !== 'mail_core') {
-            return fetchEmailDetail(selected!.accountEmail, selected!.id, selected!.folder || 'inbox', selected!.id_mode || '', signal)
-          }
-          // mail_core ids are UUIDs — Flask cannot serve them; rethrow.
-          throw err
-        }
-      }
-      return fetchEmailDetail(selected!.accountEmail, selected!.id, selected!.folder || 'inbox', selected!.id_mode || '', signal)
+      const d = await fetchMailCoreMessage(selected!.id, signal)
+      return mailCoreToMailDetail(d)
     },
     retry: false,
-    enabled: !!selected?.id && (!!selected?.accountEmail || preferMailCoreDetail),
+    enabled: !!selected?.id,
   })
-  const useMailCoreDetail = preferMailCoreDetail && !detailQuery.isError
 
   if (!selected) {
     return (
@@ -88,7 +73,8 @@ export default function MessageReader() {
       setActionStatus('')
       const gone = mailKey(selected)
       queryClient.setQueriesData<MailItem[]>({ queryKey: ['emails'] }, (list) => list?.filter((m) => mailKey(m) !== gone))
-      await queryClient.invalidateQueries({ queryKey: ['emails', selected.accountEmail] })
+      queryClient.setQueriesData<MailItem[]>({ queryKey: ['mail-core', 'inbox'] }, (list) => list?.filter((m) => mailKey(m) !== gone))
+      await queryClient.invalidateQueries({ queryKey: ['mail-core', 'inbox'] })
     } catch (err) {
       setActionStatus(errorMessage(err, '删除失败'))
     }
@@ -155,7 +141,7 @@ export default function MessageReader() {
               title="邮件正文"
               sandbox={MAIL_IFRAME_SANDBOX}
               referrerPolicy="no-referrer"
-              srcDoc={buildMailSrcdoc(body, { loadRemoteImages: !useMailCoreDetail })}
+              srcDoc={buildMailSrcdoc(body, { loadRemoteImages: false })}
               style={{ width: '100%', minHeight: 420, border: 0, background: '#fff', borderRadius: 8 }}
             />
           ) : (
@@ -164,11 +150,7 @@ export default function MessageReader() {
           {(detail?.attachments || []).length > 0 && (
             <div className="attachment-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
               {detail!.attachments!.map((att, i) => {
-                const href = att.id
-                  ? (useMailCoreDetail
-                      ? mailCoreAttachmentUrl(att.id)
-                      : api.attachmentUrl(selected.accountEmail, selected.id, att.id, selected.folder || 'inbox', selected.id_mode || ''))
-                  : undefined
+                const href = att.id ? mailCoreAttachmentUrl(att.id) : undefined
                 return (
                   <a key={att.id || i} href={href} style={{ padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 9, color: 'inherit', textDecoration: 'none' }}>
                     <strong>{att.name || '附件'}</strong>

@@ -71,7 +71,7 @@ function withTimeout(signal: AbortSignal | null | undefined, timeoutMs?: number)
 
 
 /** mail-core JSON helper (Cookie session + CSRF + timeout). */
-async function mcRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function mcRequest<T>(path: string, options: RequestOptions = {}, retriedCsrf = false): Promise<T> {
   const base = mailCoreBaseUrl() || ''
   const url = path.startsWith('http') ? path : `${base}${path}`
   const { headers: extraHeaders, timeoutMs = 30_000, signal: callerSignal, ...rest } = options
@@ -82,22 +82,21 @@ async function mcRequest<T>(path: string, options: RequestOptions = {}): Promise
   }
   const unsafe = !!options.method && options.method !== 'GET' && options.method !== 'HEAD'
   if (unsafe) {
-    // Prefer mail-core CSRF from /api/auth/me cache if present; else Flask-shaped header after login response.
     const token = csrfToken || (await ensureCsrf())
     if (token) {
       headers['X-CSRF-Token'] = token
       headers['X-CSRFToken'] = token
     }
   }
-  const t = withTimeout(callerSignal, timeoutMs)
+  const tmo = withTimeout(callerSignal, timeoutMs)
   let res: Response
   try {
-    res = await fetch(url, { ...rest, signal: t.signal, credentials: 'include', headers })
+    res = await fetch(url, { ...rest, signal: tmo.signal, credentials: 'include', headers })
   } catch (err) {
-    if (t.timedOut()) throw { status: 0, code: 'timeout', message: `请求超时（${Math.round((timeoutMs || 0) / 1000)} 秒）` } as ApiError
+    if (tmo.timedOut()) throw { status: 0, code: 'timeout', message: `请求超时（${Math.round((timeoutMs || 0) / 1000)} 秒）` } as ApiError
     throw err
   } finally {
-    t.done()
+    tmo.done()
   }
   if (res.status === 401) throw handleUnauthorized()
   if (!res.ok) {
@@ -108,6 +107,11 @@ async function mcRequest<T>(path: string, options: RequestOptions = {}): Promise
       const b = body as { detail?: unknown; error?: string; message?: string }
       message = (typeof b.detail === 'string' ? b.detail : undefined) || b.error || b.message || message
     } catch { /* ignore */ }
+    if (unsafe && !retriedCsrf && isCsrfFailure(res.status, body)) {
+      csrfToken = null
+      await fetchCsrfToken()
+      return mcRequest<T>(path, options, true)
+    }
     throw { status: res.status, message, payload: body } as ApiError
   }
   const contentType = res.headers.get('content-type') || ''
@@ -115,62 +119,9 @@ async function mcRequest<T>(path: string, options: RequestOptions = {}): Promise
   return (await res.text()) as unknown as T
 }
 
-async function request<T>(path: string, options: RequestOptions = {}, retriedCsrf = false): Promise<T> {
-  const { headers: extraHeaders, timeoutMs, signal: callerSignal, ...rest } = options
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-    ...(rest.body != null ? { 'Content-Type': 'application/json' } : {}),
-    ...(extraHeaders as Record<string, string> | undefined),
-  }
-
-  const unsafe = !!options.method && options.method !== 'GET' && options.method !== 'HEAD'
-  if (unsafe) {
-    const token = await ensureCsrf()
-    if (token) headers['X-CSRFToken'] = token
-  }
-
-  const t = withTimeout(callerSignal, timeoutMs)
-  let res: Response
-  try {
-    // Spread caller options first so the merged headers (with CSRF) always win.
-    res = await fetch(path, { ...rest, signal: t.signal, credentials: 'include', headers })
-  } catch (err) {
-    if (t.timedOut()) throw { status: 0, code: 'timeout', message: `请求超时（${Math.round((timeoutMs || 0) / 1000)} 秒）` } as ApiError
-    throw err
-  } finally {
-    t.done()
-  }
-
-  if (res.status === 401 || res.redirected) {
-    throw handleUnauthorized()
-  }
-
-  if (!res.ok) {
-    let message = res.statusText
-    let body: unknown = null
-    try {
-      body = await res.json()
-      const b = body as { error?: { message?: string } | string; message?: string }
-      message = (typeof b.error === 'object' ? b.error?.message : b.error) || b.message || message
-    } catch {
-      /* ignore */
-    }
-    // Flask's cookie session is rewritten by every response, so a request that
-    // started before the CSRF token was stored can drop it from the session.
-    // Fetch a fresh token (re-stores it) and retry the write once.
-    if (unsafe && !retriedCsrf && isCsrfFailure(res.status, body)) {
-      csrfToken = null
-      await fetchCsrfToken()
-      return request<T>(path, options, true)
-    }
-    throw { status: res.status, message, payload: body } as ApiError
-  }
-
-  const contentType = res.headers.get('content-type') || ''
-  if (contentType.includes('application/json')) {
-    return res.json() as Promise<T>
-  }
-  return (await res.text()) as unknown as T
+async function request<T>(path: string, options: RequestOptions = {}, _retriedCsrf = false): Promise<T> {
+  // Sole backend is mail-core; keep name for older call sites / tests.
+  return mcRequest<T>(path, options)
 }
 
 /** Test hook. */
@@ -260,7 +211,7 @@ export const api = {
     return ensureCsrf()
   },
 
-  /** true when the Flask session is valid. /api/csrf-token is login_required. */
+  /** true when the mail-core session cookie is valid. */
   async checkSession(): Promise<boolean> {
     try {
       const me = await mcRequest<{ authenticated?: boolean; csrf_token?: string }>('/api/auth/me')
@@ -282,9 +233,12 @@ export const api = {
     return { success: true as boolean, message: 'ok' }
   },
 
-  logout() {
+  async logout() {
+    try {
+      await mcRequest('/api/auth/logout', { method: 'POST', body: '{}' })
+    } catch { /* ignore */ }
     csrfToken = null
-    window.location.assign('/logout')
+    window.location.assign('/')
   },
 
   async getGroups() {
@@ -318,14 +272,21 @@ export const api = {
   },
 
   async markRead(payload: { email: string; folder?: string; method?: string; items: Array<{ id: string; folder?: string; id_mode?: string }> }) {
-    return request<{ success?: boolean; error?: unknown }>('/api/emails/mark-read', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    })
+    for (const item of payload.items || []) {
+      await mcRequest(`/api/mail/messages/${encodeURIComponent(item.id)}/read`, {
+        method: 'POST',
+        body: JSON.stringify({ is_read: true }),
+      })
+    }
+    return { success: true as boolean }
   },
 
   async deleteEmails(payload: { email: string; folder?: string; items: Array<{ id: string; folder?: string; id_mode?: string }> }) {
-    return request('/api/emails/delete', { method: 'POST', body: JSON.stringify(payload) })
+    // mail-core: trash each message by UUID (local-first + remote op).
+    for (const item of payload.items || []) {
+      await mcRequest(`/api/mail/messages/${encodeURIComponent(item.id)}/trash`, { method: 'POST', body: '{}' })
+    }
+    return { success: true as boolean }
   },
 
   async addAccountsMailCore(payload: {
@@ -500,8 +461,11 @@ export const api = {
     return evt
   },
 
-  async refreshAccount(id: number) {
-    return request<{ success?: boolean; error?: string }>(`/api/accounts/${id}/refresh`, { method: 'POST' })
+  async refreshAccount(id: string | number) {
+    return mcRequest<{ success?: boolean }>(`/api/accounts/${encodeURIComponent(String(id))}/sync`, {
+      method: 'POST',
+      body: '{}',
+    })
   },
 
   async getEmailShares() {
