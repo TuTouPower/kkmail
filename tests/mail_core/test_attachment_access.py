@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 
 import pytest
@@ -88,6 +89,10 @@ def test_api_rejects_by_path_route():
     assert "path" in r.json()["detail"].lower()
 
 
+DATABASE_URL = os.environ.get("MAIL_CORE_DATABASE_URL")
+
+
+@pytest.mark.skipif(not DATABASE_URL, reason="database required")
 def test_api_unknown_uuid_404():
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     r = client.get(f"/api/mail/attachments/{uuid.uuid4()}")
