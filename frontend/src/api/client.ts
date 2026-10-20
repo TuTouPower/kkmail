@@ -6,6 +6,26 @@
  */
 
 import { apiBaseUrl } from '../lib/apiBase'
+import type {
+  AccountCreateIn,
+  AccountSummary,
+  AccountsResponse,
+  GroupCreateIn,
+  GroupOut,
+  GroupsResponse,
+  LoginOut,
+  MeOut,
+  PasswordChangeIn,
+  SettingsOut,
+  SyncAllResponse,
+} from './schemaTypes'
+
+export type {
+  AccountSummary,
+  AccountsResponse,
+  GroupsResponse,
+  SyncAllResponse,
+} from './schemaTypes'
 
 export interface ApiError {
   status: number
@@ -140,42 +160,12 @@ export function postJson<T>(path: string, body: unknown = {}, opts: RequestOptio
   return apiRequest<T>(path, { ...opts, method: 'POST', body: JSON.stringify(body) })
 }
 
-export interface AccountSummary {
-  id: string
-  email: string
-  group_id?: string
-  group_name?: string
-  group_color?: string
-  status: string
-  account_type: string
-  provider: string
-  last_refresh_at?: string
-  last_refresh_status?: string
-  sync_status?: string
-  display_name?: string | null
-}
-
-export interface AccountsResponse {
-  accounts: AccountSummary[]
-  total: number
-  limit: number
-  offset: number
-  has_more: boolean
-}
-
-export interface GroupsResponse {
-  groups: Array<{ id: string; name: string; color?: string; account_count?: number }>
-}
-
-export interface SyncAllResponse {
-  count: number
-}
 
 export const api = {
   /** true when the session cookie is valid (also caches the CSRF token). */
   async checkSession(): Promise<boolean> {
     try {
-      const me = await apiRequest<{ authenticated?: boolean; csrf_token?: string }>('/api/auth/me')
+      const me = await apiRequest<MeOut>('/api/auth/me')
       setCsrfToken(me.csrf_token)
       return true
     } catch (err) {
@@ -196,7 +186,7 @@ export const api = {
     let body: unknown = null
     try { body = await res.json() } catch { /* ignore */ }
     if (!res.ok) throw errorFromBody(res.status, res.statusText, body)
-    setCsrfToken((body as { csrf_token?: string } | null)?.csrf_token)
+    setCsrfToken((body as LoginOut | null)?.csrf_token)
   },
 
   async logout(): Promise<void> {
@@ -220,14 +210,7 @@ export const api = {
     return apiRequest<AccountsResponse>(`/api/accounts${qs ? '?' + qs : ''}`)
   },
 
-  addAccount(payload: {
-    email: string
-    provider: string
-    display_name?: string
-    group_id?: string
-    credentials?: Record<string, unknown>
-    config?: Record<string, unknown>
-  }) {
+  addAccount(payload: AccountCreateIn) {
     return postJson<AccountSummary>('/api/accounts', payload)
   },
 
@@ -243,8 +226,8 @@ export const api = {
     return postJson<unknown>(`/api/accounts/${encodeURIComponent(id)}/sync`)
   },
 
-  createGroup(payload: { name: string; color?: string }) {
-    return postJson<{ id: string; name: string }>('/api/groups', payload)
+  createGroup(payload: GroupCreateIn) {
+    return postJson<GroupOut>('/api/groups', payload)
   },
 
   deleteGroup(id: string) {
@@ -252,18 +235,19 @@ export const api = {
   },
 
   getSettings() {
-    return apiRequest<{ settings: Record<string, string> }>('/api/settings')
+    return apiRequest<SettingsOut>('/api/settings')
   },
 
   updateSettings(settings: Record<string, string>) {
-    return apiRequest<{ settings: Record<string, string> }>('/api/settings', { method: 'PUT', body: JSON.stringify({ settings }) })
+    return apiRequest<SettingsOut>('/api/settings', { method: 'PUT', body: JSON.stringify({ settings }) })
   },
 
   changePassword(currentPassword: string, newPassword: string) {
-    return postJson<unknown>('/api/auth/password', {
+    const body: PasswordChangeIn = {
       current_login_password: currentPassword,
       login_password: newPassword,
-    })
+    }
+    return postJson<unknown>('/api/auth/password', body)
   },
 }
 

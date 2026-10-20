@@ -66,7 +66,12 @@ export const queryKeys = {
 
 export async function fetchGroups(): Promise<GroupItem[]> {
   const res = await api.getGroups()
-  return res.groups.map((g) => ({ ...g, id: String(g.id) }))
+  return res.groups.map((g) => ({
+    id: String(g.id),
+    name: g.name,
+    color: g.color ?? undefined,
+    account_count: g.account_count,
+  }))
 }
 
 const ACCOUNT_PAGE_SIZE = 200

@@ -13,7 +13,7 @@
 | --- | --- |
 | `mail_core/` | 后端；模块分层见 `mail_core/README.md` |
 | `mail_core/db/alembic/` | 迁移；模型改动必须带迁移 |
-| `frontend/src/api/` | `client.ts`（唯一 HTTP 传输：Cookie + CSRF + 超时）、`mailCore.ts`（邮件端点）、`queries.ts`（React Query 缓存） |
+| `frontend/src/api/` | `client.ts`（唯一 HTTP 传输：Cookie + CSRF + 超时）、`mailCore.ts`（邮件端点）、`queries.ts`（React Query 缓存）；HTTP DTO 来自 `generated/schema.ts`（OpenAPI） |
 | `desktop/` | Electron 主进程、`postgresManager.js` |
 | `tests/mail_core/` | pytest（大部分需要 PostgreSQL） |
 | `docs/` | 架构、部署、安全 |
@@ -30,7 +30,8 @@ cd frontend
 npm ci
 npm run lint                               # oxlint --deny-warnings
 npx tsc -b
-npm test                                   # vitest（含 jsdom 组件测试）
+npm test                                   # vitest + openapi:check
+npm run openapi:check                      # 生成物与 docs/openapi.json 一致
 npm run build
 npm run dev                                # 代理 /api → 127.0.0.1:8000（MAIL_CORE_PROXY_TARGET 可改）
 
@@ -45,7 +46,7 @@ cd ../desktop && npm ci && npm test
 - **消息标识** = mail-core 消息 UUID（`lib/mailKey.ts`）；账户用 UUID（`accountId`），不要用邮箱地址当 ID。
 - **单用户 · UUID 即能力**：实例无多租户/行级用户 ACL。在已认证的 Session / API Key 边界内，知道资源 UUID 即可访问该资源；不要按「防 IDOR 的多租户 ID」来实现或评审。详见 `docs/security.md` 与 `docs/mail-core-architecture.md` §11.4。
 - **HTTP** 一律走 `api/client.ts` 的 `apiRequest` / `postJson`：写请求自动带 `X-CSRF-Token`，拿不到令牌时直接失败。
-- **API 契约**：每个路由声明 `response_model`；错误用 `HTTPException`（`{"detail": ...}`）；路由只调用 `mail_core.mail.application` / `mail_core.accounts`，不直接访问 ORM 或 sync 内部。
+- **API 契约**：每个路由声明 `response_model`；错误用 `HTTPException`（`{"detail": ...}`）；路由只调用 `mail_core.mail.application` / `mail_core.accounts`，不直接访问 ORM 或 sync 内部。改契约后跑 `scripts/gen-openapi.sh`，并用 `export_openapi.py --check` / `npm run openapi:check` / `test_openapi_contract.py` 做本地漂移校验（无 GitHub CI）。
 - **密钥**：不写默认值、不写示例密钥；缺失时拒绝启动。凭据只经 `CredentialStore`（默认数据库加密存储）；日志 / `last_error` 必须经 `mail_core.security.redact`。
 - **测试**不得连接非一次性数据库；新的 DB 用例沿用 `skipif(not MAIL_CORE_DATABASE_URL)` 标记。`scripts/run-mail-core-tests.sh` 会设置 `MAIL_CORE_REQUIRE_DB=1`，没有数据库就失败而不是跳过。
 - **表单字段**要有 `id` 或 `name`；密码框带 `autoComplete` 且在 `<form>` 内。
