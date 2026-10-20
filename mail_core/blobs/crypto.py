@@ -6,6 +6,10 @@ Wire format (ciphertext file contents):
 Plaintext SHA-256 remains the content-address key (architecture §10.2).
 Keys are loaded from MAIL_CORE_BLOB_KEYS JSON: {"1": "<base64 32-byte key>", ...}
 or MAIL_CORE_BLOB_KEY_V1 as a single base64 key for version 1.
+
+No deterministic/dev fallback: missing keys raise BlobCryptoError.
+Generate a key with:
+  python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())'
 """
 
 from __future__ import annotations
@@ -46,7 +50,8 @@ def _b64key(raw: str) -> bytes:
 
 
 def load_keyring_from_env(env: dict[str, str] | None = None) -> Keyring:
-    env = env or os.environ
+    if env is None:
+        env = os.environ
     keys: dict[int, bytes] = {}
     blob = env.get("MAIL_CORE_BLOB_KEYS")
     if blob:
@@ -57,18 +62,16 @@ def load_keyring_from_env(env: dict[str, str] | None = None) -> Keyring:
     if env.get("MAIL_CORE_BLOB_KEY_V1"):
         keys[1] = _b64key(env["MAIL_CORE_BLOB_KEY_V1"])
     if not keys:
-        # Dev default — deterministic insecure key; override in production.
-        keys[1] = hashlib_sha256_bytes(b"kkmail-dev-blob-key-v1")
+        raise BlobCryptoError(
+            "blob encryption keys required: set MAIL_CORE_BLOB_KEYS "
+            '(JSON {"1": "<base64 32-byte key>", ...}) or MAIL_CORE_BLOB_KEY_V1. '
+            "Generate with: python3 -c 'import os,base64; "
+            "print(base64.b64encode(os.urandom(32)).decode())'"
+        )
     active = int(env.get("MAIL_CORE_BLOB_KEY_VERSION") or env.get("MAIL_CORE_BLOB_ACTIVE_VERSION") or max(keys))
     if active not in keys:
         raise BlobCryptoError(f"active key version {active} missing from keyring")
     return Keyring(keys=keys, active_version=active)
-
-
-def hashlib_sha256_bytes(data: bytes) -> bytes:
-    import hashlib
-
-    return hashlib.sha256(data).digest()
 
 
 def wrap(plaintext: bytes, *, keyring: Keyring, key_version: int | None = None) -> bytes:

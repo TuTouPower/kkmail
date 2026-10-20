@@ -14,7 +14,11 @@ from mail_core.api.sse import router as sse_router
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    from mail_core.blobs.crypto import load_keyring_from_env
     from mail_core.realtime.listener import start_outbox_listener, stop_outbox_listener
+
+    # Fail fast: refuse to serve if blob encryption keys are missing.
+    load_keyring_from_env()
 
     listener = start_outbox_listener()
     listener.wait_started(timeout=5)
