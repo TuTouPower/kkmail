@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from flask import Response, redirect, send_from_directory
+from flask import Response, abort, redirect, send_from_directory
 
 if TYPE_CHECKING:
     from web_outlook_app import *  # noqa: F403
@@ -90,5 +90,6 @@ def react_assets(filename):
     asset = dist / "assets" / filename
     if asset.is_file():
         return send_from_directory(dist / "assets", filename)
-    # Let Flask's normal static handler or existing /assets routes respond.
-    return redirect(f"/static/{filename}")
+    # Explicit legacy routes (/assets/index.css, /assets/active-skin.css) match first;
+    # anything else missing is a real 404, not a redirect into /static.
+    abort(404)

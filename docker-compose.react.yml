@@ -4,13 +4,14 @@ services:
       context: .
       dockerfile: Dockerfile
     image: kkmail:local
-    container_name: outlook-mail-reader
+    container_name: kkmail
     ports:
       - "5000:5000"
     volumes:
       - ./data:/app/data
     environment:
-      - LOGIN_PASSWORD=admin123
-      - SECRET_KEY=change-me-before-public-deploy
+      # 必填：在 .env 或 shell 中设置，避免使用公开的默认值
+      - LOGIN_PASSWORD=${LOGIN_PASSWORD:?set LOGIN_PASSWORD}
+      - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY (e.g. openssl rand -hex 32)}
       - FLASK_ENV=production
     restart: unless-stopped
