@@ -6,6 +6,16 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+- 后端整体替换为 mail-core（FastAPI + PostgreSQL + worker）；Flask 应用、旧版 `templates/` / `static/` UI、浏览器扩展、上游镜像与打包脚本全部删除，无兼容层。
+- 桌面版启动本地 PostgreSQL（SCRAM、随机密码）与 `python -m mail_core` sidecar，按安装生成密钥与一次性初始密码。
+- SPA 只对接 mail-core：单一 HTTP 客户端（Cookie + CSRF + 超时）、服务端搜索、服务端旗标；移除发信 / 撰写界面与 Flask 专属文件夹。
+
+### Security
+- 所有 API 需认证（Cookie Session + Bearer API Key + CSRF）；登录失败限速。
+- blob 使用流式 AES-GCM（`KKMS`）且必须配置密钥；账户凭据加密存入数据库；作业错误脱敏。
+- compose 只绑定 `127.0.0.1`，不含任何默认密码或密钥。
+
 ## [3.0.20] - 2026-10-18
 
 ### Added

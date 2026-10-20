@@ -1,4 +1,4 @@
-/** Strip HTML roughly the same way the Flask helper strip_html_content does. */
+/** Strip HTML tags and collapse whitespace for list previews. */
 export function stripHtmlToText(html: string): string {
   let text = html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
   text = text.replace(/<br\s*\/?>/gi, '\n')

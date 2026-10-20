@@ -3,7 +3,7 @@
 Env contract:
   MAIL_CORE_SECRET_KEY or SECRET_KEY   — required; signs session cookies
   MAIL_CORE_LOGIN_PASSWORD_HASH        — preferred bcrypt hash ($2b$...)
-  MAIL_CORE_LOGIN_PASSWORD or LOGIN_PASSWORD — plaintext alternative (hashed at load)
+  MAIL_CORE_LOGIN_PASSWORD             — plaintext alternative (hashed at load)
   MAIL_CORE_PASSWORD_HASH_PATH         — optional file to persist hash after first boot
   MAIL_CORE_API_KEYS                   — comma-separated or JSON list of Bearer keys
   MAIL_CORE_SESSION_MAX_AGE            — seconds (default 30 days)
@@ -117,14 +117,9 @@ def get_login_password_hash() -> bytes:
             if _password_hash:
                 return _password_hash
 
-    plain = (
-        os.environ.get("MAIL_CORE_LOGIN_PASSWORD") or os.environ.get("LOGIN_PASSWORD") or ""
-    ).strip()
+    plain = (os.environ.get("MAIL_CORE_LOGIN_PASSWORD") or "").strip()
     if not plain:
-        raise AuthConfigError(
-            "Set MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt) or "
-            "MAIL_CORE_LOGIN_PASSWORD / LOGIN_PASSWORD for mail-core login"
-        )
+        raise AuthConfigError("Set MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt) or MAIL_CORE_LOGIN_PASSWORD for mail-core login")
 
     _password_hash = bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt())
     if path_raw:

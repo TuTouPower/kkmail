@@ -36,8 +36,8 @@ ENV/
 Thumbs.db
 
 # Docker
-Dockerfile
-docker-compose.yml
+Dockerfile.mail-core
+docker-compose*.yml
 .dockerignore
 
 # 文档
