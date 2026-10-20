@@ -5,12 +5,14 @@ describe('mailCoreToMailItem', () => {
   it('maps inbox row to MailItem', () => {
     const row: MailCoreMessage = {
       id: 'uuid-1',
-      account_id: 'acc-1',
+      account_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      account_email: 'box@ex.com',
       subject: 'Hi',
       from_address: 'a@b.c',
       from_name: 'Ann',
       sort_time: '2024-01-01T00:00:00Z',
       is_read: false,
+      is_flagged: true,
       has_attachments: true,
       snippet: 'preview',
       folder_id: 'f1',
@@ -18,7 +20,9 @@ describe('mailCoreToMailItem', () => {
     const item = mailCoreToMailItem(row)
     expect(item.id).toBe('uuid-1')
     expect(item.from).toContain('Ann')
-    expect(item.accountEmail).toBe('acc-1')
+    expect(item.accountEmail).toBe('box@ex.com')
+    expect(item.accountId).toBeUndefined()
+    expect(item.is_flagged).toBe(true)
     expect(item.id_mode).toBe('mail_core')
     expect(item.has_attachments).toBe(true)
   })
