@@ -222,6 +222,12 @@ export const api = {
     })
   },
 
+  async getTempEmailMessages(email: string) {
+    return request<{ success?: boolean; messages?: Array<{ id?: string; subject?: string; from_address?: string }>; error?: string }>(
+      `/api/temp-emails/${encodeURIComponent(email)}/messages`,
+    )
+  },
+
   async getForwardingLogs() {
     return request<{ success?: boolean; logs?: unknown[] }>('/api/accounts/forwarding-logs')
   },
