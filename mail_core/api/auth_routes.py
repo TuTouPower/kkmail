@@ -14,6 +14,7 @@ from mail_core.security.auth import (
     change_login_password,
     cookie_samesite,
     cookie_secure,
+    invalidate_all_sessions,
     issue_session,
     session_max_age,
     verify_password,
@@ -74,6 +75,7 @@ def login(body: LoginIn, request: Request, response: Response) -> LoginOut:
 
 @router.post("/logout", response_model=OkOut)
 def logout(response: Response, _principal: AuthPrincipal = Depends(require_auth)) -> OkOut:
+    invalidate_all_sessions()
     _clear_session_cookie(response)
     return OkOut()
 

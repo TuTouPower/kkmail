@@ -69,9 +69,18 @@ class FolderStatsOut(BaseModel):
     updated_at: datetime | None = None
 
 
+class AccountFolderStatsItemOut(BaseModel):
+    folder_id: UUID
+    role: str
+    name: str
+    total_count: int
+    unread_count: int
+    remote_id: str
+
+
 class AccountFolderStatsOut(BaseModel):
     account_id: str
-    folders: list[dict]
+    folders: list[AccountFolderStatsItemOut]
 
 
 class AttachmentOut(BaseModel):

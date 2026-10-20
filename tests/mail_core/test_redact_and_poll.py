@@ -22,6 +22,14 @@ def test_provider_body_is_not_persisted():
     assert "LEAK" not in out
 
 
+def test_provider_raw_body_in_message_is_sanitized():
+    raw_json = '{"error": "invalid_grant", "sensitive_info": "CONFIDENTIAL"}'
+    exc = ProviderHttpError(raw_json, status=400, body=raw_json)
+    out = safe_error(exc)
+    assert out == "ProviderHttpError status=400"
+    assert "CONFIDENTIAL" not in out
+
+
 def test_rate_limited_error_summary_and_truncation():
     assert safe_error(RateLimitedError("slow down")).startswith("RateLimitedError status=429")
     assert len(safe_error("x" * 5000)) == 500

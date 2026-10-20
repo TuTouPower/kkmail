@@ -97,9 +97,30 @@ def test_logout_clears_session():
     client = TestClient(app)
     login = client.post("/api/auth/login", json={"password": TEST_LOGIN_PASSWORD})
     csrf = login.json()["csrf_token"]
+    old_cookie = client.cookies.get("kkmail_mc_session")
     out = client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
     assert out.status_code == 200
     assert client.get("/api/auth/me").status_code == 401
+
+    stale_client = TestClient(app, cookies={"kkmail_mc_session": old_cookie})
+    assert stale_client.get("/api/auth/me").status_code == 401
+
+
+def test_password_change_invalidates_session():
+    client = TestClient(app)
+    login = client.post("/api/auth/login", json={"password": TEST_LOGIN_PASSWORD})
+    csrf = login.json()["csrf_token"]
+    old_cookie = client.cookies.get("kkmail_mc_session")
+
+    ch = client.post(
+        "/api/auth/password",
+        json={"current_login_password": TEST_LOGIN_PASSWORD, "login_password": "new_secret_password_123"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert ch.status_code == 200
+
+    stale_client = TestClient(app, cookies={"kkmail_mc_session": old_cookie})
+    assert stale_client.get("/api/auth/me").status_code == 401
 
 
 def test_missing_blob_key_fails():
