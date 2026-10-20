@@ -14,8 +14,25 @@ const { spawn, spawnSync } = require('child_process')
 
 const DEFAULT_PORT = 54329
 
-/** Official PG binaries land in desktop/vendor/pgsql/bin via scripts/fetch-pg-binaries.sh */
+/** Official PG binaries: packaged resources/pgsql/bin, else desktop/vendor/pgsql/bin. */
 function defaultVendorBinDir() {
+  try {
+    const { app } = require('electron')
+    if (app && app.isPackaged) {
+      const packaged = path.join(process.resourcesPath, 'pgsql', 'bin')
+      if (fs.existsSync(path.join(packaged, 'pg_ctl')) || fs.existsSync(path.join(packaged, 'pg_ctl.exe'))) {
+        return packaged
+      }
+    }
+  } catch (_) {
+    /* not running under electron */
+  }
+  if (process.resourcesPath) {
+    const packaged = path.join(process.resourcesPath, 'pgsql', 'bin')
+    if (fs.existsSync(path.join(packaged, 'pg_ctl')) || fs.existsSync(path.join(packaged, 'pg_ctl.exe'))) {
+      return packaged
+    }
+  }
   return path.join(__dirname, 'vendor', 'pgsql', 'bin')
 }
 
