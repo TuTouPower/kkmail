@@ -12,6 +12,7 @@ const dirtyState = {
   selectedKey: 'dirty-key',
   selectedIds: ['dirty-key'],
   mobileView: 'detail' as const,
+  settingsOpen: true,
 }
 
 function expectNavigationReset() {
@@ -19,6 +20,7 @@ function expectNavigationReset() {
   expect(s().selectedKey).toBeNull()
   expect(s().selectedIds).toEqual([])
   expect(s().mobileView).toBe('list')
+  expect(s().settingsOpen).toBe(false)
 }
 
 describe('mobile drawer closes on every navigation', () => {
