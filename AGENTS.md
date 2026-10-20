@@ -1,25 +1,3 @@
-<!-- TRELLIS:START -->
-# Trellis Instructions
-
-These instructions are for AI assistants working in this project.
-
-This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
-
-- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
-- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
-- `.trellis/workspace/` — per-developer journals and session traces
-- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
-
-If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
-
-If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
-- `.agents/skills/` — reusable Trellis skills
-- `.codex/agents/` — optional custom subagents
-
-Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
-
-<!-- TRELLIS:END -->
-
 # kkmail 编码代理指南
 
 > 本节在 Trellis 区块之外，`trellis update` 不会覆盖。下列命令均已在干净 clone 中实际跑通（Python 3.13 / Node 20）。
@@ -27,38 +5,44 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 ## 项目概况
 
 - kkmail 是 [assast/outlookEmail](https://github.com/assast/outlookEmail) 的二次开发（fork），仓库 `TuTouPower/kkmail`。
-- 远端：`origin` = TuTouPower/kkmail，`upstream` = assast/outlookEmail。没有 upstream 时：`git remote add upstream https://github.com/assast/outlookEmail.git`。
-- 同步上游：`./scripts/sync-upstream.sh`（合并 `upstream/main` 到 `sync/upstream-main` 并开 PR）；`.github/workflows/upstream-sync.yml` 每周自动开同步 PR。
-- **时刻考虑上游合并**：上游代码（`outlook_web/segments/*`、`templates/`、`static/`）尽量少改、改动集中；新功能优先放在新文件/新 segment（如 `12_routes_react_spa.py`）里。产物名与数据目录沿用上游 `OutlookEmail`，不要改名。
+- **邮件内核是 `mail_core/`（FastAPI + Postgres + worker）**；Flask `web_outlook_app.py` / `outlook_web/segments/` 正在退役，仅暂时承接账号管理/OAuth/设置等尚未迁完的路由。
+- 远端：`origin` = TuTouPower/kkmail，`upstream` = assast/outlookEmail。
+- 新功能只进 `mail_core/` 与 `frontend/`；不要再扩大 Flask segment 表面积。产物名与数据目录仍可能沿用上游 `OutlookEmail`。
 
 ## 目录结构
 
 | 路径 | 说明 |
 | --- | --- |
-| `web_outlook_app.py` | Flask 入口。按文件名顺序把 `outlook_web/segments/NN_*.py` `exec` 进同一个全局命名空间 |
-| `outlook_web/segments/` | 后端全部逻辑（路由、IMAP/Graph、调度器）。segment 共享全局变量，`__file__` 是入口模块而不是 segment 本身 |
-| `templates/`、`static/` | 旧版界面，挂在 `/legacy`；`/login` 仍是 `templates/login.html` |
-| `frontend/` | 新版 SPA：React + TypeScript + Vite，状态 Zustand，数据 `@tanstack/react-query`。构建产物 `frontend/dist` 由 Flask 直接提供 |
-| `desktop/` | Electron 壳。启动 PyInstaller 打包的后端 sidecar，并设 `KKMAIL_SIDECAR=1`（后端不再弹托盘/浏览器） |
-| `scripts/build-sidecar.sh` | 用 PyInstaller 打包后端 sidecar 到 `desktop/resources/`（含 templates/static/segments/frontend dist） |
-| `Dockerfile`、`docker-compose*.yml` | 多阶段构建：Node 构建前端 → python:3.11-slim + gunicorn（`-w 1 --threads 16`，单 worker，上游有进程内状态） |
-| `tests/` | pytest；`tests/conftest.py` 负责测试库隔离 |
-| `docs/` | 部署、API、安全、已知限制（`docs/known-limitations.md`） |
+| `mail_core/` | **主后端**：FastAPI API、worker、同步、blob、鉴权（Cookie Session + Bearer API Key） |
+| `frontend/` | React SPA（唯一 UI）。构建产物 `frontend/dist` |
+| `docker-compose.mail-core.yml` | Postgres + API + worker 开发栈（密钥均需环境变量） |
+| `web_outlook_app.py` / `outlook_web/segments/` | **遗留 Flask 壳**（exec 多 segment）；计划删除 |
+| `templates/`、`static/` | 遗留 UI（`/legacy`）；勿再扩展 |
+| `desktop/` | Electron 壳 |
+| `tests/mail_core/` | mail-core pytest；根 `tests/` 多为 Flask 遗留契约 |
+| `docs/` | 架构见 `docs/mail-core-architecture.md`；CI 模板见 `docs/ci/` |
+| `docs/ci/` | 工作流模板（仓库可能缺 workflow 写权限时在此维护，再人工同步到 `.github/workflows`） |
 
 ## 环境与开发
 
 ```bash
-# 后端
+# mail-core（推荐）
 python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements-mail-core.txt
+export MAIL_CORE_SECRET_KEY="$(openssl rand -hex 32)"
+export MAIL_CORE_LOGIN_PASSWORD='换成你的密码'
+export MAIL_CORE_BLOB_KEY_V1="$(python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())')"
+# 另需 Postgres：见 docker-compose.mail-core.yml / scripts/run-mail-core-tests.sh
+uvicorn mail_core.api.app:app --host 127.0.0.1 --port 8000
+python -m mail_core.worker.main
 
-# 前端（构建后由 Flask 提供；vite dev server 没有配置 /api 代理，不适合联调）
+# 前端
 cd frontend && npm ci && npm run build && cd ..
 
-# 本地运行（SECRET_KEY 必须显式提供，生产模式下缺失会直接报错）
-export SECRET_KEY="$(python -c 'import secrets;print(secrets.token_hex(32))')"
-export LOGIN_PASSWORD='换成你的密码' DATABASE_PATH=[REDACTED]dev/dev.db
-PORT=5000 HOST=127.0.0.1 python web_outlook_app.py   # http://127.0.0.1:5000
+# 遗留 Flask 壳（账号管理等未迁完时）
+pip install -r requirements-dev.txt
+export SECRET_KEY="$(openssl rand -hex 32)" LOGIN_PASSWORD='换成你的密码'
+PORT=5000 HOST=127.0.0.1 python web_outlook_app.py
 ```
 
 - 前端改动后重新 `npm run build` 即可，刷新页面生效；改了 `templates/` 需要重启后端（生产模式缓存模板）。

@@ -1,3 +1,5 @@
+# Cutover note (2026-10): mail-core is the sole mail backend; Flask is retiring.
+
 # mail-core cutover
 
 Legacy Flask (`web_outlook_app.py`) remains the runnable product shell on
