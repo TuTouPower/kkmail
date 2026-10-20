@@ -209,6 +209,7 @@ def sync_folder_delta(
     store: CredentialStore | None = None,
     lease_ttl: timedelta = timedelta(seconds=120),
     max_pages: int = 20,
+    poll_round: int = 0,
 ) -> dict:
     """Apply provider delta pages under fencing.
 
@@ -394,12 +395,23 @@ def sync_folder_delta(
                 priority=60,
             )
         else:
-            # Schedule next poll
+            # Schedule next poll and periodic reconcile
+            next_round = poll_round + 1
+            if next_round >= 20:
+                enqueue_job(
+                    session,
+                    job_type=JobType.RECONCILE_FOLDER.value,
+                    account_id=account_id,
+                    payload={"folder_id": str(folder_id)},
+                    priority=80,
+                    dedupe_key=f"reconcile:{account_id}:{folder_id}",
+                )
+                next_round = 0
             enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
                 account_id=account_id,
-                payload={"folder_id": str(folder_id)},
+                payload={"folder_id": str(folder_id), "poll_round": next_round},
                 priority=70,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
             )
