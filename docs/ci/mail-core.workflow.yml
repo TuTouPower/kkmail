@@ -1,6 +1,6 @@
 name: tests
 
-# Canonical copy: .github/workflows/tests.yml (this file mirrors it).
+# Template: install as .github/workflows/tests.yml (see docs/ci/README.md).
 on:
   push:
     branches: [main, dev]
