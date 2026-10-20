@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,7 +13,12 @@ if TYPE_CHECKING:
 
 
 def _react_dist_dir() -> Path:
-    candidates = [
+    candidates = []
+    override = os.getenv("KKMAIL_FRONTEND_DIST", "").strip()
+    if override:
+        candidates.append(Path(override))
+    candidates += [
+        resource_path("frontend", "dist"),
         Path(__file__).resolve().parents[2] / "frontend" / "dist",
         Path(app.root_path).parent / "frontend" / "dist",
         Path.cwd() / "frontend" / "dist",
