@@ -103,7 +103,7 @@ def complete_job(session: Session, job: WorkerJob) -> None:
 def fail_job(
     session: Session,
     job: WorkerJob,
-    error: str,
+    error: BaseException | str,
     *,
     max_attempts: int | None = None,
     now: datetime | None = None,
@@ -111,7 +111,9 @@ def fail_job(
     """Mark failed permanently or requeue with exponential backoff using attempts."""
     now = now or datetime.now(timezone.utc)
     cap = max_attempts if max_attempts is not None else _max_attempts()
-    job.last_error = (error or "")[:2000] or None
+    from mail_core.security.redact import safe_error
+
+    job.last_error = safe_error(error) or None
     if int(job.attempts) < cap:
         delay = backoff_seconds(int(job.attempts))
         job.status = JobStatus.PENDING.value

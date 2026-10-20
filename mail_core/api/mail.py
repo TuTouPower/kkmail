@@ -6,7 +6,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from mail_core.mail.application.attachments import (
@@ -266,9 +266,11 @@ def api_get_attachment(attachment_id: str):
         headers = {
             "Content-Disposition": content_disposition_attachment(payload.filename),
             "X-Content-SHA256": payload.content_sha256,
+            "X-Content-Type-Options": "nosniff",
         }
         media = payload.content_type or "application/octet-stream"
-        return Response(content=payload.data, media_type=media, headers=headers)
+        # Stream-decrypt chunk by chunk; never materialise the whole attachment.
+        return StreamingResponse(payload.open_stream(), media_type=media, headers=headers)
 
 
 @router.get("/attachments/by-path/{path:path}")

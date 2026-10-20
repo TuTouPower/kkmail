@@ -49,4 +49,4 @@ def test_fail_job_permanent_when_attempts_exhausted():
     )
     fail_job(_FakeSession(), job, "x" * 5000, max_attempts=8)  # type: ignore[arg-type]
     assert job.status == JobStatus.FAILED.value
-    assert len(job.last_error) == 2000
+    assert len(job.last_error) == 500  # redacted + truncated (MAX_ERROR_CHARS)

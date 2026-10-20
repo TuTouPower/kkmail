@@ -9,7 +9,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from mail_core.blobs.crypto import Keyring, load_keyring_from_env, unwrap, wrap
+from collections.abc import Iterator
+
+from mail_core.blobs.crypto import BlobCryptoError, Keyring, iter_unwrap, load_keyring_from_env, read_key_version, unwrap, wrap
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -94,10 +96,35 @@ class BlobStore:
         return BlobWriteResult(digest, len(data), rel, self.key_version)
 
     def get(self, digest: str) -> bytes:
-        raw = self.path_for(digest).read_bytes()
-        plaintext, _version = unwrap(raw, keyring=self.keyring)
+        digest = self._normalize_digest(digest)
+        plaintext, _version = unwrap(self.path_for(digest).read_bytes(), keyring=self.keyring)
+        if self.hash_plaintext(plaintext) != digest:
+            raise BlobCryptoError("blob content does not match its digest")
         return plaintext
 
     def get_with_version(self, digest: str) -> tuple[bytes, int]:
-        raw = self.path_for(digest).read_bytes()
-        return unwrap(raw, keyring=self.keyring)
+        digest = self._normalize_digest(digest)
+        plaintext, version = unwrap(self.path_for(digest).read_bytes(), keyring=self.keyring)
+        if self.hash_plaintext(plaintext) != digest:
+            raise BlobCryptoError("blob content does not match its digest")
+        return plaintext, version
+
+    def key_version_of(self, digest: str) -> int:
+        with self.path_for(digest).open("rb") as fh:
+            return read_key_version(fh)
+
+    def iter_plaintext(self, digest: str) -> Iterator[bytes]:
+        """Stream-decrypt one chunk at a time; verifies the SHA-256 at the end.
+
+        AES-GCM authenticates every frame, and the final-frame flag rejects
+        truncation, so only authenticated bytes are ever yielded.
+        """
+        digest = self._normalize_digest(digest)
+        path = self.path_for(digest)
+        h = hashlib.sha256()
+        with path.open("rb") as fh:
+            for chunk in iter_unwrap(fh, keyring=self.keyring):
+                h.update(chunk)
+                yield chunk
+        if h.hexdigest() != digest:
+            raise BlobCryptoError("blob content does not match its digest")

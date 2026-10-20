@@ -65,7 +65,7 @@ class ImapProvider:
     port: int
     username: str
     password: str
-    use_ssl: bool = False
+    use_ssl: bool = True
     timeout: float = 30.0
 
     def _connect(self) -> imaplib.IMAP4:
@@ -121,7 +121,8 @@ class ImapProvider:
             start = int((cursor or {}).get("uid_next") or 1)
             typ, data = c.uid("SEARCH", None, f"UID {start}:*")
             if typ != "OK":
-                return MetadataPage(items=(), next_cursor=cursor, exhausted=True)
+                # Never treat a failed SEARCH as "folder exhausted" — that silently stops sync.
+                raise RuntimeError(f"UID SEARCH {folder_remote_id} failed: {typ}")
             uids = [int(x) for x in (data[0] or b"").split() if x]
             uids = [u for u in uids if u >= start]
             batch_size = int((cursor or {}).get("page_size") or 50)
