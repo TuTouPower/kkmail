@@ -6,10 +6,41 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import OutboxEventType, RemoteOperationStatus
 from mail_core.mail.storage.models import OutboxEvent, RemoteOperation
+
+
+def _coalesce_existing(
+    session: Session,
+    existing: RemoteOperation,
+    *,
+    account_id: uuid.UUID,
+    entity_key: str,
+    op_type: str,
+    desired_state: dict,
+) -> RemoteOperation:
+    existing.desired_state = desired_state
+    existing.op_type = op_type
+    existing.entity_key = entity_key
+    existing.status = RemoteOperationStatus.PENDING.value
+    existing.updated_at = datetime.now(timezone.utc)
+    session.add(
+        OutboxEvent(
+            event_type=OutboxEventType.REMOTE_OPERATION_UPDATED.value,
+            account_id=account_id,
+            payload={
+                "operation_id": str(existing.id),
+                "status": existing.status,
+                "op_type": op_type,
+                "upsert": True,
+            },
+        )
+    )
+    session.flush()
+    return existing
 
 
 def enqueue_remote_operation(
@@ -21,26 +52,24 @@ def enqueue_remote_operation(
     desired_state: dict,
     idempotency_key: str | None = None,
 ) -> RemoteOperation:
-    """Enqueue or upsert by ``idempotency_key`` (unique) to avoid IntegrityError storms."""
+    """Enqueue or upsert by ``idempotency_key`` (unique) to avoid IntegrityError storms.
+
+    Concurrent inserts with the same key are coalesced via a savepoint: the loser
+    of the UNIQUE race reloads the winner and refreshes desired_state.
+    """
     if idempotency_key:
         existing = session.scalar(
             select(RemoteOperation).where(RemoteOperation.idempotency_key == idempotency_key).limit(1)
         )
         if existing is not None:
-            existing.desired_state = desired_state
-            existing.op_type = op_type
-            existing.entity_key = entity_key
-            existing.status = RemoteOperationStatus.PENDING.value
-            existing.updated_at = datetime.now(timezone.utc)
-            session.add(
-                OutboxEvent(
-                    event_type=OutboxEventType.REMOTE_OPERATION_UPDATED.value,
-                    account_id=account_id,
-                    payload={"operation_id": str(existing.id), "status": existing.status, "op_type": op_type, "upsert": True},
-                )
+            return _coalesce_existing(
+                session,
+                existing,
+                account_id=account_id,
+                entity_key=entity_key,
+                op_type=op_type,
+                desired_state=desired_state,
             )
-            session.flush()
-            return existing
 
     op = RemoteOperation(
         account_id=account_id,
@@ -50,8 +79,29 @@ def enqueue_remote_operation(
         status=RemoteOperationStatus.PENDING.value,
         idempotency_key=idempotency_key,
     )
-    session.add(op)
-    session.flush()
+    if idempotency_key:
+        try:
+            with session.begin_nested():
+                session.add(op)
+                session.flush()
+        except IntegrityError:
+            existing = session.scalar(
+                select(RemoteOperation).where(RemoteOperation.idempotency_key == idempotency_key).limit(1)
+            )
+            if existing is None:
+                raise
+            return _coalesce_existing(
+                session,
+                existing,
+                account_id=account_id,
+                entity_key=entity_key,
+                op_type=op_type,
+                desired_state=desired_state,
+            )
+    else:
+        session.add(op)
+        session.flush()
+
     session.add(
         OutboxEvent(
             event_type=OutboxEventType.REMOTE_OPERATION_UPDATED.value,
