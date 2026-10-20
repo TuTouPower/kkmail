@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useMailStore } from './store/mailStore'
 import Sidebar from './components/Sidebar'
 import MessageList from './components/MessageList'
@@ -8,23 +8,21 @@ import ComposeModal from './components/ComposeModal'
 import { UNAUTHORIZED_EVENT, api } from './api/client'
 import { queryClient } from './api/queries'
 import './design-system/tokens.css'
-import './App.css'
+
+function subscribeResize(onChange: () => void) {
+  window.addEventListener('resize', onChange)
+  return () => window.removeEventListener('resize', onChange)
+}
 
 function App() {
   const { theme, mobileView, sidebarCollapsed, mobileSidebarOpen } = useMailStore()
-  const [appEl, setAppEl] = useState<HTMLDivElement | null>(null)
   const [authed, setAuthed] = useState<boolean | null>(null)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
   }, [theme])
 
-  useEffect(() => {
-    if (appEl) {
-      appEl.dataset.mobileView = mobileView
-      appEl.classList.toggle('sidebar-collapsed', sidebarCollapsed && window.innerWidth > 760)
-    }
-  }, [mobileView, sidebarCollapsed, appEl])
+  const wide = useSyncExternalStore(subscribeResize, () => window.innerWidth > 760, () => true)
 
   useEffect(() => {
     let cancelled = false
@@ -48,7 +46,10 @@ function App() {
   }
 
   return (
-    <div className={`app ${mobileSidebarOpen ? 'sidebar-open' : ''}`} ref={setAppEl} data-mobile-view="list">
+    <div
+      className={['app', mobileSidebarOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : ''].filter(Boolean).join(' ')}
+      data-mobile-view={mobileView}
+    >
       <div className="workspace">
         <Sidebar />
         <MessageList />
