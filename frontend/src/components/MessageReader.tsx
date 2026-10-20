@@ -19,9 +19,19 @@ export default function MessageReader() {
   useEffect(() => {
     setLoadRemoteImages(false)
   }, [selectedKey])
-  // Re-render when any cached list changes (optimistic read/delete updates).
-  const cache = queryClient.getQueryCache()
-  useSyncExternalStore((cb) => cache.subscribe(cb), () => findCachedMail(selectedKey))
+  // Re-render when mail-core list caches change (optimistic flag/read/delete), not the whole query cache.
+  const selectedSnap = useSyncExternalStore(
+    (cb) =>
+      queryClient.getQueryCache().subscribe((event) => {
+        const qk = event?.query?.queryKey
+        if (Array.isArray(qk) && qk[0] === 'mail-core') cb()
+      }),
+    () => {
+      const m = findCachedMail(selectedKey)
+      return m ? `${m.id}\0${m.is_flagged ? 1 : 0}\0${m.is_read ? 1 : 0}\0${m.subject}` : ''
+    },
+  )
+  void selectedSnap
   const selected = findCachedMail(selectedKey)
 
   const detailQuery = useQuery({
