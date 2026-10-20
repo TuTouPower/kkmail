@@ -119,3 +119,15 @@ pytest tests/mail_core/ -q
 
 Cutover notes: [`docs/mail-core-cutover.md`](../docs/mail-core-cutover.md).
 Desktop PG: [`docs/mail-core-desktop.md`](../docs/mail-core-desktop.md).
+
+## SPA cutover
+
+Prefer mail-core list/reader without rebuilding the SPA:
+
+```bash
+export MAIL_CORE_DEFAULT=1
+# optional: MAIL_CORE_PUBLIC_BASE=http://127.0.0.1:8000
+```
+
+Or build with `VITE_MAIL_CORE=1` / `VITE_MAIL_CORE_DEFAULT=1`. See `docs/mail-core-cutover.md`.
+Flask login remains unchanged; list falls back to Flask if mail-core errors.

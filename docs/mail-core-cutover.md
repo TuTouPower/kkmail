@@ -1,12 +1,31 @@
-# mail-core cutover plan (early phases)
+# mail-core cutover
 
-Legacy Flask (`web_outlook_app.py`) remains the runnable product UI/API on
-`:5000` / Docker `:5080` until mail-core reaches M1 local-authority.
+Legacy Flask (`web_outlook_app.py`) remains the runnable product shell on
+`:5000` / Docker `:5080` (login, settings, compose/send until those move).
+
+mail-core FastAPI (`:8000`) is the local-authoritative mail kernel.
+
+## Prefer mail-core for list/reader
+
+| Mechanism | Effect |
+|---|---|
+| `VITE_MAIL_CORE=1` | Build-time: SPA uses mail-core inbox + detail |
+| `VITE_MAIL_CORE_DEFAULT=1` | Build-time cutover default (same UX) |
+| `MAIL_CORE_DEFAULT=1` | Runtime: Flask injects `window.__KKMAIL_CONFIG__` into SPA `index.html` (no rebuild). Login routes unchanged. |
+| `VITE_MAIL_CORE=0` | Force Flask-only list/reader even if runtime default is on |
+| `MAIL_CORE_PUBLIC_BASE` | Optional public base for mail-core (default `/mail-core`) |
+
+When mail-core is preferred but the API errors, **MessageList falls back to Flask**
+list endpoints. MessageReader uses mail-core for `id_mode=mail_core` rows (remote
+images off); non-mail_core ids keep Flask detail.
+
+## Phases
 
 | Phase | Legacy | mail-core |
 |---|---|---|
-| Skeleton / schema | Unchanged; keep shipping | New `mail_core/` package + `docker-compose.mail-core.yml` (PG :5433) |
-| Sync / providers | Still owns live IMAP/Graph reads | Builds greenfield PG + blob; no dual-write of old cache |
-| Cutover | Retire mail-list paths | SPA points at FastAPI; accounts/settings migrated at high level only |
+| Skeleton / schema | Unchanged; keep shipping | `mail_core/` + compose PG :5433 |
+| Sync / providers | Still owns live product reads until cutover | PG + blob; OAuth transports for Gmail/Graph |
+| Cutover (current) | Login + send + settings; Flask list as fallback | SPA list/reader prefer mail-core when flagged |
+| Later | Retire mail-list paths | Full local authority |
 
 Do **not** treat the old SQLite mail cache as a source of truth.
