@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { extractMessageIds, shouldInvalidateMailCoreInbox } from './useMailCoreRealtime'
+import { describe, expect, it, vi } from 'vitest'
+import { createThrottledInvalidator, extractMessageIds, shouldInvalidateMailCoreInbox } from './useMailCoreRealtime'
+import type { queryClient } from '../api/queries'
 
 describe('shouldInvalidateMailCoreInbox', () => {
   it('invalidates on mail / folder stats change events', () => {
@@ -24,5 +25,33 @@ describe('extractMessageIds', () => {
     expect(extractMessageIds({ message_ids: ['m-3', 'm-4'] })).toEqual(['m-3', 'm-4'])
     expect(extractMessageIds('m-5')).toEqual(['m-5'])
     expect(extractMessageIds(null)).toEqual([])
+  })
+})
+
+describe('createThrottledInvalidator', () => {
+  it('batches and throttles multiple rapid events within time window', () => {
+    vi.useFakeTimers()
+    const mockQc = {
+      invalidateQueries: vi.fn(),
+    } as unknown as typeof queryClient
+
+    const throttler = createThrottledInvalidator(mockQc, 100)
+
+    throttler.handleEvent('message.upserted', { message_id: 'id-1' })
+    throttler.handleEvent('folder.stats_updated', {})
+    throttler.handleEvent('message.upserted', { message_id: 'id-2' })
+    throttler.handleEvent('message.upserted', { message_id: 'id-1' })
+
+    expect(mockQc.invalidateQueries).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(100)
+
+    // Should invalidate ['mail-core'] once, and details for id-1 and id-2 once each
+    expect(mockQc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['mail-core'] })
+    expect(mockQc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['detail', 'mail-core', 'id-1'] })
+    expect(mockQc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['detail', 'mail-core', 'id-2'] })
+    expect(mockQc.invalidateQueries).toHaveBeenCalledTimes(3)
+
+    vi.useRealTimers()
   })
 })
