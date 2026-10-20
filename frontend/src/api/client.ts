@@ -100,6 +100,7 @@ export interface AccountsResponse {
   total?: number
   limit?: number
   offset?: number
+  has_more?: boolean
   items?: AccountSummary[]
 }
 

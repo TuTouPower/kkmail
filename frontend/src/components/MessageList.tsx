@@ -1,6 +1,8 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, MoreHorizontal, Paperclip, Menu, X } from 'lucide-react'
-import { fetchAccounts, fetchEmails, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
+import { ALL_INBOX_ACCOUNT_LIMIT, fetchAccounts, fetchEmails, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
+import { useState } from 'react'
+import { confirmAction, ensureSuccess, errorMessage } from '../lib/actions'
 import { api } from '../api/client'
 import { useMailStore } from '../store/mailStore'
 
@@ -44,7 +46,7 @@ export default function MessageList() {
   })
 
   const allQueries = useQueries({
-    queries: (view.type === 'allInbox' ? accounts.slice(0, 8) : []).map((a) => ({
+    queries: (view.type === 'allInbox' ? accounts.slice(0, ALL_INBOX_ACCOUNT_LIMIT) : []).map((a) => ({
       queryKey: queryKeys.emails(a.email, 'inbox'),
       queryFn: () => fetchEmails(a.email, 'inbox', a.id),
       enabled: view.type === 'allInbox',
@@ -71,6 +73,8 @@ export default function MessageList() {
       return sortNewest ? bb.localeCompare(aa) : aa.localeCompare(bb)
     })
 
+  const [actionStatus, setActionStatus] = useState('')
+  const truncatedAccounts = view.type === 'allInbox' ? Math.max(0, accounts.length - ALL_INBOX_ACCOUNT_LIMIT) : 0
   const unreadCount = visible.filter((m) => !m.is_read).length
   const loading = view.type === 'accountFolder' ? singleQuery.isLoading : accountsQuery.isLoading || allQueries.some((q) => q.isLoading)
   const error = view.type === 'accountFolder' ? singleQuery.error : allQueries.find((q) => q.error)?.error
@@ -86,7 +90,46 @@ export default function MessageList() {
       list.push(m)
       groups.set(m.accountEmail, list)
     })
-    await Promise.all([...groups.entries()].map(([email, items]) => markEmailsRead(email, items, items[0]?.folder || 'inbox')))
+    const results = await Promise.allSettled([...groups.entries()].map(async ([email, items]) => ensureSuccess(await markEmailsRead(email, items, items[0]?.folder || 'inbox'), `${email} 标记失败`)))
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    setActionStatus(failed.length ? `部分账户标记失败：${failed.map((r) => errorMessage(r.reason)).join('；')}` : '')
+    await queryClient.invalidateQueries({ queryKey: ['emails'] })
+  }
+
+  async function deleteSelected() {
+    const chosen = visible.filter((m) => selectedIds.includes(`${m.accountEmail}:${m.id}`))
+    if (!chosen.length) return
+    const inTrash = chosen.some((m) => (m.folder || singleFolder) === 'deleteditems')
+    const warning = inTrash ? '废纸篓中的邮件将被永久删除，无法恢复。' : '邮件将移到废纸篓（IMAP 账户可能直接永久删除）。'
+    if (!confirmAction(`删除所选 ${chosen.length} 封邮件？${warning}`)) return
+    const groups = new Map<string, MailItem[]>()
+    chosen.forEach((m) => {
+      const list = groups.get(m.accountEmail) || []
+      list.push(m)
+      groups.set(m.accountEmail, list)
+    })
+    const entries = [...groups.entries()]
+    const results = await Promise.allSettled(entries.map(async ([email, items]) => ensureSuccess(await api.deleteEmails({
+      email,
+      folder: items[0]?.folder || singleFolder,
+      items: items.map((m) => ({ id: m.id, folder: m.folder || singleFolder, id_mode: m.id_mode || '' })),
+    }), `${email} 删除失败`)))
+    const failedEmails = new Set<string>()
+    const messages: string[] = []
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        failedEmails.add(entries[i][0])
+        messages.push(errorMessage(r.reason))
+      }
+    })
+    // Keep failed items selected so the user can retry.
+    clearSelected()
+    if (failedEmails.size) {
+      selectAll(chosen.filter((m) => failedEmails.has(m.accountEmail)).map((m) => `${m.accountEmail}:${m.id}`))
+      setActionStatus(`删除失败：${messages.join('；')}`)
+    } else {
+      setActionStatus(`已删除 ${chosen.length} 封邮件`)
+    }
     await queryClient.invalidateQueries({ queryKey: ['emails'] })
   }
 
@@ -136,18 +179,7 @@ export default function MessageList() {
               全选
             </button>
             {selectedIds.length > 0 && (
-              <button className="sort-btn" onClick={async () => {
-                const chosen = visible.filter((m) => selectedIds.includes(`${m.accountEmail}:${m.id}`))
-                const groups = new Map<string, MailItem[]>()
-                chosen.forEach((m) => {
-                  const list = groups.get(m.accountEmail) || []
-                  list.push(m)
-                  groups.set(m.accountEmail, list)
-                })
-                await Promise.all([...groups.entries()].map(([email, items]) => api.deleteEmails({ email, folder: items[0]?.folder || 'inbox', items })))
-                clearSelected()
-                await queryClient.invalidateQueries({ queryKey: ['emails'] })
-              }} title="删除所选">
+              <button className="sort-btn" onClick={deleteSelected} title="删除所选">
                 删除所选
               </button>
             )}
@@ -167,7 +199,13 @@ export default function MessageList() {
         </div>
       </div>
       <div className="message-list">
-        {error && <div style={{ padding: 20, color: 'var(--red)', fontSize: 12 }}>{String((error as Error).message || error)}</div>}
+        {truncatedAccounts > 0 && (
+          <div role="note" style={{ padding: '8px 14px', fontSize: 11, color: 'var(--muted)', borderBottom: '1px solid var(--line)' }}>
+            所有收件箱仅汇总前 {ALL_INBOX_ACCOUNT_LIMIT} 个账户，另有 {truncatedAccounts} 个账户未包含；请在左侧选择单个账户查看。
+          </div>
+        )}
+        {actionStatus && <div role="status" style={{ padding: '8px 14px', fontSize: 12, color: actionStatus.includes('失败') ? 'var(--red)' : 'var(--muted)' }}>{actionStatus}</div>}
+        {error && <div style={{ padding: 20, color: 'var(--red)', fontSize: 12 }}>{errorMessage(error, String(error))}</div>}
         {!loading && visible.length === 0 && (
           <div style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
             {accounts.length === 0 ? '还没有账户。在设置或旧版界面中添加账户后，这里会显示真实邮件。' : '没有找到邮件'}

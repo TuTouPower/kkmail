@@ -63,10 +63,26 @@ export async function fetchGroups(): Promise<GroupItem[]> {
   return (res.groups as GroupItem[]) || []
 }
 
+const ACCOUNT_PAGE_SIZE = 200
+const ACCOUNT_MAX_PAGES = 100
+
+/** Load every account page; the backend paginates with limit/offset/has_more. */
 export async function fetchAccounts(): Promise<AccountSummary[]> {
-  const res = await api.getAccounts({ limit: 200 })
-  return res.accounts || []
+  const all: AccountSummary[] = []
+  for (let page = 0; page < ACCOUNT_MAX_PAGES; page++) {
+    const res = await api.getAccounts({ limit: ACCOUNT_PAGE_SIZE, offset: all.length })
+    if (res.success === false) throw new Error('获取账户失败')
+    const rows = res.accounts || res.items || []
+    all.push(...rows)
+    const total = typeof res.total === 'number' ? res.total : undefined
+    if (!rows.length || res.has_more === false || (total !== undefined && all.length >= total)) break
+    if (res.has_more === undefined && total === undefined && rows.length < ACCOUNT_PAGE_SIZE) break
+  }
+  return all
 }
+
+/** The unified inbox fans out one request per account, so it is capped. */
+export const ALL_INBOX_ACCOUNT_LIMIT = 8
 
 function mapMail(raw: Record<string, unknown>, accountEmail: string, accountId?: number): MailItem {
   return {
