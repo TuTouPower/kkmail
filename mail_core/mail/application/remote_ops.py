@@ -52,10 +52,13 @@ def enqueue_remote_operation(
     desired_state: dict,
     idempotency_key: str | None = None,
 ) -> RemoteOperation:
-    """Enqueue or upsert by ``idempotency_key`` (unique) to avoid IntegrityError storms.
+    """Enqueue or upsert by ``idempotency_key`` / pending ``entity_key`` (desired-state).
 
     Concurrent inserts with the same key are coalesced via a savepoint: the loser
     of the UNIQUE race reloads the winner and refreshes desired_state.
+
+    Pending ops for the same ``entity_key`` (e.g. read True then False) collapse
+    into one row so the worker pushes the latest desired_state only.
     """
     if idempotency_key:
         existing = session.scalar(
@@ -70,6 +73,24 @@ def enqueue_remote_operation(
                 op_type=op_type,
                 desired_state=desired_state,
             )
+
+    pending = session.scalar(
+        select(RemoteOperation)
+        .where(RemoteOperation.account_id == account_id)
+        .where(RemoteOperation.entity_key == entity_key)
+        .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
+        .order_by(RemoteOperation.created_at.asc())
+        .limit(1)
+    )
+    if pending is not None:
+        return _coalesce_existing(
+            session,
+            pending,
+            account_id=account_id,
+            entity_key=entity_key,
+            op_type=op_type,
+            desired_state=desired_state,
+        )
 
     op = RemoteOperation(
         account_id=account_id,

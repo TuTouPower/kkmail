@@ -126,6 +126,8 @@ class Message(Base):
     __table_args__ = (
         UniqueConstraint("account_id", "remote_id", name="uq_messages_account_remote"),
         Index("ix_messages_account_sort", "account_id", "sort_time"),
+        # Inbox/folder keyset: ORDER BY sort_time DESC, id DESC (queries.list_messages_keyset).
+        Index("ix_messages_sort_id", "sort_time", "id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -155,6 +157,8 @@ class MessageLocation(Base):
     __table_args__ = (
         UniqueConstraint("message_id", "folder_id", name="uq_message_locations"),
         Index("ix_message_locations_folder_id", "folder_id"),
+        # Supports folder_id IN (...) join into messages for keyset inbox lists.
+        Index("ix_message_locations_folder_message", "folder_id", "message_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
