@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState } from 'react'
 import { useMailStore } from './store/mailStore'
 import Sidebar from './components/Sidebar'
 import MessageList from './components/MessageList'
@@ -8,21 +8,36 @@ import ComposeModal from './components/ComposeModal'
 import { UNAUTHORIZED_EVENT, api } from './api/client'
 import { queryClient } from './api/queries'
 import './design-system/tokens.css'
-
-function subscribeResize(onChange: () => void) {
-  window.addEventListener('resize', onChange)
-  return () => window.removeEventListener('resize', onChange)
-}
+import { useIsWide } from './lib/viewport'
 
 function App() {
-  const { theme, mobileView, sidebarCollapsed, mobileSidebarOpen } = useMailStore()
+  const { theme, mobileView, sidebarCollapsed, mobileSidebarOpen, closeMobileSidebar } = useMailStore()
   const [authed, setAuthed] = useState<boolean | null>(null)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
   }, [theme])
 
-  const wide = useSyncExternalStore(subscribeResize, () => window.innerWidth > 760, () => true)
+  const wide = useIsWide()
+  const drawerOpen = mobileSidebarOpen && !wide
+
+  // Mobile drawer: Escape closes it and the page behind must not scroll.
+  useEffect(() => {
+    if (!drawerOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMobileSidebar() }
+    window.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [drawerOpen, closeMobileSidebar])
+
+  // Leaving the mobile layout must not leave a stale open drawer behind.
+  useEffect(() => {
+    if (wide && mobileSidebarOpen) closeMobileSidebar()
+  }, [wide, mobileSidebarOpen, closeMobileSidebar])
 
   useEffect(() => {
     let cancelled = false
@@ -47,11 +62,21 @@ function App() {
 
   return (
     <div
-      className={['app', mobileSidebarOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : ''].filter(Boolean).join(' ')}
+      className={['app', drawerOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : ''].filter(Boolean).join(' ')}
       data-mobile-view={mobileView}
     >
       <div className="workspace">
         <Sidebar />
+        {drawerOpen && (
+          <div
+            className="drawer-backdrop"
+            data-testid="drawer-backdrop"
+            aria-hidden="true"
+            // Close on click (not pointerdown): the backdrop must still be under
+            // the pointer when the click fires, or the tap lands on the list.
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeMobileSidebar() }}
+          />
+        )}
         <MessageList />
         <MessageReader />
       </div>
