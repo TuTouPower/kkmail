@@ -90,9 +90,17 @@ def handle_job(session: Session, job: WorkerJob) -> None:
             complete_job(session, job)
             return
 
+        if job.job_type == JobType.OUTBOX_DISPATCH_WAKE.value:
+            from mail_core.realtime.dispatcher import get_dispatcher
+
+            session.commit()
+            n = get_dispatcher().dispatch_once()
+            log.info("outbox_dispatch_wake dispatched=%s", n)
+            complete_job(session, job)
+            return
+
         if job.job_type in {
             JobType.SYNC_FOLDER_DELTA.value,
-            JobType.OUTBOX_DISPATCH_WAKE.value,
             JobType.GC_BLOBS.value,
             JobType.BACKUP_RUN.value,
         }:
