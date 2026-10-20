@@ -781,13 +781,14 @@ Known unfinished product rules are in `docs/known-limitations.md`. Flagged mail 
 The React UI lives in `frontend/`. Flask serves `frontend/dist` at `/` when present, and the previous interface remains at `/legacy`.
 
 ```bash
-cd frontend && npm install --legacy-peer-deps && npm run build
+cd frontend && npm ci --legacy-peer-deps && npm run build
 SECRET_KEY=dev LOGIN_PASSWORD=[REDACTED] python web_outlook_app.py
 ```
 
 Docker with the new UI:
 
 ```bash
+export LOGIN_PASSWORD='换成你的密码' SECRET_KEY="$(openssl rand -hex 32)"
 docker compose -f docker-compose.react.yml up -d --build
 ```
 
