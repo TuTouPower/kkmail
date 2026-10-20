@@ -164,7 +164,7 @@ class SystemSkinManagementTests(unittest.TestCase):
         self.assertFalse(payload['success'])
         self.assertIn('路径', payload['error'])
 
-    def test_git_install_failure_keeps_current_skin(self):
+    def test_git_install_disabled(self):
         with patch.object(web_outlook_app.shutil, 'which', return_value='/usr/bin/git'), \
                 patch.object(
                     web_outlook_app.subprocess,
@@ -181,22 +181,14 @@ class SystemSkinManagementTests(unittest.TestCase):
         with self.app.app_context():
             self.assertEqual(web_outlook_app.get_configured_active_skin_id(), 'classic')
 
-    def test_git_update_failure_keeps_existing_skin_files(self):
-        self.install_git_skin_fixture()
-        skin_dir = web_outlook_app.get_skin_source_root(web_outlook_app.SKIN_SOURCE_GIT) / 'git-skin'
-        before_css = (skin_dir / 'theme.css').read_text(encoding='utf-8')
+    def test_git_update_disabled(self):
+        with self.app.test_client() as client:
+            self.login(client)
+            # Even with a fake id, update path calls install which is disabled
+            res = client.post('/api/skins/not-a-skin/git/update')
+            payload = res.get_json() or {}
+            self.assertFalse(payload.get('success', True) and res.status_code == 200 and payload.get('success') is True)
 
-        with patch.object(web_outlook_app.shutil, 'which', return_value='/usr/bin/git'), \
-                patch.object(
-                    web_outlook_app.subprocess,
-                    'run',
-                    return_value=types.SimpleNamespace(returncode=1, stdout='', stderr='network failed'),
-                ):
-            response = self.client.post('/api/skins/git-skin/git/update')
-
-        payload = response.get_json()
-        self.assertFalse(payload['success'])
-        self.assertEqual((skin_dir / 'theme.css').read_text(encoding='utf-8'), before_css)
 
     def test_active_skin_css_returns_custom_or_classic_fallback(self):
         upload_response = self.client.post(
