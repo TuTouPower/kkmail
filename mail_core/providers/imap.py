@@ -108,11 +108,23 @@ def _check_uidvalidity(cursor: dict[str, Any] | None, uidvalidity: int | None) -
         )
 
 
+def _quote_mailbox(name: str) -> str:
+    """Safely quote an IMAP mailbox name if it contains spaces or special characters."""
+    if not name:
+        return '""'
+    if name.startswith('"') and name.endswith('"'):
+        return name
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    if any(c in name for c in ' ()[]{}\\"%*'):
+        return f'"{escaped}"'
+    return name
+
+
 def _get_server_uidvalidity(c: imaplib.IMAP4, folder: str) -> int | None:
     if not hasattr(c, "status"):
         return None
     try:
-        status = c.status(folder, "(UIDVALIDITY)")
+        status = c.status(_quote_mailbox(folder), "(UIDVALIDITY)")
         if status[0] == "OK" and status[1] and status[1][0]:
             blob = status[1][0].decode() if isinstance(status[1][0], bytes) else str(status[1][0])
             m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
@@ -187,11 +199,11 @@ class ImapProvider:
         """Page by UID ascending. Cursor keys: uid_next, uidvalidity, page_size."""
         c = self._connect()
         try:
-            typ, _ = c.select(folder_remote_id, readonly=True)
+            typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
             if typ != "OK":
                 raise RuntimeError(f"select {folder_remote_id} failed: {typ}")
             uidvalidity = None
-            status = c.status(folder_remote_id, "(UIDVALIDITY)")
+            status = c.status(_quote_mailbox(folder_remote_id), "(UIDVALIDITY)")
             if status[0] == "OK" and status[1] and status[1][0]:
                 blob = status[1][0].decode() if isinstance(status[1][0], bytes) else str(status[1][0])
                 m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
@@ -314,7 +326,7 @@ class ImapProvider:
             )
         c = self._connect()
         try:
-            typ, _ = c.select(folder, readonly=True)
+            typ, _ = c.select(_quote_mailbox(folder), readonly=True)
             if typ != "OK":
                 raise RuntimeError(f"select {folder} failed for fetch_mime")
             if _uv is not None and _uv > 0:
@@ -372,12 +384,12 @@ class ImapProvider:
         """
         c = self._connect()
         try:
-            typ, _ = c.select(folder_remote_id, readonly=True)
+            typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
             if typ != "OK":
                 raise RuntimeError(f"select {folder_remote_id} failed")
             highest = None
             try:
-                st = c.status(folder_remote_id, "(HIGHESTMODSEQ UIDVALIDITY)")
+                st = c.status(_quote_mailbox(folder_remote_id), "(HIGHESTMODSEQ UIDVALIDITY)")
                 if st[0] == "OK" and st[1] and st[1][0]:
                     blob = st[1][0].decode() if isinstance(st[1][0], bytes) else str(st[1][0])
                     m = re.search(r"HIGHESTMODSEQ\s+(\d+)", blob)
@@ -496,7 +508,7 @@ class ImapProvider:
         op = normalize_op_type(op_type)
         c = self._connect()
         try:
-            typ, _ = c.select(folder)
+            typ, _ = c.select(_quote_mailbox(folder))
             if typ != "OK":
                 return RemoteOperationResult(success=False, error=f"select {folder} failed")
 
@@ -531,7 +543,7 @@ class ImapProvider:
                 if not dest:
                     return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
                 # Prefer UID MOVE (RFC 6851); never STORE \Deleted or expunge entire mailbox
-                typ, _ = c.uid("MOVE", uid_str, dest)
+                typ, _ = c.uid("MOVE", uid_str, _quote_mailbox(dest))
                 if typ != "OK":
                     return RemoteOperationResult(
                         success=False,
@@ -542,7 +554,7 @@ class ImapProvider:
             if op == OP_TRASH:
                 trash = str(desired_state.get("trash_folder_remote_id") or "Trash")
                 # Try move into trash mailbox first; never STORE \Deleted or expunge entire mailbox
-                typ, _ = c.uid("MOVE", uid_str, trash)
+                typ, _ = c.uid("MOVE", uid_str, _quote_mailbox(trash))
                 if typ != "OK":
                     return RemoteOperationResult(
                         success=False,
@@ -561,11 +573,11 @@ class ImapProvider:
         """Return delete actions for local IDs missing remotely — caller must have completed a full scan."""
         c = self._connect()
         try:
-            typ, _ = c.select(folder_remote_id, readonly=True)
+            typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
             if typ != "OK":
                 raise RuntimeError(f"select {folder_remote_id} failed during reconcile: {typ}")
             uidvalidity = 0
-            status = c.status(folder_remote_id, "(UIDVALIDITY)")
+            status = c.status(_quote_mailbox(folder_remote_id), "(UIDVALIDITY)")
             if status[0] == "OK" and status[1] and status[1][0]:
                 blob = status[1][0].decode() if isinstance(status[1][0], bytes) else str(status[1][0])
                 m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
