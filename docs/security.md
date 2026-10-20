@@ -43,6 +43,17 @@
 
 - **浏览器扩展永久不做**（cancelled / wontfix）：不提供扩展、不维护 `/api/extension/*` 登录桥，也不再恢复旧 `browser-extension/` 代码路径。客户端仅为同源 SPA 与桌面 Electron。
 
+
+## 桌面 Electron
+
+主进程（`desktop/main.js` + `desktop/hardening.js`）：
+
+- `contextIsolation`、无 `nodeIntegration`、`sandbox`、禁用 `webviewTag`
+- `will-attach-webview` 一律 `preventDefault`
+- `setPermissionRequestHandler` / `setPermissionCheckHandler` 全部拒绝
+- 会话级 Content-Security-Policy：`default-src 'self'`，禁止 `object`，`connect-src` 仅同源；邮件 HTML 仍由阅读器 iframe 的独立 CSP 约束（默认不加载远程图）
+- 外链仅 `http(s):` / `mailto:` 交给系统浏览器；离开本地 origin 的导航被拦截
+
 ## 日志
 
 - 作业错误（`worker_jobs.last_error`、归档错误）经 `safe_error` / `redact` 处理：去掉 Bearer token、`token=`/`secret=`/`password=` 值、DSN 密码，不保存 provider 响应体。
