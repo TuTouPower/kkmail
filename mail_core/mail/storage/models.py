@@ -71,6 +71,18 @@ class AppSetting(Base):
     )
 
 
+class AuthCredential(Base):
+    """System authentication credential store (Plan A)."""
+
+    __tablename__ = "auth_credentials"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default="default")
+    login_password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class Account(Base):
     __tablename__ = "accounts"
 
