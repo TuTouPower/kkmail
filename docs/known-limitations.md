@@ -15,7 +15,7 @@
 
 - The list view loads the newest 100 messages per view (unified inbox or one account's inbox). Keyset pagination (`next_cursor`) is available in the API, but the SPA does not page further yet.
 - Search uses the server: PostgreSQL full-text search plus trigram matching on subject and sender. The SPA starts searching at two characters (the API accepts one) and shows up to 100 results without paging.
-- Sidebar unread badges come from the cached unified-inbox page, so they count unread messages among the loaded rows only.
+- **Unified inbox / unread badges (client vs backend).** Architecture §12.4 targets a **backend-aggregated** unified inbox and server `folder_stats` for unread badges. **Current SPA behavior:** the list calls `/api/mail/inbox` (backend already merges inbox-role folders across accounts), but sidebar unread badges are derived from the **cached first page** of that unified list (client-8 / loaded-rows only), not from a dedicated stats endpoint. Until badges read server stats, counts can under-report beyond the loaded page. See [mail-core-architecture.md §12.4](./mail-core-architecture.md) (target) and this note (current).
 - Realtime events arrive over SSE with the session cookie. Bearer-key integrations need an HTTP client that can stream and set headers; browser `EventSource` cannot.
 
 ## Desktop packaging

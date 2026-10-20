@@ -38,6 +38,8 @@ export const UNAUTHORIZED_EVENT = 'kkmail:unauthorized'
 export const DEFAULT_TIMEOUT_MS = 30_000
 
 let csrfToken: string | null = null
+/** In-flight /api/auth/me so concurrent unsafe writes share one CSRF fetch (singleflight). */
+let csrfInflight: Promise<string | null> | null = null
 
 export function setCsrfToken(token: string | null | undefined): void {
   csrfToken = token || null
@@ -46,24 +48,33 @@ export function setCsrfToken(token: string | null | undefined): void {
 /** Test hook. */
 export function __resetCsrfForTests() {
   csrfToken = null
+  csrfInflight = null
 }
 
 function handleUnauthorized(): ApiError {
   csrfToken = null
+  csrfInflight = null
   if (typeof window !== 'undefined') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
   return { status: 401, code: 'unauthorized', message: '登录已过期，请重新登录' }
 }
 
 async function fetchCsrfToken(): Promise<string | null> {
-  try {
-    const res = await fetch(`${apiBaseUrl()}/api/auth/me`, { credentials: 'include', headers: { Accept: 'application/json' } })
-    if (!res.ok) return null
-    const data = (await res.json()) as { csrf_token?: string }
-    csrfToken = data.csrf_token || null
-    return csrfToken
-  } catch {
-    return null
-  }
+  if (csrfToken) return csrfToken
+  if (csrfInflight) return csrfInflight
+  csrfInflight = (async () => {
+    try {
+      const res = await fetch(`${apiBaseUrl()}/api/auth/me`, { credentials: 'include', headers: { Accept: 'application/json' } })
+      if (!res.ok) return null
+      const data = (await res.json()) as { csrf_token?: string }
+      csrfToken = data.csrf_token || null
+      return csrfToken
+    } catch {
+      return null
+    } finally {
+      csrfInflight = null
+    }
+  })()
+  return csrfInflight
 }
 
 export interface RequestOptions extends RequestInit {
@@ -219,6 +230,7 @@ export const api = {
       await postJson('/api/auth/logout')
     } catch { /* session may already be gone */ }
     csrfToken = null
+    csrfInflight = null
     window.location.assign('/')
   },
 

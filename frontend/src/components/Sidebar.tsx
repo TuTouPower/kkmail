@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle } from 'lucide-react'
-import { fetchAccounts, fetchGroups, queryKeys, type MailItem } from '../api/queries'
+import { ALL_ACCOUNTS, fetchAccounts, fetchGroups, queryKeys, type MailItem } from '../api/queries'
 import { providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
 
@@ -25,7 +25,7 @@ export default function Sidebar() {
   const accounts = accountsQuery.data || []
   // Unread badges are derived from the cached unified inbox page (populated by MessageList).
   const inboxCache = useQuery({
-    queryKey: queryKeys.inbox('all'),
+    queryKey: queryKeys.inbox(ALL_ACCOUNTS),
     queryFn: async () => [] as MailItem[],
     enabled: false,
   })
