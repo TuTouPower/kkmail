@@ -3,6 +3,7 @@ import { Reply, ReplyAll, Forward, MailOpen, Trash2, Flag, Folder, Archive, Shie
 import { api } from '../api/client'
 import { fetchAccounts, fetchEmailDetail, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
+import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, htmlToText, isHtmlBody } from '../lib/mailBody'
 
 export default function MessageReader() {
   const { selectedKey, openCompose, flaggedIds, toggleFlag, setMobileView } = useMailStore()
@@ -35,7 +36,8 @@ export default function MessageReader() {
 
   const detail = detailQuery.data
   const body = detail?.body || selected.body_preview || ''
-  const html = (detail?.body_type || '').toLowerCase().includes('html') || body.trim().startsWith('<')
+  const html = !!detail?.body && isHtmlBody(detail.body_type)
+  const quotedBody = html ? htmlToText(body) : body
 
   async function markCurrent() {
     if (!selected) return
@@ -52,18 +54,18 @@ export default function MessageReader() {
           <button className="reader-action" title="回复" onClick={() => openCompose('reply', {
             to: selected.from.includes('@') ? selected.from : '',
             subject: `Re: ${detail?.subject || selected.subject}`,
-            body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
+            body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
             accountId: selected.accountId,
           })}><Reply size={15} /></button>
           <button className="reader-action" title="全部回复" aria-label="回复全部" onClick={() => openCompose('reply', {
             to: [selected.from, detail?.to || selected.to].filter(Boolean).join(', '),
             subject: `Re: ${detail?.subject || selected.subject}`,
-            body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
+            body: `\n\n—— 原始邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
             accountId: selected.accountId,
           })}><ReplyAll size={15} /></button>
           <button className="reader-action" title="转发" onClick={() => openCompose('forward', {
             subject: `Fwd: ${detail?.subject || selected.subject}`,
-            body: `\n\n—— 转发邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${detail?.body || selected.body_preview || ''}`,
+            body: `\n\n—— 转发邮件 ——\n发件人：${selected.from}\n主题：${detail?.subject || selected.subject}\n\n${quotedBody}`,
             accountId: selected.accountId,
           })}><Forward size={15} /></button>
           <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
@@ -93,7 +95,14 @@ export default function MessageReader() {
           {detailQuery.isLoading && <div style={{ color: 'var(--muted)' }}>正在加载正文…</div>}
           {detailQuery.error && <div style={{ color: 'var(--red)' }}>{String((detailQuery.error as Error).message)}</div>}
           {html ? (
-            <div className="email-body" dangerouslySetInnerHTML={{ __html: body }} />
+            <iframe
+              className="email-body email-body-frame"
+              title="邮件正文"
+              sandbox={MAIL_IFRAME_SANDBOX}
+              referrerPolicy="no-referrer"
+              srcDoc={buildMailSrcdoc(body)}
+              style={{ width: '100%', minHeight: 420, border: 0, background: '#fff', borderRadius: 8 }}
+            />
           ) : (
             <div className="email-body" style={{ whiteSpace: 'pre-wrap' }}>{body}</div>
           )}
