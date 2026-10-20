@@ -172,11 +172,23 @@ def test_gmail_429_and_invalid_history():
 
 def test_gmail_list_folders_via_transport():
     def transport(method, path, params):
-        return {"labels": [{"id": "INBOX", "name": "INBOX"}, {"id": "Label_1", "name": "Work"}]}
+        return {
+            "labels": [
+                {"id": "INBOX", "name": "INBOX"},
+                {"id": "SENT", "name": "SENT"},
+                {"id": "TRASH", "name": "TRASH"},
+                {"id": "SPAM", "name": "SPAM"},
+                {"id": "Label_1", "name": "Work"},
+            ]
+        }
 
     folders = GmailProvider(credential_ref="x", transport=transport).list_folders()
-    assert folders[0].role == "inbox"
-    assert folders[1].remote_id == "Label_1"
+    by_id = {f.remote_id: f for f in folders}
+    assert by_id["INBOX"].role == "inbox"
+    assert by_id["SENT"].role == "sent"
+    assert by_id["TRASH"].role == "trash"
+    assert by_id["SPAM"].role == "junk"
+    assert by_id["Label_1"].role == "other"
 
 
 def test_graph_delta_uses_delta_link_and_next_link():
@@ -257,11 +269,13 @@ def test_graph_list_folders_roles():
             "value": [
                 {"id": "aa", "displayName": "Inbox", "role": "inbox"},
                 {"id": "bb", "displayName": "Archive", "role": "archive"},
+                {"id": "cc", "displayName": "Sent Items", "wellKnownName": "sentitems"},
+                {"id": "dd", "displayName": "Custom"},
             ]
         }
 
     folders = GraphProvider(credential_ref="x", transport=transport).list_folders()
-    assert [f.role for f in folders] == ["inbox", "archive"]
+    assert [f.role for f in folders] == ["inbox", "archive", "sent", "other"]
 
 
 def test_not_configured_without_credentials_transport():

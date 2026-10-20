@@ -31,14 +31,37 @@ class GraphNotConfiguredError(NotImplementedError):
     """Raised until a real Graph HTTP transport is supplied."""
 
 
+_GRAPH_WELL_KNOWN_ROLES: dict[str, str] = {
+    "inbox": "inbox",
+    "sentitems": "sent",
+    "deleteditems": "trash",
+    "drafts": "drafts",
+    "junkemail": "junk",
+    "archive": "archive",
+}
+
+
+def graph_folder_role(folder: dict[str, Any]) -> str:
+    """Prefer explicit role, else Graph ``wellKnownName``, else ``other``."""
+    if folder.get("role"):
+        return str(folder["role"])
+    well = (folder.get("wellKnownName") or "").lower()
+    return _GRAPH_WELL_KNOWN_ROLES.get(well, "other")
+
+
 def _raise_mapped(exc: ProviderHttpError) -> None:
     status = exc.status or 0
     body = exc.body
     text = str(body).lower() if body is not None else str(exc).lower()
     if status == 429:
         raise RateLimitedError(str(exc), body=body, headers=exc.headers) from exc
-    # Graph: 410 Gone / syncStateNotFound when delta token is stale
-    if status in (404, 410) or "syncstatenotfound" in text or "resyncrequired" in text:
+    # Graph: 410 Gone / syncStateNotFound when delta token is stale — not every 404.
+    if (
+        status == 410
+        or "syncstatenotfound" in text
+        or "resyncrequired" in text
+        or (status == 404 and ("delta" in text or "sync" in text))
+    ):
         raise CursorInvalidError(str(exc), status=status, body=body, headers=exc.headers) from exc
     raise exc
 
@@ -71,7 +94,7 @@ class GraphProvider:
             RemoteFolder(
                 remote_id=f["id"],
                 name=f.get("displayName") or f["id"],
-                role=f.get("role") or "other",
+                role=graph_folder_role(f),
             )
             for f in data.get("value") or []
         ]
