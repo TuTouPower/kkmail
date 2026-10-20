@@ -16,13 +16,41 @@ export function shouldInvalidateMailCoreInbox(eventType: string): boolean {
   return MAIL_CORE_INBOX_INVALIDATE_EVENTS.has(eventType)
 }
 
+export function extractMessageIds(data: unknown): string[] {
+  if (!data) return []
+  if (typeof data === 'string') return [data]
+  if (typeof data === 'object') {
+    const obj = data as Record<string, unknown>
+    const ids: string[] = []
+    if (typeof obj.message_id === 'string' && obj.message_id) ids.push(obj.message_id)
+    if (typeof obj.id === 'string' && obj.id) ids.push(obj.id)
+    if (Array.isArray(obj.message_ids)) {
+      for (const id of obj.message_ids) {
+        if (typeof id === 'string' && id) ids.push(id)
+      }
+    }
+    return ids
+  }
+  return []
+}
+
 /** While signed in, subscribe to mail-core SSE and refetch message lists on relevant events. */
 export function useMailCoreRealtime(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return
     return subscribeMailCoreEvents(
-      (type) => {
+      (type, data) => {
         if (shouldInvalidateMailCoreInbox(type)) void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+        if (type === 'message.upserted' || type === 'message.removed') {
+          const ids = extractMessageIds(data)
+          if (ids.length) {
+            for (const id of ids) {
+              void queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core', id] })
+            }
+          } else {
+            void queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core'] })
+          }
+        }
       },
       () => {
         /* EventSource reconnects on its own */
