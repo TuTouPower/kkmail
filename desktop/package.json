@@ -12,7 +12,10 @@
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "dist:linux": "electron-builder --linux",
-    "test": "node paths.test.js && node postgresManager.test.js"
+    "test": "node paths.test.js && node postgresManager.test.js",
+    "dist:linux:dir": "node scripts/pack-linux.js",
+    "pack:linux": "node scripts/pack-linux.js",
+    "pack:linux:with-pg": "node scripts/pack-linux.js"
   },
   "dependencies": {
     "electron-squirrel-startup": "^1.0.1"
@@ -45,6 +48,17 @@
         "filter": [
           "kkmail-backend*"
         ]
+      },
+      {
+        "from": "vendor/pgsql",
+        "to": "pgsql",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "vendor/README.md",
+        "to": "pgsql-README.md"
       }
     ],
     "mac": {
@@ -63,6 +77,7 @@
     },
     "linux": {
       "target": [
+        "dir",
         "AppImage",
         "deb"
       ],
