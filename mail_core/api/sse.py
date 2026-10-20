@@ -5,11 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import AsyncIterator
+import os
+import threading
+from dataclasses import dataclass
+from typing import Any, AsyncIterator
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+
 from mail_core.db.session import get_session_factory
 from mail_core.realtime.dispatcher import get_dispatcher
 from mail_core.realtime.outbox import fetch_since, head_event_id, to_item
@@ -22,9 +26,87 @@ RESYNC_GAP = 500
 # Replay page size must be >= RESYNC_GAP so a full page implies a true gap, not truncation.
 REPLAY_LIMIT = RESYNC_GAP
 
+# Soft cap on concurrent SSE streams per process (503 when exceeded).
+MAX_SSE_CONNECTIONS = int(os.environ.get("MAIL_CORE_SSE_MAX_CONNECTIONS", "128"))
+_sse_active = 0
+_sse_active_lock = threading.Lock()
+
 
 def _format_sse(event_id: int, event: str, data: dict) -> str:
     return f"id: {event_id}\nevent: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplayPlan:
+    frames: list[tuple[int, str, dict[str, Any]]]
+    cursor: int
+
+
+def _build_replay(cursor: int, account_id: UUID | None, *, malformed: bool) -> _ReplayPlan:
+    """Synchronous DB work for SSE replay — run via ``asyncio.to_thread``."""
+    Session = get_session_factory()
+    frames: list[tuple[int, str, dict[str, Any]]] = []
+    cursor_local = cursor
+    with Session() as session:
+        head = head_event_id(session)
+
+        if malformed:
+            payload = {"reason": "malformed_last_event_id", "head": head}
+            frames.append((head, "client.resync_hint", payload))
+            return _ReplayPlan(frames=frames, cursor=head)
+
+        if cursor > head:
+            payload = {"reason": "cursor_ahead", "head": head, "last_event_id": cursor}
+            frames.append((head, "client.resync_hint", payload))
+            return _ReplayPlan(frames=frames, cursor=head)
+
+        if cursor > 0 and head - cursor > RESYNC_GAP:
+            payload = {"reason": "gap_too_large", "head": head, "last_event_id": cursor}
+            frames.append((head, "client.resync_hint", payload))
+            return _ReplayPlan(frames=frames, cursor=head)
+
+        rows = fetch_since(
+            session,
+            last_event_id=cursor,
+            limit=REPLAY_LIMIT,
+            account_id=account_id,
+        )
+        seen: set[int] = set()
+        for row in rows:
+            item = to_item(row)
+            # Extra guard: other accounts only (globals have account_id None).
+            if account_id and item.account_id and item.account_id != str(account_id):
+                continue
+            if item.id in seen:
+                continue
+            frames.append((item.id, item.event_type, item.payload))
+            seen.add(item.id)
+            cursor_local = item.id
+        if len(rows) >= REPLAY_LIMIT and cursor_local < head:
+            payload = {
+                "reason": "replay_truncated",
+                "head": head,
+                "last_event_id": cursor_local,
+                "replay_limit": REPLAY_LIMIT,
+            }
+            frames.append((head, "client.resync_hint", payload))
+            cursor_local = head
+    return _ReplayPlan(frames=frames, cursor=cursor_local)
+
+
+def _acquire_sse_slot() -> bool:
+    global _sse_active
+    with _sse_active_lock:
+        if _sse_active >= MAX_SSE_CONNECTIONS:
+            return False
+        _sse_active += 1
+        return True
+
+
+def _release_sse_slot() -> None:
+    global _sse_active
+    with _sse_active_lock:
+        _sse_active = max(0, _sse_active - 1)
 
 
 @router.get("/events")
@@ -37,12 +119,20 @@ async def stream_events(
     """Server-Sent Events stream. Subscribe first, replay, then live-tail (dedupe by eid)."""
 
     cursor = 0
+    malformed = False
     raw = last_event_id or (str(after) if after is not None else None)
     if raw:
         try:
             cursor = int(raw)
         except ValueError:
+            malformed = True
             cursor = 0
+
+    if not _acquire_sse_slot():
+        return JSONResponse(
+            {"detail": "too many sse connections", "max": MAX_SSE_CONNECTIONS},
+            status_code=503,
+        )
 
     async def gen() -> AsyncIterator[str]:
         # Subscribe BEFORE replay so events committed during replay land in the queue
@@ -52,41 +142,11 @@ async def stream_events(
         seen: set[int] = set()
         cursor_local = cursor
         try:
-            Session = get_session_factory()
-            with Session() as session:
-                head = head_event_id(session)
-                if cursor > 0 and head - cursor > RESYNC_GAP:
-                    payload = {"reason": "gap_too_large", "head": head, "last_event_id": cursor}
-                    yield _format_sse(head, "client.resync_hint", payload)
-                    cursor_local = head
-                    seen.add(head)
-                else:
-                    rows = fetch_since(
-                        session,
-                        last_event_id=cursor,
-                        limit=REPLAY_LIMIT,
-                        account_id=account_id,
-                    )
-                    for row in rows:
-                        item = to_item(row)
-                        if account_id and item.account_id and item.account_id != str(account_id):
-                            continue
-                        if item.id in seen:
-                            continue
-                        yield _format_sse(item.id, item.event_type, item.payload)
-                        seen.add(item.id)
-                        cursor_local = item.id
-                    # Full page with more events behind head → client must resync (avoid silent truncate).
-                    if len(rows) >= REPLAY_LIMIT and cursor_local < head:
-                        payload = {
-                            "reason": "replay_truncated",
-                            "head": head,
-                            "last_event_id": cursor_local,
-                            "replay_limit": REPLAY_LIMIT,
-                        }
-                        yield _format_sse(head, "client.resync_hint", payload)
-                        cursor_local = head
-                        seen.add(head)
+            plan = await asyncio.to_thread(_build_replay, cursor, account_id, malformed=malformed)
+            for eid, etype, data in plan.frames:
+                yield _format_sse(eid, etype, data)
+                seen.add(eid)
+            cursor_local = plan.cursor
 
             while True:
                 if await request.is_disconnected():
@@ -98,6 +158,7 @@ async def stream_events(
                     # (single dispatcher; no per-connection polling / dual dispatch).
                     yield ": keepalive\n\n"
                     continue
+                # Account filter: keep globals (NULL account_id) for account streams.
                 if account_id and event.get("account_id") and event["account_id"] != str(account_id):
                     continue
                 eid = int(event["id"])
@@ -108,5 +169,6 @@ async def stream_events(
                 cursor_local = eid
         finally:
             dispatcher.unsubscribe(queue, account_id=str(account_id) if account_id else None)
+            _release_sse_slot()
 
     return StreamingResponse(gen(), media_type="text/event-stream")

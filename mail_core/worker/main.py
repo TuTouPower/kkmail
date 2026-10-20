@@ -28,12 +28,13 @@ def request_stop() -> None:
 
 
 def _reclaim_once() -> int:
-    """Periodically return stuck CLAIMED jobs and archive claims to PENDING."""
+    """Periodically reclaim stuck claims and prune old dispatched outbox rows."""
     try:
         from datetime import timedelta
 
         from mail_core.blobs.archive import reclaim_stale_archive_claims
         from mail_core.db.session import get_session_factory
+        from mail_core.realtime.outbox import prune_dispatched
         from mail_core.sync.jobs import reclaim_stale_claims
     except Exception as exc:  # pragma: no cover
         log.warning("reclaim imports failed: %s", exc)
@@ -48,8 +49,11 @@ def _reclaim_once() -> int:
             a = reclaim_stale_archive_claims(session, older_than=timedelta(minutes=15), limit=100)
             if a:
                 log.info("reclaimed %s stale archive_in_progress claim(s)", a)
+            pruned = prune_dispatched(session, older_than=timedelta(days=7), limit=2000)
+            if pruned:
+                log.info("pruned %s dispatched outbox row(s)", pruned)
             session.commit()
-            return n + a
+            return n + a + pruned
         except Exception:
             session.rollback()
             log.exception("reclaim_stale_claims failed")
@@ -87,11 +91,13 @@ def _tick(worker_id: str) -> int:
             if job is None:
                 continue
             try:
-                handle_job(session, job)
-                handled += 1
-                # Handlers may have committed already; commit any leftover work.
+                ok = handle_job(session, job)
+                # Handlers may have committed already; commit any leftover work
+                # (including fail_job flushes when ok is False).
                 if session.in_transaction():
                     session.commit()
+                if ok:
+                    handled += 1
             except Exception as exc:  # pragma: no cover
                 from mail_core.security.redact import safe_error
 
@@ -102,9 +108,12 @@ def _tick(worker_id: str) -> int:
                     pass
                 try:
                     # Re-load after rollback so fail_job can persist.
+                    # Skip if handle_job already marked FAILED (avoid double-handle).
+                    from mail_core.mail.domain.enums import JobStatus
+
                     job = session.get(WorkerJob, job_id)
-                    if job is not None:
-                        fail_job(session, job, exc)
+                    if job is not None and job.status == JobStatus.CLAIMED.value:
+                        fail_job(session, job, exc, worker_id=worker_id)
                         session.commit()
                 except Exception:
                     session.rollback()
