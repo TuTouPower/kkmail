@@ -363,3 +363,53 @@ def test_graph_and_gmail_reconcile_use_standard_queries():
     assert g_actions[0].remote_id == "gm_stale"
     assert gmail_calls[0][0] == "GET"
 
+
+def test_graph_trash_does_not_fall_back_to_delete_on_5xx_or_403():
+    calls = []
+
+    def transport_500(method, path, body):
+        calls.append((method, path))
+        if method == "POST" and path.endswith("/move"):
+            raise ProviderHttpError("Server error", status=500)
+        return {}
+
+    gp = GraphProvider(credential_ref="x", transport=transport_500)
+    res = gp.apply_remote_operation("trash", {"remote_id": "msg-123"})
+    assert res.success is False
+    assert "Server error" in (res.error or "")
+    # DELETE must NOT have been called
+    assert not any(method == "DELETE" for method, _ in calls)
+
+    calls.clear()
+
+    def transport_403(method, path, body):
+        calls.append((method, path))
+        if method == "POST" and path.endswith("/move"):
+            raise ProviderHttpError("Forbidden", status=403)
+        return {}
+
+    gp = GraphProvider(credential_ref="x", transport=transport_403)
+    res = gp.apply_remote_operation("trash", {"remote_id": "msg-123"})
+    assert res.success is False
+    assert "Forbidden" in (res.error or "")
+    assert not any(method == "DELETE" for method, _ in calls)
+
+
+def test_graph_trash_falls_back_to_delete_only_on_404():
+    calls = []
+
+    def transport_404(method, path, body):
+        calls.append((method, path))
+        if method == "POST" and path.endswith("/move"):
+            raise ProviderHttpError("Not Found", status=404)
+        if method == "DELETE":
+            return {}
+        return {}
+
+    gp = GraphProvider(credential_ref="x", transport=transport_404)
+    res = gp.apply_remote_operation("trash", {"remote_id": "msg-123"})
+    assert res.success is True
+    assert res.remote_state == {"deleted": True}
+    assert any(method == "DELETE" for method, _ in calls)
+
+
