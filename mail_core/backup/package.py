@@ -13,6 +13,7 @@ import tarfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from mail_core.backup.crypto import (
     BackupCryptoError,
@@ -68,22 +69,111 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+# Members written into a plain backup directory (inner tar for sealed packages).
+_PLAIN_MEMBER_ALLOWLIST = frozenset({"postgres.dump", "blobs.tar"})
+# Outer sealed package directory may also list the ciphertext blob.
+_OUTER_MEMBER_ALLOWLIST = frozenset({"backup.kkbak"}) | {f"plain/{m}" for m in _PLAIN_MEMBER_ALLOWLIST}
+
+
+def _libpq_dsn_and_password(url: str) -> tuple[str, str | None]:
+    """Return a libpq URI without password, plus the password (if any).
+
+    Password must not appear on the pg_dump argv (visible via ps /proc cmdline).
+    Callers pass it via PGPASSWORD (or a 0600 pgpass file).
+    """
+    dsn = url
+    if dsn.startswith("postgresql+psycopg://"):
+        dsn = "postgresql://" + dsn[len("postgresql+psycopg://") :]
+    elif dsn.startswith("postgres+psycopg://"):
+        dsn = "postgres://" + dsn[len("postgres+psycopg://") :]
+    parsed = urlparse(dsn)
+    # urlparse leaves percent-encoding in .password; libpq/PGPASSWORD need decoded bytes.
+    password = unquote(parsed.password) if parsed.password is not None else None
+    if password is None:
+        return dsn, None
+    # Rebuild netloc without password: user@host:port
+    user = unquote(parsed.username) if parsed.username else ""
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    userinfo = quote(user, safe="") if user else ""
+    auth = f"{userinfo}@" if userinfo or user else ""
+    # IPv6 hosts need brackets
+    if host and ":" in host and not host.startswith("["):
+        host_part = f"[{host}]"
+    else:
+        host_part = host
+    netloc = f"{auth}{host_part}{port}"
+    safe = urlunparse(
+        (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
+    )
+    return safe, password
+
+
+def _safe_member_relpath(name: str, *, allowlist: frozenset[str]) -> str | None:
+    """Return ``name`` if it is an allowlisted relative path with no traversal."""
+    if not isinstance(name, str) or name not in allowlist:
+        return None
+    if name.startswith(("/", "\\")) or "\\" in name:
+        return None
+    parts = Path(name).parts
+    if not parts or any(p in ("..", "", ".") for p in parts):
+        return None
+    if Path(*parts).as_posix() != name:
+        return None
+    return name
+
+
+def _resolve_member_file(work: Path, name: str) -> Path | None:
+    """Map an allowlisted member name to a file under ``work`` (no escape)."""
+    safe = _safe_member_relpath(name, allowlist=_PLAIN_MEMBER_ALLOWLIST)
+    if safe is None:
+        return None
+    candidate = work.joinpath(*Path(safe).parts)
+    try:
+        work_res = work.resolve(strict=False)
+        cand_res = candidate.resolve(strict=False)
+    except OSError:
+        return None
+    if cand_res != work_res and work_res not in cand_res.parents:
+        return None
+    return candidate
+
+
+def _verify_manifest_file_checksum(man_path: Path, sha_path: Path, errors: list[str]) -> None:
+    if not sha_path.is_file():
+        errors.append(f"{sha_path.name} missing")
+        return
+    expected = sha_path.read_text(encoding="utf-8").split()[0]
+    actual = _sha256_file(man_path)
+    if expected != actual:
+        errors.append(f"{sha_path.name} mismatch: expected {expected}, got {actual}")
+
+
 def _pg_dump_to(dest: Path, url: str, *, allow_stub: bool = False) -> str:
     """Run pg_dump into ``dest``.
 
     On failure (missing binary or non-zero exit), raise unless ``allow_stub`` is set
     for offline unit/crypto drills. Stubs never verify as restoreable backups.
+
+    The database password is passed via ``PGPASSWORD`` (never on argv).
     """
-    dsn = url
-    if dsn.startswith("postgresql+psycopg://"):
-        dsn = "postgresql://" + dsn[len("postgresql+psycopg://") :]
+    dsn, password = _libpq_dsn_and_password(url)
     pg_dump = shutil.which("pg_dump")
     if pg_dump:
+        env = os.environ.copy()
+        # Prefer PGPASSWORD; also drop any inherited PGPASSFILE so a stale pgpass
+        # cannot override the intended credentials for this dump.
+        env.pop("PGPASSFILE", None)
+        if password is not None:
+            env["PGPASSWORD"] = password
+        else:
+            env.pop("PGPASSWORD", None)
         try:
             subprocess.run(
                 [pg_dump, "--format=custom", "--file", str(dest), dsn],
                 check=True,
                 capture_output=True,
+                env=env,
             )
             return "custom"
         except subprocess.CalledProcessError as exc:
@@ -206,53 +296,27 @@ def create_backup_package(
     return out
 
 
-def verify_backup_package(
-    package_dir: str | Path,
+_INNER_TAR_ALLOWLIST = _PLAIN_MEMBER_ALLOWLIST | {"MANIFEST.json", "MANIFEST.sha256"}
+
+
+def _check_plain_members(
+    work: Path,
+    members: dict,
     *,
-    env: dict[str, str] | None = None,
-    allow_stub: bool = False,
-) -> RestoreVerifyResult:
-    """Decrypt (if needed) and verify member checksums. Does not restore into PG."""
-    root = Path(package_dir)
-    errors: list[str] = []
-    key_version: int | None = None
-    work = root
-    kkbak = root / "backup.kkbak"
-    if kkbak.is_file():
-        try:
-            keyring = load_backup_keyring(env)
-            plaintext, key_version = decrypt_bytes(kkbak.read_bytes(), keyring=keyring)
-        except Exception as exc:
-            return RestoreVerifyResult(ok=False, members_checked=0, errors=[f"decrypt failed: {exc}"])
-        extract_dir = root / ".verify_extract"
-        if extract_dir.exists():
-            shutil.rmtree(extract_dir)
-        extract_dir.mkdir(parents=True)
-        with tarfile.open(fileobj=io.BytesIO(plaintext), mode="r") as tar:
-            tar.extractall(extract_dir, filter="data")
-        work = extract_dir
-
-    man_path = work / "MANIFEST.json"
-    if not man_path.is_file():
-        return RestoreVerifyResult(ok=False, members_checked=0, errors=["MANIFEST.json missing"], backup_key_version=key_version)
-    manifest = json.loads(man_path.read_text(encoding="utf-8"))
-    # Verify MANIFEST.sha256 if present
-    sha_path = work / "MANIFEST.sha256"
-    if sha_path.is_file():
-        expected = sha_path.read_text(encoding="utf-8").split()[0]
-        actual = _sha256_file(man_path)
-        if expected != actual:
-            errors.append(f"MANIFEST.sha256 mismatch: expected {expected}, got {actual}")
-
+    allow_stub: bool,
+    errors: list[str],
+) -> int:
+    """Verify allowlisted plain members under ``work``. Returns count checked."""
     checked = 0
-    for name, meta in (manifest.get("members") or {}).items():
-        # Skip nested plain/ aliases on sealed outer manifest
-        if name.startswith("plain/"):
+    for name, meta in (members or {}).items():
+        if name.startswith("plain/") or name == "backup.kkbak":
+            # Outer sealed aliases — handled separately before decrypt.
             continue
-        if name == "backup.kkbak":
+        if _safe_member_relpath(name, allowlist=_PLAIN_MEMBER_ALLOWLIST) is None:
+            errors.append(f"disallowed member name: {name!r}")
             continue
-        path = work / name
-        if not path.is_file():
+        path = _resolve_member_file(work, name)
+        if path is None or not path.is_file():
             errors.append(f"missing member {name}")
             continue
         method = meta.get("method")
@@ -265,9 +329,138 @@ def verify_backup_package(
         if expected and digest != expected:
             errors.append(f"checksum mismatch for {name}")
         checked += 1
+    return checked
+
+
+def _extract_plain_tar(plaintext: bytes, extract_dir: Path, errors: list[str]) -> bool:
+    """Extract inner backup tar with path-traversal / allowlist checks."""
+    try:
+        with tarfile.open(fileobj=io.BytesIO(plaintext), mode="r") as tar:
+            for info in tar.getmembers():
+                name = info.name
+                if name.endswith("/"):
+                    # Directory entries: only empty path or prefixes of allowlisted files.
+                    base = name.rstrip("/")
+                    if base and (
+                        ".." in Path(base).parts
+                        or base.startswith("/")
+                        or not any(a == base or a.startswith(base + "/") for a in _INNER_TAR_ALLOWLIST)
+                    ):
+                        errors.append(f"unsafe tar member: {name!r}")
+                        return False
+                    continue
+                if name not in _INNER_TAR_ALLOWLIST or ".." in Path(name).parts or name.startswith("/"):
+                    errors.append(f"unsafe or unexpected tar member: {name!r}")
+                    return False
+            tar.extractall(extract_dir, filter="data")
+    except tarfile.TarError as exc:
+        errors.append(f"inner tar extract failed: {exc}")
+        return False
+    return True
+
+
+def verify_backup_package(
+    package_dir: str | Path,
+    *,
+    env: dict[str, str] | None = None,
+    allow_stub: bool = False,
+) -> RestoreVerifyResult:
+    """Decrypt (if needed) and verify member checksums. Does not restore into PG.
+
+    For sealed packages, the outer ``MANIFEST.json`` / ``MANIFEST.sha256`` and the
+    ``backup.kkbak`` digest are checked before decrypt. Inner member names are
+    allowlisted (no ``..`` / absolute paths).
+    """
+    root = Path(package_dir)
+    errors: list[str] = []
+    key_version: int | None = None
+    checked = 0
+    kkbak = root / "backup.kkbak"
+    extract_dir: Path | None = None
 
     if kkbak.is_file():
-        shutil.rmtree(work, ignore_errors=True)
+        # --- Outer sealed integrity (previously skipped) ---
+        outer_man = root / "MANIFEST.json"
+        if not outer_man.is_file():
+            return RestoreVerifyResult(
+                ok=False, members_checked=0, errors=["outer MANIFEST.json missing"]
+            )
+        _verify_manifest_file_checksum(outer_man, root / "MANIFEST.sha256", errors)
+        try:
+            outer = json.loads(outer_man.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            return RestoreVerifyResult(
+                ok=False, members_checked=0, errors=[f"outer MANIFEST.json invalid: {exc}"]
+            )
+        outer_members = outer.get("members") or {}
+        meta = outer_members.get("backup.kkbak") or {}
+        expected_kk = str(meta.get("sha256") or "")
+        actual_kk = _sha256_file(kkbak)
+        if not expected_kk:
+            errors.append("outer manifest missing backup.kkbak sha256")
+        elif actual_kk != expected_kk:
+            errors.append(
+                f"checksum mismatch for backup.kkbak: expected {expected_kk}, got {actual_kk}"
+            )
+            return RestoreVerifyResult(
+                ok=False, members_checked=checked, errors=errors, backup_key_version=None
+            )
+        else:
+            checked += 1
+        for name in outer_members:
+            if _safe_member_relpath(name, allowlist=_OUTER_MEMBER_ALLOWLIST) is None:
+                errors.append(f"disallowed outer member name: {name!r}")
+
+        try:
+            keyring = load_backup_keyring(env)
+            plaintext, key_version = decrypt_bytes(kkbak.read_bytes(), keyring=keyring)
+        except Exception as exc:
+            errors.append(f"decrypt failed: {exc}")
+            return RestoreVerifyResult(
+                ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
+            )
+        extract_dir = root / ".verify_extract"
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+        extract_dir.mkdir(parents=True)
+        if not _extract_plain_tar(plaintext, extract_dir, errors):
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            return RestoreVerifyResult(
+                ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
+            )
+        work = extract_dir
+    else:
+        work = root
+
+    man_path = work / "MANIFEST.json"
+    if not man_path.is_file():
+        if extract_dir is not None:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        return RestoreVerifyResult(
+            ok=False,
+            members_checked=checked,
+            errors=errors + ["MANIFEST.json missing"],
+            backup_key_version=key_version,
+        )
+    try:
+        manifest = json.loads(man_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        if extract_dir is not None:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        return RestoreVerifyResult(
+            ok=False,
+            members_checked=checked,
+            errors=errors + [f"MANIFEST.json invalid: {exc}"],
+            backup_key_version=key_version,
+        )
+    _verify_manifest_file_checksum(man_path, work / "MANIFEST.sha256", errors)
+
+    checked += _check_plain_members(
+        work, manifest.get("members") or {}, allow_stub=allow_stub, errors=errors
+    )
+
+    if extract_dir is not None:
+        shutil.rmtree(extract_dir, ignore_errors=True)
 
     return RestoreVerifyResult(
         ok=not errors,
