@@ -4,6 +4,8 @@ kkmail 只有一种服务端形态：mail-core API + worker + PostgreSQL，SPA �
 
 ## Docker Compose
 
+`docker-compose.mail-core.yml` 使用 Compose Specification，**不写**顶层 `version:`（该字段在现代 Docker Compose 中已废弃并被忽略）。
+
 ```bash
 export POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 export MAIL_CORE_SECRET_KEY="$(openssl rand -hex 32)"

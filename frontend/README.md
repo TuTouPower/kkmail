@@ -1,32 +1,29 @@
-# React + TypeScript + Vite
+# kkmail frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React + TypeScript + Vite SPA for the kkmail mail-core backend.
 
-Currently, two official plugins are available:
+## Setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+# from repo root: mail-core must be listening (default 127.0.0.1:8000)
+cd frontend
+npm ci
+npm run dev          # http://127.0.0.1:5173 — /api proxied to mail-core
+npm run build        # output: dist/ (also copied/served by mail-core in production images)
+npm test             # vitest + OpenAPI drift check
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Optional: set `VITE_API_BASE` (or runtime `__KKMAIL_CONFIG__.apiBase`) when the API origin differs from the page origin. Same-origin is the default and preferred.
+
+## Layout of `src/`
+
+| Path | Role |
+| --- | --- |
+| `api/` | HTTP client, mail-core helpers, OpenAPI-generated types |
+| `components/` | Sidebar, MessageList, MessageReader, Settings, Login |
+| `hooks/` | SSE realtime |
+| `store/` | Zustand UI state |
+| `design-system/` | CSS tokens |
+| `lib/` | mailKey, sanitize/srcdoc, viewport breakpoint, helpers |
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for boundaries and product scope. Root docs: [docs/deployment.md](../docs/deployment.md), [docs/api.md](../docs/api.md), [DESIGN.md](../DESIGN.md).
