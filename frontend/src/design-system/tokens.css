@@ -892,3 +892,107 @@ button:disabled {
 .sidebar-collapsed .sidebar-footer {
   display: none;
 }
+
+/* --- list header / selection / checkbox fixes (review 2026-10-20) --- */
+.list-pane { min-width: 0; }
+.list-header { min-width: 0; }
+.list-controls { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+.list-control-group { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; }
+.segmented { flex: 0 0 auto; }
+.segment-btn { white-space: nowrap; flex: 0 0 auto; }
+.sort-btn:disabled { opacity: 0.4; }
+.sort-btn.danger { color: var(--red); }
+.selection-bar { justify-content: space-between; }
+.selection-count { font-size: 11px; font-weight: 650; color: var(--text); white-space: nowrap; }
+
+.message-check {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: 8px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--on-primary, #fff);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.message-row:hover .message-check,
+.message-row:focus-within .message-check,
+.message-list.selecting .message-check,
+.message-row.checked .message-check { opacity: 1; }
+.message-row.checked .message-check { background: var(--primary); border-color: var(--primary); }
+.message-row.checked { border-color: color-mix(in srgb, var(--primary) 35%, transparent); }
+
+.list-note { padding: 8px 14px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.list-note.error { color: var(--red); }
+
+.side-count.unread-badge { color: var(--accent); font-weight: 700; }
+
+.mobile-only { display: none !important; }
+@media (max-width: 760px) {
+  .mobile-only { display: grid !important; }
+}
+
+.email-body-text { white-space: pre-wrap; text-align: start; }
+.field-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.field-hint { font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 4px; white-space: pre-line; }
+
+/* --- mobile drawer, dialogs (review 2026-10-20, mobile pass) --- */
+.drawer-backdrop { display: none; }
+@media (max-width: 760px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    height: 100dvh;
+    overscroll-behavior: contain;
+  }
+  .drawer-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    background: rgba(0, 0, 0, 0.45);
+    touch-action: none;
+  }
+}
+
+.dialog-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.dialog-actions button, .settings-row button { white-space: nowrap; flex: 0 0 auto; }
+.dialog-actions .dialog-hint { margin-left: auto; font-size: 11px; color: var(--muted); min-width: 0; flex: 1 1 180px; text-align: right; overflow-wrap: anywhere; }
+.settings-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+.settings-row > input, .settings-row > select { flex: 1 1 160px; min-width: 0; }
+.settings-row > .narrow { flex: 0 1 90px; }
+.settings-dialog { width: min(760px, 100%); height: min(680px, 88dvh); }
+.settings-body { display: flex; flex: 1; min-height: 0; }
+.settings-content { min-width: 0; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 22px 24px; }
+.settings-content input, .settings-content textarea, .settings-content select { max-width: 100%; }
+.settings-content * { overflow-wrap: anywhere; }
+
+@media (max-width: 760px) {
+  .modal-overlay { padding: 0 !important; align-items: stretch !important; }
+  .settings-dialog, .compose-dialog {
+    width: 100vw !important;
+    max-width: 100vw;
+    height: 100dvh !important;
+    max-height: 100dvh;
+    border-radius: 0 !important;
+    border: 0 !important;
+  }
+  .compose-dialog { display: flex; flex-direction: column; overflow-y: auto !important; }
+  .compose-dialog textarea { flex: 1; }
+  .settings-body { flex-direction: column; }
+  .settings-nav { flex-direction: row !important; overflow-x: auto; width: 100% !important; border-right: 0 !important; border-bottom: 1px solid var(--line); padding: 8px !important; }
+  .settings-nav button { white-space: nowrap; flex: 0 0 auto; }
+  .settings-content { padding: 16px 14px; }
+  .dialog-actions .dialog-hint { flex-basis: 100%; text-align: left; margin-left: 0; }
+}
+.settings-field { display: flex; flex-direction: column; min-width: 0; }
+.settings-row > * { min-width: 0; }
+.settings-content button { white-space: nowrap; }
