@@ -134,7 +134,7 @@ def _pause_quota(session, message_ids: list[uuid.UUID], account_id: uuid.UUID | 
         if st is None:
             continue
         apply_transition(st, ArchiveState.ARCHIVE_PAUSED_QUOTA)
-        st.pause_reason = "hard_quota"
+        st.pause_reason = "quota"
         st.claimed_by = None
         st.updated_at = datetime.now(timezone.utc)
     session.add(
@@ -180,14 +180,20 @@ def run_archive_batch(
             session.commit()
 
     quota = check_quota(root, soft_limit_bytes=soft_i, hard_limit_bytes=hard_i)
-    if quota.hard_exceeded:
+    if quota.hard_exceeded or quota.soft_exceeded:
         with Session() as session:
-            # Nothing claimed yet — emit pause event and stop.
+            # Nothing claimed yet — emit pause event and stop (soft + hard).
             session.add(
                 OutboxEvent(
                     event_type=OutboxEventType.ARCHIVE_PAUSED_QUOTA.value,
                     account_id=account_id,
-                    payload={"used_bytes": quota.used_bytes, "hard_limit_bytes": hard_i},
+                    payload={
+                        "used_bytes": quota.used_bytes,
+                        "soft_limit_bytes": soft_i,
+                        "hard_limit_bytes": hard_i,
+                        "soft_exceeded": quota.soft_exceeded,
+                        "hard_exceeded": quota.hard_exceeded,
+                    },
                 )
             )
             if account_id is not None and fencing is not None:
@@ -227,7 +233,7 @@ def run_archive_batch(
     for mid, remote_id, msg_account_id in work:
         # Re-check quota before each download
         quota = check_quota(root, soft_limit_bytes=soft_i, hard_limit_bytes=hard_i)
-        if quota.hard_exceeded:
+        if quota.hard_exceeded or quota.soft_exceeded:
             with Session() as session:
                 remaining = [mid] + [w[0] for w in work[work.index((mid, remote_id, msg_account_id)) + 1 :]]
                 _pause_quota(session, remaining, account_id)

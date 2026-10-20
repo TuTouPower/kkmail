@@ -223,8 +223,12 @@ class GmailProvider:
             return bytes(data["raw_bytes"])
         import base64
 
-        raw = data.get("raw") or ""
-        return base64.urlsafe_b64decode(raw + "==")
+        raw = data.get("raw")
+        if not isinstance(raw, str) or not raw:
+            raise RuntimeError("Gmail messages.get(format=raw) missing raw MIME")
+        # urlsafe_b64decode needs length % 4 == 0; pad only as needed (never force "==").
+        pad = "=" * ((4 - len(raw) % 4) % 4)
+        return base64.urlsafe_b64decode(raw + pad)
 
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:
         self._calls.append("delta_changes")

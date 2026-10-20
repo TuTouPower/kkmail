@@ -147,7 +147,8 @@ def apply_metadata_page(
         if not o.changed:
             continue
         touched.append(o.message.id)
-        upsert_message_search(session, message_id=o.message.id, body_text=meta.snippet or "")
+        # body_text=None → prefer MessageBody.text_plain; never clobber FTS with snippet.
+        upsert_message_search(session, message_id=o.message.id)
         if o.created and (
             meta.internet_message_id
             or meta.provider_thread_key
@@ -163,14 +164,14 @@ def apply_metadata_page(
             )
     if touched:
         session.add(messages_upserted_event(account_id, folder_id, touched))
-    recompute_folder_stats(session, folder_id)
-    session.add(
-        OutboxEvent(
-            event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
-            account_id=account_id,
-            payload={"folder_id": str(folder_id)},
+        recompute_folder_stats(session, folder_id)
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
+                account_id=account_id,
+                payload={"folder_id": str(folder_id)},
+            )
         )
-    )
     cursor = page.next_cursor or {}
     commit_checkpoint(
         session,
