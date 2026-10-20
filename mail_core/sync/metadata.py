@@ -20,6 +20,8 @@ from mail_core.mail.storage.models import (
 from mail_core.providers.base import MetadataPage, RemoteMessageMeta
 from mail_core.sync.checkpoints import commit_checkpoint
 from mail_core.sync.leases import assert_fencing
+from mail_core.search.index import upsert_message_search
+from mail_core.realtime.notify import try_notify_outbox
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +106,7 @@ def apply_metadata_page(
     assert_fencing(session, account_id=account_id, fencing_token=fencing_token)
     for meta in page.items:
         msg = _upsert_message(session, account_id=account_id, folder_id=folder_id, meta=meta)
+        upsert_message_search(session, message_id=msg.id, body_text=meta.snippet or "")
         session.add(
             OutboxEvent(
                 event_type=OutboxEventType.MESSAGE_UPSERTED.value,
@@ -129,5 +132,6 @@ def apply_metadata_page(
         uidvalidity=cursor.get("uidvalidity"),
         full_scan_complete=page.exhausted,
     )
+    try_notify_outbox(session)
     session.flush()
     return MetadataApplyResult(upserted=len(page.items), exhausted=page.exhausted, cursor=cursor)
