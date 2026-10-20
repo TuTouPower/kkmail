@@ -140,7 +140,18 @@ def _verify_manifest_file_checksum(man_path: Path, sha_path: Path, errors: list[
     if not sha_path.is_file():
         errors.append(f"{sha_path.name} missing")
         return
-    expected = sha_path.read_text(encoding="utf-8").split()[0]
+    raw = sha_path.read_text(encoding="utf-8").strip()
+    if not raw:
+        errors.append(f"{sha_path.name} is empty")
+        return
+    parts = raw.split()
+    if not parts:
+        errors.append(f"{sha_path.name} invalid format")
+        return
+    expected = parts[0]
+    if len(expected) != 64:
+        errors.append(f"{sha_path.name} invalid sha256: {expected!r}")
+        return
     actual = _sha256_file(man_path)
     if expected != actual:
         errors.append(f"{sha_path.name} mismatch: expected {expected}, got {actual}")
@@ -255,6 +266,11 @@ def create_backup_package(
     (plain / "MANIFEST.sha256").write_text(f"{_sha256_file(man_path)}  MANIFEST.json\n", encoding="utf-8")
 
     if not do_encrypt:
+        # Clean up any stale sealed artifacts from previous runs
+        for stale_name in ("backup.kkbak", "backup.kkbak.sha256"):
+            stale_f = out / stale_name
+            if stale_f.exists():
+                stale_f.unlink()
         log.info("backup package written to %s (plaintext)", out)
         return out
 
@@ -323,8 +339,10 @@ def _check_plain_members(
             )
         digest = _sha256_file(path)
         expected = str(meta.get("sha256") or "")
-        if expected and digest != expected:
-            errors.append(f"checksum mismatch for {name}")
+        if not expected or len(expected) != 64:
+            errors.append(f"invalid or missing sha256 for {name}")
+        elif digest != expected:
+            errors.append(f"checksum mismatch for {name}: expected {expected}, got {digest}")
         checked += 1
     return checked
 
@@ -375,9 +393,19 @@ def verify_backup_package(
     kkbak = root / "backup.kkbak"
     extract_dir: Path | None = None
 
-    if kkbak.is_file():
+    outer_man = root / "MANIFEST.json"
+    is_sealed = False
+    if outer_man.is_file():
+        try:
+            outer_data = json.loads(outer_man.read_text(encoding="utf-8"))
+            is_sealed = bool(outer_data.get("encrypted"))
+        except Exception:
+            is_sealed = kkbak.is_file()
+    else:
+        is_sealed = kkbak.is_file()
+
+    if is_sealed and kkbak.is_file():
         # --- Outer sealed integrity (previously skipped) ---
-        outer_man = root / "MANIFEST.json"
         if not outer_man.is_file():
             return RestoreVerifyResult(
                 ok=False, members_checked=0, errors=["outer MANIFEST.json missing"]
@@ -470,8 +498,11 @@ def _verify_plain_tree(
             backup_key_version=key_version,
         )
     _verify_manifest_file_checksum(man_path, work / "MANIFEST.sha256", errors)
+    members = manifest.get("members") or {}
+    if "postgres.dump" not in members:
+        errors.append("required member postgres.dump missing from manifest")
     checked += _check_plain_members(
-        work, manifest.get("members") or {}, allow_stub=allow_stub, errors=errors
+        work, members, allow_stub=allow_stub, errors=errors
     )
     return RestoreVerifyResult(
         ok=not errors,
