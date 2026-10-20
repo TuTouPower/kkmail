@@ -25,20 +25,23 @@ def create_account(
     credentials: dict | None = None,
 ) -> Account:
     email_norm = email.strip().lower()
-    ref = credential_ref
-    if credentials is not None:
-        ref = ref or f"account:{email_norm}"
-        save_json_secret(get_credential_store(), ref, credentials)
     acc = Account(
         email=email_norm,
         provider=str(provider),
-        credential_ref=ref,
+        credential_ref=credential_ref,
         display_name=display_name,
         config=config or {},
         group_id=group_id,
     )
     session.add(acc)
     session.flush()
+
+    if credentials is not None:
+        ref = credential_ref or f"account:{acc.id}"
+        save_json_secret(get_credential_store(), ref, credentials)
+        acc.credential_ref = ref
+        session.flush()
+
     return acc
 
 
@@ -85,7 +88,7 @@ def update_account(
         merged.update(config_patch)
         acc.config = merged
     if credentials is not None:
-        ref = acc.credential_ref or f"account:{acc.email}"
+        ref = acc.credential_ref or f"account:{acc.id}"
         acc.credential_ref = ref
         save_json_secret(get_credential_store(), ref, credentials)
     session.flush()
