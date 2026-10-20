@@ -15,5 +15,4 @@ Spec: [mail-core-architecture.md](./mail-core-architecture.md). This page lists 
 | Read API | Unified inbox (opaque cursor), hydrated search with a total, message detail, and streamed attachments. |
 | Backup | `KKBK` packages under a separate backup key. A restore drill script is provided. |
 | Desktop | Electron starts a loopback PostgreSQL (SCRAM, random password) and the `python -m mail_core` sidecar, with per-install secrets. |
-| CI templates | `docs/ci/*.workflow.yml`: PostgreSQL-backed pytest with no DB skips, and frontend lint, `tsc -b`, vitest and build. |
 | Tests | `tests/mail_core/` (pytest, PostgreSQL) and `frontend/src/**/*.test.ts(x)` (vitest, including jsdom component tests). No browser end-to-end suite. |
