@@ -86,5 +86,13 @@ describe('<MessageList />', () => {
     row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     await waitFor(() => expect(useMailStore.getState().selectedKey).toBe('a'))
   })
+
+  it('checkbox stops keydown propagation to prevent opening row', async () => {
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toHaveLength(2))
+    const checkBtn = container.querySelector('.message-check') as HTMLElement
+    checkBtn.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
+    expect(useMailStore.getState().selectedKey).toBeNull()
+  })
 })
 

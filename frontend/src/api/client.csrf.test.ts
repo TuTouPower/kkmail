@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { __resetCsrfForTests, apiRequest, postJson } from './client'
+import { __resetCsrfForTests, api, apiRequest, postJson } from './client'
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -61,7 +61,7 @@ describe('CSRF handling', () => {
     let meCalls = 0
     let release!: (v: Response) => void
     const gate = new Promise<Response>((resolve) => { release = resolve })
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (String(url).endsWith('/api/auth/me')) {
         meCalls += 1
         return gate
@@ -80,7 +80,7 @@ describe('CSRF handling', () => {
     const writeCalls = fetchMock.mock.calls.filter((c) => !String(c[0]).endsWith('/api/auth/me'))
     expect(writeCalls).toHaveLength(2)
     for (const [, init] of writeCalls) {
-      expect((init.headers as Record<string, string>)['X-CSRF-Token']).toBe('shared')
+      expect(((init?.headers || {}) as Record<string, string>)['X-CSRF-Token']).toBe('shared')
     }
   })
 })
@@ -120,5 +120,23 @@ describe('errors and timeouts', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(401, { detail: 'authentication required' })))
     await expect(apiRequest('/api/groups')).rejects.toMatchObject({ status: 401 })
     expect(seen).toHaveBeenCalledOnce()
+  })
+
+  it('times out hung CSRF fetch during unsafe requests', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit = {}) => new Promise((_res, rej) => {
+      init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
+    })))
+    await expect(postJson('/api/mail/messages/1/trash', {}, { timeoutMs: 30 })).rejects.toMatchObject({
+      code: 'csrf_unavailable',
+    })
+  })
+
+  it('times out hung login requests', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit = {}) => new Promise((_res, rej) => {
+      init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
+    })))
+    await expect(api.login('secret', { timeoutMs: 30 })).rejects.toMatchObject({
+      code: 'timeout',
+    })
   })
 })

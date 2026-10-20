@@ -21,6 +21,9 @@ export default function SettingsPage() {
   const [email, setEmail] = useState('')
   const [provider, setProvider] = useState('imap')
   const [credJson, setCredJson] = useState('')
+  const [imapHost, setImapHost] = useState('')
+  const [imapPort, setImapPort] = useState('993')
+  const [imapUseSsl, setImapUseSsl] = useState(true)
   const [groupName, setGroupName] = useState('')
   const [timezone, setTimezone] = useState<string | null>(null)
   const [timeoutSeconds, setTimeoutSeconds] = useState<string | null>(null)
@@ -97,23 +100,78 @@ export default function SettingsPage() {
             ))}
             <div style={{ marginTop: 18, fontWeight: 700 }}>添加账户</div>
             <p style={{ fontSize: 12, color: 'var(--muted)' }}>credentials 为 JSON（如 refresh_token / client_id），写入凭证库，接口不会回显。</p>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
-            <select value={provider} onChange={(e) => setProvider(e.target.value)} style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+            <input id="account-email" name="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+            <select id="account-provider" name="provider" value={provider} onChange={(e) => setProvider(e.target.value)} style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
               <option value="imap">imap</option>
               <option value="gmail">gmail</option>
               <option value="graph">graph</option>
             </select>
-            <textarea value={credJson} onChange={(e) => setCredJson(e.target.value)} placeholder='{"refresh_token":"...","client_id":"..."} 或 IMAP password JSON' style={{ width: '100%', minHeight: 80, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: 8, fontSize: 12 }} />
+            {provider === 'imap' && (
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <input
+                  id="account-imap-host"
+                  name="imap_host"
+                  value={imapHost}
+                  onChange={(e) => setImapHost(e.target.value)}
+                  placeholder="IMAP 服务器 (imap_host, 必填)"
+                  style={{ width: '100%', height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }}
+                  required
+                />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    id="account-imap-port"
+                    name="imap_port"
+                    type="number"
+                    value={imapPort}
+                    onChange={(e) => setImapPort(e.target.value)}
+                    placeholder="端口 (默认 993)"
+                    style={{ width: 120, height: 34, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }}
+                  />
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                    <input
+                      id="account-imap-ssl"
+                      name="use_ssl"
+                      type="checkbox"
+                      checked={imapUseSsl}
+                      onChange={(e) => {
+                        const next = e.target.checked
+                        setImapUseSsl(next)
+                        if (imapPort === '993' && !next) setImapPort('143')
+                        else if (imapPort === '143' && next) setImapPort('993')
+                      }}
+                    />
+                    SSL / TLS
+                  </label>
+                </div>
+              </div>
+            )}
+            <textarea id="account-credentials" name="credentials" value={credJson} onChange={(e) => setCredJson(e.target.value)} placeholder='{"refresh_token":"...","client_id":"..."} 或 IMAP password JSON' style={{ width: '100%', minHeight: 80, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: 8, fontSize: 12 }} />
             <button type="button" onClick={async () => {
+              if (!email.trim()) {
+                setStatus('请输入邮箱地址')
+                return
+              }
               let credentials: Record<string, unknown> | undefined
               if (credJson.trim()) {
                 try { credentials = JSON.parse(credJson) } catch { setStatus('credentials JSON 无效'); return }
               }
+              let config: Record<string, unknown> | undefined
+              if (provider === 'imap') {
+                if (!imapHost.trim()) {
+                  setStatus('IMAP 服务器（imap_host）为必填项')
+                  return
+                }
+                config = {
+                  imap_host: imapHost.trim(),
+                  imap_port: Number.parseInt(imapPort, 10) || (imapUseSsl ? 993 : 143),
+                  use_ssl: imapUseSsl,
+                }
+              }
               setStatus('添加账户…')
               try {
-                await api.addAccount({ email, provider, credentials })
+                await api.addAccount({ email: email.trim(), provider, credentials, config })
                 setStatus('账户已添加')
-                setEmail(''); setCredJson('')
+                setEmail(''); setCredJson(''); setImapHost(''); setImapPort('993'); setImapUseSsl(true)
                 await qc.invalidateQueries({ queryKey: queryKeys.accounts })
               } catch (err) {
                 setStatus(errorMessage(err, '添加账户失败'))

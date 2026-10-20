@@ -21,6 +21,7 @@ const HOST = '127.0.0.1'
 let backend = null
 let backendExit = null
 let mainWindow = null
+let backendUrl = ''
 let appOrigin = ''
 let shuttingDown = false
 let backendLogStream = null
@@ -142,6 +143,9 @@ function createWindow(url) {
       webviewTag: false,
     },
   })
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
   mainWindow.loadURL(url)
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
     if (isAllowedExternalUrl(target)) shell.openExternal(target)
@@ -173,12 +177,18 @@ app.on('web-contents-created', (_event, contents) => {
 app.whenReady().then(async () => {
   try {
     applySessionHardening()
-    const url = await startBackend()
-    createWindow(url)
+    backendUrl = await startBackend()
+    createWindow(backendUrl)
   } catch (err) {
     console.error(err)
     dialog.showErrorBox('kkmail 无法启动', String(err && err.message ? err.message : err))
     app.quit()
+  }
+})
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0 && backendUrl) {
+    createWindow(backendUrl)
   }
 })
 

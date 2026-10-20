@@ -58,19 +58,25 @@ function handleUnauthorized(): ApiError {
   return { status: 401, code: 'unauthorized', message: '登录已过期，请重新登录' }
 }
 
-async function fetchCsrfToken(): Promise<string | null> {
+async function fetchCsrfToken(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<string | null> {
   if (csrfToken) return csrfToken
   if (csrfInflight) return csrfInflight
+  const tmo = withTimeout(undefined, timeoutMs)
   csrfInflight = (async () => {
     try {
-      const res = await fetch(`${apiBaseUrl()}/api/auth/me`, { credentials: 'include', headers: { Accept: 'application/json' } })
+      const res = await fetch(`${apiBaseUrl()}/api/auth/me`, {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+        signal: tmo.signal,
+      })
       if (!res.ok) return null
-      const data = (await res.json()) as { csrf_token?: string }
+      const data = (await underTimeout(res.json(), tmo.signal, timeoutMs, tmo.timedOut)) as { csrf_token?: string }
       csrfToken = data.csrf_token || null
       return csrfToken
     } catch {
       return null
     } finally {
+      tmo.done()
       csrfInflight = null
     }
   })()
@@ -152,7 +158,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}, 
   const method = (rest.method || 'GET').toUpperCase()
   const unsafe = method !== 'GET' && method !== 'HEAD'
   if (unsafe) {
-    const token = csrfToken || (await fetchCsrfToken())
+    const token = csrfToken || (await fetchCsrfToken(timeoutMs))
     if (!token) {
       // Never send a state-changing request without CSRF protection.
       throw { status: 0, code: 'csrf_unavailable', message: '无法获取 CSRF 令牌，请重新登录后重试' } as ApiError
@@ -211,18 +217,35 @@ export const api = {
     }
   },
 
-  async login(password: string): Promise<void> {
+  async login(password: string, opts: { timeoutMs?: number } = {}): Promise<void> {
     // Login is CSRF-exempt on the server (no session yet); send directly.
-    const res = await fetch(`${apiBaseUrl()}/api/auth/login`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
-    })
-    let body: unknown = null
-    try { body = await res.json() } catch { /* ignore */ }
-    if (!res.ok) throw errorFromBody(res.status, res.statusText, body)
-    setCsrfToken((body as LoginOut | null)?.csrf_token)
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    const tmo = withTimeout(undefined, timeoutMs)
+    try {
+      const res = await fetch(`${apiBaseUrl()}/api/auth/login`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+        signal: tmo.signal,
+      })
+      let body: unknown = null
+      try {
+        body = await underTimeout(res.json(), tmo.signal, timeoutMs, tmo.timedOut)
+      } catch (err) {
+        if (tmo.timedOut()) throw err
+        /* ignore */
+      }
+      if (!res.ok) throw errorFromBody(res.status, res.statusText, body)
+      setCsrfToken((body as LoginOut | null)?.csrf_token)
+    } catch (err) {
+      if (tmo.timedOut()) {
+        throw { status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` } as ApiError
+      }
+      throw err
+    } finally {
+      tmo.done()
+    }
   },
 
   async logout(): Promise<void> {
