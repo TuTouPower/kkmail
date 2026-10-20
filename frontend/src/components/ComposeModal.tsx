@@ -1,32 +1,30 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { api } from '../api/client'
 import { fetchAccounts, queryKeys } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
+import { ensureSuccess, errorMessage } from '../lib/actions'
 
 export default function ComposeModal() {
-  const { composeOpen, setComposeOpen, composeMode, composeDraft, view } = useMailStore()
-  const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts, enabled: composeOpen })
+  const composeOpen = useMailStore((s) => s.composeOpen)
+  const composeSeq = useMailStore((s) => s.composeSeq)
+  if (!composeOpen) return null
+  // Remount per open so the form state is initialised from the current draft.
+  return <ComposeForm key={composeSeq} />
+}
+
+function ComposeForm() {
+  const { setComposeOpen, composeMode, composeDraft, view } = useMailStore()
+  const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
-  const [accountId, setAccountId] = useState(0)
-  const [to, setTo] = useState('')
+  const [accountId, setAccountId] = useState(() => composeDraft.accountId || (view.type === 'accountFolder' ? view.accountId : 0))
+  const [to, setTo] = useState(composeDraft.to)
   const [cc, setCc] = useState('')
-  const [subject, setSubject] = useState('')
-  const [body, setBody] = useState('')
+  const [subject, setSubject] = useState(composeDraft.subject)
+  const [body, setBody] = useState(composeDraft.body)
   const [status, setStatus] = useState('')
   const [sending, setSending] = useState(false)
-
-  useEffect(() => {
-    if (!composeOpen) return
-    setTo(composeDraft.to)
-    setSubject(composeDraft.subject)
-    setBody(composeDraft.body)
-    setAccountId(composeDraft.accountId || (view.type === 'accountFolder' ? view.accountId : 0))
-    setStatus('')
-  }, [composeOpen, composeDraft, view])
-
-  if (!composeOpen) return null
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -34,11 +32,11 @@ export default function ComposeModal() {
     setStatus('')
     try {
       const recipients = [to, cc].filter(Boolean).join(', ')
-      await api.sendOutlookMail({ account_id: accountId, recipients, subject, body })
+      ensureSuccess(await api.sendOutlookMail({ account_id: accountId, recipients, subject, body }), '发送失败')
       setStatus('已提交发送（Graph 返回 202 表示已受理，不代表已送达）')
       setTimeout(() => setComposeOpen(false), 900)
     } catch (err: unknown) {
-      setStatus(err && typeof err === 'object' && 'message' in err ? String((err as { message: string }).message) : '发送失败。仅已完成 Graph 授权的 Outlook 账号可发信。')
+      setStatus(errorMessage(err, '发送失败。仅已完成 Graph 授权的 Outlook 账号可发信。'))
     } finally {
       setSending(false)
     }
