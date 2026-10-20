@@ -755,12 +755,12 @@ button:disabled {
 }
 
 .reader-action {
-  height: 29px;
-  width: 29px;
+  height: 36px;
+  width: 36px;
   display: grid;
   place-items: center;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
   color: var(--muted);
 }
