@@ -20,8 +20,12 @@ def test_encrypted_backup_verify_drill(tmp_path, monkeypatch):
         encrypt=True,
         database_url_override="postgresql://nobody:nope@127.0.0.1:1/none",
         blobs_dir=blobs,
+        allow_dump_stub=True,
     )
     assert path.exists()
-    vr = verify_backup_package(path)
+    rejected = verify_backup_package(path)
+    assert rejected.ok is False
+    assert any("sql_stub" in e for e in rejected.errors)
+    vr = verify_backup_package(path, allow_stub=True)
     assert vr.ok, vr.errors
     assert vr.members_checked >= 1

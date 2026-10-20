@@ -68,7 +68,12 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _pg_dump_to(dest: Path, url: str) -> str:
+def _pg_dump_to(dest: Path, url: str, *, allow_stub: bool = False) -> str:
+    """Run pg_dump into ``dest``.
+
+    On failure (missing binary or non-zero exit), raise unless ``allow_stub`` is set
+    for offline unit/crypto drills. Stubs never verify as restoreable backups.
+    """
     dsn = url
     if dsn.startswith("postgresql+psycopg://"):
         dsn = "postgresql://" + dsn[len("postgresql+psycopg://") :]
@@ -82,7 +87,12 @@ def _pg_dump_to(dest: Path, url: str) -> str:
             )
             return "custom"
         except subprocess.CalledProcessError as exc:
-            log.warning("pg_dump failed: %s", exc.stderr.decode(errors="replace")[:500])
+            detail = exc.stderr.decode(errors="replace")[:500] if exc.stderr else str(exc)
+            log.warning("pg_dump failed: %s", detail)
+            if not allow_stub:
+                raise RuntimeError(f"pg_dump failed: {detail}") from exc
+    elif not allow_stub:
+        raise RuntimeError("pg_dump binary not found on PATH")
     dest.write_text(
         "-- mail-core backup stub: pg_dump unavailable or failed\n"
         f"-- url={_redact_url(url)}\n"
@@ -98,10 +108,11 @@ def _build_plain_dir(
     url: str,
     root: Path,
     include_blobs: bool,
+    allow_dump_stub: bool = False,
 ) -> BackupManifest:
     out.mkdir(parents=True, exist_ok=True)
     dump_path = out / "postgres.dump"
-    dump_method = _pg_dump_to(dump_path, url)
+    dump_method = _pg_dump_to(dump_path, url, allow_stub=allow_dump_stub)
     members: dict[str, dict[str, str | int]] = {
         "postgres.dump": {
             "sha256": _sha256_file(dump_path),
@@ -134,8 +145,13 @@ def create_backup_package(
     database_url_override: str | None = None,
     blobs_dir: Path | None = None,
     encrypt: bool | None = None,
+    allow_dump_stub: bool = False,
 ) -> Path:
-    """Write a plain backup directory, optionally seal to ``backup.kkbak``."""
+    """Write a plain backup directory, optionally seal to ``backup.kkbak``.
+
+    ``allow_dump_stub`` is for offline unit/crypto drills only. Production callers
+    must leave it false so a failed pg_dump cannot seal as a successful backup.
+    """
     out = Path(output_dir)
     url = database_url_override or database_url()
     root = blobs_dir or blob_root()
@@ -144,7 +160,9 @@ def create_backup_package(
     )
 
     plain = out / "plain" if do_encrypt else out
-    manifest = _build_plain_dir(plain, url=url, root=root, include_blobs=include_blobs)
+    manifest = _build_plain_dir(
+        plain, url=url, root=root, include_blobs=include_blobs, allow_dump_stub=allow_dump_stub
+    )
     man_path = plain / "MANIFEST.json"
     man_path.write_text(json.dumps(asdict(manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     (plain / "MANIFEST.sha256").write_text(f"{_sha256_file(man_path)}  MANIFEST.json\n", encoding="utf-8")
@@ -192,6 +210,7 @@ def verify_backup_package(
     package_dir: str | Path,
     *,
     env: dict[str, str] | None = None,
+    allow_stub: bool = False,
 ) -> RestoreVerifyResult:
     """Decrypt (if needed) and verify member checksums. Does not restore into PG."""
     root = Path(package_dir)
@@ -236,6 +255,11 @@ def verify_backup_package(
         if not path.is_file():
             errors.append(f"missing member {name}")
             continue
+        method = meta.get("method")
+        if method == "sql_stub" and not allow_stub:
+            errors.append(
+                f"{name} is sql_stub (pg_dump failed or skipped); backup is not restoreable"
+            )
         digest = _sha256_file(path)
         expected = str(meta.get("sha256") or "")
         if expected and digest != expected:
