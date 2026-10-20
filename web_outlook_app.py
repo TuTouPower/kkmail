@@ -131,6 +131,10 @@ def run_windows_desktop(access_url: str, host: str, port: int) -> None:
     run_desktop_app(access_url, host, port)
 
 
+def is_sidecar_mode() -> bool:
+    return os.getenv("KKMAIL_SIDECAR", "").strip().lower() in {"1", "true", "yes"}
+
+
 def main():
     port = int(os.getenv("PORT", 5000))
     host = os.getenv("HOST", "127.0.0.1" if is_frozen() else "0.0.0.0")
@@ -146,11 +150,14 @@ def main():
     print("=" * 60)
 
     try:
-        if is_frozen() and (os.name == "nt" or sys.platform == "darwin"):
+        # KKMAIL_SIDECAR=1: started by the Electron shell, which owns the window.
+        # Skip the tray icon and the auto-opened system browser.
+        sidecar = is_sidecar_mode()
+        if is_frozen() and not sidecar and (os.name == "nt" or sys.platform == "darwin"):
             run_desktop_app(access_url, host, port)
             return
 
-        if is_frozen():
+        if is_frozen() and not sidecar:
             threading.Timer(1.0, lambda: webbrowser.open(access_url)).start()
 
         init_scheduler()
