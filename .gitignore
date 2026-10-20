@@ -57,3 +57,7 @@ desktop/node_modules/
 desktop/release/
 frontend/node_modules/
 frontend/dist/
+
+build/
+dist/
+desktop/resources/
