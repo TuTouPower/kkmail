@@ -105,16 +105,55 @@ def sweep_expired_blobs(
     )
 
 
-def unlink_gc_paths(paths: tuple[Path, ...] | list[Path]) -> int:
-    """Phase 2: remove files after DB commit. Returns unlink count."""
+def unlink_gc_paths(
+    paths: tuple[Path, ...] | list[Path],
+    *,
+    session: Session | None = None,
+) -> int:
+    """Phase 2: remove files after DB commit. Returns unlink count.
+
+    Performs a second safety check against the DB before unlinking to prevent
+    races where a concurrent archive re-referenced the same digest (V2-21 / R12).
+    """
     n = 0
-    for path in paths:
+    Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
+
+    own_session = None
+    if session is None:
         try:
-            if path.is_file():
+            own_session = Session()
+            check_session = own_session
+        except Exception:
+            check_session = None
+    else:
+        check_session = session
+
+    try:
+        for path in paths:
+            try:
+                if not path.is_file():
+                    continue
+                digest = path.stem.lower()
+                if len(digest) == 64 and check_session is not None:
+                    try:
+                        live_refs = check_session.scalar(
+                            select(func.count())
+                            .select_from(MessageBlob)
+                            .where(MessageBlob.content_sha256 == digest)
+                        ) or 0
+                        if int(live_refs) > 0:
+                            log.info("gc unlink skipped newly referenced blob: %s", path)
+                            continue
+                    except Exception as exc:
+                        log.warning("gc unlink safety check query error for %s: %s", path, exc)
                 path.unlink()
                 n += 1
-        except OSError as exc:
-            log.warning("gc unlink failed %s: %s", path, exc)
+            except OSError as exc:
+                log.warning("gc unlink failed %s: %s", path, exc)
+    finally:
+        if own_session is not None:
+            own_session.close()
+
     return n
 
 
