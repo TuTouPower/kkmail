@@ -14,6 +14,7 @@ export default function Sidebar() {
     collapsedAccounts,
     toggleAccount,
     toggleSidebar,
+    closeMobileSidebar,
   } = useMailStore()
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -36,7 +37,7 @@ export default function Sidebar() {
       <div className="sidebar-scroll">
         <div className="side-section">
           <div className="section-label"><span>个人收藏</span></div>
-          <button className={`side-item ${view.type === 'allInbox' ? 'active' : ''}`} onClick={() => setView({ type: 'allInbox' })}>
+          <button className={`side-item ${view.type === 'allInbox' ? 'active' : ''}`} onClick={() => { setView({ type: 'allInbox' }); closeMobileSidebar() }}>
             <Inbox size={17} />
             <span className="side-name">所有收件箱</span>
             <span className="side-count">{accounts.length}</span>
@@ -85,7 +86,7 @@ export default function Sidebar() {
                         </button>
                         <button
                           className={`account-button ${selected ? 'active' : ''}`}
-                          onClick={() => setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: 'inbox' })}
+                          onClick={() => { setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: 'inbox' }); closeMobileSidebar() }}
                           title={a.email}
                         >
                           <span className="account-dot" style={{ background: a.group_color || providerColor(a.provider, a.account_type) }}>
@@ -102,7 +103,7 @@ export default function Sidebar() {
                               <button
                                 key={f.id}
                                 className={`side-item ${active ? 'active' : ''}`}
-                                onClick={() => setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: f.api })}
+                                onClick={() => { setView({ type: 'accountFolder', accountId: a.id, email: a.email, folder: f.api }); closeMobileSidebar() }}
                               >
                                 <Inbox size={15} />
                                 <span className="side-name">{f.label}</span>

@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import { Reply, Forward, MailOpen, Trash2, Flag, Folder, MoreHorizontal } from 'lucide-react'
+import { Reply, Forward, MailOpen, Trash2, Flag, Folder, MoreHorizontal, ArrowLeft } from 'lucide-react'
 import { api } from '../api/client'
 import { fetchAccounts, fetchEmailDetail, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
 
 export default function MessageReader() {
-  const { selectedKey, openCompose, flaggedIds, toggleFlag } = useMailStore()
+  const { selectedKey, openCompose, flaggedIds, toggleFlag, setMobileView } = useMailStore()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
   const cachedLists = queryClient.getQueriesData<MailItem[]>({ queryKey: ['emails'] })
@@ -46,6 +46,7 @@ export default function MessageReader() {
   return (
     <section className="reader-pane" aria-label="邮件正文">
       <div className="reader-toolbar">
+        <button className="reader-action" title="返回列表" onClick={() => setMobileView('list')}><ArrowLeft size={15} /></button>
         <div className="reader-location">{selected.accountEmail}</div>
         <div className="reader-toolbar-actions">
           <button className="reader-action" title="回复" onClick={() => openCompose('reply', {
