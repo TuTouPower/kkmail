@@ -1,9 +1,4 @@
-"""PostgreSQL LISTEN/NOTIFY wake helpers for the outbox dispatcher.
-
-TODO(mail-core): run a dedicated listener thread in the API/worker process that
-calls ``OutboxDispatcher.dispatch_once`` on ``mail_core_outbox`` NOTIFY.
-Until then, SSE keepalive ticks and ``outbox_dispatch_wake`` jobs poll the table.
-"""
+"""PostgreSQL LISTEN/NOTIFY wake helpers for the outbox dispatcher."""
 
 from __future__ import annotations
 
@@ -17,7 +12,7 @@ log = logging.getLogger("mail_core.realtime.notify")
 
 
 def notify_outbox(session: Session) -> None:
-    """Emit NOTIFY after outbox inserts (same transaction)."""
+    """Emit NOTIFY after outbox inserts (delivered when the transaction commits)."""
     session.execute(text(f"SELECT pg_notify('{CHANNEL}', 'wake')"))
 
 
