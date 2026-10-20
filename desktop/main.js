@@ -4,6 +4,7 @@
  * contextIsolation on, nodeIntegration off.
  */
 const { app, BrowserWindow, shell, dialog, session } = require('electron')
+const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
@@ -75,12 +76,14 @@ async function startBackend() {
   if (port == null) throw new Error('无法分配本地端口给 mail-core')
   const target = backendCommand()
   const databaseUrl = pg.databaseUrl()
+  const instanceToken = crypto.randomBytes(24).toString('hex')
   const env = scrubEnv(process.env, {
     MAIL_CORE_HOST: HOST,
     MAIL_CORE_PORT: String(port),
     MAIL_CORE_DATA_DIR: dataRoot,
     MAIL_CORE_DATABASE_URL: databaseUrl,
     KKMAIL_SIDECAR: '1',
+    KKMAIL_INSTANCE_TOKEN: instanceToken,
   })
   const dist = target.packaged
     ? frontendDistPath(process.resourcesPath)
@@ -89,7 +92,7 @@ async function startBackend() {
 
   // Own process group on Unix so stopChildTree can SIGTERM/SIGKILL the whole tree.
   const detached = process.platform !== 'win32'
-  backend = spawn(target.cmd, [...target.args, '--data-dir', dataRoot], {
+  backend = spawn(target.cmd, [...target.args, '--data-dir', dataRoot, '--instance-token', instanceToken], {
     cwd: target.cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -106,7 +109,10 @@ async function startBackend() {
       app.quit()
     }
   })
-  await waitForHealth(`http://${HOST}:${port}/health`, 60000, { shouldStop: () => backendExit })
+  await waitForHealth(`http://${HOST}:${port}/health`, 60000, {
+    instanceToken,
+    shouldStop: () => backendExit,
+  })
   showInitialPasswordOnce(dataRoot)
   return `http://${HOST}:${port}/`
 }

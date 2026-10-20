@@ -130,6 +130,7 @@ function waitForHealth(url, timeoutMs = 30000, opts = {}) {
   const isOkStatus = (code) => typeof code === 'number' && code >= 200 && code < 400
   const started = Date.now()
   const shouldStop = opts.shouldStop || (() => null)
+  const expectedToken = opts.instanceToken
 
   return new Promise((resolve, reject) => {
     const tick = () => {
@@ -138,14 +139,17 @@ function waitForHealth(url, timeoutMs = 30000, opts = {}) {
         reject(stopErr)
         return
       }
-      const req = http.get(url, (res) => {
+      const headers = expectedToken ? { 'X-Instance-Token': expectedToken } : {}
+      const req = http.get(url, { headers }, (res) => {
         res.resume()
-        if (isOkStatus(res.statusCode)) {
+        const tokenMatch = !expectedToken || res.headers['x-instance-token'] === expectedToken
+        if (isOkStatus(res.statusCode) && tokenMatch) {
           resolve(true)
           return
         }
         if (Date.now() - started > timeoutMs) {
-          reject(new Error(`backend health bad status ${res.statusCode}`))
+          const detail = !tokenMatch ? 'instance token mismatch' : `bad status ${res.statusCode}`
+          reject(new Error(`backend health ${detail}`))
         } else {
           setTimeout(tick, 300)
         }
