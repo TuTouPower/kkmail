@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -83,3 +83,44 @@ def mark_remote_operation(
         )
     )
     session.flush()
+
+
+def reclaim_stale_in_progress(
+    session: Session,
+    *,
+    older_than: timedelta = timedelta(minutes=15),
+    limit: int = 100,
+    now: datetime | None = None,
+) -> int:
+    """Reset stuck ``in_progress`` remote ops back to ``pending`` after a crash/fence loss.
+
+    Ops left ``in_progress`` when fencing is lost mid-push (side effect may or may
+    not have landed) are retried; providers must be idempotent on desired_state.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - older_than
+    rows = list(
+        session.scalars(
+            select(RemoteOperation)
+            .where(RemoteOperation.status == RemoteOperationStatus.IN_PROGRESS.value)
+            .where(RemoteOperation.updated_at < cutoff)
+            .order_by(RemoteOperation.updated_at.asc())
+            .limit(limit)
+        ).all()
+    )
+    for op in rows:
+        op.status = RemoteOperationStatus.PENDING.value
+        op.updated_at = now
+        op.last_error = (op.last_error or "")[:1800]
+        suffix = "|reclaimed_stale_in_progress"
+        if not (op.last_error or "").endswith(suffix):
+            op.last_error = ((op.last_error or "") + suffix)[:2000]
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.REMOTE_OPERATION_UPDATED.value,
+                account_id=op.account_id,
+                payload={"operation_id": str(op.id), "status": op.status, "reclaimed": True},
+            )
+        )
+    session.flush()
+    return len(rows)

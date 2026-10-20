@@ -186,6 +186,8 @@ class MessageBlob(Base):
     # Relative path under blob root; never expose as user-controlled API path.
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     ref_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    # Set when ref_count hits 0; GC cool-off is measured from this, not created_at.
+    gc_eligible_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

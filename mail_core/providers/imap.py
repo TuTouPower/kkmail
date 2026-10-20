@@ -177,7 +177,7 @@ class ImapProvider:
                 typ, fetched = c.uid(
                     "FETCH",
                     str(uid),
-                    "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])",
+                    "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)])",
                 )
                 if typ != "OK" or not fetched or fetched[0] is None:
                     continue
@@ -213,6 +213,8 @@ class ImapProvider:
                         has_attachments=False,
                         internet_message_id=headers.get("Message-ID"),
                         uid=uid,
+                        in_reply_to=headers.get("In-Reply-To"),
+                        references=headers.get("References"),
                     )
                 )
             if not batch:
@@ -267,19 +269,46 @@ class ImapProvider:
             except Exception:
                 pass
 
+    def _fetch_flags_for_uids(
+        self,
+        c: imaplib.IMAP4,
+        folder_remote_id: str,
+        uidvalidity: int,
+        uids: list[int],
+    ) -> list[DeltaChange]:
+        """FETCH FLAGS for MODSEQ-changed UIDs and emit flag deltas (not discarded)."""
+        changes: list[DeltaChange] = []
+        for uid in uids:
+            typ, fetched = c.uid("FETCH", str(uid), "(FLAGS)")
+            if typ != "OK" or not fetched or fetched[0] is None:
+                continue
+            blob = fetched[0]
+            meta_bytes = blob[0] if isinstance(blob, tuple) else blob
+            meta_s = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
+            is_read = "\\Seen" in meta_s
+            is_flagged = "\\Flagged" in meta_s
+            rid = format_imap_remote_id(folder_remote_id, int(uidvalidity), uid)
+            changes.append(
+                DeltaChange(
+                    kind="flag",
+                    remote_id=rid,
+                    flags={"is_read": is_read, "is_flagged": is_flagged},
+                )
+            )
+        return changes
+
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:
         """Incremental sync.
 
-        Prefer CONDSTORE/MODSEQ when the server advertises it; otherwise page new
-        UIDs since ``uid_next``. Deletions are *not* inferred here — use reconcile
-        after a complete scan.
+        Prefer CONDSTORE/MODSEQ when the server advertises it; emit explicit flag
+        changes for MODSEQ hits. Also page new UIDs since ``uid_next``. Deletions
+        are *not* inferred here — use reconcile after a complete scan.
         """
         c = self._connect()
         try:
             typ, _ = c.select(folder_remote_id, readonly=True)
             if typ != "OK":
                 raise RuntimeError(f"select {folder_remote_id} failed")
-            # Detect HIGHESTMODSEQ via STATUS when possible.
             highest = None
             try:
                 st = c.status(folder_remote_id, "(HIGHESTMODSEQ UIDVALIDITY)")
@@ -297,22 +326,49 @@ class ImapProvider:
                 highest = None
 
             _check_uidvalidity(cursor, uidvalidity if uidvalidity is not None else None)
+            uv = int(uidvalidity) if uidvalidity is not None else 0
 
+            changes: list[DeltaChange] = []
             since_modseq = cursor.get("modseq")
             if highest is not None and since_modseq is not None:
-                # CHANGEDSINCE may be unsupported on pymap; fall back silently.
                 try:
                     typ, data = c.uid("SEARCH", None, "MODSEQ", str(int(since_modseq) + 1))
                     if typ == "OK":
-                        uids = [int(x) for x in (data[0] or b"").split() if x]
-                        # Reuse header fetch path by setting cursor to each uid range
-                        # Fall through to UID page for those uids via temporary cursor.
-                        if not uids:
+                        changed_uids = [int(x) for x in (data[0] or b"").split() if x]
+                        if not changed_uids:
                             return DeltaPage(
                                 changes=(),
                                 next_cursor={**cursor, "modseq": highest, "uidvalidity": uidvalidity},
                                 exhausted=True,
                             )
+                        uid_next = int(cursor.get("uid_next") or 1)
+                        # New UIDs: full metadata upsert; older UIDs: flag-only.
+                        new_uids = [u for u in changed_uids if u >= uid_next]
+                        flag_uids = [u for u in changed_uids if u < uid_next]
+                        if flag_uids:
+                            changes.extend(
+                                self._fetch_flags_for_uids(c, folder_remote_id, uv, flag_uids[:200])
+                            )
+                        if new_uids:
+                            # Page via temporary cursor starting at the lowest new UID.
+                            page = self.fetch_metadata_page(
+                                folder_remote_id,
+                                {**cursor, "uid_next": min(new_uids), "page_size": min(50, len(new_uids))},
+                            )
+                            changes.extend(
+                                DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items
+                            )
+                            next_cursor = dict(page.next_cursor or {})
+                        else:
+                            next_cursor = dict(cursor)
+                        next_cursor["modseq"] = highest
+                        if uidvalidity is not None:
+                            next_cursor["uidvalidity"] = uidvalidity
+                        return DeltaPage(
+                            changes=changes,
+                            next_cursor=next_cursor,
+                            exhausted=len(changed_uids) <= 200 and not new_uids,
+                        )
                 except Exception:
                     pass
 
