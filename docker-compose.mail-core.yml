@@ -2,6 +2,9 @@
 # Host disk/volume encryption is REQUIRED in production (see docs/mail-core-architecture.md §11).
 # Docker volume ≠ encryption.
 version: "3.9"
+# Note: if `docker compose` plugin is unavailable, equivalent:
+#   docker run -d --name kkmail-mail-core-pg -e POSTGRES_USER=kkmail \
+#     -e POSTGRES_PASSWORD=kkmail -e POSTGRES_DB=kkmail_mail -p 5433:5432 postgres:16
 services:
   postgres:
     image: postgres:16
