@@ -59,6 +59,8 @@ pg.stop()
 
 ## Packaging scaffold (electron-builder)
 
+Desktop shell targets **Electron 44** (Chromium 152 / Node 24). Host Node ≥ 22.12 is recommended for `npm install` in `desktop/` (Electron packages declare that engines range).
+
 ```bash
 cd desktop
 npm ci
@@ -73,7 +75,7 @@ reports `stub: true` and the app refuses to start.
 
 ### macOS / Windows
 
-- Use `npm run dist:mac` / `npm run dist:win` on the matching host or CI runner.
+- Use `npm run dist:mac` / `npm run dist:win` on the matching host.
 - Fetch or place PG binaries at **build time** into `desktop/vendor/pgsql/bin`
   (see `desktop/vendor/README.md`). The Linux fetch script does not auto-download
   for mac/win.
