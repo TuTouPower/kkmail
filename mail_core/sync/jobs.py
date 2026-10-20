@@ -17,6 +17,23 @@ DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RECLAIM_LIMIT = 100
 
 
+class JobOwnershipError(RuntimeError):
+    """complete_job/fail_job called without owning the CLAIMED row."""
+
+
+def _assert_job_owner(job: WorkerJob, worker_id: str | None) -> None:
+    if worker_id is None:
+        return
+    if job.status != JobStatus.CLAIMED.value:
+        raise JobOwnershipError(
+            f"job {job.id} status={job.status!r} expected CLAIMED"
+        )
+    if job.locked_by != worker_id:
+        raise JobOwnershipError(
+            f"job {job.id} locked_by={job.locked_by!r} != worker_id={worker_id!r}"
+        )
+
+
 def _max_attempts() -> int:
     return int(os.environ.get("MAIL_CORE_JOB_MAX_ATTEMPTS") or str(DEFAULT_MAX_ATTEMPTS))
 
@@ -95,8 +112,11 @@ def claim_jobs(
     return rows
 
 
-def complete_job(session: Session, job: WorkerJob) -> None:
+def complete_job(session: Session, job: WorkerJob, *, worker_id: str | None = None) -> None:
+    _assert_job_owner(job, worker_id)
     job.status = JobStatus.DONE.value
+    job.locked_by = None
+    job.locked_at = None
     session.flush()
 
 
@@ -105,10 +125,12 @@ def fail_job(
     job: WorkerJob,
     error: BaseException | str,
     *,
+    worker_id: str | None = None,
     max_attempts: int | None = None,
     now: datetime | None = None,
 ) -> None:
     """Mark failed permanently or requeue with exponential backoff using attempts."""
+    _assert_job_owner(job, worker_id)
     now = now or datetime.now(timezone.utc)
     cap = max_attempts if max_attempts is not None else _max_attempts()
     from mail_core.security.redact import safe_error

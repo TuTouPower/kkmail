@@ -38,7 +38,7 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
             session.commit()
             result = sync_account_folders(account_id, worker_id=worker_id, store=store)
             log.info("sync_account_folders %s", result)
-            complete_job(session, job)
+            complete_job(session, job, worker_id=worker_id)
             return True
 
         if job.job_type == JobType.SYNC_FOLDER_METADATA.value:
@@ -50,7 +50,7 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
             session.commit()
             result = sync_folder_metadata(account_id, folder_id, worker_id=worker_id, store=store)
             log.info("sync_folder_metadata %s", result)
-            complete_job(session, job)
+            complete_job(session, job, worker_id=worker_id)
             return True
 
         if job.job_type == JobType.RECONCILE_FOLDER.value:
@@ -62,7 +62,7 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
             session.commit()
             result = reconcile_folder(account_id, folder_id, worker_id=worker_id, store=store)
             log.info("reconcile_folder %s", result)
-            complete_job(session, job)
+            complete_job(session, job, worker_id=worker_id)
             return True
 
         if job.job_type == JobType.REMOTE_OPERATION_PUSH.value:
@@ -73,7 +73,7 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
             session.commit()
             result = push_remote_operations(account_id, worker_id=worker_id, store=store)
             log.info("remote_operation_push %s", result)
-            complete_job(session, job)
+            complete_job(session, job, worker_id=worker_id)
             return True
 
         if job.job_type == JobType.ARCHIVE_MIME_BATCH.value:
@@ -87,7 +87,7 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
                 payload=payload,
             )
             log.info("archive_mime_batch %s", result)
-            complete_job(session, job)
+            complete_job(session, job, worker_id=worker_id)
             return True
 
         if job.job_type == JobType.OUTBOX_DISPATCH_WAKE.value:
@@ -96,7 +96,7 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
             from mail_core.realtime.notify import try_notify_outbox
 
             try_notify_outbox(session)
-            complete_job(session, job)
+            complete_job(session, job, worker_id=worker_id)
             log.info("outbox_dispatch_wake notified API listener")
             return True
 
@@ -109,7 +109,7 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
             session.commit()
             result = sync_folder_delta(account_id, folder_id, worker_id=worker_id, store=store)
             log.info("sync_folder_delta %s", result)
-            complete_job(session, job)
+            complete_job(session, job, worker_id=worker_id)
             return True
 
         if job.job_type == JobType.GC_BLOBS.value:
@@ -119,7 +119,7 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
             hours = float(payload.get("cool_off_hours") or 24)
             result = run_gc_blobs(cool_off_hours=hours, dry_run=bool(payload.get("dry_run")))
             log.info("gc_blobs %s", result)
-            complete_job(session, job)
+            complete_job(session, job, worker_id=worker_id)
             return True
 
         if job.job_type == JobType.BACKUP_RUN.value:
@@ -128,10 +128,10 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
             session.commit()
             result = run_backup(output_dir=payload.get("output_dir"))
             log.info("backup_run %s", result)
-            complete_job(session, job)
+            complete_job(session, job, worker_id=worker_id)
             return True
 
-        fail_job(session, job, f"unknown job_type {job.job_type}")
+        fail_job(session, job, f"unknown job_type {job.job_type}", worker_id=worker_id)
         return False
     except Exception as exc:
         from mail_core.security.redact import safe_error
@@ -139,5 +139,5 @@ def handle_job(session: Session, job: WorkerJob) -> bool:
         log.error("job %s (%s) failed: %s", job.id, job.job_type, safe_error(exc))
         log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()
-        fail_job(session, job, exc)
+        fail_job(session, job, exc, worker_id=worker_id)
         return False
