@@ -56,6 +56,20 @@ def health() -> dict[str, str]:
 
 
 @app.get("/ready")
-def ready() -> dict[str, str]:
-    # Commit 4 will probe DB; keep shape stable.
+def ready():
+    """Liveness for orchestrators: requires DB connectivity."""
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import text
+
+    from mail_core.db.session import get_engine
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": "database", "detail": str(exc)[:200]},
+        )
     return {"status": "ready"}
