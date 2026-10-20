@@ -10,6 +10,9 @@ on:
       - "docker-compose.mail-core.yml"
       - "scripts/run-mail-core-tests.sh"
       - "scripts/start-mail-core-imap.sh"
+      - "scripts/mail-core-chaos-lease.sh"
+      - "scripts/mail-core-backup-restore-drill.sh"
+      - "scripts/fetch-pg-binaries.sh"
       - ".github/workflows/mail-core.yml"
   pull_request:
     paths:
@@ -20,6 +23,9 @@ on:
       - "docker-compose.mail-core.yml"
       - "scripts/run-mail-core-tests.sh"
       - "scripts/start-mail-core-imap.sh"
+      - "scripts/mail-core-chaos-lease.sh"
+      - "scripts/mail-core-backup-restore-drill.sh"
+      - "scripts/fetch-pg-binaries.sh"
       - ".github/workflows/mail-core.yml"
 
 jobs:
