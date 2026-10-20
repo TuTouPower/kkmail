@@ -49,7 +49,7 @@ export const queryClient = new QueryClient({
       staleTime: MAIL_STALE_TIME_MS,
       gcTime: 30 * 60_000,
       refetchOnWindowFocus: false,
-      placeholderData: (previousData: unknown) => previousData,
+      // Intentionally no global placeholderData — detail queries must not show the previous message.
     },
   },
 })

@@ -7,9 +7,8 @@ const { app, BrowserWindow, shell, dialog, session } = require('electron')
 const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
-const http = require('http')
-const net = require('net')
 const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl } = require('./paths')
+const { parsePort, freePort, waitForHealth } = require('./startup')
 const {
   mergeCspHeaders,
   denyPermissionRequest,
@@ -17,7 +16,7 @@ const {
 } = require('./hardening')
 const { PostgresManager } = require('./postgresManager')
 
-const PORT = Number(process.env.OUTLOOK_DESKTOP_PORT || 18765)
+const PORT = parsePort(process.env.OUTLOOK_DESKTOP_PORT)
 const HOST = '127.0.0.1'
 let backend = null
 let backendExit = null
@@ -26,46 +25,6 @@ let appOrigin = ''
 
 function repoRoot() {
   return path.resolve(__dirname, '..')
-}
-
-function tryListen(port) {
-  return new Promise((resolve) => {
-    const srv = net.createServer()
-    srv.once('error', () => resolve(null))
-    srv.once('listening', () => {
-      const { port: bound } = srv.address()
-      srv.close(() => resolve(bound))
-    })
-    srv.listen(port, HOST)
-  })
-}
-
-async function freePort(preferred) {
-  const exact = await tryListen(preferred)
-  if (exact) return exact
-  // Let the OS pick any free port instead of guessing preferred + 1.
-  return tryListen(0)
-}
-
-function waitForHealth(url, timeoutMs = 30000) {
-  const started = Date.now()
-  return new Promise((resolve, reject) => {
-    const tick = () => {
-      if (backendExit) {
-        reject(backendExit)
-        return
-      }
-      const req = http.get(url, (res) => {
-        res.resume()
-        resolve(true)
-      })
-      req.on('error', () => {
-        if (Date.now() - started > timeoutMs) reject(new Error('backend timeout'))
-        else setTimeout(tick, 300)
-      })
-    }
-    tick()
-  })
 }
 
 function backendCommand() {
@@ -91,7 +50,8 @@ async function startBackend() {
     throw new Error(`PostgreSQL 启动失败: ${pgResult.reason || 'unknown'}`)
   }
   const dataRoot = pg.paths().dataRoot
-  const port = await freePort(PORT)
+  const port = await freePort(PORT, HOST)
+  if (port == null) throw new Error('无法分配本地端口给 mail-core')
   const target = backendCommand()
   const env = {
     ...process.env,
@@ -118,7 +78,7 @@ async function startBackend() {
       app.quit()
     }
   })
-  await waitForHealth(`http://${HOST}:${port}/health`, 60000)
+  await waitForHealth(`http://${HOST}:${port}/health`, 60000, { shouldStop: () => backendExit })
   showInitialPasswordOnce(dataRoot)
   return `http://${HOST}:${port}/`
 }

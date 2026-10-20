@@ -19,7 +19,10 @@ function frontendDistPath(resourcesPath) {
 
 function isAllowedExternalUrl(target) {
   try {
-    const { protocol } = new URL(target)
+    const u = new URL(target)
+    // Reject embedded credentials (https://user:pass@host/…) — phishing / leak risk.
+    if (u.username || u.password) return false
+    const { protocol } = u
     return protocol === 'https:' || protocol === 'http:' || protocol === 'mailto:'
   } catch {
     return false

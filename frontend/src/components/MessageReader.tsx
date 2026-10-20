@@ -34,6 +34,8 @@ export default function MessageReader() {
     },
     retry: false,
     enabled: !!selected?.id,
+    // Never keep the previous message body while switching selection.
+    placeholderData: undefined,
   })
 
   if (!selected) {
