@@ -204,32 +204,7 @@ class BearerTransport:
             raise
 
 
-def build_gmail_api_transport(
-    token_client: OAuthTokenClient,
-    *,
-    api_get: Callable[[str, str, dict[str, Any] | None, dict[str, str] | None], Any] | None = None,
-) -> BearerTransport:
-    """Bearer transport targeting Gmail REST (path like /gmail/v1/...)."""
 
-    def _inner(method: str, path: str, params: dict[str, Any] | None, headers: dict[str, str] | None) -> Any:
-        if api_get is None:
-            raise ProviderHttpError("Gmail API HTTP not configured", status=501)
-        return api_get(method, path, params, headers)
-
-    return BearerTransport(token_client=token_client, inner=_inner, base_url="https://gmail.googleapis.com")
-
-
-def build_graph_api_transport(
-    token_client: OAuthTokenClient,
-    *,
-    api_get: Callable[[str, str, dict[str, Any] | None, dict[str, str] | None], Any] | None = None,
-) -> BearerTransport:
-    def _inner(method: str, path: str, params: dict[str, Any] | None, headers: dict[str, str] | None) -> Any:
-        if api_get is None:
-            raise ProviderHttpError("Graph API HTTP not configured", status=501)
-        return api_get(method, path, params, headers)
-
-    return BearerTransport(token_client=token_client, inner=_inner, base_url="https://graph.microsoft.com/v1.0")
 
 
 
