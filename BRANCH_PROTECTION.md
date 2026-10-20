@@ -20,20 +20,12 @@ Recommended settings:
 - Require a pull request before merging
 - Require at least 1 approval (optional if solo-maintained, but recommended if collaborators join later)
 - Dismiss stale approvals when new commits are pushed
-- Require status checks to pass before merging
 - Require branches to be up to date before merging
 - Restrict direct pushes to `main`
 - Restrict force pushes
 - Restrict branch deletion
 
-### Suggested required checks for `main`
-
-At minimum:
-
-- `tests / mail-core` (pytest against PostgreSQL, DB tests may not skip)
-- `frontend / check` (lint, tsc, vitest, build)
-
-Job definitions: the templates in [`docs/ci/`](docs/ci/README.md), installed as `.github/workflows/tests.yml` and `.github/workflows/frontend.yml`.
+仓库没有 GitHub Actions，所以没有可设为必过的状态检查。合并前在本机跑测试。
 
 ### Protect `dev`
 
@@ -47,22 +39,10 @@ Recommended lighter rules:
 
 1. Develop on `dev`
 2. Push incremental changes to `dev`
-3. Verify app behavior / CI status
+3. Verify app behavior locally
 4. Merge `dev` into `main` only for releasable states
 5. Update `VERSION` and `CHANGELOG.md`
 6. Push a version tag such as `v1.0.1`
-
-## Build Trigger Policy
-
-To avoid excessive image publishing:
-
-- Docker builds should trigger only for code/runtime/container-related changes
-- Documentation-only changes should not trigger image rebuilds
-- GitHub Release creation should happen only on `v*` tags
-
-Recommended path filter for the image build (`Dockerfile.mail-core`): `mail_core/**`, `frontend/**`,
-`requirements-mail-core.txt`, `Dockerfile.mail-core`, and the workflow file itself. README, changelog and
-other doc-only edits should not rebuild the image.
 
 ## Release Policy
 
