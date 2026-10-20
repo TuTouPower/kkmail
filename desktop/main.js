@@ -8,7 +8,7 @@ const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
 const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl } = require('./paths')
-const { parsePort, freePort, waitForHealth } = require('./startup')
+const { parsePort, freePort, waitForHealth, scrubEnv, redactSecrets, stopChildTree } = require('./startup')
 const {
   mergeCspHeaders,
   denyPermissionRequest,
@@ -22,6 +22,8 @@ let backend = null
 let backendExit = null
 let mainWindow = null
 let appOrigin = ''
+let shuttingDown = false
+let backendLogStream = null
 
 function repoRoot() {
   return path.resolve(__dirname, '..')
@@ -42,6 +44,24 @@ function backendCommand() {
 
 let pg = null
 
+function pipeBackendLogs(child, logPath, secrets) {
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    backendLogStream = fs.createWriteStream(logPath, { flags: 'a' })
+  } catch (err) {
+    console.warn('[mail-core] cannot open backend log', err && err.message)
+    backendLogStream = null
+  }
+  const write = (chunk) => {
+    const text = redactSecrets(chunk.toString('utf8'), secrets)
+    if (backendLogStream) {
+      try { backendLogStream.write(text) } catch (_) { /* ignore */ }
+    }
+  }
+  if (child.stdout) child.stdout.on('data', write)
+  if (child.stderr) child.stderr.on('data', write)
+}
+
 async function startBackend() {
   // mail-core requires PostgreSQL; the cluster lives under userData (outside the install dir).
   pg = new PostgresManager({ app })
@@ -53,21 +73,28 @@ async function startBackend() {
   const port = await freePort(PORT, HOST)
   if (port == null) throw new Error('无法分配本地端口给 mail-core')
   const target = backendCommand()
-  const env = {
-    ...process.env,
-    // Secrets are generated per install by mail-core (MAIL_CORE_DATA_DIR/secrets, 0600).
+  const databaseUrl = pg.databaseUrl()
+  const env = scrubEnv(process.env, {
     MAIL_CORE_HOST: HOST,
     MAIL_CORE_PORT: String(port),
     MAIL_CORE_DATA_DIR: dataRoot,
-    MAIL_CORE_DATABASE_URL: pg.databaseUrl(),
+    MAIL_CORE_DATABASE_URL: databaseUrl,
     KKMAIL_SIDECAR: '1',
-  }
+  })
   const dist = target.packaged
     ? frontendDistPath(process.resourcesPath)
     : path.join(repoRoot(), 'frontend', 'dist')
   if (dist) env.KKMAIL_FRONTEND_DIST = dist
 
-  backend = spawn(target.cmd, [...target.args, '--data-dir', dataRoot], { cwd: target.cwd, env, stdio: 'inherit' })
+  // Own process group on Unix so stopChildTree can SIGTERM/SIGKILL the whole tree.
+  const detached = process.platform !== 'win32'
+  backend = spawn(target.cmd, [...target.args, '--data-dir', dataRoot], {
+    cwd: target.cwd,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached,
+  })
+  pipeBackendLogs(backend, path.join(dataRoot, 'mail-core.log'), [pg.password(), databaseUrl])
   backend.on('error', (err) => {
     backendExit = new Error(`后端启动失败: ${err.message}`)
   })
@@ -162,30 +189,42 @@ app.on('window-all-closed', () => {
 function stopMailCorePg() {
   if (!pg) return
   try { pg.stop() } catch (err) { console.warn('[mail-core] pg stop', err) }
-  pg = null
+  // Keep reference so repeat stop() is the same idempotent manager (no throwaway).
 }
+
 function stopBackend() {
-  if (backend && backend.exitCode === null && !backend.killed) {
-    backend.kill()
+  if (!backend) return
+  const child = backend
+  stopChildTree(child, {
+    escalateAfterMs: 4000,
+    log: (m) => console.warn('[mail-core] stopBackend', m),
+  })
+}
+
+/** Single-flight shutdown for before-quit + signals + process exit (avoids triple stop races). */
+function shutdownAll() {
+  if (shuttingDown) return
+  shuttingDown = true
+  app.isQuitting = true
+  stopBackend()
+  stopMailCorePg()
+  if (backendLogStream) {
+    try { backendLogStream.end() } catch (_) { /* ignore */ }
+    backendLogStream = null
   }
 }
 
 app.on('before-quit', () => {
-  app.isQuitting = true
-  stopBackend()
-  stopMailCorePg()
+  shutdownAll()
 })
 
 // SIGTERM/SIGINT (logout, `kill`, Ctrl+C) skip before-quit; never leave the backend orphaned.
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   process.on(signal, () => {
-    app.isQuitting = true
-    stopMailCorePg()
-    stopBackend()
+    shutdownAll()
     app.quit()
   })
 }
 process.on('exit', () => {
-  stopBackend()
-  stopMailCorePg()
+  shutdownAll()
 })
