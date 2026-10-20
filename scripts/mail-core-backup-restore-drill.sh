@@ -21,6 +21,14 @@ esac
 # Resolve to an absolute path; parent must already exist (or be creatable under /tmp).
 OUT_PARENT="$(dirname -- "$OUT_RAW")"
 OUT_BASE="$(basename -- "$OUT_RAW")"
+case "$OUT_BASE" in
+  kkmail-backup-drill*)
+    ;;
+  *)
+    echo "OUT directory name must start with 'kkmail-backup-drill' (got $OUT_BASE)" >&2
+    exit 2
+    ;;
+esac
 mkdir -p "$OUT_PARENT"
 OUT="$(cd "$OUT_PARENT" && pwd)/$OUT_BASE"
 case "$OUT" in
