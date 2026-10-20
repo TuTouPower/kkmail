@@ -1,91 +1,89 @@
-import { Reply, ReplyAll, Forward, MailOpen, Archive, Trash2, Flag, Folder, MoreHorizontal } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Reply, Forward, MailOpen, Trash2, Flag, Folder, MoreHorizontal } from 'lucide-react'
+import { fetchAccounts, fetchEmailDetail, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
 
 export default function MessageReader() {
-  const { messages, selectedId, view, } = useMailStore()
-  const m = messages.find((x) => x.id === selectedId)
+  const { selectedKey, setComposeOpen } = useMailStore()
+  const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
+  const accounts = accountsQuery.data || []
+  const cachedLists = queryClient.getQueriesData<MailItem[]>({ queryKey: ['emails'] })
+  const selected = cachedLists
+    .flatMap(([, list]) => list || [])
+    .find((m) => `${m.accountEmail}:${m.id}` === selectedKey)
 
-  if (!m) {
+  const detailQuery = useQuery({
+    queryKey: selected ? queryKeys.detail(selected.accountEmail, selected.id, selected.folder || 'inbox', selected.id_mode || '') : ['detail', 'none'],
+    queryFn: () => fetchEmailDetail(selected!.accountEmail, selected!.id, selected!.folder || 'inbox', selected!.id_mode || ''),
+    enabled: !!selected?.id && !!selected?.accountEmail,
+  })
+
+  if (!selected) {
     return (
       <section className="reader-pane" aria-label="邮件正文">
-        <div className="reader-toolbar">
-          <div className="reader-location">未选择邮件</div>
-        </div>
+        <div className="reader-toolbar"><div className="reader-location">未选择邮件</div></div>
         <div className="reader-scroll">
           <div className="no-message">
             <strong>未选择邮件</strong>
-            <span>从左侧邮件列表中选择一封邮件以查看内容。</span>
+            <span>从邮件列表中选择一封邮件以查看内容。</span>
           </div>
         </div>
       </section>
     )
   }
 
-  const email = m.sender.toLowerCase().replace(/\s+/g, '.') + '@example.com'
+  const detail = detailQuery.data
+  const body = detail?.body || selected.body_preview || ''
+  const html = (detail?.body_type || '').toLowerCase().includes('html') || body.trim().startsWith('<')
+
+  async function markCurrent() {
+    if (!selected) return
+    await markEmailsRead(selected.accountEmail, [selected], selected.folder || 'inbox')
+    await queryClient.invalidateQueries({ queryKey: ['emails'] })
+  }
 
   return (
     <section className="reader-pane" aria-label="邮件正文">
       <div className="reader-toolbar">
-        <div className="reader-location">
-          {view.type === 'allInbox' ? '所有收件箱' : '邮件'} · {m.accountId}
-        </div>
-        <div className="reader-toolbar-actions" aria-label="当前邮件操作">
-          <button className="reader-action" title="回复">
-            <Reply size={15} />
-          </button>
-          <button className="reader-action" title="回复全部">
-            <ReplyAll size={15} />
-          </button>
-          <button className="reader-action" title="转发">
-            <Forward size={15} />
-          </button>
+        <div className="reader-location">{selected.accountEmail}</div>
+        <div className="reader-toolbar-actions">
+          <button className="reader-action" title="回复" onClick={() => setComposeOpen(true)}><Reply size={15} /></button>
+          <button className="reader-action" title="转发" onClick={() => setComposeOpen(true)}><Forward size={15} /></button>
           <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
-          <button className="reader-action" title="标为已读 / 未读">
-            <MailOpen size={15} />
-          </button>
-          <button className="reader-action" title="归档">
-            <Archive size={15} />
-          </button>
-          <button className="reader-action" title="移到废纸篓">
-            <Trash2 size={15} />
-          </button>
-          <button className="reader-action" title="标记为垃圾邮件">
-            <MailOpen size={15} />
-          </button>
-          <span style={{ height: 22, width: 1, background: 'var(--line-strong)', margin: '0 3px' }} />
-          <button className="reader-action" title="移动到文件夹">
-            <Folder size={15} />
-          </button>
-          <button className="reader-action" title="标记邮件">
-            <Flag size={15} />
-          </button>
-          <button className="reader-action" title="更多操作">
-            <MoreHorizontal size={15} />
-          </button>
+          <button className="reader-action" title="标为已读" onClick={markCurrent}><MailOpen size={15} /></button>
+          <button className="reader-action" title="删除"><Trash2 size={15} /></button>
+          <button className="reader-action" title="标记"><Flag size={15} /></button>
+          <button className="reader-action" title="移动"><Folder size={15} /></button>
+          <button className="reader-action" title="更多"><MoreHorizontal size={15} /></button>
         </div>
       </div>
       <div className="reader-scroll">
         <div className="message-paper">
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 13, marginBottom: 22 }}>
-            <div className="avatar" style={{ height: 44, width: 44, fontSize: 17, background: m.color }}>
-              {m.initial}
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="detail-subject">{m.subject}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', fontSize: 12 }}>
-                <span style={{ fontWeight: 700 }}>{m.sender}</span>
-                <span style={{ color: 'var(--muted)' }}>{"<" + email + ">"}</span>
-              </div>
-              <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 5 }}>收件人：{m.accountId}</div>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
-              {m.date}
-              <br />
-              {m.time}
-            </div>
+          <div className="detail-subject">{detail?.subject || selected.subject}</div>
+          <div style={{ fontSize: 12, marginBottom: 8 }}>
+            <strong>{detail?.from || selected.from}</strong>
+            <span style={{ color: 'var(--muted)' }}> · {detail?.date || selected.date}</span>
           </div>
-          <div style={{ height: 1, background: 'var(--line)', margin: '20px 0 24px' }} />
-          <div className="email-body" dangerouslySetInnerHTML={{ __html: m.body }} />
+          <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 16 }}>
+            收件人：{detail?.to || selected.to || accounts.find((a) => a.email === selected.accountEmail)?.email || selected.accountEmail}
+          </div>
+          {detailQuery.isLoading && <div style={{ color: 'var(--muted)' }}>正在加载正文…</div>}
+          {detailQuery.error && <div style={{ color: 'var(--red)' }}>{String((detailQuery.error as Error).message)}</div>}
+          {html ? (
+            <div className="email-body" dangerouslySetInnerHTML={{ __html: body }} />
+          ) : (
+            <div className="email-body" style={{ whiteSpace: 'pre-wrap' }}>{body}</div>
+          )}
+          {(detail?.attachments || []).length > 0 && (
+            <div className="attachment-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
+              {detail!.attachments!.map((att, i) => (
+                <div key={att.id || i} className="attachment" style={{ padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 9 }}>
+                  <strong>{att.name || '附件'}</strong>
+                  {att.size ? <small style={{ display: 'block', color: 'var(--muted)' }}>{att.size} B</small> : null}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </section>

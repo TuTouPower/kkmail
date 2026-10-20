@@ -1,12 +1,20 @@
-import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, MoreHorizontal } from 'lucide-react'
+import { useQueries, useQuery } from '@tanstack/react-query'
+import { Search, PenSquare, RefreshCw, CheckCircle, SortAsc, MoreHorizontal, Paperclip } from 'lucide-react'
+import { fetchAccounts, fetchEmails, markEmailsRead, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
+
+function formatWhen(value?: string) {
+  if (!value) return ''
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value.slice(5, 16)
+  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
 
 export default function MessageList() {
   const {
-    messages,
     view,
-    selectedId,
-    setSelectedId,
+    selectedKey,
+    setSelectedKey,
     setMobileView,
     search,
     setSearch,
@@ -14,41 +22,65 @@ export default function MessageList() {
     setListFilter,
     sortNewest,
     toggleSort,
-    markAllVisibleRead,
+    setComposeOpen,
   } = useMailStore()
 
-  const visible = messages
+  const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
+  const accounts = accountsQuery.data || []
+
+  const singleEmail = view.type === 'accountFolder' ? view.email : ''
+  const singleFolder = view.type === 'accountFolder' ? view.folder : 'inbox'
+  const singleQuery = useQuery({
+    queryKey: queryKeys.emails(singleEmail, singleFolder),
+    queryFn: () => fetchEmails(singleEmail, singleFolder, view.type === 'accountFolder' ? view.accountId : undefined),
+    enabled: view.type === 'accountFolder' && !!singleEmail,
+  })
+
+  const allQueries = useQueries({
+    queries: (view.type === 'allInbox' ? accounts.slice(0, 8) : []).map((a) => ({
+      queryKey: queryKeys.emails(a.email, 'inbox'),
+      queryFn: () => fetchEmails(a.email, 'inbox', a.id),
+      enabled: view.type === 'allInbox',
+    })),
+  })
+
+  const raw: MailItem[] = view.type === 'accountFolder'
+    ? (singleQuery.data || [])
+    : allQueries.flatMap((q) => q.data || [])
+
+  const visible = raw
     .filter((m) => {
-      if (view.type === 'allInbox' && m.folder !== 'inbox') return false
-      if (view.type === 'unread' && !m.unread) return false
-      if (view.type === 'flagged' && !m.flagged) return false
-      if (view.type === 'accountFolder' && (m.accountId !== view.accountId || (view.folder === 'important' ? !m.flagged : m.folder !== view.folder))) return false
-      if (listFilter === 'unread' && !m.unread) return false
-      if (listFilter === 'flagged' && !m.flagged) return false
+      if (listFilter === 'unread' && m.is_read) return false
       if (search) {
-        const hay = [m.sender, m.subject, m.preview].join(' ').toLowerCase()
+        const hay = [m.from, m.subject, m.body_preview, m.accountEmail].join(' ').toLowerCase()
         if (!hay.includes(search.toLowerCase())) return false
       }
       return true
     })
     .sort((a, b) => {
-      const aa = a.date + ' ' + a.time
-      const bb = b.date + ' ' + b.time
+      const aa = a.date || ''
+      const bb = b.date || ''
       return sortNewest ? bb.localeCompare(aa) : aa.localeCompare(bb)
     })
 
-  const unreadCount = visible.filter((m) => m.unread).length
+  const unreadCount = visible.filter((m) => !m.is_read).length
+  const loading = view.type === 'accountFolder' ? singleQuery.isLoading : accountsQuery.isLoading || allQueries.some((q) => q.isLoading)
+  const error = view.type === 'accountFolder' ? singleQuery.error : allQueries.find((q) => q.error)?.error
 
-  const title =
-    view.type === 'allInbox'
-      ? '所有收件箱'
-      : view.type === 'unread'
-      ? '未读邮件'
-      : view.type === 'flagged'
-      ? '已标记'
-      : view.type === 'accountFolder'
-      ? `${view.accountId} · ${view.folder}`
-      : '邮件'
+  const title = view.type === 'allInbox'
+    ? '所有收件箱'
+    : `${view.email} · ${view.folder === 'junkemail' ? '垃圾邮件' : view.folder === 'deleteditems' ? '废纸篓' : view.folder === 'all' ? '全部' : '收件箱'}`
+
+  async function markAll() {
+    const groups = new Map<string, MailItem[]>()
+    visible.filter((m) => !m.is_read && m.id).forEach((m) => {
+      const list = groups.get(m.accountEmail) || []
+      list.push(m)
+      groups.set(m.accountEmail, list)
+    })
+    await Promise.all([...groups.entries()].map(([email, items]) => markEmailsRead(email, items, items[0]?.folder || 'inbox')))
+    await queryClient.invalidateQueries({ queryKey: ['emails'] })
+  }
 
   return (
     <section className="list-pane" aria-label="邮件列表">
@@ -56,33 +88,35 @@ export default function MessageList() {
         <div className="list-title-row">
           <div className="list-heading">
             <div className="list-title">{title}</div>
-            <div className="list-count">
-              {visible.length} 封邮件 · {unreadCount} 封未读
-            </div>
+            <div className="list-count">{loading ? '正在拉取邮件…' : `${visible.length} 封邮件 · ${unreadCount} 封未读`}</div>
           </div>
           <div className="list-primary-actions">
-            <button className="list-primary-btn" title="写邮件" onClick={() => alert('撰写邮件（演示）')}>
+            <button className="list-primary-btn" title="写邮件" onClick={() => setComposeOpen(true)}>
               <PenSquare size={16} />
             </button>
-            <button className="list-primary-btn" title="刷新" onClick={() => alert('已刷新（演示）')}>
+            <button
+              className="list-primary-btn"
+              title="刷新"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ['emails'] })}
+            >
               <RefreshCw size={16} />
             </button>
           </div>
         </div>
         <label className="list-search">
           <Search size={16} />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索所有邮箱" aria-label="搜索所有邮箱" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索当前列表" aria-label="搜索当前列表" />
         </label>
         <div className="list-controls">
           <div className="segmented">
-            {(['all', 'unread', 'flagged'] as const).map((f) => (
+            {(['all', 'unread'] as const).map((f) => (
               <button key={f} className={`segment-btn ${listFilter === f ? 'active' : ''}`} onClick={() => setListFilter(f)}>
-                {f === 'all' ? '全部' : f === 'unread' ? '未读' : '已标记'}
+                {f === 'all' ? '全部' : '未读'}
               </button>
             ))}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <button className="mark-all-btn" onClick={markAllVisibleRead} disabled={unreadCount === 0} title="将当前列表中的邮件全部标为已读">
+            <button className="mark-all-btn" onClick={markAll} disabled={unreadCount === 0} title="将当前列表中的邮件全部标为已读">
               <CheckCircle size={13} />
               <span className="mark-label">全部已读</span>
             </button>
@@ -97,38 +131,42 @@ export default function MessageList() {
         </div>
       </div>
       <div className="message-list">
-        {visible.length === 0 ? (
-          <div style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>没有找到邮件</div>
-        ) : (
-          visible.map((m) => (
+        {error && <div style={{ padding: 20, color: 'var(--red)', fontSize: 12 }}>{String((error as Error).message || error)}</div>}
+        {!loading && visible.length === 0 && (
+          <div style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
+            {accounts.length === 0 ? '还没有账户。在设置或旧版界面中添加账户后，这里会显示真实邮件。' : '没有找到邮件'}
+          </div>
+        )}
+        {visible.map((m) => {
+          const key = `${m.accountEmail}:${m.id}`
+          return (
             <article
-              key={m.id}
-              className={`message-row ${selectedId === m.id ? 'selected' : ''} ${m.unread ? 'unread' : ''}`}
+              key={key}
+              className={`message-row ${selectedKey === key ? 'selected' : ''} ${!m.is_read ? 'unread' : ''}`}
               onClick={() => {
-                setSelectedId(m.id)
+                setSelectedKey(key)
                 if (window.innerWidth <= 760) setMobileView('detail')
               }}
             >
-              <div className="avatar" style={{ background: m.color }}>
-                {m.initial}
-              </div>
+              <div className="avatar" style={{ background: '#6d8fd1' }}>{(m.from || '?').slice(0, 1).toUpperCase()}</div>
               <div className="message-content">
                 <div className="message-top">
                   <span className="sender">
-                    {m.unread && <span className="unread-dot" style={{ display: 'inline-block', marginRight: 5, verticalAlign: 'middle' }} />}
-                    {m.sender}
+                    {!m.is_read && <span className="unread-dot" style={{ display: 'inline-block', marginRight: 5, verticalAlign: 'middle' }} />}
+                    {m.from}
                   </span>
-                  <time className="message-date">{m.time}</time>
+                  <time className="message-date">{formatWhen(m.date)}</time>
                 </div>
                 <div className="subject">{m.subject}</div>
-                <div className="preview">{m.preview}</div>
+                <div className="preview">{m.body_preview}</div>
                 <div className="message-bottom">
-                  <span className="mail-account-tag">{m.accountId}</span>
+                  <span className="mail-account-tag">{m.accountEmail}</span>
+                  {m.has_attachments && <Paperclip size={12} />}
                 </div>
               </div>
             </article>
-          ))
-        )}
+          )
+        })}
       </div>
     </section>
   )
