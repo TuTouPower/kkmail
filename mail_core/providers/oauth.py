@@ -186,9 +186,25 @@ class BearerTransport:
     base_url: str = ""
 
     def __call__(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+        if path.startswith("http://") or path.startswith("https://"):
+            url = path
+            if self.base_url:
+                from urllib.parse import urlparse
+
+                base_parts = urlparse(self.base_url)
+                url_parts = urlparse(url)
+                if (url_parts.scheme.lower(), url_parts.netloc.lower()) != (
+                    base_parts.scheme.lower(),
+                    base_parts.netloc.lower(),
+                ):
+                    raise OAuthError(
+                        f"cross-origin Bearer request denied: target origin {url_parts.scheme}://{url_parts.netloc} "
+                        f"does not match base origin {base_parts.scheme}://{base_parts.netloc}"
+                    )
+        else:
+            url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         token = self.token_client.get_access_token()
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        url = path if path.startswith("http") else f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         try:
             return self.inner(method, url, params, headers)
         except RateLimitedError:
