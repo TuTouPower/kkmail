@@ -31,8 +31,32 @@
 
 ## 忘记登录密码
 
-- `--data-dir` 部署：停止服务，删除 `<data-dir>/secrets/login-password.bcrypt`，未设置 `MAIL_CORE_LOGIN_PASSWORD*` 时重启会生成新的 `<data-dir>/initial-password.txt`。
-- 环境变量部署：替换 `MAIL_CORE_LOGIN_PASSWORD_HASH` / `MAIL_CORE_LOGIN_PASSWORD` 后重启。
+系统以 PostgreSQL 数据库中的 `auth_credentials` 表为权威密码源。仅删除本地文件或修改环境变量不会覆盖数据库中已存在的密码记录。重置密码需操作数据库：
+
+### 方法一：直接更新数据库密码哈希（推荐）
+
+1. 生成新密码的 bcrypt 哈希：
+   ```bash
+   python3 -c "import bcrypt; print(bcrypt.hashpw(b'<新密码>', bcrypt.gensalt()).decode())"
+   ```
+2. 连接数据库并更新 `auth_credentials`：
+   ```sql
+   UPDATE auth_credentials
+   SET login_password_hash = '<生成的bcrypt哈希>', updated_at = NOW()
+   WHERE id = 'default';
+   ```
+3. 重启 mail-core 服务使新密码及内存缓存生效。
+
+### 方法二：清空数据库凭据后重新引导
+
+1. 停止 mail-core 服务。
+2. 连接数据库删除旧凭据：
+   ```sql
+   DELETE FROM auth_credentials WHERE id = 'default';
+   ```
+3. 若使用了 `--data-dir`，同时删除 `<data-dir>/secrets/login-password.bcrypt`。
+4. 导出新密码环境变量 `MAIL_CORE_LOGIN_PASSWORD`（或 `MAIL_CORE_LOGIN_PASSWORD_HASH`）；若未设置环境变量且使用 `--data-dir`，重启时会在 `<data-dir>/initial-password.txt` 重新生成初始随机密码。
+5. 重启 mail-core 服务完成初次引导入库。
 
 ## 附件 / 原文读取报错
 
