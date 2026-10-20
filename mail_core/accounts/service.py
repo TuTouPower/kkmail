@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import uuid
 
 from sqlalchemy import func, select
@@ -83,6 +84,8 @@ def update_account(
         acc.group_id = group_id  # type: ignore[assignment]
     if sync_enabled is not None:
         acc.sync_enabled = sync_enabled
+        if not sync_enabled:
+            acc.sync_status = "idle"
     if config_patch:
         merged = dict(acc.config or {})
         merged.update(config_patch)
@@ -149,3 +152,29 @@ def delete_group(session: Session, group_id: uuid.UUID) -> None:
         raise LookupError("group not found")
     session.delete(g)
     session.flush()
+
+
+def update_account_sync_status(
+    session: Session,
+    account_id: uuid.UUID,
+    status: str,
+    *,
+    error: str | None = None,
+    synced_at: datetime | None = None,
+) -> Account | None:
+    acc = session.get(Account, account_id)
+    if acc is None:
+        return None
+    acc.sync_status = status
+    ts = synced_at or datetime.now(timezone.utc)
+    cfg = dict(acc.config or {})
+    cfg["last_synced_at"] = ts.isoformat()
+    if error:
+        cfg["last_sync_error"] = str(error)
+    elif status == "idle":
+        cfg.pop("last_sync_error", None)
+    acc.config = cfg
+    if hasattr(acc, "last_synced_at"):
+        setattr(acc, "last_synced_at", ts)
+    session.flush()
+    return acc
