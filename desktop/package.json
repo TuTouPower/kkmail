@@ -35,6 +35,11 @@
       {
         "from": "../frontend/dist",
         "to": "frontend/dist"
+      },
+      {
+        "from": "resources",
+        "to": "backend",
+        "filter": ["outlookemail-backend*"]
       }
     ],
     "mac": {
