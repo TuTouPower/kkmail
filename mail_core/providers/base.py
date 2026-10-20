@@ -95,7 +95,7 @@ class MailProvider(Protocol):
     def fetch_metadata_page(self, folder_remote_id: str, cursor: dict[str, Any] | None) -> MetadataPage:
         ...
 
-    def fetch_mime(self, remote_id: str) -> bytes:
+    def fetch_mime(self, remote_id: str, *, folder_remote_id: str | None = None) -> bytes:
         ...
 
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:
@@ -128,7 +128,7 @@ class StubProvider:
         items = self._messages.get(folder_remote_id, [])
         return MetadataPage(items=items, next_cursor=None, exhausted=True)
 
-    def fetch_mime(self, remote_id: str) -> bytes:
+    def fetch_mime(self, remote_id: str, *, folder_remote_id: str | None = None) -> bytes:
         return b"From: stub@example.com\r\nSubject: stub\r\n\r\nbody\r\n"
 
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:

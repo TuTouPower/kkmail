@@ -58,6 +58,32 @@ def _parse_from(value: str) -> tuple[str, str | None]:
     name, addr = email.utils.parseaddr(value or "")
     return (addr or value or "", name or None)
 
+# IMAP UIDs are per-mailbox; bare UIDs collide across folders. Namespace with
+# UIDVALIDITY + folder so (account_id, remote_id) stays unique and fetch_mime
+# can select the right mailbox without defaulting to INBOX.
+_IMAP_REMOTE_SEP = "\x1f"
+
+
+def format_imap_remote_id(folder: str, uidvalidity: int, uid: int) -> str:
+    safe_folder = folder.replace(_IMAP_REMOTE_SEP, " ")
+    return f"{int(uidvalidity)}{_IMAP_REMOTE_SEP}{safe_folder}{_IMAP_REMOTE_SEP}{int(uid)}"
+
+
+def parse_imap_remote_id(remote_id: str) -> tuple[int, str, int] | None:
+    parts = remote_id.split(_IMAP_REMOTE_SEP)
+    if len(parts) != 3:
+        return None
+    try:
+        return int(parts[0]), parts[1], int(parts[2])
+    except ValueError:
+        return None
+
+
+def imap_uid_for_command(remote_id: str) -> str:
+    """Bare UID string for UID FETCH/STORE (strips namespace when present)."""
+    parsed = parse_imap_remote_id(remote_id)
+    return str(parsed[2]) if parsed else str(remote_id)
+
 
 @dataclass
 class ImapProvider:
@@ -156,9 +182,10 @@ class ImapProvider:
                         sort_time = sort_time.replace(tzinfo=timezone.utc)
                 except Exception:
                     sort_time = datetime.now(timezone.utc)
+                uv = int(uidvalidity) if uidvalidity is not None else 0
                 items.append(
                     RemoteMessageMeta(
-                        remote_id=str(uid),
+                        remote_id=format_imap_remote_id(folder_remote_id, uv, uid),
                         subject=subject,
                         from_address=addr,
                         from_name=name,
@@ -188,11 +215,26 @@ class ImapProvider:
             except Exception:
                 pass
 
-    def fetch_mime(self, remote_id: str) -> bytes:
+    def fetch_mime(self, remote_id: str, *, folder_remote_id: str | None = None) -> bytes:
+        parsed = parse_imap_remote_id(remote_id)
+        if parsed is not None:
+            _uv, folder_from_id, uid = parsed
+            folder = folder_remote_id or folder_from_id
+            uid_str = str(uid)
+        else:
+            folder = folder_remote_id
+            uid_str = str(remote_id)
+        if not folder:
+            raise ValueError(
+                "IMAP fetch_mime requires folder_remote_id= or a namespaced remote_id "
+                "(uidvalidity\\x1ffolder\\x1fuid)"
+            )
         c = self._connect()
         try:
-            c.select("INBOX", readonly=True)
-            typ, data = c.uid("FETCH", str(remote_id), "(BODY.PEEK[])")
+            typ, _ = c.select(folder, readonly=True)
+            if typ != "OK":
+                raise RuntimeError(f"select {folder} failed for fetch_mime")
+            typ, data = c.uid("FETCH", uid_str, "(BODY.PEEK[])")
             if typ != "OK" or not data or data[0] is None:
                 raise RuntimeError(f"fetch mime {remote_id} failed")
             part = data[0]
@@ -282,7 +324,9 @@ class ImapProvider:
             remote_id = require_remote_id(desired_state)
         except ValueError as exc:
             return RemoteOperationResult(success=False, error=str(exc))
-        folder = str(desired_state.get("folder_remote_id") or "INBOX")
+        parsed = parse_imap_remote_id(remote_id)
+        folder = str(desired_state.get("folder_remote_id") or (parsed[1] if parsed else "") or "INBOX")
+        uid_str = imap_uid_for_command(remote_id)
         op = normalize_op_type(op_type)
         c = self._connect()
         try:
@@ -293,7 +337,7 @@ class ImapProvider:
             if op == OP_MARK_READ:
                 want_read = bool(desired_state.get("is_read", True))
                 flag_op = "+FLAGS" if want_read else "-FLAGS"
-                typ, _ = c.uid("STORE", remote_id, flag_op, r"(\Seen)")
+                typ, _ = c.uid("STORE", uid_str, flag_op, r"(\Seen)")
                 if typ != "OK":
                     return RemoteOperationResult(success=False, error="STORE Seen failed")
                 return RemoteOperationResult(success=True, remote_state={"is_read": want_read})
@@ -301,7 +345,7 @@ class ImapProvider:
             if op == OP_SET_FLAG:
                 want = bool(desired_state.get("is_flagged", True))
                 flag_op = "+FLAGS" if want else "-FLAGS"
-                typ, _ = c.uid("STORE", remote_id, flag_op, r"(\Flagged)")
+                typ, _ = c.uid("STORE", uid_str, flag_op, r"(\Flagged)")
                 if typ != "OK":
                     return RemoteOperationResult(success=False, error="STORE Flagged failed")
                 return RemoteOperationResult(success=True, remote_state={"is_flagged": want})
@@ -311,12 +355,12 @@ class ImapProvider:
                 if not dest:
                     return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
                 # Prefer UID MOVE (RFC 6851); fall back to COPY + delete.
-                typ, _ = c.uid("MOVE", remote_id, dest)
+                typ, _ = c.uid("MOVE", uid_str, dest)
                 if typ != "OK":
-                    typ, _ = c.uid("COPY", remote_id, dest)
+                    typ, _ = c.uid("COPY", uid_str, dest)
                     if typ != "OK":
                         return RemoteOperationResult(success=False, error=f"COPY/MOVE to {dest} failed")
-                    typ, _ = c.uid("STORE", remote_id, "+FLAGS", r"(\Deleted)")
+                    typ, _ = c.uid("STORE", uid_str, "+FLAGS", r"(\Deleted)")
                     if typ != "OK":
                         return RemoteOperationResult(success=False, error="STORE Deleted after COPY failed")
                     try:
@@ -328,18 +372,18 @@ class ImapProvider:
             if op == OP_TRASH:
                 trash = str(desired_state.get("trash_folder_remote_id") or "Trash")
                 # Try move into trash mailbox first
-                typ, _ = c.uid("MOVE", remote_id, trash)
+                typ, _ = c.uid("MOVE", uid_str, trash)
                 if typ == "OK":
                     return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
-                typ, _ = c.uid("COPY", remote_id, trash)
+                typ, _ = c.uid("COPY", uid_str, trash)
                 if typ == "OK":
-                    c.uid("STORE", remote_id, "+FLAGS", r"(\Deleted)")
+                    c.uid("STORE", uid_str, "+FLAGS", r"(\Deleted)")
                     try:
                         c.expunge()
                     except Exception:
                         pass
                     return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
-                typ, _ = c.uid("STORE", remote_id, "+FLAGS", r"(\Deleted)")
+                typ, _ = c.uid("STORE", uid_str, "+FLAGS", r"(\Deleted)")
                 if typ != "OK":
                     return RemoteOperationResult(success=False, error="STORE Deleted failed")
                 try:
@@ -362,10 +406,26 @@ class ImapProvider:
             typ, _ = c.select(folder_remote_id, readonly=True)
             if typ != "OK":
                 return ()
+            uidvalidity = 0
+            status = c.status(folder_remote_id, "(UIDVALIDITY)")
+            if status[0] == "OK" and status[1] and status[1][0]:
+                blob = status[1][0].decode() if isinstance(status[1][0], bytes) else str(status[1][0])
+                m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
+                if m:
+                    uidvalidity = int(m.group(1))
             typ, data = c.uid("SEARCH", None, "ALL")
             if typ != "OK":
                 return ()
-            remote = {x.decode() if isinstance(x, bytes) else str(x) for x in (data[0] or b"").split()}
+            remote_uids = []
+            for x in (data[0] or b"").split():
+                s = x.decode() if isinstance(x, bytes) else str(x)
+                try:
+                    remote_uids.append(int(s))
+                except ValueError:
+                    continue
+            remote = {format_imap_remote_id(folder_remote_id, uidvalidity, u) for u in remote_uids}
+            # Also accept legacy bare-UID locals during transition.
+            remote |= {str(u) for u in remote_uids}
             local = set(local_remote_ids)
             return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote)]
         finally:
