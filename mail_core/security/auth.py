@@ -29,6 +29,7 @@ _SESSION_SALT = "kkmail-mail-core-session-v1"
 
 _password_hash: bytes | None = None
 _api_keys: frozenset[str] | None = None
+_session_epoch: int = 1
 
 
 class AuthConfigError(RuntimeError):
@@ -149,10 +150,16 @@ def validate_auth_config() -> None:
     load_api_keys()  # validate JSON if present
 
 
+def invalidate_all_sessions() -> None:
+    """Invalidate all active sessions by incrementing the session epoch."""
+    global _session_epoch
+    _session_epoch += 1
+
+
 def issue_session() -> tuple[str, str]:
     """Return (signed_cookie_value, csrf_token)."""
     csrf = secrets.token_urlsafe(32)
-    token = _serializer().dumps({"v": 1, "csrf": csrf})
+    token = _serializer().dumps({"v": 1, "csrf": csrf, "epoch": _session_epoch})
     return token, csrf
 
 
@@ -162,6 +169,8 @@ def read_session(cookie_value: str) -> dict[str, Any] | None:
     except (BadSignature, SignatureExpired, TypeError, ValueError):
         return None
     if not isinstance(data, dict) or data.get("v") != 1:
+        return None
+    if data.get("epoch") != _session_epoch:
         return None
     csrf = data.get("csrf")
     if not isinstance(csrf, str) or not csrf:
@@ -215,3 +224,4 @@ def change_login_password(*, current: str, new: str) -> None:
     from mail_core.runtime.bootstrap import clear_initial_password
 
     clear_initial_password(os.environ.get("MAIL_CORE_DATA_DIR"))
+    invalidate_all_sessions()
