@@ -449,43 +449,25 @@ class ImapProvider:
                 dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
                 if not dest:
                     return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
-                # Prefer UID MOVE (RFC 6851); fall back to COPY + delete.
+                # Prefer UID MOVE (RFC 6851); never STORE \Deleted or expunge entire mailbox
                 typ, _ = c.uid("MOVE", uid_str, dest)
                 if typ != "OK":
-                    typ, _ = c.uid("COPY", uid_str, dest)
-                    if typ != "OK":
-                        return RemoteOperationResult(success=False, error=f"COPY/MOVE to {dest} failed")
-                    typ, _ = c.uid("STORE", uid_str, "+FLAGS", r"(\Deleted)")
-                    if typ != "OK":
-                        return RemoteOperationResult(success=False, error="STORE Deleted after COPY failed")
-                    try:
-                        c.expunge()
-                    except Exception:
-                        pass
+                    return RemoteOperationResult(
+                        success=False,
+                        error="IMAP server does not support atomic MOVE/delete",
+                    )
                 return RemoteOperationResult(success=True, remote_state={"folder_remote_id": dest})
 
             if op == OP_TRASH:
                 trash = str(desired_state.get("trash_folder_remote_id") or "Trash")
-                # Try move into trash mailbox first
+                # Try move into trash mailbox first; never STORE \Deleted or expunge entire mailbox
                 typ, _ = c.uid("MOVE", uid_str, trash)
-                if typ == "OK":
-                    return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
-                typ, _ = c.uid("COPY", uid_str, trash)
-                if typ == "OK":
-                    c.uid("STORE", uid_str, "+FLAGS", r"(\Deleted)")
-                    try:
-                        c.expunge()
-                    except Exception:
-                        pass
-                    return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
-                typ, _ = c.uid("STORE", uid_str, "+FLAGS", r"(\Deleted)")
                 if typ != "OK":
-                    return RemoteOperationResult(success=False, error="STORE Deleted failed")
-                try:
-                    c.expunge()
-                except Exception:
-                    pass
-                return RemoteOperationResult(success=True)
+                    return RemoteOperationResult(
+                        success=False,
+                        error="IMAP server does not support atomic MOVE/delete",
+                    )
+                return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
 
             return RemoteOperationResult(success=False, error=f"imap apply not implemented: {op_type}")
         finally:
