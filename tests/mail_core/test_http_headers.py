@@ -21,3 +21,6 @@ def test_content_disposition_unicode_filename_star():
     h = content_disposition_attachment("账单.pdf")
     assert "filename*=UTF-8''" in h
     assert "\r" not in h and "\n" not in h
+    # Must be encodable as latin-1 for HTTP response headers
+    h.encode("latin-1")
+    assert 'filename="__' in h

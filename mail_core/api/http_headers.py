@@ -22,7 +22,8 @@ def content_disposition_attachment(filename: str | None) -> str:
     base = PurePosixPath(raw.replace("\\", "/")).name.strip() or "attachment"
     # Drop C0 controls from the value that will be percent-encoded as well.
     base_clean = re.sub(r"[\x00-\x1f\x7f]", "", base) or "attachment"
-    ascii_name = _BAD.sub("_", base_clean)[:180] or "attachment"
+    ascii_candidate = base_clean.encode("ascii", "replace").decode("ascii")
+    ascii_name = re.sub(r'[\x00-\x1f\x7f"\\/;:?]', "_", ascii_candidate)[:180].strip() or "attachment"
     # Encode the cleaned basename so filename* cannot smuggle CR/LF or separators.
     encoded = quote(base_clean, safe="")
     return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
