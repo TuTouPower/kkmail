@@ -5,7 +5,7 @@
 ## 分支与版本
 
 - 开发：`dev`；稳定：`main`。版本号 `MAJOR.MINOR.PATCH`，写在 `VERSION` 与 `CHANGELOG.md`（`## [X.Y.Z] - YYYY-MM-DD`）。
-- 推送标签 `vX.Y.Z` 触发发布工作流。
+- 本仓库无 GitHub Actions 远程发布工作流；发版前必须在本地完成全量校验与测试，打标签 `vX.Y.Z` 仅用于代码归档标记。
 
 ## 产物
 
@@ -16,8 +16,11 @@
 
 ## 发版前检查
 
-1. `main` 上 `tests` 与 `frontend` 检查通过。
-2. `VERSION`、`CHANGELOG.md` 已更新。
+1. 本地全量测试通过：
+   - 后端：`scripts/run-mail-core-tests.sh`（包含 alembic 迁移升级与完整 DB 测试）
+   - 前端：`cd frontend && npm run lint && npx tsc -b && npm test && npm run build && cd ..`
+   - 桌面：`cd desktop && npm test && cd ..`
+2. `VERSION`、`CHANGELOG.md`、`desktop/package.json` 版本号已同步更新。
 3. 新增迁移已在干净库上 `alembic upgrade head` 验证，且 `/ready` 为 200。
 4. 行为变化已写入 `docs/`（部署、安全、已知限制）。
 
@@ -25,12 +28,12 @@
 
 ```bash
 git checkout main && git pull
-echo X.Y.Z > VERSION   # 并补 CHANGELOG
-git commit -am "chore(release): vX.Y.Z" && git push origin main
+echo X.Y.Z > VERSION   # 并补 CHANGELOG.md 与 desktop/package.json
+git add VERSION CHANGELOG.md desktop/package.json
+git commit -m "chore(release): vX.Y.Z" && git push origin main
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
 ## 发版后核对
 
-- Release 附件齐全；镜像标签 `vX.Y.Z` 可拉取。
-- 桌面包首次启动：生成 `secrets/` 与一次性初始密码，`/health` 正常。
+- 桌面包首次启动：生成 `secrets/` 与一次性初始密码（`<data-dir>/initial-password.txt`），`/health` 正常。
