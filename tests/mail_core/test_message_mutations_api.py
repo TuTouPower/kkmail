@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from mail_core.api.app import app
+from tests.mail_core.conftest import TEST_API_KEY
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import JobType, RemoteOperationStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, RemoteOperation, WorkerJob
@@ -48,7 +49,7 @@ def _seed() -> uuid.UUID:
 
 def test_mark_read_and_flag_enqueue_ops():
     mid = _seed()
-    client = TestClient(app)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     r = client.post(f"/api/mail/messages/{mid}/read", json={"is_read": True})
     assert r.status_code == 200
     assert r.json()["is_read"] is True
