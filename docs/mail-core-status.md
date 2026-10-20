@@ -4,7 +4,7 @@ Spec: [mail-core-architecture.md](./mail-core-architecture.md). This page is a *
 
 | Area | Status |
 | --- | --- |
-| Schema | Alembic migrations through `20261021_0009`. `/health` reports the code head and `/ready` checks that the database matches it. |
+| Schema | Alembic migrations through `20261021_0012`. `/health` reports the code head and `/ready` checks that the database matches it. |
 | Auth | Cookie session, Bearer API keys, CSRF on unsafe methods, and a per-client failed-login limit. All secrets are required; `--data-dir` generates them per install. |
 | Sync | IMAP (TLS by default), Gmail and Graph providers, with leases and fencing tokens. Metadata pages are applied in batches. Delta pages use last-change-wins. Rate limits re-queue the job with backoff. Provider depth and edge cases still tracked in code/tests, not “done forever”. |
 | Jobs | `SKIP LOCKED` claim, dedupe keys, exponential backoff, and bounded reclaim of stale claims. The worker poll adapts to queue depth. |
