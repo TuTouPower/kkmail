@@ -26,6 +26,8 @@
 - [x] AC-004：Gmail 提供商增量请求发送 repeated `historyTypes` 参数，对 ID stub 邮件调用 `messages.get` 补全元数据，并联动标签与位置增删。
 - [x] AC-005：元数据扫描完成后自动调度首个归档批次，归档成功后解析 MIME 生成 `MessageBody` 与 `Attachment`。
 - [x] AC-006：垃圾回收 (GC) 必须同时统计 `MessageBlobLink` 与 `Attachment.blob_id` 引用，删除文件前执行数据库二次校验，异常时 Fail-Closed 跳过删除。
+- [x] AC-007：IMAP Provider 对名为 `"已发送"`、`"已发送邮件"` 或带有 `\Sent` 标志的目录，解析出 `role="sent"`。
+- [x] AC-008：`/api/mail/inbox` 支持 `folder_role` 参数（默认 `inbox`，支持 `sent` 等），支持按角色检索全账号或指定账号邮件。
 
 ### 可测试性声明
 
