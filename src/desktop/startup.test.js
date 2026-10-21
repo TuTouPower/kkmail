@@ -13,9 +13,17 @@ const {
 
 assert.strictEqual(parsePort(undefined), 18765)
 assert.strictEqual(parsePort('8080'), 8080)
-assert.throws(() => parsePort('0'), /OUTLOOK_DESKTOP_PORT/)
-assert.throws(() => parsePort('65536'), /OUTLOOK_DESKTOP_PORT/)
-assert.throws(() => parsePort('nope'), /OUTLOOK_DESKTOP_PORT/)
+assert.throws(() => parsePort('0'), /KKMAIL_DESKTOP_PORT/)
+assert.throws(() => parsePort('65536'), /KKMAIL_DESKTOP_PORT/)
+assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
+
+// A50: environment variable fallback test
+{
+  const portFromEnv = (env) => parsePort(env.KKMAIL_DESKTOP_PORT || env.OUTLOOK_DESKTOP_PORT)
+  assert.strictEqual(portFromEnv({ KKMAIL_DESKTOP_PORT: '9000', OUTLOOK_DESKTOP_PORT: '8000' }), 9000)
+  assert.strictEqual(portFromEnv({ OUTLOOK_DESKTOP_PORT: '8000' }), 8000)
+  assert.strictEqual(portFromEnv({}), 18765)
+}
 
 // scrubEnv: drop secrets / odd keys; keep PATH and MAIL_CORE_*; extras win
 {
