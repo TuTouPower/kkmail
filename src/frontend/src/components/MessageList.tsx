@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag, Mail, MailOpen, Trash2, Reply, ReplyAll, Forward, ExternalLink } from 'lucide-react'
 import { apiRequest } from '../api/client'
@@ -29,7 +29,7 @@ function isSearchTrigger(q: string): boolean {
   return trimmed.length >= SEARCH_MIN_CHARS
 }
 
-export default function MessageList() {
+const MessageList = memo(function MessageList() {
   const view = useMailStore((s) => s.view)
   const selectedKey = useMailStore((s) => s.selectedKey)
   const setSelectedKey = useMailStore((s) => s.setSelectedKey)
@@ -156,10 +156,17 @@ export default function MessageList() {
   const active = searching ? searchInfiniteQuery : inboxInfiniteQuery
 
   const raw: MailItem[] = useMemo(() => {
-    if (searching) {
-      return (searchInfiniteQuery.data?.pages || []).flatMap((p) => p.items)
+    const pages = (searching ? searchInfiniteQuery.data?.pages : inboxInfiniteQuery.data?.pages) || []
+    const all = pages.flatMap((p) => p.items)
+    const seen = new Set<string>()
+    const deduped: MailItem[] = []
+    for (const item of all) {
+      if (!seen.has(item.id)) {
+        seen.add(item.id)
+        deduped.push(item)
+      }
     }
-    return (inboxInfiniteQuery.data?.pages || []).flatMap((p) => p.items)
+    return deduped
   }, [searching, searchInfiniteQuery.data, inboxInfiniteQuery.data])
 
   const hasMore = Boolean(searching ? searchInfiniteQuery.hasNextPage : inboxInfiniteQuery.hasNextPage)
@@ -179,13 +186,15 @@ export default function MessageList() {
     }
   }
 
-  const visible = raw
-    .filter((m) => {
-      if ((favoriteCategory === 'unread' || listFilter === 'unread') && m.is_read) return false
-      if (listFilter === 'flagged' && !m.is_flagged) return false
-      return true
-    })
-    .sort((a, b) => compareMailDates(a.date, b.date, sortNewest))
+  const visible = useMemo(() => {
+    return raw
+      .filter((m) => {
+        if ((favoriteCategory === 'unread' || listFilter === 'unread') && m.is_read) return false
+        if (listFilter === 'flagged' && !m.is_flagged) return false
+        return true
+      })
+      .sort((a, b) => compareMailDates(a.date, b.date, sortNewest))
+  }, [raw, favoriteCategory, listFilter, sortNewest])
 
   const [actionStatus, setActionStatus] = useState('')
   const unreadCount = raw.filter((m) => !m.is_read).length
@@ -562,4 +571,6 @@ export default function MessageList() {
       )}
     </section>
   )
-}
+})
+
+export default MessageList

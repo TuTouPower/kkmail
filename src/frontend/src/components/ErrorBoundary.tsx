@@ -1,7 +1,11 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { exportDiagnosticsAsText, logDiagnostic } from '../lib/diagnostics'
 
-type Props = { children: ReactNode }
+type Props = {
+  children: ReactNode
+  inline?: boolean
+  fallbackTitle?: string
+}
 type State = { error: Error | null; copied: boolean }
 
 /** Catches render errors and offers a Chinese reload affordance. */
@@ -35,51 +39,76 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (!this.state.error) return this.props.children
+    const isInline = Boolean(this.props.inline)
     return (
       <div
         role="alert"
-        style={{
-          minHeight: '100dvh',
-          display: 'grid',
-          placeItems: 'center',
-          padding: 24,
-          background: 'var(--bg, #171819)',
-          color: 'var(--text, #e8e8e8)',
-          textAlign: 'center',
-        }}
+        style={
+          isInline
+            ? {
+                height: '100%',
+                minHeight: 180,
+                display: 'grid',
+                placeItems: 'center',
+                padding: 16,
+                background: 'var(--surface-2, #202124)',
+                color: 'var(--text, #e8e8e8)',
+                textAlign: 'center',
+                boxSizing: 'border-box',
+              }
+            : {
+                minHeight: '100dvh',
+                display: 'grid',
+                placeItems: 'center',
+                padding: 24,
+                background: 'var(--bg, #171819)',
+                color: 'var(--text, #e8e8e8)',
+                textAlign: 'center',
+              }
+        }
       >
         <div style={{ maxWidth: 420 }}>
-          <strong style={{ fontSize: 18 }}>页面出错了</strong>
-          <p style={{ color: 'var(--muted, #9a9a9a)', margin: '12px 0 20px' }}>
-            发生了意外错误。请刷新页面重试；若问题持续，可复制诊断日志排查。
+          <strong style={{ fontSize: isInline ? 15 : 18 }}>{this.props.fallbackTitle || '页面出错了'}</strong>
+          <p style={{ color: 'var(--muted, #9a9a9a)', margin: '12px 0 20px', fontSize: isInline ? 13 : 14 }}>
+            {isInline
+              ? '该模块发生意外错误。可重试或复制诊断日志排查。'
+              : '发生了意外错误。请刷新页面重试；若问题持续，可复制诊断日志排查。'}
           </p>
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
             <button
               type="button"
-              onClick={() => window.location.reload()}
+              onClick={() => {
+                if (isInline) {
+                  this.setState({ error: null })
+                } else {
+                  window.location.reload()
+                }
+              }}
               style={{
-                height: 36,
+                height: isInline ? 32 : 36,
                 padding: '0 16px',
                 borderRadius: 8,
                 border: '1px solid var(--line, #333)',
                 background: 'var(--accent, #0879d9)',
                 color: '#fff',
                 cursor: 'pointer',
+                fontSize: isInline ? 13 : 14,
               }}
             >
-              刷新页面
+              {isInline ? '重试模块' : '刷新页面'}
             </button>
             <button
               type="button"
               onClick={this.copyReport}
               style={{
-                height: 36,
+                height: isInline ? 32 : 36,
                 padding: '0 16px',
                 borderRadius: 8,
                 border: '1px solid var(--line, #333)',
                 background: 'transparent',
                 color: 'var(--text, #e8e8e8)',
                 cursor: 'pointer',
+                fontSize: isInline ? 13 : 14,
               }}
             >
               {this.state.copied ? '已复制日志' : '复制诊断日志'}
