@@ -42,7 +42,9 @@
 2. 连接数据库并更新 `auth_credentials`：
     ```sql
     UPDATE auth_credentials
-    SET login_password_hash = '<生成的bcrypt哈希>', updated_at = NOW()
+    SET login_password_hash = '<生成的bcrypt哈希>',
+        session_epoch = session_epoch + 1,
+        updated_at = NOW()
     WHERE id = 'default';
     ```
 3. 重启 mail-core 服务使新密码及内存缓存生效。

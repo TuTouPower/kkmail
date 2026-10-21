@@ -1,6 +1,6 @@
 # mail-core 桌面 PostgreSQL 子进程
 
-架构依据：`docs/mail-core-architecture.md` §4.3 / M6。
+架构依据：`docs/blueprint/architecture.md` §4.3 / M6。
 
 ## 数据目录（安装目录之外）
 
@@ -43,7 +43,7 @@ pg.stop()
 # 或手动解压到 desktop/vendor/pgsql/bin/
 ```
 
-详见 [`desktop/vendor/README.md`](../desktop/vendor/README.md)。
+详见 [`desktop/vendor/README.md`](../../src/desktop/vendor/README.md)。
 
 无二进制时：`start()` 创建数据目录并返回 `{ stub: true }`，`main.js` 将其视为致命错误并提示（mail-core 是唯一后端，没有无 PG 的回退）。
 
@@ -93,4 +93,4 @@ npm run dist:linux:dir      # 通过 electron-builder 打包
 2. 权限请求 / 检查全部拒绝
 3. `session.webRequest.onHeadersReceived` 注入限制性 CSP
 
-详见 `docs/security.md`「桌面 Electron」。
+详见 `docs/guides/security.md`「桌面 Electron」。

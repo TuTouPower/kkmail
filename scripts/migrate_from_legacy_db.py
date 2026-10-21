@@ -64,9 +64,10 @@ def migrate():
         print(f"Legacy sqlite db not found: {sqlite_path}", file=sys.stderr)
         sys.exit(1)
 
-    legacy_secret = os.environ.get(
-        "LEGACY_SECRET_KEY", "[REDACTED]"
-    )
+    legacy_secret = os.environ.get("LEGACY_SECRET_KEY")
+    if not legacy_secret:
+        print("LEGACY_SECRET_KEY required", file=sys.stderr)
+        sys.exit(1)
     legacy_cipher = get_legacy_cipher(legacy_secret)
 
     blob_b64 = os.environ.get("MAIL_CORE_BLOB_KEY_V1")
