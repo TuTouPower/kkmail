@@ -1,9 +1,10 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle } from 'lucide-react'
+import { ChevronDown, ChevronRight, Inbox, MailOpen, Send, Settings, PanelLeft, AlertCircle } from 'lucide-react'
 import { apiRequest } from '../api/client'
 import { fetchAccounts, fetchGroups, queryKeys } from '../api/queries'
 import { fetchGlobalStats } from '../api/mailCore'
-import { providerBadge, providerColor, useMailStore } from '../store/mailStore'
+import { providerBadge, providerColor, useMailStore, type FavoriteCategory } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
 
 interface FolderStatsItem {
@@ -40,9 +41,17 @@ export default function Sidebar() {
   const toggleSidebar = useMailStore((s) => s.toggleSidebar)
   const closeMobileSidebar = useMailStore((s) => s.closeMobileSidebar)
   const listFilter = useMailStore((s) => s.listFilter)
-  const openSmartView = useMailStore((s) => s.openSmartView)
   const openSettings = useMailStore((s) => s.openSettings)
+  const setListFilter = useMailStore((s) => s.setListFilter)
   const wide = useIsWide()
+  const [expandedFavorites, setExpandedFavorites] = useState<Record<FavoriteCategory, boolean>>({
+    inbox: false,
+    unread: false,
+    sent: false,
+  })
+  const toggleFavorite = (cat: FavoriteCategory) => {
+    setExpandedFavorites((prev) => ({ ...prev, [cat]: !prev[cat] }))
+  }
 
   const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
@@ -111,19 +120,97 @@ export default function Sidebar() {
       <div className="sidebar-scroll">
         <div className="side-section">
           <div className="section-label"><span>个人收藏</span></div>
-          <button className={`side-item ${inAllInbox && listFilter === 'all' ? 'active' : ''}`} onClick={() => openSmartView('all')}>
-            <Inbox size={17} />
-            <span className="side-name">所有收件箱</span>
-            {allInboxUnread > 0 && <span className="side-count unread-badge" title={`${allInboxUnread} 封未读`} aria-label={`${allInboxUnread} 封未读`}>{allInboxUnread}</span>}
-          </button>
-          <button className={`side-item ${inAllInbox && listFilter === 'unread' ? 'active' : ''}`} onClick={() => openSmartView('unread')}>
-            <MailOpen size={17} />
-            <span className="side-name">未读邮件</span>
-          </button>
-          <button className={`side-item ${inAllInbox && listFilter === 'flagged' ? 'active' : ''}`} onClick={() => openSmartView('flagged')}>
-            <Flag size={17} />
-            <span className="side-name">已标记</span>
-          </button>
+          {[
+            { category: 'inbox' as const, label: '所有收件箱', icon: Inbox, showBadges: true },
+            { category: 'unread' as const, label: '所有未读', icon: MailOpen, showBadges: false },
+            { category: 'sent' as const, label: '所有已发邮件', icon: Send, showBadges: false },
+          ].map(({ category: cat, label, icon: Icon, showBadges }) => {
+            const isExpanded = !!expandedFavorites[cat]
+            const isTopActive =
+              (view.type === 'favorite' && view.category === cat && !view.accountId) ||
+              (cat === 'inbox' && inAllInbox && listFilter === 'all') ||
+              (cat === 'unread' && inAllInbox && listFilter === 'unread')
+
+            return (
+              <div key={cat} className={`favorite-category favorite-category-${cat}`}>
+                <div className={`side-item-group ${isTopActive ? 'active' : ''}`}>
+                  <button
+                    type="button"
+                    className="category-toggle group-toggle"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      toggleFavorite(cat)
+                    }}
+                    title={isExpanded ? `折叠 ${label}` : `展开 ${label}`}
+                    aria-label={isExpanded ? `折叠` : `展开`}
+                    aria-expanded={isExpanded}
+                  >
+                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    className={`side-item category-btn ${isTopActive ? 'active' : ''}`}
+                    onClick={() => {
+                      setView({ type: 'favorite', category: cat })
+                      if (cat === 'unread') {
+                        setListFilter('unread')
+                      } else {
+                        setListFilter('all')
+                      }
+                    }}
+                  >
+                    <Icon size={17} />
+                    <span className="side-name">{label}</span>
+                    {showBadges && allInboxUnread > 0 && (
+                      <span className="side-count unread-badge" title={`${allInboxUnread} 封未读`} aria-label={`${allInboxUnread} 封未读`}>
+                        {allInboxUnread}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {isExpanded && (
+                  <div className="favorite-accounts">
+                    {accounts.map((a) => {
+                      const isSubActive =
+                        view.type === 'favorite' &&
+                        view.category === cat &&
+                        view.accountId === a.id
+                      const unread = unreadByAccount.get(a.id)
+
+                      return (
+                        <div key={a.id} className="favorite-account-row">
+                          <button
+                            type="button"
+                            className={`account-button category-account-btn ${isSubActive ? 'active' : ''}`}
+                            onClick={() => {
+                              setView({ type: 'favorite', category: cat, accountId: a.id, email: a.email })
+                              if (cat === 'unread') {
+                                setListFilter('unread')
+                              } else {
+                                setListFilter('all')
+                              }
+                            }}
+                            title={a.email}
+                          >
+                            <span className="account-dot" style={{ background: a.group_color || providerColor(a.provider, a.account_type) }}>
+                              {providerBadge(a.provider, a.account_type)}
+                            </span>
+                            <span className="account-email">{a.email}</span>
+                            {showBadges && !!unread && (
+                              <span className="side-count unread-badge" aria-label={`${unread} 封未读`}>
+                                {unread}
+                              </span>
+                            )}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
 
         <div className="side-section">

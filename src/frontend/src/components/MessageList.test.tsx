@@ -134,5 +134,21 @@ describe('<MessageList />', () => {
     await waitFor(() => expect(subjects(container)).toEqual(['Subject p1', 'Subject p2']))
     expect(calls.some((u) => u.includes('offset=1'))).toBe(true)
   })
+
+  it('requests folder_role=sent when favorite category is sent', async () => {
+    useMailStore.setState({ view: { type: 'favorite', category: 'sent' } })
+    await render(<MessageList />)
+    await waitFor(() => {
+      expect(calls.some((u) => u.includes('folder_role=sent'))).toBe(true)
+    })
+  })
+
+  it('requests folder_role=inbox&is_read=false when favorite category is unread', async () => {
+    useMailStore.setState({ view: { type: 'favorite', category: 'unread' } })
+    await render(<MessageList />)
+    await waitFor(() => {
+      expect(calls.some((u) => u.includes('folder_role=inbox') && u.includes('is_read=false'))).toBe(true)
+    })
+  })
 })
 

@@ -1,8 +1,11 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
+export type FavoriteCategory = 'inbox' | 'unread' | 'sent'
+
 export type ViewState =
   | { type: 'allInbox' }
+  | { type: 'favorite'; category: FavoriteCategory; accountId?: string; email?: string }
   | { type: 'account'; accountId: string; email: string }
 
 interface MailUiState {
