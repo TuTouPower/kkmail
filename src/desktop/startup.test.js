@@ -17,11 +17,10 @@ assert.throws(() => parsePort('0'), /KKMAIL_DESKTOP_PORT/)
 assert.throws(() => parsePort('65536'), /KKMAIL_DESKTOP_PORT/)
 assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
 
-// A50: environment variable fallback test
+// parsePort from KKMAIL_DESKTOP_PORT
 {
-  const portFromEnv = (env) => parsePort(env.KKMAIL_DESKTOP_PORT || env.OUTLOOK_DESKTOP_PORT)
-  assert.strictEqual(portFromEnv({ KKMAIL_DESKTOP_PORT: '9000', OUTLOOK_DESKTOP_PORT: '8000' }), 9000)
-  assert.strictEqual(portFromEnv({ OUTLOOK_DESKTOP_PORT: '8000' }), 8000)
+  const portFromEnv = (env) => parsePort(env.KKMAIL_DESKTOP_PORT)
+  assert.strictEqual(portFromEnv({ KKMAIL_DESKTOP_PORT: '9000' }), 9000)
   assert.strictEqual(portFromEnv({}), 18765)
 }
 

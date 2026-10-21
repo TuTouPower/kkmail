@@ -138,9 +138,8 @@ def test_missing_blob_key_fails():
 
 def test_auth_config_requires_secret(monkeypatch):
     monkeypatch.delenv("MAIL_CORE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("SECRET_KEY", raising=False)
     reset_auth_caches()
-    with pytest.raises(AuthConfigError, match="SECRET_KEY"):
+    with pytest.raises(AuthConfigError, match="MAIL_CORE_SECRET_KEY"):
         validate_auth_config()
 
 
