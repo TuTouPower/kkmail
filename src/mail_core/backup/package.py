@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import logging
 import os
@@ -392,17 +391,6 @@ def _extract_tar_file(tar_path: Path, extract_dir: Path, errors: list[str]) -> b
         errors.append(f"inner tar extract failed: {exc}")
         return False
     return True
-
-
-def _extract_plain_tar(plaintext: bytes, extract_dir: Path, errors: list[str]) -> bool:
-    """Extract inner backup tar with path-traversal / allowlist checks."""
-    tmp_path = extract_dir / f".tmp_{uuid.uuid4().hex}.tar"
-    try:
-        tmp_path.write_bytes(plaintext)
-        return _extract_tar_file(tmp_path, extract_dir, errors)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
 
 
 def verify_backup_package(

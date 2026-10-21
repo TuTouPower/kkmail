@@ -142,7 +142,7 @@ class OutboxDispatcher:
                             seen_q_ids.add(id(q))
                             targets.append((loop, q))
         if not targets:
-            return True
+            return False
         ok = True
         for loop, q in targets:
             if not self._fanout_one(loop, q, event):
@@ -186,17 +186,6 @@ class OutboxDispatcher:
 
     def request_stop(self) -> None:
         self._stop = True
-
-    def run_forever(self) -> None:
-        import time
-
-        self._stop = False
-        while not self._stop:
-            try:
-                self.dispatch_once()
-            except Exception:
-                log.exception("dispatch tick failed")
-            time.sleep(self.poll_interval_s)
 
 
 _dispatcher: OutboxDispatcher | None = None

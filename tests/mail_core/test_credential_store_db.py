@@ -68,7 +68,7 @@ def test_composite_routes_plain_refs_to_db(monkeypatch):
 
 
 def test_account_credentials_transactional_atomicity():
-    from mail_core.accounts.service import create_account, delete_account
+    from mail_core.accounts.service import create_account
     from mail_core.accounts.credentials import set_credential_store
     set_credential_store(DbCredentialStore(keyring=_ring()))
 

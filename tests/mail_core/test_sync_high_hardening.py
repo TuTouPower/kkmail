@@ -15,14 +15,13 @@ from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import RemoteOperationStatus
 from mail_core.mail.storage import Folder, RemoteOperation
 from mail_core.mail.storage.models import AccountSyncLease
-from mail_core.providers.base import MetadataPage, RemoteFolder, RemoteMessageMeta, RemoteOperationResult
+from mail_core.providers.base import RemoteFolder, RemoteMessageMeta
 from mail_core.providers.gmail import gmail_label_role
 from mail_core.providers.graph import graph_folder_role
 from mail_core.providers.http import CursorInvalidError, ProviderHttpError
 from mail_core.providers.oauth import _url_is_sync_cursor_endpoint, urllib_json_request
 from mail_core.providers.stub_memory import MemoryProvider
 from mail_core.sync import push_remote_operations, reconcile_folder, sync_folder_delta, sync_folder_metadata
-from mail_core.sync.leases import acquire_lease
 import mail_core.sync.delta as delta_mod
 import mail_core.sync.engine as engine_mod
 import mail_core.sync.reconcile as reconcile_mod

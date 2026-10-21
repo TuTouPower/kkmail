@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from mail_core.blobs.crypto import MAGIC, BlobCryptoError, load_keyring_from_env, unwrap, wrap
+from mail_core.blobs.crypto import MAGIC, BlobCryptoError, wrap
 from mail_core.blobs.gc import sweep_expired_blobs
 from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory

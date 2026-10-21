@@ -17,6 +17,7 @@ import logging
 import os
 import threading
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger("mail_core.main")
 
@@ -42,6 +43,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--instance-token", default=os.environ.get("KKMAIL_INSTANCE_TOKEN") or "")
     parser.add_argument("--no-worker", action="store_true", default=os.environ.get("MAIL_CORE_EMBEDDED_WORKER") == "0")
     parser.add_argument("--skip-migrations", action="store_true", default=os.environ.get("MAIL_CORE_SKIP_MIGRATIONS") == "1")
+    parser.add_argument(
+        "--proxy-headers",
+        action="store_true",
+        default=os.environ.get("MAIL_CORE_PROXY_HEADERS", "1").strip().lower() in ("1", "true", "yes", "on"),
+        help="Enable proxy headers parsing",
+    )
+    parser.add_argument(
+        "--forwarded-allow-ips",
+        default=os.environ.get("MAIL_CORE_FORWARDED_ALLOW_IPS") or None,
+        help="Comma-separated list of IPs/CIDRs to trust for proxy headers",
+    )
     args = parser.parse_args(argv)
 
     from mail_core.logging_config import configure_logging
@@ -65,7 +77,11 @@ def main(argv: list[str] | None = None) -> None:
 
     from mail_core.api.app import app
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn_kwargs: dict[str, Any] = {"proxy_headers": args.proxy_headers}
+    if args.forwarded_allow_ips is not None:
+        uvicorn_kwargs["forwarded_allow_ips"] = args.forwarded_allow_ips
+
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info", **uvicorn_kwargs)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,9 +38,11 @@ def _frontend_dist() -> Path | None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     from mail_core.blobs.crypto import load_keyring_from_env
+    from mail_core.logging_config import configure_logging
     from mail_core.realtime.listener import start_outbox_listener, stop_outbox_listener
     from mail_core.security.auth import validate_auth_config
 
+    configure_logging(service_name="mail-core-api")
     load_keyring_from_env()
     validate_auth_config()
 
@@ -62,6 +64,17 @@ app = FastAPI(
     description="Local-authoritative mail kernel (sole backend).",
     lifespan=lifespan,
 )
+
+_forwarded_allow_ips = os.environ.get("MAIL_CORE_FORWARDED_ALLOW_IPS")
+if _forwarded_allow_ips or os.environ.get("MAIL_CORE_PROXY_HEADERS", "1").strip().lower() in ("1", "true", "yes", "on"):
+    try:
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+        trusted = _forwarded_allow_ips.strip() if _forwarded_allow_ips else "*"
+        app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
+    except ImportError:
+        pass
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -74,6 +87,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 @app.middleware("http")
@@ -139,15 +162,13 @@ def health(response: Response) -> HealthOut:
 def ready():
     """Readiness: DB reachable, schema at code head, outbox listener running."""
     from fastapi.responses import JSONResponse
-    from sqlalchemy import text
 
-    from mail_core.db.session import get_engine
+    from mail_core.mail.storage.health import get_current_schema_revision
     from mail_core.realtime.listener import get_outbox_listener
 
     head = _code_schema_head()
     try:
-        with get_engine().connect() as conn:
-            rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        rev = get_current_schema_revision()
     except Exception as exc:
         body = ReadyOut(status="not_ready", schema_head=head, reason=f"database: {type(exc).__name__}")
         return JSONResponse(status_code=503, content=body.model_dump())
