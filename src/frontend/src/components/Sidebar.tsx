@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Inbox, MailOpen, Send, Settings, PanelLeft, 
 import { apiRequest } from '../api/client'
 import { fetchAccounts, fetchGroups, queryKeys } from '../api/queries'
 import { fetchGlobalStats } from '../api/mailCore'
+import { errorMessage } from '../lib/actions'
 import { providerBadge, providerColor, useMailStore, type FavoriteCategory } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
 
@@ -215,8 +216,40 @@ const Sidebar = memo(function Sidebar() {
             <div style={{ padding: '8px 10px', color: 'var(--muted)', fontSize: 12 }}>正在加载账户…</div>
           )}
           {(groupsQuery.error || accountsQuery.error) && (
-            <div style={{ padding: '8px 10px', color: 'var(--red)', fontSize: 12, display: 'flex', gap: 6 }}>
-              <AlertCircle size={14} /> 账户加载失败，请确认已登录且后端可用
+            <div
+              style={{
+                padding: '8px 10px',
+                color: 'var(--red)',
+                fontSize: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <AlertCircle size={14} style={{ flexShrink: 0 }} />
+                <span>{errorMessage(accountsQuery.error || groupsQuery.error, '账户加载失败')}</span>
+              </div>
+              <button
+                type="button"
+                className="account-error-retry"
+                onClick={() => {
+                  void accountsQuery.refetch()
+                  void groupsQuery.refetch()
+                }}
+                style={{
+                  alignSelf: 'flex-start',
+                  fontSize: 11,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  border: '1px solid var(--border)',
+                  background: 'var(--card)',
+                  color: 'var(--fg)',
+                  cursor: 'pointer',
+                }}
+              >
+                重试
+              </button>
             </div>
           )}
           {grouped.map(({ group, members }) => {

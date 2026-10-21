@@ -50,6 +50,22 @@
             "conflicts_with": "",
             "note": "",
             "dir": "docs/archive/tasks/t003_reader_toolbar_and_context_menu"
+        },
+        {
+            "tid": "t004",
+            "slug": "fix_accounts_dto_and_sidebar_error",
+            "title": "修复AccountDTO序列化异常与侧栏错误状态处理",
+            "status": "done",
+            "branch": "t004_fix_accounts_dto_and_sidebar_error",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "f915e78bcfc81767386f86b5e9f2448235f44fa7",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "",
+            "dir": "docs/archive/tasks/t004_fix_accounts_dto_and_sidebar_error"
         }
     ]
 }

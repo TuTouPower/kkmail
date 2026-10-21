@@ -1,0 +1,38 @@
+{
+  "tid": "t004",
+  "attempt": 1,
+  "execution_id": "6cd56333752b4852af1b71bc251c90fa",
+  "status": "done",
+  "branch": "t004_fix_accounts_dto_and_sidebar_error",
+  "base_sha": "f915e78bcfc81767386f86b5e9f2448235f44fa7",
+  "tests": "contract: 148 passed; mail_core: 194 passed; frontend: 128 passed + build ok; desktop: 5 passed; pg integration: 2 passed",
+  "blackbox": "playwright e2e smoke 2 passed",
+  "review": "single review PASS (Round 1)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/mail_core/api/accounts.py",
+      "tests/mail_core/test_accounts_api_unit.py",
+      "tests/mail_core/test_accounts_api_pg.py"
+    ],
+    "AC-002": [
+      "src/mail_core/api/accounts.py",
+      "tests/mail_core/test_accounts_api_unit.py",
+      "tests/mail_core/test_accounts_api_pg.py"
+    ],
+    "AC-003": [
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/Sidebar.test.tsx"
+    ],
+    "AC-004": [
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/Sidebar.test.tsx"
+    ],
+    "AC-005": [
+      "tests/mail_core/test_accounts_api_unit.py"
+    ]
+  },
+  "pending": [
+    "docs/archive/pending/p008_sidebar_accounts_failure_handling.md"
+  ],
+  "findings": []
+}
