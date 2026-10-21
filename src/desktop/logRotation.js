@@ -48,7 +48,8 @@ function rotateLogFile(filePath, maxBytes = DEFAULT_MAX_BYTES, maxFiles = DEFAUL
 }
 
 /**
- * A synchronous write stream that automatically rotates when reaching maxBytes.
+ * An asynchronous write stream that automatically rotates when reaching maxBytes.
+ * Uses in-memory buffering and non-blocking fs.write to avoid stalling the Electron main event loop.
  */
 class RotatingLogStream {
   constructor(filePath, options = {}) {
@@ -57,6 +58,10 @@ class RotatingLogStream {
     this.maxFiles = options.maxFiles || DEFAULT_MAX_FILES
     this.currentSize = 0
     this.fd = null
+    this.queue = []
+    this.writing = false
+    this.flushScheduled = false
+    this.closed = false
 
     this._init()
   }
@@ -78,16 +83,48 @@ class RotatingLogStream {
   }
 
   write(chunk) {
+    if (this.closed) return
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8')
+    if (buf.length === 0) return
+
     if (this.currentSize + buf.length >= this.maxBytes) {
+      this._flushSync()
       this._rotate()
     }
-    if (this.fd !== null) {
-      try {
-        fs.writeSync(this.fd, buf)
-        this.currentSize += buf.length
-      } catch (_) {}
-    }
+
+    this.queue.push(buf)
+    this.currentSize += buf.length
+    this._scheduleFlush()
+  }
+
+  _scheduleFlush() {
+    if (this.flushScheduled || this.writing || this.closed) return
+    this.flushScheduled = true
+    setImmediate(() => {
+      this.flushScheduled = false
+      this._flushAsync()
+    })
+  }
+
+  _flushAsync() {
+    if (this.writing || this.closed || this.queue.length === 0 || this.fd === null) return
+    this.writing = true
+    const buf = this.queue.length === 1 ? this.queue.shift() : Buffer.concat(this.queue.splice(0))
+    fs.write(this.fd, buf, 0, buf.length, null, () => {
+      this.writing = false
+      if (!this.closed && this.queue.length > 0) {
+        this._scheduleFlush()
+      }
+    })
+  }
+
+  _flushSync() {
+    this.flushScheduled = false
+    if (this.fd === null || this.queue.length === 0) return
+    try {
+      const buf = this.queue.length === 1 ? this.queue.shift() : Buffer.concat(this.queue.splice(0))
+      fs.writeSync(this.fd, buf)
+    } catch (_) {}
   }
 
   _rotate() {
@@ -105,6 +142,8 @@ class RotatingLogStream {
   }
 
   end() {
+    this.closed = true
+    this._flushSync()
     if (this.fd !== null) {
       try { fs.closeSync(this.fd) } catch (_) {}
       this.fd = null

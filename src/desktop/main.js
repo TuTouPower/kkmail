@@ -9,7 +9,7 @@ const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
 const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl } = require('./paths')
-const { parsePort, freePort, waitForHealth, scrubEnv, redactSecrets, stopChildTree } = require('./startup')
+const { parsePort, freePort, waitForHealth, scrubEnv, redactSecrets, isChildDead, stopChildTree } = require('./startup')
 const {
   mergeCspHeaders,
   denyPermissionRequest,
@@ -17,7 +17,7 @@ const {
 } = require('./hardening')
 const { PostgresManager } = require('./postgresManager')
 
-const PORT = parsePort(process.env.OUTLOOK_DESKTOP_PORT)
+const PORT = parsePort(process.env.KKMAIL_DESKTOP_PORT || process.env.OUTLOOK_DESKTOP_PORT)
 const HOST = '127.0.0.1'
 let backend = null
 let backendExit = null
@@ -49,7 +49,7 @@ function backendCommand() {
   return { cmd: py, args: ['-m', 'mail_core'], cwd: path.join(root, 'src'), packaged: false }
 }
 
-const { rotateLogFile, RotatingLogStream } = require('./logRotation')
+const { RotatingLogStream } = require('./logRotation')
 
 let pg = null
 
@@ -163,11 +163,13 @@ function createWindow(url) {
     if (isAllowedExternalUrl(target)) shell.openExternal(target)
     return { action: 'deny' }
   })
-  mainWindow.webContents.on('will-navigate', (event, target) => {
+  const handleExternalNavigation = (event, target) => {
     if (isLocalAppUrl(target, appOrigin)) return
     event.preventDefault()
     if (isAllowedExternalUrl(target)) shell.openExternal(target)
-  })
+  }
+  mainWindow.webContents.on('will-navigate', handleExternalNavigation)
+  mainWindow.webContents.on('will-redirect', handleExternalNavigation)
 }
 
 function applySessionHardening() {
@@ -186,27 +188,41 @@ app.on('web-contents-created', (_event, contents) => {
   })
 })
 
-app.whenReady().then(async () => {
-  try {
-    applySessionHardening()
-    backendUrl = await startBackend()
-    createWindow(backendUrl)
-  } catch (err) {
-    console.error(err)
-    dialog.showErrorBox('kkmail 无法启动', String(err && err.message ? err.message : err))
-    app.quit()
-  }
-})
+const gotTheLock = app.requestSingleInstanceLock()
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0 && backendUrl) {
-    createWindow(backendUrl)
-  }
-})
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
+  app.whenReady().then(async () => {
+    try {
+      applySessionHardening()
+      backendUrl = await startBackend()
+      createWindow(backendUrl)
+    } catch (err) {
+      console.error(err)
+      dialog.showErrorBox('kkmail 无法启动', String(err && err.message ? err.message : err))
+      app.quit()
+    }
+  })
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0 && backendUrl) {
+      createWindow(backendUrl)
+    }
+  })
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit()
+  })
+}
 
 function stopMailCorePg() {
   if (!pg) return
@@ -215,38 +231,84 @@ function stopMailCorePg() {
 }
 
 function stopBackend() {
-  if (!backend) return
+  if (!backend || isChildDead(backend)) return Promise.resolve()
   const child = backend
-  stopChildTree(child, {
-    escalateAfterMs: 4000,
-    log: (m) => console.warn('[mail-core] stopBackend', m),
+  return new Promise((resolve) => {
+    let timer = null
+    const cleanup = () => {
+      if (timer) clearTimeout(timer)
+      child.removeListener('exit', onExit)
+      child.removeListener('close', onExit)
+    }
+    const onExit = () => {
+      cleanup()
+      resolve()
+    }
+    child.once('exit', onExit)
+    child.once('close', onExit)
+    timer = setTimeout(() => {
+      cleanup()
+      resolve()
+    }, 6000)
+    if (typeof timer.unref === 'function') timer.unref()
+
+    stopChildTree(child, {
+      escalateAfterMs: 4000,
+      log: (m) => console.warn('[mail-core] stopBackend', m),
+    })
   })
 }
 
+let shutdownPromise = null
+let shutdownFinished = false
+
 /** Single-flight shutdown for before-quit + signals + process exit (avoids triple stop races). */
-function shutdownAll() {
-  if (shuttingDown) return
+async function shutdownAll() {
+  if (shutdownPromise) return shutdownPromise
   shuttingDown = true
   app.isQuitting = true
-  stopBackend()
-  stopMailCorePg()
-  if (backendLogStream) {
-    try { backendLogStream.end() } catch (_) { /* ignore */ }
-    backendLogStream = null
-  }
+  shutdownPromise = (async () => {
+    try {
+      await stopBackend()
+    } catch (err) {
+      console.warn('[mail-core] stopBackend error', err)
+    }
+    stopMailCorePg()
+    if (backendLogStream) {
+      try { backendLogStream.end() } catch (_) { /* ignore */ }
+      backendLogStream = null
+    }
+  })()
+  return shutdownPromise
 }
 
-app.on('before-quit', () => {
-  shutdownAll()
+app.on('before-quit', (event) => {
+  if (shutdownFinished) return
+  event.preventDefault()
+  shutdownAll().finally(() => {
+    shutdownFinished = true
+    app.quit()
+  })
 })
 
 // SIGTERM/SIGINT (logout, `kill`, Ctrl+C) skip before-quit; never leave the backend orphaned.
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   process.on(signal, () => {
-    shutdownAll()
-    app.quit()
+    shutdownAll().finally(() => {
+      shutdownFinished = true
+      app.quit()
+    })
   })
 }
 process.on('exit', () => {
-  shutdownAll()
+  if (!shutdownFinished) {
+    if (backend && !isChildDead(backend)) {
+      try { stopChildTree(backend, { escalateAfterMs: 0 }) } catch (_) {}
+    }
+    stopMailCorePg()
+    if (backendLogStream) {
+      try { backendLogStream.end() } catch (_) {}
+      backendLogStream = null
+    }
+  }
 })
