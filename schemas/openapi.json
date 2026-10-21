@@ -1238,7 +1238,7 @@
   "info": {
     "description": "Local-authoritative mail kernel (sole backend).",
     "title": "kkmail mail-core",
-    "version": "0.1.0"
+    "version": "3.0.20"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1372,7 +1372,6 @@
     },
     "/api/accounts/sync-all": {
       "post": {
-        "description": "Enqueue a sync for every sync-enabled account (paged; deduped by the job queue).",
         "operationId": "api_sync_all_accounts_api_accounts_sync_all_post",
         "responses": {
           "200": {
@@ -2576,7 +2575,6 @@
         ]
       },
       "put": {
-        "description": "Update public settings only. Password changes use POST /api/auth/password.",
         "operationId": "api_update_settings_api_settings_put",
         "requestBody": {
           "content": {
