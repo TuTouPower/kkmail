@@ -97,7 +97,7 @@ function redactSecrets(text, secrets = []) {
 function parsePort(raw, fallback = DEFAULT_PORT) {
   const n = Number(raw == null || raw === '' ? fallback : raw)
   if (!Number.isInteger(n) || n < 1 || n > 65535) {
-    throw new Error(`OUTLOOK_DESKTOP_PORT 无效（需要 1–65535 的整数）: ${raw}`)
+    throw new Error(`KKMAIL_DESKTOP_PORT 无效（需要 1–65535 的整数）: ${raw}`)
   }
   return n
 }
@@ -242,5 +242,6 @@ module.exports = {
   waitForHealth,
   scrubEnv,
   redactSecrets,
+  isChildDead,
   stopChildTree,
 }

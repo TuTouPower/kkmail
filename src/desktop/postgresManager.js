@@ -128,7 +128,8 @@ PostgresManager.prototype.paths = function paths() {
 PostgresManager.prototype.ensureDirs = function ensureDirs() {
   const p = this.paths()
   for (const dir of [p.dataRoot, p.blobs, p.backups, p.secrets]) {
-    fs.mkdirSync(dir, { recursive: true, mode: dir === p.secrets ? 0o700 : 0o755 })
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    try { fs.chmodSync(dir, 0o700) } catch (_) {}
   }
   // Marker so uninstall docs can find the durable data root.
   const marker = path.join(p.dataRoot, 'README-DO-NOT-DELETE.txt')
@@ -222,7 +223,8 @@ PostgresManager.prototype.initIfNeeded = function initIfNeeded() {
   if (fs.existsSync(path.join(p.pgData, 'PG_VERSION'))) {
     return { ok: true, initialized: false, pgData: p.pgData }
   }
-  fs.mkdirSync(p.pgData, { recursive: true })
+  fs.mkdirSync(p.pgData, { recursive: true, mode: 0o700 })
+  try { fs.chmodSync(p.pgData, 0o700) } catch (_) {}
   const pwFile = path.join(p.secrets, 'pg-pwfile-init')
   let r
   try {
