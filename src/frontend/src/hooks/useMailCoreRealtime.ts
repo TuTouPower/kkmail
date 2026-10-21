@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { subscribeMailCoreStream } from '../api/sseStream'
 import { queryClient } from '../api/queries'
+import { UNAUTHORIZED_EVENT } from '../api/client'
 
 /** Events that mean cached message lists may be stale. */
 export const MAIL_CORE_INBOX_INVALIDATE_EVENTS = new Set([
@@ -150,6 +151,7 @@ export function useMailCoreRealtime(enabled: boolean): void {
         },
         onUnauthorized: (status) => {
           console.warn(`[SSE] Unauthorized stream access (${status}), stopping reconnect.`)
+          window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
         },
         onVisibilityRecovery: () => {
           void queryClient.invalidateQueries({ queryKey: ['mail-core'] })

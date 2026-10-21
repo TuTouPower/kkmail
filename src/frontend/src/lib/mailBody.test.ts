@@ -23,12 +23,19 @@ describe('mail body safety', () => {
     expect(out).not.toMatch(/<svg|<math|<video|<audio|<source|<track|<details/i)
   })
 
-  it('wraps output in a CSP document with rel="noopener noreferrer" base', () => {
+  it('wraps output in a CSP document with rel="noopener noreferrer" base and no-referrer meta', () => {
     const doc = buildMailSrcdoc('<img src=x onerror=alert(1)>')
     expect(doc).toContain("default-src 'none'")
     expect(doc).toContain('img-src data: cid:')
+    expect(doc).toContain('<meta name="referrer" content="no-referrer">')
     expect(doc).toContain('<base target="_blank" rel="noopener noreferrer">')
     expect(doc).not.toMatch(/onerror/i)
+  })
+
+  it('enforces rel="noopener noreferrer" and target="_blank" on anchor tags', () => {
+    const out = sanitizeMailHtml('<a href="https://example.com">link</a>')
+    expect(out).toContain('target="_blank"')
+    expect(out).toContain('rel="noopener noreferrer"')
   })
 
   it('blocks remote images by default and allows them only on explicit opt-in', () => {
@@ -36,11 +43,12 @@ describe('mail body safety', () => {
     expect(buildMailSrcdoc('<img src="https://x/y.png">', { loadRemoteImages: true })).toContain('img-src https: http: data: cid:')
   })
 
-  it('sandbox never allows scripts, same-origin, or escape-sandbox', () => {
+  // 旧测试 "sandbox never allows scripts, same-origin, or escape-sandbox" 已删除：A17 演进为允许 allow-popups-to-escape-sandbox 保证 Web SPA 模式下外部新窗口正常可用
+  it('sandbox allows popups and escaping sandbox, but never scripts or same-origin', () => {
     expect(MAIL_IFRAME_SANDBOX).not.toContain('allow-scripts')
     expect(MAIL_IFRAME_SANDBOX).not.toContain('allow-same-origin')
-    expect(MAIL_IFRAME_SANDBOX).not.toContain('allow-popups-to-escape-sandbox')
-    expect(MAIL_IFRAME_SANDBOX).toBe('allow-popups')
+    expect(MAIL_IFRAME_SANDBOX).toContain('allow-popups')
+    expect(MAIL_IFRAME_SANDBOX).toContain('allow-popups-to-escape-sandbox')
   })
 
   it('detects html only from body_type', () => {

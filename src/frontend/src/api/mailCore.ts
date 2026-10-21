@@ -4,6 +4,7 @@ import { apiBaseUrl } from '../lib/apiBase'
 import { apiRequest, postJson } from './client'
 import type { MailDetail, MailItem } from './queries'
 import type {
+  GlobalStatsOut,
   MailCoreAttachment,
   MailCoreInboxPage,
   MailCoreMessage,
@@ -13,6 +14,8 @@ import type {
 } from './schemaTypes'
 
 export type {
+  AccountInboxStatsOut,
+  GlobalStatsOut,
   MailCoreAttachment,
   MailCoreInboxPage,
   MailCoreMessage,
@@ -82,17 +85,6 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
     accountEmail: m.account_email ?? '',
     accountId: m.account_id,
   }
-}
-
-export interface AccountInboxStatsOut {
-  account_id: string
-  unread_count: number
-  total_count: number
-}
-
-export interface GlobalStatsOut {
-  total_unread: number
-  accounts: AccountInboxStatsOut[]
 }
 
 export function fetchGlobalStats(signal?: AbortSignal): Promise<GlobalStatsOut> {

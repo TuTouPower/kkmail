@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { memo, useMemo, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Mail, MailOpen, Trash2, Flag, ArrowLeft, Reply, ReplyAll, Forward } from 'lucide-react'
 import { fetchAccounts, findCachedMail, flagOptimistic, setReadOptimistic, queryClient, queryKeys, removeCachedMail } from '../api/queries'
@@ -11,17 +11,16 @@ import { formatReaderDate } from '../lib/listDate'
 import { displayName } from '../lib/displayName'
 import { formatFileSize } from '../lib/formatSize'
 
-export default function MessageReader() {
+const MessageReader = memo(function MessageReader() {
   const selectedKey = useMailStore((s) => s.selectedKey)
   const setSelectedKey = useMailStore((s) => s.setSelectedKey)
   const setMobileView = useMailStore((s) => s.setMobileView)
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
   const [actionStatus, setActionStatus] = useState('')
-  const [loadRemoteImages, setLoadRemoteImages] = useState(false)
-  useEffect(() => {
-    setLoadRemoteImages(false)
-  }, [selectedKey])
+  const [allowedRemoteImagesKey, setAllowedRemoteImagesKey] = useState<string | null>(null)
+  const loadRemoteImages = Boolean(selectedKey && allowedRemoteImagesKey === selectedKey)
+
   // Re-render when mail-core list caches change (optimistic flag/read/delete), not the whole query cache.
   const selectedSnap = useSyncExternalStore(
     (cb) =>
@@ -51,6 +50,15 @@ export default function MessageReader() {
     placeholderData: undefined,
   })
 
+  const detail = detailQuery.data
+  const body = detail?.body || selected?.body_preview || ''
+  const html = Boolean(detail?.body && isHtmlBody(detail.body_type))
+  const currentMailKey = selected ? mailKey(selected) : undefined
+  const mailSrcdoc = useMemo(
+    () => (body ? buildMailSrcdoc(body, { loadRemoteImages }) : ''),
+    [body, loadRemoteImages],
+  )
+
   if (!selected) {
     return (
       <section className="reader-pane" aria-label="邮件正文">
@@ -64,10 +72,6 @@ export default function MessageReader() {
       </section>
     )
   }
-
-  const detail = detailQuery.data
-  const body = detail?.body || selected.body_preview || ''
-  const html = !!detail?.body && isHtmlBody(detail.body_type)
 
   async function toggleReadCurrent() {
     if (!selected) return
@@ -177,17 +181,18 @@ export default function MessageReader() {
               {!loadRemoteImages && /<img\b[^>]+src\s*=\s*["']https?:/i.test(body) && (
                 <div style={{ fontSize: 12, marginBottom: 10, padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel, #f7f7f8)' }}>
                   远程图片已拦截（防追踪）。
-                  <button type="button" style={{ marginLeft: 8 }} onClick={() => setLoadRemoteImages(true)}>
+                  <button type="button" style={{ marginLeft: 8 }} onClick={() => selectedKey && setAllowedRemoteImagesKey(selectedKey)}>
                     仅此邮件允许加载
                   </button>
                 </div>
               )}
               <iframe
+                key={currentMailKey}
                 className="email-body email-body-frame"
                 title="邮件正文"
                 sandbox={MAIL_IFRAME_SANDBOX}
                 referrerPolicy="no-referrer"
-                srcDoc={buildMailSrcdoc(body, { loadRemoteImages })}
+                srcDoc={mailSrcdoc}
                 style={{ width: '100%', minHeight: 420, border: 0, background: '#fff', borderRadius: 8 }}
               />
             </>
@@ -199,7 +204,14 @@ export default function MessageReader() {
               {detail!.attachments!.map((att, i) => {
                 const href = att.id ? mailCoreAttachmentUrl(att.id) : undefined
                 return (
-                  <a key={att.id || i} href={href} style={{ padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 9, color: 'inherit', textDecoration: 'none' }}>
+                  <a
+                    key={att.id || i}
+                    href={href}
+                    download={att.name || true}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 9, color: 'inherit', textDecoration: 'none' }}
+                  >
                     <strong>{att.name || '附件'}</strong>
                     {att.size ? <small style={{ display: 'block', color: 'var(--muted)' }}>{formatFileSize(att.size)}</small> : null}
                   </a>
@@ -211,4 +223,6 @@ export default function MessageReader() {
       </div>
     </section>
   )
-}
+})
+
+export default MessageReader

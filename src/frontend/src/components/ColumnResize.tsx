@@ -1,15 +1,22 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 export default function ColumnResize({
   ariaLabel,
   onDrag,
+  onDragEnd,
 }: {
   ariaLabel: string
   onDrag: (deltaX: number) => void
+  onDragEnd?: () => void
 }) {
   const lastX = useRef(0)
   const onDragRef = useRef(onDrag)
-  onDragRef.current = onDrag
+  const onDragEndRef = useRef(onDragEnd)
+
+  useEffect(() => {
+    onDragRef.current = onDrag
+    onDragEndRef.current = onDragEnd
+  }, [onDrag, onDragEnd])
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -31,6 +38,7 @@ export default function ColumnResize({
       } catch {
         /* capture already lost */
       }
+      onDragEndRef.current?.()
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', end)
@@ -46,8 +54,14 @@ export default function ColumnResize({
       tabIndex={0}
       onPointerDown={onPointerDown}
       onKeyDown={(e) => {
-        if (e.key === 'ArrowLeft') onDrag(-8)
-        if (e.key === 'ArrowRight') onDrag(8)
+        if (e.key === 'ArrowLeft') {
+          onDrag(-8)
+          onDragEnd?.()
+        }
+        if (e.key === 'ArrowRight') {
+          onDrag(8)
+          onDragEnd?.()
+        }
       }}
     />
   )

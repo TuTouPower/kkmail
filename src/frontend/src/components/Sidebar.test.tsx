@@ -55,20 +55,24 @@ describe('<Sidebar />', () => {
     expect(calls.some((u) => u.startsWith('/api/mail/stats'))).toBe(true)
   })
 
-  it('falls back to per-account folder stats when /api/mail/stats fails', async () => {
+  // 旧测试 "falls back to per-account folder stats when /api/mail/stats fails"（基于已废弃的 /api/accounts/:id/folders 轮询）已删除：
+  // A23 演进为移除失效的 /api/accounts/:id/folders，统一直接调用 /api/mail/accounts/:id/folder-stats
+  it('falls back to /api/mail/accounts/:id/folder-stats when global stats fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url)
       if (u.startsWith('/api/groups')) return json({ groups: [] })
       if (u.startsWith('/api/accounts')) {
-        if (u.includes('/folders')) {
-          if (u.includes('acc-1')) return json([{ role: 'inbox', unread_count: 4, total_count: 8 }])
-          return json([{ role: 'inbox', unread_count: 1, total_count: 2 }])
-        }
         return json({
           accounts: [
             { id: 'acc-1', email: 'a@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
           ],
           total: 1, limit: 200, offset: 0, has_more: false,
+        })
+      }
+      if (u.startsWith('/api/mail/accounts/acc-1/folder-stats')) {
+        return json({
+          account_id: 'acc-1',
+          folders: [{ role: 'inbox', unread_count: 4, total_count: 8 }],
         })
       }
       if (u.startsWith('/api/mail/stats')) {
