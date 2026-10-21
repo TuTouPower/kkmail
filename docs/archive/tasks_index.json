@@ -2,5 +2,54 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/archive/tasks/{tid}_{slug}/task.md front matter",
     "workspace": ".",
-    "tasks": []
+    "tasks": [
+        {
+            "tid": "t001",
+            "slug": "mail_core_sent_query",
+            "title": "支持按角色查询已发邮件与映射IMAP已发目录",
+            "status": "done",
+            "branch": "t001_mail_core_sent_query",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "d7e829a4a81c9f9c0f9153d6bc57d86d0a188ad7",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "",
+            "dir": "docs/archive/tasks/t001_mail_core_sent_query"
+        },
+        {
+            "tid": "t002",
+            "slug": "frontend_favorites_views",
+            "title": "重构个人收藏为收件箱未读与已发三折叠树",
+            "status": "done",
+            "branch": "t002_frontend_favorites_views",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "20819f0569606224f2e519c14c2f221bae4e2e4e",
+            "depends_on": "t001",
+            "conflicts_with": "",
+            "note": "",
+            "dir": "docs/archive/tasks/t002_frontend_favorites_views"
+        },
+        {
+            "tid": "t003",
+            "slug": "reader_toolbar_and_context_menu",
+            "title": "重构邮件详情居中工具栏与支持邮件列表右键菜单",
+            "status": "done",
+            "branch": "t003_reader_toolbar_and_context_menu",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "ca9a9309f40c856e550b103ed6b69a5ea62445c0",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "",
+            "dir": "docs/archive/tasks/t003_reader_toolbar_and_context_menu"
+        }
+    ]
 }

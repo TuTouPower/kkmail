@@ -134,5 +134,58 @@ describe('<MessageList />', () => {
     await waitFor(() => expect(subjects(container)).toEqual(['Subject p1', 'Subject p2']))
     expect(calls.some((u) => u.includes('offset=1'))).toBe(true)
   })
+
+  it('requests folder_role=sent when favorite category is sent', async () => {
+    useMailStore.setState({ view: { type: 'favorite', category: 'sent' } })
+    await render(<MessageList />)
+    await waitFor(() => {
+      expect(calls.some((u) => u.includes('folder_role=sent'))).toBe(true)
+    })
+  })
+
+  it('requests folder_role=inbox&is_read=false when favorite category is unread', async () => {
+    useMailStore.setState({ view: { type: 'favorite', category: 'unread' } })
+    await render(<MessageList />)
+    await waitFor(() => {
+      expect(calls.some((u) => u.includes('folder_role=inbox') && u.includes('is_read=false'))).toBe(true)
+    })
+  })
+
+  it('opens context menu on right click with options and handles actions (AC-004, AC-005)', async () => {
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toHaveLength(2))
+    const firstRow = container.querySelector('.message-row') as HTMLElement
+    expect(firstRow).not.toBeNull()
+
+    const { act } = await import('react')
+    await act(async () => {
+      firstRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 100, clientY: 150 }))
+    })
+
+    await waitFor(() => expect(container.querySelector('.context-menu')).not.toBeNull())
+    const menu = container.querySelector('.context-menu')
+    expect(menu?.textContent).toContain('打开')
+    expect(menu?.textContent).toContain('标为已读')
+    expect(menu?.textContent).toContain('标记旗标')
+    expect(menu?.textContent).toContain('移到废纸篓')
+
+    const replyItem = [...menu!.querySelectorAll('.context-menu-item')].find((el) => el.textContent?.includes('回复'))
+    expect(replyItem).toBeDefined()
+    expect(replyItem?.getAttribute('aria-disabled') === 'true' || (replyItem as HTMLButtonElement).disabled).toBe(true)
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await waitFor(() => expect(container.querySelector('.context-menu')).toBeNull())
+
+    await act(async () => {
+      firstRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 100, clientY: 150 }))
+    })
+    await waitFor(() => expect(container.querySelector('.context-menu')).not.toBeNull())
+    const flagItem = [...container.querySelectorAll('.context-menu-item')].find((el) => el.textContent?.includes('标记旗标'))
+    expect(flagItem).toBeDefined()
+    await click(flagItem as HTMLElement)
+    await waitFor(() => expect(container.querySelector('.context-menu')).toBeNull())
+  })
 })
 
