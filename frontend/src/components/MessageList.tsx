@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
+import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag } from 'lucide-react'
 import { apiRequest } from '../api/client'
 import { accountScope, fetchAccounts, markReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
@@ -68,36 +68,45 @@ export default function MessageList() {
   const searching = isSearchTrigger(term)
   const listScope = accountScope(accountId)
 
-  const [nextCursor, setNextCursor] = useState<string | null>(null)
-  const [nextOffset, setNextOffset] = useState<number | null>(null)
-  const [searchTotal, setSearchTotal] = useState<number | null>(null)
-  const [loadingMore, setLoadingMore] = useState(false)
+  interface InboxPageData {
+    items: MailItem[]
+    next_cursor: string | null
+  }
 
-  useEffect(() => {
-    setNextCursor(null)
-    setNextOffset(null)
-    setSearchTotal(null)
-  }, [listScope, term])
+  interface SearchPageData {
+    items: MailItem[]
+    next_offset: number | null
+    total: number
+  }
 
-  const inboxQuery = useQuery<MailItem[]>({
+  const inboxInfiniteQuery = useInfiniteQuery<InboxPageData, Error, { pages: InboxPageData[]; pageParams: (string | null)[] }, readonly unknown[], string | null>({
     queryKey: queryKeys.inbox(listScope),
-    queryFn: async ({ signal }) => {
-      const page = await fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, signal })
-      setNextCursor(page.next_cursor ?? null)
-      return page.items.filter(hasMailId).map(mailCoreToMailItem)
+    queryFn: async ({ pageParam, signal }) => {
+      const page = await fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, cursor: pageParam || undefined, signal })
+      return {
+        items: page.items.filter(hasMailId).map(mailCoreToMailItem),
+        next_cursor: page.next_cursor ?? null,
+      }
     },
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? null,
     enabled: !searching,
     retry: false,
     placeholderData: keepPreviousData,
   })
-  const searchQuery = useQuery<MailItem[]>({
+
+  const searchInfiniteQuery = useInfiniteQuery<SearchPageData, Error, { pages: SearchPageData[]; pageParams: number[] }, readonly unknown[], number>({
     queryKey: queryKeys.search(term, listScope),
-    queryFn: async ({ signal }) => {
-      const page = await fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, signal })
-      setNextOffset(page.next_offset ?? null)
-      setSearchTotal(page.total)
-      return page.items.filter(hasMailId).map(mailCoreToMailItem)
+    queryFn: async ({ pageParam, signal }) => {
+      const page = await fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, offset: pageParam, signal })
+      return {
+        items: page.items.filter(hasMailId).map(mailCoreToMailItem),
+        next_offset: page.next_offset ?? null,
+        total: page.total,
+      }
     },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.next_offset ?? null,
     enabled: searching,
     retry: false,
     placeholderData: keepPreviousData,
@@ -130,40 +139,29 @@ export default function MessageList() {
     enabled: accounts.length > 0 && !searching,
   })
 
-  const active = searching ? searchQuery : inboxQuery
-  const raw: MailItem[] = active.data || []
+  const active = searching ? searchInfiniteQuery : inboxInfiniteQuery
 
-  const hasMore = searching ? nextOffset !== null : nextCursor !== null
-  const totalCount = searching ? searchTotal : (folderStatsQuery.data ?? null)
+  const raw: MailItem[] = useMemo(() => {
+    if (searching) {
+      return (searchInfiniteQuery.data?.pages || []).flatMap((p) => p.items)
+    }
+    return (inboxInfiniteQuery.data?.pages || []).flatMap((p) => p.items)
+  }, [searching, searchInfiniteQuery.data, inboxInfiniteQuery.data])
+
+  const hasMore = Boolean(searching ? searchInfiniteQuery.hasNextPage : inboxInfiniteQuery.hasNextPage)
+  const loadingMore = Boolean(searching ? searchInfiniteQuery.isFetchingNextPage : inboxInfiniteQuery.isFetchingNextPage)
+  const totalCount = searching ? (searchInfiniteQuery.data?.pages?.[0]?.total ?? null) : (folderStatsQuery.data ?? null)
 
   async function handleLoadMore() {
     if (loadingMore || !hasMore) return
-    setLoadingMore(true)
     try {
       if (searching) {
-        if (nextOffset === null) return
-        const res = await fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, offset: nextOffset })
-        setNextOffset(res.next_offset ?? null)
-        setSearchTotal(res.total)
-        const newItems = res.items.filter(hasMailId).map(mailCoreToMailItem)
-        queryClient.setQueryData<MailItem[]>(queryKeys.search(term, listScope), (old = []) => {
-          const seen = new Set(old.map((m) => m.id))
-          return [...old, ...newItems.filter((m) => !seen.has(m.id))]
-        })
+        await searchInfiniteQuery.fetchNextPage()
       } else {
-        if (!nextCursor) return
-        const res = await fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, cursor: nextCursor })
-        setNextCursor(res.next_cursor ?? null)
-        const newItems = res.items.filter(hasMailId).map(mailCoreToMailItem)
-        queryClient.setQueryData<MailItem[]>(queryKeys.inbox(listScope), (old = []) => {
-          const seen = new Set(old.map((m) => m.id))
-          return [...old, ...newItems.filter((m) => !seen.has(m.id))]
-        })
+        await inboxInfiniteQuery.fetchNextPage()
       }
     } catch (err) {
       setActionStatus(errorMessage(err, '加载更多失败'))
-    } finally {
-      setLoadingMore(false)
     }
   }
 
