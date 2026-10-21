@@ -74,18 +74,18 @@
 
 全库审阅按当前真实问题保留基线已存在项，不把“不是最后一次commit新增”当排除条件。
 
-| 问题位置 | blame/history来源 | 结论 |
-| --- | --- | --- |
-| RELEASE标签发布、版本/提交步骤 | `b5edaa6a`，工作流删除见`af85b20` | 旧流程未随删除同步；当前仍有效入口 |
-| upgrade备份/恢复/回滚文本 | `daca631a`，轮换条件`a875ce95` | 部分为基线HEAD最近改动，其他为预存 |
-| deployment直跑/拆进程、Secure设置 | `b5edaa6a`；代理补充`a875ce95` | 预存流程缺口 |
-| schema状态0007、密码恢复路径 | `b5edaa6a` | 预存文档漂移 |
-| API drift命令/生成README | `3dc1e071` | 初始codegen说明引入cwd问题 |
-| pack strict说明 | `daca631a` | 基线HEAD新增说明未覆盖全部分支 |
-| 架构web/worker职责 | `8106e07c` | 初始方案语义与当前进程职责不再一致 |
-| settings注释 / credential_ref注释 | `a4a5239a` / `ff2640b9` | 预存注释未随实现同步 |
-| rotate crash-safety docstring | `1ce66644` | 新保证只适用部分调用路径 |
-| CHANGELOG历史污染 | `3d9dbbbe297ea8d8524ae3ea79f6f56e4a8e8169` | 同一后续提交向数十旧版本插入相同条目，有直接patch证据 |
+|问题位置|blame/history来源|结论|
+|---|---|---|
+|RELEASE标签发布、版本/提交步骤|`b5edaa6a`，工作流删除见`af85b20`|旧流程未随删除同步；当前仍有效入口|
+|upgrade备份/恢复/回滚文本|`daca631a`，轮换条件`a875ce95`|部分为基线HEAD最近改动，其他为预存|
+|deployment直跑/拆进程、Secure设置|`b5edaa6a`；代理补充`a875ce95`|预存流程缺口|
+|schema状态0007、密码恢复路径|`b5edaa6a`|预存文档漂移|
+|API drift命令/生成README|`3dc1e071`|初始codegen说明引入cwd问题|
+|pack strict说明|`daca631a`|基线HEAD新增说明未覆盖全部分支|
+|架构web/worker职责|`8106e07c`|初始方案语义与当前进程职责不再一致|
+|settings注释 / credential_ref注释|`a4a5239a` / `ff2640b9`|预存注释未随实现同步|
+|rotate crash-safety docstring|`1ce66644`|新保证只适用部分调用路径|
+|CHANGELOG历史污染|`3d9dbbbe297ea8d8524ae3ea79f6f56e4a8e8169`|同一后续提交向数十旧版本插入相同条目，有直接patch证据|
 
 ## 验证限制
 

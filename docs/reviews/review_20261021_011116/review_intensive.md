@@ -5,6 +5,7 @@
 # Intensive Review — TuTouPower/kkmail @ b2956445574ebf171c1e73526421f0d46ccac3a3 · 2026-10-21 (Asia/Shanghai)
 
 ## Summary
+
 - Scope: full public tree · ~201 clean files / 66 bundles · SHA `b2956445574ebf171c1e73526421f0d46ccac3a3`
 - Perspectives: 8 (Security, Correctness, Contracts, Perf, Architecture, Robustness, Tests/Spec, Docs) + cross-validation
 - Findings (deduped): Critical=4 · High=36 · Medium=45 · Low=22 · Info=11 · **total 118**
@@ -12,12 +13,14 @@
 - Verdict: **BLOCK**
 
 ## Critical (必修)
+
 1. mail-core API/SSE 无鉴权，compose 将 `:8000` 暴露在 `0.0.0.0`
 2. `docker-compose.yml` 挂载 `docker.sock` + 默认 `***` / 固定 `SECRET_KEY` + 自动更新
 3. blob 加密密钥为确定性/硬编码（dev fallback + compose 样例）
 4. 默认 `LOGIN_PASSWORD=***`（与 #2 叠加可直达主机）
 
 ## High 主题（节选）
+
 - Flask `accountId`→mail-core UUID 契约断裂；列表漏 `is_flagged`
 - CI 几乎不跑后端全量 / 前端不跑 vitest·lint·tsc
 - `fail_job` 永久失败无退避；`reclaim_stale_claims` 未调用
@@ -25,30 +28,32 @@
 - CSRF via GET refresh-all；`/api/settings` 回传密钥；git skin SSRF
 
 ## Strengths
+
 - mail_core 模块分层与架构文档意图一致
 - inbox keyset 分页、`SKIP LOCKED` 抢占、lease/fencing 设计
 - Flask `sanitize_error_details` + `trace_id`（mail_core 可复用）
 
 ## Trace
+
 - OUTDIR: `docs/reviews/review_20261021_011116/`
 - Artifacts: 4 perspective bundles · `bundle_cross_validation.md` · `bundle_zz_findings_machine.md` · this file
 - Filter: none (zero-drop); CHALLENGED kept with lowered confidence
 
----
+______________________________________________________________________
 
 ## Findings (deduped, sorted by Severity × Confidence)
 
 - [Critical][97] mail_core/api/app.py:33 — mail-core API/SSE unauthenticated; compose publishes :8000 on 0.0.0.0
-- [Critical][92] docker-compose.yml:8 — docker.sock mount + default ***/SECRET_KEY + DOCKER_UPDATE_ENABLED
+- [Critical][92] docker-compose.yml:8 — docker.sock mount + default \*\*\*/SECRET_KEY + DOCKER_UPDATE_ENABLED
 - [Critical][92] mail_core/blobs/crypto.py:59 — deterministic/hardcoded blob encryption keys (dev fallback + compose samples)
-- [Critical][90] .env.example:7 — default LOGIN_PASSWORD=*** (env + bootstrap); CONNECT S2
+- [Critical][90] .env.example:7 — default LOGIN_PASSWORD=\*\*\* (env + bootstrap); CONNECT S2
 - [High][98] web_outlook_app.py:23 — Flask god-namespace via exec of 12 segments (~26.6k LOC shared globals)
 - [High][97] .github/workflows/tests.yml:20 — CI runs only 2 pytest modules; omits mail_core and full suite
 - [High][97] frontend/src/store/mailStore.ts:8 — Flask accountId number passed as mail-core account_id UUID (422)
 - [High][95] .github/workflows/frontend.yml:24 — frontend CI only npm build; skips vitest/lint/tsc
 - [High][95] mail_core/providers/oauth.py:39 — triple OAuth/IMAP/Graph duplication (segments + outlook_mail_reader + mail_core)
 - [High][95] mail_core/sync/jobs.py:76 — fail_job permanently FAILED; attempts unused for backoff requeue
-- [High][95] mail_core/sync/metadata.py:81 — _recompute_folder_stats loads entire folder into ORM per page/mutation
+- [High][95] mail_core/sync/metadata.py:81 — \_recompute_folder_stats loads entire folder into ORM per page/mutation
 - [High][95] outlook_mail_reader.py:41 — uses os.getenv without import os (NameError)
 - [High][95] AGENTS.md:1 — Trellis instructions point at missing .trellis/ and .agents/
 - [High][92] frontend/src/api/mailCore.ts:81 — mailCoreToMailItem maps accountEmail to UUID; drops numeric accountId
@@ -56,7 +61,7 @@
 - [High][92] tests/test_outlook_graph_send_mail_frontend.py:7 — primary UI contracts assert legacy templates/static, not React SPA
 - [High][90] README.md:69 — README↔docs/deployment.md dual deployment authority / non-minimal entry
 - [High][90] mail_core/api/mail.py:12 — API bypasses application for blobs/search; SSE reaches storage ORM
-- [High][90] mail_core/mail/application/mutations.py:14 — application layer imports sync internals and private _recompute_folder_stats
+- [High][90] mail_core/mail/application/mutations.py:14 — application layer imports sync internals and private \_recompute_folder_stats
 - [High][90] mail_core/mail/storage/models.py:109 — message_locations lacks folder_id-leading index for inbox path
 - [High][90] mail_core/sync/jobs.py:82 — reclaim_stale_claims unused by worker (V4+V6); CLAIMED jobs stick forever
 - [High][88] mail_core/mail/application/remote_ops.py:15 — remote-op idempotency_key unique but enqueue does not upsert → IntegrityError
@@ -73,7 +78,7 @@
 - [High][82] mail_core/providers/oauth.py:81 — missing expires_at treated as non-expiring access token
 - [High][82] outlook_web/segments/03_mail_helpers.py:3326 — API key accepted via query string; CORS * on /api/external
 - [High][82] outlook_web/segments/04_routes_groups_accounts.py:12 — login rate limit trusts X-Forwarded-For leftmost (bypasses ProxyFix)
-- [High][80] docker-compose.mail-core.yml:18 — Postgres published on host 5433:5432 with password ***
+- [High][80] docker-compose.mail-core.yml:18 — Postgres published on host 5433:5432 with password \*\*\*
 - [High][78] outlook_web/segments/01_bootstrap.py:79 — missing SESSION_COOKIE_SECURE; permanent sessions use datetime.max
 - [High][72] outlook_web/segments/03_mail_helpers.py:295 — request_with_proxy_failover lacks default timeout (callers usually pass; CHALLENGED)
 - [High][70] outlook_web/segments/04_routes_groups_accounts.py:43 — /login verify_password vs extension verify_login_password (CHALLENGED: init hashes)
@@ -85,7 +90,7 @@
 - [Medium][88] mail_core/search/index.py:58 — subject ILIKE/similarity without subject trigram index
 - [Medium][85] mail_core/api/mail.py:87 — most mail-core routes lack response_model; bare-string errors
 - [Medium][85] mail_core/sync/engine.py:81 — sync folder discovery N+1 SELECT per remote folder
-- [Medium][85] openspec/specs/ — OpenSpec Purpose TBD placeholders (cloudflare-*/email-address-fallback)
+- [Medium][85] openspec/specs/ — OpenSpec Purpose TBD placeholders (cloudflare-\*/email-address-fallback)
 - [Medium][85] static/js/index/ — dual UIs (legacy static/js + React frontend) both live
 - [Medium][82] mail_core/db/session.py:26 — engine pool untuned (pool_pre_ping only)
 - [Medium][82] openspec/specs/group-tree-ui/spec.md:13 — group-tree-ui spec vs flat React Sidebar (half-implemented on main UI)
@@ -129,7 +134,7 @@
 - [Low][70] outlook_web/segments/01_bootstrap.py:145 — CSRF token never expires; WTF_CSRF_SSL_STRICT false
 - [Low][70] outlook_web/segments/07_routes_oauth_settings_external.py:585 — masked bcrypt still exposes structure; full hash in payload (see S9)
 - [Low][65] mail_core/api/app.py:44 — health returns version but no alembic revision
-- [Low][65] web_outlook_app.py:1 — outlook_* naming while product is kkmail/multi-provider
+- [Low][65] web_outlook_app.py:1 — outlook\_\* naming while product is kkmail/multi-provider
 - [Low][60] docs/api.md:1 — docs/api.md ~3077 lines hand-maintained drift risk
 - [Low][60] frontend/src/api/client.ts:150 — EmailListResponse success?: boolean weak TS contract
 - [Low][60] mail_core/accounts/credentials.py:32 — EnvCredentialStore.put_secret mutates process env only

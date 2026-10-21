@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-OPENAPI_PATH = ROOT / "docs" / "openapi.json"
+OPENAPI_PATH = ROOT / "schemas" / "openapi.json"
 
 
 def _canonical(schema: dict) -> str:
@@ -36,8 +36,8 @@ def test_committed_openapi_json_matches_app():
     assert OPENAPI_PATH.is_file(), f"missing {OPENAPI_PATH}; run scripts/export_openapi.py"
     committed = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
     assert _canonical(live) == _canonical(committed), (
-        "docs/openapi.json drifted from mail_core.api.app:app.openapi(); "
-        "run: python scripts/export_openapi.py && cd frontend && npm run openapi:gen"
+        "schemas/openapi.json drifted from mail_core.api.app:app.openapi(); "
+        "run: python scripts/export_openapi.py && (cd src/frontend && npm run openapi:gen)"
     )
 
 

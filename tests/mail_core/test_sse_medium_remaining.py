@@ -39,7 +39,7 @@ def test_sse_wire_events_match_outbox_enum():
 
 def test_frontend_subscribes_to_core_sse_events():
     """Server/client name contract: core events must appear in MAIL_CORE_EVENTS."""
-    path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "api" / "mailCore.ts"
+    path = Path(__file__).resolve().parents[2] / "src" / "frontend" / "src" / "api" / "mailCore.ts"
     if not path.is_file():
         pytest.skip("frontend not present")
     text = path.read_text(encoding="utf-8")
