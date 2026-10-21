@@ -15,7 +15,7 @@ description: 接入并操控自托管邮件客户端 kkmail（基于 mail-core�
 - `KKMAIL_PASSWORD`：管理员密码，默认为 `[REDACTED]456Password!`（或本地 `.env` 中的 `LOGIN_PASSWORD`）
 - `KKMAIL_API_KEY`：可选 Bearer Token（配置 `MAIL_CORE_API_KEYS` 后免 Session/CSRF）
 
-______________________________________________________________________
+---
 
 ## 推荐方式：CLI 工具
 
@@ -23,7 +23,7 @@ Skill 内置零依赖 CLI 执行器，Agent 可直接在终端调用：
 
 ```bash
 # 路径
-CLI="python3 .agents/skills/kkmail/scripts/kkmail_cli.py"
+CLI="python3 docs/skills/kkmail/scripts/kkmail_cli.py"
 ```
 
 ### 常用命令
@@ -101,7 +101,7 @@ CLI="python3 .agents/skills/kkmail/scripts/kkmail_cli.py"
     $CLI add-account --email user@example.com --provider imap --host imap.example.com --port 993 --password secret
     ```
 
-______________________________________________________________________
+---
 
 ## 直接调用 REST API
 
@@ -129,7 +129,7 @@ ______________________________________________________________________
 - `POST /api/accounts/{id}/sync`：排队异步同步指定账号
 - `POST /api/accounts/sync-all`：排队异步同步所有已启用账号
 
-______________________________________________________________________
+---
 
 ## 业务边界说明
 
