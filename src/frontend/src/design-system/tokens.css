@@ -792,8 +792,10 @@ button:disabled {
 .reader-toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
-  flex: 0 0 auto;
+  gap: 4px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .reader-action {
@@ -807,10 +809,74 @@ button:disabled {
   color: var(--muted);
 }
 
-.reader-action:hover {
+.reader-action:hover:not(:disabled) {
   border-color: var(--line);
   background: var(--surface-hover);
   color: var(--text);
+}
+
+.reader-action:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+/* Context Menu */
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 170px;
+  background: var(--panel-surface, #ffffff);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.08);
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+[data-theme='dark'] .context-menu {
+  background: #25262b;
+  border-color: #3b3d45;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+.context-menu-item:hover:not(:disabled):not(.disabled) {
+  background: var(--selected);
+  color: var(--blue);
+}
+
+.context-menu-item:disabled,
+.context-menu-item.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.context-menu-item.danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--red);
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 6px;
 }
 
 .reader-scroll {

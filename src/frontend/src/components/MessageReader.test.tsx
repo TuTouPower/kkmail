@@ -62,10 +62,36 @@ describe('<MessageReader />', () => {
     expect(link.getAttribute('href')).toBe('/api/mail/attachments/att-1')
   })
 
-  it('has no compose/send actions (send is out of scope)', async () => {
+  // 旧测试 "has no compose/send actions" 已删除：t003 演进为支持占位展示发信按钮并设为 disabled 禁用状态
+  it('renders disabled placeholder actions for compose/reply/forward (AC-003)', async () => {
     const { container } = await render(<MessageReader />)
-    expect(container.querySelector('[aria-label=回复]')).toBeNull()
-    expect(container.querySelector('[aria-label=转发]')).toBeNull()
+    const replyBtn = container.querySelector('[aria-label=回复]') as HTMLButtonElement
+    const replyAllBtn = container.querySelector('[aria-label=回复所有人]') as HTMLButtonElement
+    const forwardBtn = container.querySelector('[aria-label=转发]') as HTMLButtonElement
+    expect(replyBtn).not.toBeNull()
+    expect(replyBtn.disabled).toBe(true)
+    expect(replyAllBtn).not.toBeNull()
+    expect(replyAllBtn.disabled).toBe(true)
+    expect(forwardBtn).not.toBeNull()
+    expect(forwardBtn.disabled).toBe(true)
+  })
+
+  it('toggles read/unread status on the same button based on current state (AC-002)', async () => {
+    const { container } = await render(<MessageReader />)
+    // item is_read is true initially -> button should be "标为未读" and clickable
+    const unreadBtn = container.querySelector('[aria-label=标为未读]') as HTMLButtonElement
+    expect(unreadBtn).not.toBeNull()
+    expect(unreadBtn.disabled).toBe(false)
+
+    await click(unreadBtn)
+    await waitFor(() => expect(posts).toContainEqual({ url: '/api/mail/messages/m-1/read', body: { is_read: false } }))
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_read).toBe(false)
+
+    // After state becomes unread -> button should switch to "标为已读"
+    await waitFor(() => expect(container.querySelector('[aria-label=标为已读]')).not.toBeNull())
+    const markReadBtn = container.querySelector('[aria-label=标为已读]') as HTMLButtonElement
+    await click(markReadBtn)
+    await waitFor(() => expect(posts).toContainEqual({ url: '/api/mail/messages/m-1/read', body: { is_read: true } }))
   })
 
   it('flag button posts is_flagged=true and updates the cached row', async () => {
