@@ -63,7 +63,10 @@ export default function MessageList() {
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
 
-  const accountId = view.type === 'account' ? view.accountId : undefined
+  const accountId = view.type === 'account' ? view.accountId : (view.type === 'favorite' ? view.accountId : undefined)
+  const favoriteCategory = view.type === 'favorite' ? view.category : undefined
+  const folderRole = favoriteCategory === 'sent' ? 'sent' : 'inbox'
+  const effectiveFilter = favoriteCategory === 'unread' ? 'unread' : listFilter
   const term = search.trim()
   const searching = isSearchTrigger(term)
   const listScope = accountScope(accountId)
@@ -79,17 +82,18 @@ export default function MessageList() {
     total: number
   }
 
-  const is_unread = listFilter === 'unread' ? false : undefined
+  const is_unread = effectiveFilter === 'unread' ? false : undefined
   const is_flagged = listFilter === 'flagged' ? true : undefined
 
   const inboxInfiniteQuery = useInfiniteQuery<InboxPageData, Error, { pages: InboxPageData[]; pageParams: (string | null)[] }, readonly unknown[], string | null>({
-    queryKey: queryKeys.inbox(listScope, listFilter),
+    queryKey: queryKeys.inbox(listScope, effectiveFilter, folderRole),
     queryFn: async ({ pageParam, signal }) => {
       const page = await fetchMailCoreInbox({
         limit: LIST_LIMIT,
         accountId,
         is_read: is_unread,
         is_flagged: is_flagged,
+        folder_role: folderRole,
         cursor: pageParam || undefined,
         signal,
       })
@@ -177,7 +181,7 @@ export default function MessageList() {
 
   const visible = raw
     .filter((m) => {
-      if (listFilter === 'unread' && m.is_read) return false
+      if ((favoriteCategory === 'unread' || listFilter === 'unread') && m.is_read) return false
       if (listFilter === 'flagged' && !m.is_flagged) return false
       return true
     })

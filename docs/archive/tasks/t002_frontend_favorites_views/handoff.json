@@ -1,0 +1,33 @@
+{
+  "tid": "t002",
+  "attempt": 1,
+  "execution_id": "3f41f0d4ab9c42c5b7739c87a98c208a",
+  "status": "done",
+  "branch": "t002_frontend_favorites_views",
+  "base_sha": "20819f0569606224f2e519c14c2f221bae4e2e4e",
+  "tests": "frontend: 117 passed + build ok; desktop: 5 passed; contract: 149 passed",
+  "blackbox": "playwright e2e smoke 2 passed",
+  "review": "single review PASS (Round 1)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/Sidebar.test.tsx"
+    ],
+    "AC-002": [
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/Sidebar.test.tsx"
+    ],
+    "AC-003": [
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/Sidebar.test.tsx"
+    ],
+    "AC-004": [
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/Sidebar.test.tsx",
+      "src/frontend/src/components/MessageList.tsx",
+      "src/frontend/src/components/MessageList.test.tsx"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

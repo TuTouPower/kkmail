@@ -74,10 +74,17 @@ export const queryKeys = {
   groups: ['groups'] as const,
   accounts: ['accounts'] as const,
   stats: ['mail-core', 'stats'] as const,
-  inbox: (accountId: string = ALL_ACCOUNTS, filter?: string) =>
-    filter && filter !== 'all'
-      ? (['mail-core', 'inbox', accountScope(accountId), filter] as const)
-      : (['mail-core', 'inbox', accountScope(accountId)] as const),
+  inbox: (accountId: string = ALL_ACCOUNTS, filter?: string, folderRole: string = 'inbox') => {
+    const scope = accountScope(accountId)
+    if (folderRole !== 'inbox') {
+      return filter && filter !== 'all'
+        ? (['mail-core', 'inbox', scope, `role:${folderRole}`, filter] as const)
+        : (['mail-core', 'inbox', scope, `role:${folderRole}`] as const)
+    }
+    return filter && filter !== 'all'
+      ? (['mail-core', 'inbox', scope, filter] as const)
+      : (['mail-core', 'inbox', scope] as const)
+  },
   search: (q: string, accountId: string = ALL_ACCOUNTS) => ['mail-core', 'search', accountScope(accountId), q] as const,
 }
 

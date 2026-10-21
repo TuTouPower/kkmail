@@ -12,7 +12,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 进程模型：支持单进程模式（API 嵌入 Worker 线程）或生产拆分模式（独立的 API 容器与 Worker 容器）。
 2. **前端界面 (`src/frontend/`)**：
     - 技术栈：React 19 + TypeScript + Vite + TanStack React Query + Lucide Icons。
-    - 特点：单页应用 (SPA)，由 `mail-core` 同源托管提供；基于 `useInfiniteQuery` 实现游标深翻页，原生集成 SSE 流式状态同步。
+    - 特点：单页应用 (SPA)，由 `mail-core` 同源托管提供；基于 `useInfiniteQuery` 实现游标深翻页，原生集成 SSE 流式状态同步。侧边栏个人收藏提供「所有收件箱」、「所有未读」、「所有已发邮件」三折叠树导航，支持全局与按账号维度多路分类切换。
 3. **桌面集成 (`src/desktop/`)**：
     - 运行环境：Electron 主进程。
     - 职责：进程生命周期管理，启动内置 PostgreSQL 实例与 `mail_core` sidecar 进程，支持 macOS/Linux/Windows 跨平台运行。

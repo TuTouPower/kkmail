@@ -28,6 +28,7 @@ export interface MailCoreInboxQuery {
   cursor?: string
   is_read?: boolean
   is_flagged?: boolean
+  folder_role?: string
   signal?: AbortSignal
 }
 
@@ -50,6 +51,7 @@ export function fetchMailCoreInbox(q: MailCoreInboxQuery = {}): Promise<MailCore
   if (q.cursor) params.set('cursor', q.cursor)
   if (q.is_read !== undefined) params.set('is_read', String(q.is_read))
   if (q.is_flagged !== undefined) params.set('is_flagged', String(q.is_flagged))
+  if (q.folder_role) params.set('folder_role', q.folder_role)
   return apiRequest(`/api/mail/inbox?${params.toString()}`, { signal: q.signal })
 }
 

@@ -251,6 +251,43 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.favorite-category {
+  margin: 1px 0;
+}
+
+.side-item-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.side-item-group .category-toggle {
+  flex-shrink: 0;
+  width: 20px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.side-item-group .category-toggle:hover {
+  background: var(--surface-hover);
+}
+
+.side-item-group .category-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.favorite-accounts {
+  padding-left: 18px;
+}
+
 .account-group {
   margin: 8px 0 12px;
 }
