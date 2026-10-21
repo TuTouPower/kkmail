@@ -35,7 +35,18 @@ beforeEach(() => {
     calls.push(u)
     if (u.startsWith('/api/accounts')) return json({ accounts: [{ id: 'acc-1', email: 'box@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
     if (u.startsWith('/api/mail/inbox')) return json({ items: [row('a'), row('b', { is_flagged: true, is_read: true })], next_cursor: null })
-    if (u.startsWith('/api/mail/search')) return json({ query: 'zz', items: [row('s')], total: 1, offset: 0, next_offset: null })
+    if (u.startsWith('/api/mail/search')) {
+      const urlObj = new URL(u, 'http://localhost')
+      const q = urlObj.searchParams.get('q') || ''
+      const offset = Number(urlObj.searchParams.get('offset') || '0')
+      if (q === 'page-test') {
+        if (offset === 0) {
+          return json({ query: q, items: [row('p1')], total: 2, offset: 0, next_offset: 1 })
+        }
+        return json({ query: q, items: [row('p2')], total: 2, offset: 1, next_offset: null })
+      }
+      return json({ query: q, items: [row('s')], total: 1, offset: 0, next_offset: null })
+    }
     return json({ detail: 'unexpected' }, 404)
   }))
 })
@@ -93,6 +104,35 @@ describe('<MessageList />', () => {
     const checkBtn = container.querySelector('.message-check') as HTMLElement
     checkBtn.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
     expect(useMailStore.getState().selectedKey).toBeNull()
+  })
+
+  it('triggers search with single CJK character, but requires 2 chars for ascii', async () => {
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toHaveLength(2))
+    const input = container.querySelector('input[name=search]') as HTMLInputElement
+
+    await typeInto(input, 'a')
+    expect(calls.some((u) => u.startsWith('/api/mail/search'))).toBe(false)
+
+    await typeInto(input, '信')
+    await waitFor(() => expect(calls.some((u) => u.includes('/api/mail/search?q='))).toBe(true))
+  })
+
+  it('supports search pagination via next_offset and load more button', async () => {
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toHaveLength(2))
+    const input = container.querySelector('input[name=search]') as HTMLInputElement
+
+    await typeInto(input, 'page-test')
+    await waitFor(() => expect(subjects(container)).toEqual(['Subject p1']))
+
+    const loadMoreBtn = container.querySelector('.load-more-btn') as HTMLButtonElement
+    expect(loadMoreBtn).not.toBeNull()
+    expect(loadMoreBtn.textContent).toContain('加载更多')
+
+    await click(loadMoreBtn)
+    await waitFor(() => expect(subjects(container)).toEqual(['Subject p1', 'Subject p2']))
+    expect(calls.some((u) => u.includes('offset=1'))).toBe(true)
   })
 })
 

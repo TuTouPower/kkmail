@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Inbox, MailOpen, Flag, Settings, PanelLeft, AlertCircle } from 'lucide-react'
 import { apiRequest } from '../api/client'
-import { ALL_ACCOUNTS, fetchAccounts, fetchGroups, queryKeys, type MailItem } from '../api/queries'
+import { fetchAccounts, fetchGroups, queryKeys } from '../api/queries'
+import { fetchGlobalStats } from '../api/mailCore'
 import { providerBadge, providerColor, useMailStore } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
 
@@ -49,36 +50,39 @@ export default function Sidebar() {
   const groups = groupsQuery.data || []
   const accounts = accountsQuery.data || []
 
-  const folderStatsQuery = useQuery({
-    queryKey: ['mail-core', 'sidebar-folder-stats', accounts.map((a) => a.id).sort().join(',')],
+  const statsQuery = useQuery({
+    queryKey: queryKeys.stats,
     queryFn: async ({ signal }) => {
-      const statsMap = new Map<string, number>()
-      await Promise.all(
-        accounts.map(async (a) => {
-          const count = await fetchAccountFolders(a.id, signal)
-          statsMap.set(a.id, count)
-        }),
-      )
-      return statsMap
+      try {
+        const globalStats = await fetchGlobalStats(signal)
+        const statsMap = new Map<string, number>()
+        for (const item of globalStats.accounts) {
+          statsMap.set(item.account_id, item.unread_count)
+        }
+        return {
+          totalUnread: globalStats.total_unread,
+          byAccount: statsMap,
+        }
+      } catch {
+        const statsMap = new Map<string, number>()
+        await Promise.all(
+          accounts.map(async (a) => {
+            const count = await fetchAccountFolders(a.id, signal)
+            statsMap.set(a.id, count)
+          }),
+        )
+        const total = [...statsMap.values()].reduce((n, c) => n + c, 0)
+        return {
+          totalUnread: total,
+          byAccount: statsMap,
+        }
+      }
     },
     enabled: accounts.length > 0,
   })
 
-  // Fallback to cached unified inbox page if server stats not yet loaded
-  const inboxCache = useQuery({
-    queryKey: queryKeys.inbox(ALL_ACCOUNTS),
-    queryFn: async () => [] as MailItem[],
-    enabled: false,
-  })
-  const inboxRows = (inboxCache.data || []) as MailItem[]
-  const fallbackUnread = new Map<string, number>()
-  for (const m of inboxRows) {
-    if (m.is_read) continue
-    if (m.accountId) fallbackUnread.set(m.accountId, (fallbackUnread.get(m.accountId) || 0) + 1)
-  }
-
-  const unreadByAccount = folderStatsQuery.data ?? fallbackUnread
-  const allInboxUnread = [...unreadByAccount.values()].reduce((n, c) => n + c, 0)
+  const unreadByAccount = statsQuery.data?.byAccount ?? new Map<string, number>()
+  const allInboxUnread = statsQuery.data?.totalUnread ?? 0
   const inAllInbox = view.type === 'allInbox'
   const groupIds = new Set(groups.map((g) => g.id))
   const ungroupedAccounts = accounts.filter((a) => !a.group_id || !groupIds.has(a.group_id))
