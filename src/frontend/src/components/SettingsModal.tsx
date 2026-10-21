@@ -25,13 +25,24 @@ export default function SettingsPage() {
   const [imapPort, setImapPort] = useState('993')
   const [imapUseSsl, setImapUseSsl] = useState(true)
   const [groupName, setGroupName] = useState('')
-  const [timezone, setTimezone] = useState<string | null>(null)
-  const [timeoutSeconds, setTimeoutSeconds] = useState<string | null>(null)
+  const [timezone, setTimezone] = useState('')
+  const [timeoutSeconds, setTimeoutSeconds] = useState('')
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
 
   const savedTimezone = settingsQuery.data?.app_timezone || ''
   const savedTimeout = settingsQuery.data?.mail_fetch_timeout_seconds || ''
+
+  useEffect(() => {
+    if (settingsQuery.data) {
+      if (settingsQuery.data.app_timezone !== undefined) {
+        setTimezone(settingsQuery.data.app_timezone || '')
+      }
+      if (settingsQuery.data.mail_fetch_timeout_seconds !== undefined) {
+        setTimeoutSeconds(settingsQuery.data.mail_fetch_timeout_seconds || '')
+      }
+    }
+  }, [settingsQuery.data])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -229,13 +240,27 @@ export default function SettingsPage() {
               </div>
             )}
             <label style={{ fontSize: 12, color: 'var(--muted)' }}>时区</label>
-            <input value={timezone ?? savedTimezone} onChange={(e) => setTimezone(e.target.value)} placeholder="Asia/Shanghai" style={{ width: '100%', height: 34, marginTop: 4, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+            <input
+              id="settings-timezone"
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+              placeholder="Asia/Shanghai"
+              style={{ width: '100%', height: 34, marginTop: 4, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }}
+            />
             <label style={{ fontSize: 12, color: 'var(--muted)', display: 'block', marginTop: 10 }}>拉信超时（秒）</label>
-            <input value={timeoutSeconds ?? savedTimeout} onChange={(e) => setTimeoutSeconds(e.target.value)} placeholder="120" style={{ width: '100%', height: 34, marginTop: 4, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
+            <input
+              id="settings-timeout"
+              value={timeoutSeconds}
+              onChange={(e) => setTimeoutSeconds(e.target.value)}
+              placeholder="120"
+              style={{ width: '100%', height: 34, marginTop: 4, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }}
+            />
             <button type="button" onClick={async () => {
               const payload: Record<string, string> = {}
-              if (timezone !== null && timezone.trim() && timezone.trim() !== savedTimezone) payload.app_timezone = timezone.trim()
-              if (timeoutSeconds !== null && timeoutSeconds.trim() && timeoutSeconds.trim() !== savedTimeout) payload.mail_fetch_timeout_seconds = timeoutSeconds.trim()
+              const currentTz = timezone.trim()
+              const currentTimeout = timeoutSeconds.trim()
+              if (currentTz !== savedTimezone) payload.app_timezone = currentTz
+              if (currentTimeout !== savedTimeout) payload.mail_fetch_timeout_seconds = currentTimeout
               if (!Object.keys(payload).length) { setStatus('没有改动'); return }
               await run('保存设置', () => api.updateSettings(payload), '设置已保存', ['settings'])
             }} style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>保存</button>
