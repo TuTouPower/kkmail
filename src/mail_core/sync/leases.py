@@ -118,10 +118,22 @@ def heartbeat_lease(
 renew_lease = heartbeat_lease
 
 
-def assert_fencing(session: Session, *, account_id: uuid.UUID, fencing_token: int) -> None:
+def assert_fencing(
+    session: Session,
+    *,
+    account_id: uuid.UUID,
+    fencing_token: int,
+    now: datetime | None = None,
+) -> None:
     """Call inside the same short TX that commits checkpoints / message writes."""
+    now = now or _utcnow()
     row = session.get(AccountSyncLease, account_id, with_for_update=True)
-    if row is None or int(row.fencing_token) != fencing_token:
+    if (
+        row is None
+        or int(row.fencing_token) != fencing_token
+        or row.lease_expires_at is None
+        or row.lease_expires_at <= now
+    ):
         raise FencingMismatch(
             f"fencing token {fencing_token} rejected; current="
             f"{None if row is None else row.fencing_token}"
@@ -146,7 +158,8 @@ def release_lease(
         return
     if row.owner_id != owner_id or int(row.fencing_token) != fencing_token:
         raise FencingMismatch("release rejected")
-    # Expire immediately so others can acquire; keep fencing_token as-is.
+    # Expire immediately and advance fencing_token so stale workers cannot commit.
+    row.fencing_token = int(row.fencing_token) + 1
     row.lease_expires_at = now
     row.heartbeat_at = now
     session.flush()

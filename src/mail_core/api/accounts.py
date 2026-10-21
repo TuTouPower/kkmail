@@ -8,20 +8,19 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
-from mail_core.accounts import (
-    create_account,
-    create_group,
-    delete_account,
-    delete_group,
-    enqueue_account_sync,
-    get_public_settings,
-    list_accounts,
-    list_groups,
-    update_account,
-    update_public_settings,
+from mail_core.mail.application.accounts import (
+    create_account_app,
+    create_group_app,
+    delete_account_app,
+    delete_group_app,
+    get_settings_app,
+    list_accounts_app,
+    list_groups_app,
+    sync_account_app,
+    sync_all_accounts_app,
+    update_account_app,
+    update_settings_app,
 )
-from mail_core.db.session import get_session_factory
-from mail_core.mail.storage.models import Account, AccountGroup
 
 router = APIRouter(tags=["accounts"])
 
@@ -106,188 +105,115 @@ class SettingsUpdateIn(BaseModel):
     settings: dict[str, str] = Field(default_factory=dict)
 
 
-def _account_out(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountOut:
-    g = groups.get(acc.group_id) if acc.group_id else None
-    remark = None
-    if isinstance(acc.config, dict):
-        remark = acc.config.get("remark")
-        if remark is not None:
-            remark = str(remark)
-    return AccountOut(
-        id=str(acc.id),
-        email=acc.email,
-        provider=acc.provider,
-        display_name=acc.display_name,
-        group_id=str(acc.group_id) if acc.group_id else None,
-        group_name=g.name if g else None,
-        group_color=g.color if g else None,
-        status="active" if acc.sync_enabled else "disabled",
-        sync_status=acc.sync_status,
-        sync_enabled=acc.sync_enabled,
-        account_type=acc.provider,
-        remark=remark,
-    )
-
-
 @router.get("/api/accounts", response_model=AccountsPage)
 def api_list_accounts(
     group_id: UUID | None = None,
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
-    Session = get_session_factory()
-    with Session() as session:
-        rows, total = list_accounts(session, group_id=group_id, limit=limit, offset=offset)
-        gmap = {g.id: g for g, _n in list_groups(session)}
-        items = [_account_out(a, gmap) for a in rows]
-        return AccountsPage(
-            accounts=items,
-            total=total,
-            limit=limit,
-            offset=offset,
-            has_more=offset + len(items) < total,
-        )
+    page = list_accounts_app(group_id=group_id, limit=limit, offset=offset)
+    return AccountsPage(
+        accounts=[AccountOut(**dict(a.__dict__)) for a in page.accounts],
+        total=page.total,
+        limit=page.limit,
+        offset=page.offset,
+        has_more=page.has_more,
+    )
 
 
 @router.post("/api/accounts", response_model=AccountOut)
 def api_create_account(body: AccountCreateIn):
-    Session = get_session_factory()
-    with Session() as session:
-        try:
-            acc = create_account(
-                session,
-                email=body.email,
-                provider=body.provider,
-                display_name=body.display_name,
-                group_id=body.group_id,
-                config=body.config,
-                credentials=body.credentials,
-            )
-            session.commit()
-        except Exception as exc:
-            session.rollback()
-            raise HTTPException(400, str(exc)) from exc
-        gmap = {g.id: g for g, _n in list_groups(session)}
-        return _account_out(acc, gmap)
+    try:
+        acc = create_account_app(
+            email=body.email,
+            provider=body.provider,
+            display_name=body.display_name,
+            group_id=body.group_id,
+            config=body.config,
+            credentials=body.credentials,
+        )
+        return AccountOut(**dict(acc.__dict__))
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.patch("/api/accounts/{account_id}", response_model=AccountOut)
 def api_update_account(account_id: UUID, body: AccountUpdateIn):
-    Session = get_session_factory()
-    with Session() as session:
-        try:
-            group_arg: object = ...
-            if body.clear_group:
-                group_arg = None
-            elif body.group_id is not None:
-                group_arg = body.group_id
-            acc = update_account(
-                session,
-                account_id,
-                display_name=body.display_name,
-                group_id=group_arg,
-                sync_enabled=body.sync_enabled,
-                config_patch=body.config,
-                credentials=body.credentials,
-            )
-            session.commit()
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        gmap = {g.id: g for g, _n in list_groups(session)}
-        return _account_out(acc, gmap)
+    try:
+        acc = update_account_app(
+            account_id,
+            display_name=body.display_name,
+            group_id=body.group_id,
+            clear_group=body.clear_group,
+            sync_enabled=body.sync_enabled,
+            config=body.config,
+            credentials=body.credentials,
+        )
+        return AccountOut(**dict(acc.__dict__))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.delete("/api/accounts/{account_id}", status_code=204, response_class=Response)
 def api_delete_account(account_id: UUID) -> Response:
-    Session = get_session_factory()
-    with Session() as session:
-        try:
-            delete_account(session, account_id)
-            session.commit()
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from exc
+    try:
+        delete_account_app(account_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
     return Response(status_code=204)
 
 
 @router.post("/api/accounts/{account_id}/sync", response_model=SyncJobOut)
 def api_sync_account(account_id: UUID) -> SyncJobOut:
-    Session = get_session_factory()
-    with Session() as session:
-        try:
-            job_id = enqueue_account_sync(session, account_id)
-            session.commit()
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from exc
-    return SyncJobOut(job_id=str(job_id))
-
-
-_SYNC_ALL_PAGE = 500
+    try:
+        job = sync_account_app(account_id)
+        return SyncJobOut(job_id=job.job_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/api/accounts/sync-all", response_model=SyncAllOut)
 def api_sync_all_accounts() -> SyncAllOut:
-    """Enqueue a sync for every sync-enabled account (paged; deduped by the job queue)."""
-    Session = get_session_factory()
-    job_ids: list[str] = []
-    with Session() as session:
-        offset = 0
-        while True:
-            rows, total = list_accounts(session, limit=_SYNC_ALL_PAGE, offset=offset)
-            for acc in rows:
-                if acc.sync_enabled:
-                    job_ids.append(str(enqueue_account_sync(session, acc.id)))
-            offset += len(rows)
-            if not rows or offset >= total:
-                break
-        session.commit()
-    return SyncAllOut(job_ids=job_ids, count=len(job_ids))
+    res = sync_all_accounts_app()
+    return SyncAllOut(job_ids=res.job_ids, count=res.count)
 
 
 @router.get("/api/groups", response_model=GroupsOut)
 def api_list_groups() -> GroupsOut:
-    Session = get_session_factory()
-    with Session() as session:
-        return GroupsOut(
-            groups=[GroupOut(id=str(g.id), name=g.name, color=g.color, account_count=n) for g, n in list_groups(session)]
-        )
+    groups = list_groups_app()
+    return GroupsOut(
+        groups=[
+            GroupOut(id=g.id, name=g.name, color=g.color, account_count=g.account_count)
+            for g in groups
+        ]
+    )
 
 
 @router.post("/api/groups", response_model=GroupOut)
 def api_create_group(body: GroupCreateIn) -> GroupOut:
-    Session = get_session_factory()
-    with Session() as session:
-        g = create_group(session, name=body.name, color=body.color)
-        session.commit()
-        return GroupOut(id=str(g.id), name=g.name, color=g.color, account_count=0)
+    g = create_group_app(name=body.name, color=body.color)
+    return GroupOut(id=g.id, name=g.name, color=g.color, account_count=0)
 
 
 @router.delete("/api/groups/{group_id}", status_code=204, response_class=Response)
 def api_delete_group(group_id: UUID) -> Response:
-    Session = get_session_factory()
-    with Session() as session:
-        try:
-            delete_group(session, group_id)
-            session.commit()
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from exc
+    try:
+        delete_group_app(group_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
     return Response(status_code=204)
 
 
 @router.get("/api/settings", response_model=SettingsOut)
 def api_get_settings() -> SettingsOut:
-    Session = get_session_factory()
-    with Session() as session:
-        return SettingsOut(settings=get_public_settings(session))
+    res = get_settings_app()
+    return SettingsOut(settings=res.settings)
 
 
 @router.put("/api/settings", response_model=SettingsOut)
 def api_update_settings(body: SettingsUpdateIn) -> SettingsOut:
-    """Update public settings only. Password changes use POST /api/auth/password."""
-    Session = get_session_factory()
-    with Session() as session:
-        try:
-            settings = update_public_settings(session, body.settings)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        session.commit()
-        return SettingsOut(settings=settings)
+    try:
+        res = update_settings_app(body.settings)
+        return SettingsOut(settings=res.settings)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc

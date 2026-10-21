@@ -62,9 +62,6 @@ class AttachmentPayload:
     content_sha256: str
     open_stream: Callable[[], Iterator[bytes]]
 
-    def read_all(self) -> bytes:
-        return b"".join(self.open_stream())
-
 
 def resolve_attachment_bytes(
     session: Session,

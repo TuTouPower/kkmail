@@ -141,6 +141,7 @@ class Message(Base):
         Index("ix_messages_account_sort", "account_id", "sort_time"),
         # Inbox/folder keyset: ORDER BY sort_time DESC, id DESC (queries.list_messages_keyset).
         Index("ix_messages_sort_id", "sort_time", "id"),
+        Index("ix_messages_account_internet_id", "account_id", "internet_message_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
@@ -332,6 +333,9 @@ class MessageArchiveState(Base):
     """Per-message MIME archive state machine (architecture §8.4)."""
 
     __tablename__ = "message_archive_state"
+    __table_args__ = (
+        Index("ix_archive_claim", "state", "priority", postgresql_where=text("claimed_by IS NULL")),
+    )
 
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
     state: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'metadata_synced'"))
@@ -375,6 +379,9 @@ class MessageSearch(Base):
     """FTS projection — searchable fields are not field-encrypted (architecture §11.2)."""
 
     __tablename__ = "message_search"
+    __table_args__ = (
+        Index("ix_message_search_from_text_trgm", "from_text", postgresql_using="gin", postgresql_ops={"from_text": "gin_trgm_ops"}),
+    )
 
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)

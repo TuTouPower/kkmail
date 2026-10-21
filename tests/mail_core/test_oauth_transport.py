@@ -11,7 +11,6 @@ from mail_core.accounts import DictCredentialStore
 from mail_core.mail.storage.models import Account
 from mail_core.providers.factory import build_provider
 from mail_core.providers.gmail import GmailNotConfiguredError, GmailProvider
-from mail_core.providers.graph import GraphNotConfiguredError
 from mail_core.providers.http import ProviderHttpError
 from mail_core.providers.oauth import (
     BearerTransport,

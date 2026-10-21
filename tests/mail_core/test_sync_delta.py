@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
 from mail_core.db.session import get_session_factory

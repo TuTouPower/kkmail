@@ -38,6 +38,24 @@ _EXPORTS: dict[str, str] = {
     "AttachmentAccessError": "attachments",
     "PathTraversalRejected": "attachments",
     "load_attachment": "attachments",
+    # accounts
+    "AccountDTO": "accounts",
+    "AccountPageDTO": "accounts",
+    "GroupDTO": "accounts",
+    "SyncJobDTO": "accounts",
+    "SyncAllDTO": "accounts",
+    "SettingsDTO": "accounts",
+    "list_accounts_app": "accounts",
+    "create_account_app": "accounts",
+    "update_account_app": "accounts",
+    "delete_account_app": "accounts",
+    "sync_account_app": "accounts",
+    "sync_all_accounts_app": "accounts",
+    "list_groups_app": "accounts",
+    "create_group_app": "accounts",
+    "delete_group_app": "accounts",
+    "get_settings_app": "accounts",
+    "update_settings_app": "accounts",
 }
 
 __all__ = sorted(_EXPORTS)
