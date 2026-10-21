@@ -79,10 +79,20 @@ export default function MessageList() {
     total: number
   }
 
+  const is_unread = listFilter === 'unread' ? false : undefined
+  const is_flagged = listFilter === 'flagged' ? true : undefined
+
   const inboxInfiniteQuery = useInfiniteQuery<InboxPageData, Error, { pages: InboxPageData[]; pageParams: (string | null)[] }, readonly unknown[], string | null>({
-    queryKey: queryKeys.inbox(listScope),
+    queryKey: queryKeys.inbox(listScope, listFilter),
     queryFn: async ({ pageParam, signal }) => {
-      const page = await fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, cursor: pageParam || undefined, signal })
+      const page = await fetchMailCoreInbox({
+        limit: LIST_LIMIT,
+        accountId,
+        is_read: is_unread,
+        is_flagged: is_flagged,
+        cursor: pageParam || undefined,
+        signal,
+      })
       return {
         items: page.items.filter(hasMailId).map(mailCoreToMailItem),
         next_cursor: page.next_cursor ?? null,
@@ -270,7 +280,7 @@ export default function MessageList() {
             <span className="selection-count">已选 {selectedIds.length} 封</span>
             <div className="list-control-group">
               <button className="sort-btn" onClick={() => selectAll(visible.map((m) => mailKey(m)))} title="选择当前列表全部邮件">全选</button>
-              <button className="sort-btn danger" onClick={deleteSelected} title="删除所选邮件">删除所选</button>
+              <button className="sort-btn danger" onClick={deleteSelected} title="移到废纸篓（删除所选）" aria-label="移到废纸篓（删除所选）">移到废纸篓</button>
               <button className="sort-btn" onClick={clearSelected} title="取消选择">取消</button>
             </div>
           </div>

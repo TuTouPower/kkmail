@@ -128,6 +128,8 @@ def list_messages_keyset(
     folder_ids: list[uuid.UUID],
     limit: int = 50,
     cursor: str | None = None,
+    is_read: bool | None = None,
+    is_flagged: bool | None = None,
 ) -> MessagePage:
     # Opaque cursor is atomic: decode raises InvalidCursor unless both halves exist.
     cursor_pair = decode_cursor(cursor) if cursor else None
@@ -138,6 +140,10 @@ def list_messages_keyset(
         .join(MessageLocation, MessageLocation.message_id == Message.id)
         .where(MessageLocation.folder_id.in_(folder_ids))
     )
+    if is_read is not None:
+        stmt = stmt.where(Message.is_read == is_read)
+    if is_flagged is not None:
+        stmt = stmt.where(Message.is_flagged == is_flagged)
     if cursor_pair is not None:
         cursor_sort_time, cursor_message_id = cursor_pair
         stmt = stmt.where(
@@ -164,6 +170,8 @@ def unified_inbox(
     account_ids: list[uuid.UUID] | None = None,
     limit: int = 50,
     cursor: str | None = None,
+    is_read: bool | None = None,
+    is_flagged: bool | None = None,
 ) -> MessagePage:
     """Backend-aggregated inbox across accounts (role=inbox folders)."""
     stmt = select(Folder.id).where(Folder.role == FolderRole.INBOX.value)
@@ -175,6 +183,8 @@ def unified_inbox(
         folder_ids=folder_ids,
         limit=limit,
         cursor=cursor,
+        is_read=is_read,
+        is_flagged=is_flagged,
     )
 
 

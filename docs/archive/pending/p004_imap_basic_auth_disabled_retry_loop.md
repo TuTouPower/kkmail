@@ -6,4 +6,4 @@
 - 同类位点：Gmail 遇到关闭低安全性应用、163/QQ 邮箱使用普通密码而非授权码时的同类错误捕获。
 - 测试缺口：现有 IMAP 单元测试使用本地 Dovecot 夹具（支持并允许普通密码），未模拟真实公网邮件服务商明确禁用 Basic Auth 的拒绝响应。应在 Provider 单元测试与 Handler 集成测试补充该异常的分类处理断言。
 - 线索：部署新容器后 Worker 日志反复打印 `imaplib.IMAP4.error: Basic authentication is disabled.` 导致推入的出站操作被阻断。
-- 处理：未开
+- 处理：fix/p001-p004

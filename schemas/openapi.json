@@ -2110,6 +2110,42 @@
               ],
               "title": "Account Id"
             }
+          },
+          {
+            "description": "Filter messages by read status",
+            "in": "query",
+            "name": "is_read",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter messages by read status",
+              "title": "Is Read"
+            }
+          },
+          {
+            "description": "Filter messages by flagged status",
+            "in": "query",
+            "name": "is_flagged",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter messages by flagged status",
+              "title": "Is Flagged"
+            }
           }
         ],
         "responses": {

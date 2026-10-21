@@ -101,3 +101,8 @@ class FixtureTransport:
         if isinstance(resp, BaseException):
             raise resp
         return resp
+
+
+class PermanentAuthError(Exception):
+    """Provider rejected credentials permanently (e.g. Basic auth disabled, account closed)."""
+
