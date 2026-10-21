@@ -21,7 +21,6 @@ from mail_core.mail.application.attachments import (
 )
 from mail_core.mail.application.mutations import MutationResult, set_message_flagged, set_message_read, trash_message
 from mail_core.mail.application.queries import (
-    AccountInboxStatsOut,
     GlobalStatsOut,
     InvalidCursor,
     MessageListItem,

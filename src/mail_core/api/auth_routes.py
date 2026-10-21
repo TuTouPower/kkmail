@@ -42,12 +42,12 @@ class OkOut(BaseModel):
     ok: bool = True
 
 
-def _set_session_cookie(response: Response, value: str) -> None:
+def _set_session_cookie(response: Response, value: str, request: Request | None = None) -> None:
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=value,
         httponly=True,
-        secure=cookie_secure(),
+        secure=cookie_secure(request),
         samesite=cookie_samesite(),  # type: ignore[arg-type]
         path="/",
         max_age=session_max_age(),
@@ -69,7 +69,7 @@ def login(body: LoginIn, request: Request, response: Response) -> LoginOut:
         raise HTTPException(status_code=401, detail="invalid credentials")
     login_limiter.reset(client)
     cookie_val, csrf = issue_session()
-    _set_session_cookie(response, cookie_val)
+    _set_session_cookie(response, cookie_val, request=request)
     return LoginOut(csrf_token=csrf)
 
 

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import os
+import socket
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.storage.models import Account
@@ -36,6 +39,33 @@ def _oauth_transport(
     base = "https://gmail.googleapis.com" if provider == "gmail" else "https://graph.microsoft.com/v1.0"
     api = api_http or urllib_json_request
     return BearerTransport(token_client=client, inner=api, base_url=base)
+
+
+def is_private_host(host: str) -> bool:
+    h = host.strip().lower()
+    if h in ("localhost", "localhost.localdomain") or h.endswith(".local") or h.endswith(".localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified
+    except ValueError:
+        pass
+    try:
+        for res in socket.getaddrinfo(h, None):
+            ip_str = res[4][0]
+            ip = ipaddress.ip_address(ip_str)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
+                return True
+    except (socket.gaierror, socket.herror, OSError):
+        pass
+    return False
+
+
+def validate_imap_host(host: str) -> None:
+    if os.environ.get("MAIL_CORE_ALLOW_PRIVATE_HOSTS", "").strip().lower() in ("1", "true", "yes", "on"):
+        return
+    if is_private_host(host):
+        raise ValueError(f"imap host {host!r} is a private or loopback address (SSRF protection)")
 
 
 def build_provider(
@@ -77,6 +107,7 @@ def build_provider(
         port = int(cfg.get("imap_port") or cfg.get("port") or (993 if use_ssl else 143))
         if not host:
             raise ValueError("imap account config missing imap_host")
+        validate_imap_host(host)
         return ImapProvider(host=host, port=port, username=user, password=password, use_ssl=use_ssl)
 
     if provider == "gmail":

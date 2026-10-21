@@ -20,7 +20,6 @@ from sqlalchemy import func, select
 from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.mutations import set_message_flagged, set_message_read
-from mail_core.mail.application.remote_ops import reclaim_stale_in_progress
 from mail_core.mail.domain.enums import RemoteOperationStatus
 from mail_core.mail.storage import Folder, Message, MessageLocation, RemoteOperation
 from mail_core.providers.base import RemoteFolder, RemoteMessageMeta

@@ -124,7 +124,6 @@ def set_message_flagged(
     if msg is None:
         raise LookupError("message not found")
     msg.is_flagged = is_flagged
-    folder_ids = _all_location_folder_ids(session, message_id)
     folder, _loc = _primary_location(session, message_id)
     desired = {
         "remote_id": msg.remote_id,
@@ -146,9 +145,6 @@ def set_message_flagged(
             payload={"message_id": str(msg.id), "is_flagged": is_flagged},
         )
     )
-    # Flag changes do not alter unread/total, but keep all locations consistent
-    # if a future stats column depends on them / multi-folder mirrors.
-    _recompute_stats_for_folders(session, account_id=msg.account_id, folder_ids=folder_ids)
     _wake_push(session, msg.account_id)
     try_notify_outbox(session)
     session.flush()

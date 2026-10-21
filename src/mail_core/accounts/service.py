@@ -26,6 +26,12 @@ def create_account(
     credentials: dict | None = None,
 ) -> Account:
     email_norm = email.strip().lower()
+    if str(provider).lower() == "imap" and config:
+        imap_host = config.get("imap_host") or config.get("host")
+        if imap_host:
+            from mail_core.providers.factory import validate_imap_host
+
+            validate_imap_host(imap_host)
     acc = Account(
         email=email_norm,
         provider=str(provider),
@@ -89,6 +95,12 @@ def update_account(
     if config_patch:
         merged = dict(acc.config or {})
         merged.update(config_patch)
+        if (acc.provider or "").lower() == "imap":
+            imap_host = merged.get("imap_host") or merged.get("host")
+            if imap_host:
+                from mail_core.providers.factory import validate_imap_host
+
+                validate_imap_host(imap_host)
         acc.config = merged
     if credentials is not None:
         ref = acc.credential_ref or f"account:{acc.id}"
