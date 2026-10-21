@@ -167,4 +167,46 @@ describe('<Sidebar />', () => {
     await fireClick(acc1Inbox?.querySelector('.category-account-btn') as HTMLElement)
     expect(useMailStore.getState().view).toEqual({ type: 'favorite', category: 'inbox', accountId: 'acc-1', email: 'a@x.test' })
   })
+
+  it('renders real error message and refetch retry button on accounts error (AC-003, AC-004)', async () => {
+    let shouldFail = true
+    let accountsCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/groups')) return json({ groups: [] })
+      if (u.startsWith('/api/accounts')) {
+        accountsCalls++
+        if (shouldFail) {
+          return json({ detail: 'Internal Server Error: DB connection failed' }, 500)
+        }
+        return json({
+          accounts: [
+            { id: 'acc-1', email: 'recovered@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+          ],
+          total: 1, limit: 200, offset: 0, has_more: false,
+        })
+      }
+      if (u.startsWith('/api/mail/stats')) return json({ total_unread: 0, accounts: [] })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<Sidebar />)
+
+    await waitFor(() => {
+      expect(container.textContent).not.toContain('请确认已登录且后端可用')
+      expect(container.textContent).toContain('DB connection failed')
+    })
+
+    const retryBtn = container.querySelector('.account-error-retry') as HTMLButtonElement | null
+    expect(retryBtn).not.toBeNull()
+
+    shouldFail = false
+    const { click: fireClick } = await import('../test/render')
+    await fireClick(retryBtn!)
+
+    await waitFor(() => {
+      expect(accountsCalls).toBeGreaterThanOrEqual(2)
+      expect(container.textContent).toContain('recovered@x.test')
+    })
+  })
 })
