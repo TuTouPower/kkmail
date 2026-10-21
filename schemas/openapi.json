@@ -2146,6 +2146,18 @@
               "description": "Filter messages by flagged status",
               "title": "Is Flagged"
             }
+          },
+          {
+            "description": "Folder role to query (default: inbox)",
+            "in": "query",
+            "name": "folder_role",
+            "required": false,
+            "schema": {
+              "default": "inbox",
+              "description": "Folder role to query (default: inbox)",
+              "title": "Folder Role",
+              "type": "string"
+            }
           }
         ],
         "responses": {

@@ -172,9 +172,10 @@ def unified_inbox(
     cursor: str | None = None,
     is_read: bool | None = None,
     is_flagged: bool | None = None,
+    folder_role: str = "inbox",
 ) -> MessagePage:
-    """Backend-aggregated inbox across accounts (role=inbox folders)."""
-    stmt = select(Folder.id).where(Folder.role == FolderRole.INBOX.value)
+    """Backend-aggregated inbox across accounts for a specified folder role (defaults to inbox)."""
+    stmt = select(Folder.id).where(Folder.role == folder_role)
     if account_ids:
         stmt = stmt.where(Folder.account_id.in_(account_ids))
     folder_ids = list(session.scalars(stmt).all())
