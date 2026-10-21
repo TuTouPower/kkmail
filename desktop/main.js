@@ -44,12 +44,13 @@ function backendCommand() {
   return { cmd: py, args: ['-m', 'mail_core'], cwd: root, packaged: false }
 }
 
+const { rotateLogFile, RotatingLogStream } = require('./logRotation')
+
 let pg = null
 
 function pipeBackendLogs(child, logPath, secrets) {
   try {
-    fs.mkdirSync(path.dirname(logPath), { recursive: true })
-    backendLogStream = fs.createWriteStream(logPath, { flags: 'a' })
+    backendLogStream = new RotatingLogStream(logPath)
   } catch (err) {
     console.warn('[mail-core] cannot open backend log', err && err.message)
     backendLogStream = null
