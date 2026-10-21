@@ -60,6 +60,8 @@ describe('<MessageReader />', () => {
     await waitFor(() => expect(container.querySelector('.email-body-text')?.textContent).toBe('plain body text'))
     const link = container.querySelector('.attachment-list a') as HTMLAnchorElement
     expect(link.getAttribute('href')).toBe('/api/mail/attachments/att-1')
+    expect(link.getAttribute('download')).toBe('r.pdf')
+    expect(link.getAttribute('target')).toBe('_blank')
     expect(link.querySelector('small')?.textContent).toBe('10 B')
   })
 

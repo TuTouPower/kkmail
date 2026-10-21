@@ -62,5 +62,22 @@ describe('ColumnResize', () => {
     expect(hasCap).toHaveBeenCalledWith(7)
     expect(release).toHaveBeenCalledWith(7)
   })
+
+  it('calls onDragEnd when drag completes or cancel occurs', async () => {
+    const onDrag = vi.fn()
+    const onDragEnd = vi.fn()
+    const { container } = await render(<ColumnResize ariaLabel="resize" onDrag={onDrag} onDragEnd={onDragEnd} />)
+    const handle = container.querySelector('[role="separator"]') as HTMLDivElement
+    Object.defineProperty(handle, 'setPointerCapture', { configurable: true, value: vi.fn() })
+    Object.defineProperty(handle, 'releasePointerCapture', { configurable: true, value: vi.fn() })
+
+    act(() => {
+      handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 50, pointerId: 1 }))
+    })
+    act(() => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 }))
+    })
+    expect(onDragEnd).toHaveBeenCalledTimes(1)
+  })
 })
 
