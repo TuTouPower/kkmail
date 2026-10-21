@@ -1388,6 +1388,10 @@ export interface operations {
                 /** @description `next_cursor` from the previous page */
                 cursor?: string | null;
                 account_id?: string | null;
+                /** @description Filter messages by read status */
+                is_read?: boolean | null;
+                /** @description Filter messages by flagged status */
+                is_flagged?: boolean | null;
             };
             header?: never;
             path?: never;
