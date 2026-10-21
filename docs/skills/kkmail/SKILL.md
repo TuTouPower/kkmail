@@ -12,10 +12,10 @@ description: 接入并操控自托管邮件客户端 kkmail（基于 mail-core�
 默认连接本地最小化运行态：
 
 - `KKMAIL_BASE_URL`：服务地址，默认为 `http://127.0.0.1:37281`
-- `KKMAIL_PASSWORD`：管理员密码，默认为 `admin123456Password!`（或本地 `.env` 中的 `LOGIN_PASSWORD`）
+- `KKMAIL_PASSWORD`：管理员密码（必填，或在命令行通过 `--password` 提供）
 - `KKMAIL_API_KEY`：可选 Bearer Token（配置 `MAIL_CORE_API_KEYS` 后免 Session/CSRF）
 
----
+______________________________________________________________________
 
 ## 推荐方式：CLI 工具
 
@@ -101,7 +101,7 @@ CLI="python3 docs/skills/kkmail/scripts/kkmail_cli.py"
     $CLI add-account --email user@example.com --provider imap --host imap.example.com --port 993 --password secret
     ```
 
----
+______________________________________________________________________
 
 ## 直接调用 REST API
 
@@ -129,7 +129,7 @@ CLI="python3 docs/skills/kkmail/scripts/kkmail_cli.py"
 - `POST /api/accounts/{id}/sync`：排队异步同步指定账号
 - `POST /api/accounts/sync-all`：排队异步同步所有已启用账号
 
----
+______________________________________________________________________
 
 ## 业务边界说明
 
