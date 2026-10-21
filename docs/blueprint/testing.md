@@ -17,6 +17,7 @@ command -v md_kx || true
 
 ```bash
 pytest .repo_template/tests -q -m contract
+pytest tests/mail_core -q
 (cd src/frontend && npm test && npx tsc -b && npm run build)
 (cd src/desktop && npm test)
 ```
