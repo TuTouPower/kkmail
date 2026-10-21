@@ -5,7 +5,7 @@
 |slug|task 清单|最后更新时间|
 |---|---|---|
 |auth_and_session|-|2026-10-22|
-|mail_sync_and_storage|-|2026-10-22|
+|mail_sync_and_storage|t001|2026-10-22|
 |inbox_ui_and_search|-|2026-10-22|
 
 <!-- 示例行（实际项目使用时从真实 task 收尾开始填写；示例勿放表内，「在表即生效」）：

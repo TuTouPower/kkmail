@@ -176,6 +176,7 @@ def api_unified_inbox(
     account_id: UUID | None = None,
     is_read: bool | None = Query(None, description="Filter messages by read status"),
     is_flagged: bool | None = Query(None, description="Filter messages by flagged status"),
+    folder_role: str = Query("inbox", description="Folder role to query (default: inbox)"),
 ) -> PageOut:
     Session = get_session_factory()
     with Session() as session:
@@ -187,6 +188,7 @@ def api_unified_inbox(
                 cursor=cursor,
                 is_read=is_read,
                 is_flagged=is_flagged,
+                folder_role=folder_role,
             )
         except InvalidCursor as exc:
             raise HTTPException(400, str(exc)) from exc

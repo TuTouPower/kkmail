@@ -1392,6 +1392,8 @@ export interface operations {
                 is_read?: boolean | null;
                 /** @description Filter messages by flagged status */
                 is_flagged?: boolean | null;
+                /** @description Folder role to query (default: inbox) */
+                folder_role?: string;
             };
             header?: never;
             path?: never;
