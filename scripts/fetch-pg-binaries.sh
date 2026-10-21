@@ -345,7 +345,7 @@ if [[ -d "$DEST/bin" ]]; then
     [[ -f "$f" ]] || continue
     base="$(basename "$f")"
     case "$base" in
-      initdb|initdb.exe|pg_ctl|pg_ctl.exe|postgres|postgres.exe|*.dll)
+      initdb|initdb.exe|pg_ctl|pg_ctl.exe|postgres|postgres.exe|createdb|createdb.exe|*.dll)
         ;;
       *)
         rm -f "$f"
