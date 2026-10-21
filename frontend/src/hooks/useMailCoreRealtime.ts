@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { subscribeMailCoreEvents } from '../api/mailCore'
+import { subscribeMailCoreStream } from '../api/sseStream'
 import { queryClient } from '../api/queries'
 
 /** Events that mean cached message lists may be stale. */
@@ -129,7 +129,7 @@ export function useMailCoreRealtime(enabled: boolean): void {
     window.addEventListener('online', onOnline)
     document.addEventListener('visibilitychange', onVisibilityChange)
 
-    const unsubscribe = subscribeMailCoreEvents(
+    const unsubscribe = subscribeMailCoreStream(
       (type, data) => {
         if (isReconnecting) {
           isReconnecting = false
@@ -137,19 +137,23 @@ export function useMailCoreRealtime(enabled: boolean): void {
         }
         throttler.handleEvent(type, data)
       },
-      (err) => {
-        isReconnecting = true
-        const target = err.target as EventSource | null
-        if (target && target.readyState === EventSource.CLOSED) {
-          console.warn('[SSE] EventSource closed with terminal error, realtime sync may be stalled.')
-        }
-      },
-      () => {
-        if (hasConnectedOnce || isReconnecting) {
+      {
+        onOpen: () => {
+          if (hasConnectedOnce || isReconnecting) {
+            void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+          }
+          hasConnectedOnce = true
+          isReconnecting = false
+        },
+        onError: () => {
+          isReconnecting = true
+        },
+        onUnauthorized: (status) => {
+          console.warn(`[SSE] Unauthorized stream access (${status}), stopping reconnect.`)
+        },
+        onVisibilityRecovery: () => {
           void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
-        }
-        hasConnectedOnce = true
-        isReconnecting = false
+        },
       },
     )
 
