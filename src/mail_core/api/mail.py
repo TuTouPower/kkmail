@@ -174,11 +174,20 @@ def api_unified_inbox(
     limit: int = Query(50, ge=1, le=200),
     cursor: str | None = Query(None, description="`next_cursor` from the previous page"),
     account_id: UUID | None = None,
+    is_read: bool | None = Query(None, description="Filter messages by read status"),
+    is_flagged: bool | None = Query(None, description="Filter messages by flagged status"),
 ) -> PageOut:
     Session = get_session_factory()
     with Session() as session:
         try:
-            page = unified_inbox(session, account_ids=[account_id] if account_id else None, limit=limit, cursor=cursor)
+            page = unified_inbox(
+                session,
+                account_ids=[account_id] if account_id else None,
+                limit=limit,
+                cursor=cursor,
+                is_read=is_read,
+                is_flagged=is_flagged,
+            )
         except InvalidCursor as exc:
             raise HTTPException(400, str(exc)) from exc
         emails = account_emails_by_id(session, [i.account_id for i in page.items])

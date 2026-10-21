@@ -26,6 +26,8 @@ export interface MailCoreInboxQuery {
   /** mail-core account UUID */
   accountId?: string
   cursor?: string
+  is_read?: boolean
+  is_flagged?: boolean
   signal?: AbortSignal
 }
 
@@ -46,6 +48,8 @@ export function fetchMailCoreInbox(q: MailCoreInboxQuery = {}): Promise<MailCore
   params.set('limit', String(q.limit ?? 50))
   if (q.accountId) params.set('account_id', q.accountId)
   if (q.cursor) params.set('cursor', q.cursor)
+  if (q.is_read !== undefined) params.set('is_read', String(q.is_read))
+  if (q.is_flagged !== undefined) params.set('is_flagged', String(q.is_flagged))
   return apiRequest(`/api/mail/inbox?${params.toString()}`, { signal: q.signal })
 }
 
