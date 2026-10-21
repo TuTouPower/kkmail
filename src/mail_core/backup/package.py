@@ -270,7 +270,7 @@ def create_backup_package(
     url = database_url_override or database_url()
     root = blobs_dir or blob_root()
     do_encrypt = encrypt if encrypt is not None else bool(
-        os.environ.get("MAIL_CORE_BACKUP_KEY") or os.environ.get("MAIL_CORE_BACKUP_KEYS")
+        os.environ.get("MAIL_CORE_BACKUP_KEY")
     )
 
     plain = out / "plain" if do_encrypt else out

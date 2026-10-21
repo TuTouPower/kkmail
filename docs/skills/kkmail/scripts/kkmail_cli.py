@@ -17,13 +17,8 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_BASE_URL = os.environ.get("KKMAIL_BASE_URL") or "http://127.0.0.1:37281"
-DEFAULT_PASSWORD = (
-    os.environ.get("KKMAIL_PASSWORD")
-    or os.environ.get("MAIL_CORE_LOGIN_PASSWORD")
-    or os.environ.get("LOGIN_PASSWORD")
-    or ""
-)
-DEFAULT_API_KEY = os.environ.get("KKMAIL_API_KEY") or os.environ.get("MAIL_CORE_API_KEYS") or ""
+DEFAULT_PASSWORD = os.environ.get("KKMAIL_PASSWORD") or ""
+DEFAULT_API_KEY = os.environ.get("KKMAIL_API_KEY") or ""
 SESSION_CACHE_FILE = Path(os.environ.get("KKMAIL_SESSION_CACHE") or (Path.home() / ".cache" / "kkmail_agent_session.json"))
 
 
