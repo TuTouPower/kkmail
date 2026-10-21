@@ -31,10 +31,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Api Sync All Accounts
-         * @description Enqueue a sync for every sync-enabled account (paged; deduped by the job queue).
-         */
+        /** Api Sync All Accounts */
         post: operations["api_sync_all_accounts_api_accounts_sync_all_post"];
         delete?: never;
         options?: never;
@@ -397,10 +394,7 @@ export interface paths {
         };
         /** Api Get Settings */
         get: operations["api_get_settings_api_settings_get"];
-        /**
-         * Api Update Settings
-         * @description Update public settings only. Password changes use POST /api/auth/password.
-         */
+        /** Api Update Settings */
         put: operations["api_update_settings_api_settings_put"];
         post?: never;
         delete?: never;
