@@ -6,7 +6,7 @@
 # Security: URL allowlist, mandatory SHA-256 verification, path-traversal-safe extract.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VENDOR="$ROOT/desktop/vendor"
+VENDOR="$ROOT/src/desktop/vendor"
 DEST="$VENDOR/pgsql"
 
 DETECTED_OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "linux")"

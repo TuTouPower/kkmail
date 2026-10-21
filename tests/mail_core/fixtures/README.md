@@ -1,9 +1,9 @@
 # mail-core L2 fixtures
 
-| Path | Role |
+|Path|Role|
 |---|---|
-| `dovecot/` | Alpine Dovecot image + seeded Maildir (`alice@kkmail.test` / `alice-imap-pass`) |
-| `maildir/` | Same mailbox layout for pymap fallback |
+|`dovecot/`|Alpine Dovecot image + seeded Maildir (`alice@kkmail.test` / `alice-imap-pass`)|
+|`maildir/`|Same mailbox layout for pymap fallback|
 
 ```bash
 docker compose -f docker-compose.mail-core.yml up -d --build imap

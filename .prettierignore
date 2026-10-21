@@ -1,0 +1,11 @@
+# 同步自模板（repo-template-sync）：模板自有路径不受消费仓 format 门禁约束
+.repo_template/scripts/package.json
+.repo_template/tests/package.json
+.repo_template/scripts/repo_task/view_static/
+.repo_template/tests/test_chain_plan_cases.js
+.repo_template/sync_state.json
+docs/tasks_index.json
+docs/archive/tasks_index.json
+docs/**/handoff.json
+.opencode/package.json
+.opencode/package-lock.json
