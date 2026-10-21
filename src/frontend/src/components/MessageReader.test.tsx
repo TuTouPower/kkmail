@@ -55,11 +55,12 @@ afterEach(() => {
 })
 
 describe('<MessageReader />', () => {
-  it('renders the text body and attachment links by UUID', async () => {
+  it('renders the text body and attachment links by UUID with formatted size', async () => {
     const { container } = await render(<MessageReader />)
     await waitFor(() => expect(container.querySelector('.email-body-text')?.textContent).toBe('plain body text'))
     const link = container.querySelector('.attachment-list a') as HTMLAnchorElement
     expect(link.getAttribute('href')).toBe('/api/mail/attachments/att-1')
+    expect(link.querySelector('small')?.textContent).toBe('10 B')
   })
 
   it('has no compose/send actions (send is out of scope)', async () => {

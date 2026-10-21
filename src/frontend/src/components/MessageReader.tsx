@@ -9,6 +9,7 @@ import { confirmAction, errorMessage } from '../lib/actions'
 import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, isHtmlBody } from '../lib/mailBody'
 import { formatReaderDate } from '../lib/listDate'
 import { displayName } from '../lib/displayName'
+import { formatFileSize } from '../lib/formatSize'
 
 export default function MessageReader() {
   const selectedKey = useMailStore((s) => s.selectedKey)
@@ -169,7 +170,7 @@ export default function MessageReader() {
                 return (
                   <a key={att.id || i} href={href} style={{ padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 9, color: 'inherit', textDecoration: 'none' }}>
                     <strong>{att.name || '附件'}</strong>
-                    {att.size ? <small style={{ display: 'block', color: 'var(--muted)' }}>{att.size} B</small> : null}
+                    {att.size ? <small style={{ display: 'block', color: 'var(--muted)' }}>{formatFileSize(att.size)}</small> : null}
                   </a>
                 )
               })}
