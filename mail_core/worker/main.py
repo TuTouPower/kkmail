@@ -9,7 +9,9 @@ import threading
 import time
 import uuid
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [mail-core-worker] %(message)s")
+from mail_core.logging_config import configure_logging
+
+configure_logging(service_name="mail-core-worker")
 log = logging.getLogger("mail_core.worker")
 
 _stop = False
