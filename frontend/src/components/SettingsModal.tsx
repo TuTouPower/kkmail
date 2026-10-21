@@ -50,8 +50,10 @@ export default function SettingsPage() {
     }
   }
 
+  const isMicrosoftEmail = /@(outlook|hotmail|live|msn)\.com$/i.test(email.trim())
+
   return (
-    <div className="settings-page" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--surface)', color: 'var(--text)' }}>
+    <div className="settings-page" style={{ position: 'relative', zIndex: 50, display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--surface)', color: 'var(--text)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
         <SettingsIcon size={18} />
         <div style={{ fontWeight: 700, flex: 1 }}>设置</div>
@@ -106,6 +108,11 @@ export default function SettingsPage() {
               <option value="gmail">gmail</option>
               <option value="graph">graph</option>
             </select>
+            {provider === 'imap' && isMicrosoftEmail && (
+              <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(234, 179, 8, 0.15)', border: '1px solid var(--line)', borderRadius: 8, fontSize: 12, color: 'var(--yellow, #ca8a04)', lineHeight: 1.4 }}>
+                ⚠️ 提示：微软已全网停用普通密码登录（Basic Auth）。Outlook / Hotmail 个人账号建议将协议切换为 graph，或使用微软应用专用密码。
+              </div>
+            )}
             {provider === 'imap' && (
               <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <input

@@ -102,6 +102,47 @@ export async function fetchAccounts(): Promise<AccountSummary[]> {
   return all
 }
 
+function extractItemsFromCache(data: unknown): MailItem[] {
+  if (Array.isArray(data)) return data as MailItem[]
+  if (data && typeof data === 'object' && 'pages' in data && Array.isArray((data as { pages: unknown[] }).pages)) {
+    const pages = (data as { pages: unknown[] }).pages
+    const all: MailItem[] = []
+    for (const p of pages) {
+      if (Array.isArray(p)) {
+        all.push(...(p as MailItem[]))
+      } else if (p && typeof p === 'object' && 'items' in p && Array.isArray((p as { items: unknown[] }).items)) {
+        all.push(...(p as { items: MailItem[] }).items)
+      }
+    }
+    return all
+  }
+  return []
+}
+
+function updateItemsInCache(data: unknown, updater: (items: MailItem[]) => MailItem[]): unknown {
+  if (Array.isArray(data)) {
+    return updater(data as MailItem[])
+  }
+  if (data && typeof data === 'object' && 'pages' in data && Array.isArray((data as { pages: unknown[] }).pages)) {
+    const inf = data as { pages: unknown[]; pageParams: unknown[] }
+    const newPages = inf.pages.map((p) => {
+      if (Array.isArray(p)) {
+        return updater(p as MailItem[])
+      }
+      if (p && typeof p === 'object' && 'items' in p && Array.isArray((p as { items: unknown[] }).items)) {
+        const pageObj = p as { items: MailItem[]; [key: string]: unknown }
+        return {
+          ...pageObj,
+          items: updater(pageObj.items),
+        }
+      }
+      return p
+    })
+    return { ...inf, pages: newPages }
+  }
+  return data
+}
+
 /** Find a message in cached lists by its mailKey, prioritizing current view and latest updated lists. */
 export function findCachedMail(key: string | null): MailItem | undefined {
   if (!key) return undefined
@@ -125,11 +166,9 @@ export function findCachedMail(key: string | null): MailItem | undefined {
   })
 
   for (const q of sorted) {
-    const list = q.state.data as MailItem[] | undefined
-    if (Array.isArray(list)) {
-      const hit = list.find((m) => mailKey(m) === key)
-      if (hit) return hit
-    }
+    const items = extractItemsFromCache(q.state.data)
+    const hit = items.find((m) => mailKey(m) === key)
+    if (hit) return hit
   }
 
   return undefined
@@ -137,15 +176,19 @@ export function findCachedMail(key: string | null): MailItem | undefined {
 
 function patchCachedMail(keys: Iterable<string>, patch: Partial<MailItem>) {
   const wanted = new Set(keys)
-  queryClient.setQueriesData<MailItem[]>({ queryKey: MAIL_LIST_PREFIX }, (list) =>
-    list?.map((m) => (wanted.has(mailKey(m)) ? { ...m, ...patch } : m)),
+  queryClient.setQueriesData({ queryKey: MAIL_LIST_PREFIX }, (oldData) =>
+    updateItemsInCache(oldData, (list) =>
+      list.map((m) => (wanted.has(mailKey(m)) ? { ...m, ...patch } : m)),
+    ),
   )
 }
 
 /** Drop messages from every cached list (e.g. after trash). */
 export function removeCachedMail(keys: Iterable<string>) {
   const gone = new Set(keys)
-  queryClient.setQueriesData<MailItem[]>({ queryKey: MAIL_LIST_PREFIX }, (list) => list?.filter((m) => !gone.has(mailKey(m))))
+  queryClient.setQueriesData({ queryKey: MAIL_LIST_PREFIX }, (oldData) =>
+    updateItemsInCache(oldData, (list) => list.filter((m) => !gone.has(mailKey(m)))),
+  )
 }
 
 export function setCachedReadState(keys: Iterable<string>, isRead: boolean) {
