@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { MailOpen, Trash2, Flag, ArrowLeft } from 'lucide-react'
-import { fetchAccounts, findCachedMail, flagOptimistic, markReadOptimistic, queryClient, queryKeys, removeCachedMail } from '../api/queries'
+import { Mail, MailOpen, Trash2, Flag, ArrowLeft, Reply, ReplyAll, Forward } from 'lucide-react'
+import { fetchAccounts, findCachedMail, flagOptimistic, setReadOptimistic, queryClient, queryKeys, removeCachedMail } from '../api/queries'
 import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
@@ -69,10 +69,10 @@ export default function MessageReader() {
   const body = detail?.body || selected.body_preview || ''
   const html = !!detail?.body && isHtmlBody(detail.body_type)
 
-  async function markCurrent() {
+  async function toggleReadCurrent() {
     if (!selected) return
     try {
-      await markReadOptimistic([selected])
+      await setReadOptimistic([selected], !selected.is_read)
       setActionStatus('')
     } catch (err) {
       setActionStatus(errorMessage(err, '标记失败'))
@@ -109,7 +109,38 @@ export default function MessageReader() {
         <button className="reader-action mobile-only" title="返回列表" aria-label="返回列表" onClick={() => setMobileView('list')}><ArrowLeft size={18} /></button>
         <div className="reader-location">{selected.accountEmail}</div>
         <div className="reader-toolbar-actions">
-          <button className="reader-action" title="标为已读" aria-label="标为已读" onClick={markCurrent} disabled={selected.is_read}><MailOpen size={18} /></button>
+          <button
+            className="reader-action"
+            title="回复（暂不支持发信）"
+            aria-label="回复"
+            disabled
+          >
+            <Reply size={18} />
+          </button>
+          <button
+            className="reader-action"
+            title="回复所有人（暂不支持发信）"
+            aria-label="回复所有人"
+            disabled
+          >
+            <ReplyAll size={18} />
+          </button>
+          <button
+            className="reader-action"
+            title="转发（暂不支持发信）"
+            aria-label="转发"
+            disabled
+          >
+            <Forward size={18} />
+          </button>
+          <button
+            className="reader-action"
+            title={selected.is_read ? '标为未读' : '标为已读'}
+            aria-label={selected.is_read ? '标为未读' : '标为已读'}
+            onClick={toggleReadCurrent}
+          >
+            {selected.is_read ? <Mail size={18} /> : <MailOpen size={18} />}
+          </button>
           <button className="reader-action" title="移到废纸篓（删除）" aria-label="移到废纸篓（删除）" onClick={trashCurrent}><Trash2 size={18} /></button>
           <button
             className="reader-action"

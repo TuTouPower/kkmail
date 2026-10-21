@@ -38,6 +38,8 @@ _FOLDER_ROLE = {
     "Deleted Items": "trash",
     "Sent": "sent",
     "Sent Items": "sent",
+    "已发送": "sent",
+    "已发送邮件": "sent",
     "Drafts": "drafts",
     "Archive": "archive",
 }
@@ -188,6 +190,8 @@ class ImapProvider:
                 name = m.group(1).strip() if m else line.rsplit(" ", 1)[-1].strip('"')
                 if name.upper() == "INBOX":
                     role = "inbox"
+                elif re.search(r"\(\s*[^)]*\\Sent\b", line, re.IGNORECASE):
+                    role = "sent"
                 else:
                     role = _FOLDER_ROLE.get(name, "other")
                 folders.append(RemoteFolder(remote_id=name, name=name, role=role))

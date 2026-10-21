@@ -1,0 +1,29 @@
+{
+  "tid": "t001",
+  "attempt": 1,
+  "execution_id": "2a6bfa3672e34ec4bbcc7961eb0e3fa6",
+  "status": "done",
+  "branch": "t001_mail_core_sent_query",
+  "base_sha": "d7e829a4a81c9f9c0f9153d6bc57d86d0a188ad7",
+  "tests": "contract: 149 passed; frontend: 113 passed + build ok; desktop: 5 passed; mail_core: 7 passed",
+  "blackbox": "playwright e2e smoke 2 passed",
+  "review": "single review PASS (Round 1)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/mail_core/api/mail.py",
+      "src/mail_core/mail/application/queries.py",
+      "tests/mail_core/test_folder_role_inbox_api.py"
+    ],
+    "AC-002": [
+      "src/mail_core/api/mail.py",
+      "src/mail_core/mail/application/queries.py",
+      "tests/mail_core/test_folder_role_inbox_api.py"
+    ],
+    "AC-003": [
+      "src/mail_core/providers/imap.py",
+      "tests/mail_core/test_imap_remote_id.py"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

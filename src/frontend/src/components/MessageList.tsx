@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag } from 'lucide-react'
+import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag, Mail, MailOpen, Trash2, Reply, ReplyAll, Forward, ExternalLink } from 'lucide-react'
 import { apiRequest } from '../api/client'
-import { accountScope, fetchAccounts, markReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
+import { accountScope, fetchAccounts, flagOptimistic, markReadOptimistic, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
 import { hasMailId, mailKey } from '../lib/mailKey'
@@ -63,7 +63,10 @@ export default function MessageList() {
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
 
-  const accountId = view.type === 'account' ? view.accountId : undefined
+  const accountId = view.type === 'account' ? view.accountId : (view.type === 'favorite' ? view.accountId : undefined)
+  const favoriteCategory = view.type === 'favorite' ? view.category : undefined
+  const folderRole = favoriteCategory === 'sent' ? 'sent' : 'inbox'
+  const effectiveFilter = favoriteCategory === 'unread' ? 'unread' : listFilter
   const term = search.trim()
   const searching = isSearchTrigger(term)
   const listScope = accountScope(accountId)
@@ -79,17 +82,18 @@ export default function MessageList() {
     total: number
   }
 
-  const is_unread = listFilter === 'unread' ? false : undefined
+  const is_unread = effectiveFilter === 'unread' ? false : undefined
   const is_flagged = listFilter === 'flagged' ? true : undefined
 
   const inboxInfiniteQuery = useInfiniteQuery<InboxPageData, Error, { pages: InboxPageData[]; pageParams: (string | null)[] }, readonly unknown[], string | null>({
-    queryKey: queryKeys.inbox(listScope, listFilter),
+    queryKey: queryKeys.inbox(listScope, effectiveFilter, folderRole),
     queryFn: async ({ pageParam, signal }) => {
       const page = await fetchMailCoreInbox({
         limit: LIST_LIMIT,
         accountId,
         is_read: is_unread,
         is_flagged: is_flagged,
+        folder_role: folderRole,
         cursor: pageParam || undefined,
         signal,
       })
@@ -177,7 +181,7 @@ export default function MessageList() {
 
   const visible = raw
     .filter((m) => {
-      if (listFilter === 'unread' && m.is_read) return false
+      if ((favoriteCategory === 'unread' || listFilter === 'unread') && m.is_read) return false
       if (listFilter === 'flagged' && !m.is_flagged) return false
       return true
     })
@@ -193,6 +197,64 @@ export default function MessageList() {
   const selecting = selectedIds.length > 0
 
   const title = listTitle(view, listFilter)
+
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    mail: MailItem
+  } | null>(null)
+
+  useEffect(() => {
+    if (!contextMenu) return
+    function handlePointerDown(e: MouseEvent) {
+      const target = e.target as HTMLElement | null
+      if (!target?.closest('.context-menu')) {
+        setContextMenu(null)
+      }
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setContextMenu(null)
+      }
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [contextMenu])
+
+  async function handleToggleRead(m: MailItem) {
+    setContextMenu(null)
+    try {
+      await setReadOptimistic([m], !m.is_read)
+    } catch (err) {
+      setActionStatus(errorMessage(err, '标记失败'))
+    }
+  }
+
+  async function handleToggleFlag(m: MailItem) {
+    setContextMenu(null)
+    try {
+      await flagOptimistic(m, !m.is_flagged)
+    } catch (err) {
+      setActionStatus(errorMessage(err, '标记失败'))
+    }
+  }
+
+  async function handleTrash(m: MailItem) {
+    setContextMenu(null)
+    if (!confirmAction(`将「${m.subject}」移到废纸篓？`)) return
+    try {
+      await postMailCoreMessageTrash(m.id)
+      removeCachedMail([mailKey(m)])
+      if (selectedKey === mailKey(m)) setSelectedKey(null)
+      await queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+    } catch (err) {
+      setActionStatus(errorMessage(err, '删除失败'))
+    }
+  }
 
   async function markAll() {
     try {
@@ -328,6 +390,15 @@ export default function MessageList() {
               aria-label={`邮件：${m.subject || '（无主题）'}，来自 ${displayName(m.from)}`}
               className={`message-row apple-card ${selectedKey === key ? 'selected' : ''} ${!m.is_read ? 'unread' : ''} ${checked ? 'checked' : ''}`}
               onClick={() => openMessage(m)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                const menuWidth = 180
+                const menuHeight = 260
+                const x = Math.min(e.clientX, (window.innerWidth || 800) - menuWidth - 8)
+                const y = Math.min(e.clientY, (window.innerHeight || 600) - menuHeight - 8)
+                setContextMenu({ x, y, mail: m })
+                setSelectedKey(mailKey(m))
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
@@ -397,6 +468,98 @@ export default function MessageList() {
           </div>
         )}
       </div>
+      {contextMenu && (
+        <div
+          className="context-menu"
+          role="menu"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="context-menu-item"
+            role="menuitem"
+            onClick={() => {
+              const m = contextMenu.mail
+              setContextMenu(null)
+              openMessage(m)
+            }}
+          >
+            <ExternalLink size={14} />
+            <span>打开</span>
+          </button>
+
+          <div className="context-menu-separator" />
+
+          <button
+            type="button"
+            className="context-menu-item disabled"
+            role="menuitem"
+            disabled
+            aria-disabled="true"
+            title="暂不支持发信"
+          >
+            <Reply size={14} />
+            <span>回复</span>
+          </button>
+          <button
+            type="button"
+            className="context-menu-item disabled"
+            role="menuitem"
+            disabled
+            aria-disabled="true"
+            title="暂不支持发信"
+          >
+            <ReplyAll size={14} />
+            <span>回复所有人</span>
+          </button>
+          <button
+            type="button"
+            className="context-menu-item disabled"
+            role="menuitem"
+            disabled
+            aria-disabled="true"
+            title="暂不支持发信"
+          >
+            <Forward size={14} />
+            <span>转发</span>
+          </button>
+
+          <div className="context-menu-separator" />
+
+          <button
+            type="button"
+            className="context-menu-item"
+            role="menuitem"
+            onClick={() => handleToggleRead(contextMenu.mail)}
+          >
+            {contextMenu.mail.is_read ? <Mail size={14} /> : <MailOpen size={14} />}
+            <span>{contextMenu.mail.is_read ? '标为未读' : '标为已读'}</span>
+          </button>
+
+          <button
+            type="button"
+            className="context-menu-item"
+            role="menuitem"
+            onClick={() => handleToggleFlag(contextMenu.mail)}
+          >
+            <Flag size={14} />
+            <span>{contextMenu.mail.is_flagged ? '取消旗标' : '标记旗标'}</span>
+          </button>
+
+          <div className="context-menu-separator" />
+
+          <button
+            type="button"
+            className="context-menu-item danger"
+            role="menuitem"
+            onClick={() => handleTrash(contextMenu.mail)}
+          >
+            <Trash2 size={14} />
+            <span>移到废纸篓</span>
+          </button>
+        </div>
+      )}
     </section>
   )
 }
