@@ -173,13 +173,21 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         return False
     except Exception as exc:
         from mail_core.security.redact import safe_error
+        from mail_core.providers.http import PermanentAuthError
 
         log.error("job %s (%s) failed: %s", job.id, job.job_type, safe_error(exc))
         log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()
         if account_id is not None:
             try:
-                update_account_sync_status(session, account_id, "failed", error=safe_error(exc))
+                status_label = "auth_failed" if isinstance(exc, PermanentAuthError) else "failed"
+                update_account_sync_status(session, account_id, status_label, error=safe_error(exc))
+                if isinstance(exc, PermanentAuthError):
+                    from mail_core.mail.storage.models import Account
+                    acc = session.get(Account, account_id)
+                    if acc:
+                        acc.sync_enabled = False
+                    session.commit()
             except Exception:
                 pass
         fail_job(session, job, exc, worker_id=worker_id)
