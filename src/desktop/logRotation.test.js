@@ -41,6 +41,25 @@ try {
   assert.strictEqual(fs.existsSync(path.join(tmpDir, 'stream.1.log')), true)
   assert.strictEqual(fs.existsSync(streamFile), true)
 
+  // Test 3: RotatingLogStream write does not invoke fs.writeSync in normal path
+  const asyncFile = path.join(tmpDir, 'async.log')
+  const asyncStream = new RotatingLogStream(asyncFile, { maxBytes: 1000 })
+  let writeSyncCalled = false
+  const origWriteSync = fs.writeSync
+  fs.writeSync = (...args) => {
+    writeSyncCalled = true
+    return origWriteSync.apply(fs, args)
+  }
+  try {
+    asyncStream.write('async-chunk-1\n')
+    asyncStream.write('async-chunk-2\n')
+    assert.strictEqual(writeSyncCalled, false, 'write() should not call fs.writeSync synchronously')
+  } finally {
+    fs.writeSync = origWriteSync
+  }
+  asyncStream.end()
+  assert.strictEqual(fs.readFileSync(asyncFile, 'utf8'), 'async-chunk-1\nasync-chunk-2\n')
+
   console.log('logRotation.test.js: ok')
 } finally {
   fs.rmSync(tmpDir, { recursive: true, force: true })
