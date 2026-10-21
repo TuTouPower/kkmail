@@ -1,0 +1,1027 @@
+{
+  "files": [
+    ".dockerignore",
+    ".env.example",
+    ".gitignore",
+    ".md_kx.toml",
+    "AGENTS.md",
+    "README.md",
+    "assets/DESIGN.md",
+    "config/.env.example",
+    "docker-compose.mail-core.yml",
+    "docs/archive/CHANGELOG.md",
+    "docs/archive/handoff.md",
+    "docs/archive/legacy_architecture/mail-core-architecture.md",
+    "docs/archive/pending/p001_trash_action_ux_mismatch.md",
+    "docs/archive/pending/p002_empty_body_reader_blank.md",
+    "docs/archive/pending/p003_client_filter_pagination_conflict.md",
+    "docs/archive/pending/p004_imap_basic_auth_disabled_retry_loop.md",
+    "docs/archive/pending/p005_worker_unbound_local_account.md",
+    "docs/archive/pending/p006_attachment_size_human_readable.md",
+    "docs/archive/pending/p007_settings_general_fields_sync_issue.md",
+    "docs/archive/tasks/t001_mail_core_sent_query/handoff.json",
+    "docs/archive/tasks/t001_mail_core_sent_query/review_general.md",
+    "docs/archive/tasks/t001_mail_core_sent_query/spec.md",
+    "docs/archive/tasks/t001_mail_core_sent_query/task.md",
+    "docs/archive/tasks/t002_frontend_favorites_views/handoff.json",
+    "docs/archive/tasks/t002_frontend_favorites_views/review_general.md",
+    "docs/archive/tasks/t002_frontend_favorites_views/spec.md",
+    "docs/archive/tasks/t002_frontend_favorites_views/task.md",
+    "docs/archive/tasks/t003_reader_toolbar_and_context_menu/handoff.json",
+    "docs/archive/tasks/t003_reader_toolbar_and_context_menu/review_general.md",
+    "docs/archive/tasks/t003_reader_toolbar_and_context_menu/spec.md",
+    "docs/archive/tasks/t003_reader_toolbar_and_context_menu/task.md",
+    "docs/archive/tasks_index.json",
+    "docs/blueprint/architecture.md",
+    "docs/blueprint/conventions.md",
+    "docs/blueprint/decisions.md",
+    "docs/blueprint/domain.md",
+    "docs/blueprint/testing.md",
+    "docs/guides/deployment.md",
+    "docs/guides/desktop.md",
+    "docs/guides/release.md",
+    "docs/guides/security.md",
+    "docs/guides/troubleshooting.md",
+    "docs/guides/upgrade.md",
+    "docs/handoff.md",
+    "docs/skills/kkmail/SKILL.md",
+    "docs/skills/kkmail/scripts/kkmail_cli.py",
+    "docs/specs/auth_and_session.md",
+    "docs/specs/inbox_ui_and_search.md",
+    "docs/specs/mail_sync_and_storage.md",
+    "docs/specs_index.md",
+    "docs/tasks_index.json",
+    "schemas/openapi.json",
+    "scripts/build-sidecar.sh",
+    "scripts/export_openapi.py",
+    "scripts/fetch-pg-binaries.sh",
+    "scripts/gen-openapi.sh",
+    "scripts/mail-core-backup-restore-drill.sh",
+    "scripts/mail-core-chaos-lease.sh",
+    "scripts/migrate_from_legacy_db.py",
+    "scripts/run-mail-core-tests.sh",
+    "scripts/start-mail-core-imap.sh",
+    "src/desktop/README.md",
+    "src/desktop/hardening.js",
+    "src/desktop/hardening.test.js",
+    "src/desktop/logRotation.js",
+    "src/desktop/logRotation.test.js",
+    "src/desktop/main.js",
+    "src/desktop/package.json",
+    "src/desktop/paths.js",
+    "src/desktop/paths.test.js",
+    "src/desktop/postgresManager.js",
+    "src/desktop/postgresManager.test.js",
+    "src/desktop/preload.js",
+    "src/desktop/scripts/pack-linux.js",
+    "src/desktop/startup.js",
+    "src/desktop/startup.test.js",
+    "src/frontend/.env.example",
+    "src/frontend/.gitignore",
+    "src/frontend/.oxlintrc.json",
+    "src/frontend/ARCHITECTURE.md",
+    "src/frontend/README.md",
+    "src/frontend/package.json",
+    "src/frontend/playwright.config.ts",
+    "src/frontend/src/App.tsx",
+    "src/frontend/src/api/client.csrf.test.ts",
+    "src/frontend/src/api/client.ts",
+    "src/frontend/src/api/generated/README.md",
+    "src/frontend/src/api/generated/schema.ts",
+    "src/frontend/src/api/mailCore.client.test.ts",
+    "src/frontend/src/api/mailCore.mutations.test.ts",
+    "src/frontend/src/api/mailCore.test.ts",
+    "src/frontend/src/api/mailCore.ts",
+    "src/frontend/src/api/queries.cache.test.ts",
+    "src/frontend/src/api/queries.scope.test.ts",
+    "src/frontend/src/api/queries.ts",
+    "src/frontend/src/api/schemaTypes.ts",
+    "src/frontend/src/api/sseStream.test.ts",
+    "src/frontend/src/api/sseStream.ts",
+    "src/frontend/src/components/ColumnResize.test.tsx",
+    "src/frontend/src/components/ColumnResize.tsx",
+    "src/frontend/src/components/ErrorBoundary.tsx",
+    "src/frontend/src/components/LoginPage.tsx",
+    "src/frontend/src/components/MessageList.test.tsx",
+    "src/frontend/src/components/MessageList.tsx",
+    "src/frontend/src/components/MessageReader.test.tsx",
+    "src/frontend/src/components/MessageReader.tsx",
+    "src/frontend/src/components/SettingsModal.test.tsx",
+    "src/frontend/src/components/SettingsModal.tsx",
+    "src/frontend/src/components/Sidebar.test.tsx",
+    "src/frontend/src/components/Sidebar.tsx",
+    "src/frontend/src/design-system/tokens.css",
+    "src/frontend/src/hooks/useMailCoreRealtime.test.ts",
+    "src/frontend/src/hooks/useMailCoreRealtime.ts",
+    "src/frontend/src/index.css",
+    "src/frontend/src/lib/accounts.test.ts",
+    "src/frontend/src/lib/accounts.ts",
+    "src/frontend/src/lib/actions.test.ts",
+    "src/frontend/src/lib/actions.ts",
+    "src/frontend/src/lib/apiBase.test.ts",
+    "src/frontend/src/lib/apiBase.ts",
+    "src/frontend/src/lib/diagnostics.test.ts",
+    "src/frontend/src/lib/diagnostics.ts",
+    "src/frontend/src/lib/displayName.test.ts",
+    "src/frontend/src/lib/displayName.ts",
+    "src/frontend/src/lib/formatSize.test.ts",
+    "src/frontend/src/lib/formatSize.ts",
+    "src/frontend/src/lib/listDate.test.ts",
+    "src/frontend/src/lib/listDate.ts",
+    "src/frontend/src/lib/listTitle.test.ts",
+    "src/frontend/src/lib/listTitle.ts",
+    "src/frontend/src/lib/mailBody.test.ts",
+    "src/frontend/src/lib/mailBody.ts",
+    "src/frontend/src/lib/mailDate.test.ts",
+    "src/frontend/src/lib/mailDate.ts",
+    "src/frontend/src/lib/mailKey.test.ts",
+    "src/frontend/src/lib/mailKey.ts",
+    "src/frontend/src/lib/previewText.test.ts",
+    "src/frontend/src/lib/previewText.ts",
+    "src/frontend/src/lib/viewport.ts",
+    "src/frontend/src/lib/workspaceLayout.test.ts",
+    "src/frontend/src/lib/workspaceLayout.ts",
+    "src/frontend/src/main.tsx",
+    "src/frontend/src/store/mailStore.test.ts",
+    "src/frontend/src/store/mailStore.ts",
+    "src/frontend/src/store/theme.test.ts",
+    "src/frontend/src/test/render.tsx",
+    "src/frontend/tsconfig.app.json",
+    "src/frontend/tsconfig.json",
+    "src/frontend/tsconfig.node.json",
+    "src/frontend/vite.config.ts",
+    "src/mail_core/README.md",
+    "src/mail_core/__init__.py",
+    "src/mail_core/__main__.py",
+    "src/mail_core/accounts/__init__.py",
+    "src/mail_core/accounts/credentials.py",
+    "src/mail_core/accounts/service.py",
+    "src/mail_core/accounts/settings_store.py",
+    "src/mail_core/api/__init__.py",
+    "src/mail_core/api/accounts.py",
+    "src/mail_core/api/app.py",
+    "src/mail_core/api/auth_routes.py",
+    "src/mail_core/api/deps.py",
+    "src/mail_core/api/http_headers.py",
+    "src/mail_core/api/mail.py",
+    "src/mail_core/api/sse.py",
+    "src/mail_core/backup/__init__.py",
+    "src/mail_core/backup/crypto.py",
+    "src/mail_core/backup/package.py",
+    "src/mail_core/blobs/__init__.py",
+    "src/mail_core/blobs/access.py",
+    "src/mail_core/blobs/archive.py",
+    "src/mail_core/blobs/crypto.py",
+    "src/mail_core/blobs/gc.py",
+    "src/mail_core/blobs/quota.py",
+    "src/mail_core/blobs/rotate.py",
+    "src/mail_core/blobs/store.py",
+    "src/mail_core/db/__init__.py",
+    "src/mail_core/db/alembic/env.py",
+    "src/mail_core/db/alembic/versions/20261020_0001_baseline.py",
+    "src/mail_core/db/alembic/versions/20261020_0002_mail_core_unified_schema.py",
+    "src/mail_core/db/alembic/versions/20261021_0003_message_fts.py",
+    "src/mail_core/db/alembic/versions/20261021_0004_jobs_dedupe_folder_index.py",
+    "src/mail_core/db/alembic/versions/20261021_0005_groups_settings.py",
+    "src/mail_core/db/alembic/versions/20261021_0006_search_attachment_indexes.py",
+    "src/mail_core/db/alembic/versions/20261021_0007_credential_secrets.py",
+    "src/mail_core/db/alembic/versions/20261021_0008_blob_gc_eligible_at.py",
+    "src/mail_core/db/alembic/versions/20261021_0009_inbox_keyset_indexes.py",
+    "src/mail_core/db/alembic/versions/20261021_0010_message_blob_links_blob_id_index.py",
+    "src/mail_core/db/alembic/versions/20261021_0011_remote_operations_next_attempt_at.py",
+    "src/mail_core/db/alembic/versions/20261021_0012_auth_credentials.py",
+    "src/mail_core/db/alembic/versions/20261021_0013_auth_credentials_session_epoch.py",
+    "src/mail_core/db/base.py",
+    "src/mail_core/db/session.py",
+    "src/mail_core/logging_config.py",
+    "src/mail_core/mail/__init__.py",
+    "src/mail_core/mail/application/__init__.py",
+    "src/mail_core/mail/application/attachments.py",
+    "src/mail_core/mail/application/mutations.py",
+    "src/mail_core/mail/application/queries.py",
+    "src/mail_core/mail/application/remote_ops.py",
+    "src/mail_core/mail/application/search.py",
+    "src/mail_core/mail/domain/__init__.py",
+    "src/mail_core/mail/domain/archive.py",
+    "src/mail_core/mail/domain/enums.py",
+    "src/mail_core/mail/domain/models.py",
+    "src/mail_core/mail/storage/__init__.py",
+    "src/mail_core/mail/storage/folder_stats.py",
+    "src/mail_core/mail/storage/models.py",
+    "src/mail_core/providers/__init__.py",
+    "src/mail_core/providers/base.py",
+    "src/mail_core/providers/factory.py",
+    "src/mail_core/providers/gmail.py",
+    "src/mail_core/providers/graph.py",
+    "src/mail_core/providers/http.py",
+    "src/mail_core/providers/imap.py",
+    "src/mail_core/providers/oauth.py",
+    "src/mail_core/providers/parsing/__init__.py",
+    "src/mail_core/providers/parsing/gmail_history.py",
+    "src/mail_core/providers/parsing/graph_delta.py",
+    "src/mail_core/providers/remote_writeback.py",
+    "src/mail_core/providers/stub_memory.py",
+    "src/mail_core/realtime/__init__.py",
+    "src/mail_core/realtime/dispatcher.py",
+    "src/mail_core/realtime/events.py",
+    "src/mail_core/realtime/listener.py",
+    "src/mail_core/realtime/notify.py",
+    "src/mail_core/realtime/outbox.py",
+    "src/mail_core/runtime/__init__.py",
+    "src/mail_core/runtime/bootstrap.py",
+    "src/mail_core/search/__init__.py",
+    "src/mail_core/search/index.py",
+    "src/mail_core/security/__init__.py",
+    "src/mail_core/security/auth.py",
+    "src/mail_core/security/defaults.py",
+    "src/mail_core/security/ratelimit.py",
+    "src/mail_core/security/redact.py",
+    "src/mail_core/sync/__init__.py",
+    "src/mail_core/sync/checkpoints.py",
+    "src/mail_core/sync/delta.py",
+    "src/mail_core/sync/engine.py",
+    "src/mail_core/sync/jobs.py",
+    "src/mail_core/sync/leases.py",
+    "src/mail_core/sync/metadata.py",
+    "src/mail_core/sync/reconcile.py",
+    "src/mail_core/sync/remote_push.py",
+    "src/mail_core/threading/__init__.py",
+    "src/mail_core/threading/rules.py",
+    "src/mail_core/worker/__init__.py",
+    "src/mail_core/worker/handlers.py",
+    "src/mail_core/worker/main.py",
+    "tests/conftest.py",
+    "tests/e2e/smoke.spec.ts",
+    "tests/e2e/stubApi.ts",
+    "tests/mail_core/conftest.py",
+    "tests/mail_core/fixtures/README.md",
+    "tests/mail_core/fixtures/dovecot/Dockerfile",
+    "tests/mail_core/test_account_credentials_unit.py",
+    "tests/mail_core/test_accounts_api_pg.py",
+    "tests/mail_core/test_accounts_api_unit.py",
+    "tests/mail_core/test_accounts_remote_ops.py",
+    "tests/mail_core/test_api_health.py",
+    "tests/mail_core/test_archive_mime_parser.py",
+    "tests/mail_core/test_archive_scheduler.py",
+    "tests/mail_core/test_archive_state_machine.py",
+    "tests/mail_core/test_assert_fencing_lock.py",
+    "tests/mail_core/test_attachment_access.py",
+    "tests/mail_core/test_auth.py",
+    "tests/mail_core/test_auth_plan_a_db.py",
+    "tests/mail_core/test_backup_package.py",
+    "tests/mail_core/test_backup_verify_drill.py",
+    "tests/mail_core/test_blob_crypto_gc.py",
+    "tests/mail_core/test_blob_keyring_required.py",
+    "tests/mail_core/test_blob_rewrap.py",
+    "tests/mail_core/test_blob_store.py",
+    "tests/mail_core/test_chaos_lease_recovery.py",
+    "tests/mail_core/test_credential_store_db.py",
+    "tests/mail_core/test_delta_flag_patch.py",
+    "tests/mail_core/test_flag_convergence.py",
+    "tests/mail_core/test_folder_role_inbox_api.py",
+    "tests/mail_core/test_folder_stats_race.py",
+    "tests/mail_core/test_fts_inbox_api.py",
+    "tests/mail_core/test_global_stats.py",
+    "tests/mail_core/test_gmail_graph_contracts.py",
+    "tests/mail_core/test_high_blobs_providers_metadata.py",
+    "tests/mail_core/test_http_headers.py",
+    "tests/mail_core/test_imap_provider_live.py",
+    "tests/mail_core/test_imap_remote_id.py",
+    "tests/mail_core/test_imap_sync_loop.py",
+    "tests/mail_core/test_jobs_backoff.py",
+    "tests/mail_core/test_keyset_pagination.py",
+    "tests/mail_core/test_logging_trace_and_redact.py",
+    "tests/mail_core/test_medium_hardening.py",
+    "tests/mail_core/test_medium_providers_sync_blobs.py",
+    "tests/mail_core/test_message_detail_api.py",
+    "tests/mail_core/test_message_mutations_api.py",
+    "tests/mail_core/test_metadata_apply.py",
+    "tests/mail_core/test_oauth_allowlist.py",
+    "tests/mail_core/test_oauth_transport.py",
+    "tests/mail_core/test_openapi_contract.py",
+    "tests/mail_core/test_outbox_listen.py",
+    "tests/mail_core/test_outbox_wake_notify_only.py",
+    "tests/mail_core/test_provider_stub.py",
+    "tests/mail_core/test_redact_and_poll.py",
+    "tests/mail_core/test_remote_ops_coalesce_entity.py",
+    "tests/mail_core/test_remote_ops_reconcile.py",
+    "tests/mail_core/test_remote_ops_redact.py",
+    "tests/mail_core/test_remote_push_robustness.py",
+    "tests/mail_core/test_remote_writeback.py",
+    "tests/mail_core/test_runtime_bootstrap.py",
+    "tests/mail_core/test_schema_pg.py",
+    "tests/mail_core/test_select_display_body.py",
+    "tests/mail_core/test_settings_store.py",
+    "tests/mail_core/test_sse_medium_remaining.py",
+    "tests/mail_core/test_sse_outbox.py",
+    "tests/mail_core/test_sync_delta.py",
+    "tests/mail_core/test_sync_high_hardening.py",
+    "tests/mail_core/test_sync_leases_jobs.py",
+    "tests/mail_core/test_threading.py",
+    "tests/mail_core/test_uidvalidity_rebuild.py",
+    "tests/mail_core/test_worker_loop.py",
+    "tests/scripts/test_fetch_pg_binaries_helpers.sh"
+  ],
+  "bundles": [
+    {
+      "id": "dir:.",
+      "files": [
+        ".dockerignore",
+        ".env.example",
+        ".gitignore",
+        ".md_kx.toml",
+        "AGENTS.md",
+        "README.md",
+        "docker-compose.mail-core.yml"
+      ]
+    },
+    {
+      "id": "dir:assets",
+      "files": [
+        "assets/DESIGN.md"
+      ]
+    },
+    {
+      "id": "dir:config",
+      "files": [
+        "config/.env.example"
+      ]
+    },
+    {
+      "id": "dir:docs",
+      "files": [
+        "docs/handoff.md",
+        "docs/specs_index.md",
+        "docs/tasks_index.json"
+      ]
+    },
+    {
+      "id": "dir:docs/archive",
+      "files": [
+        "docs/archive/CHANGELOG.md",
+        "docs/archive/handoff.md",
+        "docs/archive/tasks_index.json"
+      ]
+    },
+    {
+      "id": "dir:docs/archive/legacy_architecture",
+      "files": [
+        "docs/archive/legacy_architecture/mail-core-architecture.md"
+      ]
+    },
+    {
+      "id": "dir:docs/archive/pending",
+      "files": [
+        "docs/archive/pending/p001_trash_action_ux_mismatch.md",
+        "docs/archive/pending/p002_empty_body_reader_blank.md",
+        "docs/archive/pending/p003_client_filter_pagination_conflict.md",
+        "docs/archive/pending/p004_imap_basic_auth_disabled_retry_loop.md",
+        "docs/archive/pending/p005_worker_unbound_local_account.md",
+        "docs/archive/pending/p006_attachment_size_human_readable.md",
+        "docs/archive/pending/p007_settings_general_fields_sync_issue.md"
+      ]
+    },
+    {
+      "id": "dir:docs/archive/tasks/t001_mail_core_sent_query",
+      "files": [
+        "docs/archive/tasks/t001_mail_core_sent_query/handoff.json",
+        "docs/archive/tasks/t001_mail_core_sent_query/review_general.md",
+        "docs/archive/tasks/t001_mail_core_sent_query/spec.md",
+        "docs/archive/tasks/t001_mail_core_sent_query/task.md"
+      ]
+    },
+    {
+      "id": "dir:docs/archive/tasks/t002_frontend_favorites_views",
+      "files": [
+        "docs/archive/tasks/t002_frontend_favorites_views/handoff.json",
+        "docs/archive/tasks/t002_frontend_favorites_views/review_general.md",
+        "docs/archive/tasks/t002_frontend_favorites_views/spec.md",
+        "docs/archive/tasks/t002_frontend_favorites_views/task.md"
+      ]
+    },
+    {
+      "id": "dir:docs/archive/tasks/t003_reader_toolbar_and_context_menu",
+      "files": [
+        "docs/archive/tasks/t003_reader_toolbar_and_context_menu/handoff.json",
+        "docs/archive/tasks/t003_reader_toolbar_and_context_menu/review_general.md",
+        "docs/archive/tasks/t003_reader_toolbar_and_context_menu/spec.md",
+        "docs/archive/tasks/t003_reader_toolbar_and_context_menu/task.md"
+      ]
+    },
+    {
+      "id": "dir:docs/blueprint",
+      "files": [
+        "docs/blueprint/architecture.md",
+        "docs/blueprint/conventions.md",
+        "docs/blueprint/decisions.md",
+        "docs/blueprint/domain.md",
+        "docs/blueprint/testing.md"
+      ]
+    },
+    {
+      "id": "dir:docs/guides",
+      "files": [
+        "docs/guides/deployment.md",
+        "docs/guides/desktop.md",
+        "docs/guides/release.md",
+        "docs/guides/security.md",
+        "docs/guides/troubleshooting.md",
+        "docs/guides/upgrade.md"
+      ]
+    },
+    {
+      "id": "dir:docs/skills/kkmail",
+      "files": [
+        "docs/skills/kkmail/SKILL.md"
+      ]
+    },
+    {
+      "id": "dir:docs/skills/kkmail/scripts",
+      "files": [
+        "docs/skills/kkmail/scripts/kkmail_cli.py"
+      ]
+    },
+    {
+      "id": "dir:docs/specs",
+      "files": [
+        "docs/specs/auth_and_session.md",
+        "docs/specs/inbox_ui_and_search.md",
+        "docs/specs/mail_sync_and_storage.md"
+      ]
+    },
+    {
+      "id": "dir:schemas",
+      "files": [
+        "schemas/openapi.json"
+      ]
+    },
+    {
+      "id": "dir:scripts_a",
+      "files": [
+        "scripts/build-sidecar.sh",
+        "scripts/export_openapi.py",
+        "scripts/fetch-pg-binaries.sh",
+        "scripts/gen-openapi.sh",
+        "scripts/mail-core-backup-restore-drill.sh",
+        "scripts/mail-core-chaos-lease.sh",
+        "scripts/migrate_from_legacy_db.py",
+        "scripts/run-mail-core-tests.sh"
+      ]
+    },
+    {
+      "id": "dir:scripts_b",
+      "files": [
+        "scripts/start-mail-core-imap.sh"
+      ]
+    },
+    {
+      "id": "dir:src/desktop_a",
+      "files": [
+        "src/desktop/README.md",
+        "src/desktop/hardening.js",
+        "src/desktop/hardening.test.js",
+        "src/desktop/logRotation.js",
+        "src/desktop/logRotation.test.js",
+        "src/desktop/main.js",
+        "src/desktop/package.json",
+        "src/desktop/paths.js"
+      ]
+    },
+    {
+      "id": "dir:src/desktop_b",
+      "files": [
+        "src/desktop/paths.test.js",
+        "src/desktop/postgresManager.js",
+        "src/desktop/postgresManager.test.js",
+        "src/desktop/preload.js",
+        "src/desktop/startup.js",
+        "src/desktop/startup.test.js"
+      ]
+    },
+    {
+      "id": "dir:src/desktop/scripts",
+      "files": [
+        "src/desktop/scripts/pack-linux.js"
+      ]
+    },
+    {
+      "id": "dir:src/frontend_a",
+      "files": [
+        "src/frontend/.env.example",
+        "src/frontend/.gitignore",
+        "src/frontend/.oxlintrc.json",
+        "src/frontend/ARCHITECTURE.md",
+        "src/frontend/README.md",
+        "src/frontend/package.json",
+        "src/frontend/playwright.config.ts",
+        "src/frontend/tsconfig.app.json"
+      ]
+    },
+    {
+      "id": "dir:src/frontend_b",
+      "files": [
+        "src/frontend/tsconfig.json",
+        "src/frontend/tsconfig.node.json",
+        "src/frontend/vite.config.ts"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src",
+      "files": [
+        "src/frontend/src/App.tsx",
+        "src/frontend/src/index.css",
+        "src/frontend/src/main.tsx"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/api_a",
+      "files": [
+        "src/frontend/src/api/client.csrf.test.ts",
+        "src/frontend/src/api/client.ts",
+        "src/frontend/src/api/mailCore.client.test.ts",
+        "src/frontend/src/api/mailCore.mutations.test.ts",
+        "src/frontend/src/api/mailCore.test.ts",
+        "src/frontend/src/api/mailCore.ts",
+        "src/frontend/src/api/queries.cache.test.ts",
+        "src/frontend/src/api/queries.scope.test.ts"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/api_b",
+      "files": [
+        "src/frontend/src/api/queries.ts",
+        "src/frontend/src/api/schemaTypes.ts",
+        "src/frontend/src/api/sseStream.test.ts",
+        "src/frontend/src/api/sseStream.ts"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/api/generated",
+      "files": [
+        "src/frontend/src/api/generated/README.md",
+        "src/frontend/src/api/generated/schema.ts"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/components_a",
+      "files": [
+        "src/frontend/src/components/ColumnResize.test.tsx",
+        "src/frontend/src/components/ColumnResize.tsx",
+        "src/frontend/src/components/ErrorBoundary.tsx",
+        "src/frontend/src/components/LoginPage.tsx",
+        "src/frontend/src/components/MessageList.test.tsx",
+        "src/frontend/src/components/MessageList.tsx",
+        "src/frontend/src/components/MessageReader.test.tsx",
+        "src/frontend/src/components/MessageReader.tsx"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/components_b",
+      "files": [
+        "src/frontend/src/components/SettingsModal.test.tsx",
+        "src/frontend/src/components/SettingsModal.tsx",
+        "src/frontend/src/components/Sidebar.test.tsx",
+        "src/frontend/src/components/Sidebar.tsx"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/design-system",
+      "files": [
+        "src/frontend/src/design-system/tokens.css"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/hooks",
+      "files": [
+        "src/frontend/src/hooks/useMailCoreRealtime.test.ts",
+        "src/frontend/src/hooks/useMailCoreRealtime.ts"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/lib_a",
+      "files": [
+        "src/frontend/src/lib/accounts.test.ts",
+        "src/frontend/src/lib/accounts.ts",
+        "src/frontend/src/lib/actions.test.ts",
+        "src/frontend/src/lib/actions.ts",
+        "src/frontend/src/lib/apiBase.test.ts",
+        "src/frontend/src/lib/apiBase.ts",
+        "src/frontend/src/lib/diagnostics.test.ts",
+        "src/frontend/src/lib/diagnostics.ts"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/lib_b",
+      "files": [
+        "src/frontend/src/lib/displayName.test.ts",
+        "src/frontend/src/lib/displayName.ts",
+        "src/frontend/src/lib/formatSize.test.ts",
+        "src/frontend/src/lib/formatSize.ts",
+        "src/frontend/src/lib/listDate.test.ts",
+        "src/frontend/src/lib/listDate.ts",
+        "src/frontend/src/lib/listTitle.test.ts",
+        "src/frontend/src/lib/listTitle.ts"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/lib_c",
+      "files": [
+        "src/frontend/src/lib/mailBody.test.ts",
+        "src/frontend/src/lib/mailBody.ts",
+        "src/frontend/src/lib/mailDate.test.ts",
+        "src/frontend/src/lib/mailDate.ts",
+        "src/frontend/src/lib/mailKey.test.ts",
+        "src/frontend/src/lib/mailKey.ts",
+        "src/frontend/src/lib/previewText.test.ts",
+        "src/frontend/src/lib/previewText.ts"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/lib_d",
+      "files": [
+        "src/frontend/src/lib/viewport.ts",
+        "src/frontend/src/lib/workspaceLayout.test.ts",
+        "src/frontend/src/lib/workspaceLayout.ts"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/store",
+      "files": [
+        "src/frontend/src/store/mailStore.test.ts",
+        "src/frontend/src/store/mailStore.ts",
+        "src/frontend/src/store/theme.test.ts"
+      ]
+    },
+    {
+      "id": "dir:src/frontend/src/test",
+      "files": [
+        "src/frontend/src/test/render.tsx"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core",
+      "files": [
+        "src/mail_core/README.md",
+        "src/mail_core/__init__.py",
+        "src/mail_core/__main__.py",
+        "src/mail_core/logging_config.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/accounts",
+      "files": [
+        "src/mail_core/accounts/__init__.py",
+        "src/mail_core/accounts/credentials.py",
+        "src/mail_core/accounts/service.py",
+        "src/mail_core/accounts/settings_store.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/api",
+      "files": [
+        "src/mail_core/api/__init__.py",
+        "src/mail_core/api/accounts.py",
+        "src/mail_core/api/app.py",
+        "src/mail_core/api/auth_routes.py",
+        "src/mail_core/api/deps.py",
+        "src/mail_core/api/http_headers.py",
+        "src/mail_core/api/mail.py",
+        "src/mail_core/api/sse.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/backup",
+      "files": [
+        "src/mail_core/backup/__init__.py",
+        "src/mail_core/backup/crypto.py",
+        "src/mail_core/backup/package.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/blobs",
+      "files": [
+        "src/mail_core/blobs/__init__.py",
+        "src/mail_core/blobs/access.py",
+        "src/mail_core/blobs/archive.py",
+        "src/mail_core/blobs/crypto.py",
+        "src/mail_core/blobs/gc.py",
+        "src/mail_core/blobs/quota.py",
+        "src/mail_core/blobs/rotate.py",
+        "src/mail_core/blobs/store.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/db",
+      "files": [
+        "src/mail_core/db/__init__.py",
+        "src/mail_core/db/base.py",
+        "src/mail_core/db/session.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/db/alembic",
+      "files": [
+        "src/mail_core/db/alembic/env.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/db/alembic/versions_a",
+      "files": [
+        "src/mail_core/db/alembic/versions/20261020_0001_baseline.py",
+        "src/mail_core/db/alembic/versions/20261020_0002_mail_core_unified_schema.py",
+        "src/mail_core/db/alembic/versions/20261021_0003_message_fts.py",
+        "src/mail_core/db/alembic/versions/20261021_0004_jobs_dedupe_folder_index.py",
+        "src/mail_core/db/alembic/versions/20261021_0005_groups_settings.py",
+        "src/mail_core/db/alembic/versions/20261021_0006_search_attachment_indexes.py",
+        "src/mail_core/db/alembic/versions/20261021_0007_credential_secrets.py",
+        "src/mail_core/db/alembic/versions/20261021_0008_blob_gc_eligible_at.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/db/alembic/versions_b",
+      "files": [
+        "src/mail_core/db/alembic/versions/20261021_0009_inbox_keyset_indexes.py",
+        "src/mail_core/db/alembic/versions/20261021_0010_message_blob_links_blob_id_index.py",
+        "src/mail_core/db/alembic/versions/20261021_0011_remote_operations_next_attempt_at.py",
+        "src/mail_core/db/alembic/versions/20261021_0012_auth_credentials.py",
+        "src/mail_core/db/alembic/versions/20261021_0013_auth_credentials_session_epoch.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/mail",
+      "files": [
+        "src/mail_core/mail/__init__.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/mail/application",
+      "files": [
+        "src/mail_core/mail/application/__init__.py",
+        "src/mail_core/mail/application/attachments.py",
+        "src/mail_core/mail/application/mutations.py",
+        "src/mail_core/mail/application/queries.py",
+        "src/mail_core/mail/application/remote_ops.py",
+        "src/mail_core/mail/application/search.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/mail/domain",
+      "files": [
+        "src/mail_core/mail/domain/__init__.py",
+        "src/mail_core/mail/domain/archive.py",
+        "src/mail_core/mail/domain/enums.py",
+        "src/mail_core/mail/domain/models.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/mail/storage",
+      "files": [
+        "src/mail_core/mail/storage/__init__.py",
+        "src/mail_core/mail/storage/folder_stats.py",
+        "src/mail_core/mail/storage/models.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/providers_a",
+      "files": [
+        "src/mail_core/providers/__init__.py",
+        "src/mail_core/providers/base.py",
+        "src/mail_core/providers/factory.py",
+        "src/mail_core/providers/gmail.py",
+        "src/mail_core/providers/graph.py",
+        "src/mail_core/providers/http.py",
+        "src/mail_core/providers/imap.py",
+        "src/mail_core/providers/oauth.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/providers_b",
+      "files": [
+        "src/mail_core/providers/remote_writeback.py",
+        "src/mail_core/providers/stub_memory.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/providers/parsing",
+      "files": [
+        "src/mail_core/providers/parsing/__init__.py",
+        "src/mail_core/providers/parsing/gmail_history.py",
+        "src/mail_core/providers/parsing/graph_delta.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/realtime",
+      "files": [
+        "src/mail_core/realtime/__init__.py",
+        "src/mail_core/realtime/dispatcher.py",
+        "src/mail_core/realtime/events.py",
+        "src/mail_core/realtime/listener.py",
+        "src/mail_core/realtime/notify.py",
+        "src/mail_core/realtime/outbox.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/runtime",
+      "files": [
+        "src/mail_core/runtime/__init__.py",
+        "src/mail_core/runtime/bootstrap.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/search",
+      "files": [
+        "src/mail_core/search/__init__.py",
+        "src/mail_core/search/index.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/security",
+      "files": [
+        "src/mail_core/security/__init__.py",
+        "src/mail_core/security/auth.py",
+        "src/mail_core/security/defaults.py",
+        "src/mail_core/security/ratelimit.py",
+        "src/mail_core/security/redact.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/sync_a",
+      "files": [
+        "src/mail_core/sync/__init__.py",
+        "src/mail_core/sync/checkpoints.py",
+        "src/mail_core/sync/delta.py",
+        "src/mail_core/sync/engine.py",
+        "src/mail_core/sync/jobs.py",
+        "src/mail_core/sync/leases.py",
+        "src/mail_core/sync/metadata.py",
+        "src/mail_core/sync/reconcile.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/sync_b",
+      "files": [
+        "src/mail_core/sync/remote_push.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/threading",
+      "files": [
+        "src/mail_core/threading/__init__.py",
+        "src/mail_core/threading/rules.py"
+      ]
+    },
+    {
+      "id": "dir:src/mail_core/worker",
+      "files": [
+        "src/mail_core/worker/__init__.py",
+        "src/mail_core/worker/handlers.py",
+        "src/mail_core/worker/main.py"
+      ]
+    },
+    {
+      "id": "dir:tests",
+      "files": [
+        "tests/conftest.py"
+      ]
+    },
+    {
+      "id": "dir:tests/e2e",
+      "files": [
+        "tests/e2e/smoke.spec.ts",
+        "tests/e2e/stubApi.ts"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core_a",
+      "files": [
+        "tests/mail_core/conftest.py",
+        "tests/mail_core/test_account_credentials_unit.py",
+        "tests/mail_core/test_accounts_api_pg.py",
+        "tests/mail_core/test_accounts_api_unit.py",
+        "tests/mail_core/test_accounts_remote_ops.py",
+        "tests/mail_core/test_api_health.py",
+        "tests/mail_core/test_archive_mime_parser.py",
+        "tests/mail_core/test_archive_scheduler.py"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core_b",
+      "files": [
+        "tests/mail_core/test_archive_state_machine.py",
+        "tests/mail_core/test_assert_fencing_lock.py",
+        "tests/mail_core/test_attachment_access.py",
+        "tests/mail_core/test_auth.py",
+        "tests/mail_core/test_auth_plan_a_db.py",
+        "tests/mail_core/test_backup_package.py",
+        "tests/mail_core/test_backup_verify_drill.py",
+        "tests/mail_core/test_blob_crypto_gc.py"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core_c",
+      "files": [
+        "tests/mail_core/test_blob_keyring_required.py",
+        "tests/mail_core/test_blob_rewrap.py",
+        "tests/mail_core/test_blob_store.py",
+        "tests/mail_core/test_chaos_lease_recovery.py",
+        "tests/mail_core/test_credential_store_db.py",
+        "tests/mail_core/test_delta_flag_patch.py",
+        "tests/mail_core/test_flag_convergence.py",
+        "tests/mail_core/test_folder_role_inbox_api.py"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core_d",
+      "files": [
+        "tests/mail_core/test_folder_stats_race.py",
+        "tests/mail_core/test_fts_inbox_api.py",
+        "tests/mail_core/test_global_stats.py",
+        "tests/mail_core/test_gmail_graph_contracts.py",
+        "tests/mail_core/test_high_blobs_providers_metadata.py",
+        "tests/mail_core/test_http_headers.py",
+        "tests/mail_core/test_imap_provider_live.py",
+        "tests/mail_core/test_imap_remote_id.py"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core_e",
+      "files": [
+        "tests/mail_core/test_imap_sync_loop.py",
+        "tests/mail_core/test_jobs_backoff.py",
+        "tests/mail_core/test_keyset_pagination.py",
+        "tests/mail_core/test_logging_trace_and_redact.py",
+        "tests/mail_core/test_medium_hardening.py",
+        "tests/mail_core/test_medium_providers_sync_blobs.py",
+        "tests/mail_core/test_message_detail_api.py",
+        "tests/mail_core/test_message_mutations_api.py"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core_f",
+      "files": [
+        "tests/mail_core/test_metadata_apply.py",
+        "tests/mail_core/test_oauth_allowlist.py",
+        "tests/mail_core/test_oauth_transport.py",
+        "tests/mail_core/test_openapi_contract.py",
+        "tests/mail_core/test_outbox_listen.py",
+        "tests/mail_core/test_outbox_wake_notify_only.py",
+        "tests/mail_core/test_provider_stub.py",
+        "tests/mail_core/test_redact_and_poll.py"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core_g",
+      "files": [
+        "tests/mail_core/test_remote_ops_coalesce_entity.py",
+        "tests/mail_core/test_remote_ops_reconcile.py",
+        "tests/mail_core/test_remote_ops_redact.py",
+        "tests/mail_core/test_remote_push_robustness.py",
+        "tests/mail_core/test_remote_writeback.py",
+        "tests/mail_core/test_runtime_bootstrap.py",
+        "tests/mail_core/test_schema_pg.py",
+        "tests/mail_core/test_select_display_body.py"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core_h",
+      "files": [
+        "tests/mail_core/test_settings_store.py",
+        "tests/mail_core/test_sse_medium_remaining.py",
+        "tests/mail_core/test_sse_outbox.py",
+        "tests/mail_core/test_sync_delta.py",
+        "tests/mail_core/test_sync_high_hardening.py",
+        "tests/mail_core/test_sync_leases_jobs.py",
+        "tests/mail_core/test_threading.py",
+        "tests/mail_core/test_uidvalidity_rebuild.py"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core_i",
+      "files": [
+        "tests/mail_core/test_worker_loop.py"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core/fixtures",
+      "files": [
+        "tests/mail_core/fixtures/README.md"
+      ]
+    },
+    {
+      "id": "dir:tests/mail_core/fixtures/dovecot",
+      "files": [
+        "tests/mail_core/fixtures/dovecot/Dockerfile"
+      ]
+    },
+    {
+      "id": "dir:tests/scripts",
+      "files": [
+        "tests/scripts/test_fetch_pg_binaries_helpers.sh"
+      ]
+    }
+  ],
+  "stats": {
+    "files": 321,
+    "bundles": 75
+  }
+}
