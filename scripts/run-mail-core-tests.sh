@@ -17,7 +17,8 @@ export MAIL_CORE_BLOB_ACTIVE_VERSION="${MAIL_CORE_BLOB_ACTIVE_VERSION:-1}"
 export MAIL_CORE_BACKUP_KEY="${MAIL_CORE_BACKUP_KEY:-$(rand_b64)}"
 export MAIL_CORE_SECRET_KEY="${MAIL_CORE_SECRET_KEY:-$(rand_hex)}"
 export MAIL_CORE_REQUIRE_DB=1
+export PYTHONPATH=src
 
 pip install -q -r requirements-mail-core.txt -r requirements-dev.txt
-alembic -c mail_core/db/alembic.ini upgrade head
+alembic -c src/mail_core/db/alembic.ini upgrade head
 pytest tests -q --tb=short

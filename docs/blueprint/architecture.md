@@ -1,0 +1,33 @@
+# 架构 (Architecture)
+
+kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采用前后端分层与单用户全生命周期设计。
+
+更详尽的历史架构规范见 [`docs/archive/legacy_architecture/mail-core-architecture.md`](../archive/legacy_architecture/mail-core-architecture.md)。
+
+## 系统拓扑与进程划分
+
+1. **后端核心 (`src/mail_core/`)**：
+    - 框架：FastAPI + SQLAlchemy 2.0 (psycopg) + Alembic。
+    - 职责：提供统一 REST API、事务性 Outbox 事件分发、多协议邮件增量同步引擎与工作进程 (Worker)。
+    - 进程模型：支持单进程模式（API 嵌入 Worker 线程）或生产拆分模式（独立的 API 容器与 Worker 容器）。
+2. **前端界面 (`src/frontend/`)**：
+    - 技术栈：React 19 + TypeScript + Vite + TanStack React Query + Lucide Icons。
+    - 特点：单页应用 (SPA)，由 `mail-core` 同源托管提供；基于 `useInfiniteQuery` 实现游标深翻页，原生集成 SSE 流式状态同步。
+3. **桌面集成 (`src/desktop/`)**：
+    - 运行环境：Electron 主进程。
+    - 职责：进程生命周期管理，启动内置 PostgreSQL 实例与 `mail_core` sidecar 进程，支持 macOS/Linux/Windows 跨平台运行。
+
+## 模块分层与数据流
+
+- **API 接入层 (`src/mail_core/api/`)**：
+    - 路由声明：统一 `response_model`，输入经 Pydantic 校验。
+    - 安全鉴权：Cookie Session 签名与防篡改、Session Epoch 全局失效、CSRF 严格校验、反向代理受信与登录防爆破。
+- **业务领域与应用层 (`src/mail_core/mail/application/`, `src/mail_core/accounts/`)**：
+    - 账户生命周期、邮件查询、聚合收件箱游标检索与全文搜索。
+    - 出站写回状态机：基于 `remote_operations` 队列与单调递增 `revision` 的乐观并发控制 (CAS)。
+- **同步引擎与协议适配 (`src/mail_core/sync/`, `src/mail_core/providers/`)**：
+    - 适配器：IMAP (带 TLS 校验与特殊文件夹转义)、Gmail REST (repeated historyTypes + History hydration)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归)。
+    - 并发保护：基于数据库的租约锁 (`AccountSyncLease`) 与递增 fencing token。
+- **存储与加密层 (`src/mail_core/blobs/`, `src/mail_core/mail/storage/`)**：
+    - 原文存储：内容寻址分块 AES-256-GCM 流式加密 (`KKMS`)，支持多版本密钥轮换。
+    - 附件与垃圾回收：严格追踪 `MessageBlobLink` 与 `Attachment.blob_id` 双重引用，Fail-Closed 二次校验防误删。

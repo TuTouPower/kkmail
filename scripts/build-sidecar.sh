@@ -6,6 +6,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+export PYTHONPATH="${ROOT}/src:${PYTHONPATH:-}"
 
 if [[ -x "$ROOT/.venv/bin/python" ]]; then
   PY="$ROOT/.venv/bin/python"
@@ -27,11 +28,12 @@ case "$(uname -s)" in
 esac
 
 "$PY" -m PyInstaller --noconfirm --onefile --name kkmail-backend \
+  --paths "src" \
   --collect-submodules mail_core \
   --collect-submodules uvicorn \
-  --add-data "mail_core/db/alembic.ini${SEP}mail_core/db" \
-  --add-data "mail_core/db/alembic${SEP}mail_core/db/alembic" \
-  mail_core/__main__.py
-mkdir -p desktop/resources
-cp "dist/kkmail-backend${EXE}" "desktop/resources/kkmail-backend${EXE}"
-echo "sidecar: desktop/resources/kkmail-backend${EXE}"
+  --add-data "src/mail_core/db/alembic.ini${SEP}mail_core/db" \
+  --add-data "src/mail_core/db/alembic${SEP}mail_core/db/alembic" \
+  src/mail_core/__main__.py
+mkdir -p src/desktop/resources
+cp "dist/kkmail-backend${EXE}" "src/desktop/resources/kkmail-backend${EXE}"
+echo "sidecar: src/desktop/resources/kkmail-backend${EXE}"

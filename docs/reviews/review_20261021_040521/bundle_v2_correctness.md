@@ -18,7 +18,7 @@
 
 - [High][100] mail_core/blobs/archive.py:317 L296-L321 — 归档完成也不会生成正文和附件 — batch 仅写 MessageBlob、MessageBlobLink、archive_complete。全库生产代码没有 `MessageBody(...)`、`Attachment(...)` 创建点，没有 MIME parser；detail 只读 MessageBody，附件下载只读 Attachment.blob_id。即使外部手工 enqueue 归档，正常邮件依然正文空、附件列表空，正文搜索也只有 snippet。修复：归档后通过生产解析路径写入正文、附件 blob/关系和搜索索引，解析失败记录 parse_error；增加从 provider MIME 到 GET detail/download 的完整验证。`test_message_detail_api.py:57` 直接 seed MessageBody/Attachment，绕过缺失生产步骤。证据：`apply_transition(st, ArchiveState.ARCHIVE_COMPLETE)` 前后无解析调用。规范：architecture §8，read API 正文与附件产品行为。
 
-- [High][99] mail_core/sync/remote_push.py:162 L42-L54,L156-L162 — remote write-back 未排后续批次，竞争 lease 也会丢唤醒 — push 只取 `limit=20`，处理后直接 return；LeaseBusy 直接 return。handlers.py:74 无论 status 都 complete_job；mutations._wake_push 用 `remote-op-push:<account>` dedupe，CLAIMED 任务也命中 existing。一次批量改 21 封、第 1 批 network 期间新增操作、或同步占 lease 时，剩余 pending 操作可以永久无任务执行。修复：push 结束同 TX 检查 pending 并安排后续唤醒；busy 明确 requeue；dedupe 的 CLAIMED 与新工作交接须防丢唤醒。证据：`limit(limit)` + 函数末尾没有 `enqueue_job`。规范：architecture §9 desired-state 最终一致。
+- [High][99] mail_core/sync/remote_push.py:162 L42-L54,L156-L162 — remote write-back 未排后续批次，竞争 lease 也会丢唤醒 — push 只取 `limit=20`，处理后直接 return；LeaseBusy 直接 return。handlers.py:74 无论 status 都 complete_job；mutations.\_wake_push 用 `remote-op-push:<account>` dedupe，CLAIMED 任务也命中 existing。一次批量改 21 封、第 1 批 network 期间新增操作、或同步占 lease 时，剩余 pending 操作可以永久无任务执行。修复：push 结束同 TX 检查 pending 并安排后续唤醒；busy 明确 requeue；dedupe 的 CLAIMED 与新工作交接须防丢唤醒。证据：`limit(limit)` + 函数末尾没有 `enqueue_job`。规范：architecture §9 desired-state 最终一致。
 
 - [High][98] mail_core/mail/application/remote_ops.py:64 L64-L79 — 复用已完成 idempotency 行导致旧操作排在新操作前，最终远程状态相反 — 先 read=true 的 A 完成，再 read=false 创建 B（pending），再 read=true。第三次先命中已完成 A 的 `idempotency_key` 并重置 pending；A.created_at 仍早于 B，push 按 created_at 排序，执行 true 后执行 false，最终远端 false、本地 true。修复：已完成历史行不能复活成当前命令；用每 entity 唯一当前 desired-state/revision，或只合并待处理行并移除/失效同 entity 旧 pending。证据：先查询所有状态 idempotency 行，`_coalesce_existing` 设置 status=pending 却不处理 B。关联 `test_remote_ops_coalesce_entity.py` 仅覆盖同一 pending 行，不覆盖 DONE→false→true。
 
@@ -44,11 +44,11 @@
 
 - [High][98] mail_core/providers/graph.py:93 L88-L103 — Graph 文件夹发现只取首层首个 page，子文件夹完全不同步 — list_folders 单次 GET /me/mailFolders，不跟 @odata.nextLink，也不遍历 childFolderCount/childFolders。较多根文件夹或任意嵌套文件夹里的邮件不会产生同步任务。修复：分页遍历根层和 childFolders，填 parent_remote_id，并在完整发现后再处理删除。[官方 childFolders 文档](https://learn.microsoft.com/en-us/graph/api/mailfolder-list-childfolders?view=graph-rest-1.0)说明 mailFolders 快捷路径仅顶层。
 
-- [High][99] mail_core/providers/base.py:32 L32-L50 — Provider metadata 契约缺 is_flagged，远端已有星标无法进入本地 — Message 有 is_flagged，但 RemoteMessageMeta 没该字段，metadata._META_FIELDS 无该项，Gmail metadata/History 未处理 STARRED、Graph delta 未读 flag。新接入账号所有已有星标显示 false，后续远端切换也无法同步（IMAP 仅已建立 MODSEQ 后旧 UID flag 分支能读）。修复：完整 metadata 加 is_flagged 并贯穿三 provider / upsert，增量各自解析 flag 更新；测试 baseline、外部修改与新邮件原有星标。known-limitations 明确 flags server-side，并非此项豁免。
+- [High][99] mail_core/providers/base.py:32 L32-L50 — Provider metadata 契约缺 is_flagged，远端已有星标无法进入本地 — Message 有 is_flagged，但 RemoteMessageMeta 没该字段，metadata.\_META_FIELDS 无该项，Gmail metadata/History 未处理 STARRED、Graph delta 未读 flag。新接入账号所有已有星标显示 false，后续远端切换也无法同步（IMAP 仅已建立 MODSEQ 后旧 UID flag 分支能读）。修复：完整 metadata 加 is_flagged 并贯穿三 provider / upsert，增量各自解析 flag 更新；测试 baseline、外部修改与新邮件原有星标。known-limitations 明确 flags server-side，并非此项豁免。
 
 - [High][97] mail_core/sync/metadata.py:99 L99-L111,L151-L175 — 新增文件夹位置但元数据相同时不刷新统计；delta 删除一个仍有其他位置的消息同样漏统计 — existing message 新增 MessageLocation 不设置 changed；metadata 仅 touched 时 recompute。Gmail 同一邮件首次同步 INBOX 后再同步 label，元数据相同，则该 label 统计保留 0。delta.py 删除 loc 后 remaining 非空时 deleted 保持 0，touched 为空则源文件夹统计也不刷新。共享 is_read 更新仅刷新当前文件夹，其他 location unread_count 保留旧值。修复：分离 metadata_changed/location_changed，收集所有受影响 folder，按实际 location/read 变化统一刷新并发事件。证据：`locs[msg.id]=loc` 后 `changed=created`；delta.py:170 `if touched or deleted:`。本地 mutation 已用 all_location_folder_ids，可沿用该语义。
 
-- [High][96] mail_core/blobs/store.py:78 L74-L81 — 已存在文件被谎报成新 key_version，多个 DB blob 行共享路径，GC 可删活文件 — put 遇到 dest 存在直接返回 `self.key_version`，未读取实际文件 header。切 active key v1→v2 后新邮件原文与旧原文相同，archive 按 (digest,key_version) 创建 v2 行，却仍指向磁盘 v1 文件；旧 v1 行失去引用后 GC 删除该共享文件，v2 活链接损坏；rewrap._sync_key_version 同时把两行变同 version 还可能 UNIQUE 冲突。修复：一 digest 对应一逻辑 blob 行且 key_version 跟实际文件一致，或路径包含版本并真实独立写入；已有文件至少 read_key_version 后返回实际版本。证据：store.py `_rel_path` 不含版本，models.py unique 是 hash+version，gc.py 无同路径存活检查。
+- [High][96] mail_core/blobs/store.py:78 L74-L81 — 已存在文件被谎报成新 key_version，多个 DB blob 行共享路径，GC 可删活文件 — put 遇到 dest 存在直接返回 `self.key_version`，未读取实际文件 header。切 active key v1→v2 后新邮件原文与旧原文相同，archive 按 (digest,key_version) 创建 v2 行，却仍指向磁盘 v1 文件；旧 v1 行失去引用后 GC 删除该共享文件，v2 活链接损坏；rewrap.\_sync_key_version 同时把两行变同 version 还可能 UNIQUE 冲突。修复：一 digest 对应一逻辑 blob 行且 key_version 跟实际文件一致，或路径包含版本并真实独立写入；已有文件至少 read_key_version 后返回实际版本。证据：store.py `_rel_path` 不含版本，models.py unique 是 hash+version，gc.py 无同路径存活检查。
 
 - [High][98] mail_core/blobs/gc.py:41 L34-L54 — GC 不计算 Attachment.blob_id 引用，会删除有效附件 — mark_unreferenced_blobs 仅 count MessageBlobLink；附件模型通过独立 Attachment.blob_id 引用 blob，FK ON DELETE SET NULL。附件 payload 有自己的 digest，与 MIME blob 不同，不会必然出现在 MessageBlobLink 中；冷相到期 sweep 删除 row 并使 attachment.blob_id 变 null，再删文件。修复：同时计算附件引用或统一 blob 引用表，活引用和 GC 判定同事务受锁保护。证据：`select(func.count()).select_from(MessageBlobLink)`；access.py 必须 Attachment.blob_id 才能下载。生产附件创建目前缺失见独立 finding，此项是已提供 attachment 存储/访问模型本身不正确。
 
@@ -56,7 +56,7 @@
 
 - [High][92] mail_core/backup/package.py:201 L199-L213 — PG dump 与 blob tar 没有一致性保护，备份成功也可能无法恢复邮件原文 — pg_dump 先固定 DB 快照；dump 之后旧消息本地删除、blob GC 冷相到期 unlink，随后 tar 不再包含该文件，但 dump 仍保留 MessageBlob/Link。verify 只检查 tar 文件 checksum，不检查 DB blob 引用完整性，因此返回 ok。修复：备份期间 pin dump 快照所需 blob / 与 GC 共享排它或 epoch 屏障；备份完成验证引用文件齐全，恢复演练检查 blob 解密与引用。规范 architecture §10.2 明确“进行中的备份与重试需防误删”；当前无 backup lease/pin。
 
-- [High][100] mail_core/api/http_headers.py:25 L24-L28 — 中文附件名未转 ASCII fallback，HTTP 响应编码抛错 — `ascii_name = _BAD.sub(...)` 仅替换控制字符/标点，保留中文；Starlette header 按 latin-1 编码，`filename="报告.pdf"` 触发 UnicodeEncodeError，下载返回 500。filename* 虽正确但不能挽救 fallback。修复：fallback 用 ASCII 安全字符替换/转写，真实 UTF-8 名仅放 filename*；加中文/emoji header encode 或下载验证。证据：`content_disposition_attachment("报告.pdf").encode("latin-1")` 必然失败，现有 tests 只验证 RFC5987 字符串含字段，未通过响应编码。
+- [High][100] mail_core/api/http_headers.py:25 L24-L28 — 中文附件名未转 ASCII fallback，HTTP 响应编码抛错 — `ascii_name = _BAD.sub(...)` 仅替换控制字符/标点，保留中文；Starlette header 按 latin-1 编码，`filename="报告.pdf"` 触发 UnicodeEncodeError，下载返回 500。filename\* 虽正确但不能挽救 fallback。修复：fallback 用 ASCII 安全字符替换/转写，真实 UTF-8 名仅放 filename\*；加中文/emoji header encode 或下载验证。证据：`content_disposition_attachment("报告.pdf").encode("latin-1")` 必然失败，现有 tests 只验证 RFC5987 字符串含字段，未通过响应编码。
 
 ## Medium / Low / Info
 
@@ -99,16 +99,16 @@
 
 只读执行 `git log --all --oneline -- <paths>`、`git blame -L ...`。关键历史：
 
-| 模块 | 相关历史证据 | 当前结论 |
-| --- | --- | --- |
-| IMAP namespace | `6610ec4` namespace remote_id | UIDVALIDITY已纳入ID，但MIME/写回仍未核验 |
-| IMAP MODSEQ | `1ce66644` / HEAD `61c2a1a92b97acb1d27ed18e58d69f082833204f` | flag patch已实现，截断仍提前推进水位 |
-| Archive | `e4f9a1d3` scheduler、`1faeff4e` FSM/refcount、`01a78ad66dff932889e072177408e6c283b86fd0` cleanup | 初始调度和生产解析仍缺；重试全失败仍断链 |
-| Remote ops | `898c5a0` fencing/isolation、`4d89440e387de43ecbdd8f1ddadd042b808ea0b8` latest | per-op隔离改善不解决排空/版本竞争 |
-| Backup | `e9003e9` sealed checksum、`01a78ad66dff932889e072177408e6c283b86fd0` latest | checksum已有校验，但无强制成员与DB/blob快照屏障 |
-| Blob put | `61c2a1a92b97acb1d27ed18e58d69f082833204f` latest | 现存文件返回active版本仍不匹配header |
-| Desktop shutdown | blame `fcc1fcb6` | 新增升级终止仍把killed误判为退出 |
-| Sidebar | `fd92b1d58d5fdc5c84d14a388c60ded61f8803be` latest | 首屏计数限制已声明，未分组账户消失另属独立缺陷 |
+|模块|相关历史证据|当前结论|
+|---|---|---|
+|IMAP namespace|`6610ec4` namespace remote_id|UIDVALIDITY已纳入ID，但MIME/写回仍未核验|
+|IMAP MODSEQ|`1ce66644` / HEAD `61c2a1a92b97acb1d27ed18e58d69f082833204f`|flag patch已实现，截断仍提前推进水位|
+|Archive|`e4f9a1d3` scheduler、`1faeff4e` FSM/refcount、`01a78ad66dff932889e072177408e6c283b86fd0` cleanup|初始调度和生产解析仍缺；重试全失败仍断链|
+|Remote ops|`898c5a0` fencing/isolation、`4d89440e387de43ecbdd8f1ddadd042b808ea0b8` latest|per-op隔离改善不解决排空/版本竞争|
+|Backup|`e9003e9` sealed checksum、`01a78ad66dff932889e072177408e6c283b86fd0` latest|checksum已有校验，但无强制成员与DB/blob快照屏障|
+|Blob put|`61c2a1a92b97acb1d27ed18e58d69f082833204f` latest|现存文件返回active版本仍不匹配header|
+|Desktop shutdown|blame `fcc1fcb6`|新增升级终止仍把killed误判为退出|
+|Sidebar|`fd92b1d58d5fdc5c84d14a388c60ded61f8803be` latest|首屏计数限制已声明，未分组账户消失另属独立缺陷|
 
 规范对照：architecture §6 provider语义、§7原子checkpoint/增量完整性、§8归档、§9 desired-state、§10.2 GC/备份；`docs/known-limitations.md` 已逐项核对。
 

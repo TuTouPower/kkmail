@@ -36,9 +36,12 @@ debug_response_*.html
 Thumbs.db
 /get_oauth_token.py
 .ace-tool/
-/.agents/
+/.agents/*
+!/.agents/skills/
 /CLAUDE.md
-/.claude/
+/.claude/*
+!/.claude/skills/
+!/.claude/settings.json
 /.superpowers/
 安全漏洞.md
 /.codex/
@@ -52,13 +55,38 @@ openspec
 /scripts/compare_accounts_db.py
 /scripts/export_accounts.py
 
+# Opencode 运行时产物
+.opencode/node_modules/
+.opencode/package.json
+.opencode/package-lock.json
+
 # generated
+src/desktop/node_modules/
+src/desktop/release/
+src/desktop/resources/
+src/desktop/dist/
+src/frontend/node_modules/
+src/frontend/dist/
 desktop/node_modules/
 desktop/release/
+desktop/resources/
 frontend/node_modules/
 frontend/dist/
-
-/build/
-/dist/
-desktop/resources/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
 /kkmail-backend.spec
+
+# 同步自模板（repo-template-sync）
+/artifacts/
+/data/
+.scratch/
+node_modules/
+.env.*
+!.env.example
+docs/reviews/review_*/_meta/
+docs/archive/reviews/review_*/_meta/
+docs/runtime/
+.repo_template/sync_state.json
+.commandcode/

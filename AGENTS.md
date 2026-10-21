@@ -1,58 +1,45 @@
-# kkmail 编码代理指南
+# kkmail
 
-## 项目概况
+kkmail 是基于 mail-core 的现代化自托管多账号邮件客户端（FastAPI + PostgreSQL + React SPA + Electron 桌面端）。产品范围不含发信、联系人与系统通知，浏览器扩展永久 out of scope (wontfix)。
 
-- 仓库 `TuTouPower/kkmail`（fork 自 assast/outlookEmail，后端已整体替换）。
-- 后端唯一实现：`mail_core/`（FastAPI + PostgreSQL + worker）。前端唯一实现：`frontend/`（React SPA，由 mail-core 同源提供）。桌面：`desktop/`（Electron + 本地 PostgreSQL + `python -m mail_core` sidecar）。
-- 产品范围不含发信、联系人、系统通知；不要新增这些入口。
-- **浏览器扩展永久 out of scope（wontfix）**：不要恢复 `browser-extension/`、`/api/extension/*` 或任何扩展交付计划。
+本项目使用模板仓 repo_template。此声明必须保留，消费仓不得删除。
 
-## 目录
+## 目录与读写规则
 
-| 路径 | 说明 |
-| --- | --- |
-| `mail_core/` | 后端；模块分层见 `mail_core/README.md` |
-| `mail_core/db/alembic/` | 迁移；模型改动必须带迁移 |
-| `frontend/src/api/` | `client.ts`（唯一 HTTP 传输：Cookie + CSRF + 超时）、`mailCore.ts`（邮件端点）、`queries.ts`（React Query 缓存）；HTTP DTO 来自 `generated/schema.ts`（OpenAPI） |
-| `desktop/` | Electron 主进程、`postgresManager.js` |
-| `tests/mail_core/` | pytest（大部分需要 PostgreSQL） |
-| `docs/` | 架构、部署、安全 |
+|路径|用途|写权归属|
+|---|---|---|
+|`src/mail_core/`|后端唯一实现（FastAPI + PostgreSQL + Worker）；分层见 `src/mail_core/README.md`|仅在 task 执行期按 spec 修改|
+|`src/mail_core/db/alembic/`|数据库迁移；数据模型改动必须附带迁移|仅在 task 执行期修改|
+|`src/frontend/`|前端唯一实现（React SPA，由 mail-core 同源提供）|仅在 task 执行期按 spec 修改|
+|`src/desktop/`|Electron 桌面端主进程与 PostgreSQL 管理器|仅在 task 执行期按 spec 修改|
+|`tests/`|测试套件（后端单测/集成测试与 E2E）|仅在 task 执行期修改|
+|`scripts/`|项目构建、迁移与开发脚本|仅在 task 执行期修改|
+|`docs/specs_index.md`|当前生效 spec 清单（在表即生效）|task 收尾时更新；废弃删除行|
+|`docs/specs/<slug>.md`|需求级 spec（按已完成 task 累积）|task 收尾时累积更新；废弃移入`docs/archive/specs/`|
+|`docs/tasks/{tid}_{slug}/`|task 工作区兼**状态权威**（backlog 起即存在）|`spec.md` / `task.md` 正文由实现侧写；`task.md` front matter 只经 `.repo_template/scripts/task.py`；reviewer 写 `review_code.md` / `review_test.md`（`single` 级写 `review_general.md`）；`finish`/`drop` 由脚本移入 `docs/archive/tasks/{tid}_{slug}/`|
+|`docs/handoff.md`|项目级交接（仅最新一节）|记录须含 branch 与交出时 head_commit；过时段落迁`docs/archive/handoff.md`|
+|`docs/pending/{todo,parked}/pNNN_{slug}.md`|待办与不办总账（一条目一文件，统一`pNNN`；`parked/`=用户确认暂搁，不迁 archive）|条目创建与迁移只经`.repo_template/scripts/pending.py`；skill 流程见`.repo_template/docs/usage.md`「skill 调用」|
+|`docs/findings/dNNN_{slug}.md`|已验证的技术发现（一条目一文件，跨 task 复用，`dNNN`）|条目创建只经`.repo_template/scripts/findings.py`；只新增与就地修订，不迁 archive；spike 收尾或日常验证出的事实写入|
+|`docs/archive/pending/pNNN_{slug}.md`|已闭环待办|仅由`.repo_template/scripts/pending.py archive` 迁入；只准新增|
+|`docs/blueprint/`|当前长期真相：架构、领域、约定、决策、测试|finalization 时更新；写代码或文档前读`conventions.md`，改跨模块行为前读 `architecture.md`，历史取舍读 `decisions.md`。门禁命令在 `testing.md` 的 `## doctor_cmd` / `## test_cmd` / `## blackbox_verify` 章节。|
+|`docs/reviews/review_*/`|多路 review 会话产物（内部或外部评审生成）|报告`review_*.md` 入库；确认过时由 `repo-hygiene` 迁 `docs/archive/reviews/`|
+|`docs/spikes/{sid}_{slug}/`|当前 spike（`report.md` 必需；有实验代码建 `code/`）|目录创建只经`.repo_template/scripts/spikes.py new`；结论入 `docs/findings/`；完结由 `repo-hygiene` 迁 `docs/archive/spikes/`|
+|`docs/guides/`|给人看的使用指南|给人读，不写 agent 行为规则|
+|`docs/archive/`|完结或终止的历史|镜像原路径；内部文件只准新增|
+|`schemas/`|跨服务接口契约|改契约走 task 流程|
+|`config/`|配置（默认 + 环境覆盖 +`.env.example`）|仅`.env.example` 入库；真值写本地 `.env`|
+|`assets/`|静态资产源文件|仅在 task 执行期按 spec 修改|
+|`.repo_template/`|模板工具链（skills、scripts、docs、hooks）|仅模板演进时修改；细目与写权见`.repo_template/docs/usage.md`|
+|`artifacts/` `data/` `.scratch/`|产物、运行数据、一次性草稿|运行与草稿；debug 复现和临时实验只写`.scratch/`（已 gitignore）；需保留的 spike 验证材料写 `docs/spikes/{sid}_{slug}/code/`|
 
-## 开发与测试
+## 开发原则
 
-```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt
-export MAIL_CORE_DATABASE_URL=postgresql+psycopg://<user>:<pass>@127.0.0.1:5433/<test-db>
-scripts/run-mail-core-tests.sh             # alembic upgrade + pytest tests（DB 用例不允许 skip）
-
-cd frontend
-npm ci
-npm run lint                               # oxlint --deny-warnings
-npx tsc -b
-npm test                                   # vitest + openapi:check
-npm run openapi:check                      # 生成物与 docs/openapi.json 一致
-npm run build
-npm run dev                                # 代理 /api → 127.0.0.1:8000（MAIL_CORE_PROXY_TARGET 可改）
-
-cd ../desktop && npm ci && npm test
-```
-
-提交前：pytest 全量 + 前端 lint / tsc / vitest / build。
-
-## 约定
-
-- **邮件 HTML** 只能经 `frontend/src/lib/mailBody.ts`（DOMPurify + sandbox iframe `srcDoc`）；是否 HTML 只看 `body_type`；禁止 `dangerouslySetInnerHTML`。
-- **消息标识** = mail-core 消息 UUID（`lib/mailKey.ts`）；账户用 UUID（`accountId`），不要用邮箱地址当 ID。
-- **单用户 · UUID 即能力**：实例无多租户/行级用户 ACL。在已认证的 Session / API Key 边界内，知道资源 UUID 即可访问该资源；不要按「防 IDOR 的多租户 ID」来实现或评审。详见 `docs/security.md` 与 `docs/mail-core-architecture.md` §11.4。
-- **HTTP** 一律走 `api/client.ts` 的 `apiRequest` / `postJson`：写请求自动带 `X-CSRF-Token`，拿不到令牌时直接失败。
-- **API 契约**：每个路由声明 `response_model`；错误用 `HTTPException`（`{"detail": ...}`）；路由只调用 `mail_core.mail.application` / `mail_core.accounts`，不直接访问 ORM 或 sync 内部。改契约后跑 `scripts/gen-openapi.sh`，并用 `export_openapi.py --check` / `npm run openapi:check` / `test_openapi_contract.py` 做本地漂移校验（无 GitHub CI）。
-- **密钥**：不写默认值、不写示例密钥；缺失时拒绝启动。凭据只经 `CredentialStore`（默认数据库加密存储）；日志 / `last_error` 必须经 `mail_core.security.redact`。
-- **测试**不得连接非一次性数据库；新的 DB 用例沿用 `skipif(not MAIL_CORE_DATABASE_URL)` 标记。`scripts/run-mail-core-tests.sh` 会设置 `MAIL_CORE_REQUIRE_DB=1`，没有数据库就失败而不是跳过。
-- **表单字段**要有 `id` 或 `name`；密码框带 `autoComplete` 且在 `<form>` 内。
-- **移动端断点 760px**：与 `lib/viewport.ts` 和 `design-system/tokens.css` 保持一致；导航走 store 的 `setView` / `openSmartView`。
-- **UI 文案中文**；图标按钮要有 `title` 与 `aria-label`；破坏性操作先 `confirmAction`。
-
-## 提交规范
-
-Conventional Commits，英文主题行，可带 scope（`mail-core`、`api`、`frontend`、`desktop`、`docs`、`ci`、`security`），正文可用中文。每个提交可构建、测试通过。
+- specs driven：需求拆分为可独立验证的 task，填写 `spec.md`（契约区行为 AC 须非空）；版本号、底层库选型、目录结构不写进行为 AC，需要长期约束的写 `docs/blueprint/decisions.md`。
+- TDD：可测部分先红后绿；测试须触达生产逻辑。实现变更让旧测试语义失效时，新增覆盖新语义的测试；旧测试原样保留或整体删除并写明理由，**禁止就地把旧测试的预期改成当前实现的输出**。
+- 用户未明确要求修改，且当前任务不在获准写入的 skill 流程中时，禁止修改未被 gitignore 的代码文件。
+- task 状态读取优先级：登记 worktree → 未合并 task 分支 ref → 主干。进行中 task 的状态在其合并前不进主干；`list/show/preflight --ref` 用于只读分支快照，不能据主干旧 backlog 重复 start 或维护。
+- task 执行期一个实现 commit；创建期和状态维护 commit 分开；派生 index 在集成时进入同一个 merge commit。每个 commit 必须独立可验证，有工程意义。
+- 发现 commit 混入不属于当前工作的改动时，立即停止工作并向用户汇报；未经用户确认，不继续提交、合并或修正。
+- 使用 `.repo_template` 提供的工具链、skills、hooks、模板文件时发现缺陷，不静默处理、不自行绕过或修改，报告用户决定。
+- task 状态：`backlog` / `active` / `done` / `dropped`。
+- 开发工作流的设计见 `.repo_template/docs/architecture.md`，使用见 `.repo_template/docs/usage.md`。

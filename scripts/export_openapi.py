@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Dump mail-core OpenAPI schema to docs/openapi.json (no HTTP server required).
+"""Dump mail-core OpenAPI schema to schemas/openapi.json (no HTTP server required).
 
 Usage:
   python scripts/export_openapi.py
   python scripts/export_openapi.py --check   # exit 1 if committed file drifts
 
 Frontend then regenerates TS with:
-  cd frontend && npm run openapi:gen
+  (cd src/frontend && npm run openapi:gen)
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "docs" / "openapi.json"
+OUT = ROOT / "schemas" / "openapi.json"
 
 
 def _ensure_minimal_env() -> None:
@@ -31,6 +31,9 @@ def _ensure_minimal_env() -> None:
 
 def dump_schema() -> dict:
     _ensure_minimal_env()
+    src = ROOT / "src"
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     from mail_core.api.app import app
@@ -47,7 +50,7 @@ def main() -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Compare live app.openapi() to docs/openapi.json without writing.",
+        help="Compare live app.openapi() to schemas/openapi.json without writing.",
     )
     args = parser.parse_args()
     schema = dump_schema()
@@ -60,8 +63,8 @@ def main() -> int:
         committed = OUT.read_text(encoding="utf-8")
         if committed != text:
             print(
-                f"docs/openapi.json is out of date with mail_core.api.app:app.openapi()\n"
-                f"  run: python scripts/export_openapi.py && cd frontend && npm run openapi:gen",
+                f"schemas/openapi.json is out of date with mail_core.api.app:app.openapi()\n"
+                f"  run: python scripts/export_openapi.py && (cd src/frontend && npm run openapi:gen)",
                 file=sys.stderr,
             )
             return 1

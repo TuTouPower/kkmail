@@ -1,9 +1,9 @@
 # mail-core API + worker + SPA
 FROM node:20-alpine AS frontend
 WORKDIR /fe
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
-COPY frontend/ ./
+COPY src/frontend/package.json src/frontend/package-lock.json ./
+RUN npm ci --legacy-peer-deps
+COPY src/frontend/ ./
 RUN npm run build
 
 FROM python:3.13-slim
@@ -12,14 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements-mail-core.txt .
 RUN pip install --no-cache-dir -r requirements-mail-core.txt
-COPY mail_core ./mail_core
+COPY src/mail_core ./src/mail_core
 COPY --from=frontend /fe/dist ./frontend/dist
 RUN useradd --system --uid 10001 --home-dir /app kkmail \
     && mkdir -p /var/lib/kkmail/blobs \
     && chown -R kkmail:kkmail /app /var/lib/kkmail
 USER kkmail
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app \
+    PYTHONPATH=/app/src \
     KKMAIL_FRONTEND_DIST=/app/frontend/dist
 EXPOSE 8000
 CMD ["uvicorn", "mail_core.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
