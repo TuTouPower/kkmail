@@ -9,6 +9,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 : "${MAIL_CORE_DATABASE_URL:?set MAIL_CORE_DATABASE_URL to a disposable test database}"
+
+# Guard: require database name in MAIL_CORE_DATABASE_URL to contain 'test'
+DB_NAME="$(python3 -c 'import os, urllib.parse; print(urllib.parse.urlsplit(os.environ.get("MAIL_CORE_DATABASE_URL", "")).path.lstrip("/"))')"
+if [[ "$DB_NAME" != *test* ]]; then
+  echo "refusing to run tests on non-disposable database: '$DB_NAME' (database name must contain 'test')" >&2
+  exit 2
+fi
 rand_b64() { python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())'; }
 rand_hex() { python3 -c 'import secrets; print(secrets.token_hex(32))'; }
 
