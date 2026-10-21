@@ -11,7 +11,7 @@ import re
 MAX_ERROR_CHARS = 500
 
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9\-._~+/]+=*"), r"\1 [REDACTED]"),
+    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9\-._~+/]+=*"), r"\1 [REDACTED]"),
     (
         re.compile(
             r"(?i)([\"']?(?:access_token|refresh_token|id_token|client_secret|password|passwd|secret|api_key|apikey|code)[\"']?\s*[:=]\s*)"
@@ -19,7 +19,10 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         r"\1[REDACTED]",
     ),
-    (re.compile(r"(?i)(postgres(?:ql)?(?:\+\w+)?://[^:/@\s]+:)[^@\s]+@"), r"\1[REDACTED]@"),
+    (
+        re.compile(r"(?i)((?:https?|socks[45]?h?|postgres(?:ql)?(?:\+\w+)?|ftp)://[^:/@\s]+:)[^@\s]+@"),
+        r"\1[REDACTED]@",
+    ),
 )
 
 

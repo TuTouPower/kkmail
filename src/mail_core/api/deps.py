@@ -72,12 +72,3 @@ def require_auth(
     principal = authenticate_request(request, bearer_creds=bearer_creds, cookie_token=cookie_token)
     enforce_csrf(request, principal)
     return principal
-
-
-def require_auth_no_csrf(
-    request: Request,
-    bearer_creds: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
-    cookie_token: str | None = Security(cookie_scheme),
-) -> AuthPrincipal:
-    """Authenticate without CSRF (SSE / safe reads already covered by require_auth)."""
-    return authenticate_request(request, bearer_creds=bearer_creds, cookie_token=cookie_token)

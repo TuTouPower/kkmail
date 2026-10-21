@@ -187,7 +187,8 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                     if acc:
                         acc.sync_enabled = False
                     session.commit()
-            except Exception:
-                pass
+            except Exception as status_exc:
+                log.warning("failed to update account sync status for %s: %s", account_id, safe_error(status_exc))
+                session.rollback()
         fail_job(session, job, exc, worker_id=worker_id)
         return False

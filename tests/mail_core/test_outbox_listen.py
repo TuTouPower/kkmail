@@ -2,17 +2,15 @@ from __future__ import annotations
 
 import os
 import time
-import uuid
 
 import pytest
-from sqlalchemy import text
 
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import OutboxEventType
 from mail_core.mail.storage import OutboxEvent
 from mail_core.realtime.dispatcher import OutboxDispatcher
 from mail_core.realtime.listener import OutboxListenThread
-from mail_core.realtime.notify import CHANNEL, notify_outbox
+from mail_core.realtime.notify import notify_outbox
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),

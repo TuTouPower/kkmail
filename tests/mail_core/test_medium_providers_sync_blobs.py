@@ -271,12 +271,13 @@ def test_imap_fetch_metadata_page_bounded_search_pagination(monkeypatch):
                 # 1000 UIDs
                 return "OK", [b" ".join(str(i).encode() for i in range(1, 1001))]
             if cmd == "FETCH":
-                uid = args[0]
+                raw_uids = [int(x) for x in str(args[0]).split(",") if x.strip().isdigit()]
                 return "OK", [
                     (
-                        b"FLAGS (\\Seen)",
-                        f"From: a@b.com\r\nSubject: Test {uid}\r\nDate: Wed, 21 Oct 2026 00:00:00 +0000\r\n\r\n".encode(),
+                        f"{u} (FLAGS (\\Seen) UID {u})".encode(),
+                        f"From: a@b.com\r\nSubject: Test {u}\r\nDate: Wed, 21 Oct 2026 00:00:00 +0000\r\n\r\n".encode(),
                     )
+                    for u in raw_uids
                 ]
             return "NO", []
 
@@ -408,3 +409,28 @@ def test_update_account_sync_status():
     assert res_failed is not None
     assert res_failed.sync_status == "failed"
     assert res_failed.config.get("last_sync_error") == "timeout connecting"
+
+
+def test_imap_fetch_metadata_page_deleted_message_skips_without_raising(monkeypatch):
+    class FakeIMAPDeleted:
+        def select(self, *a, **k):
+            return "OK", [b"1"]
+
+        def status(self, *a, **k):
+            return "OK", [b"INBOX (UIDVALIDITY 10)"]
+
+        def uid(self, cmd, *args):
+            if cmd == "SEARCH":
+                return "OK", [b"42"]
+            if cmd == "FETCH":
+                return "OK", [None]
+            return "NO", []
+
+        def logout(self):
+            return "OK", []
+
+    prov = ImapProvider("h", 993, "u", "p", use_ssl=False)
+    monkeypatch.setattr(prov, "_connect", lambda: FakeIMAPDeleted())
+    page = prov.fetch_metadata_page("INBOX", {"uid_next": 42, "page_size": 1})
+    assert len(page.items) == 0
+    assert page.next_cursor["uid_next"] == 43

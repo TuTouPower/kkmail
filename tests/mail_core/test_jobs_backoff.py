@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from mail_core.mail.domain.enums import JobStatus
-from mail_core.sync.jobs import backoff_seconds, fail_job, reclaim_stale_claims
+from mail_core.sync.jobs import backoff_seconds, fail_job
 
 
 class _FakeSession:

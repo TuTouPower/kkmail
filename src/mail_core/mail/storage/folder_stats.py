@@ -13,6 +13,17 @@ from mail_core.mail.storage.models import FolderStats, Message, MessageLocation
 
 
 def recompute_folder_stats(session: Session, folder_id: uuid.UUID) -> FolderStats:
+    stats = session.get(FolderStats, folder_id, with_for_update=True)
+    if stats is None:
+        stats = FolderStats(folder_id=folder_id)
+        try:
+            with session.begin_nested():
+                session.add(stats)
+                session.flush()
+        except IntegrityError:
+            stats = session.get(FolderStats, folder_id, with_for_update=True)
+            if stats is None:
+                raise
     total, unread = session.execute(
         select(
             func.count(),
@@ -22,17 +33,6 @@ def recompute_folder_stats(session: Session, folder_id: uuid.UUID) -> FolderStat
         .join(Message, Message.id == MessageLocation.message_id)
         .where(MessageLocation.folder_id == folder_id)
     ).one()
-    stats = session.get(FolderStats, folder_id)
-    if stats is None:
-        stats = FolderStats(folder_id=folder_id)
-        try:
-            with session.begin_nested():
-                session.add(stats)
-                session.flush()
-        except IntegrityError:
-            stats = session.get(FolderStats, folder_id)
-            if stats is None:
-                raise
     stats.total_count = int(total or 0)
     stats.unread_count = int(unread or 0)
     stats.updated_at = datetime.now(timezone.utc)

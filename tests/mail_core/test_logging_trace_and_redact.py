@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import logging
-import io
 from fastapi.testclient import TestClient
 
 from mail_core.logging_config import (
     RedactingTraceFormatter,
-    configure_logging,
-    get_trace_id,
-    set_trace_id,
     trace_scope,
 )
 from mail_core.security.redact import RedactingFilter
@@ -60,12 +56,15 @@ def test_redacting_filter_sanitizes_record():
         pathname=__file__,
         lineno=15,
         msg="failed auth token %s with secret %s",
-        args=("bearer ya29.testtoken", "client_secret: topsecret"),
+        args=("bearer ya29.testtoken", "client_secret: topsecret", "Basic dXNlcjpwYXNz", "http://user:secret123@proxy.corp:8080"),
         exc_info=None,
     )
     rfilter.filter(record)
     assert "ya29.testtoken" not in str(record.args)
     assert "topsecret" not in str(record.args)
+    assert "dXNlcjpwYXNz" not in str(record.args)
+    assert "secret123" not in str(record.args)
+    assert "[REDACTED]" in str(record.args)
 
 
 def test_http_request_id_middleware_and_trace_header():

@@ -77,8 +77,9 @@ def pytest_collection_modifyitems(config, items):
     """With MAIL_CORE_REQUIRE_DB=1, any skip caused by a missing DB URL is an error."""
     if os.environ.get("MAIL_CORE_REQUIRE_DB") != "1":
         return
+    db_skip_keywords = ("mail_core_database_url", "database required", "pg required", "postgres required")
     for item in items:
         for mark in item.iter_markers("skipif"):
             reason = str(mark.kwargs.get("reason", ""))
-            if "MAIL_CORE_DATABASE_URL" in reason and mark.args and mark.args[0]:
+            if any(k in reason.lower() for k in db_skip_keywords) and mark.args and mark.args[0]:
                 raise pytest.UsageError(f"{item.nodeid} would skip ({reason}) under MAIL_CORE_REQUIRE_DB=1")
