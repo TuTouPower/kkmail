@@ -21,12 +21,15 @@ from mail_core.mail.application.attachments import (
 )
 from mail_core.mail.application.mutations import MutationResult, set_message_flagged, set_message_read, trash_message
 from mail_core.mail.application.queries import (
+    AccountInboxStatsOut,
+    GlobalStatsOut,
     InvalidCursor,
     MessageListItem,
     account_emails_by_id,
     get_folder_stats,
     get_message_detail,
     list_folder_stats_for_account,
+    query_global_inbox_stats,
     unified_inbox,
 )
 from mail_core.mail.application.search import search_messages_page
@@ -157,6 +160,13 @@ def _mutation_out(r: MutationResult) -> MutationOut:
         is_read=r.is_read,
         is_flagged=r.is_flagged,
     )
+
+
+@router.get("/stats", response_model=GlobalStatsOut)
+def api_global_inbox_stats() -> GlobalStatsOut:
+    Session = get_session_factory()
+    with Session() as session:
+        return query_global_inbox_stats(session)
 
 
 @router.get("/inbox", response_model=PageOut)

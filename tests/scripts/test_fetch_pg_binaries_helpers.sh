@@ -32,9 +32,13 @@ bash "$TMP/check_tar_safe.sh" "$TMP/safe.tgz"
 
 # Traversal archive (member name contains ..)
 mkdir -p "$TMP/evil"
-# tar can store a member named ../evil_bin if we craft it carefully via --transform
-echo y > "$TMP/evil/x"
-tar -czf "$TMP/evil.tgz" -C "$TMP/evil" --transform 's|^x|../evil_bin|' x
+python3 -c '
+import tarfile, io, sys
+with tarfile.open(sys.argv[1], "w:gz") as tar:
+    ti = tarfile.TarInfo(name="../evil_bin")
+    ti.size = 1
+    tar.addfile(ti, io.BytesIO(b"x"))
+' "$TMP/evil.tgz"
 if bash "$TMP/check_tar_safe.sh" "$TMP/evil.tgz" 2>/dev/null; then
   echo "expected traversal reject" >&2
   exit 1
@@ -50,7 +54,11 @@ url_allowed() {
   esac
 }
 url_allowed "https://github.com/theseus-rs/postgresql-binaries/releases/download/16.6.0/postgresql-16.6.0-x86_64-unknown-linux-gnu.tar.gz"
+url_allowed "https://github.com/theseus-rs/postgresql-binaries/releases/download/16.6.0/postgresql-16.6.0-aarch64-apple-darwin.tar.gz"
+url_allowed "https://github.com/theseus-rs/postgresql-binaries/releases/download/16.6.0/postgresql-16.6.0-x86_64-pc-windows-msvc.tar.gz"
 url_allowed "https://get.enterprisedb.com/postgresql/postgresql-16.6-1-linux-x64-binaries.tar.gz"
+url_allowed "https://get.enterprisedb.com/postgresql/postgresql-16.6-1-osx-binaries.zip"
+url_allowed "https://get.enterprisedb.com/postgresql/postgresql-16.6-1-windows-x64-binaries.zip"
 if url_allowed "https://evil.example/postgresql.tar.gz"; then
   echo "evil URL should fail" >&2
   exit 1

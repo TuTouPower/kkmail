@@ -66,6 +66,17 @@ def test_unified_inbox_folder_stats_search_and_thread():
     assert one.status_code == 200
     assert one.json()["total_count"] == 1
 
+    global_stats = client.get("/api/mail/stats")
+    assert global_stats.status_code == 200
+    gs_json = global_stats.json()
+    assert "total_unread" in gs_json
+    assert "accounts" in gs_json
+    acc_entry = next((a for a in gs_json["accounts"] if a["account_id"] == str(account_id)), None)
+    assert acc_entry is not None
+    assert acc_entry["unread_count"] == 1
+    assert acc_entry["total_count"] == 1
+    assert gs_json["total_unread"] >= 1
+
     search = client.get("/api/mail/search", params={"q": "phoenix", "account_id": str(account_id)})
     assert search.status_code == 200
     sj = search.json()
