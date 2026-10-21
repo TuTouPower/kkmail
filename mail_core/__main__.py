@@ -44,7 +44,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--skip-migrations", action="store_true", default=os.environ.get("MAIL_CORE_SKIP_MIGRATIONS") == "1")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [mail-core] %(message)s")
+    from mail_core.logging_config import configure_logging
+
+    configure_logging(service_name="mail-core")
     if args.instance_token:
         os.environ["KKMAIL_INSTANCE_TOKEN"] = args.instance_token
     if args.data_dir:

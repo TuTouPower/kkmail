@@ -1,18 +1,36 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { exportDiagnosticsAsText, logDiagnostic } from '../lib/diagnostics'
 
 type Props = { children: ReactNode }
-type State = { error: Error | null }
+type State = { error: Error | null; copied: boolean }
 
 /** Catches render errors and offers a Chinese reload affordance. */
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null }
+  state: State = { error: null, copied: false }
 
   static getDerivedStateFromError(error: Error): State {
-    return { error }
+    return { error, copied: false }
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('[ErrorBoundary]', error, info.componentStack)
+    logDiagnostic(
+      'error',
+      'ui',
+      error.message || 'React 渲染异常',
+      undefined,
+      `${error.stack || ''}\n${info.componentStack || ''}`,
+    )
+  }
+
+  copyReport = () => {
+    try {
+      navigator.clipboard.writeText(exportDiagnosticsAsText())
+      this.setState({ copied: true })
+      setTimeout(() => this.setState({ copied: false }), 2000)
+    } catch {
+      /* ignore clipboard rejection */
+    }
   }
 
   render() {
@@ -33,25 +51,43 @@ export default class ErrorBoundary extends Component<Props, State> {
         <div style={{ maxWidth: 420 }}>
           <strong style={{ fontSize: 18 }}>页面出错了</strong>
           <p style={{ color: 'var(--muted, #9a9a9a)', margin: '12px 0 20px' }}>
-            发生了意外错误。请刷新页面重试；若问题持续，请重启应用。
+            发生了意外错误。请刷新页面重试；若问题持续，可复制诊断日志排查。
           </p>
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            style={{
-              height: 36,
-              padding: '0 16px',
-              borderRadius: 8,
-              border: '1px solid var(--line, #333)',
-              background: 'var(--accent, #0879d9)',
-              color: '#fff',
-              cursor: 'pointer',
-            }}
-          >
-            刷新页面
-          </button>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              style={{
+                height: 36,
+                padding: '0 16px',
+                borderRadius: 8,
+                border: '1px solid var(--line, #333)',
+                background: 'var(--accent, #0879d9)',
+                color: '#fff',
+                cursor: 'pointer',
+              }}
+            >
+              刷新页面
+            </button>
+            <button
+              type="button"
+              onClick={this.copyReport}
+              style={{
+                height: 36,
+                padding: '0 16px',
+                borderRadius: 8,
+                border: '1px solid var(--line, #333)',
+                background: 'transparent',
+                color: 'var(--text, #e8e8e8)',
+                cursor: 'pointer',
+              }}
+            >
+              {this.state.copied ? '已复制日志' : '复制诊断日志'}
+            </button>
+          </div>
         </div>
       </div>
     )
   }
 }
+
