@@ -136,6 +136,55 @@ def _get_server_uidvalidity(c: imaplib.IMAP4, folder: str) -> int | None:
         pass
     return None
 
+
+def _parse_message_meta_from_fetch(
+    flags_blob: tuple[Any, ...],
+    uid_fallback: int,
+    folder_remote_id: str,
+    uidvalidity: int,
+) -> RemoteMessageMeta | None:
+    meta_bytes = flags_blob[0]
+    header_bytes = flags_blob[1] if len(flags_blob) > 1 else b""
+    meta_s = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
+    m_uid = re.search(r"\bUID\s+(\d+)", meta_s)
+    uid = int(m_uid.group(1)) if m_uid else uid_fallback
+    is_read = "\\Seen" in meta_s
+    is_flagged = "\\Flagged" in meta_s
+    header_text = header_bytes.decode("utf-8", errors="replace") if isinstance(header_bytes, bytes) else str(header_bytes)
+    headers = email.message_from_string(header_text)
+    subject = _decode_header(headers.get("Subject"))
+    from_raw = _decode_header(headers.get("From"))
+    addr, name = _parse_from(from_raw)
+    to_raw = _decode_header(headers.get("To"))
+    cc_raw = _decode_header(headers.get("Cc"))
+    to_addresses = tuple(a for _, a in email.utils.getaddresses([to_raw]) if a) if to_raw else ()
+    cc_addresses = tuple(a for _, a in email.utils.getaddresses([cc_raw]) if a) if cc_raw else ()
+    date_raw = headers.get("Date")
+    try:
+        sort_time = parsedate_to_datetime(date_raw) if date_raw else datetime.now(timezone.utc)
+        if sort_time.tzinfo is None:
+            sort_time = sort_time.replace(tzinfo=timezone.utc)
+    except Exception:
+        sort_time = datetime.now(timezone.utc)
+    uv = int(uidvalidity) if uidvalidity is not None else 0
+    return RemoteMessageMeta(
+        remote_id=format_imap_remote_id(folder_remote_id, uv, uid),
+        subject=subject,
+        from_address=addr,
+        from_name=name,
+        sort_time=sort_time,
+        is_read=is_read,
+        has_attachments=False,
+        is_flagged=is_flagged,
+        internet_message_id=headers.get("Message-ID"),
+        uid=uid,
+        to_addresses=to_addresses,
+        cc_addresses=cc_addresses,
+        in_reply_to=headers.get("In-Reply-To"),
+        references=headers.get("References"),
+    )
+
+
 @dataclass
 class ImapProvider:
     host: str
@@ -246,62 +295,25 @@ class ImapProvider:
                 if has_more:
                     break
             items: list[RemoteMessageMeta] = []
-            for uid in batch:
+            if batch:
+                uid_spec = ",".join(str(u) for u in batch)
                 typ, fetched = c.uid(
                     "FETCH",
-                    str(uid),
-                    "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)])",
+                    uid_spec,
+                    "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)])",
                 )
-                if typ != "OK" or not fetched or fetched[0] is None:
-                    # Do not advance uid_next past a failed FETCH — raise so the
-                    # caller retries from the same cursor (architecture: no silent skip).
-                    raise RuntimeError(f"UID FETCH {folder_remote_id} uid={uid} failed: {typ}")
-                flags_blob = fetched[0]
-                if isinstance(flags_blob, tuple):
-                    meta_bytes = flags_blob[0]
-                    header_bytes = flags_blob[1] if len(flags_blob) > 1 else b""
-                else:
-                    raise RuntimeError(
-                        f"UID FETCH {folder_remote_id} uid={uid}: unexpected payload shape"
-                    )
-                meta_s = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
-                is_read = "\\Seen" in meta_s
-                is_flagged = "\\Flagged" in meta_s
-                header_text = header_bytes.decode("utf-8", errors="replace") if isinstance(header_bytes, bytes) else str(header_bytes)
-                headers = email.message_from_string(header_text)
-                subject = _decode_header(headers.get("Subject"))
-                from_raw = _decode_header(headers.get("From"))
-                addr, name = _parse_from(from_raw)
-                to_raw = _decode_header(headers.get("To"))
-                cc_raw = _decode_header(headers.get("Cc"))
-                to_addresses = tuple(a for _, a in email.utils.getaddresses([to_raw]) if a) if to_raw else ()
-                cc_addresses = tuple(a for _, a in email.utils.getaddresses([cc_raw]) if a) if cc_raw else ()
-                date_raw = headers.get("Date")
-                try:
-                    sort_time = parsedate_to_datetime(date_raw) if date_raw else datetime.now(timezone.utc)
-                    if sort_time.tzinfo is None:
-                        sort_time = sort_time.replace(tzinfo=timezone.utc)
-                except Exception:
-                    sort_time = datetime.now(timezone.utc)
-                uv = int(uidvalidity) if uidvalidity is not None else 0
-                items.append(
-                    RemoteMessageMeta(
-                        remote_id=format_imap_remote_id(folder_remote_id, uv, uid),
-                        subject=subject,
-                        from_address=addr,
-                        from_name=name,
-                        sort_time=sort_time,
-                        is_read=is_read,
-                        has_attachments=False,
-                        is_flagged=is_flagged,
-                        internet_message_id=headers.get("Message-ID"),
-                        uid=uid,
-                        to_addresses=to_addresses,
-                        cc_addresses=cc_addresses,
-                        in_reply_to=headers.get("In-Reply-To"),
-                        references=headers.get("References"),
-                    )
-                )
+                if typ != "OK":
+                    raise RuntimeError(f"UID FETCH {folder_remote_id} uids={uid_spec} failed: {typ}")
+                if fetched and fetched[0] is not None:
+                    blobs = [b for b in fetched if isinstance(b, tuple)]
+                    for idx, blob in enumerate(blobs):
+                        fallback_uid = batch[idx] if idx < len(batch) else batch[-1]
+                        meta = _parse_message_meta_from_fetch(
+                            blob, fallback_uid, folder_remote_id, int(uidvalidity or 0)
+                        )
+                        if meta is not None:
+                            items.append(meta)
+                # If fetched is empty or [None], assume deleted on server and skip without raising RuntimeError (A21)
             if not batch:
                 return MetadataPage(
                     items=(),
@@ -367,14 +379,24 @@ class ImapProvider:
         uids: list[int],
     ) -> list[DeltaChange]:
         """FETCH FLAGS for MODSEQ-changed UIDs and emit flag deltas (not discarded)."""
+        if not uids:
+            return []
         changes: list[DeltaChange] = []
-        for uid in uids:
-            typ, fetched = c.uid("FETCH", str(uid), "(FLAGS)")
-            if typ != "OK" or not fetched or fetched[0] is None:
+        uid_spec = ",".join(str(u) for u in uids)
+        typ, fetched = c.uid("FETCH", uid_spec, "(FLAGS UID)")
+        if typ != "OK" or not fetched:
+            return changes
+        for idx, blob in enumerate(fetched):
+            if blob is None:
                 continue
-            blob = fetched[0]
             meta_bytes = blob[0] if isinstance(blob, tuple) else blob
+            if not isinstance(meta_bytes, (bytes, str)):
+                continue
             meta_s = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
+            m_uid = re.search(r"\bUID\s+(\d+)", meta_s)
+            uid = int(m_uid.group(1)) if m_uid else (uids[idx] if idx < len(uids) else None)
+            if uid is None:
+                continue
             is_read = "\\Seen" in meta_s
             is_flagged = "\\Flagged" in meta_s
             rid = format_imap_remote_id(folder_remote_id, int(uidvalidity), uid)

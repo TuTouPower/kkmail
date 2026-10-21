@@ -5,7 +5,6 @@ from __future__ import annotations
 from mail_core.accounts.settings_store import (
     PUBLIC_SETTING_KEYS,
     _is_secret_key,
-    get_app_setting,
     get_fetch_timeout_seconds,
     update_public_settings,
 )

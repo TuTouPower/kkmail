@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -45,12 +46,18 @@ class AuthPrincipal:
     csrf_token: str | None = None
 
 
+_session_epoch: int = 1
+_session_epoch_cache_time: float = 0.0
+_SESSION_EPOCH_TTL: float = 5.0
+
+
 def reset_auth_caches() -> None:
-    """Test helper: clear cached password hash / API keys."""
-    global _password_hash, _api_keys, _session_epoch
+    """Test helper: clear cached password hash / API keys / session epoch."""
+    global _password_hash, _api_keys, _session_epoch, _session_epoch_cache_time
     _password_hash = None
     _api_keys = None
     _session_epoch = 1
+    _session_epoch_cache_time = 0.0
 
 
 def require_secret_key() -> str:
@@ -70,13 +77,17 @@ def session_max_age() -> int:
     return int(os.environ.get("MAIL_CORE_SESSION_MAX_AGE") or str(60 * 60 * 24 * 30))
 
 
-def cookie_secure() -> bool:
-    return (os.environ.get("MAIL_CORE_COOKIE_SECURE") or "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+def cookie_secure(request: Any = None) -> bool:
+    env_val = os.environ.get("MAIL_CORE_COOKIE_SECURE")
+    if env_val is not None and env_val.strip() != "":
+        return env_val.strip().lower() in ("1", "true", "yes", "on")
+    if request is not None:
+        proto = request.headers.get("x-forwarded-proto", "").strip().lower()
+        if proto == "https":
+            return True
+        if getattr(request.url, "scheme", "") == "https":
+            return True
+    return False
 
 
 def cookie_samesite() -> str:
@@ -204,9 +215,12 @@ def validate_auth_config() -> None:
 
 
 def get_session_epoch() -> int:
-    """Fetch authoritative session epoch from database or memory cache."""
-    global _session_epoch
+    """Fetch authoritative session epoch from database or memory cache (5s TTL)."""
+    global _session_epoch, _session_epoch_cache_time
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
+        return _session_epoch
+    now = time.monotonic()
+    if now - _session_epoch_cache_time < _SESSION_EPOCH_TTL:
         return _session_epoch
     try:
         from mail_core.db.session import get_session_factory
@@ -223,12 +237,15 @@ def get_session_epoch() -> int:
                 )
                 session.add(cred)
                 session.commit()
+                _session_epoch_cache_time = now
                 return _session_epoch
             if cred.session_epoch is None:
                 cred.session_epoch = _session_epoch
                 session.commit()
+                _session_epoch_cache_time = now
                 return _session_epoch
             _session_epoch = cred.session_epoch
+            _session_epoch_cache_time = now
             return _session_epoch
     except Exception as exc:
         log.warning("could not fetch session epoch from database: %s", exc)
@@ -237,8 +254,9 @@ def get_session_epoch() -> int:
 
 def invalidate_all_sessions() -> None:
     """Invalidate all active sessions by incrementing the session epoch in database and memory."""
-    global _session_epoch
+    global _session_epoch, _session_epoch_cache_time
     _session_epoch += 1
+    _session_epoch_cache_time = 0.0
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
         return
     try:

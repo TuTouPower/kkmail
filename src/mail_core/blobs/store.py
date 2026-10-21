@@ -116,10 +116,6 @@ class BlobStore:
         plaintext = b"".join(self.iter_plaintext(digest))
         return plaintext, version
 
-    def key_version_of(self, digest: str) -> int:
-        with self.path_for(digest).open("rb") as fh:
-            return read_key_version(fh)
-
     def iter_plaintext(self, digest: str) -> Iterator[bytes]:
         """Stream-decrypt one chunk at a time; verifies the SHA-256 at the end.
 
