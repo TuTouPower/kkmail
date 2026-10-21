@@ -49,7 +49,7 @@ services:
     container_name: kkmail-mail-core-api
     environment:
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
-      MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:8000"
+      MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:37281"
       # Auth: Cookie session signing. Provide MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt)
       # or MAIL_CORE_LOGIN_PASSWORD — process refuses to start without one.
       MAIL_CORE_SECRET_KEY: ${MAIL_CORE_SECRET_KEY:?set MAIL_CORE_SECRET_KEY (openssl rand -hex 32)}
@@ -66,7 +66,7 @@ services:
       MAIL_CORE_BACKUP_KEY: ${MAIL_CORE_BACKUP_KEY:?set MAIL_CORE_BACKUP_KEY (must differ from blob key)}
     ports:
       # Host bind loopback only — do not publish the API on 0.0.0.0.
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:37281:8000"
     volumes:
       - kkmail_mail_core_blobs:/var/lib/kkmail/blobs
     depends_on:
