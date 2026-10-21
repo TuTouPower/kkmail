@@ -187,5 +187,31 @@ describe('<MessageList />', () => {
     await click(flagItem as HTMLElement)
     await waitFor(() => expect(container.querySelector('.context-menu')).toBeNull())
   })
+
+  it('deduplicates messages with the same id across pages', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.includes('/api/mail/inbox')) {
+        return json({
+          items: [
+            { id: 'dup-1', account_id: 'acc-1', subject: 'Unique 1', from_address: 'a@x.test', from_name: 'A', sort_time: '2026-10-21T10:00:00Z', is_read: false, is_flagged: false, has_attachments: false, snippet: '' },
+            { id: 'dup-1', account_id: 'acc-1', subject: 'Duplicate 1', from_address: 'a@x.test', from_name: 'A', sort_time: '2026-10-21T10:00:00Z', is_read: false, is_flagged: false, has_attachments: false, snippet: '' },
+          ],
+          next_cursor: null,
+          has_more: false,
+        })
+      }
+      if (u.includes('/folder-stats')) {
+        return json({ folders: [{ role: 'inbox', unread_count: 1, total_count: 1 }] })
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => {
+      const rows = container.querySelectorAll('.message-row')
+      expect(rows).toHaveLength(1)
+    })
+  })
 })
 

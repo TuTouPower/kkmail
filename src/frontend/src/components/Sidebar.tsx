@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Inbox, MailOpen, Send, Settings, PanelLeft, AlertCircle } from 'lucide-react'
 import { apiRequest } from '../api/client'
@@ -16,13 +16,9 @@ interface FolderStatsItem {
 async function fetchAccountFolders(accountId: string, signal?: AbortSignal): Promise<number> {
   let res: unknown
   try {
-    res = await apiRequest(`/api/accounts/${encodeURIComponent(accountId)}/folders`, { signal })
+    res = await apiRequest(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`, { signal })
   } catch {
-    try {
-      res = await apiRequest(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`, { signal })
-    } catch {
-      return 0
-    }
+    return 0
   }
   const folders: FolderStatsItem[] = Array.isArray(res)
     ? res
@@ -33,7 +29,7 @@ async function fetchAccountFolders(accountId: string, signal?: AbortSignal): Pro
   return inboxFolder?.unread_count ?? folders.reduce((sum, f) => sum + (f.unread_count || 0), 0)
 }
 
-export default function Sidebar() {
+const Sidebar = memo(function Sidebar() {
   const view = useMailStore((s) => s.view)
   const setView = useMailStore((s) => s.setView)
   const collapsedGroups = useMailStore((s) => s.collapsedGroups)
@@ -273,4 +269,6 @@ export default function Sidebar() {
       </div>
     </aside>
   )
-}
+})
+
+export default Sidebar

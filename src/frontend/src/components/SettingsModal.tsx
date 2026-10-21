@@ -8,7 +8,9 @@ import { confirmAction, errorMessage } from '../lib/actions'
 
 /** Settings page — mail-core only (accounts / groups / appearance / password). */
 export default function SettingsPage() {
-  const { theme, setTheme, closeSettings } = useMailStore()
+  const theme = useMailStore((s) => s.theme)
+  const setTheme = useMailStore((s) => s.setTheme)
+  const closeSettings = useMailStore((s) => s.closeSettings)
   const onClose = closeSettings
   const qc = useQueryClient()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
