@@ -270,7 +270,7 @@ export default function MessageList() {
             <span className="selection-count">已选 {selectedIds.length} 封</span>
             <div className="list-control-group">
               <button className="sort-btn" onClick={() => selectAll(visible.map((m) => mailKey(m)))} title="选择当前列表全部邮件">全选</button>
-              <button className="sort-btn danger" onClick={deleteSelected} title="删除所选邮件">删除所选</button>
+              <button className="sort-btn danger" onClick={deleteSelected} title="移到废纸篓（删除所选）" aria-label="移到废纸篓（删除所选）">移到废纸篓</button>
               <button className="sort-btn" onClick={clearSelected} title="取消选择">取消</button>
             </div>
           </div>
