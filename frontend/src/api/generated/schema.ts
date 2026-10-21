@@ -371,6 +371,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mail/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Global Inbox Stats */
+        get: operations["api_global_inbox_stats_api_mail_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -480,6 +497,18 @@ export interface components {
             /** Folders */
             folders: components["schemas"]["AccountFolderStatsItemOut"][];
         };
+        /** AccountInboxStatsOut */
+        AccountInboxStatsOut: {
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            /** Total Count */
+            total_count: number;
+            /** Unread Count */
+            unread_count: number;
+        };
         /** AccountOut */
         AccountOut: {
             /** Account Type */
@@ -570,6 +599,13 @@ export interface components {
             unread_count: number;
             /** Updated At */
             updated_at?: string | null;
+        };
+        /** GlobalStatsOut */
+        GlobalStatsOut: {
+            /** Accounts */
+            accounts: components["schemas"]["AccountInboxStatsOut"][];
+            /** Total Unread */
+            total_unread: number;
         };
         /** GroupCreateIn */
         GroupCreateIn: {
@@ -1541,6 +1577,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_global_inbox_stats_api_mail_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GlobalStatsOut"];
                 };
             };
         };

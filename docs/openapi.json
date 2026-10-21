@@ -136,6 +136,30 @@
         "title": "AccountFolderStatsOut",
         "type": "object"
       },
+      "AccountInboxStatsOut": {
+        "properties": {
+          "account_id": {
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          },
+          "unread_count": {
+            "title": "Unread Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "unread_count",
+          "total_count"
+        ],
+        "title": "AccountInboxStatsOut",
+        "type": "object"
+      },
       "AccountOut": {
         "properties": {
           "account_type": {
@@ -433,6 +457,27 @@
           "unread_count"
         ],
         "title": "FolderStatsOut",
+        "type": "object"
+      },
+      "GlobalStatsOut": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AccountInboxStatsOut"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "total_unread": {
+            "title": "Total Unread",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_unread",
+          "accounts"
+        ],
+        "title": "GlobalStatsOut",
         "type": "object"
       },
       "GroupCreateIn": {
@@ -2420,6 +2465,35 @@
           }
         ],
         "summary": "Api Search",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/api/mail/stats": {
+      "get": {
+        "operationId": "api_global_inbox_stats_api_mail_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalStatsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Global Inbox Stats",
         "tags": [
           "mail"
         ]
