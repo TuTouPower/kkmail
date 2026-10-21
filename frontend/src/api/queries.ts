@@ -138,14 +138,16 @@ export function findCachedMail(key: string | null): MailItem | undefined {
 function patchCachedMail(keys: Iterable<string>, patch: Partial<MailItem>) {
   const wanted = new Set(keys)
   queryClient.setQueriesData<MailItem[]>({ queryKey: MAIL_LIST_PREFIX }, (list) =>
-    list?.map((m) => (wanted.has(mailKey(m)) ? { ...m, ...patch } : m)),
+    Array.isArray(list) ? list.map((m) => (wanted.has(mailKey(m)) ? { ...m, ...patch } : m)) : list,
   )
 }
 
 /** Drop messages from every cached list (e.g. after trash). */
 export function removeCachedMail(keys: Iterable<string>) {
   const gone = new Set(keys)
-  queryClient.setQueriesData<MailItem[]>({ queryKey: MAIL_LIST_PREFIX }, (list) => list?.filter((m) => !gone.has(mailKey(m))))
+  queryClient.setQueriesData<MailItem[]>({ queryKey: MAIL_LIST_PREFIX }, (list) =>
+    Array.isArray(list) ? list.filter((m) => !gone.has(mailKey(m))) : list,
+  )
 }
 
 export function setCachedReadState(keys: Iterable<string>, isRead: boolean) {

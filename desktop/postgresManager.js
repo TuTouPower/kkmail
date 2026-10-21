@@ -266,6 +266,10 @@ PostgresManager.prototype.start = function start() {
   if (!init.ok) return init
   const bins = this.hasBinaries()
   const p = this.paths()
+  try {
+    const { rotateLogFile } = require('./logRotation')
+    rotateLogFile(p.logFile)
+  } catch (_) {}
   const r = spawnSync(
     bins.pg_ctl,
     ['start', '-D', p.pgData, '-l', p.logFile, '-w'],

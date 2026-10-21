@@ -56,3 +56,28 @@ def safe_error(exc: BaseException | str | None) -> str:
             return f"{type(exc).__name__}{status}"
         return redact(f"{type(exc).__name__}{status}: {first[:120]}")
     return redact(f"{type(exc).__name__}: {exc}")
+
+
+class RedactingFilter:
+    """Standard logging.Filter that automatically redacts credentials from LogRecords."""
+
+    def filter(self, record: object) -> bool:
+        import logging
+
+        if not isinstance(record, logging.LogRecord):
+            return True
+        if isinstance(record.msg, str):
+            record.msg = redact(record.msg, limit=2000)
+        if record.args:
+            if isinstance(record.args, dict):
+                record.args = {
+                    k: redact(str(v), limit=500) if isinstance(v, (str, BaseException)) else v
+                    for k, v in record.args.items()
+                }
+            elif isinstance(record.args, tuple):
+                record.args = tuple(
+                    redact(str(arg), limit=500) if isinstance(arg, (str, BaseException)) else arg
+                    for arg in record.args
+                )
+        return True
+
