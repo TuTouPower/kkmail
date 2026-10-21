@@ -183,7 +183,6 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 status_label = "auth_failed" if isinstance(exc, PermanentAuthError) else "failed"
                 update_account_sync_status(session, account_id, status_label, error=safe_error(exc))
                 if isinstance(exc, PermanentAuthError):
-                    from mail_core.mail.storage.models import Account
                     acc = session.get(Account, account_id)
                     if acc:
                         acc.sync_enabled = False
