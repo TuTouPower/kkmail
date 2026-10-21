@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from pydantic import BaseModel
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import FolderRole
@@ -265,3 +266,42 @@ def account_emails_by_id(session: Session, account_ids: list[uuid.UUID]) -> dict
         return {}
     rows = session.execute(select(Account.id, Account.email).where(Account.id.in_(account_ids))).all()
     return {rid: email for rid, email in rows}
+
+
+class AccountInboxStatsOut(BaseModel):
+    account_id: uuid.UUID
+    unread_count: int
+    total_count: int
+
+
+class GlobalStatsOut(BaseModel):
+    total_unread: int
+    accounts: list[AccountInboxStatsOut]
+
+
+def query_global_inbox_stats(session: Session) -> GlobalStatsOut:
+    """Return aggregated inbox stats across all accounts."""
+    stmt = (
+        select(
+            Folder.account_id,
+            func.coalesce(func.sum(FolderStats.unread_count), 0).label("unread_count"),
+            func.coalesce(func.sum(FolderStats.total_count), 0).label("total_count"),
+        )
+        .select_from(FolderStats)
+        .join(Folder, FolderStats.folder_id == Folder.id)
+        .where(Folder.role == FolderRole.INBOX.value)
+        .group_by(Folder.account_id)
+        .order_by(Folder.account_id.asc())
+    )
+    rows = session.execute(stmt).all()
+    accounts = [
+        AccountInboxStatsOut(
+            account_id=r[0],
+            unread_count=int(r[1]),
+            total_count=int(r[2]),
+        )
+        for r in rows
+    ]
+    total_unread = sum(a.unread_count for a in accounts)
+    return GlobalStatsOut(total_unread=total_unread, accounts=accounts)
+

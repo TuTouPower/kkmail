@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # Download PostgreSQL binaries into desktop/vendor/pgsql for Electron.
-# Linux: tries theseus-rs portable builds, then EnterpriseDB.
-# macOS / Windows: prints download-at-build instructions (no silent wrong arch).
+# Supports cross-platform targets: darwin-arm64, darwin-x64, linux-x64, linux-arm64, win-x64.
+# Sources: theseus-rs portable builds (primary), EnterpriseDB (fallback).
 #
 # Security: URL allowlist, mandatory SHA-256 verification, path-traversal-safe extract.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENDOR="$ROOT/desktop/vendor"
 DEST="$VENDOR/pgsql"
-OS="linux"
-ARCH="$(uname -m)"
+
+DETECTED_OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "linux")"
+DETECTED_ARCH="$(uname -m 2>/dev/null || echo "x86_64")"
+
+OS=""
+ARCH=""
 VERSION="${PG_VERSION:-16.6.0}"
 
 while [[ $# -gt 0 ]]; do
@@ -18,7 +22,8 @@ while [[ $# -gt 0 ]]; do
     --arch) ARCH="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: $0 [--os linux|macos|windows] [--arch x86_64|arm64] [--version 16.6.0]"
+      echo "Usage: $0 [--os darwin|linux|windows] [--arch arm64|x64|x86_64] [--version 16.6.0]"
+      echo "Supported targets: darwin-arm64, darwin-x64, linux-x64, linux-arm64, win-x64"
       echo "Override URL with PG_VENDOR_URL=... (must be an allowlisted HTTPS host)"
       echo "Require checksum via PG_VENDOR_SHA256=... or a sidecar .sha256 / SHA256SUMS fetch"
       exit 0
@@ -27,40 +32,82 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-mkdir -p "$VENDOR"
-
-if [[ -x "$DEST/bin/pg_ctl" && -x "$DEST/bin/initdb" ]]; then
-  echo "Already present: $DEST/bin — skipping download (rm -rf $DEST to refresh)"
-  "$DEST/bin/pg_ctl" --version || true
-  exit 0
+if [[ -z "$OS" ]]; then
+  case "$DETECTED_OS" in
+    darwin*) OS="darwin" ;;
+    linux*) OS="linux" ;;
+    msys*|mingw*|cygwin*|windows*) OS="windows" ;;
+    *) OS="linux" ;;
+  esac
 fi
 
-case "$OS" in
-  macos|darwin|windows|win)
-    cat <<HINT
-download-at-build ($OS / $ARCH):
-  Official portable Postgres is not auto-fetched for $OS in this script
-  (signing / arch variants differ per release channel).
+if [[ -z "$ARCH" ]]; then
+  ARCH="$DETECTED_ARCH"
+fi
 
-  Build pipeline should:
-    1. Download PostgreSQL ${VERSION%%.*}.x binaries for $OS/$ARCH
-       (EnterpriseDB, Postgres.app, or official installers).
-    2. Place initdb/pg_ctl/postgres under:
-         desktop/vendor/pgsql/bin/
-    3. Or set KKMAIL_PG_BIN=/path/to/pgsql/bin at runtime.
+# Normalize OS
+case "$(echo "$OS" | tr '[:upper:]' '[:lower:]')" in
+  darwin|macos|osx) OS_NORM="darwin" ;;
+  linux) OS_NORM="linux" ;;
+  windows|win|win32|win64) OS_NORM="windows" ;;
+  *) echo "Unsupported OS: $OS" >&2; exit 1 ;;
+esac
 
-  Linux CI/dev boxes: re-run with --os linux
-HINT
-    exit 0
+# Normalize ARCH
+case "$(echo "$ARCH" | tr '[:upper:]' '[:lower:]')" in
+  arm64|aarch64) ARCH_NORM="arm64" ;;
+  x86_64|amd64|x64) ARCH_NORM="x64" ;;
+  *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
+esac
+
+# Canonical target resolution
+case "${OS_NORM}-${ARCH_NORM}" in
+  darwin-arm64)
+    TARGET="darwin-arm64"
+    THESEUS="aarch64-apple-darwin"
+    EDB_SLUG="osx"
+    ;;
+  darwin-x64)
+    TARGET="darwin-x64"
+    THESEUS="x86_64-apple-darwin"
+    EDB_SLUG="osx"
+    ;;
+  linux-x64)
+    TARGET="linux-x64"
+    THESEUS="x86_64-unknown-linux-gnu"
+    EDB_SLUG="linux-x64"
+    ;;
+  linux-arm64)
+    TARGET="linux-arm64"
+    THESEUS="aarch64-unknown-linux-gnu"
+    EDB_SLUG="linux-arm64"
+    ;;
+  windows-x64)
+    TARGET="win-x64"
+    THESEUS="x86_64-pc-windows-msvc"
+    EDB_SLUG="windows-x64"
+    ;;
+  *)
+    echo "Unsupported target combination: ${OS_NORM}-${ARCH_NORM}" >&2
+    echo "Supported targets: darwin-arm64, darwin-x64, linux-x64, linux-arm64, win-x64" >&2
+    exit 1
     ;;
 esac
 
-# Normalize arch
-case "$ARCH" in
-  x86_64|amd64) ARCH_NORM=x86_64; THESEUS=x86_64-unknown-linux-gnu; EDB_SLUG=linux-x64 ;;
-  aarch64|arm64) ARCH_NORM=arm64; THESEUS=aarch64-unknown-linux-gnu; EDB_SLUG=linux-arm64 ;;
-  *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
-esac
+mkdir -p "$VENDOR"
+
+if [[ "$OS_NORM" == "windows" ]]; then
+  if [[ -f "$DEST/bin/pg_ctl.exe" && -f "$DEST/bin/initdb.exe" ]]; then
+    echo "Already present: $DEST/bin — skipping download (rm -rf $DEST to refresh)"
+    exit 0
+  fi
+else
+  if [[ -x "$DEST/bin/pg_ctl" && -x "$DEST/bin/initdb" ]]; then
+    echo "Already present: $DEST/bin — skipping download (rm -rf $DEST to refresh)"
+    "$DEST/bin/pg_ctl" --version 2>/dev/null || true
+    exit 0
+  fi
+fi
 
 # Allowlisted download hosts (SSRF / supply-chain).
 url_allowed() {
@@ -78,6 +125,17 @@ assert_url_allowed() {
     echo "URL not on PG vendor allowlist: $u" >&2
     echo "Allowed: github.com/theseus-rs/postgresql-binaries/... or get.enterprisedb.com/postgresql/..." >&2
     exit 1
+  fi
+}
+
+calc_sha256() {
+  local target_file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$target_file" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$target_file" | awk '{print $1}'
+  else
+    python3 -c "import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest())" "$target_file"
   fi
 }
 
@@ -103,7 +161,7 @@ verify_archive_sha256() {
     return 1
   fi
   local actual
-  actual="$(sha256sum "$archive" | awk '{print $1}')"
+  actual="$(calc_sha256 "$archive")"
   if [[ "$actual" != "$expected" ]]; then
     echo "SHA-256 mismatch for PostgreSQL archive" >&2
     echo "  expected: $expected" >&2
@@ -113,7 +171,6 @@ verify_archive_sha256() {
   echo "SHA-256 OK ($actual)"
 }
 
-# Reject absolute paths and .. components before extract (path traversal).
 assert_tar_safe() {
   local archive="$1"
   local member
@@ -128,21 +185,99 @@ assert_tar_safe() {
   done < <(tar -tzf "$archive")
 }
 
+assert_zip_safe() {
+  local archive="$1"
+  local member
+  while IFS= read -r member; do
+    case "$member" in
+      "" ) continue ;;
+      /* | *../* | */../* | */.. | .. | ../* | *.. )
+        echo "Refusing zip member with unsafe path: $member" >&2
+        exit 1
+        ;;
+    esac
+  done < <(unzip -Z1 "$archive")
+}
+
+fix_macos_rpath() {
+  local target_dir="$1"
+  if ! command -v install_name_tool >/dev/null 2>&1 || ! command -v otool >/dev/null 2>&1; then
+    echo "install_name_tool or otool not available, skipping rpath adjustment" >&2
+    return 0
+  fi
+  echo "Adjusting macOS dependency and rpath settings with install_name_tool..."
+
+  # 1. Patch executable binaries in bin/
+  if [[ -d "$target_dir/bin" ]]; then
+    for b in "$target_dir/bin"/*; do
+      [[ -f "$b" ]] || continue
+      for rp in "@executable_path/../lib" "@loader_path/../lib" "/opt/homebrew/lib" "/usr/local/lib" "/opt/homebrew/opt/openssl@3/lib" "/usr/local/opt/openssl@3/lib"; do
+        install_name_tool -add_rpath "$rp" "$b" 2>/dev/null || true
+      done
+      while IFS= read -r line; do
+        local dep
+        dep="$(echo "$line" | awk '{print $1}')"
+        [[ -z "$dep" ]] && continue
+        local dep_base
+        dep_base="$(basename "$dep")"
+        if [[ ("$dep" == *"/lib/"* && "$dep" != "/usr/lib/"*) || "$dep" == *runner* ]]; then
+          if [[ -f "$target_dir/lib/$dep_base" ]]; then
+            install_name_tool -change "$dep" "@executable_path/../lib/$dep_base" "$b" 2>/dev/null || true
+          fi
+        fi
+      done < <(otool -L "$b" 2>/dev/null | tail -n +2)
+    done
+  fi
+
+  # 2. Patch shared libraries in lib/
+  if [[ -d "$target_dir/lib" ]]; then
+    while IFS= read -r d; do
+      [[ -f "$d" ]] || continue
+      local d_base
+      d_base="$(basename "$d")"
+      install_name_tool -id "@loader_path/$d_base" "$d" 2>/dev/null || true
+      for rp in "@loader_path" "/opt/homebrew/lib" "/usr/local/lib" "/opt/homebrew/opt/openssl@3/lib" "/usr/local/opt/openssl@3/lib"; do
+        install_name_tool -add_rpath "$rp" "$d" 2>/dev/null || true
+      done
+      while IFS= read -r line; do
+        local dep
+        dep="$(echo "$line" | awk '{print $1}')"
+        [[ -z "$dep" ]] && continue
+        local dep_base
+        dep_base="$(basename "$dep")"
+        if [[ ("$dep" == *"/lib/"* && "$dep" != "/usr/lib/"*) || "$dep" == *runner* ]]; then
+          if [[ -f "$target_dir/lib/$dep_base" ]]; then
+            install_name_tool -change "$dep" "@loader_path/$dep_base" "$d" 2>/dev/null || true
+          fi
+        fi
+      done < <(otool -L "$d" 2>/dev/null | tail -n +2)
+    done < <(find "$target_dir/lib" -type f -name "*.dylib" 2>/dev/null || true)
+  fi
+}
+
 TMP="$(mktemp -d)"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
-ARCHIVE="$TMP/pg.tar.gz"
+ARCHIVE="$TMP/pg.archive"
 
 CANDIDATES=()
 if [[ -n "${PG_VENDOR_URL:-}" ]]; then
   assert_url_allowed "$PG_VENDOR_URL"
   CANDIDATES+=("$PG_VENDOR_URL")
 fi
-# theseus-rs community portable builds (GitHub releases)
+
+# theseus-rs community portable builds (primary)
 CANDIDATES+=("https://github.com/theseus-rs/postgresql-binaries/releases/download/${VERSION}/postgresql-${VERSION}-${THESEUS}.tar.gz")
-# Legacy EDB naming (often 403 without cookies — kept as fallback)
+
+# EnterpriseDB portable fallback builds
 MAJOR_MINOR="$(echo "$VERSION" | cut -d. -f1-2)"
-CANDIDATES+=("https://get.enterprisedb.com/postgresql/postgresql-${MAJOR_MINOR}-1-${EDB_SLUG}-binaries.tar.gz")
+if [[ "$TARGET" == "win-x64" ]]; then
+  CANDIDATES+=("https://get.enterprisedb.com/postgresql/postgresql-${MAJOR_MINOR}-1-windows-x64-binaries.zip")
+elif [[ "$TARGET" == darwin-* ]]; then
+  CANDIDATES+=("https://get.enterprisedb.com/postgresql/postgresql-${MAJOR_MINOR}-1-osx-binaries.zip")
+else
+  CANDIDATES+=("https://get.enterprisedb.com/postgresql/postgresql-${MAJOR_MINOR}-1-${EDB_SLUG}-binaries.tar.gz")
+fi
 
 ok=0
 USED_URL=""
@@ -161,8 +296,8 @@ done
 
 if [[ "$ok" != 1 ]]; then
   cat >&2 <<HINT
-All mirrors failed (download or checksum). Manual steps:
-  1. Download PostgreSQL ${MAJOR_MINOR} linux/${ARCH_NORM} binaries
+All mirrors failed for target: $TARGET (download or checksum). Manual steps:
+  1. Download PostgreSQL ${MAJOR_MINOR} for $TARGET
   2. Verify SHA-256, then extract so initdb/pg_ctl/postgres live at: $DEST/bin/
   3. Or set KKMAIL_PG_BIN=/path/to/pgsql/bin
   4. For a custom URL: PG_VENDOR_URL=... PG_VENDOR_SHA256=...
@@ -170,52 +305,73 @@ HINT
   exit 1
 fi
 
-assert_tar_safe "$ARCHIVE"
+EXTRACT_DIR="$TMP/extracted"
+mkdir -p "$EXTRACT_DIR"
+
+if [[ "$USED_URL" == *.zip ]]; then
+  assert_zip_safe "$ARCHIVE"
+  unzip -q "$ARCHIVE" -d "$EXTRACT_DIR"
+else
+  assert_tar_safe "$ARCHIVE"
+  tar -xzf "$ARCHIVE" -C "$EXTRACT_DIR"
+fi
+
+FOUND="$(find "$EXTRACT_DIR" -type f \( -name initdb -o -name initdb.exe \) | head -1 || true)"
+if [[ -z "$FOUND" ]]; then
+  echo "Could not locate initdb in extracted archive" >&2
+  exit 1
+fi
+
+ROOT_BIN="$(dirname "$FOUND")"
+ROOT_PG="$(dirname "$ROOT_BIN")"
+ROOT_PG_REAL="$(cd "$ROOT_PG" && pwd)"
+case "$ROOT_PG_REAL" in
+  "$TMP"/*) ;;
+  *) echo "Extracted tree escaped temp dir: $ROOT_PG_REAL" >&2; exit 1 ;;
+esac
 
 rm -rf "$DEST"
 mkdir -p "$VENDOR"
-tar -xzf "$ARCHIVE" -C "$TMP"
-if [[ -d "$TMP/pgsql/bin" ]]; then
-  mv "$TMP/pgsql" "$DEST"
-elif [[ -x "$TMP/bin/pg_ctl" ]]; then
-  mkdir -p "$DEST"
-  # theseus layout: archive root has bin/, lib/, share/
-  for d in bin lib share include; do
-    [[ -d "$TMP/$d" ]] && mv "$TMP/$d" "$DEST/"
+mv "$ROOT_PG" "$DEST"
+
+# Trim redundant files (headers, documentation, unneeded binaries)
+echo "Trimming redundant files (headers, doc, unneeded CLI tools)..."
+rm -rf "$DEST/include" "$DEST/doc" "$DEST/man" "$DEST/share/doc" "$DEST/share/man"
+find "$DEST" -type f \( -name "*.a" -o -name "*.pdb" -o -name "*.dSYM" \) -delete 2>/dev/null || true
+
+# Retain only required core binaries (initdb, pg_ctl, postgres) and runtime libraries
+if [[ -d "$DEST/bin" ]]; then
+  for f in "$DEST/bin"/*; do
+    [[ -f "$f" ]] || continue
+    base="$(basename "$f")"
+    case "$base" in
+      initdb|initdb.exe|pg_ctl|pg_ctl.exe|postgres|postgres.exe|createdb|createdb.exe|*.dll)
+        ;;
+      *)
+        rm -f "$f"
+        ;;
+    esac
   done
-  # sometimes nested postgresql-VERSION-triple/
-  if [[ ! -x "$DEST/bin/pg_ctl" ]]; then
-    FOUND="$(find "$TMP" -type f -name pg_ctl | head -1 || true)"
-    if [[ -n "$FOUND" ]]; then
-      ROOT_BIN="$(dirname "$FOUND")"
-      ROOT_PG="$(dirname "$ROOT_BIN")"
-      # Ensure resolved path stays under TMP (no symlink escape).
-      ROOT_PG_REAL="$(cd "$ROOT_PG" && pwd)"
-      case "$ROOT_PG_REAL" in
-        "$TMP"/*) ;;
-        *) echo "Extracted tree escaped temp dir: $ROOT_PG_REAL" >&2; exit 1 ;;
-      esac
-      rm -rf "$DEST"
-      mv "$ROOT_PG" "$DEST"
-    fi
-  fi
-else
-  FOUND="$(find "$TMP" -type f -name pg_ctl | head -1 || true)"
-  if [[ -z "$FOUND" ]]; then
-    echo "Could not locate pg_ctl in archive" >&2
-    exit 1
-  fi
-  ROOT_PG="$(dirname "$(dirname "$FOUND")")"
-  ROOT_PG_REAL="$(cd "$ROOT_PG" && pwd)"
-  case "$ROOT_PG_REAL" in
-    "$TMP"/*) ;;
-    *) echo "Extracted tree escaped temp dir: $ROOT_PG_REAL" >&2; exit 1 ;;
-  esac
-  mv "$ROOT_PG" "$DEST"
 fi
 
-chmod +x "$DEST/bin"/* 2>/dev/null || true
-test -x "$DEST/bin/initdb"
-test -x "$DEST/bin/pg_ctl"
-echo "OK: $($DEST/bin/pg_ctl --version) (from $USED_URL)"
-echo "PostgresManager will pick up: $DEST/bin"
+# On macOS, adjust dynamic link dependencies and rpaths
+if [[ "$OS_NORM" == "darwin" ]]; then
+  fix_macos_rpath "$DEST"
+fi
+
+# Verification
+if [[ "$OS_NORM" != "windows" ]]; then
+  chmod +x "$DEST/bin"/* 2>/dev/null || true
+  test -x "$DEST/bin/initdb"
+  test -x "$DEST/bin/pg_ctl"
+else
+  test -f "$DEST/bin/initdb.exe"
+  test -f "$DEST/bin/pg_ctl.exe"
+fi
+
+echo "OK: PostgreSQL binaries ready at $DEST/bin for target: $TARGET (from $USED_URL)"
+if [[ "$OS_NORM" == "darwin" && "$TARGET" == "darwin-arm64" && "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
+  "$DEST/bin/pg_ctl" --version || true
+elif [[ "$OS_NORM" == "linux" && "$(uname -s)" == "Linux" ]]; then
+  "$DEST/bin/pg_ctl" --version || true
+fi
