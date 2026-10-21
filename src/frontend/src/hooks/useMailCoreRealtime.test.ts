@@ -1,6 +1,11 @@
+// @vitest-environment jsdom
+import { createElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { createThrottledInvalidator, extractMessageIds, shouldInvalidateMailCoreInbox } from './useMailCoreRealtime'
+import { createThrottledInvalidator, extractMessageIds, shouldInvalidateMailCoreInbox, useMailCoreRealtime } from './useMailCoreRealtime'
 import type { queryClient } from '../api/queries'
+import * as sseModule from '../api/sseStream'
+import { UNAUTHORIZED_EVENT } from '../api/client'
+import { render, cleanup } from '../test/render'
 
 describe('shouldInvalidateMailCoreInbox', () => {
   it('invalidates on mail / folder stats change events', () => {
@@ -53,5 +58,34 @@ describe('createThrottledInvalidator', () => {
     expect(mockQc.invalidateQueries).toHaveBeenCalledTimes(3)
 
     vi.useRealTimers()
+  })
+})
+
+describe('useMailCoreRealtime unauthorized handling', () => {
+  it('dispatches UNAUTHORIZED_EVENT on 401/403 status', async () => {
+    let capturedOptions: sseModule.SseStreamOptions | undefined
+    vi.spyOn(sseModule, 'subscribeMailCoreStream').mockImplementation((_onEvent, options) => {
+      capturedOptions = options
+      return () => {}
+    })
+
+    const listener = vi.fn()
+    window.addEventListener(UNAUTHORIZED_EVENT, listener)
+
+    function TestComp() {
+      useMailCoreRealtime(true)
+      return null
+    }
+
+    await render(createElement(TestComp))
+
+    expect(capturedOptions?.onUnauthorized).toBeDefined()
+    capturedOptions!.onUnauthorized!(401)
+
+    expect(listener).toHaveBeenCalledTimes(1)
+
+    window.removeEventListener(UNAUTHORIZED_EVENT, listener)
+    cleanup()
+    vi.restoreAllMocks()
   })
 })
