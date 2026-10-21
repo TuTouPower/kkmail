@@ -49,4 +49,14 @@ describe('mobile drawer closes on every navigation', () => {
     expectNavigationReset()
     expect(s().view).toEqual({ type: 'account', accountId: '2', email: 'b@x' })
   })
+
+  it('selecting a favorite view closes the drawer', () => {
+    s().setView({ type: 'favorite', category: 'sent' })
+    expectNavigationReset()
+    expect(s().view).toEqual({ type: 'favorite', category: 'sent' })
+
+    s().setView({ type: 'favorite', category: 'inbox', accountId: 'acc-1', email: 'a@x' })
+    expectNavigationReset()
+    expect(s().view).toEqual({ type: 'favorite', category: 'inbox', accountId: 'acc-1', email: 'a@x' })
+  })
 })

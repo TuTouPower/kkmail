@@ -74,10 +74,17 @@ export const queryKeys = {
   groups: ['groups'] as const,
   accounts: ['accounts'] as const,
   stats: ['mail-core', 'stats'] as const,
-  inbox: (accountId: string = ALL_ACCOUNTS, filter?: string) =>
-    filter && filter !== 'all'
-      ? (['mail-core', 'inbox', accountScope(accountId), filter] as const)
-      : (['mail-core', 'inbox', accountScope(accountId)] as const),
+  inbox: (accountId: string = ALL_ACCOUNTS, filter?: string, folderRole: string = 'inbox') => {
+    const scope = accountScope(accountId)
+    if (folderRole !== 'inbox') {
+      return filter && filter !== 'all'
+        ? (['mail-core', 'inbox', scope, `role:${folderRole}`, filter] as const)
+        : (['mail-core', 'inbox', scope, `role:${folderRole}`] as const)
+    }
+    return filter && filter !== 'all'
+      ? (['mail-core', 'inbox', scope, filter] as const)
+      : (['mail-core', 'inbox', scope] as const)
+  },
   search: (q: string, accountId: string = ALL_ACCOUNTS) => ['mail-core', 'search', accountScope(accountId), q] as const,
 }
 
@@ -198,23 +205,28 @@ export function setCachedReadState(keys: Iterable<string>, isRead: boolean) {
   patchCachedMail(keys, { is_read: isRead })
 }
 
-/** Mark messages read with an optimistic cache update; reverts failures. */
-export async function markReadOptimistic(items: MailItem[]) {
-  const unread = items.filter((m) => !m.is_read && m.id)
-  if (!unread.length) return
-  setCachedReadState(unread.map(mailKey), true)
-  const results = await Promise.allSettled(unread.map((m) => postMailCoreMessageRead(m.id, true)))
+/** Set read status of messages with an optimistic cache update; reverts failures. */
+export async function setReadOptimistic(items: MailItem[], nextRead: boolean) {
+  const targets = items.filter((m) => m.id && m.is_read !== nextRead)
+  if (!targets.length) return
+  setCachedReadState(targets.map(mailKey), nextRead)
+  const results = await Promise.allSettled(targets.map((m) => postMailCoreMessageRead(m.id, nextRead)))
   const failedKeys: string[] = []
   const failed: string[] = []
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
-      failedKeys.push(mailKey(unread[i]))
+      failedKeys.push(mailKey(targets[i]))
       const reason = r.reason as { message?: unknown } | undefined
       failed.push(typeof reason?.message === 'string' ? reason.message : String(r.reason))
     }
   })
-  if (failedKeys.length) setCachedReadState(failedKeys, false)
+  if (failedKeys.length) setCachedReadState(failedKeys, !nextRead)
   if (failed.length) throw new Error(failed.join('；'))
+}
+
+/** Mark messages read with an optimistic cache update; reverts failures. */
+export async function markReadOptimistic(items: MailItem[]) {
+  return setReadOptimistic(items, true)
 }
 
 /** Toggle the server-side flag with an optimistic cache update; restores the prior snapshot on failure. */

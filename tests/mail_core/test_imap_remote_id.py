@@ -61,3 +61,27 @@ def test_imap_provider_quotes_folder_in_commands():
     mock_client.select.assert_called_with('"Sent Items"')
     mock_client.uid.assert_called_with("MOVE", "1", '"Deleted Items"')
 
+
+def test_imap_provider_list_folders_sent_mapping():
+    from unittest.mock import MagicMock
+
+    p = ImapProvider(host="127.0.0.1", port=1, username="u", password="p", use_ssl=False)
+    mock_client = MagicMock()
+    mock_client.list.return_value = (
+        "OK",
+        [
+            b'(\\HasNoChildren) "/" "INBOX"',
+            b'(\\HasNoChildren) "/" "\xe5\xb7\xb2\xe5\x8f\x91\xe9\x80\x81"',
+            b'(\\HasNoChildren) "/" "\xe5\xb7\xb2\xe5\x8f\x91\xe9\x80\x81\xe9\x82\xae\xe4\xbb\xb6"',
+            b'(\\HasNoChildren \\Sent) "/" "CustomSentFolder"',
+            b'(\\HasNoChildren) "/" "OtherFolder"',
+        ],
+    )
+    p._connect = lambda: mock_client
+    folders = p.list_folders()
+    by_name = {f.name: f.role for f in folders}
+    assert by_name["INBOX"] == "inbox"
+    assert by_name["已发送"] == "sent"
+    assert by_name["已发送邮件"] == "sent"
+    assert by_name["CustomSentFolder"] == "sent"
+    assert by_name["OtherFolder"] == "other"
