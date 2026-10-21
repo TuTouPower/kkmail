@@ -78,6 +78,21 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
   }
 }
 
+export interface AccountInboxStatsOut {
+  account_id: string
+  unread_count: number
+  total_count: number
+}
+
+export interface GlobalStatsOut {
+  total_unread: number
+  accounts: AccountInboxStatsOut[]
+}
+
+export function fetchGlobalStats(signal?: AbortSignal): Promise<GlobalStatsOut> {
+  return apiRequest('/api/mail/stats', { signal })
+}
+
 export function fetchMailCoreMessage(messageId: string, signal?: AbortSignal): Promise<MailCoreMessageDetail> {
   return apiRequest(`/api/mail/messages/${encodeURIComponent(messageId)}`, { signal })
 }
