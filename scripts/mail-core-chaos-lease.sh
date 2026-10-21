@@ -11,10 +11,10 @@ fi
 export MAIL_CORE_DATABASE_URL="${MAIL_CORE_DATABASE_URL:-postgresql+psycopg://kkmail:kkmail@127.0.0.1:5433/kkmail_test}"
 export PYTHONPATH="${ROOT}/src:${PYTHONPATH:-$ROOT}"
 
-# Guard: require database name in MAIL_CORE_DATABASE_URL to contain 'test' or 'chaos'
+# Guard: require database name in MAIL_CORE_DATABASE_URL to match test/chaos pattern
 DB_NAME="$("$PY" -c 'import os, urllib.parse; print(urllib.parse.urlsplit(os.environ.get("MAIL_CORE_DATABASE_URL", "")).path.lstrip("/"))')"
-if [[ "$DB_NAME" != *test* && "$DB_NAME" != *chaos* ]]; then
-  echo "refusing to run chaos test on non-disposable database: '$DB_NAME' (database name must contain 'test' or 'chaos')" >&2
+if ! [[ "$DB_NAME" =~ ^.*_test$ || "$DB_NAME" =~ ^test_.* || "$DB_NAME" =~ ^.*_chaos$ ]]; then
+  echo "refusing to run chaos test on non-disposable database: '$DB_NAME' (database name must match ^.*_test$, ^test_.*, or ^.*_chaos$)" >&2
   exit 2
 fi
 "$PY" -m pip install -q -r requirements-mail-core.txt

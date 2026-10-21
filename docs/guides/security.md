@@ -68,15 +68,11 @@
 mail-core / compose **只监听 `127.0.0.1`**（API 默认 **8000**，不是旧 Flask **5000**）。
 
 - **不要**在防火墙上对公网开放 `8000/tcp`（或历史文档里的 `5000/tcp`）。
-- 需要远程访问时：只放行 **80/443**，由 TLS 反向代理转到本机 `127.0.0.1:8000`，并设置 `MAIL_CORE_COOKIE_SECURE=1` 与可信的 `FORWARDED_ALLOW_IPS`（见 [deployment.md](deployment.md)）。
+- 需要远程访问时：只放行 **80/443**，由 TLS 反向代理转到本机 `127.0.0.1:8000`，并设置 `MAIL_CORE_COOKIE_SECURE=1`；因 uvicorn 不读取环境变量，需在启动命令中传递命令行参数 `--forwarded-allow-ips=<代理地址>`（见 [deployment.md](deployment.md)）。
 - 桌面版同样只绑 loopback；不要把 sidecar 端口映射到局域网。
 
 ## 备份（勿用裸 `cp`）
 
-不要用 `cp` 复制正在运行的 PostgreSQL 数据目录或历史 SQLite 路径当备份。使用密封备份包：
-
-```bash
-python -c "from mail_core.backup import run_backup; print(run_backup(output_dir='/path/to/backups'))"
-```
+不要用 `cp` 复制正在运行的 PostgreSQL 数据目录或历史 SQLite 路径当备份。使用密封备份包，执行说明与 Runbook 统一见 [upgrade.md](upgrade.md)。
 
 备份密钥（`MAIL_CORE_BACKUP_KEY`）必须与 blob 密钥不同，并离线保存。恢复演练见 `scripts/mail-core-backup-restore-drill.sh`。
