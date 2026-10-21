@@ -17,7 +17,7 @@ const {
 } = require('./hardening')
 const { PostgresManager } = require('./postgresManager')
 
-const PORT = parsePort(process.env.KKMAIL_DESKTOP_PORT || process.env.OUTLOOK_DESKTOP_PORT)
+const PORT = parsePort(process.env.KKMAIL_DESKTOP_PORT)
 const HOST = '127.0.0.1'
 let backend = null
 let backendExit = null

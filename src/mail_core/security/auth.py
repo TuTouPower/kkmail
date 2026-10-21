@@ -61,10 +61,10 @@ def reset_auth_caches() -> None:
 
 
 def require_secret_key() -> str:
-    key = (os.environ.get("MAIL_CORE_SECRET_KEY") or os.environ.get("SECRET_KEY") or "").strip()
+    key = (os.environ.get("MAIL_CORE_SECRET_KEY") or "").strip()
     if not key:
         raise AuthConfigError(
-            "MAIL_CORE_SECRET_KEY or SECRET_KEY is required to sign mail-core sessions"
+            "MAIL_CORE_SECRET_KEY is required to sign mail-core sessions"
         )
     return key
 
