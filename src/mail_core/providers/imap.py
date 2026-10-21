@@ -160,7 +160,15 @@ class ImapProvider:
             )
         else:
             client = imaplib.IMAP4(self.host, self.port, timeout=timeout)
-        client.login(self.username, self.password)
+        try:
+            client.login(self.username, self.password)
+        except imaplib.IMAP4.error as exc:
+            msg = str(exc)
+            if "basic authentication is disabled" in msg.lower() or "authenticationfailed" in msg.lower():
+                from mail_core.providers.http import PermanentAuthError
+
+                raise PermanentAuthError(f"IMAP authentication rejected permanently: {msg}") from exc
+            raise
         return client
 
     def list_folders(self) -> Sequence[RemoteFolder]:
