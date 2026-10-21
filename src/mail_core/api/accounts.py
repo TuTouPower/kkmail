@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any, Literal
 from uuid import UUID
 
@@ -113,7 +114,7 @@ def api_list_accounts(
 ):
     page = list_accounts_app(group_id=group_id, limit=limit, offset=offset)
     return AccountsPage(
-        accounts=[AccountOut(**dict(a.__dict__)) for a in page.accounts],
+        accounts=[AccountOut(**asdict(a)) for a in page.accounts],
         total=page.total,
         limit=page.limit,
         offset=page.offset,
@@ -132,7 +133,7 @@ def api_create_account(body: AccountCreateIn):
             config=body.config,
             credentials=body.credentials,
         )
-        return AccountOut(**dict(acc.__dict__))
+        return AccountOut(**asdict(acc))
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -149,7 +150,7 @@ def api_update_account(account_id: UUID, body: AccountUpdateIn):
             config=body.config,
             credentials=body.credentials,
         )
-        return AccountOut(**dict(acc.__dict__))
+        return AccountOut(**asdict(acc))
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
 

@@ -9,4 +9,4 @@
     1. 后端：`test_accounts_api_unit.py` 仅测试了 401 和 422，未包含对 `GET /api/accounts` 正常返回 200 的 Mock/单测验证；`test_accounts_api_pg.py` 因环境变量缺失在日常单测中被跳过。
     2. 前端：`Sidebar.test.tsx` 仅测试了 Happy Path，缺少 Query Error 场景下的真实错误展示与重试测试。
 - 线索：`src/mail_core/api/accounts.py:116`；`src/frontend/src/components/Sidebar.tsx:219`；`.scratch/bug_repro/sidebar_error_repro.ts`。
-- 处理：未开
+- 处理：t004
