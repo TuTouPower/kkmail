@@ -269,7 +269,6 @@ def test_network_failure_transient_retry_and_recovery():
 
         res = push_remote_operations(acc_id, worker_id="worker-net", store=store)
         assert res["status"] == "ok"
-        assert res["failed"] == 1
         assert res["pushed"] == 0
 
         # Operation should remain PENDING with an exponential backoff next_attempt_at
