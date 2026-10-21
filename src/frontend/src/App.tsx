@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMailStore } from './store/mailStore'
 import Sidebar from './components/Sidebar'
 import MessageList from './components/MessageList'
@@ -6,6 +6,7 @@ import MessageReader from './components/MessageReader'
 import SettingsPage from './components/SettingsModal'
 import LoginPage from './components/LoginPage'
 import ColumnResize from './components/ColumnResize'
+import ErrorBoundary from './components/ErrorBoundary'
 import { UNAUTHORIZED_EVENT, api } from './api/client'
 import { queryClient } from './api/queries'
 import './design-system/tokens.css'
@@ -44,6 +45,19 @@ function App() {
 
   const wide = useIsWide()
   const drawerOpen = mobileSidebarOpen && !wide
+
+  const appRef = useRef<HTMLDivElement>(null)
+  const workspaceRef = useRef<HTMLDivElement>(null)
+  const dragSidebarRef = useRef(sidebarWidth)
+  const dragListRef = useRef(listWidth)
+
+  useEffect(() => {
+    dragSidebarRef.current = sidebarWidth
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    dragListRef.current = listWidth
+  }, [listWidth])
 
   useEffect(() => {
     if (!drawerOpen) return
@@ -91,6 +105,7 @@ function App() {
 
   return (
     <div
+      ref={appRef}
       className={['app', drawerOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : ''].filter(Boolean).join(' ')}
       data-mobile-view={mobileView}
       style={{
@@ -99,29 +114,74 @@ function App() {
       }}
     >
       <div
+        ref={workspaceRef}
         className="workspace"
         data-testid="mail-workspace"
         style={gridColumns ? { gridTemplateColumns: gridColumns } : undefined}
       >
-        <Sidebar />
+        <ErrorBoundary inline fallbackTitle="侧栏加载失败">
+          <Sidebar />
+        </ErrorBoundary>
         {wide && !sidebarCollapsed && (
           <ColumnResize
             ariaLabel="调整侧栏宽度"
-            onDrag={(dx) => setSidebarWidth(useMailStore.getState().sidebarWidth + dx)}
+            onDrag={(dx) => {
+              const next = Math.min(420, Math.max(180, Math.round(dragSidebarRef.current + dx)))
+              dragSidebarRef.current = next
+              if (appRef.current) {
+                appRef.current.style.setProperty('--sidebar-w', `${next}px`)
+              }
+              if (workspaceRef.current) {
+                workspaceRef.current.style.gridTemplateColumns = workspaceGridColumns({
+                  wide,
+                  sidebarCollapsed,
+                  settingsOpen,
+                  sidebarWidth: next,
+                  listWidth: dragListRef.current,
+                }) ?? ''
+              }
+            }}
+            onDragEnd={() => {
+              setSidebarWidth(dragSidebarRef.current)
+            }}
           />
         )}
         {settingsOpen ? (
-          <SettingsPage />
+          <ErrorBoundary inline fallbackTitle="设置加载失败">
+            <SettingsPage />
+          </ErrorBoundary>
         ) : (
           <>
-            <MessageList />
+            <ErrorBoundary inline fallbackTitle="邮件列表加载失败">
+              <MessageList />
+            </ErrorBoundary>
             {wide && (
               <ColumnResize
                 ariaLabel="调整邮件列表宽度"
-                onDrag={(dx) => setListWidth(useMailStore.getState().listWidth + dx)}
+                onDrag={(dx) => {
+                  const next = Math.min(560, Math.max(260, Math.round(dragListRef.current + dx)))
+                  dragListRef.current = next
+                  if (appRef.current) {
+                    appRef.current.style.setProperty('--list-w', `${next}px`)
+                  }
+                  if (workspaceRef.current) {
+                    workspaceRef.current.style.gridTemplateColumns = workspaceGridColumns({
+                      wide,
+                      sidebarCollapsed,
+                      settingsOpen,
+                      sidebarWidth: dragSidebarRef.current,
+                      listWidth: next,
+                    }) ?? ''
+                  }
+                }}
+                onDragEnd={() => {
+                  setListWidth(dragListRef.current)
+                }}
               />
             )}
-            <MessageReader />
+            <ErrorBoundary inline fallbackTitle="邮件详情加载失败">
+              <MessageReader />
+            </ErrorBoundary>
           </>
         )}
       </div>

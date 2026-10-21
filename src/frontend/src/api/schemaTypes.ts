@@ -32,6 +32,8 @@ export type FlagBody = schemas['FlagBody']
 export type PasswordChangeIn = schemas['PasswordChangeIn']
 export type AccountFolderStatsOut = schemas['AccountFolderStatsOut']
 export type AccountFolderStatsItemOut = schemas['AccountFolderStatsItemOut']
+export type AccountInboxStatsOut = schemas['AccountInboxStatsOut']
+export type GlobalStatsOut = schemas['GlobalStatsOut']
 
 /** Previous hand-written names → OpenAPI schemas (API layer). */
 export type MailCoreMessage = MessageOut
