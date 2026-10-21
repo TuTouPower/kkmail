@@ -79,10 +79,20 @@ export default function MessageList() {
     total: number
   }
 
+  const is_unread = listFilter === 'unread' ? false : undefined
+  const is_flagged = listFilter === 'flagged' ? true : undefined
+
   const inboxInfiniteQuery = useInfiniteQuery<InboxPageData, Error, { pages: InboxPageData[]; pageParams: (string | null)[] }, readonly unknown[], string | null>({
-    queryKey: queryKeys.inbox(listScope),
+    queryKey: queryKeys.inbox(listScope, listFilter),
     queryFn: async ({ pageParam, signal }) => {
-      const page = await fetchMailCoreInbox({ limit: LIST_LIMIT, accountId, cursor: pageParam || undefined, signal })
+      const page = await fetchMailCoreInbox({
+        limit: LIST_LIMIT,
+        accountId,
+        is_read: is_unread,
+        is_flagged: is_flagged,
+        cursor: pageParam || undefined,
+        signal,
+      })
       return {
         items: page.items.filter(hasMailId).map(mailCoreToMailItem),
         next_cursor: page.next_cursor ?? null,
