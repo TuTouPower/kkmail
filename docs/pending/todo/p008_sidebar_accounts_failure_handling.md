@@ -1,8 +1,12 @@
-# p008 侧栏账户加载失败提示误导且缺乏重试交互
+# p008 AccountDTO slots致accounts接口500及侧栏错误提示失真
 
-- 现象：当 `GET /api/groups` 或 `GET /api/accounts` 发生网络超时、后端 500 等异常时，侧栏“邮箱账户”节点显示假定未登录的静态文本「账户加载失败，请确认已登录且后端可用」；此时用户实际已登录，且中间邮件列表正常渲染展示（走 `/api/mail/inbox`），无重试入口。
-- 影响：用户误判系统鉴权或全局后端崩溃，与正常可见的邮件列表产生认知割裂；同时因缺乏重试交互，网络抖动或瞬时错误后必须强制刷新整个页面。
-- 根因：`Sidebar.tsx` 未使用 `errorMessage` 获取实际异常信息，而是对 `groupsQuery.error || accountsQuery.error` 硬编码了假定“未登录且后端可用”的兜底文案；且未向用户暴露 `refetch` 操作。扫描前端其它错误提示，未见同类直接假定未登录的误导硬编码（已扫无同类）。
-- 测试缺口：`Sidebar.test.tsx` 仅测试了账户与统计接口成功的 Happy Path，完全缺失账户/分组查询失败时的错误展示与重试交互断言。应在前端组件测试中补充 Query Error 状态下的真实错误展示与重试按钮测试。
-- 线索：`src/frontend/src/components/Sidebar.tsx` 217~221 行；`.scratch/bug_repro/sidebar_error_repro.ts`。
+- 现象：访问网页时侧栏“邮箱账户”节点显示「账户加载失败，请确认已登录且后端可用」；但用户已正常登录，且中间邮件列表正常渲染展示（走 `/api/mail/inbox`）。
+- 影响：用户无法查看与切换各账户，误以为登录失效或后端彻底崩溃；且因缺乏重试入口，无法就地恢复。
+- 根因：
+    1. 后端根因：`src/mail_core/mail/application/accounts.py` 中的 `AccountDTO` 使用了 `@dataclass(frozen=True, slots=True)`，实例不具备 `__dict__` 属性。而 `src/mail_core/api/accounts.py`（第 116、135、152 行）依然使用 `a.__dict__` 展开构造 `AccountOut`，只要数据库存在账户，`GET /api/accounts`（以及 POST/PATCH）即抛出 `AttributeError: 'AccountDTO' object has no attribute '__dict__'`，FastAPI 报 500。同类位点：全库扫描仅此 3 处使用 `.__dict__`。
+    2. 前端根因：`Sidebar.tsx` 未使用 `errorMessage` 获取实际异常信息，而是对 `groupsQuery.error || accountsQuery.error` 硬编码了假定“未登录且后端可用”的兜底文案，且未提供 `refetch` 重试按钮。
+- 测试缺口：
+    1. 后端：`test_accounts_api_unit.py` 仅测试了 401 和 422，未包含对 `GET /api/accounts` 正常返回 200 的 Mock/单测验证；`test_accounts_api_pg.py` 因环境变量缺失在日常单测中被跳过。
+    2. 前端：`Sidebar.test.tsx` 仅测试了 Happy Path，缺少 Query Error 场景下的真实错误展示与重试测试。
+- 线索：`src/mail_core/api/accounts.py:116`；`src/frontend/src/components/Sidebar.tsx:219`；`.scratch/bug_repro/sidebar_error_repro.ts`。
 - 处理：未开
