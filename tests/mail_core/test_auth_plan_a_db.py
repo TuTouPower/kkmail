@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import bcrypt
 
@@ -12,7 +12,6 @@ from mail_core.security.auth import (
     AuthConfigError,
     change_login_password,
     get_login_password_hash,
-    get_session_epoch,
     invalidate_all_sessions,
     issue_session,
     read_session,

@@ -195,7 +195,8 @@ def test_imap_delta_changes_capping_and_pagination(monkeypatch):
                 uids_bytes = b" ".join(str(i).encode() for i in range(1, 251))
                 return "OK", [uids_bytes]
             if cmd == "FETCH":
-                return "OK", [(b"1 (FLAGS (\\Seen) UID 1)", b"")]
+                uids = [int(x) for x in str(args[0]).split(",") if x.strip().isdigit()]
+                return "OK", [(f"{u} (FLAGS (\\Seen) UID {u})".encode(), b"") for u in uids]
             return "NO", []
 
     monkeypatch.setattr(ImapProvider, "_connect", lambda self: FakeImapBulk())
@@ -239,7 +240,6 @@ def test_reclaim_stale_in_progress_and_metadata_history_checkpoint():
     from mail_core.mail.application.remote_ops import enqueue_remote_operation, mark_remote_operation
     from mail_core.mail.storage import Account, Folder, RemoteOperation, SyncCheckpoint
     from mail_core.sync import acquire_lease
-    from sqlalchemy import select
 
     Session = get_session_factory()
     with Session() as session:

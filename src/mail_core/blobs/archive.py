@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import select
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.blobs.quota import check_quota

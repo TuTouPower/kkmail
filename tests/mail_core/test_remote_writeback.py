@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-import pytest
-
 from mail_core.providers.base import RemoteFolder, RemoteMessageMeta
 from mail_core.providers.gmail import GmailProvider
 from mail_core.providers.graph import GraphProvider

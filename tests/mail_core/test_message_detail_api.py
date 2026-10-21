@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
 
 from mail_core.api.app import app
 from tests.mail_core.conftest import TEST_API_KEY

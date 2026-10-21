@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.mail.storage.models import Message, Thread, ThreadMessage
@@ -173,16 +174,28 @@ def assign_thread_for_message(
 
     created = False
     if thread is None:
-        thread = Thread(
-            account_id=account_id,
-            provider_thread_key=provider_thread_key,
-            subject_norm=normalize_subject(message.subject),
-            sort_time=message.sort_time,
-        )
-        session.add(thread)
-        session.flush()
-        created = True
-        linked_via = "new"
+        try:
+            with session.begin_nested():
+                thread = Thread(
+                    account_id=account_id,
+                    provider_thread_key=provider_thread_key,
+                    subject_norm=normalize_subject(message.subject),
+                    sort_time=message.sort_time,
+                )
+                session.add(thread)
+                session.flush()
+                created = True
+                linked_via = "new"
+        except IntegrityError:
+            if provider_thread_key:
+                thread = session.scalar(
+                    select(Thread).where(
+                        Thread.account_id == account_id,
+                        Thread.provider_thread_key == provider_thread_key,
+                    )
+                )
+            if thread is None:
+                raise
     elif provider_thread_key and not thread.provider_thread_key:
         thread.provider_thread_key = provider_thread_key
 

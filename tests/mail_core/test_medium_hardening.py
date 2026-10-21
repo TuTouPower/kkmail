@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mail_core.blobs.gc import run_gc_blobs, sweep_expired_blobs
+from mail_core.blobs.gc import run_gc_blobs
 from mail_core.providers.http import ProviderHttpError
 from mail_core.providers.imap import ImapProvider
 from mail_core.providers.oauth import urllib_json_request

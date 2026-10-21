@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Generator
-from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -51,17 +49,3 @@ def get_session_factory(url: str | None = None) -> sessionmaker[Session]:
     get_engine(url)
     assert _SessionLocal is not None
     return _SessionLocal
-
-
-@contextmanager
-def session_scope(url: str | None = None) -> Generator[Session, None, None]:
-    factory = get_session_factory(url)
-    session = factory()
-    try:
-        yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

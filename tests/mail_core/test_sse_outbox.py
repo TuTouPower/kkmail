@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,7 +13,7 @@ from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import OutboxEventType
 from mail_core.mail.storage import OutboxEvent
 from mail_core.realtime.dispatcher import OutboxDispatcher
-from mail_core.realtime.outbox import fetch_since, mark_dispatched
+from mail_core.realtime.outbox import fetch_since
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import os
-import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select
 
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType
