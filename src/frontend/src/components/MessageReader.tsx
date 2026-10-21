@@ -12,6 +12,7 @@ import { displayName } from '../lib/displayName'
 
 export default function MessageReader() {
   const selectedKey = useMailStore((s) => s.selectedKey)
+  const setSelectedKey = useMailStore((s) => s.setSelectedKey)
   const setMobileView = useMailStore((s) => s.setMobileView)
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
@@ -84,6 +85,7 @@ export default function MessageReader() {
       await postMailCoreMessageTrash(selected.id)
       setActionStatus('')
       removeCachedMail([mailKey(selected)])
+      setSelectedKey(null)
       await queryClient.invalidateQueries({ queryKey: ['mail-core'] })
     } catch (err) {
       setActionStatus(errorMessage(err, '删除失败'))
@@ -107,7 +109,7 @@ export default function MessageReader() {
         <div className="reader-location">{selected.accountEmail}</div>
         <div className="reader-toolbar-actions">
           <button className="reader-action" title="标为已读" aria-label="标为已读" onClick={markCurrent} disabled={selected.is_read}><MailOpen size={18} /></button>
-          <button className="reader-action" title="移到废纸篓" aria-label="移到废纸篓" onClick={trashCurrent}><Trash2 size={18} /></button>
+          <button className="reader-action" title="移到废纸篓（删除）" aria-label="移到废纸篓（删除）" onClick={trashCurrent}><Trash2 size={18} /></button>
           <button
             className="reader-action"
             title={selected.is_flagged ? '取消标记' : '标记邮件'}
@@ -133,7 +135,12 @@ export default function MessageReader() {
           {actionStatus && <div role="status" style={{ color: 'var(--red)', fontSize: 12, marginBottom: 8 }}>{actionStatus}</div>}
           {detailQuery.isLoading && <div style={{ color: 'var(--muted)' }}>正在加载正文…</div>}
           {detailQuery.error && <div style={{ color: 'var(--red)' }}>{String((detailQuery.error as Error).message)}</div>}
-          {html ? (
+          {!body && !detailQuery.isLoading ? (
+            <div className="empty-body-placeholder" style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--muted)', background: 'var(--surface-2)', borderRadius: 8, fontSize: 13 }}>
+              <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件正文尚未完成同步或内容为空</p>
+              <p style={{ margin: 0, fontSize: 12 }}>该邮件目前仅同步了元数据摘要。后台归档任务将自动排队拉取完整原文。</p>
+            </div>
+          ) : html ? (
             <>
               {!loadRemoteImages && /<img\b[^>]+src\s*=\s*["']https?:/i.test(body) && (
                 <div style={{ fontSize: 12, marginBottom: 10, padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel, #f7f7f8)' }}>
