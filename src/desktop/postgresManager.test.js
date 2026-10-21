@@ -58,6 +58,13 @@ function testEnsureDirsWritesMarker() {
   const paths = mgr.ensureDirs()
   assert.ok(fs.existsSync(paths.blobs))
   assert.ok(fs.existsSync(paths.secrets))
+  assert.ok(fs.existsSync(paths.backups))
+  if (process.platform !== 'win32') {
+    assert.strictEqual(fs.statSync(paths.dataRoot).mode & 0o777, 0o700)
+    assert.strictEqual(fs.statSync(paths.blobs).mode & 0o777, 0o700)
+    assert.strictEqual(fs.statSync(paths.backups).mode & 0o777, 0o700)
+    assert.strictEqual(fs.statSync(paths.secrets).mode & 0o777, 0o700)
+  }
   assert.ok(fs.existsSync(path.join(paths.dataRoot, 'README-DO-NOT-DELETE.txt')))
   const status = mgr.status()
   assert.strictEqual(status.stub, true)
