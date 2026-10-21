@@ -20,6 +20,15 @@ export const SEARCH_MIN_CHARS = 2
 export const SEARCH_DEBOUNCE_MS = 250
 const LIST_LIMIT = 100
 
+/** Whether query meets search threshold (1+ CJK char or 2+ ascii chars). */
+function isSearchTrigger(q: string): boolean {
+  const trimmed = q.trim()
+  if (trimmed.length >= 1 && /[\u4e00-\u9fa5]/.test(trimmed)) {
+    return true
+  }
+  return trimmed.length >= SEARCH_MIN_CHARS
+}
+
 export default function MessageList() {
   const view = useMailStore((s) => s.view)
   const selectedKey = useMailStore((s) => s.selectedKey)
@@ -56,7 +65,7 @@ export default function MessageList() {
 
   const accountId = view.type === 'account' ? view.accountId : undefined
   const term = search.trim()
-  const searching = term.length >= SEARCH_MIN_CHARS
+  const searching = isSearchTrigger(term)
   const listScope = accountScope(accountId)
 
   const [nextCursor, setNextCursor] = useState<string | null>(null)
