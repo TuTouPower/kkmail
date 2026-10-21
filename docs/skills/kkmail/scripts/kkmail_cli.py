@@ -21,7 +21,7 @@ DEFAULT_PASSWORD = (
     os.environ.get("KKMAIL_PASSWORD")
     or os.environ.get("MAIL_CORE_LOGIN_PASSWORD")
     or os.environ.get("LOGIN_PASSWORD")
-    or "[REDACTED]456Password!"
+    or ""
 )
 DEFAULT_API_KEY = os.environ.get("KKMAIL_API_KEY") or os.environ.get("MAIL_CORE_API_KEYS") or ""
 SESSION_CACHE_FILE = Path(os.environ.get("KKMAIL_SESSION_CACHE") or (Path.home() / ".cache" / "kkmail_agent_session.json"))
@@ -61,6 +61,12 @@ class KKMailClient:
     def login(self) -> bool:
         if self.api_key:
             return True
+        if not self.password:
+            print(
+                "Error: Authentication password required. Set KKMAIL_PASSWORD or MAIL_CORE_LOGIN_PASSWORD, or pass --password.",
+                file=sys.stderr,
+            )
+            return False
         url = f"{self.base_url}/api/auth/login"
         payload = json.dumps({"password": self.password}).encode("utf-8")
         req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
