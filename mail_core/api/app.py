@@ -74,6 +74,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    import uuid
+    from mail_core.logging_config import reset_trace_id, set_trace_id
+
+    req_id = request.headers.get("X-Request-ID") or request.headers.get("X-Trace-ID")
+    if not req_id or not req_id.strip():
+        req_id = f"req_{uuid.uuid4().hex[:10]}"
+    token = set_trace_id(req_id.strip())
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = req_id.strip()
+        return response
+    finally:
+        reset_trace_id(token)
+
+
 app.include_router(auth_router)
 app.include_router(accounts_router, dependencies=[Depends(require_auth)])
 app.include_router(sse_router, prefix="/api", tags=["realtime"], dependencies=[Depends(require_auth)])

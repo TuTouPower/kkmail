@@ -5,6 +5,9 @@ import './index.css'
 import App from './App.tsx'
 import ErrorBoundary from './components/ErrorBoundary.tsx'
 import { queryClient } from './api/queries.ts'
+import { initGlobalDiagnostics } from './lib/diagnostics.ts'
+
+initGlobalDiagnostics()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
