@@ -38,7 +38,7 @@
         {
             "tid": "t026",
             "slug": "mime_archive_decode_failure",
-            "title": "修复 MIME 归档报头与附件名解码并显式记录损坏数据失败",
+            "title": "邮件 MIME 解析失败在前端明确报错",
             "status": "backlog",
             "branch": "",
             "worktree": "",
@@ -48,7 +48,7 @@
             "diff_anchor": "",
             "depends_on": "",
             "conflicts_with": "",
-            "note": "来源 p020；裸 GBK MIME 报头与附件名均复现乱码；回填保留边界及解析失败状态待确认，禁止 start",
+            "note": "来源 p020；用户确认不处理历史乱码；正文/报头/附件名解析失败持久记录并在前端报错；保留原文，无产品契约阻塞",
             "dir": "docs/tasks/t026_mime_archive_decode_failure"
         }
     ]
