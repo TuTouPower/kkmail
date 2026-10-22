@@ -348,6 +348,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mail/messages/{message_id}/sync-body": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Sync Message Body
+         * @description Trigger on-demand highest-priority body sync for a message.
+         */
+        post: operations["api_sync_message_body_api_mail_messages__message_id__sync_body_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/mail/messages/{message_id}/trash": {
         parameters: {
             query?: never;
@@ -745,6 +765,11 @@ export interface components {
             has_attachments: boolean;
             /** Id */
             id: string;
+            /**
+             * Is Archived
+             * @default true
+             */
+            is_archived: boolean;
             /** Is Flagged */
             is_flagged: boolean;
             /** Is Read */
@@ -1588,6 +1613,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MutationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_sync_message_body_api_mail_messages__message_id__sync_body_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageDetailOut"];
                 };
             };
             /** @description Validation Error */

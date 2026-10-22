@@ -167,7 +167,7 @@ describe('mail endpoints', () => {
     const d: MailCoreMessageDetail = {
       id: 'm', account_id: 'a', subject: 'S', from_address: 'a@b.c', from_name: null, from: 'a@b.c', to: '', cc: '',
       date: '2024-01-01T00:00:00Z', is_read: true, is_flagged: false, has_attachments: true, snippet: null, body: '',
-      body_type: 'empty', parse_error: null,
+      body_type: 'empty', parse_error: null, is_archived: true,
       attachments: [{ id: 'att', name: 'a.pdf', contentType: null, size: null, is_inline: false }],
     }
     const out = mailCoreToMailDetail(d)

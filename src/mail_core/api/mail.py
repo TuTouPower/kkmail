@@ -5,6 +5,7 @@ Routes call the application layer only (queries / search / mutations / attachmen
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from uuid import UUID
 
@@ -14,6 +15,11 @@ from pydantic import BaseModel, Field
 
 from mail_core.api.http_headers import content_disposition_attachment
 from mail_core.db.session import get_session_factory
+from mail_core.mail.domain.archive import apply_transition
+from mail_core.mail.domain.enums import ArchiveState, JobType
+from mail_core.mail.storage.models import Message, MessageArchiveState
+from mail_core.sync.jobs import enqueue_job
+from mail_core.security.redact import safe_error
 from mail_core.mail.application.attachments import (
     AttachmentAccessError,
     PathTraversalRejected,
@@ -39,6 +45,7 @@ from mail_core.mail.application.queries import (
 )
 from mail_core.mail.application.search import search_messages_page
 
+log = logging.getLogger("mail_core.api.mail")
 router = APIRouter(prefix="/api/mail", tags=["mail"])
 
 
@@ -118,6 +125,7 @@ class MessageDetailOut(BaseModel):
     body: str
     body_type: str
     parse_error: str | None
+    is_archived: bool = True
     attachments: list[AttachmentOut]
 
 
@@ -278,6 +286,26 @@ def api_get_message(message_id: UUID) -> MessageDetailOut:
         d = get_message_detail(session, message_id)
         if d is None:
             raise HTTPException(404, "message not found")
+        st = session.get(MessageArchiveState, message_id)
+        is_archived = (st.state == ArchiveState.ARCHIVE_COMPLETE.value) if st is not None else True
+        # AC-001: 若邮件正文未就绪且未解析失败，提升归档优先级至最高 (0) 并入队高优归档任务 (priority=10)
+        if not is_archived and not d.parse_error:
+            if st is not None and st.state in (
+                ArchiveState.METADATA_SYNCED.value,
+                ArchiveState.ARCHIVE_PENDING.value,
+            ):
+                st.priority = 0
+                if st.state == ArchiveState.METADATA_SYNCED.value:
+                    apply_transition(st, ArchiveState.ARCHIVE_PENDING)
+                enqueue_job(
+                    session,
+                    job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                    account_id=d.account_id,
+                    payload={"message_id": str(message_id), "batch_size": 1},
+                    priority=10,
+                    dedupe_key=f"archive_msg:{message_id}",
+                )
+                session.commit()
         return MessageDetailOut(
             id=str(d.id),
             account_id=str(d.account_id),
@@ -295,6 +323,79 @@ def api_get_message(message_id: UUID) -> MessageDetailOut:
             body=d.body,
             body_type=d.body_type,
             parse_error=d.parse_error,
+            is_archived=is_archived,
+            attachments=[
+                AttachmentOut(
+                    id=str(a.id),
+                    name=a.filename,
+                    contentType=a.content_type,
+                    size=a.size_bytes,
+                    is_inline=a.is_inline,
+                )
+                for a in d.attachments
+            ],
+        )
+
+
+@router.post("/messages/{message_id}/sync-body", response_model=MessageDetailOut, response_model_by_alias=True)
+def api_sync_message_body(message_id: UUID) -> MessageDetailOut:
+    """Trigger on-demand highest-priority body sync for a message."""
+    Session = get_session_factory()
+    with Session() as session:
+        msg = session.get(Message, message_id)
+        if msg is None:
+            raise HTTPException(404, "message not found")
+        account_id = msg.account_id
+        st = session.get(MessageArchiveState, message_id)
+        if st is not None:
+            st.priority = 0
+            if st.state == ArchiveState.METADATA_SYNCED.value:
+                apply_transition(st, ArchiveState.ARCHIVE_PENDING)
+            enqueue_job(
+                session,
+                job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                account_id=account_id,
+                payload={"message_id": str(message_id), "batch_size": 1},
+                priority=10,
+                dedupe_key=f"archive_msg:{message_id}",
+            )
+            session.commit()
+
+    # 尝试就地执行单封归档以提供即时响应
+    from mail_core.blobs.archive import run_archive_batch
+    try:
+        run_archive_batch(
+            account_id=account_id,
+            worker_id="api-on-demand",
+            payload={"message_id": str(message_id), "batch_size": 1},
+        )
+    except Exception as exc:
+        log.warning("on-demand sync error for message %s: %s", message_id, safe_error(exc))
+
+    with Session() as session:
+        d = get_message_detail(session, message_id)
+        if d is None:
+            raise HTTPException(404, "message not found")
+        st = session.get(MessageArchiveState, message_id)
+        is_archived = (st.state == ArchiveState.ARCHIVE_COMPLETE.value) if st is not None else True
+        return MessageDetailOut(
+            id=str(d.id),
+            account_id=str(d.account_id),
+            subject=d.subject,
+            from_address=d.from_address,
+            from_name=d.from_name,
+            from_=(f"{d.from_name} <{d.from_address}>" if d.from_name else d.from_address),
+            to=", ".join(str(x) for x in d.to_addresses) if d.to_addresses else "",
+            cc=", ".join(str(x) for x in d.cc_addresses) if d.cc_addresses else "",
+            date=d.sort_time,
+            is_read=d.is_read,
+            is_flagged=d.is_flagged,
+            has_attachments=d.has_attachments,
+            snippet=d.snippet,
+            body=d.body,
+            body_type=d.body_type,
+            parse_error=d.parse_error,
+            is_archived=is_archived,
             attachments=[
                 AttachmentOut(
                     id=str(a.id),
