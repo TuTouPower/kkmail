@@ -20,10 +20,16 @@ export const SEARCH_MIN_CHARS = 2
 export const SEARCH_DEBOUNCE_MS = 250
 const LIST_LIMIT = 100
 
+/** Whether query meets CJK threshold (1+ CJK char). */
+function isCjkTrigger(q: string): boolean {
+  const trimmed = q.trim()
+  return trimmed.length >= 1 && /[\u4e00-\u9fa5]/.test(trimmed)
+}
+
 /** Whether query meets search threshold (1+ CJK char or 2+ ascii chars). */
 function isSearchTrigger(q: string): boolean {
   const trimmed = q.trim()
-  if (trimmed.length >= 1 && /[\u4e00-\u9fa5]/.test(trimmed)) {
+  if (isCjkTrigger(trimmed)) {
     return true
   }
   return trimmed.length >= SEARCH_MIN_CHARS
@@ -47,6 +53,7 @@ const MessageList = memo(function MessageList() {
   const clearSelected = useMailStore((s) => s.clearSelected)
 
   const [searchInput, setSearchInput] = useState(search)
+  const [isComposing, setIsComposing] = useState(false)
 
   useEffect(() => {
     setSearchInput(search)
@@ -54,11 +61,24 @@ const MessageList = memo(function MessageList() {
 
   useEffect(() => {
     if (searchInput === search) return
+    if (isComposing) return
+
+    const trimmed = searchInput.trim()
+    if (!trimmed) {
+      setSearch('')
+      return
+    }
+
+    if (isCjkTrigger(trimmed)) {
+      setSearch(searchInput)
+      return
+    }
+
     const timer = setTimeout(() => {
       setSearch(searchInput)
     }, SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [searchInput, search, setSearch])
+  }, [searchInput, search, isComposing, setSearch])
 
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
@@ -329,6 +349,11 @@ const MessageList = memo(function MessageList() {
             name="search"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
+            onCompositionStart={() => setIsComposing(true)}
+            onCompositionEnd={(e) => {
+              setIsComposing(false)
+              setSearchInput(e.currentTarget.value)
+            }}
             placeholder="搜索邮件（主题 / 发件人 / 正文）"
             aria-label="搜索邮件"
           />
