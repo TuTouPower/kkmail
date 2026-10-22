@@ -38,3 +38,10 @@
 
 - 写入权威状态、派生索引（`docs/tasks_index.json`、`docs/pending/` 等）必须通过临时文件 + fsync + `os.replace` 原子替换，防止进程异常中断留下半写入文件。
 - 工具链内部公共 helper：`from repo_task.documents import atomic_write_text`。
+
+## 四、 邮件协议与报头编码规范
+
+1. **IMAP 报头保真与回退顺序**：
+    - IMAP 报头元数据扫描必须保持原始字节，严禁在 MIME 解析前全局通过 UTF-8 `replace` 解码；
+    - 报头字段解码顺序：优先遵守有效 RFC 2047 charset；无声明或未知字节按严格 UTF-8 → 严格 GB18030（兼容 GBK/GB2312）→ UTF-8 有损替换（`replace`）顺序确定性回退；
+    - 损坏或未知字段采用独立降级，不得阻断整页同步，不得污染相邻字段。
