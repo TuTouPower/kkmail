@@ -167,3 +167,19 @@ python3 scripts/run_full_stack_e2e.py
 - 启动后台真实 Worker 进程处理同步与入库；
 - Playwright 执行 `tests/e2e/full_stack.spec.ts` 验证真实登录认证、Cookie、CSRF 校验、多会话失效、添加 IMAP 账号后 Worker 自动同步与邮件详情展示、XSS 防护过滤、双页面 SSE 实时协同；
 - 运行后优雅终止进程，安全销毁测试库与 role，失败时保留截图、日志和 trace 于 `.scratch/`。同时保留 `npm --prefix src/frontend run test:e2e` 作为 4 秒快速 UI 冒烟入口。
+
+## 数据库迁移与结构一致性门禁（t018）
+
+数据库迁移质量门禁验证真实 PostgreSQL 下历史版本数据跨版本平滑升级无损保留与结构一致性：
+
+```bash
+scripts/run-mail-core-tests.sh run -k test_migration_validation
+```
+
+验证覆盖：
+
+- **线性单 Head 校验**：严格确保迁移版本历史无分叉、无孤立 revision，唯一当前 head 对应生产最新版本；
+- **历史窗口升级数据无损保留**：覆盖 `f5f312751c77` (unified schema)、`20261021_0011` (认证入库前) 及 `20261022_0014` 三个历史 revision 窗口，在旧库状态写入当时合法数据后直接升级至当前 head，验证邮件正文、附件、凭证哈希与 session_epoch 无损保留；
+- **真实完整性约束生效**：断言数据库底层唯一约束、外键级联与 RESTRICT 阻断生效，检验 keyset 索引与 FTS trigram 搜索能力；
+- **ORM Schema Drift 校验**：使用 Alembic autogenerate 比较 SQLAlchemy 模型与真实 PostgreSQL catalog 差异，结合显式 catalog 校验确保 0 未登记 drift；
+- **可逆降级再升级循环**：对最新版本执行 `downgrade -1` 与重新 `upgrade head`，验证 DDL 双向对称可逆。
