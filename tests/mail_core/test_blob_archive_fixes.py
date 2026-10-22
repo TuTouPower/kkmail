@@ -24,6 +24,7 @@ from mail_core.blobs.archive import (
     resume_quota_paused_archives,
     run_archive_batch,
 )
+from mail_core.blobs.crypto import Keyring
 from mail_core.blobs.gc import unlink_gc_paths
 from mail_core.blobs.quota import (
     acquire_blob_digest_lock,
@@ -429,6 +430,87 @@ def test_a38_multiple_attachments_same_filename_preserved_and_idempotent(tmp_pat
             assert len(replayed_atts) == 2
             assert replayed_atts[0].id == att1_uuid, "Existing attachment UUID must be preserved across replay"
             assert replayed_atts[1].id == att2_uuid, "Existing attachment UUID must be preserved across replay"
+    finally:
+        engine_mod.build_provider = orig_engine
+        archive_mod.build_provider = orig_archive
+        set_credential_store(None)
+
+
+def test_archive_batch_backfills_missing_metadata_from_mime(tmp_path):
+    """When a message enters local store with empty subject/from, archiving MIME must backfill them."""
+    cred_store = DictCredentialStore({"cred-ref": {"token": "secret"}})
+    set_credential_store(cred_store)
+
+    mime_content = (
+        b"From: Restored Sender <restored@example.com>\r\n"
+        b"To: recipient@example.com\r\n"
+        b"Subject: Restored Subject From MIME\r\n"
+        b"Date: Sun, 20 Sep 2026 10:00:00 +0000\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n"
+        b"\r\n"
+        b"Hello restored world!\r\n"
+    )
+
+    now = datetime(2026, 10, 22, 9, 56, 0, tzinfo=timezone.utc)
+    provider = MemoryProvider(folders=[RemoteFolder("INBOX", "INBOX", "inbox")])
+    provider.seed(
+        "INBOX",
+        [RemoteMessageMeta("m_empty_meta", "", "", None, now, True, False, uid=11)],
+        {"m_empty_meta": mime_content},
+    )
+
+    orig_engine = engine_mod.build_provider
+    orig_archive = archive_mod.build_provider
+    engine_mod.build_provider = lambda *a, **kw: provider
+    archive_mod.build_provider = lambda *a, **kw: provider
+
+    try:
+        keyring = Keyring({1: b"A" * 32}, active_version=1)
+        store = BlobStore(tmp_path / "blobs", keyring=keyring)
+
+        Session = get_session_factory()
+        with Session() as session:
+            acc, folder = _setup_account_and_folder(session, cred_store)
+            account_id = acc.id
+            folder_id = folder.id
+
+            msg = Message(
+                account_id=account_id,
+                remote_id="m_empty_meta",
+                subject="",
+                from_address="",
+                from_name=None,
+                sort_time=datetime(2026, 10, 22, 9, 56, 0, tzinfo=timezone.utc),
+            )
+            session.add(msg)
+            session.flush()
+            session.add(MessageArchiveState(message_id=msg.id, state=ArchiveState.ARCHIVE_PENDING.value))
+            session.commit()
+            mid = msg.id
+
+        result = run_archive_batch(
+            account_id=account_id,
+            worker_id="backfill-worker",
+            store=store,
+            payload={"batch_size": 10},
+        )
+        assert result["status"] == "ok"
+        assert result["completed"] == 1
+
+        with Session() as session:
+            repaired_msg = session.get(Message, mid)
+            assert repaired_msg is not None
+            assert repaired_msg.subject == "Restored Subject From MIME"
+            assert repaired_msg.from_address == "restored@example.com"
+            assert repaired_msg.from_name == "Restored Sender"
+            assert repaired_msg.sort_time == datetime(2026, 9, 20, 10, 0, 0, tzinfo=timezone.utc)
+
+            # FTS must also reflect the backfilled subject and sender
+            search_row = session.get(MessageSearch, mid)
+            assert search_row is not None
+            assert search_row.subject == "Restored Subject From MIME"
+            assert "Restored Sender" in search_row.from_text
+            assert "restored@example.com" in search_row.from_text
     finally:
         engine_mod.build_provider = orig_engine
         archive_mod.build_provider = orig_archive
