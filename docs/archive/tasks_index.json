@@ -386,6 +386,22 @@
             "conflicts_with": "",
             "note": "来源 p018；固定高度横向 flex 容器导致文件夹树错位；鼠标焦点缺陷未复现，保留键盘焦点可见性",
             "dir": "docs/archive/tasks/t024_sidebar_folder_tree_layout"
+        },
+        {
+            "tid": "t025",
+            "slug": "desktop_clipboard_copy",
+            "title": "修复桌面端 UI 引用与诊断日志安全复制",
+            "status": "done",
+            "branch": "t025_desktop_clipboard_copy",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "9454a1d2cc9412caf86c5381b427619fdb661a86",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p019；真实 Electron 点击触发 clipboard-sanitized-write 被拒；覆盖两个复制入口及权限边界",
+            "dir": "docs/archive/tasks/t025_desktop_clipboard_copy"
         }
     ]
 }
