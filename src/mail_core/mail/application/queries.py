@@ -130,7 +130,10 @@ def list_messages_keyset(
     cursor: str | None = None,
     is_read: bool | None = None,
     is_flagged: bool | None = None,
+    sort_order: str = "desc",
 ) -> MessagePage:
+    if sort_order not in ("asc", "desc"):
+        raise ValueError(f"Invalid sort_order: {sort_order}, must be 'asc' or 'desc'")
     # Opaque cursor is atomic: decode raises InvalidCursor unless both halves exist.
     cursor_pair = decode_cursor(cursor) if cursor else None
     if not folder_ids:
@@ -146,13 +149,24 @@ def list_messages_keyset(
         stmt = stmt.where(Message.is_flagged == is_flagged)
     if cursor_pair is not None:
         cursor_sort_time, cursor_message_id = cursor_pair
-        stmt = stmt.where(
-            or_(
-                Message.sort_time < cursor_sort_time,
-                and_(Message.sort_time == cursor_sort_time, Message.id < cursor_message_id),
+        if sort_order == "asc":
+            stmt = stmt.where(
+                or_(
+                    Message.sort_time > cursor_sort_time,
+                    and_(Message.sort_time == cursor_sort_time, Message.id > cursor_message_id),
+                )
             )
-        )
-    stmt = stmt.order_by(Message.sort_time.desc(), Message.id.desc()).limit(limit + 1)
+        else:
+            stmt = stmt.where(
+                or_(
+                    Message.sort_time < cursor_sort_time,
+                    and_(Message.sort_time == cursor_sort_time, Message.id < cursor_message_id),
+                )
+            )
+    if sort_order == "asc":
+        stmt = stmt.order_by(Message.sort_time.asc(), Message.id.asc()).limit(limit + 1)
+    else:
+        stmt = stmt.order_by(Message.sort_time.desc(), Message.id.desc()).limit(limit + 1)
     rows = list(session.execute(stmt).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
@@ -173,6 +187,7 @@ def unified_inbox(
     is_read: bool | None = None,
     is_flagged: bool | None = None,
     folder_role: str = "inbox",
+    sort_order: str = "desc",
 ) -> MessagePage:
     """Backend-aggregated inbox across accounts for a specified folder role (defaults to inbox)."""
     stmt = select(Folder.id).where(Folder.role == folder_role)
@@ -186,6 +201,7 @@ def unified_inbox(
         cursor=cursor,
         is_read=is_read,
         is_flagged=is_flagged,
+        sort_order=sort_order,
     )
 
 

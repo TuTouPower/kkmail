@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { setupStubApi } from './stubApi'
+import { setupStubApi, FAKE_CSRF_TOKEN } from './stubApi'
 
 test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
   test('未登录时阻断并成功完成密码登录流', async ({ page }) => {
@@ -35,8 +35,16 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
     await expect(page.getByText('关于安全与加密凭据的重要说明')).toBeVisible()
     await expect(page.getByText('季度运营汇总报告')).toBeVisible()
 
-    // 2. 点击第一封邮件，右侧读信区域正确展示
+    // 2. 点击第一封邮件，断言触发标记已读请求且携带 CSRF Token，右侧读信区域正确展示
+    const readRequestPromise = page.waitForRequest((req) =>
+      req.url().includes('/read') && req.method() === 'POST'
+    )
     await page.getByText('欢迎体验 kkmail 邮件内核').first().click()
+    const readRequest = await readRequestPromise
+    expect(readRequest.headers()['x-csrf-token']).toBe(FAKE_CSRF_TOKEN)
+    const readResponse = await readRequest.response()
+    expect(readResponse?.status()).toBe(200)
+
     await expect(page.locator('.detail-subject').getByText('欢迎体验 kkmail 邮件内核')).toBeVisible({ timeout: 5000 })
 
     // 3. 搜索交互验证
@@ -51,5 +59,34 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
       await searchInput.fill('')
       await expect(page.getByText('季度运营汇总报告')).toBeVisible({ timeout: 5000 })
     }
+  })
+
+  test('通过设置面板中的退出登录按钮完成登出链路', async ({ page }) => {
+    await setupStubApi(page, { authedInitially: true })
+
+    await page.goto('/')
+    await expect(page.getByRole('button', { name: /所有收件箱/ })).toBeVisible({ timeout: 10000 })
+
+    // 1. 打开设置面板
+    await page.getByRole('button', { name: '设置' }).click()
+
+    // 2. 切换到通用选项卡
+    await page.getByRole('button', { name: '通用' }).click()
+
+    // 3. 监听退出登录 POST 请求
+    const logoutRequestPromise = page.waitForRequest((req) =>
+      req.url().includes('/api/auth/logout') && req.method() === 'POST'
+    )
+
+    // 4. 点击退出登录
+    await page.locator('#logout-button').click()
+
+    const logoutRequest = await logoutRequestPromise
+    expect(logoutRequest.headers()['x-csrf-token']).toBe(FAKE_CSRF_TOKEN)
+    const logoutResponse = await logoutRequest.response()
+    expect(logoutResponse?.status()).toBe(200)
+
+    // 5. 验证成功退回到登录页面
+    await expect(page.locator('#login-password')).toBeVisible({ timeout: 10000 })
   })
 })

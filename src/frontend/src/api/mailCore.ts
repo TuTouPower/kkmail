@@ -32,7 +32,32 @@ export interface MailCoreInboxQuery {
   is_read?: boolean
   is_flagged?: boolean
   folder_role?: string
+  sort_order?: 'asc' | 'desc'
   signal?: AbortSignal
+}
+
+export interface MarkAllReadParams {
+  accountId?: string
+  folder_role?: string
+  is_flagged?: boolean
+  signal?: AbortSignal
+}
+
+export interface MarkAllReadResult {
+  success: boolean
+  count: number
+  account_id?: string | null
+}
+
+export function postMailCoreMarkAllRead(
+  params: MarkAllReadParams = {},
+): Promise<MarkAllReadResult> {
+  const body: Record<string, unknown> = {
+    folder_role: params.folder_role ?? 'inbox',
+  }
+  if (params.accountId) body.account_id = params.accountId
+  if (params.is_flagged !== undefined) body.is_flagged = params.is_flagged
+  return postJson('/api/mail/mark-all-read', body, { signal: params.signal })
 }
 
 export function postMailCoreMessageRead(messageId: string, isRead: boolean, signal?: AbortSignal): Promise<MutationResult> {
@@ -50,6 +75,7 @@ export function postMailCoreMessageTrash(messageId: string, signal?: AbortSignal
 export function fetchMailCoreInbox(q: MailCoreInboxQuery = {}): Promise<MailCoreInboxPage> {
   const params = new URLSearchParams()
   params.set('limit', String(q.limit ?? 50))
+  if (q.sort_order) params.set('sort_order', q.sort_order)
   if (q.accountId) params.set('account_id', q.accountId)
   if (q.cursor) params.set('cursor', q.cursor)
   if (q.is_read !== undefined) params.set('is_read', String(q.is_read))
