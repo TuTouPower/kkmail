@@ -77,7 +77,7 @@ npm run dist:linux:dir      # 通过 electron-builder 打包
 `npm run pack:linux`（`src/desktop/scripts/pack-linux.js`）在缺少完整依赖时支持平滑提示：
 
 - 未安装 `electron-builder` 或网络异常下载失败时打印警告；
-- 缺少 `vendor/pgsql` 时允许生成无内置数据库的轻量壳层，但启动时需要外部数据库支持。
+- 缺少 `vendor/pgsql` 时可生成无内置 PostgreSQL 的构建壳，但运行须有可用本地 PostgreSQL 二进制（内置或环境变量 `KKMAIL_PG_BIN` / 系统 `PATH`），缺失可用本地二进制即启动失败报错；应用仅管理本地 PostgreSQL 进程，不支持外接远程数据库，请区分二进制来源与外部数据库连接。
 - 需要严格门禁失败时，请设置环境变量 `KKMAIL_PACK_STRICT=1`。
 
 ### macOS 与 Windows 构建说明
