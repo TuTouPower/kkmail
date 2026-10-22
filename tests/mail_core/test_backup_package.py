@@ -223,3 +223,202 @@ def test_verify_checks_outer_kkbak_checksum(tmp_path, monkeypatch):
     bad2 = verify_backup_package(out, allow_stub=True)
     assert bad2.ok is False
     assert any("MANIFEST.sha256" in e for e in bad2.errors)
+
+
+def test_backup_workspace_permissions_and_staging_cleanup(tmp_path, monkeypatch):
+    key = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", key)
+    out = tmp_path / "enc_pkg"
+    create_backup_package(
+        out,
+        include_blobs=False,
+        database_url_override="postgresql://u:p@127.0.0.1:1/db",
+        encrypt=True,
+        allow_dump_stub=True,
+    )
+
+    # 1. Staging directory and temporary archive must be fully removed
+    remnants = [p.name for p in out.iterdir() if p.name.startswith(".")]
+    assert not remnants, f"Found lingering temporary artifacts: {remnants}"
+
+    # 2. Files written to package have 0600 permissions
+    for f in (out / "backup.kkbak", out / "MANIFEST.json", out / "MANIFEST.sha256"):
+        assert f.is_file()
+        assert (f.stat().st_mode & 0o777) == 0o600
+
+    # 3. Plaintext package files also have 0600 permissions
+    plain_out = tmp_path / "plain_pkg"
+    create_backup_package(
+        plain_out,
+        include_blobs=False,
+        database_url_override="postgresql://u:p@127.0.0.1:1/db",
+        encrypt=False,
+        allow_dump_stub=True,
+    )
+    for f in (plain_out / "postgres.dump", plain_out / "MANIFEST.json", plain_out / "MANIFEST.sha256"):
+        assert f.is_file()
+        assert (f.stat().st_mode & 0o777) == 0o600
+
+
+def test_backup_build_failure_cleans_plain_staging(tmp_path, monkeypatch):
+    key = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", key)
+    out = tmp_path / "fail_enc_pkg"
+
+    import mail_core.backup.package as pkg
+
+    def fake_encrypt_file(*args, **kwargs):
+        raise RuntimeError("simulated disk error during encryption")
+
+    monkeypatch.setattr(pkg, "encrypt_file", fake_encrypt_file)
+
+    with pytest.raises(RuntimeError, match="simulated disk error"):
+        create_backup_package(
+            out,
+            include_blobs=False,
+            database_url_override="postgresql://u:p@127.0.0.1:1/db",
+            encrypt=True,
+            allow_dump_stub=True,
+        )
+
+    # Ensure no plain staging directory or archive tar remains
+    remnants = [p.name for p in out.iterdir()]
+    assert not remnants, f"Staging cleanup failed on exception: {remnants}"
+
+
+def test_verify_failure_cleans_extract_dir(tmp_path, monkeypatch):
+    key = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", key)
+    out = tmp_path / "verify_clean_pkg"
+    create_backup_package(
+        out,
+        include_blobs=False,
+        database_url_override="postgresql://u:p@127.0.0.1:1/db",
+        encrypt=True,
+        allow_dump_stub=True,
+    )
+
+    # Tamper with kkbak payload so decrypt fails
+    kkbak = out / "backup.kkbak"
+    raw = bytearray(kkbak.read_bytes())
+    raw[30] ^= 0xFF
+    kkbak.write_bytes(raw)
+    # Update outer manifest sha so it reaches decrypt phase
+    man = json.loads((out / "MANIFEST.json").read_text())
+    man["members"]["backup.kkbak"]["sha256"] = __import__("hashlib").sha256(raw).hexdigest()
+    (out / "MANIFEST.json").write_text(json.dumps(man))
+    (out / "MANIFEST.sha256").write_text(
+        f"{__import__('hashlib').sha256((out / 'MANIFEST.json').read_bytes()).hexdigest()}  MANIFEST.json\n"
+    )
+
+    result = verify_backup_package(out, allow_stub=True)
+    assert result.ok is False
+    assert any("decrypt failed" in e for e in result.errors)
+
+    # No verify directory should linger
+    lingering = [p.name for p in out.iterdir() if p.name.startswith(".verify_")]
+    assert not lingering, f"Lingering verify directories found: {lingering}"
+
+
+def test_backup_refuses_symlink_staging(tmp_path, monkeypatch):
+    key = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", key)
+
+    target_dir = tmp_path / "actual_target"
+    target_dir.mkdir()
+    symlink_out = tmp_path / "symlink_dest"
+    symlink_out.symlink_to(target_dir, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="refusing to use symlink as output directory"):
+        create_backup_package(
+            symlink_out,
+            include_blobs=False,
+            database_url_override="postgresql://u:p@127.0.0.1:1/db",
+            encrypt=True,
+            allow_dump_stub=True,
+        )
+
+
+def test_verify_tar_refuses_symlink(tmp_path, monkeypatch):
+    import tarfile
+    from mail_core.backup.crypto import encrypt_file
+
+    key = os.urandom(32)
+    key_b64 = base64.b64encode(key).decode()
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", key_b64)
+
+    out = tmp_path / "evil_pkg"
+    out.mkdir()
+
+    # Create a malicious tar containing a symlink
+    tar_path = tmp_path / "evil.tar"
+    with tarfile.open(tar_path, mode="w") as tar:
+        # Add postgres.dump as normal file
+        dummy = tmp_path / "postgres.dump"
+        dummy.write_text("dummy dump")
+        tar.add(dummy, arcname="postgres.dump")
+
+        # Add evil symlink
+        sym_info = tarfile.TarInfo(name="blobs.tar")
+        sym_info.type = tarfile.SYMTYPE
+        sym_info.linkname = "/etc/passwd"
+        tar.addfile(sym_info)
+
+    kkbak = out / "backup.kkbak"
+    encrypt_file(tar_path, kkbak, key=key, key_version=1)
+
+    # Outer manifest
+    manifest = {
+        "created_at": "2026-01-01T00:00:00Z",
+        "database_url_redacted": "postgresql://...",
+        "blob_root": "...",
+        "members": {
+            "backup.kkbak": {
+                "sha256": __import__("hashlib").sha256(kkbak.read_bytes()).hexdigest(),
+                "size": kkbak.stat().st_size,
+            }
+        },
+        "encrypted": True,
+        "backup_key_version": 1,
+    }
+    (out / "MANIFEST.json").write_text(json.dumps(manifest))
+    (out / "MANIFEST.sha256").write_text(
+        f"{__import__('hashlib').sha256((out / 'MANIFEST.json').read_bytes()).hexdigest()}  MANIFEST.json\n"
+    )
+
+    res = verify_backup_package(out, allow_stub=True)
+    assert res.ok is False
+    assert any("unsafe symlink" in e for e in res.errors)
+
+    # Ensure extract dir was cleaned up
+    lingering = [p.name for p in out.iterdir() if p.name.startswith(".verify_")]
+    assert not lingering
+
+
+def test_run_backup_private_workspace_and_cleanup(tmp_path, monkeypatch):
+    import mail_core.backup.package as pkg
+
+    key = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", key)
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "postgresql://u:p@127.0.0.1:1/db")
+
+    def fake_dump(dest, url, allow_stub=False):
+        dest.write_bytes(b"valid pg dump data")
+        return "custom"
+
+    monkeypatch.setattr(pkg, "_pg_dump_to", fake_dump)
+
+    dest = tmp_path / "final_backup"
+    res = pkg.run_backup(output_dir=str(dest), encrypt=True)
+    assert res["status"] == "ok"
+    assert res["verify"]["ok"] is True
+    assert dest.is_dir()
+    # Check permissions
+    assert (dest.stat().st_mode & 0o777) == 0o700
+    for f in dest.iterdir():
+        assert (f.stat().st_mode & 0o777) == 0o600
+
+    # Check that dest.parent contains no leftover staging directories
+    staging_dirs = [p.name for p in dest.parent.iterdir() if p.name.startswith(".staging_")]
+    assert not staging_dirs
+
