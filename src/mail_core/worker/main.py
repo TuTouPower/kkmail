@@ -46,7 +46,8 @@ def _reclaim_once() -> int:
     Session = get_session_factory()
     with Session() as session:
         try:
-            n = reclaim_stale_claims(session, older_than=timedelta(minutes=5), limit=100)
+            reclaim_sec = float(os.environ.get("MAIL_CORE_RECLAIM_STALE_SECONDS") or 300)
+            n = reclaim_stale_claims(session, older_than=timedelta(seconds=reclaim_sec), limit=100)
             if n:
                 log.info("reclaimed %s stale CLAIMED job(s)", n)
             a = reclaim_stale_archive_claims(session, older_than=timedelta(minutes=15), limit=100)
