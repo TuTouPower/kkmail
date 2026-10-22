@@ -47,17 +47,14 @@ class AuthPrincipal:
 
 
 _session_epoch: int = 1
-_session_epoch_cache_time: float = 0.0
-_SESSION_EPOCH_TTL: float = 5.0
 
 
 def reset_auth_caches() -> None:
     """Test helper: clear cached password hash / API keys / session epoch."""
-    global _password_hash, _api_keys, _session_epoch, _session_epoch_cache_time
+    global _password_hash, _api_keys, _session_epoch
     _password_hash = None
     _api_keys = None
     _session_epoch = 1
-    _session_epoch_cache_time = 0.0
 
 
 def require_secret_key() -> str:
@@ -82,11 +79,14 @@ def cookie_secure(request: Any = None) -> bool:
     if env_val is not None and env_val.strip() != "":
         return env_val.strip().lower() in ("1", "true", "yes", "on")
     if request is not None:
-        proto = request.headers.get("x-forwarded-proto", "").strip().lower()
-        if proto == "https":
+        scope = getattr(request, "scope", None)
+        if isinstance(scope, dict) and scope.get("scheme") == "https":
             return True
-        if getattr(request.url, "scheme", "") == "https":
-            return True
+        try:
+            if getattr(request.url, "scheme", "") == "https":
+                return True
+        except Exception:
+            pass
     return False
 
 
@@ -115,9 +115,17 @@ def load_api_keys() -> frozenset[str]:
     return _api_keys
 
 
-def _fetch_db_password_hash() -> str | None:
+def _fetch_db_credentials() -> tuple[str | None, int | None]:
+    """Fetch password hash and session epoch from database.
+
+    Returns:
+        (login_password_hash, session_epoch)
+        If database is reachable but no record exists yet, returns (None, None).
+    Raises:
+        AuthConfigError: If database is configured but query fails (fail-closed).
+    """
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
-        return None
+        return None, None
     try:
         from mail_core.db.session import get_session_factory
         from mail_core.mail.storage.models import AuthCredential
@@ -126,13 +134,27 @@ def _fetch_db_password_hash() -> str | None:
         with Session() as session:
             cred = session.get(AuthCredential, "default")
             if cred is not None and cred.login_password_hash:
-                return cred.login_password_hash
-    except Exception:
-        return None
-    return None
+                return cred.login_password_hash, getattr(cred, "session_epoch", None)
+            return None, getattr(cred, "session_epoch", None) if cred is not None else None
+    except Exception as exc:
+        log.error("database query for auth credentials failed: %s", exc)
+        raise AuthConfigError(f"failed to query authentication credentials from database: {exc}") from exc
 
 
-def _persist_db_password_hash(hash_str: str) -> bool:
+def _fetch_db_password_hash() -> str | None:
+    """Fetch password hash from database.
+
+    Returns:
+        The bcrypt password hash string, or None if database is reachable but no record exists.
+    Raises:
+        AuthConfigError: If database is configured but query fails (fail-closed).
+    """
+    hash_val, _ = _fetch_db_credentials()
+    return hash_val
+
+
+def _persist_db_password_hash(hash_str: str, increment_epoch: bool = False) -> bool:
+    global _session_epoch
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
         return True
     try:
@@ -143,11 +165,16 @@ def _persist_db_password_hash(hash_str: str) -> bool:
         with Session() as session:
             cred = session.get(AuthCredential, "default")
             if cred is None:
-                cred = AuthCredential(id="default", login_password_hash=hash_str, session_epoch=_session_epoch)
+                new_epoch = _session_epoch + (1 if increment_epoch else 0)
+                cred = AuthCredential(id="default", login_password_hash=hash_str, session_epoch=new_epoch)
                 session.add(cred)
             else:
                 cred.login_password_hash = hash_str
+                if increment_epoch:
+                    cred.session_epoch = (getattr(cred, "session_epoch", None) or 1) + 1
             session.commit()
+            if increment_epoch and cred is not None:
+                _session_epoch = cred.session_epoch
             return True
     except Exception as exc:
         log.warning("could not persist password hash to database: %s", exc)
@@ -156,29 +183,37 @@ def _persist_db_password_hash(hash_str: str) -> bool:
 
 def get_login_password_hash() -> bytes:
     global _password_hash
-    if _password_hash is not None:
-        return _password_hash
 
-    # Priority 1: Query database (Decision Plan A: authoritative source)
-    db_hash = _fetch_db_password_hash()
-    if db_hash:
-        _password_hash = db_hash.encode("utf-8")
+    has_db = bool((os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip())
+    if has_db:
+        # Priority 1: Query database (Decision Plan A: authoritative source)
+        # _fetch_db_password_hash raises AuthConfigError on DB error (fail-closed)
+        db_hash = _fetch_db_password_hash()
+        if db_hash:
+            _password_hash = db_hash.encode("utf-8")
+            return _password_hash
+        # db_hash is None means DB reachable but empty record (first boot)
+
+    if _password_hash is not None and not has_db:
         return _password_hash
 
     # Priority 2: Bootstrap from environment on first boot
     hashed = (os.environ.get("MAIL_CORE_LOGIN_PASSWORD_HASH") or "").strip()
     if hashed:
         _password_hash = hashed.encode("utf-8")
-        _persist_db_password_hash(hashed)
+        if not _persist_db_password_hash(hashed):
+            raise AuthConfigError("failed to persist bootstrap password hash to database")
         return _password_hash
 
     path_raw = (os.environ.get("MAIL_CORE_PASSWORD_HASH_PATH") or "").strip()
     if path_raw:
         path = Path(path_raw)
         if path.is_file():
-            _password_hash = path.read_bytes().strip()
-            if _password_hash:
-                _persist_db_password_hash(_password_hash.decode("utf-8"))
+            stored_file_hash = path.read_bytes().strip()
+            if stored_file_hash:
+                _password_hash = stored_file_hash
+                if not _persist_db_password_hash(_password_hash.decode("utf-8")):
+                    raise AuthConfigError("failed to persist bootstrap password hash to database")
                 return _password_hash
 
     plain = (os.environ.get("MAIL_CORE_LOGIN_PASSWORD") or "").strip()
@@ -186,11 +221,15 @@ def get_login_password_hash() -> bytes:
         raise AuthConfigError("Set MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt) or MAIL_CORE_LOGIN_PASSWORD for mail-core login")
 
     _password_hash = bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt())
-    _persist_db_password_hash(_password_hash.decode("utf-8"))
+    if not _persist_db_password_hash(_password_hash.decode("utf-8")):
+        raise AuthConfigError("failed to persist bootstrap password hash to database")
     if path_raw:
-        path = Path(path_raw)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(_password_hash)
+        try:
+            path = Path(path_raw)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(_password_hash)
+        except Exception as exc:
+            log.warning("could not write password hash path: %s", exc)
     return _password_hash
 
 
@@ -215,12 +254,13 @@ def validate_auth_config() -> None:
 
 
 def get_session_epoch() -> int:
-    """Fetch authoritative session epoch from database or memory cache (5s TTL)."""
-    global _session_epoch, _session_epoch_cache_time
+    """Fetch authoritative session epoch from database (or memory if no DB).
+
+    Raises:
+        AuthConfigError: If database is configured but query fails (fail-closed).
+    """
+    global _session_epoch
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
-        return _session_epoch
-    now = time.monotonic()
-    if now - _session_epoch_cache_time < _SESSION_EPOCH_TTL:
         return _session_epoch
     try:
         from mail_core.db.session import get_session_factory
@@ -237,27 +277,28 @@ def get_session_epoch() -> int:
                 )
                 session.add(cred)
                 session.commit()
-                _session_epoch_cache_time = now
                 return _session_epoch
-            if cred.session_epoch is None:
+            epoch = getattr(cred, "session_epoch", None)
+            if epoch is None:
                 cred.session_epoch = _session_epoch
                 session.commit()
-                _session_epoch_cache_time = now
                 return _session_epoch
-            _session_epoch = cred.session_epoch
-            _session_epoch_cache_time = now
+            _session_epoch = epoch
             return _session_epoch
     except Exception as exc:
-        log.warning("could not fetch session epoch from database: %s", exc)
-        return _session_epoch
+        log.error("could not fetch session epoch from database: %s", exc)
+        raise AuthConfigError(f"could not fetch session epoch from database: {exc}") from exc
 
 
 def invalidate_all_sessions() -> None:
-    """Invalidate all active sessions by incrementing the session epoch in database and memory."""
-    global _session_epoch, _session_epoch_cache_time
-    _session_epoch += 1
-    _session_epoch_cache_time = 0.0
+    """Invalidate all active sessions by incrementing the session epoch in database and memory.
+
+    Raises:
+        AuthConfigError: If database is configured but update fails.
+    """
+    global _session_epoch
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
+        _session_epoch += 1
         return
     try:
         from mail_core.db.session import get_session_factory
@@ -270,15 +311,16 @@ def invalidate_all_sessions() -> None:
                 cred = AuthCredential(
                     id="default",
                     login_password_hash="",
-                    session_epoch=_session_epoch,
+                    session_epoch=_session_epoch + 1,
                 )
                 session.add(cred)
             else:
-                cred.session_epoch = (cred.session_epoch or 1) + 1
-                _session_epoch = cred.session_epoch
+                cred.session_epoch = (getattr(cred, "session_epoch", None) or 1) + 1
             session.commit()
+            _session_epoch = cred.session_epoch
     except Exception as exc:
-        log.warning("could not increment session epoch in database: %s", exc)
+        log.error("could not increment session epoch in database: %s", exc)
+        raise AuthConfigError(f"could not increment session epoch in database: {exc}") from exc
 
 
 def issue_session() -> tuple[str, str]:
@@ -296,7 +338,11 @@ def read_session(cookie_value: str) -> dict[str, Any] | None:
         return None
     if not isinstance(data, dict) or data.get("v") != 1:
         return None
-    current_epoch = get_session_epoch()
+    try:
+        current_epoch = get_session_epoch()
+    except AuthConfigError:
+        log.warning("rejecting session: failed to read authoritative session epoch from database")
+        return None
     if data.get("epoch") != current_epoch:
         return None
     csrf = data.get("csrf")
@@ -333,10 +379,10 @@ def csrf_header_value(headers: Any) -> str | None:
 
 
 def change_login_password(*, current: str, new: str) -> None:
-    """Verify current password and persist new bcrypt hash to database and cache."""
+    """Verify current password and persist new bcrypt hash + session epoch atomically in one DB tx."""
     import bcrypt
 
-    global _password_hash
+    global _password_hash, _session_epoch
     if not verify_password(current):
         raise AuthConfigError("current password incorrect")
     if len(new) < 8:
@@ -344,18 +390,30 @@ def change_login_password(*, current: str, new: str) -> None:
     hashed = bcrypt.hashpw(new.encode("utf-8"), bcrypt.gensalt())
     hashed_str = hashed.decode("utf-8")
 
-    # Persist directly into database (Decision Plan A)
-    if not _persist_db_password_hash(hashed_str):
+    has_db = bool((os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip())
+
+    # Persist directly into database atomically (password + incremented epoch)
+    if not _persist_db_password_hash(hashed_str, increment_epoch=True):
         raise AuthConfigError("failed to persist password to database")
 
-    # Refresh in-memory cache
+    # If without DB, increment epoch in memory
+    if not has_db:
+        _session_epoch += 1
+
+    # Refresh in-memory cache only after DB commit succeeded
     _password_hash = hashed
     path_raw = (os.environ.get("MAIL_CORE_PASSWORD_HASH_PATH") or "").strip()
     if path_raw:
-        path = Path(path_raw)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(hashed)
-    from mail_core.runtime.bootstrap import clear_initial_password
+        try:
+            path = Path(path_raw)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(hashed)
+        except Exception as exc:
+            log.warning("could not write password hash to %s: %s", path_raw, exc)
 
-    clear_initial_password(os.environ.get("MAIL_CORE_DATA_DIR"))
-    invalidate_all_sessions()
+    try:
+        from mail_core.runtime.bootstrap import clear_initial_password
+
+        clear_initial_password(os.environ.get("MAIL_CORE_DATA_DIR"))
+    except Exception as exc:
+        log.warning("could not clear initial password: %s", exc)
