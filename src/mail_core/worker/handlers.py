@@ -153,12 +153,18 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.GC_BLOBS.value:
+            from mail_core.blobs.archive import maybe_resume_quota_paused_archives
             from mail_core.blobs.gc import run_gc_blobs
 
             session.commit()
             hours = float(payload.get("cool_off_hours") or 24)
             result = run_gc_blobs(cool_off_hours=hours, dry_run=bool(payload.get("dry_run")))
             log.info("gc_blobs %s", result)
+            if not payload.get("dry_run"):
+                try:
+                    maybe_resume_quota_paused_archives()
+                except Exception as resume_exc:
+                    log.warning("post-gc maybe_resume_quota_paused_archives error: %s", resume_exc)
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.BACKUP_RUN.value:
