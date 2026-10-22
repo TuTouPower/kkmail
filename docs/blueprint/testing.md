@@ -234,3 +234,24 @@ npm --prefix src/desktop run test:packaged
 - **嵌入式 PostgreSQL 首启与建库**：在隔离测试数据目录由 `PostgresManager` 调度包内二进制完成 `initdb`、密码文件生成（权限 0600）与端口监听；
 - **优雅停机与端口释放**：验证 `pg_ctl stop` 后子进程完全终止、监听端口完全释放，不残留孤儿服务；
 - **数据跨重启持久化保留**：在同一数据目录重新启动，验证不会被重新初始化覆盖，先前写入的状态完整继承。
+
+## 大邮箱查询同步与资源使用基准（t022）
+
+支持确定性规模大邮箱基准与系统资源用量测量：
+
+```bash
+# 自动化测试门禁 (1k 规模)
+scripts/run-mail-core-tests.sh run -k test_mailbox_performance_baseline
+
+# 独立命令行基准运行 (支持 1k / 10k / 100k)
+python3 scripts/benchmark_mailbox.py --scale 1000 --runs 3 --out .scratch/benchmark_report.json
+
+# 两份基准报告差异对比
+python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candidate.json
+```
+
+核心指标与测试场景：
+
+- **场景覆盖**：首页 keyset 分页（50封）、深 keyset 翻页（逐页推进至后序多页）、中文与 ASCII 全文搜索（tsvector/trigram）、文件夹未读与总数重算、Blob 流式解密读取；
+- **度量指标**：延迟分位数（p50、p95）、吞吐（QPS）、进程峰值 RSS 内存、数据库物理体积、Message 表大小、Blob 磁盘空间及 PostgreSQL EXPLAIN 查询计划（确认索引利用）；
+- **跨报告对比**：结构化输出各场景延迟百分比变化与资源变动，若运行平台不一致明确警示不可直接比对。
