@@ -42,7 +42,7 @@ kkmail 采用自托管单用户架构，需提供稳固的密码鉴权、防暴�
 ### 测试策略
 
 - 单元测试：`tests/mail_core/test_auth.py` 与 `test_auth_plan_a_db.py`。
-- E2E 冒烟测试：`src/frontend/e2e/smoke.spec.ts` 验证登录与登出拦截流。
+- E2E 冒烟测试：`tests/e2e/smoke.spec.ts` 验证登录与登出拦截流。
 
 ### 未知契约清单
 

@@ -268,6 +268,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mail/mark-all-read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Mark All Read
+         * @description Batch mark messages read across the matching scope (folder/account/flag).
+         */
+        post: operations["api_mark_all_read_api_mail_mark_all_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/mail/messages/{message_id}": {
         parameters: {
             query?: never;
@@ -657,6 +677,30 @@ export interface components {
              * @default true
              */
             ok: boolean;
+        };
+        /** MarkAllReadBody */
+        MarkAllReadBody: {
+            /** Account Id */
+            account_id?: string | null;
+            /**
+             * Folder Role
+             * @default inbox
+             */
+            folder_role: string;
+            /** Is Flagged */
+            is_flagged?: boolean | null;
+        };
+        /** MarkAllReadOut */
+        MarkAllReadOut: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Count */
+            count: number;
+            /**
+             * Success
+             * @default true
+             */
+            success: boolean;
         };
         /** MeOut */
         MeOut: {
@@ -1388,6 +1432,8 @@ export interface operations {
                 is_flagged?: boolean | null;
                 /** @description Folder role to query (default: inbox) */
                 folder_role?: string;
+                /** @description Sort order by sort_time (desc or asc) */
+                sort_order?: string;
             };
             header?: never;
             path?: never;
@@ -1402,6 +1448,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_mark_all_read_api_mail_mark_all_read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkAllReadBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkAllReadOut"];
                 };
             };
             /** @description Validation Error */

@@ -637,6 +637,69 @@
         "title": "LoginOut",
         "type": "object"
       },
+      "MarkAllReadBody": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "folder_role": {
+            "default": "inbox",
+            "title": "Folder Role",
+            "type": "string"
+          },
+          "is_flagged": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Flagged"
+          }
+        },
+        "title": "MarkAllReadBody",
+        "type": "object"
+      },
+      "MarkAllReadOut": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "success": {
+            "default": true,
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "title": "MarkAllReadOut",
+        "type": "object"
+      },
       "MeOut": {
         "properties": {
           "authenticated": {
@@ -2157,6 +2220,19 @@
               "title": "Folder Role",
               "type": "string"
             }
+          },
+          {
+            "description": "Sort order by sort_time (desc or asc)",
+            "in": "query",
+            "name": "sort_order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "description": "Sort order by sort_time (desc or asc)",
+              "pattern": "^(asc|desc)$",
+              "title": "Sort Order",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2190,6 +2266,56 @@
           }
         ],
         "summary": "Api Unified Inbox",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/api/mail/mark-all-read": {
+      "post": {
+        "description": "Batch mark messages read across the matching scope (folder/account/flag).",
+        "operationId": "api_mark_all_read_api_mail_mark_all_read_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkAllReadBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarkAllReadOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Mark All Read",
         "tags": [
           "mail"
         ]
