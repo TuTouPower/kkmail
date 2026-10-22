@@ -45,6 +45,11 @@ def test_encode_decode_roundtrip():
     assert got_st == st
 
 
+def test_sort_order_validation():
+    with pytest.raises(ValueError, match="sort_order"):
+        list_messages_keyset(None, folder_ids=[], sort_order="invalid")
+
+
 @pytestmark_db
 def test_list_messages_keyset_pages_without_overlap():
     from mail_core.accounts import create_account
@@ -92,3 +97,16 @@ def test_list_messages_keyset_pages_without_overlap():
 
         seen = {i.id for i in page1.items + page2.items + page3.items}
         assert len(seen) == 5
+
+        # Ascending sort: starts from oldest (m0)
+        page_asc1 = list_messages_keyset(session, folder_ids=[folder_id], limit=2, sort_order="asc")
+        assert [i.subject for i in page_asc1.items] == ["m0", "m1"]
+        assert page_asc1.next_cursor
+
+        page_asc2 = list_messages_keyset(session, folder_ids=[folder_id], limit=2, cursor=page_asc1.next_cursor, sort_order="asc")
+        assert [i.subject for i in page_asc2.items] == ["m2", "m3"]
+        assert page_asc2.next_cursor
+
+        page_asc3 = list_messages_keyset(session, folder_ids=[folder_id], limit=2, cursor=page_asc2.next_cursor, sort_order="asc")
+        assert [i.subject for i in page_asc3.items] == ["m4"]
+        assert page_asc3.next_cursor is None

@@ -2,8 +2,8 @@ import { memo, useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag, Mail, MailOpen, Trash2, Reply, ReplyAll, Forward, ExternalLink } from 'lucide-react'
 import { apiRequest } from '../api/client'
-import { accountScope, fetchAccounts, flagOptimistic, markReadOptimistic, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
-import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMessageTrash } from '../api/mailCore'
+import { accountScope, fetchAccounts, flagOptimistic, markReadOptimistic, setCachedReadState, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
+import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
 import { hasMailId, mailKey } from '../lib/mailKey'
 import { MOBILE_MAX_WIDTH } from '../lib/viewport'
@@ -104,9 +104,10 @@ const MessageList = memo(function MessageList() {
 
   const is_unread = effectiveFilter === 'unread' ? false : undefined
   const is_flagged = listFilter === 'flagged' ? true : undefined
+  const sortOrder = sortNewest ? 'desc' : 'asc'
 
   const inboxInfiniteQuery = useInfiniteQuery<InboxPageData, Error, { pages: InboxPageData[]; pageParams: (string | null)[] }, readonly unknown[], string | null>({
-    queryKey: queryKeys.inbox(listScope, effectiveFilter, folderRole),
+    queryKey: queryKeys.inbox(listScope, effectiveFilter, folderRole, sortOrder),
     queryFn: async ({ pageParam, signal }) => {
       const page = await fetchMailCoreInbox({
         limit: LIST_LIMIT,
@@ -114,6 +115,7 @@ const MessageList = memo(function MessageList() {
         is_read: is_unread,
         is_flagged: is_flagged,
         folder_role: folderRole,
+        sort_order: sortOrder,
         cursor: pageParam || undefined,
         signal,
       })
@@ -147,13 +149,16 @@ const MessageList = memo(function MessageList() {
   })
 
   const folderStatsQuery = useQuery({
-    queryKey: ['mail-core', 'folder-stats', accountId ?? 'all'],
+    queryKey: ['mail-core', 'folder-stats', accountId ?? 'all', folderRole],
     queryFn: async () => {
       if (accountId) {
         const stats = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`).catch(() => null)
         if (!stats) return null
-        const inboxFolder = stats.folders.find((f: AccountFolderStatsItemOut) => f.role === 'inbox')
-        return inboxFolder ? inboxFolder.total_count : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0)
+        const targetFolder = stats.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
+        return {
+          total: targetFolder ? targetFolder.total_count : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0),
+          unread: targetFolder ? targetFolder.unread_count : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + (f.unread_count || 0), 0),
+        }
       }
       const statsList = await Promise.all(
         accounts.map((a) =>
@@ -161,14 +166,16 @@ const MessageList = memo(function MessageList() {
         ),
       )
       let total = 0
+      let unread = 0
       let hasAny = false
       for (const s of statsList) {
         if (!s) continue
         hasAny = true
-        const inboxFolder = s.folders.find((f: AccountFolderStatsItemOut) => f.role === 'inbox')
-        total += inboxFolder ? inboxFolder.total_count : s.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0)
+        const targetFolder = s.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
+        total += targetFolder ? targetFolder.total_count : s.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0)
+        unread += targetFolder ? targetFolder.unread_count : s.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + (f.unread_count || 0), 0)
       }
-      return hasAny ? total : null
+      return hasAny ? { total, unread } : null
     },
     enabled: accounts.length > 0 && !searching,
   })
@@ -191,7 +198,9 @@ const MessageList = memo(function MessageList() {
 
   const hasMore = Boolean(searching ? searchInfiniteQuery.hasNextPage : inboxInfiniteQuery.hasNextPage)
   const loadingMore = Boolean(searching ? searchInfiniteQuery.isFetchingNextPage : inboxInfiniteQuery.isFetchingNextPage)
-  const totalCount = searching ? (searchInfiniteQuery.data?.pages?.[0]?.total ?? null) : (folderStatsQuery.data ?? null)
+  const totalCount = searching ? (searchInfiniteQuery.data?.pages?.[0]?.total ?? null) : (folderStatsQuery.data?.total ?? null)
+  const serverUnread = searching ? null : (folderStatsQuery.data?.unread ?? null)
+  const unreadCount = serverUnread !== null ? serverUnread : raw.filter((m) => !m.is_read).length
 
   async function handleLoadMore() {
     if (loadingMore || !hasMore) return
@@ -217,7 +226,6 @@ const MessageList = memo(function MessageList() {
   }, [raw, favoriteCategory, listFilter, sortNewest])
 
   const [actionStatus, setActionStatus] = useState('')
-  const unreadCount = raw.filter((m) => !m.is_read).length
   const loading = active.isLoading && !active.data
   const failure = active.error ? errorMessage(active.error, '加载邮件失败') : ''
   const countLabel = loading
@@ -286,11 +294,23 @@ const MessageList = memo(function MessageList() {
   }
 
   async function markAll() {
+    const unreadKeys = raw.filter((m) => !m.is_read).map(mailKey)
+    if (unreadKeys.length) {
+      setCachedReadState(unreadKeys, true)
+    }
     try {
-      await markReadOptimistic(visible)
+      await postMailCoreMarkAllRead({
+        accountId,
+        folder_role: folderRole,
+        is_flagged: is_flagged,
+      })
+      await queryClient.invalidateQueries({ queryKey: ['mail-core'] })
       setActionStatus('')
     } catch (err) {
-      setActionStatus(`部分账户标记失败：${errorMessage(err)}`)
+      if (unreadKeys.length) {
+        setCachedReadState(unreadKeys, false)
+      }
+      setActionStatus(`标记全部已读失败：${errorMessage(err)}`)
     }
   }
 
