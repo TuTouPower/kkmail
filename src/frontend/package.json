@@ -9,9 +9,9 @@
     "lint": "oxlint --deny-warnings",
     "preview": "vite preview",
     "test": "vitest run && npm run openapi:check",
-    "test:e2e": "NODE_PATH=./node_modules playwright test",
+    "test:e2e": "node ./scripts/run_e2e.mjs",
     "openapi:gen": "openapi-typescript ../../schemas/openapi.json -o src/api/generated/schema.ts",
-    "openapi:check": "openapi-typescript ../../schemas/openapi.json -o src/api/generated/schema.check.ts && node ./scripts/openapi-check.mjs && rm -f src/api/generated/schema.check.ts"
+    "openapi:check": "node ./scripts/check_openapi.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.104.5",
