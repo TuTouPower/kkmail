@@ -10,6 +10,18 @@ export MAIL_CORE_IMAP_PORT="$PORT"
 export MAIL_CORE_IMAP_USER="${MAIL_CORE_IMAP_USER:-alice@kkmail.test}"
 export MAIL_CORE_IMAP_PASS="${MAIL_CORE_IMAP_PASS:-alice-imap-pass}"
 
+if [[ -z "${KKMAIL_TEST_PG_PASSWORD:-}" && -f "$ROOT/.env.test" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ROOT/.env.test"
+  set +a
+fi
+
+if docker compose -p kkmail_test_pg -f config/test_pg_compose.yaml up -d imap 2>/dev/null; then
+  echo "Dovecot IMAP via test compose on :$PORT"
+  exit 0
+fi
+
 if docker compose -f docker-compose.mail-core.yml --profile imap up -d imap 2>/dev/null; then
   echo "Dovecot IMAP via compose (profile=imap) on :$PORT"
   exit 0

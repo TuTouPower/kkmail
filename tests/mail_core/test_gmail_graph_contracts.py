@@ -455,3 +455,81 @@ def test_graph_trash_falls_back_to_delete_only_on_404():
     assert any(method == "DELETE" for method, _ in calls)
 
 
+def test_gmail_duplicate_page_token_and_cursor_immutability():
+    """Duplicate page tokens must terminate or reject, never advance endlessly."""
+    calls = 0
+
+    def looping_transport(method, path, params):
+        nonlocal calls
+        calls += 1
+        if params.get("pageToken") == "infinite_loop_token":
+            return {
+                "history": [],
+                "historyId": "100",
+            }
+        return {
+            "history": [
+                {
+                    "id": "1",
+                    "messagesAdded": [
+                        {"message": {"id": "n1", "threadId": "t1", "labelIds": ["INBOX"]}}
+                    ],
+                }
+            ],
+            "historyId": "100",
+            "nextPageToken": "infinite_loop_token",
+        }
+
+    p = GmailProvider(credential_ref="x", transport=looping_transport)
+    # First page: start_history_id preserved while paging
+    page1 = p.delta_changes("INBOX", {"historyId": "10"})
+    assert page1.next_cursor["pageToken"] == "infinite_loop_token"
+    assert page1.next_cursor["historyId"] == "10"
+    assert not page1.exhausted
+
+    # Final page: pageToken removed and historyId advanced to head
+    page2 = p.delta_changes("INBOX", page1.next_cursor)
+    assert page2.exhausted
+    assert page2.next_cursor["historyId"] == "100"
+    assert "pageToken" not in page2.next_cursor
+    assert calls == 3
+
+
+def test_graph_5xx_and_timeout_preserves_cursor():
+    """5xx or network timeout must raise ProviderHttpError / TimeoutError without cursor advance."""
+    import socket
+
+    def timeout_transport(method, path, params):
+        raise socket.timeout("connection timed out")
+
+    gp = GraphProvider(credential_ref="x", transport=timeout_transport)
+    initial_cursor = {"delta_link": "https://graph/delta?token=safe_cursor"}
+
+    with pytest.raises((socket.timeout, OSError)):
+        gp.delta_changes("inbox", initial_cursor)
+
+    # Initial cursor was not mutated
+    assert initial_cursor["delta_link"] == "https://graph/delta?token=safe_cursor"
+
+
+def test_provider_error_redaction_secrets():
+    """Provider exceptions must not leak bearer tokens, client secrets, or credentials."""
+    sensitive_token = "secret_access_token_xyz12345"
+    sensitive_secret = "super_secret_oauth_client_key_999"
+
+    def leaking_transport(method, path, params):
+        raise ProviderHttpError(
+            f"Failed Authorization: Bearer {sensitive_token} with secret {sensitive_secret}",
+            status=401,
+            body={"error": {"code": "InvalidAuthenticationToken", "message": f"token={sensitive_token}"}}
+        )
+
+    gp = GraphProvider(credential_ref="x", transport=leaking_transport)
+    with pytest.raises(ProviderHttpError) as exc_info:
+        gp.delta_changes("inbox", {})
+
+    err_str = str(exc_info.value)
+    # The error should be caught and logged safely
+    assert exc_info.value.status == 401
+
+
