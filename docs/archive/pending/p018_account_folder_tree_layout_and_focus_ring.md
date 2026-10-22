@@ -26,4 +26,17 @@
 - 线索：
     - `.scratch/repro_sidebar_issue.html`（CSS 错位与聚焦边框复现）
     - `.scratch/test_mutf7_decode.py`（163 邮箱真实 Modified UTF-7 文件夹映射验证）
-- 处理：未开
+
+## 2026-10-23 转办核实与纠正
+
+- 布局缺陷仍存在，转 t024：生产 `.account-row` 仍为固定 33px 高水平 flex，树与标题同级；`.scratch/pending_candidate_audit.js` 使用现有 CSS 在真实 Electron 测出树横排并覆盖下一账号。组件单测仅验证文本，缺几何回归。
+
+- 原焦点根因证据不足，撤回“缺少 focus:not(:focus-visible) 必然导致鼠标蓝框”的结论：原复现页含 autofocus；本次真实鼠标点击 outline=none，Tab 后 focus-visible=true/outline=solid。t024 保留键盘焦点与操作回归，不增加全局去焦点重置。其他平台或特定操作序列若仍出现异常，应附新证据再分析。
+
+- 原“只有新建账号才调度全量发现”描述不成立：设置页账号“同步”调用 `/api/accounts/{id}/sync`，经 `sync_account_app` → `enqueue_account_sync` 入队 `SYNC_ACCOUNT_FOLDERS`；`sync_account_folders` 对已有同 remote_id 文件夹更新 name/role/parent_remote_id，复用 t008 的 Modified UTF-7 解码和角色映射。
+
+- 历史文件夹不新增读取期解码、自动修复或额外脚本。优先复用现有显式“同步”；本次仅核实代码链路，未连接生产库、未执行同步，不能声称历史生产记录已修好。需要额外历史修复工具时另行确认范围，禁止因本次转办自动执行数据操作。
+
+- 来源拆分：已确认布局缺陷及导航/键盘回归归 t024；历史名称已有 t008 解码与显式重新发现路径，不重复立项；鼠标焦点根因未证实。无等价有效 backlog/active task。
+
+- 处理：t024
