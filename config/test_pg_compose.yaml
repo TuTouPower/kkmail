@@ -1,0 +1,19 @@
+# Dedicated test instance. Never use the application Compose or its volumes.
+services:
+  postgres:
+    image: postgres:16
+    labels:
+      io.kkmail.test_pg: "v1"
+    environment:
+      POSTGRES_PASSWORD: ${KKMAIL_TEST_PG_PASSWORD:?provide a random test-only password}
+    ports:
+      - "127.0.0.1:${KKMAIL_TEST_PG_PORT:-15433}:5432"
+    volumes:
+      - test_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+volumes:
+  test_pg_data:
