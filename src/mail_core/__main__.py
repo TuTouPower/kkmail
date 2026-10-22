@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--proxy-headers",
         action="store_true",
-        default=os.environ.get("MAIL_CORE_PROXY_HEADERS", "1").strip().lower() in ("1", "true", "yes", "on"),
+        default=os.environ.get("MAIL_CORE_PROXY_HEADERS", "0").strip().lower() in ("1", "true", "yes", "on"),
         help="Enable proxy headers parsing",
     )
     parser.add_argument(
@@ -66,6 +66,8 @@ def main(argv: list[str] | None = None) -> None:
 
         os.environ["MAIL_CORE_DATA_DIR"] = args.data_dir
         bootstrap_data_dir(args.data_dir)
+    if args.forwarded_allow_ips:
+        os.environ["MAIL_CORE_FORWARDED_ALLOW_IPS"] = args.forwarded_allow_ips
     if not args.skip_migrations:
         run_migrations()
     if not args.no_worker:
@@ -77,11 +79,9 @@ def main(argv: list[str] | None = None) -> None:
 
     from mail_core.api.app import app
 
-    uvicorn_kwargs: dict[str, Any] = {"proxy_headers": args.proxy_headers}
-    if args.forwarded_allow_ips is not None:
-        uvicorn_kwargs["forwarded_allow_ips"] = args.forwarded_allow_ips
-
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info", **uvicorn_kwargs)
+    # Proxy headers handling is managed inside FastAPI via ProxyHeadersMiddleware when
+    # MAIL_CORE_FORWARDED_ALLOW_IPS is explicitly configured, avoiding double parsing.
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info", proxy_headers=False)
 
 
 if __name__ == "__main__":

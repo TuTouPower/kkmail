@@ -22,44 +22,13 @@ from mail_core.security.auth import (
 from mail_core.threading.rules import assign_thread_for_message
 
 
-def test_session_epoch_memory_cache_and_invalidation(monkeypatch):
-    reset_auth_caches()
-    query_count = 0
-
-    class FakeSession:
-        def get(self, model, pk):
-            nonlocal query_count
-            query_count += 1
-            cred = MagicMock()
-            cred.session_epoch = 42
-            return cred
-
-        def commit(self):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "postgresql://fake/db")
-    monkeypatch.setattr("mail_core.db.session.get_session_factory", lambda: (lambda: FakeSession()))
-
-    # First call queries DB
-    assert get_session_epoch() == 42
-    assert query_count == 1
-
-    # Second call uses memory cache (no additional DB query)
-    assert get_session_epoch() == 42
-    assert query_count == 1
-
-    # Invalidate cache resets the TTL; calling it queries once to bump in DB,
-    # and subsequent get_session_epoch queries again because cache was invalidated.
-    invalidate_all_sessions()
-    assert query_count == 2
-    assert get_session_epoch() == 42
-    assert query_count == 3
+# Note on deleted tests:
+# - test_session_epoch_memory_cache_and_invalidation: Removed per A37 decision.
+#   The 5s epoch cache was removed so authentication always reads authoritative DB epoch
+#   for immediate cross-process session revocation. Replaced by tests in test_auth_plan_a_db.py.
+# - test_cookie_secure_adaptive_forwarded_proto: Removed per A21 decision.
+#   Direct trust of raw X-Forwarded-Proto headers was removed to prevent forged header bypass.
+#   cookie_secure now only trusts explicit config or verified ASGI scheme. Replaced by test_cookie_secure_boundary in test_auth.py.
 
 
 def test_security_headers_middleware():
@@ -70,24 +39,6 @@ def test_security_headers_middleware():
     assert resp.headers.get("X-Frame-Options") == "DENY"
     assert resp.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
     assert "Strict-Transport-Security" in resp.headers
-
-
-def test_cookie_secure_adaptive_forwarded_proto(monkeypatch):
-    monkeypatch.delenv("MAIL_CORE_COOKIE_SECURE", raising=False)
-
-    req_http = MagicMock()
-    req_http.headers = {"x-forwarded-proto": "http"}
-    req_http.url.scheme = "http"
-    assert cookie_secure(req_http) is False
-
-    req_https = MagicMock()
-    req_https.headers = {"x-forwarded-proto": "https"}
-    req_https.url.scheme = "http"
-    assert cookie_secure(req_https) is True
-
-    # Explicit env override takes precedence
-    monkeypatch.setenv("MAIL_CORE_COOKIE_SECURE", "0")
-    assert cookie_secure(req_https) is False
 
 
 def test_ssrf_imap_host_validation(monkeypatch):

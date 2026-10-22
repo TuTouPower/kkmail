@@ -75,7 +75,10 @@ def login(body: LoginIn, request: Request, response: Response) -> LoginOut:
 
 @router.post("/logout", response_model=OkOut)
 def logout(response: Response, _principal: AuthPrincipal = Depends(require_auth)) -> OkOut:
-    invalidate_all_sessions()
+    try:
+        invalidate_all_sessions()
+    except AuthConfigError as exc:
+        raise HTTPException(status_code=500, detail="failed to invalidate session in database") from exc
     _clear_session_cookie(response)
     return OkOut()
 
