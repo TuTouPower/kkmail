@@ -10,4 +10,12 @@ describe('listTitle', () => {
   it('names the account inbox', () => {
     expect(listTitle({ type: 'account', accountId: '1', email: 'a@x' }, 'all')).toBe('a@x · 收件箱')
   })
+  it('names the favorite views and specific folders (t008 AC-001, AC-004)', () => {
+    expect(listTitle({ type: 'favorite', category: 'drafts' }, 'all')).toBe('草稿箱')
+    expect(listTitle({ type: 'favorite', category: 'trash' }, 'all')).toBe('废纸篓')
+    expect(listTitle({ type: 'favorite', category: 'junk' }, 'all')).toBe('垃圾邮件')
+    expect(listTitle({ type: 'favorite', category: 'sent' }, 'all')).toBe('已发邮件')
+    expect(listTitle({ type: 'favorite', category: 'drafts', accountId: '1', email: 'a@x' }, 'all')).toBe('a@x · 草稿箱')
+    expect(listTitle({ type: 'folder', accountId: '1', email: 'a@x', folderId: 'f1', folderName: 'MyFolder' }, 'all')).toBe('a@x · MyFolder')
+  })
 })

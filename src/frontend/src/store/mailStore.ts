@@ -1,12 +1,13 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type FavoriteCategory = 'inbox' | 'unread' | 'sent'
+export type FavoriteCategory = 'inbox' | 'unread' | 'sent' | 'drafts' | 'trash' | 'junk'
 
 export type ViewState =
   | { type: 'allInbox' }
   | { type: 'favorite'; category: FavoriteCategory; accountId?: string; email?: string }
   | { type: 'account'; accountId: string; email: string }
+  | { type: 'folder'; accountId: string; email: string; folderId: string; folderName: string; folderRole?: string }
 
 interface MailUiState {
   theme: 'dark' | 'light' | 'system'
@@ -54,6 +55,7 @@ const navigationReset = () => ({
   mobileView: 'list' as const,
   mobileSidebarOpen: false,
   settingsOpen: false,
+  search: '',
 })
 
 export const useMailStore = create<MailUiState>()(

@@ -32,6 +32,7 @@ export interface MailCoreInboxQuery {
   is_read?: boolean
   is_flagged?: boolean
   folder_role?: string
+  folder_id?: string
   sort_order?: 'asc' | 'desc'
   signal?: AbortSignal
 }
@@ -39,6 +40,7 @@ export interface MailCoreInboxQuery {
 export interface MarkAllReadParams {
   accountId?: string
   folder_role?: string
+  folder_id?: string
   is_flagged?: boolean
   signal?: AbortSignal
 }
@@ -52,8 +54,11 @@ export interface MarkAllReadResult {
 export function postMailCoreMarkAllRead(
   params: MarkAllReadParams = {},
 ): Promise<MarkAllReadResult> {
-  const body: Record<string, unknown> = {
-    folder_role: params.folder_role ?? 'inbox',
+  const body: Record<string, unknown> = {}
+  if (params.folder_id) {
+    body.folder_id = params.folder_id
+  } else {
+    body.folder_role = params.folder_role ?? 'inbox'
   }
   if (params.accountId) body.account_id = params.accountId
   if (params.is_flagged !== undefined) body.is_flagged = params.is_flagged
@@ -81,6 +86,7 @@ export function fetchMailCoreInbox(q: MailCoreInboxQuery = {}): Promise<MailCore
   if (q.is_read !== undefined) params.set('is_read', String(q.is_read))
   if (q.is_flagged !== undefined) params.set('is_flagged', String(q.is_flagged))
   if (q.folder_role) params.set('folder_role', q.folder_role)
+  if (q.folder_id) params.set('folder_id', q.folder_id)
   return apiRequest(`/api/mail/inbox?${params.toString()}`, { signal: q.signal })
 }
 

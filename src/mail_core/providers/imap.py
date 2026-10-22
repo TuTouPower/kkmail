@@ -5,6 +5,7 @@ Never infers deletions from an incomplete UID scan (architecture §6.2).
 
 from __future__ import annotations
 
+import base64
 import email
 import email.header
 import email.utils
@@ -30,19 +31,57 @@ from mail_core.providers.http import CursorInvalidError
 
 _FOLDER_ROLE = {
     "INBOX": "inbox",
+    "收件箱": "inbox",
     "Junk": "junk",
     "Junk Email": "junk",
     "Spam": "junk",
+    "垃圾邮件": "junk",
     "Trash": "trash",
     "Deleted": "trash",
     "Deleted Items": "trash",
+    "已删除": "trash",
+    "已删除邮件": "trash",
+    "废纸篓": "trash",
     "Sent": "sent",
     "Sent Items": "sent",
+    "Sent Messages": "sent",
     "已发送": "sent",
     "已发送邮件": "sent",
     "Drafts": "drafts",
+    "草稿": "drafts",
+    "草稿箱": "drafts",
     "Archive": "archive",
+    "Archives": "archive",
+    "归档": "archive",
 }
+
+
+def decode_mutf7(s: str) -> str:
+    """Decode IMAP Modified UTF-7 (RFC 3501 §5.1.3) into standard Unicode."""
+    res = []
+    i = 0
+    while i < len(s):
+        if s[i] == "&":
+            end = s.find("-", i + 1)
+            if end == -1:
+                res.append(s[i:])
+                break
+            chunk = s[i + 1 : end]
+            if not chunk:
+                res.append("&")
+            else:
+                b64 = chunk.replace(",", "/")
+                pad = "=" * (-len(b64) % 4)
+                try:
+                    raw = base64.b64decode(b64 + pad)
+                    res.append(raw.decode("utf-16-be"))
+                except Exception:
+                    res.append(s[i : end + 1])
+            i = end + 1
+        else:
+            res.append(s[i])
+            i += 1
+    return "".join(res)
 
 
 def _decode_chunk_bytes(chunk: bytes, charset: str | None) -> str:
@@ -296,19 +335,73 @@ class ImapProvider:
             if not data:
                 return [RemoteFolder("INBOX", "INBOX", "inbox")]
             folders: list[RemoteFolder] = []
+            list_pattern = re.compile(
+                r"\((?P<flags>[^)]*)\)\s+(?:\"(?P<delim>[^\"]*)\"|(?P<delim_bare>\S+))\s+(?:\"(?P<name>[^\"]*)\"|(?P<name_bare>.+))\s*$"
+            )
             for raw in data:
                 if not raw:
                     continue
                 line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
-                m = re.search(r' "?"?([^"]+)"?\s*$', line)
-                name = m.group(1).strip() if m else line.rsplit(" ", 1)[-1].strip('"')
-                if name.upper() == "INBOX":
-                    role = "inbox"
-                elif re.search(r"\(\s*[^)]*\\Sent\b", line, re.IGNORECASE):
-                    role = "sent"
+                m = list_pattern.search(line)
+                if m:
+                    flags_raw = m.group("flags")
+                    flags = [f.strip() for f in flags_raw.split() if f.strip()]
+                    delim = m.group("delim") or m.group("delim_bare")
+                    if delim == "NIL":
+                        delim = None
+                    remote_id = (m.group("name") or m.group("name_bare")).strip()
                 else:
-                    role = _FOLDER_ROLE.get(name, "other")
-                folders.append(RemoteFolder(remote_id=name, name=name, role=role))
+                    flags_match = re.search(r"\(([^)]*)\)", line)
+                    flags = flags_match.group(1).split() if flags_match else []
+                    delim = None
+                    m_fallback = re.search(r' "?"?([^"]+)"?\s*$', line)
+                    remote_id = m_fallback.group(1).strip() if m_fallback else line.rsplit(" ", 1)[-1].strip('"')
+
+                name = decode_mutf7(remote_id)
+                parent_remote_id = None
+                if delim and delim in remote_id:
+                    parent_remote_id = remote_id.rsplit(delim, 1)[0]
+
+                # 1. INBOX is always inbox
+                if remote_id.upper() == "INBOX" or name.upper() == "INBOX":
+                    role = "inbox"
+                else:
+                    # 2. SPECIAL-USE flags (RFC 6154) - flags take priority over names
+                    flag_lower = {f.lower() for f in flags}
+                    if "\\sent" in flag_lower:
+                        role = "sent"
+                    elif "\\drafts" in flag_lower:
+                        role = "drafts"
+                    elif "\\trash" in flag_lower:
+                        role = "trash"
+                    elif "\\junk" in flag_lower:
+                        role = "junk"
+                    elif "\\archive" in flag_lower:
+                        role = "archive"
+                    else:
+                        # 3. Known names
+                        role = None
+                        for candidate in (name, remote_id):
+                            if candidate in _FOLDER_ROLE:
+                                role = _FOLDER_ROLE[candidate]
+                                break
+                            for k, v in _FOLDER_ROLE.items():
+                                if k.lower() == candidate.lower():
+                                    role = v
+                                    break
+                            if role:
+                                break
+                        if not role:
+                            role = "other"
+
+                folders.append(
+                    RemoteFolder(
+                        remote_id=remote_id,
+                        name=name,
+                        role=role,
+                        parent_remote_id=parent_remote_id,
+                    )
+                )
             if not any(f.remote_id.upper() == "INBOX" for f in folders):
                 folders.insert(0, RemoteFolder("INBOX", "INBOX", "inbox"))
             return folders
