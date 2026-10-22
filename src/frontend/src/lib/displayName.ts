@@ -15,3 +15,14 @@ export function displayName(from?: string): string {
   // Already a plain name (or leftover angle-less text)
   return raw.replace(/<[^>]*>/g, '').replace(/^"|"$/g, '').trim() || raw
 }
+
+/** Extract the email address from an RFC 5322 From-like header. */
+export function displayEmail(from?: string): string {
+  const raw = (from || '').trim()
+  if (!raw) return ''
+  const angled = raw.match(/<([^>]+)>/)
+  if (angled) {
+    return angled[1].trim()
+  }
+  return raw
+}

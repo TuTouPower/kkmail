@@ -8,7 +8,7 @@ import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
 import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, classifyMailHtml, isHtmlBody } from '../lib/mailBody'
 import { formatReaderDate } from '../lib/listDate'
-import { displayName } from '../lib/displayName'
+import { displayEmail, displayName } from '../lib/displayName'
 import { formatFileSize } from '../lib/formatSize'
 import { resolveTheme } from '../lib/theme'
 
@@ -167,6 +167,9 @@ const MessageReader = memo(function MessageReader() {
           <div style={{ fontSize: 12, marginBottom: 8 }}>
             <strong data-ui="MR06">{displayName(detail?.from || selected.from)}</strong>
             <span style={{ color: 'var(--muted)' }}> · {formatReaderDate(detail?.date || selected.date)}</span>
+          </div>
+          <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 4, overflowWrap: 'anywhere' }}>
+            发件人：{displayEmail(detail?.from || selected.from)}
           </div>
           <div data-ui="MR07" style={{ color: 'var(--muted)', fontSize: 11, marginBottom: detail?.cc ? 4 : 16, overflowWrap: 'anywhere' }}>
             收件人：{detail?.to || selected.to || accounts.find((a) => a.email === selected.accountEmail)?.email || selected.accountEmail}
