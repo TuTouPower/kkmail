@@ -131,7 +131,10 @@ describe('<Sidebar />', () => {
     expect(totalBadge?.textContent?.trim()).toBe('-')
   })
 
-  it('renders favorites tree with inbox, unread, and sent collapsible entries (AC-001 ~ AC-004)', async () => {
+  // 旧测试 "renders favorites tree with inbox, unread, and sent collapsible entries" 已由 t008 规范升级替代：
+  // t008 AC-001 将收藏入口扩充为“所有收件”“所有未读”“已发邮件”“草稿箱”“废纸篓”“垃圾邮件”六大类目；
+  // t008 AC-002 增加账号独立展开真实文件夹树能力。
+  it('renders 6 favorite categories and account folder trees (t008 AC-001, AC-002)', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url)
       if (u.startsWith('/api/groups')) return json({ groups: [] })
@@ -151,22 +154,33 @@ describe('<Sidebar />', () => {
           ],
         })
       }
+      if (u.startsWith('/api/mail/accounts/acc-1/folder-stats')) {
+        return json({
+          account_id: 'acc-1',
+          folders: [
+            { folder_id: 'f-inbox', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', unread_count: 2, total_count: 10, parent_remote_id: null },
+            { folder_id: 'f-sent', remote_id: 'Sent', name: 'Sent', role: 'sent', unread_count: 0, total_count: 5, parent_remote_id: null },
+            { folder_id: 'f-drafts', remote_id: 'Drafts', name: 'Drafts', role: 'drafts', unread_count: 0, total_count: 1, parent_remote_id: null },
+            { folder_id: 'f-parent', remote_id: 'Work', name: 'Work', role: 'other', unread_count: 0, total_count: 0, parent_remote_id: null },
+            { folder_id: 'f-child', remote_id: 'Work/P1', name: 'P1', role: 'other', unread_count: 0, total_count: 0, parent_remote_id: 'Work' },
+          ],
+        })
+      }
       return json({ detail: 'unexpected' }, 404)
     }))
 
     const { container } = await render(<Sidebar />)
     await waitFor(() => {
-      expect(container.textContent).toContain('所有收件箱')
+      expect(container.textContent).toContain('所有收件')
       expect(container.textContent).toContain('所有未读')
-      expect(container.textContent).toContain('所有已发邮件')
+      expect(container.textContent).toContain('已发邮件')
+      expect(container.textContent).toContain('草稿箱')
+      expect(container.textContent).toContain('废纸篓')
+      expect(container.textContent).toContain('垃圾邮件')
     })
 
-    // AC-001: Three collapsible entries exist
-    const favoriteSection = container.querySelector('.side-section')
-    expect(favoriteSection).not.toBeNull()
-
-    // AC-002: "所有收件箱" badge has 5; when expanded, acc-1 shows 2, acc-2 shows nothing
-    const inboxRow = [...container.querySelectorAll('.favorite-category')].find((el) => el.textContent?.includes('所有收件箱'))
+    // AC-001: "所有收件" badge has 5; when expanded, acc-1 shows 2, acc-2 shows nothing
+    const inboxRow = [...container.querySelectorAll('.favorite-category')].find((el) => el.textContent?.includes('所有收件'))
     expect(inboxRow).toBeDefined()
     await waitFor(() => {
       expect(inboxRow?.querySelector('.unread-badge')?.textContent).toBe('5')
@@ -187,28 +201,47 @@ describe('<Sidebar />', () => {
     expect(acc1Inbox?.querySelector('.unread-badge')?.textContent).toBe('2')
     expect(acc2Inbox?.querySelector('.unread-badge')).toBeNull()
 
-    // AC-003: "所有未读" and "所有已发邮件" have no badges on parent or accounts
+    // AC-001: Other favorite entries have no badges
     const unreadRow = [...container.querySelectorAll('.favorite-category')].find((el) => el.textContent?.includes('所有未读'))
-    const sentRow = [...container.querySelectorAll('.favorite-category')].find((el) => el.textContent?.includes('所有已发邮件'))
+    const sentRow = [...container.querySelectorAll('.favorite-category')].find((el) => el.textContent?.includes('已发邮件'))
+    const draftsRow = [...container.querySelectorAll('.favorite-category')].find((el) => el.textContent?.includes('草稿箱'))
     expect(unreadRow?.querySelector('.unread-badge')).toBeNull()
     expect(sentRow?.querySelector('.unread-badge')).toBeNull()
+    expect(draftsRow?.querySelector('.unread-badge')).toBeNull()
 
-    // Expand unread & sent
-    await fireClick(unreadRow?.querySelector('.category-toggle') as HTMLElement)
-    await fireClick(sentRow?.querySelector('.category-toggle') as HTMLElement)
-    const unreadAndSentRows = [...container.querySelectorAll('.favorite-account-row')].filter((el) =>
-      el.closest('.favorite-category-unread') || el.closest('.favorite-category-sent'),
-    )
-    for (const r of unreadAndSentRows) {
-      expect(r.querySelector('.unread-badge')).toBeNull()
-    }
+    // AC-001: Clicking top-level switches view
+    await fireClick(draftsRow?.querySelector('.category-btn') as HTMLElement)
+    expect(useMailStore.getState().view).toEqual({ type: 'favorite', category: 'drafts' })
 
-    // AC-004: Clicking top-level switches view; clicking account switches view
-    await fireClick(sentRow?.querySelector('.category-btn') as HTMLElement)
-    expect(useMailStore.getState().view).toEqual({ type: 'favorite', category: 'sent' })
+    // AC-002: Account folder tree expansion
+    const acc1Row = [...container.querySelectorAll('.account-row')].find((el) => el.textContent?.includes('a@x.test'))
+    expect(acc1Row).toBeDefined()
+    const acc1FolderToggle = acc1Row?.querySelector('.account-folders-toggle') as HTMLElement
+    expect(acc1FolderToggle).not.toBeNull()
+    await fireClick(acc1FolderToggle)
 
-    await fireClick(acc1Inbox?.querySelector('.category-account-btn') as HTMLElement)
-    expect(useMailStore.getState().view).toEqual({ type: 'favorite', category: 'inbox', accountId: 'acc-1', email: 'a@x.test' })
+    await waitFor(() => {
+      // Standard roles translated and displayed
+      expect(acc1Row?.textContent).toContain('收件箱')
+      expect(acc1Row?.textContent).toContain('已发送')
+      expect(acc1Row?.textContent).toContain('草稿箱')
+      // Custom folders displayed
+      expect(acc1Row?.textContent).toContain('Work')
+      expect(acc1Row?.textContent).toContain('P1')
+    })
+
+    // Click on custom folder switches to folder view
+    const p1Btn = [...acc1Row!.querySelectorAll('.folder-item-btn')].find((el) => el.textContent?.includes('P1')) as HTMLElement
+    expect(p1Btn).toBeDefined()
+    await fireClick(p1Btn)
+    expect(useMailStore.getState().view).toEqual({
+      type: 'folder',
+      accountId: 'acc-1',
+      email: 'a@x.test',
+      folderId: 'f-child',
+      folderName: 'P1',
+      folderRole: 'other',
+    })
   })
 
   it('renders real error message and refetch retry button on accounts error (AC-003, AC-004)', async () => {

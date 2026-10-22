@@ -5,6 +5,7 @@ Never infers deletions from an incomplete UID scan (architecture §6.2).
 
 from __future__ import annotations
 
+import base64
 import email
 import email.header
 import email.utils
@@ -30,34 +31,115 @@ from mail_core.providers.http import CursorInvalidError
 
 _FOLDER_ROLE = {
     "INBOX": "inbox",
+    "收件箱": "inbox",
     "Junk": "junk",
     "Junk Email": "junk",
     "Spam": "junk",
+    "垃圾邮件": "junk",
     "Trash": "trash",
     "Deleted": "trash",
     "Deleted Items": "trash",
+    "已删除": "trash",
+    "已删除邮件": "trash",
+    "废纸篓": "trash",
     "Sent": "sent",
     "Sent Items": "sent",
+    "Sent Messages": "sent",
     "已发送": "sent",
     "已发送邮件": "sent",
     "Drafts": "drafts",
+    "草稿": "drafts",
+    "草稿箱": "drafts",
     "Archive": "archive",
+    "Archives": "archive",
+    "归档": "archive",
 }
 
 
-def _decode_header(raw: str | None) -> str:
+def decode_mutf7(s: str) -> str:
+    """Decode IMAP Modified UTF-7 (RFC 3501 §5.1.3) into standard Unicode."""
+    res = []
+    i = 0
+    while i < len(s):
+        if s[i] == "&":
+            end = s.find("-", i + 1)
+            if end == -1:
+                res.append(s[i:])
+                break
+            chunk = s[i + 1 : end]
+            if not chunk:
+                res.append("&")
+            else:
+                b64 = chunk.replace(",", "/")
+                pad = "=" * (-len(b64) % 4)
+                try:
+                    raw = base64.b64decode(b64 + pad)
+                    res.append(raw.decode("utf-16-be"))
+                except Exception:
+                    res.append(s[i : end + 1])
+            i = end + 1
+        else:
+            res.append(s[i])
+            i += 1
+    return "".join(res)
+
+
+def _decode_chunk_bytes(chunk: bytes, charset: str | None) -> str:
+    if charset and str(charset).lower() != "unknown-8bit":
+        try:
+            return chunk.decode(charset, errors="replace")
+        except LookupError:
+            pass
+    # No declared charset or unknown charset:
+    # 1. Strict UTF-8 (also covers ASCII)
+    try:
+        return chunk.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    # 2. Strict GB18030 (covers GBK and GB2312)
+    try:
+        return chunk.decode("gb18030")
+    except UnicodeDecodeError:
+        pass
+    # 3. Deterministic lossy fallback
+    return chunk.decode("utf-8", errors="replace")
+
+
+def _decode_header(raw: str | email.header.Header | bytes | None) -> str:
     if not raw:
         return ""
-    parts = email.header.decode_header(raw)
+    if isinstance(raw, bytes):
+        return _decode_chunk_bytes(raw, None)
+    try:
+        parts = email.header.decode_header(raw)
+    except Exception:
+        return str(raw)
+
     out: list[str] = []
     for chunk, charset in parts:
         if isinstance(chunk, bytes):
-            try:
-                out.append(chunk.decode(charset or "utf-8", errors="replace"))
-            except LookupError:
-                out.append(chunk.decode("utf-8", errors="replace"))
-        else:
-            out.append(str(chunk))
+            if (charset is None or str(charset).lower() == "unknown-8bit") and b"=?" in chunk and b"?=" in chunk:
+                try:
+                    subparts = email.header.decode_header(chunk.decode("latin1"))
+                    for sub_chunk, sub_charset in subparts:
+                        if isinstance(sub_chunk, bytes):
+                            out.append(_decode_chunk_bytes(sub_chunk, sub_charset))
+                        elif isinstance(sub_chunk, str):
+                            if any(0xD800 <= ord(c) <= 0xDFFF for c in sub_chunk):
+                                sub_bytes = sub_chunk.encode("utf-8", errors="surrogateescape")
+                            else:
+                                sub_bytes = sub_chunk.encode("latin1")
+                            out.append(_decode_chunk_bytes(sub_bytes, sub_charset))
+                    continue
+                except Exception:
+                    pass
+            out.append(_decode_chunk_bytes(chunk, charset))
+        elif isinstance(chunk, str):
+            if any(0xD800 <= ord(c) <= 0xDFFF for c in chunk):
+                raw_bytes = chunk.encode("utf-8", errors="surrogateescape")
+                out.append(_decode_chunk_bytes(raw_bytes, charset))
+            else:
+                out.append(chunk)
     return "".join(out)
 
 
@@ -150,23 +232,39 @@ def _parse_message_meta_from_fetch(
     uid = int(m_uid.group(1)) if m_uid else uid_fallback
     is_read = "\\Seen" in meta_s
     is_flagged = "\\Flagged" in meta_s
-    header_text = header_bytes.decode("utf-8", errors="replace") if isinstance(header_bytes, bytes) else str(header_bytes)
-    headers = email.message_from_string(header_text)
+    if isinstance(header_bytes, bytes):
+        headers = email.message_from_bytes(header_bytes)
+    else:
+        headers = email.message_from_string(str(header_bytes))
+
     subject = _decode_header(headers.get("Subject"))
     from_raw = _decode_header(headers.get("From"))
     addr, name = _parse_from(from_raw)
-    to_raw = _decode_header(headers.get("To"))
-    cc_raw = _decode_header(headers.get("Cc"))
+
+    to_headers = headers.get_all("To") or []
+    to_raw = ", ".join(_decode_header(h) for h in to_headers) if to_headers else ""
+    cc_headers = headers.get_all("Cc") or []
+    cc_raw = ", ".join(_decode_header(h) for h in cc_headers) if cc_headers else ""
+
     to_addresses = tuple(a for _, a in email.utils.getaddresses([to_raw]) if a) if to_raw else ()
     cc_addresses = tuple(a for _, a in email.utils.getaddresses([cc_raw]) if a) if cc_raw else ()
     date_raw = headers.get("Date")
+    date_str = _decode_header(date_raw) if date_raw is not None else None
     try:
-        sort_time = parsedate_to_datetime(date_raw) if date_raw else datetime.now(timezone.utc)
+        sort_time = parsedate_to_datetime(date_str) if date_str else datetime.now(timezone.utc)
         if sort_time.tzinfo is None:
             sort_time = sort_time.replace(tzinfo=timezone.utc)
     except Exception:
         sort_time = datetime.now(timezone.utc)
     uv = int(uidvalidity) if uidvalidity is not None else 0
+
+    def _header_opt(name: str) -> str | None:
+        val = headers.get(name)
+        if val is None:
+            return None
+        s = _decode_header(val).strip()
+        return s if s else None
+
     return RemoteMessageMeta(
         remote_id=format_imap_remote_id(folder_remote_id, uv, uid),
         subject=subject,
@@ -176,12 +274,12 @@ def _parse_message_meta_from_fetch(
         is_read=is_read,
         has_attachments=False,
         is_flagged=is_flagged,
-        internet_message_id=headers.get("Message-ID"),
+        internet_message_id=_header_opt("Message-ID"),
         uid=uid,
         to_addresses=to_addresses,
         cc_addresses=cc_addresses,
-        in_reply_to=headers.get("In-Reply-To"),
-        references=headers.get("References"),
+        in_reply_to=_header_opt("In-Reply-To"),
+        references=_header_opt("References"),
     )
 
 
@@ -237,19 +335,73 @@ class ImapProvider:
             if not data:
                 return [RemoteFolder("INBOX", "INBOX", "inbox")]
             folders: list[RemoteFolder] = []
+            list_pattern = re.compile(
+                r"\((?P<flags>[^)]*)\)\s+(?:\"(?P<delim>[^\"]*)\"|(?P<delim_bare>\S+))\s+(?:\"(?P<name>[^\"]*)\"|(?P<name_bare>.+))\s*$"
+            )
             for raw in data:
                 if not raw:
                     continue
                 line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
-                m = re.search(r' "?"?([^"]+)"?\s*$', line)
-                name = m.group(1).strip() if m else line.rsplit(" ", 1)[-1].strip('"')
-                if name.upper() == "INBOX":
-                    role = "inbox"
-                elif re.search(r"\(\s*[^)]*\\Sent\b", line, re.IGNORECASE):
-                    role = "sent"
+                m = list_pattern.search(line)
+                if m:
+                    flags_raw = m.group("flags")
+                    flags = [f.strip() for f in flags_raw.split() if f.strip()]
+                    delim = m.group("delim") or m.group("delim_bare")
+                    if delim == "NIL":
+                        delim = None
+                    remote_id = (m.group("name") or m.group("name_bare")).strip()
                 else:
-                    role = _FOLDER_ROLE.get(name, "other")
-                folders.append(RemoteFolder(remote_id=name, name=name, role=role))
+                    flags_match = re.search(r"\(([^)]*)\)", line)
+                    flags = flags_match.group(1).split() if flags_match else []
+                    delim = None
+                    m_fallback = re.search(r' "?"?([^"]+)"?\s*$', line)
+                    remote_id = m_fallback.group(1).strip() if m_fallback else line.rsplit(" ", 1)[-1].strip('"')
+
+                name = decode_mutf7(remote_id)
+                parent_remote_id = None
+                if delim and delim in remote_id:
+                    parent_remote_id = remote_id.rsplit(delim, 1)[0]
+
+                # 1. INBOX is always inbox
+                if remote_id.upper() == "INBOX" or name.upper() == "INBOX":
+                    role = "inbox"
+                else:
+                    # 2. SPECIAL-USE flags (RFC 6154) - flags take priority over names
+                    flag_lower = {f.lower() for f in flags}
+                    if "\\sent" in flag_lower:
+                        role = "sent"
+                    elif "\\drafts" in flag_lower:
+                        role = "drafts"
+                    elif "\\trash" in flag_lower:
+                        role = "trash"
+                    elif "\\junk" in flag_lower:
+                        role = "junk"
+                    elif "\\archive" in flag_lower:
+                        role = "archive"
+                    else:
+                        # 3. Known names
+                        role = None
+                        for candidate in (name, remote_id):
+                            if candidate in _FOLDER_ROLE:
+                                role = _FOLDER_ROLE[candidate]
+                                break
+                            for k, v in _FOLDER_ROLE.items():
+                                if k.lower() == candidate.lower():
+                                    role = v
+                                    break
+                            if role:
+                                break
+                        if not role:
+                            role = "other"
+
+                folders.append(
+                    RemoteFolder(
+                        remote_id=remote_id,
+                        name=name,
+                        role=role,
+                        parent_remote_id=parent_remote_id,
+                    )
+                )
             if not any(f.remote_id.upper() == "INBOX" for f in folders):
                 folders.insert(0, RemoteFolder("INBOX", "INBOX", "inbox"))
             return folders
