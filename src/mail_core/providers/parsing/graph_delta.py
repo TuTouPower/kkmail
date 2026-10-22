@@ -65,12 +65,13 @@ def parse_graph_delta(data: dict[str, Any]) -> DeltaPage:
             changes.append(DeltaChange(kind="delete", remote_id=rid))
             continue
         meta = _meta_from_graph(item)
-        kind = "flag" if item.get("_flag_only") else "upsert"
+        has_content = bool(item.get("subject") or item.get("from") or item.get("receivedDateTime") or item.get("bodyPreview"))
+        kind = "flag" if (item.get("_flag_only") or not has_content) else "upsert"
         changes.append(
             DeltaChange(
                 kind=kind,
                 remote_id=rid,
-                meta=meta,
+                meta=meta if has_content else None,
                 flags={"is_read": meta.is_read, "is_flagged": meta.is_flagged},
             )
         )

@@ -683,6 +683,26 @@ def run_archive_batch(
                     session.flush()
 
                     # A26: 正文归档事务同步更新 FTS 索引
+                    # 若因元数据增量缺陷导致发件人或主题缺失，自动从 MIME 报头回填
+                    msg_record = session.get(Message, mid)
+                    if msg_record is not None and (not msg_record.from_address or not msg_record.subject):
+                        try:
+                            import email.utils
+                            raw_em = email.message_from_bytes(mime, policy=default_policy)
+                            em_name, em_addr = email.utils.parseaddr(str(raw_em.get("From") or ""))
+                            if not msg_record.from_address and em_addr:
+                                msg_record.from_address = em_addr
+                                msg_record.from_name = em_name or msg_record.from_name
+                            if not msg_record.subject and raw_em.get("Subject"):
+                                msg_record.subject = str(raw_em.get("Subject") or "").strip()
+                            em_date = raw_em.get("Date")
+                            if em_date:
+                                dt = email.utils.parsedate_to_datetime(em_date)
+                                if dt:
+                                    msg_record.sort_time = dt
+                        except Exception as hdr_exc:
+                            log.debug("mime header backfill skipped for %s: %s", mid, hdr_exc)
+
                     from mail_core.search.index import upsert_message_search
                     upsert_message_search(session, message_id=mid, body_text=plain_text)
                 except Exception as parse_exc:
