@@ -285,4 +285,97 @@ describe('<Sidebar />', () => {
       expect(container.textContent).toContain('recovered@x.test')
     })
   })
+
+  it('supports independent expansion of multiple accounts, empty folders, and error handling (t024 AC-001, AC-002, AC-004)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/groups')) return json({ groups: [] })
+      if (u.startsWith('/api/accounts')) return json({
+        accounts: [
+          { id: 'acc-1', email: 'acc1@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+          { id: 'acc-2', email: 'acc2@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+          { id: 'acc-3', email: 'acc3@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+        ],
+        total: 3, limit: 200, offset: 0, has_more: false,
+      })
+      if (u.startsWith('/api/mail/stats')) {
+        return json({
+          total_unread: 2,
+          accounts: [
+            { account_id: 'acc-1', unread_count: 2, total_count: 5 },
+            { account_id: 'acc-2', unread_count: 0, total_count: 0 },
+            { account_id: 'acc-3', unread_count: 0, total_count: 0 },
+          ],
+        })
+      }
+      if (u.startsWith('/api/mail/accounts/acc-1/folder-stats')) {
+        return json({
+          account_id: 'acc-1',
+          folders: [
+            { folder_id: 'f-inbox', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', unread_count: 2, total_count: 5, parent_remote_id: null },
+          ],
+        })
+      }
+      if (u.startsWith('/api/mail/accounts/acc-2/folder-stats')) {
+        // acc-2 has empty folders
+        return json({ account_id: 'acc-2', folders: [] })
+      }
+      if (u.startsWith('/api/mail/accounts/acc-3/folder-stats')) {
+        // acc-3 fails
+        return json({ detail: 'Failed to fetch folders' }, 500)
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<Sidebar />)
+    const { click: fireClick } = await import('../test/render')
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('acc1@x.test')
+      expect(container.textContent).toContain('acc2@x.test')
+      expect(container.textContent).toContain('acc3@x.test')
+    })
+
+    const acc1Row = [...container.querySelectorAll('.account-row')].find((el) => el.textContent?.includes('acc1@x.test'))!
+    const acc2Row = [...container.querySelectorAll('.account-row')].find((el) => el.textContent?.includes('acc2@x.test'))!
+    const acc3Row = [...container.querySelectorAll('.account-row')].find((el) => el.textContent?.includes('acc3@x.test'))!
+
+    const toggle1 = acc1Row.querySelector('.account-folders-toggle') as HTMLElement
+    const toggle2 = acc2Row.querySelector('.account-folders-toggle') as HTMLElement
+    const toggle3 = acc3Row.querySelector('.account-folders-toggle') as HTMLElement
+
+    // AC-004: initial aria-expanded is false
+    expect(toggle1.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle2.getAttribute('aria-expanded')).toBe('false')
+
+    // Expand acc-1 and acc-2
+    await fireClick(toggle1)
+    await fireClick(toggle2)
+
+    expect(toggle1.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle2.getAttribute('aria-expanded')).toBe('true')
+
+    await waitFor(() => {
+      expect(acc1Row.textContent).toContain('收件箱')
+      expect(acc1Row.querySelector('.unread-badge')?.textContent).toBe('2')
+    })
+
+    // Both remain expanded simultaneously (AC-002)
+    await waitFor(() => {
+      expect(acc1Row.querySelector('.account-folders')).not.toBeNull()
+      expect(acc2Row.querySelector('.account-folders')).not.toBeNull()
+    })
+
+    // Collapse acc-1 -> acc-2 remains expanded (AC-002)
+    await fireClick(toggle1)
+    expect(toggle1.getAttribute('aria-expanded')).toBe('false')
+    expect(acc1Row.querySelector('.account-folders')).toBeNull()
+    expect(acc2Row.querySelector('.account-folders')).not.toBeNull()
+
+    // Expand acc-3 (failure scenario)
+    await fireClick(toggle3)
+    await waitFor(() => {
+      expect(acc3Row.textContent).toContain('文件夹加载失败')
+    })
+  })
 })
