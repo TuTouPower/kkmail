@@ -24,6 +24,8 @@ def recompute_folder_stats(session: Session, folder_id: uuid.UUID) -> FolderStat
             stats = session.get(FolderStats, folder_id, with_for_update=True)
             if stats is None:
                 raise
+    else:
+        session.flush()
     total, unread = session.execute(
         select(
             func.count(),
