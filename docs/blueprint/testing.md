@@ -62,6 +62,7 @@ python3 scripts/run_full_stack_e2e.py
 |**后端单元/集成测试**|FastAPI + PG + Worker|`scripts/run-mail-core-tests.sh run`|
 |**UI 稳定编号与引用**|快捷键、气泡浮标、复制格式与唯一性|`(cd src/frontend && npm test -t uiReference)`|
 |**写回收敛与统计一致性**|批次自动续跑、意图保护与孤儿恢复|`scripts/run-mail-core-tests.sh run -k test_mark_read_convergence_suite`|
+|**MIME 解析错误与前端可见性**|正文/报头/附件名解析失败、API 传递与跨邮件状态隔离|`scripts/run-mail-core-tests.sh run -k test_archive_decode_failure` 及 `(cd src/frontend && npm test -t MessageReader)`|
 
 ## PostgreSQL 测试运行时（t013）
 

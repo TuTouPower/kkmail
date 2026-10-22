@@ -28,6 +28,8 @@
 - [x] AC-006：垃圾回收 (GC) 必须同时统计 `MessageBlobLink` 与 `Attachment.blob_id` 引用，删除文件前执行数据库二次校验，异常时 Fail-Closed 跳过删除。
 - [x] AC-007：IMAP Provider 对名为 `"已发送"`、`"已发送邮件"` 或带有 `\Sent` 标志的目录，解析出 `role="sent"`。
 - [x] AC-008：`/api/mail/inbox` 支持 `folder_role` 参数（默认 `inbox`，支持 `sent` 等），支持按角色检索全账号或指定账号邮件。
+- [x] AC-009：归档 MIME 正文、报头或附件文件名解析失败时持久化 `MessageBody.parse_error` 并跳过损坏派生物，保留原始 MIME，不阻塞同批合法邮件。
+- [x] AC-010：阅读器在检测到 `parse_error` 时明确展示“邮件解析失败”及脱敏原因，即使存在摘要或部分内容亦不被空占位掩盖，切换邮件即时隔离。
 
 ### 可测试性声明
 

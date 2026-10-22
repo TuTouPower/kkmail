@@ -177,7 +177,27 @@ const MessageReader = memo(function MessageReader() {
           {actionStatus && <div role="status" style={{ color: 'var(--red)', fontSize: 12, marginBottom: 8 }}>{actionStatus}</div>}
           {detailQuery.isLoading && <div style={{ color: 'var(--muted)' }}>正在加载正文…</div>}
           {detailQuery.error && <div style={{ color: 'var(--red)' }}>{String((detailQuery.error as Error).message)}</div>}
-          {!body && !detailQuery.isLoading ? (
+          {detail?.parse_error && (
+            <div
+              data-ui="MR-PARSE-ERROR"
+              role="alert"
+              className="parse-error-placeholder"
+              style={{
+                padding: '16px',
+                textAlign: 'center',
+                color: 'var(--red)',
+                background: 'var(--surface-2)',
+                borderRadius: 8,
+                fontSize: 13,
+                marginBottom: 16,
+                border: '1px solid var(--line)',
+              }}
+            >
+              <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件解析失败</p>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)', overflowWrap: 'anywhere' }}>{detail.parse_error}</p>
+            </div>
+          )}
+          {!detail?.parse_error && !body && !detailQuery.isLoading ? (
             <div className="empty-body-placeholder" style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--muted)', background: 'var(--surface-2)', borderRadius: 8, fontSize: 13 }}>
               <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件正文尚未完成同步或内容为空</p>
               <p style={{ margin: 0, fontSize: 12 }}>该邮件目前仅同步了元数据摘要。后台归档任务将自动排队拉取完整原文。</p>
