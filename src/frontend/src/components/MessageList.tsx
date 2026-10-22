@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag, Mail, MailOpen, Trash2, Reply, ReplyAll, Forward, ExternalLink } from 'lucide-react'
-import { apiRequest } from '../api/client'
+import { api, apiRequest } from '../api/client'
 import { accountScope, fetchAccounts, flagOptimistic, markReadOptimistic, setCachedReadState, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
@@ -322,8 +322,28 @@ const MessageList = memo(function MessageList() {
     }
   }
 
-  function refreshView() {
-    void queryClient.invalidateQueries({ queryKey: ['mail-core'], refetchType: 'active' })
+  const [isSyncing, setIsSyncing] = useState(false)
+
+  async function refreshView() {
+    setIsSyncing(true)
+    setActionStatus('正在同步邮件…')
+    try {
+      const activeAccountId = 'accountId' in view && typeof view.accountId === 'string' ? view.accountId : undefined
+      if (activeAccountId) {
+        await api.syncAccount(activeAccountId)
+        setActionStatus('已触发账户同步')
+      } else {
+        await api.syncAll()
+        setActionStatus('已触发全量同步')
+      }
+    } catch (err) {
+      setActionStatus(`同步触发失败：${errorMessage(err)}`)
+    } finally {
+      setIsSyncing(false)
+      void queryClient.invalidateQueries({ queryKey: ['mail-core'], refetchType: 'active' })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.accounts })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.stats })
+    }
   }
 
   async function deleteSelected() {
@@ -358,8 +378,14 @@ const MessageList = memo(function MessageList() {
             <button className="list-primary-btn mobile-only" title="账户导航" aria-label="账户导航" onClick={toggleMobileSidebar}>
               <Menu size={16} />
             </button>
-            <button className="list-primary-btn" title="刷新" aria-label="刷新" onClick={refreshView}>
-              <RefreshCw size={16} />
+            <button
+              className={`list-primary-btn ${isSyncing ? 'loading' : ''}`}
+              title={isSyncing ? '正在同步…' : '刷新并同步'}
+              aria-label={isSyncing ? '正在同步…' : '刷新并同步'}
+              disabled={isSyncing}
+              onClick={refreshView}
+            >
+              <RefreshCw size={16} className={isSyncing ? 'spin' : ''} />
             </button>
           </div>
         </div>
