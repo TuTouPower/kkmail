@@ -1,8 +1,8 @@
-import { memo, useMemo, useState, useSyncExternalStore } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Mail, MailOpen, Trash2, Flag, ArrowLeft, Reply, ReplyAll, Forward } from 'lucide-react'
+import { Mail, MailOpen, Trash2, Flag, ArrowLeft, Reply, ReplyAll, Forward, RefreshCw } from 'lucide-react'
 import { fetchAccounts, findCachedMail, flagOptimistic, setReadOptimistic, queryClient, queryKeys, removeCachedMail } from '../api/queries'
-import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash } from '../api/mailCore'
+import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash, postMailCoreSyncMessageBody } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
@@ -54,9 +54,42 @@ const MessageReader = memo(function MessageReader() {
   })
 
   const detail = detailQuery.data
-  const body = detail?.body || selected?.body_preview || ''
+  const body = detail?.body || ''
   const html = Boolean(detail?.body && isHtmlBody(detail.body_type))
   const currentMailKey = selected ? mailKey(selected) : undefined
+
+  const isPendingArchive = Boolean(
+    detail && !detail.parse_error && !detail.body && detail.is_archived === false,
+  )
+
+  const [syncingBody, setSyncingBody] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
+
+  const handleSyncBody = useCallback(async () => {
+    if (!selected?.id || syncingBody) return
+    setSyncingBody(true)
+    setSyncError(null)
+    try {
+      const updated = await postMailCoreSyncMessageBody(selected.id)
+      const mapped = mailCoreToMailDetail(updated)
+      queryClient.setQueryData(['detail', 'mail-core', selected.id], mapped)
+    } catch (err) {
+      setSyncError(errorMessage(err, '同步邮件正文失败'))
+    } finally {
+      setSyncingBody(false)
+    }
+  }, [selected, syncingBody])
+
+  useEffect(() => {
+    setSyncingBody(false)
+    setSyncError(null)
+  }, [selectedKey])
+
+  useEffect(() => {
+    if (isPendingArchive && !detailQuery.isLoading && !syncingBody && !syncError) {
+      void handleSyncBody()
+    }
+  }, [isPendingArchive, detailQuery.isLoading, syncingBody, syncError, handleSyncBody])
   const mailThemeClass = useMemo(() => (html ? classifyMailHtml(body) : 'plain'), [html, body])
   const mailSrcdoc = useMemo(
     () => (body ? buildMailSrcdoc(body, { loadRemoteImages, theme: resolvedTheme }) : ''),
@@ -198,9 +231,69 @@ const MessageReader = memo(function MessageReader() {
             </div>
           )}
           {!detail?.parse_error && !body && !detailQuery.isLoading ? (
-            <div className="empty-body-placeholder" style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--muted)', background: 'var(--surface-2)', borderRadius: 8, fontSize: 13 }}>
-              <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件正文尚未完成同步或内容为空</p>
-              <p style={{ margin: 0, fontSize: 12 }}>该邮件目前仅同步了元数据摘要。后台归档任务将自动排队拉取完整原文。</p>
+            <div
+              className="empty-body-placeholder"
+              style={{
+                padding: '32px 16px',
+                textAlign: 'center',
+                color: 'var(--muted)',
+                background: 'var(--surface-2)',
+                borderRadius: 8,
+                fontSize: 13,
+              }}
+            >
+              {syncingBody ? (
+                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                  <RefreshCw size={18} className="spin" style={{ color: 'var(--primary)' }} />
+                  <p style={{ margin: 0, fontWeight: 600, color: 'var(--text)' }}>正在优先同步邮件正文…</p>
+                  <p style={{ margin: 0, fontSize: 12 }}>已将该邮件置为最高优先级，正在向远端拉取完整原文。</p>
+                </div>
+              ) : syncError ? (
+                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                  <p style={{ margin: 0, fontWeight: 600, color: 'var(--red)' }}>{syncError}</p>
+                  <button
+                    type="button"
+                    onClick={handleSyncBody}
+                    style={{
+                      marginTop: 4,
+                      padding: '4px 12px',
+                      borderRadius: 6,
+                      border: '1px solid var(--line)',
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                    }}
+                  >
+                    立即重试同步
+                  </button>
+                </div>
+              ) : isPendingArchive ? (
+                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                  <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件正文尚未完成同步</p>
+                  <p style={{ margin: '0 0 12px 0', fontSize: 12 }}>该邮件目前仅同步了元数据摘要。后台归档任务将自动排队拉取完整原文。</p>
+                  <button
+                    type="button"
+                    onClick={handleSyncBody}
+                    style={{
+                      padding: '4px 12px',
+                      borderRadius: 6,
+                      border: '1px solid var(--line)',
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                    }}
+                  >
+                    立即拉取正文
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件正文尚未完成同步或内容为空</p>
+                  <p style={{ margin: 0, fontSize: 12 }}>该邮件没有正文内容或内容为空。</p>
+                </>
+              )}
             </div>
           ) : html ? (
             <>
