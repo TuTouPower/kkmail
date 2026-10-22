@@ -168,3 +168,80 @@ def test_limiter_window_expires():
     assert lim.retry_after("a", now=2) > 0
     assert lim.retry_after("b", now=2) == 0
     assert lim.retry_after("a", now=12) == 0
+
+
+def test_login_rate_limiter_not_bypassed_by_forged_x_forwarded_for():
+    """A21: Untrusted client cannot bypass login rate limit by forging X-Forwarded-For."""
+    from mail_core.security.ratelimit import login_limiter
+
+    login_limiter.reset()
+    client = TestClient(app)
+    try:
+        # Attacker rotates X-Forwarded-For on each attempt
+        for i in range(login_limiter.max_failures):
+            res = client.post(
+                "/api/auth/login",
+                json={"password": "wrong"},
+                headers={"X-Forwarded-For": f"198.51.100.{i + 1}"},
+            )
+            assert res.status_code == 401
+
+        # Even with a brand new forged IP, request is blocked by real socket peer
+        blocked = client.post(
+            "/api/auth/login",
+            json={"password": TEST_LOGIN_PASSWORD},
+            headers={"X-Forwarded-For": "203.0.113.99"},
+        )
+        assert blocked.status_code == 429
+        assert int(blocked.headers["Retry-After"]) >= 1
+    finally:
+        login_limiter.reset()
+
+
+def test_cookie_secure_boundary(monkeypatch):
+    """A21: cookie_secure only uses explicit config or verified ASGI scheme, never unvalidated headers."""
+    from starlette.requests import Request
+    from mail_core.security.auth import cookie_secure
+
+    monkeypatch.delenv("MAIL_CORE_COOKIE_SECURE", raising=False)
+
+    # 1. Plain HTTP request with unvalidated X-Forwarded-Proto: https -> must be False
+    plain_scope = {
+        "type": "http",
+        "scheme": "http",
+        "path": "/",
+        "headers": [(b"x-forwarded-proto", b"https"), (b"host", b"localhost:8000")],
+        "server": ("127.0.0.1", 8000),
+    }
+    req_plain = Request(plain_scope)
+    assert not cookie_secure(req_plain)
+
+    # 2. Verified ASGI scheme https (e.g. from validated ProxyHeadersMiddleware) -> True
+    https_scope = {
+        "type": "http",
+        "scheme": "https",
+        "path": "/",
+        "headers": [(b"host", b"localhost:8000")],
+        "server": ("127.0.0.1", 8000),
+    }
+    req_https = Request(https_scope)
+    assert cookie_secure(req_https)
+
+    # 3. Explicit config MAIL_CORE_COOKIE_SECURE=1 -> True even for HTTP
+    monkeypatch.setenv("MAIL_CORE_COOKIE_SECURE", "1")
+    assert cookie_secure(req_plain)
+
+
+def test_logout_fails_when_session_invalidation_fails(monkeypatch):
+    """A37: Logout must return 500 (not success) if database session invalidation fails."""
+    client = TestClient(app)
+    login = client.post("/api/auth/login", json={"password": TEST_LOGIN_PASSWORD})
+    csrf = login.json()["csrf_token"]
+
+    def _broken_invalidate():
+        raise AuthConfigError("DB failed during invalidate")
+
+    monkeypatch.setattr("mail_core.api.auth_routes.invalidate_all_sessions", _broken_invalidate)
+    out = client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
+    assert out.status_code == 500
+    assert "failed to invalidate session in database" in out.json()["detail"]
