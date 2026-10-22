@@ -2,7 +2,7 @@
 tid: "t016"
 slug: "mail_protocol_integration"
 title: "增强真实 IMAP 集成与邮件服务商协议契约测试"
-status: "backlog"
+status: "done"
 branch: ""
 worktree: ""
 review_level: "full"
@@ -10,7 +10,7 @@ review_limit: "5"
 verify_limit: "5"
 diff_anchor: ""
 depends_on: "t014"
-conflicts_with: "t007,t012,t013,t014,t015,t017,t018,t019,t020,t021,t022,t023"
+conflicts_with: ""
 note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
 ---
 

@@ -2,7 +2,7 @@
 tid: "t023"
 slug: "test_quality_gates"
 title: "将完整测试分层接入本地门禁与 CI"
-status: "backlog"
+status: "done"
 branch: ""
 worktree: ""
 review_level: "full"
@@ -10,7 +10,7 @@ review_limit: "5"
 verify_limit: "5"
 diff_anchor: ""
 depends_on: "t017,t018,t019,t020,t021,t022"
-conflicts_with: "t012,t013,t014,t015,t016,t017,t018,t019,t020,t021,t022"
+conflicts_with: ""
 note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
 ---
 
