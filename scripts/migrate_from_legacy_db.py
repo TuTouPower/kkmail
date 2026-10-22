@@ -151,7 +151,8 @@ def migrate():
                 existing = session.query(Account).filter_by(email=email_norm).first()
 
                 auth_type = (a["authorization_type"] or "").lower()
-                if auth_type == "graph":
+                has_refresh_token = bool(a["refresh_token"])
+                if auth_type == "graph" or (has_refresh_token and "outlook" in email_norm):
                     provider = "graph"
                 elif auth_type == "imap":
                     provider = "imap"
