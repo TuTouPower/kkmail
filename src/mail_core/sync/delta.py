@@ -16,6 +16,7 @@ from mail_core.mail.storage.models import Account, Folder, Message, MessageLocat
 from mail_core.providers.base import DeltaPage
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
+from mail_core.security.redact import safe_provider_summary
 from mail_core.sync.checkpoints import commit_checkpoint, invalidate_checkpoint_for_rebuild
 from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import (
@@ -261,16 +262,23 @@ def sync_folder_delta(
         )
         session.commit()
 
-    provider = build_provider(account_snapshot, store or get_credential_store())
-    totals = {"upserted": 0, "deleted": 0, "flagged": 0}
-    exhausted = False
-    pages = 0
-
     def _release_quiet(session) -> None:
         try:
             release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
         except FencingMismatch:
             session.rollback()
+
+    try:
+        provider = build_provider(account_snapshot, store or get_credential_store())
+    except Exception:
+        with Session() as session:
+            _release_quiet(session)
+            session.commit()
+        raise
+
+    totals = {"upserted": 0, "deleted": 0, "flagged": 0}
+    exhausted = False
+    pages = 0
 
     while pages < max_pages:
         try:
@@ -289,7 +297,7 @@ def sync_folder_delta(
                         payload={
                             "folder_id": str(folder_id),
                             "reason": "cursor_invalid",
-                            "detail": str(exc),
+                            "detail": safe_provider_summary(exc),
                         },
                         priority=40,
                     )
@@ -301,6 +309,7 @@ def sync_folder_delta(
             return {"status": "cursor_invalid", "pages": pages, **totals}
         except RateLimitedError as exc:
             delay = float(exc.retry_after_seconds or 60)
+            delay = max(1.0, min(delay, 86400.0))
             with Session() as session:
                 enqueue_job(
                     session,
@@ -314,7 +323,8 @@ def sync_folder_delta(
                 session.commit()
             return {"status": "rate_limited", "retry_after": delay, "pages": pages, **totals}
         except Exception as exc:
-            log.exception("delta provider I/O failed for folder %s: %s", folder_id, type(exc).__name__)
+            err_summary = safe_provider_summary(exc)
+            log.exception("delta provider I/O failed for folder %s: %s", folder_id, err_summary)
             with Session() as session:
                 enqueue_job(
                     session,
@@ -323,7 +333,7 @@ def sync_folder_delta(
                     payload={
                         "folder_id": str(folder_id),
                         "reason": "provider_error",
-                        "detail": f"{type(exc).__name__}: {exc}",
+                        "detail": err_summary,
                     },
                     priority=60,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=15),
@@ -332,7 +342,7 @@ def sync_folder_delta(
                 session.commit()
             return {
                 "status": "provider_error",
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": err_summary,
                 "pages": pages,
                 **totals,
             }

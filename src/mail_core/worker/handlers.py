@@ -18,7 +18,7 @@ log = logging.getLogger("mail_core.worker.handlers")
 
 def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: str) -> bool:
     status = result.get("status")
-    if status in ("ok", "sync_disabled", "skipped"):
+    if status in ("ok", "sync_disabled", "skipped", "rate_limited"):
         complete_job(session, job, worker_id=worker_id)
         return True
 
@@ -76,8 +76,8 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             log.info("sync_account_folders %s", result)
             if result.get("status") in ("ok", "sync_disabled"):
                 update_account_sync_status(session, account_id, "idle")
-            elif result.get("status") in ("rate_limited", "lease_busy", "provider_error"):
-                update_account_sync_status(session, account_id, "failed", error=str(result.get("status")))
+            elif result.get("status") in ("lease_busy", "provider_error"):
+                update_account_sync_status(session, account_id, "failed", error=str(result.get("error") or result.get("status")))
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.SYNC_FOLDER_METADATA.value:
