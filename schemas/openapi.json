@@ -816,6 +816,11 @@
             "title": "Id",
             "type": "string"
           },
+          "is_archived": {
+            "default": true,
+            "title": "Is Archived",
+            "type": "boolean"
+          },
           "is_flagged": {
             "title": "Is Flagged",
             "type": "boolean"
@@ -2541,6 +2546,58 @@
           }
         ],
         "summary": "Api Set Message Read",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/api/mail/messages/{message_id}/sync-body": {
+      "post": {
+        "description": "Trigger on-demand highest-priority body sync for a message.",
+        "operationId": "api_sync_message_body_api_mail_messages__message_id__sync_body_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Sync Message Body",
         "tags": [
           "mail"
         ]

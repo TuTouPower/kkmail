@@ -434,7 +434,8 @@ def sync_folder_delta(
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id), "poll_round": next_round},
-                priority=70,
+                priority=75,
+                dedupe_key=f"delta:{account_id}:{folder_id}",
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
             )
         release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
