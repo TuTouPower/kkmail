@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from mail_core.blobs.archive import parse_mime_content
+import pytest
+from mail_core.blobs.archive import MimeParseError, parse_mime_content
 
 
 def test_parse_mime_plain_and_html():
@@ -62,6 +63,103 @@ def test_parse_mime_with_attachments_and_inlines():
     assert att2["content_type"] == "image/png"
     assert att2["content_id"] == "logo123"
     assert att2["is_inline"] is True
+
+
+def test_parse_mime_body_decode_failure_strict():
+    # 1. Unknown charset
+    raw_unknown = (
+        b"From: alice@example.com\r\n"
+        b"Subject: Unknown Charset\r\n"
+        b"Content-Type: text/plain; charset=unknown-xyz\r\n\r\n"
+        b"Some text\r\n"
+    )
+    with pytest.raises(MimeParseError) as exc_info:
+        parse_mime_content(raw_unknown)
+    assert exc_info.value.stage == "body"
+    assert "unknown-xyz" in str(exc_info.value) or "LookupError" in str(exc_info.value)
+
+    # 2. Invalid UTF-8 bytes in declared utf-8 charset
+    raw_corrupt = (
+        b"From: alice@example.com\r\n"
+        b"Subject: Corrupt UTF8\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n"
+        b"Content-Transfer-Encoding: 8bit\r\n\r\n"
+        b"Hello \xff\xfe corrupted\r\n"
+    )
+    with pytest.raises(MimeParseError) as exc_info:
+        parse_mime_content(raw_corrupt)
+    assert exc_info.value.stage == "body"
+    assert "UnicodeDecodeError" in str(exc_info.value) or "invalid" in str(exc_info.value)
+
+
+def test_parse_mime_header_defect_failure():
+    # Header with undecodable bytes / unknown charset in encoded word
+    raw_bad_hdr = (
+        b"From: =?unknown-charset?b?1234?=\r\n"
+        b"Subject: Bad Header\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        b"Hello\r\n"
+    )
+    with pytest.raises(MimeParseError) as exc_info:
+        parse_mime_content(raw_bad_hdr)
+    assert exc_info.value.stage == "header"
+
+
+def test_parse_mime_attachment_filename_failure():
+    # Undecodable bytes in extended attachment filename parameter
+    raw_bad_att = (
+        b"Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n"
+        b"--b\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        b"Body\r\n"
+        b"--b\r\n"
+        b"Content-Type: application/pdf\r\n"
+        b"Content-Disposition: attachment; filename*=\"utf-8''%FF%FE%FD\"\r\n\r\n"
+        b"PDF_DATA\r\n"
+        b"--b--"
+    )
+    with pytest.raises(MimeParseError) as exc_info:
+        parse_mime_content(raw_bad_att)
+    assert exc_info.value.stage == "attachment"
+
+
+def test_parse_mime_legitimate_empty_and_valid_cases():
+    # 1. Legitimate empty text body
+    raw_empty = (
+        b"From: alice@example.com\r\n"
+        b"Subject: Empty\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+    )
+    plain, html, atts = parse_mime_content(raw_empty)
+    assert plain == "" or plain is None
+    assert html is None
+    assert atts == []
+
+    # 2. Text legitimately containing U+FFFD (replacement character) in valid UTF-8
+    raw_fffd = (
+        "From: alice@example.com\r\n"
+        "Subject: FFFD\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        "Valid text with \ufffd character"
+    ).encode("utf-8")
+    plain, html, atts = parse_mime_content(raw_fffd)
+    assert "\ufffd" in (plain or "")
+
+    # 3. Valid RFC 2047 encoded filename
+    raw_rfc2047 = (
+        b"Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n"
+        b"--b\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        b"Body\r\n"
+        b"--b\r\n"
+        b"Content-Type: application/pdf\r\n"
+        b"Content-Disposition: attachment; filename=\"=?utf-8?b?5paH5Lu2LnBkZg==?=\"\r\n\r\n"
+        b"PDF_DATA\r\n"
+        b"--b--"
+    )
+    plain, html, atts = parse_mime_content(raw_rfc2047)
+    assert len(atts) == 1
+    assert atts[0]["filename"] == "文件.pdf"
 
 
 def test_resume_quota_paused_archives_transition():
