@@ -50,7 +50,7 @@
 
 ## 桌面 Electron
 
-主进程（`desktop/main.js` + `desktop/hardening.js`）：
+主进程（`src/desktop/main.js` + `src/desktop/hardening.js`）：
 
 - `contextIsolation`、无 `nodeIntegration`、`sandbox`、禁用 `webviewTag`
 - `will-attach-webview` 一律 `preventDefault`
