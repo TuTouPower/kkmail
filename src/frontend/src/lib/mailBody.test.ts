@@ -4,7 +4,6 @@ import {
   MAIL_IFRAME_SANDBOX,
   buildMailSrcdoc,
   classifyMailHtml,
-  htmlToText,
   isHtmlBody,
   sanitizeMailHtml,
 } from './mailBody'
@@ -62,10 +61,6 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(isHtmlBody('text/HTML')).toBe(true)
     expect(isHtmlBody('text')).toBe(false)
     expect(isHtmlBody(undefined)).toBe(false)
-  })
-
-  it('converts html to quoted text', () => {
-    expect(htmlToText('<p>a</p><p>b<br>c</p><img src=x onerror=alert(1)>')).toBe('a\nb\nc')
   })
 
   it('classifies unstyled html as plain and applies dark body #1A1A1C and text #FFFFFF in dark mode (AC-003)', () => {

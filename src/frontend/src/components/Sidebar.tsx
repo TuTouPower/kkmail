@@ -103,6 +103,7 @@ function AccountFolderTree({ accountId, accountEmail }: AccountFolderTreeProps) 
       )
       return res.folders || []
     },
+    retry: false,
   })
 
   if (foldersQuery.isLoading) {
