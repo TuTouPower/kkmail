@@ -1,7 +1,7 @@
 ---
 tid: "t027"
 slug: "account_group_ordering"
-title: "持久化账号分组管理与独立排序"
+title: "完整改造账号分组侧栏与邮件范围"
 status: "backlog"
 branch: ""
 worktree: ""
@@ -10,8 +10,8 @@ review_limit: "5"
 verify_limit: "5"
 diff_anchor: ""
 depends_on: ""
-conflicts_with: "t026,t028"
-note: "来源：侧栏设计聊天最终要求与 mail-sidebar-demo-v3.html；后端组织契约，单组归属、总列表与组内排序独立持久化"
+conflicts_with: "t026"
+note: "合并原 t027–t031，保留全部 40 条 AC；完整功能不减、无预置示例分组；t032 独立负责双端窗口适配"
 ---
 
 # Task 过程总账
@@ -25,6 +25,8 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
 
 - 创建依据：2026-10-23 核对设计聊天、v3 本地原型与 main@26a8eee。仅登记 backlog，未 start、未实施。
+
+- 用户要求合并为两个 task：本 task 接收原 t028–t031 全部范围与 AC，保留 t032 为后续双端窗口适配；合并前均为主仓 backlog，无执行分支、worktree 或 attempt 记录。
 
 ## Review 处置
 
