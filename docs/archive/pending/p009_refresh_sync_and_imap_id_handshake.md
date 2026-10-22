@@ -8,4 +8,4 @@
     3. `src/mail_core/providers/imap.py` 在连接认证后未实现 RFC 2971 `ID` 扩展指令，网易服务器安全防御规则强制要求客户端 ID 标识，缺省时在 `SELECT INBOX` 阶段直接拒绝返回 `NO ['SELECT Unsafe Login']`。
 - 测试缺口：前端单测仅验证 UI 查询重新触发，未断言是否触发后端同步写接口；后端 IMAP 测试仅连接本地离线 Dovecot 夹具（默认不强制校验 ID 命令），缺少针对国内主流邮箱服务扩展要求的真实协议断言。
 - 线索：`.scratch/repro_inbox_empty_and_refresh.py`
-- 处理：未开
+- 处理：t005

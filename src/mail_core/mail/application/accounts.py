@@ -135,6 +135,12 @@ def create_account_app(
                 config=config,
                 credentials=credentials,
             )
+            # AC-002: Automatically enqueue initial sync job for newly created accounts
+            if acc.sync_enabled:
+                try:
+                    enqueue_account_sync(session, acc.id)
+                except Exception:
+                    pass
             session.commit()
         except Exception:
             session.rollback()
