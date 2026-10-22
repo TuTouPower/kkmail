@@ -5,6 +5,19 @@ import { useMailStore } from '../store/mailStore'
 import { __resetCsrfForTests } from '../api/client'
 import { cleanup, click, render, typeInto, waitFor } from '../test/render'
 
+let intersectionCallback: IntersectionObserverCallback | null = null
+
+class MockIntersectionObserver {
+  callback: IntersectionObserverCallback
+  constructor(cb: IntersectionObserverCallback) {
+    this.callback = cb
+    intersectionCallback = cb
+  }
+  observe = vi.fn()
+  unobserve = vi.fn()
+  disconnect = vi.fn()
+}
+
 const row = (id: string, over: Record<string, unknown> = {}) => ({
   id,
   account_id: 'acc-1',
@@ -29,6 +42,8 @@ let calls: string[] = []
 
 beforeEach(() => {
   calls = []
+  intersectionCallback = null
+  vi.stubGlobal('IntersectionObserver', MockIntersectionObserver)
   useMailStore.setState({ view: { type: 'allInbox' }, listFilter: 'all', search: '', selectedIds: [], selectedKey: null })
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     const u = String(url)
@@ -151,7 +166,48 @@ describe('<MessageList />', () => {
     await waitFor(() => expect(calls.some((u) => u.includes('/api/mail/search?q='))).toBe(true))
   })
 
-  it('supports search pagination via next_offset and load more button', async () => {
+  // Note: 旧测试 'supports search pagination via next_offset and load more button'
+  // 测试了已废弃的手动加载更多按钮 .load-more-btn 与点击交互，因 AC-003/AC-004 升级为触底自动加载而语义失效，
+  // 予以移除并由下方 AC-001 ~ AC-005 测试替代。
+
+  it('displays authoritative total count from folder-stats and matches unread count in unread view (AC-001)', async () => {
+    const originalFetch = vi.mocked(fetch)
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.includes('/folder-stats')) {
+        return json({
+          account_id: 'acc-1',
+          folders: [
+            { folder_id: 'f1', role: 'inbox', name: 'INBOX', total_count: 7706, unread_count: 42 },
+          ],
+        })
+      }
+      return originalFetch(url)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toEqual(['Subject a', 'Subject b']))
+    await waitFor(() => {
+      expect(container.querySelector('.list-count')?.textContent).toBe('7706 封邮件 · 42 封未读')
+    })
+
+    await click([...container.querySelectorAll('[role=tab]')].find((b) => b.textContent === '未读') || null)
+    await waitFor(() => {
+      expect(container.querySelector('.list-count')?.textContent).toBe('42 封邮件 · 42 封未读')
+    })
+  })
+
+  it('displays authoritative matching total count in search mode (AC-002)', async () => {
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toHaveLength(2))
+    const input = container.querySelector('input[name=search]') as HTMLInputElement
+
+    await typeInto(input, 'page-test')
+    await waitFor(() => expect(subjects(container)).toEqual(['Subject p1']))
+    expect(container.querySelector('.list-count')?.textContent).toContain('2 封邮件')
+  })
+
+  it('removes load more button and pagination count text (AC-003)', async () => {
     const { container } = await render(<MessageList />)
     await waitFor(() => expect(subjects(container)).toHaveLength(2))
     const input = container.querySelector('input[name=search]') as HTMLInputElement
@@ -159,13 +215,36 @@ describe('<MessageList />', () => {
     await typeInto(input, 'page-test')
     await waitFor(() => expect(subjects(container)).toEqual(['Subject p1']))
 
-    const loadMoreBtn = container.querySelector('.load-more-btn') as HTMLButtonElement
-    expect(loadMoreBtn).not.toBeNull()
-    expect(loadMoreBtn.textContent).toContain('加载更多')
+    expect(container.querySelector('.load-more-btn')).toBeNull()
+    expect(container.querySelector('[data-ui="ML14"]')).toBeNull()
+    expect(container.textContent).not.toContain('已加载 1 封')
+  })
 
-    await click(loadMoreBtn)
+  it('automatically triggers next page load on intersection sentinel or scroll (AC-004, AC-005)', async () => {
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toHaveLength(2))
+    const input = container.querySelector('input[name=search]') as HTMLInputElement
+
+    await typeInto(input, 'page-test')
+    await waitFor(() => expect(subjects(container)).toEqual(['Subject p1']))
+
+    const sentinel = container.querySelector('.list-sentinel')
+    expect(sentinel).not.toBeNull()
+
+    const { act } = await import('react')
+    await act(async () => {
+      if (intersectionCallback) {
+        intersectionCallback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
+      }
+    })
+
     await waitFor(() => expect(subjects(container)).toEqual(['Subject p1', 'Subject p2']))
     expect(calls.some((u) => u.includes('offset=1'))).toBe(true)
+
+    await waitFor(() => {
+      expect(container.querySelector('.list-sentinel')).toBeNull()
+      expect(container.textContent).toContain('已加载全部邮件')
+    })
   })
 
   it('requests folder_role=sent when favorite category is sent', async () => {

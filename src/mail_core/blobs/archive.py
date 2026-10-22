@@ -213,6 +213,7 @@ def claim_archive_batch(
     worker_id: str,
     limit: int,
     recent_days: int,
+    target_message_id: uuid.UUID | None = None,
     now: datetime | None = None,
 ) -> list[uuid.UUID]:
     """Select metadata_synced / pending rows and mark archive_in_progress."""
@@ -233,6 +234,8 @@ def claim_archive_batch(
     )
     if account_id is not None:
         stmt = stmt.where(Message.account_id == account_id)
+    if target_message_id is not None:
+        stmt = stmt.where(Message.id == target_message_id)
     stmt = (
         stmt.order_by(MessageArchiveState.priority.asc(), Message.sort_time.desc())
         .limit(limit)
@@ -244,7 +247,8 @@ def claim_archive_batch(
         # Promote metadata_synced → pending → in_progress
         if state.state == ArchiveState.METADATA_SYNCED.value:
             apply_transition(state, ArchiveState.ARCHIVE_PENDING)
-            state.priority = _priority_for(msg.sort_time, now=now, recent_days=recent_days)
+            if state.priority is None or state.priority > 0:
+                state.priority = _priority_for(msg.sort_time, now=now, recent_days=recent_days)
         apply_transition(state, ArchiveState.ARCHIVE_IN_PROGRESS)
         state.claimed_by = worker_id
         state.claimed_at = now
@@ -504,6 +508,13 @@ def run_archive_batch(
     # Capacity is below recovery threshold — automatically resume quota-paused archives (A25)
     resume_quota_paused_archives(account_id=account_id, limit=limit)
 
+    target_msg_id = None
+    if payload.get("message_id"):
+        try:
+            target_msg_id = uuid.UUID(str(payload["message_id"]))
+        except (ValueError, TypeError):
+            pass
+
     with Session() as session:
         if account_id is not None and fencing is not None:
             try:
@@ -516,6 +527,7 @@ def run_archive_batch(
             worker_id=worker_id,
             limit=limit,
             recent_days=recent_days,
+            target_message_id=target_msg_id,
         )
         # Load remote ids + account for provider
         work: list[tuple[uuid.UUID, str, uuid.UUID]] = []
@@ -611,13 +623,20 @@ def run_archive_batch(
                     and st.state == ArchiveState.ARCHIVE_IN_PROGRESS.value
                 ):
                     st.retry_count = int(st.retry_count) + 1
-                    st.last_error = safe_error(exc)
+                    err_msg = safe_error(exc)
+                    st.last_error = err_msg
                     apply_transition(
                         st,
                         ArchiveState.ARCHIVE_FAILED if st.retry_count >= 5 else ArchiveState.ARCHIVE_PENDING,
                     )
                     st.claimed_by = None
                     st.updated_at = datetime.now(timezone.utc)
+                    body_record = session.get(MessageBody, mid)
+                    if body_record is None:
+                        session.add(MessageBody(message_id=mid, text_plain="", text_html="", parse_error=err_msg))
+                    else:
+                        body_record.parse_error = err_msg
+                        body_record.updated_at = datetime.now(timezone.utc)
                 session.commit()
             failed += 1
             continue
@@ -909,15 +928,16 @@ def run_archive_batch(
                     payload={"completed": completed, "failed": failed},
                 )
             )
-            # Schedule another batch if work may remain
-            enqueue_job(
-                session,
-                job_type=JobType.ARCHIVE_MIME_BATCH.value,
-                account_id=account_id,
-                payload={"batch_size": limit, "recent_days": recent_days,
-                         "soft_limit_bytes": soft_i, "hard_limit_bytes": hard_i},
-                priority=90,
-            )
+            # Schedule another batch if work may remain (only for routine batch archive)
+            if not target_msg_id:
+                enqueue_job(
+                    session,
+                    job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                    account_id=account_id,
+                    payload={"batch_size": limit, "recent_days": recent_days,
+                             "soft_limit_bytes": soft_i, "hard_limit_bytes": hard_i},
+                    priority=60,
+                )
         elif failed > 0:
             # Batch fully failed: continue scheduling retries with backoff (V2-30 / R08)
             session.add(
@@ -927,15 +947,16 @@ def run_archive_batch(
                     payload={"completed": completed, "failed": failed},
                 )
             )
-            enqueue_job(
-                session,
-                job_type=JobType.ARCHIVE_MIME_BATCH.value,
-                account_id=account_id,
-                payload={"batch_size": limit, "recent_days": recent_days,
-                         "soft_limit_bytes": soft_i, "hard_limit_bytes": hard_i},
-                priority=90,
-                run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
-            )
+            if not target_msg_id:
+                enqueue_job(
+                    session,
+                    job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                    account_id=account_id,
+                    payload={"batch_size": limit, "recent_days": recent_days,
+                             "soft_limit_bytes": soft_i, "hard_limit_bytes": hard_i},
+                    priority=60,
+                    run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
+                )
         if account_id is not None and fencing is not None:
             try:
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)

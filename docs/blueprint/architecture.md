@@ -44,3 +44,12 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 邮件内容沙箱隔离：邮件正文所在的无脚本 `iframe` 显式属于子 frame（`isMainFrame === false`），其剪贴板写入请求被严格拒绝，无法写入系统剪贴板；
     - 权限降级与防范：剪贴板读取（`clipboard-read`）、媒体设备（`media`）、定位及通知等无关系统权限无条件保持拒绝；
     - 前端显式入口调用：UI 编号浮标（`UiReferenceOverlay`）与错误边界（`ErrorBoundary`）复制诊断日志在桌面与 Web 端均通过标准 `navigator.clipboard.writeText` 写入，缺失或被拒时提供明确的失败反馈，不使错误边界二次崩溃。
+
+## 按需邮件正文同步与归档优先级治理 (t034)
+
+1. **按需即时正文归档链路**：
+    - 当客户端请求邮件详情（`GET /api/mail/messages/{id}`）或显式触发（`POST /api/mail/messages/{id}/sync-body`）且正文未归档时，系统将该邮件在 `MessageArchiveState` 的优先级提升为最高（`priority = 0`），并向任务队列入队最高优先级即时归档任务（`priority = 10`，去重键 `archive_msg:{id}`）；
+    - `POST /api/mail/messages/{id}/sync-body` 提供就地单封归档尝试，成功后即刻解析正文、附件入库并更新为 `archive_complete`，前端立即响应渲染完整正文；若远端拉取失败或解析出错，持久化记录 `MessageBody.parse_error`，向调用方提供确定性错误反馈。
+2. **Worker 任务调度优先级治理与防饥饿**：
+    - 针对文件夹定时空转轮询导致的归档饥饿，调整任务优先级分层：按需归档任务为 **10**，出站写回操作为 **40**，初次目录扫描为 **50**，后台批量正文归档续批为 **60**，文件夹定时空转增量轮询为 **75**，定期对账任务为 **85**；
+    - 定时增量空转轮询增加去重键（`delta:{account_id}:{folder_id}`），防止单个文件夹在短时间内重复入队堆积，彻底解除增量轮询对后台批量正文归档的压制。
