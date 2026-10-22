@@ -18,8 +18,8 @@ command -v md_kx || true
 ```bash
 pytest .repo_template/tests -q -m contract
 scripts/run-mail-core-tests.sh run
-(cd src/frontend && npm test && npx tsc -b && npm run build)
-(cd src/desktop && npm test)
+(cd src/frontend && npm test && npx tsc -b && npm run build && npm run lint)
+(cd src/desktop && npm test && npm run test:packaged)
 ```
 
 ## blackbox_verify
@@ -255,3 +255,29 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 - **场景覆盖**：首页 keyset 分页（50封）、深 keyset 翻页（逐页推进至后序多页）、中文与 ASCII 全文搜索（tsvector/trigram）、文件夹未读与总数重算、Blob 流式解密读取；
 - **度量指标**：延迟分位数（p50、p95）、吞吐（QPS）、进程峰值 RSS 内存、数据库物理体积、Message 表大小、Blob 磁盘空间及 PostgreSQL EXPLAIN 查询计划（确认索引利用）；
 - **跨报告对比**：结构化输出各场景延迟百分比变化与资源变动，若运行平台不一致明确警示不可直接比对。
+
+## 本地分层门禁与 CI 流水线映射（t023）
+
+统一本地开发重放命令与 GitHub Actions 流水线，消除数据库静默跳过并实现全自动化守护：
+
+### 1. 本地快速与全量门禁矩阵
+
+|分层|覆盖内容|本地执行命令|
+|---|---|---|
+|**前置契约**|模板契约与工具链冒烟|`pytest .repo_template/tests -q -m contract`|
+|**前端全量**|样式/类型/单元/构建/OpenAPI|`(cd src/frontend && npm test && npx tsc -b && npm run build && npm run lint)`|
+|**桌面全量**|进程管理单测 + 原生打包冒烟|`(cd src/desktop && npm test && npm run test:packaged)`|
+|**后端快速**|无数据库/内存 Provider 单元|`scripts/run-mail-core-tests.sh unit` (256 passed / 105 skipped)|
+|**后端全量**|专用 PG (15433) + 真实 IMAP (1143)|`scripts/run-mail-core-tests.sh run` (361 passed / 0 skipped)|
+|**全栈 E2E**|真实 FastAPI + PG + Worker + SPA|`python3 scripts/run_full_stack_e2e.py` (3 passed, 16s)|
+|**快速 E2E**|轻量浏览器 stubApi 冒烟|`npm --prefix src/frontend run test:e2e` (3 passed, 4s)|
+|**扩展演练**|备份跨库还原 / 迁移升级 / 混沌恢复|`scripts/run-mail-core-tests.sh run -k "test_backup_restore_drill_live or test_migration_validation or test_worker_process_recovery"`|
+|**性能基准**|确定性规模延迟分位数与资源测定|`python3 scripts/benchmark_mailbox.py --scale 1000 --runs 3`|
+
+### 2. CI 工作流映射
+
+- **PR 与 Push 门禁 (`.github/workflows/ci.yml`)**：
+    并行调度 `template-contract`、`frontend-quality`、`desktop-quality` 和 `backend-and-integration` 四大 Job，任何 Job 失败均在 `ci-status` 汇总阻断；在 Linux runner 自动构建前端并拉起测试数据库与 IMAP 服务，执行真实全栈端到端测试；
+- **定时与手动扩展套件 (`.github/workflows/scheduled.yml`)**：
+    每天定时或手动触发，完整执行真实备份跨库恢复、多版本历史数据平滑升级、多进程 Worker 故障恢复和大邮箱性能基准测试；
+- **权限与环境安全**：工作流配置最小 `contents: read` 权限，不申请发布权限；测试使用的数据库密码与环境变量严格隔离于专用测试环境。

@@ -1,0 +1,187 @@
+name: CI Quality Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  template-contract:
+    name: Repo Template Contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv and dependencies
+        run: |
+          pip install uv
+          uv venv .venv
+          uv pip install --python .venv/bin/python pytest pyyaml
+
+      - name: Run contract tests
+        run: |
+          .venv/bin/pytest .repo_template/tests -q -m contract
+
+  frontend-quality:
+    name: Frontend Quality & Components
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+          cache-dependency-path: src/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: src/frontend
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+        working-directory: src/frontend
+
+      - name: Code style & lint
+        run: npm run lint
+        working-directory: src/frontend
+
+      - name: TypeScript typecheck
+        run: npx tsc -b
+        working-directory: src/frontend
+
+      - name: OpenAPI schema verification
+        run: npm run openapi:check
+        working-directory: src/frontend
+
+      - name: Frontend unit & component tests
+        run: npm test
+        working-directory: src/frontend
+
+      - name: Frontend production build
+        run: npm run build
+        working-directory: src/frontend
+
+      - name: Lightweight E2E UI Smoke
+        run: npm run test:e2e
+        working-directory: src/frontend
+
+  desktop-quality:
+    name: Desktop Package & Embedded PG
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+          cache-dependency-path: src/desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: src/desktop
+
+      - name: Fetch Linux PostgreSQL vendor binaries
+        run: bash scripts/fetch-pg-binaries.sh --os linux --arch x64
+
+      - name: Desktop unit tests
+        run: npm test
+        working-directory: src/desktop
+
+      - name: Desktop packaged smoke test
+        run: npm run test:packaged
+        working-directory: src/desktop
+
+  backend-and-integration:
+    name: Backend Live PG/IMAP & Full Stack E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install frontend & build SPA
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build
+        working-directory: src/frontend
+
+      - name: Install Python dependencies
+        run: |
+          pip install uv
+          uv venv .venv
+          uv pip install --python .venv/bin/python -r requirements-dev.txt
+
+      - name: Start Dedicated Test Services
+        env:
+          KKMAIL_TEST_PG_PASSWORD: "ci_test_password_secret_123"
+        run: |
+          echo "KKMAIL_TEST_PG_PASSWORD='ci_test_password_secret_123'" > .env.test
+          chmod 600 .env.test
+          scripts/run-mail-core-tests.sh start
+          scripts/start-mail-core-imap.sh
+
+      - name: Run Full Backend Test Suite
+        run: |
+          scripts/run-mail-core-tests.sh run
+
+      - name: Run Full Stack E2E Suite
+        run: |
+          python3 scripts/run_full_stack_e2e.py
+
+      - name: Upload Test Artifacts on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts
+          path: |
+            .scratch/test_runs/
+            .scratch/e2e_artifacts/
+            .scratch/e2e_logs/
+          retention-days: 7
+
+  ci-status:
+    name: CI Quality Gates Summary
+    needs: [template-contract, frontend-quality, desktop-quality, backend-and-integration]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all gate statuses
+        run: |
+          if [ "${{ needs.template-contract.result }}" != "success" ] || \
+             [ "${{ needs.frontend-quality.result }}" != "success" ] || \
+             [ "${{ needs.desktop-quality.result }}" != "success" ] || \
+             [ "${{ needs.backend-and-integration.result }}" != "success" ]; then
+            echo "One or more CI quality gates failed." >&2
+            exit 1
+          fi
+          echo "All CI quality gates passed successfully."
