@@ -3,13 +3,16 @@ import { X, Sun, Moon, Inbox, Settings as SettingsIcon, PanelLeft } from 'lucide
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { fetchAccounts, fetchGroups, queryKeys } from '../api/queries'
-import { providerBadge, providerColor, useMailStore } from '../store/mailStore'
+import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
+import AccountIcon from './AccountIcon'
 
 /** Settings page — mail-core only (accounts / groups / appearance / password). */
 export default function SettingsPage() {
   const theme = useMailStore((s) => s.theme)
   const setTheme = useMailStore((s) => s.setTheme)
+  const accountIconMode = useMailStore((s) => s.accountIconMode)
+  const setAccountIconMode = useMailStore((s) => s.setAccountIconMode)
   const closeSettings = useMailStore((s) => s.closeSettings)
   const sidebarCollapsed = useMailStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useMailStore((s) => s.toggleSidebar)
@@ -132,7 +135,7 @@ export default function SettingsPage() {
             )}
             {accounts.map((a) => (
               <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: '1px solid var(--line)' }}>
-                <span className="account-dot" style={{ background: a.group_color || providerColor(a.provider, a.account_type) }}>{providerBadge(a.provider, a.account_type)}</span>
+                <AccountIcon email={a.email} provider={a.provider} accountType={a.account_type} groupColor={a.group_color} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 650 }}>{a.email}</div>
                   <div style={{ fontSize: 11, color: 'var(--muted)' }}>{a.provider} · {a.sync_status || a.status}{a.group_name ? ` · ${a.group_name}` : ''}</div>
@@ -261,6 +264,31 @@ export default function SettingsPage() {
                   height: 34, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)',
                   background: theme === t ? 'var(--blue)' : 'var(--surface-2)', color: theme === t ? '#fff' : 'var(--text)',
                 }}>{t}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 700, marginTop: 20, marginBottom: 8 }}>账号图标</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {([
+                ['none', '不展示'],
+                ['brand', '品牌图标'],
+                ['initials', '首字母'],
+              ] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setAccountIconMode(mode)}
+                  style={{
+                    height: 34,
+                    padding: '0 12px',
+                    borderRadius: 8,
+                    border: '1px solid var(--line)',
+                    background: accountIconMode === mode ? 'var(--blue)' : 'var(--surface-2)',
+                    color: accountIconMode === mode ? '#fff' : 'var(--text)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {label}
+                </button>
               ))}
             </div>
           </div>
