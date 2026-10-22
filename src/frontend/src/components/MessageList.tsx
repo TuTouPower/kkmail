@@ -392,6 +392,7 @@ const MessageList = memo(function MessageList() {
           <div className="list-heading" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {(!wide || sidebarCollapsed) && (
               <button
+                data-ui="ML01"
                 type="button"
                 className="list-primary-btn sidebar-expand-btn"
                 title={wide ? '展开侧边栏' : '打开导航'}
@@ -402,12 +403,13 @@ const MessageList = memo(function MessageList() {
               </button>
             )}
             <div>
-              <div className="list-title" title={title}>{title}</div>
+              <div data-ui="ML02" className="list-title" title={title}>{title}</div>
               <div className="list-count" aria-live="polite">{countLabel}</div>
             </div>
           </div>
           <div className="list-primary-actions">
             <button
+              data-ui="ML03"
               className={`list-primary-btn ${isSyncing ? 'loading' : ''}`}
               title={isSyncing ? '正在同步…' : '刷新并同步'}
               aria-label={isSyncing ? '正在同步…' : '刷新并同步'}
@@ -421,6 +423,7 @@ const MessageList = memo(function MessageList() {
         <label className="list-search">
           <Search size={16} />
           <input
+            data-ui="ML04"
             name="search"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
@@ -434,6 +437,7 @@ const MessageList = memo(function MessageList() {
           />
           {searchInput && (
             <button
+              data-ui="ML05"
               className="list-primary-btn"
               title="清除搜索"
               aria-label="清除搜索"
@@ -465,14 +469,14 @@ const MessageList = memo(function MessageList() {
               ))}
             </div>
             <div className="list-control-group">
-              <button className="mark-all-btn" onClick={markAll} disabled={unreadCount === 0} title="将当前列表中的邮件全部标为已读" aria-label="全部标为已读">
+              <button data-ui="ML07" className="mark-all-btn" onClick={markAll} disabled={unreadCount === 0} title="将当前列表中的邮件全部标为已读" aria-label="全部标为已读">
                 <CheckCircle size={13} />
                 <span className="mark-label">全部已读</span>
               </button>
               <button className="sort-btn" onClick={() => selectAll(visible.map((m) => mailKey(m)))} title="选择当前列表全部邮件" disabled={!visible.length}>
                 全选
               </button>
-              <button className="sort-btn" onClick={toggleSort} title="切换邮件排序" aria-label={sortNewest ? '排序：最新优先' : '排序：最早优先'}>
+              <button data-ui="ML06" className="sort-btn" onClick={toggleSort} title="切换邮件排序" aria-label={sortNewest ? '排序：最新优先' : '排序：最早优先'}>
                 <SortAsc size={14} />
                 <span>{sortNewest ? '最新' : '最早'}</span>
               </button>
@@ -484,7 +488,7 @@ const MessageList = memo(function MessageList() {
         {actionStatus && <div role="status" className={`list-note ${actionStatus.includes('失败') ? 'error' : ''}`}>{actionStatus}</div>}
         {failure && <div role="alert" className="list-note error">{failure}</div>}
         {!loading && visible.length === 0 && (
-          <div style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
+          <div data-ui="ML13" style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
             {accounts.length === 0 ? '还没有账户。在设置中添加账户后，这里会显示邮件。' : searching ? '没有匹配的邮件' : '没有邮件'}
           </div>
         )}
@@ -493,6 +497,7 @@ const MessageList = memo(function MessageList() {
           const checked = selectedIds.includes(key)
           return (
             <article
+              data-ui="ML08"
               key={key}
               tabIndex={0}
               aria-selected={selectedKey === key}
@@ -528,18 +533,18 @@ const MessageList = memo(function MessageList() {
               </button>
               <div className="message-content">
                 <div className="message-top">
-                  <span className="sender">
+                  <span data-ui="ML09" className="sender">
                     {!m.is_read && <span className="unread-dot" aria-label="未读" />}
                     {displayName(m.from)}
                   </span>
                   <div className="message-meta">
                     {m.is_flagged && <Flag size={12} aria-label="已标记" />}
                     {m.has_attachments && <Paperclip size={12} aria-label="有附件" />}
-                    <time className="message-date">{formatListDate(m.date)}</time>
+                    <time data-ui="ML11" className="message-date">{formatListDate(m.date)}</time>
                   </div>
                 </div>
-                <div className="subject">{m.subject}</div>
-                <div className="preview">{previewText(m.body_preview)}</div>
+                <div data-ui="ML10" className="subject">{m.subject}</div>
+                <div data-ui="ML12" className="preview">{previewText(m.body_preview)}</div>
               </div>
             </article>
           )
@@ -553,6 +558,7 @@ const MessageList = memo(function MessageList() {
             </div>
             {hasMore ? (
               <button
+                data-ui="ML14"
                 type="button"
                 className="load-more-btn"
                 onClick={handleLoadMore}

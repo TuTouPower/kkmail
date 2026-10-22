@@ -83,6 +83,7 @@ export default function SettingsPage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
         {sidebarCollapsed && (
           <button
+            data-ui="ST01"
             type="button"
             className="sidebar-expand-btn"
             title="展开侧边栏"
@@ -103,10 +104,10 @@ export default function SettingsPage() {
           </button>
         )}
         <SettingsIcon size={18} />
-        <div style={{ fontWeight: 700, flex: 1 }}>设置</div>
-        <button type="button" onClick={onClose} title="关闭" aria-label="关闭" style={{ border: 0, background: 'transparent', color: 'var(--muted)' }}><X size={18} /></button>
+        <div data-ui="ST02" style={{ fontWeight: 700, flex: 1 }}>设置</div>
+        <button data-ui="ST03" type="button" onClick={onClose} title="关闭" aria-label="关闭" style={{ border: 0, background: 'transparent', color: 'var(--muted)' }}><X size={18} /></button>
       </div>
-      <div style={{ display: 'flex', gap: 8, padding: '10px 16px', borderBottom: '1px solid var(--line)' }}>
+      <div data-ui="ST04" style={{ display: 'flex', gap: 8, padding: '10px 16px', borderBottom: '1px solid var(--line)' }}>
         {([
           ['accounts', '账户', Inbox],
           ['appearance', '外观', theme === 'light' ? Sun : Moon],
@@ -147,8 +148,9 @@ export default function SettingsPage() {
                 }} style={{ height: 28, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--red)' }}>删除</button>
               </div>
             ))}
-            <div style={{ marginTop: 18, fontWeight: 700 }}>添加账户</div>
-            <p style={{ fontSize: 12, color: 'var(--muted)' }}>credentials 为 JSON（如 refresh_token / client_id），写入凭证库，接口不会回显。</p>
+            <div data-ui="ST05" style={{ marginTop: 18 }}>
+              <div style={{ fontWeight: 700 }}>添加账户</div>
+              <p style={{ fontSize: 12, color: 'var(--muted)' }}>credentials 为 JSON（如 refresh_token / client_id），写入凭证库，接口不会回显。</p>
             <input id="account-email" name="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
             <select id="account-provider" name="provider" value={provider} onChange={(e) => setProvider(e.target.value as 'gmail' | 'imap' | 'graph' | 'memory' | 'stub')} style={{ width: '100%', height: 34, marginTop: 8, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)' }}>
               <option value="imap">imap</option>
@@ -231,6 +233,7 @@ export default function SettingsPage() {
                 setStatus(errorMessage(err, '添加账户失败'))
               }
             }} style={{ marginTop: 8, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>添加</button>
+            </div>
 
             <div style={{ marginTop: 22, fontWeight: 700 }}>分组</div>
             {(groups || []).map((g) => (
@@ -258,7 +261,7 @@ export default function SettingsPage() {
         {section === 'appearance' && (
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>外观</div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div data-ui="ST06" style={{ display: 'flex', gap: 8 }}>
               {(['system', 'light', 'dark'] as const).map((t) => (
                 <button key={t} type="button" onClick={() => setTheme(t)} style={{
                   height: 34, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)',
@@ -267,7 +270,7 @@ export default function SettingsPage() {
               ))}
             </div>
             <div style={{ fontSize: 14, fontWeight: 700, marginTop: 20, marginBottom: 8 }}>账号图标</div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div data-ui="ST07" style={{ display: 'flex', gap: 8 }}>
               {([
                 ['none', '不展示'],
                 ['brand', '品牌图标'],
@@ -295,7 +298,7 @@ export default function SettingsPage() {
         )}
 
         {section === 'general' && (
-          <div>
+          <div data-ui="ST08">
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>通用</div>
             {settingsQuery.isError && (
               <div role="alert" style={{ color: 'var(--red)', fontSize: 12, marginBottom: 10 }}>
@@ -329,7 +332,7 @@ export default function SettingsPage() {
             }} style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>保存</button>
 
             <div style={{ marginTop: 22, fontWeight: 700 }}>修改登录密码</div>
-            <form onSubmit={async (e) => {
+            <form data-ui="ST09" onSubmit={async (e) => {
               e.preventDefault()
               const res = await run('修改密码', () => api.changePassword(currentPassword, newPassword), '密码已更新')
               if (res.ok) {

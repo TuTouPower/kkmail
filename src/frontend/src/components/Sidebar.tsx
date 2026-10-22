@@ -306,6 +306,7 @@ const Sidebar = memo(function Sidebar() {
     <aside className="sidebar" aria-label="邮箱导航" role={wide ? undefined : 'dialog'} aria-modal={wide ? undefined : true}>
       <div className="sidebar-head">
         <button
+          data-ui="SB01"
           className="sidebar-toggle"
           // On mobile the sidebar is an overlay drawer: this button closes it.
           onClick={wide ? toggleSidebar : closeMobileSidebar}
@@ -317,15 +318,15 @@ const Sidebar = memo(function Sidebar() {
       </div>
       <div className="sidebar-scroll">
         <div className="side-section">
-          <div className="section-label"><span>个人收藏</span></div>
+          <div data-ui="SB02" className="section-label"><span>个人收藏</span></div>
           {[
-            { category: 'inbox' as const, label: '所有收件', icon: Inbox, showBadges: true },
-            { category: 'unread' as const, label: '所有未读', icon: MailOpen, showBadges: false },
-            { category: 'sent' as const, label: '已发邮件', icon: Send, showBadges: false },
-            { category: 'drafts' as const, label: '草稿箱', icon: FileText, showBadges: false },
-            { category: 'trash' as const, label: '废纸篓', icon: Trash2, showBadges: false },
-            { category: 'junk' as const, label: '垃圾邮件', icon: ShieldAlert, showBadges: false },
-          ].map(({ category: cat, label, icon: Icon, showBadges }) => {
+            { category: 'inbox' as const, label: '所有收件', icon: Inbox, showBadges: true, uiId: 'SB03' },
+            { category: 'unread' as const, label: '所有未读', icon: MailOpen, showBadges: false, uiId: 'SB04' },
+            { category: 'sent' as const, label: '已发邮件', icon: Send, showBadges: false, uiId: 'SB05' },
+            { category: 'drafts' as const, label: '草稿箱', icon: FileText, showBadges: false, uiId: 'SB06' },
+            { category: 'trash' as const, label: '废纸篓', icon: Trash2, showBadges: false, uiId: 'SB07' },
+            { category: 'junk' as const, label: '垃圾邮件', icon: ShieldAlert, showBadges: false, uiId: 'SB08' },
+          ].map(({ category: cat, label, icon: Icon, showBadges, uiId }) => {
             const isExpanded = !!expandedFavorites[cat]
             const isTopActive =
               (view.type === 'favorite' && view.category === cat && !view.accountId) ||
@@ -349,6 +350,7 @@ const Sidebar = memo(function Sidebar() {
                     {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   </button>
                   <button
+                    data-ui={uiId}
                     type="button"
                     className={`side-item category-btn ${isTopActive ? 'active' : ''}`}
                     aria-label={cat === 'inbox' ? '所有收件箱' : label}
@@ -431,7 +433,7 @@ const Sidebar = memo(function Sidebar() {
         </div>
 
         <div className="side-section">
-          <div className="section-label"><span>邮箱账户</span></div>
+          <div data-ui="SB09" className="section-label"><span>邮箱账户</span></div>
           {(groupsQuery.isLoading || accountsQuery.isLoading) && (
             <div style={{ padding: '8px 10px', color: 'var(--muted)', fontSize: 12 }}>正在加载账户…</div>
           )}
@@ -496,7 +498,7 @@ const Sidebar = memo(function Sidebar() {
                   const isAccountExpanded = !!expandedAccounts[a.id]
                   const unread = unreadByAccount.get(a.id)
                   return (
-                    <div className="account-row" key={a.id}>
+                    <div data-ui="SB10" className="account-row" key={a.id}>
                       <div className={`side-item-group ${selected ? 'active' : ''}`}>
                         <button
                           type="button"
@@ -546,7 +548,7 @@ const Sidebar = memo(function Sidebar() {
         </div>
       </div>
       <div className="sidebar-footer">
-        <button className="footer-btn" onClick={() => openSettings()}>
+        <button data-ui="SB11" className="footer-btn" onClick={() => openSettings()}>
           <Settings size={17} />
           <span>设置</span>
         </button>
