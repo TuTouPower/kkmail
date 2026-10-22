@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, ExternalLink, PanelLeft } from 'lucide-react'
 import { api, apiRequest } from '../api/client'
@@ -220,7 +220,10 @@ const MessageList = memo(function MessageList() {
   const serverUnread = searching ? null : (folderStatsQuery.data?.unread ?? null)
   const unreadCount = Math.max(serverUnread ?? 0, raw.filter((m) => !m.is_read).length)
 
-  async function handleLoadMore() {
+  const [actionStatus, setActionStatus] = useState('')
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+
+  const handleLoadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return
     try {
       if (searching) {
@@ -231,7 +234,34 @@ const MessageList = memo(function MessageList() {
     } catch (err) {
       setActionStatus(errorMessage(err, '加载更多失败'))
     }
-  }
+  }, [loadingMore, hasMore, searching, searchInfiniteQuery, inboxInfiniteQuery])
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!sentinel || !hasMore || loadingMore) return
+    if (typeof IntersectionObserver === 'undefined') return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          void handleLoadMore()
+        }
+      },
+      { rootMargin: '200px' }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, loadingMore, handleLoadMore])
+
+  const handleScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+      if (scrollHeight - scrollTop - clientHeight < 150) {
+        void handleLoadMore()
+      }
+    },
+    [handleLoadMore],
+  )
 
   const visible = useMemo(() => {
     return raw
@@ -243,12 +273,15 @@ const MessageList = memo(function MessageList() {
       .sort((a, b) => compareMailDates(a.date, b.date, sortNewest))
   }, [raw, favoriteCategory, listFilter, sortNewest])
 
-  const [actionStatus, setActionStatus] = useState('')
   const loading = active.isLoading && !active.data
   const failure = active.error ? errorMessage(active.error, '加载邮件失败') : ''
+  const isUnreadView = favoriteCategory === 'unread' || listFilter === 'unread'
+  const displayTotal = isUnreadView
+    ? unreadCount
+    : (totalCount !== null ? Math.max(totalCount, visible.length) : visible.length)
   const countLabel = loading
     ? '正在拉取邮件…'
-    : `${visible.length} 封邮件 · ${unreadCount} 封未读`
+    : `${displayTotal} 封邮件 · ${unreadCount} 封未读`
   const selecting = selectedIds.length > 0
 
   const title = listTitle(view, listFilter)
@@ -484,7 +517,7 @@ const MessageList = memo(function MessageList() {
           </div>
         )}
       </div>
-      <div className={`message-list ${selecting ? 'selecting' : ''}`}>
+      <div className={`message-list ${selecting ? 'selecting' : ''}`} onScroll={handleScroll}>
         {actionStatus && <div role="status" className={`list-note ${actionStatus.includes('失败') ? 'error' : ''}`}>{actionStatus}</div>}
         {failure && <div role="alert" className="list-note error">{failure}</div>}
         {!loading && visible.length === 0 && (
@@ -549,37 +582,35 @@ const MessageList = memo(function MessageList() {
             </article>
           )
         })}
-        {!loading && (visible.length > 0 || hasMore) && (
-          <div className="list-pagination" style={{ padding: '16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
-              {totalCount !== null
-                ? `已加载 ${visible.length} 封 / 共 ${Math.max(totalCount, visible.length)} 封`
-                : `已加载 ${visible.length} 封`}
-            </div>
-            {hasMore ? (
-              <button
-                data-ui="ML14"
-                type="button"
-                className="load-more-btn"
-                onClick={handleLoadMore}
-                disabled={loadingMore}
+        {!loading && (
+          <div className="list-footer" style={{ padding: '16px', textAlign: 'center' }}>
+            {hasMore && (
+              <div
+                ref={sentinelRef}
+                className="list-sentinel"
+                style={{ height: 1, width: '100%', pointerEvents: 'none' }}
+              />
+            )}
+            {loadingMore ? (
+              <div
+                className="list-loading-more"
                 style={{
-                  padding: '6px 16px',
-                  fontSize: 13,
-                  borderRadius: 6,
-                  border: '1px solid var(--line)',
-                  background: 'var(--surface-2)',
-                  color: 'var(--text)',
-                  cursor: loadingMore ? 'not-allowed' : 'pointer',
+                  fontSize: 12,
+                  color: 'var(--muted)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  justifyContent: 'center',
                 }}
               >
-                {loadingMore ? '正在加载…' : '加载更多'}
-              </button>
-            ) : (
-              visible.length > 0 && (
-                <span style={{ fontSize: 11, color: 'var(--muted)' }}>已加载全部邮件</span>
-              )
-            )}
+                <RefreshCw size={13} className="spin" />
+                <span>正在加载更多邮件…</span>
+              </div>
+            ) : !hasMore && visible.length > 0 ? (
+              <span className="list-all-loaded" style={{ fontSize: 11, color: 'var(--muted)' }}>
+                已加载全部邮件
+              </span>
+            ) : null}
           </div>
         )}
       </div>

@@ -127,6 +127,10 @@ export function fetchMailCoreMessage(messageId: string, signal?: AbortSignal): P
   return apiRequest(`/api/mail/messages/${encodeURIComponent(messageId)}`, { signal })
 }
 
+export function postMailCoreSyncMessageBody(messageId: string, signal?: AbortSignal): Promise<MailCoreMessageDetail> {
+  return postJson(`/api/mail/messages/${encodeURIComponent(messageId)}/sync-body`, {}, { signal })
+}
+
 export function mailCoreAttachmentUrl(attachmentId: string): string {
   return `${apiBaseUrl()}/api/mail/attachments/${encodeURIComponent(attachmentId)}`
 }
@@ -147,6 +151,7 @@ export function mailCoreToMailDetail(d: MailCoreMessageDetail): MailDetail {
     body: d.body,
     body_type: detailBodyType(d.body_type),
     parse_error: d.parse_error ?? null,
+    is_archived: d.is_archived ?? true,
     has_attachments: d.has_attachments,
     attachments: d.attachments.map((a: MailCoreAttachment) => ({
       id: a.id,
