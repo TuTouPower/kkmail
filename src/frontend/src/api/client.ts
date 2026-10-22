@@ -251,7 +251,12 @@ export const api = {
   async logout(): Promise<void> {
     try {
       await postJson('/api/auth/logout')
-    } catch { /* session may already be gone */ }
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status
+      if (status !== 401 && status !== 403) {
+        throw err
+      }
+    }
     csrfToken = null
     csrfInflight = null
     window.location.assign('/')
