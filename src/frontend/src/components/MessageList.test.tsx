@@ -246,5 +246,68 @@ describe('<MessageList />', () => {
       expect(rows).toHaveLength(1)
     })
   })
+
+  it('passes sort_order=asc when toggled to oldest first', async () => {
+    useMailStore.setState({ sortNewest: false })
+    await render(<MessageList />)
+    await waitFor(() => {
+      expect(calls.some((u) => u.includes('sort_order=asc'))).toBe(true)
+    })
+  })
+
+  it('displays authoritative unread count from server folder-stats', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'box@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) {
+        return json({ items: [row('a', { is_read: true })], next_cursor: null })
+      }
+      if (u.includes('/folder-stats')) {
+        return json({ folders: [{ role: 'inbox', unread_count: 42, total_count: 100 }] })
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => {
+      expect(container.querySelector('.list-count')?.textContent).toContain('42 封未读')
+    })
+  })
+
+  it('calls POST /api/mail/mark-all-read on mark-all click', async () => {
+    let markAllPayload: unknown = null
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'box@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) {
+        return json({ items: [row('a', { is_read: false })], next_cursor: null })
+      }
+      if (u.includes('/folder-stats')) {
+        return json({ folders: [{ role: 'inbox', unread_count: 1, total_count: 1 }] })
+      }
+      if (u === '/api/auth/me') {
+        return json({ csrf_token: 'fake-token' })
+      }
+      if (u === '/api/mail/mark-all-read') {
+        markAllPayload = JSON.parse(String(init?.body || '{}'))
+        return json({ success: true, count: 1 })
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toEqual(['Subject a']))
+
+    const markAllBtn = container.querySelector('.mark-all-btn') as HTMLButtonElement
+    expect(markAllBtn).not.toBeNull()
+    expect(markAllBtn.disabled).toBe(false)
+
+    await click(markAllBtn)
+    await waitFor(() => expect(markAllPayload).toEqual({ folder_role: 'inbox' }))
+  })
 })
 

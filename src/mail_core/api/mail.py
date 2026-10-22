@@ -19,7 +19,13 @@ from mail_core.mail.application.attachments import (
     PathTraversalRejected,
     load_attachment,
 )
-from mail_core.mail.application.mutations import MutationResult, set_message_flagged, set_message_read, trash_message
+from mail_core.mail.application.mutations import (
+    MutationResult,
+    mark_all_messages_read,
+    set_message_flagged,
+    set_message_read,
+    trash_message,
+)
 from mail_core.mail.application.queries import (
     GlobalStatsOut,
     InvalidCursor,
@@ -122,6 +128,18 @@ class FlagBody(BaseModel):
     is_flagged: bool
 
 
+class MarkAllReadBody(BaseModel):
+    account_id: UUID | None = None
+    folder_role: str = "inbox"
+    is_flagged: bool | None = None
+
+
+class MarkAllReadOut(BaseModel):
+    success: bool = True
+    count: int
+    account_id: str | None = None
+
+
 class MutationOut(BaseModel):
     id: str
     account_id: str
@@ -176,6 +194,7 @@ def api_unified_inbox(
     is_read: bool | None = Query(None, description="Filter messages by read status"),
     is_flagged: bool | None = Query(None, description="Filter messages by flagged status"),
     folder_role: str = Query("inbox", description="Folder role to query (default: inbox)"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$", description="Sort order by sort_time (desc or asc)"),
 ) -> PageOut:
     Session = get_session_factory()
     with Session() as session:
@@ -188,6 +207,7 @@ def api_unified_inbox(
                 is_read=is_read,
                 is_flagged=is_flagged,
                 folder_role=folder_role,
+                sort_order=sort_order,
             )
         except InvalidCursor as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -293,6 +313,25 @@ def api_set_message_read(message_id: UUID, body: ReadBody) -> MutationOut:
             raise HTTPException(404, str(exc)) from exc
         session.commit()
         return _mutation_out(result)
+
+
+@router.post("/mark-all-read", response_model=MarkAllReadOut)
+def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
+    """Batch mark messages read across the matching scope (folder/account/flag)."""
+    Session = get_session_factory()
+    with Session() as session:
+        count = mark_all_messages_read(
+            session,
+            account_id=body.account_id,
+            folder_role=body.folder_role,
+            is_flagged=body.is_flagged,
+        )
+        session.commit()
+        return MarkAllReadOut(
+            success=True,
+            count=count,
+            account_id=str(body.account_id) if body.account_id else None,
+        )
 
 
 @router.post("/messages/{message_id}/flag", response_model=MutationOut)
