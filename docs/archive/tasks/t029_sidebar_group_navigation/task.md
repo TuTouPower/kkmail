@@ -1,17 +1,17 @@
 ---
-tid: "t031"
-slug: "sidebar_drag_ordering"
-title: "支持整行拖拽分组移动与独立排序"
-status: "backlog"
+tid: "t029"
+slug: "sidebar_group_navigation"
+title: "重构顶层分组侧栏与统一层级导航"
+status: "dropped"
 branch: ""
 worktree: ""
 review_level: "single"
 review_limit: "5"
 verify_limit: "5"
 diff_anchor: ""
-depends_on: "t030"
-conflicts_with: "t032"
-note: "来源：侧栏设计聊天最终要求与 v3 demo；无拖动手柄、跨组/总列表双向移动、组与账号排序、恢复默认"
+depends_on: ""
+conflicts_with: "t026"
+note: "来源：侧栏设计聊天最终要求与 v3 demo；所有账号/自定义分组/账号列表，24px 缩进，真实文件夹与未读导航; dropped: 已合并至 t027：完整改造账号分组侧栏与邮件范围；原 AC-001–010 映射为 t027 AC-017–026，全部保留"
 ---
 
 # Task 过程总账

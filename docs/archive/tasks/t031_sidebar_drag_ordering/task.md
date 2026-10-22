@@ -1,17 +1,17 @@
 ---
-tid: "t028"
-slug: "group_mail_scope"
-title: "贯通分组邮件查询与批量已读范围"
-status: "backlog"
+tid: "t031"
+slug: "sidebar_drag_ordering"
+title: "支持整行拖拽分组移动与独立排序"
+status: "dropped"
 branch: ""
 worktree: ""
-review_level: "full"
+review_level: "single"
 review_limit: "5"
 verify_limit: "5"
 diff_anchor: ""
 depends_on: ""
-conflicts_with: "t026,t027"
-note: "来源：侧栏设计聊天与 v3 demo；分组收件/未读/已发/废纸篓、搜索、统计和全部已读；空分组禁止退化为全账号"
+conflicts_with: ""
+note: "来源：侧栏设计聊天最终要求与 v3 demo；无拖动手柄、跨组/总列表双向移动、组与账号排序、恢复默认; dropped: 已合并至 t027：完整改造账号分组侧栏与邮件范围；原 AC-001–007 映射为 t027 AC-034–040，全部保留"
 ---
 
 # Task 过程总账
