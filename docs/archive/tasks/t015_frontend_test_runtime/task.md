@@ -2,7 +2,7 @@
 tid: "t015"
 slug: "frontend_test_runtime"
 title: "恢复前端测试门禁并固定浏览器存储测试环境"
-status: "backlog"
+status: "done"
 branch: ""
 worktree: ""
 review_level: "single"
@@ -10,7 +10,7 @@ review_limit: "5"
 verify_limit: "5"
 diff_anchor: ""
 depends_on: ""
-conflicts_with: "t006,t008,t009,t010,t011,t012,t013,t014,t016,t017,t018,t019,t020,t021,t022,t023"
+conflicts_with: ""
 note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
 ---
 
