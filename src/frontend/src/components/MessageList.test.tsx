@@ -309,5 +309,64 @@ describe('<MessageList />', () => {
     await click(markAllBtn)
     await waitFor(() => expect(markAllPayload).toEqual({ folder_role: 'inbox' }))
   })
+
+  it('clicking refresh in unified view triggers syncAll and invalidates cache', async () => {
+    let syncAllCalled = false
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/accounts/sync-all')) {
+        syncAllCalled = true
+        return json({ queued: 1 })
+      }
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [], total: 0, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) {
+        return json({ items: [], next_cursor: null })
+      }
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'allInbox' } })
+    const { container } = await render(<MessageList />)
+
+    const refreshBtn = container.querySelector('button[aria-label="刷新并同步"]') as HTMLButtonElement
+    expect(refreshBtn).not.toBeNull()
+    await click(refreshBtn)
+
+    await waitFor(() => expect(syncAllCalled).toBe(true))
+  })
+
+  it('clicking refresh in single account view triggers syncAccount', async () => {
+    let syncedAccountId = ''
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/accounts/acc-99/sync')) {
+        syncedAccountId = 'acc-99'
+        return json({ job_id: 'job-1' })
+      }
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-99', email: 'u@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) {
+        return json({ items: [], next_cursor: null })
+      }
+      if (u.includes('/folder-stats')) {
+        return json({ folders: [] })
+      }
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'account', accountId: 'acc-99', email: 'u@x.test' } })
+    const { container } = await render(<MessageList />)
+
+    const refreshBtn = container.querySelector('button[aria-label="刷新并同步"]') as HTMLButtonElement
+    expect(refreshBtn).not.toBeNull()
+    await click(refreshBtn)
+
+    await waitFor(() => expect(syncedAccountId).toBe('acc-99'))
+  })
 })
 
