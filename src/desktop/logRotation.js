@@ -49,7 +49,8 @@ function rotateLogFile(filePath, maxBytes = DEFAULT_MAX_BYTES, maxFiles = DEFAUL
 
 /**
  * An asynchronous write stream that automatically rotates when reaching maxBytes.
- * Uses in-memory buffering and non-blocking fs.write to avoid stalling the Electron main event loop.
+ * Uses in-memory buffering and serialized non-blocking fs.write to avoid stalling Electron main.
+ * Serializes in-flight writes, rotations, and close operations so logs are never dropped or corrupted.
  */
 class RotatingLogStream {
   constructor(filePath, options = {}) {
@@ -62,6 +63,9 @@ class RotatingLogStream {
     this.writing = false
     this.flushScheduled = false
     this.closed = false
+    this.lastError = null
+    this.drainWaiters = []
+    this.onError = typeof options.onError === 'function' ? options.onError : null
 
     this._init()
   }
@@ -77,24 +81,20 @@ class RotatingLogStream {
         this.currentSize = 0
       }
       this.fd = fs.openSync(this.filePath, 'a')
-    } catch (_) {
+    } catch (err) {
       this.fd = null
+      this.lastError = err
     }
   }
 
   write(chunk) {
-    if (this.closed) return
+    if (this.closed) return false
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8')
-    if (buf.length === 0) return
-
-    if (this.currentSize + buf.length >= this.maxBytes) {
-      this._flushSync()
-      this._rotate()
-    }
+    if (buf.length === 0) return true
 
     this.queue.push(buf)
-    this.currentSize += buf.length
     this._scheduleFlush()
+    return true
   }
 
   _scheduleFlush() {
@@ -107,47 +107,145 @@ class RotatingLogStream {
   }
 
   _flushAsync() {
-    if (this.writing || this.closed || this.queue.length === 0 || this.fd === null) return
+    if (this.writing || this.fd === null) return
+
+    if (this.queue.length === 0) {
+      this._notifyDrain()
+      return
+    }
+
+    // Rotate only when idle (no in-flight write) if next chunk exceeds maxBytes
+    const nextLen = this.queue[0].length
+    if (this.currentSize + nextLen >= this.maxBytes && this.currentSize > 0) {
+      this._rotate()
+    }
+
+    if (this.fd === null) {
+      this._notifyDrain(this.lastError || new Error('Log file descriptor unavailable'))
+      return
+    }
+
+    const buf = this.queue.shift()
+    this._writeAsyncChunk(buf, 0)
+  }
+
+  _writeAsyncChunk(buf, offset) {
     this.writing = true
-    const buf = this.queue.length === 1 ? this.queue.shift() : Buffer.concat(this.queue.splice(0))
-    fs.write(this.fd, buf, 0, buf.length, null, () => {
+    const remaining = buf.length - offset
+    fs.write(this.fd, buf, offset, remaining, null, (err, bytesWritten) => {
+      if (err) {
+        this.writing = false
+        this.lastError = err
+        if (typeof this.onError === 'function') {
+          try { this.onError(err) } catch (_) {}
+        } else {
+          console.warn('[logRotation] write error:', err && err.message ? err.message : err)
+        }
+        this._notifyDrain(err)
+        return
+      }
+
+      if (bytesWritten < remaining) {
+        this.currentSize += bytesWritten
+        this._writeAsyncChunk(buf, offset + bytesWritten)
+        return
+      }
+
+      this.currentSize += bytesWritten
       this.writing = false
-      if (!this.closed && this.queue.length > 0) {
+
+      if (this.queue.length > 0) {
         this._scheduleFlush()
+      } else {
+        this._notifyDrain()
       }
     })
   }
 
   _flushSync() {
     this.flushScheduled = false
-    if (this.fd === null || this.queue.length === 0) return
-    try {
-      const buf = this.queue.length === 1 ? this.queue.shift() : Buffer.concat(this.queue.splice(0))
-      fs.writeSync(this.fd, buf)
-    } catch (_) {}
+    while (this.queue.length > 0) {
+      const next = this.queue[0]
+      if (this.currentSize + next.length >= this.maxBytes && this.currentSize > 0) {
+        this._rotate()
+      }
+      if (this.fd === null) break
+      const buf = this.queue.shift()
+      let offset = 0
+      while (offset < buf.length) {
+        try {
+          const written = fs.writeSync(this.fd, buf, offset, buf.length - offset)
+          if (written <= 0) break
+          offset += written
+          this.currentSize += written
+        } catch (err) {
+          this.lastError = err
+          if (typeof this.onError === 'function') {
+            try { this.onError(err) } catch (_) {}
+          }
+          break
+        }
+      }
+    }
   }
 
   _rotate() {
-    if (this.fd !== null) {
-      try { fs.closeSync(this.fd) } catch (_) {}
-      this.fd = null
-    }
+    this._closeFd()
     rotateLogFile(this.filePath, 0, this.maxFiles)
     this.currentSize = 0
     try {
       this.fd = fs.openSync(this.filePath, 'a')
-    } catch (_) {
+    } catch (err) {
       this.fd = null
+      this.lastError = err
     }
   }
 
-  end() {
-    this.closed = true
-    this._flushSync()
+  _closeFd() {
     if (this.fd !== null) {
       try { fs.closeSync(this.fd) } catch (_) {}
       this.fd = null
     }
+  }
+
+  drain() {
+    if (!this.writing && this.queue.length === 0) {
+      return Promise.resolve()
+    }
+    return new Promise((resolve, reject) => {
+      this.drainWaiters.push({ resolve, reject })
+    })
+  }
+
+  _notifyDrain(err = null) {
+    if (this.writing || (this.queue.length > 0 && !err && this.fd !== null)) {
+      return
+    }
+    const waiters = this.drainWaiters.splice(0)
+    for (const { resolve, reject } of waiters) {
+      if (err) reject(err)
+      else resolve()
+    }
+  }
+
+  end(cb) {
+    this.closed = true
+    if (this.writing) {
+      const p = this.drain().then(() => {
+        this._closeFd()
+        if (typeof cb === 'function') cb()
+      }).catch((err) => {
+        this._closeFd()
+        if (typeof cb === 'function') cb(err)
+      })
+      return p
+    }
+
+    this._flushSync()
+    this._closeFd()
+    this._notifyDrain()
+    if (typeof cb === 'function') cb()
+    return Promise.resolve()
   }
 }
 
