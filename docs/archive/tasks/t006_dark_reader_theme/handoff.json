@@ -1,0 +1,49 @@
+{
+  "tid": "t006",
+  "attempt": 1,
+  "execution_id": "c604ea221c294b83a78a40d81c5b75ff",
+  "status": "done",
+  "branch": "t006_dark_reader_theme",
+  "base_sha": "7d7a5b3d915b94d200f252ad17425345b1be632f",
+  "tests": "contract: 148 passed; mail_core: 217 passed; frontend: 161 passed + tsc ok + build ok; desktop: ok",
+  "blackbox": "playwright e2e smoke 3 passed",
+  "review": "full review PASS (Round 1: review_code PASS, review_test PASS)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/design-system/tokens.css",
+      "assets/DESIGN.md",
+      "src/frontend/src/design-system/darkTheme.test.ts"
+    ],
+    "AC-002": [
+      "src/frontend/src/design-system/tokens.css",
+      "src/frontend/src/design-system/darkTheme.test.ts"
+    ],
+    "AC-003": [
+      "src/frontend/src/lib/mailBody.ts",
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/lib/mailBody.test.ts",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ],
+    "AC-004": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/SettingsModal.tsx",
+      "src/frontend/src/components/ErrorBoundary.tsx",
+      "src/frontend/src/design-system/tokens.css"
+    ],
+    "AC-005": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ],
+    "AC-006": [
+      "src/frontend/scripts/check_css_tokens.mjs",
+      "src/frontend/src/lib/checkCssTokens.ts",
+      "src/frontend/src/lib/checkCssTokens.test.ts"
+    ]
+  },
+  "pending": [
+    "docs/archive/pending/p010_remote_images_banner_dark_mode.md",
+    "docs/archive/pending/p012_apple_mail_dark_mode_background.md"
+  ],
+  "findings": []
+}

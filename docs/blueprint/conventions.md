@@ -7,15 +7,19 @@
 1. **单用户 · UUID 即能力凭据 (Capability-based)**：
     - 实例无多租户角色或行级用户 ACL。
     - 在已认证的 Session / API Key 边界内，掌握资源 UUID 即可访问该资源；不得将其作为“多租户防 IDOR”缺陷处理。详见 `docs/guides/security.md`。
-2. **邮件 HTML 渲染沙箱**：
-    - 邮件 HTML 正文只能经由 `src/frontend/src/lib/mailBody.ts` 进行 DOMPurify 过滤；
-    - 必须在带有 CSP 约束的无脚本 `iframe` 沙箱（`srcDoc`）中呈现；
-    - 严禁使用 `dangerouslySetInnerHTML`。
-3. **HTTP 传输与状态机**：
+2. **邮件 HTML 渲染沙箱与主题边界**：
+    - 邮件 HTML 正文只能经由 `src/frontend/src/lib/mailBody.ts` 进行 DOMPurify 过滤与保守主题分类；
+    - 必须在带有 CSP 约束的无脚本 `iframe` 沙箱（`srcDoc`）中呈现，严禁使用 `dangerouslySetInnerHTML`；
+    - 不得为了适配深色模式放宽 `script`, `style`, `meta`, `link` 等安全净化标签；
+    - 显式固定浅色富文本邮件以独立纸张卡片承载并保留自身原色，无显式配色邮件自适应深色底与高对比度文字。
+3. **前端语义颜色与 Token 纪律**：
+    - 前端组件与样式一律引用 `src/frontend/src/design-system/tokens.css` 声明的语义 CSS 变量；
+    - `npm test` 与 `scripts/check_css_tokens.mjs` 门禁静态扫描所有源码中的 `var(--...)` 引用，拦截未定义变量与脱离设计系统值。
+4. **HTTP 传输与状态机**：
     - 前端写操作一律走 `src/frontend/src/api/client.ts` 的 `apiRequest` / `postJson`；
     - 不安全请求自动带 `X-CSRF-Token`，缺失立即 Fail-Closed；
     - 移动端 760px 响应式断点（`src/frontend/src/lib/viewport.ts`），导航统一走 Zustand store。
-4. **密钥与凭据规范**：
+5. **密钥与凭据规范**：
     - 不预设弱口令或示例密钥，缺失时拒绝启动；
     - 凭据仅经 `CredentialStore` 存储并由 blob keyring 派生加密；
     - 日志与 `last_error` 必须经 `mail_core.security.redact` 脱敏。

@@ -266,9 +266,9 @@ const Sidebar = memo(function Sidebar() {
                   fontSize: 11,
                   padding: '2px 8px',
                   borderRadius: 4,
-                  border: '1px solid var(--border)',
-                  background: 'var(--card)',
-                  color: 'var(--fg)',
+                  border: '1px solid var(--line)',
+                  background: 'var(--surface-2)',
+                  color: 'var(--text)',
                   cursor: 'pointer',
                 }}
               >

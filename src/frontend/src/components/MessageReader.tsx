@@ -6,12 +6,15 @@ import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, post
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
-import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, isHtmlBody } from '../lib/mailBody'
+import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, classifyMailHtml, isHtmlBody } from '../lib/mailBody'
 import { formatReaderDate } from '../lib/listDate'
 import { displayName } from '../lib/displayName'
 import { formatFileSize } from '../lib/formatSize'
+import { resolveTheme } from '../lib/theme'
 
 const MessageReader = memo(function MessageReader() {
+  const themePref = useMailStore((s) => s.theme)
+  const resolvedTheme = resolveTheme(themePref)
   const selectedKey = useMailStore((s) => s.selectedKey)
   const setSelectedKey = useMailStore((s) => s.setSelectedKey)
   const setMobileView = useMailStore((s) => s.setMobileView)
@@ -54,9 +57,10 @@ const MessageReader = memo(function MessageReader() {
   const body = detail?.body || selected?.body_preview || ''
   const html = Boolean(detail?.body && isHtmlBody(detail.body_type))
   const currentMailKey = selected ? mailKey(selected) : undefined
+  const mailThemeClass = useMemo(() => (html ? classifyMailHtml(body) : 'plain'), [html, body])
   const mailSrcdoc = useMemo(
-    () => (body ? buildMailSrcdoc(body, { loadRemoteImages }) : ''),
-    [body, loadRemoteImages],
+    () => (body ? buildMailSrcdoc(body, { loadRemoteImages, theme: resolvedTheme }) : ''),
+    [body, loadRemoteImages, resolvedTheme],
   )
 
   if (!selected) {
@@ -179,22 +183,65 @@ const MessageReader = memo(function MessageReader() {
           ) : html ? (
             <>
               {!loadRemoteImages && /<img\b[^>]+src\s*=\s*["']https?:/i.test(body) && (
-                <div style={{ fontSize: 12, marginBottom: 10, padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--panel, #f7f7f8)' }}>
+                <div style={{ fontSize: 12, marginBottom: 10, padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--text)' }}>
                   远程图片已拦截（防追踪）。
-                  <button type="button" style={{ marginLeft: 8 }} onClick={() => selectedKey && setAllowedRemoteImagesKey(selectedKey)}>
+                  <button
+                    type="button"
+                    style={{
+                      marginLeft: 8,
+                      padding: '3px 8px',
+                      borderRadius: 4,
+                      border: '1px solid var(--line)',
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                    }}
+                    onClick={() => selectedKey && setAllowedRemoteImagesKey(selectedKey)}
+                  >
                     仅此邮件允许加载
                   </button>
                 </div>
               )}
-              <iframe
-                key={currentMailKey}
-                className="email-body email-body-frame"
-                title="邮件正文"
-                sandbox={MAIL_IFRAME_SANDBOX}
-                referrerPolicy="no-referrer"
-                srcDoc={mailSrcdoc}
-                style={{ width: '100%', minHeight: 420, border: 0, background: '#fff', borderRadius: 8 }}
-              />
+              {resolvedTheme === 'dark' && mailThemeClass === 'light' ? (
+                <div
+                  className="mail-paper-card"
+                  style={{
+                    background: '#FFFFFF',
+                    borderRadius: 8,
+                    padding: '16px',
+                    boxSizing: 'border-box',
+                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.28)',
+                  }}
+                >
+                  <iframe
+                    key={`${currentMailKey}-${resolvedTheme}`}
+                    className="email-body email-body-frame"
+                    title="邮件正文"
+                    sandbox={MAIL_IFRAME_SANDBOX}
+                    referrerPolicy="no-referrer"
+                    srcDoc={mailSrcdoc}
+                    style={{ width: '100%', minHeight: 420, border: 0, background: '#FFFFFF', borderRadius: 6, display: 'block' }}
+                  />
+                </div>
+              ) : (
+                <iframe
+                  key={`${currentMailKey}-${resolvedTheme}`}
+                  className="email-body email-body-frame"
+                  title="邮件正文"
+                  sandbox={MAIL_IFRAME_SANDBOX}
+                  referrerPolicy="no-referrer"
+                  srcDoc={mailSrcdoc}
+                  style={{
+                    width: '100%',
+                    minHeight: 420,
+                    border: 0,
+                    background: resolvedTheme === 'dark' ? '#1A1A1C' : '#FFFFFF',
+                    borderRadius: 8,
+                    display: 'block',
+                  }}
+                />
+              )}
             </>
           ) : (
             <div className="email-body email-body-text">{body}</div>

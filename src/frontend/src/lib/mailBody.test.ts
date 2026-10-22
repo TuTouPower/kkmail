@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, htmlToText, isHtmlBody, sanitizeMailHtml } from './mailBody'
+import {
+  MAIL_IFRAME_SANDBOX,
+  buildMailSrcdoc,
+  classifyMailHtml,
+  htmlToText,
+  isHtmlBody,
+  sanitizeMailHtml,
+} from './mailBody'
 
-describe('mail body safety', () => {
+describe('mail body safety and dark mode classification (AC-003)', () => {
   it('strips event handlers and scripts', () => {
     const out = sanitizeMailHtml('<p>hi</p><img src=x onerror=alert(1)><script>alert(2)</script><a href="javascript:alert(3)">x</a>')
     expect(out).not.toMatch(/onerror/i)
@@ -43,7 +50,6 @@ describe('mail body safety', () => {
     expect(buildMailSrcdoc('<img src="https://x/y.png">', { loadRemoteImages: true })).toContain('img-src https: http: data: cid:')
   })
 
-  // 旧测试 "sandbox never allows scripts, same-origin, or escape-sandbox" 已删除：A17 演进为允许 allow-popups-to-escape-sandbox 保证 Web SPA 模式下外部新窗口正常可用
   it('sandbox allows popups and escaping sandbox, but never scripts or same-origin', () => {
     expect(MAIL_IFRAME_SANDBOX).not.toContain('allow-scripts')
     expect(MAIL_IFRAME_SANDBOX).not.toContain('allow-same-origin')
@@ -60,5 +66,46 @@ describe('mail body safety', () => {
 
   it('converts html to quoted text', () => {
     expect(htmlToText('<p>a</p><p>b<br>c</p><img src=x onerror=alert(1)>')).toBe('a\nb\nc')
+  })
+
+  it('classifies unstyled html as plain and applies dark body #1A1A1C and text #FFFFFF in dark mode (AC-003)', () => {
+    const plainHtml = '<p>Simple paragraph with <a href="https://example.com">link</a></p>'
+    expect(classifyMailHtml(plainHtml)).toBe('plain')
+
+    const darkDoc = buildMailSrcdoc(plainHtml, { theme: 'dark' })
+    expect(darkDoc).toContain('background:#1A1A1C')
+    expect(darkDoc).toContain('color:#FFFFFF')
+    expect(darkDoc).toContain('a{color:#0A84FF}')
+
+    const lightDoc = buildMailSrcdoc(plainHtml, { theme: 'light' })
+    expect(lightDoc).toContain('background:#ffffff')
+    expect(lightDoc).toContain('color:#202124')
+    expect(lightDoc).toContain('a{color:#0066CC}')
+  })
+
+  it('classifies explicit light rich html as light and preserves white background in dark mode (AC-003)', () => {
+    const lightHtml = '<div style="background-color: #ffffff; color: #333333;"><p>Newsletter</p></div>'
+    expect(classifyMailHtml(lightHtml)).toBe('light')
+
+    const darkDoc = buildMailSrcdoc(lightHtml, { theme: 'dark' })
+    expect(darkDoc).toContain('background:#ffffff')
+    expect(darkDoc).toContain('color:#202124')
+  })
+
+  it('classifies explicit dark html as dark (AC-003)', () => {
+    const darkHtml = '<table bgcolor="#111111" style="color: #eeeeee"><tr><td>Dark promo</td></tr></table>'
+    expect(classifyMailHtml(darkHtml)).toBe('dark')
+
+    const darkDoc = buildMailSrcdoc(darkHtml, { theme: 'dark' })
+    expect(darkDoc).toContain('background:#1A1A1C')
+  })
+
+  it('does not relax script/meta/style sanitization rules for dark theme adaptation', () => {
+    const malicious = '<p>Hi</p><meta http-equiv="refresh" content="0"><style>body{color:red}</style><script>alert(1)</script>'
+    const sanitized = sanitizeMailHtml(malicious)
+    expect(sanitized).not.toMatch(/<script|<meta|<style/i)
+    const doc = buildMailSrcdoc(malicious, { theme: 'dark' })
+    expect(doc).not.toMatch(/alert\(1\)/)
+    expect(doc).toContain("default-src 'none'")
   })
 })
