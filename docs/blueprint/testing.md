@@ -199,3 +199,19 @@ scripts/mail-core-backup-restore-drill.sh
 - **防覆盖与越界阻断**：严格拒绝源库与目标库相同，防止破坏性覆盖生产库；严格校验目标 Blob 目录拒绝路径穿越与越界符号链接；
 - **真实业务核验**：恢复后通过独立会话核验账号、邮件、正文、附件关联，并使用密钥解密读取 Blob 确保字节与原始附件完全一致；
 - **篡改与伪造拒绝**：校验错误密钥、篡改数据、缺失 Blob 抛出明确异常；声明禁止将 SQL stub 备份伪造为可恢复证据。
+
+## 多进程 Worker 竞争与故障恢复测试（t020）
+
+多进程并发与混沌恢复门禁验证真实操作系统级 Worker 竞争与异常退出后的系统自我修复能力：
+
+```bash
+scripts/run-mail-core-tests.sh run -k test_worker_process_recovery
+```
+
+验证覆盖：
+
+- **真实进程并发与非重叠 Claim**：启动多个独立 Worker 子进程竞争任务，验证 PostgreSQL `FOR UPDATE SKIP LOCKED` 互斥生效，各 Worker 独占认领不同账号任务并成功推进，无重叠或重复执行；
+- **真实 SIGKILL 杀进程与自然 Reclaim**：对正在持有任务的 Worker 进程发送 `SIGKILL` 强制终止，存活 Worker 在自然时间超过 `MAIL_CORE_RECLAIM_STALE_SECONDS`（生产默认 300s）后自动将陈旧任务回收为 PENDING 并重新认领执行，不通过手动修改数据库时间字段；
+- **Fencing Token 阻止陈旧提交**：模拟已被替代的旧 Worker 重新提交操作时，触发 `FencingMismatch` 异常，保证已推进的 Checkpoint、Message 与 Blob 不被覆盖；
+- **跨进程事件通知与回滚隔离**：Worker 进程提交事务后通过真实 PostgreSQL `LISTEN/NOTIFY` 唤醒 API 进程的 SSE 分发，未提交或已 rollback 的事务严格不广播；
+- **进程组安全销毁**：测试中所有子进程使用独立的进程组（`start_new_session=True`），测试退出时通过 `os.killpg` 严格清理，绝无孤儿进程残留。
