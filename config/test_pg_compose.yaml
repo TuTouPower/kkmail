@@ -5,7 +5,7 @@ services:
     labels:
       io.kkmail.test_pg: "v1"
     environment:
-      POSTGRES_PASSWORD: ${KKMAIL_TEST_PG_PASSWORD:?provide a random test-only password}
+      POSTGRES_PASSWORD: ${KKMAIL_TEST_PG_PASSWORD:?provide operator-supplied KKMAIL_TEST_PG_PASSWORD (check .env.test on main branch/worktree)}
     ports:
       - "127.0.0.1:${KKMAIL_TEST_PG_PORT:-15433}:5432"
     volumes:

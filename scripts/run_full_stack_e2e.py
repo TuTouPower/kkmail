@@ -54,7 +54,11 @@ def main():
 
     pg_password = os.environ.get("KKMAIL_TEST_PG_PASSWORD")
     if not pg_password:
-        LOG.error("KKMAIL_TEST_PG_PASSWORD not provided")
+        LOG.error(
+            "KKMAIL_TEST_PG_PASSWORD not provided "
+            "(check .env.test on the main branch/worktree; untracked .env.test may be missing in git worktrees / "
+            "若在 git worktree 上开发，请到主分支获取未被 git 跟踪的 .env.test)"
+        )
         sys.exit(2)
 
     # 1. Ensure Dovecot IMAP fixture is running

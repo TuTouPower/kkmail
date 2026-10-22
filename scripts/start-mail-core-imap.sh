@@ -44,4 +44,7 @@ Neither docker compose imap nor pymap is available.
   docker compose -f docker-compose.mail-core.yml --profile imap up -d imap
   # or: python3 -m pip install pymap && ./scripts/start-mail-core-imap.sh
 HINT
+if [[ -z "${KKMAIL_TEST_PG_PASSWORD:-}" ]]; then
+  echo "Hint: KKMAIL_TEST_PG_PASSWORD is not set (check .env.test on main branch/worktree if working in a git worktree)." >&2
+fi
 exit 1
