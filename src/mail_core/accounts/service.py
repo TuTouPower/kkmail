@@ -186,7 +186,9 @@ def update_account_sync_status(
     cfg = dict(acc.config or {})
     cfg["last_synced_at"] = ts.isoformat()
     if error:
-        cfg["last_sync_error"] = str(error)
+        from mail_core.security.redact import safe_provider_summary
+
+        cfg["last_sync_error"] = safe_provider_summary(error)
     elif status == "idle":
         cfg.pop("last_sync_error", None)
     acc.config = cfg
