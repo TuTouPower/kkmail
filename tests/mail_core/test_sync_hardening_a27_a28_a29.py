@@ -26,7 +26,7 @@ import mail_core.sync.remote_push as push_mod
 from mail_core.sync.engine import sync_account_folders
 from mail_core.worker.handlers import handle_job
 
-pytestmark = pytest.mark.skipif(
+_requires_db = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
     reason="MAIL_CORE_DATABASE_URL not set",
 )
@@ -78,6 +78,7 @@ def test_safe_provider_summary_unit():
     assert s5 == "ProviderHttpError status=500"
 
 
+@_requires_db
 def test_a27_sync_folder_delta_sanitizes_errors(monkeypatch):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -126,6 +127,7 @@ def test_a27_sync_folder_delta_sanitizes_errors(monkeypatch):
         set_credential_store(None)
 
 
+@_requires_db
 def test_a27_sync_account_folders_sanitizes_last_sync_error(monkeypatch):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -155,6 +157,7 @@ def test_a27_sync_account_folders_sanitizes_last_sync_error(monkeypatch):
         set_credential_store(None)
 
 
+@_requires_db
 def test_a27_remote_push_sanitizes_errors(monkeypatch):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -200,6 +203,7 @@ def test_a27_remote_push_sanitizes_errors(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@_requires_db
 def test_a28_worker_handler_rate_limited_single_job(monkeypatch):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -276,6 +280,7 @@ def test_a28_worker_handler_rate_limited_single_job(monkeypatch):
         set_credential_store(None)
 
 
+@_requires_db
 def test_a28_remote_push_rate_limited_not_failed_and_respects_retry_after(monkeypatch):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -337,6 +342,7 @@ def test_a28_remote_push_rate_limited_not_failed_and_respects_retry_after(monkey
 # ---------------------------------------------------------------------------
 
 
+@_requires_db
 def test_a29_sync_account_folders_releases_lease_on_build_provider_failure(monkeypatch):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -364,6 +370,7 @@ def test_a29_sync_account_folders_releases_lease_on_build_provider_failure(monke
         set_credential_store(None)
 
 
+@_requires_db
 def test_a29_sync_folder_metadata_releases_lease_on_build_provider_failure(monkeypatch):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -392,6 +399,7 @@ def test_a29_sync_folder_metadata_releases_lease_on_build_provider_failure(monke
         set_credential_store(None)
 
 
+@_requires_db
 def test_a29_sync_folder_delta_releases_lease_on_build_provider_failure(monkeypatch):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -428,6 +436,7 @@ def test_a29_sync_folder_delta_releases_lease_on_build_provider_failure(monkeypa
         set_credential_store(None)
 
 
+@_requires_db
 def test_a29_remote_push_releases_lease_on_build_provider_failure(monkeypatch):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -462,6 +471,7 @@ def test_a29_remote_push_releases_lease_on_build_provider_failure(monkeypatch):
         set_credential_store(None)
 
 
+@_requires_db
 def test_a29_archive_batch_releases_lease_and_restores_claims_on_build_failure(monkeypatch):
     from unittest.mock import patch
     import mail_core.blobs.archive as archive_mod
