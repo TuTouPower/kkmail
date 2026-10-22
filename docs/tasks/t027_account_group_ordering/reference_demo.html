@@ -1,0 +1,1478 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark" data-shell="web">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mail Sidebar Demo</title>
+<style>
+:root {
+  color-scheme: dark;
+  --app-bg: #171819;
+  --sidebar-bg: #1e1f21;
+  --list-bg: #202123;
+  --reader-bg: #1b1c1e;
+  --surface: #252629;
+  --surface-hover: #2b2d30;
+  --surface-selected: #303236;
+  --input-bg: #292a2d;
+  --text: #f5f5f7;
+  --text-secondary: #a0a1a5;
+  --text-tertiary: #74767b;
+  --border: rgba(255,255,255,.075);
+  --border-strong: rgba(255,255,255,.12);
+  --accent: #0a84ff;
+  --accent-soft: rgba(10,132,255,.14);
+  --badge-bg: #3b3d41;
+  --danger: #ff453a;
+  --shadow: 0 22px 60px rgba(0,0,0,.36);
+  --row-radius: 10px;
+  --tree-indent: 24px;
+  --tree-slot: 18px;
+}
+html[data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #f2f2f7;
+  --sidebar-bg: #f5f5f7;
+  --list-bg: #ffffff;
+  --reader-bg: #ffffff;
+  --surface: #f0f0f4;
+  --surface-hover: #e9e9ee;
+  --surface-selected: #e5e5ea;
+  --input-bg: #eaeaef;
+  --text: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #8e8e93;
+  --border: rgba(0,0,0,.075);
+  --border-strong: rgba(0,0,0,.12);
+  --accent: #007aff;
+  --accent-soft: rgba(0,122,255,.10);
+  --badge-bg: #e5e5ea;
+  --danger: #ff3b30;
+  --shadow: 0 22px 60px rgba(0,0,0,.18);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; }
+body {
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+button, input, textarea, select { font: inherit; }
+button { color: inherit; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+button { border: 0; cursor: pointer; }
+.icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.icon.small { width: 15px; height: 15px; }
+.icon.large { width: 21px; height: 21px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.app-window {
+  width: 100%;
+  height: 100vh;
+  min-height: 600px;
+  display: flex;
+  flex-direction: column;
+  background: var(--app-bg);
+}
+.titlebar {
+  height: 44px;
+  flex: 0 0 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 13px 0 16px;
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--border);
+}
+.titlebar-leading { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.traffic-lights { display: none; align-items: center; gap: 8px; }
+.traffic-light {
+  width: 12px; height: 12px; border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.12);
+}
+.traffic-light.red { background: #ff5f57; }
+.traffic-light.yellow { background: #febc2e; }
+.traffic-light.green { background: #28c840; }
+.titlebar-actions { display: flex; align-items: center; gap: 7px; }
+#sidebar-toggle-web { display: none; }
+#sidebar-toggle-desktop { display: none; }
+.icon-button.sidebar-toggle-collapsed { background: var(--surface-selected); color: var(--text); }
+html[data-shell="web"] .titlebar { display: none; }
+html[data-shell="web"] #sidebar-toggle-web { display: inline-flex; }
+html[data-shell="web"] #sidebar-toggle-desktop { display: none; }
+html[data-shell="desktop"] .traffic-lights { display: flex; }
+html[data-shell="desktop"] #sidebar-toggle-web { display: none; }
+html[data-shell="desktop"] #sidebar-toggle-desktop { display: inline-flex; }
+.icon-button {
+  width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-secondary); background: transparent; border-radius: 8px;
+  transition: background .15s ease, color .15s ease;
+}
+.icon-button:hover { background: var(--surface-hover); color: var(--text); }
+.app-body {
+  display: grid;
+  grid-template-columns: 316px 366px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  transition: grid-template-columns .18s ease;
+}
+.sidebar {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  position: relative;
+  overflow: visible;
+}
+.sidebar-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 9px 16px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.sidebar-scroll::-webkit-scrollbar, .mail-list-scroll::-webkit-scrollbar, .reader-scroll::-webkit-scrollbar { width: 7px; }
+.sidebar-scroll::-webkit-scrollbar-thumb, .mail-list-scroll::-webkit-scrollbar-thumb, .reader-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; }
+.sidebar-dynamic { display: flex; flex-direction: column; gap: 10px; }
+.sidebar-section { min-width: 0; }
+.section-head-row { display: flex; align-items: center; gap: 3px; min-height: 36px; margin: 0 0 2px; }
+.section-toggle {
+  min-width: 0; flex: 1; height: 36px; display: flex; align-items: center; gap: 8px;
+  padding: 0 8px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--text);
+  text-align: left; font-size: 14px; font-weight: 650; letter-spacing: -.2px;
+}
+.section-toggle:hover { background: var(--surface-hover); }
+.section-toggle .section-chevron { color: var(--text-tertiary); width: var(--tree-slot); flex: 0 0 var(--tree-slot); display: flex; justify-content: center; }
+.section-chevron .icon { transition: transform .15s ease; }
+.section-chevron .icon.expanded { transform: rotate(90deg); }
+.section-toggle .section-icon { color: var(--text-secondary); width: var(--tree-slot); flex: 0 0 var(--tree-slot); display: flex; }
+.section-actions { display: flex; gap: 2px; }
+.section-actions .icon-button { width: 28px; height: 28px; }
+.nav-list, .account-master-list { display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+  width: 100%; min-width: 0; height: 34px; display: flex; align-items: center; gap: 8px;
+  padding: 0 10px 0 calc(8px + var(--tree-indent)); border-radius: var(--row-radius); background: transparent;
+  color: var(--text); text-align: left; transition: background .12s ease; border: 1px solid transparent;
+}
+.nav-item.depth-2 { padding-left: calc(8px + var(--tree-indent) + var(--tree-indent)); }
+.nav-item .tree-slot { width: var(--tree-slot); height: 18px; flex: 0 0 var(--tree-slot); }
+.nav-item:hover { background: var(--surface-hover); }
+.nav-item.active { background: var(--surface-selected); color: var(--accent); }
+.nav-item .nav-icon { color: var(--text-secondary); width: 18px; height: 18px; }
+.nav-item.active .nav-icon { color: var(--accent); }
+.nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; font-size: 13px; font-weight: 520; }
+.count-badge {
+  min-width: 18px; height: 19px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 7px; background: var(--badge-bg); color: var(--text-secondary); font-size: 11px; font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.nav-item.active .count-badge { background: var(--accent-soft); color: var(--accent); }
+.groups-list { display: flex; flex-direction: column; gap: 3px; }
+.top-level-groups { display: flex; flex-direction: column; gap: 3px; }
+.group-block { min-width: 0; border-radius: 10px; }
+.group-head {
+  position: relative; min-width: 0; height: 36px; display: flex; align-items: center; gap: 8px;
+  border-radius: 9px; padding: 0 8px; border: 1px solid transparent;
+}
+.group-head:hover { background: var(--surface-hover); }
+.dragging { opacity: .45; }
+.group-head.drop-target, .account-row.drop-target, .empty-dropzone.drop-target, .section-head-row.drop-target {
+  background: var(--accent-soft); border-color: var(--accent);
+}
+.group-head[draggable="true"], .account-row[draggable="true"] { cursor: grab; }
+.group-head[draggable="true"]:active, .account-row[draggable="true"]:active { cursor: grabbing; }
+.disclosure {
+  width: var(--tree-slot); height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; background: transparent; color: var(--text-tertiary); border-radius: 6px; flex: 0 0 var(--tree-slot);
+}
+.disclosure:hover { background: var(--surface-selected); color: var(--text); }
+.disclosure .icon { width: 14px; height: 14px; transition: transform .15s ease; }
+.disclosure.expanded .icon { transform: rotate(90deg); }
+.group-name {
+  display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; height: 32px; padding: 0;
+  background: transparent; border-radius: 7px; text-align: left; font-size: 14px; font-weight: 650; letter-spacing: -.2px;
+}
+.group-name .icon { color: var(--text-secondary); width: var(--tree-slot); height: 18px; flex: 0 0 var(--tree-slot); }
+.group-name span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.group-name:hover { color: var(--text); }
+.group-unread { font-size: 11px; font-weight: 650; color: var(--text-secondary); font-variant-numeric: tabular-nums; padding: 0 4px; }
+.group-menu-button { width: 25px; height: 26px; opacity: 0; }
+.group-head:hover .group-menu-button, .group-menu-button:focus-visible { opacity: 1; }
+.group-menu {
+  position: absolute; right: 5px; top: 31px; z-index: 20; width: 166px; padding: 5px;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 11px; box-shadow: var(--shadow);
+}
+.menu-item {
+  width: 100%; display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 7px;
+  text-align: left; background: transparent; color: var(--text); font-size: 12px;
+}
+.menu-item:hover { background: var(--surface-hover); }
+.menu-item.danger { color: var(--danger); }
+.group-children { padding: 1px 0 4px; }
+.group-aggregate { display: flex; flex-direction: column; gap: 1px; margin-bottom: 6px; }
+.group-aggregate .nav-item { height: 32px; }
+.group-aggregate .nav-label { font-size: 12px; }
+.group-account-list { display: flex; flex-direction: column; gap: 2px; }
+.account-block { min-width: 0; }
+.account-row {
+  min-width: 0; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 calc(8px + var(--tree-indent));
+  border: 1px solid transparent; border-radius: 9px; position: relative;
+}
+.account-row:hover { background: var(--surface-hover); }
+.account-row .account-name {
+  min-width: 0; flex: 1; height: 32px; display: flex; align-items: center; gap: 8px;
+  padding: 0; border-radius: 7px; background: transparent; color: var(--text); text-align: left;
+}
+.account-row .account-name:hover { color: var(--text); }
+.account-row .account-mail-icon { color: var(--text-secondary); display: flex; width: var(--tree-slot); flex: 0 0 var(--tree-slot); }
+.account-row .account-mail-icon .icon { width: 18px; height: 18px; }
+.account-email { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 560; }
+.account-row .count-badge { margin-right: 2px; }
+.account-children { display: flex; flex-direction: column; gap: 1px; padding: 1px 0 5px; }
+.account-children .nav-item { height: 31px; }
+.account-children .nav-label { font-size: 12px; font-weight: 480; }
+.account-children .nav-icon { width: 16px; height: 16px; }
+.empty-dropzone {
+  margin: 4px 7px 8px calc(var(--tree-indent) + var(--tree-slot) + 8px); height: 36px; display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--border-strong); border-radius: 8px; color: var(--text-tertiary); font-size: 11px;
+}
+.mobile-backdrop { display: none; }
+.mobile-backdrop:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.34); border: 0; border-radius: 0; }
+.sidebar-footer {
+  flex: 0 0 auto; position: relative; padding: 8px 10px 10px; border-top: 1px solid var(--border);
+  background: var(--sidebar-bg);
+}
+.settings-trigger {
+  width: 100%; height: 38px; display: flex; align-items: center; gap: 11px; padding: 0 10px;
+  border-radius: 9px; background: transparent; color: var(--text-secondary); text-align: left;
+}
+.settings-trigger:hover, .settings-trigger[aria-expanded="true"] { background: var(--surface-hover); color: var(--text); }
+.settings-trigger span { font-size: 13px; font-weight: 560; }
+.settings-popover {
+  position: absolute; left: 10px; right: 10px; bottom: 56px; z-index: 30;
+  padding: 12px; background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 13px; box-shadow: var(--shadow);
+}
+.settings-popover[hidden] { display: none; }
+.popover-title { font-size: 12px; font-weight: 650; margin: 0 0 8px 2px; }
+.theme-segment {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; border-radius: 9px; background: var(--input-bg); margin-bottom: 9px;
+}
+.theme-segment button {
+  display: flex; align-items: center; justify-content: center; gap: 6px; height: 30px; border-radius: 7px;
+  background: transparent; color: var(--text-secondary); font-size: 12px;
+}
+.theme-segment button.active { background: var(--surface-selected); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.popover-row {
+  width: 100%; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px;
+  border-radius: 8px; background: transparent; text-align: left; color: var(--text); font-size: 12px;
+}
+.popover-row:hover { background: var(--surface-hover); }
+.popover-row .icon { color: var(--text-secondary); }
+.mail-list-pane {
+  min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  background: var(--list-bg); border-right: 1px solid var(--border);
+}
+.mail-list-header { padding: 21px 17px 13px; border-bottom: 1px solid var(--border); }
+.mail-list-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 14px; }
+html[data-shell="web"] .mail-list-title-row #sidebar-toggle-web { margin-left: -5px; flex: 0 0 30px; }
+html[data-shell="desktop"] .mail-list-title-row #sidebar-toggle-web { display: none; }
+html[data-shell="web"] .titlebar { display: none; }
+html[data-shell="desktop"] .titlebar { display: flex; }
+.mail-list-title {
+  min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin: 0; font-size: 20px; line-height: 1.2; font-weight: 720; letter-spacing: -.55px;
+}
+.mail-list-count { color: var(--text-tertiary); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mail-list-controls { display: flex; align-items: center; gap: 8px; }
+.search-box {
+  min-width: 0; flex: 1; height: 31px; display: flex; align-items: center; gap: 7px; padding: 0 9px;
+  border-radius: 8px; background: var(--input-bg); color: var(--text-tertiary);
+}
+.search-box .icon { width: 15px; height: 15px; }
+.search-box input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
+.search-box input::placeholder { color: var(--text-tertiary); }
+.compose-button {
+  width: 32px; height: 31px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #fff; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.12);
+}
+.compose-button:hover { filter: brightness(1.08); }
+.mail-list-scroll { flex: 1; min-height: 0; overflow: auto; padding: 7px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.mail-row {
+  position: relative; padding: 11px 11px 10px; border-radius: 10px; cursor: pointer; margin-bottom: 3px;
+  border: 1px solid transparent; transition: background .12s ease;
+}
+.mail-row:hover { background: var(--surface-hover); }
+.mail-row.selected { background: var(--surface-selected); border-color: var(--border); }
+.mail-row-top, .mail-row-middle { display: flex; align-items: center; min-width: 0; gap: 7px; }
+.mail-row-top { margin-bottom: 6px; }
+.unread-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: transparent; }
+.mail-row.unread .unread-dot { background: var(--accent); }
+.mail-sender { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-secondary); }
+.mail-row.unread .mail-sender { color: var(--text); font-weight: 680; }
+.mail-date { flex: 0 0 auto; color: var(--text-tertiary); font-size: 10px; font-variant-numeric: tabular-nums; }
+.mail-subject { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 520; color: var(--text); }
+.mail-row.unread .mail-subject { font-weight: 700; }
+.star-button { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--text-tertiary); opacity: 0; border-radius: 5px; }
+.mail-row:hover .star-button, .mail-row.selected .star-button, .star-button.starred { opacity: 1; }
+.star-button.starred { color: #f5b942; }
+.star-button .icon { width: 14px; height: 14px; }
+.mail-preview { margin: 5px 0 0 13px; color: var(--text-tertiary); font-size: 11px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.empty-state { height: 100%; min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-tertiary); text-align: center; padding: 24px; }
+.empty-state .icon { width: 29px; height: 29px; opacity: .65; }
+.empty-state strong { color: var(--text-secondary); font-size: 13px; font-weight: 600; }
+.reader-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--reader-bg); }
+.reader-toolbar {
+  height: 55px; flex: 0 0 55px; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 22px; border-bottom: 1px solid var(--border);
+}
+.reader-toolbar-group { display: flex; align-items: center; gap: 5px; }
+.reader-toolbar .icon-button { width: 31px; height: 31px; }
+.reader-scroll { min-height: 0; flex: 1; overflow-y: auto; padding: 30px clamp(22px, 4vw, 52px) 40px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.message-subject { margin: 0 0 24px; font-size: 25px; line-height: 1.28; font-weight: 730; letter-spacing: -.7px; overflow-wrap: anywhere; }
+.message-sender-card { display: flex; align-items: center; gap: 11px; margin-bottom: 28px; min-width: 0; }
+.sender-avatar {
+  width: 38px; height: 38px; flex: 0 0 38px; display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--surface-selected); color: var(--text-secondary); font-size: 14px; font-weight: 650;
+}
+.sender-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.sender-name { font-size: 13px; font-weight: 680; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.sender-address { color: var(--text-tertiary); font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.message-time { color: var(--text-tertiary); font-size: 11px; align-self: flex-start; white-space: nowrap; padding-top: 3px; }
+.message-body { font-size: 13px; line-height: 1.85; color: var(--text); white-space: pre-line; overflow-wrap: anywhere; }
+.message-body p { margin: 0 0 15px; }
+.message-signature { margin-top: 25px; color: var(--text-secondary); }
+.reader-divider { height: 1px; background: var(--border); margin: 27px 0 18px; }
+.reply-button {
+  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 13px; border-radius: 9px;
+  border: 1px solid var(--border-strong); background: transparent; color: var(--text-secondary); font-size: 12px; font-weight: 560;
+}
+.reply-button:hover { background: var(--surface-hover); color: var(--text); }
+.app-window.sidebar-collapsed .app-body { grid-template-columns: 0 366px minmax(0, 1fr); }
+.app-window.sidebar-collapsed .sidebar { opacity: 0; pointer-events: none; overflow: hidden; border-right: 0; }
+.modal-host[hidden] { display: none; }
+.modal-host { position: fixed; inset: 0; z-index: 100; }
+.modal-backdrop { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.42); backdrop-filter: blur(8px); }
+.modal {
+  width: min(430px, 100%); max-height: min(82vh, 720px); display: flex; flex-direction: column; overflow: hidden;
+  border-radius: 16px; background: var(--sidebar-bg); border: 1px solid var(--border-strong); box-shadow: var(--shadow);
+  animation: modal-in .16s ease-out;
+}
+.modal.wide { width: min(580px, 100%); }
+@keyframes modal-in { from { opacity: 0; transform: translateY(5px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 17px 19px 14px; border-bottom: 1px solid var(--border); }
+.modal-title { margin: 0; font-size: 15px; font-weight: 720; letter-spacing: -.2px; }
+.modal-body { overflow-y: auto; padding: 18px 19px 19px; }
+.form-field { display: flex; flex-direction: column; gap: 7px; margin-bottom: 15px; }
+.form-field label { color: var(--text-secondary); font-size: 12px; font-weight: 560; }
+.form-field input, .form-field textarea, .form-field select {
+  width: 100%; min-width: 0; border: 1px solid var(--border-strong); border-radius: 9px; padding: 10px 11px;
+  background: var(--input-bg); color: var(--text); outline: 0; font-size: 13px;
+}
+.form-field textarea { min-height: 112px; resize: vertical; line-height: 1.55; }
+.form-field input::placeholder, .form-field textarea::placeholder { color: var(--text-tertiary); }
+.form-error { color: var(--danger); font-size: 11px; min-height: 0; margin: -6px 0 12px; }
+.modal-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-top: 8px; }
+.button-secondary, .button-primary, .button-danger {
+  min-height: 33px; padding: 0 13px; border-radius: 8px; font-size: 12px; font-weight: 620;
+}
+.button-secondary { background: var(--surface-hover); color: var(--text); }
+.button-secondary:hover { filter: brightness(1.04); }
+.button-primary { background: var(--accent); color: #fff; }
+.button-primary:hover { filter: brightness(1.08); }
+.button-danger { background: var(--danger); color: #fff; }
+.modal-copy { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
+.manage-list { display: flex; flex-direction: column; gap: 3px; margin-bottom: 13px; }
+.manage-account-row { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) 142px 30px; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.manage-account-email { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 560; }
+.manage-account-row select { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 7px; padding: 6px 7px; background: var(--input-bg); color: var(--text); font-size: 11px; }
+.manage-account-row .icon-button { width: 29px; height: 29px; }
+.manager-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 7px; }
+.manager-total { color: var(--text-tertiary); font-size: 11px; }
+.compose-account-select { margin-bottom: 14px; }
+.toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 10px); z-index: 200;
+  padding: 10px 14px; border-radius: 10px; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border-strong); box-shadow: var(--shadow); font-size: 12px; font-weight: 560;
+  opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease;
+}
+.toast.visible { opacity: 1; transform: translate(-50%, 0); }
+@media (max-width: 1080px) {
+  .app-body { grid-template-columns: 292px 340px minmax(0,1fr); }
+  .app-window.sidebar-collapsed .app-body { grid-template-columns: 0 340px minmax(0,1fr); }
+  .reader-scroll { padding-left: 25px; padding-right: 25px; }
+}
+@media (max-width: 860px) {
+  .app-body { grid-template-columns: 292px minmax(0,1fr); }
+  .app-window.sidebar-collapsed .app-body { grid-template-columns: 0 minmax(0,1fr); }
+  .reader-pane { display: none; }
+  .mail-list-pane { border-right: 0; }
+}
+@media (max-width: 600px) {
+  .app-body { grid-template-columns: minmax(0,1fr); }
+  .sidebar { display: none; }
+  .app-window.mobile-sidebar-open .sidebar {
+    display: flex; position: fixed; top: 0; bottom: 0; left: 0; width: min(320px, 86vw);
+    z-index: 80; opacity: 1; pointer-events: auto; overflow: hidden; box-shadow: var(--shadow);
+  }
+  .app-window.mobile-sidebar-open .app-body { grid-template-columns: minmax(0,1fr); }
+  .mail-list-header { padding: 16px 13px 12px; }
+  .mail-list-scroll { padding: 5px; }
+}
+</style>
+</head>
+<body>
+<svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-mailboxes" viewBox="0 0 24 24"><path d="M4 8.5 7.5 4h9L20 8.5v10A1.5 1.5 0 0 1 18.5 20h-13A1.5 1.5 0 0 1 4 18.5z"/><path d="M4 12h4l1.5 3h5L16 12h4"/><path d="M8 4.5 8.5 8h7L16 4.5"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 18.5z"/><path d="M4 13h4l1.5 3h5L16 13h4"/></symbol>
+  <symbol id="i-unread" viewBox="0 0 24 24"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z"/><path d="m5 7 7 5 7-5"/><circle cx="18.5" cy="5.5" r="2.5" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m21 3-7.2 18-3.7-7.1L3 10.2z"/><path d="M10.1 13.9 21 3"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m6.5 7 1 13h9l1-13"/><path d="M10 10v7M14 10v7"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3.5h8l5 5v12A1.5 1.5 0 0 1 17.5 22h-11A1.5 1.5 0 0 1 5 20.5v-15A2 2 0 0 1 7 3.5z"/><path d="M14 3.5v5h5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H10l2 2h7.5A1.5 1.5 0 0 1 21 8.5v10a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
+  <symbol id="i-folder-plus" viewBox="0 0 24 24"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H10l2 2h7.5A1.5 1.5 0 0 1 21 9.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M15.5 11.5v5M13 14h5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-sort" viewBox="0 0 24 24"><path d="M8 5v14M4.5 8.5 8 5l3.5 3.5"/><path d="M16 19V5m-3.5 10.5L16 19l3.5-3.5"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.1.8-1.4 2.4-1.3-.5a7.9 7.9 0 0 1-1.8 1l-.2 1.4h-2.8l-.2-1.4a7.9 7.9 0 0 1-1.8-1l-1.3.5-1.4-2.4 1.1-.8a7.2 7.2 0 0 1 0-2l-1.1-.8 1.4-2.4 1.3.5a7.9 7.9 0 0 1 1.8-1l.2-1.4h2.8l.2 1.4a7.9 7.9 0 0 1 1.8 1l1.3-.5 1.4 2.4-1.1.8a7.2 7.2 0 0 1 0 2z" transform="translate(-1 -1) scale(1.08)"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.5 14.2A8.6 8.6 0 0 1 9.8 3.5 8.8 8.8 0 1 0 20.5 14.2z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></symbol>
+  <symbol id="i-compose" viewBox="0 0 24 24"><path d="M12 20H4a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 4 4h10"/><path d="m15 4 5 5M9 15l8.9-8.9a2.1 2.1 0 0 1 3 3L12 18l-4 1z"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><path d="M4 4h16v4H4z"/><path d="M5.5 8v12h13V8"/><path d="M9 12h6"/></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24"><path d="m10 8-6 5 6 5v-3c6 0 9 2 11 5-1-7-5-10-11-10z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 12 24"><circle cx="3" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="3" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="3" cy="18" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="18" r="1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7"/></symbol>
+  <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m8 12.5 7.8-7.8a3.2 3.2 0 0 1 4.5 4.5l-9.9 9.9a5 5 0 0 1-7.1-7.1l9.2-9.2"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+</svg>
+
+<div class="app-window" id="app-window">
+  <header class="titlebar">
+    <div class="titlebar-leading">
+      <div class="traffic-lights" aria-label="窗口控制">
+        <span class="traffic-light red"></span><span class="traffic-light yellow"></span><span class="traffic-light green"></span>
+      </div>
+      <button class="icon-button" id="sidebar-toggle-desktop" title="收起侧边栏" aria-label="收起侧边栏" aria-expanded="true"><svg class="icon"><use href="#i-panel"></use></svg></button>
+    </div>
+    <div class="titlebar-actions"></div>
+  </header>
+
+  <div class="app-body">
+    <button class="mobile-backdrop" id="mobile-backdrop" aria-label="关闭侧边栏" hidden></button>
+    <aside class="sidebar" aria-label="邮箱导航">
+      <div class="sidebar-scroll">
+        <div class="sidebar-dynamic" id="sidebar-dynamic"></div>
+      </div>
+      <div class="sidebar-footer">
+        <button class="settings-trigger" id="settings-trigger" aria-expanded="false">
+          <svg class="icon"><use href="#i-settings"></use></svg><span>设置</span>
+        </button>
+        <div class="settings-popover" id="settings-popover" hidden>
+          <div class="popover-title">外观</div>
+          <div class="theme-segment">
+            <button data-action="set-theme" data-theme-choice="light"><svg class="icon small"><use href="#i-sun"></use></svg>浅色</button>
+            <button data-action="set-theme" data-theme-choice="dark"><svg class="icon small"><use href="#i-moon"></use></svg>深色</button>
+          </div>
+          <button class="popover-row" data-action="account-manager"><svg class="icon"><use href="#i-user"></use></svg>账号管理</button>
+          <button class="popover-row" data-action="sort-default"><svg class="icon"><use href="#i-sort"></use></svg>恢复默认排序</button>
+        </div>
+      </div>
+    </aside>
+
+    <section class="mail-list-pane" aria-label="邮件列表">
+      <div class="mail-list-header">
+        <div class="mail-list-title-row">
+          <button class="icon-button" id="sidebar-toggle-web" title="收起侧边栏" aria-label="收起侧边栏" aria-expanded="true"><svg class="icon"><use href="#i-panel"></use></svg></button>
+          <h1 class="mail-list-title" id="mail-list-title">所有收件箱</h1>
+          <span class="mail-list-count" id="mail-list-count"></span>
+        </div>
+        <div class="mail-list-controls">
+          <label class="search-box">
+            <svg class="icon"><use href="#i-search"></use></svg>
+            <input id="mail-search" type="search" placeholder="搜索邮件" autocomplete="off" aria-label="搜索邮件">
+          </label>
+          <button class="compose-button" id="compose-button" title="写邮件" aria-label="写邮件"><svg class="icon"><use href="#i-compose"></use></svg></button>
+        </div>
+      </div>
+      <div class="mail-list-scroll" id="mail-list-scroll"></div>
+    </section>
+
+    <section class="reader-pane" id="reader-pane" aria-label="邮件正文"></section>
+  </div>
+</div>
+
+<div class="modal-host" id="modal-host" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const requestedShell = new URLSearchParams(window.location.search).get('shell');
+  if (requestedShell === 'desktop') document.documentElement.dataset.shell = 'desktop';
+
+  const STORAGE_KEY = 'mail-sidebar-demo-state-v1';
+  const THEME_KEY = 'mail-sidebar-demo-theme-v1';
+  const shellParam = new URLSearchParams(window.location.search).get('shell');
+  const isDesktopShell = shellParam === 'desktop' || (shellParam !== 'web' && Boolean(window.__TAURI__ || window.electronAPI || window.process?.type === 'renderer'));
+  document.documentElement.dataset.shell = isDesktopShell ? 'desktop' : 'web';
+  const clone = value => JSON.parse(JSON.stringify(value));
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[ch]);
+  const icon = (name, cls = '') => `<svg class="icon ${cls}" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+
+  const initialGroups = [
+    { id: 'group-work', name: '工作', expanded: true, sortMode: 'domain' },
+    { id: 'group-personal', name: '个人', expanded: false, sortMode: 'domain' },
+    { id: 'group-shopping', name: '购物', expanded: false, sortMode: 'domain' }
+  ];
+  const initialAccounts = [
+    { id: 'a-126-archive', email: 'archive@126.com', groupId: null, expanded: false, order: 0 },
+    { id: 'a-126-notes', email: 'notes@126.com', groupId: null, expanded: false, order: 1 },
+    { id: 'a-163-archive', email: 'archive@163.com', groupId: 'group-personal', expanded: false, order: 0 },
+    { id: 'a-163-feng', email: 'feng@163.com', groupId: 'group-personal', expanded: false, order: 1 },
+    { id: 'a-gmail-billing', email: 'finance@gmail.com', groupId: 'group-work', expanded: true, order: 0 },
+    { id: 'a-gmail-studio', email: 'studio@gmail.com', groupId: 'group-work', expanded: false, order: 1 },
+    { id: 'a-gmail-personal', email: 'hello@gmail.com', groupId: 'group-personal', expanded: false, order: 2 },
+    { id: 'a-outlook-team', email: 'team@outlook.com', groupId: 'group-work', expanded: false, order: 2 },
+    { id: 'a-outlook-orders', email: 'orders@outlook.com', groupId: 'group-shopping', expanded: false, order: 0 },
+    { id: 'a-qq-shopping', email: 'shop@qq.com', groupId: 'group-shopping', expanded: false, order: 1 },
+    { id: 'a-qq-family', email: 'family@qq.com', groupId: 'group-personal', expanded: false, order: 3 },
+    { id: 'a-yahoo-notes', email: 'notes@yahoo.com', groupId: null, expanded: false, order: 2 }
+  ];
+  const initialEmails = [
+    { id: 'm1', accountId: 'a-gmail-billing', folder: 'inbox', sender: '林悦', senderEmail: 'lin.yue@example.com', subject: '本周产品评审安排', preview: '周五下午的评审我整理了新的议程，重点讨论侧边栏交互和账号分组。', body: '你好，\n\n周五下午的产品评审我整理了新的议程，重点讨论侧边栏交互和账号分组。\n\n麻烦会前看一下文档里的三个交互方案，如果有需要调整的地方，可以直接在评论里标注。\n\n谢谢！', date: '10:42', unread: true, starred: true },
+    { id: 'm2', accountId: 'a-outlook-team', folder: 'inbox', sender: 'Mina Chen', senderEmail: 'mina.chen@example.com', subject: 'Q4 项目时间表', preview: '更新后的里程碑已经同步，第一阶段计划在下周三结束。', body: '大家好，\n\n更新后的里程碑已经同步，第一阶段计划在下周三结束。请各负责人确认自己负责的事项和依赖关系。\n\n如果时间上有冲突，请在今天下班前告诉我。', date: '09:18', unread: true, starred: false },
+    { id: 'm3', accountId: 'a-gmail-studio', folder: 'inbox', sender: 'Figma', senderEmail: 'notifications@figma.com', subject: 'Design review: Sidebar refresh', preview: 'A teammate mentioned you in a comment on the Mail workspace.', body: 'You were mentioned in a comment.\n\n“这版层级已经清楚很多，建议再检查一下分组拖拽时的反馈状态。”\n\nOpen the design file to review the latest changes.', date: '昨天', unread: false, starred: false },
+    { id: 'm4', accountId: 'a-163-feng', folder: 'inbox', sender: '网易邮箱', senderEmail: 'service@mail.163.com', subject: '账号安全提醒', preview: '你的邮箱近期有一次新的登录活动，请确认是否为本人操作。', body: '您好，\n\n你的邮箱近期有一次新的登录活动。若这是你本人进行的操作，可以忽略本邮件；如果不是，请及时修改密码并检查账号安全设置。\n\n网易邮箱团队', date: '昨天', unread: true, starred: false },
+    { id: 'm5', accountId: 'a-gmail-personal', folder: 'inbox', sender: '周末读书会', senderEmail: 'reading.club@example.com', subject: '周六下午见', preview: '这次我们聊《设计中的设计》，我会带几本可以传阅的版本。', body: '大家好，\n\n这次我们聊《设计中的设计》，我会带几本可以传阅的版本。地点还是上次那家咖啡馆，下午两点见。\n\n到时见！', date: '周一', unread: false, starred: false },
+    { id: 'm6', accountId: 'a-qq-family', folder: 'inbox', sender: '妈妈', senderEmail: 'family@example.com', subject: '周末回家吗', preview: '天气预报说周末会降温，记得带件厚外套。', body: '周末回家吗？\n\n天气预报说周末会降温，记得带件厚外套。路上注意安全。', date: '周一', unread: false, starred: true },
+    { id: 'm7', accountId: 'a-outlook-orders', folder: 'inbox', sender: '订单通知', senderEmail: 'orders@example-shop.com', subject: '你的订单已发货', preview: '包裹已交给承运商，可以通过订单详情查看物流进度。', body: '你好，\n\n你的订单已发货。包裹已交给承运商，可以通过订单详情查看物流进度。\n\n感谢购买。', date: '10月20日', unread: false, starred: false },
+    { id: 'm8', accountId: 'a-qq-shopping', folder: 'inbox', sender: '支付平台', senderEmail: 'notice@example-pay.com', subject: '付款成功通知', preview: '一笔订单付款成功，如有疑问请前往订单中心查看。', body: '付款成功。\n\n这是一封自动发送的交易通知，请勿直接回复。', date: '10月19日', unread: true, starred: false },
+    { id: 'm9', accountId: 'a-gmail-billing', folder: 'sent', sender: '我', senderEmail: 'finance@gmail.com', recipient: 'lin.yue@example.com', subject: 'Re: 产品评审安排', preview: '收到，我会在周四之前把交互稿更新好。', body: '收到，我会在周四之前把交互稿更新好。\n\n我会把分组拖拽和默认排序的状态一起补全。', date: '10:21', unread: false, starred: false },
+    { id: 'm10', accountId: 'a-163-feng', folder: 'sent', sender: '我', senderEmail: 'feng@163.com', recipient: 'team@example.com', subject: '项目资料已整理', preview: '资料已放在共享文件夹中，包含最新版本和变更记录。', body: '大家好，\n\n资料已放在共享文件夹中，包含最新版本和变更记录。\n\n有问题随时联系我。', date: '10月21日', unread: false, starred: false },
+    { id: 'm11', accountId: 'a-gmail-studio', folder: 'trash', sender: 'Design Digest', senderEmail: 'digest@example.com', subject: '本周设计灵感精选', preview: '本周值得关注的界面、交互和设计系统文章。', body: '本周设计灵感精选。\n\n这封邮件位于垃圾箱中。', date: '10月18日', unread: false, starred: false },
+    { id: 'm12', accountId: 'a-gmail-personal', folder: 'drafts', sender: '草稿', senderEmail: 'hello@gmail.com', subject: '旅行计划', preview: '还没有发送的邮件草稿。', body: '还没有发送的邮件草稿。', date: '昨天', unread: false, starred: false },
+    { id: 'm13', accountId: 'a-126-archive', folder: 'inbox', sender: 'GitHub', senderEmail: 'noreply@github.com', subject: 'Security alert', preview: 'We noticed a new sign-in to your account.', body: 'We noticed a new sign-in to your account.\n\nIf this was you, you can safely ignore this email. Otherwise, please review your security settings.', date: '10月18日', unread: false, starred: false },
+    { id: 'm14', accountId: 'a-yahoo-notes', folder: 'inbox', sender: 'Cloudflare', senderEmail: 'no-reply@cloudflare.com', subject: 'DNS 设置已更新', preview: '你的域名 DNS 设置已成功更新。', body: '你好，\n\n你的域名 DNS 设置已成功更新。你可以在控制台查看当前配置和变更记录。', date: '10月17日', unread: true, starred: false },
+    { id: 'm15', accountId: 'a-126-notes', folder: 'trash', sender: '每日简报', senderEmail: 'brief@example.com', subject: '今日资讯汇总', preview: '你订阅的每日简报已经送达。', body: '今日资讯汇总。\n\n这封邮件位于垃圾箱中。', date: '10月16日', unread: false, starred: false },
+    { id: 'm16', accountId: 'a-gmail-billing', folder: 'inbox', sender: '财务', senderEmail: 'finance-team@example.com', subject: '十月费用明细', preview: '十月的费用明细已整理好，请在本周内核对。', body: '你好，\n\n十月的费用明细已整理好，请在本周内核对。附件包含分类汇总和原始凭证。\n\n谢谢。', date: '08:34', unread: true, starred: false },
+    { id: 'm17', accountId: 'a-outlook-team', folder: 'drafts', sender: '草稿', senderEmail: 'team@outlook.com', subject: '周会同步', preview: '还没有发送的邮件草稿。', body: '还没有发送的邮件草稿。', date: '昨天', unread: false, starred: false },
+    { id: 'm18', accountId: 'a-163-archive', folder: 'inbox', sender: '铁路服务', senderEmail: 'service@12306.cn', subject: '行程信息', preview: '你的行程信息和乘车提醒。', body: '你的行程信息和乘车提醒。请提前安排出行时间。', date: '10月15日', unread: false, starred: false },
+    { id: 'm19', accountId: 'a-qq-family', folder: 'inbox', sender: '社区通知', senderEmail: 'notice@example.org', subject: '小区停水通知', preview: '本周四上午将进行设备维护，请提前做好准备。', body: '本周四上午将进行设备维护，届时部分区域会短暂停水，请提前做好准备。', date: '10月14日', unread: false, starred: false },
+    { id: 'm20', accountId: 'a-outlook-orders', folder: 'inbox', sender: '物流助手', senderEmail: 'tracking@example-shop.com', subject: '包裹即将送达', preview: '你的包裹预计今天 18:00 前送达。', body: '你的包裹预计今天 18:00 前送达。请留意电话和门铃。', date: '10月13日', unread: true, starred: false }
+  ];
+
+  let groups = clone(initialGroups);
+  let accounts = clone(initialAccounts);
+  let emails = clone(initialEmails);
+  let allExpanded = true;
+  let accountListExpanded = true;
+  let masterSortMode = 'domain';
+  let selectedView = 'all:inbox';
+  let selectedEmailId = 'm1';
+  let openMenuGroupId = null;
+  let toastTimer = null;
+  let theme = 'dark';
+  let dragPayload = null;
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    if (saved && Array.isArray(saved.groups) && Array.isArray(saved.accounts)) {
+      groups = saved.groups;
+      accounts = saved.accounts;
+      allExpanded = saved.allExpanded !== false;
+      accountListExpanded = saved.accountListExpanded !== false;
+      masterSortMode = saved.masterSortMode || 'domain';
+      selectedView = saved.selectedView || 'all:inbox';
+    }
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    if (savedTheme === 'light' || savedTheme === 'dark') theme = savedTheme;
+  } catch (_) {}
+
+  const sidebarDynamic = document.getElementById('sidebar-dynamic');
+  const modalHost = document.getElementById('modal-host');
+  const settingsPopover = document.getElementById('settings-popover');
+  const settingsTrigger = document.getElementById('settings-trigger');
+  const appWindow = document.getElementById('app-window');
+  const mailSearch = document.getElementById('mail-search');
+  const toast = document.getElementById('toast');
+
+  function persist() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        groups, accounts, allExpanded, accountListExpanded, masterSortMode, selectedView
+      }));
+      localStorage.setItem(THEME_KEY, theme);
+    } catch (_) {}
+  }
+
+  function applyTheme() {
+    document.documentElement.dataset.theme = theme;
+    document.querySelectorAll('[data-theme-choice]').forEach(button => {
+      button.classList.toggle('active', button.dataset.themeChoice === theme);
+    });
+    persist();
+  }
+
+  function showToast(message) {
+    toast.textContent = message;
+    toast.classList.add('visible');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('visible'), 1900);
+  }
+
+  function getAccount(accountId) { return accounts.find(account => account.id === accountId); }
+  function getGroup(groupId) { return groups.find(group => group.id === groupId); }
+  function emailParts(email) {
+    const value = String(email || '').trim().toLowerCase();
+    const at = value.lastIndexOf('@');
+    return { local: at >= 0 ? value.slice(0, at) : value, domain: at >= 0 ? value.slice(at + 1) : '' };
+  }
+  function compareAccounts(a, b) {
+    const aa = emailParts(a.email), bb = emailParts(b.email);
+    return aa.domain.localeCompare(bb.domain, 'en', { sensitivity: 'base' }) ||
+      a.email.toLowerCase().localeCompare(b.email.toLowerCase(), 'en', { sensitivity: 'base' });
+  }
+  function getAccountsForGroup(groupId) {
+    const list = accounts.filter(account => (groupId === '__ungrouped__' ? account.groupId == null : account.groupId === groupId));
+    const mode = groupId === '__ungrouped__' ? 'domain' : (getGroup(groupId)?.sortMode || 'domain');
+    if (mode === 'manual') return list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    return list.sort(compareAccounts);
+  }
+  function getMasterAccounts() {
+    const list = accounts.slice();
+    if (masterSortMode === 'manual') {
+      return list.sort((a, b) => (a.masterOrder ?? Number.MAX_SAFE_INTEGER) - (b.masterOrder ?? Number.MAX_SAFE_INTEGER) || compareAccounts(a, b));
+    }
+    return list.sort(compareAccounts);
+  }
+  function getAccountIdsForGroup(groupId) {
+    return getAccountsForGroup(groupId).map(account => account.id);
+  }
+  function countUnreadForAccount(accountId) {
+    return emails.filter(email => email.accountId === accountId && email.folder === 'inbox' && email.unread).length;
+  }
+  function countUnreadForGroup(groupId) {
+    const ids = new Set(getAccountIdsForGroup(groupId));
+    return emails.filter(email => ids.has(email.accountId) && email.folder === 'inbox' && email.unread).length;
+  }
+  function countFolderForAccount(accountId, folder) {
+    return emails.filter(email => email.accountId === accountId && email.folder === folder).length;
+  }
+  function getViewInfo(viewId) {
+    const parts = String(viewId || 'all:inbox').split(':');
+    const scope = parts[0];
+    const type = scope === 'all' ? parts[1] : parts[2];
+    const scopeId = scope === 'all' ? null : parts[1];
+    const typeLabels = {
+      inbox: scope === 'account' ? '收件箱' : '所有收件箱',
+      unread: scope === 'account' ? '未读邮件' : '所有未读',
+      sent: '已发送邮件',
+      trash: '垃圾箱',
+      drafts: '草稿箱'
+    };
+    let title = typeLabels[type] || '所有收件箱';
+    if (scope === 'group') {
+      const group = scopeId === '__ungrouped__' ? null : getGroup(scopeId);
+      title = `${group ? group.name : '所有账号'} · ${typeLabels[type] || '所有收件箱'}`;
+    } else if (scope === 'account') {
+      const account = getAccount(scopeId);
+      title = `${account ? account.email : '邮箱'} · ${typeLabels[type] || '收件箱'}`;
+    }
+    return { scope, scopeId, type, title };
+  }
+  function getFilteredEmails(viewId) {
+    const info = getViewInfo(viewId);
+    let list = emails.filter(email => {
+      let inScope = true;
+      if (info.scope === 'account') {
+        inScope = email.accountId === info.scopeId;
+      } else if (info.scope === 'group') {
+        inScope = getAccountIdsForGroup(info.scopeId).includes(email.accountId);
+      }
+      if (!inScope) return false;
+      if (info.type === 'unread') return email.folder === 'inbox' && email.unread;
+      if (info.type === 'inbox') return email.folder === 'inbox';
+      if (info.type === 'sent') return email.folder === 'sent';
+      if (info.type === 'trash') return email.folder === 'trash';
+      if (info.type === 'drafts') return email.folder === 'drafts';
+      return email.folder === 'inbox';
+    });
+    return list;
+  }
+  function viewCount(viewId) { return getFilteredEmails(viewId).length; }
+  function folderIcon(type) {
+    return ({ inbox: 'inbox', unread: 'unread', sent: 'send', trash: 'trash', drafts: 'file' })[type] || 'inbox';
+  }
+
+  function renderNavItem(viewId, label, iconName, badgeText = '', depth = 1) {
+    const active = selectedView === viewId;
+    return `<button class="nav-item depth-${depth} ${active ? 'active' : ''}" data-action="select-view" data-view="${escapeHtml(viewId)}" title="${escapeHtml(label)}">
+      <span class="tree-slot" aria-hidden="true"></span>
+      ${icon(iconName, 'nav-icon')}
+      <span class="nav-label">${escapeHtml(label)}</span>
+      ${badgeText !== '' && Number(badgeText) > 0 ? `<span class="count-badge">${escapeHtml(badgeText)}</span>` : ''}
+    </button>`;
+  }
+
+  function renderAggregateRows(scope, scopeId = null, depth = 1) {
+    const defs = [
+      { type: 'inbox', label: '所有收件箱', icon: 'inbox' },
+      { type: 'unread', label: '所有未读', icon: 'unread' },
+      { type: 'sent', label: '已发送邮件', icon: 'send' },
+      { type: 'trash', label: '垃圾箱', icon: 'trash' }
+    ];
+    return defs.map(def => {
+      const viewId = scope === 'all' ? `all:${def.type}` : `group:${scopeId}:${def.type}`;
+      const badge = def.type === 'unread' ? viewCount(viewId) : 0;
+      return renderNavItem(viewId, def.label, def.icon, badge, depth);
+    }).join('');
+  }
+
+  function renderAccountRows(account, depth = 2) {
+    const defs = [
+      { type: 'inbox', label: '收件箱', icon: 'inbox' },
+      { type: 'unread', label: '未读邮件', icon: 'unread' },
+      { type: 'drafts', label: '草稿箱', icon: 'file' },
+      { type: 'trash', label: '垃圾箱', icon: 'trash' }
+    ];
+    return defs.map(def => {
+      const viewId = `account:${account.id}:${def.type}`;
+      const badge = def.type === 'unread' ? countUnreadForAccount(account.id) : 0;
+      return renderNavItem(viewId, def.label, def.icon, badge, depth);
+    }).join('');
+  }
+
+  function renderAccount(account, context = 'group') {
+    const unread = countUnreadForAccount(account.id);
+    const listContext = context === 'master' ? 'master' : 'group';
+    return `<div class="account-block">
+      <div class="account-row depth-1" draggable="true" data-drag-type="account" data-list-context="${listContext}" data-account-id="${escapeHtml(account.id)}" data-target-account-id="${escapeHtml(account.id)}" data-group-id="${escapeHtml(account.groupId || '')}" title="${escapeHtml(account.email)}">
+        <button class="disclosure ${account.expanded ? 'expanded' : ''}" data-action="toggle-account" data-account-id="${escapeHtml(account.id)}" aria-label="${account.expanded ? '折叠' : '展开'} ${escapeHtml(account.email)}">${icon('chevron')}</button>
+        <button class="account-name" data-action="toggle-account" data-account-id="${escapeHtml(account.id)}">
+          <span class="account-mail-icon">${icon('inbox')}</span>
+          <span class="account-email">${escapeHtml(account.email)}</span>
+          ${unread > 0 ? `<span class="count-badge">${unread}</span>` : ''}
+        </button>
+      </div>
+      ${account.expanded ? `<div class="account-children">${renderAccountRows(account, 2)}</div>` : ''}
+    </div>`;
+  }
+
+  function renderGroup(group) {
+    const unread = countUnreadForGroup(group.id);
+    const accountsInGroup = getAccountsForGroup(group.id);
+    const menu = openMenuGroupId === group.id ? `<div class="group-menu">
+      <button class="menu-item" data-action="rename-group" data-group-id="${escapeHtml(group.id)}">${icon('file', 'small')}重命名分组</button>
+      <button class="menu-item danger" data-action="delete-group" data-group-id="${escapeHtml(group.id)}">${icon('trash', 'small')}删除分组</button>
+    </div>` : '';
+    return `<div class="group-block" data-group-block="${escapeHtml(group.id)}">
+      <div class="group-head" draggable="true" data-drag-type="group" data-group-id="${escapeHtml(group.id)}" data-drop-group-id="${escapeHtml(group.id)}">
+        <button class="disclosure ${group.expanded ? 'expanded' : ''}" data-action="toggle-group" data-group-id="${escapeHtml(group.id)}" aria-label="${group.expanded ? '折叠' : '展开'} ${escapeHtml(group.name)}">${icon('chevron')}</button>
+        <button class="group-name" data-action="toggle-group" data-group-id="${escapeHtml(group.id)}" title="${escapeHtml(group.name)}">
+          ${icon('folder')}<span>${escapeHtml(group.name)}</span>
+        </button>
+        ${unread > 0 ? `<span class="group-unread">${unread}</span>` : ''}
+        <button class="icon-button group-menu-button" data-action="group-menu" data-group-id="${escapeHtml(group.id)}" title="分组操作" aria-label="分组操作">${icon('more')}</button>
+        ${menu}
+      </div>
+      ${group.expanded ? `<div class="group-children">
+        <div class="group-aggregate">${renderAggregateRows('group', group.id, 1)}</div>
+        <div class="group-account-list">${accountsInGroup.map(account => renderAccount(account, 'group')).join('')}</div>
+        ${accountsInGroup.length === 0 ? `<div class="empty-dropzone" data-drop-group-id="${escapeHtml(group.id)}">拖入邮箱账号</div>` : ''}
+      </div>` : ''}
+    </div>`;
+  }
+
+  function renderSidebar() {
+    const masterAccounts = getMasterAccounts();
+    sidebarDynamic.innerHTML = `
+      <section class="sidebar-section">
+        <div class="section-head-row">
+          <button class="section-toggle" data-action="toggle-all" aria-expanded="${allExpanded}">
+            <span class="section-chevron">${icon('chevron', allExpanded ? 'expanded' : '')}</span>
+            <span class="section-icon">${icon('mailboxes')}</span>
+            <span>所有账号</span>
+          </button>
+        </div>
+        ${allExpanded ? `<div class="nav-list">${renderAggregateRows('all', null, 1)}</div>` : ''}
+      </section>
+      <section class="sidebar-section top-level-groups" aria-label="邮箱分组">
+        ${groups.map(renderGroup).join('')}
+      </section>
+      <section class="sidebar-section">
+        <div class="section-head-row" data-drop-group-id="__ungrouped__">
+          <button class="section-toggle" data-action="toggle-account-list" aria-expanded="${accountListExpanded}">
+            <span class="section-chevron">${icon('chevron', accountListExpanded ? 'expanded' : '')}</span>
+            <span class="section-icon">${icon('folder')}</span>
+            <span>账号列表</span>
+          </button>
+          <div class="section-actions">
+            <button class="icon-button" data-action="new-group" title="新建分组" aria-label="新建分组">${icon('folder-plus')}</button>
+            <button class="icon-button" data-action="sort-default" title="恢复默认排序：域名、邮箱地址" aria-label="恢复默认排序">${icon('sort')}</button>
+          </div>
+        </div>
+        ${accountListExpanded ? `<div class="account-master-list" data-drop-group-id="__ungrouped__">${masterAccounts.map(account => renderAccount(account, 'master')).join('') || `<div class="empty-dropzone" data-drop-group-id="__ungrouped__">暂无邮箱账号</div>`}</div>` : ''}
+      </section>`;
+    applyThemeButtons();
+  }
+
+  function applyThemeButtons() {
+    document.querySelectorAll('[data-theme-choice]').forEach(button => {
+      button.classList.toggle('active', button.dataset.themeChoice === theme);
+    });
+  }
+
+  function currentSearch() { return (mailSearch.value || '').trim().toLocaleLowerCase(); }
+  function getVisibleEmails() {
+    const query = currentSearch();
+    return getFilteredEmails(selectedView).filter(email => {
+      if (!query) return true;
+      const account = getAccount(email.accountId);
+      return [email.sender, email.senderEmail, email.subject, email.preview, email.body, account?.email]
+        .filter(Boolean).join(' ').toLocaleLowerCase().includes(query);
+    });
+  }
+  function renderMailRow(email) {
+    const selected = email.id === selectedEmailId;
+    return `<div class="mail-row ${email.unread ? 'unread' : ''} ${selected ? 'selected' : ''}" role="button" tabindex="0" data-action="select-email" data-email-id="${escapeHtml(email.id)}">
+      <div class="mail-row-top">
+        <span class="unread-dot"></span>
+        <span class="mail-sender">${escapeHtml(email.sender)}</span>
+        <span class="mail-date">${escapeHtml(email.date)}</span>
+      </div>
+      <div class="mail-row-middle">
+        <span class="mail-subject">${escapeHtml(email.subject || '(无主题)')}</span>
+        <button class="star-button ${email.starred ? 'starred' : ''}" data-action="toggle-star" data-email-id="${escapeHtml(email.id)}" title="${email.starred ? '取消星标' : '添加星标'}" aria-label="${email.starred ? '取消星标' : '添加星标'}">${icon('star')}</button>
+      </div>
+      <div class="mail-preview">${escapeHtml(email.preview || '')}</div>
+    </div>`;
+  }
+  function renderReader(email) {
+    if (!email) {
+      return `<div class="reader-toolbar"><div class="reader-toolbar-group">${icon('mailboxes')}</div></div>
+        <div class="empty-state">${icon('inbox')}<strong>没有选中的邮件</strong></div>`;
+    }
+    const account = getAccount(email.accountId);
+    const senderAddress = email.sender === '我' ? (account?.email || email.senderEmail) : email.senderEmail;
+    const body = escapeHtml(email.body || email.preview || '').replace(/\n/g, '<br>');
+    return `<div class="reader-toolbar">
+      <div class="reader-toolbar-group">
+        <button class="icon-button" data-action="archive-email" data-email-id="${escapeHtml(email.id)}" title="归档" aria-label="归档">${icon('archive')}</button>
+        <button class="icon-button" data-action="trash-email" data-email-id="${escapeHtml(email.id)}" title="移到垃圾箱" aria-label="移到垃圾箱">${icon('trash')}</button>
+      </div>
+      <div class="reader-toolbar-group">
+        <button class="icon-button" data-action="toggle-read" data-email-id="${escapeHtml(email.id)}" title="${email.unread ? '标记为已读' : '标记为未读'}" aria-label="${email.unread ? '标记为已读' : '标记为未读'}">${icon('unread')}</button>
+        <button class="icon-button" data-action="reply" data-email-id="${escapeHtml(email.id)}" title="回复" aria-label="回复">${icon('reply')}</button>
+      </div>
+    </div>
+    <div class="reader-scroll">
+      <article>
+        <h2 class="message-subject">${escapeHtml(email.subject || '(无主题)')}</h2>
+        <div class="message-sender-card">
+          <div class="sender-avatar">${escapeHtml((email.sender || '?').slice(0, 1))}</div>
+          <div class="sender-meta">
+            <div class="sender-name">${escapeHtml(email.sender)}</div>
+            <div class="sender-address">${escapeHtml(senderAddress || '')}</div>
+          </div>
+          <div class="message-time">${escapeHtml(email.date)}</div>
+        </div>
+        <div class="message-body">${body}</div>
+        <div class="message-signature"></div>
+        <div class="reader-divider"></div>
+        <button class="reply-button" data-action="reply" data-email-id="${escapeHtml(email.id)}">${icon('reply', 'small')}回复</button>
+      </article>
+    </div>`;
+  }
+
+  function renderMailArea() {
+    const info = getViewInfo(selectedView);
+    const visible = getVisibleEmails();
+    if (!visible.some(email => email.id === selectedEmailId)) selectedEmailId = visible[0]?.id || null;
+    document.getElementById('mail-list-title').textContent = info.title;
+    document.getElementById('mail-list-count').textContent = visible.length ? String(visible.length) : '';
+    const listEl = document.getElementById('mail-list-scroll');
+    if (!visible.length) {
+      listEl.innerHTML = `<div class="empty-state">${icon('inbox')}<strong>${currentSearch() ? '没有匹配的邮件' : '这里还没有邮件'}</strong></div>`;
+    } else {
+      listEl.innerHTML = visible.map(renderMailRow).join('');
+    }
+    const selectedEmail = emails.find(email => email.id === selectedEmailId) || null;
+    document.getElementById('reader-pane').innerHTML = renderReader(selectedEmail);
+  }
+
+  function renderAll() {
+    renderSidebar();
+    renderMailArea();
+    persist();
+  }
+
+  function selectView(viewId) {
+    selectedView = viewId;
+    selectedEmailId = null;
+    openMenuGroupId = null;
+    settingsPopover.hidden = true;
+    settingsTrigger.setAttribute('aria-expanded', 'false');
+    renderAll();
+  }
+
+  function toggleSection(which) {
+    if (which === 'all') allExpanded = !allExpanded;
+    if (which === 'account-list') accountListExpanded = !accountListExpanded;
+    renderSidebar();
+    persist();
+  }
+
+  function setGroupSortMode(groupId, mode) {
+    if (groupId === '__ungrouped__') return;
+    const group = getGroup(groupId);
+    if (group) group.sortMode = mode;
+  }
+  function compactOrders(groupId) {
+    if (groupId === '__ungrouped__') return;
+    getAccountsForGroup(groupId).forEach((account, index) => { account.order = index; });
+  }
+  function reorderMasterAccount(sourceId, targetId) {
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    const list = getMasterAccounts();
+    const from = list.findIndex(account => account.id === sourceId);
+    const to = list.findIndex(account => account.id === targetId);
+    if (from < 0 || to < 0) return;
+    const [moved] = list.splice(from, 1);
+    list.splice(list.findIndex(account => account.id === targetId), 0, moved);
+    masterSortMode = 'manual';
+    list.forEach((account, index) => { account.masterOrder = index; });
+    renderAll();
+    showToast('账号列表顺序已更新');
+  }
+  function moveAccountToGroup(accountId, targetGroupId, targetAccountId = null) {
+    const account = getAccount(accountId);
+    if (!account) return;
+    const normalizedTarget = targetGroupId === '__ungrouped__' ? null : targetGroupId;
+    if (normalizedTarget && !getGroup(normalizedTarget)) return;
+    const sourceGroup = account.groupId == null ? '__ungrouped__' : account.groupId;
+    const sourceList = getAccountsForGroup(sourceGroup);
+    const sourceIndex = sourceList.findIndex(item => item.id === accountId);
+    sourceList.splice(sourceIndex, 1);
+    account.groupId = normalizedTarget;
+    const destinationKey = normalizedTarget == null ? '__ungrouped__' : normalizedTarget;
+    let destinationList = getAccountsForGroup(destinationKey).filter(item => item.id !== accountId);
+    setGroupSortMode(destinationKey, 'manual');
+    const insertAt = targetAccountId ? destinationList.findIndex(item => item.id === targetAccountId) : -1;
+    if (insertAt >= 0) destinationList.splice(insertAt, 0, account);
+    else destinationList.push(account);
+    destinationList.forEach((item, index) => { item.order = index; });
+    compactOrders(sourceGroup);
+    if (destinationKey !== '__ungrouped__') {
+      const group = getGroup(destinationKey);
+      if (group) group.expanded = true;
+    }
+    renderAll();
+  }
+  function reorderGroup(sourceId, targetId) {
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    const from = groups.findIndex(group => group.id === sourceId);
+    if (from < 0 || !groups.some(group => group.id === targetId)) return;
+    const [moved] = groups.splice(from, 1);
+    const targetIndex = groups.findIndex(group => group.id === targetId);
+    groups.splice(targetIndex, 0, moved);
+    renderAll();
+    showToast('分组顺序已更新');
+  }
+  function restoreDefaultSort() {
+    groups.forEach(group => { group.sortMode = 'domain'; });
+    masterSortMode = 'domain';
+    accounts.forEach(account => { account.order = 0; });
+    openMenuGroupId = null;
+    settingsPopover.hidden = true;
+    settingsTrigger.setAttribute('aria-expanded', 'false');
+    renderAll();
+    showToast('已按域名和邮箱地址排序');
+  }
+
+  function openModal(title, content, wide = false) {
+    modalHost.innerHTML = `<div class="modal-backdrop" data-action="backdrop-close">
+      <section class="modal ${wide ? 'wide' : ''}" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+        <header class="modal-header"><h2 class="modal-title">${escapeHtml(title)}</h2><button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button></header>
+        <div class="modal-body">${content}</div>
+      </section>
+    </div>`;
+    modalHost.hidden = false;
+    const firstInput = modalHost.querySelector('input:not([type="hidden"]), textarea, select');
+    if (firstInput) setTimeout(() => firstInput.focus(), 30);
+  }
+  function closeModal() {
+    modalHost.hidden = true;
+    modalHost.innerHTML = '';
+  }
+  function openNewGroupModal() {
+    openModal('新建分组', `<form data-form="create-group">
+      <div class="form-field"><label for="group-name-input">分组名称</label><input id="group-name-input" name="name" maxlength="32" placeholder="例如：工作、个人" required></div>
+      <div class="form-error" id="modal-error"></div>
+      <div class="modal-actions"><button class="button-secondary" type="button" data-action="close-modal">取消</button><button class="button-primary" type="submit">创建分组</button></div>
+    </form>`);
+  }
+  function openRenameGroupModal(groupId) {
+    const group = getGroup(groupId);
+    if (!group) return;
+    openModal('重命名分组', `<form data-form="rename-group" data-group-id="${escapeHtml(groupId)}">
+      <div class="form-field"><label for="group-name-input">分组名称</label><input id="group-name-input" name="name" maxlength="32" value="${escapeHtml(group.name)}" required></div>
+      <div class="form-error" id="modal-error"></div>
+      <div class="modal-actions"><button class="button-secondary" type="button" data-action="close-modal">取消</button><button class="button-primary" type="submit">保存</button></div>
+    </form>`);
+  }
+  function openDeleteGroupModal(groupId) {
+    const group = getGroup(groupId);
+    if (!group) return;
+    const count = accounts.filter(account => account.groupId === groupId).length;
+    openModal('删除分组', `<form data-form="delete-group" data-group-id="${escapeHtml(groupId)}">
+      <p class="modal-copy">删除“${escapeHtml(group.name)}”分组？${count ? `其中的 ${count} 个邮箱账号仍保留在账号列表中，并退出该分组。` : ''}不会删除邮箱账号或邮件。</p>
+      <div class="modal-actions"><button class="button-secondary" type="button" data-action="close-modal">取消</button><button class="button-danger" type="submit">删除分组</button></div>
+    </form>`);
+  }
+  function groupOptions(selectedId) {
+    return `<option value="__ungrouped__" ${selectedId == null ? 'selected' : ''}>不加入分组</option>` +
+      groups.map(group => `<option value="${escapeHtml(group.id)}" ${selectedId === group.id ? 'selected' : ''}>${escapeHtml(group.name)}</option>`).join('');
+  }
+  function openAccountManager() {
+    const rows = accounts.slice().sort(compareAccounts).map(account => `<div class="manage-account-row">
+      <div class="manage-account-email" title="${escapeHtml(account.email)}">${escapeHtml(account.email)}</div>
+      <select data-action="assign-account" data-account-id="${escapeHtml(account.id)}" aria-label="移动 ${escapeHtml(account.email)}">${groupOptions(account.groupId)}</select>
+      <button class="icon-button" data-action="remove-account" data-account-id="${escapeHtml(account.id)}" title="移除账号" aria-label="移除账号">${icon('trash', 'small')}</button>
+    </div>`).join('');
+    openModal('账号管理', `<div class="manage-list">${rows || '<p class="modal-copy">还没有添加邮箱账号。</p>'}</div>
+      <div class="manager-footer"><span class="manager-total">${accounts.length} 个账号</span><div style="display:flex;gap:8px"><button class="button-secondary" data-action="close-modal" type="button">完成</button><button class="button-primary" data-action="add-account" type="button">添加账号</button></div></div>`, true);
+  }
+  function openAddAccountModal() {
+    openModal('添加邮箱账号', `<form data-form="add-account">
+      <div class="form-field"><label for="account-email-input">邮箱地址</label><input id="account-email-input" name="email" type="email" placeholder="name@example.com" autocomplete="off" required></div>
+      <div class="form-field"><label for="account-group-input">所属分组</label><select id="account-group-input" name="groupId">${groupOptions(null)}</select></div>
+      <div class="form-error" id="modal-error"></div>
+      <div class="modal-actions"><button class="button-secondary" type="button" data-action="close-modal">取消</button><button class="button-primary" type="submit">添加账号</button></div>
+    </form>`);
+  }
+  function openRemoveAccountModal(accountId) {
+    const account = getAccount(accountId);
+    if (!account) return;
+    openModal('移除邮箱账号', `<form data-form="remove-account" data-account-id="${escapeHtml(accountId)}">
+      <p class="modal-copy">确定移除 ${escapeHtml(account.email)}？此操作会同时移除 Demo 中与该账号关联的示例邮件。</p>
+      <div class="modal-actions"><button class="button-secondary" type="button" data-action="close-modal">取消</button><button class="button-danger" type="submit">移除账号</button></div>
+    </form>`);
+  }
+  function openComposeModal(prefill = {}) {
+    const defaultAccountId = prefill.accountId || (getViewInfo(selectedView).scope === 'account' ? getViewInfo(selectedView).scopeId : accounts[0]?.id);
+    const accountOptions = accounts.map(account => `<option value="${escapeHtml(account.id)}" ${account.id === defaultAccountId ? 'selected' : ''}>${escapeHtml(account.email)}</option>`).join('');
+    openModal(prefill.title || '新邮件', `<form data-form="compose">
+      <div class="form-field"><label for="compose-from">发件账号</label><select id="compose-from" name="accountId" class="compose-account-select">${accountOptions}</select></div>
+      <div class="form-field"><label for="compose-to">收件人</label><input id="compose-to" name="to" type="email" value="${escapeHtml(prefill.to || '')}" placeholder="recipient@example.com"></div>
+      <div class="form-field"><label for="compose-subject">主题</label><input id="compose-subject" name="subject" value="${escapeHtml(prefill.subject || '')}" placeholder="邮件主题"></div>
+      <div class="form-field"><label for="compose-body">正文</label><textarea id="compose-body" name="body" placeholder="写点什么…">${escapeHtml(prefill.body || '')}</textarea></div>
+      <div class="modal-actions"><button class="button-secondary" type="button" data-action="close-modal">取消</button><button class="button-secondary" type="button" data-action="save-compose-draft">存为草稿</button><button class="button-primary" type="button" data-action="send-compose">发送</button></div>
+    </form>`, true);
+  }
+
+  function saveComposedEmail(asDraft) {
+    const accountId = modalHost.querySelector('[name="accountId"]')?.value || accounts[0]?.id;
+    const account = getAccount(accountId);
+    if (!account) { showToast('请先添加邮箱账号'); return; }
+    const to = modalHost.querySelector('[name="to"]')?.value.trim() || '';
+    const subject = modalHost.querySelector('[name="subject"]')?.value.trim() || '(无主题)';
+    const body = modalHost.querySelector('[name="body"]')?.value || '';
+    if (!asDraft && !to) {
+      const input = modalHost.querySelector('[name="to"]');
+      input?.focus();
+      input?.setCustomValidity('请填写收件人');
+      input?.reportValidity();
+      input?.addEventListener('input', () => input.setCustomValidity(''), { once: true });
+      return;
+    }
+    const id = `m-${Date.now()}`;
+    emails.unshift({
+      id, accountId, folder: asDraft ? 'drafts' : 'sent', sender: asDraft ? '草稿' : '我',
+      senderEmail: account.email, recipient: to, subject, preview: body.slice(0, 130) || (asDraft ? '还没有发送的邮件草稿。' : `发送给 ${to}`),
+      body, date: '刚刚', unread: false, starred: false
+    });
+    closeModal();
+    selectedView = asDraft ? `account:${accountId}:drafts` : 'all:sent';
+    selectedEmailId = id;
+    renderAll();
+    showToast(asDraft ? '草稿已保存' : '邮件已加入已发送');
+  }
+
+  function archiveEmail(emailId) {
+    const email = emails.find(item => item.id === emailId);
+    if (!email) return;
+    email.folder = 'archive';
+    renderAll();
+    showToast('邮件已归档');
+  }
+  function trashEmail(emailId) {
+    const email = emails.find(item => item.id === emailId);
+    if (!email) return;
+    email.folder = 'trash';
+    renderAll();
+    showToast('邮件已移到垃圾箱');
+  }
+  function toggleRead(emailId) {
+    const email = emails.find(item => item.id === emailId);
+    if (!email) return;
+    email.unread = !email.unread;
+    renderAll();
+    showToast(email.unread ? '已标记为未读' : '已标记为已读');
+  }
+  function replyToEmail(emailId) {
+    const email = emails.find(item => item.id === emailId);
+    if (!email) return;
+    const accountId = email.accountId;
+    const to = email.sender === '我' ? (email.recipient || '') : email.senderEmail;
+    openComposeModal({ accountId, to, subject: `Re: ${email.subject || ''}`, body: '\n\n--- 原邮件 ---\n' + (email.body || '') });
+  }
+
+  sidebarDynamic.addEventListener('click', event => {
+    const button = event.target.closest('[data-action]');
+    if (!button) return;
+    const action = button.dataset.action;
+    if (action === 'toggle-all') { toggleSection('all'); return; }
+    if (action === 'toggle-account-list') { toggleSection('account-list'); return; }
+    if (action === 'toggle-group') {
+      const group = getGroup(button.dataset.groupId);
+      if (group) { group.expanded = !group.expanded; openMenuGroupId = null; renderSidebar(); persist(); }
+      return;
+    }
+    if (action === 'toggle-account') {
+      const account = getAccount(button.dataset.accountId);
+      if (account) { account.expanded = !account.expanded; renderSidebar(); persist(); }
+      return;
+    }
+    if (action === 'select-view') { selectView(button.dataset.view); return; }
+    if (action === 'new-group') { openMenuGroupId = null; openNewGroupModal(); return; }
+    if (action === 'sort-default') { restoreDefaultSort(); return; }
+    if (action === 'group-menu') {
+      openMenuGroupId = openMenuGroupId === button.dataset.groupId ? null : button.dataset.groupId;
+      renderSidebar();
+      return;
+    }
+    if (action === 'rename-group') { const id = button.dataset.groupId; openMenuGroupId = null; openRenameGroupModal(id); return; }
+    if (action === 'delete-group') { const id = button.dataset.groupId; openMenuGroupId = null; openDeleteGroupModal(id); return; }
+  });
+
+  document.addEventListener('click', event => {
+    if (!event.target.closest('#settings-popover') && !event.target.closest('#settings-trigger')) {
+      settingsPopover.hidden = true;
+      settingsTrigger.setAttribute('aria-expanded', 'false');
+    }
+    if (!event.target.closest('.group-head')) {
+      if (openMenuGroupId) { openMenuGroupId = null; renderSidebar(); }
+    }
+  });
+
+  settingsTrigger.addEventListener('click', () => {
+    settingsPopover.hidden = !settingsPopover.hidden;
+    settingsTrigger.setAttribute('aria-expanded', String(!settingsPopover.hidden));
+  });
+  settingsPopover.addEventListener('click', event => {
+    const button = event.target.closest('[data-action]');
+    if (!button) return;
+    if (button.dataset.action === 'set-theme') {
+      theme = button.dataset.themeChoice;
+      applyTheme();
+      showToast(theme === 'dark' ? '已切换到深色模式' : '已切换到浅色模式');
+    } else if (button.dataset.action === 'account-manager') {
+      settingsPopover.hidden = true;
+      settingsTrigger.setAttribute('aria-expanded', 'false');
+      openAccountManager();
+    } else if (button.dataset.action === 'sort-default') {
+      restoreDefaultSort();
+    }
+  });
+
+  modalHost.addEventListener('click', event => {
+    const button = event.target.closest('[data-action]');
+    if (button) {
+      const action = button.dataset.action;
+      if (action === 'close-modal' || action === 'backdrop-close' && event.target.classList.contains('modal-backdrop')) { closeModal(); return; }
+      if (action === 'add-account') { openAddAccountModal(); return; }
+      if (action === 'remove-account') { openRemoveAccountModal(button.dataset.accountId); return; }
+      if (action === 'assign-account') return;
+    }
+    if (event.target.classList.contains('modal-backdrop')) closeModal();
+  });
+
+  modalHost.addEventListener('submit', event => {
+    const form = event.target.closest('form[data-form]');
+    if (!form) return;
+    event.preventDefault();
+    const type = form.dataset.form;
+    const errorEl = form.querySelector('.form-error');
+    if (errorEl) errorEl.textContent = '';
+    if (type === 'create-group' || type === 'rename-group') {
+      const name = String(new FormData(form).get('name') || '').trim();
+      if (!name) { if (errorEl) errorEl.textContent = '请输入分组名称。'; return; }
+      const groupId = form.dataset.groupId;
+      const duplicate = groups.some(group => group.name.toLocaleLowerCase() === name.toLocaleLowerCase() && group.id !== groupId);
+      if (duplicate) { if (errorEl) errorEl.textContent = '已有同名分组，请换一个名称。'; return; }
+      if (type === 'create-group') {
+        groups.push({ id: `group-${Date.now()}`, name, expanded: true, sortMode: 'domain' });
+        showToast('分组已创建');
+      } else {
+        const group = getGroup(groupId);
+        if (group) group.name = name;
+        showToast('分组名称已更新');
+      }
+      closeModal(); openMenuGroupId = null; renderAll(); return;
+    }
+    if (type === 'delete-group') {
+      const groupId = form.dataset.groupId;
+      accounts.forEach(account => { if (account.groupId === groupId) account.groupId = null; });
+      groups = groups.filter(group => group.id !== groupId);
+      if (getViewInfo(selectedView).scope === 'group' && getViewInfo(selectedView).scopeId === groupId) selectedView = 'all:inbox';
+      closeModal(); renderAll(); showToast('分组已删除，账号仍保留在账号列表'); return;
+    }
+    if (type === 'add-account') {
+      const formData = new FormData(form);
+      const email = String(formData.get('email') || '').trim();
+      const groupValue = String(formData.get('groupId') || '__ungrouped__');
+      if (!email || !email.includes('@')) { if (errorEl) errorEl.textContent = '请输入有效的邮箱地址。'; return; }
+      if (accounts.some(account => account.email.toLowerCase() === email.toLowerCase())) { if (errorEl) errorEl.textContent = '这个邮箱账号已经存在。'; return; }
+      const groupId = groupValue === '__ungrouped__' ? null : groupValue;
+      accounts.push({ id: `account-${Date.now()}`, email, groupId, expanded: false, order: accounts.length, masterOrder: getMasterAccounts().length });
+      if (groupId) { const group = getGroup(groupId); if (group) group.expanded = true; }
+      closeModal(); renderAll(); showToast('邮箱账号已添加'); return;
+    }
+    if (type === 'remove-account') {
+      const accountId = form.dataset.accountId;
+      accounts = accounts.filter(account => account.id !== accountId);
+      emails = emails.filter(email => email.accountId !== accountId);
+      if (masterSortMode === 'manual') getMasterAccounts().forEach((account, index) => { account.masterOrder = index; });
+      if (getViewInfo(selectedView).scope === 'account' && getViewInfo(selectedView).scopeId === accountId) selectedView = 'all:inbox';
+      closeModal(); renderAll(); showToast('邮箱账号已移除'); return;
+    }
+  });
+
+  modalHost.addEventListener('change', event => {
+    const select = event.target.closest('[data-action="assign-account"]');
+    if (!select) return;
+    const accountId = select.dataset.accountId;
+    const targetGroupId = select.value;
+    moveAccountToGroup(accountId, targetGroupId, null);
+    openAccountManager();
+  });
+
+  document.getElementById('mail-list-scroll').addEventListener('click', event => {
+    const button = event.target.closest('[data-action]');
+    if (button && button.dataset.action === 'toggle-star') {
+      event.stopPropagation();
+      const email = emails.find(item => item.id === button.dataset.emailId);
+      if (email) { email.starred = !email.starred; renderMailArea(); persist(); }
+      return;
+    }
+    const row = event.target.closest('[data-action="select-email"]');
+    if (row) {
+      selectedEmailId = row.dataset.emailId;
+      const email = emails.find(item => item.id === selectedEmailId);
+      if (email && email.unread) email.unread = false;
+      renderAll();
+    }
+  });
+  document.getElementById('mail-list-scroll').addEventListener('keydown', event => {
+    if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-action="select-email"]')) {
+      event.preventDefault();
+      selectedEmailId = event.target.dataset.emailId;
+      const email = emails.find(item => item.id === selectedEmailId);
+      if (email && email.unread) email.unread = false;
+      renderAll();
+    }
+  });
+  document.getElementById('reader-pane').addEventListener('click', event => {
+    const button = event.target.closest('[data-action]');
+    if (!button) return;
+    const emailId = button.dataset.emailId;
+    if (button.dataset.action === 'archive-email') archiveEmail(emailId);
+    if (button.dataset.action === 'trash-email') trashEmail(emailId);
+    if (button.dataset.action === 'toggle-read') toggleRead(emailId);
+    if (button.dataset.action === 'reply') replyToEmail(emailId);
+  });
+  mailSearch.addEventListener('input', () => renderMailArea());
+  document.getElementById('compose-button').addEventListener('click', () => openComposeModal());
+  const mobileBackdrop = document.getElementById('mobile-backdrop');
+  function updateSidebarToggleState() {
+    const narrow = window.matchMedia('(max-width: 600px)').matches;
+    const expanded = narrow ? appWindow.classList.contains('mobile-sidebar-open') : !appWindow.classList.contains('sidebar-collapsed');
+    [document.getElementById('sidebar-toggle-web'), document.getElementById('sidebar-toggle-desktop')].forEach(button => {
+      button.setAttribute('aria-expanded', String(expanded));
+      button.setAttribute('aria-label', expanded ? '收起侧边栏' : '展开侧边栏');
+      button.title = expanded ? '收起侧边栏' : '展开侧边栏';
+      button.classList.toggle('sidebar-toggle-collapsed', !expanded);
+    });
+  }
+  function toggleSidebar() {
+    if (window.matchMedia('(max-width: 600px)').matches) {
+      const opening = !appWindow.classList.contains('mobile-sidebar-open');
+      appWindow.classList.toggle('mobile-sidebar-open', opening);
+      mobileBackdrop.hidden = !opening;
+    } else {
+      appWindow.classList.toggle('sidebar-collapsed');
+    }
+    updateSidebarToggleState();
+  }
+  document.getElementById('sidebar-toggle-web').addEventListener('click', toggleSidebar);
+  document.getElementById('sidebar-toggle-desktop').addEventListener('click', toggleSidebar);
+  window.addEventListener('resize', () => {
+    if (!window.matchMedia('(max-width: 600px)').matches) {
+      appWindow.classList.remove('mobile-sidebar-open');
+      mobileBackdrop.hidden = true;
+    }
+    updateSidebarToggleState();
+  });
+  mobileBackdrop.addEventListener('click', () => {
+    appWindow.classList.remove('mobile-sidebar-open');
+    mobileBackdrop.hidden = true;
+  });
+
+
+  modalHost.addEventListener('click', event => {
+    const button = event.target.closest('[data-action="send-compose"], [data-action="save-compose-draft"]');
+    if (!button) return;
+    saveComposedEmail(button.dataset.action === 'save-compose-draft');
+  });
+
+  document.addEventListener('dragstart', event => {
+    const accountRow = event.target.closest('.account-row[data-drag-type="account"]');
+    const groupHead = event.target.closest('.group-head[data-drag-type="group"]');
+    if (!accountRow && !groupHead) return;
+    if (event.target.closest('.group-menu-button')) { event.preventDefault(); return; }
+    if (accountRow) {
+      dragPayload = { type: 'account', id: accountRow.dataset.accountId, context: accountRow.dataset.listContext || 'group' };
+    } else {
+      dragPayload = { type: 'group', id: groupHead.dataset.groupId };
+    }
+    try {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', JSON.stringify(dragPayload));
+    } catch (_) {}
+    requestAnimationFrame(() => (accountRow || groupHead).classList.add('dragging'));
+  });
+
+  document.addEventListener('dragover', event => {
+    if (!dragPayload) return;
+    const groupHead = event.target.closest('.group-head[data-drop-group-id]');
+    const emptyZone = event.target.closest('.empty-dropzone[data-drop-group-id]');
+    const accountRow = event.target.closest('.account-row[data-target-account-id]');
+    const accountListHead = event.target.closest('.section-head-row[data-drop-group-id], .account-master-list[data-drop-group-id]');
+    const target = groupHead || emptyZone || accountRow || accountListHead;
+    if (!target) return;
+    if (dragPayload.type === 'group' && !groupHead) return;
+    if (dragPayload.type === 'account' && !(groupHead || emptyZone || accountRow || accountListHead)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+    target.classList.add('drop-target');
+  });
+
+  document.addEventListener('drop', event => {
+    if (!dragPayload) return;
+    const groupHead = event.target.closest('.group-head[data-drop-group-id]');
+    const emptyZone = event.target.closest('.empty-dropzone[data-drop-group-id]');
+    const accountRow = event.target.closest('.account-row[data-target-account-id]');
+    const accountListHead = event.target.closest('.section-head-row[data-drop-group-id], .account-master-list[data-drop-group-id]');
+    const target = groupHead || emptyZone || accountRow || accountListHead;
+    if (!target) return;
+    let payload = dragPayload;
+    try {
+      const data = event.dataTransfer?.getData('text/plain');
+      if (data) payload = JSON.parse(data);
+    } catch (_) {}
+    if (payload.type === 'group') {
+      if (groupHead && groupHead.dataset.dropGroupId !== '__ungrouped__') {
+        event.preventDefault();
+        reorderGroup(payload.id, groupHead.dataset.dropGroupId);
+      }
+    } else if (payload.type === 'account') {
+      event.preventDefault();
+      if (accountListHead) {
+        moveAccountToGroup(payload.id, '__ungrouped__', null);
+        showToast('账号已从分组移出');
+      } else if (accountRow) {
+        const targetAccountId = accountRow.dataset.targetAccountId;
+        if (targetAccountId && targetAccountId !== payload.id) {
+          if (accountRow.dataset.listContext === 'master') {
+            const sourceAccount = getAccount(payload.id);
+            if (sourceAccount && sourceAccount.groupId != null) {
+              moveAccountToGroup(payload.id, '__ungrouped__', null);
+              reorderMasterAccount(payload.id, targetAccountId);
+              showToast('账号已移至账号列表');
+            } else {
+              reorderMasterAccount(payload.id, targetAccountId);
+            }
+          } else {
+            const targetAccount = getAccount(targetAccountId);
+            if (targetAccount) {
+              moveAccountToGroup(payload.id, targetAccount.groupId == null ? '__ungrouped__' : targetAccount.groupId, targetAccountId);
+              showToast('分组内账号顺序已更新');
+            }
+          }
+        }
+      } else {
+        const targetGroupId = target.dataset.dropGroupId;
+        if (targetGroupId) {
+          moveAccountToGroup(payload.id, targetGroupId, null);
+          showToast('账号已移入分组');
+        }
+      }
+    }
+    dragPayload = null;
+    document.querySelectorAll('.drop-target, .dragging').forEach(el => el.classList.remove('drop-target', 'dragging'));
+  });
+
+  document.addEventListener('dragend', () => {
+    dragPayload = null;
+    document.querySelectorAll('.drop-target, .dragging').forEach(el => el.classList.remove('drop-target', 'dragging'));
+  });
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      if (!modalHost.hidden) closeModal();
+      settingsPopover.hidden = true;
+      settingsTrigger.setAttribute('aria-expanded', 'false');
+      if (openMenuGroupId) { openMenuGroupId = null; renderSidebar(); }
+      appWindow.classList.remove('mobile-sidebar-open');
+      mobileBackdrop.hidden = true;
+    }
+  });
+
+  applyTheme();
+  updateSidebarToggleState();
+  renderAll();
+})();
+</script>
+</body>
+</html>
