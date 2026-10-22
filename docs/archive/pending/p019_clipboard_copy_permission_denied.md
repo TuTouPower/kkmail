@@ -13,4 +13,15 @@
     - 前端单测（`UiReferenceOverlay.test.tsx` 与 `ErrorBoundary.test.tsx`）运行在 jsdom 下，单测显式 mock 了 `navigator.clipboard` 且直接将“拒绝时展示复制失败提示”作为断言通过项，遮蔽了桌面运行时必定失败的真实缺陷；
     - 桌面加固单测 `src/desktop/hardening.test.js` 仅验证了 `media` 权限被拒，未测试桌面端剪贴板权限与写入行为。
 - 线索：`.scratch/reproduce_ui_copy_bug.js`
-- 处理：未开
+
+## 2026-10-23 转办核实
+
+- 当前两个复制入口仍直接调用 `navigator.clipboard.writeText`；preload 无写入能力，桌面生产 permission handlers 仍无条件拒绝。无等价有效 backlog/active task。
+
+- `.scratch/pending_candidate_audit.js` 在当前 Electron 44.9.2 中加载生产 hardening，聚焦窗口并用真实鼠标输入点击；捕获 `request:clipboard-sanitized-write`，结果为 `NotAllowedError: Write permission denied`。已区分隐藏窗口导致的 `Document is not focused`；最终证据使用聚焦窗口，确认并非单纯焦点问题。
+
+- 同类位点仍为 UI 引用和诊断日志两个入口。转 t025，要求真实 Electron 复制验证，并覆盖不可信来源/frame、剪贴板读取与无关权限仍拒绝；不将全局放开权限作为修复。
+
+- 前端 mock 与 hardening helper 单测不能覆盖真实授权链路，t025 明确补测贯通实际复制路径。
+
+- 处理：t025
