@@ -1,0 +1,33 @@
+{
+  "tid": "t007",
+  "attempt": 1,
+  "execution_id": "fa36b717230d4be39e74664cac3db574",
+  "status": "done",
+  "branch": "t007_imap_header_decode",
+  "base_sha": "f9cc7ade0022aa687cf5d7eedaf5ce05203c18ef",
+  "tests": "contract: 149 passed; mail_core: 377 passed (PG + Dovecot); frontend: 168 passed + tsc ok + build ok + lint ok; desktop: ok + packaged-smoke ok",
+  "blackbox": "frontend e2e smoke 3 passed, full stack e2e 3 passed",
+  "review": "full review PASS (Round 1: review_code PASS, review_test PASS)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/mail_core/providers/imap.py",
+      "tests/mail_core/test_imap_header_decode.py"
+    ],
+    "AC-002": [
+      "src/mail_core/providers/imap.py",
+      "tests/mail_core/test_imap_header_decode.py"
+    ],
+    "AC-003": [
+      "src/mail_core/providers/imap.py",
+      "tests/mail_core/test_imap_header_decode.py"
+    ],
+    "AC-004": [
+      "src/mail_core/providers/imap.py",
+      "tests/mail_core/test_imap_header_decode.py"
+    ]
+  },
+  "pending": [
+    "docs/archive/pending/p011_imap_raw_gbk_header_mojibake.md"
+  ],
+  "findings": []
+}

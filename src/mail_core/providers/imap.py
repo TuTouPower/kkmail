@@ -45,19 +45,62 @@ _FOLDER_ROLE = {
 }
 
 
-def _decode_header(raw: str | None) -> str:
+def _decode_chunk_bytes(chunk: bytes, charset: str | None) -> str:
+    if charset and str(charset).lower() != "unknown-8bit":
+        try:
+            return chunk.decode(charset, errors="replace")
+        except LookupError:
+            pass
+    # No declared charset or unknown charset:
+    # 1. Strict UTF-8 (also covers ASCII)
+    try:
+        return chunk.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    # 2. Strict GB18030 (covers GBK and GB2312)
+    try:
+        return chunk.decode("gb18030")
+    except UnicodeDecodeError:
+        pass
+    # 3. Deterministic lossy fallback
+    return chunk.decode("utf-8", errors="replace")
+
+
+def _decode_header(raw: str | email.header.Header | bytes | None) -> str:
     if not raw:
         return ""
-    parts = email.header.decode_header(raw)
+    if isinstance(raw, bytes):
+        return _decode_chunk_bytes(raw, None)
+    try:
+        parts = email.header.decode_header(raw)
+    except Exception:
+        return str(raw)
+
     out: list[str] = []
     for chunk, charset in parts:
         if isinstance(chunk, bytes):
-            try:
-                out.append(chunk.decode(charset or "utf-8", errors="replace"))
-            except LookupError:
-                out.append(chunk.decode("utf-8", errors="replace"))
-        else:
-            out.append(str(chunk))
+            if (charset is None or str(charset).lower() == "unknown-8bit") and b"=?" in chunk and b"?=" in chunk:
+                try:
+                    subparts = email.header.decode_header(chunk.decode("latin1"))
+                    for sub_chunk, sub_charset in subparts:
+                        if isinstance(sub_chunk, bytes):
+                            out.append(_decode_chunk_bytes(sub_chunk, sub_charset))
+                        elif isinstance(sub_chunk, str):
+                            if any(0xD800 <= ord(c) <= 0xDFFF for c in sub_chunk):
+                                sub_bytes = sub_chunk.encode("utf-8", errors="surrogateescape")
+                            else:
+                                sub_bytes = sub_chunk.encode("latin1")
+                            out.append(_decode_chunk_bytes(sub_bytes, sub_charset))
+                    continue
+                except Exception:
+                    pass
+            out.append(_decode_chunk_bytes(chunk, charset))
+        elif isinstance(chunk, str):
+            if any(0xD800 <= ord(c) <= 0xDFFF for c in chunk):
+                raw_bytes = chunk.encode("utf-8", errors="surrogateescape")
+                out.append(_decode_chunk_bytes(raw_bytes, charset))
+            else:
+                out.append(chunk)
     return "".join(out)
 
 
@@ -150,23 +193,39 @@ def _parse_message_meta_from_fetch(
     uid = int(m_uid.group(1)) if m_uid else uid_fallback
     is_read = "\\Seen" in meta_s
     is_flagged = "\\Flagged" in meta_s
-    header_text = header_bytes.decode("utf-8", errors="replace") if isinstance(header_bytes, bytes) else str(header_bytes)
-    headers = email.message_from_string(header_text)
+    if isinstance(header_bytes, bytes):
+        headers = email.message_from_bytes(header_bytes)
+    else:
+        headers = email.message_from_string(str(header_bytes))
+
     subject = _decode_header(headers.get("Subject"))
     from_raw = _decode_header(headers.get("From"))
     addr, name = _parse_from(from_raw)
-    to_raw = _decode_header(headers.get("To"))
-    cc_raw = _decode_header(headers.get("Cc"))
+
+    to_headers = headers.get_all("To") or []
+    to_raw = ", ".join(_decode_header(h) for h in to_headers) if to_headers else ""
+    cc_headers = headers.get_all("Cc") or []
+    cc_raw = ", ".join(_decode_header(h) for h in cc_headers) if cc_headers else ""
+
     to_addresses = tuple(a for _, a in email.utils.getaddresses([to_raw]) if a) if to_raw else ()
     cc_addresses = tuple(a for _, a in email.utils.getaddresses([cc_raw]) if a) if cc_raw else ()
     date_raw = headers.get("Date")
+    date_str = _decode_header(date_raw) if date_raw is not None else None
     try:
-        sort_time = parsedate_to_datetime(date_raw) if date_raw else datetime.now(timezone.utc)
+        sort_time = parsedate_to_datetime(date_str) if date_str else datetime.now(timezone.utc)
         if sort_time.tzinfo is None:
             sort_time = sort_time.replace(tzinfo=timezone.utc)
     except Exception:
         sort_time = datetime.now(timezone.utc)
     uv = int(uidvalidity) if uidvalidity is not None else 0
+
+    def _header_opt(name: str) -> str | None:
+        val = headers.get(name)
+        if val is None:
+            return None
+        s = _decode_header(val).strip()
+        return s if s else None
+
     return RemoteMessageMeta(
         remote_id=format_imap_remote_id(folder_remote_id, uv, uid),
         subject=subject,
@@ -176,12 +235,12 @@ def _parse_message_meta_from_fetch(
         is_read=is_read,
         has_attachments=False,
         is_flagged=is_flagged,
-        internet_message_id=headers.get("Message-ID"),
+        internet_message_id=_header_opt("Message-ID"),
         uid=uid,
         to_addresses=to_addresses,
         cc_addresses=cc_addresses,
-        in_reply_to=headers.get("In-Reply-To"),
-        references=headers.get("References"),
+        in_reply_to=_header_opt("In-Reply-To"),
+        references=_header_opt("References"),
     )
 
 
