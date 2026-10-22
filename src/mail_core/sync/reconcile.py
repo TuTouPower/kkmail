@@ -62,18 +62,21 @@ def reconcile_folder(
             config=dict(account.config or {}),
         )
 
-    provider = build_provider(account_snapshot, store or get_credential_store())
     try:
+        provider = build_provider(account_snapshot, store or get_credential_store())
         actions = list(provider.reconcile(remote_folder, local_ids))  # network / full scan inside provider
     except Exception as exc:
-        log.exception("reconcile provider I/O failed for folder %s: %s", folder_id, type(exc).__name__)
+        from mail_core.security.redact import safe_provider_summary
+
+        err_summary = safe_provider_summary(exc)
+        log.exception("reconcile provider I/O failed for folder %s: %s", folder_id, err_summary)
         with Session() as session:
             try:
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
                 session.commit()
             except FencingMismatch:
                 session.rollback()
-        return {"status": "provider_error", "error": f"{type(exc).__name__}: {exc}"}
+        return {"status": "provider_error", "error": err_summary}
 
     deleted = 0
     with Session() as session:
