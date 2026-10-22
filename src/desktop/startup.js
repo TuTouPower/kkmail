@@ -59,7 +59,63 @@ const ENV_ALLOW_EXACT = new Set([
   'DYLD_FALLBACK_LIBRARY_PATH',
 ])
 
-const ENV_ALLOW_PREFIX = ['LC_', 'MAIL_CORE_', 'KKMAIL_']
+const ENV_ALLOW_PREFIX = ['LC_']
+
+/**
+ * Controlled configuration keys accepted by mail-core sidecar when explicitly passed from desktop.
+ * Unrelated/arbitrary secrets in the parent shell must not leak into children.
+ */
+const SIDECAR_CONFIG_KEYS = new Set([
+  'MAIL_CORE_HOST',
+  'MAIL_CORE_PORT',
+  'MAIL_CORE_DATA_DIR',
+  'MAIL_CORE_DATABASE_URL',
+  'MAIL_CORE_SECRET_KEY',
+  'MAIL_CORE_LOGIN_PASSWORD',
+  'MAIL_CORE_LOGIN_PASSWORD_HASH',
+  'MAIL_CORE_API_KEYS',
+  'MAIL_CORE_BLOB_KEY_V1',
+  'MAIL_CORE_BLOB_KEYS',
+  'MAIL_CORE_BLOB_ACTIVE_VERSION',
+  'MAIL_CORE_BLOB_ROOT',
+  'MAIL_CORE_BACKUP_KEY',
+  'MAIL_CORE_BACKUP_KEYS',
+  'MAIL_CORE_BACKUP_KEY_VERSION',
+  'MAIL_CORE_BACKUP_DIR',
+  'MAIL_CORE_EMBEDDED_WORKER',
+  'MAIL_CORE_SKIP_MIGRATIONS',
+  'MAIL_CORE_PROXY_HEADERS',
+  'MAIL_CORE_FORWARDED_ALLOW_IPS',
+  'MAIL_CORE_DB_POOL_SIZE',
+  'MAIL_CORE_DB_MAX_OVERFLOW',
+  'MAIL_CORE_DB_POOL_TIMEOUT',
+  'MAIL_CORE_DB_POOL_RECYCLE',
+  'MAIL_CORE_WORKER_POLL_S',
+  'MAIL_CORE_WORKER_MAX_IDLE_S',
+  'MAIL_CORE_COOKIE_SECURE',
+  'MAIL_CORE_COOKIE_SAMESITE',
+  'MAIL_CORE_SESSION_MAX_AGE',
+  'MAIL_CORE_LOGIN_MAX_FAILURES',
+  'MAIL_CORE_LOGIN_WINDOW_S',
+  'MAIL_CORE_LOG_LEVEL',
+  'KKMAIL_SIDECAR',
+  'KKMAIL_INSTANCE_TOKEN',
+  'KKMAIL_FRONTEND_DIST',
+])
+
+/**
+ * Pick only audited sidecar config keys from parentEnv and merge with launcher baseExtras.
+ */
+function collectSidecarExtras(parentEnv, baseExtras = {}) {
+  const out = { ...baseExtras }
+  const src = parentEnv || {}
+  for (const key of SIDECAR_CONFIG_KEYS) {
+    if (src[key] !== undefined && out[key] === undefined) {
+      out[key] = src[key]
+    }
+  }
+  return out
+}
 
 /**
  * Build a child env from an allowlist of parent keys, then apply extras (overwrite).
@@ -236,6 +292,8 @@ module.exports = {
   DEFAULT_PORT,
   ENV_ALLOW_EXACT,
   ENV_ALLOW_PREFIX,
+  SIDECAR_CONFIG_KEYS,
+  collectSidecarExtras,
   parsePort,
   tryListen,
   freePort,

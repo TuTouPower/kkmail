@@ -9,6 +9,9 @@ const {
   redactSecrets,
   stopChildTree,
   ENV_ALLOW_EXACT,
+  ENV_ALLOW_PREFIX,
+  SIDECAR_CONFIG_KEYS,
+  collectSidecarExtras,
 } = require('./startup')
 
 assert.strictEqual(parsePort(undefined), 18765)
@@ -24,7 +27,7 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
   assert.strictEqual(portFromEnv({}), 18765)
 }
 
-// scrubEnv: drop secrets / odd keys; keep PATH and MAIL_CORE_*; extras win
+// scrubEnv: drop secrets / odd keys; only system and LC_* allowed by default; extras required for app vars
 {
   const cleaned = scrubEnv(
     {
@@ -33,6 +36,8 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
       AWS_SECRET_ACCESS_KEY: 'should-not-leak',
       GITHUB_TOKEN: 'ghs_xxx',
       MAIL_CORE_HOST: 'old',
+      MAIL_CORE_LEAK_SECRET: 'leaked-secret',
+      KKMAIL_PARENT_SECRET: 'parent-secret',
       LC_ALL: 'C',
       RANDOM_JUNK: 'no',
     },
@@ -43,10 +48,47 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
   assert.strictEqual(cleaned.LC_ALL, 'C')
   assert.strictEqual(cleaned.MAIL_CORE_HOST, '127.0.0.1')
   assert.strictEqual(cleaned.MAIL_CORE_DATABASE_URL, 'postgresql://x')
+  assert.strictEqual(cleaned.MAIL_CORE_LEAK_SECRET, undefined, 'unrelated MAIL_CORE_ keys must not leak via prefix')
+  assert.strictEqual(cleaned.KKMAIL_PARENT_SECRET, undefined, 'unrelated KKMAIL_ keys must not leak via prefix')
   assert.strictEqual(cleaned.AWS_SECRET_ACCESS_KEY, undefined)
   assert.strictEqual(cleaned.GITHUB_TOKEN, undefined)
   assert.strictEqual(cleaned.RANDOM_JUNK, undefined)
   assert.ok(ENV_ALLOW_EXACT.has('PATH'))
+  assert.deepStrictEqual(ENV_ALLOW_PREFIX, ['LC_'])
+}
+
+// collectSidecarExtras: only audited sidecar config keys pass through; launcher baseExtras win
+{
+  const parentEnv = {
+    MAIL_CORE_HOST: '192.168.1.100', // launcher baseExtras will override this
+    MAIL_CORE_LOG_LEVEL: 'DEBUG',     // audited key: should pass through
+    MAIL_CORE_SECRET_KEY: 'custom-secret', // audited key: should pass through
+    MAIL_CORE_RANDOM_UNAUDITED: 'forbidden', // not audited: must be dropped
+    KKMAIL_SECRET_TOKEN: 'forbidden-token',   // not audited: must be dropped
+    AWS_KEY: 'forbidden-aws',
+  }
+  const baseExtras = {
+    MAIL_CORE_HOST: '127.0.0.1',
+    MAIL_CORE_PORT: '18765',
+    KKMAIL_SIDECAR: '1',
+  }
+  const sidecarExtras = collectSidecarExtras(parentEnv, baseExtras)
+  assert.strictEqual(sidecarExtras.MAIL_CORE_HOST, '127.0.0.1', 'baseExtras must win')
+  assert.strictEqual(sidecarExtras.MAIL_CORE_PORT, '18765')
+  assert.strictEqual(sidecarExtras.KKMAIL_SIDECAR, '1')
+  assert.strictEqual(sidecarExtras.MAIL_CORE_LOG_LEVEL, 'DEBUG')
+  assert.strictEqual(sidecarExtras.MAIL_CORE_SECRET_KEY, 'custom-secret')
+  assert.strictEqual(sidecarExtras.MAIL_CORE_RANDOM_UNAUDITED, undefined)
+  assert.strictEqual(sidecarExtras.KKMAIL_SECRET_TOKEN, undefined)
+  assert.strictEqual(sidecarExtras.AWS_KEY, undefined)
+
+  const finalEnv = scrubEnv(parentEnv, sidecarExtras)
+  assert.strictEqual(finalEnv.MAIL_CORE_HOST, '127.0.0.1')
+  assert.strictEqual(finalEnv.MAIL_CORE_LOG_LEVEL, 'DEBUG')
+  assert.strictEqual(finalEnv.MAIL_CORE_SECRET_KEY, 'custom-secret')
+  assert.strictEqual(finalEnv.MAIL_CORE_RANDOM_UNAUDITED, undefined)
+  assert.strictEqual(finalEnv.KKMAIL_SECRET_TOKEN, undefined)
+  assert.strictEqual(finalEnv.AWS_KEY, undefined)
 }
 
 {
