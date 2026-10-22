@@ -262,7 +262,7 @@ main() {
 
   local TMP ARCHIVE CANDIDATES
   TMP="$(mktemp -d)"
-  cleanup() { rm -rf "$TMP"; }
+  cleanup() { if [[ -n "${TMP:-}" ]]; then rm -rf "$TMP"; fi; }
   trap cleanup EXIT
   ARCHIVE="$TMP/pg.archive"
 
