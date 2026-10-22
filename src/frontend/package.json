@@ -12,6 +12,7 @@
     "test:coverage": "vitest run --coverage",
     "css:check": "node ./scripts/check_css_tokens.mjs",
     "test:e2e": "node ./scripts/run_e2e.mjs",
+    "test:e2e:full": "python3 ../../scripts/run_full_stack_e2e.py",
     "openapi:gen": "openapi-typescript ../../schemas/openapi.json -o src/api/generated/schema.ts",
     "openapi:check": "node ./scripts/check_openapi.mjs"
   },

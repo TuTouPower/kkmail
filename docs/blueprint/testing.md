@@ -24,10 +24,14 @@ scripts/run-mail-core-tests.sh run
 
 ## blackbox_verify
 
-浏览器端到端轻量冒烟验证：
+浏览器端到端轻量冒烟验证与真实全栈端到端自动化：
 
 ```bash
+# 快速 UI 冒烟测试（基于 stubApi，无外部服务依赖，4s）
 npm --prefix src/frontend run test:e2e
+
+# 真实全栈端到端测试（基于真实 FastAPI、PostgreSQL、Worker、Dovecot 与生产 SPA，16s）
+python3 scripts/run_full_stack_e2e.py
 ```
 
 ## Schema / codegen 验证
@@ -146,3 +150,20 @@ scripts/run-mail-core-tests.sh run -k test_imap
 - **增量收敛与服务端可观察性**：测试远端 Flag 变更与删除在本地库的增量同步；验证本地读状态更新经 `push_remote_operations` 写回到真实服务端后能在 IMAP 协议（`\Seen`）上直接观测；
 - **安全废纸篓与 TLS 防护**：验证仅移动目标邮件至 Trash，在缺少 MOVE 能力时拒绝不安全的全目录 EXPUNGE；非 SSL 端口开启 TLS 时必须握手失败直接阻断；
 - **Gmail / Graph 服务商传输契约**：覆盖循环/重复 pageToken 检测、过期游标不前进、OAuth token 刷新失败脱敏、429 重试等待及 5xx/超时重试幂等性。普通 CI 不依赖外网真实 OAuth 凭据。
+
+## 全栈端到端真实测试（t017）
+
+全栈端到端测试覆盖真实环境（FastAPI、Worker、PostgreSQL、Dovecot、生产 SPA 构建同源托管）：
+
+```bash
+python3 scripts/run_full_stack_e2e.py
+```
+
+执行流程与环境规范：
+
+- 由 `scripts/run_full_stack_e2e.py` 自动化控制器统筹调度；
+- 动态在测试 PostgreSQL 实例中分配 `kkmail_e2e_<uuid>` 测试库与专属所有者 role，执行 Alembic head 迁移；
+- 启动真实 FastAPI 服务（通过 `KKMAIL_FRONTEND_DIST` 挂载 `src/frontend/dist` 生产构建），分配空闲端口并探测 `/health`；
+- 启动后台真实 Worker 进程处理同步与入库；
+- Playwright 执行 `tests/e2e/full_stack.spec.ts` 验证真实登录认证、Cookie、CSRF 校验、多会话失效、添加 IMAP 账号后 Worker 自动同步与邮件详情展示、XSS 防护过滤、双页面 SSE 实时协同；
+- 运行后优雅终止进程，安全销毁测试库与 role，失败时保留截图、日志和 trace 于 `.scratch/`。同时保留 `npm --prefix src/frontend run test:e2e` 作为 4 秒快速 UI 冒烟入口。

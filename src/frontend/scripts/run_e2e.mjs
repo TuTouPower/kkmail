@@ -6,9 +6,12 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const cli = resolve(root, 'node_modules/@playwright/test/cli.js')
 
+const args = process.argv.slice(2)
+const targets = args.length > 0 ? args : ['smoke.spec.ts']
+
 const result = spawnSync(
   process.execPath,
-  [cli, 'test', ...process.argv.slice(2)],
+  [cli, 'test', ...targets],
   {
     cwd: root,
     stdio: 'inherit',
