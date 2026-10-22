@@ -215,3 +215,22 @@ scripts/run-mail-core-tests.sh run -k test_worker_process_recovery
 - **Fencing Token 阻止陈旧提交**：模拟已被替代的旧 Worker 重新提交操作时，触发 `FencingMismatch` 异常，保证已推进的 Checkpoint、Message 与 Blob 不被覆盖；
 - **跨进程事件通知与回滚隔离**：Worker 进程提交事务后通过真实 PostgreSQL `LISTEN/NOTIFY` 唤醒 API 进程的 SSE 分发，未提交或已 rollback 的事务严格不广播；
 - **进程组安全销毁**：测试中所有子进程使用独立的进程组（`start_new_session=True`），测试退出时通过 `os.killpg` 严格清理，绝无孤儿进程残留。
+
+## 桌面打包产物与嵌入式数据库生命周期门禁（t021）
+
+桌面测试区分快速基础测试与严格实际打包产物冒烟：
+
+```bash
+# 桌面进程管理器、路径与基础单测 (2s)
+npm --prefix src/desktop test
+
+# 严格实际打包产物与内置 PostgreSQL 生命周期冒烟
+npm --prefix src/desktop run test:packaged
+```
+
+验证覆盖：
+
+- **非 Stub 生产产物验证**：断言 `--dir` 产物内部 `frontend/dist` 包含真实 SPA（拒绝临时 stub 伪装通过），校验内置 `pgsql/bin` 包含匹配原生平台架构的 `initdb`、`pg_ctl`、`postgres` 二进制；
+- **嵌入式 PostgreSQL 首启与建库**：在隔离测试数据目录由 `PostgresManager` 调度包内二进制完成 `initdb`、密码文件生成（权限 0600）与端口监听；
+- **优雅停机与端口释放**：验证 `pg_ctl stop` 后子进程完全终止、监听端口完全释放，不残留孤儿服务；
+- **数据跨重启持久化保留**：在同一数据目录重新启动，验证不会被重新初始化覆盖，先前写入的状态完整继承。
