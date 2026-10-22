@@ -259,7 +259,10 @@ def child(command, env):
 
 def run_environment(directory):
     env = {key: value for key, value in os.environ.items() if not key.startswith("MAIL_CORE_")}
+    pg_client_dir = str(ROOT / "scripts" / "test_pg_client")
+    path = os.environ.get("PATH", "")
     env.update(PYTHONPATH=str(ROOT / "src"),
+               PATH=f"{pg_client_dir}:{path}",
                KKMAIL_TEST_REPORT_DIR=str(directory),
                COVERAGE_FILE=str(directory / ".coverage"),
                MAIL_CORE_BLOB_ROOT=str(directory / "blobs"), MAIL_CORE_BACKUP_DIR=str(directory / "backups"),

@@ -670,3 +670,166 @@ def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) ->
         }
     finally:
         _safe_rmtree(staging_dir)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreResult:
+    ok: bool
+    database_restored: bool
+    blobs_restored: int
+    duration_seconds: float
+    package_size_bytes: int
+    errors: list[str]
+
+
+def restore_backup_package(
+    package_path: str | Path,
+    *,
+    target_database_url: str,
+    target_blobs_dir: str | Path,
+    keyring: dict[int, bytes] | None = None,
+    allow_stub: bool = False,
+    source_database_url: str | None = None,
+) -> RestoreResult:
+    """Restore a backup package into a dedicated disposable target database and blob directory.
+
+    Verifies checksums and signatures before unpacking. Enforces destination safety guards.
+    """
+    begun = datetime.now(timezone.utc)
+    pkg = Path(package_path).resolve()
+    if pkg.is_dir():
+        pkg_dir = pkg
+    elif pkg.is_file():
+        pkg_dir = pkg.parent
+    else:
+        raise FileNotFoundError(f"backup package not found: {pkg}")
+
+    pkg_size = sum(f.stat().st_size for f in pkg_dir.glob("**/*") if f.is_file())
+
+    # Guard AC-004: Prevent restoring onto the same source database
+    if source_database_url:
+        src_clean = _redact_url(source_database_url)
+        tgt_clean = _redact_url(target_database_url)
+        if src_clean == tgt_clean:
+            raise RuntimeError(f"refusing to restore onto source database: {src_clean}")
+
+    target_blobs = Path(target_blobs_dir).resolve()
+    if target_blobs.is_symlink():
+        raise RuntimeError(f"refusing target blobs dir as symlink: {target_blobs}")
+    if any(part in ("..", ".") for part in Path(target_blobs_dir).parts):
+        raise RuntimeError(f"path traversal detected in target blobs dir: {target_blobs_dir}")
+
+    # Verify package first
+    vr = verify_backup_package(pkg_dir, allow_stub=allow_stub)
+    if not vr.ok:
+        raise RuntimeError(f"backup package verification failed: {vr.errors}")
+
+    temp_parent = pkg_dir.parent
+    work_dir = temp_parent / f".restore_staging_{uuid.uuid4().hex}"
+    _make_private_dir(work_dir)
+    errors: list[str] = []
+    blobs_restored = 0
+    db_restored = False
+
+    kkbak = pkg_dir / "backup.kkbak"
+    try:
+        # Decrypt if encrypted
+        if kkbak.is_file():
+            plain_tar = work_dir / "plain.tar.gz"
+            keyring_to_use = keyring or load_backup_keyring()
+            decrypt_file(kkbak, plain_tar, keyring=keyring_to_use)
+            tar_to_extract = plain_tar
+        else:
+            # Check for plain tarball
+            candidates = list(pkg_dir.glob("*.tar.gz"))
+            if not candidates:
+                raise RuntimeError("no backup archive file found in package directory")
+            tar_to_extract = candidates[0]
+
+        extract_dir = work_dir / "extracted"
+        _make_private_dir(extract_dir)
+        if not _extract_tar_file(tar_to_extract, extract_dir, errors):
+            raise RuntimeError(f"tar extraction failed: {errors}")
+
+        man_path = extract_dir / "manifest.json"
+        if not man_path.is_file():
+            raise RuntimeError("missing manifest.json in backup archive")
+        manifest = json.loads(man_path.read_text(encoding="utf-8"))
+
+        # Reject stubs unless allow_stub explicitly granted
+        dump_meta = manifest.get("members", {}).get("postgres.dump", {})
+        dump_fmt = dump_meta.get("method", "custom")
+        if dump_fmt == "stub" and not allow_stub:
+            raise RuntimeError("refusing to restore stub backup without allow_stub")
+
+        # 1. Restore blobs if blobs.tar is present
+        blobs_tar = extract_dir / "blobs.tar"
+        if blobs_tar.is_file():
+            target_blobs.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(blobs_tar, "r") as t:
+                for member in t.getmembers():
+                    if member.name.startswith("blobs/") and not member.name.endswith("/"):
+                        rel_path = member.name[len("blobs/"):]
+                        if not rel_path or any(part in ("..", ".") for part in Path(rel_path).parts):
+                            continue
+                        dest_file = target_blobs / rel_path
+                        dest_file.parent.mkdir(parents=True, exist_ok=True)
+                        f = t.extractfile(member)
+                        if f:
+                            dest_file.write_bytes(f.read())
+                            blobs_restored += 1
+
+        # 2. Restore PostgreSQL dump
+        dump_file = extract_dir / "postgres.dump"
+        if not dump_file.is_file():
+            raise RuntimeError("missing postgres.dump in backup archive")
+
+        dsn, password = _libpq_dsn_and_password(target_database_url)
+        pg_restore = shutil.which("pg_restore")
+        if not pg_restore:
+            raise RuntimeError("pg_restore executable not found on PATH")
+
+        env = os.environ.copy()
+        env.pop("PGPASSFILE", None)
+        env["PGCONNECT_TIMEOUT"] = os.environ.get("MAIL_CORE_PG_CONNECT_TIMEOUT", "10")
+        if password is not None:
+            env["PGPASSWORD"] = password
+        else:
+            env.pop("PGPASSWORD", None)
+
+        restore_timeout = float(os.environ.get("MAIL_CORE_PG_RESTORE_TIMEOUT", "300"))
+        cmd = [
+            pg_restore,
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-privileges",
+            "--dbname",
+            dsn,
+            str(dump_file),
+        ]
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            env=env,
+            timeout=restore_timeout,
+        )
+        if res.returncode != 0:
+            err_msg = res.stderr.decode("utf-8", errors="replace")[:1000]
+            log.warning("pg_restore returned code %d: %s", res.returncode, err_msg)
+            if res.returncode > 1 or "FATAL" in err_msg or "error:" in err_msg.lower():
+                errors.append(f"pg_restore failed: {err_msg}")
+                raise RuntimeError(f"pg_restore failed ({res.returncode}): {err_msg}")
+
+        db_restored = True
+        duration = (datetime.now(timezone.utc) - begun).total_seconds()
+        return RestoreResult(
+            ok=True,
+            database_restored=db_restored,
+            blobs_restored=blobs_restored,
+            duration_seconds=duration,
+            package_size_bytes=pkg_size,
+            errors=errors,
+        )
+    finally:
+        _safe_rmtree(work_dir)

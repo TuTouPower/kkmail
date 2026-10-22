@@ -183,3 +183,19 @@ scripts/run-mail-core-tests.sh run -k test_migration_validation
 - **真实完整性约束生效**：断言数据库底层唯一约束、外键级联与 RESTRICT 阻断生效，检验 keyset 索引与 FTS trigram 搜索能力；
 - **ORM Schema Drift 校验**：使用 Alembic autogenerate 比较 SQLAlchemy 模型与真实 PostgreSQL catalog 差异，结合显式 catalog 校验确保 0 未登记 drift；
 - **可逆降级再升级循环**：对最新版本执行 `downgrade -1` 与重新 `upgrade head`，验证 DDL 双向对称可逆。
+
+## 真实加密备份与跨库恢复演练（t019）
+
+生产备份逻辑支持真实 PostgreSQL `pg_dump`、AES-GCM 封装加密与真实 `pg_restore` 还原到全新目标实例：
+
+```bash
+scripts/run-mail-core-tests.sh run -k test_backup_restore_drill_live
+scripts/mail-core-backup-restore-drill.sh
+```
+
+恢复规范与安全机制：
+
+- **真实客户端与隔离目标**：通过 `restore_backup_package` 驱动真实 `pg_restore` 恢复至独立测试库，并安全解包还原 `blobs.tar` 至目标 Blob 目录；
+- **防覆盖与越界阻断**：严格拒绝源库与目标库相同，防止破坏性覆盖生产库；严格校验目标 Blob 目录拒绝路径穿越与越界符号链接；
+- **真实业务核验**：恢复后通过独立会话核验账号、邮件、正文、附件关联，并使用密钥解密读取 Blob 确保字节与原始附件完全一致；
+- **篡改与伪造拒绝**：校验错误密钥、篡改数据、缺失 Blob 抛出明确异常；声明禁止将 SQL stub 备份伪造为可恢复证据。
