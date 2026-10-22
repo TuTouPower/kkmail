@@ -50,6 +50,22 @@
             "conflicts_with": "",
             "note": "",
             "dir": "docs/tasks/t033_message_list_total_count_and_infinite_scroll"
+        },
+        {
+            "tid": "t034",
+            "slug": "on_demand_body_sync_and_archive_priority",
+            "title": "按需即时同步邮件正文与归档调度优化",
+            "status": "backlog",
+            "branch": "",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p021；用户点击未同步邮件时按需置为最高优先级即时拉取正文，修复增量轮询导致的归档饥饿",
+            "dir": "docs/tasks/t034_on_demand_body_sync_and_archive_priority"
         }
     ]
 }
