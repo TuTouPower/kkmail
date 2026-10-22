@@ -218,7 +218,7 @@ const MessageList = memo(function MessageList() {
   const loadingMore = Boolean(searching ? searchInfiniteQuery.isFetchingNextPage : inboxInfiniteQuery.isFetchingNextPage)
   const totalCount = searching ? (searchInfiniteQuery.data?.pages?.[0]?.total ?? null) : (folderStatsQuery.data?.total ?? null)
   const serverUnread = searching ? null : (folderStatsQuery.data?.unread ?? null)
-  const unreadCount = serverUnread !== null ? serverUnread : raw.filter((m) => !m.is_read).length
+  const unreadCount = Math.max(serverUnread ?? 0, raw.filter((m) => !m.is_read).length)
 
   async function handleLoadMore() {
     if (loadingMore || !hasMore) return
