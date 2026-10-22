@@ -1,17 +1,17 @@
 ---
-tid: "t030"
-slug: "sidebar_group_management"
-title: "提供侧栏分组管理与账号归属操作"
-status: "backlog"
+tid: "t028"
+slug: "group_mail_scope"
+title: "贯通分组邮件查询与批量已读范围"
+status: "dropped"
 branch: ""
 worktree: ""
-review_level: "single"
+review_level: "full"
 review_limit: "5"
 verify_limit: "5"
 diff_anchor: ""
-depends_on: "t029"
-conflicts_with: "t032"
-note: "来源：侧栏设计聊天与 v3 demo；文件夹加号、新建/重命名/删除分组、账号归属选择；复用设置与现有真实账号流程"
+depends_on: ""
+conflicts_with: "t026"
+note: "来源：侧栏设计聊天与 v3 demo；保留现有全部分类并贯通分组查询、搜索、统计和全部已读；空分组禁止退化为全账号；demo 不构成功能删减依据; dropped: 已合并至 t027：完整改造账号分组侧栏与邮件范围；原 AC-001–007 映射为 t027 AC-010–016，全部保留"
 ---
 
 # Task 过程总账

@@ -9,9 +9,9 @@ review_level: "single"
 review_limit: "5"
 verify_limit: "5"
 diff_anchor: ""
-depends_on: "t029"
-conflicts_with: "t025,t030,t031"
-note: "来源：侧栏设计聊天最终要求与 v3 demo；网页列表标题同行控制，macOS 原生红绿灯旁控制，保留移动端 760px 断点"
+depends_on: "t027"
+conflicts_with: "t025"
+note: "来源：侧栏设计聊天最终要求与 v3 demo；网页列表标题同行控制，macOS 原生红绿灯旁控制，保留移动端 760px 断点; 本批收敛为两个 task；依赖合并后的 t027，原 t028–t031 不再独立调度"
 ---
 
 # Task 过程总账
