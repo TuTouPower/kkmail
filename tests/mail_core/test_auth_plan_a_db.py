@@ -85,19 +85,237 @@ def test_auth_plan_a_database_persistence():
 
 def test_change_login_password_fails_closed_on_db_error():
     reset_auth_caches()
+    stored_cred = {"hash": None, "epoch": 1}
+
+    class FakeCred:
+        def __init__(self, id, hash_val, epoch=1):
+            self.id = id
+            stored_cred["hash"] = hash_val
+            stored_cred["epoch"] = epoch
+
+        @property
+        def login_password_hash(self):
+            return stored_cred["hash"]
+
+        @login_password_hash.setter
+        def login_password_hash(self, val):
+            stored_cred["hash"] = val
+
+        @property
+        def session_epoch(self):
+            return stored_cred["epoch"]
+
+        @session_epoch.setter
+        def session_epoch(self, val):
+            stored_cred["epoch"] = val
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, model, key):
+            if stored_cred["hash"]:
+                return FakeCred("default", stored_cred["hash"], stored_cred["epoch"])
+            return None
+
+        def add(self, obj):
+            stored_cred["hash"] = obj.login_password_hash
+
+        def commit(self):
+            pass
+
     with (
         patch.dict(os.environ, {"MAIL_CORE_DATABASE_URL": "postgresql://test/db", "MAIL_CORE_LOGIN_PASSWORD": "initial_password_1"}),
-        patch("mail_core.security.auth._persist_db_password_hash", return_value=False),
+        patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
     ):
         get_login_password_hash()
         assert verify_password("initial_password_1")
 
-        with pytest.raises(AuthConfigError, match="failed to persist password to database"):
-            change_login_password(current="initial_password_1", new="new_password_fails_to_save")
+        with patch("mail_core.security.auth._persist_db_password_hash", return_value=False):
+            with pytest.raises(AuthConfigError, match="failed to persist password to database"):
+                change_login_password(current="initial_password_1", new="new_password_fails_to_save")
 
         # Memory cache and verification must remain unchanged
         assert verify_password("initial_password_1")
         assert not verify_password("new_password_fails_to_save")
+
+
+def test_auth_db_query_failure_fails_closed_does_not_fallback_to_env():
+    """A37: If database is configured but query fails, fail closed (never fallback to env password)."""
+    reset_auth_caches()
+
+    class BrokenSession:
+        def __enter__(self):
+            raise RuntimeError("Database connection refused")
+
+        def __exit__(self, *args):
+            return False
+
+    with (
+        patch.dict(os.environ, {
+            "MAIL_CORE_DATABASE_URL": "postgresql://test/db",
+            "MAIL_CORE_LOGIN_PASSWORD": "old_env_fallback_password",
+        }),
+        patch("mail_core.db.session.get_session_factory", return_value=lambda: BrokenSession()),
+    ):
+        # Must raise AuthConfigError directly, not fallback to old_env_fallback_password
+        with pytest.raises(AuthConfigError, match="failed to query authentication credentials"):
+            get_login_password_hash()
+
+        # verify_password must return False, denying access
+        assert not verify_password("old_env_fallback_password")
+
+
+def test_change_password_atomic_commit_and_rollback_on_failure():
+    """A37: Password hash and session epoch commit atomically; failure rolls back and keeps old state."""
+    reset_auth_caches()
+    stored_cred = {"hash": None, "epoch": 1}
+
+    class FakeCred:
+        def __init__(self, id, hash_val, epoch=1, session=None):
+            self.id = id
+            self._hash = hash_val
+            self._epoch = epoch
+            self._session = session
+
+        @property
+        def login_password_hash(self):
+            return self._session._pending_hash if (self._session and self._session._pending_hash is not None) else self._hash
+
+        @login_password_hash.setter
+        def login_password_hash(self, val):
+            if self._session:
+                self._session._pending_hash = val
+            else:
+                self._hash = val
+
+        @property
+        def session_epoch(self):
+            return self._session._pending_epoch if (self._session and self._session._pending_epoch is not None) else self._epoch
+
+        @session_epoch.setter
+        def session_epoch(self, val):
+            if self._session:
+                self._session._pending_epoch = val
+            else:
+                self._epoch = val
+
+    should_fail_commit = False
+
+    class FakeSession:
+        def __init__(self):
+            self._pending_hash = None
+            self._pending_epoch = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, *args):
+            return False
+
+        def get(self, model, key):
+            if stored_cred["hash"]:
+                return FakeCred("default", stored_cred["hash"], stored_cred["epoch"], session=self)
+            return None
+
+        def add(self, obj):
+            self._pending_hash = obj.login_password_hash
+            self._pending_epoch = obj.session_epoch
+
+        def commit(self):
+            if should_fail_commit:
+                raise RuntimeError("DB commit failed")
+            if self._pending_hash is not None:
+                stored_cred["hash"] = self._pending_hash
+            if self._pending_epoch is not None:
+                stored_cred["epoch"] = self._pending_epoch
+
+    with (
+        patch.dict(os.environ, {
+            "MAIL_CORE_DATABASE_URL": "postgresql://test/db",
+            "MAIL_CORE_LOGIN_PASSWORD": "valid_initial_pwd",
+            "MAIL_CORE_SECRET_KEY": "test_secret_key_12345678901234567890",
+        }),
+        patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
+    ):
+        get_login_password_hash()
+        assert verify_password("valid_initial_pwd")
+        cookie_val, _ = issue_session()
+        assert read_session(cookie_val) is not None
+
+        # 1. Successful change password atomically updates hash and epoch
+        change_login_password(current="valid_initial_pwd", new="new_pwd_1234567")
+        assert verify_password("new_pwd_1234567")
+        assert not verify_password("valid_initial_pwd")
+        assert stored_cred["epoch"] == 2
+        # Old session is revoked immediately
+        assert read_session(cookie_val) is None
+
+        # 2. Simulated DB failure during next password change
+        cookie_val_2, _ = issue_session()
+        assert read_session(cookie_val_2) is not None
+        should_fail_commit = True
+
+        with pytest.raises(AuthConfigError, match="failed to persist password to database"):
+            change_login_password(current="new_pwd_1234567", new="another_pwd_fails")
+
+        # Must retain previous valid password and session
+        should_fail_commit = False
+        assert verify_password("new_pwd_1234567")
+        assert not verify_password("another_pwd_fails")
+        assert read_session(cookie_val_2) is not None
+
+
+def test_instant_epoch_revocation_across_processes_without_cache_delay():
+    """A37: Epoch changes in DB immediately revoke sessions across processes with zero cache delay."""
+    reset_auth_caches()
+    stored_cred = {"hash": "dummy", "epoch": 1}
+
+    class FakeCred:
+        def __init__(self, id, hash_val, epoch=1):
+            self.id = id
+            self.login_password_hash = hash_val
+            stored_cred["epoch"] = epoch
+
+        @property
+        def session_epoch(self):
+            return stored_cred["epoch"]
+
+        @session_epoch.setter
+        def session_epoch(self, val):
+            stored_cred["epoch"] = val
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, model, key):
+            return FakeCred("default", stored_cred["hash"], stored_cred["epoch"])
+
+        def commit(self):
+            pass
+
+    with (
+        patch.dict(os.environ, {
+            "MAIL_CORE_DATABASE_URL": "postgresql://test/db",
+            "MAIL_CORE_SECRET_KEY": "test_secret_key_12345678901234567890",
+        }),
+        patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
+    ):
+        cookie_val, _ = issue_session()
+        assert read_session(cookie_val) is not None
+
+        # Another process increments epoch directly in DB
+        stored_cred["epoch"] = 2
+
+        # Immediately rejected without waiting 5s TTL
+        assert read_session(cookie_val) is None
 
 
 def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
