@@ -21,10 +21,23 @@ const {
 } = require('./startup')
 const {
   mergeCspHeaders,
+  createPermissionRequestHandler,
+  createPermissionCheckHandler,
   denyPermissionRequest,
   denyPermissionCheck,
 } = require('./hardening')
 const { PostgresManager } = require('./postgresManager')
+const { getDesktopLogger } = require('./desktopLog')
+
+const desktopLogger = getDesktopLogger({ app })
+desktopLogger.hookConsoleAndProcess()
+desktopLogger.info('Starting kkmail desktop', {
+  pid: process.pid,
+  platform: process.platform,
+  arch: process.arch,
+  electron: process.versions.electron,
+  node: process.versions.node,
+})
 
 const PORT = parsePort(process.env.KKMAIL_DESKTOP_PORT)
 const HOST = '127.0.0.1'
@@ -186,8 +199,8 @@ function createWindow(url) {
 
 function applySessionHardening() {
   const ses = session.defaultSession
-  ses.setPermissionRequestHandler(denyPermissionRequest)
-  ses.setPermissionCheckHandler(denyPermissionCheck)
+  ses.setPermissionRequestHandler(createPermissionRequestHandler(() => appOrigin))
+  ses.setPermissionCheckHandler(createPermissionCheckHandler(() => appOrigin))
   ses.webRequest.onHeadersReceived((details, callback) => {
     callback({ responseHeaders: mergeCspHeaders(details.responseHeaders) })
   })
@@ -304,15 +317,18 @@ async function shutdownAll() {
         console.warn('[mail-core] stopBackend error', err)
       }
       stopMailCorePg()
-      if (backendLogStream) {
-        try {
-          await backendLogStream.end()
-        } catch (err) {
-          console.warn('[mail-core] backend log stream drain/end error', err)
+        if (backendLogStream) {
+          try {
+            await backendLogStream.end()
+          } catch (err) {
+            console.warn('[mail-core] backend log stream drain/end error', err)
+          }
+          backendLogStream = null
         }
-        backendLogStream = null
+        try {
+          await desktopLogger.end()
+        } catch (_) {}
       }
-    }
     await Promise.race([runShutdown(), shutdownTimeout])
   })()
   return shutdownPromise
