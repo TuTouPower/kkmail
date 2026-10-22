@@ -67,13 +67,17 @@ describe('<UiReferenceOverlay /> (t011 AC-001 ~ AC-006)', () => {
       expect(badges).not.toContain('ML13')
     })
 
-    // Click on badge to copy reference (AC-005)
+    const underlyingClick = vi.fn()
+    el1.addEventListener('click', underlyingClick)
+
+    // Click on badge to copy reference (AC-005, t025 AC-001)
     const badgeML03 = [...document.querySelectorAll('.ui-ref-badge')].find((b) => b.textContent === 'ML03') as HTMLElement
     expect(badgeML03).toBeDefined()
     const { click: fireClick } = await import('../test/render')
     await fireClick(badgeML03)
 
     expect(writeTextMock).toHaveBeenCalledWith('[UI:ML03] 邮件列表 · 刷新并同步按钮')
+    expect(underlyingClick).not.toHaveBeenCalled()
 
     await waitFor(() => {
       expect(document.body.textContent).toContain('已复制引用：[UI:ML03] 邮件列表 · 刷新并同步按钮')
@@ -107,6 +111,45 @@ describe('<UiReferenceOverlay /> (t011 AC-001 ~ AC-006)', () => {
     await render(<UiReferenceOverlay />)
 
     // Open mode
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: '.',
+        code: 'Period',
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+
+    await waitFor(() => {
+      expect(document.querySelector('.ui-ref-badge')).not.toBeNull()
+    })
+
+    const badge = document.querySelector('.ui-ref-badge') as HTMLElement
+    const { click: fireClick } = await import('../test/render')
+    await fireClick(badge)
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('复制失败')
+    })
+  })
+
+  it('displays failure feedback when navigator.clipboard is missing (t025 AC-004)', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+    })
+
+    const el = document.createElement('div')
+    el.setAttribute('data-ui', 'SB01')
+    vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({
+      top: 10, left: 10, width: 40, height: 40, right: 50, bottom: 50, x: 10, y: 10, toJSON: () => {},
+    })
+    document.body.appendChild(el)
+
+    await render(<UiReferenceOverlay />)
+
     window.dispatchEvent(
       new KeyboardEvent('keydown', {
         key: '.',
