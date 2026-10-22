@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from mail_core.blobs.archive import blob_root
+from mail_core.blobs.quota import acquire_blob_digest_lock, digest_to_lock_id
 from mail_core.mail.storage.models import Attachment, MessageBlob, MessageBlobLink
 
 log = logging.getLogger("mail_core.blobs.gc")
@@ -123,6 +124,7 @@ def unlink_gc_paths(
 
     Performs a second safety check against the DB before unlinking to prevent
     races where a concurrent archive re-referenced the same digest (V2-21 / R12).
+    Coordinates via digest advisory lock to serialize with concurrent archive publishing.
     """
     n = 0
     own_session = None
@@ -147,19 +149,37 @@ def unlink_gc_paths(
                         log.warning("gc unlink safety check has no db session for %s; skipping", path)
                         continue
                     try:
-                        live_refs = check_session.scalar(
-                            select(func.count())
-                            .select_from(MessageBlob)
-                            .where(MessageBlob.content_sha256 == digest)
-                        ) or 0
-                        if int(live_refs) > 0:
-                            log.info("gc unlink skipped newly referenced blob: %s", path)
-                            continue
+                        if own_session is not None:
+                            with own_session.begin():
+                                acquire_blob_digest_lock(own_session, digest)
+                                live_refs = own_session.scalar(
+                                    select(func.count())
+                                    .select_from(MessageBlob)
+                                    .where(MessageBlob.content_sha256 == digest)
+                                ) or 0
+                                if int(live_refs) > 0:
+                                    log.info("gc unlink skipped newly referenced blob: %s", path)
+                                    continue
+                                path.unlink(missing_ok=True)
+                                n += 1
+                        else:
+                            acquire_blob_digest_lock(check_session, digest)
+                            live_refs = check_session.scalar(
+                                select(func.count())
+                                .select_from(MessageBlob)
+                                .where(MessageBlob.content_sha256 == digest)
+                            ) or 0
+                            if int(live_refs) > 0:
+                                log.info("gc unlink skipped newly referenced blob: %s", path)
+                                continue
+                            path.unlink(missing_ok=True)
+                            n += 1
                     except Exception as exc:
                         log.warning("gc unlink safety check query error for %s: %s (skipping)", path, exc)
                         continue
-                path.unlink()
-                n += 1
+                else:
+                    path.unlink(missing_ok=True)
+                    n += 1
             except OSError as exc:
                 log.warning("gc unlink failed %s: %s", path, exc)
     finally:
