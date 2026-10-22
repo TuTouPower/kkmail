@@ -495,6 +495,8 @@ export interface components {
             folder_id: string;
             /** Name */
             name: string;
+            /** Parent Remote Id */
+            parent_remote_id?: string | null;
             /** Remote Id */
             remote_id: string;
             /** Role */
@@ -682,11 +684,13 @@ export interface components {
         MarkAllReadBody: {
             /** Account Id */
             account_id?: string | null;
+            /** Folder Id */
+            folder_id?: string | null;
             /**
              * Folder Role
              * @default inbox
              */
-            folder_role: string;
+            folder_role: string | null;
             /** Is Flagged */
             is_flagged?: boolean | null;
         };
@@ -1432,6 +1436,8 @@ export interface operations {
                 is_flagged?: boolean | null;
                 /** @description Folder role to query (default: inbox) */
                 folder_role?: string;
+                /** @description Specific folder ID to query */
+                folder_id?: string | null;
                 /** @description Sort order by sort_time (desc or asc) */
                 sort_order?: string;
             };

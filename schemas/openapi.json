@@ -87,6 +87,17 @@
             "title": "Name",
             "type": "string"
           },
+          "parent_remote_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Remote Id"
+          },
           "remote_id": {
             "title": "Remote Id",
             "type": "string"
@@ -651,10 +662,29 @@
             ],
             "title": "Account Id"
           },
+          "folder_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id"
+          },
           "folder_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "default": "inbox",
-            "title": "Folder Role",
-            "type": "string"
+            "title": "Folder Role"
           },
           "is_flagged": {
             "anyOf": [
@@ -2219,6 +2249,25 @@
               "description": "Folder role to query (default: inbox)",
               "title": "Folder Role",
               "type": "string"
+            }
+          },
+          {
+            "description": "Specific folder ID to query",
+            "in": "query",
+            "name": "folder_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Specific folder ID to query",
+              "title": "Folder Id"
             }
           },
           {
