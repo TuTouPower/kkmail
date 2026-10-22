@@ -15,7 +15,7 @@ Electron 使用 `app.getPath('userData')/mail-core-data/`：
 
 **卸载默认不得删除**该目录；清除需用户显式「清除本地邮件数据」。
 
-## API（`desktop/postgresManager.js`）
+## API（`src/desktop/postgresManager.js`）
 
 ```js
 const { PostgresManager } = require('./postgresManager')
@@ -31,7 +31,7 @@ pg.stop()
 解析顺序：
 
 1. `KKMAIL_PG_BIN` / `PostgresManager({ pgBinDir })`
-2. `desktop/vendor/pgsql/bin`（官方二进制；**不进 git**）
+2. `src/desktop/vendor/pgsql/bin`（官方二进制；**不进 git**）
 3. 系统 `PATH` 上的 `initdb` / `pg_ctl`
 
 获取开发用二进制：
@@ -39,11 +39,11 @@ pg.stop()
 ```bash
 # Linux
 ./scripts/fetch-pg-binaries.sh
-# macOS/Windows: download-at-build（见 desktop/vendor/README.md）
-# 或手动解压到 desktop/vendor/pgsql/bin/
+# macOS/Windows: download-at-build（见 src/desktop/vendor/README.md）
+# 或手动解压到 src/desktop/vendor/pgsql/bin/
 ```
 
-详见 [`desktop/vendor/README.md`](../../src/desktop/vendor/README.md)。
+详见 [`src/desktop/vendor/README.md`](../../src/desktop/vendor/README.md)。
 
 无二进制时：`start()` 创建数据目录并返回 `{ stub: true }`，`main.js` 将其视为致命错误并提示（mail-core 是唯一后端，没有无 PG 的回退）。
 
@@ -87,7 +87,7 @@ npm run dist:linux:dir      # 通过 electron-builder 打包
 
 ## 会话安全（Electron）
 
-`main.js` 在 `app.whenReady` 时调用 `applySessionHardening()`（逻辑在 `hardening.js`）：
+`src/desktop/main.js` 在 `app.whenReady` 时调用 `applySessionHardening()`（逻辑在 `src/desktop/hardening.js`）：
 
 1. `will-attach-webview` → `preventDefault`（且 `webviewTag: false`）
 2. 权限请求 / 检查全部拒绝

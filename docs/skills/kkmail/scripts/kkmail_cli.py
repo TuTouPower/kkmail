@@ -8,9 +8,12 @@ with a self-hosted kkmail (mail-core) instance via REST API.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
+import stat
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,46 +22,275 @@ from pathlib import Path
 DEFAULT_BASE_URL = os.environ.get("KKMAIL_BASE_URL") or "http://127.0.0.1:37281"
 DEFAULT_PASSWORD = os.environ.get("KKMAIL_PASSWORD") or ""
 DEFAULT_API_KEY = os.environ.get("KKMAIL_API_KEY") or ""
-SESSION_CACHE_FILE = Path(os.environ.get("KKMAIL_SESSION_CACHE") or (Path.home() / ".cache" / "kkmail_agent_session.json"))
+
+
+def is_loopback_host(host: str | None) -> bool:
+    """Return True if host is localhost or a loopback IP address (IPv4 or IPv6)."""
+    if not host:
+        return False
+    h = host.strip("[]").lower()
+    if h == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+        return ip.is_loopback
+    except ValueError:
+        return False
+
+
+def validate_target_url(url: str) -> urllib.parse.ParseResult:
+    """Validate target URL: scheme must be http/https; non-loopback targets require https."""
+    parsed = urllib.parse.urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported URL scheme '{parsed.scheme}': only http and https are allowed.")
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError(f"Invalid URL (missing host): {url}")
+
+    if scheme == "http" and not is_loopback_host(hostname):
+        raise ValueError(
+            f"Insecure HTTP connection rejected: host '{hostname}' is not a loopback address "
+            f"(127.0.0.1, localhost, ::1). Remote connections must use HTTPS."
+        )
+    return parsed
+
+
+def get_url_origin(url: str) -> tuple[str, str, int]:
+    """Extract (scheme, hostname, port) origin tuple from URL."""
+    parsed = urllib.parse.urlparse(url)
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower()
+    port = parsed.port
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return (scheme, hostname, port)
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Enforces HTTPS for non-loopback redirects and strips credentials on cross-origin redirects."""
+
+    def __init__(self, initial_url: str):
+        super().__init__()
+        self.initial_url = initial_url
+        self.initial_origin = get_url_origin(initial_url)
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target_url = urllib.parse.urljoin(req.full_url, newurl)
+
+        # 1. Enforce scheme & loopback HTTP / remote HTTPS rules on redirect target
+        try:
+            validate_target_url(target_url)
+        except ValueError as exc:
+            raise urllib.error.HTTPError(
+                target_url,
+                code,
+                f"Redirect rejected by security policy: {exc}",
+                headers,
+                fp,
+            ) from exc
+
+        old_origin = get_url_origin(req.full_url)
+        new_origin = get_url_origin(target_url)
+        is_cross_origin = (old_origin != new_origin)
+        is_downgrade = (old_origin[0] == "https" and new_origin[0] == "http")
+
+        # 2. Block redirecting login/credential requests across origins or downgraded transport
+        if is_cross_origin or is_downgrade:
+            if "/api/auth/login" in req.full_url or (req.data and "password" in str(req.data)):
+                raise urllib.error.HTTPError(
+                    target_url,
+                    code,
+                    "Redirect of login/credential payload across different origins or downgraded transport is blocked",
+                    headers,
+                    fp,
+                )
+
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is None:
+            return None
+
+        # 3. Guard credentials across boundary: never forward cookies, auth headers, or csrf tokens
+        if is_cross_origin or is_downgrade:
+            sensitive_headers = ["authorization", "cookie", "x-csrf-token"]
+            for key in list(new_req.headers.keys()):
+                if key.lower() in sensitive_headers:
+                    del new_req.headers[key]
+            for key in list(new_req.unredirected_hdrs.keys()):
+                if key.lower() in sensitive_headers:
+                    del new_req.unredirected_hdrs[key]
+
+        return new_req
+
+
+def get_default_cache_dir() -> Path:
+    return Path.home() / ".cache" / "kkmail"
+
+
+def get_default_cache_file() -> Path:
+    return get_default_cache_dir() / "session.json"
+
+
+def get_legacy_cache_file() -> Path:
+    return Path.home() / ".cache" / "kkmail_agent_session.json"
 
 
 class KKMailClient:
     def __init__(self, base_url: str = DEFAULT_BASE_URL, api_key: str = DEFAULT_API_KEY, password: str = DEFAULT_PASSWORD):
         self.base_url = base_url.rstrip("/")
+        # Validate URL immediately (loopback allows HTTP; remote requires HTTPS)
+        validate_target_url(self.base_url)
+
         self.api_key = api_key.strip()
         self.password = password.strip()
         self.cookie: str | None = None
         self.csrf_token: str | None = None
+
+        custom_cache = os.environ.get("KKMAIL_SESSION_CACHE")
+        if custom_cache:
+            self.cache_file = Path(custom_cache)
+            self.is_custom_cache = True
+        else:
+            self.cache_file = get_default_cache_file()
+            self.is_custom_cache = False
+
+        self._opener = urllib.request.build_opener(SafeRedirectHandler(self.base_url))
         self._load_session_cache()
 
     def _load_session_cache(self) -> None:
         if self.api_key:
             return
-        if SESSION_CACHE_FILE.is_file():
-            try:
-                data = json.loads(SESSION_CACHE_FILE.read_text(encoding="utf-8"))
-                if data.get("base_url") == self.base_url:
-                    self.cookie = data.get("cookie")
-                    self.csrf_token = data.get("csrf_token")
-            except Exception:
-                pass
+
+        # Attempt legacy cache migration if using default path and new cache does not exist
+        if not self.is_custom_cache and not self.cache_file.exists():
+            legacy_file = get_legacy_cache_file()
+            if legacy_file.is_file() and not legacy_file.is_symlink():
+                try:
+                    data = json.loads(legacy_file.read_text(encoding="utf-8"))
+                    if data.get("base_url") == self.base_url:
+                        self.cookie = data.get("cookie")
+                        self.csrf_token = data.get("csrf_token")
+                        self._save_session_cache()
+                    try:
+                        legacy_file.unlink()
+                    except OSError:
+                        pass
+                    return
+                except Exception:
+                    pass
+
+        # Inspect parent directory for default cache
+        if not self.is_custom_cache:
+            parent = self.cache_file.parent
+            if parent.exists():
+                if parent.is_symlink():
+                    print(f"Warning: Cache directory {parent} is a symlink; skipping session cache.", file=sys.stderr)
+                    return
+                try:
+                    os.chmod(parent, 0o700)
+                except OSError:
+                    pass
+
+        # Inspect cache file
+        if not self.cache_file.exists():
+            return
+
+        if self.cache_file.is_symlink():
+            print(f"Warning: Session cache file {self.cache_file} is a symlink; refusing to read.", file=sys.stderr)
+            return
+
+        try:
+            # Correct existing cache file permissions to 0600
+            os.chmod(self.cache_file, 0o600)
+        except OSError:
+            pass
+
+        try:
+            data = json.loads(self.cache_file.read_text(encoding="utf-8"))
+            if data.get("base_url") == self.base_url:
+                self.cookie = data.get("cookie")
+                self.csrf_token = data.get("csrf_token")
+        except Exception:
+            pass
 
     def _save_session_cache(self) -> None:
         if self.api_key or not self.cookie:
             return
+
+        parent = self.cache_file.parent
+
+        if not self.is_custom_cache:
+            # Default path: ensure dedicated 0700 directory
+            if parent.is_symlink():
+                print(f"Warning: Cache directory {parent} is a symlink; refusing to save session.", file=sys.stderr)
+                return
+            try:
+                parent.mkdir(parents=True, exist_ok=True)
+                os.chmod(parent, 0o700)
+            except OSError as exc:
+                print(f"Warning: Could not create private cache directory {parent}: {exc}", file=sys.stderr)
+                return
+        else:
+            # Custom path: ensure parent exists, but do NOT modify user's shared parent directory permissions
+            try:
+                parent.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                print(f"Warning: Could not create parent directory {parent}: {exc}", file=sys.stderr)
+                return
+
+        # Refuse to overwrite if target is already a symlink
+        if self.cache_file.is_symlink():
+            print(f"Warning: Session cache file {self.cache_file} is a symlink; refusing to overwrite.", file=sys.stderr)
+            return
+
+        data = {"base_url": self.base_url, "cookie": self.cookie, "csrf_token": self.csrf_token}
+        payload = json.dumps(data, indent=2).encode("utf-8")
+
+        # Write to temporary file in the same directory, sync to disk, and replace atomically
+        tmp_fd = None
+        tmp_path = None
         try:
-            SESSION_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            data = {"base_url": self.base_url, "cookie": self.cookie, "csrf_token": self.csrf_token}
-            SESSION_CACHE_FILE.write_text(json.dumps(data), encoding="utf-8")
-        except Exception:
-            pass
+            tmp_fd, tmp_path_str = tempfile.mkstemp(prefix=".session_", suffix=".tmp", dir=str(parent))
+            tmp_path = Path(tmp_path_str)
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+
+            with os.fdopen(tmp_fd, "wb") as f:
+                tmp_fd = None  # os.fdopen takes ownership
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Double-check target before replacing
+            if self.cache_file.is_symlink():
+                raise RuntimeError(f"Session cache file {self.cache_file} is a symlink; aborting replacement.")
+
+            os.replace(tmp_path, self.cache_file)
+            try:
+                os.chmod(self.cache_file, 0o600)
+            except OSError:
+                pass
+        except Exception as exc:
+            if tmp_fd is not None:
+                try:
+                    os.close(tmp_fd)
+                except OSError:
+                    pass
+            if tmp_path is not None and tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+            print(f"Warning: Failed to save session cache: {exc}", file=sys.stderr)
 
     def login(self) -> bool:
         if self.api_key:
             return True
         if not self.password:
             print(
-                "Error: Authentication password required. Set KKMAIL_PASSWORD or MAIL_CORE_LOGIN_PASSWORD, or pass --password.",
+                "Error: Authentication password required. Set KKMAIL_PASSWORD or pass --password.",
                 file=sys.stderr,
             )
             return False
@@ -66,7 +298,7 @@ class KKMailClient:
         payload = json.dumps({"password": self.password}).encode("utf-8")
         req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with self._opener.open(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 self.csrf_token = data.get("csrf_token")
                 cookie_header = resp.headers.get("Set-Cookie")
@@ -103,7 +335,7 @@ class KKMailClient:
 
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with self._opener.open(req, timeout=30) as resp:
                 text = resp.read().decode("utf-8")
                 if not text.strip():
                     return {"ok": True, "status_code": resp.status}
@@ -199,10 +431,16 @@ def main() -> None:
     output_json = "--json" in sys.argv
     cleaned_argv = [a for a in sys.argv[1:] if a != "--json"]
 
-    parser = argparse.ArgumentParser(description="kkmail Agent CLI client")
-    parser.add_argument("--url", default=DEFAULT_BASE_URL, help="kkmail base URL")
-    parser.add_argument("--password", default=DEFAULT_PASSWORD, help="Login password")
-    parser.add_argument("--api-key", default=DEFAULT_API_KEY, help="Bearer API key")
+    parser = argparse.ArgumentParser(
+        description="kkmail Agent CLI client. Interacts with kkmail instance over HTTP (loopback only) or HTTPS (remote)."
+    )
+    parser.add_argument(
+        "--url",
+        default=DEFAULT_BASE_URL,
+        help="kkmail base URL (defaults to http://127.0.0.1:37281; HTTPS required for remote non-loopback)",
+    )
+    parser.add_argument("--password", default=DEFAULT_PASSWORD, help="Login password (prefer KKMAIL_PASSWORD env var)")
+    parser.add_argument("--api-key", default=DEFAULT_API_KEY, help="Bearer API key (prefer KKMAIL_API_KEY env var)")
 
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -251,13 +489,14 @@ def main() -> None:
     p_add.add_argument("--host", help="IMAP server host")
     p_add.add_argument("--port", type=int, default=993, help="IMAP port")
     p_add.add_argument("--no-ssl", action="store_true", help="Disable SSL/TLS for IMAP")
-    p_add.add_argument("--password", dest="acc_password", help="Account password")
+    p_add.add_argument("--password", dest="acc_password", help="Account password (prefer KKMAIL_ACCOUNT_PASSWORD env var)")
     p_add.add_argument("--credentials-json", help="Raw JSON string for credentials")
 
     args = parser.parse_args(cleaned_argv)
-    client = KKMailClient(base_url=args.url, api_key=args.api_key, password=args.password)
 
     try:
+        client = KKMailClient(base_url=args.url, api_key=args.api_key, password=args.password)
+
         if args.cmd == "health":
             res = client.health()
             if output_json:
@@ -359,10 +598,11 @@ def main() -> None:
 
         elif args.cmd == "add-account":
             creds = {}
+            acc_pass = args.acc_password or os.environ.get("KKMAIL_ACCOUNT_PASSWORD")
             if args.credentials_json:
                 creds = json.loads(args.credentials_json)
-            elif args.acc_password:
-                creds = {"password": args.acc_password}
+            elif acc_pass:
+                creds = {"password": acc_pass}
 
             cfg = None
             if args.provider == "imap" and args.host:
