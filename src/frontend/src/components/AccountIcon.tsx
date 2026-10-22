@@ -1,7 +1,8 @@
 import { memo } from 'react'
 import { Mail } from 'lucide-react'
-import { detectAccountBrand, getEmailInitial, type AccountIconMode } from '../store/accountIcon'
+import { detectAccountBrand, getEmailInitial, BRAND_TITLES, type AccountIconMode } from '../store/accountIcon'
 import { providerColor, useMailStore } from '../store/mailStore'
+import { BRAND_ICON_COMPONENTS } from './brand-icons/brandIconMap'
 
 export interface AccountIconProps {
   email?: string
@@ -53,65 +54,21 @@ export const AccountIcon = memo(function AccountIcon({
     )
   }
 
-  // Brand mode
-  const brand = detectAccountBrand(email, provider)
-  switch (brand) {
-    case 'gmail':
-      return (
-        <span
-          className={`${baseCls} account-brand-gmail`}
-          style={{ background: groupColor || '#ea4335' }}
-          aria-hidden="true"
-          title="Gmail"
-        >
-          G
-        </span>
-      )
-    case 'outlook':
-      return (
-        <span
-          className={`${baseCls} account-brand-outlook`}
-          style={{ background: groupColor || '#0078d4' }}
-          aria-hidden="true"
-          title="Outlook"
-        >
-          O
-        </span>
-      )
-    case '163':
-      return (
-        <span
-          className={`${baseCls} account-brand-163`}
-          style={{ background: groupColor || '#d94b47', fontSize: '9px' }}
-          aria-hidden="true"
-          title="网易邮箱"
-        >
-          163
-        </span>
-      )
-    case 'qq':
-      return (
-        <span
-          className={`${baseCls} account-brand-qq`}
-          style={{ background: groupColor || '#12b7f5', fontSize: '9px' }}
-          aria-hidden="true"
-          title="QQ邮箱"
-        >
-          QQ
-        </span>
-      )
-    case 'generic':
-    default:
-      return (
-        <span
-          className={`${baseCls} account-brand-generic`}
-          style={{ background: groupColor || 'var(--surface-2)' }}
-          aria-hidden="true"
-        >
-          <Mail size={11} />
-        </span>
-      )
-  }
+  // Brand mode: use dedicated SVG brand icon or fallback to default-mail icon
+  const brand = detectAccountBrand(email, provider, accountType)
+  const IconComponent = BRAND_ICON_COMPONENTS[brand] ?? BRAND_ICON_COMPONENTS['default-mail']
+  const title = BRAND_TITLES[brand] ?? BRAND_TITLES['default-mail']
+
+  return (
+    <span
+      className={`${baseCls} account-brand-${brand}`}
+      style={{ background: 'transparent', padding: 0, overflow: 'hidden' }}
+      aria-hidden="true"
+      title={title}
+    >
+      <IconComponent />
+    </span>
+  )
 })
 
 export default AccountIcon
