@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import email
 from email.policy import default as default_policy
+import hashlib
 import logging
 import os
 import uuid
@@ -14,10 +15,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
-from mail_core.blobs.quota import check_quota
+from mail_core.blobs.quota import (
+    acquire_blob_digest_lock,
+    check_quota,
+    estimate_encrypted_size,
+    release_quota_reservation,
+    reserve_quota,
+)
 from mail_core.blobs.store import BlobStore
 from mail_core.mail.domain.archive import apply_transition
 from mail_core.security.redact import safe_error
@@ -47,6 +54,10 @@ log = logging.getLogger("mail_core.blobs.archive")
 
 DEFAULT_RECENT_DAYS = 30
 DEFAULT_BATCH = 20
+
+
+class QuotaExceededError(RuntimeError):
+    """Raised when blob write would exceed hard quota."""
 
 
 def blob_root() -> Path:
@@ -105,6 +116,7 @@ def parse_mime_content(
 
             attachments.append(
                 {
+                    "part_id": str(part_index),
                     "filename": clean_filename[:512],
                     "content_type": content_type[:255],
                     "size_bytes": len(payload),
@@ -294,6 +306,7 @@ def resume_quota_paused_archives(
                     job_type=JobType.ARCHIVE_MIME_BATCH.value,
                     account_id=account_id,
                     priority=50,
+                    dedupe_key=f"archive_mime_batch:{account_id}",
                 )
             else:
                 mids = [st.message_id for st in rows]
@@ -304,6 +317,7 @@ def resume_quota_paused_archives(
                         job_type=JobType.ARCHIVE_MIME_BATCH.value,
                         account_id=aid,
                         priority=50,
+                        dedupe_key=f"archive_mime_batch:{aid}",
                     )
             s.add(
                 OutboxEvent(
@@ -324,6 +338,29 @@ def resume_quota_paused_archives(
             count = _do_resume(s)
             s.commit()
             return count
+
+
+def maybe_resume_quota_paused_archives(
+    session=None,
+    *,
+    root: Path | None = None,
+    account_id: uuid.UUID | None = None,
+    limit: int = 100,
+    soft_limit_bytes: int | None = None,
+    hard_limit_bytes: int | None = None,
+) -> int:
+    """Check quota; if below recovery threshold, resume paused archives."""
+    r = root or blob_root()
+    soft = soft_limit_bytes if soft_limit_bytes is not None else (
+        int(os.environ["MAIL_CORE_BLOB_SOFT_BYTES"]) if os.environ.get("MAIL_CORE_BLOB_SOFT_BYTES") else None
+    )
+    hard = hard_limit_bytes if hard_limit_bytes is not None else (
+        int(os.environ["MAIL_CORE_BLOB_HARD_BYTES"]) if os.environ.get("MAIL_CORE_BLOB_HARD_BYTES") else None
+    )
+    quota = check_quota(r, soft_limit_bytes=soft, hard_limit_bytes=hard)
+    if not quota.soft_exceeded and not quota.hard_exceeded:
+        return resume_quota_paused_archives(session, account_id=account_id, limit=limit)
+    return 0
 
 
 def run_archive_batch(
@@ -384,6 +421,9 @@ def run_archive_batch(
                     pass
             session.commit()
         return {"status": "paused_quota", "used_bytes": quota.used_bytes}
+
+    # Capacity is below recovery threshold — automatically resume quota-paused archives (A25)
+    resume_quota_paused_archives(account_id=account_id, limit=limit)
 
     with Session() as session:
         if account_id is not None and fencing is not None:
@@ -463,8 +503,6 @@ def run_archive_batch(
 
         try:
             mime = provider.fetch_mime(remote_id)  # network
-            write = blob_store.put(mime)
-            current_used_bytes += write.size_bytes
         except Exception as exc:
             log.warning("archive fetch failed message=%s: %s", mid, safe_error(exc))
             with Session() as session:
@@ -491,137 +529,257 @@ def run_archive_batch(
             failed += 1
             continue
 
-        with Session() as session:
-            if account_id is not None and fencing is not None:
-                try:
-                    assert_fencing(session, account_id=account_id, fencing_token=fencing)
-                except FencingMismatch:
-                    return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
-            st = session.get(MessageArchiveState, mid)
-            if (
-                st is None
-                or st.state != ArchiveState.ARCHIVE_IN_PROGRESS.value
-                or st.claimed_by != worker_id
-            ):
-                continue
-            blob = session.scalar(
-                select(MessageBlob).where(
-                    MessageBlob.content_sha256 == write.content_sha256,
-                    MessageBlob.key_version == write.key_version,
+        mime_digest = hashlib.sha256(mime).hexdigest()
+        needed_bytes = 0 if blob_store.exists(mime_digest) else estimate_encrypted_size(len(mime))
+        res_id = None
+        if needed_bytes > 0:
+            with Session() as s_res:
+                res_id = reserve_quota(
+                    s_res,
+                    root=root,
+                    needed_bytes=needed_bytes,
+                    worker_id=worker_id,
+                    message_id=mid,
+                    hard_limit_bytes=hard_i,
                 )
-            )
-            if blob is None:
-                blob = MessageBlob(
-                    content_sha256=write.content_sha256,
-                    key_version=write.key_version,
-                    size_bytes=write.size_bytes,
-                    storage_path=write.storage_path,
-                    ref_count=0,
-                )
-                session.add(blob)
-                session.flush()
-            if session.get(MessageBlobLink, mid) is None:
-                # ref_count tracks links: only a new link takes a reference.
-                session.add(MessageBlobLink(message_id=mid, blob_id=blob.id))
-                blob.ref_count = int(blob.ref_count) + 1
-                blob.gc_eligible_at = None
-
-            # Parse MIME body and attachments into domain models (V2-03)
-            parsed_attachments = []
-            try:
-                plain_text, html_text, parsed_attachments = parse_mime_content(mime)
-                body = session.get(MessageBody, mid)
-                if body is None:
-                    session.add(MessageBody(message_id=mid, text_plain=plain_text, text_html=html_text))
-                else:
-                    body.text_plain = plain_text
-                    body.text_html = html_text
-                    body.parse_error = None
-                    body.updated_at = datetime.now(timezone.utc)
-            except Exception as parse_exc:
-                log.warning("archive mime parse error for message %s: %s", mid, safe_error(parse_exc))
-                body = session.get(MessageBody, mid)
-                if body is None:
-                    session.add(MessageBody(message_id=mid, parse_error=safe_error(parse_exc)[:2000]))
-                else:
-                    body.parse_error = safe_error(parse_exc)[:2000]
-
-            storage_failed = False
-            if parsed_attachments:
-                try:
-                    msg_record = session.get(Message, mid)
-                    if msg_record is not None:
-                        msg_record.has_attachments = True
-
-                    existing_atts = session.scalars(
-                        select(Attachment).where(Attachment.message_id == mid)
-                    ).all()
-                    existing_keys = {
-                        (att.filename, att.content_id) for att in existing_atts
+                if res_id is None:
+                    remaining = [w[0] for w in work[idx:]]
+                    _pause_quota(s_res, remaining, account_id, worker_id=worker_id)
+                    if account_id is not None and fencing is not None:
+                        try:
+                            release_lease(s_res, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                        except FencingMismatch:
+                            pass
+                    s_res.commit()
+                    return {
+                        "status": "paused_quota",
+                        "completed": completed,
+                        "failed": failed,
+                        "used_bytes": current_used_bytes,
                     }
+                s_res.commit()
 
-                    for att_info in parsed_attachments:
-                        key = (att_info["filename"], att_info["content_id"])
-                        if key in existing_keys:
-                            continue
-                        existing_keys.add(key)
+        try:
+            write = blob_store.put(mime)
+            current_used_bytes += write.size_bytes
+        except Exception:
+            if res_id is not None:
+                with Session() as s_cleanup:
+                    release_quota_reservation(s_cleanup, res_id)
+                    s_cleanup.commit()
+            raise
 
-                        att_write = blob_store.put(att_info["data"])
-                        current_used_bytes += att_write.size_bytes
-                        att_blob = session.scalar(
-                            select(MessageBlob).where(
-                                MessageBlob.content_sha256 == att_write.content_sha256,
-                                MessageBlob.key_version == att_write.key_version,
-                            )
-                        )
-                        if att_blob is None:
-                            att_blob = MessageBlob(
-                                content_sha256=att_write.content_sha256,
-                                key_version=att_write.key_version,
-                                size_bytes=att_write.size_bytes,
-                                storage_path=att_write.storage_path,
-                                ref_count=0,
-                            )
-                            session.add(att_blob)
-                            session.flush()
+        with Session() as session:
+            try:
+                if res_id is not None:
+                    release_quota_reservation(session, res_id)
 
-                        attachment = Attachment(
-                            message_id=mid,
-                            blob_id=att_blob.id,
-                            filename=att_info["filename"],
-                            content_type=att_info["content_type"],
-                            size_bytes=att_info["size_bytes"],
-                            content_id=att_info["content_id"],
-                            is_inline=att_info["is_inline"],
-                        )
-                        session.add(attachment)
-                        att_blob.ref_count = int(att_blob.ref_count) + 1
-                        att_blob.gc_eligible_at = None
-                except Exception as store_exc:
-                    log.warning("archive attachment storage error for message %s: %s", mid, safe_error(store_exc))
-                    session.rollback()
-                    st = session.get(MessageArchiveState, mid)
-                    if st is not None:
-                        st.retry_count = int(st.retry_count) + 1
-                        st.last_error = safe_error(store_exc)
-                        apply_transition(
-                            st,
-                            ArchiveState.ARCHIVE_FAILED if st.retry_count >= 5 else ArchiveState.ARCHIVE_PENDING,
-                        )
-                        st.claimed_by = None
-                        st.updated_at = datetime.now(timezone.utc)
+                if account_id is not None and fencing is not None:
+                    try:
+                        assert_fencing(session, account_id=account_id, fencing_token=fencing)
+                    except FencingMismatch:
+                        session.commit()
+                        return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
+
+                # A35: 以 digest 跨进程锁协调发布与回收
+                acquire_blob_digest_lock(session, write.content_sha256)
+
+                st = session.get(MessageArchiveState, mid)
+                if (
+                    st is None
+                    or st.state != ArchiveState.ARCHIVE_IN_PROGRESS.value
+                    or st.claimed_by != worker_id
+                ):
+                    # 状态失效时安全核验孤儿文件
+                    live = session.scalar(
+                        select(func.count())
+                        .select_from(MessageBlob)
+                        .where(MessageBlob.content_sha256 == write.content_sha256)
+                    ) or 0
+                    if int(live) == 0:
+                        try:
+                            blob_store.path_for(write.content_sha256).unlink(missing_ok=True)
+                        except OSError:
+                            pass
                     session.commit()
-                    failed += 1
-                    storage_failed = True
+                    continue
 
-            if storage_failed:
-                continue
+                blob = session.scalar(
+                    select(MessageBlob).where(
+                        MessageBlob.content_sha256 == write.content_sha256,
+                        MessageBlob.key_version == write.key_version,
+                    )
+                )
+                if blob is None:
+                    blob = MessageBlob(
+                        content_sha256=write.content_sha256,
+                        key_version=write.key_version,
+                        size_bytes=write.size_bytes,
+                        storage_path=write.storage_path,
+                        ref_count=0,
+                    )
+                    session.add(blob)
+                    session.flush()
+                if session.get(MessageBlobLink, mid) is None:
+                    session.add(MessageBlobLink(message_id=mid, blob_id=blob.id))
+                    blob.ref_count = int(blob.ref_count) + 1
+                    blob.gc_eligible_at = None
 
-            apply_transition(st, ArchiveState.ARCHIVE_COMPLETE)
-            st.claimed_by = None
-            st.updated_at = datetime.now(timezone.utc)
-            completed += 1
-            session.commit()
+                # A26: Parse MIME body and attachments into domain models; sync FTS
+                parsed_attachments = []
+                try:
+                    plain_text, html_text, parsed_attachments = parse_mime_content(mime)
+                    body = session.get(MessageBody, mid)
+                    if body is None:
+                        session.add(MessageBody(message_id=mid, text_plain=plain_text, text_html=html_text))
+                    else:
+                        body.text_plain = plain_text
+                        body.text_html = html_text
+                        body.parse_error = None
+                        body.updated_at = datetime.now(timezone.utc)
+                    session.flush()
+
+                    # A26: 正文归档事务同步更新 FTS 索引
+                    from mail_core.search.index import upsert_message_search
+                    upsert_message_search(session, message_id=mid, body_text=plain_text)
+                except Exception as parse_exc:
+                    log.warning("archive mime parse error for message %s: %s", mid, safe_error(parse_exc))
+                    body = session.get(MessageBody, mid)
+                    if body is None:
+                        session.add(MessageBody(message_id=mid, parse_error=safe_error(parse_exc)[:2000]))
+                    else:
+                        body.parse_error = safe_error(parse_exc)[:2000]
+                    session.flush()
+
+                storage_failed = False
+                if parsed_attachments:
+                    try:
+                        msg_record = session.get(Message, mid)
+                        if msg_record is not None:
+                            msg_record.has_attachments = True
+
+                        existing_atts = {
+                            att.part_id: att
+                            for att in session.scalars(select(Attachment).where(Attachment.message_id == mid)).all()
+                            if att.part_id
+                        }
+
+                        for att_info in parsed_attachments:
+                            pid = str(att_info["part_id"])
+                            att_data = att_info["data"]
+                            att_digest = hashlib.sha256(att_data).hexdigest()
+
+                            att_needed = 0 if blob_store.exists(att_digest) else estimate_encrypted_size(len(att_data))
+                            att_res_id = None
+                            if att_needed > 0:
+                                att_res_id = reserve_quota(
+                                    session,
+                                    root=root,
+                                    needed_bytes=att_needed,
+                                    worker_id=worker_id,
+                                    message_id=mid,
+                                    hard_limit_bytes=hard_i,
+                                )
+                                if att_res_id is None:
+                                    raise QuotaExceededError(f"attachment quota exceeded for message {mid}")
+
+                            try:
+                                acquire_blob_digest_lock(session, att_digest)
+                                att_write = blob_store.put(att_data)
+                                current_used_bytes += att_write.size_bytes
+                                att_blob = session.scalar(
+                                    select(MessageBlob).where(
+                                        MessageBlob.content_sha256 == att_write.content_sha256,
+                                        MessageBlob.key_version == att_write.key_version,
+                                    )
+                                )
+                                if att_blob is None:
+                                    att_blob = MessageBlob(
+                                        content_sha256=att_write.content_sha256,
+                                        key_version=att_write.key_version,
+                                        size_bytes=att_write.size_bytes,
+                                        storage_path=att_write.storage_path,
+                                        ref_count=0,
+                                    )
+                                    session.add(att_blob)
+                                    session.flush()
+
+                                if pid in existing_atts:
+                                    # A38: 保护已有 UUID
+                                    attachment = existing_atts[pid]
+                                    if attachment.blob_id != att_blob.id:
+                                        attachment.blob_id = att_blob.id
+                                        att_blob.ref_count = int(att_blob.ref_count) + 1
+                                        att_blob.gc_eligible_at = None
+                                    attachment.filename = att_info["filename"]
+                                    attachment.content_type = att_info["content_type"]
+                                    attachment.size_bytes = att_info["size_bytes"]
+                                    attachment.content_id = att_info["content_id"]
+                                    attachment.is_inline = att_info["is_inline"]
+                                else:
+                                    # A38: 稳定 MIME part 身份入库
+                                    attachment = Attachment(
+                                        message_id=mid,
+                                        part_id=pid,
+                                        blob_id=att_blob.id,
+                                        filename=att_info["filename"],
+                                        content_type=att_info["content_type"],
+                                        size_bytes=att_info["size_bytes"],
+                                        content_id=att_info["content_id"],
+                                        is_inline=att_info["is_inline"],
+                                    )
+                                    session.add(attachment)
+                                    att_blob.ref_count = int(att_blob.ref_count) + 1
+                                    att_blob.gc_eligible_at = None
+                                    existing_atts[pid] = attachment
+                            finally:
+                                if att_res_id is not None:
+                                    release_quota_reservation(session, att_res_id)
+                    except QuotaExceededError:
+                        session.rollback()
+                        with Session() as s_pause:
+                            remaining = [w[0] for w in work[idx:]]
+                            _pause_quota(s_pause, remaining, account_id, worker_id=worker_id)
+                            if account_id is not None and fencing is not None:
+                                try:
+                                    release_lease(s_pause, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                                except FencingMismatch:
+                                    pass
+                            s_pause.commit()
+                        return {
+                            "status": "paused_quota",
+                            "completed": completed,
+                            "failed": failed,
+                            "used_bytes": current_used_bytes,
+                        }
+                    except Exception as store_exc:
+                        log.warning("archive attachment storage error for message %s: %s", mid, safe_error(store_exc))
+                        session.rollback()
+                        st = session.get(MessageArchiveState, mid)
+                        if st is not None:
+                            st.retry_count = int(st.retry_count) + 1
+                            st.last_error = safe_error(store_exc)
+                            apply_transition(
+                                st,
+                                ArchiveState.ARCHIVE_FAILED if st.retry_count >= 5 else ArchiveState.ARCHIVE_PENDING,
+                            )
+                            st.claimed_by = None
+                            st.updated_at = datetime.now(timezone.utc)
+                        session.commit()
+                        failed += 1
+                        storage_failed = True
+
+                if storage_failed:
+                    continue
+
+                apply_transition(st, ArchiveState.ARCHIVE_COMPLETE)
+                st.claimed_by = None
+                st.updated_at = datetime.now(timezone.utc)
+                completed += 1
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
 
     with Session() as session:
         if completed:

@@ -85,7 +85,8 @@ class BlobStore:
                         h.update(chunk)
                     if h.hexdigest() != digest:
                         raise BlobCryptoError("existing blob hash mismatch")
-                return BlobWriteResult(digest, len(data), rel, disk_version)
+                disk_size = dest.stat().st_size
+                return BlobWriteResult(digest, disk_size, rel, disk_version)
             except Exception:
                 pass
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -103,7 +104,7 @@ class BlobStore:
             except OSError:
                 pass
             raise
-        return BlobWriteResult(digest, len(data), rel, self.key_version)
+        return BlobWriteResult(digest, len(payload), rel, self.key_version)
 
     def get(self, digest: str) -> bytes:
         """Assemble plaintext via streaming decrypt (same path as attachment download)."""
