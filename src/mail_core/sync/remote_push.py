@@ -6,12 +6,13 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.application.remote_ops import mark_remote_operation, reclaim_stale_in_progress
-from mail_core.mail.domain.enums import JobType, RemoteOperationStatus
-from mail_core.mail.storage.models import Account, RemoteOperation
+from mail_core.mail.domain.enums import JobStatus, JobType, RemoteOperationStatus
+from mail_core.mail.storage.folder_stats import recompute_folder_stats
+from mail_core.mail.storage.models import Account, Folder, RemoteOperation, WorkerJob
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import ProviderHttpError, RateLimitedError
 from mail_core.security.redact import safe_provider_summary
@@ -322,6 +323,7 @@ def push_remote_operations(
         except FencingMismatch:
             pass
         now_end = datetime.now(timezone.utc)
+        next_due = None
         has_due_pending = session.scalar(
             select(RemoteOperation.id)
             .where(RemoteOperation.account_id == account_id)
@@ -361,7 +363,98 @@ def push_remote_operations(
                     dedupe_key=f"remote-op-push:{account_id}",
                 )
         session.commit()
-    return {"status": "ok", "pushed": pushed, "failed": failed}
+    return {
+        "status": "ok",
+        "pushed": pushed,
+        "failed": failed,
+        "has_more": has_due_pending,
+        "next_run_after": next_due,
+    }
+
+
+def get_unconverged_field_intents(
+    session: Session,
+    account_id: uuid.UUID,
+    remote_ids: list[str],
+    now: datetime | None = None,
+    grace_seconds: float = 60.0,
+) -> dict[str, dict[str, Any]]:
+    """Return {remote_id: {"is_read": bool, "is_flagged": bool}} for unconverged local intents."""
+    if not remote_ids:
+        return {}
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=grace_seconds)
+    entity_keys: list[str] = []
+    for r in remote_ids:
+        entity_keys.append(f"msg:{r}:read")
+        entity_keys.append(f"msg:{r}:flag")
+
+    ops = list(
+        session.scalars(
+            select(RemoteOperation)
+            .where(RemoteOperation.account_id == account_id)
+            .where(RemoteOperation.entity_key.in_(entity_keys))
+            .where(
+                or_(
+                    RemoteOperation.status.in_([RemoteOperationStatus.PENDING.value, RemoteOperationStatus.IN_PROGRESS.value]),
+                    and_(
+                        RemoteOperation.status == RemoteOperationStatus.DONE.value,
+                        RemoteOperation.updated_at >= cutoff,
+                    ),
+                )
+            )
+        ).all()
+    )
+    intents: dict[str, dict[str, Any]] = {}
+    for op in ops:
+        parts = op.entity_key.split(":")
+        if len(parts) >= 3 and parts[0] == "msg":
+            rem_id = parts[1]
+            field_name = "is_read" if parts[2] == "read" else ("is_flagged" if parts[2] == "flag" else None)
+            if field_name and field_name in (op.desired_state or {}):
+                intents.setdefault(rem_id, {})[field_name] = op.desired_state[field_name]
+    return intents
+
+
+def reconcile_account_writeback_and_stats(
+    session: Session, account_id: uuid.UUID
+) -> dict[str, int]:
+    """Recover orphan pending writebacks and recompute drifted folder stats for an account."""
+    pending_count = session.scalar(
+        select(func.count(RemoteOperation.id))
+        .where(RemoteOperation.account_id == account_id)
+        .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
+    ) or 0
+
+    active_job = session.scalar(
+        select(WorkerJob.id)
+        .where(WorkerJob.account_id == account_id)
+        .where(WorkerJob.dedupe_key == f"remote-op-push:{account_id}")
+        .where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
+        .limit(1)
+    )
+    enqueued = 0
+    if pending_count > 0 and not active_job:
+        enqueue_job(
+            session,
+            job_type=JobType.REMOTE_OPERATION_PUSH.value,
+            account_id=account_id,
+            payload={},
+            priority=40,
+            dedupe_key=f"remote-op-push:{account_id}",
+        )
+        enqueued = 1
+
+    folders = list(session.scalars(select(Folder).where(Folder.account_id == account_id)).all())
+    for f in folders:
+        recompute_folder_stats(session, f.id)
+
+    session.flush()
+    return {
+        "pending_ops": pending_count,
+        "enqueued_jobs": enqueued,
+        "folders_recomputed": len(folders),
+    }
 
 
 push_pending_remote_operations = push_remote_operations

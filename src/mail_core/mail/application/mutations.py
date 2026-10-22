@@ -212,17 +212,31 @@ def mark_all_messages_read(
     session: Session,
     *,
     account_id: uuid.UUID | None = None,
-    folder_role: str = "inbox",
+    folder_role: str | None = "inbox",
+    folder_id: uuid.UUID | None = None,
     is_flagged: bool | None = None,
 ) -> int:
-    """Batch mark messages read matching the scope (account/folder_role/flag). Returns updated count."""
-    stmt = (
-        select(Message)
-        .join(MessageLocation, MessageLocation.message_id == Message.id)
-        .join(Folder, MessageLocation.folder_id == Folder.id)
-        .where(Folder.role == folder_role)
-        .where(Message.is_read.is_(False))
-    )
+    """Batch mark messages read matching the scope (account/folder_role/folder_id/flag). Returns updated count."""
+    if folder_id is not None:
+        folder = session.get(Folder, folder_id)
+        if folder is None:
+            raise LookupError(f"folder {folder_id} not found")
+        if account_id is not None and folder.account_id != account_id:
+            raise LookupError(f"folder {folder_id} does not belong to specified account")
+        stmt = (
+            select(Message)
+            .join(MessageLocation, MessageLocation.message_id == Message.id)
+            .where(MessageLocation.folder_id == folder_id)
+            .where(Message.is_read.is_(False))
+        )
+    else:
+        stmt = (
+            select(Message)
+            .join(MessageLocation, MessageLocation.message_id == Message.id)
+            .join(Folder, MessageLocation.folder_id == Folder.id)
+            .where(Folder.role == (folder_role or "inbox"))
+            .where(Message.is_read.is_(False))
+        )
     if account_id is not None:
         stmt = stmt.where(Message.account_id == account_id)
     if is_flagged is not None:

@@ -79,13 +79,16 @@ export const queryKeys = {
     filter?: string,
     folderRole: string = 'inbox',
     sortOrder: string = 'desc',
+    folderId?: string | null,
   ) => {
     const scope = accountScope(accountId)
-    const rolePart = folderRole !== 'inbox' ? `role:${folderRole}` : null
+    const folderPart = folderId ? `folder:${folderId}` : null
+    const rolePart = !folderId && folderRole !== 'inbox' ? `role:${folderRole}` : null
     const filterPart = filter && filter !== 'all' ? filter : null
     const sortPart = sortOrder && sortOrder !== 'desc' ? `sort:${sortOrder}` : null
 
     const key: string[] = ['mail-core', 'inbox', scope]
+    if (folderPart) key.push(folderPart)
     if (rolePart) key.push(rolePart)
     if (filterPart) key.push(filterPart)
     if (sortPart) key.push(sortPart)

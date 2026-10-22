@@ -1,0 +1,56 @@
+{
+  "tid": "t008",
+  "attempt": 1,
+  "execution_id": "5abb2f2bc8924c47b4ed662fcd8bb963",
+  "status": "done",
+  "branch": "t008_account_folder_navigation",
+  "base_sha": "06f714cfaf9d77157b1eb90cf4c289ff14982836",
+  "tests": "contract: 149 passed; mail_core: 381 passed (PG + Dovecot); frontend: 169 passed + tsc ok + build ok + lint ok; desktop: ok + packaged-smoke ok",
+  "blackbox": "frontend e2e smoke 3 passed, full stack e2e 3 passed",
+  "review": "full review PASS (Round 1: review_code PASS, review_test PASS)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/store/mailStore.ts",
+      "src/frontend/src/lib/listTitle.ts",
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/Sidebar.test.tsx"
+    ],
+    "AC-002": [
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/Sidebar.test.tsx",
+      "src/mail_core/api/mail.py",
+      "src/mail_core/mail/application/queries.py",
+      "tests/mail_core/test_account_folder_navigation.py"
+    ],
+    "AC-003": [
+      "src/mail_core/providers/gmail.py",
+      "src/mail_core/providers/imap.py",
+      "src/mail_core/providers/graph.py"
+    ],
+    "AC-004": [
+      "src/mail_core/api/mail.py",
+      "src/mail_core/mail/application/queries.py",
+      "src/frontend/src/components/MessageList.tsx",
+      "tests/mail_core/test_account_folder_navigation.py"
+    ],
+    "AC-005": [
+      "src/mail_core/mail/application/queries.py",
+      "tests/mail_core/test_account_folder_navigation.py"
+    ],
+    "AC-006": [
+      "src/mail_core/providers/imap.py",
+      "tests/mail_core/test_account_folder_navigation.py"
+    ],
+    "AC-007": [
+      "src/frontend/src/store/mailStore.ts",
+      "src/frontend/src/api/queries.ts",
+      "src/frontend/src/components/MessageList.tsx",
+      "src/mail_core/mail/application/mutations.py",
+      "tests/mail_core/test_account_folder_navigation.py"
+    ]
+  },
+  "pending": [
+    "docs/archive/pending/p013_account_folder_tree_support.md"
+  ],
+  "findings": []
+}

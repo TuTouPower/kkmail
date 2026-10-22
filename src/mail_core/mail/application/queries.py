@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, cast, func, or_, select, String
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import FolderRole
@@ -65,7 +65,8 @@ def decode_cursor(token: str) -> tuple[datetime, uuid.UUID]:
         raise InvalidCursor("invalid cursor") from exc
 
 
-def _list_item(m: Message, folder_id: uuid.UUID | None) -> MessageListItem:
+def _list_item(m: Message, folder_id: Any) -> MessageListItem:
+    fid_uuid = uuid.UUID(str(folder_id)) if folder_id else None
     return MessageListItem(
         id=m.id,
         account_id=m.account_id,
@@ -77,7 +78,7 @@ def _list_item(m: Message, folder_id: uuid.UUID | None) -> MessageListItem:
         is_flagged=m.is_flagged,
         has_attachments=m.has_attachments,
         snippet=m.snippet,
-        folder_id=folder_id,
+        folder_id=fid_uuid,
     )
 
 
@@ -115,6 +116,7 @@ def list_folder_stats_for_account(session: Session, account_id: uuid.UUID) -> li
                 "remote_id": folder.remote_id,
                 "name": folder.name,
                 "role": folder.role,
+                "parent_remote_id": folder.parent_remote_id,
                 "total_count": stats.total_count if stats else 0,
                 "unread_count": stats.unread_count if stats else 0,
             }
@@ -139,9 +141,10 @@ def list_messages_keyset(
     if not folder_ids:
         return MessagePage(items=[], next_cursor=None)
     stmt = (
-        select(Message, MessageLocation.folder_id)
+        select(Message, func.min(cast(MessageLocation.folder_id, String)).label("folder_id"))
         .join(MessageLocation, MessageLocation.message_id == Message.id)
         .where(MessageLocation.folder_id.in_(folder_ids))
+        .group_by(Message.id)
     )
     if is_read is not None:
         stmt = stmt.where(Message.is_read == is_read)
@@ -182,6 +185,7 @@ def unified_inbox(
     session: Session,
     *,
     account_ids: list[uuid.UUID] | None = None,
+    folder_id: uuid.UUID | None = None,
     limit: int = 50,
     cursor: str | None = None,
     is_read: bool | None = None,
@@ -189,11 +193,19 @@ def unified_inbox(
     folder_role: str = "inbox",
     sort_order: str = "desc",
 ) -> MessagePage:
-    """Backend-aggregated inbox across accounts for a specified folder role (defaults to inbox)."""
-    stmt = select(Folder.id).where(Folder.role == folder_role)
-    if account_ids:
-        stmt = stmt.where(Folder.account_id.in_(account_ids))
-    folder_ids = list(session.scalars(stmt).all())
+    """Backend-aggregated inbox across accounts for a specified folder role or exact folder_id."""
+    if folder_id is not None:
+        folder = session.get(Folder, folder_id)
+        if folder is None:
+            raise LookupError(f"folder {folder_id} not found")
+        if account_ids and folder.account_id not in account_ids:
+            raise LookupError(f"folder {folder_id} does not belong to specified account")
+        folder_ids = [folder.id]
+    else:
+        stmt = select(Folder.id).where(Folder.role == folder_role)
+        if account_ids:
+            stmt = stmt.where(Folder.account_id.in_(account_ids))
+        folder_ids = list(session.scalars(stmt).all())
     return list_messages_keyset(
         session,
         folder_ids=folder_ids,
