@@ -105,3 +105,27 @@ KKMAIL_TEST_SEED=41 scripts/run-mail-core-tests.sh run
 每轮目录包含 `.coverage`、`coverage.xml`、`coverage.json`、`junit.xml` 和 `test_summary.json`。覆盖仅统计生产 `mail_core`，启用分支覆盖；汇总列出实际收集、执行、错误、跳过原因和未执行清单，不用统一覆盖率百分比代替行为验收。依赖安装单独执行，pytest-cov 缺失会失败，不在测试入口自动安装。
 
 实测基线：快速套件 252 passed / 102 skipped；完整 seed 41、17 各 352 passed / 2 IMAP skipped，约 260/273 秒。87 个生产模块文件行/分支综合覆盖 78.63% / 78.66%，不代表未覆盖行为安全。IMAP 真实路径由 t016 接续，不将当前协议跳过计为通过。
+
+## 前端测试运行时与隔离（t015）
+
+前端单测与组件测试采用 Vitest + jsdom 环境，要求 Node >= 20（本地推荐 Node 22/24）：
+
+```bash
+(cd src/frontend && npm test)
+(cd src/frontend && npm run test:coverage)
+(cd src/frontend && npm run lint)
+(cd src/frontend && npx tsc -b && npm run build)
+```
+
+在测试启动入口 `src/frontend/src/test/test_setup.ts` 中，在导入任何 Zustand store 之前确保将 jsdom 真实存储实例注入 `globalThis.localStorage` 与 `globalThis.sessionStorage`，防止 Node 环境宿主存储影响。
+
+每用例前后执行隔离与清理：
+
+- 重置 Zustand store 至初始状态；
+- 清理 `localStorage` 与 `sessionStorage`；
+- 清空 TanStack QueryClient 缓存；
+- 重置内存 CSRF token；
+- 移除测试中绑定的全局 window 事件监听器；
+- 卸载已渲染 DOM 组件节点，恢复全局 fetch、timers 与 navigator 替身。
+
+覆盖率报告基于 `@vitest/coverage-v8` 输出至 `.scratch/frontend_coverage`，覆盖范围仅限 `src/**/*.{ts,tsx}` 生产代码，排除测试文件与生成代码。实测全量 34 个测试文件共 168 项用例全通，行覆盖率约 78%。

@@ -7,6 +7,12 @@ if [[ ! -x "$PYTHON" ]]; then
     echo 'Missing .venv: run uv venv .venv and uv pip install --python .venv/bin/python -r requirements-dev.txt' >&2
     exit 2
 fi
+if [[ -z "${KKMAIL_TEST_PG_PASSWORD:-}" && -f "$ROOT/.env.test" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ROOT/.env.test"
+    set +a
+fi
 if [[ $# -eq 0 ]]; then
     set -- run
 fi
