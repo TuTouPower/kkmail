@@ -13,11 +13,7 @@ import './design-system/tokens.css'
 import { useIsWide } from './lib/viewport'
 import { workspaceGridColumns } from './lib/workspaceLayout'
 import { useMailCoreRealtime } from './hooks/useMailCoreRealtime'
-
-function resolveTheme(theme: 'dark' | 'light' | 'system'): 'dark' | 'light' {
-  if (theme !== 'system') return theme
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
+import { resolveTheme } from './lib/theme'
 
 function App() {
   const theme = useMailStore((s) => s.theme)

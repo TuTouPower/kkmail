@@ -130,7 +130,7 @@ export default function SettingsPage() {
               <option value="graph">graph</option>
             </select>
             {provider === 'imap' && isMicrosoftEmail && (
-              <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(234, 179, 8, 0.15)', border: '1px solid var(--line)', borderRadius: 8, fontSize: 12, color: 'var(--yellow, #ca8a04)', lineHeight: 1.4 }}>
+              <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(255, 159, 10, 0.15)', border: '1px solid var(--line)', borderRadius: 8, fontSize: 12, color: 'var(--warning)', lineHeight: 1.4 }}>
                 ⚠️ 提示：微软已全网停用普通密码登录（Basic Auth）。Outlook / Hotmail 个人账号建议将协议切换为 graph，或使用微软应用专用密码。
               </div>
             )}
