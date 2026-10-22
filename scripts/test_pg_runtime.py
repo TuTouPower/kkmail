@@ -43,7 +43,11 @@ def docker(*args):
 def password():
     value = os.environ.get("KKMAIL_TEST_PG_PASSWORD", "")
     if not value:
-        raise SafetyError("provide operator-supplied KKMAIL_TEST_PG_PASSWORD")
+        raise SafetyError(
+            "provide operator-supplied KKMAIL_TEST_PG_PASSWORD "
+            "(check .env.test on the main branch/worktree; untracked .env.test may be missing in git worktrees / "
+            "若在 git worktree 上开发，请到主分支获取未被 git 跟踪的 .env.test)"
+        )
     return value
 
 

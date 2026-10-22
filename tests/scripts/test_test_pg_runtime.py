@@ -45,6 +45,12 @@ def test_no_password_fails_without_invoking_docker(monkeypatch):
         runtime.start()
 
 
+def test_missing_password_error_hints_env_test(monkeypatch):
+    monkeypatch.delenv("KKMAIL_TEST_PG_PASSWORD", raising=False)
+    with pytest.raises(runtime.SafetyError, match=r"\.env\.test.*(main|worktree)"):
+        runtime.password()
+
+
 @pytest.mark.parametrize("raw_url", [None, "postgresql://user:must-not-appear@127.0.0.1/business"])
 def test_direct_pytest_refuses_before_collection_without_leaking_secrets(raw_url, tmp_path):
     env = {key: value for key, value in os.environ.items()
