@@ -7,6 +7,7 @@ import SettingsPage from './components/SettingsModal'
 import LoginPage from './components/LoginPage'
 import ColumnResize from './components/ColumnResize'
 import ErrorBoundary from './components/ErrorBoundary'
+import UiReferenceOverlay from './components/UiReferenceOverlay'
 import { UNAUTHORIZED_EVENT, api } from './api/client'
 import { queryClient } from './api/queries'
 import './design-system/tokens.css'
@@ -88,7 +89,12 @@ function App() {
     return <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', color: 'var(--muted)' }}>正在检查登录状态…</div>
   }
   if (!authed) {
-    return <LoginPage onSuccess={() => { setAuthed(true); void queryClient.invalidateQueries() }} />
+    return (
+      <>
+        <LoginPage onSuccess={() => { setAuthed(true); void queryClient.invalidateQueries() }} />
+        <UiReferenceOverlay />
+      </>
+    )
   }
 
   const gridColumns = workspaceGridColumns({
@@ -192,6 +198,7 @@ function App() {
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeMobileSidebar() }}
         />
       )}
+      <UiReferenceOverlay />
     </div>
   )
 }

@@ -1,0 +1,55 @@
+{
+  "tid": "t011",
+  "attempt": 1,
+  "execution_id": "bde17fbbcb6742f7b51c407f9366886f",
+  "status": "done",
+  "branch": "t011_ui_reference",
+  "base_sha": "7a1f6280a717da31ae985d7f7cbf930da3709f02",
+  "tests": "contract: 149 passed; mail_core: 381 passed; frontend: 183 passed + tsc ok + build ok + lint ok; desktop: ok + packaged-smoke ok",
+  "blackbox": "frontend e2e smoke 3 passed, full stack e2e 3 passed",
+  "review": "single review PASS (Round 1: review_general PASS)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/lib/uiReference.ts",
+      "src/frontend/src/lib/uiReference.test.ts",
+      "src/frontend/src/components/UiReferenceOverlay.tsx",
+      "src/frontend/src/components/UiReferenceOverlay.test.tsx"
+    ],
+    "AC-002": [
+      "src/frontend/src/components/UiReferenceOverlay.tsx",
+      "src/frontend/src/components/UiReferenceOverlay.test.tsx"
+    ],
+    "AC-003": [
+      "src/frontend/src/lib/uiReference.ts",
+      "src/frontend/src/components/MessageList.tsx",
+      "src/frontend/src/components/Sidebar.tsx"
+    ],
+    "AC-004": [
+      "src/frontend/src/components/UiReferenceOverlay.tsx",
+      "src/frontend/src/components/UiReferenceOverlay.test.tsx"
+    ],
+    "AC-005": [
+      "src/frontend/src/lib/uiReference.ts",
+      "src/frontend/src/components/UiReferenceOverlay.tsx",
+      "src/frontend/src/components/UiReferenceOverlay.test.tsx"
+    ],
+    "AC-006": [
+      "src/frontend/src/components/UiReferenceOverlay.tsx",
+      "src/frontend/src/components/UiReferenceOverlay.test.tsx"
+    ],
+    "AC-007": [
+      "src/frontend/src/lib/uiReference.ts",
+      "src/frontend/src/components/LoginPage.tsx",
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/MessageList.tsx",
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/SettingsModal.tsx"
+    ],
+    "AC-008": [
+      "src/frontend/src/lib/uiReference.ts",
+      "src/frontend/src/lib/uiReference.test.ts"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}
