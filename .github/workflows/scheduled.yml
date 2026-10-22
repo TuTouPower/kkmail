@@ -1,0 +1,64 @@
+name: Scheduled Extended Drills & Benchmarks
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  extended-drills:
+    name: Database Migration, Backup Drill & Chaos Recovery
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          pip install uv
+          uv venv .venv
+          uv pip install --python .venv/bin/python -r requirements-dev.txt
+
+      - name: Start Dedicated Test Services
+        env:
+          KKMAIL_TEST_PG_PASSWORD: "ci_drill_password_secret_456"
+        run: |
+          echo "KKMAIL_TEST_PG_PASSWORD='ci_drill_password_secret_456'" > .env.test
+          chmod 600 .env.test
+          scripts/run-mail-core-tests.sh start
+          scripts/start-mail-core-imap.sh
+
+      - name: Run Migration Validation
+        run: |
+          scripts/run-mail-core-tests.sh run -k test_migration_validation
+
+      - name: Run Live Backup & Restore Drill
+        run: |
+          scripts/run-mail-core-tests.sh run -k test_backup_restore_drill_live
+          scripts/mail-core-backup-restore-drill.sh
+
+      - name: Run Multi-Process Worker Chaos Recovery
+        run: |
+          scripts/run-mail-core-tests.sh run -k test_worker_process_recovery
+
+      - name: Run Mailbox Performance Benchmark
+        run: |
+          scripts/run-mail-core-tests.sh run -k test_mailbox_performance_baseline
+
+      - name: Upload Extended Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheduled-drill-artifacts
+          path: |
+            .scratch/test_runs/
+            .scratch/benchmark_report.json
+          retention-days: 14
