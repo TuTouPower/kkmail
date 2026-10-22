@@ -257,6 +257,35 @@ def _pause_quota(
     )
 
 
+def _release_archive_claims_and_lease(
+    session,
+    message_ids: list[uuid.UUID],
+    *,
+    worker_id: str,
+    account_id: uuid.UUID | None = None,
+    fencing: int | None = None,
+    error: BaseException | str | None = None,
+) -> None:
+    now = datetime.now(timezone.utc)
+    from mail_core.security.redact import safe_provider_summary
+
+    err_str = safe_provider_summary(error) if error else None
+    for mid in message_ids:
+        st = session.get(MessageArchiveState, mid)
+        if st is not None and st.claimed_by == worker_id and st.state == ArchiveState.ARCHIVE_IN_PROGRESS.value:
+            apply_transition(st, ArchiveState.ARCHIVE_PENDING)
+            st.claimed_by = None
+            st.claimed_at = None
+            st.updated_at = now
+            if err_str:
+                st.last_error = err_str
+    if account_id is not None and fencing is not None:
+        try:
+            release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+        except FencingMismatch:
+            pass
+
+
 def resume_quota_paused_archives(
     session=None,
     *,
@@ -434,16 +463,30 @@ def run_archive_batch(
             }
 
         if msg_account_id not in provider_cache:
-            with Session() as session:
-                acc = session.get(Account, msg_account_id)
-                snap = Account(
-                    id=acc.id,
-                    email=acc.email,
-                    provider=acc.provider,
-                    credential_ref=acc.credential_ref,
-                    config=dict(acc.config or {}),
-                )
-            provider_cache[msg_account_id] = build_provider(snap, store or get_credential_store())
+            try:
+                with Session() as session:
+                    acc = session.get(Account, msg_account_id)
+                    snap = Account(
+                        id=acc.id,
+                        email=acc.email,
+                        provider=acc.provider,
+                        credential_ref=acc.credential_ref,
+                        config=dict(acc.config or {}),
+                    )
+                provider_cache[msg_account_id] = build_provider(snap, store or get_credential_store())
+            except Exception as exc:
+                with Session() as session:
+                    remaining_ids = [w[0] for w in work[idx:]]
+                    _release_archive_claims_and_lease(
+                        session,
+                        remaining_ids,
+                        worker_id=worker_id,
+                        account_id=account_id,
+                        fencing=fencing,
+                        error=exc,
+                    )
+                    session.commit()
+                raise
         provider = provider_cache[msg_account_id]
 
         # Heartbeat account lease during batch downloads (R10)

@@ -13,6 +13,8 @@ from mail_core.mail.application.remote_ops import mark_remote_operation, reclaim
 from mail_core.mail.domain.enums import JobType, RemoteOperationStatus
 from mail_core.mail.storage.models import Account, RemoteOperation
 from mail_core.providers.factory import build_provider
+from mail_core.providers.http import ProviderHttpError, RateLimitedError
+from mail_core.security.redact import safe_provider_summary
 from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import (
     FencingMismatch,
@@ -30,12 +32,16 @@ DEFAULT_MAX_REMOTE_OP_ATTEMPTS = 5
 
 def is_transient_error(exc: Exception | None = None, err_msg: str | None = None) -> bool:
     if exc is not None:
+        if isinstance(exc, RateLimitedError):
+            return True
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             return True
         name = type(exc).__name__.lower()
         if any(term in name for term in ("timeout", "connect", "network", "socket")):
             return True
-        status_code = getattr(exc, "status_code", None)
+        status_code = getattr(exc, "status", None)
+        if status_code is None:
+            status_code = getattr(exc, "status_code", None)
         if status_code is None and hasattr(exc, "response"):
             status_code = getattr(getattr(exc, "response"), "status_code", None)
         if isinstance(status_code, int) and (status_code == 429 or status_code >= 500):
@@ -49,6 +55,7 @@ def is_transient_error(exc: Exception | None = None, err_msg: str | None = None)
                 "timed out",
                 "connection",
                 "rate limit",
+                "ratelimited",
                 "429",
                 "500",
                 "502",
@@ -60,6 +67,37 @@ def is_transient_error(exc: Exception | None = None, err_msg: str | None = None)
         ):
             return True
     return False
+
+
+def is_rate_limited_error(exc: Exception | None = None, err_msg: str | None = None) -> bool:
+    if exc is not None:
+        if isinstance(exc, RateLimitedError):
+            return True
+        status_code = getattr(exc, "status", None)
+        if status_code is None:
+            status_code = getattr(exc, "status_code", None)
+        if status_code is None and hasattr(exc, "response"):
+            status_code = getattr(getattr(exc, "response"), "status_code", None)
+        if status_code == 429:
+            return True
+    if err_msg:
+        err_lower = err_msg.lower()
+        if "rate limit" in err_lower or "429" in err_lower or "ratelimited" in err_lower:
+            return True
+    return False
+
+
+def get_retry_after_seconds(exc: Exception | None, fallback: float = 60.0) -> float:
+    if exc is not None:
+        sec = getattr(exc, "retry_after_seconds", None)
+        if sec is not None:
+            try:
+                val = float(sec)
+                if val > 0:
+                    return max(1.0, min(val, 86400.0))
+            except (ValueError, TypeError):
+                pass
+    return max(1.0, min(fallback, 86400.0))
 
 
 def push_remote_operations(
@@ -130,7 +168,17 @@ def push_remote_operations(
                 pass
         return {"status": "ok", "pushed": 0, "failed": 0}
 
-    provider = build_provider(account_snapshot, store or get_credential_store())
+    try:
+        provider = build_provider(account_snapshot, store or get_credential_store())
+    except Exception:
+        with Session() as session:
+            try:
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            except FencingMismatch:
+                pass
+        raise
+
     pushed = 0
     failed = 0
 
@@ -164,12 +212,13 @@ def push_remote_operations(
         try:
             result = provider.apply_remote_operation(op_type, claimed_desired)  # network
             ok = bool(result.success)
-            err = result.error
+            err = safe_provider_summary(result.error) if result.error else None
         except Exception as exc:  # noqa: BLE001 — isolate per-op provider failures
-            log.exception("remote push op %s failed: %s", op_id, type(exc).__name__)
+            err_summary = safe_provider_summary(exc)
+            log.exception("remote push op %s failed: %s", op_id, err_summary)
             caught_exc = exc
             ok = False
-            err = f"{type(exc).__name__}: {exc}"
+            err = err_summary
 
         with Session() as session:
             try:
@@ -207,7 +256,26 @@ def push_remote_operations(
                 pushed += 1
             else:
                 now_retry = datetime.now(timezone.utc)
-                if is_transient_error(caught_exc, err) and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS:
+                if is_rate_limited_error(caught_exc, err):
+                    delay = get_retry_after_seconds(caught_exc, fallback=60.0)
+                    next_attempt = now_retry + timedelta(seconds=delay)
+                    mark_remote_operation(
+                        session,
+                        op,
+                        status=RemoteOperationStatus.PENDING,
+                        error=err or "rate limited",
+                        next_attempt_at=next_attempt,
+                    )
+                    enqueue_job(
+                        session,
+                        job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                        account_id=account_id,
+                        payload={},
+                        priority=40,
+                        run_after=next_attempt,
+                        dedupe_key=f"remote-op-push:{account_id}",
+                    )
+                elif is_transient_error(caught_exc, err) and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS:
                     delay = min(3600, 2 ** max(0, int(op.attempts) - 1))
                     next_attempt = now_retry + timedelta(seconds=delay)
                     mark_remote_operation(

@@ -18,6 +18,7 @@ from mail_core.mail.domain.enums import JobType, OutboxEventType, SyncPhase
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
+from mail_core.security.redact import safe_provider_summary
 from mail_core.sync.checkpoints import invalidate_checkpoint_for_rebuild
 from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import (
@@ -73,32 +74,53 @@ def sync_account_folders(
             config=dict(account.config or {}),
         )
 
-    provider = build_provider(account_snapshot, store or get_credential_store())
     try:
-        remote_folders = list(provider.list_folders())  # network
-    except RateLimitedError as exc:
-        delay = float(exc.retry_after_seconds or 60)
-        with Session() as session:
-            acc = session.get(Account, account_id)
-            if acc is not None:
-                acc.sync_status = "failed"
-                cfg = dict(acc.config or {})
-                cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
-                cfg["last_sync_error"] = str(exc)
-                acc.config = cfg
-                if hasattr(acc, "last_synced_at"):
-                    setattr(acc, "last_synced_at", datetime.now(timezone.utc))
-            enqueue_job(
-                session,
-                job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
-                account_id=account_id,
-                payload={},
-                priority=60,
-                run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
-            )
-            release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-            session.commit()
-        return {"status": "rate_limited", "retry_after": delay}
+        provider = build_provider(account_snapshot, store or get_credential_store())
+        try:
+            remote_folders = list(provider.list_folders())  # network
+        except RateLimitedError as exc:
+            delay = float(exc.retry_after_seconds or 60)
+            delay = max(1.0, min(delay, 86400.0))
+            with Session() as session:
+                acc = session.get(Account, account_id)
+                if acc is not None:
+                    acc.sync_status = "failed"
+                    cfg = dict(acc.config or {})
+                    cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
+                    cfg["last_sync_error"] = safe_provider_summary(exc)
+                    acc.config = cfg
+                    if hasattr(acc, "last_synced_at"):
+                        setattr(acc, "last_synced_at", datetime.now(timezone.utc))
+                enqueue_job(
+                    session,
+                    job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+                    account_id=account_id,
+                    payload={},
+                    priority=60,
+                    run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
+                )
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            return {"status": "rate_limited", "retry_after": delay}
+        except Exception as exc:
+            with Session() as session:
+                try:
+                    acc = session.get(Account, account_id)
+                    if acc is not None:
+                        acc.sync_status = "failed"
+                        cfg = dict(acc.config or {})
+                        cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
+                        cfg["last_sync_error"] = safe_provider_summary(exc)
+                        acc.config = cfg
+                        if hasattr(acc, "last_synced_at"):
+                            setattr(acc, "last_synced_at", datetime.now(timezone.utc))
+                    release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                    session.commit()
+                except FencingMismatch:
+                    session.rollback()
+                except Exception:
+                    session.rollback()
+            raise
     except Exception as exc:
         with Session() as session:
             try:
@@ -107,7 +129,7 @@ def sync_account_folders(
                     acc.sync_status = "failed"
                     cfg = dict(acc.config or {})
                     cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
-                    cfg["last_sync_error"] = str(exc)
+                    cfg["last_sync_error"] = safe_provider_summary(exc)
                     acc.config = cfg
                     if hasattr(acc, "last_synced_at"):
                         setattr(acc, "last_synced_at", datetime.now(timezone.utc))
@@ -252,11 +274,11 @@ def sync_folder_metadata(
             cursor["uidvalidity"] = int(cp.uidvalidity)
         session.commit()
 
-    provider = build_provider(account_snapshot, store or get_credential_store())
     total = 0
     exhausted = False
     pages = 0
     try:
+        provider = build_provider(account_snapshot, store or get_credential_store())
         while pages < max_pages:
             page = provider.fetch_metadata_page(remote_id, cursor)  # network
             with Session() as session:
@@ -315,7 +337,7 @@ def sync_folder_metadata(
                     payload={
                         "folder_id": str(folder_id),
                         "reason": "cursor_invalid",
-                        "detail": str(exc),
+                        "detail": safe_provider_summary(exc),
                     },
                     priority=40,
                 )
@@ -327,6 +349,7 @@ def sync_folder_metadata(
         return {"status": "cursor_invalid", "upserted": total, "pages": pages}
     except RateLimitedError as exc:
         delay = float(exc.retry_after_seconds or 60)
+        delay = max(1.0, min(delay, 86400.0))
         with Session() as session:
             enqueue_job(
                 session,

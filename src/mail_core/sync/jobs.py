@@ -163,6 +163,13 @@ def fail_job(
     job.last_error = safe_error(error) or None
     if int(job.attempts) < cap:
         delay = backoff_seconds(int(job.attempts))
+        if hasattr(error, "retry_after_seconds") and getattr(error, "retry_after_seconds", None) is not None:
+            try:
+                retry_after = float(getattr(error, "retry_after_seconds"))
+                if retry_after > 0:
+                    delay = max(delay, retry_after)
+            except (ValueError, TypeError):
+                pass
         job.status = JobStatus.PENDING.value
         job.run_after = now + timedelta(seconds=delay)
         job.locked_by = None
