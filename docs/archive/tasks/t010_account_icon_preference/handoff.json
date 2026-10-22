@@ -1,0 +1,43 @@
+{
+  "tid": "t010",
+  "attempt": 1,
+  "execution_id": "7375d51ccf12451981c8f9a641130573",
+  "status": "done",
+  "branch": "t010_account_icon_preference",
+  "base_sha": "a673de4bc2d94863f8369f8d2dd3bc84b070f7c7",
+  "tests": "contract: 149 passed; mail_core: 381 passed; frontend: 178 passed + tsc ok + build ok + lint ok; desktop: ok + packaged-smoke ok",
+  "blackbox": "frontend e2e smoke 3 passed, full stack e2e 3 passed",
+  "review": "single review PASS (Round 1: review_general PASS)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/store/mailStore.ts",
+      "src/frontend/src/components/SettingsModal.tsx",
+      "src/frontend/src/test/persistence.test.ts"
+    ],
+    "AC-002": [
+      "src/frontend/src/components/AccountIcon.tsx",
+      "src/frontend/src/components/AccountIcon.test.tsx"
+    ],
+    "AC-003": [
+      "src/frontend/src/store/accountIcon.ts",
+      "src/frontend/src/store/accountIcon.test.ts",
+      "src/frontend/src/components/AccountIcon.tsx",
+      "src/frontend/src/components/AccountIcon.test.tsx"
+    ],
+    "AC-004": [
+      "src/frontend/src/store/accountIcon.ts",
+      "src/frontend/src/store/accountIcon.test.ts",
+      "src/frontend/src/components/AccountIcon.tsx",
+      "src/frontend/src/components/AccountIcon.test.tsx"
+    ],
+    "AC-005": [
+      "src/frontend/src/components/AccountIcon.tsx",
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/components/SettingsModal.tsx"
+    ]
+  },
+  "pending": [
+    "docs/archive/pending/p015_account_avatar_style_setting.md"
+  ],
+  "findings": []
+}

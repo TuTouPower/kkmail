@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { AccountIconMode } from './accountIcon'
 
 export type FavoriteCategory = 'inbox' | 'unread' | 'sent' | 'drafts' | 'trash' | 'junk'
 
@@ -12,6 +13,8 @@ export type ViewState =
 interface MailUiState {
   theme: 'dark' | 'light' | 'system'
   setTheme: (theme: 'dark' | 'light' | 'system') => void
+  accountIconMode: AccountIconMode
+  setAccountIconMode: (mode: AccountIconMode) => void
   sidebarCollapsed: boolean
   toggleSidebar: () => void
   mobileSidebarOpen: boolean
@@ -63,6 +66,8 @@ export const useMailStore = create<MailUiState>()(
     (set) => ({
       theme: 'dark',
       setTheme: (theme) => set({ theme }),
+      accountIconMode: 'brand',
+      setAccountIconMode: (mode) => set({ accountIconMode: mode }),
       sidebarCollapsed: false,
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       mobileSidebarOpen: false,
@@ -103,7 +108,7 @@ export const useMailStore = create<MailUiState>()(
       clearSelected: () => set({ selectedIds: [] }),
       selectAll: (keys: string[]) => set({ selectedIds: keys }),
     }),
-    { name: 'mail-ui-storage', partialize: (s) => ({ theme: s.theme, sidebarWidth: s.sidebarWidth, listWidth: s.listWidth }) },
+    { name: 'mail-ui-storage', partialize: (s) => ({ theme: s.theme, sidebarWidth: s.sidebarWidth, listWidth: s.listWidth, accountIconMode: s.accountIconMode }) },
   ),
 )
 
