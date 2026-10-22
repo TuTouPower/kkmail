@@ -192,6 +192,13 @@ describe('<MessageReader />', () => {
     expect(link.querySelector('small')?.textContent).toBe('10 B')
   })
 
+  it('renders sender email address between MR06 and MR07', async () => {
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.querySelector('[data-ui="MR06"]')?.textContent).toBe('Ann'))
+    expect(container.textContent).toContain('发件人：ann@x.test')
+    expect(container.querySelector('[data-ui="MR07"]')?.textContent).toContain('收件人：box@x.test')
+  })
+
   // 旧测试 "has no compose/send actions" 已删除：t003 演进为支持占位展示发信按钮并设为 disabled 禁用状态
   it('renders disabled placeholder actions for compose/reply/forward (AC-003)', async () => {
     const { container } = await render(<MessageReader />)
