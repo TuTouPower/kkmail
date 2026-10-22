@@ -7,4 +7,4 @@
     2. `src/mail_core/providers/imap.py:56` 在 `_decode_header` 中针对未指定 charset 的原始 chunk，直接以 `utf-8` 解码且无字符集嗅探回退。
 - 测试缺口：现有 IMAP 测试夹具仅使用纯 ASCII 或标准 RFC 2047 UTF-8 封装编码（`=?UTF-8?B?...?=`），未覆盖携带裸发 GBK/GB2312 编码字节报头的兼容性场景。
 - 线索：`.scratch/repro_imap_header_gbk_mojibake.py`
-- 处理：未开
+- 处理：t007

@@ -22,4 +22,4 @@
     3. 后端协议映射与检索支持：
         - 修复 `src/mail_core/providers/imap.py`：补齐 RFC 6154 SPECIAL-USE 属性解析（`\Sent`, `\Drafts`, `\Trash`, `\Junk`, `\Archive`）与国内主流邮箱中文名（“草稿箱”、“已删除/废纸篓”、“垃圾邮件”、“归档”等），确保 5 大通用角色与归档精准映射；
         - 确保 `/api/mail/inbox?folder_role=...` 支持对新增角色（`drafts`, `trash`, `junk`, `archive`）的跨账户与单账户游标分页检索。
-- 处理：未开
+- 处理：t008
