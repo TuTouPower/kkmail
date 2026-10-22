@@ -36,7 +36,8 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 - 安全测试：17 passed；显式快速套件（已配置密码）241 passed / 103 skipped，PG live probes 确认不执行。完整套件 337 passed / 2 failed / 2 skipped，约 130 秒；失败为 LISTEN 消费前序残留、旧 SSE dispatch 测试未设置真实 subscriber。保留原始失败证据，完整连续两轮 AC 尚未通过，交由紧随其后的 t014 在获准测试隔离范围收口。
 - 真实验证：两个独立仓库进程分配不同数据库与产物目录；取消首轮后第二轮哨兵保持。断言失败、真实 Alembic 迁移失败、SIGTERM 与分配阶段 OSError/KeyboardInterrupt 均验证清理；运行后无残留带标记数据库或 owner role。PG skip 回归证明失败报告为 exit 1，不产生 pytest INTERNALERROR。
 - 独立代码 review：三项 important 已修复，末次复审未发现重要问题；见 `review_code.md`，未将完整 task 验收标为 PASS。
-- 本轮先交付 runtime 实现；t013 全套验收仍待 t014 后复验，不伪写全部完成。t014–t023 尚未实施。
+- 后续验证：t014 完成后，最终 seed 41、17 各 352 passed / 2 IMAP skipped；两个独立测试库、相同完整 testcase 集合，容器与 PG 服务进程持续复用。
+- 最后补验：真实未登记 PG 实例不能被入口采用，直接 pytest 拒绝实例身份不匹配，哨兵保持；SIGKILL 留下可辨认记录，按 exact UUID 清理成功。临时负向容器已按 CID 与专属 label 验证后删除，不触及常驻服务或业务数据。
 
 ## Review 处置
 
@@ -49,12 +50,12 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 ### 验收与验证
 
 - spec：[`spec.md`](spec.md)
-- 结果：尚未实施
-- 测试：待执行时填写
-- 黑盒：待执行时填写
-- review：待执行时填写
-- AC 证据：见 `handoff.json`
+- 结果：runtime 实现及全部 AC 验证完成；实现 commit `8f93e8e`，后续完整套件由 t014 收口
+- 测试：17 项安全测试；最终两轮完整 PG 套件各 352 passed / 2 IMAP skipped
+- 黑盒：双仓库并发、取消隔离、真实未登记 PG 哨兵、迁移/断言失败、SIGTERM、SIGKILL 残留及 exact cleanup
+- review：独立代码审查无未解决重要问题；t014 对当前共享测试入口与隔离再次完成 code/test review
+- AC 证据：实施笔记、保护测试、两轮 JUnit/coverage/test_summary 与 review 报告；按用户授权不生成工具链 handoff
 
 ### 结果摘要
 
-- 待执行时填写；遗留只写引用，不复制正文
+- 专用容器与每轮数据库生命周期已验证，业务数据库与凭据未复用；两项真实 IMAP 跳过交由 t016 实施，不计为协议通过。

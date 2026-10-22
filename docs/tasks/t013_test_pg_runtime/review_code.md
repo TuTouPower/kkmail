@@ -21,3 +21,14 @@ PG 条件 skip 处理改为 `pytest_runtest_makereport` hookwrapper，在最终 
 连续两轮完整测试及其容器、PG 服务进程复用证据仍缺；同进程双分配探针不能替代两个独立仓库/worktree 完整运行与取消隔离证据。SIGKILL 残留后显式回收也需补充实测记录。
 
 结论：本轮代码审查无未解决 critical/important；整项 t013 验收尚未完成，不标记 task PASS。
+
+## 后续验收补证
+
+以下为 t014 完成后主会话核实的补充证据，保留上文原审查时点记录：
+
+- 最终 seed 41、seed 17 两轮收集相同 354 项，各 352 passed / 2 skipped；仅两项真实 IMAP 测试缺服务跳过。两轮数据库不同，容器及 PG 服务进程保持复用，结束后本轮测试数据库与 owner role 均清理。
+- 已实际验证两个仓库进程并存，取消首轮后，第二轮哨兵仍可读取且不受清理影响。
+- SIGKILL 测试 worker 后保留 running 所有权记录及确切数据库；使用 CLI 指定对应 UUID，成功回收残留资源。
+- 在 loopback 随机端口建立临时未登记 PG 实例与人工 sentinel。直接 pytest 以 `instance ownership mismatch` 拒绝；入口拒绝采用未登记项目并返回 2；sentinel 值仍为 42。临时容器经 CID 与专属 label 确认后执行 rm-v。该探针验证临时未登记实例保护，不代表业务数据库验证或模板门禁。
+
+结合 t014 代码与测试独立审查，t013 此前连续两轮、跨仓库取消隔离、强制终止后指定回收等证据缺口已补齐。代码审查无未解决 critical/important；真实 IMAP 协议交互仍不在本次已执行证据内。
