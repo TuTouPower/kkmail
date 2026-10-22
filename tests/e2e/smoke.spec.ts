@@ -89,4 +89,29 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
     // 5. 验证成功退回到登录页面
     await expect(page.locator('#login-password')).toBeVisible({ timeout: 10000 })
   })
+
+  test('解析失败邮件在阅读器明确提示错误且跨邮件隔离 (AC-006, AC-007)', async ({ page }) => {
+    await setupStubApi(page, { authedInitially: true })
+    await page.goto('/')
+
+    // 1. 点击解析失败邮件
+    await expect(page.getByText('解析失败的损坏测试邮件')).toBeVisible({ timeout: 10000 })
+    await page.getByText('解析失败的损坏测试邮件').click()
+
+    // 2. 验证出现“邮件解析失败”提示及脱敏原因，且不出现“尚未完成同步或内容为空”
+    await expect(page.getByRole('alert')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('邮件解析失败')).toBeVisible()
+    await expect(page.getByText('body_decode_failed: UnicodeDecodeError')).toBeVisible()
+    await expect(page.getByText('邮件正文尚未完成同步或内容为空')).not.toBeVisible()
+
+    // 3. 切换至正常邮件：错误提示消失，正常正文呈现
+    await page.getByText('欢迎体验 kkmail 邮件内核').click()
+    await expect(page.getByRole('alert')).not.toBeVisible()
+    await expect(page.getByText('邮件解析失败')).not.toBeVisible()
+
+    // 4. 重新切回失败邮件：持久错误依然可见
+    await page.getByText('解析失败的损坏测试邮件').click()
+    await expect(page.getByRole('alert')).toBeVisible()
+    await expect(page.getByText('邮件解析失败')).toBeVisible()
+  })
 })

@@ -11,6 +11,7 @@ export interface MockMessage {
   has_attachments: boolean
   body_preview: string
   body_html: string
+  parse_error?: string | null
   accountEmail: string
   accountId: string
 }
@@ -56,6 +57,21 @@ export function createMockMessages(): MockMessage[] {
       has_attachments: false,
       body_preview: '收件箱增量同步完成，数据库索引性能平稳。',
       body_html: '<p>季度报告数据汇总完毕，全文检索与 Keyset 游标均已就绪。</p>',
+      accountEmail: 'user@example.com',
+      accountId: 'acc-00000000-0000-0000-0000-000000000001',
+    },
+    {
+      id: 'msg-00000000-0000-0000-0000-000000000004',
+      subject: '解析失败的损坏测试邮件',
+      from: 'corrupt@kkmail.local',
+      to: 'user@example.com',
+      date: '2026-10-18T10:00:00Z',
+      is_read: true,
+      is_flagged: false,
+      has_attachments: false,
+      body_preview: '部分头部摘要',
+      body_html: '',
+      parse_error: 'body_decode_failed: UnicodeDecodeError: invalid start byte',
       accountEmail: 'user@example.com',
       accountId: 'acc-00000000-0000-0000-0000-000000000001',
     },
@@ -323,6 +339,7 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
           body_text: hit.body_preview,
           body_html: hit.body_html,
           body_type: 'html',
+          parse_error: hit.parse_error ?? null,
           attachments: hit.has_attachments
             ? [{ id: 'att-1', name: 'security_audit.pdf', size: 102400, contentType: 'application/pdf' }]
             : [],
