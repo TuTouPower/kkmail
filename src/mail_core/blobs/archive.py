@@ -6,6 +6,7 @@ Never pre-creates millions of job rows; selects a limited batch each run.
 from __future__ import annotations
 
 import email
+import email.errors
 from email.policy import default as default_policy
 import hashlib
 import logging
@@ -60,6 +61,15 @@ class QuotaExceededError(RuntimeError):
     """Raised when blob write would exceed hard quota."""
 
 
+class MimeParseError(RuntimeError):
+    """Raised when MIME body, header, or attachment filename parsing/decoding fails."""
+
+    def __init__(self, stage: str, detail: str):
+        super().__init__(f"{stage}: {detail}")
+        self.stage = stage
+        self.detail = detail
+
+
 def blob_root() -> Path:
     return Path(os.environ.get("MAIL_CORE_BLOB_ROOT", "[REDACTED]mail-core-blobs"))
 
@@ -68,7 +78,20 @@ def parse_mime_content(
     mime_bytes: bytes,
 ) -> tuple[str | None, str | None, list[dict[str, Any]]]:
     """Parse raw MIME bytes into (text_plain, text_html, attachments)."""
-    msg = email.message_from_bytes(mime_bytes, policy=default_policy)
+    try:
+        msg = email.message_from_bytes(mime_bytes, policy=default_policy)
+    except Exception as exc:
+        raise MimeParseError("header", f"header_parse_failed: {safe_error(exc)}") from exc
+
+    for defect in getattr(msg, "defects", ()):
+        if isinstance(defect, (email.errors.HeaderDefect, email.errors.CharsetError, email.errors.UndecodableBytesDefect)):
+            raise MimeParseError("header", f"header_defect: {type(defect).__name__}")
+
+    for header_name, header_value in msg.items():
+        for defect in getattr(header_value, "defects", ()):
+            if isinstance(defect, (email.errors.UndecodableBytesDefect, email.errors.CharsetError)):
+                raise MimeParseError("header", f"header_defect in {header_name}: {type(defect).__name__}")
+
     text_plain_parts: list[str] = []
     text_html_parts: list[str] = []
     attachments: list[dict[str, Any]] = []
@@ -78,8 +101,23 @@ def parse_mime_content(
         if part.is_multipart():
             continue
 
-        disposition = part.get_content_disposition()
-        filename = part.get_filename()
+        try:
+            disposition = part.get_content_disposition()
+            filename = part.get_filename()
+        except Exception as exc:
+            raise MimeParseError("attachment", f"attachment_filename_failed: {safe_error(exc)}") from exc
+
+        cd = part.get("Content-Disposition")
+        if cd and hasattr(cd, "defects"):
+            for d in cd.defects:
+                if isinstance(d, (email.errors.UndecodableBytesDefect, email.errors.CharsetError)):
+                    raise MimeParseError("attachment", f"attachment_filename_failed: {type(d).__name__}")
+        ct = part.get("Content-Type")
+        if ct and hasattr(ct, "defects"):
+            for d in ct.defects:
+                if isinstance(d, (email.errors.UndecodableBytesDefect, email.errors.CharsetError)):
+                    raise MimeParseError("attachment", f"attachment_filename_failed: {type(d).__name__}")
+
         content_id_raw = part.get("Content-ID")
         content_id = content_id_raw.strip("<>") if content_id_raw else None
         content_type = part.get_content_type() or "application/octet-stream"
@@ -126,16 +164,28 @@ def parse_mime_content(
                 }
             )
         else:
+            for defect in getattr(part, "defects", ()):
+                if isinstance(defect, (email.errors.UndecodableBytesDefect, email.errors.CharsetError)):
+                    raise MimeParseError("body", f"body_defect: {type(defect).__name__}")
+
             try:
-                content = part.get_content()
-            except Exception:
-                raw = part.get_payload(decode=True)
-                if isinstance(raw, bytes):
-                    content = raw.decode("utf-8", errors="replace")
-                elif isinstance(raw, str):
-                    content = raw
+                content = part.get_content(errors="strict")
+            except UnicodeDecodeError as ude:
+                param_charset = part.get_param("charset")
+                if not param_charset or str(param_charset).lower() in ("ascii", "us-ascii"):
+                    raw_payload = part.get_payload(decode=True)
+                    if isinstance(raw_payload, bytes):
+                        try:
+                            content = raw_payload.decode("utf-8", errors="strict")
+                        except Exception:
+                            raise MimeParseError("body", f"body_decode_failed: {safe_error(ude)}") from ude
+                    else:
+                        raise MimeParseError("body", f"body_decode_failed: {safe_error(ude)}") from ude
                 else:
-                    content = ""
+                    raise MimeParseError("body", f"body_decode_failed: {safe_error(ude)}") from ude
+            except Exception as body_exc:
+                raise MimeParseError("body", f"body_decode_failed: {safe_error(body_exc)}") from body_exc
+
             if not isinstance(content, str):
                 content = str(content)
 
@@ -701,17 +751,23 @@ def run_archive_batch(
                                 if dt:
                                     msg_record.sort_time = dt
                         except Exception as hdr_exc:
-                            log.debug("mime header backfill skipped for %s: %s", mid, hdr_exc)
+                            raise MimeParseError("header", f"header_backfill_failed: {safe_error(hdr_exc)}") from hdr_exc
 
                     from mail_core.search.index import upsert_message_search
                     upsert_message_search(session, message_id=mid, body_text=plain_text)
                 except Exception as parse_exc:
-                    log.warning("archive mime parse error for message %s: %s", mid, safe_error(parse_exc))
+                    parsed_attachments = []
+                    stage = getattr(parse_exc, "stage", "content")
+                    err_str = safe_error(parse_exc)[:2000]
+                    log.warning("archive mime parse error for message %s stage=%s: %s", mid, stage, err_str)
                     body = session.get(MessageBody, mid)
                     if body is None:
-                        session.add(MessageBody(message_id=mid, parse_error=safe_error(parse_exc)[:2000]))
+                        session.add(MessageBody(message_id=mid, text_plain=None, text_html=None, parse_error=err_str))
                     else:
-                        body.parse_error = safe_error(parse_exc)[:2000]
+                        body.text_plain = None
+                        body.text_html = None
+                        body.parse_error = err_str
+                        body.updated_at = datetime.now(timezone.utc)
                     session.flush()
 
                 storage_failed = False

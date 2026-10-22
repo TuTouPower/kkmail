@@ -1,0 +1,45 @@
+{
+  "tid": "t026",
+  "attempt": 1,
+  "execution_id": "dc2df50b9ea143d4859df9cb0a3bffcb",
+  "status": "done",
+  "branch": "t026_mime_archive_decode_failure",
+  "base_sha": "76865ff7a3a72e3cd40aff368bd6297d4b3d775f",
+  "tests": "contract: 149 passed; mail_core: 392 passed (PG + Dovecot); frontend: 188 passed + tsc ok + build ok + lint ok; desktop: ok + packaged-smoke ok",
+  "blackbox": "frontend e2e smoke 4 passed, full stack e2e 3 passed",
+  "review": "full review PASS (Round 1: review_code PASS, review_test PASS)",
+  "ac_evidence": {
+    "AC-003": [
+      "src/mail_core/blobs/archive.py",
+      "tests/mail_core/test_archive_mime_parser.py",
+      "tests/mail_core/test_archive_decode_failure.py"
+    ],
+    "AC-004": [
+      "src/mail_core/blobs/archive.py",
+      "tests/mail_core/test_archive_decode_failure.py"
+    ],
+    "AC-005": [
+      "src/mail_core/blobs/archive.py",
+      "src/mail_core/mail/application/queries.py",
+      "tests/mail_core/test_archive_decode_failure.py"
+    ],
+    "AC-006": [
+      "src/frontend/src/api/queries.ts",
+      "src/frontend/src/api/mailCore.ts",
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx",
+      "tests/e2e/smoke.spec.ts"
+    ],
+    "AC-007": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx",
+      "tests/e2e/smoke.spec.ts"
+    ]
+  },
+  "pending": [
+    "docs/archive/pending/p020_imap_header_mojibake_history_backfill_and_mime_gap.md"
+  ],
+  "findings": [
+    "docs/findings/d001_python_email_policy_defects_and_strict_decoding.md"
+  ]
+}

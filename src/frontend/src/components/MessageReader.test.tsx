@@ -58,6 +58,43 @@ const htmlItemLightRich: MailItem = {
   folder: 'inbox',
 }
 
+const failedItem: MailItem = {
+  id: 'm-failed',
+  subject: 'Corrupted MIME Email',
+  from: 'Bad <bad@x.test>',
+  is_read: true,
+  is_flagged: false,
+  has_attachments: false,
+  accountEmail: 'box@x.test',
+  accountId: 'acc-1',
+  folder: 'inbox',
+}
+
+const failedItemWithSnippet: MailItem = {
+  id: 'm-failed-snippet',
+  subject: 'Failed MIME with Snippet',
+  from: 'Bad2 <bad2@x.test>',
+  is_read: true,
+  is_flagged: false,
+  has_attachments: false,
+  body_preview: 'Metadata snippet preview',
+  accountEmail: 'box@x.test',
+  accountId: 'acc-1',
+  folder: 'inbox',
+}
+
+const emptyNormalItem: MailItem = {
+  id: 'm-empty',
+  subject: 'Legitimate Empty Email',
+  from: 'Empty <empty@x.test>',
+  is_read: true,
+  is_flagged: false,
+  has_attachments: false,
+  accountEmail: 'box@x.test',
+  accountId: 'acc-1',
+  folder: 'inbox',
+}
+
 const posts: Array<{ url: string; body: unknown }> = []
 
 beforeEach(() => {
@@ -101,13 +138,40 @@ beforeEach(() => {
         parse_error: null, attachments: [],
       })
     }
+    if (u === '/api/mail/messages/m-failed') {
+      return json({
+        id: 'm-failed', account_id: 'acc-1', subject: 'Corrupted MIME Email', from_address: 'bad@x.test', from_name: 'Bad',
+        from: 'Bad <bad@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T12:00:00Z', is_read: true,
+        is_flagged: false, has_attachments: false, snippet: null,
+        body: '', body_type: 'empty',
+        parse_error: 'body_decode_failed: UnicodeDecodeError: invalid start byte', attachments: [],
+      })
+    }
+    if (u === '/api/mail/messages/m-failed-snippet') {
+      return json({
+        id: 'm-failed-snippet', account_id: 'acc-1', subject: 'Failed MIME with Snippet', from_address: 'bad2@x.test', from_name: 'Bad2',
+        from: 'Bad2 <bad2@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T13:00:00Z', is_read: true,
+        is_flagged: false, has_attachments: false, snippet: 'Metadata snippet preview',
+        body: '', body_type: 'empty',
+        parse_error: 'header_defect in From: UndecodableBytesDefect', attachments: [],
+      })
+    }
+    if (u === '/api/mail/messages/m-empty') {
+      return json({
+        id: 'm-empty', account_id: 'acc-1', subject: 'Legitimate Empty Email', from_address: 'empty@x.test', from_name: 'Empty',
+        from: 'Empty <empty@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T14:00:00Z', is_read: true,
+        is_flagged: false, has_attachments: false, snippet: null,
+        body: '', body_type: 'empty',
+        parse_error: null, attachments: [],
+      })
+    }
     if (init.method === 'POST') {
       posts.push({ url: u, body: JSON.parse(String(init.body)) })
       return json({ id: 'm-1', account_id: 'acc-1', operation_id: 'op', is_flagged: true, success: true })
     }
     return json({ detail: 'unexpected' }, 404)
   }))
-  queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item, htmlItemWithImages, htmlItemOther, htmlItemLightRich])
+  queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item, htmlItemWithImages, htmlItemOther, htmlItemLightRich, failedItem, failedItemWithSnippet, emptyNormalItem])
   useMailStore.setState({ selectedKey: 'm-1', theme: 'dark' })
 })
 
@@ -210,5 +274,61 @@ describe('<MessageReader />', () => {
     await waitFor(() => expect(container.querySelector('.mail-paper-card')).toBeNull())
     const lightIframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
     expect(lightIframe.srcdoc).toContain('background:#ffffff')
+  })
+
+  it('displays clear parse error banner with reason and hides empty placeholder on failed MIME (AC-006)', async () => {
+    useMailStore.setState({ selectedKey: 'm-failed' })
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[role="alert"]')).not.toBeNull()
+      expect(container.textContent).toContain('邮件解析失败')
+      expect(container.textContent).toContain('body_decode_failed: UnicodeDecodeError: invalid start byte')
+    })
+    // Must NOT mask failure with the empty body placeholder
+    expect(container.textContent).not.toContain('邮件正文尚未完成同步或内容为空')
+  })
+
+  it('displays parse error even if snippet/preview exists and never masks failure (AC-006)', async () => {
+    useMailStore.setState({ selectedKey: 'm-failed-snippet' })
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[role="alert"]')).not.toBeNull()
+      expect(container.textContent).toContain('邮件解析失败')
+      expect(container.textContent).toContain('header_defect in From: UndecodableBytesDefect')
+    })
+    expect(container.textContent).not.toContain('邮件正文尚未完成同步或内容为空')
+  })
+
+  it('clears error when switching to normal email and restores error on switching back (AC-007)', async () => {
+    // 1. Start on failed email
+    useMailStore.setState({ selectedKey: 'm-failed' })
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.textContent).toContain('邮件解析失败'))
+
+    // 2. Switch to normal email
+    useMailStore.setState({ selectedKey: 'm-1' })
+    await waitFor(() => expect(container.textContent).toContain('plain body text'))
+    expect(container.textContent).not.toContain('邮件解析失败')
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+
+    // 3. Switch back to failed email
+    useMailStore.setState({ selectedKey: 'm-failed' })
+    await waitFor(() => {
+      expect(container.textContent).toContain('邮件解析失败')
+      expect(container.querySelector('[role="alert"]')).not.toBeNull()
+    })
+  })
+
+  it('displays empty body placeholder and not parse error for legitimate empty email (AC-007)', async () => {
+    useMailStore.setState({ selectedKey: 'm-empty' })
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('邮件正文尚未完成同步或内容为空')
+    })
+    expect(container.textContent).not.toContain('邮件解析失败')
+    expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 })

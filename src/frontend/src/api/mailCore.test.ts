@@ -53,5 +53,30 @@ describe('mailCoreToMailDetail', () => {
     const out = mailCoreToMailDetail(d)
     expect(out.body_type).toBe('html')
     expect(out.body).toContain('<p>')
+    expect(out.parse_error).toBeNull()
+  })
+
+  it('preserves parse_error in MailDetail', () => {
+    const d: MailCoreMessageDetail = {
+      id: 'm-err',
+      account_id: 'a1',
+      subject: 'Failed MIME',
+      from_address: 'a@b.c',
+      from_name: 'A',
+      from: 'A <a@b.c>',
+      to: 'you@x.com',
+      cc: '',
+      date: '2024-01-01T00:00:00Z',
+      is_read: true,
+      is_flagged: false,
+      has_attachments: false,
+      snippet: 'partial snippet',
+      body: '',
+      body_type: 'empty',
+      parse_error: 'body_decode_failed: UnicodeDecodeError: invalid start byte',
+      attachments: [],
+    }
+    const out = mailCoreToMailDetail(d)
+    expect(out.parse_error).toBe('body_decode_failed: UnicodeDecodeError: invalid start byte')
   })
 })
