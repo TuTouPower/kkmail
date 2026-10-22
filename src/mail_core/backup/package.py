@@ -127,6 +127,8 @@ def _resolve_member_file(work: Path, name: str) -> Path | None:
     if safe is None:
         return None
     candidate = work.joinpath(*Path(safe).parts)
+    if candidate.is_symlink():
+        return None
     try:
         work_res = work.resolve(strict=False)
         cand_res = candidate.resolve(strict=False)
@@ -135,6 +137,40 @@ def _resolve_member_file(work: Path, name: str) -> Path | None:
     if cand_res != work_res and work_res not in cand_res.parents:
         return None
     return candidate
+
+
+def _safe_rmtree(path: Path) -> None:
+    """Safely remove a temporary directory created by this process without following symlinks."""
+    try:
+        if path.is_symlink():
+            path.unlink()
+            return
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.exists():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _make_private_dir(path: Path) -> Path:
+    """Create a private 0700 directory, refusing symlinks."""
+    if path.is_symlink():
+        raise BackupCryptoError(f"refusing to use symlink as private workspace: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
+    return path
+
+
+def _set_private_file(path: Path) -> None:
+    """Set file permissions to 0600."""
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _verify_manifest_file_checksum(man_path: Path, sha_path: Path, errors: list[str]) -> None:
@@ -224,9 +260,10 @@ def _build_plain_dir(
     include_blobs: bool,
     allow_dump_stub: bool = False,
 ) -> BackupManifest:
-    out.mkdir(parents=True, exist_ok=True)
+    _make_private_dir(out)
     dump_path = out / "postgres.dump"
     dump_method = _pg_dump_to(dump_path, url, allow_stub=allow_dump_stub)
+    _set_private_file(dump_path)
     members: dict[str, dict[str, str | int]] = {
         "postgres.dump": {
             "sha256": _sha256_file(dump_path),
@@ -239,6 +276,7 @@ def _build_plain_dir(
         with tarfile.open(tar_path, "w") as tar:
             if root.exists():
                 tar.add(root, arcname="blobs")
+        _set_private_file(tar_path)
         members["blobs.tar"] = {
             "sha256": _sha256_file(tar_path),
             "size": tar_path.stat().st_size,
@@ -267,21 +305,26 @@ def create_backup_package(
     must leave it false so a failed pg_dump cannot seal as a successful backup.
     """
     out = Path(output_dir)
+    if out.is_symlink():
+        raise RuntimeError(f"refusing to use symlink as output directory: {out}")
     url = database_url_override or database_url()
     root = blobs_dir or blob_root()
     do_encrypt = encrypt if encrypt is not None else bool(
         os.environ.get("MAIL_CORE_BACKUP_KEY")
     )
 
-    plain = out / "plain" if do_encrypt else out
-    manifest = _build_plain_dir(
-        plain, url=url, root=root, include_blobs=include_blobs, allow_dump_stub=allow_dump_stub
-    )
-    man_path = plain / "MANIFEST.json"
-    man_path.write_text(json.dumps(asdict(manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    (plain / "MANIFEST.sha256").write_text(f"{_sha256_file(man_path)}  MANIFEST.json\n", encoding="utf-8")
-
     if not do_encrypt:
+        _make_private_dir(out)
+        manifest = _build_plain_dir(
+            out, url=url, root=root, include_blobs=include_blobs, allow_dump_stub=allow_dump_stub
+        )
+        man_path = out / "MANIFEST.json"
+        man_path.write_text(json.dumps(asdict(manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        _set_private_file(man_path)
+        sha_path = out / "MANIFEST.sha256"
+        sha_path.write_text(f"{_sha256_file(man_path)}  MANIFEST.json\n", encoding="utf-8")
+        _set_private_file(sha_path)
+
         # Clean up any stale sealed artifacts from previous runs
         for stale_name in ("backup.kkbak", "backup.kkbak.sha256"):
             stale_f = out / stale_name
@@ -291,41 +334,61 @@ def create_backup_package(
         return out
 
     key, version = load_backup_key()
-    out.mkdir(parents=True, exist_ok=True)
-    # Stream tar to temporary file on disk (avoid buffering full DB + blobs in memory)
+    _make_private_dir(out)
+
+    plain_stage = out / f".stage_plain_{uuid.uuid4().hex}"
+    _make_private_dir(plain_stage)
     tar_tmp = out / f".archive_{uuid.uuid4().hex}.tar"
     kkbak = out / "backup.kkbak"
+
     try:
+        manifest = _build_plain_dir(
+            plain_stage, url=url, root=root, include_blobs=include_blobs, allow_dump_stub=allow_dump_stub
+        )
+        man_path = plain_stage / "MANIFEST.json"
+        man_path.write_text(json.dumps(asdict(manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        _set_private_file(man_path)
+        sha_path = plain_stage / "MANIFEST.sha256"
+        sha_path.write_text(f"{_sha256_file(man_path)}  MANIFEST.json\n", encoding="utf-8")
+        _set_private_file(sha_path)
+
         with tarfile.open(tar_tmp, mode="w") as tar:
-            for path in sorted(plain.rglob("*")):
+            for path in sorted(plain_stage.rglob("*")):
+                if path.is_symlink():
+                    raise RuntimeError(f"refusing symlink in backup staging: {path}")
                 if path.is_file() and path != tar_tmp:
-                    tar.add(path, arcname=str(path.relative_to(plain)))
+                    tar.add(path, arcname=str(path.relative_to(plain_stage)))
+        _set_private_file(tar_tmp)
+
         encrypt_file(tar_tmp, kkbak, key=key, key_version=version)
+
+        sealed_manifest = BackupManifest(
+            created_at=manifest.created_at,
+            database_url_redacted=manifest.database_url_redacted,
+            blob_root=manifest.blob_root,
+            members={
+                "backup.kkbak": {"sha256": _sha256_file(kkbak), "size": kkbak.stat().st_size},
+                **{f"plain/{k}": v for k, v in manifest.members.items()},
+            },
+            encrypted=True,
+            backup_key_version=version,
+            note=manifest.note,
+        )
+        out_man = out / "MANIFEST.json"
+        out_man.write_text(
+            json.dumps(asdict(sealed_manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        _set_private_file(out_man)
+        out_sha = out / "MANIFEST.sha256"
+        out_sha.write_text(
+            f"{_sha256_file(out_man)}  MANIFEST.json\n", encoding="utf-8"
+        )
+        _set_private_file(out_sha)
+        log.info("encrypted backup written to %s", kkbak)
+        return out
     finally:
-        if tar_tmp.exists():
-            tar_tmp.unlink()
-    sealed_manifest = BackupManifest(
-        created_at=manifest.created_at,
-        database_url_redacted=manifest.database_url_redacted,
-        blob_root=manifest.blob_root,
-        members={
-            "backup.kkbak": {"sha256": _sha256_file(kkbak), "size": kkbak.stat().st_size},
-            **{f"plain/{k}": v for k, v in manifest.members.items()},
-        },
-        encrypted=True,
-        backup_key_version=version,
-        note=manifest.note,
-    )
-    (out / "MANIFEST.json").write_text(
-        json.dumps(asdict(sealed_manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    (out / "MANIFEST.sha256").write_text(
-        f"{_sha256_file(out / 'MANIFEST.json')}  MANIFEST.json\n", encoding="utf-8"
-    )
-    # Remove plaintext working tree from the package root
-    shutil.rmtree(plain, ignore_errors=True)
-    log.info("encrypted backup written to %s", kkbak)
-    return out
+        _safe_rmtree(plain_stage)
+        _safe_rmtree(tar_tmp)
 
 
 _INNER_TAR_ALLOWLIST = _PLAIN_MEMBER_ALLOWLIST | {"MANIFEST.json", "MANIFEST.sha256"}
@@ -372,6 +435,9 @@ def _extract_tar_file(tar_path: Path, extract_dir: Path, errors: list[str]) -> b
         with tarfile.open(tar_path, mode="r") as tar:
             for info in tar.getmembers():
                 name = info.name
+                if info.issym() or info.islnk():
+                    errors.append(f"unsafe symlink or hardlink in tar: {name!r}")
+                    return False
                 if name.endswith("/"):
                     # Directory entries: only empty path or prefixes of allowlisted files.
                     base = name.rstrip("/")
@@ -387,6 +453,17 @@ def _extract_tar_file(tar_path: Path, extract_dir: Path, errors: list[str]) -> b
                     errors.append(f"unsafe or unexpected tar member: {name!r}")
                     return False
             tar.extractall(extract_dir, filter="data")
+            for p in extract_dir.rglob("*"):
+                if p.is_symlink():
+                    errors.append(f"unexpected symlink after extract: {p.name!r}")
+                    return False
+                if p.is_file():
+                    _set_private_file(p)
+                elif p.is_dir():
+                    try:
+                        p.chmod(0o700)
+                    except OSError:
+                        pass
     except tarfile.TarError as exc:
         errors.append(f"inner tar extract failed: {exc}")
         return False
@@ -410,7 +487,6 @@ def verify_backup_package(
     key_version: int | None = None
     checked = 0
     kkbak = root / "backup.kkbak"
-    extract_dir: Path | None = None
 
     outer_man = root / "MANIFEST.json"
     is_sealed = False
@@ -455,20 +531,23 @@ def verify_backup_package(
             if _safe_member_relpath(name, allowlist=_OUTER_MEMBER_ALLOWLIST) is None:
                 errors.append(f"disallowed outer member name: {name!r}")
 
-        extract_dir = root / ".verify_extract"
-        if extract_dir.exists():
-            shutil.rmtree(extract_dir)
-        extract_dir.mkdir(parents=True)
-        decrypted_tar = extract_dir / f".decrypted_{uuid.uuid4().hex}.tar"
-        try:
-            keyring = load_backup_keyring(env)
-            key_version = decrypt_file(kkbak, decrypted_tar, keyring=keyring)
-        except Exception as exc:
-            errors.append(f"decrypt failed: {exc}")
+        extract_dir = root / f".verify_{uuid.uuid4().hex}"
+        if extract_dir.is_symlink():
+            errors.append(f"refusing symlink as verify extract directory: {extract_dir}")
             return RestoreVerifyResult(
                 ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
             )
+        _make_private_dir(extract_dir)
+        decrypted_tar = extract_dir / f".decrypted_{uuid.uuid4().hex}.tar"
         try:
+            try:
+                keyring = load_backup_keyring(env)
+                key_version = decrypt_file(kkbak, decrypted_tar, keyring=keyring)
+            except Exception as exc:
+                errors.append(f"decrypt failed: {exc}")
+                return RestoreVerifyResult(
+                    ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
+                )
             if not _extract_tar_file(decrypted_tar, extract_dir, errors):
                 return RestoreVerifyResult(
                     ok=False, members_checked=checked, errors=errors, backup_key_version=key_version
@@ -483,7 +562,7 @@ def verify_backup_package(
                 allow_stub=allow_stub,
             )
         finally:
-            shutil.rmtree(extract_dir, ignore_errors=True)
+            _safe_rmtree(extract_dir)
 
     return _verify_plain_tree(
         root,
@@ -536,6 +615,8 @@ def _verify_plain_tree(
 
 def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) -> dict:
     dest = Path(output_dir or os.environ.get("MAIL_CORE_BACKUP_DIR") or "[REDACTED]mail-core-backup")
+    if dest.is_symlink():
+        raise RuntimeError(f"refusing backup destination as symlink: {dest}")
     do_encrypt = True if encrypt is None else encrypt
     if do_encrypt:
         # Enforce strict encryption in production: refuse to run without backup keys
@@ -543,11 +624,14 @@ def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) ->
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     staging_dir = dest.parent / f".staging_{dest.name}_{uuid.uuid4().hex}"
+    if staging_dir.is_symlink():
+        raise RuntimeError(f"refusing staging dir as symlink: {staging_dir}")
+    _make_private_dir(staging_dir)
     try:
         path = create_backup_package(staging_dir, encrypt=do_encrypt)
         verify = verify_backup_package(path)
         if not verify.ok:
-            shutil.rmtree(staging_dir, ignore_errors=True)
+            _safe_rmtree(staging_dir)
             return {
                 "status": "verify_failed",
                 "path": str(dest),
@@ -562,11 +646,13 @@ def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) ->
         # Atomic replace: swap staging directory into dest
         old_dir = dest.parent / f".old_{dest.name}_{uuid.uuid4().hex}"
         if dest.exists():
+            if dest.is_symlink():
+                raise RuntimeError(f"refusing existing destination as symlink: {dest}")
             dest.rename(old_dir)
         try:
             staging_dir.rename(dest)
             if old_dir.exists():
-                shutil.rmtree(old_dir, ignore_errors=True)
+                _safe_rmtree(old_dir)
         except Exception:
             if old_dir.exists():
                 old_dir.rename(dest)
@@ -574,7 +660,7 @@ def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) ->
         return {
             "status": "ok",
             "path": str(dest),
-            "files": sorted(p.name for p in dest.iterdir() if p.name != ".verify_extract"),
+            "files": sorted(p.name for p in dest.iterdir() if not p.name.startswith(".")),
             "verify": {
                 "ok": True,
                 "members_checked": verify.members_checked,
@@ -583,5 +669,4 @@ def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) ->
             },
         }
     finally:
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir, ignore_errors=True)
+        _safe_rmtree(staging_dir)
