@@ -115,7 +115,8 @@ def test_memory_provider_sync_folders_and_metadata():
 
 
 @pytest.mark.skipif(not _imap_up(), reason="pymap IMAP not listening")
-def test_live_imap_sync_via_worker_handler():
+def test_live_imap_sync_via_worker_handler(monkeypatch):
+    monkeypatch.setenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", "1")
     store = DictCredentialStore()
     ref = f"test:alice-{uuid.uuid4().hex[:6]}"
     store.put(ref, os.environ.get("MAIL_CORE_IMAP_PASS", "alice-imap-pass"))
