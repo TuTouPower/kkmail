@@ -42,6 +42,12 @@ def _apply_flag_patches(
     changes: list,
 ) -> tuple[int, list[uuid.UUID]]:
     """Patch is_read / is_flagged only — never upsert stub meta that wipes subject/from."""
+    from mail_core.sync.remote_push import get_unconverged_field_intents
+
+    remote_ids = [c.remote_id for c in changes]
+    now = datetime.now(timezone.utc)
+    intents = get_unconverged_field_intents(session, account_id, remote_ids, now=now)
+
     touched: list[uuid.UUID] = []
     flagged = 0
     for change in changes:
@@ -60,18 +66,24 @@ def _apply_flag_patches(
         changed = False
         if "is_read" in flags:
             want = bool(flags["is_read"])
+            if change.remote_id in intents and "is_read" in intents[change.remote_id]:
+                want = bool(intents[change.remote_id]["is_read"])
             if msg.is_read != want:
                 msg.is_read = want
                 changed = True
         if "is_flagged" in flags:
             want = bool(flags["is_flagged"])
+            if change.remote_id in intents and "is_flagged" in intents[change.remote_id]:
+                want = bool(intents[change.remote_id]["is_flagged"])
             if msg.is_flagged != want:
                 msg.is_flagged = want
                 changed = True
         if changed:
-            msg.updated_at = datetime.now(timezone.utc)
+            msg.updated_at = now
             touched.append(msg.id)
             flagged += 1
+    if flagged > 0:
+        session.flush()
     return flagged, touched
 
 

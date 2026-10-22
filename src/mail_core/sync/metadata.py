@@ -87,6 +87,9 @@ def upsert_messages(
             )
         }
     now = datetime.now(timezone.utc)
+    from mail_core.sync.remote_push import get_unconverged_field_intents
+
+    intents = get_unconverged_field_intents(session, account_id, remote_ids, now=now)
     out: list[UpsertOutcome] = []
     for meta in metas:
         msg = existing.get(meta.remote_id)
@@ -112,6 +115,12 @@ def upsert_messages(
         changed = created or location_created
         for field in _META_FIELDS:
             value = getattr(meta, field)
+            if (
+                field in ("is_read", "is_flagged")
+                and meta.remote_id in intents
+                and field in intents[meta.remote_id]
+            ):
+                value = intents[meta.remote_id][field]
             if getattr(msg, field) != value:
                 setattr(msg, field, value)
                 changed = True

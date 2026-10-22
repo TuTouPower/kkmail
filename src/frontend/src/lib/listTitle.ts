@@ -18,8 +18,20 @@ export function listTitle(view: ViewState, filter: 'all' | 'unread' | 'flagged')
       return view.email ? `${view.email} · 未读邮件` : '所有未读'
     }
     if (view.category === 'sent') {
-      return view.email ? `${view.email} · 已发邮件` : '所有已发邮件'
+      return view.email ? `${view.email} · 已发邮件` : '已发邮件'
     }
+    if (view.category === 'drafts') {
+      return view.email ? `${view.email} · 草稿箱` : '草稿箱'
+    }
+    if (view.category === 'trash') {
+      return view.email ? `${view.email} · 废纸篓` : '废纸篓'
+    }
+    if (view.category === 'junk') {
+      return view.email ? `${view.email} · 垃圾邮件` : '垃圾邮件'
+    }
+  }
+  if (view.type === 'folder') {
+    return `${view.email} · ${view.folderName}`
   }
   return `${view.email} · 收件箱`
 }

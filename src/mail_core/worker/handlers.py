@@ -19,7 +19,27 @@ log = logging.getLogger("mail_core.worker.handlers")
 def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: str) -> bool:
     status = result.get("status")
     if status in ("ok", "sync_disabled", "skipped", "rate_limited"):
+        payload = dict(job.payload or {})
+        followup = bool(result.get("has_more") or payload.get("_followup_needed"))
+        next_run_after = result.get("next_run_after")
+        if not next_run_after and payload.get("_followup_run_after"):
+            try:
+                next_run_after = datetime.fromisoformat(payload["_followup_run_after"])
+            except Exception:
+                pass
         complete_job(session, job, worker_id=worker_id)
+        if followup or next_run_after:
+            from mail_core.sync.jobs import enqueue_job
+
+            enqueue_job(
+                session,
+                job_type=job.job_type,
+                account_id=job.account_id,
+                payload={},
+                priority=job.priority,
+                run_after=next_run_after,
+                dedupe_key=job.dedupe_key,
+            )
         return True
 
     err_msg = str(result.get("error") or status or "job failed")

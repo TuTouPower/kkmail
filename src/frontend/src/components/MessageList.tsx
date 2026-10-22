@@ -1,12 +1,12 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag, Mail, MailOpen, Trash2, Reply, ReplyAll, Forward, ExternalLink } from 'lucide-react'
+import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, Reply, ReplyAll, Forward, ExternalLink, PanelLeft } from 'lucide-react'
 import { api, apiRequest } from '../api/client'
 import { accountScope, fetchAccounts, flagOptimistic, markReadOptimistic, setCachedReadState, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
 import { hasMailId, mailKey } from '../lib/mailKey'
-import { MOBILE_MAX_WIDTH } from '../lib/viewport'
+import { MOBILE_MAX_WIDTH, useIsWide } from '../lib/viewport'
 import { listTitle } from '../lib/listTitle'
 import { confirmAction, errorMessage } from '../lib/actions'
 import { compareMailDates } from '../lib/mailDate'
@@ -46,7 +46,10 @@ const MessageList = memo(function MessageList() {
   const setListFilter = useMailStore((s) => s.setListFilter)
   const sortNewest = useMailStore((s) => s.sortNewest)
   const toggleSort = useMailStore((s) => s.toggleSort)
+  const sidebarCollapsed = useMailStore((s) => s.sidebarCollapsed)
+  const toggleSidebar = useMailStore((s) => s.toggleSidebar)
   const toggleMobileSidebar = useMailStore((s) => s.toggleMobileSidebar)
+  const wide = useIsWide()
   const selectedIds = useMailStore((s) => s.selectedIds)
   const toggleSelected = useMailStore((s) => s.toggleSelected)
   const selectAll = useMailStore((s) => s.selectAll)
@@ -83,9 +86,21 @@ const MessageList = memo(function MessageList() {
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
 
-  const accountId = view.type === 'account' ? view.accountId : (view.type === 'favorite' ? view.accountId : undefined)
+  const accountId = view.type === 'account' ? view.accountId : (view.type === 'favorite' ? view.accountId : (view.type === 'folder' ? view.accountId : undefined))
   const favoriteCategory = view.type === 'favorite' ? view.category : undefined
-  const folderRole = favoriteCategory === 'sent' ? 'sent' : 'inbox'
+  const folderId = view.type === 'folder' ? view.folderId : undefined
+  const folderRole =
+    view.type === 'folder'
+      ? (view.folderRole || 'other')
+      : favoriteCategory === 'sent'
+        ? 'sent'
+        : favoriteCategory === 'drafts'
+          ? 'drafts'
+          : favoriteCategory === 'trash'
+            ? 'trash'
+            : favoriteCategory === 'junk'
+              ? 'junk'
+              : 'inbox'
   const effectiveFilter = favoriteCategory === 'unread' ? 'unread' : listFilter
   const term = search.trim()
   const searching = isSearchTrigger(term)
@@ -107,14 +122,15 @@ const MessageList = memo(function MessageList() {
   const sortOrder = sortNewest ? 'desc' : 'asc'
 
   const inboxInfiniteQuery = useInfiniteQuery<InboxPageData, Error, { pages: InboxPageData[]; pageParams: (string | null)[] }, readonly unknown[], string | null>({
-    queryKey: queryKeys.inbox(listScope, effectiveFilter, folderRole, sortOrder),
+    queryKey: queryKeys.inbox(listScope, effectiveFilter, folderRole, sortOrder, folderId),
     queryFn: async ({ pageParam, signal }) => {
       const page = await fetchMailCoreInbox({
         limit: LIST_LIMIT,
         accountId,
+        folder_id: folderId,
         is_read: is_unread,
         is_flagged: is_flagged,
-        folder_role: folderRole,
+        folder_role: folderId ? undefined : folderRole,
         sort_order: sortOrder,
         cursor: pageParam || undefined,
         signal,
@@ -149,15 +165,17 @@ const MessageList = memo(function MessageList() {
   })
 
   const folderStatsQuery = useQuery({
-    queryKey: ['mail-core', 'folder-stats', accountId ?? 'all', folderRole],
+    queryKey: ['mail-core', 'folder-stats', accountId ?? 'all', folderRole, folderId ?? ''],
     queryFn: async () => {
       if (accountId) {
         const stats = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`).catch(() => null)
         if (!stats) return null
-        const targetFolder = stats.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
+        const targetFolder = folderId
+          ? stats.folders.find((f: AccountFolderStatsItemOut) => String(f.folder_id) === folderId)
+          : stats.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
         return {
-          total: targetFolder ? targetFolder.total_count : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0),
-          unread: targetFolder ? targetFolder.unread_count : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + (f.unread_count || 0), 0),
+          total: targetFolder ? targetFolder.total_count : (folderId ? 0 : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0)),
+          unread: targetFolder ? targetFolder.unread_count : (folderId ? 0 : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + (f.unread_count || 0), 0)),
         }
       }
       const statsList = await Promise.all(
@@ -200,7 +218,7 @@ const MessageList = memo(function MessageList() {
   const loadingMore = Boolean(searching ? searchInfiniteQuery.isFetchingNextPage : inboxInfiniteQuery.isFetchingNextPage)
   const totalCount = searching ? (searchInfiniteQuery.data?.pages?.[0]?.total ?? null) : (folderStatsQuery.data?.total ?? null)
   const serverUnread = searching ? null : (folderStatsQuery.data?.unread ?? null)
-  const unreadCount = serverUnread !== null ? serverUnread : raw.filter((m) => !m.is_read).length
+  const unreadCount = Math.max(serverUnread ?? 0, raw.filter((m) => !m.is_read).length)
 
   async function handleLoadMore() {
     if (loadingMore || !hasMore) return
@@ -301,7 +319,8 @@ const MessageList = memo(function MessageList() {
     try {
       await postMailCoreMarkAllRead({
         accountId,
-        folder_role: folderRole,
+        folder_role: folderId ? undefined : folderRole,
+        folder_id: folderId,
         is_flagged: is_flagged,
       })
       await queryClient.invalidateQueries({ queryKey: ['mail-core'] })
@@ -370,15 +389,27 @@ const MessageList = memo(function MessageList() {
     <section className="list-pane" aria-label="邮件列表">
       <div className="list-header">
         <div className="list-title-row">
-          <div className="list-heading">
-            <div className="list-title" title={title}>{title}</div>
-            <div className="list-count" aria-live="polite">{countLabel}</div>
+          <div className="list-heading" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {(!wide || sidebarCollapsed) && (
+              <button
+                data-ui="ML01"
+                type="button"
+                className="list-primary-btn sidebar-expand-btn"
+                title={wide ? '展开侧边栏' : '打开导航'}
+                aria-label={wide ? '展开侧边栏' : '打开导航'}
+                onClick={wide ? toggleSidebar : toggleMobileSidebar}
+              >
+                <PanelLeft size={16} />
+              </button>
+            )}
+            <div>
+              <div data-ui="ML02" className="list-title" title={title}>{title}</div>
+              <div className="list-count" aria-live="polite">{countLabel}</div>
+            </div>
           </div>
           <div className="list-primary-actions">
-            <button className="list-primary-btn mobile-only" title="账户导航" aria-label="账户导航" onClick={toggleMobileSidebar}>
-              <Menu size={16} />
-            </button>
             <button
+              data-ui="ML03"
               className={`list-primary-btn ${isSyncing ? 'loading' : ''}`}
               title={isSyncing ? '正在同步…' : '刷新并同步'}
               aria-label={isSyncing ? '正在同步…' : '刷新并同步'}
@@ -392,6 +423,7 @@ const MessageList = memo(function MessageList() {
         <label className="list-search">
           <Search size={16} />
           <input
+            data-ui="ML04"
             name="search"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
@@ -405,6 +437,7 @@ const MessageList = memo(function MessageList() {
           />
           {searchInput && (
             <button
+              data-ui="ML05"
               className="list-primary-btn"
               title="清除搜索"
               aria-label="清除搜索"
@@ -436,14 +469,14 @@ const MessageList = memo(function MessageList() {
               ))}
             </div>
             <div className="list-control-group">
-              <button className="mark-all-btn" onClick={markAll} disabled={unreadCount === 0} title="将当前列表中的邮件全部标为已读" aria-label="全部标为已读">
+              <button data-ui="ML07" className="mark-all-btn" onClick={markAll} disabled={unreadCount === 0} title="将当前列表中的邮件全部标为已读" aria-label="全部标为已读">
                 <CheckCircle size={13} />
                 <span className="mark-label">全部已读</span>
               </button>
               <button className="sort-btn" onClick={() => selectAll(visible.map((m) => mailKey(m)))} title="选择当前列表全部邮件" disabled={!visible.length}>
                 全选
               </button>
-              <button className="sort-btn" onClick={toggleSort} title="切换邮件排序" aria-label={sortNewest ? '排序：最新优先' : '排序：最早优先'}>
+              <button data-ui="ML06" className="sort-btn" onClick={toggleSort} title="切换邮件排序" aria-label={sortNewest ? '排序：最新优先' : '排序：最早优先'}>
                 <SortAsc size={14} />
                 <span>{sortNewest ? '最新' : '最早'}</span>
               </button>
@@ -455,7 +488,7 @@ const MessageList = memo(function MessageList() {
         {actionStatus && <div role="status" className={`list-note ${actionStatus.includes('失败') ? 'error' : ''}`}>{actionStatus}</div>}
         {failure && <div role="alert" className="list-note error">{failure}</div>}
         {!loading && visible.length === 0 && (
-          <div style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
+          <div data-ui="ML13" style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
             {accounts.length === 0 ? '还没有账户。在设置中添加账户后，这里会显示邮件。' : searching ? '没有匹配的邮件' : '没有邮件'}
           </div>
         )}
@@ -464,6 +497,7 @@ const MessageList = memo(function MessageList() {
           const checked = selectedIds.includes(key)
           return (
             <article
+              data-ui="ML08"
               key={key}
               tabIndex={0}
               aria-selected={selectedKey === key}
@@ -499,18 +533,18 @@ const MessageList = memo(function MessageList() {
               </button>
               <div className="message-content">
                 <div className="message-top">
-                  <span className="sender">
+                  <span data-ui="ML09" className="sender">
                     {!m.is_read && <span className="unread-dot" aria-label="未读" />}
                     {displayName(m.from)}
                   </span>
                   <div className="message-meta">
                     {m.is_flagged && <Flag size={12} aria-label="已标记" />}
                     {m.has_attachments && <Paperclip size={12} aria-label="有附件" />}
-                    <time className="message-date">{formatListDate(m.date)}</time>
+                    <time data-ui="ML11" className="message-date">{formatListDate(m.date)}</time>
                   </div>
                 </div>
-                <div className="subject">{m.subject}</div>
-                <div className="preview">{previewText(m.body_preview)}</div>
+                <div data-ui="ML10" className="subject">{m.subject}</div>
+                <div data-ui="ML12" className="preview">{previewText(m.body_preview)}</div>
               </div>
             </article>
           )
@@ -524,6 +558,7 @@ const MessageList = memo(function MessageList() {
             </div>
             {hasMore ? (
               <button
+                data-ui="ML14"
                 type="button"
                 className="load-more-btn"
                 onClick={handleLoadMore}

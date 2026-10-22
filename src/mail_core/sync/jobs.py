@@ -65,6 +65,13 @@ def enqueue_job(
             .limit(1)
         )
         if existing is not None:
+            if existing.status == JobStatus.CLAIMED.value:
+                p = dict(existing.payload or {})
+                p["_followup_needed"] = True
+                if run_after:
+                    p["_followup_run_after"] = run_after.isoformat()
+                existing.payload = p
+                session.flush()
             return existing
     job = WorkerJob(
         job_type=job_type,
@@ -88,6 +95,13 @@ def enqueue_job(
                 .limit(1)
             )
             if existing is not None:
+                if existing.status == JobStatus.CLAIMED.value:
+                    p = dict(existing.payload or {})
+                    p["_followup_needed"] = True
+                    if run_after:
+                        p["_followup_run_after"] = run_after.isoformat()
+                    existing.payload = p
+                    session.flush()
                 return existing
             latest = session.scalar(
                 select(WorkerJob)
