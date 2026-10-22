@@ -129,3 +129,20 @@ KKMAIL_TEST_SEED=41 scripts/run-mail-core-tests.sh run
 - 卸载已渲染 DOM 组件节点，恢复全局 fetch、timers 与 navigator 替身。
 
 覆盖率报告基于 `@vitest/coverage-v8` 输出至 `.scratch/frontend_coverage`，覆盖范围仅限 `src/**/*.{ts,tsx}` 生产代码，排除测试文件与生成代码。实测全量 34 个测试文件共 168 项用例全通，行覆盖率约 78%。
+
+## 真实 IMAP 与服务商协议契约验证（t016）
+
+真实 IMAP 服务由专用测试 Compose 提供（`config/test_pg_compose.yaml` 中的 `imap` 服务，基于 Dovecot，绑定 `127.0.0.1:1143`），由 `scripts/start-mail-core-imap.sh` 启动，与业务数据库及业务 Compose 完全隔离，不使用业务口令或生产卷：
+
+```bash
+scripts/start-mail-core-imap.sh
+scripts/run-mail-core-tests.sh run -k test_imap
+```
+
+真实协议层门禁特性：
+
+- **无静默跳过**：完整测试运行期间必须确保测试 IMAP 服务处于监听与认证就绪状态，全量套件实现 0 项 IMAP 条件跳过（361 passed / 0 skipped）；
+- **全链路同步验证**：覆盖中文多部分正文、二进制附件落库加密与流式解密校验、相同 Message-ID 邮件处理，以及多轮同步的严格幂等性；
+- **增量收敛与服务端可观察性**：测试远端 Flag 变更与删除在本地库的增量同步；验证本地读状态更新经 `push_remote_operations` 写回到真实服务端后能在 IMAP 协议（`\Seen`）上直接观测；
+- **安全废纸篓与 TLS 防护**：验证仅移动目标邮件至 Trash，在缺少 MOVE 能力时拒绝不安全的全目录 EXPUNGE；非 SSL 端口开启 TLS 时必须握手失败直接阻断；
+- **Gmail / Graph 服务商传输契约**：覆盖循环/重复 pageToken 检测、过期游标不前进、OAuth token 刷新失败脱敏、429 重试等待及 5xx/超时重试幂等性。普通 CI 不依赖外网真实 OAuth 凭据。
