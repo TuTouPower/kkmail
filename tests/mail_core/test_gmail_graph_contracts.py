@@ -63,6 +63,48 @@ def test_parse_graph_delta_pagination_and_removed():
     assert page2.next_cursor["delta_link"].endswith("deltatoken=abc")
 
 
+def test_parse_graph_delta_flag_only_without_content_metadata():
+    """Graph delta items with only flags/state change and no message metadata must be kind='flag'."""
+    page = parse_graph_delta(
+        {
+            "value": [
+                {
+                    "id": "m_read_only",
+                    "isRead": True,
+                },
+                {
+                    "id": "m_flag_status",
+                    "flag": {"flagStatus": "flagged"},
+                    "isRead": False,
+                },
+                {
+                    "id": "m_full",
+                    "subject": "Real Subject",
+                    "from": {"emailAddress": {"address": "sender@test.com", "name": "Sender"}},
+                    "receivedDateTime": "2026-10-22T08:00:00Z",
+                    "isRead": False,
+                },
+            ]
+        }
+    )
+    assert len(page.changes) == 3
+    c1, c2, c3 = page.changes
+    # c1 & c2 must be classified as flag change, not upsert
+    assert c1.kind == "flag"
+    assert c1.meta is None
+    assert c1.flags == {"is_read": True, "is_flagged": False}
+
+    assert c2.kind == "flag"
+    assert c2.meta is None
+    assert c2.flags == {"is_read": False, "is_flagged": True}
+
+    # c3 has metadata, must be classified as upsert
+    assert c3.kind == "upsert"
+    assert c3.meta is not None
+    assert c3.meta.subject == "Real Subject"
+    assert c3.meta.from_address == "sender@test.com"
+
+
 def test_parse_gmail_history_pagination_add_delete_flag():
     page = parse_gmail_history(
         {
