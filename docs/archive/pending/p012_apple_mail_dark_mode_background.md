@@ -28,4 +28,4 @@
         - `src/frontend/src/design-system/tokens.css` 中 `html[data-theme="dark"]` 的 CSS 变量；
         - `assets/DESIGN.md` 中的设计规范常量；
         - `src/frontend/src/components/MessageReader.tsx` 与 `src/frontend/src/lib/mailBody.ts` 中正文 iframe 的背景与深色卡片模式。
-- 处理：未开
+- 处理：t006

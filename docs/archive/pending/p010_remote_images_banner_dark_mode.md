@@ -20,4 +20,4 @@
     2. 缺乏针对前端源码中 CSS Token 有效性与硬编码颜色的静态检查机制，导致写错或未在 `tokens.css` 中定义的变量无法在构建/单测阶段被捕获。
     3. 补测建议：在 `MessageReader.test.tsx` 中增加外链图片拦截条渲染与「仅此邮件允许加载」交互测试，确保采用 `tokens.css` 语义化样式；补齐前端 CSS token 静态扫描或断言。
 - 线索：`src/frontend/src/components/MessageReader.tsx:182`；`.scratch/reproduce.cjs`；`.scratch/scan_all_colors.cjs`。
-- 处理：未开
+- 处理：t006
