@@ -7,13 +7,18 @@ description: 接入并操控自托管邮件客户端 kkmail（基于 mail-core�
 
 通过 CLI 脚本或 REST API 接入并操控自托管邮件客户端 kkmail。
 
-## 环境变量配置
+## 环境变量与认证配置
 
 默认连接本地最小化运行态：
 
-- `KKMAIL_BASE_URL`：服务地址，默认为 `http://127.0.0.1:37281`
-- `KKMAIL_PASSWORD`：管理员密码（必填，或在命令行通过 `--password` 提供）
-- `KKMAIL_API_KEY`：可选 Bearer Token（配置 `MAIL_CORE_API_KEYS` 后免 Session/CSRF）
+- `KKMAIL_BASE_URL`：服务地址，默认为 `http://127.0.0.1:37281`。远程连接必须使用 HTTPS，HTTP 仅限 loopback 本机地址（127.0.0.1, localhost, ::1）。
+- `KKMAIL_PASSWORD`：管理员密码。建议通过静默读取注入环境变量，运行后及时清理（避免泄露至命令行参数或 shell 历史）：
+    ```bash
+    read -s -p "Enter KKMAIL_PASSWORD: " KKMAIL_PASSWORD && export KKMAIL_PASSWORD
+    # 运行完成后清理
+    unset KKMAIL_PASSWORD
+    ```
+- `KKMAIL_API_KEY`：可选 Bearer Token（配置 `MAIL_CORE_API_KEYS` 后免 Session/CSRF，亦可通过环境变量 `KKMAIL_API_KEY` 提供）
 
 ______________________________________________________________________
 
@@ -97,8 +102,10 @@ CLI="python3 docs/skills/kkmail/scripts/kkmail_cli.py"
     # 或触发指定账号同步
     $CLI sync <ACCOUNT_ID>
 
-    # 添加 IMAP 账号
-    $CLI add-account --email user@example.com --provider imap --host imap.example.com --port 993 --password secret
+    # 添加 IMAP 账号（交互静默读取密码注入环境变量，避免命令行明文暴露）
+    read -s -p "Enter IMAP password: " KKMAIL_ACCOUNT_PASSWORD && export KKMAIL_ACCOUNT_PASSWORD
+    $CLI add-account --email user@example.com --provider imap --host imap.example.com --port 993
+    unset KKMAIL_ACCOUNT_PASSWORD
     ```
 
 ______________________________________________________________________

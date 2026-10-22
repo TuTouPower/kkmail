@@ -1,0 +1,262 @@
+"""Tests for kkmail_cli.py (session cache security and HTTPS enforcement)."""
+
+import importlib.util
+import json
+import os
+import stat
+import urllib.error
+import urllib.request
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+CLI_PATH = Path(__file__).resolve().parents[2] / "docs" / "skills" / "kkmail" / "scripts" / "kkmail_cli.py"
+spec = importlib.util.spec_from_file_location("kkmail_cli", CLI_PATH)
+kkmail_cli = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(kkmail_cli)
+
+
+def test_validate_target_url_loopback_allowed():
+    """Loopback addresses must be allowed for both HTTP and HTTPS."""
+    # HTTP loopback
+    assert kkmail_cli.validate_target_url("http://127.0.0.1:37281").hostname == "127.0.0.1"
+    assert kkmail_cli.validate_target_url("http://localhost:8000").hostname == "localhost"
+    assert kkmail_cli.validate_target_url("http://[::1]:8000").hostname == "::1"
+    assert kkmail_cli.validate_target_url("http://127.0.0.2:8080").hostname == "127.0.0.2"
+
+    # HTTPS loopback
+    assert kkmail_cli.validate_target_url("https://127.0.0.1:37281").hostname == "127.0.0.1"
+    assert kkmail_cli.validate_target_url("https://localhost:8000").hostname == "localhost"
+
+
+def test_validate_target_url_remote_https_allowed():
+    """Remote hosts must be allowed if HTTPS."""
+    assert kkmail_cli.validate_target_url("https://mail.example.com").hostname == "mail.example.com"
+    assert kkmail_cli.validate_target_url("https://192.168.1.50:8443").hostname == "192.168.1.50"
+
+
+def test_validate_target_url_remote_http_rejected():
+    """Remote hosts over plain HTTP must be rejected."""
+    with pytest.raises(ValueError, match="Insecure HTTP connection rejected"):
+        kkmail_cli.validate_target_url("http://mail.example.com")
+
+    with pytest.raises(ValueError, match="Insecure HTTP connection rejected"):
+        kkmail_cli.validate_target_url("http://192.168.1.50:8000")
+
+    with pytest.raises(ValueError, match="Insecure HTTP connection rejected"):
+        kkmail_cli.validate_target_url("http://example.com/api")
+
+
+def test_validate_target_url_unsupported_schemes():
+    """Non-http/https schemes must be rejected."""
+    with pytest.raises(ValueError, match="Unsupported URL scheme"):
+        kkmail_cli.validate_target_url("ftp://127.0.0.1:21")
+
+    with pytest.raises(ValueError, match="Unsupported URL scheme"):
+        kkmail_cli.validate_target_url("file:///etc/passwd")
+
+
+def test_safe_redirect_handler_blocks_downgrade():
+    """Redirecting to non-loopback HTTP must be blocked."""
+    handler = kkmail_cli.SafeRedirectHandler("https://mail.example.com")
+    req = urllib.request.Request("https://mail.example.com/api/test")
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        handler.redirect_request(req, None, 302, "Found", {}, "http://mail.example.com/api/test")
+    assert "Redirect rejected by security policy" in str(exc_info.value)
+
+
+def test_safe_redirect_handler_strips_credentials_on_cross_origin():
+    """Redirecting to a different origin must strip sensitive headers."""
+    handler = kkmail_cli.SafeRedirectHandler("https://mail.example.com")
+    req = urllib.request.Request(
+        "https://mail.example.com/api/inbox",
+        headers={
+            "Authorization": "Bearer secret-key",
+            "Cookie": "kkmail_mc_session=xyz123",
+            "X-CSRF-Token": "csrf-token-abc",
+            "Accept": "application/json",
+        },
+    )
+
+    new_req = handler.redirect_request(req, None, 302, "Found", {}, "https://other.example.com/api/inbox")
+    assert new_req is not None
+
+    headers_lower = {k.lower(): v for k, v in new_req.headers.items()}
+    assert "authorization" not in headers_lower
+    assert "cookie" not in headers_lower
+    assert "x-csrf-token" not in headers_lower
+    assert headers_lower.get("accept") == "application/json"
+
+
+def test_safe_redirect_handler_blocks_login_payload_cross_origin():
+    """Redirecting a login request with credentials to another origin must be blocked."""
+    handler = kkmail_cli.SafeRedirectHandler("https://mail.example.com")
+    req = urllib.request.Request(
+        "https://mail.example.com/api/auth/login",
+        data=b'{"password": "secret"}',
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        handler.redirect_request(req, None, 307, "Temporary Redirect", {}, "https://attacker.example.com/steal")
+    assert "Redirect of login/credential payload" in str(exc_info.value)
+
+
+def test_session_cache_permissions_default_mode(tmp_path, monkeypatch):
+    """Default session cache directory must be 0700 and file must be 0600."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("KKMAIL_SESSION_CACHE", raising=False)
+
+    client = kkmail_cli.KKMailClient(base_url="http://127.0.0.1:37281", password="test")
+    client.cookie = "kkmail_mc_session=abc"
+    client.csrf_token = "csrf123"
+    client._save_session_cache()
+
+    cache_dir = fake_home / ".cache" / "kkmail"
+    cache_file = cache_dir / "session.json"
+
+    assert cache_dir.is_dir()
+    assert cache_file.is_file()
+
+    # Verify directory permissions: 0700
+    dir_mode = stat.S_IMODE(cache_dir.stat().st_mode)
+    assert dir_mode == 0o700
+
+    # Verify file permissions: 0600
+    file_mode = stat.S_IMODE(cache_file.stat().st_mode)
+    assert file_mode == 0o600
+
+    # Verify load
+    client2 = kkmail_cli.KKMailClient(base_url="http://127.0.0.1:37281", password="test")
+    assert client2.cookie == "kkmail_mc_session=abc"
+    assert client2.csrf_token == "csrf123"
+
+
+def test_session_cache_custom_path_does_not_modify_parent_permissions(tmp_path, monkeypatch):
+    """Custom KKMAIL_SESSION_CACHE must not chmod user's shared parent directory."""
+    parent_dir = tmp_path / "shared"
+    parent_dir.mkdir(mode=0o755)
+    custom_cache = parent_dir / "my_session.json"
+    monkeypatch.setenv("KKMAIL_SESSION_CACHE", str(custom_cache))
+
+    client = kkmail_cli.KKMailClient(base_url="http://127.0.0.1:37281", password="test")
+    client.cookie = "kkmail_mc_session=custom"
+    client.csrf_token = "csrf-custom"
+    client._save_session_cache()
+
+    # Parent directory permissions must remain untouched (0755)
+    parent_mode = stat.S_IMODE(parent_dir.stat().st_mode)
+    assert parent_mode == 0o755
+
+    # But session file must be 0600
+    file_mode = stat.S_IMODE(custom_cache.stat().st_mode)
+    assert file_mode == 0o600
+
+
+def test_session_cache_refuses_symlink_file(tmp_path, monkeypatch):
+    """Session cache must refuse to write to or read from a symlink."""
+    fake_home = tmp_path / "home"
+    cache_dir = fake_home / ".cache" / "kkmail"
+    cache_dir.mkdir(parents=True)
+    target = tmp_path / "sensitive.txt"
+    target.write_text("sensitive data", encoding="utf-8")
+
+    symlink_file = cache_dir / "session.json"
+    symlink_file.symlink_to(target)
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("KKMAIL_SESSION_CACHE", raising=False)
+
+    client = kkmail_cli.KKMailClient(base_url="http://127.0.0.1:37281", password="test")
+    # Must refuse to read symlink
+    assert client.cookie is None
+
+    # Must refuse to overwrite symlink
+    client.cookie = "malicious_session"
+    client._save_session_cache()
+    # Target content must remain unchanged
+    assert target.read_text(encoding="utf-8") == "sensitive data"
+
+
+def test_legacy_cache_migration(tmp_path, monkeypatch):
+    """Legacy ~/.cache/kkmail_agent_session.json must be migrated and removed."""
+    fake_home = tmp_path / "home"
+    legacy_dir = fake_home / ".cache"
+    legacy_dir.mkdir(parents=True)
+    legacy_file = legacy_dir / "kkmail_agent_session.json"
+    legacy_file.write_text(
+        json.dumps({
+            "base_url": "http://127.0.0.1:37281",
+            "cookie": "legacy_cookie_val",
+            "csrf_token": "legacy_csrf_val",
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("KKMAIL_SESSION_CACHE", raising=False)
+
+    client = kkmail_cli.KKMailClient(base_url="http://127.0.0.1:37281", password="test")
+    assert client.cookie == "legacy_cookie_val"
+    assert client.csrf_token == "legacy_csrf_val"
+
+    # Legacy file must be deleted
+    assert not legacy_file.exists()
+
+    # New cache file must exist with 0600
+    new_cache = fake_home / ".cache" / "kkmail" / "session.json"
+    assert new_cache.is_file()
+    assert stat.S_IMODE(new_cache.stat().st_mode) == 0o600
+
+
+def test_session_cache_corrects_existing_lax_permissions(tmp_path, monkeypatch):
+    """Loading existing session file with lax permissions (0644) must tighten it to 0600."""
+    fake_home = tmp_path / "home"
+    cache_dir = fake_home / ".cache" / "kkmail"
+    cache_dir.mkdir(parents=True, mode=0o755)
+    cache_file = cache_dir / "session.json"
+    cache_file.write_text(
+        json.dumps({
+            "base_url": "http://127.0.0.1:37281",
+            "cookie": "test_cookie",
+            "csrf_token": "test_csrf",
+        }),
+        encoding="utf-8",
+    )
+    cache_file.chmod(0o644)
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("KKMAIL_SESSION_CACHE", raising=False)
+
+    client = kkmail_cli.KKMailClient(base_url="http://127.0.0.1:37281", password="test")
+    assert client.cookie == "test_cookie"
+    assert stat.S_IMODE(cache_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(cache_dir.stat().st_mode) == 0o700
+
+
+def test_session_cache_refuses_symlink_directory(tmp_path, monkeypatch):
+    """If default cache directory is a symlink, client must refuse to use it."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    real_dir = tmp_path / "somewhere_else"
+    real_dir.mkdir()
+
+    symlink_dir = fake_home / ".cache"
+    symlink_dir.mkdir()
+    (symlink_dir / "kkmail").symlink_to(real_dir)
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("KKMAIL_SESSION_CACHE", raising=False)
+
+    client = kkmail_cli.KKMailClient(base_url="http://127.0.0.1:37281", password="test")
+    client.cookie = "cookie_data"
+    client._save_session_cache()
+
+    # Nothing should be written to real_dir
+    assert list(real_dir.iterdir()) == []
+
