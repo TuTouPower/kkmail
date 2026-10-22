@@ -40,4 +40,20 @@ describe('workspaceGridColumns', () => {
       wide: false, sidebarCollapsed: false, settingsOpen: false, sidebarWidth: 260, listWidth: 360,
     })).toBeUndefined()
   })
+
+  it('completely hides sidebar on desktop when collapsed (t009 AC-001, AC-003, AC-005)', () => {
+    const input = { wide: true, sidebarCollapsed: true, settingsOpen: false }
+    const roles = workspaceGridChildRoles(input)
+    const cols = workspaceGridColumns({ ...input, sidebarWidth: 260, listWidth: 360 })!
+    expect(roles).toEqual(['list', 'resize-list', 'reader'])
+    expect(cols).toBe('360px 5px minmax(0, 1fr)')
+    expect(trackCount(cols)).toBe(roles.length)
+
+    const settingsInput = { wide: true, sidebarCollapsed: true, settingsOpen: true }
+    const settingsRoles = workspaceGridChildRoles(settingsInput)
+    const settingsCols = workspaceGridColumns({ ...settingsInput, sidebarWidth: 260, listWidth: 360 })!
+    expect(settingsRoles).toEqual(['settings'])
+    expect(settingsCols).toBe('minmax(0, 1fr)')
+    expect(trackCount(settingsCols)).toBe(settingsRoles.length)
+  })
 })

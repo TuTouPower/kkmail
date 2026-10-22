@@ -1,12 +1,12 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, Menu, X, Check, Flag, Mail, MailOpen, Trash2, Reply, ReplyAll, Forward, ExternalLink } from 'lucide-react'
+import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, Reply, ReplyAll, Forward, ExternalLink, PanelLeft } from 'lucide-react'
 import { api, apiRequest } from '../api/client'
 import { accountScope, fetchAccounts, flagOptimistic, markReadOptimistic, setCachedReadState, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
 import { hasMailId, mailKey } from '../lib/mailKey'
-import { MOBILE_MAX_WIDTH } from '../lib/viewport'
+import { MOBILE_MAX_WIDTH, useIsWide } from '../lib/viewport'
 import { listTitle } from '../lib/listTitle'
 import { confirmAction, errorMessage } from '../lib/actions'
 import { compareMailDates } from '../lib/mailDate'
@@ -46,7 +46,10 @@ const MessageList = memo(function MessageList() {
   const setListFilter = useMailStore((s) => s.setListFilter)
   const sortNewest = useMailStore((s) => s.sortNewest)
   const toggleSort = useMailStore((s) => s.toggleSort)
+  const sidebarCollapsed = useMailStore((s) => s.sidebarCollapsed)
+  const toggleSidebar = useMailStore((s) => s.toggleSidebar)
   const toggleMobileSidebar = useMailStore((s) => s.toggleMobileSidebar)
+  const wide = useIsWide()
   const selectedIds = useMailStore((s) => s.selectedIds)
   const toggleSelected = useMailStore((s) => s.toggleSelected)
   const selectAll = useMailStore((s) => s.selectAll)
@@ -386,14 +389,24 @@ const MessageList = memo(function MessageList() {
     <section className="list-pane" aria-label="邮件列表">
       <div className="list-header">
         <div className="list-title-row">
-          <div className="list-heading">
-            <div className="list-title" title={title}>{title}</div>
-            <div className="list-count" aria-live="polite">{countLabel}</div>
+          <div className="list-heading" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {(!wide || sidebarCollapsed) && (
+              <button
+                type="button"
+                className="list-primary-btn sidebar-expand-btn"
+                title={wide ? '展开侧边栏' : '打开导航'}
+                aria-label={wide ? '展开侧边栏' : '打开导航'}
+                onClick={wide ? toggleSidebar : toggleMobileSidebar}
+              >
+                <PanelLeft size={16} />
+              </button>
+            )}
+            <div>
+              <div className="list-title" title={title}>{title}</div>
+              <div className="list-count" aria-live="polite">{countLabel}</div>
+            </div>
           </div>
           <div className="list-primary-actions">
-            <button className="list-primary-btn mobile-only" title="账户导航" aria-label="账户导航" onClick={toggleMobileSidebar}>
-              <Menu size={16} />
-            </button>
             <button
               className={`list-primary-btn ${isSyncing ? 'loading' : ''}`}
               title={isSyncing ? '正在同步…' : '刷新并同步'}
