@@ -19,8 +19,9 @@ import { apiRequest } from '../api/client'
 import { fetchAccounts, fetchGroups, queryKeys } from '../api/queries'
 import { fetchGlobalStats } from '../api/mailCore'
 import { errorMessage } from '../lib/actions'
-import { providerBadge, providerColor, useMailStore, type FavoriteCategory } from '../store/mailStore'
+import { useMailStore, type FavoriteCategory } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
+import AccountIcon from './AccountIcon'
 
 interface FolderStatsItem {
   folder_id?: string
@@ -400,9 +401,12 @@ const Sidebar = memo(function Sidebar() {
                             }}
                             title={a.email}
                           >
-                            <span className="account-dot" style={{ background: a.group_color || providerColor(a.provider, a.account_type) }}>
-                              {providerBadge(a.provider, a.account_type)}
-                            </span>
+                            <AccountIcon
+                              email={a.email}
+                              provider={a.provider}
+                              accountType={a.account_type}
+                              groupColor={a.group_color}
+                            />
                             <span className="account-email">{a.email}</span>
                             {showBadges && (
                               unread === null ? (
@@ -512,9 +516,12 @@ const Sidebar = memo(function Sidebar() {
                           onClick={() => { setView({ type: 'account', accountId: a.id, email: a.email }) }}
                           title={a.email}
                         >
-                          <span className="account-dot" style={{ background: a.group_color || providerColor(a.provider, a.account_type) }}>
-                            {providerBadge(a.provider, a.account_type)}
-                          </span>
+                          <AccountIcon
+                            email={a.email}
+                            provider={a.provider}
+                            accountType={a.account_type}
+                            groupColor={a.group_color}
+                          />
                           <span className="account-email">{a.email}</span>
                           {unread === null ? (
                             <span className="side-count unread-badge unread-badge-unknown" title="未读数获取失败" aria-label="未读数未知">
