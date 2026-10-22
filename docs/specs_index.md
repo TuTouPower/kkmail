@@ -6,7 +6,7 @@
 |---|---|---|
 |auth_and_session|-|2026-10-22|
 |mail_sync_and_storage|t001, t026|2026-10-23|
-|inbox_ui_and_search|t002, t003, t024|2026-10-23|
+|inbox_ui_and_search|t002, t003, t024, t027|2026-10-23|
 |testing_quality|t013, t014|2026-10-22|
 
 <!-- 示例行（实际项目使用时从真实 task 收尾开始填写；示例勿放表内，「在表即生效」）：

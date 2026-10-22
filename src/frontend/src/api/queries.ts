@@ -9,6 +9,7 @@ export interface GroupItem {
   name: string
   color?: string
   account_count?: number
+  sort_order?: number
 }
 
 export interface MailItem {
@@ -74,6 +75,7 @@ export function accountScope(accountId?: string | null): string {
 export const queryKeys = {
   groups: ['groups'] as const,
   accounts: ['accounts'] as const,
+  sidebarLayout: ['sidebar-layout'] as const,
   stats: ['mail-core', 'stats'] as const,
   inbox: (
     accountId: string = ALL_ACCOUNTS,
@@ -81,8 +83,9 @@ export const queryKeys = {
     folderRole: string = 'inbox',
     sortOrder: string = 'desc',
     folderId?: string | null,
+    groupId?: string | null,
   ) => {
-    const scope = accountScope(accountId)
+    const scope = groupId ? `group:${groupId}` : accountScope(accountId)
     const folderPart = folderId ? `folder:${folderId}` : null
     const rolePart = !folderId && folderRole !== 'inbox' ? `role:${folderRole}` : null
     const filterPart = filter && filter !== 'all' ? filter : null
@@ -95,7 +98,33 @@ export const queryKeys = {
     if (sortPart) key.push(sortPart)
     return key as unknown as readonly string[]
   },
-  search: (q: string, accountId: string = ALL_ACCOUNTS) => ['mail-core', 'search', accountScope(accountId), q] as const,
+  search: (q: string, accountId: string = ALL_ACCOUNTS, groupId?: string | null, folderId?: string | null) => {
+    const key: string[] = ['mail-core', 'search', groupId ? `group:${groupId}` : accountScope(accountId)]
+    if (folderId) key.push(`folder:${folderId}`)
+    key.push(q)
+    return key as unknown as readonly string[]
+  },
+}
+
+/** Drop cached group pages when membership changes so no stale members are shown. */
+export function resetGroupMailQueries(groupId?: string): Promise<void[]> {
+  const scope = groupId ? `group:${groupId}` : null
+  const matchesGroupScope = (query: { queryKey: readonly unknown[] }) => {
+    const queryScope = query.queryKey[2]
+    return typeof queryScope === 'string' && queryScope.startsWith('group:') && (!scope || queryScope === scope)
+  }
+  return Promise.all([
+    queryClient.resetQueries({ queryKey: ['mail-core', 'inbox'], predicate: matchesGroupScope }),
+    queryClient.resetQueries({ queryKey: ['mail-core', 'search'], predicate: matchesGroupScope }),
+  ])
+}
+
+/** Drop all cached list pages after deleting an account. */
+export function resetMailListQueries(): Promise<void[]> {
+  return Promise.all([
+    queryClient.resetQueries({ queryKey: ['mail-core', 'inbox'] }),
+    queryClient.resetQueries({ queryKey: ['mail-core', 'search'] }),
+  ])
 }
 
 export async function fetchGroups(): Promise<GroupItem[]> {
@@ -105,19 +134,20 @@ export async function fetchGroups(): Promise<GroupItem[]> {
     name: g.name,
     color: g.color ?? undefined,
     account_count: g.account_count,
+    sort_order: g.sort_order,
   }))
 }
 
 const ACCOUNT_PAGE_SIZE = 200
-const ACCOUNT_MAX_PAGES = 100
 
 /** Load every account page (limit/offset/has_more). */
 export async function fetchAccounts(): Promise<AccountSummary[]> {
   const all: AccountSummary[] = []
-  for (let page = 0; page < ACCOUNT_MAX_PAGES; page++) {
+  for (;;) {
     const res = await api.getAccounts({ limit: ACCOUNT_PAGE_SIZE, offset: all.length })
     all.push(...res.accounts)
-    if (!res.accounts.length || !res.has_more) break
+    if (!res.has_more) break
+    if (!res.accounts.length) throw new Error('Account pagination returned an empty page while more accounts remain')
   }
   return all
 }

@@ -6,15 +6,21 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
+
 from mail_core.accounts import (
     create_account,
     create_group,
     delete_account,
     delete_group,
     enqueue_account_sync,
+    get_sidebar_layout,
     get_public_settings,
     list_accounts,
     list_groups,
+    rename_group,
+    reset_sidebar_account_order,
+    save_sidebar_layout,
     update_account,
     update_public_settings,
 )
@@ -36,6 +42,8 @@ class AccountDTO:
     sync_enabled: bool
     account_type: str
     remark: str | None
+    master_order: int | None = None
+    group_order: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +61,7 @@ class GroupDTO:
     name: str
     color: str | None
     account_count: int
+    sort_order: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +95,8 @@ def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDT
         group_id=str(acc.group_id) if acc.group_id else None,
         group_name=g.name if g else None,
         group_color=g.color if g else None,
+        master_order=acc.master_order,
+        group_order=acc.group_order,
         status="active" if acc.sync_enabled else "disabled",
         sync_status=acc.sync_status,
         sync_enabled=acc.sync_enabled,
@@ -232,7 +243,7 @@ def list_groups_app() -> list[GroupDTO]:
     Session = get_session_factory()
     with Session() as session:
         return [
-            GroupDTO(id=str(g.id), name=g.name, color=g.color, account_count=n)
+            GroupDTO(id=str(g.id), name=g.name, color=g.color, account_count=n, sort_order=g.sort_order)
             for g, n in list_groups(session)
         ]
 
@@ -243,7 +254,7 @@ def create_group_app(*, name: str, color: str | None = None) -> GroupDTO:
         try:
             g = create_group(session, name=name, color=color)
             session.commit()
-            return GroupDTO(id=str(g.id), name=g.name, color=g.color, account_count=0)
+            return GroupDTO(id=str(g.id), name=g.name, color=g.color, account_count=0, sort_order=g.sort_order)
         except Exception:
             session.rollback()
             raise
@@ -254,6 +265,61 @@ def delete_group_app(group_id: UUID) -> None:
     with Session() as session:
         try:
             delete_group(session, group_id)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+
+
+def rename_group_app(group_id: UUID, *, name: str) -> GroupDTO:
+    Session = get_session_factory()
+    with Session() as session:
+        try:
+            group = rename_group(session, group_id, name=name)
+            count = len(list(session.scalars(select(Account.id).where(Account.group_id == group_id)).all()))
+            session.commit()
+            return GroupDTO(id=str(group.id), name=group.name, color=group.color, account_count=count, sort_order=group.sort_order)
+        except Exception:
+            session.rollback()
+            raise
+
+
+def save_sidebar_layout_app(
+    *,
+    expected_revision: str,
+    group_ids: list[UUID],
+    master_account_ids: list[UUID],
+    ungrouped_account_ids: list[UUID],
+    group_account_ids: dict[UUID, list[UUID]],
+) -> None:
+    Session = get_session_factory()
+    with Session() as session:
+        try:
+            save_sidebar_layout(
+                session,
+                expected_revision=expected_revision,
+                group_ids=group_ids,
+                master_account_ids=master_account_ids,
+                ungrouped_account_ids=ungrouped_account_ids,
+                group_account_ids=group_account_ids,
+            )
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+
+
+def get_sidebar_layout_app() -> dict[str, object]:
+    Session = get_session_factory()
+    with Session() as session:
+        return get_sidebar_layout(session)
+
+
+def reset_sidebar_account_order_app(*, expected_revision: str) -> None:
+    Session = get_session_factory()
+    with Session() as session:
+        try:
+            reset_sidebar_account_order(session, expected_revision=expected_revision)
             session.commit()
         except Exception:
             session.rollback()

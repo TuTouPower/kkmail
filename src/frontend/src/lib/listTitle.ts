@@ -30,6 +30,15 @@ export function listTitle(view: ViewState, filter: 'all' | 'unread' | 'flagged')
       return view.email ? `${view.email} · 垃圾邮件` : '垃圾邮件'
     }
   }
+  if (view.type === 'group') {
+    const prefix = `${view.groupName} · `
+    if (view.category === 'inbox') return filter === 'unread' ? `${prefix}未读邮件` : `${prefix}所有收件箱`
+    if (view.category === 'unread') return `${prefix}所有未读`
+    if (view.category === 'sent') return `${prefix}已发邮件`
+    if (view.category === 'drafts') return `${prefix}草稿箱`
+    if (view.category === 'trash') return `${prefix}废纸篓`
+    return `${prefix}垃圾邮件`
+  }
   if (view.type === 'folder') {
     return `${view.email} · ${view.folderName}`
   }

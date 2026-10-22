@@ -34,6 +34,7 @@ beforeEach(() => {
     const u = String(url)
     calls.push(u)
     if (u.startsWith('/api/accounts')) return json({ accounts: [{ id: 'acc-1', email: 'box@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+    if (u.includes('/folder-stats')) return json({ folders: [{ role: 'inbox', unread_count: 1, total_count: 2 }] })
     if (u.startsWith('/api/mail/inbox')) return json({ items: [row('a'), row('b', { is_flagged: true, is_read: true })], next_cursor: null })
     if (u.startsWith('/api/mail/search')) {
       const urlObj = new URL(u, 'http://localhost')
@@ -82,6 +83,15 @@ describe('<MessageList />', () => {
     expect(calls.some((u) => u.startsWith('/api/mail/search?q=zz'))).toBe(true)
   })
 
+  it('keeps server search scoped to the selected real folder', async () => {
+    useMailStore.setState({
+      view: { type: 'folder', accountId: 'acc-1', email: 'box@x.test', folderId: 'folder-1', folderName: 'INBOX', folderRole: 'inbox' },
+      search: 'invoice',
+    })
+    await render(<MessageList />)
+    await waitFor(() => expect(calls.some((url) => url.startsWith('/api/mail/search?') && url.includes('folder_id=folder-1'))).toBe(true))
+  })
+
   it('CJK query triggers search immediately without debounce delay, and clear is instant', async () => {
     const { container } = await render(<MessageList />)
     await waitFor(() => expect(subjects(container)).toHaveLength(2))
@@ -119,6 +129,14 @@ describe('<MessageList />', () => {
     useMailStore.setState({ view: { type: 'account', accountId: 'acc-1', email: 'box@x.test' } })
     await render(<MessageList />)
     await waitFor(() => expect(calls.some((u) => u.includes('account_id=acc-1'))).toBe(true))
+  })
+
+  it('scopes group inbox, unread, search, and mark-all-read requests to the selected group', async () => {
+    useMailStore.setState({ view: { type: 'group', groupId: 'group-1', groupName: '税务归档', category: 'unread' } })
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(calls.some((url) => url.includes('group_id=group-1') && url.includes('is_read=false'))).toBe(true))
+    await typeInto(container.querySelector('input[name=search]'), 'scope')
+    await waitFor(() => expect(calls.some((url) => url.startsWith('/api/mail/search') && url.includes('group_id=group-1'))).toBe(true))
   })
 
   it('message rows are keyboard operable (Enter selects)', async () => {
@@ -274,6 +292,21 @@ describe('<MessageList />', () => {
     await waitFor(() => {
       expect(container.querySelector('.list-count')?.textContent).toContain('42 封未读')
     })
+  })
+
+  it('shows unknown unread count when folder stats are incomplete', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
+      const u = String(url)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'box@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [row('a', { is_read: true })], next_cursor: null })
+      if (u.includes('/folder-stats')) return json({ folders: [{ role: 'inbox', unread_count: null, total_count: null }] })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toContain('— 封未读'))
   })
 
   it('calls POST /api/mail/mark-all-read on mark-all click', async () => {
