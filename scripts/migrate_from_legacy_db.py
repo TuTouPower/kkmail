@@ -3,11 +3,25 @@
 
 from __future__ import annotations
 
+import argparse
+import sys
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Migrate accounts, groups, credentials and emails from legacy SQLite to mail-core PostgreSQL."
+    )
+    return parser.parse_args(argv)
+
+
+# Parse CLI arguments early so --help succeeds without heavy imports or DB connection
+if __name__ == "__main__":
+    parse_args()
+
 import base64
 import json
 import os
 import sqlite3
-import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +49,14 @@ from mail_core.mail.storage.models import (
 )
 
 
+class MigrationError(RuntimeError):
+    """Base exception for migration failures."""
+
+
+class MigrationDecryptionError(MigrationError):
+    """Raised when decrypting a legacy encrypted field fails."""
+
+
 def get_legacy_cipher(secret_key: str) -> Fernet:
     salt = b"outlook_email_encryption_salt_v1"
     kdf = PBKDF2HMAC(
@@ -47,14 +69,25 @@ def get_legacy_cipher(secret_key: str) -> Fernet:
     return Fernet(key)
 
 
-def decrypt_legacy_field(cipher: Fernet, val: str | None) -> str:
+def decrypt_legacy_field(
+    cipher: Fernet,
+    val: str | None,
+    *,
+    record_id: str | int | None = None,
+    field_name: str | None = None,
+) -> str:
     if not val:
         return ""
     if val.startswith("enc:"):
         try:
             return cipher.decrypt(val[4:].encode("utf-8")).decode("utf-8")
-        except Exception:
-            return ""
+        except Exception as exc:
+            context = (
+                f" (record_id={record_id!r}, field={field_name!r})"
+                if record_id is not None or field_name is not None
+                else ""
+            )
+            raise MigrationDecryptionError(f"Failed to decrypt legacy field{context}") from exc
     return val
 
 
@@ -109,72 +142,96 @@ def migrate():
     folder_id_map: dict[uuid.UUID, uuid.UUID] = {}
 
     with Session() as session:
-        cred_store = DbCredentialStore(keyring=keyring, session_factory=lambda: session)
+        try:
+            cred_store = DbCredentialStore(keyring=keyring, session_factory=lambda: session)
 
-        legacy_accounts = sqlite_cursor.execute("SELECT * FROM accounts").fetchall()
-        for a in legacy_accounts:
-            email_norm = a["email"].strip().lower()
-            existing = session.query(Account).filter_by(email=email_norm).first()
+            legacy_accounts = sqlite_cursor.execute("SELECT * FROM accounts").fetchall()
+            for a in legacy_accounts:
+                email_norm = a["email"].strip().lower()
+                existing = session.query(Account).filter_by(email=email_norm).first()
 
-            auth_type = (a["authorization_type"] or "").lower()
-            if auth_type == "graph":
-                provider = "graph"
-            elif auth_type == "imap":
-                provider = "imap"
-            else:
-                provider = "imap"
+                auth_type = (a["authorization_type"] or "").lower()
+                if auth_type == "graph":
+                    provider = "graph"
+                elif auth_type == "imap":
+                    provider = "imap"
+                else:
+                    provider = "imap"
 
-            cfg: dict = {}
-            if provider == "imap":
-                cfg = {
-                    "imap_host": a["imap_host"] or "outlook.office365.com",
-                    "imap_port": a["imap_port"] or 993,
-                    "use_ssl": True,
-                }
+                cfg: dict = {}
+                if provider == "imap":
+                    cfg = {
+                        "imap_host": a["imap_host"] or "outlook.office365.com",
+                        "imap_port": a["imap_port"] or 993,
+                        "use_ssl": True,
+                    }
 
-            group_id = group_id_map.get(a["group_id"])
-            ref = f"account:{email_norm}"
+                group_id = group_id_map.get(a["group_id"])
+                ref = f"account:{email_norm}"
 
-            if not existing:
-                acc_id = uuid.uuid4()
-                acc = Account(
-                    id=acc_id,
-                    email=email_norm,
-                    provider=provider,
-                    credential_ref=ref,
-                    display_name=a["remark"] or email_norm,
-                    config=cfg,
-                    group_id=group_id,
-                    sync_status="idle",
-                    sync_enabled=bool(a["status"] == "active"),
-                )
-                session.add(acc)
-                session.flush()
-                account_id_map[a["id"]] = acc_id
-            else:
-                acc_id = existing.id
-                account_id_map[a["id"]] = acc_id
+                # Save credentials into DbCredentialStore before creating/updating records
+                if provider == "graph":
+                    cid = a["client_id"] or ""
+                    rt = decrypt_legacy_field(
+                        legacy_cipher,
+                        a["refresh_token"],
+                        record_id=a["id"],
+                        field_name="refresh_token",
+                    )
+                    if not rt:
+                        raise MigrationDecryptionError(
+                            f"Missing required decrypted credential (record_id={a['id']!r}, field='refresh_token')"
+                        )
+                    creds = {"client_id": cid, "refresh_token": rt}
+                else:
+                    raw_pwd = a["password"] or a["imap_password"]
+                    pwd_field = "password" if a["password"] else "imap_password"
+                    pwd = decrypt_legacy_field(
+                        legacy_cipher,
+                        raw_pwd,
+                        record_id=a["id"],
+                        field_name=pwd_field,
+                    )
+                    if not pwd:
+                        raise MigrationDecryptionError(
+                            f"Missing required decrypted credential (record_id={a['id']!r}, field={pwd_field!r})"
+                        )
+                    creds = {"password": pwd}
 
-            # Save credentials into DbCredentialStore
-            if provider == "graph":
-                cid = a["client_id"] or ""
-                rt = decrypt_legacy_field(legacy_cipher, a["refresh_token"])
-                creds = {"client_id": cid, "refresh_token": rt}
+                if not existing:
+                    acc_id = uuid.uuid4()
+                    acc = Account(
+                        id=acc_id,
+                        email=email_norm,
+                        provider=provider,
+                        credential_ref=ref,
+                        display_name=a["remark"] or email_norm,
+                        config=cfg,
+                        group_id=group_id,
+                        sync_status="idle",
+                        sync_enabled=bool(a["status"] == "active"),
+                    )
+                    session.add(acc)
+                    session.flush()
+                    account_id_map[a["id"]] = acc_id
+                else:
+                    acc_id = existing.id
+                    account_id_map[a["id"]] = acc_id
+
                 save_json_secret(cred_store, ref, creds)
-            else:
-                pwd = decrypt_legacy_field(legacy_cipher, a["password"] or a["imap_password"])
-                creds = {"password": pwd}
-                save_json_secret(cred_store, ref, creds)
 
-            # Ensure INBOX folder exists
-            inbox_folder = session.query(Folder).filter_by(account_id=acc_id, role="inbox").first()
-            if not inbox_folder:
-                inbox_folder = Folder(account_id=acc_id, remote_id="INBOX", name="INBOX", role="inbox")
-                session.add(inbox_folder)
-                session.flush()
-            folder_id_map[acc_id] = inbox_folder.id
+                # Ensure INBOX folder exists
+                inbox_folder = session.query(Folder).filter_by(account_id=acc_id, role="inbox").first()
+                if not inbox_folder:
+                    inbox_folder = Folder(account_id=acc_id, remote_id="INBOX", name="INBOX", role="inbox")
+                    session.add(inbox_folder)
+                    session.flush()
+                folder_id_map[acc_id] = inbox_folder.id
 
-        session.commit()
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
     print(f"Migrated {len(account_id_map)} accounts with encrypted credentials.")
 
     print("=== 3. Migrating Retained Messages (Sample / Recent) ===")
