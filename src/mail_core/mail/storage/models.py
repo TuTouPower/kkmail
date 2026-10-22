@@ -221,11 +221,15 @@ class MessageBlobLink(Base):
 
 class Attachment(Base):
     __tablename__ = "attachments"
-    __table_args__ = (Index("ix_attachments_message_id", "message_id"),)
+    __table_args__ = (
+        Index("ix_attachments_message_id", "message_id"),
+        UniqueConstraint("message_id", "part_id", name="uq_attachments_message_part"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
     blob_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("message_blobs.id", ondelete="SET NULL"))
+    part_id: Mapped[Optional[str]] = mapped_column(String(64))
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     content_type: Mapped[Optional[str]] = mapped_column(String(255))
     size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger)
@@ -389,3 +393,18 @@ class MessageSearch(Base):
     from_text: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     body_text: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class BlobQuotaReservation(Base):
+    """Temporary reservation of blob disk quota before physical write completes."""
+
+    __tablename__ = "blob_quota_reservations"
+    __table_args__ = (Index("ix_blob_quota_reservations_expires_at", "expires_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    worker_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    message_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"))
+    reserved_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+

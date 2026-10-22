@@ -34,7 +34,8 @@ def _reclaim_once() -> int:
     try:
         from datetime import timedelta
 
-        from mail_core.blobs.archive import reclaim_stale_archive_claims
+        from mail_core.blobs.archive import maybe_resume_quota_paused_archives, reclaim_stale_archive_claims
+        from mail_core.blobs.quota import prune_expired_quota_reservations
         from mail_core.db.session import get_session_factory
         from mail_core.realtime.outbox import prune_dispatched
         from mail_core.sync.jobs import prune_completed_jobs, reclaim_stale_claims
@@ -57,6 +58,12 @@ def _reclaim_once() -> int:
             pruned_jobs = prune_completed_jobs(session, older_than=timedelta(days=7), limit=1000)
             if pruned_jobs:
                 log.info("pruned %s completed/failed worker job(s)", pruned_jobs)
+            pruned_reservations = prune_expired_quota_reservations(session)
+            if pruned_reservations:
+                log.info("pruned %s expired blob quota reservation(s)", pruned_reservations)
+            resumed = maybe_resume_quota_paused_archives(session, limit=100)
+            if resumed:
+                log.info("resumed %s quota paused archive(s)", resumed)
             session.commit()
             return n + a + pruned + pruned_jobs
         except Exception:
