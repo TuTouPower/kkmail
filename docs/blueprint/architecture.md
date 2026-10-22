@@ -31,3 +31,15 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
 - **存储与加密层 (`src/mail_core/blobs/`, `src/mail_core/mail/storage/`)**：
     - 原文存储：内容寻址分块 AES-256-GCM 流式加密 (`KKMS`)，支持多版本密钥轮换。
     - 附件与垃圾回收：严格追踪 `MessageBlobLink` 与 `Attachment.blob_id` 双重引用，Fail-Closed 二次校验防误删。
+
+## 桌面主进程与安全复制边界 (t025)
+
+1. **桌面主进程日志基础设施 (`desktop.log`)**：
+    - 主进程启动时在 `userData` 目录下建立 `desktop.log` 文件日志并接入 `RotatingLogStream` 轮转；
+    - 捕获主进程启动阶段（PID、平台、架构、Electron/Node 版本）、关键生命周期事件及未捕获异常（`uncaughtException` / `unhandledRejection`），并在应用退出时优雅 flush 与 close；
+    - 解决桌面端无控制台环境下主进程报错无从排查的缺口。
+2. **桌面剪贴板授权与安全边界**：
+    - 文本复制授权遵循最小权限原则：Electron 会话加固仅对受信任的本地顶层应用页面（`details.isMainFrame === true` 且请求 URL 匹配 `appOrigin`）开放 `clipboard-sanitized-write` 权限；
+    - 邮件内容沙箱隔离：邮件正文所在的无脚本 `iframe` 显式属于子 frame（`isMainFrame === false`），其剪贴板写入请求被严格拒绝，无法写入系统剪贴板；
+    - 权限降级与防范：剪贴板读取（`clipboard-read`）、媒体设备（`media`）、定位及通知等无关系统权限无条件保持拒绝；
+    - 前端显式入口调用：UI 编号浮标（`UiReferenceOverlay`）与错误边界（`ErrorBoundary`）复制诊断日志在桌面与 Web 端均通过标准 `navigator.clipboard.writeText` 写入，缺失或被拒时提供明确的失败反馈，不使错误边界二次崩溃。
