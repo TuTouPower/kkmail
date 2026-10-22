@@ -95,6 +95,30 @@ const emptyNormalItem: MailItem = {
   folder: 'inbox',
 }
 
+const unarchivedItem: MailItem = {
+  id: 'm-unarchived',
+  subject: 'Unarchived Email',
+  from: 'Unarchived <u@x.test>',
+  is_read: false,
+  is_flagged: false,
+  has_attachments: false,
+  accountEmail: 'box@x.test',
+  accountId: 'acc-1',
+  folder: 'inbox',
+}
+
+const syncFailedItem: MailItem = {
+  id: 'm-sync-failed',
+  subject: 'Sync Failed Email',
+  from: 'Fail <f@x.test>',
+  is_read: false,
+  is_flagged: false,
+  has_attachments: false,
+  accountEmail: 'box@x.test',
+  accountId: 'acc-1',
+  folder: 'inbox',
+}
+
 const posts: Array<{ url: string; body: unknown }> = []
 
 beforeEach(() => {
@@ -165,13 +189,43 @@ beforeEach(() => {
         parse_error: null, attachments: [],
       })
     }
+    if (u === '/api/mail/messages/m-unarchived') {
+      return json({
+        id: 'm-unarchived', account_id: 'acc-1', subject: 'Unarchived Email', from_address: 'u@x.test', from_name: 'Unarchived',
+        from: 'Unarchived <u@x.test>', to: 'box@x.test', cc: '', date: '2018-10-26T12:00:00Z', is_read: false,
+        is_flagged: false, has_attachments: false, snippet: 'Snippet',
+        body: '', body_type: 'empty',
+        parse_error: null, is_archived: false, attachments: [],
+      })
+    }
+    if (u === '/api/mail/messages/m-unarchived/sync-body' && init.method === 'POST') {
+      return json({
+        id: 'm-unarchived', account_id: 'acc-1', subject: 'Unarchived Email', from_address: 'u@x.test', from_name: 'Unarchived',
+        from: 'Unarchived <u@x.test>', to: 'box@x.test', cc: '', date: '2018-10-26T12:00:00Z', is_read: false,
+        is_flagged: false, has_attachments: false, snippet: 'Snippet',
+        body: '<p>Instant fetched on-demand body</p>', body_type: 'html',
+        parse_error: null, is_archived: true, attachments: [],
+      })
+    }
+    if (u === '/api/mail/messages/m-sync-failed') {
+      return json({
+        id: 'm-sync-failed', account_id: 'acc-1', subject: 'Sync Failed Email', from_address: 'f@x.test', from_name: 'Fail',
+        from: 'Fail <f@x.test>', to: 'box@x.test', cc: '', date: '2018-10-26T12:00:00Z', is_read: false,
+        is_flagged: false, has_attachments: false, snippet: null,
+        body: '', body_type: 'empty',
+        parse_error: null, is_archived: false, attachments: [],
+      })
+    }
+    if (u === '/api/mail/messages/m-sync-failed/sync-body' && init.method === 'POST') {
+      return json({ detail: 'Remote connection timeout' }, 500)
+    }
     if (init.method === 'POST') {
       posts.push({ url: u, body: JSON.parse(String(init.body)) })
       return json({ id: 'm-1', account_id: 'acc-1', operation_id: 'op', is_flagged: true, success: true })
     }
     return json({ detail: 'unexpected' }, 404)
   }))
-  queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item, htmlItemWithImages, htmlItemOther, htmlItemLightRich, failedItem, failedItemWithSnippet, emptyNormalItem])
+  queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item, htmlItemWithImages, htmlItemOther, htmlItemLightRich, failedItem, failedItemWithSnippet, emptyNormalItem, unarchivedItem, syncFailedItem])
   useMailStore.setState({ selectedKey: 'm-1', theme: 'dark' })
 })
 
@@ -330,5 +384,28 @@ describe('<MessageReader />', () => {
     })
     expect(container.textContent).not.toContain('邮件解析失败')
     expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('displays syncing state on unarchived email and smoothly renders body after on-demand sync (AC-004)', async () => {
+    useMailStore.setState({ selectedKey: 'm-unarchived' })
+    const { container } = await render(<MessageReader />)
+
+    // Trigger on-demand sync and verify body renders
+    await waitFor(() => {
+      const iframe = container.querySelector('iframe')
+      expect(iframe).not.toBeNull()
+      expect(iframe?.srcdoc).toContain('Instant fetched on-demand body')
+    })
+    expect(container.textContent).not.toContain('邮件解析失败')
+  })
+
+  it('displays error and retry button when on-demand sync fails (AC-005)', async () => {
+    useMailStore.setState({ selectedKey: 'm-sync-failed' })
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Remote connection timeout')
+      expect(container.textContent).toContain('立即重试同步')
+    })
   })
 })

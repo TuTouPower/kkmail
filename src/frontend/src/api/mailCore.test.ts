@@ -48,6 +48,7 @@ describe('mailCoreToMailDetail', () => {
       body: '<p>x</p>',
       body_type: 'html',
       parse_error: null,
+      is_archived: true,
       attachments: [],
     }
     const out = mailCoreToMailDetail(d)
@@ -74,6 +75,7 @@ describe('mailCoreToMailDetail', () => {
       body: '',
       body_type: 'empty',
       parse_error: 'body_decode_failed: UnicodeDecodeError: invalid start byte',
+      is_archived: true,
       attachments: [],
     }
     const out = mailCoreToMailDetail(d)
