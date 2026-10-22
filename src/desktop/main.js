@@ -9,7 +9,16 @@ const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
 const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl } = require('./paths')
-const { parsePort, freePort, waitForHealth, scrubEnv, redactSecrets, isChildDead, stopChildTree } = require('./startup')
+const {
+  parsePort,
+  freePort,
+  waitForHealth,
+  scrubEnv,
+  redactSecrets,
+  isChildDead,
+  stopChildTree,
+  collectSidecarExtras,
+} = require('./startup')
 const {
   mergeCspHeaders,
   denyPermissionRequest,
@@ -83,18 +92,21 @@ async function startBackend() {
   const target = backendCommand()
   const databaseUrl = pg.databaseUrl()
   const instanceToken = crypto.randomBytes(24).toString('hex')
-  const env = scrubEnv(process.env, {
+  const baseExtras = {
     MAIL_CORE_HOST: HOST,
     MAIL_CORE_PORT: String(port),
     MAIL_CORE_DATA_DIR: dataRoot,
     MAIL_CORE_DATABASE_URL: databaseUrl,
     KKMAIL_SIDECAR: '1',
     KKMAIL_INSTANCE_TOKEN: instanceToken,
-  })
+  }
   const dist = target.packaged
     ? frontendDistPath(process.resourcesPath)
     : path.join(repoRoot(), 'src', 'frontend', 'dist')
-  if (dist) env.KKMAIL_FRONTEND_DIST = dist
+  if (dist) baseExtras.KKMAIL_FRONTEND_DIST = dist
+
+  const sidecarExtras = collectSidecarExtras(process.env, baseExtras)
+  const env = scrubEnv(process.env, sidecarExtras)
 
   // Own process group on Unix so stopChildTree can SIGTERM/SIGKILL the whole tree.
   const detached = process.platform !== 'win32'
@@ -226,7 +238,14 @@ if (!gotTheLock) {
 
 function stopMailCorePg() {
   if (!pg) return
-  try { pg.stop() } catch (err) { console.warn('[mail-core] pg stop', err) }
+  try {
+    const res = pg.stop()
+    if (!res || !res.ok) {
+      console.warn('[mail-core] pg stop failed:', (res && res.detail) || res)
+    }
+  } catch (err) {
+    console.warn('[mail-core] pg stop exception', err)
+  }
   // Keep reference so repeat stop() is the same idempotent manager (no throwaway).
 }
 
@@ -238,14 +257,23 @@ function stopBackend() {
     const cleanup = () => {
       if (timer) clearTimeout(timer)
       child.removeListener('exit', onExit)
-      child.removeListener('close', onExit)
+      child.removeListener('close', onClose)
     }
-    const onExit = () => {
+    const onClose = () => {
       cleanup()
       resolve()
     }
+    const onExit = () => {
+      const stdioClosed = (!child.stdout || child.stdout.destroyed) &&
+                          (!child.stderr || child.stderr.destroyed)
+      if (stdioClosed) {
+        cleanup()
+        resolve()
+      }
+      // Otherwise wait for close so stdio pipes are completely flushed
+    }
     child.once('exit', onExit)
-    child.once('close', onExit)
+    child.once('close', onClose)
     timer = setTimeout(() => {
       cleanup()
       resolve()
@@ -268,16 +296,24 @@ async function shutdownAll() {
   shuttingDown = true
   app.isQuitting = true
   shutdownPromise = (async () => {
-    try {
-      await stopBackend()
-    } catch (err) {
-      console.warn('[mail-core] stopBackend error', err)
+    const shutdownTimeout = new Promise((resolve) => setTimeout(resolve, 10000))
+    const runShutdown = async () => {
+      try {
+        await stopBackend()
+      } catch (err) {
+        console.warn('[mail-core] stopBackend error', err)
+      }
+      stopMailCorePg()
+      if (backendLogStream) {
+        try {
+          await backendLogStream.end()
+        } catch (err) {
+          console.warn('[mail-core] backend log stream drain/end error', err)
+        }
+        backendLogStream = null
+      }
     }
-    stopMailCorePg()
-    if (backendLogStream) {
-      try { backendLogStream.end() } catch (_) { /* ignore */ }
-      backendLogStream = null
-    }
+    await Promise.race([runShutdown(), shutdownTimeout])
   })()
   return shutdownPromise
 }
