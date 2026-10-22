@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, Reply, ReplyAll, Forward, ExternalLink, PanelLeft } from 'lucide-react'
+import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, ExternalLink, PanelLeft } from 'lucide-react'
 import { api, apiRequest } from '../api/client'
 import { accountScope, fetchAccounts, flagOptimistic, markReadOptimistic, setCachedReadState, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
@@ -602,42 +602,6 @@ const MessageList = memo(function MessageList() {
           >
             <ExternalLink size={14} />
             <span>打开</span>
-          </button>
-
-          <div className="context-menu-separator" />
-
-          <button
-            type="button"
-            className="context-menu-item disabled"
-            role="menuitem"
-            disabled
-            aria-disabled="true"
-            title="暂不支持发信"
-          >
-            <Reply size={14} />
-            <span>回复</span>
-          </button>
-          <button
-            type="button"
-            className="context-menu-item disabled"
-            role="menuitem"
-            disabled
-            aria-disabled="true"
-            title="暂不支持发信"
-          >
-            <ReplyAll size={14} />
-            <span>回复所有人</span>
-          </button>
-          <button
-            type="button"
-            className="context-menu-item disabled"
-            role="menuitem"
-            disabled
-            aria-disabled="true"
-            title="暂不支持发信"
-          >
-            <Forward size={14} />
-            <span>转发</span>
           </button>
 
           <div className="context-menu-separator" />

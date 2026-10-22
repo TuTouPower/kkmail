@@ -821,6 +821,7 @@ button:hover .icon,
 }
 
 .reader-toolbar {
+  position: relative;
   height: 47px;
   min-height: 47px;
   display: flex;
@@ -848,7 +849,8 @@ button:hover .icon,
   gap: 4px;
   position: absolute;
   left: 50%;
-  transform: translateX(-50%);
+  top: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .reader-action {
@@ -860,6 +862,12 @@ button:hover .icon,
   border-radius: 9px;
   background: transparent;
   color: var(--muted);
+}
+
+.reader-action:focus,
+.reader-action:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .reader-action:hover:not(:disabled) {

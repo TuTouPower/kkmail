@@ -201,10 +201,8 @@ describe('<MessageList />', () => {
     expect(menu?.textContent).toContain('标为已读')
     expect(menu?.textContent).toContain('标记旗标')
     expect(menu?.textContent).toContain('移到废纸篓')
-
-    const replyItem = [...menu!.querySelectorAll('.context-menu-item')].find((el) => el.textContent?.includes('回复'))
-    expect(replyItem).toBeDefined()
-    expect(replyItem?.getAttribute('aria-disabled') === 'true' || (replyItem as HTMLButtonElement).disabled).toBe(true)
+    expect(menu?.textContent).not.toContain('回复')
+    expect(menu?.textContent).not.toContain('转发')
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))

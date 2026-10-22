@@ -199,18 +199,11 @@ describe('<MessageReader />', () => {
     expect(container.querySelector('[data-ui="MR07"]')?.textContent).toContain('收件人：box@x.test')
   })
 
-  // 旧测试 "has no compose/send actions" 已删除：t003 演进为支持占位展示发信按钮并设为 disabled 禁用状态
-  it('renders disabled placeholder actions for compose/reply/forward (AC-003)', async () => {
+  it('does not render placeholder compose/reply/forward actions in reader toolbar', async () => {
     const { container } = await render(<MessageReader />)
-    const replyBtn = container.querySelector('[aria-label=回复]') as HTMLButtonElement
-    const replyAllBtn = container.querySelector('[aria-label=回复所有人]') as HTMLButtonElement
-    const forwardBtn = container.querySelector('[aria-label=转发]') as HTMLButtonElement
-    expect(replyBtn).not.toBeNull()
-    expect(replyBtn.disabled).toBe(true)
-    expect(replyAllBtn).not.toBeNull()
-    expect(replyAllBtn.disabled).toBe(true)
-    expect(forwardBtn).not.toBeNull()
-    expect(forwardBtn.disabled).toBe(true)
+    expect(container.querySelector('[aria-label=回复]')).toBeNull()
+    expect(container.querySelector('[aria-label=回复所有人]')).toBeNull()
+    expect(container.querySelector('[aria-label=转发]')).toBeNull()
   })
 
   it('toggles read/unread status on the same button based on current state (AC-002)', async () => {
