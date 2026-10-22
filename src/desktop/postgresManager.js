@@ -12,7 +12,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const crypto = require('crypto')
-const { spawnSync } = require('child_process')
+const cp = require('child_process')
 const { scrubEnv } = require('./startup')
 
 const DEFAULT_PORT = 54329
@@ -93,6 +93,7 @@ function PostgresManager(options = {}) {
   this._binsCache = null
   this._stopped = false
   this._binProbeTimeoutMs = options.binProbeTimeoutMs != null ? options.binProbeTimeoutMs : BIN_PROBE_TIMEOUT_MS
+  this._spawnSync = options.spawnSync || cp.spawnSync
 }
 
 /** Per-install random PG password persisted (0600) under the data root. */
@@ -164,7 +165,7 @@ PostgresManager.prototype.hasBinaries = function hasBinaries() {
   const check = (bin) => {
     if (!bin) return false
     if (path.isAbsolute(bin) || bin.includes(path.sep)) return fs.existsSync(bin)
-    const r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout })
+    const r = (this._spawnSync || cp.spawnSync)(bin, ['--version'], { encoding: 'utf8', env: scrubEnv(process.env), timeout })
     return !r.error && r.status === 0
   }
   const pick = (name) => {
@@ -189,8 +190,9 @@ PostgresManager.prototype.status = function status() {
   const stub = !(bins.initdb && bins.pg_ctl)
   let running = false
   if (!stub && bins.pg_ctl && fs.existsSync(p.pgData)) {
-    const r = spawnSync(bins.pg_ctl, ['status', '-D', p.pgData], {
+    const r = (this._spawnSync || cp.spawnSync)(bins.pg_ctl, ['status', '-D', p.pgData], {
       encoding: 'utf8',
+      env: scrubEnv(process.env),
       timeout: this._binProbeTimeoutMs,
     })
     running = !r.error && r.status === 0
@@ -229,10 +231,10 @@ PostgresManager.prototype.initIfNeeded = function initIfNeeded() {
   let r
   try {
     fs.writeFileSync(pwFile, this.password(), { encoding: 'utf8', mode: 0o600 })
-    r = spawnSync(
+    r = (this._spawnSync || cp.spawnSync)(
       bins.initdb,
       ['-D', p.pgData, '-U', this.user, '--pwfile', pwFile, '-A', 'scram-sha-256', '--locale=C', '--encoding=UTF8'],
-      { encoding: 'utf8', timeout: 120000 },
+      { encoding: 'utf8', env: scrubEnv(process.env), timeout: 120000 },
     )
   } finally {
     try { fs.unlinkSync(pwFile) } catch (_) { /* ignore */ }
@@ -272,7 +274,7 @@ PostgresManager.prototype.start = function start() {
     const { rotateLogFile } = require('./logRotation')
     rotateLogFile(p.logFile)
   } catch (_) {}
-  const r = spawnSync(
+  const r = (this._spawnSync || cp.spawnSync)(
     bins.pg_ctl,
     ['start', '-D', p.pgData, '-l', p.logFile, '-w'],
     { encoding: 'utf8', env: scrubEnv(process.env, { PGPORT: String(this.port) }), timeout: 60000 },
@@ -290,7 +292,7 @@ PostgresManager.prototype.ensureDatabase = function ensureDatabase(bins) {
   const marker = path.join(this.dataRoot, 'secrets', 'db-created')
   if (fs.existsSync(marker)) return { ok: true }
   if (!bins.createdb) return { ok: false, reason: 'createdb binary not found next to pg_ctl' }
-  const r = spawnSync(
+  const r = (this._spawnSync || cp.spawnSync)(
     bins.createdb,
     ['-h', '127.0.0.1', '-p', String(this.port), '-U', this.user, this.database],
     { encoding: 'utf8', env: scrubEnv(process.env, { PGPASSWORD: this.password() }), timeout: 30000 },
@@ -304,12 +306,11 @@ PostgresManager.prototype.ensureDatabase = function ensureDatabase(bins) {
 }
 
 /**
- * Stop the cluster. Idempotent: repeat calls (before-quit + signals + exit) are no-ops.
- * Uses the live manager — do not construct a throwaway PostgresManager just to stop.
+ * Stop the cluster. Idempotent on success: repeat calls after success are no-ops.
+ * On failure: returns stopped: false, does not mark _stopped, and retains references for retry.
  */
 PostgresManager.prototype.stop = function stop() {
-  if (this._stopped) return { ok: true, alreadyStopped: true }
-  this._stopped = true
+  if (this._stopped) return { ok: true, stopped: true, alreadyStopped: true }
   const bins = this.hasBinaries()
   const p = this.paths()
   if (!bins.pg_ctl || !fs.existsSync(p.pgData)) {
@@ -317,13 +318,27 @@ PostgresManager.prototype.stop = function stop() {
       try { this._child.kill('SIGTERM') } catch (_) { /* ignore */ }
       this._child = null
     }
+    this._stopped = true
     return { ok: true, stub: !bins.pg_ctl, stopped: true }
   }
-  const r = spawnSync(bins.pg_ctl, ['stop', '-D', p.pgData, '-m', 'fast', '-w'], {
+  const r = (this._spawnSync || cp.spawnSync)(bins.pg_ctl, ['stop', '-D', p.pgData, '-m', 'fast', '-w'], {
     encoding: 'utf8',
+    env: scrubEnv(process.env),
     timeout: 30000,
   })
-  return { ok: !r.error && r.status === 0, stopped: true, detail: (r.stderr || r.stdout) || (r.error && r.error.message) }
+  const success = !r.error && r.status === 0
+  if (success) {
+    this._stopped = true
+    if (this._child) {
+      this._child = null
+    }
+    return { ok: true, stopped: true, detail: (r.stderr || r.stdout) || null }
+  }
+  return {
+    ok: false,
+    stopped: false,
+    detail: (r.stderr || r.stdout) || (r.error && r.error.message) || 'pg_ctl stop failed',
+  }
 }
 
 module.exports = {

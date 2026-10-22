@@ -2,6 +2,7 @@ const assert = require('assert')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const cp = require('child_process')
 const {
   PostgresManager,
   defaultMailDataRoot,
@@ -120,6 +121,65 @@ function testInvalidPortRejectedAtConstruct() {
   )
 }
 
+function testStopFailureAndRetry() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-stop-retry-'))
+  const pgData = path.join(dataRoot, 'pgdata')
+  fs.mkdirSync(pgData, { recursive: true })
+
+  let spawnCount = 0
+  const mockSpawnSync = (cmd, args, opts) => {
+    if (args && args[0] === 'stop') {
+      spawnCount++
+      if (spawnCount === 1) {
+        // First stop attempt fails
+        return { error: null, status: 1, stderr: 'pg_ctl: server does not shut down', stdout: '' }
+      }
+      // Second stop attempt succeeds
+      return { error: null, status: 0, stderr: '', stdout: 'server stopped' }
+    }
+    return { error: null, status: 0, stdout: '', stderr: '' }
+  }
+
+  const mgr = new PostgresManager({
+    dataRoot,
+    pgBinDir: path.join(dataRoot, 'bin'),
+    spawnSync: mockSpawnSync,
+  })
+  // Stub binaries cache so pg_ctl is present
+  mgr._binsCache = {
+    initdb: '/fake/bin/initdb',
+    pg_ctl: '/fake/bin/pg_ctl',
+    postgres: '/fake/bin/postgres',
+    createdb: '/fake/bin/createdb',
+  }
+  const fakeChild = { killed: false, kill: () => {} }
+  mgr._child = fakeChild
+
+  try {
+    // 1. First attempt fails: stopped=false, _stopped=false, child retained
+    const r1 = mgr.stop()
+    assert.strictEqual(r1.ok, false)
+    assert.strictEqual(r1.stopped, false)
+    assert.strictEqual(mgr._stopped, false)
+    assert.strictEqual(mgr._child, fakeChild, 'child reference must be retained on stop failure')
+    assert.match(r1.detail, /server does not shut down/)
+
+    // 2. Retry succeeds: stopped=true, _stopped=true, child cleaned up
+    const r2 = mgr.stop()
+    assert.strictEqual(r2.ok, true)
+    assert.strictEqual(r2.stopped, true)
+    assert.strictEqual(mgr._stopped, true)
+    assert.strictEqual(mgr._child, null)
+
+    // 3. Repeat after success: alreadyStopped=true, no additional spawn
+    const r3 = mgr.stop()
+    assert.strictEqual(r3.alreadyStopped, true)
+    assert.strictEqual(spawnCount, 2, 'spawnSync must not be called after alreadyStopped')
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
 testDefaultDataRootOutsideInstall()
 testFallbackDataRootNotSharedTmp()
 testParsePgPort()
@@ -127,6 +187,7 @@ testEnsureDirsWritesMarker()
 testPasswordPersisted0600()
 testHasBinariesCachesAndTimeout()
 testStopIdempotentNoThrowaway()
+testStopFailureAndRetry()
 testInitPwfileCleanupLegacy()
 testInvalidPortRejectedAtConstruct()
 console.log('postgresManager.test.js: ok')
