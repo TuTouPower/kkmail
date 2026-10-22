@@ -105,7 +105,7 @@ export const AccountIcon = memo(function AccountIcon({
       return (
         <span
           className={`${baseCls} account-brand-generic`}
-          style={{ background: groupColor || 'var(--muted)' }}
+          style={{ background: groupColor || 'var(--surface-2)' }}
           aria-hidden="true"
         >
           <Mail size={11} />

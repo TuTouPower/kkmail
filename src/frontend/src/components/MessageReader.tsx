@@ -68,7 +68,7 @@ const MessageReader = memo(function MessageReader() {
       <section className="reader-pane" aria-label="邮件正文">
         <div className="reader-toolbar"><div className="reader-location">未选择邮件</div></div>
         <div className="reader-scroll">
-          <div className="no-message">
+          <div data-ui="MR10" className="no-message">
             <strong>未选择邮件</strong>
             <span>从邮件列表中选择一封邮件以查看内容。</span>
           </div>
@@ -113,7 +113,7 @@ const MessageReader = memo(function MessageReader() {
 
   return (
     <section className="reader-pane" aria-label="邮件正文">
-      <div className="reader-toolbar">
+      <div data-ui="MR01" className="reader-toolbar">
         <button className="reader-action mobile-only" title="返回列表" aria-label="返回列表" onClick={() => setMobileView('list')}><ArrowLeft size={18} /></button>
         <div className="reader-location">{selected.accountEmail}</div>
         <div className="reader-toolbar-actions">
@@ -142,6 +142,7 @@ const MessageReader = memo(function MessageReader() {
             <Forward size={18} />
           </button>
           <button
+            data-ui="MR02"
             className="reader-action"
             title={selected.is_read ? '标为未读' : '标为已读'}
             aria-label={selected.is_read ? '标为未读' : '标为已读'}
@@ -149,8 +150,9 @@ const MessageReader = memo(function MessageReader() {
           >
             {selected.is_read ? <Mail size={18} /> : <MailOpen size={18} />}
           </button>
-          <button className="reader-action" title="移到废纸篓（删除）" aria-label="移到废纸篓（删除）" onClick={trashCurrent}><Trash2 size={18} /></button>
+          <button data-ui="MR04" className="reader-action" title="移到废纸篓（删除）" aria-label="移到废纸篓（删除）" onClick={trashCurrent}><Trash2 size={18} /></button>
           <button
+            data-ui="MR03"
             className="reader-action"
             title={selected.is_flagged ? '取消标记' : '标记邮件'}
             aria-label={selected.is_flagged ? '取消标记' : '标记邮件'}
@@ -160,13 +162,13 @@ const MessageReader = memo(function MessageReader() {
         </div>
       </div>
       <div className="reader-scroll">
-        <div className="message-paper">
-          <div className="detail-subject">{detail?.subject || selected.subject}</div>
+        <div data-ui="MR08" className="message-paper">
+          <div data-ui="MR05" className="detail-subject">{detail?.subject || selected.subject}</div>
           <div style={{ fontSize: 12, marginBottom: 8 }}>
-            <strong>{displayName(detail?.from || selected.from)}</strong>
+            <strong data-ui="MR06">{displayName(detail?.from || selected.from)}</strong>
             <span style={{ color: 'var(--muted)' }}> · {formatReaderDate(detail?.date || selected.date)}</span>
           </div>
-          <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: detail?.cc ? 4 : 16, overflowWrap: 'anywhere' }}>
+          <div data-ui="MR07" style={{ color: 'var(--muted)', fontSize: 11, marginBottom: detail?.cc ? 4 : 16, overflowWrap: 'anywhere' }}>
             收件人：{detail?.to || selected.to || accounts.find((a) => a.email === selected.accountEmail)?.email || selected.accountEmail}
           </div>
           {detail?.cc && (
@@ -247,7 +249,7 @@ const MessageReader = memo(function MessageReader() {
             <div className="email-body email-body-text">{body}</div>
           )}
           {(detail?.attachments || []).length > 0 && (
-            <div className="attachment-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
+            <div data-ui="MR09" className="attachment-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
               {detail!.attachments!.map((att, i) => {
                 const href = att.id ? mailCoreAttachmentUrl(att.id) : undefined
                 return (
