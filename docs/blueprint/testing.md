@@ -62,8 +62,8 @@ npm --prefix src/frontend run test:e2e
 环境安装与测试执行分开，复用仓库 `.venv`：
 
 ```bash
-uv venv .venv
-uv pip install --python .venv/bin/python -r requirements-dev.txt
+UV_CACHE_DIR=.scratch/uv_cache uv venv .venv
+UV_CACHE_DIR=.scratch/uv_cache uv pip install --python .venv/bin/python -r requirements-dev.txt
 ```
 
 启动前由操作者设置随机专用 `KKMAIL_TEST_PG_PASSWORD`。禁止复用业务 `.env` 密码。服务采用 `config/test_pg_compose.yaml`，独立 Compose project `kkmail_test_pg`，PostgreSQL 16 仅绑定 `127.0.0.1`，默认端口 15433；端口可经 `KKMAIL_TEST_PG_PORT` 指定。不得连接业务 Compose 或挂载业务卷。
@@ -85,4 +85,23 @@ scripts/run-mail-core-tests.sh cleanup <run_uuid>
 
 所有权或实例身份不符时拒绝清理；不扫描删除未知数据库。显式 `stop` 遇到带运行标记的数据库时拒绝停止。每轮使用独立 NOLOGIN owner role 原子标记建库归属，覆盖建库与 comment 写入间中断；creating 状态仅回收所有者匹配的确切数据库，运行态额外要求 comment 匹配。
 
-当前验证：17 项保护测试通过，独立仓库并发、真实迁移失败与 SIGTERM 清理已验证。完整套件为 337 passed / 2 failed / 2 skipped，失败集中于前序残留 Outbox 与无 subscriber 的旧测试；完整连续两轮验收待 t014 收口，当前不宣告全量通过。
+当前验证：17 项保护测试通过，独立仓库并发、真实迁移失败与 SIGTERM 清理已验证。t014 已收口 Outbox 残留与旧测试前置；最终 seed 41、17 连续两轮均 352 passed / 2 skipped（仅 IMAP 服务未启用），无 PG 条件跳过。两轮容器和 PG 服务进程复用，数据库独立，结束后无测试库或 owner role 残留。
+
+## 后端逐用例隔离与确定性验证（t014）
+
+共享 fixture 在独占测试库中清理全部业务表，保留 Alembic 版本。测试仍使用真实 commit、多连接与生产锁；不通过外层 rollback 吞掉跨连接语义。每例停止 Worker/LISTEN、关闭实际 checkout 连接并 dispose Engine，恢复 provider、credential store、dispatcher、鉴权、限流、schema cache 与 SSE 计数。setup/teardown 清理失败立即停止套件，禁止污染后续用例。
+
+快速模式明确不运行 DB 套件；独立单测使用逐项 PG 标记，避免整文件跳过。完整模式拒绝 PG 条件 skip，协议服务未显式启用时的 IMAP 跳过单独报告，不能解释为真实协议验证通过。
+
+固定 seed 可重放全套顺序：
+
+```bash
+KKMAIL_TEST_SEED=17 scripts/run-mail-core-tests.sh run
+KKMAIL_TEST_SEED=41 scripts/run-mail-core-tests.sh run
+```
+
+失败输出包含 seed 与 nodeid；可追加 pytest 参数，例如 `-k test_committed_data_starts_empty` 缩小复现。`tests/mail_core/mailbox_factory.py` 提供确定 UUID、中文 multipart MIME、固定排序时间、重复 Message-ID、多账号/空目录与真实加密 Blob/附件数据，不使用墙钟或随机碰撞建立分页断言。
+
+每轮目录包含 `.coverage`、`coverage.xml`、`coverage.json`、`junit.xml` 和 `test_summary.json`。覆盖仅统计生产 `mail_core`，启用分支覆盖；汇总列出实际收集、执行、错误、跳过原因和未执行清单，不用统一覆盖率百分比代替行为验收。依赖安装单独执行，pytest-cov 缺失会失败，不在测试入口自动安装。
+
+实测基线：快速套件 252 passed / 102 skipped；完整 seed 41、17 各 352 passed / 2 IMAP skipped，约 260/273 秒。87 个生产模块文件行/分支综合覆盖 78.63% / 78.66%，不代表未覆盖行为安全。IMAP 真实路径由 t016 接续，不将当前协议跳过计为通过。

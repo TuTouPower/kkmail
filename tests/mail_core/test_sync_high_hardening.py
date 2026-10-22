@@ -27,7 +27,7 @@ import mail_core.sync.engine as engine_mod
 import mail_core.sync.reconcile as reconcile_mod
 import mail_core.sync.remote_push as push_mod
 
-pytestmark = pytest.mark.skipif(
+_requires_db = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
     reason="MAIL_CORE_DATABASE_URL not set",
 )
@@ -114,6 +114,7 @@ def _restore(originals):
     push_mod.build_provider = originals["push"]
 
 
+@_requires_db
 def test_metadata_provider_error_releases_lease():
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -148,6 +149,7 @@ def test_metadata_provider_error_releases_lease():
         set_credential_store(None)
 
 
+@_requires_db
 def test_delta_provider_error_releases_and_returns_status():
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -187,6 +189,7 @@ def test_delta_provider_error_releases_and_returns_status():
         set_credential_store(None)
 
 
+@_requires_db
 def test_remote_push_isolates_per_op_errors():
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -256,6 +259,7 @@ def test_remote_push_isolates_per_op_errors():
         set_credential_store(None)
 
 
+@_requires_db
 def test_reconcile_provider_error_releases_lease():
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
@@ -292,6 +296,7 @@ def test_reconcile_provider_error_releases_lease():
         set_credential_store(None)
 
 
+@_requires_db
 def test_metadata_heartbeats_between_pages(monkeypatch):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)

@@ -17,7 +17,7 @@ from mail_core.threading import (
     normalize_subject,
 )
 
-pytestmark = pytest.mark.skipif(
+_requires_db = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
     reason="MAIL_CORE_DATABASE_URL not set",
 )
@@ -30,6 +30,7 @@ def test_normalize_and_extract_ids():
     assert normalize_subject("Re: Fwd: Hello") == "hello"
 
 
+@_requires_db
 def test_in_reply_to_links_and_creates_parent_thread():
     Session = get_session_factory()
     now = datetime.now(timezone.utc)
@@ -73,6 +74,7 @@ def test_in_reply_to_links_and_creates_parent_thread():
         session.commit()
 
 
+@_requires_db
 def test_references_walks_newest_first():
     Session = get_session_factory()
     now = datetime.now(timezone.utc)
@@ -113,6 +115,7 @@ def test_references_walks_newest_first():
         session.commit()
 
 
+@_requires_db
 def test_provider_thread_key():
     Session = get_session_factory()
     now = datetime.now(timezone.utc)

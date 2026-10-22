@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import os
+import json
+import random
 import sys
 from pathlib import Path
 
@@ -46,6 +48,7 @@ def _guard_test_database():
 
 
 def pytest_configure(config):
+    config.addinivalue_line("markers", "db: requires the owned PostgreSQL test runtime")
     if os.environ.get("MAIL_CORE_DATABASE_URL") or os.environ.get("MAIL_CORE_REQUIRE_DB") == "1":
         _guard_test_database()
     elif os.environ.get("KKMAIL_TEST_MODE") != "unit":
@@ -53,33 +56,10 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
-def _reset_auth_state_for_tests():
-    from mail_core.security.auth import reset_auth_caches
-    reset_auth_caches()
-    if os.environ.get("MAIL_CORE_DATABASE_URL"):
-        _guard_test_database()
-        try:
-            from mail_core.db.session import get_session_factory
-            from mail_core.mail.storage.models import AuthCredential
-            Session = get_session_factory()
-            with Session() as session:
-                session.query(AuthCredential).delete()
-                session.commit()
-        except Exception:
-            pass
-    yield
-    reset_auth_caches()
-    if os.environ.get("MAIL_CORE_DATABASE_URL"):
-        _guard_test_database()
-        try:
-            from mail_core.db.session import get_session_factory
-            from mail_core.mail.storage.models import AuthCredential
-            Session = get_session_factory()
-            with Session() as session:
-                session.query(AuthCredential).delete()
-                session.commit()
-        except Exception:
-            pass
+def _isolated_backend_runtime(monkeypatch, tmp_path, request):
+    from tests.mail_core.runtime_isolation import isolated_runtime
+    with isolated_runtime(monkeypatch, tmp_path, request.session):
+        yield
 
 
 @pytest.fixture
@@ -97,14 +77,50 @@ def api_client(auth_headers):
 
 def pytest_collection_modifyitems(config, items):
     """With MAIL_CORE_REQUIRE_DB=1, any skip caused by a missing DB URL is an error."""
-    if os.environ.get("MAIL_CORE_REQUIRE_DB") != "1":
-        return
     db_skip_keywords = ("mail_core_database_url", "database required", "pg required", "postgres required")
     for item in items:
         for mark in item.iter_markers("skipif"):
             reason = str(mark.kwargs.get("reason", ""))
-            if any(k in reason.lower() for k in db_skip_keywords) and mark.args and mark.args[0]:
-                raise pytest.UsageError(f"{item.nodeid} would skip ({reason}) under MAIL_CORE_REQUIRE_DB=1")
+            if any(k in reason.lower() for k in db_skip_keywords):
+                item.add_marker("db")
+                if os.environ.get("MAIL_CORE_REQUIRE_DB") == "1" and mark.args and mark.args[0]:
+                    raise pytest.UsageError(f"{item.nodeid} would skip ({reason}) under MAIL_CORE_REQUIRE_DB=1")
+    seed = os.environ.get("KKMAIL_TEST_SEED")
+    if seed is not None:
+        try:
+            random.Random(int(seed)).shuffle(items)
+        except ValueError:
+            raise pytest.UsageError("KKMAIL_TEST_SEED must be an integer") from None
+
+
+def pytest_sessionfinish(session, exitstatus):
+    directory = os.environ.get("KKMAIL_TEST_REPORT_DIR")
+    reporter = session.config.pluginmanager.getplugin("terminalreporter")
+    if not directory or reporter is None:
+        return
+    target = Path(directory).resolve()
+    if not target.is_relative_to(_SRC.parent / ".scratch") or not target.is_dir():
+        session.exitstatus = pytest.ExitCode.USAGE_ERROR
+        reporter.write_line("test report directory must exist under repository .scratch")
+        return
+    stats = reporter.stats
+    completed = {report.nodeid for category in ("passed", "failed", "error", "skipped")
+                 for report in stats.get(category, [])}
+    summary = {
+        "collected": session.testscollected, "exit_status": int(exitstatus),
+        "seed": os.environ.get("KKMAIL_TEST_SEED"),
+        "passed": len(stats.get("passed", [])), "failed": len(stats.get("failed", [])),
+        "errors": len(stats.get("error", [])),
+        "skipped": [{"nodeid": report.nodeid, "reason": str(report.longrepr)} for report in stats.get("skipped", [])],
+        "not_executed": [item.nodeid for item in session.items if item.nodeid not in completed],
+    }
+    (target / "test_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+def pytest_terminal_summary(terminalreporter):
+    seed = os.environ.get("KKMAIL_TEST_SEED")
+    if seed is not None:
+        terminalreporter.write_line(f"Test order seed={seed}; replay with KKMAIL_TEST_SEED={seed}")
 
 
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)

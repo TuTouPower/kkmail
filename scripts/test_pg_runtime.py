@@ -260,6 +260,8 @@ def child(command, env):
 def run_environment(directory):
     env = {key: value for key, value in os.environ.items() if not key.startswith("MAIL_CORE_")}
     env.update(PYTHONPATH=str(ROOT / "src"),
+               KKMAIL_TEST_REPORT_DIR=str(directory),
+               COVERAGE_FILE=str(directory / ".coverage"),
                MAIL_CORE_BLOB_ROOT=str(directory / "blobs"), MAIL_CORE_BACKUP_DIR=str(directory / "backups"),
                MAIL_CORE_DATA_DIR=str(directory / "data"), TMPDIR=str(directory / "tmp"))
     for subdir in ("blobs", "backups", "data", "tmp"):
@@ -292,6 +294,9 @@ def run(args):
                 raise TestFailure(code)
         with stage("tests"):
             code = child([sys.executable, "-m", "pytest", "tests", "-q", "--tb=short",
+                          "-ra", "--cov=mail_core", "--cov-branch", "--cov-report=term:skip-covered",
+                          "--cov-report=xml:" + str(directory / "coverage.xml"),
+                          "--cov-report=json:" + str(directory / "coverage.json"),
                           "--basetemp", str(directory / "tmp" / "pytest"),
                           "--junitxml", str(directory / "junit.xml"), *args], env)
             if code:
@@ -342,7 +347,10 @@ def main():
             env.pop("KKMAIL_TEST_PG_PASSWORD", None)
             env.pop("KKMAIL_TEST_RUN_DIR", None)
             LOG.warning("quick mode: PostgreSQL suite NOT executed")
-            return child([sys.executable, "-m", "pytest", "tests", "-q", "--basetemp",
+            return child([sys.executable, "-m", "pytest", "tests", "-q", "-ra",
+                          "--cov=mail_core", "--cov-branch", "--cov-report=term:skip-covered",
+                          "--cov-report=xml:" + str(directory / "coverage.xml"),
+                          "--cov-report=json:" + str(directory / "coverage.json"), "--basetemp",
                           str(directory / "tmp" / "pytest"), *args.arguments], env)
         else:
             return run(args.arguments)

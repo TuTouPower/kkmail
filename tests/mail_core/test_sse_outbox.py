@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,12 +16,13 @@ from mail_core.mail.storage import OutboxEvent
 from mail_core.realtime.dispatcher import OutboxDispatcher
 from mail_core.realtime.outbox import fetch_since
 
-pytestmark = pytest.mark.skipif(
+_requires_db = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
     reason="MAIL_CORE_DATABASE_URL not set",
 )
 
 
+@_requires_db
 def test_dispatch_marks_outbox_and_sse_replays_last_event_id():
     Session = get_session_factory()
     with Session() as session:
@@ -35,7 +37,18 @@ def test_dispatch_marks_outbox_and_sse_replays_last_event_id():
         first, second = sorted(ids)
 
     dispatcher = OutboxDispatcher()
-    n = dispatcher.dispatch_once()
+
+    async def dispatch_with_subscriber():
+        queue = dispatcher.subscribe()
+        try:
+            count = dispatcher.dispatch_once()
+            received = [queue.get_nowait()["id"] for _ in range(queue.qsize())]
+            assert first in received and second in received
+            return count
+        finally:
+            dispatcher.unsubscribe(queue)
+
+    n = asyncio.run(dispatch_with_subscriber())
     assert n >= 2
 
     with Session() as session:
@@ -57,11 +70,14 @@ def test_dispatch_marks_outbox_and_sse_replays_last_event_id():
         assert "event:" in buf
 
 
+@_requires_db
 def test_resync_hint_when_gap_huge(monkeypatch):
     monkeypatch.setattr("mail_core.api.sse.RESYNC_GAP", 0)
     Session = get_session_factory()
     with Session() as session:
-        session.add(OutboxEvent(event_type="sync.progress", payload={}))
+        # A fresh isolated sequence starts at one. Keep the existing positive
+        # replay cursor meaningful without relying on earlier tests' events.
+        session.add_all([OutboxEvent(event_type="sync.progress", payload={}) for _ in range(12)])
         session.commit()
         head = session.scalar(select(OutboxEvent.id).order_by(OutboxEvent.id.desc()))
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
@@ -78,6 +94,7 @@ def test_replay_limit_matches_resync_gap():
     assert sse_mod.REPLAY_LIMIT >= sse_mod.RESYNC_GAP
 
 
+@_requires_db
 def test_resync_hint_when_replay_page_full(monkeypatch):
     """If replay returns a full page and head is beyond the page, emit resync_hint."""
     monkeypatch.setattr(sse_mod, "RESYNC_GAP", 50)
@@ -102,6 +119,7 @@ def test_resync_hint_when_replay_page_full(monkeypatch):
         assert "replay_truncated" in buf
 
 
+@_requires_db
 def test_dispatch_require_subscribers_skips_mark():
     Session = get_session_factory()
     with Session() as session:

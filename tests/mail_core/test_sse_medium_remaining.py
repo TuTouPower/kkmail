@@ -19,7 +19,7 @@ from mail_core.realtime import events as events_mod
 from mail_core.realtime.outbox import fetch_since, prune_dispatched
 from tests.mail_core.conftest import TEST_API_KEY
 
-pytestmark = pytest.mark.skipif(
+_requires_db = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
     reason="MAIL_CORE_DATABASE_URL not set",
 )
@@ -51,6 +51,7 @@ def test_frontend_subscribes_to_core_sse_events():
     # archive.* may be omitted by the UI until archive progress is surfaced (documented drift).
 
 
+@_requires_db
 def test_malformed_last_event_id_emits_resync_hint():
     from mail_core.db.session import get_session_factory
 
@@ -72,6 +73,7 @@ def test_malformed_last_event_id_emits_resync_hint():
         assert "malformed_last_event_id" in buf
 
 
+@_requires_db
 def test_cursor_ahead_of_head_emits_resync_hint():
     from mail_core.db.session import get_session_factory
 
@@ -93,6 +95,7 @@ def test_cursor_ahead_of_head_emits_resync_hint():
         assert "cursor_ahead" in buf
 
 
+@_requires_db
 def test_account_filtered_replay_includes_global_null_account():
     from mail_core.db.session import get_session_factory
 
@@ -115,6 +118,7 @@ def test_account_filtered_replay_includes_global_null_account():
     assert any(r.id == gid and r.account_id is None for r in rows)
 
 
+@_requires_db
 def test_prune_dispatched_removes_old_keeps_undispatched():
     from mail_core.db.session import get_session_factory
 
@@ -163,6 +167,7 @@ def test_sse_connection_cap_returns_503(monkeypatch):
         assert resp.status_code == 503
         assert resp.json()["detail"] == "too many sse connections"
 
+@_requires_db
 def test_build_replay_runs_without_event_loop():
     """Regression: replay helper is sync and safe for asyncio.to_thread."""
     plan = sse_mod._build_replay(0, None, malformed=False)
