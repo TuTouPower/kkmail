@@ -115,9 +115,11 @@ function App() {
         data-testid="mail-workspace"
         style={gridColumns ? { gridTemplateColumns: gridColumns } : undefined}
       >
-        <ErrorBoundary inline fallbackTitle="侧栏加载失败">
-          <Sidebar />
-        </ErrorBoundary>
+        {(!wide || !sidebarCollapsed) && (
+          <ErrorBoundary inline fallbackTitle="侧栏加载失败">
+            <Sidebar />
+          </ErrorBoundary>
+        )}
         {wide && !sidebarCollapsed && (
           <ColumnResize
             ariaLabel="调整侧栏宽度"
