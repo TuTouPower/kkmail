@@ -137,3 +137,23 @@ def test_mark_read_recomputes_all_locations_and_is_idempotent():
         )
         folder_ids = {e.payload.get("folder_id") for e in folder_events}
         assert str(fid1) in folder_ids and str(fid2) in folder_ids
+
+
+def test_mark_all_read_api():
+    mid = _seed()
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    r = client.post("/api/mail/mark-all-read", json={"folder_role": "inbox"})
+    assert r.status_code == 200
+    res = r.json()
+    assert res["success"] is True
+    assert res["count"] >= 1
+
+    r2 = client.post("/api/mail/mark-all-read", json={"folder_role": "inbox"})
+    assert r2.status_code == 200
+    assert r2.json()["count"] == 0
+
+    Session = get_session_factory()
+    with Session() as session:
+        msg = session.get(Message, mid)
+        assert msg.is_read is True
+

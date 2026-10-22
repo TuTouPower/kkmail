@@ -47,7 +47,7 @@
 ### 测试策略
 
 - 前端组件测试：`src/frontend/src/components/MessageList.test.tsx`、`Sidebar.test.tsx`、`ColumnResize.test.tsx`。
-- 浏览器端到端测试：`src/frontend/e2e/smoke.spec.ts`。
+- 浏览器端到端测试：`tests/e2e/smoke.spec.ts`。
 
 ### 未知契约清单
 

@@ -206,3 +206,83 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
         account_id=account_id,
         operation_id=op.id,
     )
+
+
+def mark_all_messages_read(
+    session: Session,
+    *,
+    account_id: uuid.UUID | None = None,
+    folder_role: str = "inbox",
+    is_flagged: bool | None = None,
+) -> int:
+    """Batch mark messages read matching the scope (account/folder_role/flag). Returns updated count."""
+    stmt = (
+        select(Message)
+        .join(MessageLocation, MessageLocation.message_id == Message.id)
+        .join(Folder, MessageLocation.folder_id == Folder.id)
+        .where(Folder.role == folder_role)
+        .where(Message.is_read.is_(False))
+    )
+    if account_id is not None:
+        stmt = stmt.where(Message.account_id == account_id)
+    if is_flagged is not None:
+        stmt = stmt.where(Message.is_flagged == is_flagged)
+
+    messages = list(session.scalars(stmt.distinct()).all())
+    if not messages:
+        return 0
+
+    loc_rows = session.execute(
+        select(MessageLocation.message_id, MessageLocation.folder_id, Folder.remote_id)
+        .join(Folder, MessageLocation.folder_id == Folder.id)
+        .where(MessageLocation.message_id.in_([m.id for m in messages]))
+    ).all()
+
+    msg_folders: dict[uuid.UUID, list[tuple[uuid.UUID, str]]] = {}
+    for mid, fid, f_remote_id in loc_rows:
+        msg_folders.setdefault(mid, []).append((fid, f_remote_id or "INBOX"))
+
+    affected_accounts: set[uuid.UUID] = set()
+    affected_folders_by_account: dict[uuid.UUID, set[uuid.UUID]] = {}
+
+    for msg in messages:
+        msg.is_read = True
+        affected_accounts.add(msg.account_id)
+        folders = msg_folders.get(msg.id, [])
+        folder_ids = [fid for fid, _ in folders]
+        primary_folder_remote = folders[0][1] if folders else "INBOX"
+
+        if msg.account_id not in affected_folders_by_account:
+            affected_folders_by_account[msg.account_id] = set()
+        affected_folders_by_account[msg.account_id].update(folder_ids)
+
+        desired = {
+            "remote_id": msg.remote_id,
+            "folder_remote_id": primary_folder_remote,
+            "is_read": True,
+        }
+        enqueue_remote_operation(
+            session,
+            account_id=msg.account_id,
+            entity_key=f"msg:{msg.remote_id}:read",
+            op_type="mark_read",
+            desired_state=desired,
+            idempotency_key=f"{msg.id}:read:1",
+        )
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.MESSAGE_UPSERTED.value,
+                account_id=msg.account_id,
+                payload={"message_id": str(msg.id), "is_read": True},
+            )
+        )
+
+    for acc_id in affected_accounts:
+        fids = affected_folders_by_account.get(acc_id, set())
+        _recompute_stats_for_folders(session, account_id=acc_id, folder_ids=list(fids))
+        _wake_push(session, acc_id)
+
+    try_notify_outbox(session)
+    session.flush()
+    return len(messages)
+
