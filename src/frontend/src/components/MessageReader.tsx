@@ -1,6 +1,6 @@
 import { memo, useMemo, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Mail, MailOpen, Trash2, Flag, ArrowLeft, Reply, ReplyAll, Forward } from 'lucide-react'
+import { Mail, MailOpen, Trash2, Flag, ArrowLeft } from 'lucide-react'
 import { fetchAccounts, findCachedMail, flagOptimistic, setReadOptimistic, queryClient, queryKeys, removeCachedMail } from '../api/queries'
 import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
@@ -117,30 +117,6 @@ const MessageReader = memo(function MessageReader() {
         <button className="reader-action mobile-only" title="返回列表" aria-label="返回列表" onClick={() => setMobileView('list')}><ArrowLeft size={18} /></button>
         <div className="reader-location">{selected.accountEmail}</div>
         <div className="reader-toolbar-actions">
-          <button
-            className="reader-action"
-            title="回复（暂不支持发信）"
-            aria-label="回复"
-            disabled
-          >
-            <Reply size={18} />
-          </button>
-          <button
-            className="reader-action"
-            title="回复所有人（暂不支持发信）"
-            aria-label="回复所有人"
-            disabled
-          >
-            <ReplyAll size={18} />
-          </button>
-          <button
-            className="reader-action"
-            title="转发（暂不支持发信）"
-            aria-label="转发"
-            disabled
-          >
-            <Forward size={18} />
-          </button>
           <button
             data-ui="MR02"
             className="reader-action"

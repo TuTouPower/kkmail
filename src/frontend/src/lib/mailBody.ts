@@ -136,11 +136,3 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
 
 /** iframe sandbox flags: allow-popups and allow-popups-to-escape-sandbox for opening links in new windows. */
 export const MAIL_IFRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox'
-
-/** Turn HTML into readable text for reply/forward quoting. */
-export function htmlToText(html: string): string {
-  const doc = new DOMParser().parseFromString(sanitizeMailHtml(html), 'text/html')
-  doc.querySelectorAll('br').forEach((br) => br.replaceWith('\n'))
-  doc.querySelectorAll('p,div,li,tr,h1,h2,h3,h4,h5,h6').forEach((el) => el.append('\n'))
-  return (doc.body.textContent || '').replace(/\n{3,}/g, '\n\n').trim()
-}
