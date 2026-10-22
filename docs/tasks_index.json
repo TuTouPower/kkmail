@@ -4,22 +4,6 @@
     "workspace": ".",
     "tasks": [
         {
-            "tid": "t006",
-            "slug": "dark_reader_theme",
-            "title": "统一深色阅读体验与语义颜色",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "",
-            "conflicts_with": "",
-            "note": "来源 p010、p012；合并主题与样式交付",
-            "dir": "docs/tasks/t006_dark_reader_theme"
-        },
-        {
             "tid": "t007",
             "slug": "imap_header_decode",
             "title": "修复 IMAP 裸 GBK 报头解码",

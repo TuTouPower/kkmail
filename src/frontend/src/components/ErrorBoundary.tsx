@@ -55,8 +55,8 @@ export default class ErrorBoundary extends Component<Props, State> {
                 display: 'grid',
                 placeItems: 'center',
                 padding: 16,
-                background: 'var(--surface-2, #202124)',
-                color: 'var(--text, #e8e8e8)',
+                background: 'var(--surface-2)',
+                color: 'var(--text)',
                 textAlign: 'center',
                 boxSizing: 'border-box',
               }
@@ -65,15 +65,15 @@ export default class ErrorBoundary extends Component<Props, State> {
                 display: 'grid',
                 placeItems: 'center',
                 padding: 24,
-                background: 'var(--bg, #171819)',
-                color: 'var(--text, #e8e8e8)',
+                background: 'var(--canvas)',
+                color: 'var(--text)',
                 textAlign: 'center',
               }
         }
       >
         <div style={{ maxWidth: 420 }}>
           <strong style={{ fontSize: isInline ? 15 : 18 }}>{this.props.fallbackTitle || '页面出错了'}</strong>
-          <p style={{ color: 'var(--muted, #9a9a9a)', margin: '12px 0 20px', fontSize: isInline ? 13 : 14 }}>
+          <p style={{ color: 'var(--muted)', margin: '12px 0 20px', fontSize: isInline ? 13 : 14 }}>
             {isInline
               ? '该模块发生意外错误。可重试或复制诊断日志排查。'
               : '发生了意外错误。请刷新页面重试；若问题持续，可复制诊断日志排查。'}
@@ -92,9 +92,9 @@ export default class ErrorBoundary extends Component<Props, State> {
                 height: isInline ? 32 : 36,
                 padding: '0 16px',
                 borderRadius: 8,
-                border: '1px solid var(--line, #333)',
-                background: 'var(--accent, #0879d9)',
-                color: '#fff',
+                border: '1px solid var(--line)',
+                background: 'var(--primary)',
+                color: 'var(--on-primary)',
                 cursor: 'pointer',
                 fontSize: isInline ? 13 : 14,
               }}
@@ -108,9 +108,9 @@ export default class ErrorBoundary extends Component<Props, State> {
                 height: isInline ? 32 : 36,
                 padding: '0 16px',
                 borderRadius: 8,
-                border: '1px solid var(--line, #333)',
+                border: '1px solid var(--line)',
                 background: 'transparent',
-                color: this.state.copyFailed ? 'var(--red, #ef4444)' : 'var(--text, #e8e8e8)',
+                color: this.state.copyFailed ? 'var(--red)' : 'var(--text)',
                 cursor: 'pointer',
                 fontSize: isInline ? 13 : 14,
               }}

@@ -23,24 +23,27 @@
 html[data-theme="dark"] {
   color-scheme: dark;
   --canvas: #171819;
-  --sidebar: #1C1D1F;
-  --list: #202123;
-  --reader: #1D1F20;
+  --sidebar: #1E1E1E;
+  --list: #212124;
+  --reader: #1A1A1C;
   --surface: #27292B;
   --surface-2: #303235;
-  --surface-hover: #343639;
-  --selected: #34383D;
-  --line: #3A3C3F;
-  --line-strong: #3A3C3F;
-  --text: #F3F4F5;
-  --muted: #96999E;
-  --subtle: #C0C2C5;
+  --surface-hover: #2A2A2E;
+  --selected: #323236;
+  --line: #2C2C2E;
+  --line-strong: #2C2C2E;
+  --text: #FFFFFF;
+  --muted: #8E8E93;
+  --subtle: #E4E4E6;
+  --icon: #98989D;
+  --icon-hover: #FFFFFF;
+  --accent: #0A84FF;
   --red: #FF6B65;
   --danger: #FF6B65;
   --blue-soft: rgba(10, 132, 255, 0.18);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
-  --mail-body: #fff;
-  --mail-body-text: #202124;
+  --mail-body: #1A1A1C;
+  --mail-body-text: #FFFFFF;
 }
 
 html[data-theme="light"] {
@@ -58,6 +61,9 @@ html[data-theme="light"] {
   --text: #1D1D1F;
   --muted: #686A70;
   --subtle: #555961;
+  --icon: #686A70;
+  --icon-hover: #1D1D1F;
+  --accent: #0A84FF;
   --red: #D92D20;
   --danger: #D92D20;
   --blue-soft: rgba(0, 102, 204, 0.12);
@@ -117,6 +123,13 @@ button:disabled {
   stroke-width: 1.75;
   stroke-linecap: round;
   stroke-linejoin: round;
+  color: var(--icon);
+}
+
+.icon:hover,
+button:hover .icon,
+.side-item:hover .icon {
+  color: var(--icon-hover);
 }
 
 .app {
@@ -643,21 +656,45 @@ button:disabled {
   background: var(--surface-hover);
 }
 
+/* 失焦选中态（默认选中态） */
 .message-row.selected {
-  background: var(--primary);
-  color: var(--on-primary);
+  background: var(--selected);
+  color: var(--text);
 }
 
-.message-row.selected .sender,
-.message-row.selected .subject,
+.message-row.selected .sender {
+  color: var(--text);
+}
+
+.message-row.selected .subject {
+  color: var(--subtle);
+}
+
 .message-row.selected .preview,
-.message-row.selected .mail-account-tag,
 .message-row.selected .message-date {
-  color: var(--on-primary);
+  color: var(--muted);
 }
 
-.message-row.selected .preview {
-  color: rgba(255, 255, 255, 0.76);
+/* 列表拥有焦点时的选中态 (AC-002) */
+.message-list:focus-within .message-row.selected {
+  background: #0A60FE;
+  color: #FFFFFF;
+}
+
+.message-list:focus-within .message-row.selected .sender {
+  color: #FFFFFF;
+}
+
+.message-list:focus-within .message-row.selected .subject,
+.message-list:focus-within .message-row.selected .preview,
+.message-list:focus-within .message-row.selected .message-date,
+.message-list:focus-within .message-row.selected .mail-account-tag,
+.message-list:focus-within .message-row.selected .message-meta {
+  color: #D0E2FF;
+}
+
+.message-list:focus-within .message-row.selected .message-meta svg {
+  color: #D0E2FF;
 }
 
 .avatar {
@@ -687,7 +724,7 @@ button:disabled {
 }
 
 .sender {
-  font-weight: 700;
+  font-weight: 600;
   font-size: 12px;
   min-width: 0;
   overflow: hidden;
@@ -711,7 +748,7 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text);
+  color: var(--subtle);
 }
 
 .preview {
@@ -752,9 +789,13 @@ button:disabled {
   flex: 0 0 auto;
 }
 
-.unread .sender,
+.unread .sender {
+  font-weight: 600;
+}
+
 .unread .subject {
-  font-weight: 760;
+  font-weight: 700;
+  color: var(--text);
 }
 
 /* Reader pane */
@@ -825,20 +866,14 @@ button:disabled {
   position: fixed;
   z-index: 1000;
   min-width: 170px;
-  background: var(--panel-surface, #ffffff);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 10px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow);
   padding: 5px;
   display: flex;
   flex-direction: column;
   gap: 1px;
-}
-
-[data-theme='dark'] .context-menu {
-  background: #25262b;
-  border-color: #3b3d45;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
 .context-menu-item {
@@ -869,8 +904,8 @@ button:disabled {
 }
 
 .context-menu-item.danger:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.12);
-  color: var(--red);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
 }
 
 .context-menu-separator {
