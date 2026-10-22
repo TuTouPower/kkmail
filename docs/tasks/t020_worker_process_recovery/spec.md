@@ -25,12 +25,12 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：两个真实 Worker 同时竞争同一组任务时，活动 claim 不重叠；同一账号租约互斥，已完成业务结果不因重复执行出现重复邮件或错误计数。
-- [ ] AC-002：在明确记录 claim 后强制终止其中一个进程，存活 Worker 经实际过期/reclaim 自动继续处理；测试不手改 lease_expires_at/locked_at、不手动 complete 或重入 handler；在规定超时内任务退出失效 claim。
-- [ ] AC-003：旧持有者在接管后恢复或提交时因 fencing 失效而被拒绝，新的 checkpoint、邮件与 Blob 引用不被旧提交覆盖；允许安全重试但不声称外部操作 exactly-once。
-- [ ] AC-004：API 与 Worker 分开进程时，Worker 提交事务后真实 LISTEN/NOTIFY 与 SSE 能观察事件；事务回滚不广播未提交业务结果。
-- [ ] AC-005：中断数据库连接或重启专用测试 PG 服务后，API readiness 正确降级并恢复，listener 重新订阅、Worker 重连，客户端补播或 resync 后与 DB 一致，等待有上限。
-- [ ] AC-006：正常、超时、断言失败与取消均回收本轮进程和连接，只杀本轮拥有的 PID/进程组；留下脱敏进程日志与恢复时间，不影响其他 worktree 的运行。
+- [x] AC-001：两个真实 Worker 同时竞争同一组任务时，活动 claim 不重叠；同一账号租约互斥，已完成业务结果不因重复执行出现重复邮件或错误计数。
+- [x] AC-002：在明确记录 claim 后强制终止其中一个进程，存活 Worker 经实际过期/reclaim 自动继续处理；测试不手改 lease_expires_at/locked_at、不手动 complete 或重入 handler；在规定超时内任务退出失效 claim。
+- [x] AC-003：旧持有者在接管后恢复或提交时因 fencing 失效而被拒绝，新的 checkpoint、邮件与 Blob 引用不被旧提交覆盖；允许安全重试但不声称外部操作 exactly-once。
+- [x] AC-004：API 与 Worker 分开进程时，Worker 提交事务后真实 LISTEN/NOTIFY 与 SSE 能观察事件；事务回滚不广播未提交业务结果。
+- [x] AC-005：中断数据库连接或重启专用测试 PG 服务后，API readiness 正确降级并恢复，listener 重新订阅、Worker 重连，客户端补播或 resync 后与 DB 一致，等待有上限。
+- [x] AC-006：正常、超时、断言失败与取消均回收本轮进程和连接，只杀本轮拥有的 PID/进程组；留下脱敏进程日志与恢复时间，不影响其他 worktree 的运行。
 
 ### 可测试性声明
 
