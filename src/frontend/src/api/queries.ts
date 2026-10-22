@@ -74,16 +74,22 @@ export const queryKeys = {
   groups: ['groups'] as const,
   accounts: ['accounts'] as const,
   stats: ['mail-core', 'stats'] as const,
-  inbox: (accountId: string = ALL_ACCOUNTS, filter?: string, folderRole: string = 'inbox') => {
+  inbox: (
+    accountId: string = ALL_ACCOUNTS,
+    filter?: string,
+    folderRole: string = 'inbox',
+    sortOrder: string = 'desc',
+  ) => {
     const scope = accountScope(accountId)
-    if (folderRole !== 'inbox') {
-      return filter && filter !== 'all'
-        ? (['mail-core', 'inbox', scope, `role:${folderRole}`, filter] as const)
-        : (['mail-core', 'inbox', scope, `role:${folderRole}`] as const)
-    }
-    return filter && filter !== 'all'
-      ? (['mail-core', 'inbox', scope, filter] as const)
-      : (['mail-core', 'inbox', scope] as const)
+    const rolePart = folderRole !== 'inbox' ? `role:${folderRole}` : null
+    const filterPart = filter && filter !== 'all' ? filter : null
+    const sortPart = sortOrder && sortOrder !== 'desc' ? `sort:${sortOrder}` : null
+
+    const key: string[] = ['mail-core', 'inbox', scope]
+    if (rolePart) key.push(rolePart)
+    if (filterPart) key.push(filterPart)
+    if (sortPart) key.push(sortPart)
+    return key as unknown as readonly string[]
   },
   search: (q: string, accountId: string = ALL_ACCOUNTS) => ['mail-core', 'search', accountScope(accountId), q] as const,
 }

@@ -62,6 +62,8 @@ export function createMockMessages(): MockMessage[] {
   ]
 }
 
+export const FAKE_CSRF_TOKEN = 'fake-csrf-token'
+
 export async function setupStubApi(page: Page, options: { authedInitially?: boolean } = {}) {
   let isAuthed = options.authedInitially ?? false
   const messages = createMockMessages()
@@ -77,7 +79,10 @@ export async function setupStubApi(page: Page, options: { authedInitially?: bool
       if (!isAuthed) {
         return route.fulfill({ status: 401, json: { detail: '未登录' } })
       }
-      return route.fulfill({ status: 200, json: { username: 'kkmail', email: 'user@example.com' } })
+      return route.fulfill({
+        status: 200,
+        json: { username: 'kkmail', email: 'user@example.com', csrf_token: FAKE_CSRF_TOKEN, via: 'session' },
+      })
     }
 
     // 2. Login
@@ -89,9 +94,9 @@ export async function setupStubApi(page: Page, options: { authedInitially?: bool
           status: 200,
           headers: {
             'Set-Cookie': 'kkmail_session=fake-session-cookie; Path=/; HttpOnly',
-            'X-CSRF-Token': 'fake-csrf-token',
+            'X-CSRF-Token': FAKE_CSRF_TOKEN,
           },
-          json: { ok: true, username: 'kkmail' },
+          json: { ok: true, username: 'kkmail', csrf_token: FAKE_CSRF_TOKEN },
         })
       }
       return route.fulfill({ status: 401, json: { detail: '登录密码错误' } })
@@ -100,6 +105,29 @@ export async function setupStubApi(page: Page, options: { authedInitially?: bool
     // If not authed, reject unsafe endpoints
     if (!isAuthed) {
       return route.fulfill({ status: 401, json: { detail: '未登录' } })
+    }
+
+    // Enforce CSRF on all state-mutating requests
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      const csrfHeader = req.headers()['x-csrf-token']
+      if (csrfHeader !== FAKE_CSRF_TOKEN) {
+        return route.fulfill({
+          status: 403,
+          json: { detail: { error: 'CSRF validation failed', csrf_error: true } },
+        })
+      }
+    }
+
+    // 2.1 Logout
+    if (path === '/api/auth/logout' && method === 'POST') {
+      isAuthed = false
+      return route.fulfill({
+        status: 200,
+        headers: {
+          'Set-Cookie': 'kkmail_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+        },
+        json: { ok: true },
+      })
     }
 
     // 3. Groups & Accounts & Settings
@@ -152,7 +180,12 @@ export async function setupStubApi(page: Page, options: { authedInitially?: bool
 
     // 5. Mail Inbox
     if (path === '/api/mail/inbox') {
-      const items = messages.map((m) => ({
+      const sortOrder = url.searchParams.get('sort_order') || 'desc'
+      const sorted = [...messages].sort((a, b) => {
+        const diff = new Date(a.date).getTime() - new Date(b.date).getTime()
+        return sortOrder === 'asc' ? diff : -diff
+      })
+      const items = sorted.map((m) => ({
         id: m.id,
         subject: m.subject,
         from_address: m.from,
@@ -225,8 +258,25 @@ export async function setupStubApi(page: Page, options: { authedInitially?: bool
       })
     }
 
-    // 8. Mutations (read / flag / trash)
-    if (path.includes('/read') && method === 'POST') {
+    // 8. Mutations (read / flag / trash / mark-all-read)
+    if (path === '/api/mail/mark-all-read' && method === 'POST') {
+      let count = 0
+      for (const m of messages) {
+        if (!m.is_read) {
+          m.is_read = true
+          count++
+        }
+      }
+      return route.fulfill({ status: 200, json: { success: true, count } })
+    }
+    const readMatch = path.match(/^\/api\/mail\/messages\/([^/]+)\/read$/)
+    if (readMatch && method === 'POST') {
+      const mid = readMatch[1]
+      const target = messages.find((m) => m.id === mid)
+      if (target) {
+        const body = req.postDataJSON() || {}
+        target.is_read = body.is_read ?? true
+      }
       return route.fulfill({ status: 200, json: { ok: true } })
     }
     if (path.includes('/flag') && method === 'POST') {
