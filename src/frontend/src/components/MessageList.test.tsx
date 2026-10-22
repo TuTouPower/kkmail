@@ -82,6 +82,39 @@ describe('<MessageList />', () => {
     expect(calls.some((u) => u.startsWith('/api/mail/search?q=zz'))).toBe(true)
   })
 
+  it('CJK query triggers search immediately without debounce delay, and clear is instant', async () => {
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toHaveLength(2))
+    const input = container.querySelector('input[name=search]') as HTMLInputElement
+
+    // CJK character triggers search immediately
+    await typeInto(input, '测')
+    await waitFor(() => expect(useMailStore.getState().search).toBe('测'))
+    expect(calls.some((u) => u.includes('/api/mail/search') && decodeURIComponent(u).includes('q=测'))).toBe(true)
+
+    // Clearing search takes effect immediately
+    await typeInto(input, '')
+    await waitFor(() => expect(useMailStore.getState().search).toBe(''))
+  })
+
+  it('handles IME composition: does not update search until composition ends', async () => {
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toHaveLength(2))
+    const input = container.querySelector('input[name=search]') as HTMLInputElement
+
+    // Simulate IME composition start
+    input.dispatchEvent(new Event('compositionstart', { bubbles: true }))
+    await typeInto(input, 'zhong')
+    // During composition, search should remain empty
+    expect(useMailStore.getState().search).toBe('')
+
+    // End composition with Chinese character
+    input.value = '中'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中' }))
+    await waitFor(() => expect(useMailStore.getState().search).toBe('中'))
+  })
+
   it('filters by account UUID when an account is selected', async () => {
     useMailStore.setState({ view: { type: 'account', accountId: 'acc-1', email: 'box@x.test' } })
     await render(<MessageList />)

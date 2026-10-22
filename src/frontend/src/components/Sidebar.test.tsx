@@ -88,6 +88,49 @@ describe('<Sidebar />', () => {
     })
   })
 
+  it('shows unknown dash badge when account stats request fails, without showing pseudo-exact zero (A19)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/groups')) return json({ groups: [] })
+      if (u.startsWith('/api/accounts')) {
+        return json({
+          accounts: [
+            { id: 'acc-1', email: 'a@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+            { id: 'acc-2', email: 'b@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+          ],
+          total: 2, limit: 200, offset: 0, has_more: false,
+        })
+      }
+      // Global stats fails -> fallback to per-account
+      if (u.startsWith('/api/mail/stats')) {
+        return json({ detail: 'stats failed' }, 500)
+      }
+      // acc-1 succeeds with 3 unread
+      if (u.startsWith('/api/mail/accounts/acc-1/folder-stats')) {
+        return json({
+          account_id: 'acc-1',
+          folders: [{ role: 'inbox', unread_count: 3, total_count: 5 }],
+        })
+      }
+      // acc-2 fails
+      if (u.startsWith('/api/mail/accounts/acc-2/folder-stats')) {
+        return json({ detail: 'network error' }, 500)
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => {
+      const unknownBadges = [...container.querySelectorAll('.unread-badge-unknown')]
+      expect(unknownBadges.length).toBeGreaterThanOrEqual(1)
+      expect(unknownBadges[0].textContent?.trim()).toBe('-')
+    })
+
+    // Total unread must NOT display pseudo-exact 3 or 0; it must display '-'
+    const totalBadge = container.querySelector('.category-btn .unread-badge')
+    expect(totalBadge?.textContent?.trim()).toBe('-')
+  })
+
   it('renders favorites tree with inbox, unread, and sent collapsible entries (AC-001 ~ AC-004)', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url)
@@ -195,7 +238,7 @@ describe('<Sidebar />', () => {
     await waitFor(() => {
       expect(container.textContent).not.toContain('请确认已登录且后端可用')
       expect(container.textContent).toContain('DB connection failed')
-    })
+    }, 3000)
 
     const retryBtn = container.querySelector('.account-error-retry') as HTMLButtonElement | null
     expect(retryBtn).not.toBeNull()

@@ -52,14 +52,22 @@ export default function SettingsPage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  async function run(label: string, fn: () => Promise<unknown>, okMsg: string, invalidate?: unknown) {
+  async function run<T = unknown>(
+    label: string,
+    fn: () => Promise<T>,
+    okMsg?: string | ((data: T) => string),
+    invalidate?: unknown,
+  ): Promise<{ ok: boolean; data?: T; error?: unknown }> {
     setStatus(`${label}…`)
     try {
-      await fn()
-      setStatus(okMsg)
+      const data = await fn()
+      const message = typeof okMsg === 'function' ? okMsg(data) : (okMsg ?? `${label}成功`)
+      setStatus(message)
       if (invalidate) await qc.invalidateQueries({ queryKey: invalidate as readonly unknown[] })
+      return { ok: true, data }
     } catch (err) {
       setStatus(errorMessage(err, `${label}失败`))
+      return { ok: false, error: err }
     }
   }
 
@@ -211,11 +219,13 @@ export default function SettingsPage() {
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="新分组名" style={{ flex: 1, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '0 8px' }} />
               <button type="button" onClick={async () => {
-                await run('创建分组', () => api.createGroup({ name: groupName.trim() }), '分组已创建', queryKeys.groups)
-                setGroupName('')
+                const name = groupName.trim()
+                if (!name) return
+                const res = await run('创建分组', () => api.createGroup({ name }), '分组已创建', queryKeys.groups)
+                if (res.ok) setGroupName('')
               }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>创建</button>
             </div>
-            <button type="button" onClick={() => run('全量同步', async () => setStatus(`已排队 ${(await api.syncAll()).count} 个同步任务`), '同步任务已排队', queryKeys.accounts)} style={{ marginTop: 16, height: 34, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)' }}>同步全部账户</button>
+            <button type="button" onClick={() => run('全量同步', () => api.syncAll(), (res) => `已排队 ${res?.count ?? 0} 个同步任务`, queryKeys.accounts)} style={{ marginTop: 16, height: 34, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)' }}>同步全部账户</button>
           </div>
         )}
 
@@ -268,9 +278,13 @@ export default function SettingsPage() {
             }} style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>保存</button>
 
             <div style={{ marginTop: 22, fontWeight: 700 }}>修改登录密码</div>
-            <form onSubmit={(e) => {
+            <form onSubmit={async (e) => {
               e.preventDefault()
-              run('修改密码', () => api.changePassword(currentPassword, newPassword), '密码已更新')
+              const res = await run('修改密码', () => api.changePassword(currentPassword, newPassword), '密码已更新')
+              if (res.ok) {
+                setCurrentPassword('')
+                setNewPassword('')
+              }
             }}>
               <input
                 id="current-password"
@@ -294,6 +308,35 @@ export default function SettingsPage() {
               />
               <button type="submit" style={{ marginTop: 10, height: 34, padding: '0 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>更新密码</button>
             </form>
+
+            <div style={{ marginTop: 28, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>退出登录</div>
+              <button
+                type="button"
+                id="logout-button"
+                onClick={async () => {
+                  setStatus('正在登出…')
+                  try {
+                    await api.logout()
+                    qc.clear()
+                  } catch (err) {
+                    setStatus(errorMessage(err, '登出失败'))
+                  }
+                }}
+                style={{
+                  height: 34,
+                  padding: '0 14px',
+                  borderRadius: 8,
+                  border: '1px solid var(--red, #ef4444)',
+                  background: 'transparent',
+                  color: 'var(--red, #ef4444)',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                }}
+              >
+                退出登录
+              </button>
+            </div>
           </div>
         )}
         {status && <div style={{ marginTop: 16, fontSize: 12, color: 'var(--muted)' }}>{status}</div>}
