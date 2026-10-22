@@ -13,12 +13,19 @@ import base64
 import json
 import os
 import struct
+import uuid
 from pathlib import Path
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 MAGIC = b"KKBK"
 NONCE_LEN = 12
+HEADER_LEN = 4 + 4 + NONCE_LEN  # 20 bytes
+TAG_LEN = 16  # AES-GCM authentication tag length
+MIN_PAYLOAD_LEN = HEADER_LEN + TAG_LEN  # 36 bytes
+CHUNK_SIZE = 64 * 1024  # 64 KB streaming buffer
 
 
 class BackupCryptoError(Exception):
@@ -79,28 +86,118 @@ def decrypt_bytes(payload: bytes, *, keyring: dict[int, bytes]) -> tuple[bytes, 
 
 def encrypt_file(src_path: Path, dst_path: Path, *, key: bytes, key_version: int) -> None:
     """Stream encryption from src_path to dst_path without in-memory buffering."""
+    if not src_path.is_file():
+        raise BackupCryptoError(f"source file not found: {src_path}")
     nonce = os.urandom(NONCE_LEN)
-    header = MAGIC + struct.pack(">I", key_version) + nonce
-    pt = src_path.read_bytes()
-    ct = AESGCM(key).encrypt(nonce, pt, associated_data=MAGIC + struct.pack(">I", key_version))
-    with dst_path.open("wb") as f:
-        f.write(header)
-        f.write(ct)
+    aad = MAGIC + struct.pack(">I", key_version)
+    header = aad + nonce
+
+    cipher = Cipher(algorithms.AES(key), modes.GCM(nonce))
+    encryptor = cipher.encryptor()
+    encryptor.authenticate_additional_data(aad)
+
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_dst = dst_path.parent / f".tmp_{dst_path.name}_{uuid.uuid4().hex}"
+    try:
+        fd = os.open(temp_dst, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f_out:
+            f_out.write(header)
+            with src_path.open("rb") as f_in:
+                while True:
+                    chunk = f_in.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    ct_chunk = encryptor.update(chunk)
+                    if ct_chunk:
+                        f_out.write(ct_chunk)
+            final_ct = encryptor.finalize()
+            if final_ct:
+                f_out.write(final_ct)
+            f_out.write(encryptor.tag)
+            f_out.flush()
+            os.fsync(f_out.fileno())
+
+        os.replace(temp_dst, dst_path)
+        try:
+            os.chmod(dst_path, 0o600)
+        except OSError:
+            pass
+    finally:
+        if temp_dst.exists():
+            try:
+                temp_dst.unlink()
+            except OSError:
+                pass
 
 
 def decrypt_file(src_path: Path, dst_path: Path, *, keyring: dict[int, bytes]) -> int:
     """Stream decrypt from src_path to dst_path without in-memory buffering."""
-    with src_path.open("rb") as f:
-        header = f.read(4 + 4 + NONCE_LEN)
-        if len(header) < 4 + 4 + NONCE_LEN or header[:4] != MAGIC:
+    if not src_path.is_file():
+        raise BackupCryptoError(f"source file not found: {src_path}")
+
+    with src_path.open("rb") as f_in:
+        f_in.seek(0, os.SEEK_END)
+        src_size = f_in.tell()
+        if src_size < MIN_PAYLOAD_LEN:
+            raise BackupCryptoError("not a KKBK backup blob")
+
+        f_in.seek(0, os.SEEK_SET)
+        header = f_in.read(HEADER_LEN)
+        if len(header) < HEADER_LEN or header[:4] != MAGIC:
             raise BackupCryptoError("not a KKBK backup blob")
         version = struct.unpack(">I", header[4:8])[0]
         if version not in keyring:
             raise BackupCryptoError(f"unknown backup key version {version}")
-        nonce = header[8 : 8 + NONCE_LEN]
-        ct = f.read()
-    pt = AESGCM(keyring[version]).decrypt(
-        nonce, ct, associated_data=MAGIC + struct.pack(">I", version)
-    )
-    dst_path.write_bytes(pt)
-    return version
+        nonce = header[8:HEADER_LEN]
+
+        f_in.seek(-TAG_LEN, os.SEEK_END)
+        tag = f_in.read(TAG_LEN)
+        if len(tag) < TAG_LEN:
+            raise BackupCryptoError("truncated backup blob: missing tag")
+
+        ct_total = src_size - MIN_PAYLOAD_LEN
+        f_in.seek(HEADER_LEN, os.SEEK_SET)
+
+        key = keyring[version]
+        aad = MAGIC + struct.pack(">I", version)
+        cipher = Cipher(algorithms.AES(key), modes.GCM(nonce, tag))
+        decryptor = cipher.decryptor()
+        decryptor.authenticate_additional_data(aad)
+
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_dst = dst_path.parent / f".tmp_{dst_path.name}_{uuid.uuid4().hex}"
+        try:
+            fd = os.open(temp_dst, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as f_out:
+                bytes_left = ct_total
+                while bytes_left > 0:
+                    read_len = min(CHUNK_SIZE, bytes_left)
+                    chunk = f_in.read(read_len)
+                    if len(chunk) != read_len:
+                        raise BackupCryptoError("truncated backup ciphertext")
+                    bytes_left -= len(chunk)
+                    pt_chunk = decryptor.update(chunk)
+                    if pt_chunk:
+                        f_out.write(pt_chunk)
+                final_pt = decryptor.finalize()
+                if final_pt:
+                    f_out.write(final_pt)
+                f_out.flush()
+                os.fsync(f_out.fileno())
+
+            os.replace(temp_dst, dst_path)
+            try:
+                os.chmod(dst_path, 0o600)
+            except OSError:
+                pass
+            return version
+        except InvalidTag as exc:
+            raise BackupCryptoError(
+                f"backup decryption failed: tag verification failed (data corrupted or tampered): {exc}"
+            ) from exc
+        finally:
+            if temp_dst.exists():
+                try:
+                    temp_dst.unlink()
+                except OSError:
+                    pass
