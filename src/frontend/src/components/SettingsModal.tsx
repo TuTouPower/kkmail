@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { X, Sun, Moon, Inbox, Settings as SettingsIcon } from 'lucide-react'
+import { X, Sun, Moon, Inbox, Settings as SettingsIcon, PanelLeft } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { fetchAccounts, fetchGroups, queryKeys } from '../api/queries'
@@ -11,6 +11,8 @@ export default function SettingsPage() {
   const theme = useMailStore((s) => s.theme)
   const setTheme = useMailStore((s) => s.setTheme)
   const closeSettings = useMailStore((s) => s.closeSettings)
+  const sidebarCollapsed = useMailStore((s) => s.sidebarCollapsed)
+  const toggleSidebar = useMailStore((s) => s.toggleSidebar)
   const onClose = closeSettings
   const qc = useQueryClient()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
@@ -76,6 +78,27 @@ export default function SettingsPage() {
   return (
     <div className="settings-page" style={{ position: 'relative', zIndex: 50, display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--surface)', color: 'var(--text)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="sidebar-expand-btn"
+            title="展开侧边栏"
+            aria-label="展开侧边栏"
+            onClick={toggleSidebar}
+            style={{
+              border: 0,
+              background: 'transparent',
+              color: 'var(--text)',
+              cursor: 'pointer',
+              display: 'grid',
+              placeItems: 'center',
+              padding: 2,
+              borderRadius: 6,
+            }}
+          >
+            <PanelLeft size={18} />
+          </button>
+        )}
         <SettingsIcon size={18} />
         <div style={{ fontWeight: 700, flex: 1 }}>设置</div>
         <button type="button" onClick={onClose} title="关闭" aria-label="关闭" style={{ border: 0, background: 'transparent', color: 'var(--muted)' }}><X size={18} /></button>
