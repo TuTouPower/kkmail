@@ -272,6 +272,8 @@ button:hover .icon,
   display: flex;
   align-items: center;
   gap: 2px;
+  width: 100%;
+  min-width: 0;
 }
 
 .side-item-group .category-toggle {
@@ -343,11 +345,21 @@ button:hover .icon,
 }
 
 .account-row {
-  height: 33px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
   margin: 1px 0;
+}
+
+.account-folders {
+  display: flex;
+  flex-direction: column;
+}
+
+.folder-tree-row {
+  width: 100%;
+}
+
+.category-account-btn,
+.folder-item-btn {
+  width: 100%;
 }
 
 .account-expand {
