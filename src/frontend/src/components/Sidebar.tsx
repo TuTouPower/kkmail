@@ -15,12 +15,7 @@ interface FolderStatsItem {
 }
 
 async function fetchAccountFolders(accountId: string, signal?: AbortSignal): Promise<number> {
-  let res: unknown
-  try {
-    res = await apiRequest(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`, { signal })
-  } catch {
-    return 0
-  }
+  const res = await apiRequest(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`, { signal })
   const folders: FolderStatsItem[] = Array.isArray(res)
     ? res
     : Array.isArray((res as { folders?: unknown })?.folders)
@@ -61,25 +56,40 @@ const Sidebar = memo(function Sidebar() {
     queryFn: async ({ signal }) => {
       try {
         const globalStats = await fetchGlobalStats(signal)
-        const statsMap = new Map<string, number>()
+        const statsMap = new Map<string, number | null>()
         for (const item of globalStats.accounts) {
           statsMap.set(item.account_id, item.unread_count)
         }
         return {
-          totalUnread: globalStats.total_unread,
+          totalUnread: globalStats.total_unread as number | null,
           byAccount: statsMap,
         }
-      } catch {
-        const statsMap = new Map<string, number>()
+      } catch (globalErr) {
+        const statsMap = new Map<string, number | null>()
+        let anyFailed = false
+        let total = 0
+        let successCount = 0
+
         await Promise.all(
           accounts.map(async (a) => {
-            const count = await fetchAccountFolders(a.id, signal)
-            statsMap.set(a.id, count)
+            try {
+              const count = await fetchAccountFolders(a.id, signal)
+              statsMap.set(a.id, count)
+              total += count
+              successCount++
+            } catch {
+              anyFailed = true
+              statsMap.set(a.id, null)
+            }
           }),
         )
-        const total = [...statsMap.values()].reduce((n, c) => n + c, 0)
+
+        if (accounts.length > 0 && successCount === 0) {
+          throw globalErr
+        }
+
         return {
-          totalUnread: total,
+          totalUnread: anyFailed ? null : total,
           byAccount: statsMap,
         }
       }
@@ -87,8 +97,9 @@ const Sidebar = memo(function Sidebar() {
     enabled: accounts.length > 0,
   })
 
-  const unreadByAccount = statsQuery.data?.byAccount ?? new Map<string, number>()
-  const allInboxUnread = statsQuery.data?.totalUnread ?? 0
+  const statsData = statsQuery.data
+  const unreadByAccount = statsData?.byAccount ?? new Map<string, number | null>()
+  const allInboxUnread = statsData ? statsData.totalUnread : (statsQuery.isError ? null : 0)
   const inAllInbox = view.type === 'allInbox'
   const groupIds = new Set(groups.map((g) => g.id))
   const ungroupedAccounts = accounts.filter((a) => !a.group_id || !groupIds.has(a.group_id))
@@ -158,10 +169,16 @@ const Sidebar = memo(function Sidebar() {
                   >
                     <Icon size={17} />
                     <span className="side-name">{label}</span>
-                    {showBadges && allInboxUnread > 0 && (
-                      <span className="side-count unread-badge" title={`${allInboxUnread} 封未读`} aria-label={`${allInboxUnread} 封未读`}>
-                        {allInboxUnread}
-                      </span>
+                    {showBadges && (
+                      allInboxUnread === null ? (
+                        <span className="side-count unread-badge unread-badge-unknown" title="未读数获取失败" aria-label="未读数未知">
+                          -
+                        </span>
+                      ) : allInboxUnread > 0 ? (
+                        <span className="side-count unread-badge" title={`${allInboxUnread} 封未读`} aria-label={`${allInboxUnread} 封未读`}>
+                          {allInboxUnread}
+                        </span>
+                      ) : null
                     )}
                   </button>
                 </div>
@@ -194,10 +211,16 @@ const Sidebar = memo(function Sidebar() {
                               {providerBadge(a.provider, a.account_type)}
                             </span>
                             <span className="account-email">{a.email}</span>
-                            {showBadges && !!unread && (
-                              <span className="side-count unread-badge" aria-label={`${unread} 封未读`}>
-                                {unread}
-                              </span>
+                            {showBadges && (
+                              unread === null ? (
+                                <span className="side-count unread-badge unread-badge-unknown" title="未读数获取失败" aria-label="未读数未知">
+                                  -
+                                </span>
+                              ) : (typeof unread === 'number' && unread > 0) ? (
+                                <span className="side-count unread-badge" aria-label={`${unread} 封未读`}>
+                                  {unread}
+                                </span>
+                              ) : null
                             )}
                           </button>
                         </div>
@@ -215,7 +238,7 @@ const Sidebar = memo(function Sidebar() {
           {(groupsQuery.isLoading || accountsQuery.isLoading) && (
             <div style={{ padding: '8px 10px', color: 'var(--muted)', fontSize: 12 }}>正在加载账户…</div>
           )}
-          {(groupsQuery.error || accountsQuery.error) && (
+          {(groupsQuery.error || accountsQuery.error || statsQuery.error) && (
             <div
               style={{
                 padding: '8px 10px',
@@ -228,7 +251,7 @@ const Sidebar = memo(function Sidebar() {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <AlertCircle size={14} style={{ flexShrink: 0 }} />
-                <span>{errorMessage(accountsQuery.error || groupsQuery.error, '账户加载失败')}</span>
+                <span>{errorMessage(accountsQuery.error || groupsQuery.error || statsQuery.error, '账户加载失败')}</span>
               </div>
               <button
                 type="button"
@@ -236,6 +259,7 @@ const Sidebar = memo(function Sidebar() {
                 onClick={() => {
                   void accountsQuery.refetch()
                   void groupsQuery.refetch()
+                  void statsQuery.refetch()
                 }}
                 style={{
                   alignSelf: 'flex-start',
@@ -284,7 +308,15 @@ const Sidebar = memo(function Sidebar() {
                           {providerBadge(a.provider, a.account_type)}
                         </span>
                         <span className="account-email">{a.email}</span>
-                        {!!unread && <span className="side-count unread-badge" aria-label={`${unread} 封未读`}>{unread}</span>}
+                        {unread === null ? (
+                          <span className="side-count unread-badge unread-badge-unknown" title="未读数获取失败" aria-label="未读数未知">
+                            -
+                          </span>
+                        ) : (typeof unread === 'number' && unread > 0) ? (
+                          <span className="side-count unread-badge" aria-label={`${unread} 封未读`}>
+                            {unread}
+                          </span>
+                        ) : null}
                       </button>
                     </div>
                   )

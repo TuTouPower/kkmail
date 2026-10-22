@@ -6,14 +6,14 @@ type Props = {
   inline?: boolean
   fallbackTitle?: string
 }
-type State = { error: Error | null; copied: boolean }
+type State = { error: Error | null; copied: boolean; copyFailed: boolean }
 
 /** Catches render errors and offers a Chinese reload affordance. */
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null, copied: false }
+  state: State = { error: null, copied: false, copyFailed: false }
 
   static getDerivedStateFromError(error: Error): State {
-    return { error, copied: false }
+    return { error, copied: false, copyFailed: false }
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -27,13 +27,17 @@ export default class ErrorBoundary extends Component<Props, State> {
     )
   }
 
-  copyReport = () => {
+  copyReport = async () => {
     try {
-      navigator.clipboard.writeText(exportDiagnosticsAsText())
-      this.setState({ copied: true })
+      if (!navigator?.clipboard?.writeText) {
+        throw new Error('剪贴板不可用')
+      }
+      await navigator.clipboard.writeText(exportDiagnosticsAsText())
+      this.setState({ copied: true, copyFailed: false })
       setTimeout(() => this.setState({ copied: false }), 2000)
     } catch {
-      /* ignore clipboard rejection */
+      this.setState({ copied: false, copyFailed: true })
+      setTimeout(() => this.setState({ copyFailed: false }), 2000)
     }
   }
 
@@ -106,12 +110,16 @@ export default class ErrorBoundary extends Component<Props, State> {
                 borderRadius: 8,
                 border: '1px solid var(--line, #333)',
                 background: 'transparent',
-                color: 'var(--text, #e8e8e8)',
+                color: this.state.copyFailed ? 'var(--red, #ef4444)' : 'var(--text, #e8e8e8)',
                 cursor: 'pointer',
                 fontSize: isInline ? 13 : 14,
               }}
             >
-              {this.state.copied ? '已复制日志' : '复制诊断日志'}
+              {this.state.copied
+                ? '已复制日志'
+                : this.state.copyFailed
+                  ? '复制失败'
+                  : '复制诊断日志'}
             </button>
           </div>
         </div>

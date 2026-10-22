@@ -21,6 +21,8 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
     }
   }
 
+  const isDesktop = typeof window !== 'undefined' && Boolean((window as unknown as { kkmailDesktop?: unknown }).kkmailDesktop)
+
   return (
     <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', background: 'var(--canvas)', color: 'var(--text)', padding: 20 }}>
       <form
@@ -71,7 +73,11 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
         >
           {loading ? '登录中…' : '登录'}
         </button>
-        <div style={{ marginTop: 14, fontSize: 11, color: 'var(--muted)' }}>密码见 MAIL_CORE_LOGIN_PASSWORD / LOGIN_PASSWORD</div>
+        <div style={{ marginTop: 14, fontSize: 11, color: 'var(--muted)', lineHeight: 1.5 }}>
+          {isDesktop
+            ? '桌面环境：请查看启动时的初始密码对话框（如已修改请使用新密码）'
+            : '密码配置见 MAIL_CORE_LOGIN_PASSWORD / MAIL_CORE_LOGIN_PASSWORD_HASH'}
+        </div>
       </form>
     </div>
   )
