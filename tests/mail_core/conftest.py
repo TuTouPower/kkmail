@@ -32,11 +32,32 @@ if os.environ.get("MAIL_CORE_REQUIRE_DB") == "1" and not os.environ.get("MAIL_CO
 TEST_LOGIN_PASSWORD = "test-login-password"
 
 
+def _guard_test_database():
+    scripts = str(_SRC.parent / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from test_pg_runtime import SafetyError, guard_database
+    try:
+        guard_database()
+    except SafetyError as exc:
+        raise pytest.UsageError(str(exc)) from None
+    except Exception as exc:
+        raise pytest.UsageError(f"test database verification failed ({type(exc).__name__})") from None
+
+
+def pytest_configure(config):
+    if os.environ.get("MAIL_CORE_DATABASE_URL") or os.environ.get("MAIL_CORE_REQUIRE_DB") == "1":
+        _guard_test_database()
+    elif os.environ.get("KKMAIL_TEST_MODE") != "unit":
+        raise pytest.UsageError("select owned DB runtime or explicit quick mode KKMAIL_TEST_MODE=unit")
+
+
 @pytest.fixture(autouse=True)
 def _reset_auth_state_for_tests():
     from mail_core.security.auth import reset_auth_caches
     reset_auth_caches()
     if os.environ.get("MAIL_CORE_DATABASE_URL"):
+        _guard_test_database()
         try:
             from mail_core.db.session import get_session_factory
             from mail_core.mail.storage.models import AuthCredential
@@ -49,6 +70,7 @@ def _reset_auth_state_for_tests():
     yield
     reset_auth_caches()
     if os.environ.get("MAIL_CORE_DATABASE_URL"):
+        _guard_test_database()
         try:
             from mail_core.db.session import get_session_factory
             from mail_core.mail.storage.models import AuthCredential
@@ -83,3 +105,15 @@ def pytest_collection_modifyitems(config, items):
             reason = str(mark.kwargs.get("reason", ""))
             if any(k in reason.lower() for k in db_skip_keywords) and mark.args and mark.args[0]:
                 raise pytest.UsageError(f"{item.nodeid} would skip ({reason}) under MAIL_CORE_REQUIRE_DB=1")
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if os.environ.get("MAIL_CORE_REQUIRE_DB") != "1" or not report.skipped:
+        return
+    reason = str(report.longrepr).lower()
+    if any(word in reason for word in ("database", "postgres", "pg required", "mail_core_database_url")):
+        report.outcome = "failed"
+        report.longrepr = f"{item.nodeid}: database test skipped during required full suite"
