@@ -194,7 +194,8 @@ export interface paths {
         delete: operations["api_delete_group_api_groups__group_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Api Rename Group */
+        patch: operations["api_rename_group_api_groups__group_id__patch"];
         trace?: never;
     };
     "/api/mail/accounts/{account_id}/folder-stats": {
@@ -423,6 +424,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sidebar/layout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Get Sidebar Layout */
+        get: operations["api_get_sidebar_layout_api_sidebar_layout_get"];
+        /** Api Save Sidebar Layout */
+        put: operations["api_save_sidebar_layout_api_sidebar_layout_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sidebar/layout/default-order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Reset Sidebar Account Order */
+        post: operations["api_reset_sidebar_account_order_api_sidebar_layout_default_order_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -502,9 +538,9 @@ export interface components {
             /** Role */
             role: string;
             /** Total Count */
-            total_count: number;
+            total_count: number | null;
             /** Unread Count */
-            unread_count: number;
+            unread_count: number | null;
         };
         /** AccountFolderStatsOut */
         AccountFolderStatsOut: {
@@ -521,9 +557,9 @@ export interface components {
              */
             account_id: string;
             /** Total Count */
-            total_count: number;
+            total_count: number | null;
             /** Unread Count */
-            unread_count: number;
+            unread_count: number | null;
         };
         /** AccountOut */
         AccountOut: {
@@ -539,8 +575,12 @@ export interface components {
             group_id?: string | null;
             /** Group Name */
             group_name?: string | null;
+            /** Group Order */
+            group_order?: number | null;
             /** Id */
             id: string;
+            /** Master Order */
+            master_order?: number | null;
             /** Provider */
             provider: string;
             /** Remark */
@@ -621,7 +661,7 @@ export interface components {
             /** Accounts */
             accounts: components["schemas"]["AccountInboxStatsOut"][];
             /** Total Unread */
-            total_unread: number;
+            total_unread: number | null;
         };
         /** GroupCreateIn */
         GroupCreateIn: {
@@ -641,6 +681,16 @@ export interface components {
             color?: string | null;
             /** Id */
             id: string;
+            /** Name */
+            name: string;
+            /**
+             * Sort Order
+             * @default 0
+             */
+            sort_order: number;
+        };
+        /** GroupUpdateIn */
+        GroupUpdateIn: {
             /** Name */
             name: string;
         };
@@ -691,6 +741,8 @@ export interface components {
              * @default inbox
              */
             folder_role: string | null;
+            /** Group Id */
+            group_id?: string | null;
             /** Is Flagged */
             is_flagged?: boolean | null;
         };
@@ -891,6 +943,41 @@ export interface components {
             settings?: {
                 [key: string]: string;
             };
+        };
+        /** SidebarLayoutIn */
+        SidebarLayoutIn: {
+            /** Expected Revision */
+            expected_revision: string;
+            /** Group Account Ids */
+            group_account_ids: {
+                [key: string]: string[];
+            };
+            /** Group Ids */
+            group_ids: string[];
+            /** Master Account Ids */
+            master_account_ids: string[];
+            /** Ungrouped Account Ids */
+            ungrouped_account_ids: string[];
+        };
+        /** SidebarLayoutRevisionIn */
+        SidebarLayoutRevisionIn: {
+            /** Expected Revision */
+            expected_revision: string;
+        };
+        /** SidebarLayoutSnapshotOut */
+        SidebarLayoutSnapshotOut: {
+            /** Group Account Ids */
+            group_account_ids: {
+                [key: string]: string[];
+            };
+            /** Group Ids */
+            group_ids: string[];
+            /** Master Account Ids */
+            master_account_ids: string[];
+            /** Revision */
+            revision: string;
+            /** Ungrouped Account Ids */
+            ungrouped_account_ids: string[];
         };
         /** SyncAllOut */
         SyncAllOut: {
@@ -1330,6 +1417,41 @@ export interface operations {
             };
         };
     };
+    api_rename_group_api_groups__group_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupUpdateIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     api_folder_stats_api_mail_accounts__account_id__folder_stats_get: {
         parameters: {
             query?: never;
@@ -1430,6 +1552,7 @@ export interface operations {
                 /** @description `next_cursor` from the previous page */
                 cursor?: string | null;
                 account_id?: string | null;
+                group_id?: string | null;
                 /** @description Filter messages by read status */
                 is_read?: boolean | null;
                 /** @description Filter messages by flagged status */
@@ -1637,6 +1760,8 @@ export interface operations {
             query: {
                 q: string;
                 account_id?: string | null;
+                group_id?: string | null;
+                folder_id?: string | null;
                 limit?: number;
                 offset?: number;
             };
@@ -1668,7 +1793,10 @@ export interface operations {
     };
     api_global_inbox_stats_api_mail_stats_get: {
         parameters: {
-            query?: never;
+            query?: {
+                group_id?: string | null;
+                folder_role?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1682,6 +1810,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GlobalStatsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1727,6 +1864,102 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SettingsOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_get_sidebar_layout_api_sidebar_layout_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SidebarLayoutSnapshotOut"];
+                };
+            };
+        };
+    };
+    api_save_sidebar_layout_api_sidebar_layout_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SidebarLayoutIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The sidebar layout changed after the supplied revision was read. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_reset_sidebar_account_order_api_sidebar_layout_default_order_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SidebarLayoutRevisionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The sidebar layout changed after the supplied revision was read. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -284,3 +284,18 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 - **定时与手动扩展套件 (`.github/workflows/scheduled.yml`)**：
     每天定时或手动触发，完整执行真实备份跨库恢复、多版本历史数据平滑升级、多进程 Worker 故障恢复和大邮箱性能基准测试；
 - **权限与环境安全**：工作流配置最小 `contents: read` 权限，不申请发布权限；测试使用的数据库密码与环境变量严格隔离于专用测试环境。
+
+## 分组侧栏与分组邮件范围（t027）
+
+组织数据、邮件范围与浏览器交互必须组合验证，不能只测组件状态或仅检查 API 响应：
+
+```bash
+scripts/run-mail-core-tests.sh run
+(cd src/frontend && npm test && npx tsc -b && npm run build && npm run lint && npm run openapi:check)
+npm --prefix src/frontend run test:e2e
+python3 scripts/run_full_stack_e2e.py
+```
+
+- PostgreSQL 集成测试验证分组 CRUD、删除非空组后保留账号、完整布局原子校验、独立排序、空组与未知组范围、列表/搜索/统计/全部已读，以及最新迁移的降级再升级；测试必须使用专用测试数据库。
+- 浏览器冒烟测试验证六类全局分类、分组分类、真实文件夹树和导航布局；真实全栈 Playwright 通过 HTML5 拖拽验证空组、跨组、移出、主列表内排序和分组排序，并刷新后读取服务端确认成员关系与顺序持久化。
+- 前端测试覆盖查询 key 按 scope 隔离、分组参数贯通、偏好持久化与设置入口；`schemas/openapi.json` 和生成 TypeScript 必须通过 codegen 漂移检查。

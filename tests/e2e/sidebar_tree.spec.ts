@@ -60,23 +60,23 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await setupStubApi(page, { authedInitially: true, accounts, folderStatsByAccount })
     await page.goto('/')
 
-    const acc1Row = page.locator('.account-row').filter({ hasText: 'alpha@example.com' })
-    const acc2Row = page.locator('.account-row').filter({ hasText: 'beta@example.com' })
+    const acc1Row = page.locator('.tree-account-block[data-drop-list="master"]').filter({ hasText: 'alpha@example.com' })
+    const acc2Row = page.locator('.tree-account-block[data-drop-list="master"]').filter({ hasText: 'beta@example.com' })
     await expect(acc1Row).toBeVisible({ timeout: 10000 })
     await expect(acc2Row).toBeVisible()
 
     // 展开账号 1
-    const toggle1 = acc1Row.locator('.account-folders-toggle')
+    const toggle1 = acc1Row.locator('.tree-disclosure')
     await toggle1.click()
 
-    const tree1 = acc1Row.locator('.account-folders')
+    const tree1 = acc1Row.locator('.tree-folder-list')
     await expect(tree1).toBeVisible()
     await expect(tree1.getByText('工作邮件')).toBeVisible()
 
     // 获取账号 1 头部、文件夹树与账号 2 头部的真实几何包围盒
-    const acc1HeaderBox = await acc1Row.locator('.side-item-group').boundingBox()
+    const acc1HeaderBox = await acc1Row.locator('.tree-account-row').boundingBox()
     const tree1Box = await tree1.boundingBox()
-    const acc2HeaderBox = await acc2Row.locator('.side-item-group').boundingBox()
+    const acc2HeaderBox = await acc2Row.locator('.tree-account-row').boundingBox()
 
     expect(acc1HeaderBox).not.toBeNull()
     expect(tree1Box).not.toBeNull()
@@ -100,26 +100,26 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await setupStubApi(page, { authedInitially: true, accounts, folderStatsByAccount: customStats })
     await page.goto('/')
 
-    const acc1Row = page.locator('.account-row').filter({ hasText: 'alpha@example.com' })
-    const acc2Row = page.locator('.account-row').filter({ hasText: 'beta@example.com' })
+    const acc1Row = page.locator('.tree-account-block[data-drop-list="master"]').filter({ hasText: 'alpha@example.com' })
+    const acc2Row = page.locator('.tree-account-block[data-drop-list="master"]').filter({ hasText: 'beta@example.com' })
     await expect(acc1Row).toBeVisible({ timeout: 10000 })
 
     // 同时展开两个账号
-    await acc1Row.locator('.account-folders-toggle').click()
-    await acc2Row.locator('.account-folders-toggle').click()
+    await acc1Row.locator('.tree-disclosure').click()
+    await acc2Row.locator('.tree-disclosure').click()
 
-    await expect(acc1Row.locator('.account-folders')).toBeVisible()
+    await expect(acc1Row.locator('.tree-folder-list')).toBeVisible()
     // acc-2 失败提示展示在 acc-2 下方
     const errorStatus = acc2Row.getByText('文件夹加载失败')
     await expect(errorStatus).toBeVisible()
 
-    const acc2HeaderBox = await acc2Row.locator('.side-item-group').boundingBox()
+    const acc2HeaderBox = await acc2Row.locator('.tree-account-row').boundingBox()
     const errorBox = await errorStatus.boundingBox()
     expect(errorBox!.y).toBeGreaterThanOrEqual(acc2HeaderBox!.y + acc2HeaderBox!.height - 2)
 
     // 折叠账号 1，账号 2 的错误状态依然保持展开
-    await acc1Row.locator('.account-folders-toggle').click()
-    await expect(acc1Row.locator('.account-folders')).not.toBeVisible()
+    await acc1Row.locator('.tree-disclosure').click()
+    await expect(acc1Row.locator('.tree-folder-list')).not.toBeVisible()
     await expect(errorStatus).toBeVisible()
   })
 
@@ -129,14 +129,14 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
 
     // 1. 桌面视口测试 (1200x800)
     await page.setViewportSize({ width: 1200, height: 800 })
-    const acc3Row = page.locator('.account-row').filter({ hasText: 'gamma-long-address' })
+    const acc3Row = page.locator('.tree-account-block[data-drop-list="master"]').filter({ hasText: 'gamma-long-address' })
     await expect(acc3Row).toBeVisible({ timeout: 10000 })
-    await acc3Row.locator('.account-folders-toggle').click()
+    await acc3Row.locator('.tree-disclosure').click()
 
     const sidebar = page.locator('aside.sidebar')
     const sidebarBox = await sidebar.boundingBox()
-    const longEmailSpan = acc3Row.locator('.account-email').first()
-    const longFolderBtn = acc3Row.locator('.folder-item-btn')
+    const longEmailSpan = acc3Row.locator('.tree-account-select .tree-label').first()
+    const longFolderBtn = acc3Row.locator('.tree-folder-row').filter({ hasText: '超级超长的测试目录名称' })
 
     await expect(longFolderBtn).toBeVisible()
     const longEmailBox = await longEmailSpan.boundingBox()
@@ -147,9 +147,9 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     expect(longFolderBox!.x + longFolderBox!.width).toBeLessThanOrEqual(sidebarBox!.x + sidebarBox!.width + 2)
 
     // 2. 点击目录准确导航至该 folder_id
-    const acc1Row = page.locator('.account-row').filter({ hasText: 'alpha@example.com' })
-    await acc1Row.locator('.account-folders-toggle').click()
-    const workFolderBtn = acc1Row.locator('.folder-item-btn').filter({ hasText: '工作邮件' })
+    const acc1Row = page.locator('.tree-account-block[data-drop-list="master"]').filter({ hasText: 'alpha@example.com' })
+    await acc1Row.locator('.tree-disclosure').click()
+    const workFolderBtn = acc1Row.locator('.tree-folder-row').filter({ hasText: '工作邮件' })
     await workFolderBtn.click()
 
     // 验证导航标题更新为对应文件夹名称
@@ -170,8 +170,8 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await setupStubApi(page, { authedInitially: true, accounts, folderStatsByAccount })
     await page.goto('/')
 
-    const acc1Row = page.locator('.account-row').filter({ hasText: 'alpha@example.com' })
-    const toggle1 = acc1Row.locator('.account-folders-toggle')
+    const acc1Row = page.locator('.tree-account-block[data-drop-list="master"]').filter({ hasText: 'alpha@example.com' })
+    const toggle1 = acc1Row.locator('.tree-disclosure')
     await expect(toggle1).toBeVisible({ timeout: 10000 })
 
     // 初始 aria-expanded = false
@@ -181,10 +181,10 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await toggle1.focus()
     await page.keyboard.press('Space')
     await expect(toggle1).toHaveAttribute('aria-expanded', 'true')
-    await expect(acc1Row.locator('.account-folders')).toBeVisible()
+    await expect(acc1Row.locator('.tree-folder-list')).toBeVisible()
 
     // 目录项可通过 Tab 聚焦并按 Enter 导航
-    const firstFolder = acc1Row.locator('.folder-item-btn').first()
+    const firstFolder = acc1Row.locator('.tree-folder-row').filter({ hasText: '收件箱' })
     await firstFolder.focus()
     await page.keyboard.press('Enter')
     await expect(page.locator('.list-title').getByText('收件箱')).toBeVisible()
@@ -193,6 +193,75 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await toggle1.focus()
     await page.keyboard.press('Enter')
     await expect(toggle1).toHaveAttribute('aria-expanded', 'false')
-    await expect(acc1Row.locator('.account-folders')).not.toBeVisible()
+    await expect(acc1Row.locator('.tree-folder-list')).not.toBeVisible()
+  })
+
+  test('t027: 固定 24px 层级、三区独立折叠、760px 断点与双主题保持布局', async ({ page }) => {
+    await setupStubApi(page, {
+      authedInitially: true,
+      groups: [{ id: 'group-layout', name: '自定义组', color: null, sort_order: 0 }],
+      accounts: accounts.map((account) => ({ ...account, group_id: account.id === 'acc-1' ? 'group-layout' : null })),
+      folderStatsByAccount,
+    })
+    await page.setViewportSize({ width: 1200, height: 850 })
+    await page.goto('/')
+    const sidebar = page.locator('aside.sidebar')
+    const group = page.locator('.tree-group-block[data-group-id="group-layout"]')
+    const member = page.locator('.tree-account-block[data-drop-list="group:group-layout"][data-account-id="acc-1"]')
+    const masterAccount = page.locator('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')
+    await expect(group).toBeVisible({ timeout: 10000 })
+    await expect(masterAccount).toBeVisible()
+
+    const sections = await sidebar.locator('.tree-section').evaluateAll((nodes) => nodes.map((node) => {
+      const header = node.querySelector('.tree-section-heading, .tree-group-heading')
+      return header?.textContent?.trim().replace(/\s+/g, ' ') || ''
+    }))
+    expect(sections[0]).toContain('所有账号')
+    expect(sections[1]).toContain('自定义组')
+    expect(sections[2]).toContain('账号列表')
+
+    const globalSection = sidebar.locator('.tree-section').nth(0)
+    const groupSection = sidebar.locator('.tree-section').nth(1)
+    const accountSection = sidebar.locator('.tree-section').nth(2)
+    await globalSection.getByRole('button', { name: '所有账号' }).click()
+    await expect(globalSection.locator('.tree-category-row')).toHaveCount(0)
+    await expect(group.locator('.tree-group-heading')).toBeVisible()
+    await group.locator('.tree-disclosure').click()
+    await expect(group.locator('.tree-group-children')).toBeVisible()
+    await accountSection.getByRole('button', { name: '账号列表' }).click()
+    await expect(accountSection.locator('.tree-account-list')).toHaveCount(0)
+    await expect(group.locator('.tree-group-children')).toBeVisible()
+
+    await globalSection.getByRole('button', { name: '所有账号' }).click()
+    const globalCategoryIndent = await globalSection.locator('.tree-category-heading').first().evaluate((node) => getComputedStyle(node).paddingLeft)
+    expect(globalCategoryIndent).toBe('24px')
+    await globalSection.getByRole('button', { name: '展开 所有收件箱' }).click()
+    const nestedCategoryAccountIndent = await globalSection.locator('.tree-category-account').first().evaluate((node) => getComputedStyle(node).paddingLeft)
+    expect(nestedCategoryAccountIndent).toBe('48px')
+    await accountSection.getByRole('button', { name: '账号列表' }).click()
+    const accountIndent = await masterAccount.locator('.tree-account-row').evaluate((node) => getComputedStyle(node).paddingLeft)
+    expect(accountIndent).toBe('24px')
+    await masterAccount.locator('.tree-disclosure').click()
+    const folderIndent = await masterAccount.locator('.tree-folder-row').first().evaluate((node) => getComputedStyle(node).paddingLeft)
+    expect(folderIndent).toBe('48px')
+    const accountTextBox = await masterAccount.locator('.tree-account-select .tree-label').boundingBox()
+    const folderTextBox = await masterAccount.locator('.tree-folder-row .tree-label').first().boundingBox()
+    expect(Math.abs(accountTextBox!.x - folderTextBox!.x)).toBeLessThanOrEqual(3)
+
+    await page.getByRole('button', { name: '设置' }).click()
+    await page.getByRole('button', { name: '外观' }).click()
+    await page.getByRole('button', { name: 'light', exact: true }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+    await page.getByRole('button', { name: 'dark', exact: true }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+    await page.getByRole('button', { name: '关闭' }).click()
+
+    await page.setViewportSize({ width: 761, height: 850 })
+    await expect(sidebar).toBeVisible()
+    await expect(page.getByRole('button', { name: '打开导航' })).toHaveCount(0)
+    await page.setViewportSize({ width: 760, height: 850 })
+    await expect(sidebar).toBeHidden()
+    await page.getByRole('button', { name: '打开导航' }).click()
+    await expect(sidebar).toBeVisible()
   })
 })

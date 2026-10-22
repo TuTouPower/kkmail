@@ -28,6 +28,7 @@ export interface MailCoreInboxQuery {
   limit?: number
   /** mail-core account UUID */
   accountId?: string
+  groupId?: string
   cursor?: string
   is_read?: boolean
   is_flagged?: boolean
@@ -39,6 +40,7 @@ export interface MailCoreInboxQuery {
 
 export interface MarkAllReadParams {
   accountId?: string
+  groupId?: string
   folder_role?: string
   folder_id?: string
   is_flagged?: boolean
@@ -61,6 +63,7 @@ export function postMailCoreMarkAllRead(
     body.folder_role = params.folder_role ?? 'inbox'
   }
   if (params.accountId) body.account_id = params.accountId
+  if (params.groupId) body.group_id = params.groupId
   if (params.is_flagged !== undefined) body.is_flagged = params.is_flagged
   return postJson('/api/mail/mark-all-read', body, { signal: params.signal })
 }
@@ -82,6 +85,7 @@ export function fetchMailCoreInbox(q: MailCoreInboxQuery = {}): Promise<MailCore
   params.set('limit', String(q.limit ?? 50))
   if (q.sort_order) params.set('sort_order', q.sort_order)
   if (q.accountId) params.set('account_id', q.accountId)
+  if (q.groupId) params.set('group_id', q.groupId)
   if (q.cursor) params.set('cursor', q.cursor)
   if (q.is_read !== undefined) params.set('is_read', String(q.is_read))
   if (q.is_flagged !== undefined) params.set('is_flagged', String(q.is_flagged))
@@ -92,10 +96,12 @@ export function fetchMailCoreInbox(q: MailCoreInboxQuery = {}): Promise<MailCore
 
 export function fetchMailCoreSearch(
   query: string,
-  opts: { accountId?: string; limit?: number; offset?: number; signal?: AbortSignal } = {},
+  opts: { accountId?: string; groupId?: string; folderId?: string; limit?: number; offset?: number; signal?: AbortSignal } = {},
 ): Promise<MailCoreSearchPage> {
   const params = new URLSearchParams({ q: query, limit: String(opts.limit ?? 50), offset: String(opts.offset ?? 0) })
   if (opts.accountId) params.set('account_id', opts.accountId)
+  if (opts.groupId) params.set('group_id', opts.groupId)
+  if (opts.folderId) params.set('folder_id', opts.folderId)
   return apiRequest(`/api/mail/search?${params.toString()}`, { signal: opts.signal })
 }
 
@@ -119,8 +125,12 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
   }
 }
 
-export function fetchGlobalStats(signal?: AbortSignal): Promise<GlobalStatsOut> {
-  return apiRequest('/api/mail/stats', { signal })
+export function fetchGlobalStats(signal?: AbortSignal, groupId?: string, folderRole?: string): Promise<GlobalStatsOut> {
+  const params = new URLSearchParams()
+  if (groupId) params.set('group_id', groupId)
+  if (folderRole) params.set('folder_role', folderRole)
+  const query = params.size ? `?${params.toString()}` : ''
+  return apiRequest(`/api/mail/stats${query}`, { signal })
 }
 
 export function fetchMailCoreMessage(messageId: string, signal?: AbortSignal): Promise<MailCoreMessageDetail> {

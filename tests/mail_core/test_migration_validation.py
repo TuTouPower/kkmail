@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from mail_core.db.session import get_engine, get_session_factory
 from mail_core.mail.storage.models import (
     Account,
+    AccountGroup,
     Attachment,
     Base,
     Folder,
@@ -63,7 +64,7 @@ def test_alembic_linear_single_head_and_no_branches():
     heads = script.get_heads()
     assert len(heads) == 1, f"Expected exactly 1 migration head, found {len(heads)}: {heads}"
     head_rev = heads[0]
-    assert head_rev == "20261022_0015"
+    assert head_rev == "20261023_0016"
 
     # Walk from head down to base; assert strict single-parent chain
     current = script.get_revision(head_rev)
@@ -76,7 +77,7 @@ def test_alembic_linear_single_head_and_no_branches():
         assert isinstance(down, str), f"Fork detected at revision {current.revision} with multiple parents: {down}"
         current = script.get_revision(down)
 
-    assert len(visited) == 15, f"Expected 15 total revisions, found {len(visited)}"
+    assert len(visited) == 16, f"Expected 16 total revisions, found {len(visited)}"
     assert visited[-1] == "20261020_0001"
 
 
@@ -197,7 +198,7 @@ def test_migration_three_revision_windows_data_preservation():
                 )
             )
 
-        # Upgrade to head (20261022_0015)
+        # Upgrade to head (20261023_0016)
         with engine.connect() as conn:
             command.upgrade(cfg, "head")
 
@@ -402,14 +403,38 @@ def test_orm_schema_drift_and_negative_detection():
 
 
 def test_revertible_downgrade_and_upgrade_cycle():
-    """AC-005: Verifies that revision 20261022_0015 cleanly downgrades to 0014 and re-upgrades to head."""
+    """AC-005: Verifies the new ordering migration and prior blob migration both downgrade and upgrade cleanly."""
     cfg = _get_alembic_config()
     engine = get_engine()
+    Session = get_session_factory()
+    with Session() as session:
+        group = AccountGroup(name=f"migration-group-{uuid.uuid4().hex}", sort_order=17)
+        session.add(group)
+        session.flush()
+        account = Account(
+            email=f"migration-member-{uuid.uuid4().hex}@example.test",
+            provider="imap",
+            group_id=group.id,
+            master_order=4,
+            group_order=2,
+        )
+        session.add(account)
+        session.commit()
+        group_id, account_id = group.id, account.id
 
     try:
-        # Downgrade 1 revision (0015 -> 0014)
+        # Downgrade the sidebar ordering migration (0016 -> 0015).
         with engine.connect() as conn:
             command.downgrade(cfg, "-1")
+
+        columns_0015 = {c["name"] for c in inspect(engine).get_columns("accounts")}
+        assert "master_order" not in columns_0015
+        assert "group_order" not in columns_0015
+        assert "blob_quota_reservations" in set(inspect(engine).get_table_names())
+
+        # Downgrade the prior blob migration (0015 -> 0014).
+        with engine.connect() as conn:
+            command.downgrade(cfg, "20261022_0014")
 
         # In 0014: blob_quota_reservations table and attachments.part_id column must be gone
         tables_0014 = set(inspect(engine).get_table_names())
@@ -417,14 +442,22 @@ def test_revertible_downgrade_and_upgrade_cycle():
         cols_0014 = {c["name"] for c in inspect(engine).get_columns("attachments")}
         assert "part_id" not in cols_0014
 
-        # Re-upgrade to head (0014 -> 0015)
+        # Re-upgrade to head (0014 -> 0016)
         with engine.connect() as conn:
             command.upgrade(cfg, "head")
 
-        tables_0015 = set(inspect(engine).get_table_names())
-        assert "blob_quota_reservations" in tables_0015
-        cols_0015 = {c["name"] for c in inspect(engine).get_columns("attachments")}
-        assert "part_id" in cols_0015
+        tables_head = set(inspect(engine).get_table_names())
+        assert "blob_quota_reservations" in tables_head
+        attachment_columns = {c["name"] for c in inspect(engine).get_columns("attachments")}
+        assert "part_id" in attachment_columns
+        account_columns = {c["name"] for c in inspect(engine).get_columns("accounts")}
+        assert {"master_order", "group_order"} <= account_columns
+        with Session() as session:
+            migrated_group = session.get(AccountGroup, group_id)
+            migrated_account = session.get(Account, account_id)
+            assert migrated_group is not None and migrated_group.sort_order == 17
+            assert migrated_account is not None and migrated_account.group_id == group_id
+            assert migrated_account.master_order is None and migrated_account.group_order is None
     finally:
         with engine.connect() as conn:
             command.upgrade(cfg, "head")

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, Sun, Moon, Inbox, Settings as SettingsIcon, PanelLeft } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
-import { fetchAccounts, fetchGroups, queryKeys } from '../api/queries'
+import { fetchAccounts, fetchGroups, queryKeys, resetGroupMailQueries, resetMailListQueries } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
 import AccountIcon from './AccountIcon'
@@ -141,10 +141,43 @@ export default function SettingsPage() {
                   <div style={{ fontWeight: 650 }}>{a.email}</div>
                   <div style={{ fontSize: 11, color: 'var(--muted)' }}>{a.provider} · {a.sync_status || a.status}{a.group_name ? ` · ${a.group_name}` : ''}</div>
                 </div>
+                <select
+                  aria-label={`移动 ${a.email}`}
+                  value={a.group_id ?? ''}
+                  onChange={async (event) => {
+                    const groupId = event.target.value
+                    const result = await run('移动账号', () => api.updateAccount(a.id, groupId ? { group_id: groupId } : { clear_group: true }), '账号分组已更新', queryKeys.accounts)
+                    if (result.ok) {
+                      if ((a.group_id ?? null) !== (groupId || null)) {
+                        useMailStore.setState((state) => ({ ...state, selectedKey: null, selectedIds: [] }))
+                        await resetGroupMailQueries()
+                      }
+                      await qc.invalidateQueries({ queryKey: queryKeys.groups })
+                      await qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout })
+                      await qc.invalidateQueries({ queryKey: ['mail-core'] })
+                    }
+                  }}
+                  style={{ maxWidth: 120, height: 28, borderRadius: 7, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--text)' }}
+                >
+                  <option value="">不加入分组</option>
+                  {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                </select>
                 <button type="button" onClick={() => run('同步', () => api.syncAccount(a.id), '已排队同步', queryKeys.accounts)} style={{ height: 28, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>同步</button>
                 <button type="button" onClick={async () => {
                   if (!confirmAction(`删除账户 ${a.email}？`)) return
-                  await run('删除账户', () => api.deleteAccount(a.id), '已删除', queryKeys.accounts)
+                  const result = await run('删除账户', () => api.deleteAccount(a.id), '已删除', queryKeys.accounts)
+                  if (result.ok) {
+                    if (accounts.length === 1) {
+                      qc.setQueryData(queryKeys.stats, { totalUnread: 0, byAccount: new Map<string, number | null>() })
+                    } else {
+                      await qc.resetQueries({ queryKey: queryKeys.stats })
+                    }
+                    await Promise.all([
+                      qc.invalidateQueries({ queryKey: queryKeys.groups }),
+                      qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout }),
+                      resetMailListQueries(),
+                    ])
+                  }
                 }} style={{ height: 28, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--red)' }}>删除</button>
               </div>
             ))}
@@ -229,6 +262,8 @@ export default function SettingsPage() {
                 setStatus('账户已添加')
                 setEmail(''); setCredJson(''); setImapHost(''); setImapPort('993'); setImapUseSsl(true)
                 await qc.invalidateQueries({ queryKey: queryKeys.accounts })
+                await qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout })
+                await qc.resetQueries({ queryKey: queryKeys.stats })
               } catch (err) {
                 setStatus(errorMessage(err, '添加账户失败'))
               }
@@ -240,8 +275,16 @@ export default function SettingsPage() {
               <div key={g.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0' }}>
                 <span style={{ flex: 1 }}>{g.name}（{g.account_count || 0}）</span>
                 <button type="button" onClick={async () => {
-                  if (!confirmAction(`删除分组 ${g.name}？`)) return
-                  await run('删除分组', () => api.deleteGroup(g.id), '已删除', queryKeys.groups)
+                  if (!confirmAction(`删除分组 ${g.name}？账号和邮件会保留，并从该分组移出。`)) return
+                  const result = await run('删除分组', () => api.deleteGroup(g.id), '已删除', queryKeys.groups)
+                  if (result.ok) {
+                    useMailStore.setState((state) => state.view.type === 'group' && state.view.groupId === g.id
+                      ? { ...state, view: { type: 'allInbox' }, listFilter: 'all', search: '', selectedKey: null, selectedIds: [] }
+                      : { ...state, selectedKey: null, selectedIds: [] })
+                    await qc.invalidateQueries({ queryKey: queryKeys.accounts })
+                    await qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout })
+                    await qc.invalidateQueries({ queryKey: ['mail-core'] })
+                  }
                 }} style={{ height: 28, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)' }}>删除</button>
               </div>
             ))}
@@ -251,7 +294,12 @@ export default function SettingsPage() {
                 const name = groupName.trim()
                 if (!name) return
                 const res = await run('创建分组', () => api.createGroup({ name }), '分组已创建', queryKeys.groups)
-                if (res.ok) setGroupName('')
+                if (res.ok) {
+                  setGroupName('')
+                  await qc.invalidateQueries({ queryKey: queryKeys.accounts })
+                  await qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout })
+                  await qc.invalidateQueries({ queryKey: ['mail-core'] })
+                }
               }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>创建</button>
             </div>
             <button type="button" onClick={() => run('全量同步', () => api.syncAll(), (res) => `已排队 ${res?.count ?? 0} 个同步任务`, queryKeys.accounts)} style={{ marginTop: 16, height: 34, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)' }}>同步全部账户</button>
