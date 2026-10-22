@@ -62,9 +62,36 @@ export function createMockMessages(): MockMessage[] {
   ]
 }
 
+export interface StubFolder {
+  folder_id: string
+  role?: string
+  name: string
+  total_count?: number
+  unread_count?: number
+  remote_id?: string
+  parent_remote_id?: string | null
+}
+
+export interface StubAccount {
+  id: string
+  email: string
+  provider?: string
+  account_type?: string
+  group_id?: string
+  group_color?: string
+  sync_state?: string
+  sync_enabled?: boolean
+}
+
+export interface SetupStubApiOptions {
+  authedInitially?: boolean
+  accounts?: StubAccount[]
+  folderStatsByAccount?: Record<string, StubFolder[] | { error: string }>
+}
+
 export const FAKE_CSRF_TOKEN = 'fake-csrf-token'
 
-export async function setupStubApi(page: Page, options: { authedInitially?: boolean } = {}) {
+export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}) {
   let isAuthed = options.authedInitially ?? false
   const messages = createMockMessages()
 
@@ -139,20 +166,21 @@ export async function setupStubApi(page: Page, options: { authedInitially?: bool
     }
 
     if (path === '/api/accounts') {
+      const accountsList = options.accounts ?? [
+        {
+          id: 'acc-00000000-0000-0000-0000-000000000001',
+          email: 'user@example.com',
+          provider: 'imap',
+          group_id: 'grp-1',
+          sync_state: 'idle',
+          sync_enabled: true,
+        },
+      ]
       return route.fulfill({
         status: 200,
         json: {
-          accounts: [
-            {
-              id: 'acc-00000000-0000-0000-0000-000000000001',
-              email: 'user@example.com',
-              provider: 'imap',
-              group_id: 'grp-1',
-              sync_state: 'idle',
-              sync_enabled: true,
-            },
-          ],
-          total: 1,
+          accounts: accountsList,
+          total: accountsList.length,
           has_more: false,
         },
       })
@@ -165,8 +193,52 @@ export async function setupStubApi(page: Page, options: { authedInitially?: bool
       })
     }
 
-    // 4. Folder stats
-    if (path.includes('/folder-stats') || path.includes('/stats')) {
+    // 4. Global Stats & Folder stats
+    if (path === '/api/mail/stats') {
+      const accountsList = options.accounts ?? [
+        { id: 'acc-00000000-0000-0000-0000-000000000001', email: 'user@example.com' },
+      ]
+      return route.fulfill({
+        status: 200,
+        json: {
+          total_unread: 1,
+          accounts: accountsList.map((a) => ({
+            account_id: a.id,
+            unread_count: 1,
+            total_count: messages.length,
+          })),
+        },
+      })
+    }
+
+    const folderStatsMatch = path.match(/^\/api\/mail\/accounts\/([^/]+)\/folder-stats$/)
+    if (folderStatsMatch) {
+      const accountId = decodeURIComponent(folderStatsMatch[1])
+      if (options.folderStatsByAccount && options.folderStatsByAccount[accountId]) {
+        const val = options.folderStatsByAccount[accountId]
+        if ('error' in val) {
+          return route.fulfill({ status: 500, json: { detail: val.error } })
+        }
+        return route.fulfill({
+          status: 200,
+          json: {
+            account_id: accountId,
+            folders: val,
+          },
+        })
+      }
+      return route.fulfill({
+        status: 200,
+        json: {
+          account_id: accountId,
+          folders: [
+            { folder_id: 'f-inbox', role: 'inbox', name: '收件箱', total_count: messages.length, unread_count: 1 },
+          ],
+        },
+      })
+    }
+
+    if (path.includes('/folder-stats')) {
       return route.fulfill({
         status: 200,
         json: {

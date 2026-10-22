@@ -370,6 +370,22 @@
             "conflicts_with": "",
             "note": "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog",
             "dir": "docs/archive/tasks/t023_test_quality_gates"
+        },
+        {
+            "tid": "t024",
+            "slug": "sidebar_folder_tree_layout",
+            "title": "修复侧栏账号文件夹树布局并保持导航可访问性",
+            "status": "done",
+            "branch": "t024_sidebar_folder_tree_layout",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "9454a1d2cc9412caf86c5381b427619fdb661a86",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p018；固定高度横向 flex 容器导致文件夹树错位；鼠标焦点缺陷未复现，保留键盘焦点可见性",
+            "dir": "docs/archive/tasks/t024_sidebar_folder_tree_layout"
         }
     ]
 }

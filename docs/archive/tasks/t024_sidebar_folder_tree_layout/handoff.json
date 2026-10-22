@@ -1,0 +1,33 @@
+{
+  "tid": "t024",
+  "attempt": 1,
+  "execution_id": "889b1820331848e0b24eeae0ca56dc8d",
+  "status": "done",
+  "branch": "t024_sidebar_folder_tree_layout",
+  "base_sha": "9454a1d2cc9412caf86c5381b427619fdb661a86",
+  "tests": "contract: 149 passed; frontend: 184 passed + tsc ok + build ok + lint ok; desktop: ok",
+  "blackbox": "frontend e2e 7 passed (smoke + sidebar_tree layout & a11y)",
+  "review": "single review PASS (Round 1: review_general PASS)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/design-system/tokens.css",
+      "tests/e2e/sidebar_tree.spec.ts"
+    ],
+    "AC-002": [
+      "src/frontend/src/components/Sidebar.test.tsx",
+      "tests/e2e/sidebar_tree.spec.ts"
+    ],
+    "AC-003": [
+      "src/frontend/src/design-system/tokens.css",
+      "tests/e2e/sidebar_tree.spec.ts"
+    ],
+    "AC-004": [
+      "src/frontend/src/components/Sidebar.test.tsx",
+      "tests/e2e/sidebar_tree.spec.ts"
+    ]
+  },
+  "pending": [
+    "docs/archive/pending/p018_account_folder_tree_layout_and_focus_ring.md"
+  ],
+  "findings": []
+}
