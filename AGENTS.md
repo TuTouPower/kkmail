@@ -2,7 +2,7 @@
 
 kkmail 是基于 mail-core 的现代化自托管多账号邮件客户端（FastAPI + PostgreSQL + React SPA + Electron 桌面端）。产品范围不含发信、联系人与系统通知，浏览器扩展永久 out of scope (wontfix)。
 
-本项目最初 fork 自上游开源项目 [`assast/outlookEmail`](https://github.com/assast/outlookEmail)，分叉基线为上游 3.0.20 版本（上游 Commit `498cd35358d687600b5dd7fd9cb79ff59cd18296`，本地历史对应 Commit `a8cf0ff82f36c53a75022c4ade5fb3b46f60b9b0`：`release: prepare 3.0.20 — 邮件转发收件人与关键词筛选`）。自该基线之后，项目已彻底推倒重构为 mail-core + React SPA + Electron 架构，与原项目完全脱钩并独立演进。
+本项目最初 fork 自上游开源项目 [`assast/outlookEmail`](https://github.com/assast/outlookEmail)，分叉基线为上游 3.0.20 版本（上游 Commit `498cd35358d687600b5dd7fd9cb79ff59cd18296`，本地历史对应 Commit `97184eba1d6eaf7087727a99eb01d54304ad14a0`：`release: prepare 3.0.20 — 邮件转发收件人与关键词筛选`）。自该基线之后，项目已彻底推倒重构为 mail-core + React SPA + Electron 架构，与原项目完全脱钩并独立演进。
 
 本项目使用模板仓 repo_template。此声明必须保留，消费仓不得删除。
 
