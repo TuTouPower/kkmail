@@ -83,9 +83,21 @@ const MessageList = memo(function MessageList() {
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const accounts = accountsQuery.data || []
 
-  const accountId = view.type === 'account' ? view.accountId : (view.type === 'favorite' ? view.accountId : undefined)
+  const accountId = view.type === 'account' ? view.accountId : (view.type === 'favorite' ? view.accountId : (view.type === 'folder' ? view.accountId : undefined))
   const favoriteCategory = view.type === 'favorite' ? view.category : undefined
-  const folderRole = favoriteCategory === 'sent' ? 'sent' : 'inbox'
+  const folderId = view.type === 'folder' ? view.folderId : undefined
+  const folderRole =
+    view.type === 'folder'
+      ? (view.folderRole || 'other')
+      : favoriteCategory === 'sent'
+        ? 'sent'
+        : favoriteCategory === 'drafts'
+          ? 'drafts'
+          : favoriteCategory === 'trash'
+            ? 'trash'
+            : favoriteCategory === 'junk'
+              ? 'junk'
+              : 'inbox'
   const effectiveFilter = favoriteCategory === 'unread' ? 'unread' : listFilter
   const term = search.trim()
   const searching = isSearchTrigger(term)
@@ -107,14 +119,15 @@ const MessageList = memo(function MessageList() {
   const sortOrder = sortNewest ? 'desc' : 'asc'
 
   const inboxInfiniteQuery = useInfiniteQuery<InboxPageData, Error, { pages: InboxPageData[]; pageParams: (string | null)[] }, readonly unknown[], string | null>({
-    queryKey: queryKeys.inbox(listScope, effectiveFilter, folderRole, sortOrder),
+    queryKey: queryKeys.inbox(listScope, effectiveFilter, folderRole, sortOrder, folderId),
     queryFn: async ({ pageParam, signal }) => {
       const page = await fetchMailCoreInbox({
         limit: LIST_LIMIT,
         accountId,
+        folder_id: folderId,
         is_read: is_unread,
         is_flagged: is_flagged,
-        folder_role: folderRole,
+        folder_role: folderId ? undefined : folderRole,
         sort_order: sortOrder,
         cursor: pageParam || undefined,
         signal,
@@ -149,15 +162,17 @@ const MessageList = memo(function MessageList() {
   })
 
   const folderStatsQuery = useQuery({
-    queryKey: ['mail-core', 'folder-stats', accountId ?? 'all', folderRole],
+    queryKey: ['mail-core', 'folder-stats', accountId ?? 'all', folderRole, folderId ?? ''],
     queryFn: async () => {
       if (accountId) {
         const stats = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`).catch(() => null)
         if (!stats) return null
-        const targetFolder = stats.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
+        const targetFolder = folderId
+          ? stats.folders.find((f: AccountFolderStatsItemOut) => String(f.folder_id) === folderId)
+          : stats.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
         return {
-          total: targetFolder ? targetFolder.total_count : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0),
-          unread: targetFolder ? targetFolder.unread_count : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + (f.unread_count || 0), 0),
+          total: targetFolder ? targetFolder.total_count : (folderId ? 0 : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0)),
+          unread: targetFolder ? targetFolder.unread_count : (folderId ? 0 : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + (f.unread_count || 0), 0)),
         }
       }
       const statsList = await Promise.all(
@@ -301,7 +316,8 @@ const MessageList = memo(function MessageList() {
     try {
       await postMailCoreMarkAllRead({
         accountId,
-        folder_role: folderRole,
+        folder_role: folderId ? undefined : folderRole,
+        folder_id: folderId,
         is_flagged: is_flagged,
       })
       await queryClient.invalidateQueries({ queryKey: ['mail-core'] })

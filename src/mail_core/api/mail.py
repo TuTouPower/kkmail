@@ -84,6 +84,7 @@ class AccountFolderStatsItemOut(BaseModel):
     total_count: int
     unread_count: int
     remote_id: str
+    parent_remote_id: str | None = None
 
 
 class AccountFolderStatsOut(BaseModel):
@@ -130,7 +131,8 @@ class FlagBody(BaseModel):
 
 class MarkAllReadBody(BaseModel):
     account_id: UUID | None = None
-    folder_role: str = "inbox"
+    folder_role: str | None = "inbox"
+    folder_id: UUID | None = None
     is_flagged: bool | None = None
 
 
@@ -194,6 +196,7 @@ def api_unified_inbox(
     is_read: bool | None = Query(None, description="Filter messages by read status"),
     is_flagged: bool | None = Query(None, description="Filter messages by flagged status"),
     folder_role: str = Query("inbox", description="Folder role to query (default: inbox)"),
+    folder_id: UUID | None = Query(None, description="Specific folder ID to query"),
     sort_order: str = Query("desc", pattern="^(asc|desc)$", description="Sort order by sort_time (desc or asc)"),
 ) -> PageOut:
     Session = get_session_factory()
@@ -202,6 +205,7 @@ def api_unified_inbox(
             page = unified_inbox(
                 session,
                 account_ids=[account_id] if account_id else None,
+                folder_id=folder_id,
                 limit=limit,
                 cursor=cursor,
                 is_read=is_read,
@@ -209,6 +213,8 @@ def api_unified_inbox(
                 folder_role=folder_role,
                 sort_order=sort_order,
             )
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
         except InvalidCursor as exc:
             raise HTTPException(400, str(exc)) from exc
         emails = account_emails_by_id(session, [i.account_id for i in page.items])
@@ -320,12 +326,16 @@ def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
     """Batch mark messages read across the matching scope (folder/account/flag)."""
     Session = get_session_factory()
     with Session() as session:
-        count = mark_all_messages_read(
-            session,
-            account_id=body.account_id,
-            folder_role=body.folder_role,
-            is_flagged=body.is_flagged,
-        )
+        try:
+            count = mark_all_messages_read(
+                session,
+                account_id=body.account_id,
+                folder_role=body.folder_role,
+                folder_id=body.folder_id,
+                is_flagged=body.is_flagged,
+            )
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
         session.commit()
         return MarkAllReadOut(
             success=True,

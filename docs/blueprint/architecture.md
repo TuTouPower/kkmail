@@ -23,7 +23,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 路由声明：统一 `response_model`，输入经 Pydantic 校验。
     - 安全鉴权：Cookie Session 签名与防篡改、Session Epoch 全局失效、CSRF 严格校验、反向代理受信与登录防爆破。
 - **业务领域与应用层 (`src/mail_core/mail/application/`, `src/mail_core/accounts/`)**：
-    - 账户生命周期、邮件查询、聚合收件箱游标检索与全文搜索。`/api/mail/inbox` 支持通过 `folder_role`（默认 `inbox`，支持 `sent` 等）联合 `account_id` 实现多账号统一/单账号分类邮件检索。
+    - 账户生命周期、邮件查询、聚合收件箱游标检索与全文搜索。`/api/mail/inbox` 支持通过 `folder_role`（默认 `inbox`，支持 `sent`/`drafts`/`trash`/`junk`/`archive` 等）或精确 `folder_id` 联合 `account_id` 实现多账号统一/单账号分类及特定文件夹邮件检索，保证多位置邮件去重与 keyset 翻页一致性。前端侧栏支持六大个人收藏分类与账号入库文件夹树导航。
     - 出站写回状态机：基于 `remote_operations` 队列与单调递增 `revision` 的乐观并发控制 (CAS)。
 - **同步引擎与协议适配 (`src/mail_core/sync/`, `src/mail_core/providers/`)**：
     - 适配器：IMAP (带 TLS 校验与特殊文件夹转义)、Gmail REST (repeated historyTypes + History hydration)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归)。
