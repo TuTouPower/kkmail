@@ -7,6 +7,7 @@ export type FavoriteCategory = 'inbox' | 'unread' | 'sent' | 'drafts' | 'trash' 
 export type ViewState =
   | { type: 'allInbox' }
   | { type: 'favorite'; category: FavoriteCategory; accountId?: string; email?: string }
+  | { type: 'group'; groupId: string; groupName: string; category: FavoriteCategory }
   | { type: 'account'; accountId: string; email: string }
   | { type: 'folder'; accountId: string; email: string; folderId: string; folderName: string; folderRole?: string }
 
@@ -44,6 +45,14 @@ interface MailUiState {
   toggleSort: () => void
   collapsedGroups: string[]
   toggleGroup: (group: string) => void
+  sidebarSections: { allAccounts: boolean; accountList: boolean }
+  toggleSidebarSection: (section: 'allAccounts' | 'accountList') => void
+  expandedSidebarGroups: string[]
+  toggleSidebarGroup: (groupId: string) => void
+  expandedSidebarCategories: string[]
+  toggleSidebarCategory: (key: string) => void
+  expandedSidebarAccounts: string[]
+  toggleSidebarAccount: (accountId: string) => void
   selectedIds: string[]
   toggleSelected: (key: string) => void
   clearSelected: () => void
@@ -100,6 +109,28 @@ export const useMailStore = create<MailUiState>()(
             ? s.collapsedGroups.filter((g) => g !== group)
             : [...s.collapsedGroups, group],
         })),
+      sidebarSections: { allAccounts: true, accountList: true },
+      toggleSidebarSection: (section) => set((s) => ({
+        sidebarSections: { ...s.sidebarSections, [section]: !s.sidebarSections[section] },
+      })),
+      expandedSidebarGroups: [],
+      toggleSidebarGroup: (groupId) => set((s) => ({
+        expandedSidebarGroups: s.expandedSidebarGroups.includes(groupId)
+          ? s.expandedSidebarGroups.filter((id) => id !== groupId)
+          : [...s.expandedSidebarGroups, groupId],
+      })),
+      expandedSidebarCategories: [],
+      toggleSidebarCategory: (key) => set((s) => ({
+        expandedSidebarCategories: s.expandedSidebarCategories.includes(key)
+          ? s.expandedSidebarCategories.filter((item) => item !== key)
+          : [...s.expandedSidebarCategories, key],
+      })),
+      expandedSidebarAccounts: [],
+      toggleSidebarAccount: (accountId) => set((s) => ({
+        expandedSidebarAccounts: s.expandedSidebarAccounts.includes(accountId)
+          ? s.expandedSidebarAccounts.filter((id) => id !== accountId)
+          : [...s.expandedSidebarAccounts, accountId],
+      })),
       selectedIds: [],
       toggleSelected: (key) =>
         set((s) => ({
@@ -108,7 +139,16 @@ export const useMailStore = create<MailUiState>()(
       clearSelected: () => set({ selectedIds: [] }),
       selectAll: (keys: string[]) => set({ selectedIds: keys }),
     }),
-    { name: 'mail-ui-storage', partialize: (s) => ({ theme: s.theme, sidebarWidth: s.sidebarWidth, listWidth: s.listWidth, accountIconMode: s.accountIconMode }) },
+    { name: 'mail-ui-storage', partialize: (s) => ({
+      theme: s.theme,
+      sidebarWidth: s.sidebarWidth,
+      listWidth: s.listWidth,
+      accountIconMode: s.accountIconMode,
+      sidebarSections: s.sidebarSections,
+      expandedSidebarGroups: s.expandedSidebarGroups,
+      expandedSidebarCategories: s.expandedSidebarCategories,
+      expandedSidebarAccounts: s.expandedSidebarAccounts,
+    }) },
   ),
 )
 
