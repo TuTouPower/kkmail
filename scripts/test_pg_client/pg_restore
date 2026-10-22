@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Proxy pg_restore to dedicated test postgres container
+CONTAINER="kkmail_test_pg-postgres-1"
+ARGS=()
+FILE=""
+for arg in "$@"; do
+  if [[ -f "$arg" ]]; then
+    FILE="$arg"
+  else
+    mapped="${arg//:15433/:5432}"
+    mapped="${mapped//15433/5432}"
+    ARGS+=("$mapped")
+  fi
+done
+
+if [[ -n "$FILE" ]]; then
+  exec docker exec -i -e PGPASSWORD="${PGPASSWORD:-}" "$CONTAINER" pg_restore "${ARGS[@]}" < "$FILE"
+else
+  exec docker exec -i -e PGPASSWORD="${PGPASSWORD:-}" "$CONTAINER" pg_restore "${ARGS[@]}"
+fi

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Proxy pg_dump to dedicated test postgres container
+CONTAINER="kkmail_test_pg-postgres-1"
+ARGS=()
+FILE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --file)
+      FILE="$2"
+      shift 2
+      ;;
+    --file=*)
+      FILE="${1#*=}"
+      shift
+      ;;
+    *)
+      # Map host port 15433 to container internal port 5432
+      arg="${1//:15433/:5432}"
+      arg="${arg//15433/5432}"
+      ARGS+=("$arg")
+      shift
+      ;;
+  esac
+done
+
+if [[ -n "$FILE" ]]; then
+  exec docker exec -i -e PGPASSWORD="${PGPASSWORD:-}" "$CONTAINER" pg_dump "${ARGS[@]}" > "$FILE"
+else
+  exec docker exec -i -e PGPASSWORD="${PGPASSWORD:-}" "$CONTAINER" pg_dump "${ARGS[@]}"
+fi
