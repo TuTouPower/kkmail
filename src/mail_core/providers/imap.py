@@ -213,6 +213,12 @@ class ImapProvider:
             client = imaplib.IMAP4(self.host, self.port, timeout=timeout)
         try:
             client.login(self.username, self.password)
+            # RFC 2971: Client identification (required by NetEase 163/126 to prevent 'SELECT Unsafe Login')
+            try:
+                imaplib.Commands.setdefault("ID", ("AUTH", "SELECTED"))
+                client._simple_command("ID", '("name" "kkmail" "version" "3.0.20" "vendor" "kkmail")')
+            except Exception:
+                pass
         except imaplib.IMAP4.error as exc:
             msg = str(exc)
             if "basic authentication is disabled" in msg.lower() or "authenticationfailed" in msg.lower():

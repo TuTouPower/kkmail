@@ -2,22 +2,5 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/tasks/{tid}_{slug}/task.md front matter",
     "workspace": ".",
-    "tasks": [
-        {
-            "tid": "t005",
-            "slug": "sync_refresh_and_imap_id",
-            "title": "修复列表刷新联动远端同步新建账号入队与网易IMAP握手",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "single",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "",
-            "conflicts_with": "",
-            "note": "",
-            "dir": "docs/tasks/t005_sync_refresh_and_imap_id"
-        }
-    ]
+    "tasks": []
 }
