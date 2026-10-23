@@ -96,7 +96,7 @@ def test_unified_inbox_folder_stats_search_and_thread():
         assert "Phoenix" in row.subject
 
 
-def test_list_body_preview_is_read_only_and_preserves_provider_snippet():
+def test_list_body_preview_is_read_only_and_preserves_provider_snippets():
     from sqlalchemy import event
     from mail_core.mail.application.queries import messages_by_ids
     from mail_core.mail.storage import MessageBody
@@ -109,7 +109,6 @@ def test_list_body_preview_is_read_only_and_preserves_provider_snippet():
         (None, "Use <div> &amp; <support@example.com> literally", None, None, "Use <div> &amp; <support@example.com> literally"),
         ("", None, "<html><head><title>Hidden</title><style>Hidden</style></head><body><p>HTML &amp; body</p><script>Hidden</script></body></html>", None, "HTML & body"),
         (None, None, None, None, ""),
-        (None, "Partial", None, "parse failed", ""),
         (None, "x" * 300, None, None, "x" * 180),
     ]
     with Session() as session:
@@ -140,8 +139,10 @@ def test_list_body_preview_is_read_only_and_preserves_provider_snippet():
 
     with Session() as session:
         statements = []
+
         def capture(connection, cursor, statement, parameters, context, executemany):
             statements.append(statement)
+
         event.listen(session.get_bind(), "before_cursor_execute", capture)
         try:
             items = messages_by_ids(session, ids)
@@ -152,3 +153,41 @@ def test_list_body_preview_is_read_only_and_preserves_provider_snippet():
         session.commit()
         for mid, (snippet, _, _, _, _) in zip(ids, cases):
             assert session.get(Message, mid).snippet == snippet
+
+
+# The previous combined test incorrectly excluded readable partial text; conventions §9.3 allows it with parse_error.
+def test_list_body_preview_keeps_readable_partial_body_when_parse_error_exists():
+    from mail_core.mail.storage import MessageBody
+
+    Session = get_session_factory()
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    with Session() as session:
+        account = create_account(session, email="partial-preview@example.com", provider="imap")
+        folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        session.flush()
+        message = Message(
+            account_id=account.id,
+            remote_id="partial",
+            subject="PartialPreview",
+            from_address="sender@example.com",
+            sort_time=datetime.now(timezone.utc),
+            snippet=None,
+        )
+        session.add(message)
+        session.flush()
+        session.add(MessageLocation(message_id=message.id, folder_id=folder.id, uid=1))
+        session.add(MessageBody(message_id=message.id, text_plain="Partial", parse_error="parse failed"))
+        upsert_message_search(session, message_id=message.id, body_text="PartialPreview")
+        session.commit()
+        account_id, message_id = str(account.id), message.id
+
+    for path, params in [("/api/mail/inbox", {}), ("/api/mail/search", {"q": "PartialPreview"})]:
+        response = client.get(path, params={"account_id": account_id, **params})
+        assert response.status_code == 200
+        row = next(item for item in response.json()["items"] if item["id"] == str(message_id))
+        assert row["snippet"] is None
+        assert row["body_preview"] == "Partial"
+
+    with Session() as session:
+        assert session.get(Message, message_id).snippet is None
