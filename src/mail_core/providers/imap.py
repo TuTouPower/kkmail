@@ -325,7 +325,11 @@ class ImapProvider:
                 pass
         except imaplib.IMAP4.error as exc:
             msg = str(exc)
-            if "basic authentication is disabled" in msg.lower() or "authenticationfailed" in msg.lower():
+            if (
+                "basic authentication is disabled" in msg.lower()
+                or "authenticationfailed" in msg.lower()
+                or "login error or password error" in msg.lower()
+            ):
                 from mail_core.providers.http import PermanentAuthError
 
                 raise PermanentAuthError(f"IMAP authentication rejected permanently: {msg}") from exc

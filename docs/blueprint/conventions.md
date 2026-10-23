@@ -107,8 +107,11 @@
 3. **统计聚合事务可见性**：
     - 文件夹统计计算（`recompute_folder_stats`）在执行底层 SQL 聚合前必须确保 session 状态已 flush 至数据库事务，消除在 `autoflush=False` 下读到陈旧内存数据的时序缺陷。
 4. **未读数未知语义**：
-    - 目标账号任一 inbox FolderStats 行缺失时，账号未读数、总数及包含该账号的聚合返回 `null`；分组统计对缺失行同样返回未知；前端使用 `-` 显示未知，禁止把部分和或缺失行按零呈现。
-    - 文件夹包含 `is_read: null` 邮件时，`FolderStats.unread_count` 返回 `null`；账号、分组和全局聚合传播该未知值，禁止 SQL `SUM` 忽略 null 后返回部分和。已知邮件总数保持准确，不因读状态未知而丢失。
+    - 目标账号任一 inbox FolderStats 行缺失时，账号未读数、总数及包含该账号的聚合返回 `null`；分组统计对缺失行同样返回未知；前端使用 `-` 显示未知，禁止把部分和或缺失行按零呈现；
+    - 文件夹包含 `is_read: null` 邮件时，`FolderStats.unread_count` 返回 `null`；账号、分组和全局聚合传播该未知值，禁止 SQL `SUM` 忽略 null 后返回部分和。已知邮件总数保持准确，不因读状态未知而丢失；
+    - 故障账号聚合排除：当账号已禁用（`sync_enabled=false`）或处于同步/认证失败状态（`sync_status in ('failed', 'auth_failed')`）且未同步生成目标角色文件夹时，全局收件箱与分组汇总排除该故障账号，按其余正常账号聚合输出，不阻断正常账号的汇总；故障账号自身单独查询仍返回 `null`（`-`）；
+    - 空文件夹统计初始化：新文件夹首次执行元数据同步（`apply_metadata_page`）且包含 0 封邮件时，立即生成 `FolderStats(total_count=0, unread_count=0)`，消除因空目录未变动导致 `FolderStats` 长期缺失的假性未知未读数；
+    - 侧栏与邮件列表头部统计语义保持一致：单账号或多账号缺失目标文件夹角色时，严格展示未知（`—` / `-`），禁止回退为全目录合计或静默按零填充。
 5. **服务商字段缺省与显式清空**：
     - `RemoteMessageMeta.supplied_fields` 为 `None` 时表示完整快照，为字段集合时表示部分 projection；Graph delta 与 Gmail metadata 必须标明实际返回字段。upsert 只更新集合内字段，不把缺省值当清空指令。
     - 明确返回的空主题、空摘要、空收件人数组按服务商原值应用；缺省字段保持已有值。日期与状态解析得到 `None` 表示未知，不能清除已知日期/状态。
