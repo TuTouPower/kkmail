@@ -219,6 +219,14 @@ def _get_server_uidvalidity(c: imaplib.IMAP4, folder: str) -> int | None:
     return None
 
 
+def _parse_fetch_flags(meta: str) -> tuple[bool | None, bool | None]:
+    match = re.search(r"\bFLAGS\s*\(([^)]*)\)", meta, flags=re.IGNORECASE)
+    if match is None:
+        return None, None
+    flags = set(match.group(1).casefold().split())
+    return "\\seen" in flags, "\\flagged" in flags
+
+
 def _parse_message_meta_from_fetch(
     flags_blob: tuple[Any, ...],
     uid_fallback: int,
@@ -230,8 +238,7 @@ def _parse_message_meta_from_fetch(
     meta_s = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
     m_uid = re.search(r"\bUID\s+(\d+)", meta_s)
     uid = int(m_uid.group(1)) if m_uid else uid_fallback
-    is_read = "\\Seen" in meta_s
-    is_flagged = "\\Flagged" in meta_s
+    is_read, is_flagged = _parse_fetch_flags(meta_s)
     if isinstance(header_bytes, bytes):
         headers = email.message_from_bytes(header_bytes)
     else:
@@ -554,8 +561,9 @@ class ImapProvider:
             uid = int(m_uid.group(1)) if m_uid else (uids[idx] if idx < len(uids) else None)
             if uid is None:
                 continue
-            is_read = "\\Seen" in meta_s
-            is_flagged = "\\Flagged" in meta_s
+            is_read, is_flagged = _parse_fetch_flags(meta_s)
+            if is_read is None:
+                continue
             rid = format_imap_remote_id(folder_remote_id, int(uidvalidity), uid)
             changes.append(
                 DeltaChange(
