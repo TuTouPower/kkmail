@@ -2,7 +2,7 @@
 tid: "t043"
 slug: "reader_preview_closure"
 title: "核验正文摘要隔离并闭环原修复记录"
-status: "backlog"
+status: "done"
 branch: ""
 worktree: ""
 review_level: "single"
