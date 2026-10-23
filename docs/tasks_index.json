@@ -64,7 +64,7 @@
             "diff_anchor": "",
             "depends_on": "t036",
             "conflicts_with": "",
-            "note": "来源：审查确认旧库迁移补造主题发件人和时间、误判正文类型并伪造 UID。; 依赖 t036 的 sort_time nullable/API 语义后确定旧库时间映射，避免两个迁移语义并行变化。",
+            "note": "来源：审查确认旧库迁移补造主题发件人和时间、误判正文类型并伪造 UID。; 依赖 t036 的 sort_time nullable/API 语义后确定旧库时间映射，避免两个迁移语义并行变化。; 已扩展 AC-005：缺少 MessageArchiveState 时 is_archived 必须保持未知。",
             "dir": "docs/tasks/t037_legacy_migration_fidelity"
         },
         {
