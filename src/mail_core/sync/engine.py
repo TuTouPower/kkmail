@@ -196,7 +196,7 @@ def sync_account_folders(
         run.finished_at = datetime.now(timezone.utc)
         run.stats = {"folders": len(folder_ids), "upserted": upserted}
         acc = session.get(Account, account_id)
-        if acc is not None:
+        if acc is not None and acc.sync_status not in ("failed", "auth_failed"):
             acc.sync_status = "idle"
             cfg = dict(acc.config or {})
             cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()

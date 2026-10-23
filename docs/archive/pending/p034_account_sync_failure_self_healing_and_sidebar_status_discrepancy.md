@@ -29,4 +29,4 @@
     - `src/mail_core/sync/engine.py:80-135, 198-208`
     - `src/frontend/src/components/Sidebar.tsx:183-188, 684-702`
     - `src/frontend/src/components/SettingsModal.tsx:17, 236`
-- 处理：未开
+- 处理：main

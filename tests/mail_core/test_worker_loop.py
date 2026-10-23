@@ -89,6 +89,143 @@ def test_tick_reclaims_stale_and_isolates_job_sessions():
             assert row.locked_by == "test-worker-iso" or row.locked_by is None
 
 
+@pytestmark_db
+def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
+    import uuid
+
+    from datetime import datetime, timezone
+
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.enums import JobStatus, JobType
+    from mail_core.mail.storage.models import Account, WorkerJob
+    from mail_core.worker.handlers import handle_job
+
+    Session = get_session_factory()
+    account_id = uuid.uuid4()
+    folder_id = uuid.uuid4()
+    with Session() as session:
+        account = Account(email=f"self-heal-{account_id.hex[:10]}@example.test", provider="imap")
+        session.add(account)
+        session.flush()
+        account_id = account.id
+        failed_job = WorkerJob(
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            account_id=account_id,
+            payload={"folder_id": str(folder_id)},
+            status=JobStatus.CLAIMED.value,
+            locked_by="worker-failed",
+            attempts=1,
+        )
+        successful_job = WorkerJob(
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            account_id=account_id,
+            payload={"folder_id": str(folder_id)},
+            status=JobStatus.CLAIMED.value,
+            locked_by="worker-success",
+            attempts=1,
+        )
+        session.add_all([failed_job, successful_job])
+        session.commit()
+        failed_job_id, successful_job_id = failed_job.id, successful_job.id
+
+    with Session() as session:
+        job = session.get(WorkerJob, failed_job_id)
+        assert job is not None
+        with patch(
+            "mail_core.sync.delta.sync_folder_delta",
+            side_effect=RuntimeError("temporary provider outage"),
+        ):
+            assert handle_job(session, job, worker_id="worker-failed") is False
+        session.commit()
+        account = session.get(Account, account_id)
+        assert account is not None
+        assert account.sync_status == "failed"
+        assert (account.config or {}).get("last_sync_error")
+        assert session.get(WorkerJob, failed_job_id).status == JobStatus.PENDING.value
+
+    with Session() as session:
+        job = session.get(WorkerJob, successful_job_id)
+        assert job is not None
+        with patch("mail_core.sync.delta.sync_folder_delta", return_value={"status": "ok"}):
+            assert handle_job(session, job, worker_id="worker-success") is True
+        session.commit()
+        account = session.get(Account, account_id)
+        assert account is not None
+        assert account.sync_status == "failed"
+        assert (account.config or {}).get("last_sync_error")
+
+    with Session() as session:
+        retry = session.get(WorkerJob, failed_job_id)
+        assert retry is not None
+        retry.status = JobStatus.CLAIMED.value
+        retry.locked_by = "worker-retry"
+        retry.locked_at = datetime.now(timezone.utc)
+        retry.attempts = 2
+        session.commit()
+        with patch("mail_core.sync.delta.sync_folder_delta", return_value={"status": "ok"}):
+            assert handle_job(session, retry, worker_id="worker-retry") is True
+        session.commit()
+        account = session.get(Account, account_id)
+        assert account is not None
+        assert account.sync_status == "idle"
+        assert "last_sync_error" not in (account.config or {})
+
+        account.sync_status = "auth_failed"
+        account.sync_enabled = False
+        auth_job = WorkerJob(
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            account_id=account_id,
+            payload={"folder_id": str(folder_id)},
+            status=JobStatus.CLAIMED.value,
+            locked_by="worker-auth",
+            attempts=1,
+        )
+        session.add(auth_job)
+        session.commit()
+        assert handle_job(session, auth_job, worker_id="worker-auth") is True
+        session.commit()
+        account = session.get(Account, account_id)
+        assert account is not None
+        assert account.sync_status == "auth_failed"
+
+
+@pytestmark_db
+def test_auxiliary_archive_failure_does_not_mark_account_sync_failed():
+    import uuid
+
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.enums import JobStatus, JobType
+    from mail_core.mail.storage.models import Account, WorkerJob
+    from mail_core.worker.handlers import handle_job
+
+    Session = get_session_factory()
+    with Session() as session:
+        account = Account(email=f"archive-status-{uuid.uuid4().hex[:10]}@example.test", provider="imap")
+        session.add(account)
+        session.flush()
+        job = WorkerJob(
+            job_type=JobType.ARCHIVE_MIME_BATCH.value,
+            account_id=account.id,
+            payload={},
+            status=JobStatus.CLAIMED.value,
+            locked_by="worker-archive",
+            attempts=1,
+        )
+        session.add(job)
+        session.commit()
+        account_id = account.id
+
+        with patch(
+            "mail_core.blobs.archive.run_archive_batch",
+            side_effect=RuntimeError("archive disk failure"),
+        ):
+            assert handle_job(session, job, worker_id="worker-archive") is False
+        session.commit()
+        account = session.get(Account, account_id)
+        assert account is not None
+        assert account.sync_status == "idle"
+
+
 def test_tick_failed_job_not_counted_as_handled():
     """handle_job False (fail_job path) must not increment handled / skew backoff."""
     import uuid
