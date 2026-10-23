@@ -8,6 +8,20 @@ from typing import Any
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
 
 
+def parse_gmail_internal_date(raw: Any) -> datetime | None:
+    """Parse Gmail's millisecond Unix timestamp without coercing other JSON types."""
+    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+        return None
+    if isinstance(raw, str):
+        digits = raw[1:] if raw.startswith(("+", "-")) else raw
+        if not digits or not digits.isascii() or not digits.isdecimal():
+            return None
+    try:
+        return datetime.fromtimestamp(int(raw) / 1000.0, tz=timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
 def _parse_address_list(raw: str | None) -> tuple[str, ...]:
     if not raw:
         return ()
@@ -27,14 +41,7 @@ def _minimal_meta(message: dict[str, Any]) -> RemoteMessageMeta:
         name_part, _, rest = frm.partition("<")
         from_name = name_part.strip().strip('"') or None
         frm = rest.rstrip(">").strip()
-    sort_raw = message.get("internalDate")
-    if sort_raw is not None:
-        try:
-            sort_time = datetime.fromtimestamp(int(sort_raw) / 1000.0, tz=timezone.utc)
-        except (TypeError, ValueError, OSError):
-            sort_time = datetime.now(timezone.utc)
-    else:
-        sort_time = datetime.now(timezone.utc)
+    sort_time = parse_gmail_internal_date(message.get("internalDate"))
     label_ids = set(message.get("labelIds") or [])
     to_addrs = tuple(message.get("to_addresses") or ()) or _parse_address_list(headers.get("to"))
     cc_addrs = tuple(message.get("cc_addresses") or ()) or _parse_address_list(headers.get("cc"))

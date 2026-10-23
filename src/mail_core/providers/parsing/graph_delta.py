@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
 
 
-def _parse_dt(raw: str | None) -> datetime:
-    if not raw:
-        return datetime.now(timezone.utc)
-    text = raw.replace("Z", "+00:00")
+def _parse_dt(raw: str | None) -> datetime | None:
+    if not isinstance(raw, str) or not raw:
+        return None
+    text = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
     try:
-        return datetime.fromisoformat(text)
-    except ValueError:
-        return datetime.now(timezone.utc)
+        parsed = datetime.fromisoformat(text)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if parsed.utcoffset() is not None else None
 
 
 def _meta_from_graph(item: dict[str, Any]) -> RemoteMessageMeta:
@@ -38,7 +39,7 @@ def _meta_from_graph(item: dict[str, Any]) -> RemoteMessageMeta:
         subject=str(item.get("subject") or ""),
         from_address=str(frm.get("address") or ""),
         from_name=frm.get("name"),
-        sort_time=_parse_dt(item.get("receivedDateTime") or item.get("lastModifiedDateTime")),
+        sort_time=_parse_dt(item.get("receivedDateTime")),
         is_read=bool(item["isRead"]) if item.get("isRead") is not None else None,
         has_attachments=(
             bool(item["hasAttachments"]) if item.get("hasAttachments") is not None else None

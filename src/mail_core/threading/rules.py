@@ -200,7 +200,7 @@ def assign_thread_for_message(
         thread.provider_thread_key = provider_thread_key
 
     message.thread_id = thread.id
-    if thread.sort_time is None or message.sort_time >= thread.sort_time:
+    if message.sort_time is not None and (thread.sort_time is None or message.sort_time >= thread.sort_time):
         thread.sort_time = message.sort_time
     existing = session.scalar(
         select(ThreadMessage).where(

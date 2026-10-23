@@ -17,7 +17,7 @@ export interface MailItem {
   subject: string
   from: string
   to?: string
-  date?: string
+  date?: string | null
   is_read: boolean
   is_flagged: boolean
   has_attachments: boolean
@@ -35,7 +35,7 @@ export interface MailDetail {
   from?: string
   to?: string
   cc?: string
-  date?: string
+  date?: string | null
   body?: string
   body_type?: 'html' | 'text'
   parse_error?: string | null
