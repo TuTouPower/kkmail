@@ -277,7 +277,7 @@ def migrate():
                 is_read=bool(m["is_read"]),
                 is_flagged=False,
                 has_attachments=bool(m["has_attachments"]),
-                snippet=m["body_preview"] or (body[:120] if body else ""),
+                snippet=m["body_preview"],
             )
             session.add(msg)
             session.flush()

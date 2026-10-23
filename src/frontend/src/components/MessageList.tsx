@@ -12,7 +12,6 @@ import { confirmAction, errorMessage } from '../lib/actions'
 import { compareMailDates } from '../lib/mailDate'
 import { displayName } from '../lib/displayName'
 import { formatListDate } from '../lib/listDate'
-import { previewText } from '../lib/previewText'
 import { useMailStore } from '../store/mailStore'
 
 /** Server-side search kicks in from this many characters. */
@@ -577,7 +576,7 @@ const MessageList = memo(function MessageList() {
                   </div>
                 </div>
                 <div data-ui="ML10" className="subject">{m.subject}</div>
-                <div data-ui="ML12" className="preview">{previewText(m.body_preview)}</div>
+                <div data-ui="ML12" className="preview">{m.body_preview}</div>
               </div>
             </article>
           )
