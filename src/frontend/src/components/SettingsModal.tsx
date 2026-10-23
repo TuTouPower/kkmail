@@ -15,6 +15,7 @@ type Feedback = { message: string; error?: boolean }
 const providers: Record<string, string> = { imap: 'IMAP', gmail: 'Gmail', graph: 'Microsoft Graph' }
 const syncStates: Record<string, string> = { idle: '空闲', running: '同步中', failed: '同步失败', auth_failed: '认证失败', pending: '等待同步' }
 const syncFailed = (account: AccountSummary) => ['failed', 'auth_failed'].includes(account.sync_status)
+const accountDomain = (email: string) => email.slice(email.lastIndexOf('@') + 1).trim().toLowerCase()
 
 function Status({ value }: { value?: Feedback }) {
   if (!value) return null
@@ -47,6 +48,7 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
   const [search, setSearch] = useState('')
   const [groupFilter, setGroupFilter] = useState('all')
   const [stateFilter, setStateFilter] = useState('all')
+  const [domainFilter, setDomainFilter] = useState('all')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkGroup, setBulkGroup] = useState('')
   const [groupSearch, setGroupSearch] = useState('')
@@ -63,10 +65,12 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
   const timezone = draft.app_timezone ?? saved.app_timezone ?? ''
   const timeoutSeconds = draft.mail_fetch_timeout_seconds ?? saved.mail_fetch_timeout_seconds ?? ''
   const query = search.trim().toLowerCase()
+  const domains = [...new Set(accounts.map(account => accountDomain(account.email)).filter(Boolean))].sort((a, b) => a.localeCompare(b))
   const filtered = accounts.filter(a =>
     (!query || `${a.email} ${providers[a.provider] || a.provider} ${a.group_name || '未分组'}`.toLowerCase().includes(query)) &&
     (groupFilter === 'all' || (groupFilter === 'ungrouped' ? !a.group_id : a.group_id === groupFilter)) &&
-    (stateFilter === 'all' || (stateFilter === 'enabled' ? a.sync_enabled !== false : stateFilter === 'disabled' ? a.sync_enabled === false : syncFailed(a))),
+    (stateFilter === 'all' || (stateFilter === 'enabled' ? a.sync_enabled !== false : stateFilter === 'disabled' ? a.sync_enabled === false : syncFailed(a))) &&
+    (domainFilter === 'all' || accountDomain(a.email) === domainFilter),
   )
   const selectedAccounts = accounts.filter(a => selected.has(a.id))
   const filteredSelected = filtered.filter(a => selected.has(a.id)).length
@@ -171,6 +175,7 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
     setSearch('')
     setGroupFilter(id)
     setStateFilter('all')
+    setDomainFilter('all')
     setSelected(new Set())
     setSection('accounts')
   }
@@ -204,6 +209,7 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
               <label className="settings-search"><Search size={15} /><input type="search" aria-label="搜索账户" placeholder="搜索邮箱、域名、服务商或分组" value={search} onChange={event => setSearch(event.target.value)} /></label>
               <select aria-label="按分组筛选" value={groupFilter} onChange={event => setGroupFilter(event.target.value)} disabled={groupsQuery.isError}><option value="all">所有分组</option><option value="ungrouped">未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
               <select aria-label="按同步状态筛选" value={stateFilter} onChange={event => setStateFilter(event.target.value)}><option value="all">全部状态</option><option value="enabled">已启用同步</option><option value="disabled">已暂停同步</option><option value="failed">同步异常</option></select>
+              <select aria-label="按邮箱域名筛选" value={domainFilter} onChange={event => setDomainFilter(event.target.value)}><option value="all">所有域名</option>{domains.map(domain => <option key={domain} value={domain}>{domain}</option>)}</select>
             </div>
             {selectedAccounts.length > 0 && <div className="settings-bulk-bar" aria-label="批量账户操作">
               <strong>已选 {selectedAccounts.length} 个账户</strong><select aria-label="批量移动分组" value={bulkGroup} onChange={event => setBulkGroup(event.target.value)} disabled={pending || groupsQuery.isError}><option value="">移至未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
