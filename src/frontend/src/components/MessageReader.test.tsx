@@ -236,6 +236,68 @@ afterEach(() => {
 })
 
 describe('<MessageReader />', () => {
+  it('renders only loading while detail is pending, even with an HTML preview', async () => {
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [{ ...item, body_preview: '<html>Hidden preview</html>' }])
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) =>
+      String(url) === '/api/mail/messages/m-1'
+        ? new Promise<Response>(() => {})
+        : originalFetch(url, init),
+    ))
+    const { container } = await render(<MessageReader />)
+    expect(container.textContent).toContain('正在加载正文…')
+    expect(container.textContent).not.toContain('Hidden preview')
+    expect(container.querySelector('.email-body')).toBeNull()
+    expect(container.querySelector('.empty-body-placeholder')).toBeNull()
+  })
+
+  it.each([true, false])('hides HTML previews for empty bodies (archived=%s)', async (archived) => {
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [{ ...unarchivedItem, body_preview: '<html><head><meta charset="utf-8"></head><body>Hidden preview</body></html>' }])
+    useMailStore.setState({ selectedKey: 'm-unarchived' })
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith('/sync-body')) return new Promise<Response>(() => {})
+      const response = await originalFetch(url, init)
+      if (String(url) !== '/api/mail/messages/m-unarchived') return response
+      return json({ ...await response.json(), is_archived: archived })
+    }))
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => {
+      expect(container.querySelector('.empty-body-placeholder')).not.toBeNull()
+      expect(container.textContent).toContain(archived ? '邮件正文尚未完成同步或内容为空' : '正在优先同步邮件正文…')
+    })
+    expect(container.textContent).not.toContain('Hidden preview')
+    expect(container.querySelector('.email-body')).toBeNull()
+  })
+
+  it.each(['text', 'html'])('shows only the parse error with partial %s content', async (bodyType) => {
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const response = await originalFetch(url, init)
+      if (String(url) !== '/api/mail/messages/m-1') return response
+      return json({ ...await response.json(), body: '<p>Hidden partial content</p>', body_type: bodyType, parse_error: 'MIME parsing failed' })
+    }))
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.textContent).toContain('MIME parsing failed'))
+    expect(container.querySelector('[role="alert"]')).not.toBeNull()
+    expect(container.querySelector('.email-body')).toBeNull()
+    expect(container.querySelector('.empty-body-placeholder')).toBeNull()
+    expect(container.textContent).not.toContain('Hidden partial content')
+  })
+
+  it('shows only the request error when detail loading fails', async () => {
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) =>
+      String(url) === '/api/mail/messages/m-1'
+        ? Promise.resolve(json({ detail: 'Detail request failed' }, 500))
+        : originalFetch(url, init),
+    ))
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.textContent).toContain('Detail request failed'))
+    expect(container.querySelector('.email-body')).toBeNull()
+    expect(container.querySelector('.empty-body-placeholder')).toBeNull()
+  })
+
   it('renders the text body and attachment links by UUID with formatted size', async () => {
     const { container } = await render(<MessageReader />)
     await waitFor(() => expect(container.querySelector('.email-body-text')?.textContent).toBe('plain body text'))
