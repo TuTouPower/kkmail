@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { PanelLeft } from 'lucide-react'
 import { useMailStore } from './store/mailStore'
 import Sidebar from './components/Sidebar'
 import MessageList from './components/MessageList'
@@ -15,6 +16,7 @@ import { useIsWide } from './lib/viewport'
 import { workspaceGridColumns } from './lib/workspaceLayout'
 import { useMailCoreRealtime } from './hooks/useMailCoreRealtime'
 import { resolveTheme } from './lib/theme'
+import { getDesktopPlatform } from './lib/desktopShell'
 
 function App() {
   const theme = useMailStore((s) => s.theme)
@@ -23,6 +25,8 @@ function App() {
   const mobileSidebarOpen = useMailStore((s) => s.mobileSidebarOpen)
   const closeMobileSidebar = useMailStore((s) => s.closeMobileSidebar)
   const settingsOpen = useMailStore((s) => s.settingsOpen)
+  const toggleSidebar = useMailStore((s) => s.toggleSidebar)
+  const toggleMobileSidebar = useMailStore((s) => s.toggleMobileSidebar)
   const sidebarWidth = useMailStore((s) => s.sidebarWidth)
   const listWidth = useMailStore((s) => s.listWidth)
   const setSidebarWidth = useMailStore((s) => s.setSidebarWidth)
@@ -42,6 +46,22 @@ function App() {
 
   const wide = useIsWide()
   const drawerOpen = mobileSidebarOpen && !wide
+  const isMacDesktop = getDesktopPlatform() === 'darwin'
+  const macLoginDragRegion = isMacDesktop
+    ? <div className="mac-login-drag-region" data-testid="mac-login-drag-region" aria-hidden="true" />
+    : null
+  const sidebarToggleRef = useRef<HTMLButtonElement | null>(null)
+  const drawerWasOpen = useRef(false)
+
+  useEffect(() => {
+    if (drawerWasOpen.current && !drawerOpen) {
+      requestAnimationFrame(() => {
+        const toggle = sidebarToggleRef.current
+        if (toggle?.isConnected && toggle.getClientRects().length) toggle.focus()
+      })
+    }
+    drawerWasOpen.current = drawerOpen
+  }, [drawerOpen])
 
   const appRef = useRef<HTMLDivElement>(null)
   const workspaceRef = useRef<HTMLDivElement>(null)
@@ -86,11 +106,15 @@ function App() {
   }, [])
 
   if (authed === null) {
-    return <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', color: 'var(--muted)' }}>正在检查登录状态…</div>
+    return <>
+      {macLoginDragRegion}
+      <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', color: 'var(--muted)' }}>正在检查登录状态…</div>
+    </>
   }
   if (!authed) {
     return (
       <>
+        {macLoginDragRegion}
         <LoginPage onSuccess={() => { setAuthed(true); void queryClient.invalidateQueries() }} />
         <UiReferenceOverlay />
       </>
@@ -108,13 +132,31 @@ function App() {
   return (
     <div
       ref={appRef}
-      className={['app', drawerOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : ''].filter(Boolean).join(' ')}
+      className={['app', isMacDesktop ? 'mac-desktop-shell' : '', drawerOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : ''].filter(Boolean).join(' ')}
       data-mobile-view={mobileView}
       style={{
         ['--sidebar-w' as string]: `${sidebarWidth}px`,
         ['--list-w' as string]: `${listWidth}px`,
       }}
     >
+      {isMacDesktop && (
+        <div className="mac-titlebar-controls" data-testid="mac-titlebar-controls">
+          <div className="mac-titlebar-drag-region" aria-hidden="true" />
+          <button
+            ref={sidebarToggleRef}
+            data-ui="ML01"
+            data-testid="sidebar-toggle"
+            className="mac-titlebar-sidebar-toggle"
+            type="button"
+            title={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+            aria-label={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+            aria-expanded={wide ? !sidebarCollapsed : mobileSidebarOpen}
+            onClick={wide ? toggleSidebar : toggleMobileSidebar}
+          >
+            <PanelLeft size={16} />
+          </button>
+        </div>
+      )}
       <div
         ref={workspaceRef}
         className="workspace"
@@ -152,12 +194,12 @@ function App() {
         )}
         {settingsOpen ? (
           <ErrorBoundary inline fallbackTitle="设置加载失败">
-            <SettingsPage />
+            <SettingsPage sidebarToggleRef={sidebarToggleRef} />
           </ErrorBoundary>
         ) : (
           <>
             <ErrorBoundary inline fallbackTitle="邮件列表加载失败">
-              <MessageList />
+              <MessageList sidebarToggleRef={sidebarToggleRef} />
             </ErrorBoundary>
             {wide && (
               <ColumnResize

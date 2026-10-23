@@ -12,7 +12,7 @@
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "dist:linux": "electron-builder --linux",
-    "test": "node paths.test.js && node hardening.test.js && node postgresManager.test.js && node startup.test.js && node logRotation.test.js && node desktopLog.test.js && node clipboard.test.js && node packLinux.test.js",
+    "test": "node paths.test.js && node hardening.test.js && node postgresManager.test.js && node startup.test.js && node logRotation.test.js && node desktopLog.test.js && node clipboard.test.js && node windowOptions.test.js && node packLinux.test.js",
     "test:packaged": "node scripts/packaged-smoke.js",
     "dist:linux:dir": "node scripts/pack-linux.js",
     "pack:linux": "node scripts/pack-linux.js",
@@ -36,6 +36,7 @@
       "desktopLog.js",
       "hardening.js",
       "logRotation.js",
+      "windowOptions.js",
       "postgresManager.js",
       "preload.js",
       "startup.js"

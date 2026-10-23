@@ -34,6 +34,12 @@ npm --prefix src/frontend run test:e2e
 python3 scripts/run_full_stack_e2e.py
 ```
 
+### Electron 原生标题栏人工验证（t032）
+
+`BrowserWindow` 参数单测不能证明 macOS 原生交通灯、真实拖动区或全屏行为。改动桌面标题栏后，使用隔离 `userData` 与测试服务启动独立 Electron 窗口，并以系统截图和操作记录验证：原生交通灯与侧栏按钮相邻、侧栏收起后按钮可用、空白区可拖动而按钮点击不拖窗、最小化/恢复、关闭/重新打开、全屏进出及窗口缩放后不重叠。不得用网页原型绘制的假交通灯代替证据。
+
+Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使用对应平台时，明确标注仅完成窗口参数单测，不宣称该平台已实测。
+
 ## Schema / codegen 验证
 
 - **触发路径**：`src/mail_core/api/` (路由与 DTO 改动)、`schemas/openapi.json`、`src/mail_core/db/alembic/versions/`
