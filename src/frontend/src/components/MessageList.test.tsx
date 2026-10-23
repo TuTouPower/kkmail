@@ -62,6 +62,9 @@ beforeEach(() => {
       }
       return json({ query: q, items: [row('s')], total: 1, offset: 0, next_offset: null })
     }
+    if (u.includes('/folder-stats')) {
+      return json({ folders: [{ folder_id: 'f1', role: 'inbox', total_count: 2, unread_count: 1 }] })
+    }
     return json({ detail: 'unexpected' }, 404)
   }))
 })
@@ -194,6 +197,136 @@ describe('<MessageList />', () => {
     await click([...container.querySelectorAll('[role=tab]')].find((b) => b.textContent === '未读') || null)
     await waitFor(() => {
       expect(container.querySelector('.list-count')?.textContent).toBe('42 封邮件 · 42 封未读')
+    })
+  })
+
+  it('shows zero when the selected account has no folder with the target role', async () => {
+    useMailStore.setState({ view: { type: 'account', accountId: 'acc-1', email: 'box@x.test' } })
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'box@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      if (u.includes('/folder-stats')) {
+        return json({ folders: [{ folder_id: 'sent-1', role: 'sent', total_count: 91, unread_count: 17 }] })
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => {
+      expect(container.querySelector('.list-count')?.textContent).toBe('0 封邮件 · 0 封未读')
+    })
+  })
+
+  it('keeps all-account counts unknown until every stats response arrives', async () => {
+    let releaseStats: (() => void) | undefined
+    const statsGate = new Promise<void>((resolve) => {
+      releaseStats = resolve
+    })
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      calls.push(u)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [
+          { id: 'acc-1', email: 'a@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+          { id: 'acc-2', email: 'b@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+        ], total: 2, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [row('a'), row('b')], next_cursor: null })
+      if (u.includes('/api/mail/accounts/acc-1/folder-stats')) {
+        await statsGate
+        return json({ folders: [{ folder_id: 'inbox-1', role: 'inbox', total_count: 100, unread_count: 10 }] })
+      }
+      if (u.includes('/api/mail/accounts/acc-2/folder-stats')) {
+        await statsGate
+        return json({ folders: [{ folder_id: 'inbox-2', role: 'inbox', total_count: 30, unread_count: 7 }] })
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toEqual(['Subject a', 'Subject b']))
+    await waitFor(() => expect(calls.filter((url) => url.includes('/folder-stats'))).toHaveLength(2))
+    expect(container.querySelector('.list-count')?.textContent).toBe('— 封邮件 · — 封未读')
+
+    releaseStats?.()
+    await waitFor(() => {
+      expect(container.querySelector('.list-count')?.textContent).toBe('130 封邮件 · 17 封未读')
+    })
+  })
+
+  it('does not present a partial all-account stats result as a complete total', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [
+          { id: 'acc-1', email: 'a@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+          { id: 'acc-2', email: 'b@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+        ], total: 2, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      if (u.includes('/api/mail/accounts/acc-1/folder-stats')) {
+        return json({ folders: [{ folder_id: 'inbox-1', role: 'inbox', total_count: 100, unread_count: 10 }] })
+      }
+      if (u.includes('/api/mail/accounts/acc-2/folder-stats')) return json({ detail: 'stats unavailable' }, 500)
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => {
+      expect(container.querySelector('.list-count')?.textContent).toBe('— 封邮件 · — 封未读')
+    })
+  })
+
+  it('sums all-account stats when every account request succeeds', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [
+          { id: 'acc-1', email: 'a@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+          { id: 'acc-2', email: 'b@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+        ], total: 2, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      if (u.includes('/api/mail/accounts/acc-1/folder-stats')) {
+        return json({ folders: [{ folder_id: 'inbox-1', role: 'inbox', total_count: 100, unread_count: 10 }] })
+      }
+      if (u.includes('/api/mail/accounts/acc-2/folder-stats')) {
+        return json({ folders: [{ folder_id: 'inbox-2', role: 'inbox', total_count: 30, unread_count: 7 }] })
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => {
+      expect(container.querySelector('.list-count')?.textContent).toBe('130 封邮件 · 17 封未读')
+    })
+  })
+
+  it('does not substitute other folders for a missing role in all-account stats', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [
+          { id: 'acc-1', email: 'a@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+          { id: 'acc-2', email: 'b@x.test', status: 'active', account_type: 'imap', provider: 'imap' },
+        ], total: 2, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      if (u.includes('/api/mail/accounts/acc-1/folder-stats')) {
+        return json({ folders: [{ folder_id: 'inbox-1', role: 'inbox', total_count: 100, unread_count: 10 }] })
+      }
+      if (u.includes('/api/mail/accounts/acc-2/folder-stats')) {
+        return json({ folders: [{ folder_id: 'sent-2', role: 'sent', total_count: 91, unread_count: 17 }] })
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => {
+      expect(container.querySelector('.list-count')?.textContent).toBe('100 封邮件 · 10 封未读')
     })
   })
 
