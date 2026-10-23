@@ -1,0 +1,28 @@
+{
+  "tid": "t049",
+  "attempt": 1,
+  "execution_id": "235b282b69f742bfa00aaa7e14ebc2a6",
+  "status": "done",
+  "branch": "t049_sync_retry_double_enqueue",
+  "base_sha": "2185a75bbeaa53b10d9c81c3fb4b73ba634ee563",
+  "tests": "Main after t049+t050 integration: mail-core 500 passed; template contract 149 passed / 1 skipped; frontend 274 passed, TypeScript/build/lint/OpenAPI/CSS passed; desktop and packaged smoke passed. This worktree targeted PostgreSQL regression: 11 passed.",
+  "blackbox": "Merged-source UI E2E 16 passed; real full-stack E2E 8 passed. T049 deployment health/ready and static asset smoke passed before later t050 code merge.",
+  "review": "Full Round 5 code and test review PASS, 0 unresolved findings; reviewed_scope=8f66d190d7e01e1a. Round 1 important finding resolved.",
+  "ac_evidence": {
+    "AC-001": [
+      "src/mail_core/sync/delta.py",
+      "src/mail_core/sync/engine.py",
+      "tests/mail_core/test_sync_retry_queue.py"
+    ],
+    "AC-002": [
+      "src/mail_core/worker/handlers.py",
+      "tests/mail_core/test_sync_retry_queue.py"
+    ],
+    "AC-003": [
+      "src/mail_core/worker/handlers.py",
+      "tests/mail_core/test_sync_retry_queue.py"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}
