@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Mail, MailOpen, Trash2, Flag, ArrowLeft, RefreshCw } from 'lucide-react'
-import { fetchAccounts, findCachedMail, flagOptimistic, setReadOptimistic, queryClient, queryKeys, removeCachedMail } from '../api/queries'
+import { findCachedMail, flagOptimistic, setReadOptimistic, queryClient, removeCachedMail } from '../api/queries'
 import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash, postMailCoreSyncMessageBody } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
@@ -18,8 +18,6 @@ const MessageReader = memo(function MessageReader() {
   const selectedKey = useMailStore((s) => s.selectedKey)
   const setSelectedKey = useMailStore((s) => s.setSelectedKey)
   const setMobileView = useMailStore((s) => s.setMobileView)
-  const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
-  const accounts = accountsQuery.data || []
   const [actionStatus, setActionStatus] = useState('')
   const [allowedRemoteImagesKey, setAllowedRemoteImagesKey] = useState<string | null>(null)
   const loadRemoteImages = Boolean(selectedKey && allowedRemoteImagesKey === selectedKey)
@@ -180,9 +178,11 @@ const MessageReader = memo(function MessageReader() {
           <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 4, overflowWrap: 'anywhere' }}>
             发件人：{displayEmail(detail?.from || selected.from)}
           </div>
-          <div data-ui="MR07" style={{ color: 'var(--muted)', fontSize: 11, marginBottom: detail?.cc ? 4 : 16, overflowWrap: 'anywhere' }}>
-            收件人：{detail?.to || selected.to || accounts.find((a) => a.email === selected.accountEmail)?.email || selected.accountEmail}
-          </div>
+          {detail && (
+            <div data-ui="MR07" style={{ color: 'var(--muted)', fontSize: 11, marginBottom: detail.cc ? 4 : 16, overflowWrap: 'anywhere' }}>
+              收件人：{detail.to || '未提供'}
+            </div>
+          )}
           {detail?.cc && (
             <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 16, overflowWrap: 'anywhere' }}>抄送：{detail.cc}</div>
           )}
