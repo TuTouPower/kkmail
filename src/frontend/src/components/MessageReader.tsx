@@ -173,7 +173,7 @@ const MessageReader = memo(function MessageReader() {
           <div data-ui="MR05" className="detail-subject">{detail?.subject || selected.subject}</div>
           <div style={{ fontSize: 12, marginBottom: 8 }}>
             <strong data-ui="MR06">{displayName(detail?.from || selected.from)}</strong>
-            <span style={{ color: 'var(--muted)' }}> · {formatReaderDate(detail?.date || selected.date)}</span>
+            <span style={{ color: 'var(--muted)' }}> · {formatReaderDate(detail ? detail.date : selected.date)}</span>
           </div>
           <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 4, overflowWrap: 'anywhere' }}>
             发件人：{displayEmail(detail?.from || selected.from)}

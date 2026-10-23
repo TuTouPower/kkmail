@@ -18,6 +18,9 @@ describe('formatListDate', () => {
     expect(out).toContain(String(d.getDate()))
     expect(out).not.toMatch(/:/)
   })
+  it('shows no date text for an unknown date', () => {
+    expect(formatListDate(null, now)).toBe('')
+  })
 })
 
 describe('formatReaderDate', () => {
@@ -26,5 +29,8 @@ describe('formatReaderDate', () => {
     expect(out).toMatch(/2026/)
     expect(out).not.toMatch(/UTC/)
     expect(out).not.toMatch(/\+0000/)
+  })
+  it('shows no date text for an unknown date', () => {
+    expect(formatReaderDate(null)).toBe('')
   })
 })

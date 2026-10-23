@@ -157,7 +157,7 @@ class Message(Base):
     from_name: Mapped[Optional[str]] = mapped_column(String(255))
     to_addresses: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     cc_addresses: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
-    sort_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    sort_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     is_flagged: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     has_attachments: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))

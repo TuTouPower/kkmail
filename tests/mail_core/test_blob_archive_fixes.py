@@ -436,12 +436,12 @@ def test_a38_multiple_attachments_same_filename_preserved_and_idempotent(tmp_pat
         set_credential_store(None)
 
 
-def test_archive_batch_backfills_missing_metadata_from_mime(tmp_path):
-    """When a message enters local store with empty subject/from, archiving MIME must backfill them."""
+def test_archive_mime_backfills_only_missing_headers_and_preserves_provider_time(tmp_path):
+    """MIME may fill missing subject but must not invent or replace provider received time."""
     cred_store = DictCredentialStore({"cred-ref": {"token": "secret"}})
     set_credential_store(cred_store)
 
-    mime_content = (
+    mime_with_empty_subject = (
         b"From: Restored Sender <restored@example.com>\r\n"
         b"To: recipient@example.com\r\n"
         b"Subject: Restored Subject From MIME\r\n"
@@ -450,13 +450,35 @@ def test_archive_batch_backfills_missing_metadata_from_mime(tmp_path):
         b"\r\n"
         b"Hello restored world!\r\n"
     )
+    mime_with_existing_subject = (
+        b"From: Another Sender <another@example.com>\r\n"
+        b"Subject: Must Not Replace Existing Subject\r\n"
+        b"Date: Sun, 20 Sep 2026 10:00:00 +0000\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        b"Hello unknown date!\r\n"
+    )
+    mime_with_missing_subject = (
+        b"From: Unknown Sender <unknown@example.com>\r\n"
+        b"Subject: Backfilled Subject With Unknown Received Time\r\n"
+        b"Date: Sun, 20 Sep 2026 10:00:00 +0000\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        b"Hello missing subject!\r\n"
+    )
 
-    now = datetime(2026, 10, 22, 9, 56, 0, tzinfo=timezone.utc)
+    received_time = datetime(2026, 10, 22, 9, 56, 0, tzinfo=timezone.utc)
     provider = MemoryProvider(folders=[RemoteFolder("INBOX", "INBOX", "inbox")])
     provider.seed(
         "INBOX",
-        [RemoteMessageMeta("m_empty_meta", "", "", None, now, True, False, uid=11)],
-        {"m_empty_meta": mime_content},
+        [
+            RemoteMessageMeta("m_empty_subject", "", "provider@example.com", "Provider", received_time, True, False, uid=11),
+            RemoteMessageMeta("m_unknown_time", "Existing Subject", "known@example.com", "Known", None, True, False, uid=12),
+            RemoteMessageMeta("m_unknown_time_missing_subject", "", "unknown@example.com", "Unknown", None, True, False, uid=13),
+        ],
+        {
+            "m_empty_subject": mime_with_empty_subject,
+            "m_unknown_time": mime_with_existing_subject,
+            "m_unknown_time_missing_subject": mime_with_missing_subject,
+        },
     )
 
     orig_engine = engine_mod.build_provider
@@ -476,17 +498,52 @@ def test_archive_batch_backfills_missing_metadata_from_mime(tmp_path):
 
             msg = Message(
                 account_id=account_id,
-                remote_id="m_empty_meta",
+                remote_id="m_empty_subject",
                 subject="",
-                from_address="",
-                from_name=None,
-                sort_time=datetime(2026, 10, 22, 9, 56, 0, tzinfo=timezone.utc),
+                from_address="provider@example.com",
+                from_name="Provider",
+                sort_time=received_time,
+            )
+            unknown = Message(
+                account_id=account_id,
+                remote_id="m_unknown_time",
+                subject="Existing Subject",
+                from_address="known@example.com",
+                from_name="Known",
+                sort_time=None,
+            )
+            unknown_with_missing_subject = Message(
+                account_id=account_id,
+                remote_id="m_unknown_time_missing_subject",
+                subject="",
+                from_address="unknown@example.com",
+                from_name="Unknown",
+                sort_time=None,
             )
             session.add(msg)
+            session.add(unknown)
+            session.add(unknown_with_missing_subject)
             session.flush()
             session.add(MessageArchiveState(message_id=msg.id, state=ArchiveState.ARCHIVE_PENDING.value))
+            session.add(
+                MessageArchiveState(
+                    message_id=unknown.id,
+                    state=ArchiveState.METADATA_SYNCED.value,
+                    priority=99,
+                )
+            )
+            session.add(
+                MessageArchiveState(
+                    message_id=unknown_with_missing_subject.id,
+                    state=ArchiveState.ARCHIVE_PENDING.value,
+                )
+            )
             session.commit()
-            mid = msg.id
+            mids = {
+                msg.remote_id: msg.id,
+                unknown.remote_id: unknown.id,
+                unknown_with_missing_subject.remote_id: unknown_with_missing_subject.id,
+            }
 
         result = run_archive_batch(
             account_id=account_id,
@@ -495,22 +552,31 @@ def test_archive_batch_backfills_missing_metadata_from_mime(tmp_path):
             payload={"batch_size": 10},
         )
         assert result["status"] == "ok"
-        assert result["completed"] == 1
+        assert result["completed"] == 3
 
         with Session() as session:
-            repaired_msg = session.get(Message, mid)
+            repaired_msg = session.get(Message, mids["m_empty_subject"])
+            unknown_time_msg = session.get(Message, mids["m_unknown_time"])
+            unknown_subject_msg = session.get(Message, mids["m_unknown_time_missing_subject"])
             assert repaired_msg is not None
+            assert unknown_time_msg is not None
+            assert unknown_subject_msg is not None
             assert repaired_msg.subject == "Restored Subject From MIME"
-            assert repaired_msg.from_address == "restored@example.com"
-            assert repaired_msg.from_name == "Restored Sender"
-            assert repaired_msg.sort_time == datetime(2026, 9, 20, 10, 0, 0, tzinfo=timezone.utc)
+            assert repaired_msg.from_address == "provider@example.com"
+            assert repaired_msg.from_name == "Provider"
+            assert repaired_msg.sort_time == received_time
+            assert unknown_time_msg.subject == "Existing Subject"
+            assert unknown_time_msg.from_address == "known@example.com"
+            assert unknown_time_msg.sort_time is None
+            assert unknown_subject_msg.subject == "Backfilled Subject With Unknown Received Time"
+            assert unknown_subject_msg.from_address == "unknown@example.com"
+            assert unknown_subject_msg.sort_time is None
 
             # FTS must also reflect the backfilled subject and sender
-            search_row = session.get(MessageSearch, mid)
+            search_row = session.get(MessageSearch, mids["m_empty_subject"])
             assert search_row is not None
             assert search_row.subject == "Restored Subject From MIME"
-            assert "Restored Sender" in search_row.from_text
-            assert "restored@example.com" in search_row.from_text
+            assert "provider@example.com" in search_row.from_text
     finally:
         engine_mod.build_provider = orig_engine
         archive_mod.build_provider = orig_archive

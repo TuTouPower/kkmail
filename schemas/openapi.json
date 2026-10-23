@@ -874,9 +874,16 @@
             "type": "string"
           },
           "date": {
-            "format": "date-time",
-            "title": "Date",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
           },
           "from": {
             "title": "From",
@@ -1048,9 +1055,16 @@
             "title": "Snippet"
           },
           "sort_time": {
-            "format": "date-time",
-            "title": "Sort Time",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Time"
           },
           "subject": {
             "title": "Subject",

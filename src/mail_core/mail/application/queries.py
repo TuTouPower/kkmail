@@ -24,7 +24,7 @@ class MessageListItem:
     subject: str
     from_address: str
     from_name: str | None
-    sort_time: datetime
+    sort_time: datetime | None
     is_read: bool
     is_flagged: bool
     has_attachments: bool
@@ -44,23 +44,24 @@ class InvalidCursor(ValueError):
     """Cursor token is malformed."""
 
 
-def encode_cursor(sort_time: datetime, message_id: uuid.UUID) -> str:
-    raw = f"{sort_time.isoformat()}|{message_id}".encode()
+def encode_cursor(sort_time: datetime | None, message_id: uuid.UUID) -> str:
+    timestamp = sort_time.isoformat() if sort_time is not None else ""
+    raw = f"{timestamp}|{message_id}".encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def decode_cursor(token: str) -> tuple[datetime, uuid.UUID]:
-    """Decode opaque keyset token. Both halves are required — never partially apply."""
+def decode_cursor(token: str) -> tuple[datetime | None, uuid.UUID]:
+    """Decode a keyset token; an empty timestamp encodes an unknown time."""
     try:
         pad = "=" * (-len(token) % 4)
         raw = base64.urlsafe_b64decode(token + pad).decode()
         if "|" not in raw:
             raise InvalidCursor("invalid cursor")
         st, mid = raw.split("|", 1)
-        if not st.strip() or not mid.strip():
-            # Partial keyset (time without id or id without time) must not be ignored.
+        if not mid.strip():
             raise InvalidCursor("invalid cursor")
-        return datetime.fromisoformat(st), uuid.UUID(mid)
+        sort_time = datetime.fromisoformat(st) if st.strip() else None
+        return sort_time, uuid.UUID(mid)
     except InvalidCursor:
         raise
     except Exception as exc:  # noqa: BLE001 - any decode failure is the same client error
@@ -202,9 +203,15 @@ def list_messages_keyset(
         stmt = stmt.where(Message.is_flagged == is_flagged)
     if cursor_pair is not None:
         cursor_sort_time, cursor_message_id = cursor_pair
-        if sort_order == "asc":
+        if cursor_sort_time is None:
+            id_after_cursor = (
+                Message.id > cursor_message_id if sort_order == "asc" else Message.id < cursor_message_id
+            )
+            stmt = stmt.where(and_(Message.sort_time.is_(None), id_after_cursor))
+        elif sort_order == "asc":
             stmt = stmt.where(
                 or_(
+                    Message.sort_time.is_(None),
                     Message.sort_time > cursor_sort_time,
                     and_(Message.sort_time == cursor_sort_time, Message.id > cursor_message_id),
                 )
@@ -212,14 +219,15 @@ def list_messages_keyset(
         else:
             stmt = stmt.where(
                 or_(
+                    Message.sort_time.is_(None),
                     Message.sort_time < cursor_sort_time,
                     and_(Message.sort_time == cursor_sort_time, Message.id < cursor_message_id),
                 )
             )
     if sort_order == "asc":
-        stmt = stmt.order_by(Message.sort_time.asc(), Message.id.asc()).limit(limit + 1)
+        stmt = stmt.order_by(Message.sort_time.asc().nulls_last(), Message.id.asc()).limit(limit + 1)
     else:
-        stmt = stmt.order_by(Message.sort_time.desc(), Message.id.desc()).limit(limit + 1)
+        stmt = stmt.order_by(Message.sort_time.desc().nulls_last(), Message.id.desc()).limit(limit + 1)
     rows = list(session.execute(stmt).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
@@ -295,7 +303,7 @@ class MessageDetail:
     from_name: str | None
     to_addresses: list[Any]
     cc_addresses: list[Any]
-    sort_time: datetime
+    sort_time: datetime | None
     is_read: bool
     is_flagged: bool
     has_attachments: bool
