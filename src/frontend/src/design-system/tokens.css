@@ -22,16 +22,16 @@
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #171819;
-  --sidebar: #1E1E1E;
-  --list: #212124;
-  --reader: #1A1A1C;
-  --surface: #27292B;
-  --surface-2: #303235;
-  --surface-hover: #2A2A2E;
-  --selected: #323236;
-  --line: #2C2C2E;
-  --line-strong: #2C2C2E;
+  --canvas: #16191A;
+  --sidebar: #1C1F21;
+  --list: #212628;
+  --reader: #222729;
+  --surface: #282D30;
+  --surface-2: #31373A;
+  --surface-hover: #2B3134;
+  --selected: #33393D;
+  --line: #2C3235;
+  --line-strong: #2C3235;
   --text: #FFFFFF;
   --muted: #8E8E93;
   --subtle: #E4E4E6;
@@ -42,7 +42,7 @@ html[data-theme="dark"] {
   --danger: #FF6B65;
   --blue-soft: rgba(10, 132, 255, 0.18);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
-  --mail-body: #1A1A1C;
+  --mail-body: #222729;
   --mail-body-text: #FFFFFF;
 }
 
