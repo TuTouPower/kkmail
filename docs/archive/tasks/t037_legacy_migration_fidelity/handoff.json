@@ -1,0 +1,67 @@
+{
+  "tid": "t037",
+  "attempt": 1,
+  "execution_id": "fa8922aa87cd4d84b2a0eabc3e555b80",
+  "status": "done",
+  "branch": "t037_legacy_migration_fidelity",
+  "base_sha": "22a3f23c48fa7e66daff400ca6f2db3c7cfd0c19",
+  "tests": "Backend full suite: 453 passed, 0 failed/errors/skips, 1 Starlette deprecation warning (runs 3a7f83f770694c10b04ea71e7cee134e and 48304c9a11154c86ac1f8044d87fd2ae). Final focused PostgreSQL importer/detail: 2 passed / 451 deselected / 1 warning (69bca3dfd794415ab01a5e7aa0d296ab); final importer boundary: 1 passed / 452 deselected / 1 warning (44e3a0f8c0244072b2bbaac44631a30d). Frontend full suite: 256 tests / 39 files passed; npx tsc -b, build, lint, OpenAPI/schema/CSS checks passed. Final API/Reader focused frontend tests: 31 passed / 2 files. Template contract: 149 passed / 367 deselected.",
+  "blackbox": "Stub browser E2E: 13 passed. Full-stack E2E: 8 passed (run f3290360ba79); runner shut down API/Worker and removed the dedicated database and role.",
+  "review": "Full Round 2 independent code/test review PASS; reviewed_scope=e7d935c32ba1685d. Round 1 findings (1 important, 2 minor) fixed; no unresolved findings.",
+  "ac_evidence": {
+    "AC-001": [
+      "scripts/migrate_from_legacy_db.py",
+      "tests/mail_core/test_legacy_migration.py"
+    ],
+    "AC-002": [
+      "scripts/migrate_from_legacy_db.py",
+      "tests/mail_core/test_legacy_migration.py"
+    ],
+    "AC-003": [
+      "scripts/migrate_from_legacy_db.py",
+      "tests/mail_core/test_legacy_migration.py"
+    ],
+    "AC-004": [
+      "scripts/migrate_from_legacy_db.py",
+      "tests/mail_core/test_legacy_migration.py"
+    ],
+    "AC-005": [
+      "src/mail_core/api/mail.py",
+      "schemas/openapi.json",
+      "src/frontend/src/api/generated/schema.ts",
+      "src/frontend/src/api/mailCore.ts",
+      "src/frontend/src/api/mailCore.test.ts",
+      "src/frontend/src/components/MessageReader.test.tsx",
+      "tests/mail_core/test_message_detail_api.py",
+      "tests/mail_core/test_openapi_contract.py"
+    ],
+    "AC-006": [
+      "scripts/migrate_from_legacy_db.py",
+      "src/mail_core/mail/storage/models.py",
+      "src/mail_core/db/alembic/versions/20261023_0018_nullable_message_remote_id.py",
+      "src/mail_core/blobs/archive.py",
+      "src/mail_core/sync/engine.py",
+      "src/mail_core/sync/remote_push.py",
+      "tests/mail_core/test_legacy_migration.py",
+      "tests/mail_core/test_archive_scheduler.py",
+      "tests/mail_core/test_remote_ops_reconcile.py"
+    ],
+    "AC-007": [
+      "src/mail_core/mail/storage/models.py",
+      "src/mail_core/db/alembic/versions/20261023_0018_nullable_message_remote_id.py",
+      "tests/mail_core/test_migration_validation.py"
+    ],
+    "AC-008": [
+      "src/mail_core/mail/application/mutations.py",
+      "src/mail_core/api/mail.py",
+      "tests/mail_core/test_message_mutations_api.py",
+      "tests/mail_core/test_message_detail_api.py",
+      "tests/mail_core/test_archive_scheduler.py",
+      "tests/mail_core/test_remote_ops_reconcile.py"
+    ]
+  },
+  "pending": [
+    "docs/pending/todo/p024_unknown_mail_status_defaults.md"
+  ],
+  "findings": []
+}

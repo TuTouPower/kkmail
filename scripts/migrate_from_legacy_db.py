@@ -19,11 +19,13 @@ if __name__ == "__main__":
     parse_args()
 
 import base64
+import email.utils
 import json
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 # Add src to sys.path
@@ -48,6 +50,9 @@ from mail_core.mail.storage.models import (
     MessageSearch,
 )
 
+_MAX_POSTGRES_BIGINT = (1 << 63) - 1
+_MAX_POSTGRES_BIGINT_TEXT = str(_MAX_POSTGRES_BIGINT)
+
 
 class MigrationError(RuntimeError):
     """Base exception for migration failures."""
@@ -55,6 +60,154 @@ class MigrationError(RuntimeError):
 
 class MigrationDecryptionError(MigrationError):
     """Raised when decrypting a legacy encrypted field fails."""
+
+
+@dataclass(frozen=True, slots=True)
+class MessageMigrationReport:
+    migrated: int = 0
+    skipped_existing: int = 0
+    imported_without_remote_id: int = 0
+
+
+def _legacy_sender(raw: str | None) -> tuple[str, str | None]:
+    if not raw:
+        return "", None
+    for name, address in email.utils.getaddresses([raw]):
+        if address and "@" in address:
+            return address, name or None
+    return "", raw
+
+
+def _legacy_addresses(raw: str | None) -> list[str]:
+    return [address for _name, address in email.utils.getaddresses([raw or ""]) if address]
+
+
+def _legacy_received_time(id_mode: str | None, raw: str | None) -> datetime | None:
+    if str(id_mode or "").strip().lower() != "graph" or not isinstance(raw, str) or not raw.strip():
+        return None
+    value = raw.strip()
+    if value.endswith("Z"):
+        value = f"{value[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None and parsed.utcoffset() is not None else None
+
+
+def _legacy_uid(id_mode: str | None, provider_message_id: str | None) -> int | None:
+    if str(id_mode or "").strip().lower() != "uid" or isinstance(provider_message_id, bool):
+        return None
+    value = str(provider_message_id or "").strip()
+    if not value or not value.isascii() or not value.isdecimal():
+        return None
+    normalized = value.lstrip("0")
+    if not normalized:
+        return None
+    if len(normalized) > len(_MAX_POSTGRES_BIGINT_TEXT) or (
+        len(normalized) == len(_MAX_POSTGRES_BIGINT_TEXT)
+        and normalized > _MAX_POSTGRES_BIGINT_TEXT
+    ):
+        return None
+    uid = int(normalized)
+    return uid if 0 < uid <= _MAX_POSTGRES_BIGINT else None
+
+
+def migrate_retained_messages(
+    session,
+    sqlite_cursor: sqlite3.Cursor,
+    *,
+    account_id_map: dict[int, uuid.UUID],
+    folder_id_map: dict[uuid.UUID, uuid.UUID],
+) -> MessageMigrationReport:
+    """Import retained messages from a read-only legacy SQLite cursor."""
+    migrated = 0
+    skipped_existing = 0
+    imported_without_remote_id = 0
+    legacy_msgs = sqlite_cursor.execute(
+        "SELECT * FROM retained_normal_mail_messages ORDER BY id DESC LIMIT 200"
+    ).fetchall()
+
+    for legacy_msg in legacy_msgs:
+        new_account_id = account_id_map.get(legacy_msg["account_id"])
+        folder_id = folder_id_map.get(new_account_id) if new_account_id else None
+        if not new_account_id or not folder_id:
+            continue
+
+        provider_message_id = legacy_msg["provider_message_id"]
+        id_mode = str(legacy_msg["id_mode"] or "").strip().lower()
+        provider_id = str(provider_message_id or "")
+        # Legacy Graph IDs are canonical; IMAP lacks UIDVALIDITY and other modes
+        # cannot be addressed safely by mail-core, so keep their identity unknown.
+        remote_id = provider_id if id_mode == "graph" and provider_id.strip() else None
+        # SQLite id is a local source key used only for stable Message.id, never remote_id/UID.
+        msg_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"kkmail:legacy-retained:{new_account_id}:{legacy_msg['id']}",
+        )
+        if session.get(Message, msg_id) is not None or (
+            remote_id is not None
+            and session.query(Message).filter_by(account_id=new_account_id, remote_id=remote_id).first()
+        ):
+            skipped_existing += 1
+            continue
+
+        subject = legacy_msg["subject"] if legacy_msg["subject"] else ""
+        sender = legacy_msg["sender"] if legacy_msg["sender"] else ""
+        from_address, from_name = _legacy_sender(sender)
+        body = legacy_msg["body"] if legacy_msg["body"] else ""
+        body_type = legacy_msg["body_type"]
+        is_html = body_type == "html"
+
+        msg = Message(
+            id=msg_id,
+            account_id=new_account_id,
+            remote_id=remote_id,
+            subject=subject,
+            from_address=from_address,
+            from_name=from_name,
+            to_addresses=_legacy_addresses(legacy_msg["recipients"]),
+            cc_addresses=_legacy_addresses(legacy_msg["cc"]),
+            sort_time=_legacy_received_time(legacy_msg["id_mode"], legacy_msg["received_at"]),
+            is_read=bool(legacy_msg["is_read"]),
+            is_flagged=False,
+            has_attachments=bool(legacy_msg["has_attachments"]),
+            snippet=legacy_msg["body_preview"],
+        )
+        session.add(msg)
+        session.flush()
+        session.add(
+            MessageLocation(
+                message_id=msg_id,
+                folder_id=folder_id,
+                uid=_legacy_uid(legacy_msg["id_mode"], provider_message_id),
+            )
+        )
+        session.add(
+            MessageBody(
+                message_id=msg_id,
+                text_html=body if is_html else None,
+                text_plain=body if not is_html else None,
+            )
+        )
+        session.add(
+            MessageSearch(
+                message_id=msg_id,
+                account_id=new_account_id,
+                subject=subject,
+                from_text=sender,
+                body_text=body[:2000] if body else "",
+            )
+        )
+        migrated += 1
+        if remote_id is None:
+            imported_without_remote_id += 1
+
+    return MessageMigrationReport(
+        migrated=migrated,
+        skipped_existing=skipped_existing,
+        imported_without_remote_id=imported_without_remote_id,
+    )
 
 
 def get_legacy_cipher(secret_key: str) -> Fernet:
@@ -112,7 +265,7 @@ def migrate():
     keyring = Keyring({1: blob_raw}, active_version=1)
 
     Session = get_session_factory()
-    sqlite_conn = sqlite3.connect(str(sqlite_path))
+    sqlite_conn = sqlite3.connect(f"{sqlite_path.as_uri()}?mode=ro", uri=True)
     sqlite_conn.row_factory = sqlite3.Row
     sqlite_cursor = sqlite_conn.cursor()
 
@@ -236,70 +389,13 @@ def migrate():
     print(f"Migrated {len(account_id_map)} accounts with encrypted credentials.")
 
     print("=== 3. Migrating Retained Messages (Sample / Recent) ===")
-    migrated_msgs = 0
     with Session() as session:
-        # Migrate recent up to 200 normal messages
-        legacy_msgs = sqlite_cursor.execute(
-            "SELECT * FROM retained_normal_mail_messages ORDER BY id DESC LIMIT 200"
-        ).fetchall()
-        now = datetime.now(timezone.utc)
-
-        for m in legacy_msgs:
-            old_acc_id = m["account_id"]
-            new_acc_id = account_id_map.get(old_acc_id)
-            if not new_acc_id:
-                continue
-
-            inbox_fid = folder_id_map.get(new_acc_id)
-            if not inbox_fid:
-                continue
-
-            remote_id = f"legacy-{m['provider_message_id'] or m['id']}"
-            existing_msg = session.query(Message).filter_by(account_id=new_acc_id, remote_id=remote_id).first()
-            if existing_msg:
-                continue
-
-            msg_id = uuid.uuid4()
-            subject = m["subject"] or "无主题"
-            sender = m["sender"] or "未知发件人"
-            body = m["body"] or ""
-            is_html = m["body_type"] == "html" or "<html" in body.lower() or "<div" in body.lower()
-
-            msg = Message(
-                id=msg_id,
-                account_id=new_acc_id,
-                remote_id=remote_id,
-                subject=subject,
-                from_address=sender,
-                from_name=sender.split("<")[0].strip() if "<" in sender else sender,
-                to_addresses=[m["recipients"]] if m["recipients"] else [],
-                sort_time=now,
-                is_read=bool(m["is_read"]),
-                is_flagged=False,
-                has_attachments=bool(m["has_attachments"]),
-                snippet=m["body_preview"],
-            )
-            session.add(msg)
-            session.flush()
-
-            session.add(MessageLocation(message_id=msg_id, folder_id=inbox_fid, uid=m["id"]))
-            session.add(
-                MessageBody(
-                    message_id=msg_id,
-                    text_html=body if is_html else None,
-                    text_plain=body if not is_html else None,
-                )
-            )
-            session.add(
-                MessageSearch(
-                    message_id=msg_id,
-                    account_id=new_acc_id,
-                    subject=subject,
-                    from_text=sender,
-                    body_text=body[:2000] if body else "",
-                )
-            )
-            migrated_msgs += 1
+        message_report = migrate_retained_messages(
+            session,
+            sqlite_cursor,
+            account_id_map=account_id_map,
+            folder_id_map=folder_id_map,
+        )
 
         # Recompute folder stats
         for acc_id, fid in folder_id_map.items():
@@ -318,8 +414,14 @@ def migrate():
                 st.unread_count = unr
 
         session.commit()
-    print(f"Migrated {migrated_msgs} messages into PostgreSQL.")
+    print(f"Migrated {message_report.migrated} messages into PostgreSQL.")
+    if message_report.imported_without_remote_id:
+        print(
+            "Imported "
+            f"{message_report.imported_without_remote_id} messages without canonical provider remote IDs."
+        )
     print("MIGRATION COMPLETED SUCCESSFULLY.")
+    sqlite_conn.close()
 
 
 if __name__ == "__main__":

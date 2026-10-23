@@ -232,6 +232,8 @@ def claim_archive_batch(
             ),
             MessageArchiveState.claimed_by.is_(None),
             MessageArchiveState.retry_count < 5,
+            Message.remote_id.is_not(None),
+            Message.remote_id != "",
         )
     )
     if account_id is not None:
@@ -535,7 +537,7 @@ def run_archive_batch(
         work: list[tuple[uuid.UUID, str, uuid.UUID]] = []
         for mid in claimed_ids:
             msg = session.get(Message, mid)
-            if msg is None:
+            if msg is None or not msg.remote_id or not msg.remote_id.strip():
                 continue
             work.append((mid, msg.remote_id, msg.account_id))
         session.commit()
