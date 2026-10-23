@@ -770,6 +770,22 @@
             "conflicts_with": "",
             "note": "来源 p031；用户确认严格提示解析错误但同时展示可读正文，剥离 fetch_mime 拉取错误并复用同批 IMAP 连接。",
             "dir": "docs/archive/tasks/t048_mime_parse_error_with_body_and_fetch_isolation"
+        },
+        {
+            "tid": "t050",
+            "slug": "imap_noselect_and_graph_transient_retry",
+            "title": "过滤 IMAP 非选文件夹并增强 Graph 传输瞬态重试",
+            "status": "done",
+            "branch": "t050_imap_noselect_and_graph_transient_retry",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "cdfafc7317b37209678c512cb49adefa3fa17e63",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "",
+            "dir": "docs/archive/tasks/t050_imap_noselect_and_graph_transient_retry"
         }
     ]
 }
