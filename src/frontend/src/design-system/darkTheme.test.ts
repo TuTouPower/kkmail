@@ -8,14 +8,14 @@ const css = readFileSync(resolve(__dirname, 'tokens.css'), 'utf8')
 
 describe('Dark mode Apple Mail theme and contrast (AC-001, AC-002)', () => {
   it('declares exact Apple Mail dark mode color tokens (AC-001)', () => {
-    // 侧栏 #1E1E1E、列表 #212124、阅读容器 #1A1A1C
-    expect(css).toMatch(/--sidebar:\s*#1E1E1E;/i)
-    expect(css).toMatch(/--list:\s*#212124;/i)
-    expect(css).toMatch(/--reader:\s*#1A1A1C;/i)
-    // 边框 #2C2C2E
-    expect(css).toMatch(/--line:\s*#2C2C2E;/i)
-    // 列表悬停 #2A2A2E
-    expect(css).toMatch(/--surface-hover:\s*#2A2A2E;/i)
+    // 侧栏 #1C1F21、列表 #212628、阅读容器 #222729
+    expect(css).toMatch(/--sidebar:\s*#1C1F21;/i)
+    expect(css).toMatch(/--list:\s*#212628;/i)
+    expect(css).toMatch(/--reader:\s*#222729;/i)
+    // 边框 #2C3235
+    expect(css).toMatch(/--line:\s*#2C3235;/i)
+    // 列表悬停 #2B3134
+    expect(css).toMatch(/--surface-hover:\s*#2B3134;/i)
     // 未读点 #0A84FF
     expect(css).toMatch(/--accent:\s*#0A84FF;/i)
     // 主文本 #FFFFFF、辅助文本 #8E8E93、次级文本 #E4E4E6、图标 #98989D、图标悬停 #FFFFFF

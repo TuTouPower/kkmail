@@ -1,7 +1,7 @@
 /** Extract a display name from an RFC 5322 From-like header. */
 export function displayName(from?: string): string {
   const raw = (from || '').trim()
-  if (!raw) return '未知'
+  if (!raw) return ''
   // "Name" <addr> or Name <addr>
   const angled = raw.match(/^\s*"?([^"<]*)"?\s*<[^>]+>\s*$/)
   if (angled) {
