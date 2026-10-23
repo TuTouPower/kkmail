@@ -20,9 +20,13 @@ from mail_core.sync.jobs import enqueue_job
 class MutationResult:
     message_id: uuid.UUID
     account_id: uuid.UUID
-    operation_id: uuid.UUID
+    operation_id: uuid.UUID | None
     is_read: bool | None = None
     is_flagged: bool | None = None
+
+
+class UnaddressableMessageError(ValueError):
+    """Raised when an operation requires a provider ID that is unknown."""
 
 
 def _primary_location(session: Session, message_id: uuid.UUID) -> tuple[Folder | None, MessageLocation | None]:
@@ -70,6 +74,10 @@ def _wake_push(session: Session, account_id: uuid.UUID) -> None:
     )
 
 
+def _has_provider_remote_id(msg: Message) -> bool:
+    return isinstance(msg.remote_id, str) and bool(msg.remote_id.strip())
+
+
 def set_message_read(
     session: Session,
     message_id: uuid.UUID,
@@ -82,19 +90,22 @@ def set_message_read(
     msg.is_read = is_read
     folder_ids = _all_location_folder_ids(session, message_id)
     folder, _loc = _primary_location(session, message_id)
-    desired = {
-        "remote_id": msg.remote_id,
-        "folder_remote_id": folder.remote_id if folder else "INBOX",
-        "is_read": is_read,
-    }
-    op = enqueue_remote_operation(
-        session,
-        account_id=msg.account_id,
-        entity_key=f"msg:{msg.remote_id}:read",
-        op_type="mark_read",
-        desired_state=desired,
-        idempotency_key=f"{msg.id}:read:{int(is_read)}",
-    )
+    operation_id = None
+    if _has_provider_remote_id(msg):
+        desired = {
+            "remote_id": msg.remote_id,
+            "folder_remote_id": folder.remote_id if folder else "INBOX",
+            "is_read": is_read,
+        }
+        op = enqueue_remote_operation(
+            session,
+            account_id=msg.account_id,
+            entity_key=f"msg:{msg.remote_id}:read",
+            op_type="mark_read",
+            desired_state=desired,
+            idempotency_key=f"{msg.id}:read:{int(is_read)}",
+        )
+        operation_id = op.id
     session.add(
         OutboxEvent(
             event_type=OutboxEventType.MESSAGE_UPSERTED.value,
@@ -103,13 +114,14 @@ def set_message_read(
         )
     )
     _recompute_stats_for_folders(session, account_id=msg.account_id, folder_ids=folder_ids)
-    _wake_push(session, msg.account_id)
+    if operation_id is not None:
+        _wake_push(session, msg.account_id)
     try_notify_outbox(session)
     session.flush()
     return MutationResult(
         message_id=msg.id,
         account_id=msg.account_id,
-        operation_id=op.id,
+        operation_id=operation_id,
         is_read=is_read,
     )
 
@@ -125,19 +137,22 @@ def set_message_flagged(
         raise LookupError("message not found")
     msg.is_flagged = is_flagged
     folder, _loc = _primary_location(session, message_id)
-    desired = {
-        "remote_id": msg.remote_id,
-        "folder_remote_id": folder.remote_id if folder else "INBOX",
-        "is_flagged": is_flagged,
-    }
-    op = enqueue_remote_operation(
-        session,
-        account_id=msg.account_id,
-        entity_key=f"msg:{msg.remote_id}:flag",
-        op_type="set_flag",
-        desired_state=desired,
-        idempotency_key=f"{msg.id}:flag:{int(is_flagged)}",
-    )
+    operation_id = None
+    if _has_provider_remote_id(msg):
+        desired = {
+            "remote_id": msg.remote_id,
+            "folder_remote_id": folder.remote_id if folder else "INBOX",
+            "is_flagged": is_flagged,
+        }
+        op = enqueue_remote_operation(
+            session,
+            account_id=msg.account_id,
+            entity_key=f"msg:{msg.remote_id}:flag",
+            op_type="set_flag",
+            desired_state=desired,
+            idempotency_key=f"{msg.id}:flag:{int(is_flagged)}",
+        )
+        operation_id = op.id
     session.add(
         OutboxEvent(
             event_type=OutboxEventType.MESSAGE_UPSERTED.value,
@@ -145,13 +160,14 @@ def set_message_flagged(
             payload={"message_id": str(msg.id), "is_flagged": is_flagged},
         )
     )
-    _wake_push(session, msg.account_id)
+    if operation_id is not None:
+        _wake_push(session, msg.account_id)
     try_notify_outbox(session)
     session.flush()
     return MutationResult(
         message_id=msg.id,
         account_id=msg.account_id,
-        operation_id=op.id,
+        operation_id=operation_id,
         is_flagged=is_flagged,
     )
 
@@ -167,6 +183,8 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
     msg = session.get(Message, message_id)
     if msg is None:
         raise LookupError("message not found")
+    if not _has_provider_remote_id(msg):
+        raise UnaddressableMessageError("message has no verified provider remote id")
     folder_ids = _all_location_folder_ids(session, message_id)
     folder, _loc = _primary_location(session, message_id)
     desired = {
@@ -286,6 +304,7 @@ def mark_all_messages_read(
         msg_folders.setdefault(mid, []).append((fid, f_remote_id or "INBOX"))
 
     affected_accounts: set[uuid.UUID] = set()
+    remote_operation_accounts: set[uuid.UUID] = set()
     affected_folders_by_account: dict[uuid.UUID, set[uuid.UUID]] = {}
 
     for msg in messages:
@@ -299,19 +318,21 @@ def mark_all_messages_read(
             affected_folders_by_account[msg.account_id] = set()
         affected_folders_by_account[msg.account_id].update(folder_ids)
 
-        desired = {
-            "remote_id": msg.remote_id,
-            "folder_remote_id": primary_folder_remote,
-            "is_read": True,
-        }
-        enqueue_remote_operation(
-            session,
-            account_id=msg.account_id,
-            entity_key=f"msg:{msg.remote_id}:read",
-            op_type="mark_read",
-            desired_state=desired,
-            idempotency_key=f"{msg.id}:read:1",
-        )
+        if _has_provider_remote_id(msg):
+            desired = {
+                "remote_id": msg.remote_id,
+                "folder_remote_id": primary_folder_remote,
+                "is_read": True,
+            }
+            enqueue_remote_operation(
+                session,
+                account_id=msg.account_id,
+                entity_key=f"msg:{msg.remote_id}:read",
+                op_type="mark_read",
+                desired_state=desired,
+                idempotency_key=f"{msg.id}:read:1",
+            )
+            remote_operation_accounts.add(msg.account_id)
         session.add(
             OutboxEvent(
                 event_type=OutboxEventType.MESSAGE_UPSERTED.value,
@@ -323,6 +344,8 @@ def mark_all_messages_read(
     for acc_id in affected_accounts:
         fids = affected_folders_by_account.get(acc_id, set())
         _recompute_stats_for_folders(session, account_id=acc_id, folder_ids=list(fids))
+
+    for acc_id in remote_operation_accounts:
         _wake_push(session, acc_id)
 
     try_notify_outbox(session)

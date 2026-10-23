@@ -273,23 +273,25 @@ describe('<MessageReader />', () => {
     expect(container.querySelector('.empty-body-placeholder')).toBeNull()
   })
 
-  it.each([true, false])('hides HTML previews for empty bodies (archived=%s)', async (archived) => {
+  it.each([true, false, null])('hides HTML previews for empty bodies (archived=%s)', async (archived) => {
     queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [{ ...unarchivedItem, body_preview: '<html><head><meta charset="utf-8"></head><body>Hidden preview</body></html>' }])
     useMailStore.setState({ selectedKey: 'm-unarchived' })
     const originalFetch = globalThis.fetch
-    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (String(url).endsWith('/sync-body')) return new Promise<Response>(() => {})
       const response = await originalFetch(url, init)
       if (String(url) !== '/api/mail/messages/m-unarchived') return response
       return json({ ...await response.json(), is_archived: archived })
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const { container } = await render(<MessageReader />)
     await waitFor(() => {
       expect(container.querySelector('.empty-body-placeholder')).not.toBeNull()
-      expect(container.textContent).toContain(archived ? '邮件正文尚未完成同步或内容为空' : '正在优先同步邮件正文…')
+      expect(container.textContent).toContain(archived === false ? '正在优先同步邮件正文…' : '邮件正文尚未完成同步或内容为空')
     })
     expect(container.textContent).not.toContain('Hidden preview')
     expect(container.querySelector('.email-body')).toBeNull()
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/sync-body'))).toHaveLength(archived === false ? 1 : 0)
   })
 
   it.each(['text', 'html'])('shows only the parse error with partial %s content', async (bodyType) => {
