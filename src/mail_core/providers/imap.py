@@ -272,7 +272,7 @@ def _parse_message_meta_from_fetch(
         from_name=name,
         sort_time=sort_time,
         is_read=is_read,
-        has_attachments=False,
+        has_attachments=None,
         is_flagged=is_flagged,
         internet_message_id=_header_opt("Message-ID"),
         uid=uid,

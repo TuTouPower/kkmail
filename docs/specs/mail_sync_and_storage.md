@@ -30,6 +30,8 @@
 - [x] AC-008：`/api/mail/inbox` 支持 `folder_role` 参数（默认 `inbox`，支持 `sent` 等），支持按角色检索全账号或指定账号邮件。
 - [x] AC-009：归档 MIME 正文、报头或附件文件名解析失败时持久化 `MessageBody.parse_error` 并跳过损坏派生物，保留原始 MIME，不阻塞同批合法邮件。
 - [x] AC-010：阅读器在检测到 `parse_error` 时明确展示“邮件解析失败”及脱敏原因，即使存在摘要或部分内容亦不被空占位掩盖，切换邮件即时隔离。
+- [x] AC-011：Graph Delta 只更新本次明确返回的 `isRead` 与 `flag.flagStatus`；字段缺失时，数据库保留已有 read/star 状态。
+- [x] AC-012：IMAP 与 Gmail 元数据未提供附件状态时，不覆盖本地 MIME 解析得到的 `has_attachments`；元数据明确提供 `true` 或 `false` 时按返回值更新。
 
 ### 可测试性声明
 
@@ -45,7 +47,7 @@
 
 ### 测试策略
 
-- 单元测试：`tests/mail_core/test_gmail_graph_contracts.py`、`test_archive_mime_parser.py`、`test_flag_convergence.py`。
+- 单元测试：`tests/mail_core/test_gmail_graph_contracts.py`、`test_delta_flag_patch.py`、`test_metadata_apply.py`、`test_archive_mime_parser.py`、`test_flag_convergence.py`。
 - 契约测试：`test_blob_crypto_gc.py` 验证 GC 与附件引用计数。
 
 ### 未知契约清单

@@ -36,22 +36,6 @@
             "dir": "docs/tasks/t032_sidebar_shell_controls"
         },
         {
-            "tid": "t035",
-            "slug": "partial_provider_metadata",
-            "title": "保留 Graph 局部状态与未知附件元数据语义",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "",
-            "conflicts_with": "",
-            "note": "来源：审查复现；Graph delta 缺字段生成 false，IMAP/Gmail 未提供附件标记却覆盖已归档值。",
-            "dir": "docs/tasks/t035_partial_provider_metadata"
-        },
-        {
             "tid": "t036",
             "slug": "mail_datetime_provenance",
             "title": "保持邮件时间来源准确并避免缺失值漂移",

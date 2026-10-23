@@ -1,0 +1,35 @@
+{
+  "tid": "t035",
+  "attempt": 1,
+  "execution_id": "2428d72855844c67867c6f9a881f1509",
+  "status": "done",
+  "branch": "t035_partial_provider_metadata",
+  "base_sha": "852c01372e17a4d858050eb2e9fed148870e5495",
+  "tests": "Template contract: 149 passed; targeted provider/sync PostgreSQL tests: 31 passed; full mail_core suite: 402 passed, 0 skipped; parser TDD RED reproduced before implementation.",
+  "blackbox": "Frontend browser E2E: 8 passed; real full-stack E2E: 3 passed.",
+  "review": "Full review PASS: Round 1 and Round 2 code/test reports PASS; scope d007d7f37a900891; code minor disposition recorded, test minor fixed.",
+  "ac_evidence": {
+    "AC-001": [
+      "src/mail_core/providers/parsing/graph_delta.py",
+      "src/mail_core/sync/delta.py",
+      "tests/mail_core/test_gmail_graph_contracts.py",
+      "tests/mail_core/test_delta_flag_patch.py"
+    ],
+    "AC-002": [
+      "src/mail_core/providers/base.py",
+      "src/mail_core/providers/gmail.py",
+      "src/mail_core/providers/imap.py",
+      "src/mail_core/providers/parsing/gmail_history.py",
+      "src/mail_core/sync/metadata.py",
+      "tests/mail_core/test_gmail_graph_contracts.py",
+      "tests/mail_core/test_metadata_apply.py"
+    ],
+    "AC-003": [
+      "tests/mail_core/test_gmail_graph_contracts.py",
+      "tests/mail_core/test_delta_flag_patch.py",
+      "tests/mail_core/test_metadata_apply.py"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}
