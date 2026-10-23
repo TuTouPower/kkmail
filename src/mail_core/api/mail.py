@@ -58,7 +58,7 @@ class MessageOut(BaseModel):
     subject: str
     from_address: str
     from_name: str | None
-    sort_time: datetime
+    sort_time: datetime | None
     is_read: bool
     is_flagged: bool
     has_attachments: bool
@@ -120,7 +120,7 @@ class MessageDetailOut(BaseModel):
     from_: str = Field(serialization_alias="from")
     to: str
     cc: str
-    date: datetime
+    date: datetime | None
     is_read: bool
     is_flagged: bool
     has_attachments: bool

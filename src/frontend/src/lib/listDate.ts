@@ -3,7 +3,7 @@ import { parseMailDate } from './mailDate'
 const DAY_MS = 24 * 60 * 60 * 1000
 
 /** Apple Mail–style list date: concrete time within 24h, otherwise a short date. */
-export function formatListDate(value?: string, now = Date.now()): string {
+export function formatListDate(value?: string | null, now = Date.now()): string {
   if (!value) return ''
   const ms = parseMailDate(value)
   if (!Number.isFinite(ms) || ms <= 0) return value.slice(0, 16)
@@ -23,7 +23,7 @@ export function formatListDate(value?: string, now = Date.now()): string {
 }
 
 /** Short, localized date for the reader header. */
-export function formatReaderDate(value?: string): string {
+export function formatReaderDate(value?: string | null): string {
   if (!value) return ''
   const ms = parseMailDate(value)
   if (!Number.isFinite(ms) || ms <= 0) return value

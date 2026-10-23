@@ -56,15 +56,17 @@ def _get_alembic_config() -> Config:
 # --- AC-001: Linear migration, single head and branch rejection --------------------
 
 
-def test_alembic_linear_single_head_and_no_branches():
-    """AC-001: Ensures migration history is strictly linear with exactly one head."""
+# Replaces the t018 test that fixed 20261022_0015 as the current head. t027 adds
+# revision 0016 and t036 adds nullable message time at revision 0017.
+def test_current_alembic_chain_has_single_nullable_time_head():
+    """The current migration history stays linear and ends at nullable message time."""
     cfg = _get_alembic_config()
     script = ScriptDirectory.from_config(cfg)
 
     heads = script.get_heads()
     assert len(heads) == 1, f"Expected exactly 1 migration head, found {len(heads)}: {heads}"
     head_rev = heads[0]
-    assert head_rev == "20261023_0016"
+    assert head_rev == "20261023_0017"
 
     # Walk from head down to base; assert strict single-parent chain
     current = script.get_revision(head_rev)
@@ -77,8 +79,56 @@ def test_alembic_linear_single_head_and_no_branches():
         assert isinstance(down, str), f"Fork detected at revision {current.revision} with multiple parents: {down}"
         current = script.get_revision(down)
 
-    assert len(visited) == 16, f"Expected 16 total revisions, found {len(visited)}"
+    assert len(visited) == 17, f"Expected 17 total revisions, found {len(visited)}"
     assert visited[-1] == "20261020_0001"
+
+
+def test_nullable_message_time_migration_preserves_known_received_time():
+    """Revision 0017 must preserve a provider received time already stored at 0015."""
+    cfg = _get_alembic_config()
+    engine = get_engine()
+    account_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+    received_at = datetime(2025, 5, 4, 3, 2, 1, tzinfo=timezone.utc)
+
+    try:
+        with engine.connect() as conn:
+            command.downgrade(cfg, "20261022_0015")
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO accounts (id, email, provider, created_at, updated_at)
+                    VALUES (:id, :email, 'imap', NOW(), NOW())
+                    """
+                ),
+                {"id": account_id, "email": f"migration-time-{account_id.hex[:8]}@example.com"},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO messages (id, account_id, remote_id, subject, from_address, sort_time, is_read, is_flagged)
+                    VALUES (:id, :account_id, 'received-time-preservation', 'Known time', 'sender@example.com', :sort_time, false, false)
+                    """
+                ),
+                {"id": message_id, "account_id": account_id, "sort_time": received_at},
+            )
+
+        with engine.connect() as conn:
+            command.upgrade(cfg, "head")
+
+        with engine.connect() as conn:
+            actual_received_at = conn.execute(
+                text("SELECT sort_time FROM messages WHERE id = :id"), {"id": message_id}
+            ).scalar_one()
+            assert actual_received_at == received_at
+    finally:
+        with engine.connect() as conn:
+            command.upgrade(cfg, "head")
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM messages WHERE id = :id"), {"id": message_id})
+            conn.execute(text("DELETE FROM accounts WHERE id = :id"), {"id": account_id})
 
 
 # --- AC-002: Three revision windows upgrade with data preservation -----------------
@@ -198,7 +248,7 @@ def test_migration_three_revision_windows_data_preservation():
                 )
             )
 
-        # Upgrade to head (20261023_0016)
+        # Upgrade to the current head, including nullable message received time.
         with engine.connect() as conn:
             command.upgrade(cfg, "head")
 
@@ -399,11 +449,11 @@ def test_orm_schema_drift_and_negative_detection():
         Account.__table__._columns.remove(fake_col)
 
 
-# --- AC-005: Reversible Downgrade and Upgrade Cycle -------------------------------
+# --- Current migration rollback and historical predecessor cycle -----------------
 
 
 def test_revertible_downgrade_and_upgrade_cycle():
-    """AC-005: Verifies the new ordering migration and prior blob migration both downgrade and upgrade cleanly."""
+    """The t027 ordering and prior blob migrations remain reversible below t036."""
     cfg = _get_alembic_config()
     engine = get_engine()
     Session = get_session_factory()
@@ -423,9 +473,15 @@ def test_revertible_downgrade_and_upgrade_cycle():
         group_id, account_id = group.id, account.id
 
     try:
-        # Downgrade the sidebar ordering migration (0016 -> 0015).
+        # Remove t036 first, then exercise the sidebar ordering migration (0016 -> 0015).
         with engine.connect() as conn:
-            command.downgrade(cfg, "-1")
+            command.downgrade(cfg, "20261023_0016")
+
+        cols_0016 = {c["name"]: c for c in inspect(engine).get_columns("messages")}
+        assert cols_0016["sort_time"]["nullable"] is False
+
+        with engine.connect() as conn:
+            command.downgrade(cfg, "20261022_0015")
 
         columns_0015 = {c["name"] for c in inspect(engine).get_columns("accounts")}
         assert "master_order" not in columns_0015
@@ -436,13 +492,12 @@ def test_revertible_downgrade_and_upgrade_cycle():
         with engine.connect() as conn:
             command.downgrade(cfg, "20261022_0014")
 
-        # In 0014: blob_quota_reservations table and attachments.part_id column must be gone
         tables_0014 = set(inspect(engine).get_table_names())
         assert "blob_quota_reservations" not in tables_0014
         cols_0014 = {c["name"] for c in inspect(engine).get_columns("attachments")}
         assert "part_id" not in cols_0014
 
-        # Re-upgrade to head (0014 -> 0016)
+        # Re-upgrade to head (0014 -> 0017).
         with engine.connect() as conn:
             command.upgrade(cfg, "head")
 
@@ -452,12 +507,75 @@ def test_revertible_downgrade_and_upgrade_cycle():
         assert "part_id" in attachment_columns
         account_columns = {c["name"] for c in inspect(engine).get_columns("accounts")}
         assert {"master_order", "group_order"} <= account_columns
+        message_columns = {c["name"]: c for c in inspect(engine).get_columns("messages")}
+        assert message_columns["sort_time"]["nullable"] is True
         with Session() as session:
             migrated_group = session.get(AccountGroup, group_id)
             migrated_account = session.get(Account, account_id)
             assert migrated_group is not None and migrated_group.sort_order == 17
             assert migrated_account is not None and migrated_account.group_id == group_id
             assert migrated_account.master_order is None and migrated_account.group_order is None
+    finally:
+        with engine.connect() as conn:
+            command.upgrade(cfg, "head")
+
+
+def test_nullable_message_time_migration_round_trips_to_head_and_predecessor():
+    """Revision 0017 round-trips to 0016 and refuses a lossy downgrade."""
+    cfg = _get_alembic_config()
+    engine = get_engine()
+
+    try:
+        with engine.connect() as conn:
+            command.downgrade(cfg, "20261023_0016")
+
+        cols_0016 = {c["name"]: c for c in inspect(engine).get_columns("messages")}
+        assert cols_0016["sort_time"]["nullable"] is False
+        account_cols_0016 = {c["name"] for c in inspect(engine).get_columns("accounts")}
+        assert {"master_order", "group_order"} <= account_cols_0016
+
+        with engine.connect() as conn:
+            command.upgrade(cfg, "head")
+
+        cols_0017 = {c["name"]: c for c in inspect(engine).get_columns("messages")}
+        assert cols_0017["sort_time"]["nullable"] is True
+
+        Session = get_session_factory()
+        with Session() as session:
+            account = Account(email=f"rollback-null-{uuid.uuid4().hex[:8]}@example.com", provider="stub")
+            session.add(account)
+            session.flush()
+            unknown_time = Message(
+                account_id=account.id,
+                remote_id="unknown-time",
+                subject="Unknown time",
+                from_address="sender@example.com",
+                sort_time=None,
+            )
+            session.add(unknown_time)
+            session.commit()
+            account_id, message_id = account.id, unknown_time.id
+
+        with pytest.raises(RuntimeError, match="messages.sort_time contains NULL"):
+            command.downgrade(cfg, "20261023_0016")
+
+        with engine.connect() as conn:
+            assert MigrationContext.configure(conn).get_current_revision() == "20261023_0017"
+        with Session() as session:
+            session.delete(session.get(Message, message_id))
+            session.flush()
+            session.delete(session.get(Account, account_id))
+            session.commit()
+
+        with engine.connect() as conn:
+            command.downgrade(cfg, "20261022_0015")
+
+        cols_0015 = {c["name"]: c for c in inspect(engine).get_columns("messages")}
+        assert cols_0015["sort_time"]["nullable"] is False
+        account_cols_0015 = {c["name"] for c in inspect(engine).get_columns("accounts")}
+        assert "master_order" not in account_cols_0015
+        assert "group_order" not in account_cols_0015
+        assert "blob_quota_reservations" in set(inspect(engine).get_table_names())
     finally:
         with engine.connect() as conn:
             command.upgrade(cfg, "head")

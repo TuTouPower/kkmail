@@ -99,6 +99,59 @@ def test_apply_metadata_page_writes_messages_stats_outbox_checkpoint():
         assert n_upsert == 1
 
 
+def test_unknown_provider_time_does_not_erase_known_received_time():
+    Session = get_session_factory()
+    known_time = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
+    with Session() as session:
+        account = Account(email=f"meta-time-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        session.add(account)
+        session.flush()
+        folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        session.flush()
+        lease = acquire_lease(session, account_id=account.id, owner_id="w-time", ttl=timedelta(minutes=5))
+        initial_page = MetadataPage(
+            items=[
+                RemoteMessageMeta("known", "Known", "a@b.c", None, known_time, False, False),
+                RemoteMessageMeta("unknown", "Unknown", "c@d.e", None, None, False, False),
+            ],
+            next_cursor={},
+            exhausted=True,
+        )
+        apply_metadata_page(
+            session,
+            account_id=account.id,
+            folder_id=folder.id,
+            fencing_token=lease.fencing_token,
+            page=initial_page,
+        )
+        session.commit()
+        account_id, folder_id = account.id, folder.id
+
+    with Session() as session:
+        lease = acquire_lease(session, account_id=account_id, owner_id="w-time", ttl=timedelta(minutes=5))
+        page = MetadataPage(
+            items=[RemoteMessageMeta("known", "Known", "a@b.c", None, None, False, False)],
+            next_cursor={},
+            exhausted=True,
+        )
+        apply_metadata_page(
+            session,
+            account_id=account_id,
+            folder_id=folder_id,
+            fencing_token=lease.fencing_token,
+            page=page,
+        )
+        session.commit()
+        rows = {
+            message.remote_id: message.sort_time
+            for message in session.scalars(select(Message).where(Message.account_id == account_id))
+        }
+
+    assert rows["known"] == known_time
+    assert rows["unknown"] is None
+
+
 def test_metadata_apply_preserves_fts_body_and_skips_outbox_on_replay():
     """Snippet must not overwrite MessageBody-backed FTS; replay must not flood outbox."""
     from mail_core.mail.storage.models import MessageBody, MessageSearch, SyncCheckpoint

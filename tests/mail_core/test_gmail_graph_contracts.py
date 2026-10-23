@@ -595,3 +595,63 @@ def test_graph_delta_partial_status_field_presence_contract():
     assert c4.flags == {"is_flagged": False}
 
 
+@pytest.mark.parametrize("internal_date", [None, "invalid", str(10**100), True, 1.5])
+def test_gmail_missing_or_invalid_internal_date_remains_unknown(internal_date):
+    message = {"id": "gmail-time", "payload": {"headers": []}}
+    if internal_date is not None:
+        message["internalDate"] = internal_date
+
+    meta = _meta_from_gmail_message(message)
+    history = parse_gmail_history(
+        {"history": [{"messagesAdded": [{"message": message}]}]}
+    )
+
+    assert meta.sort_time is None
+    assert history.changes[0].meta.sort_time is None
+
+
+def test_gmail_valid_internal_date_is_preserved_in_both_parser_paths():
+    message = {"id": "gmail-valid-time", "internalDate": "1000", "payload": {"headers": []}}
+
+    meta = _meta_from_gmail_message(message)
+    history = parse_gmail_history(
+        {"history": [{"messagesAdded": [{"message": message}]}]}
+    )
+
+    expected = datetime(1970, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
+    assert meta.sort_time == expected
+    assert history.changes[0].meta.sort_time == expected
+
+
+@pytest.mark.parametrize(
+    ("received", "last_modified", "expected"),
+    [
+        (
+            "2026-10-20T12:30:00Z",
+            "2026-10-21T12:30:00Z",
+            datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc),
+        ),
+        (
+            "2026-10-20T12:30:00+05:30",
+            "2026-10-21T12:30:00Z",
+            datetime.fromisoformat("2026-10-20T12:30:00+05:30"),
+        ),
+        ("2026-10-20T12:30:00", "2026-10-21T12:30:00Z", None),
+        (None, "2026-10-21T12:30:00Z", None),
+        (True, "2026-10-21T12:30:00Z", None),
+        (1.5, "2026-10-21T12:30:00Z", None),
+        ({"date": "2026-10-20T12:30:00Z"}, "2026-10-21T12:30:00Z", None),
+        ("invalid", "2026-10-21T12:30:00Z", None),
+    ],
+)
+def test_graph_received_date_is_the_only_received_time_source(received, last_modified, expected):
+    item = {"id": "graph-time", "subject": "Message", "lastModifiedDateTime": last_modified}
+    if received is not None:
+        item["receivedDateTime"] = received
+
+    page = parse_graph_delta({"value": [item]})
+
+    assert page.changes[0].meta is not None
+    assert page.changes[0].meta.sort_time == expected
+
+
