@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from mail_core.mail.domain.enums import ArchiveState, OutboxEventType
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import (
+    FolderStats,
     Message,
     MessageArchiveState,
     MessageLocation,

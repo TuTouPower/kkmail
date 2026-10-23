@@ -294,19 +294,39 @@ describe('<MessageReader />', () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/sync-body'))).toHaveLength(archived === false ? 1 : 0)
   })
 
-  it.each(['text', 'html'])('shows only the parse error with partial %s content', async (bodyType) => {
+  // t048 已修复：原 t026 断言 parse_error 与正文互斥的旧语义已由 t048 允许告警与可读正文并存的新契约替代，移除旧互斥测试
+  it.each(['text', 'html'])('renders both parse error alert and readable body when body is non-empty (AC-002)', async (bodyType) => {
     const originalFetch = globalThis.fetch
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
       const response = await originalFetch(url, init)
       if (String(url) !== '/api/mail/messages/m-1') return response
-      return json({ ...await response.json(), body: '<p>Hidden partial content</p>', body_type: bodyType, parse_error: 'MIME parsing failed' })
+      return json({ ...await response.json(), body: '<p>Readable partial content</p>', body_type: bodyType, parse_error: 'MIME parsing failed' })
     }))
     const { container } = await render(<MessageReader />)
     await waitFor(() => expect(container.textContent).toContain('MIME parsing failed'))
-    expect(container.querySelector('[role="alert"]')).not.toBeNull()
+    expect(container.querySelector('[data-ui="MR-PARSE-ERROR"]')).not.toBeNull()
+    expect(container.querySelector('.email-body')).not.toBeNull()
+    expect(container.querySelector('.empty-body-placeholder')).toBeNull()
+    if (bodyType === 'text') {
+      expect(container.textContent).toContain('Readable partial content')
+    } else {
+      const iframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
+      expect(iframe.srcdoc).toContain('Readable partial content')
+    }
+  })
+
+  it('renders only parse error alert and no empty body placeholder when body is empty (AC-002)', async () => {
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const response = await originalFetch(url, init)
+      if (String(url) !== '/api/mail/messages/m-1') return response
+      return json({ ...await response.json(), body: '', body_type: 'text', parse_error: 'MIME parsing failed' })
+    }))
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.textContent).toContain('MIME parsing failed'))
+    expect(container.querySelector('[data-ui="MR-PARSE-ERROR"]')).not.toBeNull()
     expect(container.querySelector('.email-body')).toBeNull()
     expect(container.querySelector('.empty-body-placeholder')).toBeNull()
-    expect(container.textContent).not.toContain('Hidden partial content')
   })
 
   it('shows only the request error when detail loading fails', async () => {
