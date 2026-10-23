@@ -31,11 +31,12 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
         if followup or next_run_after:
             from mail_core.sync.jobs import enqueue_job
 
+            next_payload = {k: v for k, v in payload.items() if not k.startswith("_followup_")}
             enqueue_job(
                 session,
                 job_type=job.job_type,
                 account_id=job.account_id,
-                payload={},
+                payload=next_payload,
                 priority=job.priority,
                 run_after=next_run_after,
                 dedupe_key=job.dedupe_key,

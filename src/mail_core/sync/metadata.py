@@ -190,7 +190,7 @@ def apply_metadata_page(
     if touched:
         session.add(messages_upserted_event(account_id, folder_id, touched))
         folder_stats_dirty = True
-    if folder_stats_dirty:
+    if folder_stats_dirty or session.get(FolderStats, folder_id) is None:
         recompute_folder_stats(session, folder_id)
         session.add(
             OutboxEvent(
