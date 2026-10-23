@@ -116,17 +116,26 @@ def _meta_from_gmail_message(message: dict[str, Any]) -> RemoteMessageMeta:
     label_ids = set(message.get("labelIds") or [])
     to_addrs = _parse_address_list(headers.get("to"))
     cc_addrs = _parse_address_list(headers.get("cc"))
+    supplied = {"subject", "from_address", "from_name", "internet_message_id", "to_addresses", "cc_addresses", "in_reply_to", "references"} if "headers" in (message.get("payload") or {}) else set()
+    for source, fields in {
+        "labelIds": ("is_read", "is_flagged"), "internalDate": ("sort_time",),
+        "snippet": ("snippet",), "threadId": ("provider_thread_key",),
+        "has_attachments": ("has_attachments",),
+    }.items():
+        if source in message:
+            supplied.update(fields)
     return RemoteMessageMeta(
+        supplied_fields=frozenset(supplied),
         remote_id=str(message["id"]),
         subject=str(subject),
         from_address=str(frm),
         from_name=from_name,
         sort_time=sort_time,
-        is_read="UNREAD" not in label_ids,
+        is_read="UNREAD" not in label_ids if "labelIds" in message else None,
         has_attachments=(
             bool(message["has_attachments"]) if message.get("has_attachments") is not None else None
         ),
-        is_flagged="STARRED" in label_ids,
+        is_flagged="STARRED" in label_ids if "labelIds" in message else None,
         internet_message_id=headers.get("message-id"),
         snippet=message.get("snippet"),
         provider_thread_key=message.get("threadId"),
@@ -135,6 +144,17 @@ def _meta_from_gmail_message(message: dict[str, Any]) -> RemoteMessageMeta:
         in_reply_to=headers.get("in-reply-to"),
         references=headers.get("references"),
     )
+
+
+def _validate_metadata_response(detail: Any, remote_id: str) -> None:
+    if (
+        not isinstance(detail, dict)
+        or detail.get("id") != remote_id
+        or not isinstance(detail.get("labelIds"), list)
+        or not isinstance(detail.get("payload"), dict)
+        or not isinstance(detail["payload"].get("headers"), list)
+    ):
+        raise ValueError("Gmail metadata response is incomplete or has mismatched id")
 
 
 @dataclass
@@ -212,8 +232,7 @@ class GmailProvider:
                     "metadataHeaders": list(_GMAIL_META_HEADERS),
                 },
             )
-            if not isinstance(detail, dict) or not detail.get("id"):
-                detail = {**stub, **(detail if isinstance(detail, dict) else {})}
+            _validate_metadata_response(detail, str(mid))
             items.append(_meta_from_gmail_message(detail))
         token = data.get("nextPageToken")
         next_cursor: dict[str, Any] = {}
@@ -281,26 +300,16 @@ class GmailProvider:
         hydrated_changes: list[DeltaChange] = []
         for change in page.changes:
             if change.kind == "upsert":
-                try:
-                    detail = self._call(
-                        "GET",
-                        f"/gmail/v1/users/{self.user_id}/messages/{change.remote_id}",
-                        {
-                            "format": "metadata",
-                            "metadataHeaders": list(_GMAIL_META_HEADERS),
-                        },
-                    )
-                    if isinstance(detail, dict) and detail.get("id"):
-                        meta = _meta_from_gmail_message(detail)
-                        change = DeltaChange(
-                            kind="upsert",
-                            remote_id=change.remote_id,
-                            meta=meta,
-                            flags=change.flags,
-                        )
-                except Exception:
-                    if not change.meta or (not change.meta.subject and not change.meta.from_address):
-                        raise
+                detail = self._call(
+                    "GET",
+                    f"/gmail/v1/users/{self.user_id}/messages/{change.remote_id}",
+                    {"format": "metadata", "metadataHeaders": list(_GMAIL_META_HEADERS)},
+                )
+                _validate_metadata_response(detail, change.remote_id)
+                change = DeltaChange(
+                    kind="upsert", remote_id=change.remote_id,
+                    meta=_meta_from_gmail_message(detail), flags=change.flags,
+                )
             hydrated_changes.append(change)
         return DeltaPage(
             changes=hydrated_changes,

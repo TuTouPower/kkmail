@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.domain.enums import JobType, OutboxEventType, SyncPhase
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
-from mail_core.providers.base import DeltaPage
+from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
 from mail_core.security.redact import safe_provider_summary
@@ -108,19 +108,48 @@ def apply_delta_page(
 ) -> DeltaApplyResult:
     assert_fencing(session, account_id=account_id, fencing_token=fencing_token)
     upserted = deleted = flagged = 0
-    # Changes are batched; the *last* change per remote id wins (upsert→delete deletes,
-    # delete→upsert keeps the message), matching sequential application.
+    # Coalesce supplied fields in response order; a delete discards earlier patches.
     last_kind = {c.remote_id: c.kind for c in page.changes}
-    last_upserts: dict[str, Any] = {}
-    for c in page.changes:
-        if c.kind == "upsert" and c.meta is not None and last_kind.get(c.remote_id) != "delete":
-            last_upserts[c.remote_id] = c
-    upserts = list(last_upserts.values())
-    flag_changes = [
-        c
-        for c in page.changes
-        if c.kind == "flag" and last_kind.get(c.remote_id) == "flag"
-    ]
+    merged: dict[str, RemoteMessageMeta] = {}
+    pending_flags: dict[str, dict] = {}
+    meta_fields = {f.name for f in fields(RemoteMessageMeta)} - {"remote_id", "supplied_fields"}
+    for change in page.changes:
+        rid = change.remote_id
+        if change.kind == "delete":
+            merged.pop(rid, None)
+            pending_flags.pop(rid, None)
+        elif change.kind == "flag":
+            patch = dict(change.flags)
+            if not patch and change.meta is not None and change.meta.is_read is not None:
+                patch["is_read"] = change.meta.is_read
+            pending_flags.setdefault(rid, {}).update(patch)
+        elif change.kind == "upsert" and change.meta is not None:
+            newer = change.meta
+            older = merged.get(rid)
+            flags = pending_flags.pop(rid, {})
+            if older is not None:
+                supplied = older.supplied_fields
+                older = replace(older, **flags, supplied_fields=None if supplied is None else supplied | flags.keys())
+                supplied = newer.supplied_fields if newer.supplied_fields is not None else meta_fields
+                # Unknown parsed values never erase earlier known facts.
+                values = {
+                    name: getattr(newer, name)
+                    for name in supplied
+                    if getattr(newer, name) is not None
+                    or name not in {"sort_time", "is_read", "is_flagged", "has_attachments"}
+                }
+                newer = replace(
+                    older, **values,
+                    supplied_fields=None if older.supplied_fields is None or newer.supplied_fields is None
+                    else older.supplied_fields | supplied,
+                )
+            elif flags:
+                supplied = newer.supplied_fields if newer.supplied_fields is not None else meta_fields
+                missing_flags = {name: value for name, value in flags.items() if name not in supplied or getattr(newer, name) is None}
+                newer = replace(newer, **missing_flags, supplied_fields=None if newer.supplied_fields is None else supplied | missing_flags.keys())
+            merged[rid] = newer
+    upserts = [DeltaChange(kind="upsert", remote_id=rid, meta=meta) for rid, meta in merged.items() if last_kind[rid] != "delete"]
+    flag_changes = [DeltaChange(kind="flag", remote_id=rid, flags=flags) for rid, flags in pending_flags.items() if last_kind[rid] != "delete"]
     outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=[c.meta for c in upserts])
     touched: list[uuid.UUID] = []
     for o, change in zip(outcomes, upserts):

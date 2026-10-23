@@ -34,7 +34,18 @@ def _meta_from_graph(item: dict[str, Any]) -> RemoteMessageMeta:
         for r in item.get("ccRecipients") or []
         if (r.get("emailAddress") or {}).get("address")
     ) or tuple(item.get("cc_addresses") or ())
+    field_sources = {
+        "subject": ("subject",), "from": ("from_address", "from_name"),
+        "receivedDateTime": ("sort_time",), "isRead": ("is_read",),
+        "hasAttachments": ("has_attachments",), "flag": ("is_flagged",),
+        "internetMessageId": ("internet_message_id",), "bodyPreview": ("snippet",),
+        "conversationId": ("provider_thread_key",),
+        "toRecipients": ("to_addresses",), "ccRecipients": ("cc_addresses",),
+        "to_addresses": ("to_addresses",), "cc_addresses": ("cc_addresses",),
+    }
+    supplied = frozenset(field for source, fields in field_sources.items() if source in item for field in fields)
     return RemoteMessageMeta(
+        supplied_fields=supplied,
         remote_id=str(item["id"]),
         subject=str(item.get("subject") or ""),
         from_address=str(frm.get("address") or ""),
@@ -57,7 +68,7 @@ def parse_graph_delta(data: dict[str, Any]) -> DeltaPage:
     """Normalize a Graph delta JSON body.
 
     - ``@removed`` → explicit delete
-    - otherwise → upsert (full message resource)
+    - otherwise → upsert for supplied content, or a status-only patch
     - ``@odata.nextLink`` / ``@odata.deltaLink`` → cursor
     """
     changes: list[DeltaChange] = []
@@ -74,7 +85,7 @@ def parse_graph_delta(data: dict[str, Any]) -> DeltaPage:
             flags["is_read"] = meta.is_read
         if meta.is_flagged is not None:
             flags["is_flagged"] = meta.is_flagged
-        has_content = bool(item.get("subject") or item.get("from") or item.get("receivedDateTime") or item.get("bodyPreview"))
+        has_content = bool(meta.supplied_fields - {"is_read", "is_flagged"})
         kind = "flag" if (item.get("_flag_only") or not has_content) else "upsert"
         changes.append(
             DeltaChange(

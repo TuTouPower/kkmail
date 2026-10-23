@@ -38,6 +38,8 @@ class RemoteMessageMeta:
     cc_addresses: tuple[str, ...] = ()
     in_reply_to: str | None = None
     references: str | None = None
+    # None denotes a complete snapshot; partial projections name supplied fields.
+    supplied_fields: frozenset[str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
