@@ -558,4 +558,28 @@ describe('<MessageReader />', () => {
       expect(container.textContent).toContain('立即重试同步')
     })
   })
+
+  it('does not crash and renders cleanly when non-mail queries are present in QueryCache (AC-001, AC-002)', async () => {
+    queryClient.setQueryData(['mail-core', 'account-folders', 'acc-1'], [
+      { folder_id: 'folder-junk', name: '垃圾邮件', role: 'junk', unread_count: 2, total_count: 2 },
+    ])
+    queryClient.setQueryData(queryKeys.inbox('acc-1'), [
+      {
+        id: 'msg-catie',
+        subject: 'Public benchmarks',
+        from: 'catie@example.com',
+        is_read: false,
+        is_flagged: false,
+        has_attachments: false,
+        accountId: 'acc-1',
+        accountEmail: 'a@x.test',
+      },
+    ])
+    useMailStore.setState({ selectedKey: 'msg-catie' })
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => {
+      expect(container.textContent).toContain('Public benchmarks')
+    })
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
 })
