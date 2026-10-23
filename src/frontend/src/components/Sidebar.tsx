@@ -182,7 +182,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
   const folders = foldersQuery.data
   if (folders.length === 0) {
     if (syncStatus === 'auth_failed' || syncStatus === 'failed') {
-      return <div className="tree-folder-status tree-error" style={{ paddingLeft: '48px' }}>同步失败，请检查账户设置</div>
+      return <div className="tree-folder-status tree-error" role="status" style={{ paddingLeft: '48px' }}>同步失败，请检查账户设置</div>
     }
     return <div className="tree-folder-status" style={{ paddingLeft: '48px' }}>暂无文件夹</div>
   }
@@ -231,18 +231,22 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
       </div>
     )
   })
+  const syncFailed = syncStatus === 'auth_failed' || syncStatus === 'failed'
   return (
-    <div className="tree-folder-list">
-      <button type="button" className="tree-nav-row tree-folder-row" style={{ paddingLeft: '48px' }} onClick={() => {
-        setView({ type: 'favorite', category: 'unread', accountId, email: accountEmail })
-        setListFilter('unread')
-      }}>
-        <span className="tree-disclosure-slot" aria-hidden="true" />
-        <MailOpen size={16} aria-hidden="true" /><span className="tree-label">未读邮件</span>
-        {unreadCount === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : unreadCount && unreadCount > 0 ? <span className="side-count unread-badge">{unreadCount}</span> : null}
-      </button>
-      {renderTree(roots)}
-    </div>
+    <>
+      {syncFailed && <div className="tree-folder-status tree-error" role="status" style={{ paddingLeft: '48px' }}>同步失败，请检查账户设置</div>}
+      <div className="tree-folder-list">
+        <button type="button" className="tree-nav-row tree-folder-row" style={{ paddingLeft: '48px' }} onClick={() => {
+          setView({ type: 'favorite', category: 'unread', accountId, email: accountEmail })
+          setListFilter('unread')
+        }}>
+          <span className="tree-disclosure-slot" aria-hidden="true" />
+          <MailOpen size={16} aria-hidden="true" /><span className="tree-label">未读邮件</span>
+          {unreadCount === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : unreadCount && unreadCount > 0 ? <span className="side-count unread-badge">{unreadCount}</span> : null}
+        </button>
+        {renderTree(roots)}
+      </div>
+    </>
   )
 }
 
@@ -695,6 +699,7 @@ function Sidebar() {
           <button type="button" className="tree-account-select" title={account.email} aria-expanded={expanded} onClick={() => toggleExpandedAccount(account.id)}>
             <AccountIcon email={account.email} provider={account.provider} accountType={account.account_type} groupColor={account.group_color} />
             <span className="tree-label">{account.email}</span>
+            {(account.sync_status === 'failed' || account.sync_status === 'auth_failed') && <span className="tree-account-sync-error" role="img" aria-label="同步失败" title="同步失败"><AlertCircle size={14} /></span>}
             {unread === null ? <span className="side-count unread-badge unread-badge-unknown" aria-label="未读数未知">-</span> : unread && unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}
           </button>
         </div>

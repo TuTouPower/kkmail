@@ -585,6 +585,18 @@ describe('<Sidebar />', () => {
     expect(account.textContent).not.toContain('未读邮件')
   })
 
+  it('shows sync failure on the account row and above existing folders', async () => {
+    mockApi({ syncStatusAcc1: 'failed' })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
+    expect(account.querySelector('[aria-label="同步失败"]')).not.toBeNull()
+
+    await click(account.querySelector('.tree-disclosure'))
+    await waitFor(() => expect(account.textContent).toContain('同步失败，请检查账户设置'))
+    expect(account.textContent).toContain('收件箱')
+  })
+
   it('displays no folders message when account folders are empty and sync_status is idle (AC-001)', async () => {
     mockApi({ emptyFoldersAcc1: true, syncStatusAcc1: 'idle' })
     const { container } = await render(<Sidebar />)
