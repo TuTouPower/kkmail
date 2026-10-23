@@ -86,6 +86,7 @@ class AuthCredential(Base):
 
 class Account(Base):
     __tablename__ = "accounts"
+    __table_args__ = (Index("ix_accounts_group_id", "group_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
@@ -96,6 +97,8 @@ class Account(Base):
     group_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("account_groups.id", ondelete="SET NULL")
     )
+    master_order: Mapped[Optional[int]] = mapped_column(Integer)
+    group_order: Mapped[Optional[int]] = mapped_column(Integer)
     sync_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     sync_status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'idle'"))
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))

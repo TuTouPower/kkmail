@@ -40,6 +40,21 @@ def test_group_create_validation_constraints(api_client):
     assert res.status_code == 422
 
 
+def test_group_names_are_trimmed_before_length_validation():
+    import pytest
+    from pydantic import ValidationError
+
+    from mail_core.api.accounts import GroupCreateIn, GroupUpdateIn
+
+    normalized = "x" * 128
+    assert GroupCreateIn(name=f" {normalized} ").name == normalized
+    assert GroupUpdateIn(name=f" {normalized} ").name == normalized
+    with pytest.raises(ValidationError):
+        GroupCreateIn(name=f" {normalized}x ")
+    with pytest.raises(ValidationError):
+        GroupUpdateIn(name="   ")
+
+
 def test_list_accounts_serializes_slotted_dtos_mock(api_client):
     import uuid
     from unittest.mock import patch

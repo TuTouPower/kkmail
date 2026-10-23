@@ -1,14 +1,15 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, Sun, Moon, Inbox, Settings as SettingsIcon, PanelLeft } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type Ref } from 'react'
 import { api } from '../api/client'
-import { fetchAccounts, fetchGroups, queryKeys } from '../api/queries'
+import { fetchAccounts, fetchGroups, queryKeys, resetGroupMailQueries, resetMailListQueries } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
 import AccountIcon from './AccountIcon'
+import { useIsWide } from '../lib/viewport'
 
 /** Settings page — mail-core only (accounts / groups / appearance / password). */
-export default function SettingsPage() {
+export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: Ref<HTMLButtonElement> } = {}) {
   const theme = useMailStore((s) => s.theme)
   const setTheme = useMailStore((s) => s.setTheme)
   const accountIconMode = useMailStore((s) => s.accountIconMode)
@@ -16,6 +17,9 @@ export default function SettingsPage() {
   const closeSettings = useMailStore((s) => s.closeSettings)
   const sidebarCollapsed = useMailStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useMailStore((s) => s.toggleSidebar)
+  const mobileSidebarOpen = useMailStore((s) => s.mobileSidebarOpen)
+  const toggleMobileSidebar = useMailStore((s) => s.toggleMobileSidebar)
+  const wide = useIsWide()
   const onClose = closeSettings
   const qc = useQueryClient()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
@@ -81,28 +85,29 @@ export default function SettingsPage() {
   return (
     <div className="settings-page" style={{ position: 'relative', zIndex: 50, display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--surface)', color: 'var(--text)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
-        {sidebarCollapsed && (
-          <button
-            data-ui="ST01"
-            type="button"
-            className="sidebar-expand-btn"
-            title="展开侧边栏"
-            aria-label="展开侧边栏"
-            onClick={toggleSidebar}
-            style={{
-              border: 0,
-              background: 'transparent',
-              color: 'var(--text)',
-              cursor: 'pointer',
-              display: 'grid',
-              placeItems: 'center',
-              padding: 2,
-              borderRadius: 6,
-            }}
-          >
-            <PanelLeft size={18} />
-          </button>
-        )}
+        <button
+          ref={sidebarToggleRef}
+          data-ui="ST01"
+          data-testid="sidebar-toggle"
+          type="button"
+          className="sidebar-expand-btn"
+          title={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+          aria-label={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+          aria-expanded={wide ? !sidebarCollapsed : mobileSidebarOpen}
+          onClick={wide ? toggleSidebar : toggleMobileSidebar}
+          style={{
+            border: 0,
+            background: 'transparent',
+            color: 'var(--muted)',
+            cursor: 'pointer',
+            display: 'grid',
+            placeItems: 'center',
+            padding: 2,
+            borderRadius: 6,
+          }}
+        >
+          <PanelLeft size={18} />
+        </button>
         <SettingsIcon size={18} />
         <div data-ui="ST02" style={{ fontWeight: 700, flex: 1 }}>设置</div>
         <button data-ui="ST03" type="button" onClick={onClose} title="关闭" aria-label="关闭" style={{ border: 0, background: 'transparent', color: 'var(--muted)' }}><X size={18} /></button>
@@ -141,10 +146,43 @@ export default function SettingsPage() {
                   <div style={{ fontWeight: 650 }}>{a.email}</div>
                   <div style={{ fontSize: 11, color: 'var(--muted)' }}>{a.provider} · {a.sync_status || a.status}{a.group_name ? ` · ${a.group_name}` : ''}</div>
                 </div>
+                <select
+                  aria-label={`移动 ${a.email}`}
+                  value={a.group_id ?? ''}
+                  onChange={async (event) => {
+                    const groupId = event.target.value
+                    const result = await run('移动账号', () => api.updateAccount(a.id, groupId ? { group_id: groupId } : { clear_group: true }), '账号分组已更新', queryKeys.accounts)
+                    if (result.ok) {
+                      if ((a.group_id ?? null) !== (groupId || null)) {
+                        useMailStore.setState((state) => ({ ...state, selectedKey: null, selectedIds: [] }))
+                        await resetGroupMailQueries()
+                      }
+                      await qc.invalidateQueries({ queryKey: queryKeys.groups })
+                      await qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout })
+                      await qc.invalidateQueries({ queryKey: ['mail-core'] })
+                    }
+                  }}
+                  style={{ maxWidth: 120, height: 28, borderRadius: 7, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--text)' }}
+                >
+                  <option value="">不加入分组</option>
+                  {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                </select>
                 <button type="button" onClick={() => run('同步', () => api.syncAccount(a.id), '已排队同步', queryKeys.accounts)} style={{ height: 28, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)' }}>同步</button>
                 <button type="button" onClick={async () => {
                   if (!confirmAction(`删除账户 ${a.email}？`)) return
-                  await run('删除账户', () => api.deleteAccount(a.id), '已删除', queryKeys.accounts)
+                  const result = await run('删除账户', () => api.deleteAccount(a.id), '已删除', queryKeys.accounts)
+                  if (result.ok) {
+                    if (accounts.length === 1) {
+                      qc.setQueryData(queryKeys.stats, { totalUnread: 0, byAccount: new Map<string, number | null>() })
+                    } else {
+                      await qc.resetQueries({ queryKey: queryKeys.stats })
+                    }
+                    await Promise.all([
+                      qc.invalidateQueries({ queryKey: queryKeys.groups }),
+                      qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout }),
+                      resetMailListQueries(),
+                    ])
+                  }
                 }} style={{ height: 28, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--red)' }}>删除</button>
               </div>
             ))}
@@ -229,6 +267,8 @@ export default function SettingsPage() {
                 setStatus('账户已添加')
                 setEmail(''); setCredJson(''); setImapHost(''); setImapPort('993'); setImapUseSsl(true)
                 await qc.invalidateQueries({ queryKey: queryKeys.accounts })
+                await qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout })
+                await qc.resetQueries({ queryKey: queryKeys.stats })
               } catch (err) {
                 setStatus(errorMessage(err, '添加账户失败'))
               }
@@ -240,8 +280,16 @@ export default function SettingsPage() {
               <div key={g.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0' }}>
                 <span style={{ flex: 1 }}>{g.name}（{g.account_count || 0}）</span>
                 <button type="button" onClick={async () => {
-                  if (!confirmAction(`删除分组 ${g.name}？`)) return
-                  await run('删除分组', () => api.deleteGroup(g.id), '已删除', queryKeys.groups)
+                  if (!confirmAction(`删除分组 ${g.name}？账号和邮件会保留，并从该分组移出。`)) return
+                  const result = await run('删除分组', () => api.deleteGroup(g.id), '已删除', queryKeys.groups)
+                  if (result.ok) {
+                    useMailStore.setState((state) => state.view.type === 'group' && state.view.groupId === g.id
+                      ? { ...state, view: { type: 'allInbox' }, listFilter: 'all', search: '', selectedKey: null, selectedIds: [] }
+                      : { ...state, selectedKey: null, selectedIds: [] })
+                    await qc.invalidateQueries({ queryKey: queryKeys.accounts })
+                    await qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout })
+                    await qc.invalidateQueries({ queryKey: ['mail-core'] })
+                  }
                 }} style={{ height: 28, padding: '0 8px', borderRadius: 8, border: '1px solid var(--line)' }}>删除</button>
               </div>
             ))}
@@ -251,7 +299,12 @@ export default function SettingsPage() {
                 const name = groupName.trim()
                 if (!name) return
                 const res = await run('创建分组', () => api.createGroup({ name }), '分组已创建', queryKeys.groups)
-                if (res.ok) setGroupName('')
+                if (res.ok) {
+                  setGroupName('')
+                  await qc.invalidateQueries({ queryKey: queryKeys.accounts })
+                  await qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout })
+                  await qc.invalidateQueries({ queryKey: ['mail-core'] })
+                }
               }} style={{ height: 32, padding: '0 10px', borderRadius: 8, border: 0, background: 'var(--blue)', color: '#fff' }}>创建</button>
             </div>
             <button type="button" onClick={() => run('全量同步', () => api.syncAll(), (res) => `已排队 ${res?.count ?? 0} 个同步任务`, queryKeys.accounts)} style={{ marginTop: 16, height: 34, padding: '0 12px', borderRadius: 8, border: '1px solid var(--line)' }}>同步全部账户</button>

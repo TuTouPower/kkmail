@@ -14,7 +14,7 @@ from sqlalchemy import and_, cast, func, or_, select, String
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import FolderRole
-from mail_core.mail.storage.models import Account, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
+from mail_core.mail.storage.models import Account, AccountGroup, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,8 +167,8 @@ def list_folder_stats_for_account(session: Session, account_id: uuid.UUID) -> li
                 "name": folder.name,
                 "role": folder.role,
                 "parent_remote_id": folder.parent_remote_id,
-                "total_count": stats.total_count if stats else 0,
-                "unread_count": stats.unread_count if stats else 0,
+                "total_count": stats.total_count if stats else None,
+                "unread_count": stats.unread_count if stats else None,
             }
         )
     return out
@@ -249,12 +249,12 @@ def unified_inbox(
         folder = session.get(Folder, folder_id)
         if folder is None:
             raise LookupError(f"folder {folder_id} not found")
-        if account_ids and folder.account_id not in account_ids:
+        if account_ids is not None and folder.account_id not in account_ids:
             raise LookupError(f"folder {folder_id} does not belong to specified account")
         folder_ids = [folder.id]
     else:
         stmt = select(Folder.id).where(Folder.role == folder_role)
-        if account_ids:
+        if account_ids is not None:
             stmt = stmt.where(Folder.account_id.in_(account_ids))
         folder_ids = list(session.scalars(stmt).all())
     return list_messages_keyset(
@@ -360,38 +360,74 @@ def account_emails_by_id(session: Session, account_ids: list[uuid.UUID]) -> dict
 
 class AccountInboxStatsOut(BaseModel):
     account_id: uuid.UUID
-    unread_count: int
-    total_count: int
+    unread_count: int | None
+    total_count: int | None
 
 
 class GlobalStatsOut(BaseModel):
-    total_unread: int
+    total_unread: int | None
     accounts: list[AccountInboxStatsOut]
 
 
 def query_global_inbox_stats(session: Session) -> GlobalStatsOut:
-    """Return aggregated inbox stats across all accounts."""
+    """Return complete inbox stats, keeping accounts with missing folder stats unknown."""
     stmt = (
         select(
-            Folder.account_id,
-            func.coalesce(func.sum(FolderStats.unread_count), 0).label("unread_count"),
-            func.coalesce(func.sum(FolderStats.total_count), 0).label("total_count"),
+            Account.id,
+            func.count(Folder.id).label("folder_count"),
+            func.count(FolderStats.folder_id).label("stats_count"),
+            func.sum(FolderStats.unread_count).label("unread_count"),
+            func.sum(FolderStats.total_count).label("total_count"),
         )
-        .select_from(FolderStats)
-        .join(Folder, FolderStats.folder_id == Folder.id)
-        .where(Folder.role == FolderRole.INBOX.value)
-        .group_by(Folder.account_id)
-        .order_by(Folder.account_id.asc())
+        .select_from(Account)
+        .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == FolderRole.INBOX.value))
+        .outerjoin(FolderStats, FolderStats.folder_id == Folder.id)
+        .group_by(Account.id)
+        .order_by(Account.id.asc())
     )
     rows = session.execute(stmt).all()
     accounts = [
         AccountInboxStatsOut(
             account_id=r[0],
-            unread_count=int(r[1]),
-            total_count=int(r[2]),
+            unread_count=int(r[3]) if r[1] > 0 and r[1] == r[2] else None,
+            total_count=int(r[4]) if r[1] > 0 and r[1] == r[2] else None,
         )
         for r in rows
     ]
-    total_unread = sum(a.unread_count for a in accounts)
+    total_unread = None if any(account.unread_count is None for account in accounts) else sum(
+        account.unread_count or 0 for account in accounts
+    )
+    return GlobalStatsOut(total_unread=total_unread, accounts=accounts)
+
+
+def query_group_inbox_stats(session: Session, group_id: uuid.UUID, *, folder_role: str = "inbox") -> GlobalStatsOut:
+    """Return role counts for every current member, including unknown counts."""
+    if session.get(AccountGroup, group_id) is None:
+        raise LookupError("group not found")
+    stmt = (
+        select(
+            Account.id,
+            func.count(Folder.id).label("folder_count"),
+            func.count(FolderStats.folder_id).label("stats_count"),
+            func.sum(FolderStats.unread_count).label("unread_count"),
+            func.sum(FolderStats.total_count).label("total_count"),
+        )
+        .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == folder_role))
+        .outerjoin(FolderStats, FolderStats.folder_id == Folder.id)
+        .where(Account.group_id == group_id)
+        .group_by(Account.id)
+        .order_by(Account.id.asc())
+    )
+    accounts = [
+        AccountInboxStatsOut(
+            account_id=row[0],
+            unread_count=int(row[3]) if row[1] > 0 and row[1] == row[2] else None,
+            total_count=int(row[4]) if row[1] > 0 and row[1] == row[2] else None,
+        )
+        for row in session.execute(stmt).all()
+    ]
+    total_unread = None if any(account.unread_count is None for account in accounts) else sum(
+        account.unread_count or 0 for account in accounts
+    )
     return GlobalStatsOut(total_unread=total_unread, accounts=accounts)
 

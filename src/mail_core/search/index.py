@@ -47,13 +47,20 @@ _MATCH = """
 """
 
 
-def _filters(query: str, account_ids: list[uuid.UUID] | None) -> tuple[str, dict]:
+def _filters(query: str, account_ids: list[uuid.UUID] | None, folder_id: uuid.UUID | None) -> tuple[str, dict]:
     params: dict = {"q": query}
-    account_filter = ""
-    if account_ids:
-        account_filter = "AND account_id = ANY(:account_ids)"
+    filters: list[str] = []
+    if account_ids is not None:
+        filters.append("account_id = ANY(:account_ids)")
         params["account_ids"] = account_ids
-    return account_filter, params
+    if folder_id is not None:
+        filters.append(
+            "EXISTS (SELECT 1 FROM message_locations ml "
+            "WHERE ml.message_id = message_search.message_id AND ml.folder_id = :folder_id)"
+        )
+        params["folder_id"] = folder_id
+    where_clause = "AND " + " AND ".join(filters) if filters else ""
+    return where_clause, params
 
 
 def search_messages(
@@ -61,6 +68,7 @@ def search_messages(
     *,
     account_ids: list[uuid.UUID] | None,
     query: str,
+    folder_id: uuid.UUID | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[uuid.UUID]:
@@ -72,7 +80,7 @@ def search_messages(
 
     if not query.strip():
         return []
-    account_filter, params = _filters(query, account_ids)
+    scope_filter, params = _filters(query, account_ids, folder_id)
     params.update(limit=limit, offset=max(0, offset))
     rows = session.execute(
         sql_text(
@@ -80,7 +88,7 @@ def search_messages(
             SELECT message_id
             FROM message_search
             WHERE {_MATCH}
-            {account_filter}
+            {scope_filter}
             ORDER BY ts_rank(document, plainto_tsquery('simple', :q)) DESC, updated_at DESC, message_id DESC
             LIMIT :limit OFFSET :offset
             """
@@ -90,15 +98,21 @@ def search_messages(
     return [r[0] for r in rows]
 
 
-def count_messages(session: Session, *, account_ids: list[uuid.UUID] | None, query: str) -> int:
+def count_messages(
+    session: Session,
+    *,
+    account_ids: list[uuid.UUID] | None,
+    query: str,
+    folder_id: uuid.UUID | None = None,
+) -> int:
     from sqlalchemy import text as sql_text
 
     if not query.strip():
         return 0
-    account_filter, params = _filters(query, account_ids)
+    scope_filter, params = _filters(query, account_ids, folder_id)
     return int(
         session.execute(
-            sql_text(f"SELECT count(*) FROM message_search WHERE {_MATCH} {account_filter}"),
+            sql_text(f"SELECT count(*) FROM message_search WHERE {_MATCH} {scope_filter}"),
             params,
         ).scalar()
         or 0

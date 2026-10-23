@@ -1,9 +1,9 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, ExternalLink, PanelLeft } from 'lucide-react'
 import { api, apiRequest } from '../api/client'
 import { accountScope, fetchAccounts, flagOptimistic, markReadOptimistic, setCachedReadState, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
-import { fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
+import { fetchGlobalStats, fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
 import { hasMailId, mailKey } from '../lib/mailKey'
 import { MOBILE_MAX_WIDTH, useIsWide } from '../lib/viewport'
@@ -12,7 +12,9 @@ import { confirmAction, errorMessage } from '../lib/actions'
 import { compareMailDates } from '../lib/mailDate'
 import { displayName } from '../lib/displayName'
 import { formatListDate } from '../lib/listDate'
+import { previewText } from '../lib/previewText'
 import { useMailStore } from '../store/mailStore'
+import { getDesktopPlatform } from '../lib/desktopShell'
 
 /** Server-side search kicks in from this many characters. */
 export const SEARCH_MIN_CHARS = 2
@@ -34,7 +36,12 @@ function isSearchTrigger(q: string): boolean {
   return trimmed.length >= SEARCH_MIN_CHARS
 }
 
-const MessageList = memo(function MessageList() {
+function sumKnownCounts(counts: Array<number | null>): number | null {
+  if (!counts.length || counts.some((count) => count === null)) return null
+  return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0)
+}
+
+const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarToggleRef?: Ref<HTMLButtonElement> }) {
   const view = useMailStore((s) => s.view)
   const selectedKey = useMailStore((s) => s.selectedKey)
   const setSelectedKey = useMailStore((s) => s.setSelectedKey)
@@ -46,9 +53,11 @@ const MessageList = memo(function MessageList() {
   const sortNewest = useMailStore((s) => s.sortNewest)
   const toggleSort = useMailStore((s) => s.toggleSort)
   const sidebarCollapsed = useMailStore((s) => s.sidebarCollapsed)
+  const mobileSidebarOpen = useMailStore((s) => s.mobileSidebarOpen)
   const toggleSidebar = useMailStore((s) => s.toggleSidebar)
   const toggleMobileSidebar = useMailStore((s) => s.toggleMobileSidebar)
   const wide = useIsWide()
+  const isMacDesktop = getDesktopPlatform() === 'darwin'
   const selectedIds = useMailStore((s) => s.selectedIds)
   const toggleSelected = useMailStore((s) => s.toggleSelected)
   const selectAll = useMailStore((s) => s.selectAll)
@@ -86,7 +95,8 @@ const MessageList = memo(function MessageList() {
   const accounts = accountsQuery.data || []
 
   const accountId = view.type === 'account' ? view.accountId : (view.type === 'favorite' ? view.accountId : (view.type === 'folder' ? view.accountId : undefined))
-  const favoriteCategory = view.type === 'favorite' ? view.category : undefined
+  const groupId = view.type === 'group' ? view.groupId : undefined
+  const favoriteCategory = view.type === 'favorite' || view.type === 'group' ? view.category : undefined
   const folderId = view.type === 'folder' ? view.folderId : undefined
   const folderRole =
     view.type === 'folder'
@@ -121,11 +131,12 @@ const MessageList = memo(function MessageList() {
   const sortOrder = sortNewest ? 'desc' : 'asc'
 
   const inboxInfiniteQuery = useInfiniteQuery<InboxPageData, Error, { pages: InboxPageData[]; pageParams: (string | null)[] }, readonly unknown[], string | null>({
-    queryKey: queryKeys.inbox(listScope, effectiveFilter, folderRole, sortOrder, folderId),
+    queryKey: queryKeys.inbox(listScope, effectiveFilter, folderRole, sortOrder, folderId, groupId),
     queryFn: async ({ pageParam, signal }) => {
       const page = await fetchMailCoreInbox({
         limit: LIST_LIMIT,
         accountId,
+        groupId,
         folder_id: folderId,
         is_read: is_unread,
         is_flagged: is_flagged,
@@ -143,13 +154,12 @@ const MessageList = memo(function MessageList() {
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? null,
     enabled: !searching,
     retry: false,
-    placeholderData: keepPreviousData,
   })
 
   const searchInfiniteQuery = useInfiniteQuery<SearchPageData, Error, { pages: SearchPageData[]; pageParams: number[] }, readonly unknown[], number>({
-    queryKey: queryKeys.search(term, listScope),
+    queryKey: queryKeys.search(term, listScope, groupId, folderId),
     queryFn: async ({ pageParam, signal }) => {
-      const page = await fetchMailCoreSearch(term, { accountId, limit: LIST_LIMIT, offset: pageParam, signal })
+      const page = await fetchMailCoreSearch(term, { accountId, groupId, folderId, limit: LIST_LIMIT, offset: pageParam, signal })
       return {
         items: page.items.filter(hasMailId).map(mailCoreToMailItem),
         next_offset: page.next_offset ?? null,
@@ -160,12 +170,18 @@ const MessageList = memo(function MessageList() {
     getNextPageParam: (lastPage) => lastPage.next_offset ?? null,
     enabled: searching,
     retry: false,
-    placeholderData: keepPreviousData,
   })
 
   const folderStatsQuery = useQuery({
-    queryKey: ['mail-core', 'folder-stats', accountId ?? 'all', folderRole, folderId ?? ''],
-    queryFn: async () => {
+    queryKey: ['mail-core', 'folder-stats', groupId ?? accountId ?? 'all', folderRole, folderId ?? ''],
+    queryFn: async ({ signal }) => {
+      if (groupId) {
+        const stats = await fetchGlobalStats(signal, groupId, folderRole)
+        return {
+          total: stats.accounts.length ? sumKnownCounts(stats.accounts.map((item) => item.total_count)) : 0,
+          unread: stats.accounts.length ? sumKnownCounts(stats.accounts.map((item) => item.unread_count)) : 0,
+        }
+      }
       if (accountId) {
         const stats = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`).catch(() => null)
         if (!stats) return null
@@ -173,8 +189,8 @@ const MessageList = memo(function MessageList() {
           ? stats.folders.find((f: AccountFolderStatsItemOut) => String(f.folder_id) === folderId)
           : stats.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
         return {
-          total: targetFolder?.total_count ?? 0,
-          unread: targetFolder?.unread_count ?? 0,
+          total: targetFolder ? targetFolder.total_count : 0,
+          unread: targetFolder ? targetFolder.unread_count : 0,
         }
       }
       const statsList = await Promise.all(
@@ -185,15 +201,21 @@ const MessageList = memo(function MessageList() {
       if (statsList.some((stats) => stats === null)) return null
       let total = 0
       let unread = 0
+      let totalUnknown = false
+      let unreadUnknown = false
       for (const s of statsList) {
         if (!s) return null
         const targetFolder = s.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
-        total += targetFolder?.total_count ?? 0
-        unread += targetFolder?.unread_count ?? 0
+        const accountTotal = targetFolder ? targetFolder.total_count : 0
+        const accountUnread = targetFolder ? targetFolder.unread_count : 0
+        if (accountTotal === null) totalUnknown = true
+        else total += accountTotal
+        if (accountUnread === null) unreadUnknown = true
+        else unread += accountUnread
       }
-      return { total, unread }
+      return { total: totalUnknown ? null : total, unread: unreadUnknown ? null : unread }
     },
-    enabled: accounts.length > 0 && !searching,
+    enabled: (Boolean(groupId) || Boolean(accountId) || accounts.length > 0) && !searching,
   })
 
   const active = searching ? searchInfiniteQuery : inboxInfiniteQuery
@@ -216,12 +238,19 @@ const MessageList = memo(function MessageList() {
   const loadingMore = Boolean(searching ? searchInfiniteQuery.isFetchingNextPage : inboxInfiniteQuery.isFetchingNextPage)
   const totalCount = searching ? (searchInfiniteQuery.data?.pages?.[0]?.total ?? null) : (folderStatsQuery.data?.total ?? null)
   const serverUnread = searching ? null : (folderStatsQuery.data?.unread ?? null)
-  const unreadCount = Math.max(serverUnread ?? 0, raw.filter((m) => !m.is_read).length)
-  const statsUnknown = !searching && (
+  const totalUnknown = !searching && (
     folderStatsQuery.isError ||
     folderStatsQuery.data === null ||
-    folderStatsQuery.data === undefined
+    folderStatsQuery.data === undefined ||
+    folderStatsQuery.data.total === null
   )
+  const unreadUnknown = !searching && (
+    folderStatsQuery.isError ||
+    folderStatsQuery.data === null ||
+    folderStatsQuery.data === undefined ||
+    folderStatsQuery.data.unread === null
+  )
+  const unreadCount = unreadUnknown ? null : Math.max(serverUnread ?? 0, raw.filter((m) => !m.is_read).length)
 
   const [actionStatus, setActionStatus] = useState('')
   const sentinelRef = useRef<HTMLDivElement | null>(null)
@@ -284,7 +313,7 @@ const MessageList = memo(function MessageList() {
     : (totalCount !== null ? Math.max(totalCount, visible.length) : visible.length)
   const countLabel = loading
     ? '正在拉取邮件…'
-    : `${statsUnknown ? '—' : displayTotal} 封邮件 · ${statsUnknown ? '—' : unreadCount} 封未读`
+    : `${(isUnreadView ? unreadUnknown : totalUnknown) ? '—' : displayTotal ?? '—'} 封邮件 · ${unreadUnknown ? '—' : unreadCount} 封未读`
   const selecting = selectedIds.length > 0
 
   const title = listTitle(view, listFilter)
@@ -355,6 +384,7 @@ const MessageList = memo(function MessageList() {
     try {
       await postMailCoreMarkAllRead({
         accountId,
+        groupId,
         folder_role: folderId ? undefined : folderRole,
         folder_id: folderId,
         is_flagged: is_flagged,
@@ -426,13 +456,16 @@ const MessageList = memo(function MessageList() {
       <div className="list-header">
         <div className="list-title-row">
           <div className="list-heading" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {(!wide || sidebarCollapsed) && (
+            {!isMacDesktop && (
               <button
+                ref={sidebarToggleRef}
                 data-ui="ML01"
+                data-testid="sidebar-toggle"
                 type="button"
                 className="list-primary-btn sidebar-expand-btn"
-                title={wide ? '展开侧边栏' : '打开导航'}
-                aria-label={wide ? '展开侧边栏' : '打开导航'}
+                title={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+                aria-label={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+                aria-expanded={wide ? !sidebarCollapsed : mobileSidebarOpen}
                 onClick={wide ? toggleSidebar : toggleMobileSidebar}
               >
                 <PanelLeft size={16} />
@@ -580,7 +613,7 @@ const MessageList = memo(function MessageList() {
                   </div>
                 </div>
                 <div data-ui="ML10" className="subject">{m.subject}</div>
-                <div data-ui="ML12" className="preview">{m.body_preview}</div>
+                <div data-ui="ML12" className="preview">{previewText(m.body_preview)}</div>
               </div>
             </article>
           )

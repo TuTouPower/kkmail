@@ -17,6 +17,7 @@ import type {
   MeOut,
   PasswordChangeIn,
   SettingsOut,
+  SidebarLayoutSnapshotOut,
   SyncAllResponse,
 } from './schemaTypes'
 
@@ -279,6 +280,13 @@ export const api = {
     return postJson<AccountSummary>('/api/accounts', payload)
   },
 
+  updateAccount(id: string, payload: { group_id?: string; clear_group?: boolean }) {
+    return apiRequest<AccountSummary>(`/api/accounts/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
+  },
+
   deleteAccount(id: string) {
     return apiRequest<unknown>(`/api/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
@@ -295,8 +303,33 @@ export const api = {
     return postJson<GroupOut>('/api/groups', payload)
   },
 
+  renameGroup(id: string, name: string) {
+    return apiRequest<GroupOut>(`/api/groups/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+  },
+
+  getSidebarLayout() {
+    return apiRequest<SidebarLayoutSnapshotOut>('/api/sidebar/layout')
+  },
+
   deleteGroup(id: string) {
     return apiRequest<unknown>(`/api/groups/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  saveSidebarLayout(payload: {
+    expected_revision: string
+    group_ids: string[]
+    master_account_ids: string[]
+    ungrouped_account_ids: string[]
+    group_account_ids: Record<string, string[]>
+  }) {
+    return apiRequest<unknown>('/api/sidebar/layout', { method: 'PUT', body: JSON.stringify(payload) })
+  },
+
+  resetSidebarAccountOrder(expectedRevision: string) {
+    return apiRequest<unknown>('/api/sidebar/layout/default-order', {
+      method: 'POST',
+      body: JSON.stringify({ expected_revision: expectedRevision }),
+    })
   },
 
   getSettings() {
