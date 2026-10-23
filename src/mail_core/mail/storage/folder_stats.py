@@ -26,16 +26,17 @@ def recompute_folder_stats(session: Session, folder_id: uuid.UUID) -> FolderStat
                 raise
     else:
         session.flush()
-    total, unread = session.execute(
+    total, unread, unknown = session.execute(
         select(
             func.count(),
             func.count().filter(Message.is_read.is_(False)),
+            func.count().filter(Message.is_read.is_(None)),
         )
         .select_from(MessageLocation)
         .join(Message, Message.id == MessageLocation.message_id)
         .where(MessageLocation.folder_id == folder_id)
     ).one()
     stats.total_count = int(total or 0)
-    stats.unread_count = int(unread or 0)
+    stats.unread_count = None if unknown else int(unread or 0)
     stats.updated_at = datetime.now(timezone.utc)
     return stats

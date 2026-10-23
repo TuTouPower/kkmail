@@ -18,9 +18,9 @@ export interface MailItem {
   from: string
   to?: string
   date?: string | null
-  is_read: boolean
-  is_flagged: boolean
-  has_attachments: boolean
+  is_read: boolean | null
+  is_flagged: boolean | null
+  has_attachments: boolean | null
   /** Plain display text: provider snippet or read-only body fallback. */
   body_preview?: string
   folder?: string
@@ -41,7 +41,7 @@ export interface MailDetail {
   parse_error?: string | null
   is_archived?: boolean | null
   attachments?: Array<{ id?: string; name?: string; size?: number; contentType?: string }>
-  has_attachments?: boolean
+  has_attachments?: boolean | null
 }
 
 /** Lists stay fresh for 5 minutes; SSE events invalidate earlier. */
@@ -249,20 +249,21 @@ export function setCachedReadState(keys: Iterable<string>, isRead: boolean) {
 
 /** Set read status of messages with an optimistic cache update; reverts failures. */
 export async function setReadOptimistic(items: MailItem[], nextRead: boolean) {
-  const targets = items.filter((m) => m.id && m.is_read !== nextRead)
+  const targets = items.filter((m) => m.id).map((item) => {
+    const cached = findCachedMail(mailKey(item))
+    return cached ? { ...item, is_read: cached.is_read } : item
+  }).filter((m) => m.is_read !== nextRead)
   if (!targets.length) return
   setCachedReadState(targets.map(mailKey), nextRead)
   const results = await Promise.allSettled(targets.map((m) => postMailCoreMessageRead(m.id, nextRead)))
-  const failedKeys: string[] = []
   const failed: string[] = []
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
-      failedKeys.push(mailKey(targets[i]))
+      patchCachedMail([mailKey(targets[i])], { is_read: targets[i].is_read })
       const reason = r.reason as { message?: unknown } | undefined
       failed.push(typeof reason?.message === 'string' ? reason.message : String(r.reason))
     }
   })
-  if (failedKeys.length) setCachedReadState(failedKeys, !nextRead)
   if (failed.length) throw new Error(failed.join('；'))
 }
 
@@ -275,7 +276,7 @@ export async function markReadOptimistic(items: MailItem[]) {
 export async function flagOptimistic(item: MailItem, nextFlagged: boolean): Promise<void> {
   const key = mailKey(item)
   const cached = findCachedMail(key)
-  const priorFlagged = cached?.is_flagged ?? item.is_flagged
+  const priorFlagged = cached ? cached.is_flagged : item.is_flagged
   patchCachedMail([key], { is_flagged: nextFlagged })
   try {
     await postMailCoreMessageFlag(item.id, nextFlagged)

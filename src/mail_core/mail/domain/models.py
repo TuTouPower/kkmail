@@ -36,8 +36,8 @@ class MessageMetadata:
     from_address: str
     from_name: str | None
     sort_time: datetime | None
-    is_read: bool
-    has_attachments: bool
+    is_read: bool | None
+    has_attachments: bool | None
     internet_message_id: str | None = None
     snippet: str | None = None
     provider_thread_key: str | None = None

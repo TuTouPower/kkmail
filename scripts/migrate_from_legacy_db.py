@@ -170,7 +170,7 @@ def migrate_retained_messages(
             cc_addresses=_legacy_addresses(legacy_msg["cc"]),
             sort_time=_legacy_received_time(legacy_msg["id_mode"], legacy_msg["received_at"]),
             is_read=bool(legacy_msg["is_read"]),
-            is_flagged=False,
+            is_flagged=None,
             has_attachments=bool(legacy_msg["has_attachments"]),
             snippet=legacy_msg["body_preview"],
         )

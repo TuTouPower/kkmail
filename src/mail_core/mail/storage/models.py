@@ -159,9 +159,9 @@ class Message(Base):
     to_addresses: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     cc_addresses: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     sort_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
-    is_flagged: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
-    has_attachments: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    is_read: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    is_flagged: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    has_attachments: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     snippet: Mapped[Optional[str]] = mapped_column(Text)
     size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -307,7 +307,7 @@ class FolderStats(Base):
 
     folder_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="CASCADE"), primary_key=True)
     total_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    unread_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    unread_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
