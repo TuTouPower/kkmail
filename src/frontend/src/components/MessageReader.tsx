@@ -213,7 +213,7 @@ const MessageReader = memo(function MessageReader() {
                   <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)', overflowWrap: 'anywhere' }}>{detail.parse_error}</p>
                 </div>
               )}
-              {!body && !detail?.parse_error ? (
+              {!body && !detail?.parse_error && detail?.is_archived === false ? (
             <div
               className="empty-body-placeholder"
               style={{

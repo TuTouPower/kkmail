@@ -196,7 +196,7 @@ beforeEach(() => {
         from: 'Empty <empty@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T14:00:00Z', is_read: true,
         is_flagged: false, has_attachments: false, snippet: null,
         body: '', body_type: 'empty',
-        parse_error: null, attachments: [],
+        parse_error: null, is_archived: true, attachments: [],
       })
     }
     if (u === '/api/mail/messages/m-unarchived') {
@@ -273,8 +273,30 @@ describe('<MessageReader />', () => {
     expect(container.querySelector('.empty-body-placeholder')).toBeNull()
   })
 
-  it.each([true, false, null])('hides HTML previews for empty bodies (archived=%s)', async (archived) => {
+  // p035 replaces the previous assertion that treated archived and unknown empty bodies as pending sync.
+  it('shows the empty-body placeholder only while an email is unarchived', async () => {
     queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [{ ...unarchivedItem, body_preview: '<html><head><meta charset="utf-8"></head><body>Hidden preview</body></html>' }])
+    useMailStore.setState({ selectedKey: 'm-unarchived' })
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith('/sync-body')) return new Promise<Response>(() => {})
+      const response = await originalFetch(url, init)
+      if (String(url) !== '/api/mail/messages/m-unarchived') return response
+      return json({ ...await response.json(), is_archived: false })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => {
+      expect(container.querySelector('.empty-body-placeholder')).not.toBeNull()
+      expect(container.textContent).toContain('正在优先同步邮件正文…')
+    })
+    expect(container.textContent).not.toContain('Hidden preview')
+    expect(container.querySelector('.email-body')).toBeNull()
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/sync-body'))).toHaveLength(1)
+  })
+
+  it.each([true, null])('keeps empty archived-state bodies blank (archived=%s)', async (archived) => {
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [{ ...unarchivedItem, body_preview: '<html><body>Hidden preview</body></html>' }])
     useMailStore.setState({ selectedKey: 'm-unarchived' })
     const originalFetch = globalThis.fetch
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -285,13 +307,14 @@ describe('<MessageReader />', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     const { container } = await render(<MessageReader />)
-    await waitFor(() => {
-      expect(container.querySelector('.empty-body-placeholder')).not.toBeNull()
-      expect(container.textContent).toContain(archived === false ? '正在优先同步邮件正文…' : '邮件正文尚未完成同步')
-    })
+    await waitFor(() => expect(container.querySelector('[data-ui="MR07"]')).not.toBeNull())
+    await waitFor(() => expect(container.textContent).toContain('Unarchived Email'))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/mail/messages/m-unarchived')).toBe(true))
+    expect(container.querySelector('.empty-body-placeholder')).toBeNull()
+    expect(container.textContent).not.toContain('邮件正文尚未完成同步')
     expect(container.textContent).not.toContain('Hidden preview')
     expect(container.querySelector('.email-body')).toBeNull()
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/sync-body'))).toHaveLength(archived === false ? 1 : 0)
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/sync-body'))).toHaveLength(0)
   })
 
   // t048 已修复：原 t026 断言 parse_error 与正文互斥的旧语义已由 t048 允许告警与可读正文并存的新契约替代，移除旧互斥测试
@@ -545,14 +568,15 @@ describe('<MessageReader />', () => {
     })
   })
 
-  it('displays empty body placeholder and not parse error for legitimate empty email (AC-007)', async () => {
+  // p035 deletes the old false-positive contract that showed a sync warning for a completed empty message.
+  it('keeps a legitimately empty archived email body blank', async () => {
     useMailStore.setState({ selectedKey: 'm-empty' })
     const { container } = await render(<MessageReader />)
 
-    await waitFor(() => {
-      expect(container.textContent).toContain('邮件正文尚未完成同步')
-    })
-    expect(container.textContent).not.toContain('或内容为空')
+    await waitFor(() => expect(container.querySelector('[data-ui="MR07"]')).not.toBeNull())
+    await waitFor(() => expect(container.textContent).toContain('Legitimate Empty Email'))
+    expect(container.querySelector('.empty-body-placeholder')).toBeNull()
+    expect(container.textContent).not.toContain('邮件正文尚未完成同步')
     expect(container.textContent).not.toContain('邮件解析失败')
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
