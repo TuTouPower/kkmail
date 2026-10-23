@@ -43,6 +43,15 @@
 - [x] AC-020：只有 Graph 模式的原始非空白 provider_message_id 作为 `Message.remote_id`；其他旧模式或缺失/空白 ID 的邮件保留内容并使用 null remote_id。null remote_id 不传入 provider fetch、reconcile 或 remote push。
 - [x] AC-021：Message.remote_id 可为空，迁移不改写已有远端 ID；存在 null 值时数据库降级明确失败，不合成远端 ID。
 - [x] AC-022：null remote_id 邮件的 read/flag 可本地更新且不创建 remote operation；trash 与 sync-body 返回 409，不调用 provider。
+- [x] AC-023：服务商未提供 read/flag/attachment 时，新邮件状态持久化为 null，API/前端保留未知；未知更新不覆盖已知状态，用户显式操作仍可设置布尔值。
+- [x] AC-024：未知读状态不渲染未读标记，也不因打开邮件自动标已读；乐观更新失败恢复原状态，包括 null。
+- [x] AC-025：文件夹包含未知读状态时未读数为 null；账号、分组与全局聚合传播未知，不展示部分和；可知总数仍准确。
+- [x] AC-026：状态迁移不改写已有 true/false；旧 SQLite 无 flag 列时导入 null，已有 read/attachment 原值保留。降级遇到状态或未读统计 null 时拒绝，不补 false/0。
+- [x] AC-027：Graph 部分内容 delta 仅应用实际返回字段；明确空主题、空摘要、空收件人数组可清空旧值，缺省字段保留原值。
+- [x] AC-028：同页同封邮件的 partial upsert 与 flag patch 按响应顺序合并，后续提供字段覆盖先前同字段；delete 丢弃此前 patch，不破坏本地未收敛状态意图保护。
+- [x] AC-029：Gmail metadata hydrate 必须返回请求 ID、列表 labelIds 与列表 payload.headers；无 id、id 不匹配、id-only 或 GET 异常均不得返回成功 metadata/delta 页，不用 History stub 回退。
+- [x] AC-030：Gmail metadata projection 未返回 snippet 时保留已有服务商摘要；新邮件保持空，列表展示 fallback 不写回源字段。
+- [x] AC-031：带 HTML body_preview 的邮件详情 body 为空时不将摘要渲染成正文；加载、详情错误、解析失败和空正文互斥渲染，已有正文按 html/text 分流。
 
 ### 可测试性声明
 
@@ -52,14 +61,20 @@
 
 - 来源：`docs/blueprint/decisions.md` (IMAP 安全阻断删除决策)；task t037 对旧 SQLite 数据迁移来源、身份与未知归档状态的核实见 [`docs/tasks/t037_legacy_migration_fidelity/spec.md`](../tasks/t037_legacy_migration_fidelity/spec.md)。
 
+- 本轮来源：t041/p024（未知状态）、t042/p025（部分字段）、t043/p022（正文摘要隔离闭环）；新增 AC 已经定向验证与审查；最终 PostgreSQL 全量结果由各 task 总账补入。
+
 ### 有意不测
 
 - 真实外部三方邮箱的持续长时间在线同步（使用 Stub/Memory Provider 隔离断网与配额风险）。
 
 ### 测试策略
 
+- 未知状态与部分更新：`tests/mail_core/test_unknown_mail_status.py`、`test_partial_metadata_fidelity.py`；前端 `MessageList.test.tsx`、`MessageReader.test.tsx` 与查询缓存回归。
+
 - 单元测试：`tests/mail_core/test_gmail_graph_contracts.py`、`test_delta_flag_patch.py`、`test_metadata_apply.py`、`test_archive_mime_parser.py`、`test_flag_convergence.py`。
+
 - 契约测试：`test_blob_crypto_gc.py` 验证 GC 与附件引用计数。
+
 - 旧库迁移：`tests/mail_core/test_legacy_migration.py`、`test_migration_validation.py`、Message detail/mutation/provider-boundary tests。
 
 ### 未知契约清单

@@ -105,6 +105,18 @@
     - 文件夹统计计算（`recompute_folder_stats`）在执行底层 SQL 聚合前必须确保 session 状态已 flush 至数据库事务，消除在 `autoflush=False` 下读到陈旧内存数据的时序缺陷。
 4. **未读数未知语义**：
     - 目标账号任一 inbox FolderStats 行缺失时，账号未读数、总数及包含该账号的聚合返回 `null`；分组统计对缺失行同样返回未知；前端使用 `-` 显示未知，禁止把部分和或缺失行按零呈现。
+    - 文件夹包含 `is_read: null` 邮件时，`FolderStats.unread_count` 返回 `null`；账号、分组和全局聚合传播该未知值，禁止 SQL `SUM` 忽略 null 后返回部分和。已知邮件总数保持准确，不因读状态未知而丢失。
+5. **服务商字段缺省与显式清空**：
+    - `RemoteMessageMeta.supplied_fields` 为 `None` 时表示完整快照，为字段集合时表示部分 projection；Graph delta 与 Gmail metadata 必须标明实际返回字段。upsert 只更新集合内字段，不把缺省值当清空指令。
+    - 明确返回的空主题、空摘要、空收件人数组按服务商原值应用；缺省字段保持已有值。日期与状态解析得到 `None` 表示未知，不能清除已知日期/状态。
+    - 同页同封邮件的 partial upsert 与 flag patch 按响应顺序合并；后续显式字段覆盖先前同字段，未提供字段保留，delete 丢弃先前 patch。保持本地未收敛 read/flag 意图保护。
+    - Gmail metadata hydrate 必须返回相同 ID、列表类型 `labelIds` 和列表类型 `payload.headers`。不完整或 ID 不符的响应、GET 异常均中断该页，不把 History stub 当完整邮件成功应用；`metadata` projection 未返回 snippet 时保留已有摘要。
+6. **邮件状态未知值契约**：
+    - IMAP FETCH 缺少 `FLAGS` 时读/旗标保持未知；只有显式 `FLAGS ()` 才表示 false。系统旗标按完整 token 忽略大小写匹配，扩展旗标不得因包含 Seen/Flagged 字样变成系统状态。
+    - `Message.is_read`、`is_flagged`、`has_attachments` 为可空布尔值；服务商缺失时新记录存 `null`，不得由数据库 false 默认值补造事实。列表、详情、API 与前端类型保留 null。
+    - 只有 `is_read === false` 才展示未读样式、计入已知未读集合或触发打开邮件自动标已读；未知状态不参与这些隐式操作。用户显式设置状态可写入真实布尔值，乐观更新失败时恢复原值（包括 null）。旗标按钮以混合状态表达未知。
+    - 迁移只放宽列约束与移除默认值，不根据推测重写历史 true/false。旧库无 flag 列时导入 null，原有 read/attachment 列值照存；旧默认 false 与显式 false 无法区分，不伪造来源。
+    - 降级遇到未知状态或未知未读统计时拒绝执行，不为满足旧非空约束回填 false/0。
 
 ## 八、 桌面文本复制与日志安全规范
 
