@@ -514,6 +514,22 @@
             "conflicts_with": "",
             "note": "来源 p021；用户点击未同步邮件时按需置为最高优先级即时拉取正文，修复增量轮询导致的归档饥饿",
             "dir": "docs/archive/tasks/t034_on_demand_body_sync_and_archive_priority"
+        },
+        {
+            "tid": "t039",
+            "slug": "folder_stats_scope_truth",
+            "title": "保持邮件数量统计与查询范围一致",
+            "status": "done",
+            "branch": "t039_folder_stats_scope_truth",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "852c01372e17a4d858050eb2e9fed148870e5495",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源：审查确认缺少目标文件夹时合计全目录、部分账号失败时显示不完整的全局总数。",
+            "dir": "docs/archive/tasks/t039_folder_stats_scope_truth"
         }
     ]
 }

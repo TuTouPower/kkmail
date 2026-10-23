@@ -131,6 +131,43 @@ describe('<Sidebar />', () => {
     expect(totalBadge?.textContent?.trim()).toBe('-')
   })
 
+  it('keeps inbox unread unknown when fallback stats have no inbox role', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/groups')) return json({ groups: [] })
+      if (u.startsWith('/api/accounts')) {
+        return json({
+          accounts: [{ id: 'acc-1', email: 'a@x.test', status: 'active', account_type: 'imap', provider: 'imap' }],
+          total: 1, limit: 200, offset: 0, has_more: false,
+        })
+      }
+      if (u.startsWith('/api/mail/stats')) return json({ detail: 'global stats unavailable' }, 500)
+      if (u.startsWith('/api/mail/accounts/acc-1/folder-stats')) {
+        return json({
+          account_id: 'acc-1',
+          folders: [
+            { folder_id: 'sent-1', role: 'sent', unread_count: 4, total_count: 8 },
+            { folder_id: 'other-1', role: 'other', unread_count: 6, total_count: 10 },
+          ],
+        })
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => {
+      const totalBadge = container.querySelector('.favorite-category-inbox .category-btn .unread-badge')
+      expect(totalBadge?.textContent?.trim()).toBe('-')
+    })
+
+    const { click: fireClick } = await import('../test/render')
+    await fireClick(container.querySelector('.favorite-category-inbox .category-toggle') as HTMLElement)
+    await waitFor(() => {
+      const accountRow = container.querySelector('.favorite-category-inbox .favorite-account-row')
+      expect(accountRow?.querySelector('.unread-badge')?.textContent?.trim()).toBe('-')
+    })
+  })
+
   // 旧测试 "renders favorites tree with inbox, unread, and sent collapsible entries" 已由 t008 规范升级替代：
   // t008 AC-001 将收藏入口扩充为“所有收件”“所有未读”“已发邮件”“草稿箱”“废纸篓”“垃圾邮件”六大类目；
   // t008 AC-002 增加账号独立展开真实文件夹树能力。
