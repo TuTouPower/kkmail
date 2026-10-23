@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Mail, MailOpen, Trash2, Flag, ArrowLeft, RefreshCw } from 'lucide-react'
-import { findCachedMail, flagOptimistic, setReadOptimistic, queryClient, removeCachedMail } from '../api/queries'
+import { findCachedMail, flagOptimistic, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail } from '../api/queries'
 import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash, postMailCoreSyncMessageBody } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
@@ -27,7 +27,7 @@ const MessageReader = memo(function MessageReader() {
     (cb) =>
       queryClient.getQueryCache().subscribe((event) => {
         const qk = event?.query?.queryKey
-        if (Array.isArray(qk) && qk[0] === 'mail-core') cb()
+        if (isMailListQueryKey(qk)) cb()
       }),
     () => {
       const m = findCachedMail(selectedKey)
