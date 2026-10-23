@@ -53,8 +53,8 @@ def _apply_flag_patches(
     for change in changes:
         flags = dict(change.flags or {})
         if change.meta is not None:
-            # Prefer explicit flags dict; fall back to meta.is_read when providers only set meta.
-            if "is_read" not in flags:
+            # Fall back to the meta read value only when no explicit flag fields were supplied.
+            if not flags and change.meta.is_read is not None:
                 flags["is_read"] = change.meta.is_read
         if not flags:
             continue

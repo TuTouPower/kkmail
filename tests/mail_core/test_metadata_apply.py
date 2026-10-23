@@ -194,6 +194,100 @@ def test_metadata_apply_preserves_fts_body_and_skips_outbox_on_replay():
         assert after == before
 
 
+def test_metadata_apply_preserves_unknown_attachment_state_and_updates_explicit_values():
+    """Unknown provider attachment state must preserve the locally parsed MIME result."""
+    Session = get_session_factory()
+    now = datetime(2026, 10, 23, 0, 0, tzinfo=timezone.utc)
+    with Session() as session:
+        acc = Account(email=f"attachments-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        session.add(acc)
+        session.flush()
+        folder = Folder(account_id=acc.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        session.flush()
+        existing = [
+            Message(
+                account_id=acc.id,
+                remote_id=remote_id,
+                subject=remote_id,
+                from_address="sender@example.com",
+                sort_time=now,
+                has_attachments=has_attachments,
+            )
+            for remote_id, has_attachments in (
+                ("unknown-true", True),
+                ("unknown-false", False),
+                ("explicit-false", True),
+                ("explicit-true", False),
+            )
+        ]
+        session.add_all(existing)
+        session.flush()
+        lease = acquire_lease(session, account_id=acc.id, owner_id="metadata-test", ttl=timedelta(minutes=5))
+        page = MetadataPage(
+            items=[
+                RemoteMessageMeta(
+                    remote_id="unknown-true",
+                    subject="unknown-true",
+                    from_address="sender@example.com",
+                    from_name=None,
+                    sort_time=now,
+                    is_read=False,
+                    has_attachments=None,
+                ),
+                RemoteMessageMeta(
+                    remote_id="unknown-false",
+                    subject="unknown-false",
+                    from_address="sender@example.com",
+                    from_name=None,
+                    sort_time=now,
+                    is_read=False,
+                    has_attachments=None,
+                ),
+                RemoteMessageMeta(
+                    remote_id="explicit-false",
+                    subject="explicit-false",
+                    from_address="sender@example.com",
+                    from_name=None,
+                    sort_time=now,
+                    is_read=False,
+                    has_attachments=False,
+                ),
+                RemoteMessageMeta(
+                    remote_id="explicit-true",
+                    subject="explicit-true",
+                    from_address="sender@example.com",
+                    from_name=None,
+                    sort_time=now,
+                    is_read=False,
+                    has_attachments=True,
+                ),
+            ],
+            next_cursor=None,
+            exhausted=True,
+        )
+
+        apply_metadata_page(
+            session,
+            account_id=acc.id,
+            folder_id=folder.id,
+            fencing_token=lease.fencing_token,
+            page=page,
+        )
+        session.commit()
+
+        actual = {
+            message.remote_id: message.has_attachments
+            for message in session.scalars(select(Message).where(Message.account_id == acc.id))
+        }
+        assert actual == {
+            "unknown-true": True,
+            "unknown-false": False,
+            "explicit-false": False,
+            "explicit-true": True,
+        }
+
+
 def test_delta_apply_preserves_full_scan_complete_and_indexes():
     from mail_core.providers.base import DeltaChange, DeltaPage
     from mail_core.mail.storage.models import MessageSearch, SyncCheckpoint

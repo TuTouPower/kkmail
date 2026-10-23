@@ -45,7 +45,9 @@ def _minimal_meta(message: dict[str, Any]) -> RemoteMessageMeta:
         from_name=from_name,
         sort_time=sort_time,
         is_read="UNREAD" not in label_ids,
-        has_attachments=bool(message.get("has_attachments", False)),
+        has_attachments=(
+            bool(message["has_attachments"]) if message.get("has_attachments") is not None else None
+        ),
         is_flagged="STARRED" in label_ids,
         internet_message_id=headers.get("message-id") or message.get("internet_message_id"),
         snippet=message.get("snippet"),
