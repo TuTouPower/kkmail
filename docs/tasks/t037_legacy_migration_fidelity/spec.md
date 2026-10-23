@@ -30,6 +30,7 @@
 - [ ] AC-002：迁移后的 From、To、Cc 是标准解析所得独立地址；显式 text/html 类型不被正文标签覆盖。
 - [ ] AC-003：迁移时间仅来自确认的旧时间字段；缺失时保持未知；SQLite 行号不写入远端 UID。
 - [ ] AC-004：迁移自动化测试逐字段断言缺失值与合法来源值保真，并验证现有幂等行为。
+- [ ] AC-005：缺少 `MessageArchiveState` 的迁移邮件在 API 中以 `is_archived: null` 表示；前端保留未知值，不得默认成已归档。
 
 ### 可测试性声明
 
@@ -39,11 +40,12 @@
 
 <!-- /规范 -->
 
-全部 AC 可自动测试。
+全部 AC 可自动测试；AC-005 覆盖 legacy 空正文且无归档状态的详情与按需同步响应，以及前端转换。
 
 ## 上下文区
 
 - 来源：2026-10-23 静态审查 `scripts/migrate_from_legacy_db.py` 邮件字段映射；需求方明确要求不补造数据。
+- 同类问题复现：legacy importer 写空 `MessageBody` 但不写 `MessageArchiveState`；`api_get_message` 和前端 mapper 将缺状态改成 `is_archived=true`，导致未知被标成完整。最小复现 `.scratch/repro_missing_archive_state.py` 输出 `empty body + missing MessageArchiveState => is_archived=True`。
 
 ### 有意不测
 
@@ -51,7 +53,7 @@
 
 ### 测试策略
 
-- 测试映射函数及隔离目标 PostgreSQL migration fixture，覆盖缺失字段、多地址、显式类型、可用/缺失日期和本地行号，断言持久化值准确。
+- 测试映射函数及隔离目标 PostgreSQL migration fixture，覆盖缺失字段、多地址、显式类型、可用/缺失日期、本地行号与缺失归档状态，断言持久化值/API 语义准确。
 - 运行脚本迁移目标测试及相关后端门禁。
 
 ### 未知契约清单
