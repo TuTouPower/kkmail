@@ -11,7 +11,7 @@ verify_limit: "5"
 diff_anchor: ""
 depends_on: "t035"
 conflicts_with: ""
-note: "来源：审查确认 IMAP/Gmail/Graph 时间缺失时填当前时间，归档还会用 MIME Date 覆盖 received time。; 时间文件与 t035 provider 元数据实现重叠，必须先合 t035 再开始。"
+note: "来源：审查确认 IMAP/Gmail/Graph 时间缺失时填当前时间，归档还会用 MIME Date 覆盖 received time。; 时间文件与 t035 provider 元数据实现重叠，必须先合 t035 再开始。; rewound: effective=active -> backlog（main 记录为 backlog）; attempt1 diff_anchor 早于 t032 已合入的 migration 0016；按 first-parent 契约停止旧分支并从新 main 重开，完整补丁与复审报告已备份到 .scratch/t036_attempt1_backup。"
 ---
 
 # Task 过程总账
