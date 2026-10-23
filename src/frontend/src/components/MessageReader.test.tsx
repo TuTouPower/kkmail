@@ -287,7 +287,7 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
     await waitFor(() => {
       expect(container.querySelector('.empty-body-placeholder')).not.toBeNull()
-      expect(container.textContent).toContain(archived === false ? '正在优先同步邮件正文…' : '邮件正文尚未完成同步或内容为空')
+      expect(container.textContent).toContain(archived === false ? '正在优先同步邮件正文…' : '邮件正文尚未完成同步')
     })
     expect(container.textContent).not.toContain('Hidden preview')
     expect(container.querySelector('.email-body')).toBeNull()
@@ -371,7 +371,7 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
 
     await waitFor(() => {
-      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：未提供')
+      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：')
     })
     expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test')
     expect(container.querySelector('[data-ui="MR07"]')?.textContent).not.toContain('box@x.test')
@@ -397,7 +397,7 @@ describe('<MessageReader />', () => {
 
     act(() => useMailStore.setState({ selectedKey: 'm-2' }))
     await waitFor(() => {
-      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：未提供')
+      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：')
     })
     expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test')
     expect(container.querySelector('[data-ui="MR07"]')?.textContent).not.toContain('first@x.test')
@@ -530,8 +530,9 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
 
     await waitFor(() => {
-      expect(container.textContent).toContain('邮件正文尚未完成同步或内容为空')
+      expect(container.textContent).toContain('邮件正文尚未完成同步')
     })
+    expect(container.textContent).not.toContain('或内容为空')
     expect(container.textContent).not.toContain('邮件解析失败')
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
