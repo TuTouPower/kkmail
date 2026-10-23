@@ -210,16 +210,21 @@ def push_remote_operations(
             session.commit()
 
         caught_exc: Exception | None = None
-        try:
-            result = provider.apply_remote_operation(op_type, claimed_desired)  # network
-            ok = bool(result.success)
-            err = safe_provider_summary(result.error) if result.error else None
-        except Exception as exc:  # noqa: BLE001 — isolate per-op provider failures
-            err_summary = safe_provider_summary(exc)
-            log.exception("remote push op %s failed: %s", op_id, err_summary)
-            caught_exc = exc
+        remote_id = claimed_desired.get("remote_id")
+        if not isinstance(remote_id, str) or not remote_id.strip():
             ok = False
-            err = err_summary
+            err = "remote_id_missing"
+        else:
+            try:
+                result = provider.apply_remote_operation(op_type, claimed_desired)  # network
+                ok = bool(result.success)
+                err = safe_provider_summary(result.error) if result.error else None
+            except Exception as exc:  # noqa: BLE001 — isolate per-op provider failures
+                err_summary = safe_provider_summary(exc)
+                log.exception("remote push op %s failed: %s", op_id, err_summary)
+                caught_exc = exc
+                ok = False
+                err = err_summary
 
         with Session() as session:
             try:

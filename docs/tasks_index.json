@@ -4,22 +4,6 @@
     "workspace": ".",
     "tasks": [
         {
-            "tid": "t037",
-            "slug": "legacy_migration_fidelity",
-            "title": "保真迁移旧邮件字段与远端身份",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "t036",
-            "conflicts_with": "",
-            "note": "来源：审查确认旧库迁移补造主题发件人和时间、误判正文类型并伪造 UID。; 依赖 t036 的 sort_time nullable/API 语义后确定旧库时间映射，避免两个迁移语义并行变化。; 已扩展 AC-005：缺少 MessageArchiveState 时 is_archived 必须保持未知。",
-            "dir": "docs/tasks/t037_legacy_migration_fidelity"
-        },
-        {
             "tid": "t040",
             "slug": "mail_data_truth_docs",
             "title": "固化邮件来源数据与展示统计契约文档",

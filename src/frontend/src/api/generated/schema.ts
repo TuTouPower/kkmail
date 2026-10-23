@@ -814,11 +814,8 @@ export interface components {
             has_attachments: boolean;
             /** Id */
             id: string;
-            /**
-             * Is Archived
-             * @default true
-             */
-            is_archived: boolean;
+            /** Is Archived */
+            is_archived: boolean | null;
             /** Is Flagged */
             is_flagged: boolean;
             /** Is Read */
@@ -876,7 +873,7 @@ export interface components {
             /** Is Read */
             is_read?: boolean | null;
             /** Operation Id */
-            operation_id: string;
+            operation_id?: string | null;
             /**
              * Success
              * @default true

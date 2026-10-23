@@ -149,7 +149,8 @@ class Message(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
-    remote_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Null marks a local retained message whose canonical provider identity is unknown.
+    remote_id: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     internet_message_id: Mapped[Optional[str]] = mapped_column(String(998))
     thread_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("threads.id", ondelete="SET NULL"))
     subject: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))

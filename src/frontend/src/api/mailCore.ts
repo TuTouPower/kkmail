@@ -162,7 +162,7 @@ export function mailCoreToMailDetail(d: MailCoreMessageDetail): MailDetail {
     body: d.body,
     body_type: detailBodyType(d.body_type),
     parse_error: d.parse_error ?? null,
-    is_archived: d.is_archived ?? true,
+    is_archived: d.is_archived ?? null,
     has_attachments: d.has_attachments,
     attachments: d.attachments.map((a: MailCoreAttachment) => ({
       id: a.id,

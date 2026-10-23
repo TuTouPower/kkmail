@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
-from mail_core.blobs.archive import run_archive_batch
+from mail_core.blobs.archive import claim_archive_batch, run_archive_batch
 from mail_core.blobs.quota import check_quota
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import ArchiveState
@@ -23,6 +23,42 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
     reason="MAIL_CORE_DATABASE_URL not set",
 )
+
+
+def test_archive_claim_excludes_messages_without_provider_remote_id():
+    Session = get_session_factory()
+    with Session() as session:
+        account = create_account(
+            session,
+            email=f"local-only-archive-{uuid.uuid4().hex[:8]}@example.com",
+            provider="stub",
+            credential_ref="local-only",
+        )
+        message = Message(
+            account_id=account.id,
+            remote_id=None,
+            subject="Cached only",
+            from_address="sender@example.com",
+        )
+        session.add(message)
+        session.flush()
+        state = MessageArchiveState(message_id=message.id, state=ArchiveState.ARCHIVE_PENDING.value)
+        session.add(state)
+        session.commit()
+        message_id, account_id = message.id, account.id
+
+    with Session() as session:
+        claimed = claim_archive_batch(
+            session,
+            account_id=account_id,
+            worker_id="local-only-test",
+            limit=10,
+            recent_days=7,
+        )
+        assert claimed == []
+        state = session.get(MessageArchiveState, message_id)
+        assert state is not None and state.state == ArchiveState.ARCHIVE_PENDING.value
+        assert state.claimed_by is None
 
 
 def test_archive_batch_completes_and_respects_hard_quota(tmp_path, monkeypatch):

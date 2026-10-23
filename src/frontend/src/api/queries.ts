@@ -39,7 +39,7 @@ export interface MailDetail {
   body?: string
   body_type?: 'html' | 'text'
   parse_error?: string | null
-  is_archived?: boolean
+  is_archived?: boolean | null
   attachments?: Array<{ id?: string; name?: string; size?: number; contentType?: string }>
   has_attachments?: boolean
 }
