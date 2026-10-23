@@ -1683,7 +1683,7 @@ button:hover .icon,
 .settings-feedback { flex-shrink: 0; padding: 10px 12px; margin: 0 0 12px; border-radius: 8px; background: var(--blue-soft); color: var(--accent); font-size: 12px; line-height: 1.7; white-space: pre-line; overflow-wrap: anywhere; max-height: 140px; overflow: auto; }
 .settings-feedback.is-error { color: var(--red); background: color-mix(in srgb, var(--red) 9%, var(--surface)); }
 .settings-account-table { display: flex; flex-direction: column; flex: 1; min-height: 120px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface); }
-.settings-account-head, .settings-account-row { display: grid; grid-template-columns: 18px minmax(150px, 1fr) minmax(105px, 140px) 84px 62px 64px; align-items: center; gap: 12px; padding: 0 12px; }
+.settings-account-head, .settings-account-row { display: grid; grid-template-columns: 18px minmax(150px, 1fr) minmax(105px, 140px) 84px 62px 98px; align-items: center; gap: 12px; padding: 0 12px; }
 .settings-account-head { flex-shrink: 0; min-height: 36px; background: var(--surface-2); color: var(--muted); font-size: 11px; border-bottom: 1px solid var(--line); }
 .settings-account-rows { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .settings-account-row { min-height: 68px; border-bottom: 1px solid var(--line); }
@@ -1773,7 +1773,7 @@ button:hover .icon,
 @container (max-width: 700px) {
   .settings-account-head { display: flex; gap: 12px; }
   .settings-account-head > span:nth-child(n+3) { display: none; }
-  .settings-account-row { grid-template-columns: 18px minmax(0, 1fr) 36px 62px; grid-template-areas: "check identity toggle actions" ". group status status"; gap: 8px 10px; padding: 12px; }
+  .settings-account-row { grid-template-columns: 18px minmax(0, 1fr) 36px 96px; grid-template-areas: "check identity toggle actions" ". group status status"; gap: 8px 10px; padding: 12px; }
   .settings-account-row > input { grid-area: check; }
   .settings-account-identity { grid-area: identity; }
   .settings-account-row > select { grid-area: group; max-width: 190px; }

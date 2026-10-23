@@ -44,6 +44,7 @@ class AccountDTO:
     remark: str | None
     master_order: int | None = None
     group_order: int | None = None
+    imap_config: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,10 +84,28 @@ class SettingsDTO:
 def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDTO:
     g = groups.get(acc.group_id) if acc.group_id else None
     remark = None
+    imap_config = None
     if isinstance(acc.config, dict):
         val = acc.config.get("remark")
         if val is not None:
             remark = str(val)
+        if (acc.provider or "").lower() == "imap":
+            use_ssl_value = acc.config.get("use_ssl", True)
+            use_ssl = (
+                use_ssl_value
+                if isinstance(use_ssl_value, bool)
+                else str(use_ssl_value).strip().lower() not in ("0", "false", "no", "off")
+            )
+            port_value = acc.config.get("imap_port") or acc.config.get("port")
+            try:
+                port = int(port_value) if port_value is not None else (993 if use_ssl else 143)
+            except (TypeError, ValueError):
+                port = 993 if use_ssl else 143
+            imap_config = {
+                "imap_host": acc.config.get("imap_host") or acc.config.get("host"),
+                "imap_port": port,
+                "use_ssl": use_ssl,
+            }
     return AccountDTO(
         id=str(acc.id),
         email=acc.email,
@@ -102,6 +121,7 @@ def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDT
         sync_enabled=acc.sync_enabled,
         account_type=acc.provider,
         remark=remark,
+        imap_config=imap_config,
     )
 
 

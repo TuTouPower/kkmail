@@ -74,6 +74,7 @@ def test_list_accounts_serializes_slotted_dtos_mock(api_client):
         sync_enabled=True,
         account_type="imap",
         remark="test remark",
+        imap_config={"imap_host": "imap.kkmail.test", "imap_port": 993, "use_ssl": True},
     )
     mock_page = AccountPageDTO(accounts=[dto], total=1, limit=200, offset=0, has_more=False)
 
@@ -89,6 +90,39 @@ def test_list_accounts_serializes_slotted_dtos_mock(api_client):
         assert acc["provider"] == "imap"
         assert acc["display_name"] == "User Test"
         assert acc["remark"] == "test remark"
+        assert acc["imap_config"] == {"imap_host": "imap.kkmail.test", "imap_port": 993, "use_ssl": True}
+        assert "credentials" not in acc
+
+
+def test_account_dto_exposes_only_supported_imap_connection_fields():
+    from types import SimpleNamespace
+    import uuid
+
+    from mail_core.mail.application.accounts import _to_account_dto
+
+    account = SimpleNamespace(
+        id=uuid.uuid4(),
+        email="user@kkmail.test",
+        provider="imap",
+        display_name=None,
+        group_id=None,
+        master_order=None,
+        group_order=None,
+        sync_enabled=True,
+        sync_status="idle",
+        config={
+            "imap_host": "imap.kkmail.test",
+            "imap_port": "143",
+            "use_ssl": "false",
+            "last_sync_error": "internal status",
+            "password": "must not be returned",
+        },
+    )
+
+    dto = _to_account_dto(account, {})
+    assert dto.imap_config == {"imap_host": "imap.kkmail.test", "imap_port": 143, "use_ssl": False}
+    assert "last_sync_error" not in dto.imap_config
+    assert "password" not in dto.imap_config
 
 
 def test_create_account_serializes_slotted_dto_mock(api_client):

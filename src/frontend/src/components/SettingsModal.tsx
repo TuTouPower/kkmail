@@ -7,7 +7,7 @@ import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
 import { useIsWide } from '../lib/viewport'
 import AccountIcon from './AccountIcon'
-import AddAccountDialog from './settings_account_form'
+import AccountDialog from './settings_account_form'
 
 type Section = 'accounts' | 'groups' | 'general'
 type Scope = Section | 'password'
@@ -45,6 +45,7 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
   const [pending, setPending] = useState(false)
   const pendingRef = useRef(false)
   const [addOpen, setAddOpen] = useState(false)
+  const [editingAccount, setEditingAccount] = useState<AccountSummary | null>(null)
   const [search, setSearch] = useState('')
   const [groupFilter, setGroupFilter] = useState('all')
   const [stateFilter, setStateFilter] = useState('all')
@@ -75,6 +76,7 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
   const selectedAccounts = accounts.filter(a => selected.has(a.id))
   const filteredSelected = filtered.filter(a => selected.has(a.id)).length
   const allSelected = filtered.length > 0 && filteredSelected === filtered.length
+  const accountDialogOpen = addOpen || editingAccount !== null
 
   useEffect(() => {
     if (selectAllRef.current) selectAllRef.current.indeterminate = filteredSelected > 0 && !allSelected
@@ -82,11 +84,11 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !event.defaultPrevented && !addOpen) closeSettings()
+      if (event.key === 'Escape' && !event.defaultPrevented && !accountDialogOpen) closeSettings()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [closeSettings, addOpen])
+  }, [closeSettings, accountDialogOpen])
 
   function report(scope: Scope, message: string, error = false) {
     setFeedback(current => ({ ...current, [scope]: { message, error } }))
@@ -201,7 +203,7 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
         </nav>
         <div className={`settings-content settings-content-${section}`}>
           {section === 'accounts' && <>
-            <div className="settings-section-head"><div><h1>账户管理</h1><p>管理邮箱连接、同步状态与所属分组。</p></div><button type="button" className="settings-button is-primary" onClick={() => setAddOpen(true)} disabled={pending}><Plus size={15} />添加账户</button></div>
+            <div className="settings-section-head"><div><h1>账户管理</h1><p>管理邮箱连接、同步状态与所属分组。</p></div><button type="button" className="settings-button is-primary" onClick={() => { setEditingAccount(null); setAddOpen(true) }} disabled={pending}><Plus size={15} />添加账户</button></div>
             <div className="settings-summary"><span>账户总数 <strong>{accountsQuery.isPending ? '—' : accounts.length}</strong></span><span>已启用同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled !== false).length}</strong></span><span>已暂停同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled === false).length}</strong></span></div>
             {accountsQuery.isError && <div className="settings-feedback is-error" role="alert">加载账户失败：{errorMessage(accountsQuery.error)} <button type="button" className="settings-text-button" onClick={() => void accountsQuery.refetch()}>重试</button></div>}
             {groupsQuery.isError && <div className="settings-feedback is-error" role="alert">加载分组失败：{errorMessage(groupsQuery.error)} <button type="button" className="settings-text-button" onClick={() => void groupsQuery.refetch()}>重试</button></div>}
@@ -244,7 +246,7 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
                     await api.updateAccount(account.id, { sync_enabled: account.sync_enabled === false })
                     await refreshOrganization()
                   }, '同步偏好已更新')}><span /></button>
-                  <div className="settings-row-actions"><button type="button" className="settings-icon-button" title="立即同步" aria-label={`同步 ${account.email}`} disabled={pending || account.sync_enabled === false} onClick={() => void run('accounts', '同步', async () => { await api.syncAccount(account.id); await qc.invalidateQueries({ queryKey: queryKeys.accounts }) }, '已排队同步')}><RefreshCw size={14} /></button><button type="button" className="settings-icon-button is-danger" aria-label={`删除账户 ${account.email}`} title="删除账户" disabled={pending} onClick={() => void deleteAccount(account)}><Trash2 size={14} /><span className="settings-sr-only">删除</span></button></div>
+                  <div className="settings-row-actions"><button type="button" className="settings-icon-button" title="编辑账户" aria-label={`编辑账户 ${account.email}`} disabled={pending} onClick={() => { setAddOpen(false); setEditingAccount(account) }}><Pencil size={14} /></button><button type="button" className="settings-icon-button" title="立即同步" aria-label={`同步 ${account.email}`} disabled={pending || account.sync_enabled === false} onClick={() => void run('accounts', '同步', async () => { await api.syncAccount(account.id); await qc.invalidateQueries({ queryKey: queryKeys.accounts }) }, '已排队同步')}><RefreshCw size={14} /></button><button type="button" className="settings-icon-button is-danger" aria-label={`删除账户 ${account.email}`} title="删除账户" disabled={pending} onClick={() => void deleteAccount(account)}><Trash2 size={14} /><span className="settings-sr-only">删除</span></button></div>
                 </div>)}
                 {!accountsQuery.isPending && !accountsQuery.isError && !filtered.length && <div className="settings-empty"><Inbox size={26} /><strong>{accounts.length ? '没有匹配的账户' : '还没有添加账户'}</strong><span>{accounts.length ? '调整搜索词或筛选条件。' : '添加邮箱后，即可在此管理同步与分组。'}</span></div>}
               </div>
@@ -336,11 +338,17 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
           </>}
         </div>
       </div>
-      {addOpen && <AddAccountDialog groups={groups} groupsAvailable={groupsQuery.isSuccess} onClose={() => setAddOpen(false)} onAdded={async () => {
+      {accountDialogOpen && <AccountDialog key={editingAccount?.id || 'new-account'} account={editingAccount || undefined} groups={groups} groupsAvailable={groupsQuery.isSuccess} onClose={() => { setAddOpen(false); setEditingAccount(null) }} onSaved={async groupId => {
+        const wasEditing = editingAccount !== null
+        if (editingAccount && (editingAccount.group_id || '') !== groupId) {
+          useMailStore.setState({ selectedKey: null, selectedIds: [] })
+          await resetGroupMailQueries()
+        }
         await refreshOrganization()
-        await qc.resetQueries({ queryKey: queryKeys.stats })
-        report('accounts', '账户已添加')
+        if (!wasEditing) await qc.resetQueries({ queryKey: queryKeys.stats })
+        report('accounts', wasEditing ? '账户设置已更新' : '账户已添加')
         setAddOpen(false)
+        setEditingAccount(null)
       }} />}
     </section>
   )
