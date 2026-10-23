@@ -22,18 +22,18 @@ pytestmark_db = pytest.mark.skipif(
 )
 
 
-def test_decode_rejects_partial_and_malformed():
+def test_decode_rejects_malformed_cursor():
     with pytest.raises(InvalidCursor):
         decode_cursor("not-base64!!!")
     bad = base64.urlsafe_b64encode(b"2026-01-01T00:00:00+00:00|").decode().rstrip("=")
     with pytest.raises(InvalidCursor):
         decode_cursor(bad)
-    bad2 = base64.urlsafe_b64encode(b"|aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").decode().rstrip("=")
-    with pytest.raises(InvalidCursor):
-        decode_cursor(bad2)
     bad3 = base64.urlsafe_b64encode(b"only-time-no-pipe").decode().rstrip("=")
     with pytest.raises(InvalidCursor):
         decode_cursor(bad3)
+    bad4 = base64.urlsafe_b64encode(b"|not-a-uuid").decode().rstrip("=")
+    with pytest.raises(InvalidCursor):
+        decode_cursor(bad4)
 
 
 def test_encode_decode_roundtrip():
@@ -43,6 +43,16 @@ def test_encode_decode_roundtrip():
     got_st, got_id = decode_cursor(token)
     assert got_id == mid
     assert got_st == st
+
+
+def test_encode_decode_nullable_cursor_roundtrip():
+    mid = uuid.uuid4()
+    token = encode_cursor(None, mid)
+
+    got_st, got_id = decode_cursor(token)
+
+    assert got_st is None
+    assert got_id == mid
 
 
 def test_sort_order_validation():
@@ -110,3 +120,59 @@ def test_list_messages_keyset_pages_without_overlap():
         page_asc3 = list_messages_keyset(session, folder_ids=[folder_id], limit=2, cursor=page_asc2.next_cursor, sort_order="asc")
         assert [i.subject for i in page_asc3.items] == ["m4"]
         assert page_asc3.next_cursor is None
+
+
+@pytestmark_db
+@pytest.mark.parametrize(
+    ("sort_order", "expected_ids"),
+    [
+        ("asc", [1, 2, 3, 4, 5]),
+        ("desc", [3, 2, 1, 5, 4]),
+    ],
+)
+def test_nullable_sort_time_pages_with_unknown_dates_last(sort_order, expected_ids):
+    from mail_core.accounts import create_account
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.storage.models import Folder, Message, MessageLocation
+
+    Session = get_session_factory()
+    base = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    message_ids = [uuid.UUID(int=value) for value in range(1, 6)]
+    with Session() as session:
+        acc = create_account(session, email=f"nullable-keyset-{uuid.uuid4().hex[:8]}@ex.com", provider="stub")
+        folder = Folder(account_id=acc.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        session.flush()
+        times = [base, base + timedelta(minutes=1), base + timedelta(minutes=1), None, None]
+        for index, (message_id, sort_time) in enumerate(zip(message_ids, times), start=1):
+            message = Message(
+                id=message_id,
+                account_id=acc.id,
+                remote_id=f"nullable-{index}",
+                subject=f"m{index}",
+                from_address="a@b.c",
+                sort_time=sort_time,
+            )
+            session.add(message)
+            session.flush()
+            session.add(MessageLocation(message_id=message.id, folder_id=folder.id, uid=index))
+        session.commit()
+        folder_id = folder.id
+
+    with Session() as session:
+        cursor = None
+        actual_ids = []
+        while True:
+            page = list_messages_keyset(
+                session,
+                folder_ids=[folder_id],
+                limit=2,
+                cursor=cursor,
+                sort_order=sort_order,
+            )
+            actual_ids.extend(message.id for message in page.items)
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+
+    assert actual_ids == [message_ids[value - 1] for value in expected_ids]

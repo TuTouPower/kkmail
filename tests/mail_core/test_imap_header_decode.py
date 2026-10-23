@@ -22,7 +22,7 @@ from mail_core.sync.metadata import apply_metadata_page
 # --- AC-001: IMAP 返回裸 GBK 与 GB2312 报头解码 ---
 
 
-def test_ac001_bare_gbk_and_gb2312_header_decode():
+def test_imap_received_time_uses_internaldate_not_mime_date():
     # GBK-encoded bytes for "测试主题" (b"\xb2\xe2\xca\xd4\xd6\xf7\xcc\xe2")
     # GBK-encoded bytes for "张三" (b"\xd5\xc5\xc8\xfd")
     # GB2312-encoded bytes for "李四" (b"\xc0\xee\xc4\xc4")
@@ -32,11 +32,14 @@ def test_ac001_bare_gbk_and_gb2312_header_decode():
         b"From: \xd5\xc5\xc8\xfd <zhangsan@example.com>\r\n"
         b"To: \xc0\xee\xc4\xc4 <lisi@example.com>\r\n"
         b"Cc: \xcd\xf5\xce\xe5 <wangwu@example.com>\r\n"
-        b"Date: Wed, 21 Oct 2026 10:00:00 +0800\r\n"
+        b"Date: Thu, 22 Oct 2026 10:00:00 +0800\r\n"
         b"Message-ID: <msg-ac001@example.com>\r\n"
         b"\r\n"
     )
-    flags_blob = (b"1 (UID 1001 FLAGS (\\Seen))", header_bytes)
+    flags_blob = (
+        b'1 (UID 1001 FLAGS (\\Seen) INTERNALDATE "21-Oct-2026 10:00:00 +0800")',
+        header_bytes,
+    )
     meta = _parse_message_meta_from_fetch(
         flags_blob=flags_blob,
         uid_fallback=1001,
@@ -55,6 +58,60 @@ def test_ac001_bare_gbk_and_gb2312_header_decode():
     assert meta.is_read is True
     assert meta.uid == 1001
     assert "\x1fINBOX\x1f1001" in meta.remote_id
+
+
+@pytest.mark.parametrize(
+    "meta_bytes",
+    [
+        b"1 (UID 1002)",
+        b'1 (UID 1002 INTERNALDATE "not a date")',
+    ],
+)
+def test_imap_missing_or_invalid_internaldate_ignores_mime_date(meta_bytes):
+    headers = b"Subject: Mail\r\nDate: Wed, 21 Oct 2026 10:00:00 +0800\r\n\r\n"
+    meta = _parse_message_meta_from_fetch((meta_bytes, headers), 1002, "INBOX", 42)
+
+    assert meta is not None
+    assert meta.sort_time is None
+
+
+def test_imap_fetch_requests_internaldate(monkeypatch):
+    from mail_core.providers.imap import ImapProvider
+
+    class FakeImap:
+        fetch_query = None
+
+        def select(self, *_args, **_kwargs):
+            return "OK", [b"1"]
+
+        def status(self, *_args, **_kwargs):
+            return "OK", [b"INBOX (UIDVALIDITY 42)"]
+
+        def uid(self, command, *args):
+            if command == "SEARCH":
+                return "OK", [b"1001"]
+            if command == "FETCH":
+                self.fetch_query = args[1]
+                return "OK", [
+                    (
+                        b'1 (UID 1001 FLAGS () INTERNALDATE "21-Oct-2026 10:00:00 +0800")',
+                        b"Subject: Mail\r\nDate: Thu, 22 Oct 2026 10:00:00 +0800\r\n\r\n",
+                    )
+                ]
+            raise AssertionError(f"unexpected IMAP command: {command}")
+
+        def logout(self):
+            return "BYE", [b"logout"]
+
+    client = FakeImap()
+    provider = ImapProvider(host="imap.example.com", port=993, username="user", password="secret")
+    monkeypatch.setattr(provider, "_connect", lambda: client)
+
+    page = provider.fetch_metadata_page("INBOX", None)
+
+    assert client.fetch_query is not None
+    assert "INTERNALDATE" in client.fetch_query
+    assert page.items[0].sort_time == datetime(2026, 10, 21, 2, 0, tzinfo=timezone.utc)
 
 
 # --- AC-002: ASCII、裸 UTF-8、RFC 2047、混合编码及折行报头 ---

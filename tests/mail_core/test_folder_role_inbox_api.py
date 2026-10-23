@@ -105,3 +105,33 @@ def test_unified_inbox_folder_role_sent_and_default():
     assert res_acc1_sent.status_code == 200
     ids_acc1_sent = [item["id"] for item in res_acc1_sent.json()["items"]]
     assert ids_acc1_sent == [m_sent1_id]
+
+
+def test_inbox_and_detail_keep_unknown_received_time_as_null():
+    Session = get_session_factory()
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    with Session() as session:
+        account = create_account(session, email=f"null-date-{uuid.uuid4().hex[:8]}@ex.com", provider="imap")
+        folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        session.flush()
+        message = Message(
+            account_id=account.id,
+            remote_id="unknown-date",
+            subject="Unknown date",
+            from_address="sender@example.com",
+            sort_time=None,
+        )
+        session.add(message)
+        session.flush()
+        session.add(MessageLocation(message_id=message.id, folder_id=folder.id, uid=1))
+        session.commit()
+        account_id, message_id = account.id, message.id
+
+    inbox = client.get("/api/mail/inbox", params={"account_id": str(account_id)})
+    detail = client.get(f"/api/mail/messages/{message_id}")
+
+    assert inbox.status_code == 200
+    assert inbox.json()["items"][0]["sort_time"] is None
+    assert detail.status_code == 200
+    assert detail.json()["date"] is None

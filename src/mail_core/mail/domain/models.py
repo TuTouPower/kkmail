@@ -35,7 +35,7 @@ class MessageMetadata:
     subject: str
     from_address: str
     from_name: str | None
-    sort_time: datetime
+    sort_time: datetime | None
     is_read: bool
     has_attachments: bool
     internet_message_id: str | None = None

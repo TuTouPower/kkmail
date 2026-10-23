@@ -25,7 +25,7 @@ class RemoteMessageMeta:
     subject: str
     from_address: str
     from_name: str | None
-    sort_time: datetime
+    sort_time: datetime | None
     is_read: bool | None
     has_attachments: bool | None
     is_flagged: bool | None = False

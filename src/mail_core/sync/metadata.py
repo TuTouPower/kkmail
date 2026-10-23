@@ -115,6 +115,8 @@ def upsert_messages(
         changed = created or location_created
         for field in _META_FIELDS:
             value = getattr(meta, field)
+            if field == "sort_time" and value is None:
+                continue
             if field in ("is_read", "is_flagged", "has_attachments") and value is None:
                 continue
             if (

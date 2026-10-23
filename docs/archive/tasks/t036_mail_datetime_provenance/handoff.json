@@ -1,0 +1,50 @@
+{
+  "tid": "t036",
+  "attempt": 2,
+  "execution_id": "196bd2e0bac84a9381156a7b95f8961e",
+  "status": "done",
+  "branch": "t036_mail_datetime_provenance",
+  "base_sha": "e0d4f0c676c50fd0dc4e7a54b99ca5baaf858703",
+  "tests": "Backend full suite: 443 passed / 1 warning; frontend: 254 passed (39 files), tsc/build/lint/OpenAPI/schema checks passed; template contract: 149 passed; desktop npm test passed; parser/OpenAPI target: 41 passed, 1 skipped; targeted PostgreSQL migration/keyset: 13 passed.",
+  "blackbox": "Frontend E2E: 13 passed; full-stack E2E: 8 passed; packaged desktop smoke passed SPA and PostgreSQL binary/lifecycle/persistence checks.",
+  "review": "Full Round 3 code/test review PASS; reviewed_scope=87bdfa30d5113c56; no unresolved findings.",
+  "ac_evidence": {
+    "AC-001": [
+      "src/mail_core/providers/imap.py",
+      "src/mail_core/providers/gmail.py",
+      "src/mail_core/providers/parsing/gmail_history.py",
+      "src/mail_core/providers/parsing/graph_delta.py",
+      "src/mail_core/sync/metadata.py",
+      "tests/mail_core/test_imap_header_decode.py",
+      "tests/mail_core/test_gmail_graph_contracts.py",
+      "tests/mail_core/test_metadata_apply.py"
+    ],
+    "AC-002": [
+      "src/mail_core/blobs/archive.py",
+      "tests/mail_core/test_blob_archive_fixes.py"
+    ],
+    "AC-003": [
+      "src/mail_core/db/alembic/versions/20261023_0017_nullable_message_sort_time.py",
+      "src/mail_core/mail/domain/models.py",
+      "src/mail_core/mail/storage/models.py",
+      "src/mail_core/api/mail.py",
+      "src/mail_core/mail/application/queries.py",
+      "src/frontend/src/api/generated/schema.ts",
+      "src/frontend/src/lib/listDate.ts",
+      "src/frontend/src/lib/mailDate.ts",
+      "tests/mail_core/test_keyset_pagination.py",
+      "tests/mail_core/test_schema_pg.py",
+      "tests/mail_core/test_openapi_contract.py",
+      "src/frontend/src/lib/listDate.test.ts",
+      "src/frontend/src/lib/mailDate.test.ts"
+    ],
+    "AC-004": [
+      "tests/mail_core/test_imap_header_decode.py",
+      "tests/mail_core/test_gmail_graph_contracts.py",
+      "tests/mail_core/test_blob_archive_fixes.py",
+      "tests/mail_core/test_keyset_pagination.py"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

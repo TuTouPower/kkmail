@@ -121,6 +121,7 @@ const syncFailedItem: MailItem = {
 }
 
 const posts: Array<{ url: string; body: unknown }> = []
+const nullDateItem = { ...item, id: 'm-null-date', date: '2026-10-20T08:00:00Z' }
 
 beforeEach(() => {
   posts.length = 0
@@ -134,6 +135,14 @@ beforeEach(() => {
         from: 'Ann <ann@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T08:00:00Z', is_read: true,
         is_flagged: false, has_attachments: true, snippet: null, body: 'plain body text', body_type: 'text',
         parse_error: null, attachments: [{ id: 'att-1', name: 'r.pdf', contentType: 'application/pdf', size: 10, is_inline: false }],
+      })
+    }
+    if (u === '/api/mail/messages/m-null-date') {
+      return json({
+        id: 'm-null-date', account_id: 'acc-1', subject: 'Unknown received time', from_address: 'ann@x.test', from_name: 'Ann',
+        from: 'Ann <ann@x.test>', to: 'box@x.test', cc: '', date: null, is_read: true,
+        is_flagged: false, has_attachments: false, snippet: null, body: 'plain body text', body_type: 'text',
+        parse_error: null, attachments: [],
       })
     }
     if (u === '/api/mail/messages/m-2') {
@@ -226,7 +235,7 @@ beforeEach(() => {
     }
     return json({ detail: 'unexpected' }, 404)
   }))
-  queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item, htmlItemWithImages, htmlItemOther, htmlItemLightRich, failedItem, failedItemWithSnippet, emptyNormalItem, unarchivedItem, syncFailedItem])
+  queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item, nullDateItem, htmlItemWithImages, htmlItemOther, htmlItemLightRich, failedItem, failedItemWithSnippet, emptyNormalItem, unarchivedItem, syncFailedItem])
   useMailStore.setState({ selectedKey: 'm-1', theme: 'dark' })
 })
 
@@ -237,6 +246,16 @@ afterEach(() => {
 })
 
 describe('<MessageReader />', () => {
+  it('keeps an unknown detail date blank instead of falling back to the selected row date', async () => {
+    useMailStore.setState({ selectedKey: 'm-null-date' })
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => {
+      const senderHeader = container.querySelector('[data-ui="MR06"]')?.parentElement
+      expect(senderHeader?.textContent).not.toContain('2026')
+    })
+  })
+
   it('renders only loading while detail is pending, even with an HTML preview', async () => {
     queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [{ ...item, body_preview: '<html>Hidden preview</html>' }])
     const originalFetch = globalThis.fetch

@@ -802,11 +802,8 @@ export interface components {
             body_type: string;
             /** Cc */
             cc: string;
-            /**
-             * Date
-             * Format: date-time
-             */
-            date: string;
+            /** Date */
+            date: string | null;
             /** From */
             from: string;
             /** From Address */
@@ -863,11 +860,8 @@ export interface components {
             is_read: boolean;
             /** Snippet */
             snippet: string | null;
-            /**
-             * Sort Time
-             * Format: date-time
-             */
-            sort_time: string;
+            /** Sort Time */
+            sort_time: string | null;
             /** Subject */
             subject: string;
         };
