@@ -410,7 +410,7 @@ def test_apply_metadata_page_empty_folder_initializes_zero_folder_stats():
         session.add(folder)
         session.flush()
         lease = acquire_lease(session, account_id=acc.id, owner_id="w1", ttl=timedelta(minutes=5))
-        page = MetadataPage(items=[], next_cursor={"uid_validity": 1})
+        page = MetadataPage(items=[], next_cursor={"uid_validity": 1}, exhausted=True)
 
         # Precondition: no FolderStats row
         assert session.get(FolderStats, folder.id) is None
