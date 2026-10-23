@@ -25,9 +25,9 @@ class MessageListItem:
     from_address: str
     from_name: str | None
     sort_time: datetime | None
-    is_read: bool
-    is_flagged: bool
-    has_attachments: bool
+    is_read: bool | None
+    is_flagged: bool | None
+    has_attachments: bool | None
     snippet: str | None
     folder_id: uuid.UUID | None
     body_preview: str = ""
@@ -304,9 +304,9 @@ class MessageDetail:
     to_addresses: list[Any]
     cc_addresses: list[Any]
     sort_time: datetime | None
-    is_read: bool
-    is_flagged: bool
-    has_attachments: bool
+    is_read: bool | None
+    is_flagged: bool | None
+    has_attachments: bool | None
     snippet: str | None
     body_text: str | None
     body_html: str | None
@@ -386,6 +386,7 @@ def query_global_inbox_stats(session: Session) -> GlobalStatsOut:
             func.count(FolderStats.folder_id).label("stats_count"),
             func.sum(FolderStats.unread_count).label("unread_count"),
             func.sum(FolderStats.total_count).label("total_count"),
+            func.count(FolderStats.unread_count).label("known_unread_count"),
         )
         .select_from(Account)
         .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == FolderRole.INBOX.value))
@@ -397,7 +398,7 @@ def query_global_inbox_stats(session: Session) -> GlobalStatsOut:
     accounts = [
         AccountInboxStatsOut(
             account_id=r[0],
-            unread_count=int(r[3]) if r[1] > 0 and r[1] == r[2] else None,
+            unread_count=int(r[3]) if r[1] > 0 and r[1] == r[5] else None,
             total_count=int(r[4]) if r[1] > 0 and r[1] == r[2] else None,
         )
         for r in rows
@@ -419,6 +420,7 @@ def query_group_inbox_stats(session: Session, group_id: uuid.UUID, *, folder_rol
             func.count(FolderStats.folder_id).label("stats_count"),
             func.sum(FolderStats.unread_count).label("unread_count"),
             func.sum(FolderStats.total_count).label("total_count"),
+            func.count(FolderStats.unread_count).label("known_unread_count"),
         )
         .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == folder_role))
         .outerjoin(FolderStats, FolderStats.folder_id == Folder.id)
@@ -429,7 +431,7 @@ def query_group_inbox_stats(session: Session, group_id: uuid.UUID, *, folder_rol
     accounts = [
         AccountInboxStatsOut(
             account_id=row[0],
-            unread_count=int(row[3]) if row[1] > 0 and row[1] == row[2] else None,
+            unread_count=int(row[3]) if row[1] > 0 and row[1] == row[5] else None,
             total_count=int(row[4]) if row[1] > 0 and row[1] == row[2] else None,
         )
         for row in session.execute(stmt).all()

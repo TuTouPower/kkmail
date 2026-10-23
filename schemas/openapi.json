@@ -496,8 +496,15 @@
             "type": "integer"
           },
           "unread_count": {
-            "title": "Unread Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unread Count"
           },
           "updated_at": {
             "anyOf": [
@@ -905,8 +912,15 @@
             "title": "From Name"
           },
           "has_attachments": {
-            "title": "Has Attachments",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Attachments"
           },
           "id": {
             "title": "Id",
@@ -924,12 +938,26 @@
             "title": "Is Archived"
           },
           "is_flagged": {
-            "title": "Is Flagged",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Flagged"
           },
           "is_read": {
-            "title": "Is Read",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Read"
           },
           "parse_error": {
             "anyOf": [
@@ -1035,20 +1063,41 @@
             "title": "From Name"
           },
           "has_attachments": {
-            "title": "Has Attachments",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Attachments"
           },
           "id": {
             "title": "Id",
             "type": "string"
           },
           "is_flagged": {
-            "title": "Is Flagged",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Flagged"
           },
           "is_read": {
-            "title": "Is Read",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Read"
           },
           "snippet": {
             "anyOf": [

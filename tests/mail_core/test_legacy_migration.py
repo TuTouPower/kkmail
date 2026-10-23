@@ -601,6 +601,9 @@ def test_importer_preserves_legacy_mail_fields_without_mutating_sqlite_source():
             assert again.imported_without_remote_id == 0
             assert again.skipped_existing == 22
             assert session.get(Message, missing_fields.id).subject == "already imported"
+            assert missing_fields.is_read is False
+            assert missing_fields.has_attachments is False
+            assert missing_fields.is_flagged is None
         source_hash_after = hashlib.sha256(source.read_bytes()).hexdigest()
     finally:
         readonly.close()

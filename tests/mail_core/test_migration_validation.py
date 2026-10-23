@@ -56,30 +56,20 @@ def _get_alembic_config() -> Config:
 # --- AC-001: Linear migration, single head and branch rejection --------------------
 
 
-# Replaces the t018 test that fixed 20261022_0015 as the current head. t027, t036,
-# and t037 extend the chain with account ordering and nullable mail provenance.
-def test_current_alembic_chain_has_single_head():
-    """The current migration history stays linear and ends at the current head."""
-    cfg = _get_alembic_config()
-    script = ScriptDirectory.from_config(cfg)
-
-    heads = script.get_heads()
-    assert len(heads) == 1, f"Expected exactly 1 migration head, found {len(heads)}: {heads}"
-    head_rev = heads[0]
-    assert head_rev == "20261023_0018"
-
-    # Walk from head down to base; assert strict single-parent chain
-    current = script.get_revision(head_rev)
+# Replaces the t037 fixed-head check because 0019 extends the production chain.
+def test_nullable_status_alembic_chain_has_single_head():
+    script = ScriptDirectory.from_config(_get_alembic_config())
+    assert script.get_heads() == ["20261023_0019"]
+    current = script.get_revision("20261023_0019")
     visited = []
     while current is not None:
         visited.append(current.revision)
         down = current.down_revision
         if down is None:
             break
-        assert isinstance(down, str), f"Fork detected at revision {current.revision} with multiple parents: {down}"
+        assert isinstance(down, str), f"Fork at {current.revision}"
         current = script.get_revision(down)
-
-    assert len(visited) == 18, f"Expected 18 total revisions, found {len(visited)}"
+    assert len(visited) == 19
     assert visited[-1] == "20261020_0001"
 
 
@@ -201,12 +191,14 @@ def test_nullable_remote_id_migration_allows_unknowns_and_rejects_lossy_downgrad
                 remote_id=None,
                 subject="Unknown remote identity one",
                 from_address="sender@example.com",
+                is_read=False, is_flagged=False, has_attachments=False,
             )
             second = Message(
                 account_id=account.id,
                 remote_id=None,
                 subject="Unknown remote identity two",
                 from_address="sender@example.com",
+                is_read=False, is_flagged=False, has_attachments=False,
             )
             session.add_all((first, second))
             session.commit()
@@ -217,7 +209,7 @@ def test_nullable_remote_id_migration_allows_unknowns_and_rejects_lossy_downgrad
             command.downgrade(cfg, "20261023_0017")
 
         with engine.connect() as conn:
-            assert MigrationContext.configure(conn).get_current_revision() == "20261023_0018"
+            assert MigrationContext.configure(conn).get_current_revision() == ScriptDirectory.from_config(cfg).get_current_head()
         with Session() as session:
             assert all(session.get(Message, mid) is not None for mid in message_ids)
             session.query(Message).filter(Message.id.in_(message_ids)).delete(synchronize_session=False)
@@ -656,6 +648,7 @@ def test_nullable_message_time_migration_round_trips_to_head_and_predecessor():
                 subject="Unknown time",
                 from_address="sender@example.com",
                 sort_time=None,
+                is_read=False, is_flagged=False, has_attachments=False,
             )
             session.add(unknown_time)
             session.commit()
@@ -665,7 +658,7 @@ def test_nullable_message_time_migration_round_trips_to_head_and_predecessor():
             command.downgrade(cfg, "20261023_0016")
 
         with engine.connect() as conn:
-            assert MigrationContext.configure(conn).get_current_revision() == "20261023_0018"
+            assert MigrationContext.configure(conn).get_current_revision() == ScriptDirectory.from_config(cfg).get_current_head()
         with Session() as session:
             session.delete(session.get(Message, message_id))
             session.flush()
@@ -684,3 +677,34 @@ def test_nullable_message_time_migration_round_trips_to_head_and_predecessor():
     finally:
         with engine.connect() as conn:
             command.upgrade(cfg, "head")
+
+
+def test_nullable_status_migration_preserves_known_values_and_rejects_lossy_downgrade():
+    cfg = _get_alembic_config()
+    engine = get_engine()
+    account_id, message_id = uuid.uuid4(), uuid.uuid4()
+    try:
+        command.downgrade(cfg, "20261023_0018")
+        with engine.begin() as connection:
+            connection.execute(text("INSERT INTO accounts (id, email, provider) VALUES (:id, :email, 'graph')"),
+                               {"id": account_id, "email": f"status-migration-{account_id}@example.com"})
+            connection.execute(text("INSERT INTO messages (id, account_id, remote_id, is_read, is_flagged, has_attachments) VALUES (:id, :account_id, 'known', true, false, true)"),
+                               {"id": message_id, "account_id": account_id})
+        command.upgrade(cfg, "head")
+        columns = {column["name"]: column for column in inspect(engine).get_columns("messages")}
+        for name in ("is_read", "is_flagged", "has_attachments"):
+            assert columns[name]["nullable"] is True
+            assert columns[name]["default"] is None
+        with engine.begin() as connection:
+            known = connection.execute(text("SELECT is_read, is_flagged, has_attachments FROM messages WHERE id = :id"), {"id": message_id}).one()
+            assert tuple(known) == (True, False, True)
+            connection.execute(text("UPDATE messages SET is_flagged = NULL WHERE id = :id"), {"id": message_id})
+        with pytest.raises(RuntimeError, match="mail status or unread counts contain NULL"):
+            command.downgrade(cfg, "20261023_0018")
+        with engine.begin() as connection:
+            assert connection.execute(text("SELECT is_flagged FROM messages WHERE id = :id"), {"id": message_id}).scalar_one() is None
+            connection.execute(text("UPDATE messages SET is_flagged = false WHERE id = :id"), {"id": message_id})
+        command.downgrade(cfg, "20261023_0018")
+        command.upgrade(cfg, "head")
+    finally:
+        command.upgrade(cfg, "head")

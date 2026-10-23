@@ -244,13 +244,13 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     folderStatsQuery.data === undefined ||
     folderStatsQuery.data.total === null
   )
-  const unreadUnknown = !searching && (
+  const unreadUnknown = searching ? raw.some((m) => m.is_read === null) : (
     folderStatsQuery.isError ||
     folderStatsQuery.data === null ||
     folderStatsQuery.data === undefined ||
     folderStatsQuery.data.unread === null
   )
-  const unreadCount = unreadUnknown ? null : Math.max(serverUnread ?? 0, raw.filter((m) => !m.is_read).length)
+  const unreadCount = unreadUnknown ? null : Math.max(serverUnread ?? 0, raw.filter((m) => m.is_read === false).length)
 
   const [actionStatus, setActionStatus] = useState('')
   const sentinelRef = useRef<HTMLDivElement | null>(null)
@@ -298,7 +298,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
   const visible = useMemo(() => {
     return raw
       .filter((m) => {
-        if ((favoriteCategory === 'unread' || listFilter === 'unread') && m.is_read) return false
+        if ((favoriteCategory === 'unread' || listFilter === 'unread') && m.is_read !== false) return false
         if (listFilter === 'flagged' && !m.is_flagged) return false
         return true
       })
@@ -348,7 +348,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
   async function handleToggleRead(m: MailItem) {
     setContextMenu(null)
     try {
-      await setReadOptimistic([m], !m.is_read)
+      await setReadOptimistic([m], m.is_read !== true)
     } catch (err) {
       setActionStatus(errorMessage(err, '标记失败'))
     }
@@ -377,7 +377,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
   }
 
   async function markAll() {
-    const unreadKeys = raw.filter((m) => !m.is_read).map(mailKey)
+    const unreadKeys = raw.filter((m) => m.is_read === false).map(mailKey)
     if (unreadKeys.length) {
       setCachedReadState(unreadKeys, true)
     }
@@ -402,7 +402,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
   function openMessage(m: MailItem) {
     setSelectedKey(mailKey(m))
     if (window.innerWidth <= MOBILE_MAX_WIDTH) setMobileView('detail')
-    if (!m.is_read) {
+    if (m.is_read === false) {
       markReadOptimistic([m]).catch((err) => setActionStatus(`标记已读失败：${errorMessage(err)}`))
     }
   }
@@ -571,7 +571,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
               tabIndex={0}
               aria-selected={selectedKey === key}
               aria-label={`邮件：${m.subject || '（无主题）'}，来自 ${displayName(m.from)}`}
-              className={`message-row apple-card ${selectedKey === key ? 'selected' : ''} ${!m.is_read ? 'unread' : ''} ${checked ? 'checked' : ''}`}
+              className={`message-row apple-card ${selectedKey === key ? 'selected' : ''} ${m.is_read === false ? 'unread' : ''} ${checked ? 'checked' : ''}`}
               onClick={() => openMessage(m)}
               onContextMenu={(e) => {
                 e.preventDefault()
@@ -603,7 +603,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
               <div className="message-content">
                 <div className="message-top">
                   <span data-ui="ML09" className="sender">
-                    {!m.is_read && <span className="unread-dot" aria-label="未读" />}
+                    {m.is_read === false && <span className="unread-dot" aria-label="未读" />}
                     {displayName(m.from)}
                   </span>
                   <div className="message-meta">
