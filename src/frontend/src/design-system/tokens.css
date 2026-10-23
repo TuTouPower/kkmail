@@ -141,6 +141,60 @@ button:hover .icon,
   overflow: hidden;
 }
 
+.app.mac-desktop-shell {
+  position: relative;
+  padding-top: 38px;
+}
+
+.mac-titlebar-controls {
+  position: absolute;
+  z-index: 100;
+  inset: 0 0 auto;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  background: var(--sidebar);
+  pointer-events: none;
+}
+
+.mac-titlebar-drag-region {
+  position: absolute;
+  inset: 0 0 0 110px;
+  -webkit-app-region: drag;
+  pointer-events: auto;
+}
+
+.mac-login-drag-region {
+  position: fixed;
+  z-index: 100;
+  inset: 0 0 auto 110px;
+  height: 38px;
+  -webkit-app-region: drag;
+  pointer-events: auto;
+}
+
+.mac-titlebar-sidebar-toggle {
+  position: relative;
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  margin-left: 70px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+}
+
+.mac-titlebar-sidebar-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
 .workspace {
   flex: 1;
   min-height: 0;
@@ -844,6 +898,11 @@ button:hover .icon,
   gap: 7px;
 }
 
+.list-heading > .sidebar-expand-btn {
+  align-self: flex-start;
+  margin-top: -4px;
+}
+
 .list-heading {
   min-width: 0;
   flex: 1;
@@ -1464,9 +1523,6 @@ button:hover .icon,
 .email-body-text { white-space: pre-wrap; text-align: start; }
 .field-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
 .field-hint { font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 4px; white-space: pre-line; }
-
-/* Drawer backdrop hidden until ≤760 (rules merged into the 760 Responsive block). */
-.drawer-backdrop { display: none; }
 
 /* Apple Mail–style 3-line list cards */
 .message-row.apple-card {
