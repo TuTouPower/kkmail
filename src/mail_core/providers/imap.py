@@ -297,6 +297,22 @@ class ImapProvider:
     password: str = field(repr=False)
     use_ssl: bool = True
     timeout: float = 30.0
+    _active_client: Any = field(default=None, init=False, repr=False)
+    _current_folder: str | None = field(default=None, init=False, repr=False)
+
+    def open_session(self) -> None:
+        if self._active_client is None:
+            self._active_client = self._connect()
+            self._current_folder = None
+
+    def close_session(self) -> None:
+        if self._active_client is not None:
+            try:
+                self._active_client.logout()
+            except Exception:
+                pass
+            self._active_client = None
+            self._current_folder = None
 
     def __repr__(self) -> str:
         # Never leak IMAP password via logging / traceback repr.
@@ -516,11 +532,14 @@ class ImapProvider:
                 "IMAP fetch_mime requires folder_remote_id= or a namespaced remote_id "
                 "(uidvalidity\\x1ffolder\\x1fuid)"
             )
-        c = self._connect()
+        reuse = self._active_client
+        c = reuse if reuse is not None else self._connect()
         try:
-            typ, _ = c.select(_quote_mailbox(folder), readonly=True)
-            if typ != "OK":
-                raise RuntimeError(f"select {folder} failed for fetch_mime")
+            if reuse is None or self._current_folder != folder:
+                typ, _ = c.select(_quote_mailbox(folder), readonly=True)
+                if typ != "OK":
+                    raise RuntimeError(f"select {folder} failed for fetch_mime")
+                self._current_folder = folder
             if _uv is not None and _uv > 0:
                 srv_uv = _get_server_uidvalidity(c, folder)
                 if srv_uv is not None and srv_uv != _uv:
@@ -533,11 +552,16 @@ class ImapProvider:
                 body = part[1]
                 return body if isinstance(body, bytes) else bytes(body)
             raise RuntimeError("unexpected FETCH payload")
+        except Exception:
+            if reuse is not None:
+                self.close_session()
+            raise
         finally:
-            try:
-                c.logout()
-            except Exception:
-                pass
+            if reuse is None:
+                try:
+                    c.logout()
+                except Exception:
+                    pass
 
     def _fetch_flags_for_uids(
         self,

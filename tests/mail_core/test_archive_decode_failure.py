@@ -161,8 +161,7 @@ def test_archive_batch_body_decode_failure_and_batch_isolation(caplog):
             assert body_corrupt is not None
             assert body_corrupt.parse_error is not None
             assert "body_decode_failed" in body_corrupt.parse_error or "UnicodeDecodeError" in body_corrupt.parse_error
-            assert body_corrupt.text_plain is None
-            assert body_corrupt.text_html is None
+            # t048 已修复：原 t026 断言正文清空为 None 的旧语义（assert body_corrupt.text_plain is None）已由 t048 AC-001 保留可读正文替代，移除旧断言
 
             # 2. Valid message in the same batch was NOT blocked (AC-004)
             st_valid = session.get(MessageArchiveState, mid_valid)
@@ -190,7 +189,7 @@ def test_archive_batch_body_decode_failure_and_batch_isolation(caplog):
         data_corrupt = r_corrupt.json()
         assert data_corrupt["parse_error"] is not None
         assert "body_decode_failed" in data_corrupt["parse_error"] or "UnicodeDecodeError" in data_corrupt["parse_error"]
-        assert data_corrupt["body"] == ""
+        # t048 已修复：原 t026 断言接口 body 必须为空字符串（assert data_corrupt["body"] == ""）已由 t048 尽最大努力保留可读正文（AC-001/AC-002）替代，移除旧断言
 
         r_valid = client.get(f"/api/mail/messages/{mid_valid}")
         assert r_valid.status_code == 200
@@ -366,3 +365,86 @@ def test_read_does_not_mutate_or_scan_historical_data():
         assert b_after.text_plain == "manually repaired plain content"
         assert b_after.parse_error is None
         assert b_after.updated_at == now
+
+
+def test_wecom_qp_unescaped_defect_retains_readable_html_and_sets_parse_error():
+    """AC-001 & AC-002: MIME with unescaped QP defect sets parse_error but retains readable text_html and preview."""
+    from mail_core.mail.application.queries import _body_previews
+    from mail_core.mail.storage.models import MessageLocation
+
+    Session = get_session_factory()
+    store = DictCredentialStore()
+    orig_engine = engine_mod.build_provider
+    orig_archive = archive_mod.build_provider
+
+    try:
+        with Session() as session:
+            acc, folder = _setup_account_and_folder(session, store)
+            acc_id = acc.id
+            mid = uuid.uuid4()
+            msg = Message(
+                id=mid,
+                account_id=acc_id,
+                remote_id="wecom-qp-1",
+                subject="WeCom Friend Request",
+                from_address="10000@qq.com",
+                from_name="Tencent WeCom",
+                sort_time=datetime.now(timezone.utc),
+                is_read=False,
+                has_attachments=False,
+            )
+            session.add(msg)
+            session.flush()
+            session.add(MessageLocation(message_id=mid, folder_id=folder.id))
+            session.add(MessageArchiveState(
+                message_id=mid,
+                state=ArchiveState.ARCHIVE_PENDING.value,
+                priority=10,
+                retry_count=0,
+            ))
+            session.commit()
+
+        raw_mime = (
+            b'From: "Tencent WeCom" <10000@qq.com>\r\n'
+            b"Subject: Test\r\n"
+            b"MIME-Version: 1.0\r\n"
+            b'Content-Type: text/html; charset="gb2312"\r\n'
+            b"Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+            b'<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+            b"<div>Hello WeCom Content</div>"
+        )
+        mem_provider = MemoryProvider(
+            messages=[RemoteMessageMeta(remote_id="wecom-qp-1", subject="Test", from_address="10000@qq.com", from_name="WeCom", sort_time=datetime.now(timezone.utc), is_read=False, has_attachments=False)],
+            mime={"wecom-qp-1": raw_mime},
+        )
+        engine_mod.build_provider = lambda *a, **kw: mem_provider
+        archive_mod.build_provider = lambda *a, **kw: mem_provider
+
+        res = run_archive_batch(account_id=acc_id, worker_id="w-wecom", payload={"message_id": str(mid), "batch_size": 1})
+        assert res["status"] == "ok"
+        assert res["completed"] == 1
+
+        with Session() as session:
+            body = session.get(MessageBody, mid)
+            assert body is not None
+            # Must record parse_error
+            assert body.parse_error is not None
+            # Must retain readable text_html
+            assert body.text_html is not None
+            assert "Hello WeCom Content" in body.text_html
+
+            # Detail and body preview must see the content
+            detail = get_message_detail(session, mid)
+            assert detail is not None
+            assert detail.parse_error is not None
+            assert "Hello WeCom Content" in detail.body
+
+            # _body_previews must return preview
+            msg_loaded = session.get(Message, mid)
+            assert msg_loaded is not None
+            previews = _body_previews(session, [msg_loaded])
+            assert mid in previews
+            assert "Hello WeCom Content" in previews[mid]
+    finally:
+        engine_mod.build_provider = orig_engine
+        archive_mod.build_provider = orig_archive

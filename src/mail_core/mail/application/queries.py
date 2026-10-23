@@ -118,7 +118,7 @@ def _body_previews(session: Session, messages: list[Message]) -> dict[uuid.UUID,
         return {}
     rows = session.execute(
         select(MessageBody.message_id, MessageBody.text_plain, MessageBody.text_html)
-        .where(MessageBody.message_id.in_(ids), MessageBody.parse_error.is_(None))
+        .where(MessageBody.message_id.in_(ids))
     ).all()
     previews = {}
     for mid, plain, html in rows:
