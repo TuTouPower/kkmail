@@ -26,4 +26,4 @@
     - `src/mail_core/mail/application/queries.py:121`
     - `src/mail_core/blobs/archive.py:167-187, 613-646, 776-789`
     - `src/mail_core/api/mail.py:317-323`
-- 处理：未开
+- 处理：t048

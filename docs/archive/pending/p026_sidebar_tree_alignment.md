@@ -29,4 +29,4 @@
 - 线索：
     - `.scratch/repro_sidebar_alignment.spec.ts`：通过 Playwright 测量真实浏览器渲染结果，复现了所有账号（14px, 35px, 54px）、分组（14px, 39px, 62px）、账号列表（18px, 43px, 66px）的错位数据，以及分类与账号子项错位 3px 的真实几何数据。
     - `.scratch/playwright.repro.config.ts`：Playwright 复现运行配置。
-- 处理：未开
+- 处理：t044

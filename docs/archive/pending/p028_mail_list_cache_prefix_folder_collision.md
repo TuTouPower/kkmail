@@ -24,4 +24,4 @@
     - 应补测层级：在 `queries.cache.test.ts` / `mailCore.mutations.test.ts` 补充 `['mail-core', 'account-folders', accountId]` 共存时的 `findCachedMail`、`markReadOptimistic`、`flagOptimistic`、`setCachedReadState`、`removeCachedMail` 回归测试（含 `folder` / `group` 视图 scope 优先级与空白 ID 防御）；在组件测试补充 `<Sidebar />` 展开账号目录与 `<MessageList />` / `<MessageReader />` 同屏交互测试。
 - 线索：
     - `.scratch/repro_mailkey_error.test.tsx`：最小复现测试（3 个用例全部复现：`<Sidebar /> + <MessageList />` 点击未读邮件出现 `标记已读失败：mailKey requires a non-empty message id` 且 `POST /read` 0 次调用；`markReadOptimistic` / `flagOptimistic` / `setCachedReadState` / `removeCachedMail` / `findCachedMail` 抛错；选中邮件后更新 `account-folders` 触发 `<MessageReader />` 渲染崩溃）。
-- 处理：未开
+- 处理：t046
