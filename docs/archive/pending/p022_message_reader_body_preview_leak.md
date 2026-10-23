@@ -4,7 +4,7 @@
 - 根因：原 `detail?.body || selected?.body_preview` 将服务商摘要与完整正文混为同一数据源；后续独立状态提示与正文三元分支不互斥，加载或解析失败时仍可能创建正文容器。
 - 关联缺陷：历史迁移脚本在旧摘要缺失时将 `body[:120]` 写入 `messages.snippet`，混淆服务商摘要与本地正文派生展示。IMAP 未返回摘要时，旧列表又没有从已归档正文回退预览。
 - 测试缺口：原空正文 fixture 不带 `body_preview`，未覆盖含 HTML 摘要、正文尚未就绪的场景。
-- 状态：用户授权直接在 main 修复；改动未提交。
+- 状态：用户授权直接在 main 修复；已提交 `4c28237`（阅读器正文状态隔离）与 `4c4dd7a`（服务商摘要保真与展示预览）。本轮 t043 已核验当前实现、前端全量 260 passed 与 general review PASS；最终 PG 全量收尾后归档。
 
 ## 数据语义（2026-10-23T08:14:27+08:00）
 
@@ -26,3 +26,14 @@
 - 阅读器新增 6 项组件用例，覆盖带 HTML 摘要时的加载、空正文、同步中、解析失败与请求失败。此前修复前 4 项失败，修复后相关测试通过。
 - 本轮前端 `npm test` 210 passed；`npx tsc -b`、OpenAPI/CSS 检查、`npm run lint` 通过。未执行真实邮箱浏览器端到端验证。
 - 本地 API 容器已按最终代码重建并更新；健康检查与 HTTP `/health` 通过，服务实际提供的 JS/CSS 与镜像资源 SHA-256 一致；部署后再次核验原摘要恢复值 15/15。
+
+## 本轮闭环核验（t043）
+
+- 已核对当前 MessageReader 只读取 detail.body，现有回归覆盖含 HTML 摘要的加载、archived true/false/null 空正文、解析失败与请求失败。后端只读列表预览测试覆盖摘要原值与正文 fallback 不写回。
+- 原修复提交已在 main；前端 260 passed，类型/构建/lint/OpenAPI/CSS 通过，general review PASS。最终 PG 全量结果待主代理补入；本轮未修改容器摘要或生成写回数据。
+
+## 最终闭环验证
+
+- 主分支最终后端全量 477 passed / 0 skipped；前端 260 passed，类型、构建、lint、OpenAPI/CSS 均通过；真实全栈 E2E 8 passed，stub E2E 13 passed。
+- 代码/测试审查及逐 AC 证据见对应 t041/t042/t043 总账。未部署生产，未改写运行邮件数据。
+- 处理：t043
