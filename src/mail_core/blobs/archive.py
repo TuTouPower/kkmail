@@ -199,7 +199,9 @@ def parse_mime_content(
     return text_plain, text_html, attachments
 
 
-def _priority_for(sort_time: datetime, *, now: datetime, recent_days: int) -> int:
+def _priority_for(sort_time: datetime | None, *, now: datetime, recent_days: int) -> int:
+    if sort_time is None:
+        return 2  # Unknown dates are scheduled with older messages.
     age = now - sort_time
     if age <= timedelta(days=recent_days):
         return 1  # P1 recent
@@ -237,7 +239,7 @@ def claim_archive_batch(
     if target_message_id is not None:
         stmt = stmt.where(Message.id == target_message_id)
     stmt = (
-        stmt.order_by(MessageArchiveState.priority.asc(), Message.sort_time.desc())
+        stmt.order_by(MessageArchiveState.priority.asc(), Message.sort_time.desc().nulls_last())
         .limit(limit)
         .with_for_update(of=MessageArchiveState, skip_locked=True)
     )
@@ -764,11 +766,6 @@ def run_archive_batch(
                                 msg_record.from_name = em_name or msg_record.from_name
                             if not msg_record.subject and raw_em.get("Subject"):
                                 msg_record.subject = str(raw_em.get("Subject") or "").strip()
-                            em_date = raw_em.get("Date")
-                            if em_date:
-                                dt = email.utils.parsedate_to_datetime(em_date)
-                                if dt:
-                                    msg_record.sort_time = dt
                         except Exception as hdr_exc:
                             raise MimeParseError("header", f"header_backfill_failed: {safe_error(hdr_exc)}") from hdr_exc
 

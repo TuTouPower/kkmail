@@ -4,7 +4,7 @@ const MONTHS: Record<string, number> = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4,
  * Parse the date strings the backend returns: ISO 8601 (Graph), RFC 2822, and
  * IMAP INTERNALDATE ("20-Oct-2026 20:54:54 +0800"). Returns epoch ms or NaN.
  */
-export function parseMailDate(value?: string): number {
+export function parseMailDate(value?: string | null): number {
   if (!value) return NaN
   const imap = /^\s*(\d{1,2})-([A-Za-z]{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2}) ([+-])(\d{2})(\d{2})\s*$/.exec(value)
   if (imap) {
@@ -18,7 +18,7 @@ export function parseMailDate(value?: string): number {
 }
 
 /** Newest-first comparator; unparsable dates sort last. */
-export function compareMailDates(a?: string, b?: string, newestFirst = true): number {
+export function compareMailDates(a?: string | null, b?: string | null, newestFirst = true): number {
   const ta = parseMailDate(a)
   const tb = parseMailDate(b)
   const na = Number.isNaN(ta)
