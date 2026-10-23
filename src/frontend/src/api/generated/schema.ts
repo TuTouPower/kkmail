@@ -599,6 +599,7 @@ export interface components {
             group_order?: number | null;
             /** Id */
             id: string;
+            imap_config?: components["schemas"]["ImapConfigOut"] | null;
             /** Master Order */
             master_order?: number | null;
             /** Provider */
@@ -734,6 +735,15 @@ export interface components {
             status: string;
             /** Version */
             version: string;
+        };
+        /** ImapConfigOut */
+        ImapConfigOut: {
+            /** Imap Host */
+            imap_host?: string | null;
+            /** Imap Port */
+            imap_port?: number | null;
+            /** Use Ssl */
+            use_ssl?: boolean | null;
         };
         /** LoginIn */
         LoginIn: {

@@ -558,4 +558,69 @@ describe('<SettingsModal />', () => {
     await click([...container.querySelectorAll('button')].find(button => button.textContent === '暂停同步') || null)
     await waitFor(() => expect(updates.sort()).toEqual(['qq-work-1', 'qq-work-2']))
   })
+
+  it('opens the edit dialog and saves connection settings, credentials, and group through PATCH', async () => {
+    const groups = [
+      { id: 'work', name: '工作', color: null, account_count: 1, sort_order: 0 },
+      { id: 'personal', name: '个人', color: null, account_count: 0, sort_order: 1 },
+    ]
+    const account = {
+      id: 'account-edit', email: 'edit@example.test', status: 'active', sync_status: 'idle', sync_enabled: true,
+      account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作',
+      imap_config: { imap_host: 'imap.old.test', imap_port: 993, use_ssl: true },
+    }
+    let currentAccount = { ...account }
+    const patches: Array<{ path: string; body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init: RequestInit = {}) => {
+      const url = new URL(String(input), 'http://localhost')
+      const method = init.method || 'GET'
+      if (url.pathname === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (url.pathname === '/api/accounts' && method === 'GET') return json({ accounts: [currentAccount], total: 1, limit: 200, offset: 0, has_more: false })
+      if (url.pathname === '/api/accounts/account-edit' && method === 'PATCH') {
+        const body = JSON.parse(String(init.body)) as { config?: Record<string, unknown>; group_id?: string; clear_group?: boolean; credentials?: Record<string, unknown> }
+        patches.push({ path: url.pathname, body })
+        currentAccount = {
+          ...currentAccount,
+          group_id: body.group_id || currentAccount.group_id,
+          group_name: groups.find(group => group.id === (body.group_id || currentAccount.group_id))?.name || currentAccount.group_name,
+          imap_config: { ...currentAccount.imap_config, ...body.config },
+        }
+        return json(currentAccount)
+      }
+      if (url.pathname === '/api/groups') return json({ groups })
+      if (url.pathname === '/api/settings') return json({ settings: {} })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelector('.settings-account-row')).not.toBeNull())
+    const actions = container.querySelector('.settings-row-actions') as HTMLElement
+    expect(actions.querySelectorAll('button')[0].getAttribute('aria-label')).toBe('编辑账户 edit@example.test')
+    expect(actions.querySelectorAll('button')[1].getAttribute('aria-label')).toBe('同步 edit@example.test')
+    await click(actions.querySelector('button[aria-label="编辑账户 edit@example.test"]'))
+
+    const dialog = container.querySelector('dialog') as HTMLDialogElement
+    expect(dialog.querySelector('h2')?.textContent).toBe('编辑账户')
+    expect((dialog.querySelector('#account-imap-host') as HTMLInputElement).value).toBe('imap.old.test')
+    expect((dialog.querySelector('#account-imap-port') as HTMLInputElement).value).toBe('993')
+    expect((dialog.querySelector('#account-group') as HTMLSelectElement).value).toBe('work')
+
+    await typeInto(dialog.querySelector('#account-imap-host'), 'imap.new.test')
+    await typeInto(dialog.querySelector('#account-imap-port'), '143')
+    await click(dialog.querySelector('#account-imap-ssl'))
+    await typeInto(dialog.querySelector('#account-password'), 'new-app-password')
+    await changeSelect(dialog.querySelector('#account-group'), 'personal')
+    await click(dialog.querySelector('button[type="submit"]'))
+
+    await waitFor(() => expect(patches).toEqual([{
+      path: '/api/accounts/account-edit',
+      body: {
+        config: { imap_host: 'imap.new.test', imap_port: 143, use_ssl: false },
+        group_id: 'personal',
+        credentials: { password: 'new-app-password' },
+      },
+    }]))
+    await waitFor(() => expect(container.querySelector('dialog')).toBeNull())
+    await waitFor(() => expect(container.textContent).toContain('账户设置已更新'))
+  })
 })
