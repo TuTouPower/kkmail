@@ -516,6 +516,22 @@
             "dir": "docs/archive/tasks/t034_on_demand_body_sync_and_archive_priority"
         },
         {
+            "tid": "t038",
+            "slug": "reader_recipient_truth",
+            "title": "避免把账号邮箱显示为邮件收件人",
+            "status": "done",
+            "branch": "t038_reader_recipient_truth",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "852c01372e17a4d858050eb2e9fed148870e5495",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源：审查确认 To 为空时阅读器回退为账号邮箱。",
+            "dir": "docs/archive/tasks/t038_reader_recipient_truth"
+        },
+        {
             "tid": "t039",
             "slug": "folder_stats_scope_truth",
             "title": "保持邮件数量统计与查询范围一致",
