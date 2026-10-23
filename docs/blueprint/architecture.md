@@ -20,16 +20,25 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
 ## 模块分层与数据流
 
 - **API 接入层 (`src/mail_core/api/`)**：
+
     - 路由声明：统一 `response_model`，输入经 Pydantic 校验。
     - 安全鉴权：Cookie Session 签名与防篡改、Session Epoch 全局失效、CSRF 严格校验、反向代理受信与登录防爆破。
+
 - **业务领域与应用层 (`src/mail_core/mail/application/`, `src/mail_core/accounts/`)**：
+
     - 账户生命周期、用户自定义单层分组、邮件查询、聚合收件箱游标检索与全文搜索。分组顺序、账号总列表顺序与组内顺序持久化在 PostgreSQL；`GET /api/sidebar/layout` 返回完整布局与 revision，`PUT /api/sidebar/layout` 和默认顺序恢复携 expected_revision，在事务锁下拒绝过期快照并原子保存；账号、分组与布局写入共用 PostgreSQL advisory lock，默认账号顺序按邮箱域名及完整地址确定。
     - `/api/mail/inbox` 支持通过 `folder_role`（默认 `inbox`，支持 `sent`/`drafts`/`trash`/`junk`/`archive` 等）或精确 `folder_id` 联合 `account_id` 或 `group_id` 实现多账号统一、单账号、分组分类及特定文件夹检索；`/api/mail/search` 同样支持全局、单账号、分组或精确文件夹范围，拒绝分组与账号/文件夹混用，保证搜索统计和邮件列表隔离。批量已读按当前分组成员解析；空组保持空结果，不存在分组或歧义范围请求失败关闭。
     - 出站写回状态机：基于 `remote_operations` 队列与单调递增 `revision` 的乐观并发控制 (CAS)；支持多批次自动续跑、瞬时错误与限流退避延迟唤醒、跨同步边界的本地字段意图保护与孤儿任务安全对账恢复。
+
 - **同步引擎与协议适配 (`src/mail_core/sync/`, `src/mail_core/providers/`)**：
+
     - 适配器：IMAP (带 TLS 校验与特殊文件夹转义)、Gmail REST (repeated historyTypes + History hydration)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归)。
     - 并发保护：基于数据库的租约锁 (`AccountSyncLease`) 与递增 fencing token。
+    - 元数据保真：provider 通过 `RemoteMessageMeta.supplied_fields` 区分完整快照与部分返回字段，metadata upsert 按字段存在性应用；同页 partial/flag 按响应顺序合并，缺省字段不清空本地事实。Graph 内容字段显式空值仍可清空；Gmail metadata hydration 必须具备匹配 ID、labels 与 headers，失败时不返回成功页。
+    - 未知状态：邮件 read/flag/attachment 使用 nullable 布尔契约贯穿 PostgreSQL、查询 DTO、API 与前端；新建邮件不补 false。文件夹存在未知读状态时未读统计为 null，账号/分组/全局聚合传播未知而保留可知总数。旧库仅迁移已有状态列，无 flag 来源时保留 null。
+
 - **存储与加密层 (`src/mail_core/blobs/`, `src/mail_core/mail/storage/`)**：
+
     - 原文存储：内容寻址分块 AES-256-GCM 流式加密 (`KKMS`)，支持多版本密钥轮换。
     - 附件与垃圾回收：严格追踪 `MessageBlobLink` 与 `Attachment.blob_id` 双重引用，Fail-Closed 二次校验防误删。
     - MIME 解析错误传递链路：Worker 归档期解析正文、报头或附件文件名失败时，保存 raw MIME 至 BlobStore 确保可恢复性，并持久记录脱敏 `MessageBody.parse_error`；详情 API (`/api/mail/messages/{id}`) 完整返回该字段；前端 `mailCoreToMailDetail` 转换透传至 `MailDetail.parse_error`，`MessageReader` 以可访问 alert 横幅明确提示解析失败及原因，即使存在摘要或部分内容亦不被静默吞掉或伪报为空正文。

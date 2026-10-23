@@ -22,11 +22,11 @@ p025 复现 Graph partial delta 把缺省字段覆盖为空，Gmail metadata pro
 
 <!-- /规范 -->
 
-- [ ] AC-001：Graph 部分更新只改变响应明确包含字段，subject/from/snippet/地址组等未返回字段保持原值。
-- [ ] AC-002：Graph 明确返回空 subject、空 snippet 或空收件人数组时，能够清除对应旧值，不因真假判断丢掉清空操作。
-- [ ] AC-003：Gmail metadata projection 未返回 snippet 时保留已存服务商摘要；初次无摘要保持空，不生成摘要写回。
-- [ ] AC-004：Gmail history upsert 必须成功 hydrate；缺 id、ID 不匹配、只有 id、GET 失败均不得作为完整邮件成功应用或推进游标。
-- [ ] AC-005：常规完整邮件仍正确同步，状态未知与本地未收敛写回意图保护不回退。
+- [x] AC-001：Graph 部分更新只改变响应明确包含字段，subject/from/snippet/地址组等未返回字段保持原值。
+- [x] AC-002：Graph 明确返回空 subject、空 snippet 或空收件人数组时，能够清除对应旧值，不因真假判断丢掉清空操作。
+- [x] AC-003：Gmail metadata projection 未返回 snippet 时保留已存服务商摘要；初次无摘要保持空，不生成摘要写回。
+- [x] AC-004：Gmail history upsert 必须成功 hydrate；缺 id、ID 不匹配、只有 id、GET 失败均不得作为完整邮件成功应用或推进游标。
+- [x] AC-005：常规完整邮件仍正确同步，状态未知与本地未收敛写回意图保护不回退。
 
 ### 可测试性声明
 
