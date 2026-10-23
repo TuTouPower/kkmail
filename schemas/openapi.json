@@ -268,6 +268,16 @@
             "title": "Id",
             "type": "string"
           },
+          "imap_config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImapConfigOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "master_order": {
             "anyOf": [
               {
@@ -698,6 +708,45 @@
           "schema_head"
         ],
         "title": "HealthOut",
+        "type": "object"
+      },
+      "ImapConfigOut": {
+        "properties": {
+          "imap_host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imap Host"
+          },
+          "imap_port": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imap Port"
+          },
+          "use_ssl": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Use Ssl"
+          }
+        },
+        "title": "ImapConfigOut",
         "type": "object"
       },
       "LoginIn": {

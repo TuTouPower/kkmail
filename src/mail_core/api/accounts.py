@@ -31,6 +31,12 @@ from mail_core.mail.application.accounts import (
 router = APIRouter(tags=["accounts"])
 
 
+class ImapConfigOut(BaseModel):
+    imap_host: str | None = None
+    imap_port: int | None = None
+    use_ssl: bool | None = None
+
+
 class AccountOut(BaseModel):
     id: str
     email: str
@@ -46,6 +52,7 @@ class AccountOut(BaseModel):
     sync_enabled: bool
     account_type: str
     remark: str | None = None
+    imap_config: ImapConfigOut | None = None
 
 
 class AccountsPage(BaseModel):
