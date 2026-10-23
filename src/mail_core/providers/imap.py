@@ -204,6 +204,27 @@ def _quote_mailbox(name: str) -> str:
     return name
 
 
+def _is_mailbox_noselect(c: imaplib.IMAP4, folder_remote_id: str) -> bool:
+    """Check whether a mailbox has \\Noselect or \\NonExistent attribute."""
+    if not hasattr(c, "list"):
+        return False
+    try:
+        typ, data = c.list("", _quote_mailbox(folder_remote_id))
+        if typ == "OK" and data:
+            for raw in data:
+                if not raw:
+                    continue
+                line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+                m = re.search(r"\(([^)]*)\)", line)
+                if m:
+                    flags = {f.strip().lower() for f in m.group(1).split()}
+                    if "\\noselect" in flags or "\\nonexistent" in flags:
+                        return True
+    except Exception:
+        pass
+    return False
+
+
 def _get_server_uidvalidity(c: imaplib.IMAP4, folder: str) -> int | None:
     if not hasattr(c, "status"):
         return None
@@ -383,6 +404,10 @@ class ImapProvider:
                     m_fallback = re.search(r' "?"?([^"]+)"?\s*$', line)
                     remote_id = m_fallback.group(1).strip() if m_fallback else line.rsplit(" ", 1)[-1].strip('"')
 
+                flag_lower = {f.lower() for f in flags}
+                if "\\noselect" in flag_lower or "\\nonexistent" in flag_lower:
+                    continue
+
                 name = decode_mutf7(remote_id)
                 parent_remote_id = None
                 if delim and delim in remote_id:
@@ -446,6 +471,8 @@ class ImapProvider:
         try:
             typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
             if typ != "OK":
+                if _is_mailbox_noselect(c, folder_remote_id):
+                    return MetadataPage(items=[], next_cursor=None, exhausted=True)
                 raise RuntimeError(f"select {folder_remote_id} failed: {typ}")
             uidvalidity = None
             status = c.status(_quote_mailbox(folder_remote_id), "(UIDVALIDITY)")
@@ -458,6 +485,8 @@ class ImapProvider:
             start = int((cursor or {}).get("uid_next") or 1)
             typ, data = c.uid("SEARCH", None, f"UID {start}:*")
             if typ != "OK":
+                if typ == "NO" and _is_mailbox_noselect(c, folder_remote_id):
+                    return MetadataPage(items=[], next_cursor=None, exhausted=True)
                 # Never treat a failed SEARCH as "folder exhausted" — that silently stops sync.
                 raise RuntimeError(f"UID SEARCH {folder_remote_id} failed: {typ}")
             batch_size = int((cursor or {}).get("page_size") or 50)
@@ -802,6 +831,8 @@ class ImapProvider:
         try:
             typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
             if typ != "OK":
+                if _is_mailbox_noselect(c, folder_remote_id):
+                    return []
                 raise RuntimeError(f"select {folder_remote_id} failed during reconcile: {typ}")
             uidvalidity = 0
             status = c.status(_quote_mailbox(folder_remote_id), "(UIDVALIDITY)")
@@ -812,6 +843,8 @@ class ImapProvider:
                     uidvalidity = int(m.group(1))
             typ, data = c.uid("SEARCH", None, "ALL")
             if typ != "OK":
+                if typ == "NO" and _is_mailbox_noselect(c, folder_remote_id):
+                    return []
                 raise RuntimeError(f"UID SEARCH {folder_remote_id} failed during reconcile: {typ}")
             remote_uids = []
             for x in (data[0] or b"").split():
