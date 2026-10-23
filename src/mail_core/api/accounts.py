@@ -7,16 +7,21 @@ from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from mail_core.accounts import StaleSidebarLayoutError
 from mail_core.mail.application.accounts import (
     create_account_app,
     create_group_app,
     delete_account_app,
     delete_group_app,
+    get_sidebar_layout_app,
     get_settings_app,
     list_accounts_app,
     list_groups_app,
+    rename_group_app,
+    reset_sidebar_account_order_app,
+    save_sidebar_layout_app,
     sync_account_app,
     sync_all_accounts_app,
     update_account_app,
@@ -34,6 +39,8 @@ class AccountOut(BaseModel):
     group_id: str | None = None
     group_name: str | None = None
     group_color: str | None = None
+    master_order: int | None = None
+    group_order: int | None = None
     status: str
     sync_status: str
     sync_enabled: bool
@@ -76,11 +83,46 @@ class GroupOut(BaseModel):
     name: str
     color: str | None = None
     account_count: int = 0
+    sort_order: int = 0
 
 
 class GroupCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     color: str | None = Field(default=None, max_length=32)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_name(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class GroupUpdateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_name(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class SidebarLayoutIn(BaseModel):
+    group_ids: list[UUID]
+    master_account_ids: list[UUID]
+    ungrouped_account_ids: list[UUID]
+    group_account_ids: dict[UUID, list[UUID]]
+    expected_revision: str = Field(min_length=64, max_length=64)
+
+
+class SidebarLayoutRevisionIn(BaseModel):
+    expected_revision: str = Field(min_length=64, max_length=64)
+
+
+class SidebarLayoutSnapshotOut(BaseModel):
+    revision: str
+    group_ids: list[UUID]
+    master_account_ids: list[UUID]
+    ungrouped_account_ids: list[UUID]
+    group_account_ids: dict[UUID, list[UUID]]
 
 
 class GroupsOut(BaseModel):
@@ -184,7 +226,7 @@ def api_list_groups() -> GroupsOut:
     groups = list_groups_app()
     return GroupsOut(
         groups=[
-            GroupOut(id=g.id, name=g.name, color=g.color, account_count=g.account_count)
+            GroupOut(id=g.id, name=g.name, color=g.color, account_count=g.account_count, sort_order=g.sort_order)
             for g in groups
         ]
     )
@@ -192,8 +234,69 @@ def api_list_groups() -> GroupsOut:
 
 @router.post("/api/groups", response_model=GroupOut)
 def api_create_group(body: GroupCreateIn) -> GroupOut:
-    g = create_group_app(name=body.name, color=body.color)
-    return GroupOut(id=g.id, name=g.name, color=g.color, account_count=0)
+    try:
+        g = create_group_app(name=body.name, color=body.color)
+        return GroupOut(id=g.id, name=g.name, color=g.color, account_count=0, sort_order=g.sort_order)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.patch("/api/groups/{group_id}", response_model=GroupOut)
+def api_rename_group(group_id: UUID, body: GroupUpdateIn) -> GroupOut:
+    try:
+        group = rename_group_app(group_id, name=body.name)
+        return GroupOut(
+            id=group.id,
+            name=group.name,
+            color=group.color,
+            account_count=group.account_count,
+            sort_order=group.sort_order,
+        )
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/api/sidebar/layout", response_model=SidebarLayoutSnapshotOut)
+def api_get_sidebar_layout() -> SidebarLayoutSnapshotOut:
+    return SidebarLayoutSnapshotOut(**get_sidebar_layout_app())
+
+
+@router.put(
+    "/api/sidebar/layout",
+    status_code=204,
+    response_class=Response,
+    responses={409: {"description": "The sidebar layout changed after the supplied revision was read."}},
+)
+def api_save_sidebar_layout(body: SidebarLayoutIn) -> Response:
+    try:
+        save_sidebar_layout_app(
+            expected_revision=body.expected_revision,
+            group_ids=body.group_ids,
+            master_account_ids=body.master_account_ids,
+            ungrouped_account_ids=body.ungrouped_account_ids,
+            group_account_ids=body.group_account_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StaleSidebarLayoutError as exc:
+        raise HTTPException(409, "sidebar layout changed; reload and retry") from exc
+    return Response(status_code=204)
+
+
+@router.post(
+    "/api/sidebar/layout/default-order",
+    status_code=204,
+    response_class=Response,
+    responses={409: {"description": "The sidebar layout changed after the supplied revision was read."}},
+)
+def api_reset_sidebar_account_order(body: SidebarLayoutRevisionIn) -> Response:
+    try:
+        reset_sidebar_account_order_app(expected_revision=body.expected_revision)
+    except StaleSidebarLayoutError as exc:
+        raise HTTPException(409, "sidebar layout changed; reload and retry") from exc
+    return Response(status_code=204)
 
 
 @router.delete("/api/groups/{group_id}", status_code=204, response_class=Response)

@@ -34,6 +34,12 @@ npm --prefix src/frontend run test:e2e
 python3 scripts/run_full_stack_e2e.py
 ```
 
+### Electron 原生标题栏人工验证（t032）
+
+`BrowserWindow` 参数单测不能证明 macOS 原生交通灯、真实拖动区或全屏行为。改动桌面标题栏后，使用隔离 `userData` 与测试服务启动独立 Electron 窗口，并以系统截图和操作记录验证：原生交通灯与侧栏按钮相邻、侧栏收起后按钮可用、空白区可拖动而按钮点击不拖窗、最小化/恢复、关闭/重新打开、全屏进出及窗口缩放后不重叠。不得用网页原型绘制的假交通灯代替证据。
+
+Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使用对应平台时，明确标注仅完成窗口参数单测，不宣称该平台已实测。
+
 ## Schema / codegen 验证
 
 - **触发路径**：`src/mail_core/api/` (路由与 DTO 改动)、`schemas/openapi.json`、`src/mail_core/db/alembic/versions/`
@@ -284,3 +290,18 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 - **定时与手动扩展套件 (`.github/workflows/scheduled.yml`)**：
     每天定时或手动触发，完整执行真实备份跨库恢复、多版本历史数据平滑升级、多进程 Worker 故障恢复和大邮箱性能基准测试；
 - **权限与环境安全**：工作流配置最小 `contents: read` 权限，不申请发布权限；测试使用的数据库密码与环境变量严格隔离于专用测试环境。
+
+## 分组侧栏与分组邮件范围（t027）
+
+组织数据、邮件范围与浏览器交互必须组合验证，不能只测组件状态或仅检查 API 响应：
+
+```bash
+scripts/run-mail-core-tests.sh run
+(cd src/frontend && npm test && npx tsc -b && npm run build && npm run lint && npm run openapi:check)
+npm --prefix src/frontend run test:e2e
+python3 scripts/run_full_stack_e2e.py
+```
+
+- PostgreSQL 集成测试验证分组 CRUD、删除非空组后保留账号、完整布局原子校验、独立排序、空组与未知组范围、列表/搜索/统计/全部已读，以及最新迁移的降级再升级；测试必须使用专用测试数据库。
+- 浏览器冒烟测试验证六类全局分类、分组分类、真实文件夹树和导航布局；真实全栈 Playwright 通过 HTML5 拖拽验证空组、跨组、移出、主列表内排序和分组排序，并刷新后读取服务端确认成员关系与顺序持久化。
+- 前端测试覆盖查询 key 按 scope 隔离、分组参数贯通、偏好持久化与设置入口；`schemas/openapi.json` 和生成 TypeScript 必须通过 codegen 漂移检查。

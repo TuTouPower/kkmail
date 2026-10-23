@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from mail_core.api.http_headers import content_disposition_attachment
 from mail_core.db.session import get_session_factory
+from mail_core.accounts import account_ids_for_group
 from mail_core.mail.domain.archive import apply_transition
 from mail_core.mail.domain.enums import ArchiveState, JobType
 from mail_core.mail.storage.models import Message, MessageArchiveState
@@ -41,6 +42,7 @@ from mail_core.mail.application.queries import (
     get_message_detail,
     list_folder_stats_for_account,
     query_global_inbox_stats,
+    query_group_inbox_stats,
     unified_inbox,
 )
 from mail_core.mail.application.search import search_messages_page
@@ -89,8 +91,8 @@ class AccountFolderStatsItemOut(BaseModel):
     folder_id: UUID
     role: str
     name: str
-    total_count: int
-    unread_count: int
+    total_count: int | None
+    unread_count: int | None
     remote_id: str
     parent_remote_id: str | None = None
 
@@ -140,6 +142,7 @@ class FlagBody(BaseModel):
 
 class MarkAllReadBody(BaseModel):
     account_id: UUID | None = None
+    group_id: UUID | None = None
     folder_role: str | None = "inbox"
     folder_id: UUID | None = None
     is_flagged: bool | None = None
@@ -192,9 +195,14 @@ def _mutation_out(r: MutationResult) -> MutationOut:
 
 
 @router.get("/stats", response_model=GlobalStatsOut)
-def api_global_inbox_stats() -> GlobalStatsOut:
+def api_global_inbox_stats(group_id: UUID | None = None, folder_role: str = "inbox") -> GlobalStatsOut:
     Session = get_session_factory()
     with Session() as session:
+        if group_id is not None:
+            try:
+                return query_group_inbox_stats(session, group_id, folder_role=folder_role)
+            except LookupError as exc:
+                raise HTTPException(404, str(exc)) from exc
         return query_global_inbox_stats(session)
 
 
@@ -203,6 +211,7 @@ def api_unified_inbox(
     limit: int = Query(50, ge=1, le=200),
     cursor: str | None = Query(None, description="`next_cursor` from the previous page"),
     account_id: UUID | None = None,
+    group_id: UUID | None = None,
     is_read: bool | None = Query(None, description="Filter messages by read status"),
     is_flagged: bool | None = Query(None, description="Filter messages by flagged status"),
     folder_role: str = Query("inbox", description="Folder role to query (default: inbox)"),
@@ -211,10 +220,13 @@ def api_unified_inbox(
 ) -> PageOut:
     Session = get_session_factory()
     with Session() as session:
+        if group_id is not None and (account_id is not None or folder_id is not None):
+            raise HTTPException(400, "group_id cannot be combined with account_id or folder_id")
         try:
+            account_ids = account_ids_for_group(session, group_id) if group_id is not None else ([account_id] if account_id else None)
             page = unified_inbox(
                 session,
-                account_ids=[account_id] if account_id else None,
+                account_ids=account_ids,
                 folder_id=folder_id,
                 limit=limit,
                 cursor=cursor,
@@ -257,16 +269,25 @@ def api_one_folder_stats(folder_id: UUID) -> FolderStatsOut:
 def api_search(
     q: str = Query(..., min_length=1, max_length=256),
     account_id: UUID | None = None,
+    group_id: UUID | None = None,
+    folder_id: UUID | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0, le=10_000),
 ) -> SearchPageOut:
     """Ranked search; rows are hydrated like /inbox. Paginate with `next_offset`."""
     Session = get_session_factory()
     with Session() as session:
+        if group_id is not None and (account_id is not None or folder_id is not None):
+            raise HTTPException(400, "group_id cannot be combined with account_id or folder_id")
+        try:
+            account_ids = account_ids_for_group(session, group_id) if group_id is not None else ([account_id] if account_id else None)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
         page = search_messages_page(
             session,
             query=q,
-            account_ids=[account_id] if account_id else None,
+            account_ids=account_ids,
+            folder_id=folder_id,
             limit=limit,
             offset=offset,
         )
@@ -429,6 +450,8 @@ def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
     """Batch mark messages read across the matching scope (folder/account/flag)."""
     Session = get_session_factory()
     with Session() as session:
+        if body.group_id is not None and (body.account_id is not None or body.folder_id is not None):
+            raise HTTPException(400, "group_id cannot be combined with account_id or folder_id")
         try:
             count = mark_all_messages_read(
                 session,
@@ -436,6 +459,7 @@ def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
                 folder_role=body.folder_role,
                 folder_id=body.folder_id,
                 is_flagged=body.is_flagged,
+                group_id=body.group_id,
             )
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc

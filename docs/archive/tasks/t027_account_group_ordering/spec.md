@@ -83,7 +83,7 @@
 ## 上下文区
 
 - 合并来源：原 t027（当前目标）、[t028 分组邮件范围](../../archive/tasks/t028_group_mail_scope/spec.md)、[t029 侧栏导航](../../archive/tasks/t029_sidebar_group_navigation/spec.md)、[t030 分组管理](../../archive/tasks/t030_sidebar_group_management/spec.md)、[t031 拖拽排序](../../archive/tasks/t031_sidebar_drag_ordering/spec.md)；用户明确要求本批收敛为两个 task，保留 t032 双端窗口适配。
-- 需求来源：[设计聊天](https://chatgpt.com/c/6ada5614-4040-83e8-8c78-c38e010eb651)、[参考原型](reference_demo.html) 与 [评估记录](source_notes.md)；2026-10-23 通过 ego lite 核实。
+- 需求来源：[设计聊天](https://chatgpt.com/c/[REDACTED_UUID])、[参考原型](reference_demo.html) 与 [评估记录](source_notes.md)；2026-10-23 通过 ego lite 核实。
 - 后续用户约束优先：不减少当前软件功能；“工作”“个人”只为示例，不预置、不硬编码。
 - AC 保留映射：原 t027 AC-001–009 保持不变；原 t028 AC-001–007 → 本 task AC-010–016；原 t029 AC-001–010 → AC-017–026；原 t030 AC-001–007 → AC-027–033；原 t031 AC-001–007 → AC-034–040。全部 40 条行为保留，来源原编号不复用。
 

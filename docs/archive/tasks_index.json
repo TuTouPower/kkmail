@@ -420,6 +420,22 @@
             "dir": "docs/archive/tasks/t026_mime_archive_decode_failure"
         },
         {
+            "tid": "t027",
+            "slug": "account_group_ordering",
+            "title": "完整改造账号分组侧栏与邮件范围",
+            "status": "done",
+            "branch": "t027_account_group_ordering",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "c8cee92446f9c24e7a0a2a501d52d0bd49068041",
+            "depends_on": "",
+            "conflicts_with": "t026",
+            "note": "合并原 t027–t031，保留全部 40 条 AC；完整功能不减、无预置示例分组；t032 独立负责双端窗口适配",
+            "dir": "docs/archive/tasks/t027_account_group_ordering"
+        },
+        {
             "tid": "t028",
             "slug": "group_mail_scope",
             "title": "贯通分组邮件查询与批量已读范围",
@@ -482,6 +498,22 @@
             "conflicts_with": "",
             "note": "来源：侧栏设计聊天最终要求与 v3 demo；无拖动手柄、跨组/总列表双向移动、组与账号排序、恢复默认; dropped: 已合并至 t027：完整改造账号分组侧栏与邮件范围；原 AC-001–007 映射为 t027 AC-034–040，全部保留",
             "dir": "docs/archive/tasks/t031_sidebar_drag_ordering"
+        },
+        {
+            "tid": "t032",
+            "slug": "sidebar_shell_controls",
+            "title": "整合网页与桌面原生标题栏侧栏控制",
+            "status": "done",
+            "branch": "t032_sidebar_shell_controls",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "1b1407ae5e68ebd732dce46d5386355f9e9b0d56",
+            "depends_on": "t027",
+            "conflicts_with": "t025",
+            "note": "来源：侧栏设计聊天最终要求与 v3 demo；网页列表标题同行控制，macOS 原生红绿灯旁控制，保留移动端 760px 断点; 本批收敛为两个 task；依赖合并后的 t027，原 t028–t031 不再独立调度",
+            "dir": "docs/archive/tasks/t032_sidebar_shell_controls"
         },
         {
             "tid": "t033",

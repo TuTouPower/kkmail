@@ -95,13 +95,23 @@ export interface StubAccount {
   account_type?: string
   group_id?: string
   group_color?: string
+  master_order?: number | null
+  group_order?: number | null
   sync_state?: string
   sync_enabled?: boolean
+}
+
+export interface StubGroup {
+  id: string
+  name: string
+  color?: string | null
+  sort_order?: number
 }
 
 export interface SetupStubApiOptions {
   authedInitially?: boolean
   accounts?: StubAccount[]
+  groups?: StubGroup[]
   folderStatsByAccount?: Record<string, StubFolder[] | { error: string }>
 }
 
@@ -110,6 +120,39 @@ export const FAKE_CSRF_TOKEN = 'fake-csrf-token'
 export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}) {
   let isAuthed = options.authedInitially ?? false
   const messages = createMockMessages()
+  let currentGroups = options.groups ?? [{ id: 'grp-1', name: '测试邮箱组', color: '#0879d9', sort_order: 0 }]
+  let currentAccounts = options.accounts ?? [
+    {
+      id: 'acc-00000000-0000-0000-0000-000000000001',
+      email: 'user@example.com',
+      provider: 'imap',
+      group_id: 'grp-1',
+      sync_state: 'idle',
+      sync_enabled: true,
+    },
+  ]
+  let sidebarRevision = 0
+
+  const getSidebarLayout = () => {
+    const groupIds = [...currentGroups]
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }))
+      .map((group) => group.id)
+    const groupAccountIds = Object.fromEntries(currentGroups.map((group) => {
+      const members = currentAccounts.filter((account) => account.group_id === group.id)
+      const hasManualOrder = members.some((account) => account.group_order != null)
+      members.sort((a, b) => hasManualOrder
+        ? (a.group_order ?? Number.MAX_SAFE_INTEGER) - (b.group_order ?? Number.MAX_SAFE_INTEGER) || a.email.localeCompare(b.email, 'en', { sensitivity: 'base' })
+        : a.email.localeCompare(b.email, 'en', { sensitivity: 'base' }))
+      return [group.id, members.map((account) => account.id)]
+    }))
+    return {
+      revision: String(sidebarRevision).padStart(64, '0'),
+      group_ids: groupIds,
+      master_account_ids: currentAccounts.map((account) => account.id),
+      ungrouped_account_ids: currentAccounts.filter((account) => !account.group_id).map((account) => account.id),
+      group_account_ids: groupAccountIds,
+    }
+  }
 
   await page.route('**/api/**', async (route: Route) => {
     const req = route.request()
@@ -177,21 +220,16 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
     if (path === '/api/groups') {
       return route.fulfill({
         status: 200,
-        json: { groups: [{ id: 'grp-1', name: '工作邮箱', color: '#0879d9', account_count: 1 }] },
+        json: { groups: currentGroups.map((group, sort_order) => ({
+          ...group,
+          sort_order: group.sort_order ?? sort_order,
+          account_count: currentAccounts.filter((account) => account.group_id === group.id).length,
+        })) },
       })
     }
 
     if (path === '/api/accounts') {
-      const accountsList = options.accounts ?? [
-        {
-          id: 'acc-00000000-0000-0000-0000-000000000001',
-          email: 'user@example.com',
-          provider: 'imap',
-          group_id: 'grp-1',
-          sync_state: 'idle',
-          sync_enabled: true,
-        },
-      ]
+      const accountsList = currentAccounts
       return route.fulfill({
         status: 200,
         json: {
@@ -202,6 +240,10 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
       })
     }
 
+    if (path === '/api/sidebar/layout' && method === 'GET') {
+      return route.fulfill({ status: 200, json: getSidebarLayout() })
+    }
+
     if (path === '/api/settings') {
       return route.fulfill({
         status: 200,
@@ -209,16 +251,53 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
       })
     }
 
+    if (path === '/api/sidebar/layout' && method === 'PUT') {
+      const layout = req.postDataJSON() as {
+        expected_revision: string
+        group_ids: string[]
+        master_account_ids: string[]
+        ungrouped_account_ids: string[]
+        group_account_ids: Record<string, string[]>
+      }
+      if (layout.expected_revision !== String(sidebarRevision).padStart(64, '0')) {
+        return route.fulfill({ status: 409, json: { detail: 'sidebar layout changed; reload and retry' } })
+      }
+      currentGroups = layout.group_ids.map((id, sort_order) => {
+        const group = currentGroups.find((item) => item.id === id)
+        return group ? { ...group, sort_order } : null
+      }).filter((group): group is StubGroup => group !== null)
+      currentAccounts = currentAccounts.map((account) => {
+        const group = currentGroups.find((item) => layout.group_account_ids[item.id]?.includes(account.id))
+        const groupOrder = group ? layout.group_account_ids[group.id].indexOf(account.id) : null
+        return {
+          ...account,
+          group_id: group?.id,
+          master_order: layout.master_account_ids.indexOf(account.id),
+          group_order: groupOrder,
+        }
+      }).sort((a, b) => (a.master_order ?? Number.MAX_SAFE_INTEGER) - (b.master_order ?? Number.MAX_SAFE_INTEGER))
+      sidebarRevision += 1
+      return route.fulfill({ status: 204, body: '' })
+    }
+
+    if (path === '/api/sidebar/layout/default-order' && method === 'POST') {
+      const body = req.postDataJSON() as { expected_revision: string }
+      if (body.expected_revision !== String(sidebarRevision).padStart(64, '0')) {
+        return route.fulfill({ status: 409, json: { detail: 'sidebar layout changed; reload and retry' } })
+      }
+      currentAccounts = currentAccounts.map((account) => ({ ...account, master_order: null, group_order: null }))
+        .sort((a, b) => a.email.localeCompare(b.email, 'en', { sensitivity: 'base' }))
+      sidebarRevision += 1
+      return route.fulfill({ status: 204, body: '' })
+    }
+
     // 4. Global Stats & Folder stats
     if (path === '/api/mail/stats') {
-      const accountsList = options.accounts ?? [
-        { id: 'acc-00000000-0000-0000-0000-000000000001', email: 'user@example.com' },
-      ]
       return route.fulfill({
         status: 200,
         json: {
           total_unread: 1,
-          accounts: accountsList.map((a) => ({
+          accounts: currentAccounts.map((a) => ({
             account_id: a.id,
             unread_count: 1,
             total_count: messages.length,

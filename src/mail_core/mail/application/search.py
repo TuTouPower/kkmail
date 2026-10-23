@@ -29,10 +29,11 @@ def search_message_ids(
     *,
     query: str,
     account_ids: list[uuid.UUID] | None = None,
+    folder_id: uuid.UUID | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[uuid.UUID]:
-    return _search_messages(session, account_ids=account_ids, query=query, limit=limit, offset=offset)
+    return _search_messages(session, account_ids=account_ids, query=query, folder_id=folder_id, limit=limit, offset=offset)
 
 
 def search_messages_page(
@@ -40,14 +41,15 @@ def search_messages_page(
     *,
     query: str,
     account_ids: list[uuid.UUID] | None = None,
+    folder_id: uuid.UUID | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> SearchPage:
     """Ranked search hydrated into list rows, with offset pagination + total."""
-    ids = search_message_ids(session, query=query, account_ids=account_ids, limit=limit + 1, offset=offset)
+    ids = search_message_ids(session, query=query, account_ids=account_ids, folder_id=folder_id, limit=limit + 1, offset=offset)
     has_more = len(ids) > limit
     ids = ids[:limit]
-    total = _count_messages(session, account_ids=account_ids, query=query)
+    total = _count_messages(session, account_ids=account_ids, query=query, folder_id=folder_id)
     next_offset: int | None = None
     if has_more:
         cand = offset + limit
