@@ -913,9 +913,15 @@
             "type": "string"
           },
           "is_archived": {
-            "default": true,
-            "title": "Is Archived",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Archived"
           },
           "is_flagged": {
             "title": "Is Flagged",
@@ -973,6 +979,7 @@
           "body",
           "body_type",
           "parse_error",
+          "is_archived",
           "attachments"
         ],
         "title": "MessageDetailOut",
@@ -1120,8 +1127,15 @@
             "title": "Is Read"
           },
           "operation_id": {
-            "title": "Operation Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
           },
           "success": {
             "default": true,
@@ -1131,8 +1145,7 @@
         },
         "required": [
           "id",
-          "account_id",
-          "operation_id"
+          "account_id"
         ],
         "title": "MutationOut",
         "type": "object"

@@ -431,11 +431,17 @@ def local_remote_ids_for_folder(
     stmt = (
         select(Message.remote_id)
         .join(MessageLocation, MessageLocation.message_id == Message.id)
-        .where(MessageLocation.folder_id == folder_id)
+        .where(
+            MessageLocation.folder_id == folder_id,
+            Message.remote_id.is_not(None),
+            Message.remote_id != "",
+        )
         .order_by(Message.id.asc())
         .execution_options(yield_per=batch_size)
     )
     for (rid,) in session.execute(stmt):
+        if not isinstance(rid, str) or not rid.strip():
+            continue
         out.append(rid)
         if max_ids is not None and len(out) >= max_ids:
             break

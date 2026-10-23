@@ -82,6 +82,34 @@ describe('mailCoreToMailDetail', () => {
     const out = mailCoreToMailDetail(d)
     expect(out.parse_error).toBe('body_decode_failed: UnicodeDecodeError: invalid start byte')
   })
+
+  it('preserves an unknown archive state instead of treating it as archived', () => {
+    const d: MailCoreMessageDetail = {
+      id: 'm-unknown-archive',
+      account_id: 'a1',
+      subject: 'Legacy import',
+      from_address: 'a@b.c',
+      from_name: null,
+      from: 'a@b.c',
+      to: '',
+      cc: '',
+      date: null,
+      is_read: false,
+      is_flagged: false,
+      has_attachments: false,
+      snippet: null,
+      body: '',
+      body_type: 'empty',
+      parse_error: null,
+      is_archived: null,
+      attachments: [],
+    }
+    expect(mailCoreToMailDetail(d).is_archived).toBeNull()
+
+    const missing = { ...d }
+    delete (missing as Partial<MailCoreMessageDetail>).is_archived
+    expect(mailCoreToMailDetail(missing as MailCoreMessageDetail).is_archived).toBeNull()
+  })
 })
 
 describe('list preview source', () => {
