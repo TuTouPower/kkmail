@@ -21,4 +21,4 @@
         - 邮件渲染：`src/frontend/src/components/MessageReader.tsx`、`src/frontend/src/lib/mailBody.ts`
         - 桌面窗口：`src/desktop/windowOptions.js`
         - 单元测试覆盖：`src/frontend/src/design-system/darkTheme.test.ts`、`src/frontend/src/lib/mailBody.test.ts`、`src/desktop/windowOptions.test.js`
-- 处理：未开
+- 处理：t047

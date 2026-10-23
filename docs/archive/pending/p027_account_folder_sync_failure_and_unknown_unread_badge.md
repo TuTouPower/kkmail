@@ -36,4 +36,4 @@
     - `src/mail_core/providers/imap.py:326-332`
     - `src/mail_core/sync/metadata.py:168-201`
     - `src/mail_core/worker/handlers.py:34-42`
-- 处理：未开
+- 处理：t045
