@@ -1,0 +1,26 @@
+{
+  "tid": "t038",
+  "attempt": 1,
+  "execution_id": "7a87503f68e64da7b059601d1aa311ba",
+  "status": "done",
+  "branch": "t038_reader_recipient_truth",
+  "base_sha": "852c01372e17a4d858050eb2e9fed148870e5495",
+  "tests": "MessageReader: 23 passed; frontend: 38 files, 214 passed; OpenAPI and CSS token checks passed; tsc, production build, lint passed",
+  "blackbox": "stub UI E2E: 8 passed; real full-stack E2E: 3 passed",
+  "review": "single review PASS (Round 1 FAIL t038_gen_f001 fixed; Round 2 PASS; scope: 3ec8fbc6a0fd018d)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ],
+    "AC-002": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ],
+    "AC-003": [
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}
