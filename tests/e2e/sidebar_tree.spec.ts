@@ -247,10 +247,10 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     // t044 已修复：原 t027 断言未缩进的旧语义（accountTextBox.x 与 folderTextBox.x 相同）已由 t044 严格 24px 阶梯缩进测试替代，移除旧断言
 
     await page.getByRole('button', { name: '设置' }).click()
-    await page.getByRole('button', { name: '外观' }).click()
-    await page.getByRole('button', { name: 'light', exact: true }).click()
+    await page.getByRole('button', { name: '通用' }).click()
+    await page.getByRole('button', { name: '亮色', exact: true }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
-    await page.getByRole('button', { name: 'dark', exact: true }).click()
+    await page.getByRole('button', { name: '深色', exact: true }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
     await page.getByRole('button', { name: '关闭' }).click()
 
@@ -388,12 +388,12 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await expect(page.getByTestId('sidebar-toggle')).toHaveCSS('color', 'rgb(104, 106, 112)')
 
     await page.getByRole('button', { name: '设置' }).click()
-    await page.getByRole('button', { name: '外观' }).click()
-    await page.getByRole('button', { name: 'dark', exact: true }).click()
+    await page.getByRole('button', { name: '通用' }).click()
+    await page.getByRole('button', { name: '深色', exact: true }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
     await expect(page.getByTestId('sidebar-toggle')).toHaveCSS('color', 'rgb(142, 142, 147)')
 
-    await page.getByRole('button', { name: 'system', exact: true }).click()
+    await page.getByRole('button', { name: '跟随系统', exact: true }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   })
 
