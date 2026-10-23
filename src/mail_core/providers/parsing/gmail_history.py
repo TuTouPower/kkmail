@@ -51,11 +51,11 @@ def _minimal_meta(message: dict[str, Any]) -> RemoteMessageMeta:
         from_address=str(frm),
         from_name=from_name,
         sort_time=sort_time,
-        is_read="UNREAD" not in label_ids,
+        is_read="UNREAD" not in label_ids if "labelIds" in message else None,
         has_attachments=(
             bool(message["has_attachments"]) if message.get("has_attachments") is not None else None
         ),
-        is_flagged="STARRED" in label_ids,
+        is_flagged="STARRED" in label_ids if "labelIds" in message else None,
         internet_message_id=headers.get("message-id") or message.get("internet_message_id"),
         snippet=message.get("snippet"),
         provider_thread_key=message.get("threadId"),
