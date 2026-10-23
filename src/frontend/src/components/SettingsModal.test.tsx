@@ -14,6 +14,8 @@ function json(body: unknown, status = 200) {
 const puts: Array<{ url: string; body: unknown }> = []
 
 beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   puts.length = 0
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
     const u = String(url)
@@ -188,6 +190,7 @@ describe('<SettingsModal />', () => {
     }))
 
     const { container } = await render(<SettingsPage />)
+    await click([...container.querySelectorAll('button')].find(b => b.textContent === '分组管理') || null)
     const input = container.querySelector('input[placeholder="新分组名"]') as HTMLInputElement
     const createBtn = [...container.querySelectorAll('button')].find((b) => b.textContent === '创建') || null
 
@@ -273,6 +276,7 @@ describe('<SettingsModal />', () => {
     const sidebar = container.querySelector('.tree-groups-section') as HTMLElement
     const settings = container.querySelector('.settings-page') as HTMLElement
     await waitFor(() => expect(container.querySelector(`.tree-account-block[data-drop-list="master"][data-account-id="${accountId}"]`)?.getAttribute('draggable')).toBe('true'))
+    await click([...settings.querySelectorAll('button')].find(b => b.textContent === '分组管理') || null)
     const input = settings.querySelector('input[placeholder="新分组名"]') as HTMLInputElement
     const createButton = [...settings.querySelectorAll('button')].find((button) => button.textContent === '创建') || null
 
@@ -281,6 +285,7 @@ describe('<SettingsModal />', () => {
     await waitFor(() => expect(sidebar.textContent).toContain('由设置创建'))
     await waitFor(() => expect(sidebar.querySelector('.tree-group-block[data-group-id="created-group"] .tree-group-heading')?.getAttribute('draggable')).toBe('true'))
 
+    await click([...settings.querySelectorAll('button')].find(b => b.textContent === '账户管理') || null)
     const moveSelect = settings.querySelector(`select[aria-label="移动 ${accountEmail}"]`) as HTMLSelectElement
     await changeSelect(moveSelect, 'created-group')
     await waitFor(() => expect(moveSelect.value).toBe('created-group'))
@@ -292,6 +297,7 @@ describe('<SettingsModal />', () => {
 
     const priorAccountReads = accountReads.length
     const priorLayoutReads = layoutReads.length
+    await click([...settings.querySelectorAll('button')].find(b => b.textContent === '分组管理') || null)
     const deleteButton = [...settings.querySelectorAll('button')].filter((button) => button.textContent === '删除').at(-1) || null
     await click(deleteButton)
     await waitFor(() => expect(sidebar.textContent).not.toContain('由设置创建'))
@@ -399,6 +405,8 @@ describe('<SettingsModal />', () => {
     const { container } = await render(<><Sidebar /><SettingsPage /></>)
     const inbox = container.querySelector('button[aria-label="所有收件箱"]') as HTMLButtonElement
     const settings = container.querySelector('.settings-page') as HTMLElement
+    await waitFor(() => expect([...settings.querySelectorAll('button')].find(b => b.textContent?.includes('添加账户'))?.disabled).toBe(false))
+    await click([...settings.querySelectorAll('button')].find(b => b.textContent?.includes('添加账户')) || null)
     await typeInto(settings.querySelector('#account-email'), 'added@example.test')
     await typeInto(settings.querySelector('#account-imap-host'), 'imap.example.test')
     const addButton = [...settings.querySelectorAll('button')].find((button) => button.textContent === '添加') || null
@@ -421,6 +429,7 @@ describe('<SettingsModal />', () => {
 
     const { container } = await render(<SettingsPage />)
     const syncBtn = [...container.querySelectorAll('button')].find((b) => b.textContent === '同步全部账户') || null
+    await waitFor(() => expect(syncBtn?.disabled).toBe(false))
     await click(syncBtn)
 
     await waitFor(() => {
@@ -453,6 +462,7 @@ describe('<SettingsModal />', () => {
     })
 
     const { container } = await render(<SettingsPage />)
+    await click([...container.querySelectorAll('button')].find(b => b.textContent === '分组管理') || null)
     await waitFor(() => expect(container.textContent).toContain('当前分组（1）'))
     const deleteButtons = [...container.querySelectorAll('button')].filter((button) => button.textContent === '删除')
     await click(deleteButtons.at(-1) || null)

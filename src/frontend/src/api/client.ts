@@ -8,6 +8,7 @@
 import { apiBaseUrl } from '../lib/apiBase'
 import type {
   AccountCreateIn,
+  AccountUpdateIn,
   AccountSummary,
   AccountsResponse,
   GroupCreateIn,
@@ -280,7 +281,7 @@ export const api = {
     return postJson<AccountSummary>('/api/accounts', payload)
   },
 
-  updateAccount(id: string, payload: { group_id?: string; clear_group?: boolean }) {
+  updateAccount(id: string, payload: Partial<AccountUpdateIn>) {
     return apiRequest<AccountSummary>(`/api/accounts/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),

@@ -96,6 +96,8 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
       await accountTab.click()
     }
 
+    await page.getByRole('button', { name: '添加账户', exact: true }).click()
+
     // 3. 填入真实测试 IMAP 配置
     await page.locator('#account-email').fill(IMAP_USER)
     await page.locator('#account-provider').selectOption('imap')
@@ -108,6 +110,7 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
     // 再次确认端口为 1143
     await page.locator('#account-imap-port').fill(IMAP_PORT)
 
+    await page.getByText('高级凭据配置', { exact: true }).click()
     await page.locator('#account-credentials').fill(JSON.stringify({ password: IMAP_PASS }))
 
     // 点击添加账户
