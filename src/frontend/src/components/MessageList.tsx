@@ -173,8 +173,8 @@ const MessageList = memo(function MessageList() {
           ? stats.folders.find((f: AccountFolderStatsItemOut) => String(f.folder_id) === folderId)
           : stats.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
         return {
-          total: targetFolder ? targetFolder.total_count : (folderId ? 0 : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0)),
-          unread: targetFolder ? targetFolder.unread_count : (folderId ? 0 : stats.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + (f.unread_count || 0), 0)),
+          total: targetFolder?.total_count ?? 0,
+          unread: targetFolder?.unread_count ?? 0,
         }
       }
       const statsList = await Promise.all(
@@ -182,17 +182,16 @@ const MessageList = memo(function MessageList() {
           apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(a.id)}/folder-stats`).catch(() => null),
         ),
       )
+      if (statsList.some((stats) => stats === null)) return null
       let total = 0
       let unread = 0
-      let hasAny = false
       for (const s of statsList) {
-        if (!s) continue
-        hasAny = true
+        if (!s) return null
         const targetFolder = s.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
-        total += targetFolder ? targetFolder.total_count : s.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + f.total_count, 0)
-        unread += targetFolder ? targetFolder.unread_count : s.folders.reduce((sum: number, f: AccountFolderStatsItemOut) => sum + (f.unread_count || 0), 0)
+        total += targetFolder?.total_count ?? 0
+        unread += targetFolder?.unread_count ?? 0
       }
-      return hasAny ? { total, unread } : null
+      return { total, unread }
     },
     enabled: accounts.length > 0 && !searching,
   })
@@ -218,6 +217,11 @@ const MessageList = memo(function MessageList() {
   const totalCount = searching ? (searchInfiniteQuery.data?.pages?.[0]?.total ?? null) : (folderStatsQuery.data?.total ?? null)
   const serverUnread = searching ? null : (folderStatsQuery.data?.unread ?? null)
   const unreadCount = Math.max(serverUnread ?? 0, raw.filter((m) => !m.is_read).length)
+  const statsUnknown = !searching && (
+    folderStatsQuery.isError ||
+    folderStatsQuery.data === null ||
+    folderStatsQuery.data === undefined
+  )
 
   const [actionStatus, setActionStatus] = useState('')
   const sentinelRef = useRef<HTMLDivElement | null>(null)
@@ -280,7 +284,7 @@ const MessageList = memo(function MessageList() {
     : (totalCount !== null ? Math.max(totalCount, visible.length) : visible.length)
   const countLabel = loading
     ? '正在拉取邮件…'
-    : `${displayTotal} 封邮件 · ${unreadCount} 封未读`
+    : `${statsUnknown ? '—' : displayTotal} 封邮件 · ${statsUnknown ? '—' : unreadCount} 封未读`
   const selecting = selectedIds.length > 0
 
   const title = listTitle(view, listFilter)
