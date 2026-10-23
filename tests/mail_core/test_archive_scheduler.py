@@ -143,3 +143,71 @@ def test_archive_batch_completes_and_respects_hard_quota(tmp_path, monkeypatch):
         engine_mod.build_provider = original_engine
         archive_mod.build_provider = original_archive
         set_credential_store(None)
+
+
+def test_archive_batch_reuses_imap_session_across_messages():
+    """AC-004: run_archive_batch reuses single IMAP session across multiple messages in same batch."""
+    from unittest.mock import MagicMock, patch
+    from mail_core.providers.imap import ImapProvider
+
+    Session = get_session_factory()
+    store = DictCredentialStore()
+    set_credential_store(store)
+    original_archive = archive_mod.build_provider
+
+    try:
+        with Session() as session:
+            account = create_account(
+                session,
+                email=f"imap-reuse-{uuid.uuid4().hex[:8]}@example.com",
+                provider="imap",
+                credential_ref="cred-reuse",
+            )
+            account_id = account.id
+            folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+            session.add(folder)
+            session.flush()
+
+            now = datetime.now(timezone.utc)
+            for i in range(3):
+                msg = Message(
+                    account_id=account.id,
+                    remote_id=f"100\x1fINBOX\x1f{i + 1}",
+                    subject=f"Msg {i}",
+                    from_address="sender@example.com",
+                    sort_time=now,
+                )
+                session.add(msg)
+                session.flush()
+                session.add(MessageArchiveState(message_id=msg.id, state=ArchiveState.ARCHIVE_PENDING.value))
+            session.commit()
+
+        mock_imap_client = MagicMock()
+        mock_imap_client.login.return_value = ("OK", [b"LOGIN completed"])
+        mock_imap_client.select.return_value = ("OK", [b"10"])
+        mock_imap_client.uid.return_value = ("OK", [(b"1", b"From: sender@example.com\r\nSubject: Hi\r\n\r\nBody")])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_imap_client):
+            imap_provider = ImapProvider(
+                host="imap.example.com",
+                port=993,
+                username="test@example.com",
+                password="pwd",
+            )
+            archive_mod.build_provider = lambda *a, **kw: imap_provider
+            res = run_archive_batch(
+                account_id=account_id,
+                worker_id="w-reuse",
+                store=store,
+                payload={"batch_size": 3},
+            )
+            assert res["status"] == "ok"
+            assert res["completed"] == 3
+
+            # Only ONE connect / login was issued for all 3 messages!
+            assert mock_imap_client.login.call_count == 1
+            # Logout called at end of batch session
+            assert mock_imap_client.logout.call_count == 1
+    finally:
+        archive_mod.build_provider = original_archive
+        set_credential_store(None)

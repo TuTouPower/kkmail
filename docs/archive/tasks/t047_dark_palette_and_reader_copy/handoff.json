@@ -1,0 +1,36 @@
+{
+  "tid": "t047",
+  "attempt": 1,
+  "execution_id": "0f1ef9ce6c7c414ab51c540bb83f0fa9",
+  "status": "done",
+  "branch": "t047_dark_palette_and_reader_copy",
+  "base_sha": "70092c148d5fae963d0b1966f60b780e2b7ecacd",
+  "tests": "frontend: 39 files, 265 passed; contract: 150 passed; desktop: 9 passed; mail_core: 309 passed",
+  "blackbox": "stub UI E2E: 14 passed; real full-stack E2E: 8 passed",
+  "review": "single review PASS (Round 1 PASS 0 finding; scope: 3c6bc7c88ad54e3f)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/design-system/tokens.css",
+      "src/frontend/src/lib/mailBody.ts",
+      "src/desktop/windowOptions.js",
+      "src/frontend/src/design-system/darkTheme.test.ts",
+      "src/frontend/src/lib/mailBody.test.ts",
+      "src/desktop/windowOptions.test.js"
+    ],
+    "AC-002": [
+      "src/frontend/src/lib/displayName.ts",
+      "src/frontend/src/lib/displayName.test.ts",
+      "src/frontend/src/components/MessageReader.tsx"
+    ],
+    "AC-003": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ],
+    "AC-004": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

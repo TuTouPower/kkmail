@@ -63,12 +63,12 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(isHtmlBody(undefined)).toBe(false)
   })
 
-  it('classifies unstyled html as plain and applies dark body #1A1A1C and text #FFFFFF in dark mode (AC-003)', () => {
+  it('classifies unstyled html as plain and applies dark body #222729 and text #FFFFFF in dark mode (AC-003)', () => {
     const plainHtml = '<p>Simple paragraph with <a href="https://example.com">link</a></p>'
     expect(classifyMailHtml(plainHtml)).toBe('plain')
 
     const darkDoc = buildMailSrcdoc(plainHtml, { theme: 'dark' })
-    expect(darkDoc).toContain('background:#1A1A1C')
+    expect(darkDoc).toContain('background:#222729')
     expect(darkDoc).toContain('color:#FFFFFF')
     expect(darkDoc).toContain('a{color:#0A84FF}')
 
@@ -92,7 +92,7 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(classifyMailHtml(darkHtml)).toBe('dark')
 
     const darkDoc = buildMailSrcdoc(darkHtml, { theme: 'dark' })
-    expect(darkDoc).toContain('background:#1A1A1C')
+    expect(darkDoc).toContain('background:#222729')
   })
 
   it('does not relax script/meta/style sanitization rules for dark theme adaptation', () => {

@@ -185,6 +185,7 @@ def test_ac003_worker_jobs_priority_governance():
 
 
 def test_ac005_sync_body_captures_provider_or_parse_error():
+    """AC-003: Network/fetch error must record last_error in archive state and NOT write parse_error."""
     acc_id, mid = _seed_unarchived_message()
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
 
@@ -193,14 +194,19 @@ def test_ac005_sync_body_captures_provider_or_parse_error():
 
     with patch("mail_core.blobs.archive.build_provider", return_value=mock_provider):
         resp = client.post(f"/api/mail/messages/{mid}/sync-body")
-        # 即使远端拉取失败，接口也应优雅返回并透传 parse_error
         assert resp.status_code == 200
         data = resp.json()
-        assert data["parse_error"] is not None
-        assert "Remote IMAP server timeout" in data["parse_error"]
+        # AC-003: fetch failure must NOT be reported as parse_error
+        assert data["parse_error"] is None
+        assert data["is_archived"] is False
 
     Session = get_session_factory()
     with Session() as session:
+        st = session.get(MessageArchiveState, mid)
+        assert st is not None
+        assert st.last_error is not None
+        assert "Remote IMAP server timeout" in st.last_error
+
         body = session.get(MessageBody, mid)
-        assert body is not None
-        assert body.parse_error is not None
+        if body is not None:
+            assert body.parse_error is None

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Mail, MailOpen, Trash2, Flag, ArrowLeft, RefreshCw } from 'lucide-react'
-import { findCachedMail, flagOptimistic, setReadOptimistic, queryClient, removeCachedMail } from '../api/queries'
+import { findCachedMail, flagOptimistic, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail } from '../api/queries'
 import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash, postMailCoreSyncMessageBody } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
@@ -27,7 +27,7 @@ const MessageReader = memo(function MessageReader() {
     (cb) =>
       queryClient.getQueryCache().subscribe((event) => {
         const qk = event?.query?.queryKey
-        if (Array.isArray(qk) && qk[0] === 'mail-core') cb()
+        if (isMailListQueryKey(qk)) cb()
       }),
     () => {
       const m = findCachedMail(selectedKey)
@@ -176,11 +176,11 @@ const MessageReader = memo(function MessageReader() {
             <span style={{ color: 'var(--muted)' }}> · {formatReaderDate(detail ? detail.date : selected.date)}</span>
           </div>
           <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 4, overflowWrap: 'anywhere' }}>
-            发件人：{displayEmail(detail?.from || selected.from)}
+            {displayEmail(detail?.from || selected.from) ? `发件人：${displayEmail(detail?.from || selected.from)}` : ''}
           </div>
           {detail && (
             <div data-ui="MR07" style={{ color: 'var(--muted)', fontSize: 11, marginBottom: detail.cc ? 4 : 16, overflowWrap: 'anywhere' }}>
-              收件人：{detail.to || '未提供'}
+              收件人：{detail.to || ''}
             </div>
           )}
           {detail?.cc && (
@@ -191,26 +191,29 @@ const MessageReader = memo(function MessageReader() {
             <div style={{ color: 'var(--muted)' }}>正在加载正文…</div>
           ) : detailQuery.error ? (
             <div role="alert" style={{ color: 'var(--red)' }}>{String((detailQuery.error as Error).message)}</div>
-          ) : detail?.parse_error ? (
-            <div
-              data-ui="MR-PARSE-ERROR"
-              role="alert"
-              className="parse-error-placeholder"
-              style={{
-                padding: '16px',
-                textAlign: 'center',
-                color: 'var(--red)',
-                background: 'var(--surface-2)',
-                borderRadius: 8,
-                fontSize: 13,
-                marginBottom: 16,
-                border: '1px solid var(--line)',
-              }}
-            >
-              <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件解析失败</p>
-              <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)', overflowWrap: 'anywhere' }}>{detail.parse_error}</p>
-            </div>
-          ) : !body ? (
+          ) : (
+            <>
+              {detail?.parse_error && (
+                <div
+                  data-ui="MR-PARSE-ERROR"
+                  role="alert"
+                  className="parse-error-placeholder"
+                  style={{
+                    padding: '16px',
+                    textAlign: 'center',
+                    color: 'var(--red)',
+                    background: 'var(--surface-2)',
+                    borderRadius: 8,
+                    fontSize: 13,
+                    marginBottom: body ? 16 : 0,
+                    border: '1px solid var(--line)',
+                  }}
+                >
+                  <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件解析失败</p>
+                  <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)', overflowWrap: 'anywhere' }}>{detail.parse_error}</p>
+                </div>
+              )}
+              {!body && !detail?.parse_error ? (
             <div
               className="empty-body-placeholder"
               style={{
@@ -269,10 +272,7 @@ const MessageReader = memo(function MessageReader() {
                   </button>
                 </div>
               ) : (
-                <>
-                  <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件正文尚未完成同步或内容为空</p>
-                  <p style={{ margin: 0, fontSize: 12 }}>该邮件没有正文内容或内容为空。</p>
-                </>
+                <p style={{ margin: 0, fontWeight: 600 }}>邮件正文尚未完成同步</p>
               )}
             </div>
           ) : html ? (
@@ -331,15 +331,17 @@ const MessageReader = memo(function MessageReader() {
                     width: '100%',
                     minHeight: 420,
                     border: 0,
-                    background: resolvedTheme === 'dark' ? '#1A1A1C' : '#FFFFFF',
+                    background: resolvedTheme === 'dark' ? '#222729' : '#FFFFFF',
                     borderRadius: 8,
                     display: 'block',
                   }}
                 />
               )}
             </>
-          ) : (
+          ) : body ? (
             <div className="email-body email-body-text">{body}</div>
+          ) : null}
+            </>
           )}
           {(detail?.attachments || []).length > 0 && (
             <div data-ui="MR09" className="attachment-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>

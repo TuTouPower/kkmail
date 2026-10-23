@@ -89,3 +89,23 @@ def test_create_account_app_enqueues_initial_sync():
         )
         assert job is not None
         assert job.status in ("pending", "claimed", "done")
+
+
+def test_imap_connect_netease_login_error_raises_permanent_auth_error():
+    """AC-003: NetEase 126/163 Login error or password error must raise PermanentAuthError."""
+    from mail_core.providers.http import PermanentAuthError
+
+    provider = ImapProvider(
+        host="imap.126.com",
+        port=993,
+        username="user@126.com",
+        password="badpassword",
+        use_ssl=True,
+    )
+
+    mock_client = MagicMock(spec=imaplib.IMAP4_SSL)
+    mock_client.login.side_effect = imaplib.IMAP4.error("LOGIN Login error or password error")
+
+    with patch("imaplib.IMAP4_SSL", return_value=mock_client):
+        with pytest.raises(PermanentAuthError, match="IMAP authentication rejected permanently"):
+            provider._connect()
