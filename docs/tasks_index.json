@@ -16,7 +16,7 @@
             "diff_anchor": "",
             "depends_on": "",
             "conflicts_with": "",
-            "note": "来源 p036；用户要求直接在 main 修复。同步层已创建后继重试时，Worker 不应再次重试原任务。",
+            "note": "来源 p036；用户要求直接在 main 修复。同步层已创建后继重试时，Worker 不应再次重试原任务。; 已在 main 完成修复与部署（0ffe35c）；task.py finish 仍要求 active 自有 worktree，状态保留 backlog，未伪造状态或 handoff。",
             "dir": "docs/tasks/t049_sync_retry_double_enqueue"
         },
         {
