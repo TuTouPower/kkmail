@@ -159,9 +159,10 @@ interface AccountFolderTreeProps {
   accountId: string
   accountEmail: string
   unreadCount: number | null | undefined
+  syncStatus?: string | null
 }
 
-function AccountFolders({ accountId, accountEmail, unreadCount }: AccountFolderTreeProps) {
+function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: AccountFolderTreeProps) {
   const view = useMailStore((s) => s.view)
   const setView = useMailStore((s) => s.setView)
   const setListFilter = useMailStore((s) => s.setListFilter)
@@ -178,7 +179,15 @@ function AccountFolders({ accountId, accountEmail, unreadCount }: AccountFolderT
   if (foldersQuery.isLoading) return <div className="tree-folder-status" style={{ paddingLeft: '48px' }}>正在加载文件夹…</div>
   if (foldersQuery.isError || !foldersQuery.data) return <div className="tree-folder-status tree-error" style={{ paddingLeft: '48px' }}>文件夹加载失败</div>
 
-  const folderMap = new Map(foldersQuery.data.filter((folder) => folder.remote_id).map((folder) => [folder.remote_id!, folder]))
+  const folders = foldersQuery.data
+  if (folders.length === 0) {
+    if (syncStatus === 'auth_failed' || syncStatus === 'failed') {
+      return <div className="tree-folder-status tree-error" style={{ paddingLeft: '48px' }}>同步失败，请检查账户设置</div>
+    }
+    return <div className="tree-folder-status" style={{ paddingLeft: '48px' }}>暂无文件夹</div>
+  }
+
+  const folderMap = new Map(folders.filter((folder) => folder.remote_id).map((folder) => [folder.remote_id!, folder]))
   const childrenMap = new Map<string, FolderStatsItem[]>()
   const roots: FolderStatsItem[] = []
   for (const folder of foldersQuery.data) {
@@ -294,10 +303,13 @@ function Sidebar() {
         let failed = false
         let succeeded = 0
         await Promise.all(accounts.map(async (account) => {
+          const isFaulty = (account.sync_enabled === false || account.sync_status === 'failed' || account.sync_status === 'auth_failed')
           try {
             const unread = await fetchAccountFolders(account.id, signal)
             if (unread === null) {
-              failed = true
+              if (!isFaulty) {
+                failed = true
+              }
               byAccount.set(account.id, null)
               return
             }
@@ -305,7 +317,9 @@ function Sidebar() {
             total += unread
             succeeded += 1
           } catch {
-            failed = true
+            if (!isFaulty) {
+              failed = true
+            }
             byAccount.set(account.id, null)
           }
         }))
@@ -684,7 +698,7 @@ function Sidebar() {
             {unread === null ? <span className="side-count unread-badge unread-badge-unknown" aria-label="未读数未知">-</span> : unread && unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}
           </button>
         </div>
-        {expanded && <AccountFolders accountId={account.id} accountEmail={account.email} unreadCount={unread} />}
+        {expanded && <AccountFolders accountId={account.id} accountEmail={account.email} unreadCount={unread} syncStatus={account.sync_status} />}
       </div>
     )
   }
@@ -692,8 +706,13 @@ function Sidebar() {
   const groupSections = groups.map((group) => {
     const members = orderedMembers(accounts, group.id)
     const groupUnread = members.reduce<number | null>((total, account) => {
+      const isFaulty = (account.sync_enabled === false || account.sync_status === 'failed' || account.sync_status === 'auth_failed')
       const count = unreadByAccount.get(account.id)
-      if (count == null || total === null) return null
+      if (count == null) {
+        if (isFaulty) return total
+        return null
+      }
+      if (total === null) return null
       return total + count
     }, 0)
     return (

@@ -398,3 +398,33 @@ def test_delta_apply_preserves_full_scan_complete_and_indexes():
         msg = session.scalar(select(Message).where(Message.account_id == acc.id))
         assert session.get(MessageSearch, msg.id) is not None
 
+
+def test_apply_metadata_page_empty_folder_initializes_zero_folder_stats():
+    """AC-004: apply_metadata_page with 0 items on new folder must initialize FolderStats(0, 0)."""
+    Session = get_session_factory()
+    with Session() as session:
+        acc = Account(email=f"meta-empty-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        session.add(acc)
+        session.flush()
+        folder = Folder(account_id=acc.id, remote_id="EMPTY", name="EMPTY", role="other")
+        session.add(folder)
+        session.flush()
+        lease = acquire_lease(session, account_id=acc.id, owner_id="w1", ttl=timedelta(minutes=5))
+        page = MetadataPage(items=[], next_cursor={"uid_validity": 1})
+
+        # Precondition: no FolderStats row
+        assert session.get(FolderStats, folder.id) is None
+
+        apply_metadata_page(
+            session,
+            account_id=acc.id,
+            folder_id=folder.id,
+            fencing_token=lease.fencing_token,
+            page=page,
+        )
+        session.commit()
+
+        stats = session.get(FolderStats, folder.id)
+        assert stats is not None
+        assert stats.total_count == 0
+        assert stats.unread_count == 0
