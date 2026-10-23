@@ -245,47 +245,86 @@ def urllib_json_request(
     url: str,
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
+    *,
+    _sleep_fn: Any = None,
 ) -> Any:
     """Generic JSON HTTP for Gmail/Graph API calls (stdlib).
 
     Maps 404/410 → ``CursorInvalidError`` only for History / delta endpoints.
+    Retries transient 503/504 errors and network/TLS dropouts up to 3 times.
     """
+    import http.client
     import json
+    import ssl
+    import time
     import urllib.error
     import urllib.parse
     import urllib.request
 
-    if params:
-        # For GET, attach query; for POST with dict body use JSON
-        if method.upper() == "GET":
-            q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
-            url = f"{url}?{q}" if q else url
-            data = None
+    sleep = _sleep_fn or time.sleep
+    max_retries = 3
+
+    for attempt in range(1, max_retries + 2):
+        if params:
+            # For GET, attach query; for POST with dict body use JSON
+            if method.upper() == "GET":
+                q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
+                target_url = f"{url}?{q}" if q else url
+                data = None
+            else:
+                target_url = url
+                data = json.dumps(params).encode("utf-8")
         else:
-            data = json.dumps(params).encode("utf-8")
-    else:
-        data = None
-    req = urllib.request.Request(url, data=data, method=method.upper())
-    for k, v in (headers or {}).items():
-        req.add_header(k, v)
-    if data is not None and method.upper() != "GET":
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
-            raw = resp.read()
-            if not raw:
-                return {}
-            ctype = resp.headers.get("Content-Type", "")
-            if "application/json" in ctype or raw[:1] in (b"{", b"["):
-                return json.loads(raw.decode("utf-8"))
-            return {"raw_bytes": raw}
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        hdrs = {k: v for k, v in exc.headers.items()} if exc.headers else {}
-        if exc.code == 429:
-            raise RateLimitedError(body or str(exc), status=429, body=body, headers=hdrs) from exc
-        if exc.code in (404, 410) and _url_is_sync_cursor_endpoint(url):
-            raise CursorInvalidError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
-        raise ProviderHttpError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
-    except urllib.error.URLError as exc:
-        raise ProviderHttpError(f"transport error: {exc.reason}", status=None) from exc
+            target_url = url
+            data = None
+
+        req = urllib.request.Request(target_url, data=data, method=method.upper())
+        for k, v in (headers or {}).items():
+            req.add_header(k, v)
+        if data is not None and method.upper() != "GET":
+            req.add_header("Content-Type", "application/json")
+
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+                raw = resp.read()
+                if not raw:
+                    return {}
+                ctype = resp.headers.get("Content-Type", "")
+                if "application/json" in ctype or raw[:1] in (b"{", b"["):
+                    return json.loads(raw.decode("utf-8"))
+                return {"raw_bytes": raw}
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            hdrs = {k: v for k, v in exc.headers.items()} if exc.headers else {}
+            if exc.code == 429:
+                raise RateLimitedError(body or str(exc), status=429, body=body, headers=hdrs) from exc
+            if exc.code in (404, 410) and _url_is_sync_cursor_endpoint(url):
+                raise CursorInvalidError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
+            if exc.code in (503, 504) and attempt <= max_retries:
+                delay = attempt * 1.0
+                if hdrs.get("Retry-After"):
+                    try:
+                        ra = float(hdrs["Retry-After"])
+                        if ra > 0:
+                            delay = min(ra, 10.0)
+                    except (ValueError, TypeError):
+                        pass
+                sleep(delay)
+                continue
+            raise ProviderHttpError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
+        except (
+            urllib.error.URLError,
+            http.client.RemoteDisconnected,
+            http.client.IncompleteRead,
+            ConnectionResetError,
+            ssl.SSLEOFError,
+        ) as exc:
+            reason = getattr(exc, "reason", str(exc))
+            reason_str = str(reason).lower()
+            if "certificate_verify_failed" in reason_str:
+                raise ProviderHttpError(f"transport error: {reason}", status=None) from exc
+            if attempt <= max_retries:
+                delay = min(attempt * 1.0, 10.0)
+                sleep(delay)
+                continue
+            raise ProviderHttpError(f"transport error: {reason}", status=None) from exc

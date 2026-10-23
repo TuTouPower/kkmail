@@ -1,0 +1,35 @@
+{
+  "tid": "t050",
+  "attempt": 1,
+  "execution_id": "1f675a5947574a5592106a397df869a8",
+  "status": "done",
+  "branch": "t050_imap_noselect_and_graph_transient_retry",
+  "base_sha": "cdfafc7317b37209678c512cb49adefa3fa17e63",
+  "tests": "mail_core: 5 new unit tests passed, 111 full integration passed; contract: 150 passed; frontend: 274 passed; desktop: 11 passed",
+  "blackbox": "frontend Playwright UI smoke E2E: 16 passed",
+  "review": "single review PASS (Round 1 PASS 0 finding; scope: d3f6743c91ff4390)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/mail_core/providers/imap.py",
+      "tests/mail_core/test_imap_noselect_and_transient_retry.py"
+    ],
+    "AC-002": [
+      "src/mail_core/providers/imap.py",
+      "tests/mail_core/test_imap_noselect_and_transient_retry.py"
+    ],
+    "AC-003": [
+      "src/mail_core/providers/oauth.py",
+      "tests/mail_core/test_imap_noselect_and_transient_retry.py"
+    ],
+    "AC-004": [
+      "src/mail_core/providers/oauth.py",
+      "tests/mail_core/test_imap_noselect_and_transient_retry.py"
+    ],
+    "AC-005": [
+      "src/mail_core/providers/oauth.py",
+      "tests/mail_core/test_imap_noselect_and_transient_retry.py"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}
