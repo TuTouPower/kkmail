@@ -48,8 +48,10 @@
 
 ## 五、 导航 Scope 与缓存隔离规则
 
-1. **导航 Scope 隔离**：
+1. **导航 Scope 隔离与列表缓存谓词规范**：
     - 前端邮件列表查询缓存必须严格按 `[scope_type, scope_id, role, filter, sort, folder_id]` 隔离；scope 至少区分全局、`group_id` 与 `account_id`，避免不同分组或分组与账号间缓存相互污染；
+    - 列表缓存前缀与谓词严格限定为 `['mail-core', 'inbox', ...]` 与 `['mail-core', 'search', ...]`（经 `isMailListQueryKey` 判定），禁止使用过于宽泛的 `['mail-core']` 前缀扫描修改 `account-folders`、`stats`、`folder-stats` 等非邮件列表查询，防御非邮件对象被误传给 `mailKey`；
+    - `findCachedMail` 在当前视图（`account`、`folder`、`favorite`、`group`）下必须优先命中对应 scope 的缓存数据；
     - 分组邮件范围按每次请求时数据库中的当前成员关系解析，不保存成员快照；空分组必须区别于无范围参数并返回空列表、零统计，未知分组与 `group_id` 同时搭配 `account_id` 或 `folder_id` 的歧义请求失败关闭；
     - 切换所有账号、分组、账号或文件夹导航时，自动重置选中邮件、选中项集合与搜索词；账号移组后必须清除所有分组 inbox/search 页缓存，避免重访旧分组时先显示已移出账号的邮件；账号集合新增或删除后重置全局统计，删除账号时清除邮件列表缓存；
     - 批量“全部标记已读”必须限制在当前 scope 与角色、旗标或精确 `folder_id` 范围内，禁止误触组外账号、兄弟文件夹或全账号状态。
