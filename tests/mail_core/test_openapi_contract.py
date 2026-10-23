@@ -69,3 +69,12 @@ def test_openapi_documents_core_mail_and_account_routes():
     schemas = schema["components"]["schemas"]
     for name in ("MessageOut", "PageOut", "MessageDetailOut", "AccountOut", "MutationOut"):
         assert name in schemas, f"expected schema {name}"
+
+
+def test_unknown_message_date_fields_include_null_in_openapi():
+    from mail_core.api.app import app
+
+    schemas = app.openapi()["components"]["schemas"]
+    for schema_name, field_name in (("MessageOut", "sort_time"), ("MessageDetailOut", "date")):
+        branches = schemas[schema_name]["properties"][field_name]["anyOf"]
+        assert {"type": "null"} in branches, f"{schema_name}.{field_name} must allow null"

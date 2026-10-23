@@ -131,3 +131,49 @@ def test_provider_thread_key():
         assert r2.linked_via == "provider_key"
         assert r2.created is False
         session.commit()
+
+
+@_requires_db
+def test_unknown_received_time_joins_threads_without_erasing_known_time():
+    Session = get_session_factory()
+    known_time = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
+    with Session() as session:
+        account = create_account(session, email=f"th-null-{uuid.uuid4().hex[:8]}@ex.com", provider="gmail")
+        known = Message(
+            account_id=account.id,
+            remote_id="known",
+            subject="Known",
+            from_address="a@ex.com",
+            sort_time=known_time,
+        )
+        unknown = Message(
+            account_id=account.id,
+            remote_id="unknown",
+            subject="Unknown",
+            from_address="b@ex.com",
+            sort_time=None,
+        )
+        unknown_thread = Message(
+            account_id=account.id,
+            remote_id="unknown-thread",
+            subject="Unknown",
+            from_address="c@ex.com",
+            sort_time=None,
+        )
+        session.add_all([known, unknown, unknown_thread])
+        session.flush()
+
+        assign_thread_for_message(session, message=known, provider_thread_key="shared")
+        assign_thread_for_message(session, message=unknown, provider_thread_key="shared")
+        assign_thread_for_message(session, message=unknown_thread, provider_thread_key="empty")
+
+        session.refresh(known)
+        session.refresh(unknown)
+        from mail_core.mail.storage import Thread
+
+        shared = session.get(Thread, known.thread_id)
+        empty = session.get(Thread, unknown_thread.thread_id)
+        assert shared is not None and shared.sort_time == known_time
+        assert unknown.thread_id == known.thread_id
+        assert empty is not None and empty.sort_time is None
+        session.commit()

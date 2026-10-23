@@ -248,14 +248,13 @@ def _parse_message_meta_from_fetch(
 
     to_addresses = tuple(a for _, a in email.utils.getaddresses([to_raw]) if a) if to_raw else ()
     cc_addresses = tuple(a for _, a in email.utils.getaddresses([cc_raw]) if a) if cc_raw else ()
-    date_raw = headers.get("Date")
-    date_str = _decode_header(date_raw) if date_raw is not None else None
+    internal_date = re.search(r'\bINTERNALDATE\s+"([^"]+)"', meta_s, flags=re.IGNORECASE)
     try:
-        sort_time = parsedate_to_datetime(date_str) if date_str else datetime.now(timezone.utc)
-        if sort_time.tzinfo is None:
+        sort_time = parsedate_to_datetime(internal_date.group(1)) if internal_date else None
+        if sort_time is not None and sort_time.tzinfo is None:
             sort_time = sort_time.replace(tzinfo=timezone.utc)
-    except Exception:
-        sort_time = datetime.now(timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        sort_time = None
     uv = int(uidvalidity) if uidvalidity is not None else 0
 
     def _header_opt(name: str) -> str | None:
@@ -458,7 +457,7 @@ class ImapProvider:
                 typ, fetched = c.uid(
                     "FETCH",
                     uid_spec,
-                    "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES)])",
+                    "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES)])",
                 )
                 if typ != "OK":
                     raise RuntimeError(f"UID FETCH {folder_remote_id} uids={uid_spec} failed: {typ}")

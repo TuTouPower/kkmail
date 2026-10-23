@@ -47,6 +47,12 @@ def test_all_tables_exist():
     assert missing == [], missing
 
 
+def test_message_received_time_column_is_nullable():
+    columns = {column["name"]: column for column in inspect(get_engine()).get_columns("messages")}
+
+    assert columns["sort_time"]["nullable"] is True
+
+
 def test_insert_account_lease_outbox_archive():
     Session = get_session_factory()
     with Session() as session:
