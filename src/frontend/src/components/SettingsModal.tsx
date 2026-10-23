@@ -1,14 +1,15 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, Sun, Moon, Inbox, Settings as SettingsIcon, PanelLeft } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type Ref } from 'react'
 import { api } from '../api/client'
 import { fetchAccounts, fetchGroups, queryKeys, resetGroupMailQueries, resetMailListQueries } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
 import AccountIcon from './AccountIcon'
+import { useIsWide } from '../lib/viewport'
 
 /** Settings page — mail-core only (accounts / groups / appearance / password). */
-export default function SettingsPage() {
+export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: Ref<HTMLButtonElement> } = {}) {
   const theme = useMailStore((s) => s.theme)
   const setTheme = useMailStore((s) => s.setTheme)
   const accountIconMode = useMailStore((s) => s.accountIconMode)
@@ -16,6 +17,9 @@ export default function SettingsPage() {
   const closeSettings = useMailStore((s) => s.closeSettings)
   const sidebarCollapsed = useMailStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useMailStore((s) => s.toggleSidebar)
+  const mobileSidebarOpen = useMailStore((s) => s.mobileSidebarOpen)
+  const toggleMobileSidebar = useMailStore((s) => s.toggleMobileSidebar)
+  const wide = useIsWide()
   const onClose = closeSettings
   const qc = useQueryClient()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
@@ -81,28 +85,29 @@ export default function SettingsPage() {
   return (
     <div className="settings-page" style={{ position: 'relative', zIndex: 50, display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--surface)', color: 'var(--text)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
-        {sidebarCollapsed && (
-          <button
-            data-ui="ST01"
-            type="button"
-            className="sidebar-expand-btn"
-            title="展开侧边栏"
-            aria-label="展开侧边栏"
-            onClick={toggleSidebar}
-            style={{
-              border: 0,
-              background: 'transparent',
-              color: 'var(--text)',
-              cursor: 'pointer',
-              display: 'grid',
-              placeItems: 'center',
-              padding: 2,
-              borderRadius: 6,
-            }}
-          >
-            <PanelLeft size={18} />
-          </button>
-        )}
+        <button
+          ref={sidebarToggleRef}
+          data-ui="ST01"
+          data-testid="sidebar-toggle"
+          type="button"
+          className="sidebar-expand-btn"
+          title={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+          aria-label={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+          aria-expanded={wide ? !sidebarCollapsed : mobileSidebarOpen}
+          onClick={wide ? toggleSidebar : toggleMobileSidebar}
+          style={{
+            border: 0,
+            background: 'transparent',
+            color: 'var(--muted)',
+            cursor: 'pointer',
+            display: 'grid',
+            placeItems: 'center',
+            padding: 2,
+            borderRadius: 6,
+          }}
+        >
+          <PanelLeft size={18} />
+        </button>
         <SettingsIcon size={18} />
         <div data-ui="ST02" style={{ fontWeight: 700, flex: 1 }}>设置</div>
         <button data-ui="ST03" type="button" onClick={onClose} title="关闭" aria-label="关闭" style={{ border: 0, background: 'transparent', color: 'var(--muted)' }}><X size={18} /></button>

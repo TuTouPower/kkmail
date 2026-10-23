@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState, type Ref } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, Reply, ReplyAll, Forward, ExternalLink, PanelLeft } from 'lucide-react'
 import { api, apiRequest } from '../api/client'
@@ -14,6 +14,7 @@ import { displayName } from '../lib/displayName'
 import { formatListDate } from '../lib/listDate'
 import { previewText } from '../lib/previewText'
 import { useMailStore } from '../store/mailStore'
+import { getDesktopPlatform } from '../lib/desktopShell'
 
 /** Server-side search kicks in from this many characters. */
 export const SEARCH_MIN_CHARS = 2
@@ -40,7 +41,7 @@ function sumKnownCounts(counts: Array<number | null>): number | null {
   return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0)
 }
 
-const MessageList = memo(function MessageList() {
+const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarToggleRef?: Ref<HTMLButtonElement> }) {
   const view = useMailStore((s) => s.view)
   const selectedKey = useMailStore((s) => s.selectedKey)
   const setSelectedKey = useMailStore((s) => s.setSelectedKey)
@@ -52,9 +53,11 @@ const MessageList = memo(function MessageList() {
   const sortNewest = useMailStore((s) => s.sortNewest)
   const toggleSort = useMailStore((s) => s.toggleSort)
   const sidebarCollapsed = useMailStore((s) => s.sidebarCollapsed)
+  const mobileSidebarOpen = useMailStore((s) => s.mobileSidebarOpen)
   const toggleSidebar = useMailStore((s) => s.toggleSidebar)
   const toggleMobileSidebar = useMailStore((s) => s.toggleMobileSidebar)
   const wide = useIsWide()
+  const isMacDesktop = getDesktopPlatform() === 'darwin'
   const selectedIds = useMailStore((s) => s.selectedIds)
   const toggleSelected = useMailStore((s) => s.toggleSelected)
   const selectAll = useMailStore((s) => s.selectAll)
@@ -414,13 +417,16 @@ const MessageList = memo(function MessageList() {
       <div className="list-header">
         <div className="list-title-row">
           <div className="list-heading" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {(!wide || sidebarCollapsed) && (
+            {!isMacDesktop && (
               <button
+                ref={sidebarToggleRef}
                 data-ui="ML01"
+                data-testid="sidebar-toggle"
                 type="button"
                 className="list-primary-btn sidebar-expand-btn"
-                title={wide ? '展开侧边栏' : '打开导航'}
-                aria-label={wide ? '展开侧边栏' : '打开导航'}
+                title={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+                aria-label={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+                aria-expanded={wide ? !sidebarCollapsed : mobileSidebarOpen}
                 onClick={wide ? toggleSidebar : toggleMobileSidebar}
               >
                 <PanelLeft size={16} />

@@ -46,6 +46,28 @@ afterEach(() => {
 })
 
 describe('<SettingsModal />', () => {
+  it('keeps a mobile navigation control available while settings replaces the list', async () => {
+    const originalWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 })
+    try {
+      const { container } = await render(<SettingsPage />)
+      const toggle = container.querySelector('[data-testid="sidebar-toggle"]') as HTMLButtonElement
+      expect(toggle.getAttribute('aria-label')).toBe('打开导航')
+      expect(toggle.getAttribute('aria-expanded')).toBe('false')
+
+      await click(toggle)
+      expect(useMailStore.getState().mobileSidebarOpen).toBe(true)
+      expect(toggle.getAttribute('aria-label')).toBe('关闭导航')
+      expect(toggle.getAttribute('aria-expanded')).toBe('true')
+
+      await click(toggle)
+      expect(useMailStore.getState().mobileSidebarOpen).toBe(false)
+      expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth })
+    }
+  })
+
   it('switches between tabs and loads general settings', async () => {
     const { container } = await render(<SettingsPage />)
     expect(container.querySelector('.settings-page')).not.toBeNull()

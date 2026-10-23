@@ -1,0 +1,22 @@
+{
+  "tid": "t032",
+  "attempt": 2,
+  "execution_id": "83eb4470abfc4e4aa6b26866d0383350",
+  "status": "done",
+  "branch": "t032_sidebar_shell_controls",
+  "base_sha": "1b1407ae5e68ebd732dce46d5386355f9e9b0d56",
+  "tests": "template contract: 149 passed; PostgreSQL full suite: 405 passed; frontend: 39 files / 220 passed; TypeScript, production build, lint, OpenAPI and CSS token checks passed; final desktop npm test passed after window option changes; browser E2E: 13 passed",
+  "blackbox": "browser E2E: 13 passed. Isolated macOS Electron 44.9.2 final hidden-titlebar window: native traffic lights and adjacent sidebar control observed; sidebar hide/reopen, fullscreen enter/exit, minimize/restore, close/reactivate, and resize from 1280x840 to 1230x790 with controls still separated. CUA did not record actual window movement; the user explicitly accepted AC-004 and directed task closure, so this is recorded as an acceptance waiver rather than a measured CUA pass. CUA screenshots retained in the execution session; operation log: docs/archive/tasks/t032_sidebar_shell_controls/macos_window_validation.md. Windows/Linux actual runtime unavailable; window options verified by unit tests only.",
+  "review": "Round 4 PASS; scope 46c5463ca7cdfe70; f001 withdrawn by explicit user acceptance waiver (CUA did not observe actual window movement); f002 fixed; no new findings",
+  "ac_evidence": {
+    "AC-001": ["src/frontend/src/App.tsx", "src/frontend/src/components/MessageList.tsx", "src/frontend/src/design-system/tokens.css", "tests/e2e/sidebar_tree.spec.ts"],
+    "AC-002": ["src/frontend/src/App.tsx", "src/frontend/src/components/SettingsModal.tsx", "tests/e2e/sidebar_tree.spec.ts"],
+    "AC-003": ["src/desktop/windowOptions.js", "src/desktop/main.js", "src/frontend/src/design-system/tokens.css", "docs/archive/tasks/t032_sidebar_shell_controls/macos_window_validation.md"],
+    "AC-004": ["src/desktop/windowOptions.js", "src/frontend/src/App.tsx", "tests/e2e/sidebar_tree.spec.ts", "docs/archive/tasks/t032_sidebar_shell_controls/macos_window_validation.md"],
+    "AC-005": ["src/desktop/windowOptions.test.js", "src/frontend/src/lib/desktopShell.test.ts", "src/desktop/preload.js", "tests/e2e/sidebar_tree.spec.ts"],
+    "AC-006": ["src/frontend/src/App.tsx", "src/frontend/src/components/SettingsModal.test.tsx", "tests/e2e/sidebar_tree.spec.ts"],
+    "AC-007": ["src/frontend/public/theme_bootstrap.js", "src/frontend/index.html", "src/desktop/windowOptions.js", "src/desktop/main.js", "tests/e2e/sidebar_tree.spec.ts"]
+  },
+  "pending": [],
+  "findings": []
+}
