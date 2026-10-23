@@ -95,3 +95,24 @@ reviewed_scope: 1eb3b40c21ee29c1
 - 总体判断：PASS。
 
 verdict: PASS
+
+## Round 5 (2026-10-24T04:13:35+08:00)
+
+reviewed_scope: 8f66d190d7e01e1a
+- target：`git -C '/Users/karson/kar/code/kkmail_t049' diff 2185a75bbeaa53b10d9c81c3fb4b73ba634ee563`。
+- 复核内容：当前 spec 的 AC-001..003、生产实现、测试与既有 Round 1–4 报告。相对该 diff_anchor 的交付变化只有 AC 完成勾选和 task closeout 文档；本轮仍逐项复验其基线中的实现与既有 finding。
+
+### 前轮 finding 复核
+
+- `t049_code_f001`：已修复且未回归。`followup_scheduled` 分支完成原 claimed job，并跳过通用 `_followup_needed` / `_followup_run_after` enqueue。带有这些 payload 字段时不会额外创建 Worker 后继任务。
+
+### AC 复验
+
+- AC-001：五条内部排队路径分别覆盖 delta provider error、delta lease busy、delta cursor invalid、metadata lease busy、metadata cursor invalid；同步层先提交后继任务，返回 `followup_scheduled`。
+- AC-002：Worker 对标记结果完成原 job，跳过通用追加入队；PG 回归覆盖原 job 已带 `_followup_needed` 的队列数量。
+- AC-003：`provider_error` 仍由 Worker 标记账号 failed，错误摘要来自 `safe_provider_summary`；无后继标记的普通错误仍调用 `fail_job`。
+- 本轮新发现：0 条。
+- 总体判断：最终 AC 勾选与实现、测试及 task closeout 一致，无新的重要或阻断 finding。
+- 流程说明：正式 code reviewer prompt 已按 archive execution worktree 渲染；生产代码由此前 direct-main 修复提交提供，本轮未改代码或测试。
+
+verdict: PASS
