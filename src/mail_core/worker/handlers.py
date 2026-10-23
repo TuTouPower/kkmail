@@ -5,19 +5,57 @@ from __future__ import annotations
 import logging
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.accounts.credentials import get_credential_store
 from mail_core.accounts.service import update_account_sync_status
-from mail_core.mail.domain.enums import JobType
+from mail_core.mail.domain.enums import JobStatus, JobType
 from mail_core.mail.storage.models import Account, WorkerJob
 from mail_core.sync.jobs import complete_job, fail_job
 
 log = logging.getLogger("mail_core.worker.handlers")
+_ACCOUNT_SYNC_JOB_TYPES = (
+    JobType.SYNC_ACCOUNT_FOLDERS.value,
+    JobType.SYNC_FOLDER_METADATA.value,
+    JobType.SYNC_FOLDER_DELTA.value,
+    JobType.RECONCILE_FOLDER.value,
+)
+
+
+def _recover_account_sync_status(session: Session, job: WorkerJob) -> None:
+    if job.account_id is None or job.job_type not in _ACCOUNT_SYNC_JOB_TYPES:
+        return
+    account = session.get(Account, job.account_id)
+    if account is None or not account.sync_enabled or account.sync_status != "failed":
+        return
+    active_error = session.scalar(
+        select(WorkerJob.id)
+        .where(
+            WorkerJob.account_id == job.account_id,
+            WorkerJob.job_type.in_(_ACCOUNT_SYNC_JOB_TYPES),
+            WorkerJob.status.in_((JobStatus.PENDING.value, JobStatus.CLAIMED.value)),
+            WorkerJob.last_error.is_not(None),
+        )
+        .limit(1)
+    )
+    if active_error is None:
+        update_account_sync_status(session, job.account_id, "idle")
 
 
 def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: str) -> bool:
     status = result.get("status")
+    if (
+        status in ("provider_error", "rate_limited")
+        and job.account_id is not None
+        and job.job_type in _ACCOUNT_SYNC_JOB_TYPES
+    ):
+        update_account_sync_status(
+            session,
+            job.account_id,
+            "failed",
+            error=str(result.get("error") or status),
+        )
     if status in ("ok", "sync_disabled", "skipped", "rate_limited"):
         payload = dict(job.payload or {})
         followup = bool(result.get("has_more") or payload.get("_followup_needed"))
@@ -28,6 +66,8 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
             except Exception:
                 pass
         complete_job(session, job, worker_id=worker_id)
+        if status == "ok":
+            _recover_account_sync_status(session, job)
         if followup or next_run_after:
             from mail_core.sync.jobs import enqueue_job
 
@@ -95,10 +135,13 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             session.commit()
             result = sync_account_folders(account_id, worker_id=worker_id, store=store)
             log.info("sync_account_folders %s", result)
-            if result.get("status") in ("ok", "sync_disabled"):
-                update_account_sync_status(session, account_id, "idle")
-            elif result.get("status") in ("lease_busy", "provider_error"):
-                update_account_sync_status(session, account_id, "failed", error=str(result.get("error") or result.get("status")))
+            if result.get("status") in ("lease_busy", "provider_error"):
+                update_account_sync_status(
+                    session,
+                    account_id,
+                    "failed",
+                    error=str(result.get("error") or result.get("status")),
+                )
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.SYNC_FOLDER_METADATA.value:
@@ -205,7 +248,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         log.error("job %s (%s) failed: %s", job.id, job.job_type, safe_error(exc))
         log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()
-        if account_id is not None:
+        if account_id is not None and job.job_type in _ACCOUNT_SYNC_JOB_TYPES:
             try:
                 status_label = "auth_failed" if isinstance(exc, PermanentAuthError) else "failed"
                 update_account_sync_status(session, account_id, status_label, error=safe_error(exc))

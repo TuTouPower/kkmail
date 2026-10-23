@@ -772,6 +772,13 @@ button:hover .icon,
   overflow: hidden;
 }
 
+.tree-account-sync-error {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: var(--red);
+}
+
 .tree-account-select .account-icon,
 .tree-account-select .account-dot {
   width: 16px;
