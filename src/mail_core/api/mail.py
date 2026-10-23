@@ -28,6 +28,7 @@ from mail_core.mail.application.attachments import (
 )
 from mail_core.mail.application.mutations import (
     MutationResult,
+    UnaddressableMessageError,
     mark_all_messages_read,
     set_message_flagged,
     set_message_read,
@@ -128,7 +129,7 @@ class MessageDetailOut(BaseModel):
     body: str
     body_type: str
     parse_error: str | None
-    is_archived: bool = True
+    is_archived: bool | None
     attachments: list[AttachmentOut]
 
 
@@ -157,7 +158,7 @@ class MarkAllReadOut(BaseModel):
 class MutationOut(BaseModel):
     id: str
     account_id: str
-    operation_id: str
+    operation_id: str | None = None
     is_read: bool | None = None
     is_flagged: bool | None = None
     success: bool = True
@@ -188,7 +189,7 @@ def _mutation_out(r: MutationResult) -> MutationOut:
     return MutationOut(
         id=str(r.message_id),
         account_id=str(r.account_id),
-        operation_id=str(r.operation_id),
+        operation_id=str(r.operation_id) if r.operation_id is not None else None,
         is_read=r.is_read,
         is_flagged=r.is_flagged,
     )
@@ -310,9 +311,16 @@ def api_get_message(message_id: UUID) -> MessageDetailOut:
         if d is None:
             raise HTTPException(404, "message not found")
         st = session.get(MessageArchiveState, message_id)
-        is_archived = (st.state == ArchiveState.ARCHIVE_COMPLETE.value) if st is not None else True
+        msg = session.get(Message, message_id)
+        is_archived = (st.state == ArchiveState.ARCHIVE_COMPLETE.value) if st is not None else None
         # AC-001: 若邮件正文未就绪且未解析失败，提升归档优先级至最高 (0) 并入队高优归档任务 (priority=10)
-        if not is_archived and not d.parse_error:
+        if (
+            is_archived is False
+            and msg is not None
+            and msg.remote_id
+            and msg.remote_id.strip()
+            and not d.parse_error
+        ):
             if st is not None and st.state in (
                 ArchiveState.METADATA_SYNCED.value,
                 ArchiveState.ARCHIVE_PENDING.value,
@@ -368,6 +376,8 @@ def api_sync_message_body(message_id: UUID) -> MessageDetailOut:
         msg = session.get(Message, message_id)
         if msg is None:
             raise HTTPException(404, "message not found")
+        if not msg.remote_id or not msg.remote_id.strip():
+            raise HTTPException(409, "message has no verified provider remote id")
         account_id = msg.account_id
         st = session.get(MessageArchiveState, message_id)
         if st is not None:
@@ -400,7 +410,7 @@ def api_sync_message_body(message_id: UUID) -> MessageDetailOut:
         if d is None:
             raise HTTPException(404, "message not found")
         st = session.get(MessageArchiveState, message_id)
-        is_archived = (st.state == ArchiveState.ARCHIVE_COMPLETE.value) if st is not None else True
+        is_archived = (st.state == ArchiveState.ARCHIVE_COMPLETE.value) if st is not None else None
         return MessageDetailOut(
             id=str(d.id),
             account_id=str(d.account_id),
@@ -493,6 +503,8 @@ def api_trash_message(message_id: UUID) -> MutationOut:
             result = trash_message(session, message_id)
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
+        except UnaddressableMessageError as exc:
+            raise HTTPException(409, str(exc)) from exc
         session.commit()
         return _mutation_out(result)
 
