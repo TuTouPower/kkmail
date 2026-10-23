@@ -4,38 +4,6 @@
     "workspace": ".",
     "tasks": [
         {
-            "tid": "t027",
-            "slug": "account_group_ordering",
-            "title": "完整改造账号分组侧栏与邮件范围",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "",
-            "conflicts_with": "t026",
-            "note": "合并原 t027–t031，保留全部 40 条 AC；完整功能不减、无预置示例分组；t032 独立负责双端窗口适配",
-            "dir": "docs/tasks/t027_account_group_ordering"
-        },
-        {
-            "tid": "t032",
-            "slug": "sidebar_shell_controls",
-            "title": "整合网页与桌面原生标题栏侧栏控制",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "single",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "t027",
-            "conflicts_with": "t025",
-            "note": "来源：侧栏设计聊天最终要求与 v3 demo；网页列表标题同行控制，macOS 原生红绿灯旁控制，保留移动端 760px 断点; 本批收敛为两个 task；依赖合并后的 t027，原 t028–t031 不再独立调度",
-            "dir": "docs/tasks/t032_sidebar_shell_controls"
-        },
-        {
             "tid": "t036",
             "slug": "mail_datetime_provenance",
             "title": "保持邮件时间来源准确并避免缺失值漂移",

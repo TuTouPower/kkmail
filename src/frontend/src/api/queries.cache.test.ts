@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { MAIL_STALE_TIME_MS, findCachedMail, queryClient, queryKeys, type MailItem } from './queries'
+import { describe, expect, it, vi } from 'vitest'
+import { MAIL_STALE_TIME_MS, fetchAccounts, findCachedMail, queryClient, queryKeys, resetGroupMailQueries, type MailItem } from './queries'
 
 describe('mail list cache policy', () => {
   it('keeps lists fresh for several minutes', () => {
@@ -9,6 +9,49 @@ describe('mail list cache policy', () => {
 
   it('does not set global placeholderData (detail must not keep previous body)', () => {
     expect(queryClient.getDefaultOptions().queries?.placeholderData).toBeUndefined()
+  })
+
+  it('clears every cached group page after a membership change', async () => {
+    const inboxKey = queryKeys.inbox('__all__', 'all', 'inbox', 'desc', undefined, 'reset-group')
+    const otherInboxKey = queryKeys.inbox('__all__', 'all', 'inbox', 'desc', undefined, 'other-group')
+    const searchKey = queryKeys.search('needle', '__all__', 'reset-group')
+    const accountKey = queryKeys.inbox('account-1')
+    queryClient.setQueryData(inboxKey, { pages: [{ items: ['page-1'] }, { items: ['page-2'] }], pageParams: [null, 'cursor'] })
+    queryClient.setQueryData(otherInboxKey, { pages: [{ items: ['old-member'] }], pageParams: [null] })
+    queryClient.setQueryData(searchKey, { pages: [{ items: ['page-1'] }, { items: ['page-2'] }], pageParams: [0, 20] })
+    queryClient.setQueryData(accountKey, ['unaffected-account-mail'])
+
+    await resetGroupMailQueries()
+
+    expect(queryClient.getQueryData(inboxKey)).toBeUndefined()
+    expect(queryClient.getQueryData(otherInboxKey)).toBeUndefined()
+    expect(queryClient.getQueryData(searchKey)).toBeUndefined()
+    expect(queryClient.getQueryData(accountKey)).toEqual(['unaffected-account-mail'])
+  })
+
+  it('loads all account pages beyond the former 20,000-account cap', async () => {
+    const total = 20_001
+    const offsets: number[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      const offset = Number(url.searchParams.get('offset'))
+      const limit = Number(url.searchParams.get('limit'))
+      offsets.push(offset)
+      const end = Math.min(offset + limit, total)
+      const accounts = Array.from({ length: end - offset }, (_, index) => ({ id: `account-${offset + index}` }))
+      return new Response(JSON.stringify({ accounts, total, limit, offset, has_more: end < total }), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    try {
+      const accounts = await fetchAccounts()
+      expect(accounts).toHaveLength(total)
+      expect(offsets).toHaveLength(101)
+      expect(offsets.at(-1)).toBe(20_000)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 

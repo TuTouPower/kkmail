@@ -15,22 +15,35 @@ describe('browser preference persistence', () => {
     expect(localStorage.key(0)).toBeNull()
   })
 
-  // 旧测试 "restores theme and widths after rebuilding the production store" 已由 t010 规范升级替代：
-  // t010 AC-001 在本地持久化偏好中增加了 accountIconMode（默认 'brand'）。
-  it('restores theme, widths, and accountIconMode after rebuilding the production store (t010 AC-001)', async () => {
+  // t010 增加 accountIconMode；t027 增加侧栏分区、分组与账号展开偏好。
+  it('restores display and sidebar preferences after rebuilding the production store', async () => {
     const { useMailStore } = await import('../store/mailStore')
     useMailStore.getState().setTheme('light')
     useMailStore.getState().setSidebarWidth(320)
     useMailStore.getState().setListWidth(480)
     useMailStore.getState().setAccountIconMode('initials')
+    useMailStore.getState().toggleSidebarSection('allAccounts')
+    useMailStore.getState().toggleSidebarGroup('group-1')
+    useMailStore.getState().toggleSidebarAccount('account-1')
     useMailStore.getState().setSearch('not persisted')
     expect(JSON.parse(localStorage.getItem('mail-ui-storage')!)).toEqual({
-      state: { theme: 'light', sidebarWidth: 320, listWidth: 480, accountIconMode: 'initials' }, version: 0,
+      state: {
+        theme: 'light', sidebarWidth: 320, listWidth: 480, accountIconMode: 'initials',
+        sidebarSections: { allAccounts: false, accountList: true },
+        expandedSidebarCategories: [],
+        expandedSidebarGroups: ['group-1'], expandedSidebarAccounts: ['account-1'],
+      },
+      version: 0,
     })
     vi.resetModules()
     const { useMailStore: reloaded } = await import('../store/mailStore')
     expect(reloaded).not.toBe(useMailStore)
-    expect(reloaded.getState()).toMatchObject({ theme: 'light', sidebarWidth: 320, listWidth: 480, accountIconMode: 'initials', search: '' })
+    expect(reloaded.getState()).toMatchObject({
+      theme: 'light', sidebarWidth: 320, listWidth: 480, accountIconMode: 'initials', search: '',
+      sidebarSections: { allAccounts: false, accountList: true },
+      expandedSidebarGroups: ['group-1'], expandedSidebarAccounts: ['account-1'],
+      expandedSidebarCategories: [],
+    })
     expect(reloaded.persist.hasHydrated()).toBe(true)
   })
 

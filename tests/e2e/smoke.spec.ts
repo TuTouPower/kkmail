@@ -20,7 +20,7 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
     await page.locator('button[type="submit"]').click()
 
     // 4. 验证侧边栏核心入口已挂载
-    await expect(page.getByRole('button', { name: /所有收件箱/ })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('button', { name: '所有收件箱', exact: true })).toBeVisible({ timeout: 10000 })
     await expect(page.getByText('user@example.com')).toBeVisible()
   })
 
@@ -65,7 +65,7 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
     await setupStubApi(page, { authedInitially: true })
 
     await page.goto('/')
-    await expect(page.getByRole('button', { name: /所有收件箱/ })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('button', { name: '所有收件箱', exact: true })).toBeVisible({ timeout: 10000 })
 
     // 1. 打开设置面板
     await page.getByRole('button', { name: '设置' }).click()

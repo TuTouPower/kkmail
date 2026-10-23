@@ -60,3 +60,12 @@ export async function typeInto(el: HTMLInputElement | null, value: string) {
     el.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
+
+export async function changeSelect(el: HTMLSelectElement | null, value: string) {
+  if (!el) throw new Error('select not found')
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
+    setter.call(el, value)
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}

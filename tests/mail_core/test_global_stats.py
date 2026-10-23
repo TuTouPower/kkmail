@@ -15,8 +15,8 @@ def test_query_global_inbox_stats_calculation():
     acc1 = uuid.uuid4()
     acc2 = uuid.uuid4()
     session.execute.return_value.all.return_value = [
-        (acc1, 3, 10),
-        (acc2, 5, 20),
+        (acc1, 1, 1, 3, 10),
+        (acc2, 1, 1, 5, 20),
     ]
     res = query_global_inbox_stats(session)
     assert isinstance(res, GlobalStatsOut)

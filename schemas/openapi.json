@@ -107,12 +107,26 @@
             "type": "string"
           },
           "total_count": {
-            "title": "Total Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Count"
           },
           "unread_count": {
-            "title": "Unread Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unread Count"
           }
         },
         "required": [
@@ -155,12 +169,26 @@
             "type": "string"
           },
           "total_count": {
-            "title": "Total Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Count"
           },
           "unread_count": {
-            "title": "Unread Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unread Count"
           }
         },
         "required": [
@@ -225,9 +253,31 @@
             ],
             "title": "Group Name"
           },
+          "group_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Order"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "master_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Master Order"
           },
           "provider": {
             "title": "Provider",
@@ -480,8 +530,15 @@
             "type": "array"
           },
           "total_unread": {
-            "title": "Total Unread",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Unread"
           }
         },
         "required": [
@@ -543,6 +600,11 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "sort_order": {
+            "default": 0,
+            "title": "Sort Order",
+            "type": "integer"
           }
         },
         "required": [
@@ -550,6 +612,21 @@
           "name"
         ],
         "title": "GroupOut",
+        "type": "object"
+      },
+      "GroupUpdateIn": {
+        "properties": {
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GroupUpdateIn",
         "type": "object"
       },
       "GroupsOut": {
@@ -685,6 +762,18 @@
             ],
             "default": "inbox",
             "title": "Folder Role"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
           },
           "is_flagged": {
             "anyOf": [
@@ -1250,6 +1339,133 @@
           }
         },
         "title": "SettingsUpdateIn",
+        "type": "object"
+      },
+      "SidebarLayoutIn": {
+        "properties": {
+          "expected_revision": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Expected Revision",
+            "type": "string"
+          },
+          "group_account_ids": {
+            "additionalProperties": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "propertyNames": {
+              "format": "uuid"
+            },
+            "title": "Group Account Ids",
+            "type": "object"
+          },
+          "group_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Group Ids",
+            "type": "array"
+          },
+          "master_account_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Master Account Ids",
+            "type": "array"
+          },
+          "ungrouped_account_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Ungrouped Account Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "group_ids",
+          "master_account_ids",
+          "ungrouped_account_ids",
+          "group_account_ids",
+          "expected_revision"
+        ],
+        "title": "SidebarLayoutIn",
+        "type": "object"
+      },
+      "SidebarLayoutRevisionIn": {
+        "properties": {
+          "expected_revision": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Expected Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "SidebarLayoutRevisionIn",
+        "type": "object"
+      },
+      "SidebarLayoutSnapshotOut": {
+        "properties": {
+          "group_account_ids": {
+            "additionalProperties": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "propertyNames": {
+              "format": "uuid"
+            },
+            "title": "Group Account Ids",
+            "type": "object"
+          },
+          "group_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Group Ids",
+            "type": "array"
+          },
+          "master_account_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Master Account Ids",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "ungrouped_account_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Ungrouped Account Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "revision",
+          "group_ids",
+          "master_account_ids",
+          "ungrouped_account_ids",
+          "group_account_ids"
+        ],
+        "title": "SidebarLayoutSnapshotOut",
         "type": "object"
       },
       "SyncAllOut": {
@@ -2012,6 +2228,65 @@
         "tags": [
           "accounts"
         ]
+      },
+      "patch": {
+        "operationId": "api_rename_group_api_groups__group_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupUpdateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Rename Group",
+        "tags": [
+          "accounts"
+        ]
       }
     },
     "/api/mail/accounts/{account_id}/folder-stats": {
@@ -2212,6 +2487,23 @@
                 }
               ],
               "title": "Account Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "group_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group Id"
             }
           },
           {
@@ -2696,6 +2988,40 @@
           },
           {
             "in": "query",
+            "name": "group_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "folder_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Folder Id"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -2758,6 +3084,35 @@
     "/api/mail/stats": {
       "get": {
         "operationId": "api_global_inbox_stats_api_mail_stats_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "group_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "folder_role",
+            "required": false,
+            "schema": {
+              "default": "inbox",
+              "title": "Folder Role",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -2768,6 +3123,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -2855,6 +3220,123 @@
           }
         ],
         "summary": "Api Update Settings",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/sidebar/layout": {
+      "get": {
+        "operationId": "api_get_sidebar_layout_api_sidebar_layout_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SidebarLayoutSnapshotOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Get Sidebar Layout",
+        "tags": [
+          "accounts"
+        ]
+      },
+      "put": {
+        "operationId": "api_save_sidebar_layout_api_sidebar_layout_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SidebarLayoutIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "The sidebar layout changed after the supplied revision was read."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Save Sidebar Layout",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/sidebar/layout/default-order": {
+      "post": {
+        "operationId": "api_reset_sidebar_account_order_api_sidebar_layout_default_order_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SidebarLayoutRevisionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "The sidebar layout changed after the supplied revision was read."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Reset Sidebar Account Order",
         "tags": [
           "accounts"
         ]

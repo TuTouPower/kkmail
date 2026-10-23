@@ -3,7 +3,7 @@
  * Starts local PostgreSQL + the mail-core sidecar on 127.0.0.1 and opens the React UI.
  * contextIsolation on, nodeIntegration off.
  */
-const { app, BrowserWindow, shell, dialog, session } = require('electron')
+const { app, BrowserWindow, shell, dialog, session, nativeTheme } = require('electron')
 const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
@@ -28,6 +28,7 @@ const {
 } = require('./hardening')
 const { PostgresManager } = require('./postgresManager')
 const { getDesktopLogger } = require('./desktopLog')
+const { createMainWindowOptions, windowBackgroundColor } = require('./windowOptions')
 
 const desktopLogger = getDesktopLogger({ app })
 desktopLogger.hookConsoleAndProcess()
@@ -48,6 +49,12 @@ let backendUrl = ''
 let appOrigin = ''
 let shuttingDown = false
 let backendLogStream = null
+
+nativeTheme.on('updated', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBackgroundColor(windowBackgroundColor(nativeTheme.shouldUseDarkColors))
+  }
+})
 
 function repoRoot() {
   let cur = __dirname
@@ -164,24 +171,17 @@ function showInitialPasswordOnce(dataRoot) {
 
 function createWindow(url) {
   appOrigin = new URL(url).origin
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    minWidth: 900,
-    minHeight: 600,
-    title: 'kkmail',
-    backgroundColor: '#171819',
-    icon: path.join(__dirname, 'icon.svg'),
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webviewTag: false,
-    },
-  })
+  mainWindow = new BrowserWindow(createMainWindowOptions({
+    platform: process.platform,
+    preloadPath: path.join(__dirname, 'preload.js'),
+    iconPath: path.join(__dirname, 'icon.svg'),
+    backgroundColor: windowBackgroundColor(nativeTheme.shouldUseDarkColors),
+  }))
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+  mainWindow.once('ready-to-show', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show()
   })
   mainWindow.loadURL(url)
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {

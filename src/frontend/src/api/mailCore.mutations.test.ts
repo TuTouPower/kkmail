@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { __resetCsrfForTests } from './client'
-import { fetchMailCoreInbox, fetchMailCoreSearch, postMailCoreMessageFlag, postMailCoreMessageRead } from './mailCore'
+import { fetchMailCoreInbox, fetchMailCoreSearch, postMailCoreMarkAllRead, postMailCoreMessageFlag, postMailCoreMessageRead } from './mailCore'
 import { ALL_ACCOUNTS, flagOptimistic, markReadOptimistic, queryClient, queryKeys, type MailItem } from './queries'
 
 function json(status: number, body: unknown) {
@@ -65,11 +65,33 @@ describe('list queries', () => {
     expect(String(mock.mock.calls[0][0])).toBe('/api/mail/inbox?limit=10&account_id=acc-1&cursor=abc')
   })
 
+  it('passes group scope to inbox, search, and mark-all-read requests', async () => {
+    const mock = stubFetch((url) => {
+      if (url.includes('/mark-all-read')) return json(200, { success: true, count: 1 })
+      if (url.includes('/search')) return json(200, { query: 'tax', items: [], total: 0, offset: 0, next_offset: null })
+      return json(200, { items: [], next_cursor: null })
+    })
+    await fetchMailCoreInbox({ groupId: 'group-1' })
+    await fetchMailCoreSearch('tax', { groupId: 'group-1' })
+    await postMailCoreMarkAllRead({ groupId: 'group-1', folder_role: 'inbox' })
+    const requests = mock.mock.calls as unknown as Array<[string, RequestInit]>
+    expect(requests.some(([url]) => url.includes('/api/mail/inbox?') && url.includes('group_id=group-1'))).toBe(true)
+    expect(requests.some(([url]) => url.includes('/api/mail/search?') && url.includes('group_id=group-1'))).toBe(true)
+    const markAll = requests.find(([url]) => url.endsWith('/api/mail/mark-all-read'))
+    expect(JSON.parse(String(markAll?.[1].body))).toEqual({ folder_role: 'inbox', group_id: 'group-1' })
+  })
+
   it('search uses offset pagination', async () => {
     const mock = stubFetch(() => json(200, { query: 'hi', items: [], total: 0, offset: 50, next_offset: null }))
     const page = await fetchMailCoreSearch('hi', { offset: 50 })
     expect(page.total).toBe(0)
     expect(String(mock.mock.calls[0][0])).toBe('/api/mail/search?q=hi&limit=50&offset=50')
+  })
+
+  it('search includes the selected folder scope', async () => {
+    const mock = stubFetch(() => json(200, { query: 'invoice', items: [], total: 0, offset: 0, next_offset: null }))
+    await fetchMailCoreSearch('invoice', { accountId: 'acc-1', folderId: 'folder-1' })
+    expect(String(mock.mock.calls[0][0])).toBe('/api/mail/search?q=invoice&limit=50&offset=0&account_id=acc-1&folder_id=folder-1')
   })
 })
 

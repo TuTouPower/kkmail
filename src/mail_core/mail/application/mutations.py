@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import JobType, OutboxEventType
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
-from mail_core.mail.storage.models import Folder, Message, MessageLocation, OutboxEvent
+from mail_core.mail.storage.models import Account, AccountGroup, Folder, Message, MessageLocation, OutboxEvent
 from mail_core.realtime.notify import try_notify_outbox
 from mail_core.sync.jobs import enqueue_job
 
@@ -208,21 +208,27 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
     )
 
 
-def mark_all_messages_read(
+def _mark_all_read_query(
     session: Session,
     *,
-    account_id: uuid.UUID | None = None,
-    folder_role: str | None = "inbox",
-    folder_id: uuid.UUID | None = None,
-    is_flagged: bool | None = None,
-) -> int:
-    """Batch mark messages read matching the scope (account/folder_role/folder_id/flag). Returns updated count."""
+    account_id: uuid.UUID | None,
+    folder_role: str | None,
+    folder_id: uuid.UUID | None,
+    is_flagged: bool | None,
+    group_id: uuid.UUID | None,
+):
+    if group_id is not None and session.get(AccountGroup, group_id) is None:
+        raise LookupError("group not found")
     if folder_id is not None:
         folder = session.get(Folder, folder_id)
         if folder is None:
             raise LookupError(f"folder {folder_id} not found")
         if account_id is not None and folder.account_id != account_id:
             raise LookupError(f"folder {folder_id} does not belong to specified account")
+        if group_id is not None:
+            account = session.get(Account, folder.account_id)
+            if account is None or account.group_id != group_id:
+                raise LookupError("folder does not belong to specified group")
         stmt = (
             select(Message)
             .join(MessageLocation, MessageLocation.message_id == Message.id)
@@ -239,10 +245,33 @@ def mark_all_messages_read(
         )
     if account_id is not None:
         stmt = stmt.where(Message.account_id == account_id)
+    if group_id is not None:
+        stmt = stmt.where(Message.account_id.in_(select(Account.id).where(Account.group_id == group_id)))
     if is_flagged is not None:
         stmt = stmt.where(Message.is_flagged == is_flagged)
+    return stmt.distinct()
 
-    messages = list(session.scalars(stmt.distinct()).all())
+
+def mark_all_messages_read(
+    session: Session,
+    *,
+    account_id: uuid.UUID | None = None,
+    folder_role: str | None = "inbox",
+    folder_id: uuid.UUID | None = None,
+    is_flagged: bool | None = None,
+    group_id: uuid.UUID | None = None,
+) -> int:
+    """Batch mark messages read matching the scope (account/folder_role/folder_id/flag). Returns updated count."""
+    stmt = _mark_all_read_query(
+        session,
+        account_id=account_id,
+        folder_role=folder_role,
+        folder_id=folder_id,
+        is_flagged=is_flagged,
+        group_id=group_id,
+    )
+
+    messages = list(session.scalars(stmt).all())
     if not messages:
         return 0
 

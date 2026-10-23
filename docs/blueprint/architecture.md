@@ -12,10 +12,10 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 进程模型：支持单进程模式（API 嵌入 Worker 线程）或生产拆分模式（独立的 API 容器与 Worker 容器）。
 2. **前端界面 (`src/frontend/`)**：
     - 技术栈：React 19 + TypeScript + Vite + TanStack React Query + Lucide Icons。
-    - 特点：单页应用 (SPA)，由 `mail-core` 同源托管提供；基于 `useInfiniteQuery` 实现游标深翻页，原生集成 SSE 流式状态同步。侧边栏个人收藏提供「所有收件箱」、「所有未读」、「所有已发邮件」三折叠树导航，支持全局与按账号维度多路分类切换。邮件详情工具栏操作居中显示并支持已读/未读状态双向响应；邮件列表支持右键上下文菜单（Context Menu）。
+    - 特点：单页应用 (SPA)，由 `mail-core` 同源托管提供；基于 `useInfiniteQuery` 实现游标深翻页，原生集成 SSE 流式状态同步。侧栏按“所有账号／用户自定义分组／账号列表”组织导航，保留六类全局分类、分组分类、每账号分类与真实文件夹访问。邮件详情工具栏操作居中显示并支持已读/未读状态双向响应；邮件列表支持右键上下文菜单（Context Menu）。网页壳的侧栏按钮固定在邮件列表标题行；Electron macOS 使用原生标题栏交通灯，侧栏按钮放在其旁边，Windows/Linux 保留系统窗口框架。
 3. **桌面集成 (`src/desktop/`)**：
     - 运行环境：Electron 主进程。
-    - 职责：进程生命周期管理，启动内置 PostgreSQL 实例与 `mail_core` sidecar 进程，支持 macOS/Linux/Windows 跨平台运行。
+    - 职责：进程生命周期管理，启动内置 PostgreSQL 实例与 `mail_core` sidecar 进程，支持 macOS/Linux/Windows 跨平台运行；窗口选项按平台选择原生框架，macOS 自定义标题栏只覆盖网页内容区，不接管系统交通灯。
 
 ## 模块分层与数据流
 
@@ -23,7 +23,8 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 路由声明：统一 `response_model`，输入经 Pydantic 校验。
     - 安全鉴权：Cookie Session 签名与防篡改、Session Epoch 全局失效、CSRF 严格校验、反向代理受信与登录防爆破。
 - **业务领域与应用层 (`src/mail_core/mail/application/`, `src/mail_core/accounts/`)**：
-    - 账户生命周期、邮件查询、聚合收件箱游标检索与全文搜索。`/api/mail/inbox` 支持通过 `folder_role`（默认 `inbox`，支持 `sent`/`drafts`/`trash`/`junk`/`archive` 等）或精确 `folder_id` 联合 `account_id` 实现多账号统一/单账号分类及特定文件夹邮件检索，保证多位置邮件去重与 keyset 翻页一致性。前端侧栏支持六大个人收藏分类与账号入库文件夹树导航。
+    - 账户生命周期、用户自定义单层分组、邮件查询、聚合收件箱游标检索与全文搜索。分组顺序、账号总列表顺序与组内顺序持久化在 PostgreSQL；`GET /api/sidebar/layout` 返回完整布局与 revision，`PUT /api/sidebar/layout` 和默认顺序恢复携 expected_revision，在事务锁下拒绝过期快照并原子保存；账号、分组与布局写入共用 PostgreSQL advisory lock，默认账号顺序按邮箱域名及完整地址确定。
+    - `/api/mail/inbox` 支持通过 `folder_role`（默认 `inbox`，支持 `sent`/`drafts`/`trash`/`junk`/`archive` 等）或精确 `folder_id` 联合 `account_id` 或 `group_id` 实现多账号统一、单账号、分组分类及特定文件夹检索；`/api/mail/search` 同样支持全局、单账号、分组或精确文件夹范围，拒绝分组与账号/文件夹混用，保证搜索统计和邮件列表隔离。批量已读按当前分组成员解析；空组保持空结果，不存在分组或歧义范围请求失败关闭。
     - 出站写回状态机：基于 `remote_operations` 队列与单调递增 `revision` 的乐观并发控制 (CAS)；支持多批次自动续跑、瞬时错误与限流退避延迟唤醒、跨同步边界的本地字段意图保护与孤儿任务安全对账恢复。
 - **同步引擎与协议适配 (`src/mail_core/sync/`, `src/mail_core/providers/`)**：
     - 适配器：IMAP (带 TLS 校验与特殊文件夹转义)、Gmail REST (repeated historyTypes + History hydration)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归)。
