@@ -177,14 +177,22 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     queryFn: async ({ signal }) => {
       if (groupId) {
         const stats = await fetchGlobalStats(signal, groupId, folderRole)
+        const activeAccounts = stats.accounts.filter((item) => {
+          const acc = accounts.find((a) => a.id === item.account_id)
+          const isFaulty = acc && (acc.sync_enabled === false || acc.sync_status === 'failed' || acc.sync_status === 'auth_failed') && item.total_count === null
+          return !isFaulty
+        })
         return {
-          total: stats.accounts.length ? sumKnownCounts(stats.accounts.map((item) => item.total_count)) : 0,
-          unread: stats.accounts.length ? sumKnownCounts(stats.accounts.map((item) => item.unread_count)) : 0,
+          total: activeAccounts.length ? sumKnownCounts(activeAccounts.map((item) => item.total_count)) : 0,
+          unread: stats.total_unread,
         }
       }
       if (accountId) {
         const stats = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`).catch(() => null)
         if (!stats) return null
+        if (stats.folders.length === 0) {
+          return { total: null, unread: null }
+        }
         const targetFolder = folderId
           ? stats.folders.find((f: AccountFolderStatsItemOut) => String(f.folder_id) === folderId)
           : stats.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
@@ -194,17 +202,27 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         }
       }
       const statsList = await Promise.all(
-        accounts.map((a) =>
-          apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(a.id)}/folder-stats`).catch(() => null),
-        ),
+        accounts.map(async (a) => {
+          const res = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(a.id)}/folder-stats`).catch(() => null)
+          return { account: a, stats: res }
+        }),
       )
-      if (statsList.some((stats) => stats === null)) return null
+      if (statsList.some((item) => item.stats === null)) return null
       let total = 0
       let unread = 0
       let totalUnknown = false
       let unreadUnknown = false
-      for (const s of statsList) {
+      for (const { account: a, stats: s } of statsList) {
         if (!s) return null
+        const isFaulty = (a.sync_enabled === false || a.sync_status === 'failed' || a.sync_status === 'auth_failed') && s.folders.length === 0
+        if (isFaulty) {
+          continue
+        }
+        if (s.folders.length === 0) {
+          totalUnknown = true
+          unreadUnknown = true
+          continue
+        }
         const targetFolder = s.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
         const accountTotal = targetFolder ? targetFolder.total_count : 0
         const accountUnread = targetFolder ? targetFolder.unread_count : 0

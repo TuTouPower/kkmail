@@ -19,17 +19,22 @@ const accounts = [
   { id: 'acc-2', email: 'notes@a.example', status: 'active', account_type: 'imap', provider: 'imap', group_id: null },
 ]
 
-function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
+function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
   const calls: Array<{ url: string; method: string; body?: string }> = []
   let currentAccounts: Array<{
     id: string
     email: string
     status: string
+    sync_status?: string
     account_type: string
     provider: string
     group_id: string | null
     group_name?: string
-  }> = accounts.map((account) => ({ ...account, group_id: account.group_id ?? null }))
+  }> = accounts.map((account) => ({
+    ...account,
+    group_id: account.group_id ?? null,
+    sync_status: account.id === 'acc-1' && options.syncStatusAcc1 ? options.syncStatusAcc1 : 'idle',
+  }))
   let currentGroups = groups.map((group) => ({ ...group }))
   let revision = 0
   let currentLayout: {
@@ -104,6 +109,7 @@ function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partial
     }
     if (url.pathname === '/api/mail/accounts/acc-1/folder-stats') {
       if (options.failAcc1Stats) return json({ detail: 'folder stats unavailable' }, 500)
+      if (options.emptyFoldersAcc1) return json({ account_id: 'acc-1', folders: [] })
       if (options.missingInboxAcc1) return json({ account_id: 'acc-1', folders: [
         { folder_id: 'sent-1', remote_id: 'Sent', name: 'Sent', role: 'sent', unread_count: 4, total_count: 8 },
         { folder_id: 'other-1', remote_id: 'Other', name: 'Other', role: 'other', unread_count: 6, total_count: 10 },
@@ -567,5 +573,25 @@ describe('<Sidebar />', () => {
     await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('已在其他窗口更新'))
     expect(calls.filter((call) => call.url === '/api/sidebar/layout' && call.method === 'GET').length).toBeGreaterThanOrEqual(2)
     expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-2"]')).not.toBeNull()
+  })
+
+  it('displays sync failure message and does not show virtual unread item when account folders are empty and sync_status is auth_failed (AC-001)', async () => {
+    mockApi({ emptyFoldersAcc1: true, syncStatusAcc1: 'auth_failed' })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
+    await click(account.querySelector('.tree-disclosure'))
+    await waitFor(() => expect(account.textContent).toContain('同步失败，请检查账户设置'))
+    expect(account.textContent).not.toContain('未读邮件')
+  })
+
+  it('displays no folders message when account folders are empty and sync_status is idle (AC-001)', async () => {
+    mockApi({ emptyFoldersAcc1: true, syncStatusAcc1: 'idle' })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
+    await click(account.querySelector('.tree-disclosure'))
+    await waitFor(() => expect(account.textContent).toContain('暂无文件夹'))
+    expect(account.textContent).not.toContain('未读邮件')
   })
 })

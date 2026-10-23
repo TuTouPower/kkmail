@@ -165,3 +165,38 @@ def test_handle_job_sanitizes_error_in_update_account_sync_status():
         assert "my_secret_password" not in passed_error
         assert "[REDACTED]" in passed_error
 
+
+def test_evaluate_result_retains_business_payload_for_followup():
+    """AC-005: Worker _evaluate_result must retain business payload and strip _followup_* fields."""
+    import uuid
+    from mail_core.mail.domain.enums import JobType
+    from mail_core.mail.storage.models import WorkerJob
+    from mail_core.worker.handlers import _evaluate_result
+
+    job = WorkerJob(
+        job_type=JobType.SYNC_FOLDER_DELTA.value,
+        account_id=uuid.uuid4(),
+        status="claimed",
+        payload={
+            "folder_id": "f-12345",
+            "account_id": "acc-999",
+            "_followup_needed": True,
+            "_followup_run_after": "2026-10-23T10:00:00+00:00",
+        },
+        priority=5,
+        dedupe_key="dedupe-123",
+    )
+    job.id = uuid.uuid4()
+
+    session = MagicMock()
+    with (
+        patch("mail_core.worker.handlers.complete_job"),
+        patch("mail_core.sync.jobs.enqueue_job") as mock_enqueue,
+    ):
+        ok = _evaluate_result(session, job, {"status": "ok", "has_more": True}, worker_id="test-worker")
+        assert ok is True
+        mock_enqueue.assert_called_once()
+        _, kwargs = mock_enqueue.call_args
+        assert kwargs["payload"] == {"folder_id": "f-12345", "account_id": "acc-999"}
+        assert "_followup_needed" not in kwargs["payload"]
+        assert "_followup_run_after" not in kwargs["payload"]

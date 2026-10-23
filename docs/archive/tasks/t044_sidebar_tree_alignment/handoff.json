@@ -1,0 +1,33 @@
+{
+  "tid": "t044",
+  "attempt": 1,
+  "execution_id": "f4e6d742c7074dd3b2295faeb28f1e19",
+  "status": "done",
+  "branch": "t044_sidebar_tree_alignment",
+  "base_sha": "2fc7335da1d57ac980a59fc3b0acd4b32f659d81",
+  "tests": "frontend: 39 files, 260 passed; OpenAPI, CSS tokens, tsc, production build, lint passed; contract: 150 passed; desktop: 9 passed; packaged desktop smoke passed; backend unit: 304 passed",
+  "blackbox": "stub UI E2E: 14 passed (including t044 pixel geometric assertions); real full-stack E2E: 8 passed",
+  "review": "single review PASS (Round 1 PASS 0 finding; scope: 756df69247bd6c12)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/design-system/tokens.css",
+      "tests/e2e/sidebar_tree.spec.ts"
+    ],
+    "AC-002": [
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/design-system/tokens.css",
+      "tests/e2e/sidebar_tree.spec.ts"
+    ],
+    "AC-003": [
+      "src/frontend/src/components/Sidebar.tsx",
+      "src/frontend/src/design-system/tokens.css",
+      "tests/e2e/sidebar_tree.spec.ts"
+    ],
+    "AC-004": [
+      "tests/e2e/sidebar_tree.spec.ts"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

@@ -9,9 +9,11 @@ describe('displayName', () => {
   it('falls back to the local part for bare addresses', () => {
     expect(displayName('alice@kkmail.test')).toBe('alice')
   })
-  it('returns 未知 for empty input', () => {
-    expect(displayName('')).toBe('未知')
-    expect(displayName(undefined)).toBe('未知')
+  // t047 修复：发件人缺失时留白，不再返回“未知”
+  it('returns empty string for empty or blank input (AC-002)', () => {
+    expect(displayName('')).toBe('')
+    expect(displayName('   ')).toBe('')
+    expect(displayName(undefined)).toBe('')
   })
 })
 

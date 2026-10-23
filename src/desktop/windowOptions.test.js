@@ -28,6 +28,6 @@ for (const platform of ['win32', 'linux']) {
   assert.ok(!Object.hasOwn(nativeFrameOptions, 'titleBarOverlay'))
 }
 
-assert.strictEqual(windowBackgroundColor(true), '#171819')
+assert.strictEqual(windowBackgroundColor(true), '#16191A')
 assert.strictEqual(windowBackgroundColor(false), '#E9EAED')
 console.log('desktop window options: ok')

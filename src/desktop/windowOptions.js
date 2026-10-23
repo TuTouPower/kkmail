@@ -1,7 +1,7 @@
 'use strict'
 
 function windowBackgroundColor(shouldUseDarkColors) {
-  return shouldUseDarkColors ? '#171819' : '#E9EAED'
+  return shouldUseDarkColors ? '#16191A' : '#E9EAED'
 }
 
 function createMainWindowOptions({ platform, preloadPath, iconPath, backgroundColor }) {
