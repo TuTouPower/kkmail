@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _seed() -> uuid.UUID:
+def _seed(*, remote_id: str | None = "rid-1") -> uuid.UUID:
     Session = get_session_factory()
     with Session() as session:
         acc = Account(email=f"mut-{uuid.uuid4().hex[:8]}@ex.com", provider="memory", credential_ref="r")
@@ -33,7 +33,7 @@ def _seed() -> uuid.UUID:
         session.flush()
         msg = Message(
             account_id=acc.id,
-            remote_id="rid-1",
+            remote_id=remote_id,
             subject="Hi",
             from_address="a@b.c",
             sort_time=datetime.now(timezone.utc),
@@ -156,4 +156,36 @@ def test_mark_all_read_api():
     with Session() as session:
         msg = session.get(Message, mid)
         assert msg.is_read is True
+
+
+def test_local_only_messages_keep_read_flag_local_and_reject_trash():
+    mid = _seed(remote_id=None)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+
+    read = client.post(f"/api/mail/messages/{mid}/read", json={"is_read": True})
+    assert read.status_code == 200
+    assert read.json()["operation_id"] is None
+
+    flag = client.post(f"/api/mail/messages/{mid}/flag", json={"is_flagged": True})
+    assert flag.status_code == 200
+    assert flag.json()["operation_id"] is None
+
+    mark_unread = client.post(f"/api/mail/messages/{mid}/read", json={"is_read": False})
+    assert mark_unread.status_code == 200
+    batch = client.post("/api/mail/mark-all-read", json={"folder_role": "inbox"})
+    assert batch.status_code == 200
+    assert batch.json()["count"] >= 1
+
+    Session = get_session_factory()
+    with Session() as session:
+        message = session.get(Message, mid)
+        assert message is not None and message.is_read is True and message.is_flagged is True
+        assert session.scalars(select(RemoteOperation).where(RemoteOperation.account_id == message.account_id)).all() == []
+        assert session.scalars(select(WorkerJob).where(WorkerJob.account_id == message.account_id)).all() == []
+
+    trash = client.post(f"/api/mail/messages/{mid}/trash")
+    assert trash.status_code == 409
+    assert "provider remote id" in trash.json()["detail"]
+    with Session() as session:
+        assert session.get(Message, mid) is not None
 
