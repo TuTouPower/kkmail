@@ -1,6 +1,7 @@
 /** mail-core mail endpoints (inbox, search, detail, mutations, SSE). Shares the client transport. */
 
 import { apiBaseUrl } from '../lib/apiBase'
+import { previewText } from '../lib/previewText'
 import { apiRequest, postJson } from './client'
 import type { MailDetail, MailItem } from './queries'
 import type {
@@ -110,7 +111,7 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
     is_read: m.is_read,
     is_flagged: m.is_flagged,
     has_attachments: m.has_attachments,
-    body_preview: m.snippet || undefined,
+    body_preview: (m.snippet ? previewText(m.snippet) : m.body_preview) || undefined,
     // folder_id is the list identity; never invent 'inbox' (search may span roles).
     folder: m.folder_id || undefined,
     // email vs id must stay split — never fall back account_id into accountEmail.

@@ -1,9 +1,11 @@
 /** Strip HTML tags and collapse whitespace for list previews. */
 export function stripHtmlToText(html: string): string {
-  let text = html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+  let text = html.replace(/<!--[\s\S]*?(?:-->|$)|<!doctype\b[^>]*(?:>|$)/gi, ' ')
+  text = text.replace(/<(head|script|style)\b[\s\S]*?(?:<\/\1>|$)/gi, ' ')
   text = text.replace(/<br\s*\/?>/gi, '\n')
   text = text.replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
-  text = text.replace(/<[^>]+>/g, ' ')
+  text = text.replace(/<\/?[a-z][a-z0-9]*(?:\s[^<>]*|\s*\/?)>/gi, ' ')
+  text = text.replace(/<\/?(?:html|head|body|meta|div|p|span|table|br|a|img)(?=[\s/]|$)[^>]*$/gi, ' ')
   text = text
     .replace(/&nbsp;/gi, ' ')
     .replace(/&lt;/gi, '<')
@@ -15,7 +17,7 @@ export function stripHtmlToText(html: string): string {
 }
 
 function looksLikeHtml(src: string): boolean {
-  return /<\/?[a-z!][\s\S]*>/i.test(src) || /&[a-z]+;/i.test(src) || src.startsWith('<!')
+  return /<\/?[a-z][a-z0-9]*(?:\s[^<>]*|\s*\/?)>/i.test(src) || /&[a-z]+;/i.test(src) || src.startsWith('<!')
 }
 
 /** Turn a body_preview (which may still contain HTML) into plain list text. */

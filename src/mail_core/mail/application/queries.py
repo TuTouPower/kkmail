@@ -6,6 +6,7 @@ import base64
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from html.parser import HTMLParser
 from typing import Any
 
 from pydantic import BaseModel
@@ -29,6 +30,7 @@ class MessageListItem:
     has_attachments: bool
     snippet: str | None
     folder_id: uuid.UUID | None
+    body_preview: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +67,7 @@ def decode_cursor(token: str) -> tuple[datetime, uuid.UUID]:
         raise InvalidCursor("invalid cursor") from exc
 
 
-def _list_item(m: Message, folder_id: Any) -> MessageListItem:
+def _list_item(m: Message, folder_id: Any, body_preview: str = "") -> MessageListItem:
     fid_uuid = uuid.UUID(str(folder_id)) if folder_id else None
     return MessageListItem(
         id=m.id,
@@ -79,11 +81,58 @@ def _list_item(m: Message, folder_id: Any) -> MessageListItem:
         has_attachments=m.has_attachments,
         snippet=m.snippet,
         folder_id=fid_uuid,
+        body_preview=body_preview,
     )
 
 
+class _BodyPreviewParser(HTMLParser):
+    """Extract visible body text for list display without changing stored mail data."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.hidden: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"head", "script", "style"}:
+            self.hidden.append(tag)
+        if not self.hidden:
+            self.parts.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.hidden and self.hidden[-1] == tag:
+            self.hidden.pop()
+        if not self.hidden:
+            self.parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def _body_previews(session: Session, messages: list[Message]) -> dict[uuid.UUID, str]:
+    # One batch for the current page only; never load bodies when a provider snippet exists.
+    ids = [m.id for m in messages if not m.snippet]
+    if not ids:
+        return {}
+    rows = session.execute(
+        select(MessageBody.message_id, MessageBody.text_plain, MessageBody.text_html)
+        .where(MessageBody.message_id.in_(ids), MessageBody.parse_error.is_(None))
+    ).all()
+    previews = {}
+    for mid, plain, html in rows:
+        text = plain or ""
+        if not text and html:
+            parser = _BodyPreviewParser()
+            parser.feed(html)
+            parser.close()
+            text = "".join(parser.parts)
+        previews[mid] = " ".join(text.split())[:180]
+    return previews
+
+
 def messages_by_ids(session: Session, ids: list[uuid.UUID]) -> list[MessageListItem]:
-    """Hydrate list rows for ``ids`` preserving the given order (one query)."""
+    """Hydrate list rows for ``ids`` preserving the given order; batch-load body previews when needed."""
     if not ids:
         return []
     rows = session.execute(
@@ -91,9 +140,10 @@ def messages_by_ids(session: Session, ids: list[uuid.UUID]) -> list[MessageListI
         .outerjoin(MessageLocation, MessageLocation.message_id == Message.id)
         .where(Message.id.in_(ids))
     ).all()
+    previews = _body_previews(session, list({m.id: m for m, _ in rows}.values()))
     by_id: dict[uuid.UUID, MessageListItem] = {}
     for m, fid in rows:
-        by_id.setdefault(m.id, _list_item(m, fid))
+        by_id.setdefault(m.id, _list_item(m, fid, previews.get(m.id, "")))
     return [by_id[i] for i in ids if i in by_id]
 
 
@@ -173,7 +223,8 @@ def list_messages_keyset(
     rows = list(session.execute(stmt).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    items = [_list_item(m, fid) for m, fid in rows]
+    previews = _body_previews(session, [m for m, _ in rows])
+    items = [_list_item(m, fid, previews.get(m.id, "")) for m, fid in rows]
     next_cursor = None
     if has_more and items:
         last = items[-1]

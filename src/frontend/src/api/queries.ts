@@ -20,6 +20,7 @@ export interface MailItem {
   is_read: boolean
   is_flagged: boolean
   has_attachments: boolean
+  /** Plain display text: provider snippet or read-only body fallback. */
   body_preview?: string
   folder?: string
   accountEmail: string
