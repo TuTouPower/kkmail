@@ -282,7 +282,7 @@ def sync_folder_delta(
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=5),
             )
             session.commit()
-            return {"status": "lease_busy"}
+            return {"status": "lease_busy", "followup_scheduled": True}
         fencing = lease.fencing_token
         remote_id = folder.remote_id
         cursor = dict(cp.cursor or {})
@@ -347,7 +347,7 @@ def sync_folder_delta(
                 except FencingMismatch:
                     session.rollback()
                     return {"status": "fencing_mismatch", "pages": pages, **totals}
-            return {"status": "cursor_invalid", "pages": pages, **totals}
+            return {"status": "cursor_invalid", "followup_scheduled": True, "pages": pages, **totals}
         except RateLimitedError as exc:
             delay = float(exc.retry_after_seconds or 60)
             delay = max(1.0, min(delay, 86400.0))
@@ -384,6 +384,7 @@ def sync_folder_delta(
             return {
                 "status": "provider_error",
                 "error": err_summary,
+                "followup_scheduled": True,
                 "pages": pages,
                 **totals,
             }

@@ -258,7 +258,7 @@ def sync_folder_metadata(
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=5),
             )
             session.commit()
-            return {"status": "lease_busy"}
+            return {"status": "lease_busy", "followup_scheduled": True}
         fencing = lease.fencing_token
         remote_id = folder.remote_id
         account_snapshot = Account(
@@ -346,7 +346,12 @@ def sync_folder_metadata(
             except FencingMismatch:
                 session.rollback()
                 return {"status": "fencing_mismatch", "upserted": total}
-        return {"status": "cursor_invalid", "upserted": total, "pages": pages}
+        return {
+            "status": "cursor_invalid",
+            "followup_scheduled": True,
+            "upserted": total,
+            "pages": pages,
+        }
     except RateLimitedError as exc:
         delay = float(exc.retry_after_seconds or 60)
         delay = max(1.0, min(delay, 86400.0))
