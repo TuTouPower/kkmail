@@ -197,7 +197,7 @@ function AccountFolderTree({ accountId, accountEmail }: AccountFolderTreeProps) 
   return <div className="account-folders" style={{ paddingLeft: '8px' }}>{renderTree(roots, 0)}</div>
 }
 
-async function fetchAccountFolders(accountId: string, signal?: AbortSignal): Promise<number> {
+async function fetchAccountFolders(accountId: string, signal?: AbortSignal): Promise<number | null> {
   const res = await apiRequest(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`, { signal })
   const folders: FolderStatsItem[] = Array.isArray(res)
     ? res
@@ -205,7 +205,7 @@ async function fetchAccountFolders(accountId: string, signal?: AbortSignal): Pro
       ? (res as { folders: FolderStatsItem[] }).folders
       : []
   const inboxFolder = folders.find((f) => f.role === 'inbox')
-  return inboxFolder?.unread_count ?? folders.reduce((sum, f) => sum + (f.unread_count || 0), 0)
+  return typeof inboxFolder?.unread_count === 'number' ? inboxFolder.unread_count : null
 }
 
 const Sidebar = memo(function Sidebar() {
@@ -255,29 +255,27 @@ const Sidebar = memo(function Sidebar() {
           totalUnread: globalStats.total_unread as number | null,
           byAccount: statsMap,
         }
-      } catch (globalErr) {
+      } catch {
         const statsMap = new Map<string, number | null>()
         let anyFailed = false
         let total = 0
-        let successCount = 0
 
         await Promise.all(
           accounts.map(async (a) => {
             try {
               const count = await fetchAccountFolders(a.id, signal)
               statsMap.set(a.id, count)
-              total += count
-              successCount++
+              if (count === null) {
+                anyFailed = true
+              } else {
+                total += count
+              }
             } catch {
               anyFailed = true
               statsMap.set(a.id, null)
             }
           }),
         )
-
-        if (accounts.length > 0 && successCount === 0) {
-          throw globalErr
-        }
 
         return {
           totalUnread: anyFailed ? null : total,
