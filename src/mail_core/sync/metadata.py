@@ -114,6 +114,8 @@ def upsert_messages(
                 loc.uid = meta.uid
         changed = created or location_created
         for field in _META_FIELDS:
+            if meta.supplied_fields is not None and field not in meta.supplied_fields:
+                continue
             value = getattr(meta, field)
             if field == "sort_time" and value is None:
                 continue
@@ -129,6 +131,8 @@ def upsert_messages(
                 setattr(msg, field, value)
                 changed = True
         for field in ("to_addresses", "cc_addresses"):
+            if meta.supplied_fields is not None and field not in meta.supplied_fields:
+                continue
             value = list(getattr(meta, field))
             if list(getattr(msg, field) or []) != value:
                 setattr(msg, field, value)

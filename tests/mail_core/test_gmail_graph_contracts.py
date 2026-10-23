@@ -486,6 +486,8 @@ def test_gmail_duplicate_page_token_and_cursor_immutability():
     def looping_transport(method, path, params):
         nonlocal calls
         calls += 1
+        if path.endswith("/messages/n1"):
+            return {"id": "n1", "labelIds": ["INBOX"], "payload": {"headers": []}}
         if params.get("pageToken") == "infinite_loop_token":
             return {
                 "history": [],
