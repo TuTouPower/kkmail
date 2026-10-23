@@ -61,6 +61,7 @@ class MessageOut(BaseModel):
     is_flagged: bool
     has_attachments: bool
     snippet: str | None
+    body_preview: str = Field("", description="Display-only fallback from an existing body when snippet is empty; never persisted.")
     folder_id: str | None
 
 
@@ -173,6 +174,7 @@ def _rows(items: list[MessageListItem], emails: dict) -> list[MessageOut]:
             is_flagged=i.is_flagged,
             has_attachments=i.has_attachments,
             snippet=i.snippet,
+            body_preview=i.body_preview,
             folder_id=str(i.folder_id) if i.folder_id else None,
         )
         for i in items

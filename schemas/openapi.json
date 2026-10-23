@@ -899,6 +899,12 @@
             "title": "Account Id",
             "type": "string"
           },
+          "body_preview": {
+            "default": "",
+            "description": "Display-only fallback from an existing body when snippet is empty; never persisted.",
+            "title": "Body Preview",
+            "type": "string"
+          },
           "folder_id": {
             "anyOf": [
               {

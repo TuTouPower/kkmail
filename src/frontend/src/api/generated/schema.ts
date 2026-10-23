@@ -789,6 +789,12 @@ export interface components {
             account_email?: string | null;
             /** Account Id */
             account_id: string;
+            /**
+             * Body Preview
+             * @description Display-only fallback from an existing body when snippet is empty; never persisted.
+             * @default
+             */
+            body_preview: string;
             /** Folder Id */
             folder_id: string | null;
             /** From Address */
