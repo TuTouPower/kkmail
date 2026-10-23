@@ -56,11 +56,12 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
             "failed",
             error=str(result.get("error") or status),
         )
-    if status in ("ok", "sync_disabled", "skipped", "rate_limited"):
+    if status in ("ok", "sync_disabled", "skipped", "rate_limited") or result.get("followup_scheduled"):
         payload = dict(job.payload or {})
-        followup = bool(result.get("has_more") or payload.get("_followup_needed"))
-        next_run_after = result.get("next_run_after")
-        if not next_run_after and payload.get("_followup_run_after"):
+        followup_was_scheduled = bool(result.get("followup_scheduled"))
+        followup = not followup_was_scheduled and bool(result.get("has_more") or payload.get("_followup_needed"))
+        next_run_after = None if followup_was_scheduled else result.get("next_run_after")
+        if not followup_was_scheduled and not next_run_after and payload.get("_followup_run_after"):
             try:
                 next_run_after = datetime.fromisoformat(payload["_followup_run_after"])
             except Exception:
@@ -68,7 +69,7 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
         complete_job(session, job, worker_id=worker_id)
         if status == "ok":
             _recover_account_sync_status(session, job)
-        if followup or next_run_after:
+        if not followup_was_scheduled and (followup or next_run_after):
             from mail_core.sync.jobs import enqueue_job
 
             next_payload = {k: v for k, v in payload.items() if not k.startswith("_followup_")}
