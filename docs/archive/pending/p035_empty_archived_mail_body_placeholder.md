@@ -19,4 +19,4 @@
 - 线索：
     - `.scratch/repro_empty_body_placeholder.test.tsx`：最小复现用例，已证实当前对 `is_archived: true, body: ''` 的邮件输出了“邮件正文尚未完成同步”。
     - 数据库事实：`Message id: bf82c8e3-9be9-42cc-8b88-6ea500000218, subject: '12313', state: 'archive_complete', MIME payload length: 717 bytes (header only)`。
-- 处理：未开
+- 处理：main
