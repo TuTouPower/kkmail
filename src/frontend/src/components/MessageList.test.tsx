@@ -613,3 +613,32 @@ describe('<MessageList />', () => {
   })
 })
 
+
+it('keeps unknown read state neutral and does not automatically mark it read', async () => {
+  const fallback = globalThis.fetch
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).startsWith('/api/mail/inbox')) return json({ items: [row('unknown', { is_read: null, is_flagged: null, has_attachments: null })], next_cursor: null })
+    return fallback(url, init)
+  }))
+  const { container } = await render(<MessageList />)
+  await waitFor(() => expect(subjects(container)).toEqual(['Subject unknown']))
+  expect(container.querySelector('.message-row.unread')).toBeNull()
+  expect(container.querySelector('[aria-label="未读"]')).toBeNull()
+  await click(container.querySelector('.message-row'))
+  expect(calls.some((url) => url.includes('/read'))).toBe(false)
+})
+
+it('shows unknown search unread count when any loaded result has unknown read status', async () => {
+  const fallback = globalThis.fetch
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).startsWith('/api/mail/search')) return json({
+      query: 'unknown-status', items: [row('unread'), row('unknown', { is_read: null })],
+      total: 2, offset: 0, next_offset: null,
+    })
+    return fallback(url, init)
+  }))
+  useMailStore.setState({ search: 'unknown-status' })
+  const { container } = await render(<MessageList />)
+  await waitFor(() => expect(subjects(container)).toEqual(['Subject unread', 'Subject unknown']))
+  expect(container.querySelector('.list-count')?.textContent).toBe('2 封邮件 · — 封未读')
+})

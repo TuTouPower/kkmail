@@ -44,6 +44,7 @@ def _seed_message(*, html: str | None = "<p>hi</p>", plain: str | None = "hi") -
             cc_addresses=[],
             sort_time=datetime.now(timezone.utc),
             is_read=False,
+            is_flagged=False,
             has_attachments=True,
             snippet="hi",
         )

@@ -10,24 +10,21 @@ from tests.mail_core.conftest import TEST_API_KEY
 from mail_core.mail.application.queries import GlobalStatsOut, query_global_inbox_stats
 
 
-def test_query_global_inbox_stats_calculation():
+# Replaces the complete-only aggregate fixture: nullable unread counters now require
+# both complete and incomplete folder sets to be exercised by the read model.
+def test_query_global_inbox_stats_keeps_unknown_folder_counters_unknown():
     session = MagicMock()
-    acc1 = uuid.uuid4()
-    acc2 = uuid.uuid4()
+    acc1, acc2 = uuid.uuid4(), uuid.uuid4()
     session.execute.return_value.all.return_value = [
-        (acc1, 1, 1, 3, 10),
-        (acc2, 1, 1, 5, 20),
+        (acc1, 2, 2, 3, 10, 2),
+        (acc2, 2, 2, 5, 20, 1),
     ]
-    res = query_global_inbox_stats(session)
-    assert isinstance(res, GlobalStatsOut)
-    assert res.total_unread == 8
-    assert len(res.accounts) == 2
-    assert res.accounts[0].account_id == acc1
-    assert res.accounts[0].unread_count == 3
-    assert res.accounts[0].total_count == 10
-    assert res.accounts[1].account_id == acc2
-    assert res.accounts[1].unread_count == 5
-    assert res.accounts[1].total_count == 20
+    result = query_global_inbox_stats(session)
+    assert result.total_unread is None
+    assert result.accounts[0].unread_count == 3
+    assert result.accounts[0].total_count == 10
+    assert result.accounts[1].unread_count is None
+    assert result.accounts[1].total_count == 20
 
 
 def test_api_mail_stats_endpoint():

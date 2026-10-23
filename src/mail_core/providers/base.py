@@ -28,7 +28,7 @@ class RemoteMessageMeta:
     sort_time: datetime | None
     is_read: bool | None
     has_attachments: bool | None
-    is_flagged: bool | None = False
+    is_flagged: bool | None = None
     internet_message_id: str | None = None
     snippet: str | None = None
     provider_thread_key: str | None = None

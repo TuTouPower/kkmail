@@ -15,8 +15,8 @@ def test_recompute_folder_stats_handles_race_integrity_error():
     folder_id = uuid.uuid4()
     session = MagicMock()
 
-    # Query returns (5, 2)
-    session.execute.return_value.one.return_value = (5, 2)
+    # Aggregate returns total, unread, unknown-read count.
+    session.execute.return_value.one.return_value = (5, 2, 0)
 
     existing_stats = FolderStats(folder_id=folder_id, total_count=0, unread_count=0)
 

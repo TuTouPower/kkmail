@@ -60,9 +60,9 @@ class MessageOut(BaseModel):
     from_address: str
     from_name: str | None
     sort_time: datetime | None
-    is_read: bool
-    is_flagged: bool
-    has_attachments: bool
+    is_read: bool | None
+    is_flagged: bool | None
+    has_attachments: bool | None
     snippet: str | None
     body_preview: str = Field("", description="Display-only fallback from an existing body when snippet is empty; never persisted.")
     folder_id: str | None
@@ -84,7 +84,7 @@ class SearchPageOut(BaseModel):
 class FolderStatsOut(BaseModel):
     folder_id: str
     total_count: int
-    unread_count: int
+    unread_count: int | None
     updated_at: datetime | None = None
 
 
@@ -122,9 +122,9 @@ class MessageDetailOut(BaseModel):
     to: str
     cc: str
     date: datetime | None
-    is_read: bool
-    is_flagged: bool
-    has_attachments: bool
+    is_read: bool | None
+    is_flagged: bool | None
+    has_attachments: bool | None
     snippet: str | None
     body: str
     body_type: str

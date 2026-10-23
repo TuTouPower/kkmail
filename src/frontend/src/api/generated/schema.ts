@@ -672,7 +672,7 @@ export interface components {
             /** Total Count */
             total_count: number;
             /** Unread Count */
-            unread_count: number;
+            unread_count: number | null;
             /** Updated At */
             updated_at?: string | null;
         };
@@ -811,15 +811,15 @@ export interface components {
             /** From Name */
             from_name: string | null;
             /** Has Attachments */
-            has_attachments: boolean;
+            has_attachments: boolean | null;
             /** Id */
             id: string;
             /** Is Archived */
             is_archived: boolean | null;
             /** Is Flagged */
-            is_flagged: boolean;
+            is_flagged: boolean | null;
             /** Is Read */
-            is_read: boolean;
+            is_read: boolean | null;
             /** Parse Error */
             parse_error: string | null;
             /** Snippet */
@@ -848,13 +848,13 @@ export interface components {
             /** From Name */
             from_name: string | null;
             /** Has Attachments */
-            has_attachments: boolean;
+            has_attachments: boolean | null;
             /** Id */
             id: string;
             /** Is Flagged */
-            is_flagged: boolean;
+            is_flagged: boolean | null;
             /** Is Read */
-            is_read: boolean;
+            is_read: boolean | null;
             /** Snippet */
             snippet: string | null;
             /** Sort Time */

@@ -31,7 +31,7 @@ const MessageReader = memo(function MessageReader() {
       }),
     () => {
       const m = findCachedMail(selectedKey)
-      return m ? `${m.id}\0${m.is_flagged ? 1 : 0}\0${m.is_read ? 1 : 0}\0${m.subject}` : ''
+      return m ? `${m.id}\0${m.is_flagged}\0${m.is_read}\0${m.subject}` : ''
     },
   )
   void selectedSnap
@@ -163,7 +163,7 @@ const MessageReader = memo(function MessageReader() {
             className="reader-action"
             title={selected.is_flagged ? '取消标记' : '标记邮件'}
             aria-label={selected.is_flagged ? '取消标记' : '标记邮件'}
-            aria-pressed={selected.is_flagged}
+            aria-pressed={selected.is_flagged ?? 'mixed'}
             onClick={toggleFlagged}
           ><Flag size={18} /></button>
         </div>

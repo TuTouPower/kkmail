@@ -87,3 +87,25 @@ describe('findCachedMail', () => {
     expect(hit?.subject).toBe('Current Scope')
   })
 })
+
+it('restores null read and flag states after failed explicit mutations', async () => {
+  const { flagOptimistic, setReadOptimistic } = await import('./queries')
+  const item: MailItem = { id: 'unknown-state', subject: 'Unknown', from: 'a@x.test', accountEmail: 'a@x.test', is_read: null, is_flagged: null, has_attachments: null }
+  const key = queryKeys.inbox('__all__')
+  queryClient.setQueryData(key, [item])
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ detail: 'failed' }), { status: 500, headers: { 'Content-Type': 'application/json' } })))
+  await expect(setReadOptimistic([item], true)).rejects.toThrow()
+  expect(queryClient.getQueryData<MailItem[]>(key)?.[0].is_read).toBeNull()
+  await expect(flagOptimistic(item, true)).rejects.toThrow()
+  expect(queryClient.getQueryData<MailItem[]>(key)?.[0].is_flagged).toBeNull()
+})
+
+it('restores the cached null read state when a stale false item mutation fails', async () => {
+  const { setReadOptimistic } = await import('./queries')
+  const item: MailItem = { id: 'stale-state', subject: 'Unknown', from: 'a@x.test', accountEmail: 'a@x.test', is_read: null, is_flagged: null, has_attachments: null }
+  const key = queryKeys.inbox('__all__')
+  queryClient.setQueryData(key, [item])
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500, headers: { 'Content-Type': 'application/json' } })))
+  await expect(setReadOptimistic([{ ...item, is_read: false }], true)).rejects.toThrow()
+  expect(queryClient.getQueryData<MailItem[]>(key)?.[0].is_read).toBeNull()
+})
