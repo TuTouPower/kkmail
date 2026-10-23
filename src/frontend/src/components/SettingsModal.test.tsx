@@ -515,4 +515,47 @@ describe('<SettingsModal />', () => {
     expect(useMailStore.getState().selectedKey).toBeNull()
     expect(useMailStore.getState().selectedIds).toEqual([])
   })
+
+  it('filters accounts by domain and applies bulk actions to the combined filtered selection', async () => {
+    const groups = [{ id: 'work', name: '工作', color: null, account_count: 4, sort_order: 0 }]
+    const accounts = [
+      { id: 'gmail', email: 'ada@gmail.com', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
+      { id: 'qq-work-1', email: 'bob@qq.com', status: 'active', sync_status: 'failed', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
+      { id: 'qq-home', email: 'carol@qq.com', status: 'active', sync_status: 'failed', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: null, group_name: null },
+      { id: 'qq-work-2', email: 'ellen@qq.com', status: 'active', sync_status: 'failed', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
+      { id: '163-work', email: 'dave@163.com', status: 'active', sync_status: 'failed', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
+    ]
+    const updates: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init: RequestInit = {}) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (url.pathname === '/api/accounts' && (init.method || 'GET') === 'GET') return json({ accounts, total: accounts.length, limit: 200, offset: 0, has_more: false })
+      if (url.pathname.startsWith('/api/accounts/') && init.method === 'PATCH') {
+        updates.push(url.pathname.split('/').at(-1) || '')
+        return json(accounts.find(account => account.id === updates.at(-1)))
+      }
+      if (url.pathname === '/api/groups') return json({ groups })
+      if (url.pathname === '/api/settings') return json({ settings: {} })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelectorAll('.settings-account-row')).toHaveLength(5))
+    const domainSelect = container.querySelector('select[aria-label="按邮箱域名筛选"]') as HTMLSelectElement
+    expect([...domainSelect.options].map(option => option.value)).toEqual(['all', '163.com', 'gmail.com', 'qq.com'])
+
+    await changeSelect(domainSelect, 'gmail.com')
+    expect([...container.querySelectorAll('.settings-account-identity strong')].map(node => node.textContent)).toEqual(['ada@gmail.com'])
+
+    await changeSelect(domainSelect, 'qq.com')
+    await changeSelect(container.querySelector('select[aria-label="按分组筛选"]'), 'work')
+    await changeSelect(container.querySelector('select[aria-label="按同步状态筛选"]'), 'failed')
+    await typeInto(container.querySelector('input[aria-label="搜索账户"]'), 'qq.com')
+    expect([...container.querySelectorAll('.settings-account-identity strong')].map(node => node.textContent)).toEqual(['bob@qq.com', 'ellen@qq.com'])
+
+    await click(container.querySelector('input[aria-label="选择当前筛选的全部账户"]'))
+    expect(container.textContent).toContain('已选 2 个账户')
+    await click([...container.querySelectorAll('button')].find(button => button.textContent === '暂停同步') || null)
+    await waitFor(() => expect(updates.sort()).toEqual(['qq-work-1', 'qq-work-2']))
+  })
 })
