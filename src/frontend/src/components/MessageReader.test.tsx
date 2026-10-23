@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act } from 'react'
 import MessageReader from './MessageReader'
 import { useMailStore } from '../store/mailStore'
 import { __resetCsrfForTests } from '../api/client'
@@ -247,6 +248,8 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
     expect(container.textContent).toContain('正在加载正文…')
     expect(container.textContent).not.toContain('Hidden preview')
+    expect(container.querySelector('[data-ui="MR07"]')).toBeNull()
+    expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test')
     expect(container.querySelector('.email-body')).toBeNull()
     expect(container.querySelector('.empty-body-placeholder')).toBeNull()
   })
@@ -294,6 +297,8 @@ describe('<MessageReader />', () => {
     ))
     const { container } = await render(<MessageReader />)
     await waitFor(() => expect(container.textContent).toContain('Detail request failed'))
+    expect(container.querySelector('[data-ui="MR07"]')).toBeNull()
+    expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test')
     expect(container.querySelector('.email-body')).toBeNull()
     expect(container.querySelector('.empty-body-placeholder')).toBeNull()
   })
@@ -312,7 +317,69 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
     await waitFor(() => expect(container.querySelector('[data-ui="MR06"]')?.textContent).toBe('Ann'))
     expect(container.textContent).toContain('发件人：ann@x.test')
-    expect(container.querySelector('[data-ui="MR07"]')?.textContent).toContain('收件人：box@x.test')
+    await waitFor(() => expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：box@x.test'))
+  })
+
+  it('renders only API-provided recipients and keeps account ownership separate', async () => {
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const response = await originalFetch(url, init)
+      if (String(url) !== '/api/mail/messages/m-1') return response
+      return json({ ...await response.json(), to: 'first@x.test, second@x.test' })
+    }))
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：first@x.test, second@x.test')
+    })
+    expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test')
+  })
+
+  it.each([
+    ['empty To with Bcc only', { to: '', bcc: 'blind-copy@x.test' }],
+    ['missing To with Bcc only', { bcc: 'blind-copy@x.test' }],
+  ])('does not infer a recipient from account or Bcc when To is %s', async (_label, recipientFields) => {
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const response = await originalFetch(url, init)
+      if (String(url) !== '/api/mail/messages/m-1') return response
+      const detail: Record<string, unknown> = { ...await response.json(), ...recipientFields }
+      if (!Object.hasOwn(recipientFields, 'to')) delete detail.to
+      return json(detail)
+    }))
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：未提供')
+    })
+    expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test')
+    expect(container.querySelector('[data-ui="MR07"]')?.textContent).not.toContain('box@x.test')
+    expect(container.querySelector('[data-ui="MR07"]')?.textContent).not.toContain('blind-copy@x.test')
+  })
+
+  it('does not retain the previous message recipient after switching to a message without To', async () => {
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const response = await originalFetch(url, init)
+      if (String(url) === '/api/mail/messages/m-1') {
+        return json({ ...await response.json(), to: 'first@x.test' })
+      }
+      if (String(url) === '/api/mail/messages/m-2') {
+        return json({ ...await response.json(), to: '', bcc: 'blind-copy@x.test' })
+      }
+      return response
+    }))
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => {
+      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：first@x.test')
+    })
+
+    act(() => useMailStore.setState({ selectedKey: 'm-2' }))
+    await waitFor(() => {
+      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：未提供')
+    })
+    expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test')
+    expect(container.querySelector('[data-ui="MR07"]')?.textContent).not.toContain('first@x.test')
   })
 
   it('does not render placeholder compose/reply/forward actions in reader toolbar', async () => {
