@@ -5,7 +5,7 @@
 |slug|task 清单|最后更新时间|
 |---|---|---|
 |auth_and_session|-|2026-10-22|
-|mail_sync_and_storage|t001, t026|2026-10-23|
+|mail_sync_and_storage|t001, t026, t035|2026-10-23|
 |inbox_ui_and_search|t002, t003, t024|2026-10-23|
 |testing_quality|t013, t014|2026-10-22|
 

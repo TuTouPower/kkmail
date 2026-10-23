@@ -21,7 +21,8 @@ def _parse_dt(raw: str | None) -> datetime:
 def _meta_from_graph(item: dict[str, Any]) -> RemoteMessageMeta:
     frm = (item.get("from") or {}).get("emailAddress") or {}
     flag_obj = item.get("flag") or {}
-    is_flagged = flag_obj.get("flagStatus") == "flagged"
+    flag_status = flag_obj.get("flagStatus")
+    is_flagged = flag_status == "flagged" if flag_status is not None else None
     to_addrs = tuple(
         str(r.get("emailAddress", {}).get("address") or "")
         for r in item.get("toRecipients") or []
@@ -38,8 +39,10 @@ def _meta_from_graph(item: dict[str, Any]) -> RemoteMessageMeta:
         from_address=str(frm.get("address") or ""),
         from_name=frm.get("name"),
         sort_time=_parse_dt(item.get("receivedDateTime") or item.get("lastModifiedDateTime")),
-        is_read=bool(item.get("isRead", False)),
-        has_attachments=bool(item.get("hasAttachments", False)),
+        is_read=bool(item["isRead"]) if item.get("isRead") is not None else None,
+        has_attachments=(
+            bool(item["hasAttachments"]) if item.get("hasAttachments") is not None else None
+        ),
         is_flagged=is_flagged,
         internet_message_id=item.get("internetMessageId"),
         snippet=item.get("bodyPreview"),
@@ -65,6 +68,11 @@ def parse_graph_delta(data: dict[str, Any]) -> DeltaPage:
             changes.append(DeltaChange(kind="delete", remote_id=rid))
             continue
         meta = _meta_from_graph(item)
+        flags: dict[str, Any] = {}
+        if meta.is_read is not None:
+            flags["is_read"] = meta.is_read
+        if meta.is_flagged is not None:
+            flags["is_flagged"] = meta.is_flagged
         has_content = bool(item.get("subject") or item.get("from") or item.get("receivedDateTime") or item.get("bodyPreview"))
         kind = "flag" if (item.get("_flag_only") or not has_content) else "upsert"
         changes.append(
@@ -72,7 +80,7 @@ def parse_graph_delta(data: dict[str, Any]) -> DeltaPage:
                 kind=kind,
                 remote_id=rid,
                 meta=meta if has_content else None,
-                flags={"is_read": meta.is_read, "is_flagged": meta.is_flagged},
+                flags=flags,
             )
         )
 
