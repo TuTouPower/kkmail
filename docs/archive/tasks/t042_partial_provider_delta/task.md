@@ -2,7 +2,7 @@
 tid: "t042"
 slug: "partial_provider_delta"
 title: "保留服务商部分更新中未返回字段"
-status: "backlog"
+status: "done"
 branch: ""
 worktree: ""
 review_level: "full"
