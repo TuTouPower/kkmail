@@ -244,9 +244,7 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await masterAccount.locator('.tree-disclosure').click()
     const folderIndent = await masterAccount.locator('.tree-folder-row').first().evaluate((node) => getComputedStyle(node).paddingLeft)
     expect(folderIndent).toBe('48px')
-    const accountTextBox = await masterAccount.locator('.tree-account-select .tree-label').boundingBox()
-    const folderTextBox = await masterAccount.locator('.tree-folder-row .tree-label').first().boundingBox()
-    expect(Math.abs(accountTextBox!.x - folderTextBox!.x)).toBeLessThanOrEqual(3)
+    // t044 已修复：原 t027 断言未缩进的旧语义（accountTextBox.x 与 folderTextBox.x 相同）已由 t044 严格 24px 阶梯缩进测试替代，移除旧断言
 
     await page.getByRole('button', { name: '设置' }).click()
     await page.getByRole('button', { name: '外观' }).click()
@@ -397,5 +395,156 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
 
     await page.getByRole('button', { name: 'system', exact: true }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  })
+
+  test('t044 AC-001 ~ AC-004: 侧边栏顶层标题、子层级与状态提示像素级几何对齐与阶梯缩进', async ({ page }) => {
+    await setupStubApi(page, {
+      authedInitially: true,
+      groups: [{ id: 'group-1', name: '工作分组', color: null, sort_order: 0 }],
+      accounts: [
+        { id: 'acc-1', email: 'user1@example.com', provider: 'imap', sync_state: 'idle', sync_enabled: true, group_id: 'group-1' },
+        { id: 'acc-2', email: 'user2@example.com', provider: 'imap', sync_state: 'idle', sync_enabled: true, group_id: null },
+      ],
+      folderStatsByAccount: {
+        'acc-1': [
+          { folder_id: 'f-1', role: 'inbox', name: '收件箱', total_count: 5, unread_count: 1, remote_id: 'INBOX' },
+        ],
+        'acc-2': [
+          { folder_id: 'f-2', role: 'inbox', name: '收件箱', total_count: 2, unread_count: 0, remote_id: 'INBOX' },
+        ],
+      },
+    })
+    await page.setViewportSize({ width: 1200, height: 800 })
+    await page.goto('/')
+
+    const sidebar = page.locator('aside.sidebar')
+    await expect(sidebar).toBeVisible({ timeout: 10000 })
+
+    // 1. AC-001: 顶层三类标题（所有账号、自定义分组、账号列表）的 chevron、icon、text 水平坐标严格对齐（<= 1px）
+    const allAccountsSection = sidebar.locator('.tree-section').nth(0)
+    const allAccountsChevron = await allAccountsSection.locator('.tree-disclosure, .tree-disclosure-slot').first().boundingBox()
+    const allAccountsIcon = await allAccountsSection.locator('svg').nth(1).boundingBox()
+    const allAccountsText = await allAccountsSection.locator('.tree-label').first().boundingBox()
+
+    const groupHeading = sidebar.locator('.tree-group-heading').first()
+    const groupChevron = await groupHeading.locator('.tree-disclosure').boundingBox()
+    const groupIcon = await groupHeading.locator('.tree-group-select svg').first().boundingBox()
+    const groupText = await groupHeading.locator('.tree-group-select .tree-label').boundingBox()
+
+    const accountListSection = sidebar.locator('.tree-section').nth(2)
+    const accountListHeading = accountListSection.locator('.tree-section-heading')
+    const accountListChevron = await accountListHeading.locator('.tree-disclosure, .tree-disclosure-slot').first().boundingBox()
+    const accountListIcon = await accountListHeading.locator('.tree-heading-main svg').first().boundingBox()
+    const accountListText = await accountListHeading.locator('.tree-heading-main .tree-label').boundingBox()
+
+    expect(allAccountsChevron).not.toBeNull()
+    expect(groupChevron).not.toBeNull()
+    expect(accountListChevron).not.toBeNull()
+    expect(Math.abs(allAccountsChevron!.x - groupChevron!.x)).toBeLessThanOrEqual(1)
+    expect(Math.abs(allAccountsChevron!.x - accountListChevron!.x)).toBeLessThanOrEqual(1)
+
+    expect(allAccountsIcon).not.toBeNull()
+    expect(groupIcon).not.toBeNull()
+    expect(accountListIcon).not.toBeNull()
+    expect(Math.abs(allAccountsIcon!.x - groupIcon!.x)).toBeLessThanOrEqual(1)
+    expect(Math.abs(allAccountsIcon!.x - accountListIcon!.x)).toBeLessThanOrEqual(1)
+
+    expect(allAccountsText).not.toBeNull()
+    expect(groupText).not.toBeNull()
+    expect(accountListText).not.toBeNull()
+    expect(Math.abs(allAccountsText!.x - groupText!.x)).toBeLessThanOrEqual(1)
+    expect(Math.abs(allAccountsText!.x - accountListText!.x)).toBeLessThanOrEqual(1)
+
+    // 2. AC-002: 同一缩进层级兄弟节点对齐，子级文件夹与分类下账号形成 24px 阶梯缩进
+    // 展开分组查看其子分类与子账号（均为 Level 1）
+    await groupHeading.locator('.tree-disclosure').click()
+    const groupChildren = sidebar.locator('.tree-group-children')
+    await expect(groupChildren).toBeVisible()
+
+    const groupCategory = groupChildren.locator('.tree-category-heading').first()
+    const groupCategoryChevron = await groupCategory.locator('.tree-disclosure').boundingBox()
+    const groupCategoryIcon = await groupCategory.locator('.tree-nav-row svg').first().boundingBox()
+    const groupCategoryText = await groupCategory.locator('.tree-label').first().boundingBox()
+
+    const groupAccount = groupChildren.locator('.tree-account-row').first()
+    const groupAccountChevron = await groupAccount.locator('.tree-disclosure').boundingBox()
+    const groupAccountIcon = await groupAccount.locator('.account-dot').boundingBox()
+    const groupAccountText = await groupAccount.locator('.tree-label').boundingBox()
+
+    expect(groupCategoryChevron).not.toBeNull()
+    expect(groupAccountChevron).not.toBeNull()
+    expect(Math.abs(groupCategoryChevron!.x - groupAccountChevron!.x)).toBeLessThanOrEqual(1)
+
+    expect(groupCategoryIcon).not.toBeNull()
+    expect(groupAccountIcon).not.toBeNull()
+    expect(Math.abs(groupCategoryIcon!.x - groupAccountIcon!.x)).toBeLessThanOrEqual(1)
+
+    expect(groupCategoryText).not.toBeNull()
+    expect(groupAccountText).not.toBeNull()
+    expect(Math.abs(groupCategoryText!.x - groupAccountText!.x)).toBeLessThanOrEqual(1)
+
+    // 展开组内账号查看文件夹（Level 2）
+    await groupAccount.locator('.tree-disclosure').click()
+    const folderRow = groupChildren.locator('.tree-folder-row').first()
+    await expect(folderRow).toBeVisible()
+    const folderIcon = await folderRow.locator('svg').first().boundingBox()
+    const folderText = await folderRow.locator('.tree-label').boundingBox()
+
+    expect(folderIcon).not.toBeNull()
+    expect(folderText).not.toBeNull()
+    expect(folderIcon!.x).toBeGreaterThan(groupAccountIcon!.x)
+    expect(Math.abs((folderIcon!.x - groupAccountIcon!.x) - 24)).toBeLessThanOrEqual(1)
+    expect(Math.abs((folderText!.x - groupAccountText!.x) - 24)).toBeLessThanOrEqual(1)
+
+    // 展开组内分类查看分类下账号（Level 2）
+    await groupCategory.locator('.tree-disclosure').click()
+    const categoryAccount = groupChildren.locator('.tree-category-account').first()
+    await expect(categoryAccount).toBeVisible()
+    const categoryAccountIcon = await categoryAccount.locator('.account-dot').boundingBox()
+    const categoryAccountText = await categoryAccount.locator('.tree-label').boundingBox()
+
+    expect(categoryAccountIcon).not.toBeNull()
+    expect(categoryAccountText).not.toBeNull()
+    expect(categoryAccountIcon!.x).toBeGreaterThan(groupCategoryIcon!.x)
+    expect(Math.abs((categoryAccountIcon!.x - groupCategoryIcon!.x) - 24)).toBeLessThanOrEqual(1)
+    expect(Math.abs((categoryAccountText!.x - groupCategoryText!.x) - 24)).toBeLessThanOrEqual(1)
+
+    // Level 2 兄弟项水平对齐
+    expect(Math.abs(folderIcon!.x - categoryAccountIcon!.x)).toBeLessThanOrEqual(1)
+    expect(Math.abs(folderText!.x - categoryAccountText!.x)).toBeLessThanOrEqual(1)
+
+    // 3. AC-003: 内联新建/重命名分组表单、加载状态与错误提示左内边距对齐所属层级
+    await sidebar.locator('button[aria-label="新建分组"]').click()
+    const newGroupForm = sidebar.locator('.tree-groups-section .tree-inline-form')
+    await expect(newGroupForm).toBeVisible()
+    const formPaddingLeft = await newGroupForm.evaluate((node) => getComputedStyle(node).paddingLeft)
+    expect(formPaddingLeft).toBe('4px')
+
+    const loadingPaddingLeft = await page.evaluate(() => {
+      const el = document.createElement('div')
+      el.className = 'tree-loading'
+      document.body.appendChild(el)
+      const pl = getComputedStyle(el).paddingLeft
+      el.remove()
+      return pl
+    })
+    expect(loadingPaddingLeft).toBe('24px')
+
+    const folderStatusPaddingLeft = await page.evaluate(() => {
+      const el = document.createElement('div')
+      el.className = 'tree-folder-status'
+      document.body.appendChild(el)
+      const pl = getComputedStyle(el).paddingLeft
+      el.remove()
+      return pl
+    })
+    expect(folderStatusPaddingLeft).toBe('48px')
+
+    // 4. AC-004: aria-expanded 与键盘交互验证
+    const allAccountsBtn = allAccountsSection.locator('.tree-disclosure, .tree-heading-main').first()
+    expect(await allAccountsBtn.getAttribute('aria-expanded')).toBe('true')
+    await allAccountsBtn.focus()
+    await page.keyboard.press('Space')
+    expect(await allAccountsBtn.getAttribute('aria-expanded')).toBe('false')
   })
 })

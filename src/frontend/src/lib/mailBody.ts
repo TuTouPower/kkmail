@@ -32,7 +32,7 @@ function parseColorBrightness(colorStr: string): 'light' | 'dark' | null {
   if (['white', '#fff', '#ffffff', '#fafafa', '#f8f9fa', '#f5f5f5', '#eeeeee', '#e0e0e0'].includes(s)) {
     return 'light'
   }
-  if (['black', '#000', '#000000', '#111', '#1a1a1c', '#222', '#333'].includes(s)) {
+  if (['black', '#000', '#000000', '#111', '#1a1a1c', '#222729', '#222', '#333'].includes(s)) {
     return 'dark'
   }
   const hex3 = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(s)
@@ -123,7 +123,7 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
   const classification = classifyMailHtml(html)
 
   const isDarkPlain = theme === 'dark' && classification !== 'light'
-  const bg = isDarkPlain ? '#1A1A1C' : '#ffffff'
+  const bg = isDarkPlain ? '#222729' : '#ffffff'
   const text = isDarkPlain ? '#FFFFFF' : '#202124'
   const linkColor = isDarkPlain ? '#0A84FF' : '#0066CC'
 

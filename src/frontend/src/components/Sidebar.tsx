@@ -159,9 +159,10 @@ interface AccountFolderTreeProps {
   accountId: string
   accountEmail: string
   unreadCount: number | null | undefined
+  syncStatus?: string | null
 }
 
-function AccountFolders({ accountId, accountEmail, unreadCount }: AccountFolderTreeProps) {
+function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: AccountFolderTreeProps) {
   const view = useMailStore((s) => s.view)
   const setView = useMailStore((s) => s.setView)
   const setListFilter = useMailStore((s) => s.setListFilter)
@@ -175,10 +176,18 @@ function AccountFolders({ accountId, accountEmail, unreadCount }: AccountFolderT
     },
   })
 
-  if (foldersQuery.isLoading) return <div className="tree-folder-status" style={{ paddingLeft: 48 }}>正在加载文件夹…</div>
-  if (foldersQuery.isError || !foldersQuery.data) return <div className="tree-folder-status tree-error" style={{ paddingLeft: 48 }}>文件夹加载失败</div>
+  if (foldersQuery.isLoading) return <div className="tree-folder-status" style={{ paddingLeft: '48px' }}>正在加载文件夹…</div>
+  if (foldersQuery.isError || !foldersQuery.data) return <div className="tree-folder-status tree-error" style={{ paddingLeft: '48px' }}>文件夹加载失败</div>
 
-  const folderMap = new Map(foldersQuery.data.filter((folder) => folder.remote_id).map((folder) => [folder.remote_id!, folder]))
+  const folders = foldersQuery.data
+  if (folders.length === 0) {
+    if (syncStatus === 'auth_failed' || syncStatus === 'failed') {
+      return <div className="tree-folder-status tree-error" style={{ paddingLeft: '48px' }}>同步失败，请检查账户设置</div>
+    }
+    return <div className="tree-folder-status" style={{ paddingLeft: '48px' }}>暂无文件夹</div>
+  }
+
+  const folderMap = new Map(folders.filter((folder) => folder.remote_id).map((folder) => [folder.remote_id!, folder]))
   const childrenMap = new Map<string, FolderStatsItem[]>()
   const roots: FolderStatsItem[] = []
   for (const folder of foldersQuery.data) {
@@ -213,7 +222,8 @@ function AccountFolders({ accountId, accountEmail, unreadCount }: AccountFolderT
           }}
           title={displayName}
         >
-          <Icon size={15} aria-hidden="true" />
+          <span className="tree-disclosure-slot" aria-hidden="true" />
+          <Icon size={16} aria-hidden="true" />
           <span className="tree-label">{displayName}</span>
           {folder.unread_count === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : folder.unread_count ? <span className="side-count unread-badge">{folder.unread_count}</span> : null}
         </button>
@@ -227,7 +237,8 @@ function AccountFolders({ accountId, accountEmail, unreadCount }: AccountFolderT
         setView({ type: 'favorite', category: 'unread', accountId, email: accountEmail })
         setListFilter('unread')
       }}>
-        <MailOpen size={15} aria-hidden="true" /><span className="tree-label">未读邮件</span>
+        <span className="tree-disclosure-slot" aria-hidden="true" />
+        <MailOpen size={16} aria-hidden="true" /><span className="tree-label">未读邮件</span>
         {unreadCount === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : unreadCount && unreadCount > 0 ? <span className="side-count unread-badge">{unreadCount}</span> : null}
       </button>
       {renderTree(roots)}
@@ -292,10 +303,13 @@ function Sidebar() {
         let failed = false
         let succeeded = 0
         await Promise.all(accounts.map(async (account) => {
+          const isFaulty = (account.sync_enabled === false || account.sync_status === 'failed' || account.sync_status === 'auth_failed')
           try {
             const unread = await fetchAccountFolders(account.id, signal)
             if (unread === null) {
-              failed = true
+              if (!isFaulty) {
+                failed = true
+              }
               byAccount.set(account.id, null)
               return
             }
@@ -303,7 +317,9 @@ function Sidebar() {
             total += unread
             succeeded += 1
           } catch {
-            failed = true
+            if (!isFaulty) {
+              failed = true
+            }
             byAccount.set(account.id, null)
           }
         }))
@@ -622,7 +638,7 @@ function Sidebar() {
     return (
       <div key={key} className="tree-category-block">
         <div className={`tree-category-heading ${active ? 'active' : ''}`} style={{ paddingLeft: '24px' }}>
-          <button type="button" className="tree-disclosure" aria-label={expanded ? `折叠 ${label}` : `展开 ${label}`} aria-expanded={expanded} onClick={() => toggleExpandedCategory(key)}>{expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>
+          <button type="button" className="tree-disclosure" aria-label={expanded ? `折叠 ${label}` : `展开 ${label}`} aria-expanded={expanded} onClick={() => toggleExpandedCategory(key)}>{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
           <button data-ui={scope.type === 'all' ? 'SB13' : 'SB15'} type="button" className="tree-nav-row tree-category-row" aria-label={label} onClick={() => scope.type === 'all' ? selectGlobalCategory(category) : selectGroupCategory(scope.id, scope.name, category)}>
             <Icon size={16} aria-hidden="true" />
             <span className="tree-label">{label}</span>
@@ -637,6 +653,7 @@ function Sidebar() {
             setView({ type: 'favorite', category, accountId: account.id, email: account.email })
             setListFilter(category === 'unread' ? 'unread' : 'all')
           }}>
+            <span className="tree-disclosure-slot" aria-hidden="true" />
             <AccountIcon email={account.email} provider={account.provider} accountType={account.account_type} groupColor={account.group_color} />
             <span className="tree-label">{account.email}</span>
             {(category === 'inbox' || category === 'unread') && unread === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : (category === 'inbox' || category === 'unread') && unread && unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}
@@ -681,7 +698,7 @@ function Sidebar() {
             {unread === null ? <span className="side-count unread-badge unread-badge-unknown" aria-label="未读数未知">-</span> : unread && unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}
           </button>
         </div>
-        {expanded && <AccountFolders accountId={account.id} accountEmail={account.email} unreadCount={unread} />}
+        {expanded && <AccountFolders accountId={account.id} accountEmail={account.email} unreadCount={unread} syncStatus={account.sync_status} />}
       </div>
     )
   }
@@ -689,8 +706,13 @@ function Sidebar() {
   const groupSections = groups.map((group) => {
     const members = orderedMembers(accounts, group.id)
     const groupUnread = members.reduce<number | null>((total, account) => {
+      const isFaulty = (account.sync_enabled === false || account.sync_status === 'failed' || account.sync_status === 'auth_failed')
       const count = unreadByAccount.get(account.id)
-      if (count == null || total === null) return null
+      if (count == null) {
+        if (isFaulty) return total
+        return null
+      }
+      if (total === null) return null
       return total + count
     }, 0)
     return (
@@ -748,10 +770,27 @@ function Sidebar() {
       <div className="sidebar-scroll tree-sidebar-scroll">
         {actionError && <div className="tree-action-error" role="alert"><AlertCircle size={14} /><span>{actionError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14} /></button></div>}
         <section className="tree-section">
-          <button className="tree-section-heading" data-ui="SB12" type="button" aria-expanded={sidebarSections.allAccounts} onClick={() => toggleSidebarSection('allAccounts')}>
-            <span className="tree-disclosure-slot">{sidebarSections.allAccounts ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
-            <MailOpen size={16} aria-hidden="true" /><span className="tree-label">所有账号</span>
-          </button>
+          <div className="tree-section-heading">
+            <button
+              type="button"
+              className="tree-disclosure"
+              aria-label={sidebarSections.allAccounts ? '折叠' : '展开'}
+              aria-expanded={sidebarSections.allAccounts}
+              onClick={() => toggleSidebarSection('allAccounts')}
+            >
+              {sidebarSections.allAccounts ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+            <button
+              data-ui="SB12"
+              type="button"
+              className="tree-heading-main"
+              aria-expanded={sidebarSections.allAccounts}
+              onClick={() => toggleSidebarSection('allAccounts')}
+            >
+              <MailOpen size={16} aria-hidden="true" />
+              <span className="tree-label">所有账号</span>
+            </button>
+          </div>
           {sidebarSections.allAccounts && <div>{CATEGORY_ITEMS.map(({ category, label, icon: Icon }) => renderCategory(category, label, Icon, { type: 'all' }))}</div>}
         </section>
 
@@ -772,16 +811,24 @@ function Sidebar() {
             onDragOver={allowDrop}
             onDrop={(event) => void onDropListHeader(event)}
           >
+            <button
+              type="button"
+              className="tree-disclosure"
+              aria-label={sidebarSections.accountList ? '折叠' : '展开'}
+              aria-expanded={sidebarSections.accountList}
+              onClick={() => toggleSidebarSection('accountList')}
+            >
+              {sidebarSections.accountList ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
             <button type="button" className="tree-heading-main" aria-expanded={sidebarSections.accountList} onClick={() => toggleSidebarSection('accountList')}>
-              <span className="tree-disclosure-slot">{sidebarSections.accountList ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
               <FolderIcon size={16} aria-hidden="true" /><span className="tree-label">账号列表</span>
             </button>
             <button ref={newGroupTrigger} type="button" className="tree-icon-action" aria-label="新建分组" title="新建分组" onClick={() => { setNewGroupOpen(true); setActionError('') }}><FolderPlus size={16} /></button>
             <button type="button" className="tree-icon-action" aria-label="恢复默认排序" title="恢复默认排序" onClick={() => void resetOrder()}><ArrowDownWideNarrow size={16} /></button>
           </div>
           {sidebarSections.accountList && <div className="tree-account-list" onDragOver={allowDrop} onDrop={(event) => void onDropListHeader(event)}>
-            {(groupsQuery.isLoading || accountsQuery.isLoading || layoutQuery.isLoading) && <div className="tree-loading">正在加载账户…</div>}
-            {(groupsQuery.error || accountsQuery.error || layoutQuery.error || statsQuery.error) && <div className="tree-load-error" role="alert"><span>{errorMessage(accountsQuery.error || groupsQuery.error || layoutQuery.error || statsQuery.error, '账户加载失败')}</span><button className="tree-retry" type="button" onClick={() => { void groupsQuery.refetch(); void accountsQuery.refetch(); void layoutQuery.refetch(); void statsQuery.refetch() }}>重试</button></div>}
+            {(groupsQuery.isLoading || accountsQuery.isLoading || layoutQuery.isLoading) && <div className="tree-loading" style={{ paddingLeft: '24px' }}>正在加载账户…</div>}
+            {(groupsQuery.error || accountsQuery.error || layoutQuery.error || statsQuery.error) && <div className="tree-load-error" role="alert" style={{ paddingLeft: '24px' }}><span>{errorMessage(accountsQuery.error || groupsQuery.error || layoutQuery.error || statsQuery.error, '账户加载失败')}</span><button className="tree-retry" type="button" onClick={() => { void groupsQuery.refetch(); void accountsQuery.refetch(); void layoutQuery.refetch(); void statsQuery.refetch() }}>重试</button></div>}
             {accounts.map((account) => renderAccount(account, 'master', account.group_id || null, 1))}
           </div>}
         </section>

@@ -86,6 +86,66 @@ describe('findCachedMail', () => {
     const hit = findCachedMail('m-2')
     expect(hit?.subject).toBe('Current Scope')
   })
+
+  it('prioritizes folder, favorite with accountId, and group scopes (AC-003)', async () => {
+    const { useMailStore } = await import('../store/mailStore')
+    const itemInAccount: MailItem = { id: 'm-scope', subject: 'Account Scope', from: 'a@x.test', accountEmail: 'a@x.test', is_read: true, is_flagged: false, has_attachments: false }
+    const itemInGroup: MailItem = { id: 'm-scope', subject: 'Group Scope', from: 'a@x.test', accountEmail: 'a@x.test', is_read: false, is_flagged: true, has_attachments: false }
+    const itemInAll: MailItem = { id: 'm-scope', subject: 'All Scope', from: 'a@x.test', accountEmail: 'a@x.test', is_read: false, is_flagged: false, has_attachments: false }
+
+    const accQuery = queryClient.getQueryCache().build(queryClient, { queryKey: queryKeys.inbox('acc-scope') })
+    accQuery.setData([itemInAccount], { updatedAt: 1000, manual: true })
+
+    const grpQuery = queryClient.getQueryCache().build(queryClient, { queryKey: queryKeys.inbox('__all__', undefined, 'inbox', 'desc', undefined, 'grp-1') })
+    grpQuery.setData([itemInGroup], { updatedAt: 1000, manual: true })
+
+    const allQuery = queryClient.getQueryCache().build(queryClient, { queryKey: queryKeys.inbox('__all__') })
+    allQuery.setData([itemInAll], { updatedAt: 9000, manual: true })
+
+    // folder view
+    useMailStore.setState({ view: { type: 'folder', accountId: 'acc-scope', email: 'a@x.test', folderId: 'f-1', folderName: 'F', folderRole: 'inbox' } })
+    expect(findCachedMail('m-scope')?.subject).toBe('Account Scope')
+
+    // favorite view with accountId
+    useMailStore.setState({ view: { type: 'favorite', category: 'unread', accountId: 'acc-scope', email: 'a@x.test' } })
+    expect(findCachedMail('m-scope')?.subject).toBe('Account Scope')
+
+    // group view
+    useMailStore.setState({ view: { type: 'group', groupId: 'grp-1', groupName: 'G', category: 'inbox' } })
+    expect(findCachedMail('m-scope')?.subject).toBe('Group Scope')
+  })
+})
+
+describe('cache isolation from non-list query keys (AC-001)', () => {
+  it('does not throw mailKey error or corrupt account-folders when executing cache helpers', async () => {
+    const { markReadOptimistic, flagOptimistic, setCachedReadState, removeCachedMail } = await import('./queries')
+    const sampleItem: MailItem = { id: 'msg-isolated', subject: 'Test', from: 'a@x.test', accountEmail: 'a@x.test', is_read: false, is_flagged: false, has_attachments: false }
+    const folderStats = [{ folder_id: 'folder-junk', name: '垃圾邮件', role: 'junk', unread_count: 2, total_count: 2 }]
+
+    // Seed non-list queries under mail-core prefix
+    queryClient.setQueryData(['mail-core', 'account-folders', 'acc-1'], folderStats)
+    queryClient.setQueryData(['mail-core', 'stats'], { total_unread: 2, accounts: [] })
+    queryClient.setQueryData(['mail-core', 'folder-stats', 'acc-1', 'junk', 'folder-junk'], { total: 2, unread: 2 })
+
+    // Seed real mail list query
+    queryClient.setQueryData(queryKeys.inbox('acc-1'), [sampleItem])
+
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const u = String(input)
+      if (u.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'test-tok' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+
+    // None of these should throw "mailKey requires a non-empty message id"
+    expect(findCachedMail('msg-isolated')?.id).toBe('msg-isolated')
+    await markReadOptimistic([sampleItem])
+    await flagOptimistic(sampleItem, true)
+    setCachedReadState(['msg-isolated'], false)
+    removeCachedMail(['msg-isolated'])
+
+    // The account-folders cache should be completely intact
+    expect(queryClient.getQueryData(['mail-core', 'account-folders', 'acc-1'])).toEqual(folderStats)
+  })
 })
 
 it('restores null read and flag states after failed explicit mutations', async () => {

@@ -287,26 +287,46 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
     await waitFor(() => {
       expect(container.querySelector('.empty-body-placeholder')).not.toBeNull()
-      expect(container.textContent).toContain(archived === false ? '正在优先同步邮件正文…' : '邮件正文尚未完成同步或内容为空')
+      expect(container.textContent).toContain(archived === false ? '正在优先同步邮件正文…' : '邮件正文尚未完成同步')
     })
     expect(container.textContent).not.toContain('Hidden preview')
     expect(container.querySelector('.email-body')).toBeNull()
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/sync-body'))).toHaveLength(archived === false ? 1 : 0)
   })
 
-  it.each(['text', 'html'])('shows only the parse error with partial %s content', async (bodyType) => {
+  // t048 已修复：原 t026 断言 parse_error 与正文互斥的旧语义已由 t048 允许告警与可读正文并存的新契约替代，移除旧互斥测试
+  it.each(['text', 'html'])('renders both parse error alert and readable body when body is non-empty (AC-002)', async (bodyType) => {
     const originalFetch = globalThis.fetch
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
       const response = await originalFetch(url, init)
       if (String(url) !== '/api/mail/messages/m-1') return response
-      return json({ ...await response.json(), body: '<p>Hidden partial content</p>', body_type: bodyType, parse_error: 'MIME parsing failed' })
+      return json({ ...await response.json(), body: '<p>Readable partial content</p>', body_type: bodyType, parse_error: 'MIME parsing failed' })
     }))
     const { container } = await render(<MessageReader />)
     await waitFor(() => expect(container.textContent).toContain('MIME parsing failed'))
-    expect(container.querySelector('[role="alert"]')).not.toBeNull()
+    expect(container.querySelector('[data-ui="MR-PARSE-ERROR"]')).not.toBeNull()
+    expect(container.querySelector('.email-body')).not.toBeNull()
+    expect(container.querySelector('.empty-body-placeholder')).toBeNull()
+    if (bodyType === 'text') {
+      expect(container.textContent).toContain('Readable partial content')
+    } else {
+      const iframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
+      expect(iframe.srcdoc).toContain('Readable partial content')
+    }
+  })
+
+  it('renders only parse error alert and no empty body placeholder when body is empty (AC-002)', async () => {
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const response = await originalFetch(url, init)
+      if (String(url) !== '/api/mail/messages/m-1') return response
+      return json({ ...await response.json(), body: '', body_type: 'text', parse_error: 'MIME parsing failed' })
+    }))
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.textContent).toContain('MIME parsing failed'))
+    expect(container.querySelector('[data-ui="MR-PARSE-ERROR"]')).not.toBeNull()
     expect(container.querySelector('.email-body')).toBeNull()
     expect(container.querySelector('.empty-body-placeholder')).toBeNull()
-    expect(container.textContent).not.toContain('Hidden partial content')
   })
 
   it('shows only the request error when detail loading fails', async () => {
@@ -371,7 +391,7 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
 
     await waitFor(() => {
-      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：未提供')
+      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：')
     })
     expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test')
     expect(container.querySelector('[data-ui="MR07"]')?.textContent).not.toContain('box@x.test')
@@ -397,7 +417,7 @@ describe('<MessageReader />', () => {
 
     act(() => useMailStore.setState({ selectedKey: 'm-2' }))
     await waitFor(() => {
-      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：未提供')
+      expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：')
     })
     expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test')
     expect(container.querySelector('[data-ui="MR07"]')?.textContent).not.toContain('first@x.test')
@@ -530,8 +550,9 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
 
     await waitFor(() => {
-      expect(container.textContent).toContain('邮件正文尚未完成同步或内容为空')
+      expect(container.textContent).toContain('邮件正文尚未完成同步')
     })
+    expect(container.textContent).not.toContain('或内容为空')
     expect(container.textContent).not.toContain('邮件解析失败')
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
@@ -557,5 +578,29 @@ describe('<MessageReader />', () => {
       expect(container.textContent).toContain('Remote connection timeout')
       expect(container.textContent).toContain('立即重试同步')
     })
+  })
+
+  it('does not crash and renders cleanly when non-mail queries are present in QueryCache (AC-001, AC-002)', async () => {
+    queryClient.setQueryData(['mail-core', 'account-folders', 'acc-1'], [
+      { folder_id: 'folder-junk', name: '垃圾邮件', role: 'junk', unread_count: 2, total_count: 2 },
+    ])
+    queryClient.setQueryData(queryKeys.inbox('acc-1'), [
+      {
+        id: 'msg-catie',
+        subject: 'Public benchmarks',
+        from: 'catie@example.com',
+        is_read: false,
+        is_flagged: false,
+        has_attachments: false,
+        accountId: 'acc-1',
+        accountEmail: 'a@x.test',
+      },
+    ])
+    useMailStore.setState({ selectedKey: 'msg-catie' })
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => {
+      expect(container.textContent).toContain('Public benchmarks')
+    })
+    expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 })

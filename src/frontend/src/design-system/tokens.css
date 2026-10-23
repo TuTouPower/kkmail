@@ -22,16 +22,16 @@
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #171819;
-  --sidebar: #1E1E1E;
-  --list: #212124;
-  --reader: #1A1A1C;
-  --surface: #27292B;
-  --surface-2: #303235;
-  --surface-hover: #2A2A2E;
-  --selected: #323236;
-  --line: #2C2C2E;
-  --line-strong: #2C2C2E;
+  --canvas: #16191A;
+  --sidebar: #1C1F21;
+  --list: #212628;
+  --reader: #222729;
+  --surface: #282D30;
+  --surface-2: #31373A;
+  --surface-hover: #2B3134;
+  --selected: #33393D;
+  --line: #2C3235;
+  --line-strong: #2C3235;
   --text: #FFFFFF;
   --muted: #8E8E93;
   --subtle: #E4E4E6;
@@ -42,7 +42,7 @@ html[data-theme="dark"] {
   --danger: #FF6B65;
   --blue-soft: rgba(10, 132, 255, 0.18);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
-  --mail-body: #1A1A1C;
+  --mail-body: #222729;
   --mail-body-text: #FFFFFF;
 }
 
@@ -518,7 +518,7 @@ button:hover .icon,
   position: relative;
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   width: 100%;
   min-width: 0;
   min-height: 32px;
@@ -541,11 +541,11 @@ button:hover .icon,
 .tree-account-select {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
   height: 32px;
-  padding: 0 4px;
+  padding: 0 4px 0 0;
   border: 0;
   background: transparent;
   color: inherit;
@@ -565,6 +565,12 @@ button:hover .icon,
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  padding: 0;
+}
+
+.tree-disclosure-slot {
+  cursor: default;
+  pointer-events: none;
 }
 
 .tree-disclosure:hover,
@@ -606,13 +612,14 @@ button:hover .icon,
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   border-radius: 7px;
 }
 
 .tree-category-heading .tree-nav-row {
   flex: 1;
   min-width: 0;
+  padding: 0 4px 0 0;
 }
 
 .tree-category-heading.active {
@@ -627,16 +634,28 @@ button:hover .icon,
 .tree-category-account {
   height: 29px;
   font-size: 12px;
+  gap: 4px;
 }
 
-.tree-category-account .account-icon {
-  flex: 0 0 18px;
+.tree-category-account .tree-label {
+  margin-left: 4px;
+}
+
+.tree-category-account .account-icon,
+.tree-category-account .account-dot {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  font-size: 9px;
+  border-radius: 4px;
 }
 
 .tree-nav-row > svg,
 .tree-heading-main > svg,
 .tree-group-select > svg {
   flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
   color: var(--subtle);
 }
 
@@ -745,7 +764,7 @@ button:hover .icon,
   min-height: 32px;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   border-radius: 7px;
 }
 
@@ -753,8 +772,13 @@ button:hover .icon,
   overflow: hidden;
 }
 
-.tree-account-select .account-icon {
-  flex: 0 0 18px;
+.tree-account-select .account-icon,
+.tree-account-select .account-dot {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  font-size: 9px;
+  border-radius: 4px;
 }
 
 .tree-folder-list {
@@ -765,27 +789,54 @@ button:hover .icon,
 .tree-folder-row {
   height: 29px;
   font-size: 12px;
+  gap: 4px;
 }
 
-.tree-folder-status,
-.tree-loading,
-.tree-retry {
+.tree-folder-row .tree-label {
+  margin-left: 4px;
+}
+
+.tree-folder-status {
   display: block;
-  padding: 6px 8px;
+  padding: 6px 8px 6px 48px;
   color: var(--muted);
   font-size: 12px;
 }
 
-.tree-folder-status.tree-error,
-.tree-action-error {
+.tree-folder-status.tree-error {
   color: var(--red);
+}
+
+.tree-loading,
+.tree-load-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 24px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tree-load-error {
+  color: var(--red);
+}
+
+.tree-retry {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
 }
 
 .tree-inline-form {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 6px 4px 24px;
+  padding: 4px 4px;
 }
 
 .tree-inline-form input {

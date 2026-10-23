@@ -1,0 +1,28 @@
+{
+  "tid": "t046",
+  "attempt": 1,
+  "execution_id": "c547ffd69ac94df4a75fbde7ef386fd9",
+  "status": "done",
+  "branch": "t046_mail_list_cache_isolation",
+  "base_sha": "2a5fabadae189b5498a80320cf64a7b12aded81e",
+  "tests": "frontend: 39 files, 265 passed; contract: 150 passed; desktop: 9 passed; mail_core: 309 passed",
+  "blackbox": "stub UI E2E: 14 passed; real full-stack E2E: 8 passed",
+  "review": "single review PASS (Round 1 PASS 0 finding; scope: a1c4169e6ab77a54)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/api/queries.ts",
+      "src/frontend/src/api/queries.cache.test.ts"
+    ],
+    "AC-002": [
+      "src/frontend/src/api/queries.ts",
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ],
+    "AC-003": [
+      "src/frontend/src/api/queries.ts",
+      "src/frontend/src/api/queries.cache.test.ts"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}
