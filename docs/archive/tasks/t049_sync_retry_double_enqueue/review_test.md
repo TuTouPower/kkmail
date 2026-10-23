@@ -102,3 +102,37 @@ reviewed_scope: 1eb3b40c21ee29c1
 - 系统性 follow-up：无。
 
 verdict: PASS
+
+## Round 5 (2026-10-24T04:15:13+08:00)
+
+- task：`t049_sync_retry_double_enqueue`
+- spec：`docs/tasks/t049_sync_retry_double_enqueue/spec.md`
+- diff_anchor：`2185a75bbeaa53b10d9c81c3fb4b73ba634ee563`
+- target：`git -C '[REDACTED_LOCAL_PATH]' diff 2185a75bbeaa53b10d9c81c3fb4b73ba634ee563`
+- 审查范围：t049 最终 task worktree 交付；排除任何独立 task 登记内容。
+- round：5
+- reviewed_at：2026-10-24T04:15:13+08:00
+
+reviewed_scope: 8f66d190d7e01e1a
+
+### Findings
+
+无。
+
+### 结论
+
+- 前轮 finding 复核：Round 1–4 零 finding，无待修项。
+- 改测方向复核：本 worktree diff 没有测试源码改动；spec 仅将 AC-001..003 勾为已满足，未改行为预期。
+- 本轮新发现：0 条。
+- 未进表的提示：无。
+- 七视角扫描：安全、正确性、契约兼容、性能资源、架构维护、健壮性观测、测试文档规格均未发现问题；运行代码与测试源码未出现在本 attempt diff。
+- AC 复验方式：
+    - AC-001：`re_verified`——检查 `test_sync_retry_queue.py` 对 delta/metadata 两类 lease busy、delta/metadata cursor invalid、delta provider error 的结果标记与后继任务断言；对应生产分支保留各自 enqueue 类型与延迟参数。
+    - AC-002：`re_verified`——PG 集成用例断言 `_followup_needed` 与 provider error 同时出现时 `pending` 恰为 1、原任务 `DONE`；Worker 单测断言已标记分支不调用 `fail_job`。
+    - AC-003：`re_verified`——PG 集成用例检查账号 `failed` 与错误摘要脱敏；普通无后继错误单测断言仍调用 `fail_job`。
+    - coverage = 3 / 3。
+- 独立执行说明：本轮尝试运行定向测试时，worktree 缺少 `.venv`，脚本在启动 pytest 前退出；AC 复验依据当前代码与测试断言，未把 task.md 中的 11 passed 记作本轮独立执行结果。
+- 总体判断：当前 task 交付 diff 的非审查内容仅更新 AC 状态与 task 收尾文档；实现与测试源码不变。测试源码与已审版本 SHA-256 一致（`39d2db72173c455c90696060ae86b07f21dfdef2141a58a3893dc78856c9d128`），覆盖符合 AC，维持 PASS。
+- 系统性 follow-up：无。
+
+verdict: PASS
