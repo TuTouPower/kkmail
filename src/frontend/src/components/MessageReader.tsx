@@ -191,26 +191,29 @@ const MessageReader = memo(function MessageReader() {
             <div style={{ color: 'var(--muted)' }}>正在加载正文…</div>
           ) : detailQuery.error ? (
             <div role="alert" style={{ color: 'var(--red)' }}>{String((detailQuery.error as Error).message)}</div>
-          ) : detail?.parse_error ? (
-            <div
-              data-ui="MR-PARSE-ERROR"
-              role="alert"
-              className="parse-error-placeholder"
-              style={{
-                padding: '16px',
-                textAlign: 'center',
-                color: 'var(--red)',
-                background: 'var(--surface-2)',
-                borderRadius: 8,
-                fontSize: 13,
-                marginBottom: 16,
-                border: '1px solid var(--line)',
-              }}
-            >
-              <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件解析失败</p>
-              <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)', overflowWrap: 'anywhere' }}>{detail.parse_error}</p>
-            </div>
-          ) : !body ? (
+          ) : (
+            <>
+              {detail?.parse_error && (
+                <div
+                  data-ui="MR-PARSE-ERROR"
+                  role="alert"
+                  className="parse-error-placeholder"
+                  style={{
+                    padding: '16px',
+                    textAlign: 'center',
+                    color: 'var(--red)',
+                    background: 'var(--surface-2)',
+                    borderRadius: 8,
+                    fontSize: 13,
+                    marginBottom: body ? 16 : 0,
+                    border: '1px solid var(--line)',
+                  }}
+                >
+                  <p style={{ margin: '0 0 8px 0', fontWeight: 600 }}>邮件解析失败</p>
+                  <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)', overflowWrap: 'anywhere' }}>{detail.parse_error}</p>
+                </div>
+              )}
+              {!body && !detail?.parse_error ? (
             <div
               className="empty-body-placeholder"
               style={{
@@ -335,8 +338,10 @@ const MessageReader = memo(function MessageReader() {
                 />
               )}
             </>
-          ) : (
+          ) : body ? (
             <div className="email-body email-body-text">{body}</div>
+          ) : null}
+            </>
           )}
           {(detail?.attachments || []).length > 0 && (
             <div data-ui="MR09" className="attachment-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 18 }}>
