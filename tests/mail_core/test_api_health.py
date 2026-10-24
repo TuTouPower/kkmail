@@ -13,6 +13,22 @@ def test_health_reports_schema_head():
     assert body["schema_head"]
 
 
+def test_health_returns_instance_token_only_in_header(monkeypatch):
+    token = "instance-token-for-health-test"
+    client = TestClient(app)
+    monkeypatch.setenv("KKMAIL_INSTANCE_TOKEN", token)
+
+    res = client.get("/health")
+    assert res.status_code == 200
+    assert res.headers["X-Instance-Token"] == token
+    assert token not in res.text
+
+    monkeypatch.delenv("KKMAIL_INSTANCE_TOKEN")
+    res_without_token = client.get("/health")
+    assert res_without_token.status_code == 200
+    assert "X-Instance-Token" not in res_without_token.headers
+
+
 def test_ready_without_db_returns_503(monkeypatch):
     """When DB is unreachable, /ready must be 503 (not a false ready)."""
     from sqlalchemy.exc import OperationalError
