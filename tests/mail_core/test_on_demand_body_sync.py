@@ -61,7 +61,7 @@ def _seed_unarchived_message() -> tuple[uuid.UUID, uuid.UUID]:
         return acc.id, msg.id
 
 
-def test_ac001_get_message_unarchived_escalates_priority_and_enqueues_job():
+def test_ac001_get_message_unarchived_is_read_only():
     acc_id, mid = _seed_unarchived_message()
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
 
@@ -75,7 +75,7 @@ def test_ac001_get_message_unarchived_escalates_priority_and_enqueues_job():
     with Session() as session:
         st = session.get(MessageArchiveState, mid)
         assert st is not None
-        assert st.priority <= 0, "priority should be escalated to highest priority (<= 0)"
+        assert st.priority == 2, "GET must not change archive priority"
 
         job = session.scalars(
             select(WorkerJob)
@@ -85,8 +85,7 @@ def test_ac001_get_message_unarchived_escalates_priority_and_enqueues_job():
             )
             .order_by(WorkerJob.created_at.desc())
         ).first()
-        assert job is not None
-        assert job.priority == 10, "on-demand archive job priority should be 10"
+        assert job is None, "GET must not enqueue an archive job"
 
 
 def test_ac002_post_sync_body_completes_archive_and_returns_body():
@@ -120,6 +119,16 @@ def test_ac002_post_sync_body_completes_archive_and_returns_body():
         body = session.get(MessageBody, mid)
         assert body is not None
         assert "Instant full body rendered successfully!" in (body.text_html or "")
+        job = session.scalars(
+            select(WorkerJob)
+            .where(
+                WorkerJob.job_type == JobType.ARCHIVE_MIME_BATCH.value,
+                WorkerJob.account_id == acc_id,
+            )
+            .order_by(WorkerJob.created_at.desc())
+        ).first()
+        assert job is not None
+        assert job.priority == 10, "explicit POST body sync owns the priority boost"
 
 
 def test_ac003_worker_jobs_priority_governance():

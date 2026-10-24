@@ -24,39 +24,17 @@ class MessageHasNoProviderRemoteId(ValueError):
     """Raised when on-demand sync cannot address a provider message."""
 
 
-def get_message_detail_with_archive_nudge(
+def get_message_detail_with_archive_status(
     session: Session,
     message_id: UUID,
 ) -> tuple[MessageDetail, bool | None] | None:
+    """Return message detail and archive status without changing archive state."""
     detail = get_message_detail(session, message_id)
     if detail is None:
         return None
 
     state = session.get(MessageArchiveState, message_id)
-    message = session.get(Message, message_id)
     is_archived = state.state == ArchiveState.ARCHIVE_COMPLETE.value if state is not None else None
-    if (
-        is_archived is False
-        and message is not None
-        and message.remote_id
-        and message.remote_id.strip()
-        and not detail.parse_error
-        and state is not None
-        and state.state in (ArchiveState.METADATA_SYNCED.value, ArchiveState.ARCHIVE_PENDING.value)
-    ):
-        state.priority = 0
-        if state.state == ArchiveState.METADATA_SYNCED.value:
-            apply_transition(state, ArchiveState.ARCHIVE_PENDING)
-        enqueue_job(
-            session,
-            job_type=JobType.ARCHIVE_MIME_BATCH.value,
-            account_id=detail.account_id,
-            payload={"message_id": str(message_id), "batch_size": 1},
-            priority=10,
-            dedupe_key=f"archive_msg:{message_id}",
-        )
-        session.commit()
-
     return detail, is_archived
 
 

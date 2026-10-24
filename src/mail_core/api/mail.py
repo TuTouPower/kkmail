@@ -42,7 +42,7 @@ from mail_core.mail.application.queries import (
 )
 from mail_core.mail.application.message_details import (
     MessageHasNoProviderRemoteId,
-    get_message_detail_with_archive_nudge,
+    get_message_detail_with_archive_status,
     sync_message_body,
 )
 from mail_core.mail.application.search import search_messages_page
@@ -306,7 +306,7 @@ def api_get_message(message_id: UUID) -> MessageDetailOut:
     """Message metadata + parsed body + attachments (by UUID)."""
     Session = get_session_factory()
     with Session() as session:
-        result = get_message_detail_with_archive_nudge(session, message_id)
+        result = get_message_detail_with_archive_status(session, message_id)
         if result is None:
             raise HTTPException(404, "message not found")
         d, is_archived = result
