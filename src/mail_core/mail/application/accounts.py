@@ -45,6 +45,8 @@ class AccountDTO:
     master_order: int | None = None
     group_order: int | None = None
     imap_config: dict[str, Any] | None = None
+    provider_profile: str | None = None
+    oauth_client_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +103,10 @@ def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDT
                 port = int(port_value) if port_value is not None else (993 if use_ssl else 143)
             except (TypeError, ValueError):
                 port = 993 if use_ssl else 143
+            raw_user = acc.config.get("imap_user") or acc.config.get("username")
+            imap_user = raw_user.strip() if isinstance(raw_user, str) and raw_user.strip() else None
             imap_config = {
+                **({"imap_user": imap_user} if imap_user else {}),
                 "imap_host": acc.config.get("imap_host") or acc.config.get("host"),
                 "imap_port": port,
                 "use_ssl": use_ssl,
@@ -122,6 +127,8 @@ def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDT
         account_type=acc.provider,
         remark=remark,
         imap_config=imap_config,
+        provider_profile=(acc.config or {}).get("provider_profile"),
+        oauth_client_type=(acc.config or {}).get("oauth_client_type"),
     )
 
 

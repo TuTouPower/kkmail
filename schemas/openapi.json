@@ -294,9 +294,31 @@
             ],
             "title": "Master Order"
           },
+          "oauth_client_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oauth Client Type"
+          },
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "provider_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Profile"
           },
           "remark": {
             "anyOf": [
@@ -738,6 +760,17 @@
               }
             ],
             "title": "Imap Port"
+          },
+          "imap_user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imap User"
           },
           "use_ssl": {
             "anyOf": [

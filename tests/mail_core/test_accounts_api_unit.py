@@ -147,7 +147,7 @@ def test_create_account_serializes_slotted_dto_mock(api_client):
     )
 
     with patch("mail_core.api.accounts.create_account_app", return_value=dto):
-        res = api_client.post("/api/accounts", json={"email": "new@kkmail.test", "provider": "imap"})
+        res = api_client.post("/api/accounts", json={"email": "new@kkmail.test", "provider": "imap", "config": {"imap_host": "imap.kkmail.test"}, "credentials": {"password": "test-password"}})
         assert res.status_code == 200, res.text
         data = res.json()
         assert data["id"] == acc_id

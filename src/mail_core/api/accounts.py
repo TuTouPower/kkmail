@@ -7,7 +7,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, field_serializer
 
 from mail_core.accounts import StaleSidebarLayoutError
 from mail_core.mail.application.accounts import (
@@ -33,6 +33,7 @@ router = APIRouter(tags=["accounts"])
 
 class ImapConfigOut(BaseModel):
     imap_host: str | None = None
+    imap_user: str | None = None
     imap_port: int | None = None
     use_ssl: bool | None = None
 
@@ -53,6 +54,14 @@ class AccountOut(BaseModel):
     account_type: str
     remark: str | None = None
     imap_config: ImapConfigOut | None = None
+    provider_profile: str | None = None
+    oauth_client_type: str | None = None
+
+    @field_serializer("imap_config")
+    def serialize_imap_config(self, value):
+        if value is None:
+            return None
+        return {key: item for key, item in value.model_dump().items() if key != "imap_user" or item is not None}
 
 
 class AccountsPage(BaseModel):
@@ -174,6 +183,10 @@ def api_list_accounts(
 @router.post("/api/accounts", response_model=AccountOut)
 def api_create_account(body: AccountCreateIn):
     try:
+        from mail_core.accounts.connection import validate_connection, merge_credentials
+        if body.provider in ("imap", "gmail", "graph"):
+            cleaned = merge_credentials(body.provider, {}, body.credentials or {})
+            validate_connection(body.email, body.provider, body.config or {}, cleaned)
         acc = create_account_app(
             email=body.email,
             provider=body.provider,
@@ -202,6 +215,8 @@ def api_update_account(account_id: UUID, body: AccountUpdateIn):
         return AccountOut(**asdict(acc))
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.delete("/api/accounts/{account_id}", status_code=204, response_class=Response)

@@ -604,8 +604,12 @@ export interface components {
             imap_config?: components["schemas"]["ImapConfigOut"] | null;
             /** Master Order */
             master_order?: number | null;
+            /** Oauth Client Type */
+            oauth_client_type?: string | null;
             /** Provider */
             provider: string;
+            /** Provider Profile */
+            provider_profile?: string | null;
             /** Remark */
             remark?: string | null;
             /** Status */
@@ -744,6 +748,8 @@ export interface components {
             imap_host?: string | null;
             /** Imap Port */
             imap_port?: number | null;
+            /** Imap User */
+            imap_user?: string | null;
             /** Use Ssl */
             use_ssl?: boolean | null;
         };
