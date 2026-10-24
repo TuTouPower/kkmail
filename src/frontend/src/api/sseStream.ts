@@ -11,6 +11,7 @@ export interface SseParserState {
   eventName: string
   dataBuffer: string[]
   lastEventId: string | null
+  retryMs: number | null
 }
 
 export function parseSseChunk(
@@ -74,6 +75,11 @@ export function parseSseChunk(
       if (!value.includes('\0')) {
         state.lastEventId = value
       }
+    } else if (field === 'retry' && /^\d+$/.test(value)) {
+      const retryMs = Number(value)
+      if (Number.isSafeInteger(retryMs)) {
+        state.retryMs = retryMs
+      }
     }
   }
 }
@@ -89,6 +95,10 @@ export interface SseStreamOptions {
   signal?: AbortSignal
 }
 
+const INITIAL_RETRY_MS = 1000
+const MAX_RETRY_MS = 30_000
+const RETRY_JITTER_RATIO = 0.2
+
 export function subscribeMailCoreStream(
   handler: (event: string, data: unknown, id: string | null) => void,
   options: SseStreamOptions = {},
@@ -99,14 +109,30 @@ export function subscribeMailCoreStream(
   let currentAbortController: AbortController | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-  const retryMs = options.retryIntervalMs ?? 2000
+  const initialRetryMs = Math.min(MAX_RETRY_MS, Math.max(1, options.retryIntervalMs ?? INITIAL_RETRY_MS))
+  let nextRetryMs = initialRetryMs
+  let serverRetryMs: number | null = null
 
   function scheduleReconnect(immediate = false) {
     if (closed || reconnectTimer !== null) return
+    if (immediate) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null
+        void connect()
+      }, 0)
+      return
+    }
+
+    const baseRetryMs = Math.min(MAX_RETRY_MS, Math.max(nextRetryMs, serverRetryMs ?? 0))
+    const jitteredRetryMs = Math.min(
+      MAX_RETRY_MS,
+      Math.round(baseRetryMs * (1 + Math.random() * RETRY_JITTER_RATIO)),
+    )
+    nextRetryMs = Math.min(MAX_RETRY_MS, baseRetryMs * 2)
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
       void connect()
-    }, immediate ? 0 : retryMs)
+    }, jitteredRetryMs)
   }
 
   async function connect() {
@@ -152,6 +178,7 @@ export function subscribeMailCoreStream(
       }
 
       isConnected = true
+      nextRetryMs = initialRetryMs
       options.onOpen?.(res)
 
       const reader = res.body.getReader()
@@ -161,6 +188,7 @@ export function subscribeMailCoreStream(
         eventName: 'message',
         dataBuffer: [],
         lastEventId,
+        retryMs: null,
       }
 
       try {
@@ -175,6 +203,9 @@ export function subscribeMailCoreStream(
               }
               handler(event, data, id)
             })
+            if (parserState.retryMs !== null) {
+              serverRetryMs = Math.min(MAX_RETRY_MS, Math.max(INITIAL_RETRY_MS, parserState.retryMs))
+            }
           }
         }
       } finally {

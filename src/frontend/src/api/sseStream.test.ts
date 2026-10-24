@@ -10,6 +10,7 @@ describe('parseSseChunk', () => {
       eventName: 'message',
       dataBuffer: [],
       lastEventId: null,
+      retryMs: null,
     }
 
     parseSseChunk(
@@ -26,6 +27,22 @@ describe('parseSseChunk', () => {
     ])
   })
 
+  it('keeps the latest valid retry directive and ignores invalid values', () => {
+    const state: SseParserState = {
+      buffer: '',
+      eventName: 'message',
+      dataBuffer: [],
+      lastEventId: null,
+      retryMs: null,
+    }
+
+    parseSseChunk('retry: 2500\nretry: 3 seconds\nretry: -1\n\n', state, vi.fn())
+    expect(state.retryMs).toBe(2500)
+
+    parseSseChunk('retry: 4000\n\n', state, vi.fn())
+    expect(state.retryMs).toBe(4000)
+  })
+
   it('handles chunks split across lines and multiline data correctly', () => {
     const events: Array<{ event: string; data: unknown; id: string | null }> = []
     const state: SseParserState = {
@@ -33,6 +50,7 @@ describe('parseSseChunk', () => {
       eventName: 'message',
       dataBuffer: [],
       lastEventId: null,
+      retryMs: null,
     }
 
     parseSseChunk('data: line 1\n', state, (event, data, id) => events.push({ event, data, id }))
@@ -51,6 +69,7 @@ describe('subscribeMailCoreStream', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
   })
 
   function mockSseResponse(bodyText: string, status = 200) {
@@ -92,6 +111,73 @@ describe('subscribeMailCoreStream', () => {
     expect(headers['Last-Event-ID']).toBe('99')
     expect(onOpen).toHaveBeenCalled()
     expect(onEvent).toHaveBeenCalledWith('test', { ok: true }, '101')
+
+    unsubscribe()
+  })
+
+  it('backs off exponentially with jitter and resets after a successful open', async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementation(async () => mockSseResponse(':keepalive\n\n'))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+
+    const unsubscribe = subscribeMailCoreStream(vi.fn())
+    await vi.advanceTimersByTimeAsync(10)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1089)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    await vi.advanceTimersByTimeAsync(2199)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+
+    await vi.advanceTimersByTimeAsync(1099)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+
+    unsubscribe()
+  })
+
+  it('caps exponential reconnect delay at 30 seconds', async () => {
+    const fetchMock = vi.fn(async () => { throw new Error('offline') })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+
+    const unsubscribe = subscribeMailCoreStream(vi.fn())
+    await vi.advanceTimersByTimeAsync(10)
+    const delays = [1100, 2200, 4400, 8800, 17600, 30000]
+
+    for (const [index, delay] of delays.entries()) {
+      const remaining = delay - (index === 0 ? 10 : 0)
+      await vi.advanceTimersByTimeAsync(remaining - 1)
+      expect(fetchMock).toHaveBeenCalledTimes(index + 1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(fetchMock).toHaveBeenCalledTimes(index + 2)
+    }
+
+    unsubscribe()
+  })
+
+  it('uses the server retry directive as the reconnect delay', async () => {
+    const fetchMock = vi.fn(async () => mockSseResponse('retry: 5000\n\n'))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+
+    const unsubscribe = subscribeMailCoreStream(vi.fn())
+    await vi.advanceTimersByTimeAsync(10)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(4989)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
 
     unsubscribe()
   })
