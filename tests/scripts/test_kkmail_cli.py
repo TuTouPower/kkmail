@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-CLI_PATH = Path(__file__).resolve().parents[2] / "docs" / "skills" / "kkmail" / "scripts" / "kkmail_cli.py"
+CLI_PATH = Path(__file__).resolve().parents[2] / "docs" / "skills" / "kkmail-skill" / "scripts" / "kkmail_cli.py"
 spec = importlib.util.spec_from_file_location("kkmail_cli", CLI_PATH)
 kkmail_cli = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(kkmail_cli)

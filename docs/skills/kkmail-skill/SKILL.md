@@ -1,5 +1,5 @@
 ---
-name: kkmail
+name: kkmail-skill
 description: 接入并操控自托管邮件客户端 kkmail（基于 mail-core）。支持邮件查收、全文搜索、正文与附件读取、已读/星标/废纸篓标记、邮箱账号管理与邮件同步。提供开箱即用的 CLI 工具与标准 REST API 接口规范。
 ---
 
@@ -28,7 +28,7 @@ Skill 内置零依赖 CLI 执行器，Agent 可直接在终端调用：
 
 ```bash
 # 路径
-CLI="python3 docs/skills/kkmail/scripts/kkmail_cli.py"
+CLI="python3 docs/skills/kkmail-skill/scripts/kkmail_cli.py"
 ```
 
 ### 常用命令
