@@ -865,11 +865,12 @@ def restore_backup_package(
             timeout=restore_timeout,
         )
         if res.returncode != 0:
-            err_msg = res.stderr.decode("utf-8", errors="replace")[:1000]
+            err_msg = (res.stderr or b"").decode("utf-8", errors="replace").strip()[:1000]
+            if not err_msg:
+                err_msg = "(no stderr output)"
             log.warning("pg_restore returned code %d: %s", res.returncode, err_msg)
-            if res.returncode > 1 or "FATAL" in err_msg or "error:" in err_msg.lower():
-                errors.append(f"pg_restore failed: {err_msg}")
-                raise RuntimeError(f"pg_restore failed ({res.returncode}): {err_msg}")
+            errors.append(f"pg_restore failed: {err_msg}")
+            raise RuntimeError(f"pg_restore failed ({res.returncode}): {err_msg}")
 
         db_restored = True
         duration = (datetime.now(timezone.utc) - begun).total_seconds()

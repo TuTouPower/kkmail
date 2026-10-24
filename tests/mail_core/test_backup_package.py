@@ -84,6 +84,49 @@ def test_restore_sealed_backup_reads_manifest_filename_case(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize(
+    ("returncode", "stderr"),
+    [
+        (1, b""),
+        (1, b"pg_restore: warning: could not execute query"),
+        (2, b""),
+    ],
+)
+def test_restore_fails_on_any_nonzero_pg_restore_exit(tmp_path, monkeypatch, returncode, stderr):
+    backup_key = os.urandom(32)
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", base64.b64encode(backup_key).decode())
+    monkeypatch.delenv("MAIL_CORE_BACKUP_KEYS", raising=False)
+    package_dir = tmp_path / "sealed-backup"
+    create_backup_package(
+        package_dir,
+        include_blobs=False,
+        database_url_override="postgresql://nobody:nope@127.0.0.1:1/none",
+        encrypt=True,
+        allow_dump_stub=True,
+    )
+    monkeypatch.setattr(backup_package.shutil, "which", lambda name: "/fake/pg_restore")
+    monkeypatch.setattr(
+        backup_package.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], returncode, stdout=b"", stderr=stderr
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=rf"pg_restore failed \({returncode}\)"):
+        restore_backup_package(
+            package_dir,
+            target_database_url="postgresql://restore:pw@127.0.0.1:5432/target",
+            target_blobs_dir=tmp_path / "restored-blobs",
+            keyring={1: backup_key},
+            allow_stub=True,
+            source_database_url="postgresql://backup-source:pw@127.0.0.1:5432/source",
+        )
+
+    assert package_dir.is_dir()
+    assert list(tmp_path.glob(".restore_staging_*")) == []
+
+
+@pytest.mark.parametrize(
     ("source_url", "target_url"),
     [
         (
