@@ -280,8 +280,17 @@ def test_a28_worker_handler_rate_limited_single_job(monkeypatch):
         set_credential_store(None)
 
 
+@pytest.mark.parametrize(
+    ("prior_attempts", "expected_status"),
+    [
+        (0, RemoteOperationStatus.PENDING.value),
+        (4, RemoteOperationStatus.FAILED.value),
+    ],
+)
 @_requires_db
-def test_a28_remote_push_rate_limited_not_failed_and_respects_retry_after(monkeypatch):
+def test_a28_remote_push_rate_limit_respects_retry_after_and_attempt_cap(
+    monkeypatch, prior_attempts, expected_status
+):
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
     Session = get_session_factory()
@@ -307,32 +316,34 @@ def test_a28_remote_push_rate_limited_not_failed_and_respects_retry_after(monkey
                 op_type="mark_read",
                 desired_state={"remote_id": "1", "folder_remote_id": "INBOX", "is_read": True},
             )
-            # Pre-set attempts to 5 (would be marked FAILED if treated as regular transient error)
-            op.attempts = 5
+            op.attempts = prior_attempts
             session.commit()
             op_id = op.id
 
-        push_remote_operations(account_id, worker_id="w", store=store)
+        result = push_remote_operations(account_id, worker_id="w", store=store)
 
         with Session() as session:
             op = session.get(RemoteOperation, op_id)
             assert op is not None
-            # Must NOT be FAILED; must stay PENDING
-            assert op.status == RemoteOperationStatus.PENDING.value
-            # Must respect retry_after_seconds = 75
-            assert op.next_attempt_at >= now + timedelta(seconds=70)
+            assert op.status == expected_status
+            assert op.attempts == prior_attempts + 1
             assert "RateLimitedError" in (op.last_error or op.error or "")
 
-            # Ensure push job was scheduled with run_after >= now + 75
-            job = session.scalar(
-                select(WorkerJob)
-                .where(WorkerJob.account_id == account_id)
-                .where(WorkerJob.job_type == JobType.REMOTE_OPERATION_PUSH.value)
-                .order_by(WorkerJob.created_at.desc())
-                .limit(1)
-            )
-            assert job is not None
-            assert job.run_after >= now + timedelta(seconds=70)
+            if expected_status == RemoteOperationStatus.PENDING.value:
+                assert op.next_attempt_at >= now + timedelta(seconds=70)
+                job = session.scalar(
+                    select(WorkerJob)
+                    .where(WorkerJob.account_id == account_id)
+                    .where(WorkerJob.job_type == JobType.REMOTE_OPERATION_PUSH.value)
+                    .order_by(WorkerJob.created_at.desc())
+                    .limit(1)
+                )
+                assert job is not None
+                assert job.run_after >= now + timedelta(seconds=70)
+                assert result["failed"] == 0
+            else:
+                assert op.next_attempt_at is None
+                assert result["failed"] == 1
     finally:
         set_credential_store(None)
 

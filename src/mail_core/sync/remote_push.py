@@ -428,7 +428,10 @@ def push_remote_operations(
                 pushed += 1
             else:
                 now_retry = datetime.now(timezone.utc)
-                if is_rate_limited_error(caught_exc, err):
+                if (
+                    is_rate_limited_error(caught_exc, err)
+                    and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS
+                ):
                     delay = get_retry_after_seconds(caught_exc, fallback=60.0)
                     next_attempt = now_retry + timedelta(seconds=delay)
                     mark_remote_operation(
