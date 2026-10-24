@@ -27,7 +27,7 @@ def _dsn_from_settings() -> str:
 
 
 class OutboxListenThread:
-    """Daemon thread: LISTEN mail_core_outbox → dispatcher.dispatch_once()."""
+    """LISTEN thread that dispatches only while local SSE subscribers are active."""
 
     def __init__(
         self,
@@ -81,7 +81,7 @@ class OutboxListenThread:
                 log.info("LISTEN %s started", CHANNEL)
                 self._started.set()
                 try:
-                    self.dispatcher.dispatch_once()
+                    self.dispatcher.dispatch_once(require_subscribers=True)
                 except Exception:
                     log.exception("initial dispatch after LISTEN failed")
 
@@ -94,14 +94,14 @@ class OutboxListenThread:
                         if self._stop.is_set():
                             break
                         try:
-                            self.dispatcher.dispatch_once()
+                            self.dispatcher.dispatch_once(require_subscribers=True)
                         except Exception:
                             log.exception("dispatch after NOTIFY failed")
                     if self._stop.is_set():
                         break
                     if not got:
                         try:
-                            self.dispatcher.dispatch_once()
+                            self.dispatcher.dispatch_once(require_subscribers=True)
                         except Exception:
                             log.exception("idle dispatch failed")
             except Exception as exc:

@@ -1,9 +1,9 @@
 """In-process outbox dispatcher with subscriber fan-out.
 
 LISTEN/NOTIFY wake is owned by the API process. Workers must only ``pg_notify``
-(see ``outbox_dispatch_wake``) — they must not call ``dispatch_once``, or they
-would ``mark_dispatched`` with no local SSE subscribers and steal events from
-the API process.
+(see ``outbox_dispatch_wake``). The API listener dispatches only while local SSE
+subscribers exist; otherwise rows remain undispatched for replay and later delivery.
+Workers must not call ``dispatch_once`` because they do not own SSE fan-out.
 """
 
 from __future__ import annotations
