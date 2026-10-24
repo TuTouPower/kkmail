@@ -147,8 +147,6 @@ class GraphProvider:
             raise GraphNotConfiguredError("Graph message list not wired yet")
         path = (cursor or {}).get("next_link") or f"/me/mailFolders/{folder_remote_id}/messages"
         data = self._call("GET", path, {})
-        if "page" in data:
-            return data["page"]
         # Reuse delta parser shape for list (value + nextLink)
         page = parse_graph_delta(data)
         items = [c.meta for c in page.changes if c.meta is not None]
@@ -179,8 +177,6 @@ class GraphProvider:
         if self.transport is None:
             raise GraphNotConfiguredError("Graph delta query not wired yet")
         data = self._call("GET", link, {})
-        if "page" in data:
-            return data["page"]
         return parse_graph_delta(data)
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
@@ -258,18 +254,10 @@ class GraphProvider:
         while next_url:
             data = self._call("GET", next_url, params)
             params = None
-            if "page" in data:
-                page = data["page"]
-                items = getattr(page, "items", []) or []
-                for it in items:
-                    remote_ids.add(str(getattr(it, "remote_id", "")))
-                cursor = getattr(page, "next_cursor", None)
-                next_url = cursor.get("next_link") if isinstance(cursor, dict) else None
-            else:
-                for item in data.get("value") or []:
-                    if item.get("id"):
-                        remote_ids.add(str(item["id"]))
-                next_url = data.get("@odata.nextLink") or data.get("next_link")
+            for item in data.get("value") or []:
+                if item.get("id"):
+                    remote_ids.add(str(item["id"]))
+            next_url = data.get("@odata.nextLink") or data.get("next_link")
         local = set(local_remote_ids)
         return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote_ids)]
 

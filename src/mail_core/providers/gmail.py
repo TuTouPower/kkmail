@@ -270,8 +270,6 @@ class GmailProvider:
         if cur.get("pageToken"):
             params["pageToken"] = cur["pageToken"]
         data = self._call("GET", f"/gmail/v1/users/{self.user_id}/messages", params)
-        if "page" in data:
-            return data["page"]
         msgs = data.get("messages") or []
         message_ids = [str(stub["id"]) for stub in msgs if stub.get("id")]
         items: list[RemoteMessageMeta] = []
@@ -352,8 +350,6 @@ class GmailProvider:
         if cursor.get("pageToken"):
             params["pageToken"] = cursor["pageToken"]
         data = self._call("GET", f"/gmail/v1/users/{self.user_id}/history", params)
-        if "page" in data:
-            return data["page"]
         page = parse_gmail_history(
             data,
             folder_label=folder_remote_id,
@@ -470,22 +466,12 @@ class GmailProvider:
             if page_token:
                 params["pageToken"] = page_token
             data = self._call("GET", f"/gmail/v1/users/{self.user_id}/messages", params)
-            if "page" in data:
-                page = data["page"]
-                items = getattr(page, "items", []) or []
-                for it in items:
-                    remote_ids.add(str(getattr(it, "remote_id", "")))
-                cursor = getattr(page, "next_cursor", None)
-                page_token = cursor.get("pageToken") if isinstance(cursor, dict) else None
-                if not page_token:
-                    break
-            else:
-                for m in data.get("messages") or []:
-                    if m.get("id"):
-                        remote_ids.add(str(m["id"]))
-                page_token = data.get("nextPageToken")
-                if not page_token:
-                    break
+            for m in data.get("messages") or []:
+                if m.get("id"):
+                    remote_ids.add(str(m["id"]))
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
         local = set(local_remote_ids)
         return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote_ids)]
 

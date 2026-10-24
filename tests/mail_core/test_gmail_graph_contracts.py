@@ -6,25 +6,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
 from mail_core.providers.gmail import GmailNotConfiguredError, GmailProvider, _meta_from_gmail_message
 from mail_core.providers.graph import GraphNotConfiguredError, GraphProvider
 from mail_core.providers.http import CursorInvalidError, FixtureTransport, ProviderHttpError, RateLimitedError
 from mail_core.providers.imap import _parse_message_meta_from_fetch
 from mail_core.providers.parsing.gmail_history import parse_gmail_history
 from mail_core.providers.parsing.graph_delta import parse_graph_delta
-
-
-def _meta(rid: str) -> RemoteMessageMeta:
-    return RemoteMessageMeta(
-        remote_id=rid,
-        subject="s",
-        from_address="a@b.c",
-        from_name=None,
-        sort_time=datetime.now(timezone.utc),
-        is_read=False,
-        has_attachments=False,
-    )
 
 
 # --- raw parsers -----------------------------------------------------------
@@ -168,21 +155,31 @@ def test_parse_gmail_history_pagination_add_delete_flag():
 # --- provider + transport --------------------------------------------------
 
 def test_gmail_requires_history_id_and_uses_transport():
-    page = DeltaPage(
-        changes=[DeltaChange(kind="upsert", remote_id="m1", meta=_meta("m1"))],
-        next_cursor={"historyId": "99"},
-        exhausted=True,
+    transport = FixtureTransport()
+    transport.add(
+        "GET",
+        "/gmail/v1/users/me/history",
+        {
+            "history": [
+                {"messagesAdded": [{"message": {"id": "m1", "labelIds": ["INBOX"]}}]}
+            ],
+            "historyId": "99",
+        },
     )
-
-    def transport(method, path, params):
-        assert method == "GET"
-        assert path.endswith("/history")
-        assert params["startHistoryId"] == "42"
-        return {"page": page}
+    transport.add(
+        "GET",
+        "/gmail/v1/users/me/messages/m1",
+        {
+            "id": "m1",
+            "labelIds": ["INBOX"],
+            "payload": {"headers": [{"name": "Subject", "value": "s"}]},
+        },
+    )
 
     p = GmailProvider(credential_ref="x", transport=transport)
     out = p.delta_changes("INBOX", {"historyId": "42"})
     assert out.exhausted and out.changes[0].remote_id == "m1"
+    assert transport.calls[0][2]["startHistoryId"] == "42"
 
     with pytest.raises(ValueError):
         GmailProvider(credential_ref="x", transport=transport).delta_changes("INBOX", {})
@@ -279,19 +276,20 @@ def test_gmail_list_folders_via_transport():
 
 
 def test_graph_delta_uses_delta_link_and_next_link():
-    page1 = DeltaPage(
-        changes=[DeltaChange(kind="delete", remote_id="gone")],
-        next_cursor={"next_link": "https://graph/delta?page=2"},
-        exhausted=False,
+    transport = FixtureTransport()
+    transport.add(
+        "GET",
+        "/me/mailFolders/inbox/messages/delta",
+        {
+            "@odata.nextLink": "https://graph/delta?page=2",
+            "value": [{"id": "gone", "@removed": {"reason": "deleted"}}],
+        },
     )
-    page2 = DeltaPage(changes=(), next_cursor={"delta_link": "https://graph/delta?token=abc"}, exhausted=True)
-    calls = []
-
-    def transport(method, path, params):
-        calls.append(path)
-        if "page=2" in path:
-            return {"page": page2}
-        return {"page": page1}
+    transport.add(
+        "GET",
+        "https://graph/delta?page=2",
+        {"@odata.deltaLink": "https://graph/delta?token=abc", "value": []},
+    )
 
     p = GraphProvider(credential_ref="x", transport=transport)
     first = p.delta_changes("inbox", {})
@@ -299,10 +297,26 @@ def test_graph_delta_uses_delta_link_and_next_link():
     second = p.delta_changes("inbox", first.next_cursor)
     assert second.exhausted
     assert second.next_cursor["delta_link"].endswith("token=abc")
-    assert len(calls) == 2
+    assert len(transport.calls) == 2
 
     with pytest.raises(GraphNotConfiguredError):
         GraphProvider(credential_ref="x").delta_changes("inbox", {"delta_link": "x"})
+
+
+def test_graph_metadata_list_uses_wire_payload():
+    transport = FixtureTransport()
+    transport.add(
+        "GET",
+        "/me/mailFolders/inbox/messages",
+        {"value": [{"id": "m1", "subject": "Hello"}]},
+    )
+    provider = GraphProvider(credential_ref="x", transport=transport)
+
+    page = provider.fetch_metadata_page("inbox", None)
+
+    assert page.exhausted
+    assert [item.remote_id for item in page.items] == ["m1"]
+    assert page.items[0].subject == "Hello"
 
 
 def test_graph_raw_delta_pagination_fixture():
