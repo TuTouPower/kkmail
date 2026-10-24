@@ -7,6 +7,20 @@ import argparse
 import sys
 
 
+def legacy_account_connection(row) -> tuple[str, dict]:
+    """Reject unsupported/missing IMAP configuration before any import writes."""
+    from mail_core.accounts.connection import reject_microsoft_imap
+    email = row["email"].strip().lower()
+    auth_type = (row["authorization_type"] or "").lower()
+    if auth_type == "graph" or (row["refresh_token"] and "outlook" in email):
+        return "graph", {}
+    config = {"imap_host": row["imap_host"] or "", "imap_port": row["imap_port"] or 993, "use_ssl": True}
+    reject_microsoft_imap(email, config)
+    if not config["imap_host"]:
+        raise ValueError(f"IMAP server missing for legacy account record {row['id']}")
+    return "imap", config
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Migrate accounts, groups, credentials and emails from legacy SQLite to mail-core PostgreSQL."
@@ -269,6 +283,10 @@ def migrate():
     sqlite_conn.row_factory = sqlite3.Row
     sqlite_cursor = sqlite_conn.cursor()
 
+    legacy_accounts = sqlite_cursor.execute("SELECT * FROM accounts").fetchall()
+    for legacy_account in legacy_accounts:
+        legacy_account_connection(legacy_account)
+
     print("=== 1. Migrating Groups ===")
     group_id_map: dict[int, uuid.UUID] = {}
     with Session() as session:
@@ -298,27 +316,11 @@ def migrate():
         try:
             cred_store = DbCredentialStore(keyring=keyring, session_factory=lambda: session)
 
-            legacy_accounts = sqlite_cursor.execute("SELECT * FROM accounts").fetchall()
             for a in legacy_accounts:
                 email_norm = a["email"].strip().lower()
                 existing = session.query(Account).filter_by(email=email_norm).first()
 
-                auth_type = (a["authorization_type"] or "").lower()
-                has_refresh_token = bool(a["refresh_token"])
-                if auth_type == "graph" or (has_refresh_token and "outlook" in email_norm):
-                    provider = "graph"
-                elif auth_type == "imap":
-                    provider = "imap"
-                else:
-                    provider = "imap"
-
-                cfg: dict = {}
-                if provider == "imap":
-                    cfg = {
-                        "imap_host": a["imap_host"] or "outlook.office365.com",
-                        "imap_port": a["imap_port"] or 993,
-                        "use_ssl": True,
-                    }
+                provider, cfg = legacy_account_connection(a)
 
                 group_id = group_id_map.get(a["group_id"])
                 ref = f"account:{email_norm}"

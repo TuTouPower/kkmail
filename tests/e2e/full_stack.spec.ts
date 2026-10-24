@@ -110,8 +110,7 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
     // 再次确认端口为 1143
     await page.locator('#account-imap-port').fill(IMAP_PORT)
 
-    await page.getByText('高级凭据配置', { exact: true }).click()
-    await page.locator('#account-credentials').fill(JSON.stringify({ password: IMAP_PASS }))
+    await page.locator('#account-password').fill(IMAP_PASS)
 
     // 点击添加账户
     await page.getByRole('button', { name: '添加', exact: true }).click()

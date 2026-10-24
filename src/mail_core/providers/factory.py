@@ -83,6 +83,8 @@ def build_provider(
         return MemoryProvider.from_config(cfg)
 
     if provider == "imap":
+        from mail_core.accounts.connection import reject_microsoft_imap
+        reject_microsoft_imap(account.email, cfg)
         if not account.credential_ref:
             raise ValueError("imap account missing credential_ref")
         secret = store.get_secret(account.credential_ref)

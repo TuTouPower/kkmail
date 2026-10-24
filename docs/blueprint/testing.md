@@ -305,3 +305,7 @@ python3 scripts/run_full_stack_e2e.py
 - PostgreSQL 集成测试验证分组 CRUD、删除非空组后保留账号、完整布局原子校验、独立排序、空组与未知组范围、列表/搜索/统计/全部已读，以及最新迁移的降级再升级；测试必须使用专用测试数据库。
 - 浏览器冒烟测试验证六类全局分类、分组分类、真实文件夹树和导航布局；真实全栈 Playwright 通过 HTML5 拖拽验证空组、跨组、移出、主列表内排序和分组排序，并刷新后读取服务端确认成员关系与顺序持久化。
 - 前端测试覆盖查询 key 按 scope 隔离、分组参数贯通、偏好持久化与设置入口；`schemas/openapi.json` 和生成 TypeScript 必须通过 codegen 漂移检查。
+
+## 供应商账户表单（t053）
+
+后端：`scripts/run-mail-core-tests.sh run -k "provider_account or accounts_api or oauth_transport or account_credentials" --no-cov`，覆盖真实加密凭据更新、回滚、Microsoft IMAP 拒绝及多客户端令牌轮换。前端：`npm --prefix src/frontend test`；浏览器：`npm --prefix src/frontend run test:e2e -- provider_account_forms.spec.ts settings_workspace.spec.ts`，覆盖帮助弹窗焦点与窄屏输入。

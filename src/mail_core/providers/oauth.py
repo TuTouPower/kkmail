@@ -31,7 +31,7 @@ from urllib.parse import urlencode
 from mail_core.accounts.credentials import (
     CredentialStore,
     load_json_secret,
-    save_json_secret,
+    credential_edit,
 )
 from mail_core.providers.http import CursorInvalidError, ProviderHttpError, RateLimitedError
 
@@ -76,13 +76,6 @@ class OAuthTokenClient:
         self._cached = dict(data)
         return self._cached
 
-    def _persist(self, data: dict[str, Any]) -> None:
-        self._cached = dict(data)
-        try:
-            save_json_secret(self.store, self.credential_ref, data)
-        except Exception as exc:  # noqa: BLE001 — persistence is best-effort
-            log.warning("could not persist refreshed token for %s: %s", self.credential_ref, type(exc).__name__)
-
     def token_uri(self) -> str:
         data = self._load()
         if data.get("token_uri"):
@@ -111,8 +104,14 @@ class OAuthTokenClient:
 
     def get_access_token(self, *, force_refresh: bool = False) -> str:
         # Serialize refresh so concurrent callers share one token grant.
-        with self._refresh_lock:
-            data = self._load()
+        with self._refresh_lock, credential_edit(
+            self.store,
+            self.credential_ref,
+            allow_readonly=True,
+            readonly_cache=self._cached,
+        ) as data:
+            # Reload under the durable row lock; another process may have rotated it.
+            self._cached = dict(data)
             if not force_refresh and self._access_valid(data):
                 return str(data["access_token"])
             refresh = data.get("refresh_token")
@@ -147,7 +146,7 @@ class OAuthTokenClient:
             expires_in = resp.get("expires_in")
             if expires_in is not None:
                 data["expires_at"] = time.time() + float(expires_in)
-            self._persist(data)
+            self._cached = dict(data)
             return str(access)
 
 
