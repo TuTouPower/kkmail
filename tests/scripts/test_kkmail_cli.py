@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -103,6 +104,42 @@ def test_safe_redirect_handler_blocks_login_payload_cross_origin():
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         handler.redirect_request(req, None, 307, "Temporary Redirect", {}, "https://attacker.example.com/steal")
     assert "Redirect of login/credential payload" in str(exc_info.value)
+
+
+def test_list_inbox_status_filters_are_sent_as_query_params(monkeypatch):
+    client = kkmail_cli.KKMailClient(base_url="http://127.0.0.1:37281", api_key="test-key")
+    requested_urls = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"items": []}'
+
+    def open_request(request, timeout):
+        assert timeout == 30
+        requested_urls.append(request.full_url)
+        return Response()
+
+    monkeypatch.setattr(client._opener, "open", open_request)
+
+    client.list_inbox(limit=12, account_id="account-1", unread_only=True, flagged_only=True, cursor="next-page")
+
+    assert len(requested_urls) == 1
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(requested_urls[0]).query)
+    assert query == {
+        "limit": ["12"],
+        "account_id": ["account-1"],
+        "is_read": ["false"],
+        "is_flagged": ["true"],
+        "cursor": ["next-page"],
+    }
 
 
 def test_session_cache_permissions_default_mode(tmp_path, monkeypatch):

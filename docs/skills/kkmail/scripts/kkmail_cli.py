@@ -391,9 +391,9 @@ class KKMailClient:
         if folder_id:
             params["folder_id"] = folder_id
         if unread_only:
-            params["unread_only"] = "true"
+            params["is_read"] = "false"
         if flagged_only:
-            params["flagged_only"] = "true"
+            params["is_flagged"] = "true"
         if cursor:
             params["cursor"] = cursor
         return self.request("GET", "/api/mail/inbox", params=params)
