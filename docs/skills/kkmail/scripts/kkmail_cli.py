@@ -426,6 +426,14 @@ def print_json(data: object) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
+def format_read_status(is_read: bool | None) -> str:
+    if is_read is True:
+        return "✓"
+    if is_read is False:
+        return "●"
+    return "-"
+
+
 def main() -> None:
     # Pre-parse --json so it works globally regardless of position
     output_json = "--json" in sys.argv
@@ -509,7 +517,8 @@ def main() -> None:
             if output_json:
                 print_json(res)
             else:
-                print(f"Total unread messages: {res.get('total_unread', 0)}")
+                total_unread = res.get("total_unread")
+                print(f"Total unread messages: {total_unread if total_unread is not None else '-'}")
                 for acc in res.get("accounts", []):
                     acc_id = acc.get("account_id")
                     unread = acc.get("unread_count", 0)
@@ -549,7 +558,7 @@ def main() -> None:
                 items = res.get("items", [])
                 print(f"Messages ({len(items)}) | Next cursor: {res.get('next_cursor') or 'None'}:")
                 for m in items:
-                    read_flag = " " if m.get("is_read") else "●"
+                    read_flag = format_read_status(m.get("is_read"))
                     star_flag = "★" if m.get("is_flagged") else " "
                     subj = m.get("subject") or "(No Subject)"
                     from_name = m.get("from_name") or m.get("from_address") or ""
@@ -564,7 +573,7 @@ def main() -> None:
                 items = res.get("items", [])
                 print(f"Search results for '{args.query}' ({len(items)}):")
                 for m in items:
-                    read_flag = " " if m.get("is_read") else "●"
+                    read_flag = format_read_status(m.get("is_read"))
                     star_flag = "★" if m.get("is_flagged") else " "
                     subj = m.get("subject") or "(No Subject)"
                     from_name = m.get("from_name") or m.get("from_address") or ""

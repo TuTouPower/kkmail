@@ -142,6 +142,59 @@ def test_list_inbox_status_filters_are_sent_as_query_params(monkeypatch):
     }
 
 
+def test_format_read_status_preserves_unknown_state():
+    assert kkmail_cli.format_read_status(True) == "✓"
+    assert kkmail_cli.format_read_status(False) == "●"
+    assert kkmail_cli.format_read_status(None) == "-"
+
+
+@pytest.mark.parametrize("command", ["list", "search"])
+def test_cli_list_and_search_render_all_read_states(command, monkeypatch, capsys):
+    messages = [
+        {"id": "read", "subject": "read subject", "from_address": "sender@example.com", "is_read": True},
+        {"id": "unread", "subject": "unread subject", "from_address": "sender@example.com", "is_read": False},
+        {"id": "unknown", "subject": "unknown subject", "from_address": "sender@example.com", "is_read": None},
+    ]
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def list_inbox(self, **_kwargs):
+            return {"items": messages, "next_cursor": None}
+
+        def search(self, **_kwargs):
+            return {"items": messages}
+
+    monkeypatch.setattr(kkmail_cli, "KKMailClient", FakeClient)
+    argv = ["kkmail_cli.py", "--api-key", "test-key", command]
+    if command == "search":
+        argv.append("subject")
+    monkeypatch.setattr(kkmail_cli.sys, "argv", argv)
+
+    kkmail_cli.main()
+
+    rows = capsys.readouterr().out.splitlines()
+    for message_id, symbol in (("read", "✓"), ("unread", "●"), ("unknown", "-")):
+        assert any(line.startswith(f"  {symbol}   [{message_id}]") for line in rows)
+
+
+def test_stats_renders_unknown_total_unread_as_dash(monkeypatch, capsys):
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def stats(self):
+            return {"total_unread": None, "accounts": []}
+
+    monkeypatch.setattr(kkmail_cli, "KKMailClient", FakeClient)
+    monkeypatch.setattr(kkmail_cli.sys, "argv", ["kkmail_cli.py", "--api-key", "test-key", "stats"])
+
+    kkmail_cli.main()
+
+    assert "Total unread messages: -" in capsys.readouterr().out
+
+
 def test_session_cache_permissions_default_mode(tmp_path, monkeypatch):
     """Default session cache directory must be 0700 and file must be 0600."""
     fake_home = tmp_path / "home"
