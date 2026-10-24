@@ -609,6 +609,8 @@ class ImapProvider:
         folder_remote_id: str,
         uidvalidity: int,
         uids: list[int],
+        *,
+        abort_on_missing_flags: bool = False,
     ) -> list[DeltaChange]:
         """FETCH FLAGS for MODSEQ-changed UIDs and emit flag deltas (not discarded)."""
         if not uids:
@@ -641,9 +643,11 @@ class ImapProvider:
                 if uid not in expected_uids or uid in seen_uids:
                     raise _ImapFlagFetchError("IMAP flag FETCH returned an unexpected UID")
                 is_read, is_flagged = _parse_fetch_flags(meta_s)
-                if is_read is None or is_flagged is None:
-                    raise _ImapFlagFetchError("IMAP flag FETCH response omitted FLAGS")
                 seen_uids.add(uid)
+                if is_read is None or is_flagged is None:
+                    if abort_on_missing_flags:
+                        raise _ImapFlagFetchError("IMAP flag FETCH response omitted FLAGS")
+                    continue
                 rid = format_imap_remote_id(folder_remote_id, int(uidvalidity), uid)
                 changes.append(
                     DeltaChange(
@@ -715,7 +719,13 @@ class ImapProvider:
                         has_more_flags = len(flag_uids) > 200
                         if batch_flag_uids:
                             changes.extend(
-                                self._fetch_flags_for_uids(c, folder_remote_id, uv, batch_flag_uids)
+                                self._fetch_flags_for_uids(
+                                    c,
+                                    folder_remote_id,
+                                    uv,
+                                    batch_flag_uids,
+                                    abort_on_missing_flags=True,
+                                )
                             )
 
                         next_cursor = dict(cursor)
