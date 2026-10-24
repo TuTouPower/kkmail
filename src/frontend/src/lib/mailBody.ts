@@ -27,6 +27,13 @@ export function sanitizeMailHtml(html: string): string {
   })
 }
 
+export type MailHtmlClassification = 'plain' | 'light' | 'dark'
+
+export type PreparedMailHtml = {
+  sanitizedHtml: string
+  classification: MailHtmlClassification
+}
+
 function parseColorBrightness(colorStr: string): 'light' | 'dark' | null {
   const s = colorStr.trim().toLowerCase()
   if (['white', '#fff', '#ffffff', '#fafafa', '#f8f9fa', '#f5f5f5', '#eeeeee', '#e0e0e0'].includes(s)) {
@@ -66,9 +73,8 @@ function parseColorBrightness(colorStr: string): 'light' | 'dark' | null {
  * Classify HTML content into 'plain' (unstyled), 'light' (explicit fixed light), or 'dark' (explicit dark).
  * Conservative approach: only treat as 'light' if explicit light background/bgcolor is present.
  */
-export function classifyMailHtml(html: string): 'plain' | 'light' | 'dark' {
-  if (!html || typeof html !== 'string') return 'plain'
-  const sanitized = sanitizeMailHtml(html)
+function classifySanitizedMailHtml(sanitized: string): MailHtmlClassification {
+  if (!sanitized) return 'plain'
   if (!/bgcolor|background|color/i.test(sanitized)) {
     return 'plain'
   }
@@ -102,11 +108,29 @@ export function classifyMailHtml(html: string): 'plain' | 'light' | 'dark' {
   return 'plain'
 }
 
+/** Sanitize HTML once and reuse it for classification and srcdoc generation. */
+export function prepareMailHtml(html: string): PreparedMailHtml {
+  const sanitizedHtml = sanitizeMailHtml(html)
+  return {
+    sanitizedHtml,
+    classification: classifySanitizedMailHtml(sanitizedHtml),
+  }
+}
+
+export function classifyMailHtml(html: string): MailHtmlClassification {
+  if (!html || typeof html !== 'string') return 'plain'
+  return prepareMailHtml(html).classification
+}
+
 export type MailSrcdocOptions = {
   /** Remote http(s) images are blocked unless explicitly true (privacy default). */
   loadRemoteImages?: boolean
   /** Active theme: 'light' or 'dark' */
   theme?: 'light' | 'dark'
+  /** Classification computed from the same sanitized HTML, when already available. */
+  classification?: MailHtmlClassification
+  /** Sanitized HTML and its classification prepared for reuse. */
+  preparedHtml?: PreparedMailHtml
 }
 
 /**
@@ -120,7 +144,8 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
   const csp = `default-src 'none'; ${imgSrc}; style-src 'unsafe-inline'; font-src https: data:`
 
   const theme = opts.theme || 'light'
-  const classification = classifyMailHtml(html)
+  const sanitizedHtml = opts.preparedHtml?.sanitizedHtml ?? sanitizeMailHtml(html)
+  const classification = opts.classification ?? opts.preparedHtml?.classification ?? classifySanitizedMailHtml(sanitizedHtml)
 
   const isDarkPlain = theme === 'dark' && classification !== 'light'
   const bg = isDarkPlain ? '#222729' : '#ffffff'
@@ -131,7 +156,7 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
   const linkStyle = `a{color:${linkColor}}`
   const imgStyle = `img{max-width:100%;height:auto}`
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>body{${bodyStyle}}${linkStyle}${imgStyle}</style></head><body>${sanitizeMailHtml(html)}</body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>body{${bodyStyle}}${linkStyle}${imgStyle}</style></head><body>${sanitizedHtml}</body></html>`
 }
 
 /** iframe sandbox flags: allow-popups and allow-popups-to-escape-sandbox for opening links in new windows. */

@@ -6,7 +6,7 @@ import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, post
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
-import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, classifyMailHtml, isHtmlBody } from '../lib/mailBody'
+import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, isHtmlBody, prepareMailHtml } from '../lib/mailBody'
 import { formatReaderDate } from '../lib/listDate'
 import { displayEmail, displayName } from '../lib/displayName'
 import { formatFileSize } from '../lib/formatSize'
@@ -95,10 +95,18 @@ const MessageReader = memo(function MessageReader() {
       }
     }
   }, [isPendingArchive, detailQuery.isLoading, syncingBody, syncError, handleSyncBody, selected?.id])
-  const mailThemeClass = useMemo(() => (html ? classifyMailHtml(body) : 'plain'), [html, body])
+  const preparedMailHtml = useMemo(() => (body ? prepareMailHtml(body) : null), [body])
+  const mailThemeClass = html ? preparedMailHtml?.classification ?? 'plain' : 'plain'
   const mailSrcdoc = useMemo(
-    () => (body ? buildMailSrcdoc(body, { loadRemoteImages, theme: resolvedTheme }) : ''),
-    [body, loadRemoteImages, resolvedTheme],
+    () => (body && preparedMailHtml
+      ? buildMailSrcdoc(body, {
+          loadRemoteImages,
+          theme: resolvedTheme,
+          classification: preparedMailHtml.classification,
+          preparedHtml: preparedMailHtml,
+        })
+      : ''),
+    [body, loadRemoteImages, preparedMailHtml, resolvedTheme],
   )
 
   if (!selected) {

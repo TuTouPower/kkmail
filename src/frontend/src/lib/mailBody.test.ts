@@ -1,12 +1,16 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import DOMPurify from 'dompurify'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   MAIL_IFRAME_SANDBOX,
   buildMailSrcdoc,
   classifyMailHtml,
   isHtmlBody,
+  prepareMailHtml,
   sanitizeMailHtml,
 } from './mailBody'
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('mail body safety and dark mode classification (AC-003)', () => {
   it('strips event handlers and scripts', () => {
@@ -93,6 +97,21 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
 
     const darkDoc = buildMailSrcdoc(darkHtml, { theme: 'dark' })
     expect(darkDoc).toContain('background:#222729')
+  })
+
+  it('reuses prepared sanitized html and classification when building srcdoc', () => {
+    const sanitize = vi.spyOn(DOMPurify, 'sanitize')
+    const prepared = prepareMailHtml('<div style="background:#fff"><script>bad()</script>safe</div>')
+    const doc = buildMailSrcdoc('', {
+      theme: 'dark',
+      classification: prepared.classification,
+      preparedHtml: prepared,
+    })
+
+    expect(sanitize).toHaveBeenCalledTimes(1)
+    expect(doc).toContain('background:#ffffff')
+    expect(doc).toContain('safe')
+    expect(doc).not.toContain('bad()')
   })
 
   it('does not relax script/meta/style sanitization rules for dark theme adaptation', () => {
