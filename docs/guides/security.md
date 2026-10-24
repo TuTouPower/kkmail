@@ -32,7 +32,7 @@
 
 - compose 与桌面版只监听 `127.0.0.1`。公网访问必须经 TLS 反向代理。
 - OAuth token 端点限定为 Google / Microsoft 的 HTTPS 白名单。
-- IMAP 默认 TLS（993），所有 provider 请求都有超时。
+- IMAP 默认 TLS（993）；`use_ssl=false` 只允许 `localhost` 或 loopback IP，并记录明文传输告警，非 loopback 明文配置会被拒绝。所有 provider 请求都有超时。
 
 ## 邮件内容
 

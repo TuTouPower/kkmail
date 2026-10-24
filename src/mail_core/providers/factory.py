@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import os
 import socket
 
@@ -20,6 +21,8 @@ from mail_core.providers.oauth import (
     urllib_json_request,
 )
 from mail_core.providers.stub_memory import MemoryProvider
+
+logger = logging.getLogger(__name__)
 
 
 def _oauth_transport(
@@ -71,6 +74,16 @@ def validate_imap_host(host: str) -> None:
         return
     if is_private_host(host):
         raise ValueError(f"imap host {host!r} is a private or loopback address (SSRF protection)")
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = host.strip().lower().strip("[]")
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def build_provider(
@@ -134,6 +147,10 @@ def build_provider(
         port = int(cfg.get("imap_port") or cfg.get("port") or (993 if use_ssl else 143))
         if not host:
             raise ValueError("imap account config missing imap_host")
+        if not use_ssl:
+            logger.warning("plaintext IMAP is configured; credentials and messages are unencrypted")
+            if not _is_loopback_host(host):
+                raise ValueError("plaintext IMAP is only allowed for loopback hosts")
         validate_imap_host(host)
         return ImapProvider(host=host, port=port, username=user, password=password, use_ssl=use_ssl, timeout=effective_timeout)
 
