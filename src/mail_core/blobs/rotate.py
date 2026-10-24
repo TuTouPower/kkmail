@@ -2,10 +2,11 @@
 
 Crash safety: each file is rewritten via fsync + atomic replace. When running with internal
 sessions (session=None), that digest's ``MessageBlob.key_version`` is committed before the
-next file. When an external session is passed, changes are flushed without committing,
-leaving transaction commit boundaries to the caller. A crash leaves at most one digest
-with file/DB temporarily divergent; the on-disk KKMS header is authoritative and the
-next rotate pass re-syncs the row.
+next file. Credential secrets are rewrapped only after all blob files reach the target
+version without errors. When an external session is passed, database changes are flushed
+without committing, leaving transaction boundaries to the caller. The result marks old
+keys safe to retire only after committed credential migration and zero remaining old-version
+blob files and credential rows.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from cryptography.hazmat.primitives import hashes
@@ -59,12 +60,53 @@ def _rewrap_credential_secrets(session: Session, keyring: Keyring, target_versio
     return rewrapped
 
 
+def _count_old_credential_secrets(session: Session, target_version: int) -> int:
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(CredentialSecret)
+            .where(CredentialSecret.key_version != target_version)
+        )
+        or 0
+    )
+
+
+def _count_old_blob_files(root: Path, target_version: int, errors: list[str]) -> int:
+    remaining = 0
+    for path in sorted(root.rglob("*.blob")):
+        try:
+            with path.open("rb") as fh:
+                version = read_key_version(fh)
+        except Exception as exc:  # noqa: BLE001
+            error = f"{path}: {type(exc).__name__}: {exc}"
+            if error not in errors:
+                errors.append(error)
+            log.warning("could not verify blob key version for %s: %s", path, exc)
+            continue
+        if version != target_version:
+            remaining += 1
+    return remaining
+
+
 @dataclass(frozen=True, slots=True)
 class RewrapResult:
     scanned: int
     rewritten: int
     already_current: int
     errors: list[str]
+    remaining_old_version_blobs: int = 0
+    remaining_old_version_credentials: int | None = None
+    credential_secrets_rewrapped: int = 0
+    credential_secrets_committed: bool = False
+
+    @property
+    def safe_to_retire_old_keys(self) -> bool:
+        return (
+            not self.errors
+            and self.remaining_old_version_blobs == 0
+            and self.remaining_old_version_credentials == 0
+            and self.credential_secrets_committed
+        )
 
 
 def rewrap_blob_file(
@@ -140,19 +182,6 @@ def rewrap_all_blobs(
                 log.warning("rewrap DB sync disabled: %s", exc)
                 db_sync = False
 
-    if db_sync:
-        try:
-            if own_session:
-                with SessionFactory() as sess:
-                    _rewrap_credential_secrets(sess, keyring, target)
-                    sess.commit()
-            else:
-                assert session is not None
-                _rewrap_credential_secrets(session, keyring, target)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"credential_secrets: {type(exc).__name__}: {exc}")
-            log.warning("rewrap credential secrets failed: %s", exc)
-
     for path in paths:
         scanned += 1
         try:
@@ -178,7 +207,46 @@ def rewrap_all_blobs(
             errors.append(f"{path}: {type(exc).__name__}: {exc}")
             log.warning("rewrap failed for %s: %s", path, exc)
 
-    return RewrapResult(scanned=scanned, rewritten=rewritten, already_current=already, errors=errors)
+    remaining_old_blobs = _count_old_blob_files(root, target, errors)
+    credential_secrets_rewrapped = 0
+    credential_secrets_committed = False
+    if db_sync and not errors and remaining_old_blobs == 0:
+        try:
+            if own_session:
+                with SessionFactory() as sess:
+                    credential_secrets_rewrapped = _rewrap_credential_secrets(sess, keyring, target)
+                    sess.commit()
+                credential_secrets_committed = True
+            else:
+                assert session is not None
+                credential_secrets_rewrapped = _rewrap_credential_secrets(session, keyring, target)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"credential_secrets: {type(exc).__name__}: {exc}")
+            log.warning("rewrap credential secrets failed: %s", exc)
+
+    remaining_old_credentials: int | None = None
+    if db_sync:
+        try:
+            if own_session:
+                with SessionFactory() as sess:
+                    remaining_old_credentials = _count_old_credential_secrets(sess, target)
+            else:
+                assert session is not None
+                remaining_old_credentials = _count_old_credential_secrets(session, target)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"credential_secrets verification: {type(exc).__name__}: {exc}")
+            log.warning("could not verify credential key versions: %s", exc)
+
+    return RewrapResult(
+        scanned=scanned,
+        rewritten=rewritten,
+        already_current=already,
+        errors=errors,
+        remaining_old_version_blobs=remaining_old_blobs,
+        remaining_old_version_credentials=remaining_old_credentials,
+        credential_secrets_rewrapped=credential_secrets_rewrapped,
+        credential_secrets_committed=credential_secrets_committed,
+    )
 
 
 def run_rewrap(*, target_version: int | None = None, limit: int | None = None) -> dict:
@@ -188,4 +256,8 @@ def run_rewrap(*, target_version: int | None = None, limit: int | None = None) -
         "rewritten": result.rewritten,
         "already_current": result.already_current,
         "errors": result.errors,
+        "remaining_old_version_blobs": result.remaining_old_version_blobs,
+        "remaining_old_version_credentials": result.remaining_old_version_credentials,
+        "credential_secrets_rewrapped": result.credential_secrets_rewrapped,
+        "safe_to_retire_old_keys": result.safe_to_retire_old_keys,
     }

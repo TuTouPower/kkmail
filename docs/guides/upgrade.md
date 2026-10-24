@@ -15,4 +15,4 @@ mail-core 部署的升级路径（Flask / SQLite / OutlookEmail v2 镜像路径�
 ## 回滚
 
 - **降级风险**：基线迁移 `20261020_0001` 与核心统一模式 `20261020_0002` 绝不可随意降级（执行 downgrade 会破坏性 DROP `messages`、`accounts` 等核心业务表）。涉及核心表结构变动的降级，必须通过导入升级前备份包进行恢复，不可依赖单向 downgrade。
-- **密钥退休**：轮换密钥后必须保留旧密钥版本条目（`MAIL_CORE_BLOB_KEYS`）。在退休旧密钥前，不仅要执行 `mail_core.blobs.rotate.run_rewrap()` 完成所有存储 blob 的重新加密，还必须确保凭据表（`credential_secrets`，其加密密钥派生自 blob key）中的记录已完成重加密迁移，否则旧密钥移除后会导致已有账户凭据无法解密。
+- **密钥退休**：轮换期间必须保留 `MAIL_CORE_BLOB_KEYS` 中全部旧密钥。`run_rewrap()` 先重加密所有 blob 文件并逐文件提交版本元数据，确认无错误且没有旧版本 blob 后才重加密 `credential_secrets`。只有结果同时满足 `errors == []`、`remaining_old_version_blobs == 0`、`remaining_old_version_credentials == 0` 和 `safe_to_retire_old_keys == true`，才可从 keyring 移除旧密钥。若 `limit` 后仍有旧版本文件、未配置数据库、凭据迁移未提交、校验失败或任一旧版本仍有引用，必须保留旧密钥，完成剩余迁移后重新检查结果。
