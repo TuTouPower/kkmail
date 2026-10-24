@@ -1775,8 +1775,9 @@ button:hover .icon,
 .settings-advanced textarea { min-height: 100px; resize: vertical; font-family: var(--font-mono); }
 .settings-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .settings-spin { animation: settings-spin 1s linear infinite; }
+.spin { animation: settings-spin 1s linear infinite; }
 @keyframes settings-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .settings-spin { animation: none; } .settings-switch span { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .settings-spin, .spin { animation: none; } .settings-switch span { transition: none; } }
 @container (max-width: 700px) {
   .settings-account-head { display: flex; gap: 12px; }
   .settings-account-head > span:nth-child(n+3) { display: none; }
