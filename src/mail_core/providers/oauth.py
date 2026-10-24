@@ -33,7 +33,7 @@ from mail_core.accounts.credentials import (
     load_json_secret,
     credential_edit,
 )
-from mail_core.providers.http import CursorInvalidError, ProviderHttpError, RateLimitedError
+from mail_core.providers.http import AmbiguousOutcomeError, CursorInvalidError, ProviderHttpError, RateLimitedError
 
 log = logging.getLogger("mail_core.providers.oauth")
 
@@ -256,7 +256,9 @@ def urllib_json_request(
     """Generic JSON HTTP for Gmail/Graph API calls (stdlib).
 
     Maps 404/410 → ``CursorInvalidError`` only for History / delta endpoints.
-    Retries transient 503/504 errors and network/TLS dropouts up to 3 times.
+    Retries transient 503/504 errors and network/TLS dropouts for GET/HEAD only.
+    Other methods are never replayed; ambiguous 5xx/transport outcomes raise
+    ``AmbiguousOutcomeError``.
     """
     import http.client
     import json
@@ -268,11 +270,13 @@ def urllib_json_request(
 
     sleep = _sleep_fn or time.sleep
     max_retries = 3
+    method_upper = method.upper()
+    retryable = method_upper in {"GET", "HEAD"}
 
     for attempt in range(1, max_retries + 2):
         if params:
             # For GET, attach query; for POST with dict body use JSON
-            if method.upper() == "GET":
+            if method_upper == "GET":
                 q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
                 target_url = f"{url}?{q}" if q else url
                 data = None
@@ -283,10 +287,10 @@ def urllib_json_request(
             target_url = url
             data = None
 
-        req = urllib.request.Request(target_url, data=data, method=method.upper())
+        req = urllib.request.Request(target_url, data=data, method=method_upper)
         for k, v in (headers or {}).items():
             req.add_header(k, v)
-        if data is not None and method.upper() != "GET":
+        if data is not None and method_upper != "GET":
             req.add_header("Content-Type", "application/json")
 
         try:
@@ -305,7 +309,11 @@ def urllib_json_request(
                 raise RateLimitedError(body or str(exc), status=429, body=body, headers=hdrs) from exc
             if exc.code in (404, 410) and _url_is_sync_cursor_endpoint(url):
                 raise CursorInvalidError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
-            if exc.code in (503, 504) and attempt <= max_retries:
+            if exc.code >= 500 and not retryable:
+                raise AmbiguousOutcomeError(
+                    f"{method_upper} outcome ambiguous after HTTP {exc.code}"
+                ) from exc
+            if exc.code in (503, 504) and retryable and attempt <= max_retries:
                 delay = attempt * 1.0
                 if hdrs.get("Retry-After"):
                     try:
@@ -321,13 +329,17 @@ def urllib_json_request(
             urllib.error.URLError,
             http.client.RemoteDisconnected,
             http.client.IncompleteRead,
-            ConnectionResetError,
+            OSError,
             ssl.SSLEOFError,
         ) as exc:
             reason = getattr(exc, "reason", str(exc))
             reason_str = str(reason).lower()
             if "certificate_verify_failed" in reason_str:
                 raise ProviderHttpError(f"transport error: {reason}", status=None) from exc
+            if not retryable:
+                raise AmbiguousOutcomeError(
+                    f"{method_upper} outcome ambiguous after transport error ({type(exc).__name__})"
+                ) from exc
             if attempt <= max_retries:
                 delay = min(attempt * 1.0, 10.0)
                 sleep(delay)

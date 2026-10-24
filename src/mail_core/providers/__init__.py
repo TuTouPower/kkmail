@@ -11,6 +11,7 @@ from typing import Any
 
 _EXPORTS: dict[str, str] = {
     "CursorInvalidError": "mail_core.providers.http",
+    "AmbiguousOutcomeError": "mail_core.providers.http",
     "ProviderHttpError": "mail_core.providers.http",
     "RateLimitedError": "mail_core.providers.http",
     "DeltaChange": "mail_core.providers.base",

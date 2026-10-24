@@ -6,12 +6,13 @@ import io
 import json
 import ssl
 import urllib.error
+import urllib.request
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
 from mail_core.providers.base import RemoteFolder
-from mail_core.providers.http import ProviderHttpError
+from mail_core.providers.http import AmbiguousOutcomeError, ProviderHttpError
 from mail_core.providers.imap import ImapProvider
 from mail_core.providers.oauth import urllib_json_request
 
@@ -194,6 +195,63 @@ def test_urllib_json_request_retries_on_503_and_succeeds(monkeypatch):
     assert len(sleeps) == 2
     assert sleeps[0] == 2.0
     assert sleeps[1] == 2.0
+
+
+def test_urllib_json_request_does_not_replay_post_after_503(monkeypatch):
+    calls = []
+    sleeps = []
+
+    class FakeHTTP503Error(urllib.error.HTTPError):
+        def __init__(self):
+            super().__init__(
+                "https://graph.microsoft.com/v1.0/me/messages/m1/move",
+                503,
+                "Service Unavailable",
+                {},
+                io.BytesIO(b""),
+            )
+
+    def fake_urlopen(req, timeout=60):
+        calls.append(req)
+        raise FakeHTTP503Error()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(AmbiguousOutcomeError, match="POST outcome ambiguous after HTTP 503") as exc_info:
+        urllib_json_request(
+            "POST",
+            "https://graph.microsoft.com/v1.0/me/messages/m1/move",
+            {"destinationId": "archive"},
+            _sleep_fn=sleeps.append,
+        )
+
+    from mail_core.sync.remote_push import is_transient_error
+
+    assert is_transient_error(exc_info.value) is False
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_urllib_json_request_does_not_replay_post_after_transport_error(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_urlopen(req, timeout=60):
+        calls.append(req)
+        raise TimeoutError("connection timed out")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(AmbiguousOutcomeError, match="POST outcome ambiguous after transport error"):
+        urllib_json_request(
+            "POST",
+            "https://graph.microsoft.com/v1.0/me/messages/m1/move",
+            {"destinationId": "archive"},
+            _sleep_fn=sleeps.append,
+        )
+
+    assert len(calls) == 1
+    assert sleeps == []
 
 
 def test_urllib_json_request_retries_on_tls_eof_and_succeeds(monkeypatch):
