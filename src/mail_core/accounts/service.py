@@ -35,7 +35,7 @@ def create_account(
     group_id: uuid.UUID | None = None,
     credentials: dict | None = None,
 ) -> Account:
-    _lock_sidebar_layout(session)
+    lock_sidebar_layout(session)
     email_norm = email.strip().lower()
     from mail_core.accounts.connection import reject_microsoft_imap, validate_connection
     if str(provider).lower() == "imap":
@@ -115,7 +115,7 @@ def update_account(
     credentials: dict | None = None,
 ) -> Account:
     if group_id is not ...:
-        _lock_sidebar_layout(session)
+        lock_sidebar_layout(session)
     acc = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
     if acc is None:
         raise LookupError("account not found")
@@ -177,7 +177,7 @@ def _update_account_group(session: Session, account: Account, group_id: uuid.UUI
 
 
 def delete_account(session: Session, account_id: uuid.UUID) -> None:
-    _lock_sidebar_layout(session)
+    lock_sidebar_layout(session)
     acc = session.get(Account, account_id)
     if acc is None:
         raise LookupError("account not found")
@@ -213,7 +213,7 @@ def enqueue_account_sync(session: Session, account_id: uuid.UUID) -> uuid.UUID:
 
 
 def create_group(session: Session, *, name: str, color: str | None = None) -> AccountGroup:
-    _lock_sidebar_layout(session)
+    lock_sidebar_layout(session)
     normalized = name.strip()
     if not normalized or len(normalized) > 128:
         raise ValueError("group name must contain 1 to 128 characters")
@@ -228,7 +228,7 @@ def create_group(session: Session, *, name: str, color: str | None = None) -> Ac
 
 
 def rename_group(session: Session, group_id: uuid.UUID, *, name: str) -> AccountGroup:
-    _lock_sidebar_layout(session)
+    lock_sidebar_layout(session)
     group = session.get(AccountGroup, group_id)
     if group is None:
         raise LookupError("group not found")
@@ -252,7 +252,7 @@ def save_sidebar_layout(
     ungrouped_account_ids: list[uuid.UUID],
     group_account_ids: dict[uuid.UUID, list[uuid.UUID]],
 ) -> None:
-    _lock_sidebar_layout(session)
+    lock_sidebar_layout(session)
     groups = list(session.scalars(select(AccountGroup).order_by(AccountGroup.id).with_for_update()).all())
     accounts = list(session.scalars(select(Account).order_by(Account.id).with_for_update()).all())
     if _sidebar_layout_revision(groups, accounts) != expected_revision:
@@ -376,7 +376,7 @@ def _apply_sidebar_layout(
 
 
 def reset_sidebar_account_order(session: Session, *, expected_revision: str) -> None:
-    _lock_sidebar_layout(session)
+    lock_sidebar_layout(session)
     groups = list(session.scalars(select(AccountGroup).order_by(AccountGroup.id).with_for_update()).all())
     accounts = list(session.scalars(select(Account).order_by(Account.id).with_for_update()).all())
     if _sidebar_layout_revision(groups, accounts) != expected_revision:
@@ -404,7 +404,7 @@ def account_ids_for_group(session: Session, group_id: uuid.UUID) -> list[uuid.UU
 
 
 def delete_group(session: Session, group_id: uuid.UUID) -> None:
-    _lock_sidebar_layout(session)
+    lock_sidebar_layout(session)
     g = session.scalar(select(AccountGroup).where(AccountGroup.id == group_id).with_for_update())
     if g is None:
         raise LookupError("group not found")
@@ -415,7 +415,7 @@ def delete_group(session: Session, group_id: uuid.UUID) -> None:
     session.flush()
 
 
-def _lock_sidebar_layout(session: Session) -> None:
+def lock_sidebar_layout(session: Session) -> None:
     session.execute(select(func.pg_advisory_xact_lock(SIDEBAR_LAYOUT_LOCK_ID)))
 
 

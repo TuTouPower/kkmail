@@ -172,10 +172,10 @@ def create_account_app(
         try:
             if oauth_flow_id:
                 from mail_core.accounts.oauth_flow import consume_oauth_flow_for_create
-                from mail_core.accounts.service import _lock_sidebar_layout
+                from mail_core.accounts.service import lock_sidebar_layout
 
                 # All OAuth saves lock organization before flow/pointer/credentials.
-                _lock_sidebar_layout(session)
+                lock_sidebar_layout(session)
                 email, config, credentials = consume_oauth_flow_for_create(
                     session,
                     flow_id=oauth_flow_id,
@@ -231,9 +231,9 @@ def update_account_app(
         try:
             if oauth_flow_id:
                 from mail_core.accounts.oauth_flow import consume_oauth_flow_for_reauthorize
-                from mail_core.accounts.service import _lock_sidebar_layout
+                from mail_core.accounts.service import lock_sidebar_layout
 
-                _lock_sidebar_layout(session)
+                lock_sidebar_layout(session)
                 acc_row = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
                 if acc_row is None:
                     raise LookupError("account not found")

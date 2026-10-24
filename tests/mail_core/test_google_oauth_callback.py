@@ -827,7 +827,7 @@ def test_reauthorization_and_normal_group_move_share_lock_order_pg(monkeypatch):
     account_locked = Event()
     sidebar_locked = Event()
     original_consume = oauth_flow.consume_oauth_flow_for_reauthorize
-    original_lock = service._lock_sidebar_layout
+    original_lock = service.lock_sidebar_layout
 
     def wrapped_consume(*args, **kwargs):
         account_locked.set()
@@ -839,7 +839,7 @@ def test_reauthorization_and_normal_group_move_share_lock_order_pg(monkeypatch):
         sidebar_locked.set()
 
     monkeypatch.setattr(oauth_flow, 'consume_oauth_flow_for_reauthorize', wrapped_consume)
-    monkeypatch.setattr(service, '_lock_sidebar_layout', wrapped_lock)
+    monkeypatch.setattr(service, 'lock_sidebar_layout', wrapped_lock)
 
     def authorize():
         try:
@@ -946,7 +946,7 @@ def test_oauth_create_and_group_reauthorization_share_lock_order_pg(monkeypatch)
     pointer_locked = Event()
     sidebar_locked = Event()
     original_create = application.create_account
-    original_sidebar = service._lock_sidebar_layout
+    original_sidebar = service.lock_sidebar_layout
 
     def create_after_consume(*args, **kwargs):
         pointer_locked.set()
@@ -958,7 +958,7 @@ def test_oauth_create_and_group_reauthorization_share_lock_order_pg(monkeypatch)
         sidebar_locked.set()
 
     monkeypatch.setattr(application,'create_account',create_after_consume)
-    monkeypatch.setattr(service,'_lock_sidebar_layout',sidebar)
+    monkeypatch.setattr(service,'lock_sidebar_layout',sidebar)
 
     def create():
         try:
