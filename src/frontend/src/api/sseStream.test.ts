@@ -266,6 +266,73 @@ describe('subscribeMailCoreStream', () => {
     unsubscribe()
   })
 
+  it('aborts and reconnects when the stream receives no bytes for two keepalive intervals', async () => {
+    const firstSignals: AbortSignal[] = []
+    let streamCancelled = false
+    let fetchCount = 0
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      fetchCount++
+      if (fetchCount > 1) {
+        return mockSseResponse(': keepalive\n\n')
+      }
+      firstSignals.push(init?.signal as AbortSignal)
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          streamCancelled = true
+        },
+      })
+      return new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    const onError = vi.fn()
+    const unsubscribe = subscribeMailCoreStream(vi.fn(), { retryIntervalMs: 1000, onError })
+
+    await vi.advanceTimersByTimeAsync(10)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(29_989)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(11)
+    expect(firstSignals[0]?.aborted).toBe(true)
+    expect(streamCancelled).toBe(true)
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'SSE stream idle timeout' }))
+
+    await vi.advanceTimersByTimeAsync(900)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    unsubscribe()
+  })
+
+  it('resets the stale timeout when keepalive bytes continue arriving', async () => {
+    const encoder = new TextEncoder()
+    let keepaliveTimer: ReturnType<typeof setInterval> | null = null
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        keepaliveTimer = setInterval(() => {
+          controller.enqueue(encoder.encode(': keepalive\n\n'))
+        }, 10_000)
+      },
+      cancel() {
+        if (keepaliveTimer !== null) clearInterval(keepaliveTimer)
+      },
+    })
+    const fetchMock = vi.fn(async () => new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const unsubscribe = subscribeMailCoreStream(vi.fn())
+
+    await vi.advanceTimersByTimeAsync(10)
+    await vi.advanceTimersByTimeAsync(50_000)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    unsubscribe()
+  })
+
   it('triggers visibility recovery callback on visibility change to visible', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       return mockSseResponse(':keepalive\n\n')

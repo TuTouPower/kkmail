@@ -98,6 +98,8 @@ export interface SseStreamOptions {
 const INITIAL_RETRY_MS = 1000
 const MAX_RETRY_MS = 30_000
 const RETRY_JITTER_RATIO = 0.2
+const SERVER_KEEPALIVE_INTERVAL_MS = 15_000
+const STALE_STREAM_TIMEOUT_MS = SERVER_KEEPALIVE_INTERVAL_MS * 2
 
 export function subscribeMailCoreStream(
   handler: (event: string, data: unknown, id: string | null) => void,
@@ -107,6 +109,7 @@ export function subscribeMailCoreStream(
   let isConnected = false
   let lastEventId: string | null = options.initialLastEventId ?? null
   let currentAbortController: AbortController | null = null
+  let currentReader: ReadableStreamDefaultReader<Uint8Array> | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   const initialRetryMs = Math.min(MAX_RETRY_MS, Math.max(1, options.retryIntervalMs ?? INITIAL_RETRY_MS))
@@ -142,6 +145,7 @@ export function subscribeMailCoreStream(
     }
     const ac = new AbortController()
     currentAbortController = ac
+    let staleConnection = false
 
     const reqHeaders: Record<string, string> = {
       Accept: 'text/event-stream',
@@ -182,6 +186,7 @@ export function subscribeMailCoreStream(
       options.onOpen?.(res)
 
       const reader = res.body.getReader()
+      currentReader = reader
       const decoder = new TextDecoder()
       const parserState: SseParserState = {
         buffer: '',
@@ -191,11 +196,24 @@ export function subscribeMailCoreStream(
         retryMs: null,
       }
 
+      let staleTimer: ReturnType<typeof setTimeout> | null = null
+      const armStaleTimer = () => {
+        if (staleTimer !== null) clearTimeout(staleTimer)
+        staleTimer = setTimeout(() => {
+          staleConnection = true
+          ac.abort()
+          void reader.cancel().catch(() => undefined)
+          options.onError?.(new Error('SSE stream idle timeout'))
+        }, STALE_STREAM_TIMEOUT_MS)
+      }
+
       try {
+        armStaleTimer()
         while (!closed && !ac.signal.aborted) {
           const { done, value } = await reader.read()
           if (done) break
-          if (value) {
+          if (value && value.byteLength > 0) {
+            armStaleTimer()
             const chunk = decoder.decode(value, { stream: true })
             parseSseChunk(chunk, parserState, (event, data, id) => {
               if (id !== null) {
@@ -209,11 +227,13 @@ export function subscribeMailCoreStream(
           }
         }
       } finally {
+        if (staleTimer !== null) clearTimeout(staleTimer)
+        if (currentReader === reader) currentReader = null
         reader.releaseLock()
       }
     } catch (err: unknown) {
-      if (closed || ac.signal.aborted) return
-      options.onError?.(err)
+      if (closed || (ac.signal.aborted && !staleConnection)) return
+      if (!staleConnection) options.onError?.(err)
     } finally {
       isConnected = false
     }
@@ -255,6 +275,10 @@ export function subscribeMailCoreStream(
     if (currentAbortController) {
       currentAbortController.abort()
       currentAbortController = null
+    }
+    if (currentReader) {
+      void currentReader.cancel().catch(() => undefined)
+      currentReader = null
     }
   }
 
