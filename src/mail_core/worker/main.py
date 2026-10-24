@@ -8,6 +8,7 @@ import signal
 import threading
 import time
 import uuid
+from typing import NamedTuple
 
 from mail_core.logging_config import configure_logging
 
@@ -17,6 +18,11 @@ log = logging.getLogger("mail_core.worker")
 _stop = False
 CLAIM_BATCH = 5
 RECLAIM_INTERVAL_S = 60.0
+
+
+class TickResult(NamedTuple):
+    claimed: int
+    handled: int
 
 
 def _handle_stop(signum: int, _frame: object) -> None:
@@ -74,7 +80,7 @@ def _reclaim_once() -> int:
             return 0
 
 
-def _tick(worker_id: str) -> int:
+def _tick(worker_id: str) -> TickResult:
     """Claim a batch, commit claims, then handle each job in its own session.
 
     One job per session avoids a failed job rolling back siblings and keeps
@@ -88,7 +94,7 @@ def _tick(worker_id: str) -> int:
         from mail_core.worker.handlers import handle_job
     except Exception as exc:  # pragma: no cover
         log.error("worker degraded: tick imports failed (%s); skipping claim batch", exc)
-        return 0
+        return TickResult(claimed=0, handled=0)
 
     Session = get_session_factory()
     claim_tokens: list[tuple] = []
@@ -149,14 +155,19 @@ def _tick(worker_id: str) -> int:
                 except Exception:
                     session.rollback()
                     log.exception("fail_job after error also failed for %s", job_id)
-    return handled
+    return TickResult(claimed=len(claim_tokens), handled=handled)
 
 
-def next_poll_delay(handled: int, previous: float, *, base: float, max_idle: float) -> float:
-    """Deep queue (full batch) → poll again immediately; idle → exponential back-off."""
-    if handled >= CLAIM_BATCH:
-        return 0.0
-    if handled > 0:
+def next_poll_delay(
+    handled: int,
+    previous: float,
+    *,
+    base: float,
+    max_idle: float,
+    claimed: int = 0,
+) -> float:
+    """Poll at the base interval after work; back off only after empty claims."""
+    if claimed > 0 or handled > 0:
         return base
     return min(max_idle, max(base, previous * 2 if previous else base))
 
@@ -189,16 +200,22 @@ def run(poll_interval_s: float | None = None) -> None:
 
                 log.error("reclaim sweep failed: %s", safe_error(exc))
 
-        n = 0
+        tick_result = TickResult(claimed=0, handled=0)
         try:
-            n = _tick(worker_id)
-            if n:
-                log.info("handled %s job(s)", n)
+            tick_result = _tick(worker_id)
+            if tick_result.handled:
+                log.info("handled %s job(s)", tick_result.handled)
         except Exception as exc:
             from mail_core.security.redact import safe_error
 
             log.error("tick failed: %s", safe_error(exc))
-        sleep_s = next_poll_delay(n, sleep_s, base=interval, max_idle=max_idle)
+        sleep_s = next_poll_delay(
+            tick_result.handled,
+            sleep_s,
+            base=interval,
+            max_idle=max_idle,
+            claimed=tick_result.claimed,
+        )
         if sleep_s:
             time.sleep(sleep_s)
     log.info("worker loop stopped")

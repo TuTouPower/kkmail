@@ -56,7 +56,7 @@ def test_run_reclaims_on_a_separate_time_cadence(monkeypatch):
         ticks += 1
         if ticks == 4:
             worker_main.request_stop()
-        return worker_main.CLAIM_BATCH
+        return worker_main.TickResult(claimed=worker_main.CLAIM_BATCH, handled=worker_main.CLAIM_BATCH)
 
     monkeypatch.setattr(worker_main, "_tick", tick)
     thread = threading.Thread(target=worker_main.run, kwargs={"poll_interval_s": 0.01}, daemon=True)
@@ -66,6 +66,31 @@ def test_run_reclaims_on_a_separate_time_cadence(monkeypatch):
     assert not thread.is_alive()
     assert ticks == 4
     assert reclaim.call_count == 2
+
+
+def test_run_uses_base_poll_after_claimed_jobs_fail(monkeypatch):
+    delays = []
+
+    def stop_after_sleep(delay):
+        delays.append(delay)
+        worker_main.request_stop()
+
+    monkeypatch.setattr(
+        worker_main,
+        "time",
+        SimpleNamespace(monotonic=lambda: 0.0, sleep=stop_after_sleep),
+    )
+    monkeypatch.setattr("mail_core.blobs.crypto.load_keyring_from_env", lambda: {})
+    monkeypatch.setattr(worker_main, "_reclaim_once", lambda: 0)
+    monkeypatch.setattr(
+        worker_main,
+        "_tick",
+        lambda _worker_id: worker_main.TickResult(claimed=3, handled=0),
+    )
+
+    worker_main.run(poll_interval_s=2.0)
+
+    assert delays == [2.0]
 
 
 @pytestmark_db
@@ -95,8 +120,9 @@ def test_tick_reclaims_stale_and_isolates_job_sessions():
 
     worker_main._reclaim_once()
     with patch("mail_core.realtime.notify.try_notify_outbox"):
-        handled = worker_main._tick("test-worker-iso")
-    assert handled >= 2
+        result = worker_main._tick("test-worker-iso")
+    assert result.claimed >= 2
+    assert result.handled >= 2
 
     with Session() as session:
         stale_row = session.get(WorkerJob, stale_id)
@@ -288,8 +314,9 @@ def test_tick_failed_job_not_counted_as_handled():
         patch("mail_core.sync.jobs.claim_jobs", return_value=[job]),
         patch("mail_core.worker.handlers.handle_job", return_value=False),
     ):
-        n = worker_main._tick("w-fail-count")
-    assert n == 0
+        result = worker_main._tick("w-fail-count")
+    assert result.claimed == 1
+    assert result.handled == 0
 
 
 def test_handle_job_sanitizes_error_in_update_account_sync_status():
