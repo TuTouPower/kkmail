@@ -43,6 +43,10 @@ def test_update_public_settings_validates_values():
     with pytest.raises(ValueError, match="positive"):
         update_public_settings(session, {"mail_fetch_timeout_seconds": "-5"})
 
+    for value in ("nan", "inf", "-inf", "600.1", "0"):
+        with pytest.raises(ValueError):
+            update_public_settings(session, {"mail_fetch_timeout_seconds": value})
+
     # Invalid timezone
     with pytest.raises(ValueError, match="invalid IANA timezone"):
         update_public_settings(session, {"app_timezone": "Invalid/Timezone_Name"})
@@ -54,6 +58,13 @@ def test_get_fetch_timeout_seconds():
     assert get_fetch_timeout_seconds(session) == 45.5
 
     session.get.return_value = None
+    assert get_fetch_timeout_seconds(session, default=30.0) == 30.0
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "600.1", "0", "-5", "invalid"])
+def test_get_fetch_timeout_seconds_rejects_invalid_persisted_values(value):
+    session = MagicMock()
+    session.get.return_value = AppSetting(key="mail_fetch_timeout_seconds", value=value)
     assert get_fetch_timeout_seconds(session, default=30.0) == 30.0
 
 

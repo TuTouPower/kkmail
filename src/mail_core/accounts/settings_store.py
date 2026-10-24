@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import zoneinfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ PUBLIC_SETTING_KEYS = frozenset(
         "mail_fetch_timeout_seconds",
     }
 )
+MAX_FETCH_TIMEOUT_SECONDS = 600.0
 
 # Never return these even if somehow present in the table.
 SECRET_SETTING_PREFIXES = (
@@ -53,17 +55,20 @@ def get_app_setting(session: Session, key: str, default: str | None = None) -> s
     return row.value
 
 
+def _parse_fetch_timeout_seconds(value: str | None) -> float | None:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(seconds) or seconds <= 0 or seconds > MAX_FETCH_TIMEOUT_SECONDS:
+        return None
+    return seconds
+
+
 def get_fetch_timeout_seconds(session: Session, default: float = 30.0) -> float:
     """Effective mail fetch timeout in seconds for provider connections."""
-    val = get_app_setting(session, "mail_fetch_timeout_seconds")
-    if val:
-        try:
-            sec = float(val)
-            if sec > 0:
-                return sec
-        except ValueError:
-            pass
-    return default
+    seconds = _parse_fetch_timeout_seconds(get_app_setting(session, "mail_fetch_timeout_seconds"))
+    return seconds if seconds is not None else default
 
 
 def update_public_settings(session: Session, patch: dict[str, str]) -> dict[str, str]:
@@ -73,12 +78,10 @@ def update_public_settings(session: Session, patch: dict[str, str]) -> dict[str,
         raise ValueError(f"unsupported setting keys: {', '.join(rejected)}")
 
     if "mail_fetch_timeout_seconds" in patch:
-        try:
-            timeout_val = float(patch["mail_fetch_timeout_seconds"])
-            if timeout_val <= 0:
-                raise ValueError("mail_fetch_timeout_seconds must be positive")
-        except (ValueError, TypeError):
-            raise ValueError("mail_fetch_timeout_seconds must be a positive number")
+        if _parse_fetch_timeout_seconds(patch["mail_fetch_timeout_seconds"]) is None:
+            raise ValueError(
+                "mail_fetch_timeout_seconds must be a positive number, finite, and no greater than 600 seconds"
+            )
 
     if "app_timezone" in patch:
         tz_name = str(patch["app_timezone"]).strip()
