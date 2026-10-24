@@ -69,8 +69,8 @@ services:
       MAIL_CORE_SKIP_MIGRATIONS: "${MAIL_CORE_SKIP_MIGRATIONS:-1}"
       MAIL_CORE_EMBEDDED_WORKER: "${MAIL_CORE_EMBEDDED_WORKER:-0}"
     ports:
-      # Host bind loopback only — do not publish the API on 0.0.0.0.
-      - "127.0.0.1:37281:8000"
+      # Defaults to loopback. Set MAIL_CORE_HOST_BIND=0.0.0.0 for LAN hostname access.
+      - "${MAIL_CORE_HOST_BIND:-127.0.0.1}:37281:8000"
     volumes:
       - kkmail_mail_core_blobs:/var/lib/kkmail/blobs
     depends_on:
