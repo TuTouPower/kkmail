@@ -271,6 +271,8 @@ export function setCachedReadState(keys: Iterable<string>, isRead: boolean) {
 }
 
 /** Set read status of messages with an optimistic cache update; reverts failures. */
+const READ_MUTATION_BATCH_SIZE = 50
+
 export async function setReadOptimistic(items: MailItem[], nextRead: boolean) {
   const targets = items.filter((m) => m && typeof m.id === 'string' && m.id.trim()).map((item) => {
     const cached = findCachedMail(mailKey(item))
@@ -278,16 +280,24 @@ export async function setReadOptimistic(items: MailItem[], nextRead: boolean) {
   }).filter((m) => m.is_read !== nextRead)
   if (!targets.length) return
   setCachedReadState(targets.map(mailKey), nextRead)
-  const results = await Promise.allSettled(targets.map((m) => postMailCoreMessageRead(m.id, nextRead)))
-  const failed: string[] = []
-  results.forEach((r, i) => {
-    if (r.status === 'rejected') {
-      patchCachedMail([mailKey(targets[i])], { is_read: targets[i].is_read })
-      const reason = r.reason as { message?: unknown } | undefined
-      failed.push(typeof reason?.message === 'string' ? reason.message : String(r.reason))
+  for (let start = 0; start < targets.length; start += READ_MUTATION_BATCH_SIZE) {
+    const batch = targets.slice(start, start + READ_MUTATION_BATCH_SIZE)
+    const results = await Promise.allSettled(batch.map((m) => postMailCoreMessageRead(m.id, nextRead)))
+    const failed: string[] = []
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        patchCachedMail([mailKey(batch[index])], { is_read: batch[index].is_read })
+        const reason = result.reason as { message?: unknown } | undefined
+        failed.push(typeof reason?.message === 'string' ? reason.message : String(result.reason))
+      }
+    })
+    if (failed.length) {
+      for (const unprocessed of targets.slice(start + batch.length)) {
+        patchCachedMail([mailKey(unprocessed)], { is_read: unprocessed.is_read })
+      }
+      throw new Error(failed.join('；'))
     }
-  })
-  if (failed.length) throw new Error(failed.join('；'))
+  }
 }
 
 /** Mark messages read with an optimistic cache update; reverts failures. */

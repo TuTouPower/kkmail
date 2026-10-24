@@ -110,6 +110,42 @@ describe('optimistic updates', () => {
     expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_read).toBe(true)
   })
 
+  it('bounds read mutation concurrency and stops after a failed batch', async () => {
+    const items = Array.from({ length: 101 }, (_, index) => item({ id: `uuid-${index}` }))
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), items)
+    const mock = stubFetch((url) =>
+      url.endsWith('/messages/uuid-0/read') ? json(503, { detail: 'stop' }) : json(200, { is_read: true }),
+    )
+
+    await expect(markReadOptimistic(items)).rejects.toThrow('stop')
+
+    const readRequests = mock.mock.calls.filter(([url]) => String(url).includes('/messages/') && String(url).endsWith('/read'))
+    expect(readRequests).toHaveLength(50)
+    const cached = queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS)) ?? []
+    expect(cached.find((message) => message.id === 'uuid-0')?.is_read).toBe(false)
+    expect(cached.find((message) => message.id === 'uuid-1')?.is_read).toBe(true)
+    expect(cached.find((message) => message.id === 'uuid-50')?.is_read).toBe(false)
+  })
+
+  it('never runs more than 50 read mutations concurrently', async () => {
+    const items = Array.from({ length: 101 }, (_, index) => item({ id: `uuid-${index}` }))
+    let active = 0
+    let maxActive = 0
+    const mock = stubFetch(async () => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      active -= 1
+      return json(200, { is_read: true })
+    })
+
+    await markReadOptimistic(items)
+
+    const readRequests = mock.mock.calls.filter(([url]) => String(url).includes('/messages/') && String(url).endsWith('/read'))
+    expect(readRequests).toHaveLength(101)
+    expect(maxActive).toBeLessThanOrEqual(50)
+  })
+
   it('flagOptimistic patches every cached list and reverts on failure', async () => {
     queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item()])
     queryClient.setQueryData(queryKeys.search('s', ALL_ACCOUNTS), [item()])
