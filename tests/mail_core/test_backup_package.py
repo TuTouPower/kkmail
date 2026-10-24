@@ -71,6 +71,46 @@ def test_create_backup_rejects_key_equal_to_blob_key(tmp_path, monkeypatch):
     assert not (tmp_path / "same-key-backup").exists()
 
 
+def test_restore_plain_backup_uses_package_directory_as_restore_tree(tmp_path, monkeypatch):
+    blobs = tmp_path / "source-blobs"
+    blob = blobs / "aa" / "bb" / "message.blob"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"encrypted blob payload")
+
+    package_dir = tmp_path / "plain-backup"
+    create_backup_package(
+        package_dir,
+        include_blobs=True,
+        database_url_override="postgresql://backup:pw@127.0.0.1:5432/source",
+        blobs_dir=blobs,
+        encrypt=False,
+        allow_dump_stub=True,
+    )
+    assert (package_dir / "postgres.dump").is_file()
+    assert (package_dir / "blobs.tar").is_file()
+    assert not (package_dir / "backup.kkbak").exists()
+
+    monkeypatch.setattr(backup_package.shutil, "which", lambda name: "/fake/pg_restore" if name == "pg_restore" else None)
+    monkeypatch.setattr(
+        backup_package.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b""),
+    )
+    target_blobs = tmp_path / "restored-blobs"
+    result = restore_backup_package(
+        package_dir,
+        target_database_url="postgresql://restore:pw@127.0.0.1:5432/target",
+        target_blobs_dir=target_blobs,
+        source_database_url="postgresql://backup:pw@127.0.0.1:5432/source",
+        allow_stub=True,
+    )
+
+    assert result.database_restored
+    assert result.blobs_restored == 1
+    assert (target_blobs / "aa" / "bb" / "message.blob").read_bytes() == b"encrypted blob payload"
+    assert package_dir.is_dir(), "restore must preserve the source plain package"
+
+
 def test_restore_sealed_backup_reads_manifest_filename_case(tmp_path, monkeypatch):
     assert backup_package._MANIFEST_FILENAME == "MANIFEST.json"
 

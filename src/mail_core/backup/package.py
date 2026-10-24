@@ -801,18 +801,13 @@ def restore_backup_package(
             plain_tar = work_dir / "plain.tar.gz"
             keyring_to_use = keyring or load_backup_keyring()
             decrypt_file(kkbak, plain_tar, keyring=keyring_to_use)
-            tar_to_extract = plain_tar
+            extract_dir = work_dir / "extracted"
+            _make_private_dir(extract_dir)
+            if not _extract_tar_file(plain_tar, extract_dir, errors):
+                raise RuntimeError(f"tar extraction failed: {errors}")
         else:
-            # Check for plain tarball
-            candidates = list(pkg_dir.glob("*.tar.gz"))
-            if not candidates:
-                raise RuntimeError("no backup archive file found in package directory")
-            tar_to_extract = candidates[0]
-
-        extract_dir = work_dir / "extracted"
-        _make_private_dir(extract_dir)
-        if not _extract_tar_file(tar_to_extract, extract_dir, errors):
-            raise RuntimeError(f"tar extraction failed: {errors}")
+            # Plain packages already contain the manifest and members at their root.
+            extract_dir = pkg_dir
 
         man_path = extract_dir / _MANIFEST_FILENAME
         if not man_path.is_file():
