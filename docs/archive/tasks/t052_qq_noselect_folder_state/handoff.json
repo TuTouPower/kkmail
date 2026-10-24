@@ -1,0 +1,28 @@
+{
+  "tid": "t052",
+  "attempt": 1,
+  "execution_id": "33f74c887d7c4324a55225bc3dc6d2c0",
+  "status": "done",
+  "branch": "t052_qq_noselect_folder_state",
+  "base_sha": "7c35f2e63bd4edac11ad5264acb31c2464dff1a0",
+  "tests": "Backend: 505 passed; targeted noselect tests: 2 passed. Frontend: 276 passed; OpenAPI checks, TypeScript, production build and lint passed. Desktop unit and packaged tests passed. Template contract suite: 149 passed, 1 skipped.",
+  "blackbox": "UI E2E: 16 passed. Full-stack E2E: 8 passed.",
+  "review": "Code and test review PASS for final implementation commit d626852; delta/reconcile pause guards and post-job checkpoint assertion closed prior findings; lifecycle worktree scope f6cdab3a7590865a.",
+  "ac_evidence": {
+    "AC-001": [
+      "tests/mail_core/test_imap_noselect_and_transient_retry.py::test_imap_folder_catalog_keeps_noselect_parent_as_nonselectable_node"
+    ],
+    "AC-002": [
+      "tests/mail_core/test_sync_retry_queue.py::test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job"
+    ],
+    "AC-003": [
+      "tests/mail_core/test_sync_retry_queue.py::test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job",
+      "src/frontend/src/components/Sidebar.test.tsx::shows a noselect parent as a disabled container without an unknown-count badge"
+    ],
+    "AC-004": [
+      "tests/mail_core/test_sync_retry_queue.py::test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}
