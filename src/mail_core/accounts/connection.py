@@ -65,7 +65,12 @@ def validate_connection(email: str, provider: str, config: dict, credentials: di
     if not isinstance(values, dict):
         raise ValueError('credentials: must be an object')
     for key, val in values.items():
-        if val is not None and not isinstance(val, str):
+        if val is None:
+            continue
+        if key == 'expires_at':
+            if isinstance(val, bool) or not isinstance(val, (int, float, str)):
+                raise ValueError('credentials.expires_at: must be a number')
+        elif key in CREDENTIAL_FIELDS.get(provider, set()) and not isinstance(val, str):
             raise ValueError(f'credentials.{key}: must be a string')
     if provider == "imap" and "refresh_token" in values:
         raise ValueError("credentials.refresh_token: unsupported field")

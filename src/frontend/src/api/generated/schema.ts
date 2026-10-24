@@ -22,6 +22,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/oauth/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Oauth Active */
+        get: operations["api_oauth_active_api_accounts_oauth_active_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/oauth/callback/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Oauth Callback */
+        get: operations["api_oauth_callback_api_accounts_oauth_callback__provider__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/oauth/flows/{flow_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Oauth Flow Status */
+        get: operations["api_oauth_flow_status_api_accounts_oauth_flows__flow_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/oauth/flows/{flow_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Oauth Flow Cancel */
+        post: operations["api_oauth_flow_cancel_api_accounts_oauth_flows__flow_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/oauth/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Oauth Metadata */
+        get: operations["api_oauth_metadata_api_accounts_oauth_metadata_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/oauth/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Oauth Start */
+        post: operations["api_oauth_start_api_accounts_oauth_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/sync-all": {
         parameters: {
             query?: never;
@@ -532,10 +634,15 @@ export interface components {
             } | null;
             /** Display Name */
             display_name?: string | null;
-            /** Email */
+            /**
+             * Email
+             * @default
+             */
             email: string;
             /** Group Id */
             group_id?: string | null;
+            /** Oauth Flow Id */
+            oauth_flow_id?: string | null;
             /**
              * Provider
              * @enum {string}
@@ -638,6 +745,8 @@ export interface components {
             display_name?: string | null;
             /** Group Id */
             group_id?: string | null;
+            /** Oauth Flow Id */
+            oauth_flow_id?: string | null;
             /** Sync Enabled */
             sync_enabled?: boolean | null;
         };
@@ -898,6 +1007,133 @@ export interface components {
              */
             success: boolean;
         };
+        /** OAuthActiveOut */
+        OAuthActiveOut: {
+            flow?: components["schemas"]["OAuthFlowStatusOut"] | null;
+        };
+        /** OAuthCancelOut */
+        OAuthCancelOut: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /**
+             * Status
+             * @default cancelled
+             */
+            status: string;
+        };
+        /** OAuthFlowStatusOut */
+        OAuthFlowStatusOut: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Client Id */
+            client_id: string;
+            /**
+             * Client Type
+             * @enum {string}
+             */
+            client_type: "public" | "confidential";
+            /** Error */
+            error?: string | null;
+            /** Expires At */
+            expires_at: number;
+            /** Flow Id */
+            flow_id: string;
+            /** Group Id */
+            group_id?: string | null;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "create" | "reauthorize";
+            /** Provider */
+            provider: string;
+            /** Redirect Uri */
+            redirect_uri: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "authorized" | "failed" | "expired" | "cancelled" | "consumed";
+            /** Verified Email */
+            verified_email?: string | null;
+        };
+        /** OAuthMetadataOut */
+        OAuthMetadataOut: {
+            /** Callback Path */
+            callback_path: string;
+            /**
+             * Default Client Type
+             * @enum {string}
+             */
+            default_client_type: "public" | "confidential";
+            /** Notice */
+            notice?: string | null;
+            /** Origin Configured */
+            origin_configured: boolean;
+            /** Provider */
+            provider: string;
+            /** Redirect Uri */
+            redirect_uri?: string | null;
+            /**
+             * Runtime Mode
+             * @enum {string}
+             */
+            runtime_mode: "desktop" | "web";
+        };
+        /** OAuthStartIn */
+        OAuthStartIn: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Client Secret */
+            client_secret?: string | null;
+            /** Client Type */
+            client_type?: ("public" | "confidential") | null;
+            /** Email Hint */
+            email_hint?: string | null;
+            /** Group Id */
+            group_id?: string | null;
+            /**
+             * Intent
+             * @default create
+             * @enum {string}
+             */
+            intent: "create" | "reauthorize";
+            /**
+             * Provider
+             * @default google
+             */
+            provider: string;
+        };
+        /** OAuthStartOut */
+        OAuthStartOut: {
+            /** Auth Url */
+            auth_url: string;
+            /**
+             * Client Type
+             * @enum {string}
+             */
+            client_type: "public" | "confidential";
+            /** Expires At */
+            expires_at: number;
+            /** Flow Id */
+            flow_id: string;
+            /**
+             * Intent
+             * @enum {string}
+             */
+            intent: "create" | "reauthorize";
+            /** Provider */
+            provider: string;
+            /** Redirect Uri */
+            redirect_uri: string;
+            /** Status */
+            status: string;
+        };
         /** OkOut */
         OkOut: {
             /**
@@ -1106,6 +1342,188 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_oauth_active_api_accounts_oauth_active_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthActiveOut"];
+                };
+            };
+        };
+    };
+    api_oauth_callback_api_accounts_oauth_callback__provider__get: {
+        parameters: {
+            query?: {
+                state?: string | null;
+                code?: string | null;
+                error?: string | null;
+                error_description?: string | null;
+            };
+            header?: never;
+            path: {
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_oauth_flow_status_api_accounts_oauth_flows__flow_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                flow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthFlowStatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_oauth_flow_cancel_api_accounts_oauth_flows__flow_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                flow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthCancelOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_oauth_metadata_api_accounts_oauth_metadata_get: {
+        parameters: {
+            query?: {
+                provider?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthMetadataOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_oauth_start_api_accounts_oauth_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthStartIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthStartOut"];
                 };
             };
             /** @description Validation Error */

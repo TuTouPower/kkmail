@@ -19,6 +19,7 @@ from mail_core.api.accounts import router as accounts_router
 from mail_core.api.auth_routes import router as auth_router
 from mail_core.api.deps import require_auth
 from mail_core.api.mail import router as mail_router
+from mail_core.api.oauth_routes import router as oauth_router
 from mail_core.api.sse import router as sse_router
 
 
@@ -95,7 +96,7 @@ async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
@@ -118,6 +119,7 @@ async def trace_id_middleware(request: Request, call_next):
 
 
 app.include_router(auth_router)
+app.include_router(oauth_router)
 app.include_router(accounts_router, dependencies=[Depends(require_auth)])
 app.include_router(sse_router, prefix="/api", tags=["realtime"], dependencies=[Depends(require_auth)])
 app.include_router(mail_router, dependencies=[Depends(require_auth)])

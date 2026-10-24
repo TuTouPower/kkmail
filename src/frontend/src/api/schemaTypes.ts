@@ -36,6 +36,12 @@ export type AccountFolderStatsItemOut = schemas['AccountFolderStatsItemOut']
 export type AccountInboxStatsOut = schemas['AccountInboxStatsOut']
 export type GlobalStatsOut = schemas['GlobalStatsOut']
 export type SidebarLayoutSnapshotOut = schemas['SidebarLayoutSnapshotOut']
+export type OAuthMetadataOut = schemas['OAuthMetadataOut']
+export type OAuthStartIn = schemas['OAuthStartIn']
+export type OAuthStartOut = schemas['OAuthStartOut']
+export type OAuthFlowStatusOut = schemas['OAuthFlowStatusOut']
+export type OAuthActiveOut = schemas['OAuthActiveOut']
+export type OAuthCancelOut = schemas['OAuthCancelOut']
 
 /** Previous hand-written names → OpenAPI schemas (API layer). */
 export type MailCoreMessage = MessageOut

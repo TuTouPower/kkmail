@@ -8,7 +8,7 @@ import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from mail_core.security.redact import redact
+from mail_core.security.redact import RedactingFilter, redact
 
 _trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="")
 
@@ -66,3 +66,6 @@ def configure_logging(
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
     root.addHandler(handler)
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, RedactingFilter) for f in access_logger.filters):
+        access_logger.addFilter(RedactingFilter())
