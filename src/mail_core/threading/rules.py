@@ -6,7 +6,7 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -199,7 +199,15 @@ def assign_thread_for_message(
     elif provider_thread_key and not thread.provider_thread_key:
         thread.provider_thread_key = provider_thread_key
 
+    previous_thread_id = message.thread_id
     message.thread_id = thread.id
+    if previous_thread_id is not None and previous_thread_id != thread.id:
+        session.execute(
+            delete(ThreadMessage).where(
+                ThreadMessage.message_id == message.id,
+                ThreadMessage.thread_id != thread.id,
+            )
+        )
     if message.sort_time is not None and (thread.sort_time is None or message.sort_time >= thread.sort_time):
         thread.sort_time = message.sort_time
     existing = session.scalar(

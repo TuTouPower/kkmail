@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from mail_core.accounts import create_account
 from mail_core.db.session import get_session_factory
-from mail_core.mail.storage import Message, ThreadMessage
+from mail_core.mail.storage import Message, Thread, ThreadMessage
 from mail_core.threading import (
     assign_thread_for_message,
     extract_message_ids,
@@ -130,6 +130,49 @@ def test_provider_thread_key():
         assert r1.thread_id == r2.thread_id
         assert r2.linked_via == "provider_key"
         assert r2.created is False
+        session.commit()
+
+
+@_requires_db
+def test_reassigning_message_removes_old_thread_membership():
+    Session = get_session_factory()
+    now = datetime.now(timezone.utc)
+    with Session() as session:
+        account = create_account(
+            session, email=f"th-reassign-{uuid.uuid4().hex[:8]}@ex.com", provider="gmail"
+        )
+        old_thread = Thread(account_id=account.id, subject_norm="old", sort_time=now)
+        new_thread = Thread(
+            account_id=account.id,
+            provider_thread_key="new-provider-thread",
+            subject_norm="new",
+            sort_time=now,
+        )
+        session.add_all([old_thread, new_thread])
+        session.flush()
+
+        message = Message(
+            account_id=account.id,
+            remote_id="reassigned",
+            subject="Message",
+            from_address="a@ex.com",
+            sort_time=now,
+            thread_id=old_thread.id,
+        )
+        session.add(message)
+        session.flush()
+        session.add(ThreadMessage(thread_id=old_thread.id, message_id=message.id))
+        session.flush()
+
+        result = assign_thread_for_message(
+            session, message=message, provider_thread_key="new-provider-thread"
+        )
+
+        assert result.thread_id == new_thread.id
+        memberships = session.scalars(
+            select(ThreadMessage.thread_id).where(ThreadMessage.message_id == message.id)
+        ).all()
+        assert memberships == [new_thread.id]
         session.commit()
 
 
