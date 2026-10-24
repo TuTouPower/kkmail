@@ -61,6 +61,8 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
 {
   const parentEnv = {
     MAIL_CORE_HOST: '192.168.1.100', // launcher baseExtras will override this
+    MAIL_CORE_PUBLIC_ORIGIN: 'https://mail.example.test',
+    MAIL_CORE_ALLOW_LOOPBACK_OAUTH_ORIGIN: '1',
     MAIL_CORE_LOG_LEVEL: 'DEBUG',     // audited key: should pass through
     MAIL_CORE_SECRET_KEY: 'custom-secret', // audited key: should pass through
     MAIL_CORE_RANDOM_UNAUDITED: 'forbidden', // not audited: must be dropped
@@ -76,6 +78,10 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
   assert.strictEqual(sidecarExtras.MAIL_CORE_HOST, '127.0.0.1', 'baseExtras must win')
   assert.strictEqual(sidecarExtras.MAIL_CORE_PORT, '18765')
   assert.strictEqual(sidecarExtras.KKMAIL_SIDECAR, '1')
+  assert.strictEqual(sidecarExtras.MAIL_CORE_PUBLIC_ORIGIN, 'https://mail.example.test')
+  assert.strictEqual(sidecarExtras.MAIL_CORE_ALLOW_LOOPBACK_OAUTH_ORIGIN, '1')
+  assert.ok(SIDECAR_CONFIG_KEYS.has('MAIL_CORE_PUBLIC_ORIGIN'))
+  assert.ok(SIDECAR_CONFIG_KEYS.has('MAIL_CORE_ALLOW_LOOPBACK_OAUTH_ORIGIN'))
   assert.strictEqual(sidecarExtras.MAIL_CORE_LOG_LEVEL, 'DEBUG')
   assert.strictEqual(sidecarExtras.MAIL_CORE_SECRET_KEY, 'custom-secret')
   assert.strictEqual(sidecarExtras.MAIL_CORE_RANDOM_UNAUDITED, undefined)

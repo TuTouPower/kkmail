@@ -40,8 +40,8 @@
             "title": "Display Name"
           },
           "email": {
+            "default": "",
             "maxLength": 320,
-            "minLength": 3,
             "title": "Email",
             "type": "string"
           },
@@ -57,6 +57,18 @@
             ],
             "title": "Group Id"
           },
+          "oauth_flow_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oauth Flow Id"
+          },
           "provider": {
             "enum": [
               "imap",
@@ -70,7 +82,6 @@
           }
         },
         "required": [
-          "email",
           "provider"
         ],
         "title": "AccountCreateIn",
@@ -410,6 +421,18 @@
               }
             ],
             "title": "Group Id"
+          },
+          "oauth_flow_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oauth Flow Id"
           },
           "sync_enabled": {
             "anyOf": [
@@ -1286,6 +1309,361 @@
         "title": "MutationOut",
         "type": "object"
       },
+      "OAuthActiveOut": {
+        "properties": {
+          "flow": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OAuthFlowStatusOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "OAuthActiveOut",
+        "type": "object"
+      },
+      "OAuthCancelOut": {
+        "properties": {
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "status": {
+            "default": "cancelled",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "OAuthCancelOut",
+        "type": "object"
+      },
+      "OAuthFlowStatusOut": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "client_id": {
+            "title": "Client Id",
+            "type": "string"
+          },
+          "client_type": {
+            "enum": [
+              "public",
+              "confidential"
+            ],
+            "title": "Client Type",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "flow_id": {
+            "title": "Flow Id",
+            "type": "string"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "intent": {
+            "enum": [
+              "create",
+              "reauthorize"
+            ],
+            "title": "Intent",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "redirect_uri": {
+            "title": "Redirect Uri",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "authorized",
+              "failed",
+              "expired",
+              "cancelled",
+              "consumed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "verified_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified Email"
+          }
+        },
+        "required": [
+          "flow_id",
+          "provider",
+          "intent",
+          "client_type",
+          "client_id",
+          "status",
+          "redirect_uri",
+          "expires_at"
+        ],
+        "title": "OAuthFlowStatusOut",
+        "type": "object"
+      },
+      "OAuthMetadataOut": {
+        "properties": {
+          "callback_path": {
+            "title": "Callback Path",
+            "type": "string"
+          },
+          "default_client_type": {
+            "enum": [
+              "public",
+              "confidential"
+            ],
+            "title": "Default Client Type",
+            "type": "string"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "origin_configured": {
+            "title": "Origin Configured",
+            "type": "boolean"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "redirect_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redirect Uri"
+          },
+          "runtime_mode": {
+            "enum": [
+              "desktop",
+              "web"
+            ],
+            "title": "Runtime Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "runtime_mode",
+          "default_client_type",
+          "callback_path",
+          "origin_configured"
+        ],
+        "title": "OAuthMetadataOut",
+        "type": "object"
+      },
+      "OAuthStartIn": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Secret"
+          },
+          "client_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "public",
+                  "confidential"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Type"
+          },
+          "email_hint": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Hint"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "intent": {
+            "default": "create",
+            "enum": [
+              "create",
+              "reauthorize"
+            ],
+            "title": "Intent",
+            "type": "string"
+          },
+          "provider": {
+            "default": "google",
+            "maxLength": 32,
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "title": "OAuthStartIn",
+        "type": "object"
+      },
+      "OAuthStartOut": {
+        "properties": {
+          "auth_url": {
+            "title": "Auth Url",
+            "type": "string"
+          },
+          "client_type": {
+            "enum": [
+              "public",
+              "confidential"
+            ],
+            "title": "Client Type",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "flow_id": {
+            "title": "Flow Id",
+            "type": "string"
+          },
+          "intent": {
+            "enum": [
+              "create",
+              "reauthorize"
+            ],
+            "title": "Intent",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "redirect_uri": {
+            "title": "Redirect Uri",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow_id",
+          "provider",
+          "intent",
+          "status",
+          "auth_url",
+          "redirect_uri",
+          "client_type",
+          "expires_at"
+        ],
+        "title": "OAuthStartOut",
+        "type": "object"
+      },
       "OkOut": {
         "properties": {
           "ok": {
@@ -1850,6 +2228,346 @@
         "summary": "Api Create Account",
         "tags": [
           "accounts"
+        ]
+      }
+    },
+    "/api/accounts/oauth/active": {
+      "get": {
+        "operationId": "api_oauth_active_api_accounts_oauth_active_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthActiveOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Oauth Active",
+        "tags": [
+          "accounts-oauth"
+        ]
+      }
+    },
+    "/api/accounts/oauth/callback/{provider}": {
+      "get": {
+        "operationId": "api_oauth_callback_api_accounts_oauth_callback__provider__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error_description",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error Description"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Oauth Callback",
+        "tags": [
+          "accounts-oauth"
+        ]
+      }
+    },
+    "/api/accounts/oauth/flows/{flow_id}": {
+      "get": {
+        "operationId": "api_oauth_flow_status_api_accounts_oauth_flows__flow_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "title": "Flow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthFlowStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Oauth Flow Status",
+        "tags": [
+          "accounts-oauth"
+        ]
+      }
+    },
+    "/api/accounts/oauth/flows/{flow_id}/cancel": {
+      "post": {
+        "operationId": "api_oauth_flow_cancel_api_accounts_oauth_flows__flow_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "title": "Flow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthCancelOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Oauth Flow Cancel",
+        "tags": [
+          "accounts-oauth"
+        ]
+      }
+    },
+    "/api/accounts/oauth/metadata": {
+      "get": {
+        "operationId": "api_oauth_metadata_api_accounts_oauth_metadata_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "default": "google",
+              "maxLength": 32,
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthMetadataOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Oauth Metadata",
+        "tags": [
+          "accounts-oauth"
+        ]
+      }
+    },
+    "/api/accounts/oauth/start": {
+      "post": {
+        "operationId": "api_oauth_start_api_accounts_oauth_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthStartIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthStartOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Oauth Start",
+        "tags": [
+          "accounts-oauth"
         ]
       }
     },

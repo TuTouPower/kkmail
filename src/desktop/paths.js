@@ -37,4 +37,11 @@ function isLocalAppUrl(target, origin) {
   }
 }
 
-module.exports = { SIDECAR_NAME, sidecarFileName, sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl }
+function createExternalWindowHandler(openExternal) {
+  return ({ url }) => {
+    if (isAllowedExternalUrl(url)) openExternal(url)
+    return { action: 'deny' }
+  }
+}
+
+module.exports = { SIDECAR_NAME, sidecarFileName, sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl, createExternalWindowHandler }

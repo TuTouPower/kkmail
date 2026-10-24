@@ -93,6 +93,12 @@ function App() {
   }, [wide, mobileSidebarOpen, closeMobileSidebar])
 
   useEffect(() => {
+    if (authed && typeof window !== 'undefined' && window.location.hash === '#oauth-return') {
+      useMailStore.getState().openSettings()
+    }
+  }, [authed])
+
+  useEffect(() => {
     let cancelled = false
     api.checkSession()
       .then((ok) => { if (!cancelled) setAuthed(ok) })

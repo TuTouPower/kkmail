@@ -83,6 +83,29 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
   }, [filteredSelected, allSelected])
 
   useEffect(() => {
+    if (typeof window === 'undefined' || window.location.hash !== '#oauth-return' || typeof api.getActiveOAuthFlow !== 'function') return
+    if (accountsQuery.isPending) return
+    const loadedAccounts = accountsQuery.data || []
+    let cancelled = false
+    void api.getActiveOAuthFlow().then(res => {
+      if (cancelled || !res?.flow) return
+      window.history?.replaceState?.(null, '', window.location.pathname)
+      setSection('accounts')
+      if (res.flow.intent === 'create') {
+        setEditingAccount(null)
+        setAddOpen(true)
+      } else if (res.flow.account_id) {
+        const target = loadedAccounts.find(a => a.id === res.flow?.account_id)
+        if (target) {
+          setAddOpen(false)
+          setEditingAccount(target)
+        }
+      }
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [accountsQuery.isPending, accountsQuery.data])
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented && !accountDialogOpen) closeSettings()
     }

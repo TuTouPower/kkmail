@@ -306,6 +306,8 @@ python3 scripts/run_full_stack_e2e.py
 - 浏览器冒烟测试验证六类全局分类、分组分类、真实文件夹树和导航布局；真实全栈 Playwright 通过 HTML5 拖拽验证空组、跨组、移出、主列表内排序和分组排序，并刷新后读取服务端确认成员关系与顺序持久化。
 - 前端测试覆盖查询 key 按 scope 隔离、分组参数贯通、偏好持久化与设置入口；`schemas/openapi.json` 和生成 TypeScript 必须通过 codegen 漂移检查。
 
-## 供应商账户表单（t053）
+## 供应商账户表单与 Google OAuth 回调（t053 / t054）
 
-后端：`scripts/run-mail-core-tests.sh run -k "provider_account or accounts_api or oauth_transport or account_credentials" --no-cov`，覆盖真实加密凭据更新、回滚、Microsoft IMAP 拒绝及多客户端令牌轮换。前端：`npm --prefix src/frontend test`；浏览器：`npm --prefix src/frontend run test:e2e -- provider_account_forms.spec.ts settings_workspace.spec.ts`，覆盖帮助弹窗焦点与窄屏输入。
+后端：`scripts/run-mail-core-tests.sh run -k "provider_account or google_oauth_callback or accounts_api or oauth_transport or account_credentials" --no-cov`，覆盖真实加密凭据更新、回滚、Microsoft IMAP 拒绝、Google OAuth PKCE 换码与 `users.getProfile` 核验、跨会话/重放/并发回调拦截及多客户端令牌轮换。前端：`npm --prefix src/frontend test`；浏览器：`npm --prefix src/frontend run test:e2e -- provider_account_forms.spec.ts settings_workspace.spec.ts`，覆盖 Google OAuth 跳转登录、重新授权、帮助弹窗焦点与窄屏输入。
+
+OAuth Electron 集成门禁：先构建生产 SPA，再运行 `KKMAIL_TEST_ELECTRON=1 scripts/run-mail-core-tests.sh run -k google_oauth_callback --no-cov`。独立 Electron profile、真实 FastAPI/隔离 PG、假供应商 HTTP 服务覆盖动态 loopback、生产外链处理器、无 Cookie 回调、窗口焦点恢复及最终保存；不连接真实 Google 账号。

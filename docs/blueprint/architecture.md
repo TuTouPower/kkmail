@@ -65,6 +65,10 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 针对文件夹定时空转轮询导致的归档饥饿，调整任务优先级分层：按需归档任务为 **10**，出站写回操作为 **40**，初次目录扫描为 **50**，后台批量正文归档续批为 **60**，文件夹定时空转增量轮询为 **75**，定期对账任务为 **85**；
     - 定时增量空转轮询增加去重键（`delta:{account_id}:{folder_id}`），防止单个文件夹在短时间内重复入队堆积，彻底解除增量轮询对后台批量正文归档的压制。
 
-## 供应商账户配置（t053）
+## 供应商账户配置与 Google OAuth 授权码流程（t053 / t054）
 
-供应商品牌存于 Account.config.provider_profile，协议仍由 imap/gmail/graph 路由；设置页共享添加/编辑表单，品牌预设不覆盖用户连接参数。账户 DTO 只返回白名单连接信息，OAuth 秘密不回显。Microsoft IMAP 在账户入口及 provider factory 被拒绝。DbCredentialStore 的 credential_edit 在当前事务锁定加密行，账户局部更新与 OAuth 刷新共用该锁。
+供应商品牌存于 `Account.config.provider_profile`，协议仍由 `imap`/`gmail`/`graph` 路由；设置页共享添加/编辑表单，品牌预设不覆盖用户连接参数。账户 DTO 只返回白名单连接信息，OAuth 秘密不回显。Microsoft IMAP 在账户入口及 provider factory 被拒绝。`DbCredentialStore` 的 `credential_edit` 在当前事务锁定加密行，账户局部更新与 OAuth 刷新共用该锁。
+
+Google Gmail API 支持授权码 + PKCE `S256` 跳转回调与重新授权（`src/mail_core/accounts/oauth_flow.py`、`src/mail_core/api/oauth_routes.py`）：短期流程状态加密存于 `CredentialSecret`，绑定发起会话指纹、`session_epoch`、用途（新增/编辑）与目标账户，10 分钟过期。网页端从可信部署配置 `MAIL_CORE_PUBLIC_ORIGIN` 构造 HTTPS 回调；桌面端（`KKMAIL_SIDECAR=1`）使用 `127.0.0.1` 动态本地端口 loopback 回调。回调仅在换码并经 `users.getProfile` 核实真实邮箱后暂存加密凭据，最终由原认证会话提交 `oauth_flow_id` 原子落库并消费一次性结果。
+
+OAuth 最终保存统一按 sidebar 组织锁 → 账户（编辑）→ 流程 → 凭据/活跃指针顺序取锁，新增与重新授权均先取组织锁。活跃指针写入及条件清空共用引用 advisory lock；授权码以相同锁原子领取，避免缺行锁竞争。

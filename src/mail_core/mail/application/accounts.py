@@ -160,10 +160,26 @@ def create_account_app(
     group_id: UUID | None = None,
     config: dict[str, Any] | None = None,
     credentials: dict[str, Any] | None = None,
+    oauth_flow_id: str | None = None,
+    principal: Any = None,
 ) -> AccountDTO:
     Session = get_session_factory()
     with Session() as session:
         try:
+            if oauth_flow_id:
+                from mail_core.accounts.oauth_flow import consume_oauth_flow_for_create
+                from mail_core.accounts.service import _lock_sidebar_layout
+
+                # All OAuth saves lock organization before flow/pointer/credentials.
+                _lock_sidebar_layout(session)
+                email, config, credentials = consume_oauth_flow_for_create(
+                    session,
+                    flow_id=oauth_flow_id,
+                    principal=principal,
+                    provider=provider,
+                    config=config,
+                    group_id=group_id,
+                )
             acc = create_account(
                 session,
                 email=email,
@@ -196,6 +212,8 @@ def update_account_app(
     sync_enabled: bool | None = None,
     config: dict[str, Any] | None = None,
     credentials: dict[str, Any] | None = None,
+    oauth_flow_id: str | None = None,
+    principal: Any = None,
 ) -> AccountDTO:
     Session = get_session_factory()
     with Session() as session:
@@ -205,6 +223,23 @@ def update_account_app(
         elif group_id is not None:
             group_arg = group_id
         try:
+            if oauth_flow_id:
+                from mail_core.accounts.oauth_flow import consume_oauth_flow_for_reauthorize
+                from mail_core.accounts.service import _lock_sidebar_layout
+
+                _lock_sidebar_layout(session)
+                acc_row = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
+                if acc_row is None:
+                    raise LookupError("account not found")
+                consume_oauth_flow_for_reauthorize(
+                    session,
+                    account=acc_row,
+                    flow_id=oauth_flow_id,
+                    principal=principal,
+                    config_patch=config,
+                    group_id=group_arg,
+                )
+                config = None
             acc = update_account(
                 session,
                 account_id,
@@ -214,6 +249,11 @@ def update_account_app(
                 config_patch=config,
                 credentials=credentials,
             )
+            if oauth_flow_id and acc.sync_enabled:
+                try:
+                    enqueue_account_sync(session, acc.id)
+                except Exception:
+                    pass
             session.commit()
         except Exception:
             session.rollback()

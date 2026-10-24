@@ -51,6 +51,8 @@ services:
     environment:
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
       MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:37281"
+      # Optional trusted HTTPS origin for provider OAuth callbacks.
+      MAIL_CORE_PUBLIC_ORIGIN: "${MAIL_CORE_PUBLIC_ORIGIN:-}"
       # Auth: Cookie session signing. Provide MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt)
       # or MAIL_CORE_LOGIN_PASSWORD — process refuses to start without one.
       MAIL_CORE_SECRET_KEY: ${MAIL_CORE_SECRET_KEY:?set MAIL_CORE_SECRET_KEY (openssl rand -hex 32)}

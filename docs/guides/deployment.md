@@ -24,6 +24,10 @@ docker compose -f docker-compose.mail-core.yml up --build -d api worker   # 依�
 
 ## 对外暴露
 
+Google 网页 OAuth 需将 `MAIL_CORE_PUBLIC_ORIGIN` 设置为应用实际 HTTPS Origin（协议、域名及需要时的端口，不含路径或查询）。Compose 会将该值传入 API；修改后重新创建 API 容器。在 Google Cloud 的 Web OAuth 客户端登记 `<Origin>/api/accounts/oauth/callback/google`，与账户表单显示的回调 URI 完全一致，并启用 Gmail API、配置同意屏幕与测试用户。Client ID 和 Client Secret 在账户表单输入，服务端加密保存，不写入镜像或前端包。
+
+未设置 Origin 时，网页 Google 跳转入口显示配置提示，其他 IMAP 与已有凭据连接仍可使用。Electron 使用自身动态 loopback 回调和桌面客户端，不要求此公网配置。`MAIL_CORE_ALLOW_LOOPBACK_OAUTH_ORIGIN` 仅供明确受信的本机测试使用，生产网页不应开启。
+
 不要把 8000 端口直接暴露到公网。需要远程访问时放在 TLS 反向代理之后，并：
 
 - 设置 `MAIL_CORE_COOKIE_SECURE=1`；
