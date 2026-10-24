@@ -112,7 +112,65 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-log-test-'))
       await errorStream.end().catch(() => {})
     }
 
-    // Test 6: In-flight write serializes close (fd remains open until in-flight finishes)
+    // Test 6: A failed rotation drops queued data and rejects drain waiters
+    const unavailableFile = path.join(tmpDir, 'unavailable.log')
+    const unavailableError = new Error('simulated log reopen failure')
+    let unavailableErrorCallback = null
+    const unavailableStream = new RotatingLogStream(unavailableFile, {
+      maxBytes: 10,
+      onError: (err) => { unavailableErrorCallback = err },
+    })
+    unavailableStream.write('12345678')
+    await unavailableStream.drain()
+    const origOpenSync = fs.openSync
+    fs.openSync = () => { throw unavailableError }
+    try {
+      unavailableStream.write('abcdefghij')
+      const drainPromise = unavailableStream.drain()
+      await assert.rejects(drainPromise, (err) => err === unavailableError)
+      assert.strictEqual(unavailableStream.fd, null)
+      assert.strictEqual(unavailableStream.queue.length, 0)
+      assert.strictEqual(unavailableStream.lastError, unavailableError)
+      assert.strictEqual(unavailableErrorCallback, unavailableError)
+    } finally {
+      fs.openSync = origOpenSync
+      await unavailableStream.end().catch(() => {})
+    }
+
+    // Test 7: The queue is bounded and overflow is reported to drain waiters
+    const boundedFile = path.join(tmpDir, 'bounded.log')
+    let overflowError = null
+    const boundedStream = new RotatingLogStream(boundedFile, {
+      maxBytes: 1000,
+      maxQueueLength: 1,
+      onError: (err) => { overflowError = err },
+    })
+    let releaseWrite = null
+    const origWrite4 = fs.write
+    fs.write = (fd, buf, offset, length, position, cb) => {
+      if (!releaseWrite) {
+        releaseWrite = () => origWrite4.call(fs, fd, buf, offset, length, position, cb)
+        return
+      }
+      return origWrite4.call(fs, fd, buf, offset, length, position, cb)
+    }
+    try {
+      boundedStream.write('in-flight\n')
+      await new Promise((resolve) => setImmediate(resolve))
+      boundedStream.write('queued\n')
+      const drainPromise = boundedStream.drain()
+      assert.strictEqual(boundedStream.write('overflow\n'), false)
+      assert.strictEqual(boundedStream.queue.length, 0)
+      assert.match(boundedStream.lastError.message, /queue limit exceeded/)
+      releaseWrite()
+      await assert.rejects(drainPromise, /queue limit exceeded/)
+      assert.strictEqual(overflowError, boundedStream.lastError)
+    } finally {
+      fs.write = origWrite4
+      await boundedStream.end().catch(() => {})
+    }
+
+    // Test 8: In-flight write serializes close (fd remains open until in-flight finishes)
     const inflightFile = path.join(tmpDir, 'inflight.log')
     const inflightStream = new RotatingLogStream(inflightFile, { maxBytes: 1000 })
     let writeBlocked = true

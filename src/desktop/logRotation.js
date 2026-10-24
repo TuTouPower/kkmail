@@ -8,6 +8,7 @@ const path = require('path')
 
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024 // 10 MB per file
 const DEFAULT_MAX_FILES = 3 // Keep at most 3 historical rotated files
+const DEFAULT_MAX_QUEUE_LENGTH = 1024
 
 /**
  * Rotate a log file if it exceeds maxBytes.
@@ -57,6 +58,9 @@ class RotatingLogStream {
     this.filePath = filePath
     this.maxBytes = options.maxBytes || DEFAULT_MAX_BYTES
     this.maxFiles = options.maxFiles || DEFAULT_MAX_FILES
+    this.maxQueueLength = Number.isInteger(options.maxQueueLength) && options.maxQueueLength > 0
+      ? options.maxQueueLength
+      : DEFAULT_MAX_QUEUE_LENGTH
     this.currentSize = 0
     this.fd = null
     this.queue = []
@@ -64,6 +68,7 @@ class RotatingLogStream {
     this.flushScheduled = false
     this.closed = false
     this.lastError = null
+    this.pendingDrainError = null
     this.drainWaiters = []
     this.onError = typeof options.onError === 'function' ? options.onError : null
 
@@ -92,6 +97,15 @@ class RotatingLogStream {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8')
     if (buf.length === 0) return true
 
+    if (this.fd === null) {
+      this._failQueuedWrites(this.lastError || new Error('Log file descriptor unavailable'))
+      return false
+    }
+    if (this.queue.length >= this.maxQueueLength) {
+      this._failQueuedWrites(new Error(`Log write queue limit exceeded (${this.maxQueueLength})`))
+      return false
+    }
+
     this.queue.push(buf)
     this._scheduleFlush()
     return true
@@ -107,7 +121,13 @@ class RotatingLogStream {
   }
 
   _flushAsync() {
-    if (this.writing || this.fd === null) return
+    if (this.writing || this.closed) return
+    if (this.fd === null) {
+      if (this.queue.length > 0) {
+        this._failQueuedWrites(this.lastError || new Error('Log file descriptor unavailable'))
+      }
+      return
+    }
 
     if (this.queue.length === 0) {
       this._notifyDrain()
@@ -121,7 +141,7 @@ class RotatingLogStream {
     }
 
     if (this.fd === null) {
-      this._notifyDrain(this.lastError || new Error('Log file descriptor unavailable'))
+      this._failQueuedWrites(this.lastError || new Error('Log file descriptor unavailable'))
       return
     }
 
@@ -135,13 +155,7 @@ class RotatingLogStream {
     fs.write(this.fd, buf, offset, remaining, null, (err, bytesWritten) => {
       if (err) {
         this.writing = false
-        this.lastError = err
-        if (typeof this.onError === 'function') {
-          try { this.onError(err) } catch (_) {}
-        } else {
-          console.warn('[logRotation] write error:', err && err.message ? err.message : err)
-        }
-        this._notifyDrain(err)
+        this._failQueuedWrites(err)
         return
       }
 
@@ -169,23 +183,27 @@ class RotatingLogStream {
       if (this.currentSize + next.length >= this.maxBytes && this.currentSize > 0) {
         this._rotate()
       }
-      if (this.fd === null) break
+      if (this.fd === null) {
+        this._failQueuedWrites(this.lastError || new Error('Log file descriptor unavailable'))
+        break
+      }
       const buf = this.queue.shift()
       let offset = 0
       while (offset < buf.length) {
         try {
           const written = fs.writeSync(this.fd, buf, offset, buf.length - offset)
-          if (written <= 0) break
+          if (written <= 0) {
+            this._failQueuedWrites(new Error('Log file write returned no bytes'))
+            break
+          }
           offset += written
           this.currentSize += written
         } catch (err) {
-          this.lastError = err
-          if (typeof this.onError === 'function') {
-            try { this.onError(err) } catch (_) {}
-          }
+          this._failQueuedWrites(err)
           break
         }
       }
+      if (offset < buf.length) break
     }
   }
 
@@ -208,8 +226,25 @@ class RotatingLogStream {
     }
   }
 
+  _failQueuedWrites(err) {
+    this.queue.length = 0
+    this.lastError = err
+    if (typeof this.onError === 'function') {
+      try { this.onError(err) } catch (_) {}
+    } else {
+      const message = err && err.message ? err.message : String(err)
+      try { process.stderr.write(`[logRotation] write error: ${message}\n`) } catch (_) {}
+    }
+    this._notifyDrain(err)
+  }
+
   drain() {
     if (!this.writing && this.queue.length === 0) {
+      if (this.pendingDrainError) {
+        const err = this.pendingDrainError
+        this.pendingDrainError = null
+        return Promise.reject(err)
+      }
       return Promise.resolve()
     }
     return new Promise((resolve, reject) => {
@@ -218,12 +253,14 @@ class RotatingLogStream {
   }
 
   _notifyDrain(err = null) {
-    if (this.writing || (this.queue.length > 0 && !err && this.fd !== null)) {
-      return
-    }
+    if (err && !this.pendingDrainError) this.pendingDrainError = err
+    if (this.writing || (this.queue.length > 0 && !this.pendingDrainError && this.fd !== null)) return
     const waiters = this.drainWaiters.splice(0)
+    if (waiters.length === 0) return
+    const drainError = this.pendingDrainError
+    this.pendingDrainError = null
     for (const { resolve, reject } of waiters) {
-      if (err) reject(err)
+      if (drainError) reject(drainError)
       else resolve()
     }
   }
@@ -249,4 +286,10 @@ class RotatingLogStream {
   }
 }
 
-module.exports = { rotateLogFile, RotatingLogStream, DEFAULT_MAX_BYTES, DEFAULT_MAX_FILES }
+module.exports = {
+  rotateLogFile,
+  RotatingLogStream,
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_FILES,
+  DEFAULT_MAX_QUEUE_LENGTH,
+}
