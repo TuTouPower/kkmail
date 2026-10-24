@@ -21,7 +21,7 @@ from mail_core.mail.storage.models import (
 from mail_core.providers.base import MetadataPage, RemoteMessageMeta
 from mail_core.sync.checkpoints import commit_checkpoint
 from mail_core.sync.leases import assert_fencing
-from mail_core.search.index import upsert_message_search
+from mail_core.search.index import upsert_message_search_batch
 from mail_core.threading.rules import assign_thread_for_message
 from mail_core.realtime.notify import try_notify_outbox
 
@@ -97,9 +97,13 @@ def upsert_messages(
         created = msg is None
         location_created = False
         if created:
-            msg = Message(account_id=account_id, remote_id=meta.remote_id, sort_time=meta.sort_time)
+            msg = Message(
+                id=uuid.uuid4(),
+                account_id=account_id,
+                remote_id=meta.remote_id,
+                sort_time=meta.sort_time,
+            )
             session.add(msg)
-            session.flush()
             session.add(MessageArchiveState(message_id=msg.id, state=ArchiveState.METADATA_SYNCED.value))
             session.add(MessageLocation(message_id=msg.id, folder_id=folder_id, uid=meta.uid))
             existing[meta.remote_id] = msg
@@ -166,6 +170,7 @@ def apply_metadata_page(
     assert_fencing(session, account_id=account_id, fencing_token=fencing_token)
     outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=list(page.items))
     touched: list[uuid.UUID] = []
+    touched_messages: dict[uuid.UUID, Message] = {}
     folder_stats_dirty = False
     for o, meta in zip(outcomes, page.items):
         if o.location_created:
@@ -173,8 +178,7 @@ def apply_metadata_page(
         if not o.changed:
             continue
         touched.append(o.message.id)
-        # body_text=None → prefer MessageBody.text_plain; never clobber FTS with snippet.
-        upsert_message_search(session, message_id=o.message.id)
+        touched_messages[o.message.id] = o.message
         if o.created and (
             meta.internet_message_id
             or meta.provider_thread_key
@@ -189,6 +193,8 @@ def apply_metadata_page(
                 provider_thread_key=meta.provider_thread_key,
             )
     if touched:
+        # body_text=None → prefer MessageBody.text_plain; never clobber FTS with snippet.
+        upsert_message_search_batch(session, messages=list(touched_messages.values()))
         session.add(messages_upserted_event(account_id, folder_id, touched))
         folder_stats_dirty = True
     if folder_stats_dirty or session.get(FolderStats, folder_id) is None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,6 +36,48 @@ def upsert_message_search(
     row.updated_at = datetime.now(timezone.utc)
     session.flush()
     return row
+
+
+def upsert_message_search_batch(session: Session, *, messages: Sequence[Message]) -> None:
+    """Update a page of search rows with one body lookup and one index lookup."""
+    by_id = {message.id: message for message in messages}
+    if not by_id:
+        return
+    message_ids = list(by_id)
+
+    bodies = {
+        body.message_id: body
+        for body in session.scalars(
+            select(MessageBody).where(MessageBody.message_id.in_(message_ids))
+        )
+    }
+    search_rows = {
+        row.message_id: row
+        for row in session.scalars(
+            select(MessageSearch).where(MessageSearch.message_id.in_(message_ids))
+        )
+    }
+    for pending in session.new:
+        if isinstance(pending, MessageBody) and pending.message_id in by_id:
+            bodies[pending.message_id] = pending
+        elif isinstance(pending, MessageSearch) and pending.message_id in by_id:
+            search_rows[pending.message_id] = pending
+
+    now = datetime.now(timezone.utc)
+    for message in by_id.values():
+        body = bodies.get(message.id)
+        body_text = (body.text_plain if body else None) or message.snippet or ""
+        row = search_rows.get(message.id)
+        if row is None:
+            row = MessageSearch(message_id=message.id, account_id=message.account_id)
+            search_rows[message.id] = row
+            session.add(row)
+        row.account_id = message.account_id
+        row.subject = message.subject or ""
+        row.from_text = " ".join(x for x in [message.from_name, message.from_address] if x)
+        row.body_text = body_text
+        row.updated_at = now
+    session.flush()
 
 
 _MATCH = """

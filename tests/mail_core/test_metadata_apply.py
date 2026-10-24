@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select, func
+from sqlalchemy import event, select, func
 
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage import Account, Folder, FolderStats, Message, MessageArchiveState, OutboxEvent
@@ -97,6 +97,88 @@ def test_apply_metadata_page_writes_messages_stats_outbox_checkpoint():
             .where(OutboxEvent.account_id == acc.id, OutboxEvent.event_type == "message.upserted")
         )
         assert n_upsert == 1
+
+
+def test_upsert_messages_and_search_index_batch_page_work():
+    from mail_core.mail.storage import MessageBody, MessageSearch
+    from mail_core.search.index import upsert_message_search_batch
+    from mail_core.sync.metadata import upsert_messages
+
+    Session = get_session_factory()
+    with Session() as session:
+        account = Account(email=f"meta-batch-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        session.add(account)
+        session.flush()
+        folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        session.flush()
+        now = datetime.now(timezone.utc)
+        metas = [
+            RemoteMessageMeta(
+                remote_id=f"batch-{index}",
+                subject=f"Subject {index}",
+                from_address=f"sender{index}@example.com",
+                from_name=None,
+                sort_time=now,
+                is_read=False,
+                has_attachments=False,
+                snippet=f"snippet {index}",
+            )
+            for index in range(5)
+        ]
+
+        flush_count = 0
+
+        def count_flush(_session, _flush_context, _instances):
+            nonlocal flush_count
+            flush_count += 1
+
+        event.listen(session, "before_flush", count_flush)
+        try:
+            outcomes = upsert_messages(
+                session, account_id=account.id, folder_id=folder.id, metas=metas
+            )
+        finally:
+            event.remove(session, "before_flush", count_flush)
+        assert flush_count == 1
+
+        session.add(
+            MessageBody(message_id=outcomes[0].message.id, text_plain="full archived body")
+        )
+        session.flush()
+
+        select_counts = {"message_bodies": 0, "message_search": 0}
+
+        def count_index_select(_conn, _cursor, statement, _params, _context, _many):
+            normalized = statement.lstrip().lower()
+            if not normalized.startswith("select"):
+                return
+            for table in select_counts:
+                if f"from {table}" in normalized:
+                    select_counts[table] += 1
+
+        engine = session.get_bind()
+        event.listen(engine, "before_cursor_execute", count_index_select)
+        try:
+            upsert_message_search_batch(
+                session, messages=[outcome.message for outcome in outcomes]
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", count_index_select)
+
+        assert select_counts == {"message_bodies": 1, "message_search": 1}
+        indexed = {
+            row.message_id: row
+            for row in session.scalars(
+                select(MessageSearch).where(
+                    MessageSearch.message_id.in_([o.message.id for o in outcomes])
+                )
+            )
+        }
+        assert len(indexed) == len(metas)
+        assert indexed[outcomes[0].message.id].body_text == "full archived body"
+        assert indexed[outcomes[1].message.id].body_text == "snippet 1"
+        session.commit()
 
 
 def test_unknown_provider_time_does_not_erase_known_received_time():
