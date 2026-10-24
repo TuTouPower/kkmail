@@ -18,6 +18,22 @@
             "conflicts_with": "",
             "note": "来源 p038；保留不可选择父目录与子目录关系，不删除历史邮件位置",
             "dir": "docs/tasks/t052_qq_noselect_folder_state"
+        },
+        {
+            "tid": "t055",
+            "slug": "microsoft_oauth_callback",
+            "title": "支持 Microsoft OAuth 跳转与设备码登录",
+            "status": "backlog",
+            "branch": "",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "",
+            "depends_on": "t054",
+            "conflicts_with": "",
+            "note": "来源：用户明确增加设备码；Microsoft 支持跳转回调与设备码两条新增/重新授权路径，统一获取并加密保存令牌；复用 t054 会话绑定与最终保存；不做 Microsoft IMAP 或迁移",
+            "dir": "docs/tasks/t055_microsoft_oauth_callback"
         }
     ]
 }
