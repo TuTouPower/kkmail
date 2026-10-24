@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -14,6 +15,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse, urlunparse
+
+from sqlalchemy.engine import make_url
 
 from mail_core.backup.crypto import (
     BackupCryptoError,
@@ -60,6 +63,42 @@ def _redact_url(url: str) -> str:
             host = rest.split("@", 1)[1]
             return f"{scheme}://{user}:***@{host}"
     return url
+
+
+def _restore_database_identity(url: str) -> tuple[str, str, int, str, str]:
+    """Return normalized PostgreSQL connection identity without credentials."""
+    try:
+        parsed = make_url(url)
+    except Exception:
+        raise RuntimeError("refusing to restore with an invalid PostgreSQL URL") from None
+
+    scheme = parsed.drivername.lower().split("+", 1)[0]
+    if scheme not in {"postgres", "postgresql"}:
+        raise RuntimeError("refusing to restore with a non-PostgreSQL URL")
+    identity_query = {key.lower() for key in parsed.query}
+    if identity_query & {"host", "hostaddr", "port", "dbname", "database", "user", "service", "servicefile"}:
+        raise RuntimeError("refusing to restore with identity-changing URL query parameters")
+    if not parsed.host or not parsed.database or not parsed.username:
+        raise RuntimeError("refusing to restore with an incomplete PostgreSQL URL")
+
+    host = parsed.host.strip().rstrip(".")
+    if "," in host:
+        raise RuntimeError("refusing to restore with a multi-host PostgreSQL URL")
+    try:
+        host = ipaddress.ip_address(host).compressed.lower()
+    except ValueError:
+        try:
+            host = host.encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            raise RuntimeError("refusing to restore with an invalid PostgreSQL host") from None
+
+    try:
+        port = parsed.port
+    except ValueError:
+        raise RuntimeError("refusing to restore with an invalid PostgreSQL port") from None
+    if port is None:
+        port = 5432
+    return "postgresql", host, port, parsed.database, parsed.username
 
 
 def _sha256_file(path: Path) -> str:
@@ -703,7 +742,7 @@ def restore_backup_package(
     target_blobs_dir: str | Path,
     keyring: dict[int, bytes] | None = None,
     allow_stub: bool = False,
-    source_database_url: str | None = None,
+    source_database_url: str,
 ) -> RestoreResult:
     """Restore a backup package into a dedicated disposable target database and blob directory.
 
@@ -720,12 +759,9 @@ def restore_backup_package(
 
     pkg_size = sum(f.stat().st_size for f in pkg_dir.glob("**/*") if f.is_file())
 
-    # Guard AC-004: Prevent restoring onto the same source database
-    if source_database_url:
-        src_clean = _redact_url(source_database_url)
-        tgt_clean = _redact_url(target_database_url)
-        if src_clean == tgt_clean:
-            raise RuntimeError(f"refusing to restore onto source database: {src_clean}")
+    # Guard AC-004: Prevent restoring onto the same source database.
+    if _restore_database_identity(source_database_url) == _restore_database_identity(target_database_url):
+        raise RuntimeError("refusing to restore onto source database")
 
     target_blobs = Path(target_blobs_dir).resolve()
     if target_blobs.is_symlink():

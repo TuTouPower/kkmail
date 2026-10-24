@@ -76,10 +76,79 @@ def test_restore_sealed_backup_reads_manifest_filename_case(tmp_path, monkeypatc
         target_blobs_dir=tmp_path / "restored-blobs",
         keyring={1: backup_key},
         allow_stub=True,
+        source_database_url="postgresql://backup-source:pw@127.0.0.1:5432/source",
     )
 
     assert result.ok
     assert result.database_restored
+
+
+@pytest.mark.parametrize(
+    ("source_url", "target_url"),
+    [
+        (
+            "postgresql://restore:source-pw@DB.Example/source%20db?sslmode=require",
+            "postgresql+psycopg://restore:target-pw@db.example:5432/source%20db?sslmode=disable",
+        ),
+        (
+            "postgres://restore:source-pw@[2001:db8::1]/same_db",
+            "postgresql+psycopg://restore:target-pw@[2001:0db8::1]:5432/same_db",
+        ),
+    ],
+)
+def test_restore_refuses_normalized_same_source_database(tmp_path, source_url, target_url):
+    package_dir = tmp_path / "empty-package"
+    package_dir.mkdir()
+
+    with pytest.raises(RuntimeError, match="refusing to restore onto source database"):
+        restore_backup_package(
+            package_dir,
+            target_database_url=target_url,
+            target_blobs_dir=tmp_path / "restored-blobs",
+            source_database_url=source_url,
+        )
+
+
+@pytest.mark.parametrize(
+    "target_url",
+    [
+        "postgresql+psycopg://restore:pw@db.example:5432/target_db",
+        "postgresql+psycopg://restore:pw@other.example:5432/source_db",
+    ],
+)
+def test_restore_allows_different_database_or_host(tmp_path, target_url):
+    package_dir = tmp_path / "empty-package"
+    package_dir.mkdir()
+
+    with pytest.raises(RuntimeError, match="backup package verification failed"):
+        restore_backup_package(
+            package_dir,
+            target_database_url=target_url,
+            target_blobs_dir=tmp_path / "restored-blobs",
+            source_database_url="postgresql://restore:pw@DB.Example/source_db",
+        )
+
+
+def test_restore_rejects_identity_changing_url_query(tmp_path):
+    package_dir = tmp_path / "empty-package"
+    package_dir.mkdir()
+
+    with pytest.raises(RuntimeError, match="identity-changing URL query"):
+        restore_backup_package(
+            package_dir,
+            target_database_url="postgresql://restore:pw@db.example/source_db?HOST=other.example",
+            target_blobs_dir=tmp_path / "restored-blobs",
+            source_database_url="postgresql://restore:pw@db.example/source_db",
+        )
+
+
+def test_restore_requires_source_database_url(tmp_path):
+    with pytest.raises(TypeError, match="source_database_url"):
+        restore_backup_package(
+            tmp_path / "missing-package",
+            target_database_url="postgresql://restore:pw@127.0.0.1:5432/target",
+            target_blobs_dir=tmp_path / "restored-blobs",
+        )
 
 
 def test_encrypted_backup_roundtrip_verify(tmp_path, monkeypatch):
