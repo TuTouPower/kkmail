@@ -172,39 +172,3 @@ export function mailCoreToMailDetail(d: MailCoreMessageDetail): MailDetail {
     })),
   }
 }
-
-export const MAIL_CORE_EVENTS = [
-  'message.upserted',
-  'message.removed',
-  'folder.stats_updated',
-  'sync.progress',
-  'sync.completed',
-  'sync.error',
-  'remote_operation.updated',
-  'client.resync_hint',
-] as const
-
-/** Subscribe to mail-core SSE (cookie credentials; no API key in the URL). Returns unsubscribe. */
-export function subscribeMailCoreEvents(
-  onEvent: (event: string, data: unknown, id: string | null) => void,
-  onError?: (err: Event) => void,
-  onOpen?: () => void,
-): () => void {
-  const es = new EventSource(`${apiBaseUrl()}/api/events`, { withCredentials: true })
-  const handler = (e: MessageEvent) => {
-    let data: unknown = e.data
-    try {
-      data = JSON.parse(String(e.data))
-    } catch {
-      /* keep raw */
-    }
-    onEvent(e.type || 'message', data, e.lastEventId || null)
-  }
-  // Named events only. Do not also set es.onmessage: pairing it with a 'message'
-  // listener (or relying on both) historically double-dispatched the same SSE frame.
-  // Backend always emits an explicit event: field (see mail_core/api/sse.py).
-  for (const name of MAIL_CORE_EVENTS) es.addEventListener(name, handler as EventListener)
-  if (onOpen) es.onopen = () => onOpen()
-  es.onerror = (ev) => onError?.(ev)
-  return () => es.close()
-}

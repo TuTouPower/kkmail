@@ -5,9 +5,7 @@ import {
   mailCoreAttachmentUrl,
   mailCoreToMailDetail,
   mailCoreToMailItem,
-  MAIL_CORE_EVENTS,
   postMailCoreMessageTrash,
-  subscribeMailCoreEvents,
   type MailCoreMessage,
   type MailCoreMessageDetail,
 } from './mailCore'
@@ -174,69 +172,5 @@ describe('mail endpoints', () => {
     expect(out.body_type).toBeUndefined()
     expect(out.cc).toBeUndefined()
     expect(out.attachments).toEqual([{ id: 'att', name: 'a.pdf', size: undefined, contentType: undefined }])
-  })
-})
-
-describe('SSE subscription', () => {
-  class FakeEventSource {
-    static last: FakeEventSource | null = null
-    listeners = new Map<string, EventListener>()
-    onmessage: ((e: MessageEvent) => void) | null = null
-    onerror: ((e: Event) => void) | null = null
-    closed = false
-    url: string
-    init?: EventSourceInit
-    constructor(url: string, init?: EventSourceInit) {
-      this.url = url
-      this.init = init
-      FakeEventSource.last = this
-    }
-    addEventListener(name: string, fn: EventListener) {
-      this.listeners.set(name, fn)
-    }
-    close() {
-      this.closed = true
-    }
-  }
-
-  it('uses cookie credentials, listens to every event type, parses JSON and closes', () => {
-    vi.stubGlobal('EventSource', FakeEventSource)
-    const onEvent = vi.fn()
-    const onError = vi.fn()
-    const unsubscribe = subscribeMailCoreEvents(onEvent, onError)
-    const es = FakeEventSource.last!
-    expect(es.url).toBe('/api/events')
-    expect(es.url).not.toContain('key')
-    expect(es.init).toEqual({ withCredentials: true })
-    expect([...es.listeners.keys()]).toEqual([...MAIL_CORE_EVENTS])
-    expect(es.listeners.has('message')).toBe(false)
-    expect(es.onmessage).toBeNull()
-
-    es.listeners.get('message.upserted')!({ type: 'message.upserted', data: '{"id":"m1"}', lastEventId: '7' } as unknown as Event)
-    es.listeners.get('sync.error')!({ type: 'sync.error', data: 'not json', lastEventId: '' } as unknown as Event)
-    expect(onEvent.mock.calls).toEqual([
-      ['message.upserted', { id: 'm1' }, '7'],
-      ['sync.error', 'not json', null],
-    ])
-
-    const err = new Event('error')
-    es.onerror!(err)
-    expect(onError).toHaveBeenCalledWith(err)
-
-    unsubscribe()
-    expect(es.closed).toBe(true)
-  })
-
-  it('subscribes to the outbox event types the backend emits to clients', () => {
-    expect([...MAIL_CORE_EVENTS].sort()).toEqual([
-      'client.resync_hint',
-      'folder.stats_updated',
-      'message.removed',
-      'message.upserted',
-      'remote_operation.updated',
-      'sync.completed',
-      'sync.error',
-      'sync.progress',
-    ])
   })
 })

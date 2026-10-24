@@ -96,6 +96,28 @@ describe('subscribeMailCoreStream', () => {
     unsubscribe()
   })
 
+  it('dispatches every named mail-core outbox event from the fetch stream', async () => {
+    const eventTypes = [
+      'message.upserted',
+      'message.removed',
+      'folder.stats_updated',
+      'sync.progress',
+      'sync.completed',
+      'sync.error',
+      'remote_operation.updated',
+      'client.resync_hint',
+    ]
+    const body = eventTypes.map((event) => `event: ${event}\ndata: {}\n\n`).join('')
+    vi.stubGlobal('fetch', vi.fn(async () => mockSseResponse(body)))
+    const onEvent = vi.fn()
+
+    const unsubscribe = subscribeMailCoreStream(onEvent)
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(onEvent.mock.calls.map(([event]) => event)).toEqual(eventTypes)
+    unsubscribe()
+  })
+
   it('stops reconnecting on 401/403 and fires onUnauthorized and unauthorized event', async () => {
     const fetchMock = vi.fn(async () => {
       return new Response(JSON.stringify({ detail: 'unauthorized' }), { status: 401 })
