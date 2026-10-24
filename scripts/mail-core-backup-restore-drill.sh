@@ -103,12 +103,16 @@ case "$(basename "$OUT")" in
     ;;
 esac
 
-rm -rf -- "$OUT"
-mkdir -p "$OUT"
-
 # Ensure backup key differs from blob key
 export MAIL_CORE_BACKUP_KEY="${MAIL_CORE_BACKUP_KEY:-$( "$PYTHON" -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')}"
 export MAIL_CORE_BLOB_KEY_V1="${MAIL_CORE_BLOB_KEY_V1:-$( "$PYTHON" -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')}"
+if [[ "$MAIL_CORE_BACKUP_KEY" == "$MAIL_CORE_BLOB_KEY_V1" ]]; then
+  echo "MAIL_CORE_BACKUP_KEY must differ from MAIL_CORE_BLOB_KEY_V1" >&2
+  exit 2
+fi
+
+rm -rf -- "$OUT"
+mkdir -p "$OUT"
 export KKMAIL_DRILL_OUT="$OUT"
 
 # Heredoc is single-quoted so Path is not built from untrusted shell expansion.
