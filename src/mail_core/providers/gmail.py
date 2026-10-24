@@ -13,6 +13,7 @@ Without ``transport`` (and without a live credential HTTP client), methods raise
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -31,6 +32,8 @@ from mail_core.providers.parsing.gmail_history import (
     parse_gmail_history,
     parse_gmail_internal_date,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GmailNotConfiguredError(NotImplementedError):
@@ -180,6 +183,10 @@ class GmailProvider:
             _raise_mapped(exc)
             raise  # pragma: no cover
 
+    def _confirmed_deleted_ids(self, folder_remote_id: str, remote_ids: Sequence[str]) -> set[str]:
+        actions = self.reconcile(folder_remote_id, remote_ids)
+        return {action.remote_id for action in actions if action.kind == "delete"}
+
     def list_folders(self) -> Sequence[RemoteFolder]:
         self._calls.append("list_folders")
         if self.transport is None:
@@ -220,21 +227,37 @@ class GmailProvider:
             return data["page"]
         msgs = data.get("messages") or []
         items: list[RemoteMessageMeta] = []
+        missing_404: dict[str, ProviderHttpError] = {}
         for stub in msgs:
             mid = stub.get("id")
             if not mid:
                 continue
             # Batch-detail: one messages.get(metadata) per id (no fabricated empty meta).
-            detail = self._call(
-                "GET",
-                f"/gmail/v1/users/{self.user_id}/messages/{mid}",
-                {
-                    "format": "metadata",
-                    "metadataHeaders": list(_GMAIL_META_HEADERS),
-                },
-            )
+            try:
+                detail = self._call(
+                    "GET",
+                    f"/gmail/v1/users/{self.user_id}/messages/{mid}",
+                    {
+                        "format": "metadata",
+                        "metadataHeaders": list(_GMAIL_META_HEADERS),
+                    },
+                )
+            except ProviderHttpError as exc:
+                if exc.status == 404 and not isinstance(exc, CursorInvalidError):
+                    missing_404[str(mid)] = exc
+                    continue
+                raise
             _validate_metadata_response(detail, str(mid))
             items.append(_meta_from_gmail_message(detail))
+        if missing_404:
+            confirmed_deleted = self._confirmed_deleted_ids(folder_remote_id, list(missing_404))
+            unconfirmed = next((remote_id for remote_id in missing_404 if remote_id not in confirmed_deleted), None)
+            if unconfirmed is not None:
+                raise missing_404[unconfirmed]
+            logger.warning(
+                "Gmail metadata hydration confirmed %d message(s) deleted before detail fetch; skipping",
+                len(confirmed_deleted),
+            )
         token = data.get("nextPageToken")
         next_cursor: dict[str, Any] = {}
         if token:
@@ -299,19 +322,40 @@ class GmailProvider:
             start_history_id=str(history_id),
         )
         hydrated_changes: list[DeltaChange] = []
+        missing_404: dict[str, ProviderHttpError] = {}
+        missing_positions: list[tuple[int, str]] = []
         for change in page.changes:
             if change.kind == "upsert":
-                detail = self._call(
-                    "GET",
-                    f"/gmail/v1/users/{self.user_id}/messages/{change.remote_id}",
-                    {"format": "metadata", "metadataHeaders": list(_GMAIL_META_HEADERS)},
-                )
+                try:
+                    detail = self._call(
+                        "GET",
+                        f"/gmail/v1/users/{self.user_id}/messages/{change.remote_id}",
+                        {"format": "metadata", "metadataHeaders": list(_GMAIL_META_HEADERS)},
+                    )
+                except ProviderHttpError as exc:
+                    if exc.status == 404 and not isinstance(exc, CursorInvalidError):
+                        missing_404[change.remote_id] = exc
+                        missing_positions.append((len(hydrated_changes), change.remote_id))
+                        hydrated_changes.append(change)
+                        continue
+                    raise
                 _validate_metadata_response(detail, change.remote_id)
                 change = DeltaChange(
                     kind="upsert", remote_id=change.remote_id,
                     meta=_meta_from_gmail_message(detail), flags=change.flags,
                 )
             hydrated_changes.append(change)
+        if missing_404:
+            confirmed_deleted = self._confirmed_deleted_ids(folder_remote_id, list(missing_404))
+            unconfirmed = next((remote_id for remote_id in missing_404 if remote_id not in confirmed_deleted), None)
+            if unconfirmed is not None:
+                raise missing_404[unconfirmed]
+            for position, remote_id in missing_positions:
+                hydrated_changes[position] = DeltaChange(kind="delete", remote_id=remote_id)
+            logger.warning(
+                "Gmail delta hydration confirmed %d message(s) deleted before detail fetch; applying deletes",
+                len(confirmed_deleted),
+            )
         return DeltaPage(
             changes=hydrated_changes,
             next_cursor=page.next_cursor,
