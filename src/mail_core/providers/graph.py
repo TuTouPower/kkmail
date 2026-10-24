@@ -39,6 +39,12 @@ _GRAPH_WELL_KNOWN_ROLES: dict[str, str] = {
     "junkemail": "junk",
     "archive": "archive",
 }
+MAX_GRAPH_PAGES_PER_CALL = 100
+MAX_GRAPH_ITEMS_PER_CALL = 50_000
+
+
+class GraphPaginationError(RuntimeError):
+    """Raised when Graph paging cannot complete within its safety bounds."""
 
 
 def graph_folder_role(folder: dict[str, Any], inbox_id: str | None = None) -> str:
@@ -107,12 +113,27 @@ class GraphProvider:
         except Exception:
             pass
 
+        page_count = 0
+        item_count = 0
+
         def _fetch_all_pages(url: str) -> list[dict[str, Any]]:
+            nonlocal page_count, item_count
             items: list[dict[str, Any]] = []
             current_url: str | None = url
+            visited_urls: set[str] = set()
             while current_url:
+                if current_url in visited_urls:
+                    raise GraphPaginationError("Graph folder pagination returned a repeated nextLink")
+                if page_count >= MAX_GRAPH_PAGES_PER_CALL:
+                    raise GraphPaginationError("Graph folder pagination exceeded the page limit")
+                visited_urls.add(current_url)
                 data = self._call("GET", current_url, {})
-                items.extend(data.get("value") or [])
+                page_count += 1
+                page_items = data.get("value") or []
+                item_count += len(page_items)
+                if item_count > MAX_GRAPH_ITEMS_PER_CALL:
+                    raise GraphPaginationError("Graph folder pagination exceeded the item limit")
+                items.extend(page_items)
                 current_url = data.get("@odata.nextLink") or data.get("next_link")
             return items
 
@@ -251,10 +272,23 @@ class GraphProvider:
         remote_ids: set[str] = set()
         next_url: str | None = f"/me/mailFolders/{folder_remote_id}/messages"
         params: dict[str, Any] | None = {"$select": "id"}
+        page_count = 0
+        item_count = 0
+        visited_urls: set[str] = set()
         while next_url:
+            if next_url in visited_urls:
+                raise GraphPaginationError("Graph reconcile pagination returned a repeated nextLink")
+            if page_count >= MAX_GRAPH_PAGES_PER_CALL:
+                raise GraphPaginationError("Graph reconcile pagination exceeded the page limit")
+            visited_urls.add(next_url)
             data = self._call("GET", next_url, params)
+            page_count += 1
             params = None
-            for item in data.get("value") or []:
+            page_items = data.get("value") or []
+            item_count += len(page_items)
+            if item_count > MAX_GRAPH_ITEMS_PER_CALL:
+                raise GraphPaginationError("Graph reconcile pagination exceeded the item limit")
+            for item in page_items:
                 if item.get("id"):
                     remote_ids.add(str(item["id"]))
             next_url = data.get("@odata.nextLink") or data.get("next_link")

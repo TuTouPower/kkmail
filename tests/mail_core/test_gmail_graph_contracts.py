@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from mail_core.providers.gmail import GmailNotConfiguredError, GmailProvider, _meta_from_gmail_message
-from mail_core.providers.graph import GraphNotConfiguredError, GraphProvider
+from mail_core.providers.graph import GraphNotConfiguredError, GraphPaginationError, GraphProvider
 from mail_core.providers.http import CursorInvalidError, FixtureTransport, ProviderHttpError, RateLimitedError
 from mail_core.providers.imap import _parse_message_meta_from_fetch
 from mail_core.providers.parsing.gmail_history import parse_gmail_history
@@ -395,6 +395,75 @@ def test_graph_list_folders_roles():
     assert by_id["folder-inbox-id"].parent_remote_id is None
     assert by_id["folder-custom-id"].role == "other"
     assert by_id["folder-sub-id"].parent_remote_id == "folder-custom-id"
+
+
+def test_graph_folder_pagination_rejects_repeated_next_link():
+    calls = []
+
+    def transport(_method, path, _params):
+        calls.append(path)
+        if path == "/me/mailFolders/inbox":
+            return {"id": "inbox", "childFolderCount": 0}
+        return {"value": [], "@odata.nextLink": "/me/mailFolders"}
+
+    with pytest.raises(GraphPaginationError, match="repeated nextLink"):
+        GraphProvider(credential_ref="x", transport=transport).list_folders()
+
+    assert calls.count("/me/mailFolders") == 1
+
+
+def test_graph_folder_pagination_caps_pages_across_nested_folders(monkeypatch):
+    import mail_core.providers.graph as graph_module
+
+    monkeypatch.setattr(graph_module, "MAX_GRAPH_PAGES_PER_CALL", 1)
+
+    def transport(_method, path, _params):
+        if path == "/me/mailFolders/inbox":
+            return {"id": "inbox", "childFolderCount": 0}
+        if path == "/me/mailFolders":
+            return {"value": [{"id": "parent", "childFolderCount": 1}]}
+        return {"value": []}
+
+    with pytest.raises(GraphPaginationError, match="page limit"):
+        GraphProvider(credential_ref="x", transport=transport).list_folders()
+
+
+def test_graph_reconcile_caps_items_and_rejects_repeated_next_link(monkeypatch):
+    import mail_core.providers.graph as graph_module
+
+    monkeypatch.setattr(graph_module, "MAX_GRAPH_ITEMS_PER_CALL", 1)
+
+    def too_many_items(_method, _path, _params):
+        return {"value": [{"id": "one"}, {"id": "two"}]}
+
+    provider = GraphProvider(credential_ref="x", transport=too_many_items)
+    with pytest.raises(GraphPaginationError, match="item limit"):
+        provider.reconcile("inbox", [])
+
+    monkeypatch.setattr(graph_module, "MAX_GRAPH_ITEMS_PER_CALL", 10)
+    monkeypatch.setattr(graph_module, "MAX_GRAPH_PAGES_PER_CALL", 2)
+    page_calls = []
+
+    def many_pages(_method, path, _params):
+        page_calls.append(path)
+        return {"value": [], "@odata.nextLink": f"/page/{len(page_calls)}"}
+
+    provider = GraphProvider(credential_ref="x", transport=many_pages)
+    with pytest.raises(GraphPaginationError, match="page limit"):
+        provider.reconcile("inbox", [])
+    assert len(page_calls) == 2
+
+    repeated_calls = []
+
+    def repeated_next_link(_method, path, _params):
+        repeated_calls.append(path)
+        return {"value": [{"id": "one"}], "@odata.nextLink": path}
+
+    monkeypatch.setattr(graph_module, "MAX_GRAPH_PAGES_PER_CALL", 100)
+    provider = GraphProvider(credential_ref="x", transport=repeated_next_link)
+    with pytest.raises(GraphPaginationError, match="repeated nextLink"):
+        provider.reconcile("inbox", [])
+    assert len(repeated_calls) == 1
 
 
 def test_not_configured_without_credentials_transport():
