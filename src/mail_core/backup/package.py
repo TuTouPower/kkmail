@@ -354,7 +354,7 @@ def create_backup_package(
     encrypt: bool | None = None,
     allow_dump_stub: bool = False,
 ) -> Path:
-    """Write a plain backup directory, optionally seal to ``backup.kkbak``.
+    """Write an encrypted backup unless plaintext is explicitly requested.
 
     ``allow_dump_stub`` is for offline unit/crypto drills only. Production callers
     must leave it false so a failed pg_dump cannot seal as a successful backup.
@@ -364,9 +364,7 @@ def create_backup_package(
         raise RuntimeError(f"refusing to use symlink as output directory: {out}")
     url = database_url_override or database_url()
     root = blobs_dir or blob_root()
-    do_encrypt = encrypt if encrypt is not None else bool(
-        os.environ.get("MAIL_CORE_BACKUP_KEY")
-    )
+    do_encrypt = True if encrypt is None else encrypt
 
     if not do_encrypt:
         _make_private_dir(out)

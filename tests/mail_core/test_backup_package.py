@@ -426,6 +426,24 @@ def test_backup_key_required_when_encrypt_forced(tmp_path, monkeypatch):
         )
 
 
+def test_create_backup_requires_key_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("MAIL_CORE_BACKUP_KEY", raising=False)
+    monkeypatch.delenv("MAIL_CORE_BACKUP_KEYS", raising=False)
+    monkeypatch.delenv("MAIL_CORE_BACKUP_KEY_VERSION", raising=False)
+    out = tmp_path / "backup"
+
+    with pytest.raises(BackupCryptoError, match="required to encrypt backups"):
+        create_backup_package(
+            out,
+            include_blobs=False,
+            database_url_override="postgresql://u:p@127.0.0.1:1/db",
+            blobs_dir=tmp_path / "blobs",
+            allow_dump_stub=True,
+        )
+
+    assert not out.exists()
+
+
 def test_pg_dump_failure_raises_without_stub(tmp_path, monkeypatch):
     monkeypatch.delenv("MAIL_CORE_BACKUP_KEY", raising=False)
     monkeypatch.delenv("MAIL_CORE_BACKUP_KEYS", raising=False)
