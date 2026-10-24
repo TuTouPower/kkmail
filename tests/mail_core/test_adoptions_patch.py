@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 import time
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -58,6 +59,20 @@ def test_ssrf_imap_host_validation(monkeypatch):
     # Allowed when env set
     monkeypatch.setenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", "1")
     validate_imap_host("127.0.0.1")  # does not raise
+
+
+def test_ssrf_rejects_dns_answers_mixing_public_and_private_ips(monkeypatch):
+    monkeypatch.delenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", raising=False)
+    monkeypatch.setattr(
+        "mail_core.providers.factory.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", 993)),
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.8", 993)),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="SSRF protection"):
+        validate_imap_host("mail.example.test")
 
 
 def test_threading_savepoint_conflict_retry():

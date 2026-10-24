@@ -77,6 +77,7 @@ def test_imap_timeout_passed_to_connect(monkeypatch):
             seen["timeout"] = timeout
             seen["host"] = host
             seen["ssl_context"] = ssl_context
+            self.sock = SimpleNamespace(getpeername=lambda: ("8.8.8.8", 993), close=lambda: None)
 
         def login(self, *a):
             return ("OK", [b""])
@@ -98,7 +99,7 @@ def test_imap_timeout_passed_to_connect(monkeypatch):
 def test_imap_fetch_failure_raises_not_advance(monkeypatch):
     class FakeIMAP:
         def __init__(self, *a, **k):
-            pass
+            self.sock = SimpleNamespace(getpeername=lambda: ("8.8.8.8", 993), close=lambda: None)
 
         def login(self, *a):
             return ("OK", [b""])
@@ -128,7 +129,7 @@ def test_imap_fetch_failure_raises_not_advance(monkeypatch):
 def test_imap_search_failure_raises_not_exhausted(monkeypatch):
     class FakeIMAP:
         def __init__(self, *a, **k):
-            pass
+            self.sock = SimpleNamespace(getpeername=lambda: ("8.8.8.8", 993), close=lambda: None)
 
         def login(self, *a):
             return ("OK", [b""])

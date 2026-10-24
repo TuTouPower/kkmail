@@ -45,6 +45,8 @@ def test_imap_connect_sends_id_command():
     )
 
     mock_client = MagicMock(spec=imaplib.IMAP4_SSL)
+    mock_client.sock = Mock()
+    mock_client.sock.getpeername.return_value = ("8.8.8.8", 993)
     mock_client.login.return_value = ("OK", [b"LOGIN completed"])
     mock_client._simple_command.return_value = ("OK", [b"ID completed"])
 
@@ -71,6 +73,8 @@ def test_imap_connect_tolerates_missing_id_support():
     )
 
     mock_client = MagicMock(spec=imaplib.IMAP4_SSL)
+    mock_client.sock = Mock()
+    mock_client.sock.getpeername.return_value = ("8.8.8.8", 993)
     mock_client.login.return_value = ("OK", [b"LOGIN completed"])
     mock_client._simple_command.side_effect = imaplib.IMAP4.error("BAD command unknown: ID")
 
@@ -79,6 +83,27 @@ def test_imap_connect_tolerates_missing_id_support():
 
     # Connection must succeed despite ID error
     assert client is mock_client
+
+
+def test_imap_connect_rejects_private_peer_before_login(monkeypatch):
+    monkeypatch.delenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", raising=False)
+    provider = ImapProvider(
+        host="imap.example.com",
+        port=993,
+        username="user@example.com",
+        password="secretpassword",
+        use_ssl=True,
+    )
+    mock_client = MagicMock(spec=imaplib.IMAP4_SSL)
+    mock_client.sock = Mock()
+    mock_client.sock.getpeername.return_value = ("10.0.0.8", 993)
+
+    with patch("imaplib.IMAP4_SSL", return_value=mock_client):
+        with pytest.raises(ValueError, match="SSRF protection"):
+            provider._connect()
+
+    mock_client.login.assert_not_called()
+    mock_client.sock.close.assert_called_once()
 
 
 @pytest.mark.skipif(
@@ -124,6 +149,8 @@ def test_imap_connect_netease_login_error_raises_permanent_auth_error():
     )
 
     mock_client = MagicMock(spec=imaplib.IMAP4_SSL)
+    mock_client.sock = Mock()
+    mock_client.sock.getpeername.return_value = ("8.8.8.8", 993)
     mock_client.login.side_effect = imaplib.IMAP4.error("LOGIN Login error or password error")
 
     with patch("imaplib.IMAP4_SSL", return_value=mock_client):

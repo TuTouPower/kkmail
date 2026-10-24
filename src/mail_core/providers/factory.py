@@ -5,7 +5,6 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
-import os
 import socket
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
@@ -13,6 +12,7 @@ from mail_core.mail.storage.models import Account
 from mail_core.providers.base import MailProvider
 from mail_core.providers.gmail import GmailProvider
 from mail_core.providers.graph import GraphProvider
+from mail_core.providers.host_security import is_restricted_ip, private_hosts_allowed
 from mail_core.providers.imap import ImapProvider
 from mail_core.providers.oauth import (
     BearerTransport,
@@ -54,15 +54,12 @@ def is_private_host(host: str) -> bool:
     if h in ("localhost", "localhost.localdomain") or h.endswith(".local") or h.endswith(".localhost"):
         return True
     try:
-        ip = ipaddress.ip_address(h)
-        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified
+        return is_restricted_ip(h)
     except ValueError:
         pass
     try:
         for res in socket.getaddrinfo(h, None):
-            ip_str = res[4][0]
-            ip = ipaddress.ip_address(ip_str)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
+            if is_restricted_ip(res[4][0]):
                 return True
     except (socket.gaierror, socket.herror, OSError):
         pass
@@ -70,7 +67,7 @@ def is_private_host(host: str) -> bool:
 
 
 def validate_imap_host(host: str) -> None:
-    if os.environ.get("MAIL_CORE_ALLOW_PRIVATE_HOSTS", "").strip().lower() in ("1", "true", "yes", "on"):
+    if private_hosts_allowed():
         return
     if is_private_host(host):
         raise ValueError(f"imap host {host!r} is a private or loopback address (SSRF protection)")

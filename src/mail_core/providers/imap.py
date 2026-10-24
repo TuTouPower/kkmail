@@ -30,6 +30,7 @@ from mail_core.providers.base import (
     RemoteOperationResult,
 )
 from mail_core.providers.http import CursorInvalidError
+from mail_core.providers.host_security import validate_imap_peer_address
 from mail_core.security.redact import safe_error
 
 log = logging.getLogger("mail_core.providers.imap")
@@ -454,6 +455,16 @@ class ImapProvider:
             )
         else:
             client = imaplib.IMAP4(self.host, self.port, timeout=timeout)
+        sock = getattr(client, "sock", None)
+        try:
+            validate_imap_peer_address(sock.getpeername()[0])
+        except Exception:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            raise
         try:
             client.login(self.username, self.password)
             # RFC 2971: Client identification (required by NetEase 163/126 to prevent 'SELECT Unsafe Login')

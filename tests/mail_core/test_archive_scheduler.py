@@ -183,6 +183,7 @@ def test_archive_batch_reuses_imap_session_across_messages():
             session.commit()
 
         mock_imap_client = MagicMock()
+        mock_imap_client.sock.getpeername.return_value = ("8.8.8.8", 993)
         mock_imap_client.login.return_value = ("OK", [b"LOGIN completed"])
         mock_imap_client.select.return_value = ("OK", [b"10"])
         mock_imap_client.uid.return_value = ("OK", [(b"1", b"From: sender@example.com\r\nSubject: Hi\r\n\r\nBody")])
