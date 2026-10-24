@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 
 def legacy_account_connection(row) -> tuple[str, dict]:
@@ -25,12 +26,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Migrate accounts, groups, credentials and emails from legacy SQLite to mail-core PostgreSQL."
     )
+    parser.add_argument("--source", required=True, type=Path, help="legacy SQLite database path")
+    parser.add_argument("--target-url", required=True, help="PostgreSQL target URL")
+    parser.add_argument("--yes", action="store_true", help="confirm the displayed source and target")
     return parser.parse_args(argv)
 
 
 # Parse CLI arguments early so --help succeeds without heavy imports or DB connection
-if __name__ == "__main__":
-    parse_args()
+_cli_args = parse_args() if __name__ == "__main__" else None
 
 import base64
 import email.utils
@@ -40,7 +43,6 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 # Add src to sys.path
 ROOT = Path(__file__).resolve().parents[1]
@@ -261,11 +263,43 @@ def decrypt_legacy_field(
     return val
 
 
-def migrate():
-    sqlite_path = ROOT / "data" / "outlook_accounts.db"
+def _target_url_details(raw_url: str) -> tuple[str, str]:
+    from sqlalchemy.engine import make_url
+
+    try:
+        url = make_url(raw_url)
+    except Exception as exc:
+        raise ValueError("invalid PostgreSQL target URL") from exc
+    if url.drivername not in ("postgresql", "postgresql+psycopg") or not url.host or not url.database:
+        raise ValueError("target URL must identify a PostgreSQL host and database")
+    normalized_url = url.set(drivername="postgresql+psycopg").render_as_string(hide_password=False)
+    host = f"[{url.host}]" if ":" in url.host else url.host
+    target = f"host={host} port={url.port or 5432} database={url.database}"
+    return normalized_url, target
+
+
+def main(args: argparse.Namespace) -> int:
+    sqlite_path = args.source.expanduser().resolve()
+    try:
+        target_url, target_summary = _target_url_details(args.target_url)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    print(f"Source SQLite: {sqlite_path}")
+    print(f"Target PostgreSQL: {target_summary}")
+    if not args.yes:
+        print("No writes performed; review the target and rerun with --yes.", file=sys.stderr)
+        return 2
     if not sqlite_path.is_file():
-        print(f"Legacy sqlite db not found: {sqlite_path}", file=sys.stderr)
-        sys.exit(1)
+        print(f"Legacy SQLite database not found: {sqlite_path}", file=sys.stderr)
+        return 1
+
+    migrate(sqlite_path, target_url)
+    return 0
+
+
+def migrate(sqlite_path: Path, target_url: str) -> None:
 
     legacy_secret = os.environ.get("LEGACY_SECRET_KEY")
     if not legacy_secret:
@@ -281,7 +315,7 @@ def migrate():
     blob_raw = base64.b64decode(blob_b64)
     keyring = Keyring({1: blob_raw}, active_version=1)
 
-    Session = get_session_factory()
+    Session = get_session_factory(target_url)
     sqlite_conn = sqlite3.connect(f"{sqlite_path.as_uri()}?mode=ro", uri=True)
     sqlite_conn.row_factory = sqlite3.Row
     sqlite_cursor = sqlite_conn.cursor()
@@ -433,4 +467,4 @@ def migrate():
 
 
 if __name__ == "__main__":
-    migrate()
+    raise SystemExit(main(_cli_args))
