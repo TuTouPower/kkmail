@@ -105,6 +105,52 @@ def test_imap_fetch_metadata_page_safe_on_noselect_mailbox(monkeypatch):
     assert page.exhausted is True
 
 
+def test_imap_delta_changes_safe_on_noselect_mailbox(monkeypatch):
+    class FakeIMAPNoselect:
+        def __init__(self):
+            self.list_calls = 0
+
+        def select(self, mailbox, readonly=True):
+            return "NO", [b"cannot select"]
+
+        def list(self, ref, mailbox):
+            self.list_calls += 1
+            return "OK", [b'(\\Noselect) "/" "Other Folders"']
+
+        def logout(self):
+            return "OK", []
+
+    client = FakeIMAPNoselect()
+    provider = ImapProvider("imap.example.com", 993, "user", "pass", use_ssl=False)
+    monkeypatch.setattr(provider, "_connect", lambda: client)
+    cursor = {"uid_next": 25, "modseq": 4}
+
+    page = provider.delta_changes("Other Folders", cursor)
+
+    assert page.changes == ()
+    assert page.next_cursor == cursor
+    assert page.exhausted is True
+    assert client.list_calls == 1
+
+
+def test_imap_delta_changes_preserves_ordinary_select_errors(monkeypatch):
+    class FakeIMAPSelectFail:
+        def select(self, mailbox, readonly=True):
+            return "NO", [b"temporary failure"]
+
+        def list(self, ref, mailbox):
+            return "OK", [b'(\\HasChildren) "/" "Other Folders"']
+
+        def logout(self):
+            return "OK", []
+
+    provider = ImapProvider("imap.example.com", 993, "user", "pass", use_ssl=False)
+    monkeypatch.setattr(provider, "_connect", lambda: FakeIMAPSelectFail())
+
+    with pytest.raises(RuntimeError, match="select Other Folders failed"):
+        provider.delta_changes("Other Folders", {"uid_next": 25})
+
+
 # --- 2. HTTP 503 and TLS EOF / Network Disconnect Transient Retries ---
 
 

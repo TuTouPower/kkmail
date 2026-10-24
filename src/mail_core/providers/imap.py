@@ -812,6 +812,8 @@ class ImapProvider:
         try:
             typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
             if typ != "OK":
+                if _is_mailbox_noselect(c, folder_remote_id):
+                    return DeltaPage(changes=(), next_cursor=cursor, exhausted=True)
                 raise RuntimeError(f"select {folder_remote_id} failed")
             highest = None
             try:
