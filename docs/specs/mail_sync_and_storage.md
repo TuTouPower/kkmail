@@ -62,7 +62,7 @@
 
 ## 上下文区
 
-- 来源：`docs/blueprint/decisions.md` (IMAP 安全阻断删除决策)；task t037 对旧 SQLite 数据迁移来源、身份与未知归档状态的核实见 [`docs/tasks/t037_legacy_migration_fidelity/spec.md`](../tasks/t037_legacy_migration_fidelity/spec.md)。
+- 来源：`docs/blueprint/decisions.md` (IMAP 安全阻断删除决策)；task t037 对旧 SQLite 数据迁移来源、身份与未知归档状态的核实见 [`docs/archive/tasks/t037_legacy_migration_fidelity/spec.md`](../archive/tasks/t037_legacy_migration_fidelity/spec.md)。
 
 - 本轮来源：t041/p024（未知状态）、t042/p025（部分字段）、t043/p022（正文摘要隔离闭环）、t051/p037（文件夹角色与显示）、t052/p038（QQ 不可选择父目录）；最终验证由各 task 总账补入。
 
