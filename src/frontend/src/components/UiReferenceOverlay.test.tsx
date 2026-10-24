@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, Profiler } from 'react'
 import { cleanup, render, waitFor } from '../test/render'
 import UiReferenceOverlay from './UiReferenceOverlay'
 
@@ -133,6 +134,50 @@ describe('<UiReferenceOverlay /> (t011 AC-001 ~ AC-006)', () => {
     await waitFor(() => {
       expect(document.body.textContent).toContain('复制失败')
     })
+  })
+
+  it('coalesces external mutations and skips overlay or unchanged badge scans', async () => {
+    const element = document.createElement('button')
+    element.setAttribute('data-ui', 'ML03')
+    const rect = vi.spyOn(element, 'getBoundingClientRect').mockReturnValue({
+      top: 50, left: 100, width: 80, height: 32, right: 180, bottom: 82, x: 100, y: 50, toJSON: () => {},
+    })
+    document.body.appendChild(element)
+
+    const frames: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+    let commits = 0
+    await render(
+      <Profiler id="ui-reference" onRender={() => { commits += 1 }}>
+        <UiReferenceOverlay />
+      </Profiler>,
+    )
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', {
+        key: '.', code: 'Period', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true,
+      }))
+    })
+    await waitFor(() => expect(document.querySelector('.ui-ref-badge')).not.toBeNull())
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+    // Rendering the overlay's own badge must not schedule another full scan.
+    expect(frames).toHaveLength(0)
+    const stableCommitCount = commits
+
+    document.body.appendChild(document.createElement('div'))
+    await waitFor(() => expect(frames).toHaveLength(1))
+    document.body.appendChild(document.createElement('div'))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(frames).toHaveLength(1)
+
+    await act(async () => { frames.shift()?.(0) })
+    expect(rect).toHaveBeenCalledTimes(2)
+    expect(commits).toBe(stableCommitCount)
   })
 
   it('displays failure feedback when navigator.clipboard is missing (t025 AC-004)', async () => {

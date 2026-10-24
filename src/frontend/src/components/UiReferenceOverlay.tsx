@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { formatUiReferenceText, isUiReferenceShortcut } from '../lib/uiReference'
 
 interface ElementBadge {
@@ -8,10 +8,19 @@ interface ElementBadge {
   left: number
 }
 
+function sameBadgePositions(current: ElementBadge[], next: ElementBadge[]): boolean {
+  return current.length === next.length && current.every((badge, index) => {
+    const candidate = next[index]
+    return badge.id === candidate.id && badge.key === candidate.key && badge.top === candidate.top && badge.left === candidate.left
+  })
+}
+
 export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
   const [active, setActive] = useState(false)
   const [badges, setBadges] = useState<ElementBadge[]>([])
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
+  const badgesRef = useRef<ElementBadge[]>([])
 
   const scanElements = useCallback(() => {
     if (!active) return
@@ -41,7 +50,10 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
       })
     })
 
-    setBadges(nextBadges)
+    if (!sameBadgePositions(badgesRef.current, nextBadges)) {
+      badgesRef.current = nextBadges
+      setBadges(nextBadges)
+    }
   }, [active])
 
   // Keydown listener for shortcut and Escape
@@ -68,6 +80,7 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
   useEffect(() => {
     if (!active) {
       // oxlint-disable react/set-state-in-effect -- clear transient overlay state when the shortcut closes the overlay.
+      badgesRef.current = []
       setBadges([])
       setToast(null)
       // oxlint-enable react/set-state-in-effect
@@ -76,22 +89,25 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
 
     scanElements()
 
-    let ticking = false
+    let scheduledFrame: number | null = null
+    const scheduleScan = () => {
+      if (scheduledFrame !== null) return
+      scheduledFrame = window.requestAnimationFrame(() => {
+        scheduledFrame = null
+        scanElements()
+      })
+    }
     const onScrollOrResize = () => {
-      if (!ticking) {
-        window.requestAnimationFrame(() => {
-          scanElements()
-          ticking = false
-        })
-        ticking = true
-      }
+      scheduleScan()
     }
 
     window.addEventListener('scroll', onScrollOrResize, true)
     window.addEventListener('resize', onScrollOrResize)
 
-    const observer = new MutationObserver(() => {
-      scanElements()
+    const observer = new MutationObserver((mutations) => {
+      const overlay = overlayRef.current
+      if (overlay && mutations.every((mutation) => overlay.contains(mutation.target))) return
+      scheduleScan()
     })
     observer.observe(document.body, { childList: true, subtree: true, attributes: true })
 
@@ -99,6 +115,7 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
       window.removeEventListener('scroll', onScrollOrResize, true)
       window.removeEventListener('resize', onScrollOrResize)
       observer.disconnect()
+      if (scheduledFrame !== null) window.cancelAnimationFrame(scheduledFrame)
     }
   }, [active, scanElements])
 
@@ -130,6 +147,7 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
 
   return (
     <div
+      ref={overlayRef}
       className="ui-reference-overlay"
       style={{
         position: 'fixed',
