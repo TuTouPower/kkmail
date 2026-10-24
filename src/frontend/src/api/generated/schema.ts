@@ -90,6 +90,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/oauth/flows/{flow_id}/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Oauth Device Poll */
+        post: operations["api_oauth_device_poll_api_accounts_oauth_flows__flow_id__poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/oauth/metadata": {
         parameters: {
             query?: never;
@@ -713,6 +730,8 @@ export interface components {
             master_order?: number | null;
             /** Oauth Client Type */
             oauth_client_type?: string | null;
+            /** Oauth Tenant */
+            oauth_tenant?: string | null;
             /** Provider */
             provider: string;
             /** Provider Profile */
@@ -1048,6 +1067,12 @@ export interface components {
              * @enum {string}
              */
             intent: "create" | "reauthorize";
+            /**
+             * Method
+             * @default authorization_code
+             * @enum {string}
+             */
+            method: "authorization_code" | "device_code";
             /** Provider */
             provider: string;
             /** Redirect Uri */
@@ -1057,6 +1082,12 @@ export interface components {
              * @enum {string}
              */
             status: "pending" | "authorized" | "failed" | "expired" | "cancelled" | "consumed";
+            /** Tenant */
+            tenant?: string | null;
+            /** User Code */
+            user_code?: string | null;
+            /** Verification Uri */
+            verification_uri?: string | null;
             /** Verified Email */
             verified_email?: string | null;
         };
@@ -1104,10 +1135,18 @@ export interface components {
              */
             intent: "create" | "reauthorize";
             /**
+             * Method
+             * @default authorization_code
+             * @enum {string}
+             */
+            method: "authorization_code" | "device_code";
+            /**
              * Provider
              * @default google
              */
             provider: string;
+            /** Tenant */
+            tenant?: string | null;
         };
         /** OAuthStartOut */
         OAuthStartOut: {
@@ -1127,12 +1166,24 @@ export interface components {
              * @enum {string}
              */
             intent: "create" | "reauthorize";
+            /**
+             * Method
+             * @default authorization_code
+             * @enum {string}
+             */
+            method: "authorization_code" | "device_code";
             /** Provider */
             provider: string;
             /** Redirect Uri */
             redirect_uri: string;
             /** Status */
             status: string;
+            /** Tenant */
+            tenant?: string | null;
+            /** User Code */
+            user_code?: string | null;
+            /** Verification Uri */
+            verification_uri?: string | null;
         };
         /** OkOut */
         OkOut: {
@@ -1460,6 +1511,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OAuthCancelOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_oauth_device_poll_api_accounts_oauth_flows__flow_id__poll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                flow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthFlowStatusOut"];
                 };
             };
             /** @description Validation Error */

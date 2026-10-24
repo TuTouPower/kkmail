@@ -14,3 +14,10 @@
 - 自托管网页模式使用可信部署配置 `MAIL_CORE_PUBLIC_ORIGIN` 生成固定 HTTPS 回调 URI（机密客户端），绝不信任请求 `Host`/`Forwarded` 或 URL 查询参数；Electron 桌面端（`KKMAIL_SIDECAR=1`）使用 `http://127.0.0.1:{MAIL_CORE_PORT}/api/accounts/oauth/callback/google` 动态端口 loopback 回调（公共客户端）。
 - 回调端点允许无应用 Cookie 的桌面系统浏览器访问，原子消费 `state` 与 `code`，调用 Google token 端点换码并调用 Gmail `users.getProfile` 核实真实邮箱。回调仅暂存结果，不直接新增或修改账户；只有原始登录会话点击最终“添加 / 保存修改”时才在同一事务内原子写入账户与加密凭据并销毁一次性授权结果。
 - 回调响应设置 `Cache-Control: no-store`、`Referrer-Policy: no-referrer` 与无外链 CSP，内联脚本通过 `history.replaceState` 清理地址栏查询字符串；日志自动脱敏回调查询参数与短期验证秘密。
+
+## Microsoft Graph 浏览器与设备码登录（t055）
+
+- 新增与编辑 Graph 提供浏览器登录、设备码登录及已有命名凭据更新。帮助说明自有 Entra 应用、账号类型、Client ID、Secret value、公共客户端开关和管理员同意条件，不代办注册。
+- 浏览器方式使用 PKCE 与可信 Web/桌面回调；微软 Electron 使用 localhost 动态端口，不能套用到 127.0.0.1。设备码无需回调或 Secret，展示官方验证地址、短码、倒计时、复制/打开/取消操作，自动申请后台同步凭据。
+- 两种方式均经 Graph `/me` 与邮箱可访问性核实；不解析令牌或从 UPN 猜邮箱。重新授权匹配原邮箱、已存用户 ID、应用和租户，旧 Graph 无用户 ID 可凭精确邮箱建立身份。最终保存沿用共享事务与锁顺序，保留分组/同步偏好/历史邮件。
+- 设备码请求与到期轮询均在服务端，原会话带 CSRF 驱动，间隔/限流/取消/过期跨进程串行化；长码不返回前端，期限不超过供应商与本地 10 分钟上限。Microsoft IMAP 继续拒绝。

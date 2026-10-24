@@ -311,3 +311,5 @@ python3 scripts/run_full_stack_e2e.py
 后端：`scripts/run-mail-core-tests.sh run -k "provider_account or google_oauth_callback or accounts_api or oauth_transport or account_credentials" --no-cov`，覆盖真实加密凭据更新、回滚、Microsoft IMAP 拒绝、Google OAuth PKCE 换码与 `users.getProfile` 核验、跨会话/重放/并发回调拦截及多客户端令牌轮换。前端：`npm --prefix src/frontend test`；浏览器：`npm --prefix src/frontend run test:e2e -- provider_account_forms.spec.ts settings_workspace.spec.ts`，覆盖 Google OAuth 跳转登录、重新授权、帮助弹窗焦点与窄屏输入。
 
 OAuth Electron 集成门禁：先构建生产 SPA，再运行 `KKMAIL_TEST_ELECTRON=1 scripts/run-mail-core-tests.sh run -k google_oauth_callback --no-cov`。独立 Electron profile、真实 FastAPI/隔离 PG、假供应商 HTTP 服务覆盖动态 loopback、生产外链处理器、无 Cookie 回调、窗口焦点恢复及最终保存；不连接真实 Google 账号。
+
+Microsoft 回归：`KKMAIL_TEST_ELECTRON=1 scripts/run-mail-core-tests.sh run -k "microsoft_oauth or google_oauth_callback" --no-cov`，先构建生产 SPA。覆盖 Graph 身份/邮箱/许可、已有账户重新授权、租户与应用不匹配、设备码 interval/slow_down/429、取消/epoch/迟到成功、并发单次轮询、官方地址白名单及日志错误脱敏。微软独立 Electron 实例经真实 API/隔离 PG 与供应商 HTTP 夹具验证 localhost 动态端口、系统外链、无 Cookie 回调、恢复与最终保存。真实 Entra 注册/2FA/管理员同意不作为模拟通过，需另记真实账号冒烟结果。

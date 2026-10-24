@@ -376,6 +376,10 @@ export const api = {
     return apiRequest<OAuthFlowStatusOut>(`/api/accounts/oauth/flows/${encodeURIComponent(flowId)}`)
   },
 
+  pollOAuthFlow(flowId: string) {
+    return postJson<OAuthFlowStatusOut>(`/api/accounts/oauth/flows/${encodeURIComponent(flowId)}/poll`)
+  },
+
   cancelOAuthFlow(flowId: string) {
     return postJson<OAuthCancelOut>(`/api/accounts/oauth/flows/${encodeURIComponent(flowId)}/cancel`)
   },

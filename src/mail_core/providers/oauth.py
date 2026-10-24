@@ -170,7 +170,7 @@ def default_urllib_token_post(
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
-        raise ProviderHttpError(raw or str(exc), status=exc.code, body=raw) from exc
+        raise ProviderHttpError(raw or str(exc), status=exc.code, body=raw, headers=dict(exc.headers or {})) from exc
     except urllib.error.URLError as exc:
         raise ProviderHttpError(f"token transport error: {exc.reason}", status=None) from exc
 
