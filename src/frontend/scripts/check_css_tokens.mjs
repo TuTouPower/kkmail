@@ -28,7 +28,7 @@ const DESIGN_DARK_TOKEN_MAP = Object.freeze({
   'danger-dark': ['--danger', '--red'],
 })
 
-function extractDeclared(css) {
+export function extractDeclaredTokens(css) {
   const set = new Set()
   TOKEN_DECL_REGEX.lastIndex = 0
   let match
@@ -38,7 +38,7 @@ function extractDeclared(css) {
   return set
 }
 
-function extractReferenced(content) {
+export function extractReferencedTokens(content) {
   const refs = []
   const lines = content.split('\n')
   for (let i = 0; i < lines.length; i++) {
@@ -50,6 +50,33 @@ function extractReferenced(content) {
     }
   }
   return refs
+}
+
+export function validateCssTokens(files, tokensCssContent) {
+  const declared = extractDeclaredTokens(tokensCssContent)
+  for (const [filePath, content] of Object.entries(files)) {
+    if (filePath.endsWith('.css')) {
+      for (const token of extractDeclaredTokens(content)) declared.add(token)
+    }
+  }
+
+  const errors = []
+  const referenced = new Set()
+  for (const [filePath, content] of Object.entries(files)) {
+    for (const reference of extractReferencedTokens(content)) {
+      referenced.add(reference.name)
+      if (!declared.has(reference.name)) {
+        errors.push({ variable: reference.name, file: filePath, line: reference.line })
+      }
+    }
+  }
+
+  return {
+    declaredCount: declared.size,
+    referencedCount: referenced.size,
+    errors,
+    ok: errors.length === 0,
+  }
 }
 
 function extractDesignColors(markdown) {
@@ -120,36 +147,19 @@ function walk(dir) {
 
 function runChecks() {
   const tokensCss = readFileSync(tokensCssPath, 'utf8')
-  const declared = extractDeclared(tokensCss)
-
   const allFiles = walk(srcDir)
-  // Collect local declarations in CSS
-  for (const f of allFiles) {
-    if (f.endsWith('.css')) {
-      const css = readFileSync(f, 'utf8')
-      for (const d of extractDeclared(css)) declared.add(d)
-    }
-  }
-
-  const errors = []
-  for (const f of allFiles) {
-    const content = readFileSync(f, 'utf8')
-    const refs = extractReferenced(content)
-    const rel = relative(root, f)
-    for (const r of refs) {
-      if (!declared.has(r.name)) {
-        errors.push({ file: rel, line: r.line, variable: r.name })
-      }
-    }
-  }
+  const files = Object.fromEntries(
+    allFiles.map((filePath) => [relative(root, filePath), readFileSync(filePath, 'utf8')]),
+  )
+  const cssTokenResult = validateCssTokens(files, tokensCss)
 
   const designMarkdown = readFileSync(designDocPath, 'utf8')
   const designTokenErrors = validateDesignDarkTokens(designMarkdown, tokensCss)
 
-  if (errors.length > 0) {
-    console.error(`❌ Found ${errors.length} undeclared CSS variable reference(s):`)
-    for (const e of errors) {
-      console.error(`  - ${e.file}:${e.line} -> ${e.variable}`)
+  if (cssTokenResult.errors.length > 0) {
+    console.error(`❌ Found ${cssTokenResult.errors.length} undeclared CSS variable reference(s):`)
+    for (const error of cssTokenResult.errors) {
+      console.error(`  - ${error.file}:${error.line} -> ${error.variable}`)
     }
   } else {
     console.log('✅ All CSS variable references in frontend are declared.')
@@ -165,7 +175,7 @@ function runChecks() {
     console.log('✅ Dark design colors in DESIGN.md match tokens.css.')
   }
 
-  if (errors.length > 0 || designTokenErrors.length > 0) process.exitCode = 1
+  if (!cssTokenResult.ok || designTokenErrors.length > 0) process.exitCode = 1
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
