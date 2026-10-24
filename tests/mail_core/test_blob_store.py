@@ -18,6 +18,7 @@ def test_put_returns_actual_disk_key_version(tmp_path, monkeypatch):
     import base64
     k1 = base64.b64encode(b"1" * 32).decode()
     k2 = base64.b64encode(b"2" * 32).decode()
+    monkeypatch.delenv("MAIL_CORE_BLOB_KEY_V1", raising=False)
     monkeypatch.setenv("MAIL_CORE_BLOB_KEYS", f'{{"1": "{k1}", "2": "{k2}"}}')
     monkeypatch.setenv("MAIL_CORE_BLOB_KEY_VERSION", "1")
     store1 = BlobStore(tmp_path)

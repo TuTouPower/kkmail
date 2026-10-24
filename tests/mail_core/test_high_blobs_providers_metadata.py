@@ -346,6 +346,7 @@ def test_imap_delta_changes_capping_and_pagination(monkeypatch):
 
 def test_rewrap_cleans_tmp_on_failure(tmp_path, monkeypatch):
     k1 = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.delenv("MAIL_CORE_BLOB_KEY_V1", raising=False)
     monkeypatch.setenv("MAIL_CORE_BLOB_KEYS", f'{{"1": "{k1}"}}')
     monkeypatch.setenv("MAIL_CORE_BLOB_ACTIVE_VERSION", "1")
     store = BlobStore(tmp_path)

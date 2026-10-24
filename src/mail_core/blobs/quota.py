@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from mail_core.blobs.crypto import CHUNK_SIZE, HEADER_LEN, TAG_LEN
 
+log = logging.getLogger(__name__)
 QUOTA_RESERVATION_LOCK_NAMESPACE = 0x4B4B5154  # Dedicated two-key PostgreSQL advisory-lock namespace.
 QUOTA_RESERVATION_LOCK_RESOURCE = 0x52455356  # Singleton resource for global hard-quota reservations.
 
@@ -170,13 +172,17 @@ def digest_to_lock_id(digest: str) -> int:
 
 def acquire_blob_digest_lock(session: Session, digest: str) -> None:
     """Acquire transaction-level advisory lock on PostgreSQL for the given blob digest."""
+    bind = getattr(session, "bind", None) or (session.get_bind() if hasattr(session, "get_bind") else None)
+    if bind is None or getattr(getattr(bind, "dialect", None), "name", None) != "postgresql":
+        return
+
+    from sqlalchemy import text
+
+    lock_id = digest_to_lock_id(digest)
     try:
-        bind = getattr(session, "bind", None) or (session.get_bind() if hasattr(session, "get_bind") else None)
-        if bind is not None and getattr(getattr(bind, "dialect", None), "name", None) == "postgresql":
-            from sqlalchemy import text
-            lock_id = digest_to_lock_id(digest)
-            session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": lock_id})
+        session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": lock_id})
     except Exception:
-        pass
+        log.exception("failed to acquire PostgreSQL blob digest advisory lock")
+        raise
 
 

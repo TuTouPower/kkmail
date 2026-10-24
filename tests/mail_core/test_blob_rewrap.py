@@ -13,6 +13,7 @@ from mail_core.blobs.store import BlobStore
 def test_rewrap_moves_to_new_key_version(tmp_path, monkeypatch):
     k1 = base64.b64encode(os.urandom(32)).decode()
     k2 = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.delenv("MAIL_CORE_BLOB_KEY_V1", raising=False)
     monkeypatch.setenv("MAIL_CORE_BLOB_KEYS", f'{{"1": "{k1}", "2": "{k2}"}}')
     monkeypatch.setenv("MAIL_CORE_BLOB_ACTIVE_VERSION", "1")
     store = BlobStore(tmp_path)

@@ -1,22 +1,50 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import event, select
 
 from mail_core.blobs.crypto import MAGIC, BlobCryptoError, wrap
 from mail_core.blobs.gc import sweep_expired_blobs
+from mail_core.blobs.quota import acquire_blob_digest_lock
 from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage import MessageBlob
 
 
+def test_blob_digest_lock_failure_is_logged_and_propagated(caplog):
+    class Session:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+        def execute(self, *_args, **_kwargs):
+            raise RuntimeError("lock unavailable")
+
+    caplog.set_level(logging.ERROR, logger="mail_core.blobs.quota")
+    with pytest.raises(RuntimeError, match="lock unavailable"):
+        acquire_blob_digest_lock(Session(), "a" * 64)
+
+    assert "failed to acquire PostgreSQL blob digest advisory lock" in caplog.text
+
+
+def test_blob_digest_lock_is_skipped_for_non_postgresql_dialects():
+    class Session:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+        def execute(self, *_args, **_kwargs):
+            pytest.fail("non-PostgreSQL sessions must not issue advisory locks")
+
+    acquire_blob_digest_lock(Session(), "a" * 64)
+
+
 def test_aes_gcm_roundtrip_and_key_version(tmp_path, monkeypatch):
     key = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.delenv("MAIL_CORE_BLOB_KEY_V1", raising=False)
     monkeypatch.setenv("MAIL_CORE_BLOB_KEYS", f'{{"1": "{key}", "2": "{base64.b64encode(os.urandom(32)).decode()}"}}')
     monkeypatch.setenv("MAIL_CORE_BLOB_KEY_VERSION", "1")
     store = BlobStore(tmp_path)
