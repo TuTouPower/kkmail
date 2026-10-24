@@ -16,6 +16,12 @@ import type {
   GroupsResponse,
   LoginOut,
   MeOut,
+  OAuthActiveOut,
+  OAuthCancelOut,
+  OAuthFlowStatusOut,
+  OAuthMetadataOut,
+  OAuthStartIn,
+  OAuthStartOut,
   PasswordChangeIn,
   SettingsOut,
   SidebarLayoutSnapshotOut,
@@ -26,6 +32,10 @@ export type {
   AccountSummary,
   AccountsResponse,
   GroupsResponse,
+  OAuthFlowStatusOut,
+  OAuthMetadataOut,
+  OAuthStartIn,
+  OAuthStartOut,
   SyncAllResponse,
 } from './schemaTypes'
 
@@ -347,6 +357,27 @@ export const api = {
       login_password: newPassword,
     }
     return postJson<unknown>('/api/auth/password', body)
+  },
+
+  getOAuthMetadata(provider = 'google') {
+    const q = new URLSearchParams({ provider })
+    return apiRequest<OAuthMetadataOut>(`/api/accounts/oauth/metadata?${q.toString()}`)
+  },
+
+  getActiveOAuthFlow() {
+    return apiRequest<OAuthActiveOut>('/api/accounts/oauth/active')
+  },
+
+  startOAuthFlow(payload: OAuthStartIn) {
+    return postJson<OAuthStartOut>('/api/accounts/oauth/start', payload)
+  },
+
+  getOAuthFlowStatus(flowId: string) {
+    return apiRequest<OAuthFlowStatusOut>(`/api/accounts/oauth/flows/${encodeURIComponent(flowId)}`)
+  },
+
+  cancelOAuthFlow(flowId: string) {
+    return postJson<OAuthCancelOut>(`/api/accounts/oauth/flows/${encodeURIComponent(flowId)}/cancel`)
   },
 }
 

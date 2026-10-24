@@ -131,6 +131,7 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
       sync_enabled: true,
     },
   ]
+  let oauthDraft: Record<string, unknown> | null = null
   let sidebarRevision = 0
 
   const getSidebarLayout = () => {
@@ -228,7 +229,7 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
       })
     }
 
-    if (path === '/api/accounts') {
+    if (path === '/api/accounts' && method === 'GET') {
       const accountsList = currentAccounts
       return route.fulfill({
         status: 200,
@@ -238,6 +239,91 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
           has_more: false,
         },
       })
+    }
+
+    if (path === '/api/accounts' && method === 'POST') {
+      const body = (req.postDataJSON() || {}) as Record<string, unknown>
+      const newAcc: StubAccount = {
+        id: `acc-${currentAccounts.length + 1}`,
+        email: String(body.email || 'oauth-new@gmail.com'),
+        provider: String(body.provider || 'gmail'),
+        account_type: String(body.provider || 'gmail'),
+        group_id: body.group_id ? String(body.group_id) : undefined,
+        sync_state: 'idle',
+        sync_enabled: true,
+      }
+      currentAccounts = [...currentAccounts, newAcc]
+      oauthDraft = null
+      return route.fulfill({ status: 200, json: { ...newAcc, status: 'active', sync_status: 'idle' } })
+    }
+
+    const patchAccountMatch = path.match(/^\/api\/accounts\/([^/]+)$/)
+    if (patchAccountMatch && method === 'PATCH') {
+      const id = decodeURIComponent(patchAccountMatch[1])
+      const found = currentAccounts.find(a => a.id === id) || currentAccounts[0]
+      const body = req.postDataJSON() || {}
+      if (body.oauth_flow_id) oauthDraft = null
+      currentAccounts = currentAccounts.map(a => a.id === id ? { ...a, sync_state: 'idle' } : a)
+      return route.fulfill({ status: 200, json: { ...found, status: 'active', sync_status: 'idle' } })
+    }
+
+    if (path === '/api/accounts/oauth/metadata' && method === 'GET') {
+      const provider = url.searchParams.get('provider') || 'google'
+      return route.fulfill({
+        status: 200,
+        json: {
+          provider,
+          runtime_mode: 'desktop',
+          default_client_type: 'public',
+          redirect_uri: `http://127.0.0.1:18765/api/accounts/oauth/callback/${provider}`,
+          callback_path: `/api/accounts/oauth/callback/${provider}`,
+          origin_configured: true,
+          notice: null,
+        },
+      })
+    }
+
+    if (path === '/api/accounts/oauth/active' && method === 'GET') {
+      return route.fulfill({ status: 200, json: { flow: oauthDraft } })
+    }
+
+    if (path === '/api/accounts/oauth/start' && method === 'POST') {
+      const body = (req.postDataJSON() || {}) as Record<string, unknown>
+      const provider = String(body.provider || 'google')
+      const intent = String(body.intent || 'create')
+      oauthDraft = {
+        flow_id: 'stub-oauth-flow-1', provider, intent, account_id: body.account_id || null,
+        group_id: body.group_id || null, client_type: body.client_type || 'public',
+        client_id: body.client_id || 'stub-client-id', status: 'authorized',
+        verified_email: intent === 'reauthorize' ? currentAccounts.find(a => a.id === body.account_id)?.email : 'oauth-new@gmail.com',
+        error: null, redirect_uri: `http://127.0.0.1:18765/api/accounts/oauth/callback/${provider}`,
+        expires_at: 9999999999,
+      }
+      return route.fulfill({
+        status: 200,
+        json: {
+          flow_id: 'stub-oauth-flow-1',
+          provider,
+          intent,
+          status: 'pending',
+          auth_url: `http://127.0.0.1:18765/api/accounts/oauth/callback/${provider}?state=stub-state&code=stub-code`,
+          redirect_uri: `http://127.0.0.1:18765/api/accounts/oauth/callback/${provider}`,
+          client_type: String(body.client_type || 'public'),
+          expires_at: 9999999999,
+        },
+      })
+    }
+
+    if (path === '/api/accounts/oauth/flows/stub-oauth-flow-1' && method === 'GET') {
+      return route.fulfill({
+        status: 200,
+        json: oauthDraft,
+      })
+    }
+
+    if (path.endsWith('/cancel') && path.startsWith('/api/accounts/oauth/flows/')) {
+      oauthDraft = null
+      return route.fulfill({ status: 200, json: { ok: true, status: 'cancelled' } })
     }
 
     if (path === '/api/sidebar/layout' && method === 'GET') {

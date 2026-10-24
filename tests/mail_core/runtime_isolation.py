@@ -31,6 +31,7 @@ def clear_database():
 @contextmanager
 def isolated_runtime(monkeypatch, tmp_path, session):
     from mail_core.accounts.credentials import set_credential_store
+    from mail_core.accounts.oauth_flow import reset_oauth_flow_state
     from mail_core.api.app import _code_schema_head
     from mail_core.api import sse
     from mail_core.db import session as db
@@ -79,6 +80,7 @@ def isolated_runtime(monkeypatch, tmp_path, session):
         db._engine = None
         db._SessionLocal = None
         set_credential_store(None)
+        reset_oauth_flow_state()
         listener._listener = None
         dispatcher._dispatcher = None
         worker._stop = False

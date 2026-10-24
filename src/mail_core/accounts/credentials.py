@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
+import threading
 from contextlib import contextmanager
 from typing import Any, Protocol
 
@@ -262,6 +264,7 @@ def save_json_secret(
 
 
 _default_store: CredentialStore | None = None
+_non_db_lock = threading.RLock()
 
 
 def get_credential_store() -> CredentialStore:
@@ -281,14 +284,21 @@ def credential_edit(store: CredentialStore, ref: str, *, session=None, allow_rea
     """Serialize edits and token rotation on the same durable credential row."""
     target = store._pick(ref) if isinstance(store, CompositeCredentialStore) else store
     if isinstance(target, DbCredentialStore):
-        from sqlalchemy import select
+        from sqlalchemy import func, select
         from mail_core.mail.storage.models import CredentialSecret
         owned = session is None
         current = session if session is not None else target._sessions()()
         try:
-            current.scalar(select(CredentialSecret).where(CredentialSecret.ref == ref).with_for_update())
+            # A row lock alone cannot serialize creation of an absent OAuth code claim.
+            lock_key = int.from_bytes(hashlib.sha256(ref.encode()).digest()[:8], 'big', signed=True)
+            current.execute(select(func.pg_advisory_xact_lock(lock_key)))
+            row = current.scalar(
+                select(CredentialSecret)
+                .where(CredentialSecret.ref == ref)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-            row = current.get(CredentialSecret, ref)
             data = json.loads(AESGCM(target._key(row.key_version)).decrypt(row.nonce, row.ciphertext, ref.encode()).decode()) if row else {}
             if not isinstance(data, dict):
                 raise ValueError('credential secret must be a JSON object')
@@ -307,18 +317,19 @@ def credential_edit(store: CredentialStore, ref: str, *, session=None, allow_rea
                 current.close()
     else:
         # Non-DB stores are used for operator-managed refs and isolated tests.
-        try:
-            data = load_json_secret(store, ref)
-        except KeyError:
-            data = {}
-        if isinstance(target, EnvCredentialStore) and readonly_cache:
-            data = dict(readonly_cache)
-        original = dict(data)
-        yield data
-        if data != original:
+        with _non_db_lock:
             try:
-                save_json_secret(store, ref, data, session=session)
-            except ReadOnlyCredentialRef:
-                if not allow_readonly:
-                    raise
-                logging.getLogger(__name__).warning('refreshed OAuth token cannot be persisted to an operator-managed read-only credential')
+                data = load_json_secret(store, ref)
+            except KeyError:
+                data = {}
+            if isinstance(target, EnvCredentialStore) and readonly_cache:
+                data = dict(readonly_cache)
+            original = dict(data)
+            yield data
+            if data != original:
+                try:
+                    save_json_secret(store, ref, data, session=session)
+                except ReadOnlyCredentialRef:
+                    if not allow_readonly:
+                        raise
+                    logging.getLogger(__name__).warning('refreshed OAuth token cannot be persisted to an operator-managed read-only credential')

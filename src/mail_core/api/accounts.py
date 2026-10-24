@@ -6,10 +6,12 @@ from dataclasses import asdict
 from typing import Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field, field_validator, field_serializer
 
 from mail_core.accounts import StaleSidebarLayoutError
+from mail_core.api.deps import require_auth
+from mail_core.security.auth import AuthPrincipal
 from mail_core.mail.application.accounts import (
     create_account_app,
     create_group_app,
@@ -76,13 +78,14 @@ AllowedProvider = Literal["imap", "gmail", "graph", "memory", "stub"]
 
 
 class AccountCreateIn(BaseModel):
-    email: str = Field(min_length=3, max_length=320)
+    email: str = Field(default="", max_length=320)
     provider: AllowedProvider
     display_name: str | None = Field(default=None, max_length=255)
     group_id: UUID | None = None
     config: dict[str, Any] | None = None
     # Written to credential store; never returned.
     credentials: dict[str, Any] | None = None
+    oauth_flow_id: str | None = Field(default=None, max_length=128)
 
 
 class AccountUpdateIn(BaseModel):
@@ -92,6 +95,7 @@ class AccountUpdateIn(BaseModel):
     sync_enabled: bool | None = None
     config: dict[str, Any] | None = None
     credentials: dict[str, Any] | None = None
+    oauth_flow_id: str | None = Field(default=None, max_length=128)
 
 
 class GroupOut(BaseModel):
@@ -181,10 +185,12 @@ def api_list_accounts(
 
 
 @router.post("/api/accounts", response_model=AccountOut)
-def api_create_account(body: AccountCreateIn):
+def api_create_account(body: AccountCreateIn, principal: AuthPrincipal = Depends(require_auth)):
+    if not body.oauth_flow_id and len((body.email or "").strip()) < 3:
+        raise HTTPException(422, "email must have at least 3 characters")
     try:
         from mail_core.accounts.connection import validate_connection, merge_credentials
-        if body.provider in ("imap", "gmail", "graph"):
+        if not body.oauth_flow_id and body.provider in ("imap", "gmail", "graph"):
             cleaned = merge_credentials(body.provider, {}, body.credentials or {})
             validate_connection(body.email, body.provider, body.config or {}, cleaned)
         acc = create_account_app(
@@ -194,14 +200,20 @@ def api_create_account(body: AccountCreateIn):
             group_id=body.group_id,
             config=body.config,
             credentials=body.credentials,
+            oauth_flow_id=body.oauth_flow_id,
+            principal=principal,
         )
         return AccountOut(**asdict(acc))
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @router.patch("/api/accounts/{account_id}", response_model=AccountOut)
-def api_update_account(account_id: UUID, body: AccountUpdateIn):
+def api_update_account(account_id: UUID, body: AccountUpdateIn, principal: AuthPrincipal = Depends(require_auth)):
     try:
         acc = update_account_app(
             account_id,
@@ -211,8 +223,12 @@ def api_update_account(account_id: UUID, body: AccountUpdateIn):
             sync_enabled=body.sync_enabled,
             config=body.config,
             credentials=body.credentials,
+            oauth_flow_id=body.oauth_flow_id,
+            principal=principal,
         )
         return AccountOut(**asdict(acc))
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:

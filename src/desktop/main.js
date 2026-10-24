@@ -8,7 +8,7 @@ const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
-const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl } = require('./paths')
+const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl, createExternalWindowHandler } = require('./paths')
 const {
   parsePort,
   freePort,
@@ -184,10 +184,7 @@ function createWindow(url) {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show()
   })
   mainWindow.loadURL(url)
-  mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (isAllowedExternalUrl(target)) shell.openExternal(target)
-    return { action: 'deny' }
-  })
+  mainWindow.webContents.setWindowOpenHandler(createExternalWindowHandler(target => shell.openExternal(target)))
   const handleExternalNavigation = (event, target) => {
     if (isLocalAppUrl(target, appOrigin)) return
     event.preventDefault()
