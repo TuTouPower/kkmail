@@ -131,6 +131,76 @@ def test_ac002_post_sync_body_completes_archive_and_returns_body():
         assert job.priority == 10, "explicit POST body sync owns the priority boost"
 
 
+@pytest.mark.parametrize(
+    "initial_state",
+    [ArchiveState.ARCHIVE_FAILED, ArchiveState.ARCHIVE_PAUSED_QUOTA, ArchiveState.ARCHIVE_PENDING],
+)
+def test_a105_sync_body_retries_terminal_or_exhausted_archive_state(initial_state):
+    acc_id, mid = _seed_unarchived_message()
+    Session = get_session_factory()
+    with Session() as session:
+        state = session.get(MessageArchiveState, mid)
+        assert state is not None
+        state.state = initial_state.value
+        state.retry_count = 5
+        state.last_error = "previous attempt failed"
+        state.pause_reason = "quota" if initial_state == ArchiveState.ARCHIVE_PAUSED_QUOTA else None
+        session.commit()
+
+    sample_mime = (
+        b"From: sender@ex.com\r\n"
+        b"Subject: Retry archive\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        b"Manual archive retry completed."
+    )
+    mock_provider = MagicMock()
+    mock_provider.fetch_mime.return_value = sample_mime
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+
+    with patch("mail_core.blobs.archive.build_provider", return_value=mock_provider):
+        response = client.post(f"/api/mail/messages/{mid}/sync-body")
+
+    assert response.status_code == 200
+    assert "Manual archive retry completed." in response.json()["body"]
+    with Session() as session:
+        state = session.get(MessageArchiveState, mid)
+        assert state is not None
+        assert state.state == ArchiveState.ARCHIVE_COMPLETE.value
+        assert state.retry_count == 0
+        assert state.last_error is None
+        assert state.pause_reason is None
+        mock_provider.fetch_mime.assert_called_once()
+
+
+def test_a105_sync_body_restores_quota_pause_when_capacity_is_still_exceeded():
+    _, mid = _seed_unarchived_message()
+    Session = get_session_factory()
+    with Session() as session:
+        state = session.get(MessageArchiveState, mid)
+        assert state is not None
+        state.state = ArchiveState.ARCHIVE_PAUSED_QUOTA.value
+        state.retry_count = 5
+        state.pause_reason = "quota"
+        session.commit()
+
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    with patch(
+        "mail_core.blobs.archive.run_archive_batch",
+        return_value={"status": "paused_quota", "completed": 0, "failed": 0},
+    ):
+        response = client.post(f"/api/mail/messages/{mid}/sync-body")
+
+    assert response.status_code == 200
+    with Session() as session:
+        state = session.get(MessageArchiveState, mid)
+        assert state is not None
+        assert state.state == ArchiveState.ARCHIVE_PAUSED_QUOTA.value
+        assert state.retry_count == 0
+        assert state.pause_reason == "quota"
+        assert state.claimed_by is None
+        assert state.claimed_at is None
+
+
 def test_ac003_worker_jobs_priority_governance():
     from mail_core.sync.delta import sync_folder_delta
     from mail_core.blobs.archive import run_archive_batch

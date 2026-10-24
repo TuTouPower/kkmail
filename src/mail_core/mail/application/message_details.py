@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -52,8 +53,22 @@ def sync_message_body(message_id: UUID) -> tuple[MessageDetail, bool | None] | N
         state = session.get(MessageArchiveState, message_id)
         if state is not None:
             state.priority = 0
-            if state.state == ArchiveState.METADATA_SYNCED.value:
+            state_value = ArchiveState(state.state)
+            if state_value == ArchiveState.METADATA_SYNCED:
                 apply_transition(state, ArchiveState.ARCHIVE_PENDING)
+            elif state_value in (ArchiveState.ARCHIVE_FAILED, ArchiveState.ARCHIVE_PAUSED_QUOTA):
+                apply_transition(state, ArchiveState.ARCHIVE_PENDING)
+                state.retry_count = 0
+                state.last_error = None
+                state.pause_reason = None
+                state.claimed_by = None
+                state.claimed_at = None
+                state.updated_at = datetime.now(timezone.utc)
+            elif state_value == ArchiveState.ARCHIVE_PENDING and state.retry_count >= 5:
+                state.retry_count = 0
+                state.last_error = None
+                state.pause_reason = None
+                state.updated_at = datetime.now(timezone.utc)
             enqueue_job(
                 session,
                 job_type=JobType.ARCHIVE_MIME_BATCH.value,
@@ -85,6 +100,17 @@ def sync_message_body(message_id: UUID) -> tuple[MessageDetail, bool | None] | N
     except Exception as exc:
         result = {"status": "error", "error": safe_error(exc)}
         log.warning("on-demand sync error attempt=%s for message %s: %s", attempt_id, message_id, result["error"])
+
+    if result.get("status") == "paused_quota":
+        with Session() as session:
+            state = session.get(MessageArchiveState, message_id)
+            if state is not None and state.state == ArchiveState.ARCHIVE_PENDING.value:
+                apply_transition(state, ArchiveState.ARCHIVE_PAUSED_QUOTA)
+                state.pause_reason = "quota"
+                state.claimed_by = None
+                state.claimed_at = None
+                state.updated_at = datetime.now(timezone.utc)
+                session.commit()
 
     elapsed_ms = (time.monotonic() - started_at) * 1000
     log.info(
