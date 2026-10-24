@@ -125,7 +125,8 @@ ______________________________________________________________________
 
 - `GET /health`：服务健康检查
 - `GET /api/mail/stats`：未读邮件聚合统计
-- `GET /api/mail/inbox?limit=50&unread_only=true`：收件箱游标检索
+- `GET /api/mail/inbox?limit=50&is_read=false`：仅查询未读邮件
+- `GET /api/mail/inbox?limit=50&is_flagged=true`：仅查询已加旗标邮件
 - `GET /api/mail/search?q={query}&limit=20`：全文检索
 - `GET /api/mail/messages/{id}`：获取邮件元数据、解析后的 HTML/Text 正文与附件清单
 - `GET /api/mail/attachments/{attachment_id}`：下载指定附件流
