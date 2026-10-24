@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -159,6 +159,27 @@ def complete_job(session: Session, job: WorkerJob, *, worker_id: str | None = No
     session.flush()
 
 
+def heartbeat_job_claim(
+    session: Session,
+    *,
+    job_id: uuid.UUID,
+    worker_id: str,
+    locked_at: datetime,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Refresh locked_at only while the original claim still belongs to this worker."""
+    heartbeat_at = now or datetime.now(timezone.utc)
+    result = session.execute(
+        update(WorkerJob)
+        .where(WorkerJob.id == job_id)
+        .where(WorkerJob.status == JobStatus.CLAIMED.value)
+        .where(WorkerJob.locked_by == worker_id)
+        .where(WorkerJob.locked_at == locked_at)
+        .values(locked_at=heartbeat_at)
+    )
+    return heartbeat_at if result.rowcount == 1 else None
+
+
 def fail_job(
     session: Session,
     job: WorkerJob,
@@ -205,7 +226,7 @@ def reclaim_stale_claims(
     now: datetime | None = None,
     limit: int = DEFAULT_RECLAIM_LIMIT,
 ) -> int:
-    """Return CLAIMED jobs whose lock is older than ``older_than`` to PENDING."""
+    """Requeue claims whose ``locked_at`` heartbeat is older than ``older_than``."""
     now = now or datetime.now(timezone.utc)
     cutoff = now - older_than
     stmt = (

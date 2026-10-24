@@ -18,6 +18,7 @@ log = logging.getLogger("mail_core.worker")
 _stop = False
 CLAIM_BATCH = 5
 RECLAIM_INTERVAL_S = 60.0
+CLAIM_HEARTBEAT_MAX_INTERVAL_S = 60.0
 
 
 class TickResult(NamedTuple):
@@ -80,6 +81,58 @@ def _reclaim_once() -> int:
             return 0
 
 
+def _claim_heartbeat_interval_s() -> float:
+    try:
+        stale_after_s = float(os.environ.get("MAIL_CORE_RECLAIM_STALE_SECONDS") or 300)
+    except ValueError:
+        stale_after_s = 300.0
+    if stale_after_s <= 0:
+        return 0.1
+    return max(0.1, min(CLAIM_HEARTBEAT_MAX_INTERVAL_S, stale_after_s / 3))
+
+
+def _heartbeat_claims(Session, claim_tokens, claim_times, claim_times_lock, stop_event) -> None:
+    """Refresh every outstanding claim, including jobs waiting in this tick's batch."""
+    from datetime import datetime, timezone
+
+    from mail_core.sync.jobs import heartbeat_job_claim
+
+    active = {
+        job_id: owner
+        for job_id, owner, locked_at in claim_tokens
+        if owner is not None and locked_at is not None
+    }
+    while active and not stop_event.wait(_claim_heartbeat_interval_s()):
+        refreshed: dict[object, datetime | None] = {}
+        try:
+            with claim_times_lock:
+                with Session() as session:
+                    now = datetime.now(timezone.utc)
+                    for job_id, owner in list(active.items()):
+                        expected_locked_at = claim_times.get(job_id)
+                        if expected_locked_at is None:
+                            refreshed[job_id] = None
+                            continue
+                        refreshed[job_id] = heartbeat_job_claim(
+                            session,
+                            job_id=job_id,
+                            worker_id=owner,
+                            locked_at=expected_locked_at,
+                            now=now,
+                        )
+                    session.commit()
+                for job_id, locked_at in refreshed.items():
+                    if locked_at is None:
+                        active.pop(job_id, None)
+                        claim_times.pop(job_id, None)
+                    else:
+                        claim_times[job_id] = locked_at
+        except Exception as exc:
+            from mail_core.security.redact import safe_error
+
+            log.warning("worker job claim heartbeat failed: %s", safe_error(exc))
+
+
 def _tick(worker_id: str) -> TickResult:
     """Claim a batch, commit claims, then handle each job in its own session.
 
@@ -103,58 +156,80 @@ def _tick(worker_id: str) -> TickResult:
         claim_tokens = [(j.id, j.locked_by, j.locked_at) for j in jobs]
         session.commit()
 
+    claim_times = {job_id: locked_at for job_id, _owner, locked_at in claim_tokens}
+    claim_times_lock = threading.Lock()
+    heartbeat_stop = threading.Event()
+    heartbeat_tokens = [token for token in claim_tokens if token[1] is not None and token[2] is not None]
+    heartbeat_thread = None
+    if heartbeat_tokens:
+        heartbeat_thread = threading.Thread(
+            target=_heartbeat_claims,
+            args=(Session, heartbeat_tokens, claim_times, claim_times_lock, heartbeat_stop),
+            name="mail-core-job-claim-heartbeat",
+            daemon=True,
+        )
+        heartbeat_thread.start()
+
     handled = 0
-    for job_id, expected_owner, claim_time in claim_tokens:
-        with Session() as session:
-            job = session.get(WorkerJob, job_id)
-            if job is None:
-                continue
-            if expected_owner is not None:
-                if job.status != JobStatus.CLAIMED.value or job.locked_by != expected_owner:
-                    log.warning(
-                        "job %s claim lost before execution (status=%s, locked_by=%s, expected=%s); skipping",
-                        job_id,
-                        job.status,
-                        job.locked_by,
-                        expected_owner,
-                    )
-                    continue
-                if claim_time is not None and job.locked_at is not None and job.locked_at != claim_time:
-                    log.warning(
-                        "job %s claim lock timestamp mismatch (%s != %s); skipping",
-                        job_id,
-                        job.locked_at,
-                        claim_time,
-                    )
-                    continue
-            try:
-                ok = handle_job(session, job, worker_id=worker_id)
-                # Handlers may have committed already; commit any leftover work
-                # (including fail_job flushes when ok is False).
-                if session.in_transaction():
-                    session.commit()
-                if ok:
-                    handled += 1
-            except Exception as exc:  # pragma: no cover
-                from mail_core.security.redact import safe_error
-
-                log.error("job %s failed: %s", job_id, safe_error(exc))
-                try:
-                    session.rollback()
-                except Exception:
-                    pass
-                try:
-                    # Re-load after rollback so fail_job can persist.
-                    # Skip if handle_job already marked FAILED (avoid double-handle).
-                    from mail_core.mail.domain.enums import JobStatus
-
+    try:
+        for job_id, expected_owner, _claim_time in claim_tokens:
+            with Session() as session:
+                with claim_times_lock:
+                    claim_time = claim_times.get(job_id)
+                    claim_tracked = job_id in claim_times
                     job = session.get(WorkerJob, job_id)
-                    if job is not None and job.status == JobStatus.CLAIMED.value:
-                        fail_job(session, job, exc, worker_id=worker_id)
+                    if job is None:
+                        continue
+                    if expected_owner is not None:
+                        if not claim_tracked or job.status != JobStatus.CLAIMED.value or job.locked_by != expected_owner:
+                            log.warning(
+                                "job %s claim lost before execution (status=%s, locked_by=%s, expected=%s); skipping",
+                                job_id,
+                                job.status,
+                                job.locked_by,
+                                expected_owner,
+                            )
+                            continue
+                        if claim_time is not None and job.locked_at is not None and job.locked_at != claim_time:
+                            log.warning(
+                                "job %s claim lock timestamp mismatch (%s != %s); skipping",
+                                job_id,
+                                job.locked_at,
+                                claim_time,
+                            )
+                            continue
+                try:
+                    ok = handle_job(session, job, worker_id=worker_id)
+                    # Handlers may have committed already; commit any leftover work
+                    # (including fail_job flushes when ok is False).
+                    if session.in_transaction():
                         session.commit()
-                except Exception:
-                    session.rollback()
-                    log.exception("fail_job after error also failed for %s", job_id)
+                    if ok:
+                        handled += 1
+                except Exception as exc:  # pragma: no cover
+                    from mail_core.security.redact import safe_error
+
+                    log.error("job %s failed: %s", job_id, safe_error(exc))
+                    try:
+                        session.rollback()
+                    except Exception:
+                        pass
+                    try:
+                        # Re-load after rollback so fail_job can persist.
+                        # Skip if handle_job already marked FAILED (avoid double-handle).
+                        from mail_core.mail.domain.enums import JobStatus
+
+                        job = session.get(WorkerJob, job_id)
+                        if job is not None and job.status == JobStatus.CLAIMED.value:
+                            fail_job(session, job, exc, worker_id=worker_id)
+                            session.commit()
+                    except Exception:
+                        session.rollback()
+                        log.exception("fail_job after error also failed for %s", job_id)
+    finally:
+        heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=5.0)
     return TickResult(claimed=len(claim_tokens), handled=handled)
 
 

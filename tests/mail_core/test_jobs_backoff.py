@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from mail_core.mail.domain.enums import JobStatus
-from mail_core.sync.jobs import backoff_seconds, fail_job
+from mail_core.sync.jobs import backoff_seconds, fail_job, heartbeat_job_claim
 
 
 class _FakeSession:
@@ -87,3 +88,39 @@ def test_failure_cap_counts_real_failures():
 
     assert job.status == JobStatus.FAILED.value
     assert job.failure_attempts == 3
+
+
+def test_heartbeat_job_claim_uses_owner_and_lock_timestamp_cas():
+    job_id = uuid.UUID(int=1)
+    locked_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    heartbeat_at = locked_at + timedelta(seconds=30)
+
+    class Result:
+        rowcount = 1
+
+    class Session:
+        statement = None
+
+        def execute(self, statement):
+            self.statement = statement
+            return Result()
+
+    session = Session()
+    assert heartbeat_job_claim(
+        session,
+        job_id=job_id,
+        worker_id="worker-1",
+        locked_at=locked_at,
+        now=heartbeat_at,
+    ) == heartbeat_at
+
+    statement = session.statement
+    sql = str(statement).lower()
+    params = statement.compile().params
+    assert "worker_jobs.status" in sql
+    assert "worker_jobs.locked_by" in sql
+    assert "worker_jobs.locked_at" in sql
+    assert job_id in params.values()
+    assert "worker-1" in params.values()
+    assert locked_at in params.values()
+    assert heartbeat_at in params.values()

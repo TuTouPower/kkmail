@@ -101,7 +101,8 @@ def handle_job(session: Session, job: WorkerJob, *, worker_id: str | None = None
 
     Returns True when the job completed successfully, False when it was failed
     internally (``fail_job`` already applied). The claim transaction should be
-    committed before heavy work; main.py commits after handle_job returns.
+    committed before heavy work; main.py commits after handle_job returns. The
+    worker owns ``locked_at`` heartbeats; handlers must leave claim fields alone.
     """
     from mail_core.logging_config import trace_scope
 

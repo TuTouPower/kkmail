@@ -42,6 +42,56 @@ def test_reclaim_once_calls_reclaim_stale_claims():
         session.commit.assert_called()
 
 
+def test_claim_heartbeat_refreshes_all_jobs_in_claimed_batch(monkeypatch):
+    import uuid
+
+    monkeypatch.setattr(worker_main, "_claim_heartbeat_interval_s", lambda: 0.01)
+    heartbeat_calls = []
+    all_refreshed = threading.Event()
+    job_ids = [uuid.uuid4(), uuid.uuid4()]
+    now = datetime(2026, 10, 25, 10, 0, tzinfo=timezone.utc)
+    claim_times = {job_id: now for job_id in job_ids}
+    claim_lock = threading.Lock()
+    stop_event = threading.Event()
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def commit(self):
+            pass
+
+    def refresh(_session, *, job_id, worker_id, locked_at, now):
+        heartbeat_calls.append((job_id, worker_id, locked_at))
+        if len(heartbeat_calls) == 2:
+            all_refreshed.set()
+        return now
+
+    with patch("mail_core.sync.jobs.heartbeat_job_claim", side_effect=refresh):
+        thread = threading.Thread(
+            target=worker_main._heartbeat_claims,
+            args=(
+                lambda: Session(),
+                [(job_ids[0], "worker-1", now), (job_ids[1], "worker-1", now)],
+                claim_times,
+                claim_lock,
+                stop_event,
+            ),
+            daemon=True,
+        )
+        thread.start()
+        assert all_refreshed.wait(1)
+        stop_event.set()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert [call[0] for call in heartbeat_calls] == job_ids
+    assert all(claim_times[job_id] != now for job_id in job_ids)
+
+
 def test_run_reclaims_on_a_separate_time_cadence(monkeypatch):
     clock = iter((0.0, 10.0, 60.0, 61.0))
     monkeypatch.setattr(worker_main, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None))
