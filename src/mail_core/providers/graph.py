@@ -79,6 +79,7 @@ def _raise_mapped(exc: ProviderHttpError) -> None:
 class GraphProvider:
     credential_ref: str
     transport: Any | None = None
+    timeout: float = 30.0
     _calls: list[str] = field(default_factory=list, repr=False)
 
     def _call(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:

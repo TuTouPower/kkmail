@@ -6,6 +6,8 @@ Routes call the application layer only (queries / search / mutations / attachmen
 from __future__ import annotations
 
 import logging
+import time
+import uuid
 from datetime import datetime
 from uuid import UUID
 
@@ -397,14 +399,33 @@ def api_sync_message_body(message_id: UUID) -> MessageDetailOut:
 
     # 尝试就地执行单封归档以提供即时响应
     from mail_core.blobs.archive import run_archive_batch
+    attempt_id = uuid.uuid4().hex[:12]
+    worker_id = f"api-on-demand:{attempt_id}"
+    t0 = time.monotonic()
+    log.info(
+        "api_sync_message_body start attempt=%s account_id=%s message_id=%s",
+        attempt_id,
+        account_id,
+        message_id,
+    )
     try:
-        run_archive_batch(
+        run_res = run_archive_batch(
             account_id=account_id,
-            worker_id="api-on-demand",
+            worker_id=worker_id,
             payload={"message_id": str(message_id), "batch_size": 1},
         )
     except Exception as exc:
-        log.warning("on-demand sync error for message %s: %s", message_id, safe_error(exc))
+        log.warning("on-demand sync error attempt=%s for message %s: %s", attempt_id, message_id, safe_error(exc))
+        run_res = {"status": "error", "error": safe_error(exc)}
+
+    elapsed_ms = (time.monotonic() - t0) * 1000
+    log.info(
+        "api_sync_message_body end attempt=%s message_id=%s elapsed_ms=%.1f result=%s",
+        attempt_id,
+        message_id,
+        elapsed_ms,
+        run_res,
+    )
 
     with Session() as session:
         d = get_message_detail(session, message_id)

@@ -11,6 +11,7 @@ from email.policy import default as default_policy
 import hashlib
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -301,7 +302,25 @@ def claim_archive_batch(
         state.updated_at = now
         claimed.append(msg.id)
     session.flush()
+    if target_message_id is not None and target_message_id not in claimed:
+        target_st = session.get(MessageArchiveState, target_message_id)
+        log.info(
+            "claim_archive_batch target_message_id=%s not claimed: state=%s claimed_by=%s retry_count=%s",
+            target_message_id,
+            getattr(target_st, "state", None),
+            getattr(target_st, "claimed_by", None),
+            getattr(target_st, "retry_count", None),
+        )
     return claimed
+
+
+def _release_fencing_claims(session, message_ids: list[uuid.UUID], worker_id: str) -> None:
+    for mid in message_ids:
+        st = session.get(MessageArchiveState, mid)
+        if st is not None and st.claimed_by == worker_id:
+            st.claimed_by = None
+            apply_transition(st, ArchiveState.ARCHIVE_PENDING)
+            st.updated_at = datetime.now(timezone.utc)
 
 
 def reclaim_stale_archive_claims(
@@ -328,6 +347,12 @@ def reclaim_stale_archive_claims(
     )
     rows = list(session.scalars(stmt).all())
     for st in rows:
+        log.info(
+            "reclaim_stale_archive_claim message_id=%s old_claimed_by=%s claimed_at=%s",
+            st.message_id,
+            st.claimed_by,
+            st.claimed_at,
+        )
         apply_transition(st, ArchiveState.ARCHIVE_PENDING)
         st.claimed_by = None
         st.claimed_at = None
@@ -521,6 +546,7 @@ def run_archive_batch(
             try:
                 lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=timedelta(seconds=120))
             except LeaseBusy:
+                log.info("archive lease busy account=%s worker=%s", account_id, worker_id)
                 return {"status": "lease_busy"}
             fencing = lease.fencing_token
             session.commit()
@@ -566,6 +592,7 @@ def run_archive_batch(
             try:
                 assert_fencing(session, account_id=account_id, fencing_token=fencing)
             except FencingMismatch:
+                log.warning("archive fencing mismatch before claim account=%s worker=%s fencing=%s", account_id, worker_id, fencing)
                 return {"status": "fencing_mismatch"}
         claimed_ids = claim_archive_batch(
             session,
@@ -656,10 +683,18 @@ def run_archive_batch(
                     )
                     session.commit()
             except FencingMismatch:
+                log.warning("archive fencing mismatch during renew account=%s worker=%s fencing=%s", account_id, worker_id, fencing)
+                with Session() as s_fencing:
+                    remaining_ids = [w[0] for w in work[idx:]]
+                    _release_fencing_claims(s_fencing, remaining_ids, worker_id)
+                    s_fencing.commit()
                 return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
 
         try:
+            t_fetch = time.monotonic()
+            log.info("archive fetch_mime start message=%s remote_id=%s provider=%s", mid, remote_id, type(provider).__name__)
             mime = provider.fetch_mime(remote_id)  # network
+            log.info("archive fetch_mime success message=%s bytes=%d elapsed_ms=%.1f", mid, len(mime), (time.monotonic() - t_fetch) * 1000)
         except Exception as exc:
             log.warning("archive fetch failed message=%s: %s", mid, safe_error(exc))
             with Session() as session:
@@ -667,6 +702,10 @@ def run_archive_batch(
                     try:
                         assert_fencing(session, account_id=account_id, fencing_token=fencing)
                     except FencingMismatch:
+                        log.warning("archive fencing mismatch after fetch failure account=%s worker=%s fencing=%s", account_id, worker_id, fencing)
+                        remaining_ids = [w[0] for w in work[idx:]]
+                        _release_fencing_claims(session, remaining_ids, worker_id)
+                        session.commit()
                         return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
                 st = session.get(MessageArchiveState, mid)
                 if (
@@ -736,6 +775,9 @@ def run_archive_batch(
                     try:
                         assert_fencing(session, account_id=account_id, fencing_token=fencing)
                     except FencingMismatch:
+                        log.warning("archive fencing mismatch before commit account=%s worker=%s fencing=%s", account_id, worker_id, fencing)
+                        remaining_ids = [w[0] for w in work[idx:]]
+                        _release_fencing_claims(session, remaining_ids, worker_id)
                         session.commit()
                         return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
 
@@ -961,6 +1003,7 @@ def run_archive_batch(
                 st.updated_at = datetime.now(timezone.utc)
                 completed += 1
                 session.commit()
+                log.info("archive commit success message=%s", mid)
             except Exception:
                 session.rollback()
                 raise

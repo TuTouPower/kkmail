@@ -210,3 +210,55 @@ def test_ac005_sync_body_captures_provider_or_parse_error():
         body = session.get(MessageBody, mid)
         if body is not None:
             assert body.parse_error is None
+
+
+def test_p039_sync_body_uses_unique_worker_id():
+    """Verify each on-demand sync request receives an isolated worker_id (p039)."""
+    acc_id, mid = _seed_unarchived_message()
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+
+    captured_worker_ids = []
+    from mail_core.blobs import archive as archive_mod
+    orig_run = archive_mod.run_archive_batch
+
+    def fake_run(**kwargs):
+        captured_worker_ids.append(kwargs.get("worker_id"))
+        return {"status": "ok", "completed": 0, "failed": 0, "claimed": 0}
+
+    with patch.object(archive_mod, "run_archive_batch", side_effect=fake_run):
+        client.post(f"/api/mail/messages/{mid}/sync-body")
+        client.post(f"/api/mail/messages/{mid}/sync-body")
+
+    assert len(captured_worker_ids) == 2
+    assert captured_worker_ids[0].startswith("api-on-demand:")
+    assert captured_worker_ids[1].startswith("api-on-demand:")
+    assert captured_worker_ids[0] != captured_worker_ids[1], "Worker IDs must be unique per attempt"
+
+
+def test_p039_archive_batch_releases_claims_on_fencing_mismatch():
+    """Fencing mismatch during archive must restore claimed items to ARCHIVE_PENDING (p039)."""
+    acc_id, mid = _seed_unarchived_message()
+    from mail_core.blobs.archive import run_archive_batch
+    from mail_core.sync.leases import FencingMismatch
+
+    sample_mime = b"From: a@b.c\r\n\r\nHello"
+    mock_provider = MagicMock()
+    mock_provider.fetch_mime.return_value = sample_mime
+
+    # Simulate fencing token mismatch during the post-fetch commit assert_fencing check
+    with patch("mail_core.blobs.archive.build_provider", return_value=mock_provider):
+        with patch("mail_core.blobs.archive.assert_fencing", side_effect=[None, FencingMismatch("expired token")]):
+            res = run_archive_batch(
+                account_id=acc_id,
+                worker_id="test-fencing-worker",
+                payload={"message_id": str(mid), "batch_size": 1},
+            )
+            assert res["status"] == "fencing_mismatch"
+
+    Session = get_session_factory()
+    with Session() as session:
+        st = session.get(MessageArchiveState, mid)
+        assert st is not None
+        # Must NOT remain stuck in ARCHIVE_IN_PROGRESS with claimed_by held!
+        assert st.claimed_by is None, "claimed_by must be released on fencing mismatch"
+        assert st.state == ArchiveState.ARCHIVE_PENDING.value, "state must be restored to ARCHIVE_PENDING"

@@ -29,15 +29,20 @@ def _oauth_transport(
     provider: str,
     token_http=None,
     api_http=None,
+    timeout: float = 30.0,
 ) -> BearerTransport:
     client = OAuthTokenClient(
         credential_ref=credential_ref,
         store=store,
         provider=provider,
-        http_post=token_http or default_urllib_token_post,
+        http_post=token_http,
+        timeout=timeout,
     )
     base = "https://gmail.googleapis.com" if provider == "gmail" else "https://graph.microsoft.com/v1.0"
-    api = api_http or urllib_json_request
+    if api_http is not None:
+        api = api_http
+    else:
+        api = lambda m, u, p=None, h=None: urllib_json_request(m, u, p, h, timeout=timeout)
     return BearerTransport(token_client=client, inner=api, base_url=base)
 
 
@@ -74,10 +79,30 @@ def build_provider(
     *,
     token_http=None,
     api_http=None,
+    timeout: float | None = None,
+    session: Any = None,
 ) -> MailProvider:
     store = store or get_credential_store()
     provider = (account.provider or "").lower()
     cfg = dict(account.config or {})
+
+    if timeout is None and session is not None:
+        try:
+            from mail_core.accounts.settings_store import get_fetch_timeout_seconds
+            timeout = get_fetch_timeout_seconds(session)
+        except Exception:
+            timeout = 30.0
+    elif timeout is None:
+        try:
+            from mail_core.accounts.settings_store import get_fetch_timeout_seconds
+            from mail_core.db.session import get_session_factory
+            SessionFactory = get_session_factory()
+            with SessionFactory() as s:
+                timeout = get_fetch_timeout_seconds(s)
+        except Exception:
+            timeout = 30.0
+
+    effective_timeout = float(timeout) if timeout is not None else 30.0
 
     if provider == "stub" or provider == "memory":
         return MemoryProvider.from_config(cfg)
@@ -110,32 +135,34 @@ def build_provider(
         if not host:
             raise ValueError("imap account config missing imap_host")
         validate_imap_host(host)
-        return ImapProvider(host=host, port=port, username=user, password=password, use_ssl=use_ssl)
+        return ImapProvider(host=host, port=port, username=user, password=password, use_ssl=use_ssl, timeout=effective_timeout)
 
     if provider == "gmail":
         ref = account.credential_ref or ""
         if not ref:
-            return GmailProvider(credential_ref="")
+            return GmailProvider(credential_ref="", timeout=effective_timeout)
         transport = _oauth_transport(
             credential_ref=ref,
             store=store,
             provider="gmail",
             token_http=token_http,
             api_http=api_http,
+            timeout=effective_timeout,
         )
-        return GmailProvider(credential_ref=ref, transport=transport)
+        return GmailProvider(credential_ref=ref, transport=transport, timeout=effective_timeout)
 
     if provider == "graph":
         ref = account.credential_ref or ""
         if not ref:
-            return GraphProvider(credential_ref="")
+            return GraphProvider(credential_ref="", timeout=effective_timeout)
         transport = _oauth_transport(
             credential_ref=ref,
             store=store,
             provider="graph",
             token_http=token_http,
             api_http=api_http,
+            timeout=effective_timeout,
         )
-        return GraphProvider(credential_ref=ref, transport=transport)
+        return GraphProvider(credential_ref=ref, transport=transport, timeout=effective_timeout)
 
     raise ValueError(f"unknown provider type {account.provider!r}")

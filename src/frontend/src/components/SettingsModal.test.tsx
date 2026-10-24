@@ -112,6 +112,29 @@ describe('<SettingsModal />', () => {
     await waitFor(() => expect(container.textContent).toContain('设置已保存'))
   })
 
+  it('renders default 30s placeholder when mail_fetch_timeout_seconds is unset', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u.startsWith('/api/accounts')) return json({ accounts: [], total: 0, limit: 200, offset: 0, has_more: false })
+      if (u === '/api/groups') return json({ groups: [] })
+      if (u === '/api/settings') return json({ settings: {} })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    const genBtn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('通用')) || null
+    await click(genBtn)
+
+    await waitFor(() => {
+      const timeoutInput = container.querySelector('#settings-timeout') as HTMLInputElement
+      expect(timeoutInput).not.toBeNull()
+      expect(timeoutInput.placeholder).toBe('30')
+      expect(timeoutInput.value).toBe('')
+      expect(container.textContent).toContain('默认 30 秒')
+    })
+  })
+
   it('renders logout button and calls logout API on click', async () => {
     const assignMock = vi.fn()
     vi.stubGlobal('window', Object.assign(new EventTarget(), { location: { assign: assignMock } }))
