@@ -21,6 +21,57 @@ describe('diagnostics telemetry', () => {
     expect(logs[0].message).not.toContain('SECRET_TOKEN_VALUE')
   })
 
+  it('redacts nested secret context before storing and exporting it', () => {
+    const context = {
+      userId: 'user-123',
+      credentials: {
+        access_token: 'context-access-secret',
+        nested: { refreshToken: 'context-refresh-secret', label: 'preserve' },
+      },
+      rows: [{ apiKey: 'context-api-secret', safe: 'keep' }],
+    }
+    const original = JSON.parse(JSON.stringify(context))
+
+    logDiagnostic('warn', 'api', 'provider request', context)
+
+    expect(getDiagnosticLogs()[0].context).toEqual({
+      userId: 'user-123',
+      credentials: {
+        access_token: '[REDACTED]',
+        nested: { refreshToken: '[REDACTED]', label: 'preserve' },
+      },
+      rows: [{ apiKey: '[REDACTED]', safe: 'keep' }],
+    })
+    expect(context).toEqual(original)
+
+    const exported = exportDiagnosticsAsText()
+    expect(exported).not.toContain('context-access-secret')
+    expect(exported).not.toContain('context-refresh-secret')
+    expect(exported).not.toContain('context-api-secret')
+    expect(exported).toContain('"label":"preserve"')
+  })
+
+  it('redacts JSON-style secret fields in messages and stacks', () => {
+    logDiagnostic(
+      'error',
+      'api',
+      'response {"password": "json-password-secret", "api_key":"json-api-secret"} token: plain-token-secret',
+      undefined,
+      'Error: {"refresh_token":"stack-refresh-secret"}',
+    )
+
+    const entry = getDiagnosticLogs()[0]
+    expect(entry.message).not.toContain('json-password-secret')
+    expect(entry.message).not.toContain('json-api-secret')
+    expect(entry.message).not.toContain('plain-token-secret')
+    expect(entry.stack).not.toContain('stack-refresh-secret')
+    const exported = exportDiagnosticsAsText()
+    expect(exported).not.toContain('json-password-secret')
+    expect(exported).not.toContain('json-api-secret')
+    expect(exported).not.toContain('plain-token-secret')
+    expect(exported).not.toContain('stack-refresh-secret')
+  })
+
   it('caps buffer at max limit', () => {
     for (let i = 0; i < 120; i++) {
       logDiagnostic('info', 'runtime', `message-${i}`)
