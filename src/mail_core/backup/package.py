@@ -35,6 +35,7 @@ log = logging.getLogger("mail_core.backup")
 
 _MANIFEST_FILENAME = "MANIFEST.json"
 _MANIFEST_CHECKSUM_FILENAME = "MANIFEST.sha256"
+_SQL_STUB_METHOD = "sql_stub"
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,7 +304,7 @@ def _pg_dump_to(dest: Path, url: str, *, allow_stub: bool = False) -> str:
         f"-- at={datetime.now(timezone.utc).isoformat()}\n",
         encoding="utf-8",
     )
-    return "sql_stub"
+    return _SQL_STUB_METHOD
 
 
 def _build_plain_dir(
@@ -473,9 +474,9 @@ def _check_plain_members(
             errors.append(f"missing member {name}")
             continue
         method = meta.get("method")
-        if method == "sql_stub" and not allow_stub:
+        if method == _SQL_STUB_METHOD and not allow_stub:
             errors.append(
-                f"{name} is sql_stub (pg_dump failed or skipped); backup is not restoreable"
+                f"{name} is {_SQL_STUB_METHOD} (pg_dump failed or skipped); backup is not restoreable"
             )
         digest = _sha256_file(path)
         expected = str(meta.get("sha256") or "")
@@ -817,7 +818,7 @@ def restore_backup_package(
         # Reject stubs unless allow_stub explicitly granted
         dump_meta = manifest.get("members", {}).get("postgres.dump", {})
         dump_fmt = dump_meta.get("method", "custom")
-        if dump_fmt == "stub" and not allow_stub:
+        if dump_fmt == _SQL_STUB_METHOD and not allow_stub:
             raise RuntimeError("refusing to restore stub backup without allow_stub")
 
         # 1. Restore blobs if blobs.tar is present

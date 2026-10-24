@@ -37,7 +37,7 @@ def test_create_backup_package_writes_manifest(tmp_path, monkeypatch):
     assert (out / "blobs.tar").exists()
     man = json.loads((out / "MANIFEST.json").read_text())
     assert "postgres.dump" in man["members"]
-    assert man["members"]["postgres.dump"]["method"] == "sql_stub"
+    assert man["members"]["postgres.dump"]["method"] == backup_package._SQL_STUB_METHOD
     assert "***" in man["database_url_redacted"]
     # Stub dumps must not verify as restoreable by default.
     result = verify_backup_package(out)
@@ -46,6 +46,32 @@ def test_create_backup_package_writes_manifest(tmp_path, monkeypatch):
     ok_stub = verify_backup_package(out, allow_stub=True)
     assert ok_stub.ok
     assert ok_stub.members_checked >= 2
+
+
+def test_restore_rejects_sql_stub_when_verification_is_bypassed(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup_package.shutil, "which", lambda _name: None)
+    package_dir = tmp_path / "stub-backup"
+    create_backup_package(
+        package_dir,
+        include_blobs=False,
+        database_url_override="postgresql://backup:pw@127.0.0.1:5432/source",
+        blobs_dir=tmp_path / "source-blobs",
+        encrypt=False,
+        allow_dump_stub=True,
+    )
+    monkeypatch.setattr(
+        backup_package,
+        "verify_backup_package",
+        lambda *_args, **_kwargs: backup_package.RestoreVerifyResult(True, 1, []),
+    )
+
+    with pytest.raises(RuntimeError, match="refusing to restore stub backup"):
+        restore_backup_package(
+            package_dir,
+            target_database_url="postgresql://restore:pw@127.0.0.1:5432/target",
+            target_blobs_dir=tmp_path / "restored-blobs",
+            source_database_url="postgresql://backup:pw@127.0.0.1:5432/source",
+        )
 
 
 def test_create_backup_rejects_key_equal_to_blob_key(tmp_path, monkeypatch):
