@@ -15,7 +15,7 @@ from mail_core.mail.application.remote_ops import reclaim_stale_in_progress
 from mail_core.mail.domain.enums import RemoteOperationStatus
 from mail_core.providers.gmail import GmailProvider, _meta_from_gmail_message
 from mail_core.providers.graph import GraphProvider
-from mail_core.providers.http import ProviderHttpError, RateLimitedError
+from mail_core.providers.http import CursorInvalidError, ProviderHttpError, RateLimitedError
 from mail_core.providers.imap import ImapProvider, format_imap_remote_id
 from mail_core.sync.metadata import apply_metadata_page
 from mail_core.providers.base import MetadataPage, RemoteMessageMeta
@@ -176,6 +176,93 @@ def test_imap_modseq_emits_flag_changes(monkeypatch):
     assert page.next_cursor.get("modseq") == 50
     rid = format_imap_remote_id("INBOX", 7, 5)
     assert flag.remote_id == rid
+
+
+def test_imap_modseq_initial_cursor_is_seeded_only_after_successful_search(monkeypatch):
+    search_args = []
+
+    class FakeImap:
+        def select(self, folder, readonly=True):
+            return "OK", [b"1"]
+
+        def status(self, folder, items):
+            return "OK", [b"INBOX (UIDVALIDITY 7 HIGHESTMODSEQ 50)"]
+
+        def logout(self):
+            return "OK", []
+
+        def uid(self, cmd, *args):
+            search_args.append((cmd, *args))
+            return "OK", [b""]
+
+    monkeypatch.setattr(ImapProvider, "_connect", lambda self: FakeImap())
+    provider = ImapProvider(host="h", port=993, username="u", password="p")
+
+    page = provider.delta_changes("INBOX", {"uid_next": 10, "uidvalidity": 7})
+
+    assert search_args == [("SEARCH", None, "MODSEQ", "1")]
+    assert page.next_cursor["modseq"] == 50
+
+
+def test_imap_modseq_cursor_invalid_error_propagates(monkeypatch):
+    class FakeImap:
+        def select(self, folder, readonly=True):
+            return "OK", [b"1"]
+
+        def status(self, folder, items):
+            return "OK", [b"INBOX (UIDVALIDITY 7 HIGHESTMODSEQ 50)"]
+
+        def logout(self):
+            return "OK", []
+
+        def uid(self, cmd, *args):
+            raise CursorInvalidError("MODSEQ cursor invalid")
+
+    monkeypatch.setattr(ImapProvider, "_connect", lambda self: FakeImap())
+    provider = ImapProvider(host="h", port=993, username="u", password="p")
+    monkeypatch.setattr(
+        provider,
+        "fetch_metadata_page",
+        lambda *_args, **_kwargs: pytest.fail("invalid MODSEQ cursor must not fall back"),
+    )
+
+    with pytest.raises(CursorInvalidError, match="MODSEQ cursor invalid"):
+        provider.delta_changes(
+            "INBOX", {"modseq": 40, "uidvalidity": 7, "uid_next": 10}
+        )
+
+
+def test_imap_modseq_search_failure_logs_and_preserves_cursor(monkeypatch, caplog):
+    class FakeImap:
+        def select(self, folder, readonly=True):
+            return "OK", [b"1"]
+
+        def status(self, folder, items):
+            return "OK", [b"INBOX (UIDVALIDITY 7 HIGHESTMODSEQ 50)"]
+
+        def logout(self):
+            return "OK", []
+
+        def uid(self, cmd, *args):
+            raise OSError("MODSEQ search unavailable")
+
+    monkeypatch.setattr(ImapProvider, "_connect", lambda self: FakeImap())
+    provider = ImapProvider(host="h", port=993, username="u", password="p")
+    monkeypatch.setattr(
+        provider,
+        "fetch_metadata_page",
+        lambda *_args, **_kwargs: MetadataPage(
+            items=(), next_cursor={"uid_next": 10, "uidvalidity": 7}, exhausted=True
+        ),
+    )
+
+    page = provider.delta_changes(
+        "INBOX", {"modseq": 40, "uidvalidity": 7, "uid_next": 10}
+    )
+
+    assert page.next_cursor["modseq"] == 40
+    assert page.next_cursor["uid_next"] == 10
+    assert "MODSEQ delta failed" in caplog.text
 
 
 @pytest.mark.parametrize("failure", ["non_ok", "exception", "partial", "missing_flags", "malformed"])

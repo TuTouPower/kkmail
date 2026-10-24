@@ -10,6 +10,7 @@ import email
 import email.header
 import email.utils
 import imaplib
+import logging
 import re
 import ssl
 from dataclasses import dataclass, field
@@ -28,6 +29,9 @@ from mail_core.providers.base import (
     RemoteOperationResult,
 )
 from mail_core.providers.http import CursorInvalidError
+from mail_core.security.redact import safe_error
+
+log = logging.getLogger("mail_core.providers.imap")
 
 _FOLDER_ROLE = {
     "INBOX": "inbox",
@@ -769,7 +773,14 @@ class ImapProvider:
                     uidvalidity = int(m2.group(1)) if m2 else cursor.get("uidvalidity")
                 else:
                     uidvalidity = cursor.get("uidvalidity")
-            except Exception:
+            except CursorInvalidError:
+                raise
+            except Exception as exc:
+                log.warning(
+                    "could not read IMAP MODSEQ status for %s: %s",
+                    folder_remote_id,
+                    safe_error(exc),
+                )
                 uidvalidity = cursor.get("uidvalidity")
                 highest = None
 
@@ -777,8 +788,8 @@ class ImapProvider:
             uv = int(uidvalidity) if uidvalidity is not None else 0
 
             changes: list[DeltaChange] = []
-            since_modseq = cursor.get("modseq")
-            if highest is not None and since_modseq is not None:
+            since_modseq = int(cursor.get("modseq") or 0)
+            if highest is not None:
                 try:
                     typ, data = c.uid("SEARCH", None, "MODSEQ", str(int(since_modseq) + 1))
                     if typ == "OK":
@@ -846,17 +857,28 @@ class ImapProvider:
                             next_cursor=next_cursor,
                             exhausted=exhausted,
                         )
+                    log.warning(
+                        "IMAP MODSEQ SEARCH failed for %s with status %s; falling back to UID scan",
+                        folder_remote_id,
+                        typ,
+                    )
+                except CursorInvalidError:
+                    raise
                 except _ImapFlagFetchError:
                     raise
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.warning(
+                        "IMAP MODSEQ delta failed for %s; falling back to UID scan: %s",
+                        folder_remote_id,
+                        safe_error(exc),
+                    )
 
             # UID-based incremental (always safe): fetch metadata since uid_next.
             page = self.fetch_metadata_page(folder_remote_id, cursor)
             changes = [DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items]
             next_cursor = dict(page.next_cursor or {})
-            if highest is not None and page.exhausted:
-                next_cursor["modseq"] = highest
+            if cursor.get("modseq") is not None:
+                next_cursor["modseq"] = cursor["modseq"]
             if uidvalidity is not None:
                 next_cursor["uidvalidity"] = uidvalidity
             return DeltaPage(changes=changes, next_cursor=next_cursor, exhausted=page.exhausted)
