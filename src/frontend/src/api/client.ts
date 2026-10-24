@@ -81,12 +81,29 @@ async function fetchCsrfToken(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<string | 
         headers: { Accept: 'application/json' },
         signal: tmo.signal,
       })
-      if (!res.ok) return null
+      if (res.status === 401) throw handleUnauthorized()
+      if (!res.ok) {
+        let body: unknown = null
+        try {
+          body = await underTimeout(res.json(), tmo.signal, timeoutMs, tmo.timedOut)
+        } catch (err) {
+          if (tmo.timedOut()) throw err
+          /* non-JSON or empty error body */
+        }
+        throw errorFromBody(res.status, res.statusText, body)
+      }
       const data = (await underTimeout(res.json(), tmo.signal, timeoutMs, tmo.timedOut)) as { csrf_token?: string }
       csrfToken = data.csrf_token || null
       return csrfToken
-    } catch {
-      return null
+    } catch (err) {
+      if (tmo.timedOut()) {
+        throw { status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` } as ApiError
+      }
+      if (isApiError(err)) throw err
+      if (err instanceof SyntaxError) {
+        throw { status: 0, code: 'invalid_response', message: 'CSRF 令牌响应无效' } as ApiError
+      }
+      throw { status: 0, code: 'network_error', message: '网络请求失败，无法获取 CSRF 令牌' } as ApiError
     } finally {
       tmo.done()
       csrfInflight = null
@@ -139,6 +156,12 @@ function errorFromBody(status: number, statusText: string, body: unknown): ApiEr
   return { status, message, payload: body }
 }
 
+function isApiError(error: unknown): error is ApiError {
+  return !!error && typeof error === 'object'
+    && typeof (error as ApiError).status === 'number'
+    && typeof (error as ApiError).message === 'string'
+}
+
 
 /** Reject when the shared timeout aborts, so hung body parses cannot outlive timeoutMs. */
 function underTimeout<T>(work: Promise<T>, signal: AbortSignal, timeoutMs: number, timedOut: () => boolean): Promise<T> {
@@ -173,7 +196,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}, 
     const token = csrfToken || (await fetchCsrfToken(timeoutMs))
     if (!token) {
       // Never send a state-changing request without CSRF protection.
-      throw { status: 0, code: 'csrf_unavailable', message: '无法获取 CSRF 令牌，请重新登录后重试' } as ApiError
+      throw { status: 0, code: 'csrf_unavailable', message: '无法获取 CSRF 令牌，请稍后重试' } as ApiError
     }
     headers['X-CSRF-Token'] = token
   }

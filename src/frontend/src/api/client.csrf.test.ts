@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { __resetCsrfForTests, api, apiRequest, postJson } from './client'
+import { __resetCsrfForTests, api, apiRequest, postJson, UNAUTHORIZED_EVENT } from './client'
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -41,13 +41,38 @@ describe('CSRF handling', () => {
   })
 
   it('never sends an unsafe request when no CSRF token can be obtained', async () => {
+    const unauthorized = vi.fn()
+    const target = new EventTarget()
+    vi.stubGlobal('window', target)
+    target.addEventListener(UNAUTHORIZED_EVENT, unauthorized)
     const fetchMock = vi.fn(async (url: string) => {
       if (String(url).endsWith('/api/auth/me')) return json(401, { detail: 'authentication required' })
       return json(200, {})
     })
     vi.stubGlobal('fetch', fetchMock)
-    await expect(postJson('/api/mail/messages/1/trash')).rejects.toMatchObject({ code: 'csrf_unavailable' })
+    await expect(postJson('/api/mail/messages/1/trash')).rejects.toMatchObject({
+      status: 401,
+      code: 'unauthorized',
+      message: '登录已过期，请重新登录',
+    })
     expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual(['/api/auth/me'])
+    expect(unauthorized).toHaveBeenCalledOnce()
+  })
+
+  it('propagates CSRF fetch network failures as network errors', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+    await expect(postJson('/api/mail/messages/1/trash')).rejects.toMatchObject({
+      status: 0,
+      code: 'network_error',
+    })
+  })
+
+  it('does not misreport CSRF endpoint server errors as an expired login', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(503, { detail: 'temporarily unavailable' })))
+    await expect(postJson('/api/mail/messages/1/trash')).rejects.toMatchObject({
+      status: 503,
+      message: 'temporarily unavailable',
+    })
   })
 
   it('GET requests need no CSRF token', async () => {
@@ -122,12 +147,13 @@ describe('errors and timeouts', () => {
     expect(seen).toHaveBeenCalledOnce()
   })
 
-  it('times out hung CSRF fetch during unsafe requests', async () => {
+  it('propagates timeout from a hung CSRF fetch during unsafe requests', async () => {
     vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit = {}) => new Promise((_res, rej) => {
       init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
     })))
     await expect(postJson('/api/mail/messages/1/trash', {}, { timeoutMs: 30 })).rejects.toMatchObject({
-      code: 'csrf_unavailable',
+      status: 0,
+      code: 'timeout',
     })
   })
 
