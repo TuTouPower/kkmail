@@ -48,6 +48,29 @@ def test_create_backup_package_writes_manifest(tmp_path, monkeypatch):
     assert ok_stub.members_checked >= 2
 
 
+def test_create_backup_rejects_key_equal_to_blob_key(tmp_path, monkeypatch):
+    shared_key = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", shared_key)
+    monkeypatch.delenv("MAIL_CORE_BACKUP_KEYS", raising=False)
+    monkeypatch.delenv("MAIL_CORE_BACKUP_KEY_VERSION", raising=False)
+    monkeypatch.setenv("MAIL_CORE_BLOB_KEY_V1", shared_key)
+    monkeypatch.delenv("MAIL_CORE_BLOB_KEYS", raising=False)
+    monkeypatch.delenv("MAIL_CORE_BLOB_KEY_VERSION", raising=False)
+    monkeypatch.delenv("MAIL_CORE_BLOB_ACTIVE_VERSION", raising=False)
+
+    with pytest.raises(BackupCryptoError, match="backup key must differ from blob keys"):
+        create_backup_package(
+            tmp_path / "same-key-backup",
+            include_blobs=False,
+            database_url_override="postgresql://backup:pw@127.0.0.1:5432/source",
+            blobs_dir=tmp_path / "blobs",
+            encrypt=True,
+            allow_dump_stub=True,
+        )
+
+    assert not (tmp_path / "same-key-backup").exists()
+
+
 def test_restore_sealed_backup_reads_manifest_filename_case(tmp_path, monkeypatch):
     assert backup_package._MANIFEST_FILENAME == "MANIFEST.json"
 

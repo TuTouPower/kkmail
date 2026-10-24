@@ -28,6 +28,7 @@ from mail_core.backup.crypto import (
     load_backup_keyring,
 )
 from mail_core.blobs.archive import blob_root
+from mail_core.blobs.crypto import BlobCryptoError, load_keyring_from_env
 from mail_core.db.session import database_url
 
 log = logging.getLogger("mail_core.backup")
@@ -63,6 +64,17 @@ def _redact_url(url: str) -> str:
             host = rest.split("@", 1)[1]
             return f"{scheme}://{user}:***@{host}"
     return url
+
+
+def _ensure_backup_key_separate_from_blobs(backup_key: bytes) -> None:
+    if not (os.environ.get("MAIL_CORE_BLOB_KEYS") or os.environ.get("MAIL_CORE_BLOB_KEY_V1")):
+        return
+    try:
+        blob_keyring = load_keyring_from_env()
+    except BlobCryptoError as exc:
+        raise BackupCryptoError(f"cannot validate backup key separation: {exc}") from exc
+    if backup_key in blob_keyring.keys.values():
+        raise BackupCryptoError("backup key must differ from blob keys")
 
 
 def _restore_database_identity(url: str) -> tuple[str, str, int, str, str]:
@@ -376,6 +388,7 @@ def create_backup_package(
         return out
 
     key, version = load_backup_key()
+    _ensure_backup_key_separate_from_blobs(key)
     _make_private_dir(out)
 
     plain_stage = out / f".stage_plain_{uuid.uuid4().hex}"
