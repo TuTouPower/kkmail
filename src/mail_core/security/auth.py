@@ -289,21 +289,9 @@ def get_session_epoch() -> int:
         Session = get_session_factory()
         with Session() as session:
             cred = session.get(AuthCredential, "default")
-            if cred is None:
-                cred = AuthCredential(
-                    id="default",
-                    login_password_hash="",
-                    session_epoch=_session_epoch,
-                )
-                session.add(cred)
-                session.commit()
-                epoch = _session_epoch
-            else:
-                epoch = getattr(cred, "session_epoch", None)
+            epoch = getattr(cred, "session_epoch", None) if cred is not None else None
             if epoch is None:
                 epoch = _session_epoch
-                cred.session_epoch = epoch
-                session.commit()
             if generation != _session_epoch_generation:
                 # A local password change or logout completed while this query ran.
                 return _session_epoch

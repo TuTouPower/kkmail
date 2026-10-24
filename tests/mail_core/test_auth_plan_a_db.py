@@ -13,6 +13,7 @@ from mail_core.security.auth import (
     AuthConfigError,
     change_login_password,
     get_login_password_hash,
+    get_session_epoch,
     invalidate_all_sessions,
     issue_session,
     read_session,
@@ -403,5 +404,34 @@ def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
         reset_auth_caches()
         assert read_session(cookie_val) is None
         assert read_session(cookie_val_2) is not None
+
+
+def test_get_session_epoch_does_not_create_a_missing_credential_row():
+    reset_auth_caches()
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, _model, _key):
+            return None
+
+        def add(self, _obj):
+            raise AssertionError("read path must not add AuthCredential")
+
+        def commit(self):
+            raise AssertionError("read path must not commit")
+
+    try:
+        with (
+            patch.dict(os.environ, {"MAIL_CORE_DATABASE_URL": "postgresql://test/db"}),
+            patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
+        ):
+            assert get_session_epoch() == 1
+    finally:
+        reset_auth_caches()
 
 
