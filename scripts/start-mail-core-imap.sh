@@ -17,19 +17,49 @@ if [[ -z "${KKMAIL_TEST_PG_PASSWORD:-}" && -f "$ROOT/.env.test" ]]; then
   set +a
 fi
 
-if docker compose -p kkmail_test_pg -f config/test_pg_compose.yaml up -d imap 2>/dev/null; then
-  echo "Dovecot IMAP via test compose on :$PORT"
-  exit 0
-fi
-
-if docker compose -f docker-compose.mail-core.yml --profile imap up -d imap 2>/dev/null; then
-  echo "Dovecot IMAP via compose (profile=imap) on :$PORT"
-  exit 0
-fi
-
 PY="$(command -v python3 || true)"
 if [[ -z "$PY" ]]; then
   PY="$(command -v python || true)"
+fi
+
+wait_for_imap_ready() {
+  if [[ -z "$PY" ]]; then
+    echo "Cannot verify IMAP readiness: python3/python is not available." >&2
+    return 1
+  fi
+  "$PY" - "$MAIL_CORE_IMAP_HOST" "$PORT" <<'PY'
+import socket
+import sys
+import time
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            raise SystemExit(0)
+    except OSError:
+        time.sleep(0.25)
+print(f"IMAP did not become ready at {host}:{port} within 30 seconds", file=sys.stderr)
+raise SystemExit(1)
+PY
+}
+
+if docker compose -p kkmail_test_pg -f config/test_pg_compose.yaml up -d imap; then
+  if wait_for_imap_ready; then
+    echo "Dovecot IMAP via test compose on :$PORT"
+    exit 0
+  fi
+  exit 1
+fi
+
+if docker compose -f docker-compose.mail-core.yml --profile imap up -d imap; then
+  if wait_for_imap_ready; then
+    echo "Dovecot IMAP via compose (profile=imap) on :$PORT"
+    exit 0
+  fi
+  exit 1
 fi
 if [[ -n "$PY" ]] && "$PY" -c "import pymap" 2>/dev/null; then
   echo "Starting pymap on :$PORT (fallback)"
