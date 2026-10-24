@@ -31,6 +31,11 @@ describe('Dark mode Apple Mail theme and contrast (AC-001, AC-002)', () => {
     expect(css).toMatch(/\.sender\s*\{[^}]*font-weight:\s*600;/s)
   })
 
+  it('keeps reader toolbar keyboard focus visible with the shared accent token', () => {
+    expect(css).toMatch(/button:focus-visible[\s\S]*?\{[^}]*outline:\s*2px solid var\(--accent\);/)
+    expect(css).not.toMatch(/\.reader-action:focus(?:-visible)?\s*[,\{]/)
+  })
+
   it('configures focused selected and unfocused selected item styling (AC-002)', () => {
     // 聚焦选中：.message-list:focus-within .message-row.selected
     expect(css).toContain('.message-list:focus-within .message-row.selected')

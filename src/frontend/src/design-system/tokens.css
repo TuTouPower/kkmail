@@ -1331,12 +1331,6 @@ button:hover .icon,
   color: var(--muted);
 }
 
-.reader-action:focus,
-.reader-action:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
 .reader-action:hover:not(:disabled) {
   border-color: var(--line);
   background: var(--surface-hover);
