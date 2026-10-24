@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage import Account, Folder, Message
@@ -19,6 +19,70 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
     reason="MAIL_CORE_DATABASE_URL not set",
 )
+
+
+def test_flag_patches_bulk_load_messages_once():
+    from mail_core.sync.delta import _apply_flag_patches
+
+    Session = get_session_factory()
+    with Session() as session:
+        account = Account(email=f"flag-batch-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        session.add(account)
+        session.flush()
+        folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        messages = [
+            Message(
+                account_id=account.id,
+                remote_id=f"batch-{index}",
+                subject=f"Message {index}",
+                from_address="sender@example.com",
+                is_read=False,
+                is_flagged=False,
+            )
+            for index in range(5)
+        ]
+        session.add_all(messages)
+        session.flush()
+        changes = [
+            DeltaChange(
+                kind="flag",
+                remote_id=message.remote_id,
+                flags={"is_read": True, "is_flagged": True},
+            )
+            for message in messages
+        ]
+
+        message_selects = 0
+
+        def count_message_select(_conn, _cursor, statement, _params, _context, _many):
+            nonlocal message_selects
+            normalized = " ".join(statement.lower().split())
+            if (
+                normalized.startswith("select")
+                and " from messages " in normalized
+                and "messages.account_id" in normalized
+                and "messages.remote_id" in normalized
+            ):
+                message_selects += 1
+
+        engine = session.get_bind()
+        event.listen(engine, "before_cursor_execute", count_message_select)
+        try:
+            changed_count, touched = _apply_flag_patches(
+                session,
+                account_id=account.id,
+                folder_id=folder.id,
+                changes=changes,
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", count_message_select)
+
+        assert message_selects == 1
+        assert changed_count == len(messages)
+        assert len(touched) == len(messages)
+        assert all(message.is_read and message.is_flagged for message in messages)
+        session.commit()
 
 
 def test_flag_delta_does_not_wipe_subject():

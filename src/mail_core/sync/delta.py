@@ -44,37 +44,47 @@ def _apply_flag_patches(
     """Patch is_read / is_flagged only — never upsert stub meta that wipes subject/from."""
     from mail_core.sync.remote_push import get_unconverged_field_intents
 
-    remote_ids = [c.remote_id for c in changes]
+    patches: list[tuple[str, dict]] = []
+    for change in changes:
+        flags = dict(change.flags or {})
+        if change.meta is not None and not flags and change.meta.is_read is not None:
+            flags["is_read"] = change.meta.is_read
+        if flags:
+            patches.append((change.remote_id, flags))
+    if not patches:
+        return 0, []
+
+    remote_ids = list(dict.fromkeys(remote_id for remote_id, _ in patches))
     now = datetime.now(timezone.utc)
     intents = get_unconverged_field_intents(session, account_id, remote_ids, now=now)
+    messages = {
+        message.remote_id: message
+        for message in session.scalars(
+            select(Message).where(
+                Message.account_id == account_id,
+                Message.remote_id.in_(remote_ids),
+            )
+        )
+    }
 
     touched: list[uuid.UUID] = []
     flagged = 0
-    for change in changes:
-        flags = dict(change.flags or {})
-        if change.meta is not None:
-            # Fall back to the meta read value only when no explicit flag fields were supplied.
-            if not flags and change.meta.is_read is not None:
-                flags["is_read"] = change.meta.is_read
-        if not flags:
-            continue
-        msg = session.scalar(
-            select(Message).where(Message.account_id == account_id, Message.remote_id == change.remote_id)
-        )
+    for remote_id, flags in patches:
+        msg = messages.get(remote_id)
         if msg is None:
             continue
         changed = False
         if "is_read" in flags:
             want = bool(flags["is_read"])
-            if change.remote_id in intents and "is_read" in intents[change.remote_id]:
-                want = bool(intents[change.remote_id]["is_read"])
+            if remote_id in intents and "is_read" in intents[remote_id]:
+                want = bool(intents[remote_id]["is_read"])
             if msg.is_read != want:
                 msg.is_read = want
                 changed = True
         if "is_flagged" in flags:
             want = bool(flags["is_flagged"])
-            if change.remote_id in intents and "is_flagged" in intents[change.remote_id]:
-                want = bool(intents[change.remote_id]["is_flagged"])
+            if remote_id in intents and "is_flagged" in intents[remote_id]:
+                want = bool(intents[remote_id]["is_flagged"])
             if msg.is_flagged != want:
                 msg.is_flagged = want
                 changed = True
