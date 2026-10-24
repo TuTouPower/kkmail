@@ -84,9 +84,10 @@ def test_ac001_multi_batch_mark_read_auto_convergence(monkeypatch):
         session.commit()
 
         # Execute "mark all read" -> creates 26 pending remote operations and 1 WorkerJob
-        count = mark_all_messages_read(session, account_id=acc.id)
+        batch = mark_all_messages_read(session, account_id=acc.id)
         session.commit()
-        assert count == 26
+        assert batch.count == 26
+        assert batch.last_message_id is not None
 
         # Wire fake provider
         fake_provider = FakeBatchPushProvider()

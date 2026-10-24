@@ -15,6 +15,8 @@ from mail_core.mail.storage.models import Account, AccountGroup, Folder, Message
 from mail_core.realtime.notify import try_notify_outbox
 from mail_core.sync.jobs import enqueue_job
 
+MARK_ALL_READ_BATCH_SIZE = 500
+
 
 @dataclass(frozen=True, slots=True)
 class MutationResult:
@@ -23,6 +25,12 @@ class MutationResult:
     operation_id: uuid.UUID | None
     is_read: bool | None = None
     is_flagged: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MarkAllReadBatchResult:
+    count: int
+    last_message_id: uuid.UUID | None
 
 
 class UnaddressableMessageError(ValueError):
@@ -234,8 +242,11 @@ def _mark_all_read_query(
     folder_id: uuid.UUID | None,
     is_flagged: bool | None,
     group_id: uuid.UUID | None,
+    account_ids: list[uuid.UUID] | None,
+    after_message_id: uuid.UUID | None,
+    limit: int,
 ):
-    if group_id is not None and session.get(AccountGroup, group_id) is None:
+    if group_id is not None and account_ids is None and session.get(AccountGroup, group_id) is None:
         raise LookupError("group not found")
     if folder_id is not None:
         folder = session.get(Folder, folder_id)
@@ -263,11 +274,15 @@ def _mark_all_read_query(
         )
     if account_id is not None:
         stmt = stmt.where(Message.account_id == account_id)
-    if group_id is not None:
+    if account_ids is not None:
+        stmt = stmt.where(Message.account_id.in_(account_ids))
+    elif group_id is not None:
         stmt = stmt.where(Message.account_id.in_(select(Account.id).where(Account.group_id == group_id)))
     if is_flagged is not None:
         stmt = stmt.where(Message.is_flagged == is_flagged)
-    return stmt.distinct()
+    if after_message_id is not None:
+        stmt = stmt.where(Message.id > after_message_id)
+    return stmt.distinct().order_by(Message.id).limit(limit)
 
 
 def mark_all_messages_read(
@@ -278,8 +293,12 @@ def mark_all_messages_read(
     folder_id: uuid.UUID | None = None,
     is_flagged: bool | None = None,
     group_id: uuid.UUID | None = None,
-) -> int:
-    """Batch mark messages read matching the scope (account/folder_role/folder_id/flag). Returns updated count."""
+    account_ids: list[uuid.UUID] | None = None,
+    after_message_id: uuid.UUID | None = None,
+    limit: int = MARK_ALL_READ_BATCH_SIZE,
+) -> MarkAllReadBatchResult:
+    """Mark one bounded keyset batch; callers commit and continue after its last message ID."""
+    limit = min(max(limit, 1), MARK_ALL_READ_BATCH_SIZE)
     stmt = _mark_all_read_query(
         session,
         account_id=account_id,
@@ -287,11 +306,14 @@ def mark_all_messages_read(
         folder_id=folder_id,
         is_flagged=is_flagged,
         group_id=group_id,
+        account_ids=account_ids,
+        after_message_id=after_message_id,
+        limit=limit,
     )
 
     messages = list(session.scalars(stmt).all())
     if not messages:
-        return 0
+        return MarkAllReadBatchResult(count=0, last_message_id=None)
 
     loc_rows = session.execute(
         select(MessageLocation.message_id, MessageLocation.folder_id, Folder.remote_id)
@@ -350,5 +372,5 @@ def mark_all_messages_read(
 
     try_notify_outbox(session)
     session.flush()
-    return len(messages)
+    return MarkAllReadBatchResult(count=len(messages), last_message_id=messages[-1].id)
 

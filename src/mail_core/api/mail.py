@@ -29,6 +29,7 @@ from mail_core.mail.application.attachments import (
     load_attachment,
 )
 from mail_core.mail.application.mutations import (
+    MARK_ALL_READ_BATCH_SIZE,
     MutationResult,
     UnaddressableMessageError,
     mark_all_messages_read,
@@ -481,26 +482,45 @@ def api_set_message_read(message_id: UUID, body: ReadBody) -> MutationOut:
 def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
     """Batch mark messages read across the matching scope (folder/account/flag)."""
     Session = get_session_factory()
-    with Session() as session:
-        if body.group_id is not None and (body.account_id is not None or body.folder_id is not None):
-            raise HTTPException(400, "group_id cannot be combined with account_id or folder_id")
-        try:
-            count = mark_all_messages_read(
-                session,
-                account_id=body.account_id,
-                folder_role=body.folder_role,
-                folder_id=body.folder_id,
-                is_flagged=body.is_flagged,
-                group_id=body.group_id,
-            )
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        session.commit()
-        return MarkAllReadOut(
-            success=True,
-            count=count,
-            account_id=str(body.account_id) if body.account_id else None,
-        )
+    if body.group_id is not None and (body.account_id is not None or body.folder_id is not None):
+        raise HTTPException(400, "group_id cannot be combined with account_id or folder_id")
+    group_account_ids = None
+    if body.group_id is not None:
+        with Session() as scope_session:
+            try:
+                group_account_ids = account_ids_for_group(scope_session, body.group_id)
+            except LookupError as exc:
+                raise HTTPException(404, str(exc)) from exc
+    total_count = 0
+    after_message_id = None
+    while True:
+        with Session() as session:
+            try:
+                batch = mark_all_messages_read(
+                    session,
+                    account_id=body.account_id,
+                    folder_role=body.folder_role,
+                    folder_id=body.folder_id,
+                    is_flagged=body.is_flagged,
+                    group_id=body.group_id if group_account_ids is None else None,
+                    account_ids=group_account_ids,
+                    after_message_id=after_message_id,
+                    limit=MARK_ALL_READ_BATCH_SIZE,
+                )
+            except LookupError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            session.commit()
+        total_count += batch.count
+        if batch.count < MARK_ALL_READ_BATCH_SIZE:
+            break
+        if batch.last_message_id is None:
+            raise RuntimeError("mark-all-read batch did not return its keyset cursor")
+        after_message_id = batch.last_message_id
+    return MarkAllReadOut(
+        success=True,
+        count=total_count,
+        account_id=str(body.account_id) if body.account_id else None,
+    )
 
 
 @router.post("/messages/{message_id}/flag", response_model=MutationOut)

@@ -14,7 +14,7 @@ from mail_core.api.app import app
 from tests.mail_core.conftest import TEST_API_KEY
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import JobType, RemoteOperationStatus
-from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, RemoteOperation, WorkerJob
+from mail_core.mail.storage.models import Account, AccountGroup, Folder, Message, MessageLocation, RemoteOperation, WorkerJob
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
@@ -45,6 +45,44 @@ def _seed(*, remote_id: str | None = "rid-1") -> uuid.UUID:
         session.add(MessageLocation(message_id=msg.id, folder_id=folder.id, uid=1))
         session.commit()
         return msg.id
+
+
+def _seed_many(count: int, *, grouped: bool = False) -> tuple[uuid.UUID, list[uuid.UUID], uuid.UUID | None]:
+    Session = get_session_factory()
+    with Session() as session:
+        group = None
+        if grouped:
+            group = AccountGroup(name=f"mut-batch-{uuid.uuid4().hex[:8]}")
+            session.add(group)
+            session.flush()
+        acc = Account(
+            email=f"mut-batch-{uuid.uuid4().hex[:8]}@ex.com",
+            provider="memory",
+            credential_ref="r",
+            group_id=group.id if group is not None else None,
+        )
+        session.add(acc)
+        session.flush()
+        folder = Folder(account_id=acc.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        session.flush()
+        message_ids = []
+        for index in range(count):
+            msg = Message(
+                account_id=acc.id,
+                remote_id=f"rid-batch-{index}",
+                subject="Hi",
+                from_address="a@b.c",
+                sort_time=datetime.now(timezone.utc),
+                is_read=False,
+                is_flagged=False,
+            )
+            session.add(msg)
+            session.flush()
+            session.add(MessageLocation(message_id=msg.id, folder_id=folder.id, uid=index + 1))
+            message_ids.append(msg.id)
+        session.commit()
+        return acc.id, message_ids, group.id if group is not None else None
 
 
 def test_mark_read_and_flag_enqueue_ops():
@@ -156,6 +194,120 @@ def test_mark_all_read_api():
     with Session() as session:
         msg = session.get(Message, mid)
         assert msg.is_read is True
+
+
+def test_mark_all_read_api_commits_bounded_batches(monkeypatch):
+    from mail_core.api import mail as mail_api
+
+    account_id, message_ids, _ = _seed_many(5)
+    monkeypatch.setattr(mail_api, "MARK_ALL_READ_BATCH_SIZE", 2, raising=False)
+    original = mail_api.mark_all_messages_read
+    batch_counts = []
+    batch_cursors = []
+    batch_last_ids = []
+
+    def track_batch(session, **kwargs):
+        batch_cursors.append(kwargs.get("after_message_id"))
+        batch = original(session, **kwargs)
+        batch_counts.append(batch.count)
+        if batch.last_message_id is not None:
+            batch_last_ids.append(batch.last_message_id)
+        return batch
+
+    monkeypatch.setattr(mail_api, "mark_all_messages_read", track_batch)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    response = client.post(
+        "/api/mail/mark-all-read",
+        json={"account_id": str(account_id), "folder_role": "inbox"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 5
+    assert batch_counts == [2, 2, 1]
+    assert batch_cursors == [None, *batch_last_ids[:2]]
+
+    Session = get_session_factory()
+    with Session() as session:
+        assert all(session.get(Message, message_id).is_read is True for message_id in message_ids)
+        operations = list(session.scalars(select(RemoteOperation).where(RemoteOperation.account_id == account_id)))
+        assert len(operations) == 5
+
+
+def test_mark_all_read_api_keeps_committed_batches_retryable(monkeypatch):
+    from mail_core.api import mail as mail_api
+
+    account_id, message_ids, _ = _seed_many(5)
+    monkeypatch.setattr(mail_api, "MARK_ALL_READ_BATCH_SIZE", 2, raising=False)
+    original = mail_api.mark_all_messages_read
+    calls = 0
+
+    def fail_second_batch(session, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected second-batch failure")
+        return original(session, **kwargs)
+
+    monkeypatch.setattr(mail_api, "mark_all_messages_read", fail_second_batch)
+    client = TestClient(
+        app,
+        headers={"Authorization": f"Bearer {TEST_API_KEY}"},
+        raise_server_exceptions=False,
+    )
+    failed = client.post(
+        "/api/mail/mark-all-read",
+        json={"account_id": str(account_id), "folder_role": "inbox"},
+    )
+
+    assert failed.status_code == 500
+    Session = get_session_factory()
+    with Session() as session:
+        states = [session.get(Message, message_id).is_read for message_id in message_ids]
+        assert states.count(True) == 2
+        assert states.count(False) == 3
+
+    monkeypatch.setattr(mail_api, "mark_all_messages_read", original)
+    retry = client.post(
+        "/api/mail/mark-all-read",
+        json={"account_id": str(account_id), "folder_role": "inbox"},
+    )
+    assert retry.status_code == 200
+    assert retry.json()["count"] == 3
+    with Session() as session:
+        assert all(session.get(Message, message_id).is_read is True for message_id in message_ids)
+        operations = list(session.scalars(select(RemoteOperation).where(RemoteOperation.account_id == account_id)))
+        assert len(operations) == 5
+
+
+def test_mark_all_read_api_freezes_group_members_across_batches(monkeypatch):
+    from mail_core.api import mail as mail_api
+
+    account_id, message_ids, group_id = _seed_many(5, grouped=True)
+    assert group_id is not None
+    monkeypatch.setattr(mail_api, "MARK_ALL_READ_BATCH_SIZE", 2, raising=False)
+    original = mail_api.mark_all_messages_read
+    batch_scopes = []
+
+    def move_account_after_first_batch(session, **kwargs):
+        batch_scopes.append(kwargs.get("account_ids"))
+        batch = original(session, **kwargs)
+        if len(batch_scopes) == 1:
+            account = session.get(Account, account_id)
+            assert account is not None
+            account.group_id = None
+            session.flush()
+        return batch
+
+    monkeypatch.setattr(mail_api, "mark_all_messages_read", move_account_after_first_batch)
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    response = client.post("/api/mail/mark-all-read", json={"group_id": str(group_id)})
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 5
+    assert batch_scopes == [[account_id], [account_id], [account_id]]
+    Session = get_session_factory()
+    with Session() as session:
+        assert all(session.get(Message, message_id).is_read is True for message_id in message_ids)
 
 
 def test_local_only_messages_keep_read_flag_local_and_reject_trash():

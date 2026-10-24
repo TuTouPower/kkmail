@@ -199,9 +199,10 @@ def test_folder_id_query_dedup_and_mark_read_scope():
         assert item_ids.count(m3.id) == 1
 
         # 3. AC-007: mark_all_messages_read with specific folder_id only affects that folder
-        count = mark_all_messages_read(session, account_id=acc1.id, folder_id=f_b.id)
+        batch = mark_all_messages_read(session, account_id=acc1.id, folder_id=f_b.id)
         session.commit()
-        assert count == 1
+        assert batch.count == 1
+        assert batch.last_message_id is not None
         # m2 (in FolderB) is now read
         assert session.get(Message, m2.id).is_read is True
         # m1 (in FolderA) remains unread
