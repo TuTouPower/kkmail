@@ -217,8 +217,12 @@ class BearerTransport:
             raise
         except ProviderHttpError as exc:
             if exc.status == 401:
-                # One forced refresh then retry
+                # Refresh credentials for the next attempt, but do not replay writes.
                 token = self.token_client.get_access_token(force_refresh=True)
+                if method.upper() not in {"GET", "HEAD"}:
+                    raise AmbiguousOutcomeError(
+                        f"{method.upper()} outcome ambiguous after HTTP 401; request not replayed"
+                    ) from exc
                 headers["Authorization"] = f"Bearer {token}"
                 return self.inner(method, url, params, headers)
             raise

@@ -11,7 +11,7 @@ from mail_core.accounts import DictCredentialStore
 from mail_core.mail.storage.models import Account
 from mail_core.providers.factory import build_provider
 from mail_core.providers.gmail import GmailNotConfiguredError, GmailProvider
-from mail_core.providers.http import ProviderHttpError
+from mail_core.providers.http import AmbiguousOutcomeError, ProviderHttpError
 from mail_core.providers.oauth import (
     BearerTransport,
     OAuthError,
@@ -96,6 +96,45 @@ def test_bearer_transport_attaches_header_and_retries_401():
     assert seen[0] == "Bearer stale"
     assert seen[1].startswith("Bearer fresh-")
     assert tokens["n"] == 1
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH", "DELETE"])
+def test_bearer_transport_does_not_replay_writes_after_401(method):
+    store = DictCredentialStore(
+        {
+            "oauth:g": json.dumps(
+                {
+                    "refresh_token": "rt",
+                    "client_id": "c",
+                    "client_secret": "s",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "access_token": "stale",
+                    "expires_at": time.time() + 9999,
+                }
+            )
+        }
+    )
+    refreshes = []
+
+    def token_post(_method, _url, _form, _headers):
+        refreshes.append(True)
+        return {"access_token": "fresh", "expires_in": 3600}
+
+    client = OAuthTokenClient(credential_ref="oauth:g", store=store, provider="gmail", http_post=token_post)
+    requests = []
+
+    def api(request_method, _url, _params, headers):
+        requests.append((request_method, headers["Authorization"]))
+        raise ProviderHttpError("unauthorized", status=401)
+
+    transport = BearerTransport(token_client=client, inner=api, base_url="https://gmail.googleapis.com")
+
+    with pytest.raises(AmbiguousOutcomeError, match=f"{method} outcome ambiguous") as exc_info:
+        transport(method, "/me/messages/m1", {"isRead": True})
+
+    assert exc_info.value.status is None
+    assert requests == [(method, "Bearer stale")]
+    assert len(refreshes) == 1
 
 
 def test_factory_wires_gmail_oauth_and_not_configured_without_ref():
