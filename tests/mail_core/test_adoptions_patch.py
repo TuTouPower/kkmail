@@ -23,9 +23,9 @@ from mail_core.threading.rules import assign_thread_for_message
 
 
 # Note on deleted tests:
-# - test_session_epoch_memory_cache_and_invalidation: Removed per A37 decision.
-#   The 5s epoch cache was removed so authentication always reads authoritative DB epoch
-#   for immediate cross-process session revocation. Replaced by tests in test_auth_plan_a_db.py.
+# - test_session_epoch_memory_cache_and_invalidation: Removed per A37 decision, then
+#   superseded by A86's bounded 5s cache; cache expiry and local invalidation are tested
+#   in test_auth_plan_a_db.py.
 # - test_cookie_secure_adaptive_forwarded_proto: Removed per A21 decision.
 #   Direct trust of raw X-Forwarded-Proto headers was removed to prevent forged header bypass.
 #   cookie_secure now only trusts explicit config or verified ASGI scheme. Replaced by test_cookie_secure_boundary in test_auth.py.

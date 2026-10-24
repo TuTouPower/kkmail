@@ -9,6 +9,7 @@ from unittest.mock import patch
 import bcrypt
 
 from mail_core.security.auth import (
+    _SESSION_EPOCH_CACHE_TTL_SECONDS,
     AuthConfigError,
     change_login_password,
     get_login_password_hash,
@@ -269,10 +270,13 @@ def test_change_password_atomic_commit_and_rollback_on_failure():
         assert read_session(cookie_val_2) is not None
 
 
-def test_instant_epoch_revocation_across_processes_without_cache_delay():
-    """A37: Epoch changes in DB immediately revoke sessions across processes with zero cache delay."""
+def test_cross_process_epoch_revocation_is_bounded_by_cache_ttl():
+    """A86: Remote epoch changes apply after the short cache TTL."""
     reset_auth_caches()
     stored_cred = {"hash": "dummy", "epoch": 1}
+    fake_time = [100.0]
+    query_count = 0
+    db_unavailable = False
 
     class FakeCred:
         def __init__(self, id, hash_val, epoch=1):
@@ -290,12 +294,16 @@ def test_instant_epoch_revocation_across_processes_without_cache_delay():
 
     class FakeSession:
         def __enter__(self):
+            if db_unavailable:
+                raise RuntimeError("Database connection refused")
             return self
 
         def __exit__(self, *args):
             return False
 
         def get(self, model, key):
+            nonlocal query_count
+            query_count += 1
             return FakeCred("default", stored_cred["hash"], stored_cred["epoch"])
 
         def commit(self):
@@ -307,15 +315,25 @@ def test_instant_epoch_revocation_across_processes_without_cache_delay():
             "MAIL_CORE_SECRET_KEY": "test_secret_key_12345678901234567890",
         }),
         patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
+        patch("mail_core.security.auth.time.monotonic", side_effect=lambda: fake_time[0]),
     ):
         cookie_val, _ = issue_session()
         assert read_session(cookie_val) is not None
+        assert query_count == 1
 
-        # Another process increments epoch directly in DB
+        # Another process increments epoch directly in DB. The cached epoch remains valid only until TTL expiry.
         stored_cred["epoch"] = 2
+        assert read_session(cookie_val) is not None
+        assert query_count == 1
 
-        # Immediately rejected without waiting 5s TTL
+        fake_time[0] += _SESSION_EPOCH_CACHE_TTL_SECONDS
         assert read_session(cookie_val) is None
+        assert query_count == 2
+
+        current_cookie, _ = issue_session()
+        db_unavailable = True
+        fake_time[0] += _SESSION_EPOCH_CACHE_TTL_SECONDS
+        assert read_session(current_cookie) is None
 
 
 def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
