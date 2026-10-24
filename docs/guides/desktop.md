@@ -89,7 +89,7 @@ npm run dist:linux:dir      # 通过 electron-builder 打包
 `src/desktop/main.js` 在 `app.whenReady` 时调用 `applySessionHardening()`（逻辑在 `src/desktop/hardening.js`）：
 
 1. `will-attach-webview` → `preventDefault`（且 `webviewTag: false`）
-2. 权限请求 / 检查全部拒绝
+2. 权限请求 / 检查仅允许可信 `appOrigin` 的顶层页面（`details.isMainFrame === true`）写入 `clipboard-sanitized-write`；邮件 iframe、外部页面、子 frame 及其它权限（包括 `clipboard-read`）全部拒绝
 3. `session.webRequest.onHeadersReceived` 注入限制性 CSP
 
 详见 `docs/guides/security.md`「桌面 Electron」。
