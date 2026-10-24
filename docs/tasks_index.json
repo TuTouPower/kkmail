@@ -4,6 +4,38 @@
     "workspace": ".",
     "tasks": [
         {
+            "tid": "t053",
+            "slug": "provider_account_forms",
+            "title": "按邮箱供应商定制添加与编辑账户表单",
+            "status": "backlog",
+            "branch": "",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源：用户确认；供应商定制新增/编辑表单、获取凭据帮助图标与弹窗、下线 Microsoft IMAP；当前运行 DB 25 Graph/9 IMAP，未发现 Microsoft IMAP；Google/Microsoft 跳转回调分别由 t054/t055 交付",
+            "dir": "docs/tasks/t053_provider_account_forms"
+        },
+        {
+            "tid": "t054",
+            "slug": "google_oauth_callback",
+            "title": "支持 Google OAuth 跳转回调与账户重新授权",
+            "status": "backlog",
+            "branch": "",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "",
+            "depends_on": "t053",
+            "conflicts_with": "",
+            "note": "来源：用户补充；Google 保留 IMAP 应用密码并新增 OAuth 授权码跳转回调，覆盖网页与 Electron；依赖 t053",
+            "dir": "docs/tasks/t054_google_oauth_callback"
+        },
+        {
             "tid": "t055",
             "slug": "microsoft_oauth_callback",
             "title": "支持 Microsoft OAuth 跳转与设备码登录",
