@@ -2,7 +2,9 @@
 # Host disk/volume encryption is REQUIRED in production (see docs/blueprint/architecture.md §11).
 # Docker volume ≠ encryption. Sole backend: mail-core.
 #
-# Required before `docker compose -f docker-compose.mail-core.yml up`:
+# Start the distributed stack (API, migrations, and worker):
+#   docker compose -f docker-compose.mail-core.yml --profile distributed up --build -d api worker
+# Set these variables before running that command:
 #   export MAIL_CORE_BLOB_KEY_V1="$(python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
 #   export POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 #   export MAIL_CORE_SECRET_KEY="$(openssl rand -hex 32)"
