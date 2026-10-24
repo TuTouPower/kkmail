@@ -181,6 +181,103 @@ def test_upsert_messages_and_search_index_batch_page_work():
         session.commit()
 
 
+@pytest.mark.parametrize("sync_path", ("metadata", "delta"))
+def test_sync_paths_rethread_unchanged_outcome_when_parent_arrives(sync_path):
+    from mail_core.mail.storage import Thread, ThreadMessage
+    from mail_core.providers.base import DeltaChange, DeltaPage
+    from mail_core.sync.delta import apply_delta_page
+
+    Session = get_session_factory()
+    now = datetime.now(timezone.utc)
+    with Session() as session:
+        account = Account(email=f"thread-{uuid.uuid4().hex[:8]}@example.com", provider="gmail")
+        session.add(account)
+        session.flush()
+        folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+        session.add(folder)
+        session.flush()
+        lease = acquire_lease(session, account_id=account.id, owner_id="thread-test", ttl=timedelta(minutes=5))
+
+        def apply_upserts(items, cursor, exhausted=False):
+            if sync_path == "metadata":
+                apply_metadata_page(
+                    session,
+                    account_id=account.id,
+                    folder_id=folder.id,
+                    fencing_token=lease.fencing_token,
+                    page=MetadataPage(
+                        items=items,
+                        next_cursor={"uid_next": 3, "uidvalidity": 7},
+                        exhausted=exhausted,
+                    ),
+                )
+            else:
+                apply_delta_page(
+                    session,
+                    account_id=account.id,
+                    folder_id=folder.id,
+                    fencing_token=lease.fencing_token,
+                    page=DeltaPage(
+                        changes=[DeltaChange(kind="upsert", remote_id=meta.remote_id, meta=meta) for meta in items],
+                        next_cursor={"historyId": cursor},
+                        exhausted=exhausted,
+                    ),
+                )
+
+        child_meta = RemoteMessageMeta(
+            remote_id="thread-child",
+            subject="Re: Root",
+            from_address="child@example.com",
+            from_name=None,
+            sort_time=now,
+            is_read=False,
+            has_attachments=False,
+            internet_message_id="<child@example.com>",
+            in_reply_to="<parent@example.com>",
+            references="<parent@example.com>",
+            uid=2,
+        )
+        apply_upserts([child_meta], "1")
+        child = session.scalar(select(Message).where(Message.remote_id == child_meta.remote_id))
+        assert child is not None and child.thread_id is not None
+        original_thread_id = child.thread_id
+
+        apply_upserts([child_meta], "2")
+        assert child.thread_id == original_thread_id
+        assert session.scalar(
+            select(func.count()).select_from(Thread).where(Thread.account_id == account.id)
+        ) == 1
+
+        parent_meta = RemoteMessageMeta(
+            remote_id="thread-parent",
+            subject="Root",
+            from_address="parent@example.com",
+            from_name=None,
+            sort_time=now,
+            is_read=False,
+            has_attachments=False,
+            internet_message_id="<parent@example.com>",
+            uid=1,
+        )
+        apply_upserts([parent_meta, child_meta], "3", exhausted=True)
+
+        parent = session.scalar(select(Message).where(Message.remote_id == parent_meta.remote_id))
+        assert parent is not None and parent.thread_id is not None
+        assert parent.thread_id != original_thread_id
+        assert child.thread_id == parent.thread_id
+        child_threads = session.scalars(
+            select(ThreadMessage.thread_id).where(ThreadMessage.message_id == child.id)
+        ).all()
+        assert child_threads == [parent.thread_id]
+        events = session.scalars(
+            select(OutboxEvent)
+            .where(OutboxEvent.account_id == account.id, OutboxEvent.event_type == "message.upserted")
+            .order_by(OutboxEvent.id)
+        ).all()
+        assert set(events[-1].payload["message_ids"]) == {str(parent.id), str(child.id)}
+        session.commit()
+
+
 def test_unknown_provider_time_does_not_erase_known_received_time():
     Session = get_session_factory()
     known_time = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)

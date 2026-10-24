@@ -171,32 +171,39 @@ def apply_metadata_page(
     outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=list(page.items))
     touched: list[uuid.UUID] = []
     touched_messages: dict[uuid.UUID, Message] = {}
+    message_event_ids: list[uuid.UUID] = []
     folder_stats_dirty = False
     for o, meta in zip(outcomes, page.items):
         if o.location_created:
             folder_stats_dirty = True
-        if not o.changed:
-            continue
-        touched.append(o.message.id)
-        touched_messages[o.message.id] = o.message
-        if o.created and (
-            meta.internet_message_id
-            or meta.provider_thread_key
+        if o.changed:
+            touched.append(o.message.id)
+            touched_messages[o.message.id] = o.message
+            message_event_ids.append(o.message.id)
+        # Thread headers are not stored locally, so an unchanged outcome may
+        # still need re-evaluation after its parent arrives in a later scan.
+        if (
+            meta.provider_thread_key
             or meta.in_reply_to
             or meta.references
+            or (o.created and meta.internet_message_id)
         ):
-            assign_thread_for_message(
+            previous_thread_id = o.message.thread_id
+            assignment = assign_thread_for_message(
                 session,
                 message=o.message,
                 in_reply_to=meta.in_reply_to,
                 references=meta.references,
                 provider_thread_key=meta.provider_thread_key,
             )
+            if assignment.thread_id != previous_thread_id:
+                message_event_ids.append(o.message.id)
     if touched:
         # body_text=None → prefer MessageBody.text_plain; never clobber FTS with snippet.
         upsert_message_search_batch(session, messages=list(touched_messages.values()))
-        session.add(messages_upserted_event(account_id, folder_id, touched))
         folder_stats_dirty = True
+    if message_event_ids:
+        session.add(messages_upserted_event(account_id, folder_id, list(dict.fromkeys(message_event_ids))))
     if folder_stats_dirty or session.get(FolderStats, folder_id) is None:
         recompute_folder_stats(session, folder_id)
         session.add(

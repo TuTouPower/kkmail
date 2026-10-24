@@ -162,33 +162,39 @@ def apply_delta_page(
     flag_changes = [DeltaChange(kind="flag", remote_id=rid, flags=flags) for rid, flags in pending_flags.items() if last_kind[rid] != "delete"]
     outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=[c.meta for c in upserts])
     touched: list[uuid.UUID] = []
+    message_event_ids: list[uuid.UUID] = []
     for o, change in zip(outcomes, upserts):
-        if not o.changed:
-            continue
-        touched.append(o.message.id)
-        upsert_message_search(session, message_id=o.message.id)
+        if o.changed:
+            touched.append(o.message.id)
+            message_event_ids.append(o.message.id)
+            upsert_message_search(session, message_id=o.message.id)
         meta = change.meta
+        # A repeated upsert can carry headers needed to resolve a newly arrived parent.
         if meta is not None and (
-            meta.internet_message_id
-            or meta.provider_thread_key
+            meta.provider_thread_key
             or meta.in_reply_to
             or meta.references
+            or (o.created and meta.internet_message_id)
         ):
-            assign_thread_for_message(
+            previous_thread_id = o.message.thread_id
+            assignment = assign_thread_for_message(
                 session,
                 message=o.message,
                 in_reply_to=meta.in_reply_to,
                 references=meta.references,
                 provider_thread_key=meta.provider_thread_key,
             )
+            if assignment.thread_id != previous_thread_id:
+                message_event_ids.append(o.message.id)
     upserted = len(upserts)
     flag_count, flag_touched = _apply_flag_patches(
         session, account_id=account_id, folder_id=folder_id, changes=flag_changes
     )
     flagged = flag_count
     touched.extend(flag_touched)
-    if touched:
-        session.add(messages_upserted_event(account_id, folder_id, touched))
+    message_event_ids.extend(flag_touched)
+    if message_event_ids:
+        session.add(messages_upserted_event(account_id, folder_id, list(dict.fromkeys(message_event_ids))))
     for change in page.changes:
         if change.kind in ("upsert", "flag"):
             continue

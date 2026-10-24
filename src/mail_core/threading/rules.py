@@ -76,7 +76,7 @@ def extract_message_ids(*parts: str | None) -> list[str]:
 class ThreadAssignment:
     thread_id: uuid.UUID
     created: bool
-    linked_via: str  # provider_key | in_reply_to | references | new
+    linked_via: str  # provider_key | in_reply_to | references | existing | new
 
 
 def _ensure_thread_for_parent(session: Session, parent: Message) -> Thread:
@@ -171,6 +171,11 @@ def assign_thread_for_message(
                 thread = _ensure_thread_for_parent(session, parent)
                 linked_via = "references"
                 break
+
+    if thread is None and message.thread_id:
+        thread = session.get(Thread, message.thread_id)
+        if thread is not None:
+            linked_via = "existing"
 
     created = False
     if thread is None:
