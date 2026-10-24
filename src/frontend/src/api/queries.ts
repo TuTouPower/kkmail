@@ -209,10 +209,7 @@ function updateItemsInCache(data: unknown, updater: (items: MailItem[]) => MailI
   return data
 }
 
-/** Find a message in cached lists by its mailKey, prioritizing current view and latest updated lists. */
-export function findCachedMail(key: string | null): MailItem | undefined {
-  if (!key) return undefined
-
+function orderedMailListQueries() {
   let currentScope: string | undefined
   try {
     const view = useMailStore.getState().view
@@ -232,15 +229,31 @@ export function findCachedMail(key: string | null): MailItem | undefined {
   }
 
   const queries = queryClient.getQueryCache().findAll({ predicate: (query) => isMailListQueryKey(query.queryKey) })
-  const sorted = [...queries].sort((a, b) => {
+  return [...queries].sort((a, b) => {
     const aCurrent = currentScope ? a.queryKey.includes(currentScope) : false
     const bCurrent = currentScope ? b.queryKey.includes(currentScope) : false
     if (aCurrent && !bCurrent) return -1
     if (!aCurrent && bCurrent) return 1
     return (b.state.dataUpdatedAt || 0) - (a.state.dataUpdatedAt || 0)
   })
+}
 
-  for (const q of sorted) {
+function buildCachedMailIndex(): Map<string, MailItem> {
+  const index = new Map<string, MailItem>()
+  for (const query of orderedMailListQueries()) {
+    for (const mail of extractItemsFromCache(query.state.data)) {
+      const key = mailKey(mail)
+      if (!index.has(key)) index.set(key, mail)
+    }
+  }
+  return index
+}
+
+/** Find a message in cached lists by its mailKey, prioritizing current view and latest updated lists. */
+export function findCachedMail(key: string | null): MailItem | undefined {
+  if (!key) return undefined
+
+  for (const q of orderedMailListQueries()) {
     const items = extractItemsFromCache(q.state.data)
     const hit = items.find((m) => m && typeof m.id === 'string' && m.id.trim() && mailKey(m) === key)
     if (hit) return hit
@@ -289,8 +302,11 @@ export function setCachedReadState(keys: Iterable<string>, isRead: boolean) {
 const READ_MUTATION_BATCH_SIZE = 50
 
 export async function setReadOptimistic(items: MailItem[], nextRead: boolean) {
-  const targets = items.filter((m) => m && typeof m.id === 'string' && m.id.trim()).map((item) => {
-    const cached = findCachedMail(mailKey(item))
+  const validItems = items.filter((m) => m && typeof m.id === 'string' && m.id.trim())
+  if (!validItems.length) return
+  const cachedMailIndex = buildCachedMailIndex()
+  const targets = validItems.map((item) => {
+    const cached = cachedMailIndex.get(mailKey(item))
     return cached ? { ...item, is_read: cached.is_read } : item
   }).filter((m) => m.is_read !== nextRead)
   if (!targets.length) return

@@ -129,6 +129,17 @@ describe('optimistic updates', () => {
     expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_read).toBe(true)
   })
 
+  it('indexes list caches once for a batch read mutation', async () => {
+    const items = Array.from({ length: 20 }, (_, index) => item({ id: `bulk-${index}` }))
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), items)
+    stubFetch(() => json(200, { is_read: true }))
+    const findAll = vi.spyOn(queryClient.getQueryCache(), 'findAll')
+
+    await setReadOptimistic(items, true)
+
+    expect(findAll).toHaveBeenCalledTimes(2)
+  })
+
   it('bounds read mutation concurrency and stops after a failed batch', async () => {
     const items = Array.from({ length: 101 }, (_, index) => item({ id: `uuid-${index}` }))
     queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), items)
