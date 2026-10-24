@@ -39,6 +39,7 @@ _FOLDER_ROLE = {
     "Trash": "trash",
     "Deleted": "trash",
     "Deleted Items": "trash",
+    "Deleted Messages": "trash",
     "已删除": "trash",
     "已删除邮件": "trash",
     "废纸篓": "trash",

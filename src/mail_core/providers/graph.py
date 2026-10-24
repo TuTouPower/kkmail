@@ -51,7 +51,9 @@ def graph_folder_role(folder: dict[str, Any], inbox_id: str | None = None) -> st
     if well in _GRAPH_WELL_KNOWN_ROLES:
         return _GRAPH_WELL_KNOWN_ROLES[well]
     disp = (folder.get("displayName") or "").strip().lower()
-    if disp == "inbox":
+    # The well-known inbox ID is authoritative when available. A user folder
+    # named "Inbox" must not become a second inbox for that account.
+    if inbox_id is None and disp == "inbox":
         return "inbox"
     return "other"
 
