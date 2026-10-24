@@ -52,6 +52,9 @@
 - [x] AC-029：Gmail metadata hydrate 必须返回请求 ID、列表 labelIds 与列表 payload.headers；无 id、id 不匹配、id-only 或 GET 异常均不得返回成功 metadata/delta 页，不用 History stub 回退。
 - [x] AC-030：Gmail metadata projection 未返回 snippet 时保留已有服务商摘要；新邮件保持空，列表展示 fallback 不写回源字段。
 - [x] AC-031：带 HTML body_preview 的邮件详情 body 为空时不将摘要渲染成正文；加载、详情错误、解析失败和空正文互斥渲染，已有正文按 html/text 分流。
+- [x] AC-032：Graph 收件箱 ID 可用时只凭 canonical ID 或 well-known 标记赋予 inbox 角色；仅在无法取得 ID 时才回退英文名称，避免同名自定义目录成为第二个收件箱。
+- [x] AC-033：IMAP `Deleted Messages` 名称映射为 `trash` 角色。
+- [x] AC-034：IMAP LIST 的 `\NoSelect` 目录保留为 `paused` 结构节点，不创建元数据任务；已有任务以 skipped 完成，`MessageLocation`、邮件及子目录关系保留。
 
 ### 可测试性声明
 
@@ -61,7 +64,7 @@
 
 - 来源：`docs/blueprint/decisions.md` (IMAP 安全阻断删除决策)；task t037 对旧 SQLite 数据迁移来源、身份与未知归档状态的核实见 [`docs/tasks/t037_legacy_migration_fidelity/spec.md`](../tasks/t037_legacy_migration_fidelity/spec.md)。
 
-- 本轮来源：t041/p024（未知状态）、t042/p025（部分字段）、t043/p022（正文摘要隔离闭环）；新增 AC 已经定向验证与审查；最终 PostgreSQL 全量结果由各 task 总账补入。
+- 本轮来源：t041/p024（未知状态）、t042/p025（部分字段）、t043/p022（正文摘要隔离闭环）、t051/p037（文件夹角色与显示）、t052/p038（QQ 不可选择父目录）；最终验证由各 task 总账补入。
 
 ### 有意不测
 

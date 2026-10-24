@@ -28,7 +28,7 @@
 <!-- /规范 -->
 
 - [ ] AC-001：LIST 返回 `\NoSelect \HasChildren` 的 QQ `其他文件夹` 在发现结果中标为结构节点，不创建新的元数据同步任务。
-- [ ] AC-002：数据库已有该目录及待处理元数据任务时，后续发现将其转为不可选择状态；执行中的旧任务以可观察的 skipped 结果完成，不再因 `UID SEARCH NO` 重试至失败。
+- [ ] AC-002：数据库已有该目录及待处理元数据、delta 或 reconcile 任务时，后续发现将其转为不可选择状态；旧任务以可观察的 skipped 结果完成，不再因 `UID SEARCH NO` 触发重试。
 - [ ] AC-003：folder-stats API 与侧栏将结构节点呈现为不可打开、无未读数 badge 的父节点；`QQ邮件订阅` 仍嵌套其下并可打开。
 - [ ] AC-004：处理结构节点不会删除其 `Folder`、历史邮件位置、邮件或 checkpoint；普通可选择文件夹仍正常排队和同步。
 
@@ -54,7 +54,7 @@
 
 - IMAP Provider 测试覆盖 noselect 结构节点与普通可选择节点。
 - PostgreSQL 集成测试先写入旧目录、checkpoint/消息位置及待处理任务，再执行 folder discovery，检查仅状态/任务行为变化、数据保留和子目录 parent id。
-- Worker 测试检查已排队 noselect metadata 任务被跳过并完成；普通 SEARCH NO 仍为错误。
+- Worker 测试检查已排队 noselect metadata/delta/reconcile 任务均被跳过并完成；普通 SEARCH NO 仍为错误。
 - API/前端测试验证结构节点禁用、无蓝色 `-`、子文件夹缩进与精确 folder id 导航。
 
 ### 未知契约清单

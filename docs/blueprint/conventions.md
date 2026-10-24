@@ -137,6 +137,7 @@
     - 故障账号聚合排除：当账号已禁用（`sync_enabled=false`）或处于同步/认证失败状态（`sync_status in ('failed', 'auth_failed')`）且未同步生成目标角色文件夹时，全局收件箱与分组汇总排除该故障账号，按其余正常账号聚合输出，不阻断正常账号的汇总；故障账号自身单独查询仍返回 `null`（`-`）；
     - `sync_status` 仅由账号同步类任务故障更新；归档等辅助任务失败不得污染账号状态。同步任务成功后，只有账号没有带错误的待执行或执行中同步任务时，才将 `failed` 恢复为 `idle` 并清除 `last_sync_error`；`auth_failed` 不自动清除。侧栏账号根行始终显示同步失败标记，展开后即使保留旧文件夹树，也在树前显示失败提示；
     - 空文件夹统计初始化：新文件夹首次执行元数据同步（`apply_metadata_page`）且包含 0 封邮件时，立即生成 `FolderStats(total_count=0, unread_count=0)`，消除因空目录未变动导致 `FolderStats` 长期缺失的假性未知未读数；
+    - IMAP `\Noselect` 节点只用于呈现父子目录结构，不是可查询邮箱；不得为其排 metadata/delta/reconcile 任务，旧任务执行时以 skipped 完成；不得显示未知未读数 `-`，其子目录保持可同步、可独立导航；
     - 侧栏与邮件列表头部统计语义保持一致：单账号或多账号缺失目标文件夹角色时，严格展示未知（`—` / `-`），禁止回退为全目录合计或静默按零填充。
 5. **服务商字段缺省与显式清空**：
     - `RemoteMessageMeta.supplied_fields` 为 `None` 时表示完整快照，为字段集合时表示部分 projection；Graph delta 与 Gmail metadata 必须标明实际返回字段。upsert 只更新集合内字段，不把缺省值当清空指令。
