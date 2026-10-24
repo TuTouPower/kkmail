@@ -14,6 +14,9 @@ Without ``transport`` (and without a live credential HTTP client), methods raise
 from __future__ import annotations
 
 import logging
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -90,6 +93,35 @@ _GMAIL_META_HEADERS = (
     "In-Reply-To",
     "References",
 )
+_GMAIL_METADATA_MAX_WORKERS = 5
+_GMAIL_MAX_REQUESTS_PER_MINUTE = 250
+
+
+class _SharedTokenBucket:
+    """Process-wide request pacing shared by concurrent Gmail metadata scans."""
+
+    def __init__(self, requests_per_minute: int) -> None:
+        self._capacity = float(requests_per_minute)
+        self._tokens = self._capacity
+        self._tokens_per_second = requests_per_minute / 60.0
+        self._updated_at = time.monotonic()
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                elapsed = now - self._updated_at
+                self._tokens = min(self._capacity, self._tokens + elapsed * self._tokens_per_second)
+                self._updated_at = now
+                if self._tokens >= 1:
+                    self._tokens -= 1
+                    return
+                wait_seconds = (1 - self._tokens) / self._tokens_per_second
+            time.sleep(wait_seconds)
+
+
+_GMAIL_METADATA_RATE_LIMITER = _SharedTokenBucket(_GMAIL_MAX_REQUESTS_PER_MINUTE)
 
 
 def _parse_address_list(raw: str | None) -> tuple[str, ...]:
@@ -187,6 +219,21 @@ class GmailProvider:
         actions = self.reconcile(folder_remote_id, remote_ids)
         return {action.remote_id for action in actions if action.kind == "delete"}
 
+    def _fetch_metadata_detail(self, remote_id: str) -> tuple[Any, ProviderHttpError | None]:
+        _GMAIL_METADATA_RATE_LIMITER.acquire()
+        try:
+            detail = self._call(
+                "GET",
+                f"/gmail/v1/users/{self.user_id}/messages/{remote_id}",
+                {
+                    "format": "metadata",
+                    "metadataHeaders": list(_GMAIL_META_HEADERS),
+                },
+            )
+        except ProviderHttpError as exc:
+            return None, exc
+        return detail, None
+
     def list_folders(self) -> Sequence[RemoteFolder]:
         self._calls.append("list_folders")
         if self.transport is None:
@@ -226,29 +273,20 @@ class GmailProvider:
         if "page" in data:
             return data["page"]
         msgs = data.get("messages") or []
+        message_ids = [str(stub["id"]) for stub in msgs if stub.get("id")]
         items: list[RemoteMessageMeta] = []
         missing_404: dict[str, ProviderHttpError] = {}
-        for stub in msgs:
-            mid = stub.get("id")
-            if not mid:
-                continue
-            # Batch-detail: one messages.get(metadata) per id (no fabricated empty meta).
-            try:
-                detail = self._call(
-                    "GET",
-                    f"/gmail/v1/users/{self.user_id}/messages/{mid}",
-                    {
-                        "format": "metadata",
-                        "metadataHeaders": list(_GMAIL_META_HEADERS),
-                    },
-                )
-            except ProviderHttpError as exc:
-                if exc.status == 404 and not isinstance(exc, CursorInvalidError):
-                    missing_404[str(mid)] = exc
-                    continue
-                raise
-            _validate_metadata_response(detail, str(mid))
-            items.append(_meta_from_gmail_message(detail))
+        if message_ids:
+            with ThreadPoolExecutor(max_workers=min(_GMAIL_METADATA_MAX_WORKERS, len(message_ids))) as pool:
+                details = pool.map(self._fetch_metadata_detail, message_ids)
+                for remote_id, (detail, error) in zip(message_ids, details):
+                    if error is not None:
+                        if error.status == 404 and not isinstance(error, CursorInvalidError):
+                            missing_404[remote_id] = error
+                            continue
+                        raise error
+                    _validate_metadata_response(detail, remote_id)
+                    items.append(_meta_from_gmail_message(detail))
         if missing_404:
             confirmed_deleted = self._confirmed_deleted_ids(folder_remote_id, list(missing_404))
             unconfirmed = next((remote_id for remote_id in missing_404 if remote_id not in confirmed_deleted), None)
@@ -452,4 +490,7 @@ class GmailProvider:
         return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote_ids)]
 
     def rate_limit_hint(self) -> RateLimitHint:
-        return RateLimitHint(max_requests_per_minute=250, reason="gmail default quota hint")
+        return RateLimitHint(
+            max_requests_per_minute=_GMAIL_MAX_REQUESTS_PER_MINUTE,
+            reason="gmail default quota hint",
+        )

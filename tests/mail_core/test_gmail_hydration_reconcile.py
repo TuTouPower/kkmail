@@ -1,5 +1,6 @@
 import pytest
 
+import mail_core.providers.gmail as gmail_module
 from mail_core.providers.gmail import GmailProvider
 from mail_core.providers.http import ProviderHttpError
 
@@ -10,6 +11,47 @@ def _detail(message_id: str) -> dict:
         "labelIds": ["INBOX"],
         "payload": {"headers": [{"name": "Subject", "value": "subject"}]},
     }
+
+
+def test_metadata_hydration_uses_bounded_parallel_requests_and_shared_limiter(monkeypatch):
+    import threading
+    import time
+
+    message_ids = [f"m{index}" for index in range(12)]
+    active_requests = 0
+    peak_requests = 0
+    active_lock = threading.Lock()
+    rate_limit_calls = []
+
+    class RecordingLimiter:
+        def acquire(self):
+            rate_limit_calls.append(threading.get_ident())
+
+    def transport(_method, path, _params=None):
+        nonlocal active_requests, peak_requests
+        if path.endswith("/messages"):
+            return {"messages": [{"id": message_id} for message_id in message_ids]}
+        if "/messages/" in path:
+            message_id = path.rsplit("/", 1)[-1]
+            with active_lock:
+                active_requests += 1
+                peak_requests = max(peak_requests, active_requests)
+            try:
+                time.sleep(0.02)
+                return _detail(message_id)
+            finally:
+                with active_lock:
+                    active_requests -= 1
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(gmail_module, "_GMAIL_METADATA_RATE_LIMITER", RecordingLimiter())
+    page = GmailProvider(credential_ref="cred", transport=transport).fetch_metadata_page(
+        "INBOX", {"historyId": "7", "pageToken": "page-1"}
+    )
+
+    assert [item.remote_id for item in page.items] == message_ids
+    assert 1 < peak_requests <= gmail_module._GMAIL_METADATA_MAX_WORKERS
+    assert len(rate_limit_calls) == len(message_ids)
 
 
 def test_metadata_page_skips_404_only_after_reconcile_confirms_absence(caplog):
