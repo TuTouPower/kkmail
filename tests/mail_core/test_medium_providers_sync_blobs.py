@@ -225,9 +225,14 @@ def test_compose_imap_has_profile():
     assert "kkmail-mail-core-imap" in text
 
 
-def test_scripts_prefer_python3_and_venv():
+def test_chaos_script_uses_owned_test_runtime():
     chaos = Path("scripts/mail-core-chaos-lease.sh").read_text()
-    assert ".venv/bin/python" in chaos
+    assert "scripts/run-mail-core-tests.sh" in chaos
+    assert "MAIL_CORE_DATABASE_URL" not in chaos
+    assert "test_worker_kill_allows_lease_steal_and_rejects_stale_fencing" in chaos
+
+
+def test_other_scripts_prefer_python3_and_venv():
     start = Path("scripts/start-mail-core-imap.sh").read_text()
     assert "--profile imap" in start
     assert "command -v python3" in start
