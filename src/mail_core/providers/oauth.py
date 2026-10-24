@@ -66,6 +66,7 @@ class OAuthTokenClient:
     provider: str = "gmail"  # gmail | graph
     http_post: TokenHttpFn | None = None
     skew_seconds: float = 60.0
+    timeout: float = 30.0
     _cached: dict[str, Any] = field(default_factory=dict, repr=False)
     _refresh_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -130,10 +131,12 @@ class OAuthTokenClient:
             if data.get("scope"):
                 form["scope"] = str(data["scope"])
             uri = self.token_uri()
-            if self.http_post is None:
-                raise OAuthError("no token HTTP client configured (inject http_post for tests / wire urllib)")
+            if self.http_post is not None:
+                post = self.http_post
+            else:
+                post = lambda m, u, f, h=None: default_urllib_token_post(m, u, f, h, timeout=self.timeout)
             try:
-                resp = self.http_post("POST", uri, form, {"Content-Type": "application/x-www-form-urlencoded"})
+                resp = post("POST", uri, form, {"Content-Type": "application/x-www-form-urlencoded"})
             except ProviderHttpError as exc:
                 raise OAuthError(f"token endpoint HTTP {exc.status}: {exc}") from exc
             if resp.get("error"):
@@ -156,6 +159,8 @@ def default_urllib_token_post(
     url: str,
     form: dict[str, str],
     headers: dict[str, str] | None = None,
+    *,
+    timeout: float = 30.0,
 ) -> dict[str, Any]:
     """Stdlib token POST (used when no injectable http_post is given at runtime)."""
     import json
@@ -167,7 +172,7 @@ def default_urllib_token_post(
     for k, v in (headers or {}).items():
         req.add_header(k, v)
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — operator-configured token URI
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — operator-configured token URI
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
@@ -246,6 +251,7 @@ def urllib_json_request(
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
     *,
+    timeout: float = 60.0,
     _sleep_fn: Any = None,
 ) -> Any:
     """Generic JSON HTTP for Gmail/Graph API calls (stdlib).
@@ -285,7 +291,7 @@ def urllib_json_request(
             req.add_header("Content-Type", "application/json")
 
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
                 raw = resp.read()
                 if not raw:
                     return {}
