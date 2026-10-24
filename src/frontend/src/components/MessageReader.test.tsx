@@ -627,4 +627,33 @@ describe('<MessageReader />', () => {
     })
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
+
+  it('stops repeated automatic POST when HTTP 200 returns unarchived message (p039)', async () => {
+    useMailStore.setState({ selectedKey: 'm-unarchived' })
+    let syncCalls = 0
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      if (u.endsWith('/sync-body') && init.method === 'POST') {
+        syncCalls++
+        // Return 200 OK with unarchived state (empty body, is_archived: false)
+        return json({
+          id: 'm-unarchived', account_id: 'acc-1', subject: 'Unarchived Email', from_address: 'u@x.test', from_name: 'Unarchived',
+          from: 'Unarchived <u@x.test>', to: 'box@x.test', cc: '', date: '2018-10-26T12:00:00Z', is_read: false,
+          is_flagged: false, has_attachments: false, snippet: 'Snippet',
+          body: '', body_type: 'empty',
+          parse_error: null, is_archived: false, attachments: [],
+        })
+      }
+      return originalFetch(url, init)
+    }))
+
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => {
+      expect(container.textContent).toContain('邮件正文尚未完成同步')
+      expect(container.textContent).toContain('立即拉取正文')
+    })
+    // Must be bounded to exactly 1 automatic sync call, NOT looping
+    expect(syncCalls).toBe(1)
+  })
 })
