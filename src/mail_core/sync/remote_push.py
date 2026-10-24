@@ -632,12 +632,13 @@ def get_unconverged_field_intents(
     )
     intents: dict[str, dict[str, Any]] = {}
     for op in ops:
-        parts = op.entity_key.split(":")
-        if len(parts) >= 3 and parts[0] == "msg":
-            rem_id = parts[1]
-            field_name = "is_read" if parts[2] == "read" else ("is_flagged" if parts[2] == "flag" else None)
-            if field_name and field_name in (op.desired_state or {}):
-                intents.setdefault(rem_id, {})[field_name] = op.desired_state[field_name]
+        entity, separator, field = op.entity_key.rpartition(":")
+        if not separator or not entity.startswith("msg:"):
+            continue
+        rem_id = entity.removeprefix("msg:")
+        field_name = "is_read" if field == "read" else ("is_flagged" if field == "flag" else None)
+        if field_name and field_name in (op.desired_state or {}):
+            intents.setdefault(rem_id, {})[field_name] = op.desired_state[field_name]
     return intents
 
 

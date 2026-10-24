@@ -97,3 +97,34 @@ def test_latest_created_field_intent_wins_over_stale_done_intent():
     assert "remote_operations.created_at asc" in order_by
     assert "remote_operations.id asc" in order_by
     assert intents == {"remote-1": {"is_read": False}}
+
+
+def test_field_intents_preserve_colons_in_remote_ids():
+    created_at = datetime(2026, 10, 25, 10, 0, tzinfo=timezone.utc)
+    operations = [
+        SimpleNamespace(
+            entity_key="msg:remote:with:colon:read",
+            desired_state={"is_read": False},
+        ),
+        SimpleNamespace(
+            entity_key="msg:remote:with:colon:flag",
+            desired_state={"is_flagged": True},
+        ),
+    ]
+
+    class Result:
+        def all(self):
+            return operations
+
+    class Session:
+        def scalars(self, _statement):
+            return Result()
+
+    intents = get_unconverged_field_intents(
+        Session(),
+        uuid.uuid4(),
+        ["remote:with:colon"],
+        now=created_at,
+    )
+
+    assert intents == {"remote:with:colon": {"is_read": False, "is_flagged": True}}
