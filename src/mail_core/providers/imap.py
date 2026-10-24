@@ -809,6 +809,18 @@ class ImapProvider:
         are *not* inferred here — use reconcile after a complete scan.
         """
         c = self._connect()
+        connection_open = True
+
+        def close_connection() -> None:
+            nonlocal connection_open
+            if not connection_open:
+                return
+            connection_open = False
+            try:
+                c.logout()
+            except Exception:
+                pass
+
         try:
             typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
             if typ != "OK":
@@ -881,6 +893,7 @@ class ImapProvider:
                         if new_uids:
                             # Page via temporary cursor starting at the lowest new UID.
                             batch_size = min(50, len(new_uids))
+                            close_connection()
                             page = self.fetch_metadata_page(
                                 folder_remote_id,
                                 {**cursor, "uid_next": min(new_uids), "page_size": batch_size},
@@ -928,6 +941,7 @@ class ImapProvider:
                     )
 
             # UID-based incremental (always safe): fetch metadata since uid_next.
+            close_connection()
             page = self.fetch_metadata_page(folder_remote_id, cursor)
             changes = [DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items]
             next_cursor = dict(page.next_cursor or {})
@@ -937,10 +951,7 @@ class ImapProvider:
                 next_cursor["uidvalidity"] = uidvalidity
             return DeltaPage(changes=changes, next_cursor=next_cursor, exhausted=page.exhausted)
         finally:
-            try:
-                c.logout()
-            except Exception:
-                pass
+            close_connection()
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
         from mail_core.providers.remote_writeback import (

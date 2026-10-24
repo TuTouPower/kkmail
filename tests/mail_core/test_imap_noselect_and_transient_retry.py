@@ -152,6 +152,49 @@ def test_imap_delta_changes_preserves_ordinary_select_errors(monkeypatch):
         provider.delta_changes("Other Folders", {"uid_next": 25})
 
 
+@pytest.mark.parametrize("modseq_supported", [True, False])
+def test_imap_delta_releases_connection_before_metadata_page(monkeypatch, modseq_supported):
+    class FakeIMAP:
+        def __init__(self, delta_connection):
+            self.delta_connection = delta_connection
+            self.closed = False
+
+        def select(self, _mailbox, readonly=True):
+            return "OK", [b"1"]
+
+        def status(self, _mailbox, spec):
+            if self.delta_connection:
+                if modseq_supported:
+                    return "OK", [b"[UIDVALIDITY 7] HIGHESTMODSEQ 10"]
+                return "NO", [b"MODSEQ unsupported"]
+            return "OK", [b"[UIDVALIDITY 7]"]
+
+        def uid(self, _command, *_args):
+            return "OK", [b"2"] if self.delta_connection else [b""]
+
+        def logout(self):
+            self.closed = True
+            return "OK", []
+
+    connections = []
+
+    def connect():
+        if connections:
+            assert connections[-1].closed
+        client = FakeIMAP(delta_connection=not connections)
+        connections.append(client)
+        return client
+
+    provider = ImapProvider("imap.example.com", 993, "user", "pass", use_ssl=False)
+    monkeypatch.setattr(provider, "_connect", connect)
+
+    page = provider.delta_changes("INBOX", {"uid_next": 2, "modseq": 1, "uidvalidity": 7})
+
+    assert isinstance(page.changes, list)
+    assert len(connections) == 2
+    assert all(client.closed for client in connections)
+
+
 # --- 2. HTTP 503 and TLS EOF / Network Disconnect Transient Retries ---
 
 
