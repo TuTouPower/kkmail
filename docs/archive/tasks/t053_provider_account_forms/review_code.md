@@ -16,7 +16,7 @@ reviewed_scope: c862c6944024541a
 - 严重度：important
 - 锚点：AC-014，非法连接配置须由 API 拒绝为脱敏字段错误。
 - 位置：`src/mail_core/accounts/connection.py:35`、`src/mail_core/accounts/service.py:127`、`src/mail_core/api/accounts.py:218`。
-- 问题：配置 DTO 允许任意 JSON 值；PATCH 传入 `config.provider_profile=[]` 后，在 `profile not in PROFILES` 触发 `TypeError`。编辑路由只处理 LookupError/ValueError，最终为 500，而不是字段校验失败。独立直接调用生产 `validate_connection('a@example.test', 'graph', {'provider_profile': []}, {'client_id': 'id', 'refresh_token': 'r'})` 已复现 `TypeError: cannot use 'list' as a dict key`。其他配置字段也应在使用前检查类型，避免泄露 Python 转换错误。
+- 问题：配置 DTO 允许任意 JSON 值；PATCH 传入 `config.provider_profile=[]` 后，在 `profile not in PROFILES` 触发 `TypeError`。编辑路由只处理 LookupError/ValueError，最终为 500，而不是字段校验失败。独立直接调用生产 `validate_connection('[REDACTED_EMAIL]', 'graph', {'provider_profile': []}, {'client_id': 'id', 'refresh_token': 'r'})` 已复现 `TypeError: cannot use 'list' as a dict key`。其他配置字段也应在使用前检查类型，避免泄露 Python 转换错误。
 - 建议：供应商品牌先限定字符串；连接字段统一在安全类型检查后做值校验，增加真实 PATCH 回归，保证返回 400/422 且事务不写入。
 
 ### t053_code_f002 - 环境变量凭据刷新成功后被写回异常打断
@@ -48,7 +48,7 @@ reviewed_scope: c862c6944024541a
 - 严重度：important
 - 锚点：AC-002，切换邮箱或自动建议不得覆盖手动连接配置。
 - 位置：`src/frontend/src/components/settings_account_form.tsx:39`、`src/frontend/src/components/settings_account_form.tsx:107`、`src/frontend/src/components/settings_account_form.tsx:116`。
-- 问题：在新建表单先填独立登录名，再输入 `user@qq.com`，域名建议调用 `changeVendor(..., false)`，无条件 `setUsername('')`。用户名输入没有设置保留标记；即使 host/port 已被手动填写，登录名仍被清空，提交时回退为邮箱地址，导致本应使用独立用户名的账号认证失败。
+- 问题：在新建表单先填独立登录名，再输入 `[REDACTED_EMAIL]`，域名建议调用 `changeVendor(..., false)`，无条件 `setUsername('')`。用户名输入没有设置保留标记；即使 host/port 已被手动填写，登录名仍被清空，提交时回退为邮箱地址，导致本应使用独立用户名的账号认证失败。
 - 建议：跟踪独立登录名是否手动修改，自动供应商建议保留该值；跨不同协议切换只清除不适用的凭据，不清除仍适用的手动连接参数。
 
 ## 结论

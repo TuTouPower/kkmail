@@ -2,16 +2,16 @@
 tid: "t055"
 slug: "microsoft_oauth_callback"
 title: "支持 Microsoft OAuth 跳转与设备码登录"
-status: "backlog"
-branch: ""
+status: "done"
+branch: "main"
 worktree: ""
 review_level: "full"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "e1dee2549e35486fbb36172579bf0d6564f2dedc"
 depends_on: "t054"
 conflicts_with: ""
-note: "来源：用户明确增加设备码；Microsoft 支持跳转回调与设备码两条新增/重新授权路径，统一获取并加密保存令牌；复用 t054 会话绑定与最终保存；不做 Microsoft IMAP 或迁移"
+note: "来源：用户明确增加设备码；Microsoft 支持跳转回调与设备码两条新增/重新授权路径，统一获取并加密保存令牌；复用 t054 会话绑定与最终保存；不做 Microsoft IMAP 或迁移; 2026-10-25T02:00:57+08:00 用户明确授权补归档；直接 main 执行提交 87d69ac75d781bc0337f2f746291868b799f8329；历史双路 Review 指纹 42658742333b6b92 已核实；无 attempt，不伪造 ledger/handoff"
 ---
 
 # Task 过程总账
@@ -87,3 +87,10 @@ Round 3 零 finding；仅补齐 account_connection spec 索引关联，code/test
 - Microsoft Graph 浏览器授权码/PKCE 与设备码登录接通统一加密状态、身份核实及最终确认保存；保留合法命名凭据更新和所有既有账户。
 - 微软 Web/桌面回调与设备码配置帮助、客户端/账号类型/租户、错误反馈及短码复制操作。
 - 无数据库表结构变更；身份和租户使用 Account.config，短期秘密使用现有加密 CredentialSecret。不迁移邮件身份，不恢复 Microsoft IMAP。
+
+## 直接 main 执行归档补记（2026-10-25T02:00:57+08:00）
+
+- 用户本轮明确要求已完成任务归档。本次将状态由 backlog 修正为 done 并迁入 archive；正文此前“保留 backlog”均为执行时流程限制记录，由本节更新。
+- 实际执行分支：main；执行 commit：`87d69ac75d781bc0337f2f746291868b799f8329`；diff anchor：`e1dee2549e35486fbb36172579bf0d6564f2dedc`。
+- 已在执行 commit 快照重算并核实 code/test 最终 PASS，历史 reviewed_scope：`42658742333b6b92`；spec 与 Review 原件保持不变。
+- 本任务直接在 main 完成，未创建登记 worktree/attempt，不补造 execution_id、handoff 或 dispatch ledger。此为用户授权的一次性文档状态维护，不宣称正常 worktree lifecycle 已执行。

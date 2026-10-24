@@ -2,16 +2,16 @@
 tid: "t053"
 slug: "provider_account_forms"
 title: "按邮箱供应商定制添加与编辑账户表单"
-status: "backlog"
-branch: ""
+status: "done"
+branch: "main"
 worktree: ""
 review_level: "full"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "e124a27a4baa5917fd39f3bb5190d54334014639"
 depends_on: ""
 conflicts_with: ""
-note: "来源：用户确认；供应商定制新增/编辑表单、获取凭据帮助图标与弹窗、下线 Microsoft IMAP；当前运行 DB 25 Graph/9 IMAP，未发现 Microsoft IMAP；Google/Microsoft 跳转回调分别由 t054/t055 交付"
+note: "来源：用户确认；供应商定制新增/编辑表单、获取凭据帮助图标与弹窗、下线 Microsoft IMAP；当前运行 DB 25 Graph/9 IMAP，未发现 Microsoft IMAP；Google/Microsoft 跳转回调分别由 t054/t055 交付; 2026-10-25T02:00:57+08:00 用户明确授权补归档；直接 main 执行提交 4ef9bf7ada1aaa9b67ea67dfccc1dfcd9b98d10a；历史双路 Review 指纹 4072f20530f238a5 已核实；无 attempt，不伪造 ledger/handoff"
 ---
 
 # Task 过程总账
@@ -96,3 +96,10 @@ Round 3 零 finding；code/test reviewer 均 PASS，`reviewed_scope=4072f20530f2
 
 - 完成供应商定制添加与编辑账户表单、获取凭据帮助弹窗、OAuth 命名凭据局部更新与行锁串行化，以及 Microsoft IMAP 全路径下线。
 - 更新 `docs/specs/account_connection.md`、`docs/specs_index.md`、`docs/blueprint/{architecture,conventions,testing}.md` 与 OpenAPI/TypeScript 生成契约。
+
+## 直接 main 执行归档补记（2026-10-25T02:00:57+08:00）
+
+- 用户本轮明确要求已完成任务归档。本次将状态由 backlog 修正为 done 并迁入 archive；正文此前“保留 backlog”均为执行时流程限制记录，由本节更新。
+- 实际执行分支：main；执行 commit：`4ef9bf7ada1aaa9b67ea67dfccc1dfcd9b98d10a`；diff anchor：`e124a27a4baa5917fd39f3bb5190d54334014639`。
+- 已在执行 commit 快照重算并核实 code/test 最终 PASS，历史 reviewed_scope：`4072f20530f238a5`；spec 与 Review 原件保持不变。
+- 本任务直接在 main 完成，未创建登记 worktree/attempt，不补造 execution_id、handoff 或 dispatch ledger。此为用户授权的一次性文档状态维护，不宣称正常 worktree lifecycle 已执行。
