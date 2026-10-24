@@ -142,6 +142,41 @@ def test_list_inbox_status_filters_are_sent_as_query_params(monkeypatch):
     }
 
 
+def test_health_bypasses_login_but_other_commands_still_require_auth(monkeypatch, tmp_path):
+    monkeypatch.setenv("KKMAIL_SESSION_CACHE", str(tmp_path / "session.json"))
+    client = kkmail_cli.KKMailClient(base_url="http://127.0.0.1:37281", api_key="", password="")
+    requested = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"status":"ok","service":"mail-core"}'
+
+    def open_request(request, timeout):
+        requested.append(request)
+        assert timeout == 10
+        return Response()
+
+    monkeypatch.setattr(client._opener, "open", open_request)
+
+    assert client.health() == {"status": "ok", "service": "mail-core"}
+    assert len(requested) == 1
+    assert requested[0].full_url == "http://127.0.0.1:37281/health"
+    assert requested[0].get_header("Authorization") is None
+    assert requested[0].get_header("Cookie") is None
+
+    with pytest.raises(RuntimeError, match="Authentication failed"):
+        client.stats()
+    assert len(requested) == 1, "authenticated API methods must still pass through the login gate"
+
+
 def test_format_read_status_preserves_unknown_state():
     assert kkmail_cli.format_read_status(True) == "✓"
     assert kkmail_cli.format_read_status(False) == "●"

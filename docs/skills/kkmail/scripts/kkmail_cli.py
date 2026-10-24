@@ -353,7 +353,16 @@ class KKMailClient:
 
     # High-level actions
     def health(self) -> dict:
-        return self.request("GET", "/health")
+        req = urllib.request.Request(
+            f"{self.base_url}/health",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        with self._opener.open(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8")
+            if not body.strip():
+                return {"ok": True, "status_code": resp.status}
+            return json.loads(body)
 
     def stats(self) -> dict:
         return self.request("GET", "/api/mail/stats")
