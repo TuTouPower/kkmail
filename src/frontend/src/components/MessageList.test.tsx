@@ -163,6 +163,7 @@ describe('<MessageList />', () => {
     const row = container.querySelector('.message-row') as HTMLElement
     expect(row.getAttribute('tabindex')).toBe('0')
     expect(row.getAttribute('role')).toBeNull()
+    expect(row.getAttribute('aria-selected')).toBeNull()
     row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     await waitFor(() => expect(useMailStore.getState().selectedKey).toBe('a'))
   })
@@ -171,6 +172,9 @@ describe('<MessageList />', () => {
     const { container } = await render(<MessageList />)
     await waitFor(() => expect(subjects(container)).toHaveLength(2))
     const checkBtn = container.querySelector('.message-check') as HTMLElement
+    expect(checkBtn.getAttribute('role')).toBe('checkbox')
+    expect(checkBtn.getAttribute('aria-checked')).toBe('false')
+    checkBtn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     checkBtn.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
     expect(useMailStore.getState().selectedKey).toBeNull()
   })

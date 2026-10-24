@@ -588,7 +588,6 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
               data-ui="ML08"
               key={key}
               tabIndex={0}
-              aria-selected={selectedKey === key}
               aria-label={`邮件：${m.subject || '（无主题）'}，来自 ${displayName(m.from)}`}
               className={`message-row apple-card ${selectedKey === key ? 'selected' : ''} ${m.is_read === false ? 'unread' : ''} ${checked ? 'checked' : ''}`}
               onClick={() => openMessage(m)}
