@@ -2,7 +2,7 @@
 
 ## 认证
 
-- **登录**：单一登录密码。使用 `MAIL_CORE_LOGIN_PASSWORD_HASH`（bcrypt，推荐）或 `MAIL_CORE_LOGIN_PASSWORD`（启动时哈希）；桌面 / `python -m mail_core --data-dir` 在未提供时生成随机初始密码写入 `<data-dir>/initial-password.txt`（哈希存于 `secrets/login-password.bcrypt`），修改密码后删除该文件。两者都没有时进程拒绝启动。
+- **登录**：数据库模式以 `auth_credentials.login_password_hash` 为权威。`MAIL_CORE_LOGIN_PASSWORD_HASH`、`MAIL_CORE_LOGIN_PASSWORD` 与 `MAIL_CORE_PASSWORD_HASH_PATH` 仅用于首次引导，成功写入数据库后不再覆盖该值；无数据库模式使用进程内哈希。桌面 / `python -m mail_core --data-dir` 首次缺少密码时生成随机初始密码写入 `<data-dir>/initial-password.txt`，哈希存于 `secrets/login-password.bcrypt`，首次写入数据库后删除明文文件；没有可用引导值时进程拒绝启动。
 - **会话**：签名 Cookie（`MAIL_CORE_SECRET_KEY`，必填），`HttpOnly`，`SameSite=Lax`（`MAIL_CORE_COOKIE_SAMESITE`），有效期 `MAIL_CORE_SESSION_MAX_AGE`（默认 30 天）。经 HTTPS 访问时设置 `MAIL_CORE_COOKIE_SECURE=1`。
 - **CSRF**：Cookie 会话下所有写请求必须带 `X-CSRF-Token`；前端拿不到令牌时不会发出写请求。
 - **API Key**：`MAIL_CORE_API_KEYS`（逗号分隔或 JSON 列表），`Authorization: Bearer`；不接受查询串里的 key。
