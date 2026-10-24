@@ -1,5 +1,8 @@
 """Account API auth gate (no DB required for 401)."""
 
+import logging
+
+import pytest
 from fastapi.testclient import TestClient
 
 from mail_core.api.app import app
@@ -152,6 +155,47 @@ def test_create_account_serializes_slotted_dto_mock(api_client):
         data = res.json()
         assert data["id"] == acc_id
         assert data["email"] == "new@kkmail.test"
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code"),
+    [
+        (PermissionError("not allowed"), 403),
+        (LookupError("missing resource"), 404),
+        (ValueError("invalid account configuration"), 400),
+    ],
+)
+def test_create_account_maps_known_errors(api_client, monkeypatch, error, status_code):
+    from unittest.mock import Mock
+
+    monkeypatch.setattr("mail_core.api.accounts.create_account_app", Mock(side_effect=error))
+    response = api_client.post(
+        "/api/accounts",
+        json={"email": "new@kkmail.test", "provider": "memory"},
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["detail"] == str(error)
+
+
+def test_create_account_hides_and_safely_logs_unexpected_errors(api_client, monkeypatch, caplog):
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(
+        "mail_core.api.accounts.create_account_app",
+        Mock(side_effect=RuntimeError("password=private-secret")),
+    )
+    with caplog.at_level(logging.ERROR, logger="mail_core.api.accounts"):
+        response = api_client.post(
+            "/api/accounts",
+            json={"email": "new@kkmail.test", "provider": "memory"},
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal server error"}
+    assert "account creation failed" in caplog.text
+    assert "password=[REDACTED]" in caplog.text
+    assert "private-secret" not in caplog.text
 
 
 def test_update_account_serializes_slotted_dto_mock(api_client):

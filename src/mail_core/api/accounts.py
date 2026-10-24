@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 from typing import Any, Literal
 from uuid import UUID
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator, field_serializer
 from mail_core.accounts import StaleSidebarLayoutError
 from mail_core.api.deps import require_auth
 from mail_core.security.auth import AuthPrincipal
+from mail_core.security.redact import safe_error
 from mail_core.mail.application.accounts import (
     create_account_app,
     create_group_app,
@@ -31,6 +33,7 @@ from mail_core.mail.application.accounts import (
 )
 
 router = APIRouter(tags=["accounts"])
+log = logging.getLogger("mail_core.api.accounts")
 
 
 class ImapConfigOut(BaseModel):
@@ -209,8 +212,11 @@ def api_create_account(body: AccountCreateIn, principal: AuthPrincipal = Depends
         raise HTTPException(403, str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        log.error("account creation failed: %s", safe_error(exc))
+        raise HTTPException(500, "internal server error") from None
 
 
 @router.patch("/api/accounts/{account_id}", response_model=AccountOut)
