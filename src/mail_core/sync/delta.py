@@ -267,6 +267,8 @@ def sync_folder_delta(
             raise ValueError("account/folder not found")
         if not account.sync_enabled:
             return {"status": "sync_disabled"}
+        if folder.sync_status == "paused":
+            return {"status": "skipped", "reason": "folder_not_selectable"}
         cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
         if cp is None or not cp.full_scan_complete:
             return {"status": "skipped", "reason": "baseline_incomplete"}

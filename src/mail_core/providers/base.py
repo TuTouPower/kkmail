@@ -17,6 +17,7 @@ class RemoteFolder:
     name: str
     role: str  # FolderRole value
     parent_remote_id: str | None = None
+    selectable: bool = True
 
 
 @dataclass(frozen=True, slots=True)

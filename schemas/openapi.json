@@ -106,6 +106,10 @@
             "title": "Role",
             "type": "string"
           },
+          "sync_status": {
+            "title": "Sync Status",
+            "type": "string"
+          },
           "total_count": {
             "anyOf": [
               {
@@ -133,6 +137,7 @@
           "folder_id",
           "role",
           "name",
+          "sync_status",
           "total_count",
           "unread_count",
           "remote_id"

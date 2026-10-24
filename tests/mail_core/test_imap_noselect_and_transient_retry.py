@@ -54,6 +54,29 @@ def test_imap_list_folders_filters_noselect_and_nonexistent(monkeypatch):
     assert "VirtualFolder" not in remote_ids
 
 
+def test_imap_folder_catalog_keeps_noselect_parent_as_nonselectable_node(monkeypatch):
+    class FakeIMAPFolderCatalog:
+        def list(self):
+            return "OK", [
+                b'(\\HasNoChildren) "/" "INBOX"',
+                '(\\Noselect \\HasChildren) "/" "其他文件夹"'.encode("utf-8"),
+                '(\\HasNoChildren) "/" "其他文件夹/QQ邮件订阅"'.encode("utf-8"),
+            ]
+
+        def logout(self):
+            return "OK", []
+
+    provider = ImapProvider("imap.example.com", 993, "user", "pass", use_ssl=False)
+    monkeypatch.setattr(provider, "_connect", lambda: FakeIMAPFolderCatalog())
+
+    catalog = {folder.remote_id: folder for folder in provider.list_folder_catalog()}
+
+    assert catalog["其他文件夹"].selectable is False
+    assert catalog["其他文件夹/QQ邮件订阅"].selectable is True
+    assert catalog["其他文件夹/QQ邮件订阅"].parent_remote_id == "其他文件夹"
+    assert "其他文件夹" not in {folder.remote_id for folder in provider.list_folders()}
+
+
 def test_imap_fetch_metadata_page_safe_on_noselect_mailbox(monkeypatch):
     class FakeIMAPNoselectSearchFail:
         def select(self, mailbox, readonly=True):
