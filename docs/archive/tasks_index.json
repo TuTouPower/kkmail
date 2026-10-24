@@ -802,6 +802,22 @@
             "conflicts_with": "",
             "note": "",
             "dir": "docs/archive/tasks/t050_imap_noselect_and_graph_transient_retry"
+        },
+        {
+            "tid": "t051",
+            "slug": "mailbox_folder_role_aliases",
+            "title": "修正邮箱文件夹角色重复显示与映射",
+            "status": "done",
+            "branch": "t051_mailbox_folder_role_aliases",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "427bdb7ca2d10cfa3e12edc960bae37f30390023",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p037；保留远端 folder_id，不按 role 合并目录",
+            "dir": "docs/archive/tasks/t051_mailbox_folder_role_aliases"
         }
     ]
 }
