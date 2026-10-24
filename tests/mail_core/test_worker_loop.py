@@ -408,6 +408,50 @@ def test_handle_job_sanitizes_error_in_update_account_sync_status():
         assert "[REDACTED]" in passed_error
 
 
+def test_handle_job_resolves_credential_store_inside_job_error_boundary():
+    import uuid
+
+    from mail_core.mail.domain.enums import JobType
+    from mail_core.mail.storage.models import WorkerJob
+    from mail_core.worker.handlers import handle_job
+
+    job = WorkerJob(
+        account_id=uuid.uuid4(),
+        job_type=JobType.REMOTE_OPERATION_PUSH.value,
+        status="claimed",
+        payload={},
+    )
+    job.id = uuid.uuid4()
+    session = MagicMock()
+
+    with (
+        patch("mail_core.worker.handlers.get_credential_store", side_effect=RuntimeError("store unavailable")),
+        patch("mail_core.worker.handlers.fail_job") as mock_fail_job,
+    ):
+        assert handle_job(session, job, worker_id="test-worker") is False
+
+    mock_fail_job.assert_called_once()
+
+
+def test_handle_job_skips_credential_store_for_outbox_wake():
+    import uuid
+
+    from mail_core.mail.domain.enums import JobType
+    from mail_core.mail.storage.models import WorkerJob
+    from mail_core.worker.handlers import handle_job
+
+    job = WorkerJob(job_type=JobType.OUTBOX_DISPATCH_WAKE.value, status="claimed", payload={})
+    job.id = uuid.uuid4()
+    session = MagicMock()
+
+    with (
+        patch("mail_core.worker.handlers.get_credential_store", side_effect=AssertionError("not needed")),
+        patch("mail_core.realtime.notify.try_notify_outbox"),
+        patch("mail_core.worker.handlers.complete_job"),
+    ):
+        assert handle_job(session, job, worker_id="test-worker") is True
+
+
 def test_evaluate_result_retains_business_payload_for_followup():
     """AC-005: Worker _evaluate_result must retain business payload and strip _followup_* fields."""
     import uuid

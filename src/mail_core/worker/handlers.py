@@ -114,7 +114,6 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
     worker_id = worker_id or job.locked_by or "worker"
     payload = dict(job.payload or {})
     account_id = job.account_id
-    store = get_credential_store()
 
     try:
         if job.job_type in (
@@ -141,7 +140,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.engine import sync_account_folders
 
             session.commit()
-            result = sync_account_folders(account_id, worker_id=worker_id, store=store)
+            result = sync_account_folders(account_id, worker_id=worker_id, store=get_credential_store())
             log.info("sync_account_folders %s", result)
             if result.get("status") in ("lease_busy", "provider_error"):
                 update_account_sync_status(
@@ -159,7 +158,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.engine import sync_folder_metadata
 
             session.commit()
-            result = sync_folder_metadata(account_id, folder_id, worker_id=worker_id, store=store)
+            result = sync_folder_metadata(account_id, folder_id, worker_id=worker_id, store=get_credential_store())
             log.info("sync_folder_metadata %s", result)
             return _evaluate_result(session, job, result, worker_id)
 
@@ -170,7 +169,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.reconcile import reconcile_folder
 
             session.commit()
-            result = reconcile_folder(account_id, folder_id, worker_id=worker_id, store=store)
+            result = reconcile_folder(account_id, folder_id, worker_id=worker_id, store=get_credential_store())
             log.info("reconcile_folder %s", result)
             return _evaluate_result(session, job, result, worker_id)
 
@@ -180,7 +179,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.remote_push import push_remote_operations
 
             session.commit()
-            result = push_remote_operations(account_id, worker_id=worker_id, store=store)
+            result = push_remote_operations(account_id, worker_id=worker_id, store=get_credential_store())
             log.info("remote_operation_push %s", result)
             return _evaluate_result(session, job, result, worker_id)
 
@@ -191,7 +190,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             result = run_archive_batch(
                 account_id=account_id,
                 worker_id=worker_id,
-                store=store,
+                store=get_credential_store(),
                 payload=payload,
             )
             log.info("archive_mime_batch %s", result)
@@ -218,7 +217,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 account_id,
                 folder_id,
                 worker_id=worker_id,
-                store=store,
+                store=get_credential_store(),
                 poll_round=int(payload.get("poll_round") or 0),
             )
             log.info("sync_folder_delta %s", result)
