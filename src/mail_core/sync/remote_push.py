@@ -10,11 +10,13 @@ from sqlalchemy import and_, func, or_, select
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.application.remote_ops import mark_remote_operation, reclaim_stale_in_progress
-from mail_core.mail.domain.enums import JobStatus, JobType, RemoteOperationStatus
+from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, RemoteOperationStatus
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
-from mail_core.mail.storage.models import Account, Folder, RemoteOperation, WorkerJob
+from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, RemoteOperation, WorkerJob
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import ProviderHttpError, RateLimitedError
+from mail_core.providers.remote_writeback import OP_MOVE, OP_TRASH, normalize_op_type
+from mail_core.realtime.notify import try_notify_outbox
 from mail_core.security.redact import safe_provider_summary
 from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import (
@@ -29,6 +31,154 @@ from mail_core.sync.leases import (
 log = logging.getLogger("mail_core.sync.remote_push")
 
 DEFAULT_MAX_REMOTE_OP_ATTEMPTS = 5
+
+
+class RemoteIdentityConflict(ValueError):
+    """The provider returned a remote id already owned by another local message."""
+
+
+def _persist_move_remote_state(
+    session,
+    *,
+    account_id: uuid.UUID,
+    provider_type: str,
+    op_type: str,
+    desired_state: dict,
+    remote_state: dict,
+) -> bool:
+    if normalize_op_type(op_type) not in (OP_MOVE, OP_TRASH) or not isinstance(remote_state, dict):
+        return False
+    source_remote_id = desired_state.get("remote_id")
+    if not isinstance(source_remote_id, str) or not source_remote_id.strip():
+        return False
+    message = session.scalar(
+        select(Message)
+        .where(Message.account_id == account_id, Message.remote_id == source_remote_id)
+        .with_for_update()
+    )
+    # Local-first trash may have deleted the message before remote delivery.
+    if message is None:
+        return False
+
+    new_remote_id = remote_state.get("remote_id") or remote_state.get("id")
+    if not isinstance(new_remote_id, str) or not new_remote_id.strip():
+        new_remote_id = None
+    if new_remote_id and new_remote_id != message.remote_id:
+        conflict = session.scalar(
+            select(Message.id)
+            .where(
+                Message.account_id == account_id,
+                Message.remote_id == new_remote_id,
+                Message.id != message.id,
+            )
+            .limit(1)
+        )
+        if conflict is not None:
+            raise RemoteIdentityConflict("provider move returned a remote id already owned by another message")
+
+    target_remote_folder = remote_state.get("folder_remote_id")
+    if not isinstance(target_remote_folder, str) or not target_remote_folder.strip():
+        target_remote_folder = None
+    source_remote_folder = desired_state.get("folder_remote_id")
+    source_folder = None
+    if isinstance(source_remote_folder, str) and source_remote_folder:
+        source_folder = session.scalar(
+            select(Folder).where(Folder.account_id == account_id, Folder.remote_id == source_remote_folder)
+        )
+    target_folder = None
+    if target_remote_folder:
+        target_folder = session.scalar(
+            select(Folder).where(Folder.account_id == account_id, Folder.remote_id == target_remote_folder)
+        )
+
+    if (
+        target_remote_folder
+        and target_remote_folder != source_remote_folder
+        and provider_type == "imap"
+        and not new_remote_id
+    ):
+        # An IMAP UID is scoped to its source folder/UIDVALIDITY. Without COPYUID
+        # the destination identity is unknown; do not report the move as done.
+        raise RemoteIdentityConflict("IMAP MOVE succeeded without a destination UID (COPYUID)")
+
+    changed = False
+    if new_remote_id and new_remote_id != message.remote_id:
+        message.remote_id = new_remote_id
+        changed = True
+
+    affected_folder_ids: set[uuid.UUID] = set()
+    if target_remote_folder and target_folder is None:
+        # Keep the message row (and its new identity) while folder discovery
+        # creates the destination; metadata sync then reattaches the location.
+        if source_folder is not None:
+            source_location = session.scalar(
+                select(MessageLocation).where(
+                    MessageLocation.message_id == message.id,
+                    MessageLocation.folder_id == source_folder.id,
+                )
+            )
+            if source_location is not None:
+                session.delete(source_location)
+                affected_folder_ids.add(source_folder.id)
+                changed = True
+        enqueue_job(
+            session,
+            job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+            account_id=account_id,
+            payload={},
+            priority=50,
+            dedupe_key=f"sync-folders:{account_id}",
+        )
+    elif target_folder is not None:
+        if source_folder is not None and source_folder.id != target_folder.id:
+            source_location = session.scalar(
+                select(MessageLocation).where(
+                    MessageLocation.message_id == message.id,
+                    MessageLocation.folder_id == source_folder.id,
+                )
+            )
+            if source_location is not None:
+                session.delete(source_location)
+                affected_folder_ids.add(source_folder.id)
+                changed = True
+        destination_location = session.scalar(
+            select(MessageLocation).where(
+                MessageLocation.message_id == message.id,
+                MessageLocation.folder_id == target_folder.id,
+            )
+        )
+        raw_uid = remote_state.get("uid")
+        uid = raw_uid if isinstance(raw_uid, int) and not isinstance(raw_uid, bool) else None
+        if destination_location is None:
+            session.add(MessageLocation(message_id=message.id, folder_id=target_folder.id, uid=uid))
+            changed = True
+        elif uid is not None and destination_location.uid != uid:
+            destination_location.uid = uid
+            changed = True
+        if changed:
+            affected_folder_ids.add(target_folder.id)
+
+    if not changed:
+        return False
+    session.flush()
+    session.add(
+        OutboxEvent(
+            event_type=OutboxEventType.MESSAGE_UPSERTED.value,
+            account_id=account_id,
+            payload={"message_id": str(message.id), "remote_id": message.remote_id},
+        )
+    )
+    for folder_id in affected_folder_ids:
+        recompute_folder_stats(session, folder_id)
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
+                account_id=account_id,
+                payload={"folder_id": str(folder_id)},
+            )
+        )
+    try_notify_outbox(session)
+    return True
 
 
 def is_transient_error(exc: Exception | None = None, err_msg: str | None = None) -> bool:
@@ -210,6 +360,7 @@ def push_remote_operations(
             session.commit()
 
         caught_exc: Exception | None = None
+        remote_state: dict = {}
         remote_id = claimed_desired.get("remote_id")
         if not isinstance(remote_id, str) or not remote_id.strip():
             ok = False
@@ -219,6 +370,8 @@ def push_remote_operations(
                 result = provider.apply_remote_operation(op_type, claimed_desired)  # network
                 ok = bool(result.success)
                 err = safe_provider_summary(result.error) if result.error else None
+                candidate_state = getattr(result, "remote_state", {})
+                remote_state = candidate_state if isinstance(candidate_state, dict) else {}
             except Exception as exc:  # noqa: BLE001 — isolate per-op provider failures
                 err_summary = safe_provider_summary(exc)
                 log.exception("remote push op %s failed: %s", op_id, err_summary)
@@ -257,6 +410,19 @@ def push_remote_operations(
                 )
                 session.commit()
                 continue
+            if ok:
+                try:
+                    _persist_move_remote_state(
+                        session,
+                        account_id=account_id,
+                        provider_type=str(account_snapshot.provider or "").lower(),
+                        op_type=op_type,
+                        desired_state=claimed_desired,
+                        remote_state=remote_state,
+                    )
+                except RemoteIdentityConflict as exc:
+                    ok = False
+                    err = safe_provider_summary(exc)
             if ok:
                 mark_remote_operation(session, op, status=RemoteOperationStatus.DONE, next_attempt_at=None)
                 pushed += 1

@@ -175,6 +175,86 @@ def imap_uid_for_command(remote_id: str) -> str:
     return str(parsed[2]) if parsed else str(remote_id)
 
 
+def _uid_sequence_index(sequence_set: str, target_uid: int) -> int | None:
+    offset = 0
+    for part in sequence_set.split(","):
+        if ":" in part:
+            try:
+                first, last = (int(value) for value in part.split(":", 1))
+            except ValueError:
+                return None
+            step = 1 if last >= first else -1
+            count = abs(last - first) + 1
+            distance = (target_uid - first) * step
+            if 0 <= distance < count:
+                return offset + distance
+            offset += count
+        else:
+            try:
+                value = int(part)
+            except ValueError:
+                return None
+            if value == target_uid:
+                return offset
+            offset += 1
+    return None
+
+
+def _uid_sequence_value(sequence_set: str, index: int) -> int | None:
+    offset = 0
+    for part in sequence_set.split(","):
+        if ":" in part:
+            try:
+                first, last = (int(value) for value in part.split(":", 1))
+            except ValueError:
+                return None
+            step = 1 if last >= first else -1
+            count = abs(last - first) + 1
+            if offset <= index < offset + count:
+                return first + step * (index - offset)
+            offset += count
+        else:
+            try:
+                value = int(part)
+            except ValueError:
+                return None
+            if offset == index:
+                return value
+            offset += 1
+    return None
+
+
+def _copyuid_remote_state(c: imaplib.IMAP4, response_data: Any, source_uid: int, dest_folder: str) -> dict[str, Any]:
+    """Build destination identity from the UIDPLUS COPYUID response when present."""
+    remote_state: dict[str, Any] = {"folder_remote_id": dest_folder}
+    values = list(response_data or [])
+    try:
+        _, response_values = c.response("COPYUID")
+        values.extend(response_values or [])
+    except (AttributeError, imaplib.IMAP4.error):
+        pass
+    for value in values:
+        text = value.decode("ascii", errors="ignore") if isinstance(value, bytes) else str(value)
+        match = re.search(r"(?:\[\s*)?COPYUID\s+(\d+)\s+([0-9,:]+)\s+([0-9,:]+)", text, re.IGNORECASE)
+        if match is None:
+            match = re.fullmatch(r"\s*(\d+)\s+([0-9,:]+)\s+([0-9,:]+)\s*", text)
+        if match is None:
+            continue
+        uidvalidity = int(match.group(1))
+        source_set = match.group(2)
+        destination_set = match.group(3)
+        index = _uid_sequence_index(source_set, source_uid)
+        if index is None:
+            continue
+        destination_uid = _uid_sequence_value(destination_set, index)
+        if destination_uid is None:
+            continue
+        remote_state["remote_id"] = format_imap_remote_id(dest_folder, uidvalidity, destination_uid)
+        remote_state["uid"] = destination_uid
+        break
+    return remote_state
+
+
 def _check_uidvalidity(cursor: dict[str, Any] | None, uidvalidity: int | None) -> None:
     """Raise CursorInvalidError when server UIDVALIDITY differs from checkpoint cursor.
 
@@ -841,24 +921,36 @@ class ImapProvider:
                 if not dest:
                     return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
                 # Prefer UID MOVE (RFC 6851); never STORE \Deleted or expunge entire mailbox
-                typ, _ = c.uid("MOVE", uid_str, _quote_mailbox(dest))
+                typ, response_data = c.uid("MOVE", uid_str, _quote_mailbox(dest))
                 if typ != "OK":
                     return RemoteOperationResult(
                         success=False,
                         error="IMAP server does not support atomic MOVE/delete",
                     )
-                return RemoteOperationResult(success=True, remote_state={"folder_remote_id": dest})
+                try:
+                    source_uid = int(uid_str)
+                except ValueError:
+                    remote_state = {"folder_remote_id": dest}
+                else:
+                    remote_state = _copyuid_remote_state(c, response_data, source_uid, dest)
+                return RemoteOperationResult(success=True, remote_state=remote_state)
 
             if op == OP_TRASH:
                 trash = str(desired_state.get("trash_folder_remote_id") or "Trash")
                 # Try move into trash mailbox first; never STORE \Deleted or expunge entire mailbox
-                typ, _ = c.uid("MOVE", uid_str, _quote_mailbox(trash))
+                typ, response_data = c.uid("MOVE", uid_str, _quote_mailbox(trash))
                 if typ != "OK":
                     return RemoteOperationResult(
                         success=False,
                         error="IMAP server does not support atomic MOVE/delete",
                     )
-                return RemoteOperationResult(success=True, remote_state={"folder_remote_id": trash})
+                try:
+                    source_uid = int(uid_str)
+                except ValueError:
+                    remote_state = {"folder_remote_id": trash}
+                else:
+                    remote_state = _copyuid_remote_state(c, response_data, source_uid, trash)
+                return RemoteOperationResult(success=True, remote_state=remote_state)
 
             return RemoteOperationResult(success=False, error=f"imap apply not implemented: {op_type}")
         finally:

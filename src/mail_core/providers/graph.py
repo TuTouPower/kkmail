@@ -230,7 +230,10 @@ class GraphProvider:
                 data = self._call("POST", f"{msg_path}/move", {"destinationId": trash})
                 return RemoteOperationResult(
                     success=True,
-                    remote_state={"folder_remote_id": data.get("parentFolderId") or trash},
+                    remote_state={
+                        "folder_remote_id": data.get("parentFolderId") or trash,
+                        "id": data.get("id") or remote_id,
+                    },
                 )
             except (RateLimitedError, CursorInvalidError):
                 raise

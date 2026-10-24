@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 from mail_core.providers.base import RemoteFolder, RemoteMessageMeta
 from mail_core.providers.gmail import GmailProvider
 from mail_core.providers.graph import GraphProvider
-from mail_core.providers.imap import ImapProvider
+from mail_core.providers.imap import ImapProvider, format_imap_remote_id
 from mail_core.providers.remote_writeback import normalize_op_type
 from mail_core.providers.stub_memory import MemoryProvider
 
@@ -74,6 +74,11 @@ def test_imap_writeback_uses_uid_store_and_move():
                 return ("OK", [b""])
             return ("OK", [b""])
 
+        def response(self, code):
+            if code == "COPYUID":
+                return ("COPYUID", [b"42 10 12"])
+            return (code, None)
+
         def expunge(self):
             calls.append(("expunge",))
             return ("OK", [b""])
@@ -101,11 +106,21 @@ def test_imap_writeback_uses_uid_store_and_move():
     )
     assert r.success
     assert ("uid", "MOVE", ("10", "Archive")) in calls
+    assert r.remote_state == {
+        "folder_remote_id": "Archive",
+        "remote_id": format_imap_remote_id("Archive", 42, 12),
+        "uid": 12,
+    }
 
     calls.clear()
     r = provider.apply_remote_operation("trash", {"remote_id": "10", "folder_remote_id": "INBOX", "trash_folder_remote_id": "Trash"})
     assert r.success
     assert ("uid", "MOVE", ("10", "Trash")) in calls
+    assert r.remote_state == {
+        "folder_remote_id": "Trash",
+        "remote_id": format_imap_remote_id("Trash", 42, 12),
+        "uid": 12,
+    }
 
 
 def test_imap_move_trash_refuse_unsafe_expunge():
@@ -196,7 +211,7 @@ def test_graph_writeback_via_transport_mocks():
         if method == "PATCH":
             return {"id": "g1", "isRead": params.get("isRead"), "flag": params.get("flag")}
         if path.endswith("/move"):
-            return {"id": "g1", "parentFolderId": params.get("destinationId")}
+            return {"id": "g2", "parentFolderId": params.get("destinationId")}
         if method == "DELETE":
             return {}
         return {"success": True}
@@ -210,12 +225,16 @@ def test_graph_writeback_via_transport_mocks():
     assert seen[0][2]["flag"]["flagStatus"] == "flagged"
 
     seen.clear()
-    assert p.apply_remote_operation(
+    moved = p.apply_remote_operation(
         "move",
         {"remote_id": "g1", "dest_folder_remote_id": "archive-id"},
-    ).success
+    )
+    assert moved.success
     assert seen[0][0] == "POST" and seen[0][1].endswith("/move")
+    assert moved.remote_state == {"folder_remote_id": "archive-id", "id": "g2"}
 
     seen.clear()
-    assert p.apply_remote_operation("trash", {"remote_id": "g1"}).success
+    trashed = p.apply_remote_operation("trash", {"remote_id": "g1"})
+    assert trashed.success
     assert seen[0][1].endswith("/move")
+    assert trashed.remote_state == {"folder_remote_id": "deleteditems", "id": "g2"}
