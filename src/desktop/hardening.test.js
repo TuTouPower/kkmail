@@ -100,6 +100,16 @@ assert.strictEqual(
   false
 )
 assert.strictEqual(
+  checkHandler(null, 'clipboard-sanitized-write', appOrigin),
+  false,
+  'Missing frame details must be denied'
+)
+assert.strictEqual(
+  checkHandler(null, 'clipboard-sanitized-write', appOrigin, {}),
+  false,
+  'Missing isMainFrame must be denied'
+)
+assert.strictEqual(
   checkHandler(null, 'clipboard-read', appOrigin, { isMainFrame: true }),
   false
 )

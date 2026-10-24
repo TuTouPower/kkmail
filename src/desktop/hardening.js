@@ -77,7 +77,7 @@ function createPermissionCheckHandler(getTrustedOrigin) {
   return function permissionCheckHandler(webContents, permission, requestingOrigin, details) {
     const trustedOrigin = typeof getTrustedOrigin === 'function' ? getTrustedOrigin() : getTrustedOrigin
     const requestingUrl = requestingOrigin || details?.requestingUrl || (webContents && typeof webContents.getURL === 'function' ? webContents.getURL() : '')
-    const isMainFrame = details ? Boolean(details.isMainFrame) : true
+    const isMainFrame = Boolean(details?.isMainFrame)
     return isAllowedPermission(permission, requestingUrl, isMainFrame, trustedOrigin)
   }
 }
