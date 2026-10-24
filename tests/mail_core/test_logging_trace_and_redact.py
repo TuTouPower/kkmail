@@ -7,9 +7,39 @@ from fastapi.testclient import TestClient
 
 from mail_core.logging_config import (
     RedactingTraceFormatter,
+    configure_logging,
     trace_scope,
 )
 from mail_core.security.redact import RedactingFilter
+
+
+def test_configure_logging_reads_level_and_warns_on_invalid_value(monkeypatch, capsys):
+    root = logging.getLogger()
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    try:
+        monkeypatch.setenv("MAIL_CORE_LOG_LEVEL", "DEBUG")
+        configure_logging(service_name="logging-level-test")
+        assert root.level == logging.DEBUG
+        logging.getLogger("logging-level-test").debug("debug level applied")
+
+        monkeypatch.setenv("MAIL_CORE_LOG_LEVEL", "NOT_A_LEVEL")
+        configure_logging(service_name="logging-level-test")
+        assert root.level == logging.INFO
+        logging.getLogger("logging-level-test").info("info fallback applied")
+
+        output = capsys.readouterr().out
+        assert "debug level applied" in output
+        assert "invalid logging level 'NOT_A_LEVEL'; using INFO" in output
+        assert "info fallback applied" in output
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            if handler not in original_handlers:
+                handler.close()
+        for handler in original_handlers:
+            root.addHandler(handler)
+        root.setLevel(original_level)
 
 
 def test_redacting_trace_formatter_injects_trace_and_redacts():

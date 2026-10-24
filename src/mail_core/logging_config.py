@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import os
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -51,11 +52,20 @@ class RedactingTraceFormatter(logging.Formatter):
 
 def configure_logging(
     service_name: str = "mail-core",
-    level: int | str = logging.INFO,
+    level: int | str | None = None,
 ) -> None:
     """Configure root logger with RedactingTraceFormatter and stdout streaming."""
+    requested_level = level if level is not None else os.environ.get("MAIL_CORE_LOG_LEVEL", "INFO")
+    if isinstance(requested_level, int):
+        resolved_level = requested_level
+    else:
+        resolved_level = logging.getLevelName(str(requested_level).strip().upper())
+    invalid_level = not isinstance(resolved_level, int)
+    if invalid_level:
+        resolved_level = logging.INFO
+
     root = logging.getLogger()
-    root.setLevel(level)
+    root.setLevel(resolved_level)
 
     for handler in list(root.handlers):
         root.removeHandler(handler)
@@ -69,3 +79,5 @@ def configure_logging(
     access_logger = logging.getLogger("uvicorn.access")
     if not any(isinstance(f, RedactingFilter) for f in access_logger.filters):
         access_logger.addFilter(RedactingFilter())
+    if invalid_level:
+        logging.getLogger(__name__).warning("invalid logging level %r; using INFO", requested_level)

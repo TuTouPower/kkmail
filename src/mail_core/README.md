@@ -27,6 +27,7 @@ python -m mail_core --data-dir ./.kkmail-data
 |`MAIL_CORE_SECRET_KEY`|Session signing key. Required unless `--data-dir` is set.|
 |`MAIL_CORE_LOGIN_PASSWORD_HASH` / `MAIL_CORE_LOGIN_PASSWORD`|Login password.|
 |`MAIL_CORE_API_KEYS`|Bearer keys for integrations.|
+|`MAIL_CORE_LOG_LEVEL`|Root log threshold (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`); defaults to `INFO`. Invalid values warn and fall back to `INFO`.|
 |`MAIL_CORE_BLOB_KEY_V1` / `MAIL_CORE_BLOB_KEYS` / `MAIL_CORE_BLOB_ACTIVE_VERSION`|Blob and credential encryption keyring.|
 |`MAIL_CORE_BACKUP_KEY` / `MAIL_CORE_BACKUP_KEYS`|Backup key. Must differ from the blob key.|
 |`MAIL_CORE_BLOB_ROOT`, `MAIL_CORE_BACKUP_DIR`|Storage paths.|
