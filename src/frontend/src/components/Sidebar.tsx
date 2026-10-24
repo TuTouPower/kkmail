@@ -282,8 +282,11 @@ function Sidebar() {
   const toggleExpandedAccount = useMailStore((state) => state.toggleSidebarAccount)
   const expandedCategories = useMailStore((state) => state.expandedSidebarCategories)
   const toggleExpandedCategory = useMailStore((state) => state.toggleSidebarCategory)
+  const mobileSidebarOpen = useMailStore((state) => state.mobileSidebarOpen)
   const closeMobileSidebar = useMailStore((state) => state.closeMobileSidebar)
   const wide = useIsWide()
+  const drawerOpen = mobileSidebarOpen && !wide
+  const sidebarRef = useRef<HTMLElement | null>(null)
   const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const layoutQuery = useQuery({ queryKey: queryKeys.sidebarLayout, queryFn: () => api.getSidebarLayout() })
@@ -302,6 +305,39 @@ function Sidebar() {
   const renameSaveInFlight = useRef(false)
   const groupMenuTrigger = useRef<HTMLButtonElement | null>(null)
   const newGroupTrigger = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    if (!drawerOpen) return
+    const sidebar = sidebarRef.current
+    if (!sidebar) return
+
+    const focusableElements = () => Array.from(sidebar.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )).filter((element) => element.getAttribute('aria-hidden') !== 'true')
+
+    const first = focusableElements()[0]
+    ;(first ?? sidebar).focus()
+
+    const trapTab = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const elements = focusableElements()
+      if (elements.length === 0) {
+        event.preventDefault()
+        sidebar.focus()
+        return
+      }
+      const activeIndex = elements.indexOf(document.activeElement as HTMLElement)
+      if (event.shiftKey && activeIndex <= 0) {
+        event.preventDefault()
+        elements[elements.length - 1].focus()
+      } else if (!event.shiftKey && (activeIndex < 0 || activeIndex === elements.length - 1)) {
+        event.preventDefault()
+        elements[0].focus()
+      }
+    }
+
+    document.addEventListener('keydown', trapTab, true)
+    return () => document.removeEventListener('keydown', trapTab, true)
+  }, [drawerOpen])
   const statsQuery = useQuery({
     queryKey: queryKeys.stats,
     queryFn: async ({ signal }) => {
@@ -789,7 +825,14 @@ function Sidebar() {
   })
 
   return (
-    <aside className="sidebar" aria-label="邮箱导航" role={wide ? undefined : 'dialog'} aria-modal={wide ? undefined : true}>
+    <aside
+      ref={sidebarRef}
+      className="sidebar"
+      aria-label="邮箱导航"
+      role={drawerOpen ? 'dialog' : undefined}
+      aria-modal={drawerOpen ? true : undefined}
+      tabIndex={drawerOpen ? -1 : undefined}
+    >
       <div className="sidebar-scroll tree-sidebar-scroll">
         {actionError && <div className="tree-action-error" role="alert"><AlertCircle size={14} /><span>{actionError}</span><button type="button" aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14} /></button></div>}
         <section className="tree-section">

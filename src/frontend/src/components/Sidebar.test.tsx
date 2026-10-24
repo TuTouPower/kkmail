@@ -191,6 +191,7 @@ describe('<Sidebar />', () => {
   beforeEach(() => {
     useMailStore.setState({
       view: { type: 'allInbox' }, listFilter: 'all',
+      mobileSidebarOpen: false,
       sidebarSections: { allAccounts: true, accountList: true },
       expandedSidebarGroups: [], expandedSidebarCategories: [], expandedSidebarAccounts: [],
     })
@@ -223,6 +224,45 @@ describe('<Sidebar />', () => {
     await waitFor(() => expect(container.querySelectorAll('.tree-category-account')).toHaveLength(2))
     const inboxAccountBadges = [...container.querySelectorAll('.tree-category-account')].map((row) => row.querySelector('.unread-badge')?.textContent)
     expect(inboxAccountBadges).toEqual(['1', '2'])
+  })
+
+  it('focuses and traps keyboard focus inside the mobile navigation dialog', async () => {
+    const previousWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    window.dispatchEvent(new Event('resize'))
+    useMailStore.setState({ mobileSidebarOpen: true })
+    mockApi()
+
+    const { container } = await render(<Sidebar />)
+    try {
+      await waitFor(() => expect(container.querySelector('aside[role="dialog"][aria-modal="true"]')).not.toBeNull())
+      const dialog = container.querySelector('aside[role="dialog"]')!
+      const focusableElements = () => Array.from(dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => element.getAttribute('aria-hidden') !== 'true')
+
+      await waitFor(() => expect(document.activeElement).toBe(focusableElements()[0]))
+      await waitFor(() => expect(focusableElements().length).toBeGreaterThan(2))
+      const focusable = focusableElements()
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+
+      last.focus()
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+      })
+      expect(document.activeElement).toBe(first)
+
+      first.focus()
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+      })
+      expect(document.activeElement).toBe(last)
+    } finally {
+      useMailStore.getState().closeMobileSidebar()
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: previousWidth })
+      window.dispatchEvent(new Event('resize'))
+    }
   })
 
   it('opens a group, navigates all categories, and expands the same account in both lists', async () => {
