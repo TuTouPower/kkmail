@@ -1,14 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { PanelLeft } from 'lucide-react'
 import { useMailStore } from './store/mailStore'
-import Sidebar from './components/Sidebar'
 import MessageList from './components/MessageList'
-import MessageReader from './components/MessageReader'
-import SettingsPage from './components/SettingsModal'
 import LoginPage from './components/LoginPage'
 import ColumnResize from './components/ColumnResize'
 import ErrorBoundary from './components/ErrorBoundary'
-import UiReferenceOverlay from './components/UiReferenceOverlay'
 import { UNAUTHORIZED_EVENT, api } from './api/client'
 import { queryClient } from './api/queries'
 import './design-system/tokens.css'
@@ -17,6 +13,11 @@ import { workspaceGridColumns } from './lib/workspaceLayout'
 import { useMailCoreRealtime } from './hooks/useMailCoreRealtime'
 import { resolveTheme } from './lib/theme'
 import { getDesktopPlatform } from './lib/desktopShell'
+
+const Sidebar = lazy(() => import('./components/Sidebar'))
+const MessageReader = lazy(() => import('./components/MessageReader'))
+const SettingsPage = lazy(() => import('./components/SettingsModal'))
+const UiReferenceOverlay = lazy(() => import('./components/UiReferenceOverlay'))
 
 function App() {
   const theme = useMailStore((s) => s.theme)
@@ -122,7 +123,7 @@ function App() {
       <>
         {macLoginDragRegion}
         <LoginPage onSuccess={() => { setAuthed(true); void queryClient.invalidateQueries() }} />
-        <UiReferenceOverlay />
+        <Suspense fallback={null}><UiReferenceOverlay /></Suspense>
       </>
     )
   }
@@ -171,7 +172,7 @@ function App() {
       >
         {(!wide || !sidebarCollapsed) && (
           <ErrorBoundary inline fallbackTitle="侧栏加载失败">
-            <Sidebar />
+            <Suspense fallback={null}><Sidebar /></Suspense>
           </ErrorBoundary>
         )}
         {wide && !sidebarCollapsed && (
@@ -200,7 +201,7 @@ function App() {
         )}
         {settingsOpen ? (
           <ErrorBoundary inline fallbackTitle="设置加载失败">
-            <SettingsPage sidebarToggleRef={sidebarToggleRef} />
+            <Suspense fallback={<div role="status">正在加载设置…</div>}><SettingsPage sidebarToggleRef={sidebarToggleRef} /></Suspense>
           </ErrorBoundary>
         ) : (
           <>
@@ -232,7 +233,7 @@ function App() {
               />
             )}
             <ErrorBoundary inline fallbackTitle="邮件详情加载失败">
-              <MessageReader />
+              <Suspense fallback={null}><MessageReader /></Suspense>
             </ErrorBoundary>
           </>
         )}
@@ -246,7 +247,7 @@ function App() {
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeMobileSidebar() }}
         />
       )}
-      <UiReferenceOverlay />
+      <Suspense fallback={null}><UiReferenceOverlay /></Suspense>
     </div>
   )
 }
