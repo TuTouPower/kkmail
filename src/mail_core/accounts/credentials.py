@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 import logging
@@ -302,7 +303,7 @@ def credential_edit(store: CredentialStore, ref: str, *, session=None, allow_rea
             data = json.loads(AESGCM(target._key(row.key_version)).decrypt(row.nonce, row.ciphertext, ref.encode()).decode()) if row else {}
             if not isinstance(data, dict):
                 raise ValueError('credential secret must be a JSON object')
-            original = dict(data)
+            original = copy.deepcopy(data)
             yield data
             if data != original:
                 save_json_secret(target, ref, data, session=current)
@@ -324,7 +325,7 @@ def credential_edit(store: CredentialStore, ref: str, *, session=None, allow_rea
                 data = {}
             if isinstance(target, EnvCredentialStore) and readonly_cache:
                 data = dict(readonly_cache)
-            original = dict(data)
+            original = copy.deepcopy(data)
             yield data
             if data != original:
                 try:

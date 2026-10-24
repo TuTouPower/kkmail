@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from unittest.mock import MagicMock, patch
 
+from mail_core.accounts.credentials import DictCredentialStore, credential_edit
 from mail_core.accounts.service import create_account, delete_account, update_account
 from mail_core.mail.storage.models import Account
 
@@ -59,3 +61,12 @@ def test_create_and_update_and_delete_account_passes_session_to_credential_store
         assert mock_store.delete_secret.called
         _, kwargs = mock_store.delete_secret.call_args
         assert kwargs.get("session") is mock_session
+
+
+def test_credential_edit_persists_nested_mutations():
+    store = DictCredentialStore({"oauth-flow": '{"token": {"access": "old"}}'})
+
+    with credential_edit(store, "oauth-flow") as data:
+        data["token"]["access"] = "new"
+
+    assert json.loads(store.get_secret("oauth-flow")) == {"token": {"access": "new"}}
