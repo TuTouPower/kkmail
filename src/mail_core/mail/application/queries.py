@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 
 from mail_core.mail.storage.models import Account, AccountGroup, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
 
+_BODY_PREVIEW_SOURCE_CHARS = 4096
+
 
 @dataclass(frozen=True, slots=True)
 class MessageListItem:
@@ -116,7 +118,11 @@ def _body_previews(session: Session, messages: list[Message]) -> dict[uuid.UUID,
     if not ids:
         return {}
     rows = session.execute(
-        select(MessageBody.message_id, MessageBody.text_plain, MessageBody.text_html)
+        select(
+            MessageBody.message_id,
+            func.substr(MessageBody.text_plain, 1, _BODY_PREVIEW_SOURCE_CHARS),
+            func.substr(MessageBody.text_html, 1, _BODY_PREVIEW_SOURCE_CHARS),
+        )
         .where(MessageBody.message_id.in_(ids))
     ).all()
     previews = {}
