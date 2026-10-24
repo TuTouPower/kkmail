@@ -81,6 +81,7 @@ class MessageMigrationReport:
     migrated: int = 0
     skipped_existing: int = 0
     imported_without_remote_id: int = 0
+    legacy_total: int = 0
 
 
 def _legacy_sender(raw: str | None) -> tuple[str, str | None]:
@@ -138,9 +139,10 @@ def migrate_retained_messages(
     migrated = 0
     skipped_existing = 0
     imported_without_remote_id = 0
-    legacy_msgs = sqlite_cursor.execute(
-        "SELECT * FROM retained_normal_mail_messages ORDER BY id DESC LIMIT 200"
-    ).fetchall()
+    legacy_total = int(
+        sqlite_cursor.execute("SELECT COUNT(*) FROM retained_normal_mail_messages").fetchone()[0]
+    )
+    legacy_msgs = sqlite_cursor.execute("SELECT * FROM retained_normal_mail_messages ORDER BY id DESC")
 
     for legacy_msg in legacy_msgs:
         new_account_id = account_id_map.get(legacy_msg["account_id"])
@@ -221,6 +223,7 @@ def migrate_retained_messages(
         migrated=migrated,
         skipped_existing=skipped_existing,
         imported_without_remote_id=imported_without_remote_id,
+        legacy_total=legacy_total,
     )
 
 
@@ -390,7 +393,7 @@ def migrate():
             raise
     print(f"Migrated {len(account_id_map)} accounts with encrypted credentials.")
 
-    print("=== 3. Migrating Retained Messages (Sample / Recent) ===")
+    print("=== 3. Migrating Retained Messages ===")
     with Session() as session:
         message_report = migrate_retained_messages(
             session,
@@ -416,7 +419,10 @@ def migrate():
                 st.unread_count = unr
 
         session.commit()
-    print(f"Migrated {message_report.migrated} messages into PostgreSQL.")
+    print(
+        f"Legacy retained message rows: {message_report.legacy_total}; "
+        f"migrated: {message_report.migrated}; already present: {message_report.skipped_existing}."
+    )
     if message_report.imported_without_remote_id:
         print(
             "Imported "

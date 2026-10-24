@@ -616,3 +616,60 @@ def test_importer_preserves_legacy_mail_fields_without_mutating_sqlite_source():
         source.unlink(missing_ok=True)
 
     assert source_hash_after == source_hash_before
+
+
+def test_importer_migrates_all_retained_messages_not_just_recent_200():
+    source = Path(__file__).resolve().parents[2] / ".scratch" / f"legacy-import-all-{uuid.uuid4().hex}.sqlite"
+    _legacy_source(source)
+    sqlite_conn = sqlite3.connect(source)
+    sqlite_conn.executemany(
+        """
+        INSERT INTO retained_normal_mail_messages (
+            id, account_id, provider_message_id, id_mode, subject, sender,
+            recipients, cc, received_at, body, body_type, is_read,
+            has_attachments, body_preview
+        ) VALUES (?, 7, ?, 'graph', ?, 'Sender <sender@example.com>', '', '',
+                  '2026-10-20T12:30:00Z', 'Body', 'text', 0, 0, 'Preview')
+        """,
+        [(1000 + i, f"extra-{i}", f"Extra {i}") for i in range(205)],
+    )
+    sqlite_conn.commit()
+    sqlite_conn.close()
+    readonly = sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True)
+    readonly.row_factory = sqlite3.Row
+    Session = get_session_factory()
+    account_id = None
+    try:
+        with Session() as session:
+            account = Account(
+                email=f"legacy-all-{uuid.uuid4().hex[:8]}@example.com",
+                provider="graph",
+                credential_ref=f"legacy-all-{uuid.uuid4().hex[:8]}",
+            )
+            session.add(account)
+            session.flush()
+            folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+            session.add(folder)
+            session.commit()
+            account_id = account.id
+
+            report = migrate_from_legacy_db.migrate_retained_messages(
+                session,
+                readonly.cursor(),
+                account_id_map={7: account.id},
+                folder_id_map={account.id: folder.id},
+            )
+            session.commit()
+
+            assert report.migrated == 227
+            assert report.legacy_total == 227
+            assert session.query(Message).filter_by(account_id=account.id).count() == 227
+    finally:
+        readonly.close()
+        if account_id is not None:
+            with Session() as session:
+                account = session.get(Account, account_id)
+                if account is not None:
+                    session.delete(account)
+                    session.commit()
+        source.unlink(missing_ok=True)
