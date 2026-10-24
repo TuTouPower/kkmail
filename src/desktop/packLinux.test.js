@@ -2,7 +2,8 @@ const assert = require('assert')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { createStubIfNeeded } = require('./scripts/pack-linux')
+const { spawnSync } = require('child_process')
+const { canSoftExit, createStubIfNeeded } = require('./scripts/pack-linux')
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pack-linux-test-'))
 
@@ -88,7 +89,90 @@ try {
     assert.ok(fs.existsSync(assetsDir), 'assetsDir must NOT be deleted on packaging failure')
   }
 
+  // Path 4: The CLI fails by default when electron-builder is missing and always cleans its stub.
+  // Local soft-ok is explicit and unavailable to npm packaging scripts.
+  {
+    const fixtureRoot = path.join(tmpRoot, 'cli-missing-builder')
+    const scriptPath = createPackFixture(fixtureRoot)
+
+    const strictResult = runPackFixture(scriptPath, {})
+    assert.strictEqual(strictResult.status, 1, strictResult.stderr)
+    assert.ok(strictResult.stderr.includes('electron-builder not installed'))
+    assert.strictEqual(fs.existsSync(path.join(fixtureRoot, 'src', 'frontend', 'dist')), false)
+
+    const softResult = runPackFixture(scriptPath, { KKMAIL_PACK_SOFT: '1' })
+    assert.strictEqual(softResult.status, 0, softResult.stderr)
+    assert.ok(softResult.stderr.includes('pack:linux soft-ok'))
+
+    const npmSoftResult = runPackFixture(scriptPath, {
+      KKMAIL_PACK_SOFT: '1',
+      npm_lifecycle_event: 'pack:linux',
+    })
+    assert.strictEqual(npmSoftResult.status, 1, npmSoftResult.stderr)
+    assert.ok(npmSoftResult.stderr.includes('ignored by npm packaging scripts'))
+  }
+
+  // Path 5: Builder failures fail by default; explicit local soft-ok cannot mask npm pack failures.
+  if (process.platform !== 'win32') {
+    const fixtureRoot = path.join(tmpRoot, 'cli-builder-failure')
+    const scriptPath = createPackFixture(fixtureRoot, 23)
+
+    const strictResult = runPackFixture(scriptPath, {})
+    assert.strictEqual(strictResult.status, 23, strictResult.stderr)
+
+    const softResult = runPackFixture(scriptPath, { KKMAIL_PACK_SOFT: '1' })
+    assert.strictEqual(softResult.status, 0, softResult.stderr)
+
+    const npmSoftResult = runPackFixture(scriptPath, {
+      KKMAIL_PACK_SOFT: '1',
+      npm_lifecycle_event: 'pack:linux:with-pg',
+    })
+    assert.strictEqual(npmSoftResult.status, 23, npmSoftResult.stderr)
+
+    const successRoot = path.join(tmpRoot, 'cli-builder-success')
+    const successScript = createPackFixture(successRoot, 0)
+    const successResult = runPackFixture(successScript, {})
+    assert.strictEqual(successResult.status, 0, successResult.stdout)
+  }
+
+  // npm packaging scripts never opt into soft-ok.
+  {
+    const scripts = require('./package.json').scripts
+    for (const [name, command] of Object.entries(scripts)) {
+      if (command.includes('scripts/pack-linux.js')) {
+        assert.ok(!command.includes('KKMAIL_PACK_SOFT'), `${name} must not enable KKMAIL_PACK_SOFT`)
+      }
+    }
+    assert.strictEqual(canSoftExit({ KKMAIL_PACK_SOFT: '1', npm_lifecycle_event: 'dist:linux:dir' }), false)
+    assert.strictEqual(canSoftExit({ KKMAIL_PACK_SOFT: '1', npm_lifecycle_event: undefined }), true)
+  }
+
   console.log('packLinux.test.js: ok')
 } finally {
   fs.rmSync(tmpRoot, { recursive: true, force: true })
+}
+
+function createPackFixture(fixtureRoot, builderExitCode) {
+  const scriptPath = path.join(fixtureRoot, 'src', 'desktop', 'scripts', 'pack-linux.js')
+  const desktopRoot = path.join(fixtureRoot, 'src', 'desktop')
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
+  fs.writeFileSync(path.join(fixtureRoot, 'AGENTS.md'), '')
+  fs.copyFileSync(require.resolve('./scripts/pack-linux'), scriptPath)
+
+  if (builderExitCode !== undefined) {
+    const builderPath = path.join(desktopRoot, 'node_modules', '.bin', 'electron-builder')
+    fs.mkdirSync(path.dirname(builderPath), { recursive: true })
+    fs.writeFileSync(builderPath, `#!/bin/sh\nexit ${builderExitCode}\n`, { mode: 0o755 })
+    fs.chmodSync(builderPath, 0o755)
+  }
+
+  return scriptPath
+}
+
+function runPackFixture(scriptPath, env) {
+  return spawnSync(process.execPath, [scriptPath], {
+    cwd: path.resolve(scriptPath, '..', '..', '..', '..'),
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+  })
 }

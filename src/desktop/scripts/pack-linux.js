@@ -4,11 +4,12 @@
  * - Includes vendor/pgsql when present (fetched via scripts/fetch-pg-binaries.sh)
  * - If frontend/dist is missing, creates a temporary stub then deletes only what it created
  *   (never leaves a stub in the real frontend/dist tree, and never deletes pre-existing dist files)
- * - Soft-exits 0 when Electron binary download / pack fails unless KKMAIL_PACK_STRICT=1
+ * - Packaging failures exit non-zero by default; local scaffolding may opt into soft-ok
  */
 const { spawnSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
+const NPM_PACK_SCRIPTS = new Set(['dist:linux:dir', 'pack:linux', 'pack:linux:with-pg'])
 
 function createStubIfNeeded(frontendDist) {
   const assetsDir = path.join(frontendDist, 'assets')
@@ -79,6 +80,10 @@ function createStubIfNeeded(frontendDist) {
   }
 }
 
+function canSoftExit(env = process.env) {
+  return env.KKMAIL_PACK_SOFT === '1' && !NPM_PACK_SCRIPTS.has(env.npm_lifecycle_event)
+}
+
 function run() {
   const root = path.join(__dirname, '..')
   let repoRoot = path.resolve(__dirname, '../../..')
@@ -100,9 +105,18 @@ function run() {
 
   const builder = path.join(root, 'node_modules', '.bin', 'electron-builder')
   if (!fs.existsSync(builder)) {
-    console.warn('electron-builder not installed — run npm install in desktop/; soft-ok')
+    console.error('electron-builder not installed — run npm install in desktop/')
     stubState.cleanup()
-    process.exit(0)
+    if (canSoftExit()) {
+      console.warn('pack:linux soft-ok (KKMAIL_PACK_SOFT=1)')
+      process.exitCode = 0
+    } else {
+      if (process.env.KKMAIL_PACK_SOFT === '1') {
+        console.warn('KKMAIL_PACK_SOFT is ignored by npm packaging scripts')
+      }
+      process.exitCode = 1
+    }
+    return
   }
 
   let status = 1
@@ -119,20 +133,25 @@ function run() {
 
   if (status === 0) {
     console.log('pack:linux ok')
-    process.exit(0)
+    process.exitCode = 0
+    return
   }
 
-  console.warn('electron-builder exited', status)
-  // Soft-ok for local scaffold: missing Electron cache / network should warn, not fail
-  if (process.env.KKMAIL_PACK_STRICT === '1') {
-    process.exit(status || 1)
+  console.error('electron-builder exited', status)
+  // Soft-ok is reserved for direct local scaffolding calls, never npm packaging scripts.
+  if (canSoftExit()) {
+    console.warn('pack:linux soft-ok (KKMAIL_PACK_SOFT=1)')
+    process.exitCode = 0
+  } else {
+    if (process.env.KKMAIL_PACK_SOFT === '1') {
+      console.warn('KKMAIL_PACK_SOFT is ignored by npm packaging scripts')
+    }
+    process.exitCode = status > 0 ? status : 1
   }
-  console.warn('pack:linux soft-ok (set KKMAIL_PACK_STRICT=1 to fail hard)')
-  process.exit(0)
 }
 
 if (require.main === module) {
   run()
 }
 
-module.exports = { createStubIfNeeded, run }
+module.exports = { createStubIfNeeded, canSoftExit, run }
