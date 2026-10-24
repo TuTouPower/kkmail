@@ -55,3 +55,78 @@ def test_get_fetch_timeout_seconds():
 
     session.get.return_value = None
     assert get_fetch_timeout_seconds(session, default=30.0) == 30.0
+
+
+def test_build_provider_wires_fetch_timeout_from_session():
+    from unittest.mock import patch
+    from mail_core.mail.storage.models import Account
+    from mail_core.providers.factory import build_provider
+
+    session = MagicMock()
+    session.get.return_value = AppSetting(key="mail_fetch_timeout_seconds", value="120")
+
+    account = Account(
+        email="user@example.com",
+        provider="imap",
+        credential_ref="cred-1",
+        config={"imap_host": "imap.example.com"},
+    )
+    store = MagicMock()
+    store.get_secret.return_value = "secret"
+
+    with patch("mail_core.providers.factory.validate_imap_host"):
+        provider = build_provider(account, store, session=session)
+    assert provider.timeout == 120.0
+
+    # Default 30.0 when unset
+    empty_session = MagicMock()
+    empty_session.get.return_value = None
+    with patch("mail_core.providers.factory.validate_imap_host"):
+        default_provider = build_provider(account, store, session=empty_session)
+    assert default_provider.timeout == 30.0
+
+    # Explicit timeout override takes precedence
+    with patch("mail_core.providers.factory.validate_imap_host"):
+        explicit_provider = build_provider(account, store, timeout=45.0, session=session)
+    assert explicit_provider.timeout == 45.0
+
+
+def test_build_provider_wires_fetch_timeout_to_oauth_providers():
+    from mail_core.mail.storage.models import Account
+    from mail_core.providers.factory import build_provider
+
+    session = MagicMock()
+    session.get.return_value = AppSetting(key="mail_fetch_timeout_seconds", value="75")
+
+    store = MagicMock()
+    store.get_secret.return_value = "{}"
+
+    gmail_acc = Account(email="g@example.com", provider="gmail", credential_ref="oauth:g")
+    gmail_p = build_provider(gmail_acc, store, session=session, token_http=lambda *a, **k: {}, api_http=lambda *a, **k: {})
+    assert gmail_p.timeout == 75.0
+
+    graph_acc = Account(email="m@example.com", provider="graph", credential_ref="oauth:m")
+    graph_p = build_provider(graph_acc, store, session=session, token_http=lambda *a, **k: {}, api_http=lambda *a, **k: {})
+    assert graph_p.timeout == 75.0
+
+@pytest.mark.parametrize('provider_name', ['imap', 'gmail', 'graph'])
+def test_runtime_timeout_uses_persisted_setting_without_injected_session(provider_name, monkeypatch):
+    import os
+    if not os.environ.get('MAIL_CORE_DATABASE_URL'):
+        pytest.skip('PG required')
+    from mail_core.accounts.credentials import DictCredentialStore
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.storage.models import Account
+    from mail_core.providers.factory import build_provider
+
+    with get_session_factory()() as session:
+        update_public_settings(session, {'mail_fetch_timeout_seconds': '75'})
+        session.commit()
+    monkeypatch.setattr('mail_core.providers.factory.validate_imap_host', lambda _host: None)
+    account = Account(email='timeout@example.com', provider=provider_name, credential_ref='test-timeout',
+                      config={'imap_host': 'imap.example.com'})
+    store = DictCredentialStore({'test-timeout': '{"password":"test-only","client_id":"cid","refresh_token":"rt"}'})
+    provider = build_provider(account, store)
+    assert provider.timeout == 75.0
+    if provider_name in ('gmail', 'graph'):
+        assert provider.transport.token_client.timeout == 75.0

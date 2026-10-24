@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Mail, MailOpen, Trash2, Flag, ArrowLeft, RefreshCw } from 'lucide-react'
 import { findCachedMail, flagOptimistic, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail } from '../api/queries'
@@ -62,6 +62,7 @@ const MessageReader = memo(function MessageReader() {
 
   const [syncingBody, setSyncingBody] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
+  const autoSyncedMsgIdRef = useRef<string | null>(null)
 
   const handleSyncBody = useCallback(async () => {
     if (!selected?.id || syncingBody) return
@@ -81,13 +82,17 @@ const MessageReader = memo(function MessageReader() {
   useEffect(() => {
     setSyncingBody(false)
     setSyncError(null)
+    autoSyncedMsgIdRef.current = null
   }, [selectedKey])
 
   useEffect(() => {
-    if (isPendingArchive && !detailQuery.isLoading && !syncingBody && !syncError) {
-      void handleSyncBody()
+    if (isPendingArchive && !detailQuery.isLoading && !syncingBody && !syncError && selected?.id) {
+      if (autoSyncedMsgIdRef.current !== selected.id) {
+        autoSyncedMsgIdRef.current = selected.id
+        void handleSyncBody()
+      }
     }
-  }, [isPendingArchive, detailQuery.isLoading, syncingBody, syncError, handleSyncBody])
+  }, [isPendingArchive, detailQuery.isLoading, syncingBody, syncError, handleSyncBody, selected?.id])
   const mailThemeClass = useMemo(() => (html ? classifyMailHtml(body) : 'plain'), [html, body])
   const mailSrcdoc = useMemo(
     () => (body ? buildMailSrcdoc(body, { loadRemoteImages, theme: resolvedTheme }) : ''),
