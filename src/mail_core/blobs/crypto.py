@@ -70,7 +70,10 @@ def load_keyring_from_env(env: dict[str, str] | None = None) -> Keyring:
             keys[int(k)] = _b64key(v)
     # Convenience single-key
     if env.get("MAIL_CORE_BLOB_KEY_V1"):
-        keys[1] = _b64key(env["MAIL_CORE_BLOB_KEY_V1"])
+        key_v1 = _b64key(env["MAIL_CORE_BLOB_KEY_V1"])
+        if 1 in keys and keys[1] != key_v1:
+            raise BlobCryptoError("MAIL_CORE_BLOB_KEY_V1 conflicts with MAIL_CORE_BLOB_KEYS version 1")
+        keys[1] = key_v1
     if not keys:
         raise BlobCryptoError(
             "blob encryption keys required: set MAIL_CORE_BLOB_KEYS "
