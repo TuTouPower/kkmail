@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from mail_core.mail.application.queries import MessageListItem, messages_by_ids
-from mail_core.search.index import count_messages as _count_messages
 from mail_core.search.index import search_messages as _search_messages
+from mail_core.search.index import search_messages_with_total as _search_messages_with_total
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,10 +46,16 @@ def search_messages_page(
     offset: int = 0,
 ) -> SearchPage:
     """Ranked search hydrated into list rows, with offset pagination + total."""
-    ids = search_message_ids(session, query=query, account_ids=account_ids, folder_id=folder_id, limit=limit + 1, offset=offset)
+    ids, total = _search_messages_with_total(
+        session,
+        account_ids=account_ids,
+        query=query,
+        folder_id=folder_id,
+        limit=limit + 1,
+        offset=offset,
+    )
     has_more = len(ids) > limit
     ids = ids[:limit]
-    total = _count_messages(session, account_ids=account_ids, query=query, folder_id=folder_id)
     next_offset: int | None = None
     if has_more:
         cand = offset + limit

@@ -160,3 +160,39 @@ def count_messages(
         ).scalar()
         or 0
     )
+
+
+def search_messages_with_total(
+    session: Session,
+    *,
+    account_ids: list[uuid.UUID] | None,
+    query: str,
+    folder_id: uuid.UUID | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[uuid.UUID], int]:
+    """Return one ranked page and its total using a single FTS query when rows exist."""
+    from sqlalchemy import text as sql_text
+
+    if not query.strip():
+        return [], 0
+    scope_filter, params = _filters(query, account_ids, folder_id)
+    params.update(limit=limit, offset=max(0, offset))
+    rows = session.execute(
+        sql_text(
+            f"""
+            SELECT message_id, count(*) OVER () AS total_count
+            FROM message_search
+            WHERE {_MATCH}
+            {scope_filter}
+            ORDER BY ts_rank(document, plainto_tsquery('simple', :q)) DESC, updated_at DESC, message_id DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        params,
+    ).all()
+    if not rows:
+        # Window counts have no row to carry the total for an out-of-range offset.
+        total = count_messages(session, account_ids=account_ids, query=query, folder_id=folder_id) if offset else 0
+        return [], total
+    return [row[0] for row in rows], int(rows[0][1] or 0)
