@@ -1,0 +1,25 @@
+{
+  "tid": "t051",
+  "attempt": 1,
+  "execution_id": "25468c7931804ff9b0a1905294959794",
+  "status": "done",
+  "branch": "t051_mailbox_folder_role_aliases",
+  "base_sha": "427bdb7ca2d10cfa3e12edc960bae37f30390023",
+  "tests": "Backend: 505 passed. Frontend: 276 passed; OpenAPI checks, TypeScript, production build and lint passed. Desktop unit and packaged tests passed. Template contract suite: 149 passed, 1 skipped.",
+  "blackbox": "UI E2E: 16 passed. Full-stack E2E: 8 passed.",
+  "review": "Code and test review PASS for source commit 970f74c relative to 00c951b; lifecycle worktree scope f6cdab3a7590865a.",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/components/Sidebar.test.tsx::disambiguates same-role folders while keeping each folder id navigable",
+      "tests/mail_core/test_sync_high_hardening.py::test_graph_inbox_name_fallback_does_not_override_canonical_inbox_id"
+    ],
+    "AC-002": [
+      "tests/mail_core/test_account_folder_navigation.py::test_imap_deleted_messages_is_trash_role"
+    ],
+    "AC-003": [
+      "tests/mail_core/test_sync_high_hardening.py::test_graph_outbox_and_conversation_history_stay_other_without_well_known_role"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}
