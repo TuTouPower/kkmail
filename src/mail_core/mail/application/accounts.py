@@ -30,6 +30,7 @@ from mail_core.mail.storage.models import Account, AccountGroup
 from mail_core.security.redact import safe_error
 
 log = logging.getLogger("mail_core.mail.application.accounts")
+SYNC_ALL_JOB_ID_SAMPLE_LIMIT = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +300,7 @@ def sync_account_app(account_id: UUID) -> SyncJobDTO:
 def sync_all_accounts_app(page_size: int = 500) -> SyncAllDTO:
     Session = get_session_factory()
     job_ids: list[str] = []
+    count = 0
     with Session() as session:
         try:
             offset = 0
@@ -306,12 +308,16 @@ def sync_all_accounts_app(page_size: int = 500) -> SyncAllDTO:
                 rows, total = list_accounts(session, limit=page_size, offset=offset)
                 for acc in rows:
                     if acc.sync_enabled:
-                        job_ids.append(str(enqueue_account_sync(session, acc.id)))
+                        job_id = enqueue_account_sync(session, acc.id)
+                        count += 1
+                        if len(job_ids) < SYNC_ALL_JOB_ID_SAMPLE_LIMIT:
+                            job_ids.append(str(job_id))
                 offset += len(rows)
+                session.commit()
+                log.info("sync-all enqueued %d jobs through %d accounts", count, offset)
                 if not rows or offset >= total:
                     break
-            session.commit()
-            return SyncAllDTO(job_ids=job_ids, count=len(job_ids))
+            return SyncAllDTO(job_ids=job_ids, count=count)
         except Exception:
             session.rollback()
             raise

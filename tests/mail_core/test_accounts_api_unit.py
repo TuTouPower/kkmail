@@ -128,6 +128,60 @@ def test_account_dto_exposes_only_supported_imap_connection_fields():
     assert "password" not in dto.imap_config
 
 
+def test_sync_all_commits_each_page_and_caps_returned_job_ids(monkeypatch):
+    import uuid
+    from types import SimpleNamespace
+
+    import mail_core.mail.application.accounts as accounts_app
+
+    accounts = [
+        SimpleNamespace(id=uuid.UUID(int=index + 1), sync_enabled=index != 3)
+        for index in range(106)
+    ]
+    offsets = []
+    enqueued = []
+
+    class Session:
+        commits = 0
+        rollbacks = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            self.rollbacks += 1
+
+    session = Session()
+
+    def list_account_page(_session, *, limit, offset):
+        offsets.append(offset)
+        return accounts[offset : offset + limit], len(accounts)
+
+    def enqueue(_session, account_id):
+        job_id = uuid.UUID(int=account_id.int + 1_000)
+        enqueued.append(job_id)
+        return job_id
+
+    monkeypatch.setattr(accounts_app, "get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr(accounts_app, "list_accounts", list_account_page)
+    monkeypatch.setattr(accounts_app, "enqueue_account_sync", enqueue)
+
+    result = accounts_app.sync_all_accounts_app(page_size=50)
+
+    assert offsets == [0, 50, 100]
+    assert session.commits == 3
+    assert session.rollbacks == 0
+    assert result.count == 105
+    assert len(enqueued) == 105
+    assert result.job_ids == [str(job_id) for job_id in enqueued[:100]]
+
+
 def test_create_account_serializes_slotted_dto_mock(api_client):
     import uuid
     from unittest.mock import patch
