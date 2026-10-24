@@ -84,47 +84,51 @@ def main():
     admin_db_url = admin_url_obj.render_as_string(hide_password=False)
     app_db_url = app_url_obj.render_as_string(hide_password=False)
 
-    engine = create_engine(admin_db_url, isolation_level="AUTOCOMMIT")
-
-    LOG.info("Creating dedicated test database: %s", db_name)
-    with engine.connect() as conn:
-        conn.execute(text(f'CREATE ROLE "{owner_role}" NOLOGIN'))
-        conn.execute(text(f'CREATE DATABASE "{db_name}" OWNER "{owner_role}"'))
-        conn.execute(text(f'COMMENT ON DATABASE "{db_name}" IS \'kkmail-e2e-run:{run_id}\''))
-
-    blob_dir = ROOT / ".scratch" / f"e2e_blobs_{run_id}"
-    blob_dir.mkdir(parents=True, exist_ok=True)
-    logs_dir = ROOT / ".scratch" / "e2e_logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    artifacts_dir = ROOT / ".scratch" / "e2e_artifacts"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-    app_port = find_free_port()
-    secret_key = uuid.uuid4().hex * 2
-    blob_key = base64.b64encode(os.urandom(32)).decode()
-    e2e_password = "E2E_Test_Pass_123!"
-
-    env = os.environ.copy()
-    env.update(
-        PYTHONPATH=str(ROOT / "src"),
-        MAIL_CORE_DATABASE_URL=app_db_url,
-        MAIL_CORE_BLOB_ROOT=str(blob_dir),
-        MAIL_CORE_SECRET_KEY=secret_key,
-        MAIL_CORE_BLOB_KEY_V1=blob_key,
-        MAIL_CORE_BLOB_ACTIVE_VERSION="1",
-        MAIL_CORE_LOGIN_PASSWORD=e2e_password,
-        KKMAIL_AUTH_PASSWORD=e2e_password,
-        MAIL_CORE_ALLOW_PRIVATE_HOSTS="1",
-        KKMAIL_FRONTEND_DIST=str(ROOT / "src/frontend/dist"),
-        MAIL_CORE_LOG_LEVEL="INFO",
-    )
-
+    engine = None
     api_proc = None
     worker_proc = None
-    api_log = (logs_dir / f"api_{run_id}.log").open("w", encoding="utf-8")
-    worker_log = (logs_dir / f"worker_{run_id}.log").open("w", encoding="utf-8")
+    api_log = None
+    worker_log = None
 
     try:
+        engine = create_engine(admin_db_url, isolation_level="AUTOCOMMIT")
+
+        LOG.info("Creating dedicated test database: %s", db_name)
+        with engine.connect() as conn:
+            conn.execute(text(f'CREATE ROLE "{owner_role}" NOLOGIN'))
+            conn.execute(text(f'CREATE DATABASE "{db_name}" OWNER "{owner_role}"'))
+            conn.execute(text(f'COMMENT ON DATABASE "{db_name}" IS \'kkmail-e2e-run:{run_id}\''))
+
+        blob_dir = ROOT / ".scratch" / f"e2e_blobs_{run_id}"
+        blob_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir = ROOT / ".scratch" / "e2e_logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir = ROOT / ".scratch" / "e2e_artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        app_port = find_free_port()
+        secret_key = uuid.uuid4().hex * 2
+        blob_key = base64.b64encode(os.urandom(32)).decode()
+        e2e_password = "E2E_Test_Pass_123!"
+
+        env = os.environ.copy()
+        env.update(
+            PYTHONPATH=str(ROOT / "src"),
+            MAIL_CORE_DATABASE_URL=app_db_url,
+            MAIL_CORE_BLOB_ROOT=str(blob_dir),
+            MAIL_CORE_SECRET_KEY=secret_key,
+            MAIL_CORE_BLOB_KEY_V1=blob_key,
+            MAIL_CORE_BLOB_ACTIVE_VERSION="1",
+            MAIL_CORE_LOGIN_PASSWORD=e2e_password,
+            KKMAIL_AUTH_PASSWORD=e2e_password,
+            MAIL_CORE_ALLOW_PRIVATE_HOSTS="1",
+            KKMAIL_FRONTEND_DIST=str(ROOT / "src/frontend/dist"),
+            MAIL_CORE_LOG_LEVEL="INFO",
+        )
+
+        api_log = (logs_dir / f"api_{run_id}.log").open("w", encoding="utf-8")
+        worker_log = (logs_dir / f"worker_{run_id}.log").open("w", encoding="utf-8")
+
         # 3. Alembic upgrade
         LOG.info("Running database migrations...")
         run_cmd([sys.executable, "-m", "alembic", "-c", "src/mail_core/db/alembic.ini", "upgrade", "head"], env=env)
@@ -214,13 +218,19 @@ def main():
                 except subprocess.TimeoutExpired:
                     proc.kill()
 
-        api_log.close()
-        worker_log.close()
+        if api_log is not None:
+            api_log.close()
+        if worker_log is not None:
+            worker_log.close()
 
-        with engine.connect() as conn:
-            conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
-            conn.execute(text(f'DROP ROLE IF EXISTS "{owner_role}"'))
-        LOG.info("Cleaned up database %s", db_name)
+        if engine is not None:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+                    conn.execute(text(f'DROP ROLE IF EXISTS "{owner_role}"'))
+                LOG.info("Cleaned up database %s", db_name)
+            finally:
+                engine.dispose()
 
 
 if __name__ == "__main__":
