@@ -37,7 +37,12 @@ def test_create_account_stores_credential_ref_only():
 def test_enqueue_remote_operation_outbox():
     Session = get_session_factory()
     with Session() as session:
-        acc = create_account(session, email=f"rop-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        acc = create_account(
+            session,
+            email=f"rop-{uuid.uuid4().hex[:8]}@example.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
         session.flush()
         op = enqueue_remote_operation(
             session,
@@ -61,7 +66,12 @@ def test_enqueue_remote_operation_outbox():
 def test_enqueue_remote_operation_upserts_same_idempotency_key():
     Session = get_session_factory()
     with Session() as session:
-        acc = create_account(session, email=f"rop-up-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        acc = create_account(
+            session,
+            email=f"rop-up-{uuid.uuid4().hex[:8]}@example.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
         session.flush()
         key = f"idem-upsert-{uuid.uuid4().hex}"
         op1 = enqueue_remote_operation(

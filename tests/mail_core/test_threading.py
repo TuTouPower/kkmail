@@ -35,7 +35,12 @@ def test_in_reply_to_links_and_creates_parent_thread():
     Session = get_session_factory()
     now = datetime.now(timezone.utc)
     with Session() as session:
-        acc = create_account(session, email=f"th-{uuid.uuid4().hex[:8]}@ex.com", provider="imap")
+        acc = create_account(
+            session,
+            email=f"th-{uuid.uuid4().hex[:8]}@ex.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
         parent = Message(
             account_id=acc.id,
             remote_id="p1",
@@ -79,7 +84,12 @@ def test_references_walks_newest_first():
     Session = get_session_factory()
     now = datetime.now(timezone.utc)
     with Session() as session:
-        acc = create_account(session, email=f"th2-{uuid.uuid4().hex[:8]}@ex.com", provider="imap")
+        acc = create_account(
+            session,
+            email=f"th2-{uuid.uuid4().hex[:8]}@ex.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
         mid_msg = Message(
             account_id=acc.id,
             remote_id="m",

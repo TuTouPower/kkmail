@@ -161,6 +161,7 @@ def test_archive_batch_reuses_imap_session_across_messages():
                 session,
                 email=f"imap-reuse-{uuid.uuid4().hex[:8]}@example.com",
                 provider="imap",
+                config={"imap_host": "8.8.8.8"},
                 credential_ref="cred-reuse",
             )
             account_id = account.id

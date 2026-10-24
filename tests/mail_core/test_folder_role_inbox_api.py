@@ -25,8 +25,18 @@ def test_unified_inbox_folder_role_sent_and_default():
     base_time = datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc)
 
     with Session() as session:
-        acc1 = create_account(session, email=f"role1-{uuid.uuid4().hex[:8]}@ex.com", provider="imap")
-        acc2 = create_account(session, email=f"role2-{uuid.uuid4().hex[:8]}@ex.com", provider="imap")
+        acc1 = create_account(
+            session,
+            email=f"role1-{uuid.uuid4().hex[:8]}@ex.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
+        acc2 = create_account(
+            session,
+            email=f"role2-{uuid.uuid4().hex[:8]}@ex.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
 
         # acc1 folders
         f1_inbox = Folder(account_id=acc1.id, remote_id="INBOX", name="INBOX", role="inbox")
@@ -111,7 +121,12 @@ def test_inbox_and_detail_keep_unknown_received_time_as_null():
     Session = get_session_factory()
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     with Session() as session:
-        account = create_account(session, email=f"null-date-{uuid.uuid4().hex[:8]}@ex.com", provider="imap")
+        account = create_account(
+            session,
+            email=f"null-date-{uuid.uuid4().hex[:8]}@ex.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
         folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
         session.add(folder)
         session.flush()

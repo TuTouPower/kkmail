@@ -26,7 +26,12 @@ def test_unified_inbox_folder_stats_search_and_thread():
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     now = datetime.now(timezone.utc)
     with Session() as session:
-        acc = create_account(session, email=f"api-{uuid.uuid4().hex[:8]}@ex.com", provider="imap")
+        acc = create_account(
+            session,
+            email=f"api-{uuid.uuid4().hex[:8]}@ex.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
         folder = Folder(account_id=acc.id, remote_id="INBOX", name="INBOX", role="inbox")
         session.add(folder)
         session.flush()
@@ -112,7 +117,12 @@ def test_list_body_preview_is_read_only_and_preserves_provider_snippets():
         (None, "x" * 300, None, None, "x" * 180),
     ]
     with Session() as session:
-        account = create_account(session, email="preview@example.com", provider="imap")
+        account = create_account(
+            session,
+            email="preview@example.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
         folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
         session.add(folder)
         session.flush()
@@ -162,7 +172,12 @@ def test_list_body_preview_keeps_readable_partial_body_when_parse_error_exists()
     Session = get_session_factory()
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     with Session() as session:
-        account = create_account(session, email="partial-preview@example.com", provider="imap")
+        account = create_account(
+            session,
+            email="partial-preview@example.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
         folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
         session.add(folder)
         session.flush()

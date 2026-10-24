@@ -79,6 +79,7 @@ def test_account_credentials_transactional_atomicity():
             session,
             email=f"rollback-{uuid.uuid4().hex[:8]}@example.com",
             provider="imap",
+            config={"imap_host": "8.8.8.8"},
             credentials={"password": "secret_pwd"},
         )
         ref = acc.credential_ref

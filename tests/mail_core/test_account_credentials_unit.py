@@ -6,9 +6,19 @@ import json
 import uuid
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from mail_core.accounts.credentials import DictCredentialStore, credential_edit
 from mail_core.accounts.service import create_account, delete_account, update_account
 from mail_core.mail.storage.models import Account
+
+
+def test_create_account_validates_missing_imap_config():
+    with (
+        patch("mail_core.accounts.service.lock_sidebar_layout"),
+        pytest.raises(ValueError, match="config.imap_host: required"),
+    ):
+        create_account(MagicMock(), email="user@example.com", provider="imap")
 
 
 def test_create_and_update_and_delete_account_passes_session_to_credential_store():
@@ -33,6 +43,7 @@ def test_create_and_update_and_delete_account_passes_session_to_credential_store
             mock_session,
             email="test@example.com",
             provider="imap",
+            config={"imap_host": "8.8.8.8"},
             credentials={"password": "pwd1"},
         )
         assert mock_store.put_secret.called

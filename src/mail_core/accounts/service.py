@@ -37,17 +37,15 @@ def create_account(
 ) -> Account:
     lock_sidebar_layout(session)
     email_norm = email.strip().lower()
-    from mail_core.accounts.connection import reject_microsoft_imap, validate_connection
-    if str(provider).lower() == "imap":
-        reject_microsoft_imap(email_norm, config or {})
-    if config:
-        validate_connection(email_norm, str(provider).lower(), config, credentials, require_credentials=credentials is not None)
-    if str(provider).lower() == "imap" and config:
-        imap_host = config.get("imap_host") or config.get("host")
-        if imap_host:
-            from mail_core.providers.factory import validate_imap_host
+    from mail_core.accounts.connection import validate_connection
 
-            validate_imap_host(imap_host)
+    validate_connection(
+        email_norm,
+        str(provider).lower(),
+        config or {},
+        credentials,
+        require_credentials=credentials is not None,
+    )
     acc = Account(
         email=email_norm,
         provider=str(provider),

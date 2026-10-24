@@ -453,6 +453,7 @@ def test_create_account_duplicate_does_not_overwrite_credentials(monkeypatch):
             mock_session,
             email="existing@test.com",
             provider="imap",
+            config={"imap_host": "8.8.8.8"},
             credentials={"password": "hacked-password"},
         )
 
