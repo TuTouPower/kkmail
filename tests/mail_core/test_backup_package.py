@@ -172,6 +172,94 @@ def test_restore_sealed_backup_reads_manifest_filename_case(tmp_path, monkeypatc
     assert result.database_restored
 
 
+@pytest.mark.parametrize("encrypt", [False, True], ids=["plain", "sealed"])
+def test_restore_backup_package_succeeds_offline_with_fake_postgres_tools(
+    tmp_path, monkeypatch, encrypt
+):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    restore_record = tmp_path / "pg_restore_args.json"
+
+    pg_dump = fake_bin / "pg_dump"
+    pg_dump.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "Path(args[args.index('--file') + 1]).write_bytes(b'offline custom dump')\n",
+        encoding="utf-8",
+    )
+    pg_dump.chmod(0o755)
+
+    pg_restore = fake_bin / "pg_restore"
+    pg_restore.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "Path(os.environ['FAKE_PG_RESTORE_RECORD']).write_text(json.dumps(args))\n"
+        "if not Path(args[-1]).is_file():\n"
+        "    sys.exit(2)\n",
+        encoding="utf-8",
+    )
+    pg_restore.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH", f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+    )
+    monkeypatch.setenv("FAKE_PG_RESTORE_RECORD", str(restore_record))
+
+    for name in (
+        "MAIL_CORE_BACKUP_KEYS",
+        "MAIL_CORE_BACKUP_KEY_VERSION",
+        "MAIL_CORE_BLOB_KEY_V1",
+        "MAIL_CORE_BLOB_KEYS",
+        "MAIL_CORE_BLOB_KEY_VERSION",
+        "MAIL_CORE_BLOB_ACTIVE_VERSION",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    backup_key = os.urandom(32)
+    if encrypt:
+        monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", base64.b64encode(backup_key).decode())
+    else:
+        monkeypatch.delenv("MAIL_CORE_BACKUP_KEY", raising=False)
+
+    source_blobs = tmp_path / "source-blobs"
+    source_blob = source_blobs / "aa" / "bb" / "message.blob"
+    source_blob.parent.mkdir(parents=True)
+    source_blob.write_bytes(b"offline blob payload")
+    package_dir = tmp_path / ("sealed-backup" if encrypt else "plain-backup")
+    create_backup_package(
+        package_dir,
+        include_blobs=True,
+        database_url_override="postgresql://backup:source-pw@127.0.0.1:5432/source",
+        blobs_dir=source_blobs,
+        encrypt=encrypt,
+    )
+
+    manifest = json.loads((package_dir / "MANIFEST.json").read_text())
+    dump_meta = manifest["members"].get("plain/postgres.dump") or manifest["members"]["postgres.dump"]
+    assert dump_meta["method"] == "custom"
+    assert verify_backup_package(package_dir).ok
+
+    target_blobs = tmp_path / "restored-blobs"
+    result = restore_backup_package(
+        package_dir,
+        target_database_url="postgresql://restore:target-pw@127.0.0.1:5432/target",
+        target_blobs_dir=target_blobs,
+        keyring={1: backup_key} if encrypt else None,
+        source_database_url="postgresql://backup:source-pw@127.0.0.1:5432/source",
+    )
+
+    assert result.ok
+    assert result.database_restored
+    assert result.blobs_restored == 1
+    assert (target_blobs / "aa" / "bb" / "message.blob").read_bytes() == b"offline blob payload"
+    restore_args = json.loads(restore_record.read_text())
+    assert restore_args[:5] == ["--clean", "--if-exists", "--no-owner", "--no-privileges", "--dbname"]
+    assert "target-pw" not in " ".join(restore_args)
+
+
 @pytest.mark.parametrize(
     ("returncode", "stderr"),
     [
