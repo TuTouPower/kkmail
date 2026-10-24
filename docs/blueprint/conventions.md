@@ -192,3 +192,9 @@
 Google 提供 Gmail API OAuth 与 IMAP 应用专用密码；Microsoft 仅提供 Graph OAuth，创建、编辑、导入与 provider 构建均拒绝可识别 Microsoft IMAP。品牌按精确域名建议，显式选择优先，编辑以已有协议和连接配置为准。自定义域名允许手选托管商，Proton 仅提示 Bridge 限制。
 
 凭据 PATCH 按非空字段合并，保留未提交字段；OAuth 凭据或客户端类型变化清除 Access Token 缓存。加密凭据行锁串行化编辑与后台令牌轮换，禁止旧快照覆盖新 Refresh Token。
+
+## Microsoft Graph 授权约定
+
+- Microsoft 只提供 Graph OAuth。浏览器登录使用 PKCE、Web 机密客户端或 Electron 公共客户端；设备码只使用允许公共客户端流程的自有 Client ID，不要求 Secret/回调，自动申请后台持续访问。
+- 原会话最终保存前，`/me` 核实微软用户 ID 和真实邮箱，并确认邮箱可访问；重新授权不能用另一身份、客户端或租户覆盖原凭据。Access Token 保持不透明，不从 JWT 或未经核验的 UPN 猜身份。
+- 设备长码不返回前端，短码仅供原会话显示及复制；验证地址限制微软官方 HTTPS 端点，不拼接含验证码的链接，不依赖 verification_uri_complete。后端持久化间隔、429/slow_down 退避与过期状态，不由浏览器控制供应商轮询。

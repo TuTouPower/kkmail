@@ -295,7 +295,10 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
         flow_id: 'stub-oauth-flow-1', provider, intent, account_id: body.account_id || null,
         group_id: body.group_id || null, client_type: body.client_type || 'public',
         client_id: body.client_id || 'stub-client-id', status: 'authorized',
-        verified_email: intent === 'reauthorize' ? currentAccounts.find(a => a.id === body.account_id)?.email : 'oauth-new@gmail.com',
+        verified_email: intent === 'reauthorize' ? currentAccounts.find(a => a.id === body.account_id)?.email : provider === 'microsoft' ? 'oauth-new@outlook.com' : 'oauth-new@gmail.com',
+        method: body.method || 'authorization_code', tenant: body.tenant || null,
+        user_code: body.method === 'device_code' ? 'ABCD-EFGH' : null,
+        verification_uri: body.method === 'device_code' ? 'https://microsoft.com/devicelogin' : null,
         error: null, redirect_uri: `http://127.0.0.1:18765/api/accounts/oauth/callback/${provider}`,
         expires_at: 9999999999,
       }
@@ -310,8 +313,15 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
           redirect_uri: `http://127.0.0.1:18765/api/accounts/oauth/callback/${provider}`,
           client_type: String(body.client_type || 'public'),
           expires_at: 9999999999,
+          method: body.method || 'authorization_code', tenant: body.tenant || null,
+          user_code: body.method === 'device_code' ? 'ABCD-EFGH' : null,
+          verification_uri: body.method === 'device_code' ? 'https://microsoft.com/devicelogin' : null,
         },
       })
+    }
+
+    if (path.endsWith('/poll') && path.startsWith('/api/accounts/oauth/flows/')) {
+      return route.fulfill({ status: 200, json: oauthDraft })
     }
 
     if (path === '/api/accounts/oauth/flows/stub-oauth-flow-1' && method === 'GET') {

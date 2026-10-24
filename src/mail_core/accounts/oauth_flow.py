@@ -1,4 +1,4 @@
-"""OAuth2 authorization-code + PKCE flow management for Google Gmail API (t054)."""
+"""OAuth2 authorization-code + PKCE flow lifecycle shared by Google and Microsoft."""
 
 from __future__ import annotations
 
@@ -27,10 +27,9 @@ from mail_core.accounts.credentials import (
 )
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import Account, AccountGroup
-from mail_core.providers.http import ProviderHttpError
 from mail_core.providers.oauth import default_urllib_token_post, urllib_json_request
 from mail_core.security.auth import AuthPrincipal, get_session_epoch
-from mail_core.security.redact import safe_error
+from mail_core.accounts.google_oauth import _friendly_oauth_error, _exchange_and_verify_google
 
 GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -131,7 +130,7 @@ def _validate_public_origin(raw_origin: str) -> str | None:
 
 def get_oauth_metadata(provider: str = "google") -> dict[str, Any]:
     norm = (provider or "").strip().lower()
-    if norm != "google":
+    if norm not in ("google", "microsoft"):
         raise ValueError(f"不支持的 OAuth 供应商: {provider}")
     callback_path = f"/api/accounts/oauth/callback/{norm}"
     if os.environ.get("KKMAIL_SIDECAR", "").strip() == "1":
@@ -142,7 +141,7 @@ def get_oauth_metadata(provider: str = "google") -> dict[str, Any]:
             "provider": norm,
             "runtime_mode": "desktop",
             "default_client_type": "public",
-            "redirect_uri": f"http://127.0.0.1:{int(port_raw)}{callback_path}",
+            "redirect_uri": f"http://{'localhost' if norm == 'microsoft' else '127.0.0.1'}:{int(port_raw)}{callback_path}",
             "callback_path": callback_path,
             "origin_configured": True,
             "notice": None,
@@ -181,15 +180,16 @@ def get_oauth_metadata(provider: str = "google") -> dict[str, Any]:
     }
 
 
-def _load_account_for_reauthorize(account_id: uuid.UUID) -> tuple[str, str | None, dict[str, Any], dict[str, Any]]:
+def _load_account_for_reauthorize(account_id: uuid.UUID, provider: str = "google") -> tuple[str, str | None, dict[str, Any], dict[str, Any]]:
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
         raise LookupError("account not found")
     with get_session_factory()() as session:
         acc = session.get(Account, account_id)
         if acc is None:
             raise LookupError("account not found")
-        if (acc.provider or "").lower() != "gmail":
-            raise ValueError("仅已有 Gmail API 账户支持 Google OAuth 重新授权，不能将 IMAP 账户直接切换为 Gmail API")
+        expected = "graph" if provider == "microsoft" else "gmail"
+        if (acc.provider or "").lower() != expected:
+            raise ValueError(f"仅已有 {expected} 账户支持对应 OAuth 重新授权，不能切换账户协议")
         saved: dict[str, Any] = {}
         if acc.credential_ref:
             try:
@@ -207,130 +207,107 @@ def _email_exists(email: str) -> bool:
 
 
 def start_oauth_flow(
-    principal: AuthPrincipal,
-    *,
-    provider: str = "google",
-    intent: str = "create",
-    account_id: uuid.UUID | None = None,
-    email_hint: str | None = None,
-    group_id: uuid.UUID | None = None,
-    client_type: str | None = None,
-    client_id: str | None = None,
-    client_secret: str | None = None,
+    principal: AuthPrincipal, *, provider: str = "google", intent: str = "create",
+    account_id: uuid.UUID | None = None, email_hint: str | None = None,
+    group_id: uuid.UUID | None = None, client_type: str | None = None,
+    client_id: str | None = None, client_secret: str | None = None,
+    method: str = "authorization_code", tenant: str | None = None,
 ) -> dict[str, Any]:
     norm_provider = (provider or "").strip().lower()
-    if norm_provider != "google":
+    if norm_provider not in ("google", "microsoft"):
         raise ValueError(f"不支持的 OAuth 供应商: {provider}")
     if intent not in ("create", "reauthorize"):
         raise ValueError("无效的 OAuth 授权用途")
-
+    if method not in ("authorization_code", "device_code") or (method == "device_code" and norm_provider != "microsoft"):
+        raise ValueError("当前供应商不支持此登录方式")
+    device = method == "device_code"
     meta = get_oauth_metadata(norm_provider)
     saved_config: dict[str, Any] = {}
     saved_creds: dict[str, Any] = {}
     target_email = (email_hint or "").strip().lower() or None
     effective_group_id = str(group_id) if group_id else None
-
     if intent == "reauthorize":
         if account_id is None:
             raise ValueError("重新授权必须指定目标账户 ID")
-        target_email, existing_group, saved_config, saved_creds = _load_account_for_reauthorize(account_id)
+        target_email, existing_group, saved_config, saved_creds = _load_account_for_reauthorize(account_id, norm_provider)
         effective_group_id = effective_group_id or existing_group
     elif account_id is not None:
         raise ValueError("新增账户流程不能指定已有账户 ID")
-
-    effective_client_type = (
-        (client_type or "").strip()
-        or str(saved_config.get("oauth_client_type") or "").strip()
+    effective_client_type = "public" if device else (
+        (client_type or "").strip() or str(saved_config.get("oauth_client_type") or "").strip()
         or str(meta["default_client_type"])
     )
-    if effective_client_type not in ("public", "confidential"):
-        raise ValueError("config.oauth_client_type: unsupported client type")
-
+    if effective_client_type not in ("public", "confidential") or (device and client_type == "confidential"):
+        raise ValueError("设备码登录需使用允许公共客户端流程的 Client ID；不使用 Client Secret")
+    if norm_provider == "microsoft" and not device and effective_client_type != meta["default_client_type"]:
+        raise ValueError("微软浏览器登录需使用与运行环境匹配的应用：网页选择 Web 机密客户端，Electron 选择公共客户端；设备码请选择设备码登录")
     cid = (client_id or "").strip() or str(saved_creds.get("client_id") or "").strip()
-    if client_secret is not None and client_secret.strip():
-        csecret = client_secret.strip()
-    elif effective_client_type == "confidential":
-        csecret = str(saved_creds.get("client_secret") or "").strip()
-    else:
-        csecret = ""
-
-    missing = [
-        name
-        for cond, name in (
-            (not cid, "Client ID"),
-            ((effective_client_type == "confidential" or meta["runtime_mode"] == "web") and not csecret, "Client Secret"),
-            (not meta["redirect_uri"], "可信回调地址 (MAIL_CORE_PUBLIC_ORIGIN)"),
-        )
-        if cond
-    ]
+    csecret = "" if device else ((client_secret or "").strip() or (
+        str(saved_creds.get("client_secret") or "").strip() if effective_client_type == "confidential" else ""
+    ))
+    missing = [name for condition, name in (
+        (not cid, "Client ID"),
+        (not device and (effective_client_type == "confidential" or meta["runtime_mode"] == "web") and not csecret, "Client Secret"),
+        (not device and not meta["redirect_uri"], "可信回调地址 (MAIL_CORE_PUBLIC_ORIGIN)"),
+    ) if condition]
     if missing:
         raise ValueError(f"缺少 OAuth 配置项：{'、'.join(missing)}。请补齐配置或打开凭据帮助查看步骤。")
-
+    effective_tenant = None
+    if norm_provider == "microsoft":
+        from mail_core.accounts.microsoft_oauth import resolve_tenant
+        effective_tenant = resolve_tenant(tenant, saved_config, saved_creds)
+        if intent == "reauthorize" and saved_creds.get("client_id") and cid != saved_creds["client_id"]:
+            raise ValueError("重新授权的 Client ID 与原账户不一致，请使用原应用配置")
     flow_id = secrets.token_urlsafe(24)
-    state = secrets.token_urlsafe(32)
-    code_verifier = secrets.token_urlsafe(48)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
     now = time.time()
-    expires_at = now + FLOW_TTL_SECONDS
     sess_key = session_binding_key(principal)
-
-    params: dict[str, str] = {
-        "response_type": "code",
-        "client_id": cid,
-        "redirect_uri": str(meta["redirect_uri"]),
-        "scope": GOOGLE_REQUIRED_SCOPE,
-        "state": state,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-        "access_type": "offline",
-        "include_granted_scopes": "true",
-        "prompt": "consent",
-        **({"login_hint": target_email} if target_email else {}),
+    flow: dict[str, Any] = {
+        "flow_id": flow_id, "provider": norm_provider,
+        "account_provider": "graph" if norm_provider == "microsoft" else "gmail",
+        "method": method, "tenant": effective_tenant, "intent": intent,
+        "account_id": str(account_id) if account_id else None, "target_email": target_email,
+        "group_id": effective_group_id, "client_type": effective_client_type,
+        "client_id": cid, "client_secret": csecret,
+        "redirect_uri": "" if device else str(meta["redirect_uri"]),
+        "session_key": sess_key, "session_epoch": get_session_epoch(),
+        "status": "pending", "code_consumed": False, "consumed": False,
+        "verified_email": None, "error": None, "created_at": now,
+        "expires_at": now + FLOW_TTL_SECONDS,
     }
-
+    if device:
+        from mail_core.accounts.device_oauth import begin_device_authorization
+        begin_device_authorization(flow)
+        auth_url = str(flow["verification_uri"])
+    else:
+        state = secrets.token_urlsafe(32)
+        verifier = secrets.token_urlsafe(48)
+        flow.update(state=state, code_verifier=verifier)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+        scope = GOOGLE_REQUIRED_SCOPE
+        auth_uri = GOOGLE_AUTH_URI
+        params = {"response_type": "code", "client_id": cid, "redirect_uri": flow["redirect_uri"],
+                  "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}
+        if norm_provider == "microsoft":
+            from mail_core.accounts.microsoft_oauth import MICROSOFT_SCOPE, authority
+            scope = MICROSOFT_SCOPE
+            auth_uri = authority(str(effective_tenant)) + "/authorize"
+            params["prompt"] = "select_account"
+        else:
+            params.update(access_type="offline", include_granted_scopes="true", prompt="consent")
+        params["scope"] = scope
+        if target_email:
+            params["login_hint"] = target_email
+        auth_url = f"{auth_uri}?{urlencode(params)}"
     store = _flow_store()
-    save_json_secret(
-        store,
-        f"oauth_flow:{flow_id}",
-        {
-            "flow_id": flow_id,
-            "provider": norm_provider,
-            "account_provider": "gmail",
-            "intent": intent,
-            "account_id": str(account_id) if account_id else None,
-            "target_email": target_email,
-            "group_id": effective_group_id,
-            "client_type": effective_client_type,
-            "client_id": cid,
-            "client_secret": csecret,
-            "redirect_uri": str(meta["redirect_uri"]),
-            "state": state,
-            "code_verifier": code_verifier,
-            "session_key": sess_key,
-            "session_epoch": get_session_epoch(),
-            "status": "pending",
-            "code_consumed": False,
-            "consumed": False,
-            "verified_email": None,
-            "error": None,
-            "created_at": now,
-            "expires_at": expires_at,
-        },
-    )
-    save_json_secret(store, f"oauth_state:{state}", {"flow_id": flow_id, "provider": norm_provider, "expires_at": expires_at})
+    save_json_secret(store, f"oauth_flow:{flow_id}", flow)
+    if not device:
+        save_json_secret(store, f"oauth_state:{flow['state']}", {
+            "flow_id": flow_id, "provider": norm_provider, "expires_at": flow["expires_at"],
+        })
     with credential_edit(store, f"oauth_active:{sess_key}") as active:
         active.clear()
         active.update({"flow_id": flow_id, "updated_at": now})
-    return {
-        "flow_id": flow_id,
-        "provider": norm_provider,
-        "intent": intent,
-        "status": "pending",
-        "auth_url": f"{GOOGLE_AUTH_URI}?{urlencode(params)}",
-        "redirect_uri": str(meta["redirect_uri"]),
-        "client_type": effective_client_type,
-        "expires_at": expires_at,
-    }
+    return {**_public_flow_view(flow), "auth_url": auth_url}
 
 
 def _call_token_endpoint(url: str, form: dict[str, str]) -> dict[str, Any]:
@@ -346,115 +323,15 @@ def _call_profile_endpoint(url: str, access_token: str) -> dict[str, Any]:
     return res if isinstance(res, dict) else {}
 
 
-def _friendly_oauth_error(err_code: str, err_desc: str | None = None) -> str:
-    code = (err_code or "").strip().lower()
-    desc = (err_desc or "").strip().lower()
-    if code == "access_denied":
-        return "您已拒绝或取消 Google 授权；原账户与凭据未受影响，可随时重新发起。"
-    if "redirect_uri_mismatch" in code or "redirect_uri_mismatch" in desc:
-        return "回调地址不匹配（redirect_uri_mismatch）：请在 Google Cloud Console 将已授权重定向 URI 配置为表单显示的回调地址。"
-    if code == "invalid_client":
-        return "OAuth 客户端无效（invalid_client）：请核对 Client ID、客户端类型与 Client Secret 是否匹配。"
-    if code == "invalid_grant":
-        return "授权码已过期或已被使用（invalid_grant）：请重新点击 Google 登录发起授权。"
-    if code == "org_internal":
-        return "Google OAuth 同意屏幕受组织策略限制，或当前账号未加入测试用户名单。"
-    return f"Google OAuth 授权失败（{code or 'unknown_error'}），请核对客户端配置后重试。"
-
 
 def _fail_flow(flow: dict[str, Any], message: str) -> tuple[bool, int, str]:
     flow["status"] = "failed"
     flow["error"] = message
     flow.pop("staged_credentials", None)
+    for key in ("client_secret", "code_verifier", "device_code"):
+        flow.pop(key, None)
     return False, 400, message
 
-
-def _exchange_and_verify_google(flow: dict[str, Any], clean_code: str, now: float) -> tuple[bool, int, str]:
-    token_form = {
-        "grant_type": "authorization_code",
-        "code": clean_code,
-        "client_id": str(flow["client_id"]),
-        "redirect_uri": str(flow["redirect_uri"]),
-        "code_verifier": str(flow["code_verifier"]),
-        **({"client_secret": str(flow["client_secret"])} if flow.get("client_secret") else {}),
-    }
-    try:
-        token_resp = _call_token_endpoint(GOOGLE_TOKEN_URI, token_form)
-    except ProviderHttpError as exc:
-        body_text = str(getattr(exc, "body", "") or "").lower()
-        for code_key in ("redirect_uri_mismatch", "invalid_client", "invalid_grant"):
-            if code_key in body_text:
-                return _fail_flow(flow, _friendly_oauth_error(code_key))
-        return _fail_flow(flow, f"Google 令牌交换网络或服务错误（{safe_error(exc)}），请检查配置与网络后重试。")
-    except Exception as exc:
-        return _fail_flow(flow, f"Google 令牌交换失败（{safe_error(exc)}），请稍后重试。")
-
-    if not isinstance(token_resp, dict):
-        return _fail_flow(flow, "Google 令牌端点响应格式无效，请检查服务或代理后重新授权。")
-    if token_resp.get("error"):
-        return _fail_flow(flow, _friendly_oauth_error(str(token_resp["error"]), str(token_resp.get("error_description") or "")))
-
-    access_token = str(token_resp.get("access_token") or "").strip()
-    if not access_token:
-        return _fail_flow(flow, "Google 令牌端点未返回有效 Access Token。")
-
-    granted_scope = str(token_resp.get("scope") or "").strip()
-    tokens = {item.strip() for item in granted_scope.split() if item.strip()}
-    if GOOGLE_REQUIRED_SCOPE not in tokens and "gmail.modify" not in tokens:
-        return _fail_flow(flow, "Google 授权缺少必需的 gmail.modify 权限范围，请重新发起授权并勾选邮件访问权限。")
-
-    try:
-        profile = _call_profile_endpoint(GOOGLE_PROFILE_URI, access_token)
-    except Exception as exc:
-        return _fail_flow(flow, f"无法核实 Gmail 账户邮箱身份（{safe_error(exc)}），请确认已在 Google Cloud 启用 Gmail API。")
-
-    verified_email = str((profile or {}).get("emailAddress") or "").strip().lower()
-    if not verified_email or "@" not in verified_email:
-        return _fail_flow(flow, "Gmail users.getProfile 未返回有效的邮箱地址。")
-
-    refresh_token = str(token_resp.get("refresh_token") or "").strip()
-    keep_existing_refresh = False
-
-    if flow.get("intent") == "create":
-        if _email_exists(verified_email):
-            return _fail_flow(flow, f"邮箱账户 {verified_email} 已存在，不能重复添加或覆盖现有账户。")
-        if not refresh_token:
-            return _fail_flow(flow, "Google 未返回离线刷新令牌（Refresh Token），无法用于后台持续同步；请重新授权并确认同意离线访问。")
-    else:
-        try:
-            expected_email, _, _, saved_creds = _load_account_for_reauthorize(uuid.UUID(str(flow["account_id"])))
-        except Exception as exc:
-            return _fail_flow(flow, str(exc))
-        if verified_email != expected_email:
-            return _fail_flow(flow, f"当前授权的 Google 邮箱（{verified_email}）与原账户邮箱（{expected_email}）不一致，请使用 {expected_email} 重新授权。")
-        if not refresh_token:
-            if str(saved_creds.get("client_id") or "").strip() == str(flow["client_id"]).strip() and str(saved_creds.get("refresh_token") or "").strip():
-                keep_existing_refresh = True
-            else:
-                return _fail_flow(flow, "重新授权未返回新的 Refresh Token，且无相同客户端的既有有效 Refresh Token 可保留，请重新授权。")
-
-    staged: dict[str, Any] = {
-        "client_id": str(flow["client_id"]),
-        "token_uri": GOOGLE_TOKEN_URI,
-        "scope": granted_scope,
-        "access_token": access_token,
-        **({"client_secret": str(flow["client_secret"])} if flow.get("client_secret") else {}),
-        **({"refresh_token": refresh_token} if refresh_token else {}),
-    }
-    if token_resp.get("expires_in") is not None:
-        try:
-            staged["expires_at"] = now + float(token_resp["expires_in"])
-        except (TypeError, ValueError):
-            pass
-
-    flow["status"] = "authorized"
-    flow["verified_email"] = verified_email
-    flow["staged_credentials"] = staged
-    flow["keep_existing_refresh_token"] = keep_existing_refresh
-    flow["error"] = None
-    flow.pop("code_verifier", None)
-    flow.pop("client_secret", None)
-    return True, 200, f"已完成 Google 账号 {verified_email} 授权，请返回 kkmail 点击保存完成确认。"
 
 
 def complete_oauth_callback(
@@ -466,7 +343,7 @@ def complete_oauth_callback(
     error_description: str | None = None,
 ) -> tuple[bool, int, str]:
     norm_provider = (provider or "").strip().lower()
-    if norm_provider != "google":
+    if norm_provider not in ("google", "microsoft"):
         return False, 400, "不支持的 OAuth 供应商回调。"
     clean_state = (state or "").strip()
     if not clean_state or not _STATE_RE.match(clean_state):
@@ -480,7 +357,6 @@ def complete_oauth_callback(
 
     flow_id = str(state_record.get("flow_id") or "").strip()
     if not flow_id or state_record.get("provider") != norm_provider:
-        _delete_ref(store, f"oauth_state:{clean_state}")
         return False, 400, "授权状态与当前供应商不匹配，已拒绝处理。"
 
     with credential_edit(store, f"oauth_flow:{flow_id}") as flow:
@@ -490,7 +366,7 @@ def complete_oauth_callback(
         now = time.time()
         if flow.get("status") == "cancelled":
             return False, 400, "该授权流程已取消，请返回 kkmail 重新发起。"
-        if now > float(flow.get("expires_at") or 0):
+        if now >= float(flow.get("expires_at") or 0):
             flow["status"] = "expired"
             flow["error"] = EXPIRED_FLOW_MESSAGE
             flow["code_consumed"] = True
@@ -501,6 +377,9 @@ def complete_oauth_callback(
 
         flow["code_consumed"] = True
         if error:
+            if norm_provider == "microsoft":
+                from mail_core.accounts.microsoft_oauth import friendly_error
+                return _fail_flow(flow, friendly_error(error, error_description))
             return _fail_flow(flow, _friendly_oauth_error(error, error_description))
         clean_code = (code or "").strip()
         if not clean_code:
@@ -511,6 +390,9 @@ def complete_oauth_callback(
             if claim:
                 return _fail_flow(flow, "该授权码已被使用，拒绝重放。")
             claim.update({"flow_id": flow_id, "used_at": now})
+        if norm_provider == "microsoft":
+            from mail_core.accounts.microsoft_oauth import exchange_code
+            return exchange_code(flow, clean_code, now)
         return _exchange_and_verify_google(flow, clean_code, now)
 
 
@@ -519,7 +401,7 @@ def _public_flow_view(flow: dict[str, Any]) -> dict[str, Any]:
     status = str(flow.get("status") or "pending")
     error = flow.get("error")
     expires_at = float(flow.get("expires_at") or 0)
-    if status in ("pending", "authorized") and now > expires_at:
+    if status in ("pending", "authorized") and now >= expires_at:
         status = "expired"
         error = error or EXPIRED_FLOW_MESSAGE
     return {
@@ -535,11 +417,15 @@ def _public_flow_view(flow: dict[str, Any]) -> dict[str, Any]:
         "error": error,
         "redirect_uri": str(flow.get("redirect_uri") or ""),
         "expires_at": expires_at,
+        "method": flow.get("method", "authorization_code"),
+        "tenant": flow.get("tenant"),
+        "user_code": flow.get("user_code") if status == "pending" else None,
+        "verification_uri": flow.get("verification_uri") if status == "pending" else None,
     }
 
 
 def _expire_flow_if_needed(store: CredentialStore, flow_id: str, flow: dict[str, Any], sess_key: str) -> None:
-    if str(flow.get("status") or "pending") in ("pending", "authorized") and time.time() > float(flow.get("expires_at") or 0):
+    if str(flow.get("status") or "pending") in ("pending", "authorized") and time.time() >= float(flow.get("expires_at") or 0):
         state = str(flow.get("state") or "").strip()
         if state:
             _delete_ref(store, f"oauth_state:{state}")
@@ -626,7 +512,7 @@ def consume_oauth_flow_for_create(
     sess_arg = session if isinstance(store, (DbCredentialStore, CompositeCredentialStore)) else None
     with credential_edit(store, ref, session=sess_arg) as flow:
         _verify_flow_owner(flow, principal)
-        if time.time() > float(flow.get("expires_at") or 0):
+        if time.time() >= float(flow.get("expires_at") or 0):
             if principal is not None:
                 _clear_matching_active_pointer(store, session_binding_key(principal), clean_id)
             raise ValueError("OAuth 授权结果已过期，请重新发起授权")
@@ -646,6 +532,8 @@ def consume_oauth_flow_for_create(
             **(config or {}),
             "provider_profile": str(flow.get("provider") or "google"),
             "oauth_client_type": str(flow.get("client_type") or "public"),
+            **({"oauth_tenant": flow["tenant"], "microsoft_user_id": flow["microsoft_user_id"]}
+               if flow.get("provider") == "microsoft" else {}),
         }
         from mail_core.accounts.connection import validate_connection
 
@@ -677,7 +565,7 @@ def consume_oauth_flow_for_reauthorize(
     sess_arg = session if isinstance(store, (DbCredentialStore, CompositeCredentialStore)) else None
     with credential_edit(store, ref, session=sess_arg) as flow:
         _verify_flow_owner(flow, principal)
-        if time.time() > float(flow.get("expires_at") or 0):
+        if time.time() >= float(flow.get("expires_at") or 0):
             if principal is not None:
                 _clear_matching_active_pointer(store, session_binding_key(principal), clean_id)
             raise ValueError("OAuth 授权结果已过期，请重新发起授权")
@@ -693,6 +581,10 @@ def consume_oauth_flow_for_reauthorize(
         if verified_email != account.email.strip().lower():
             raise ValueError(f"授权邮箱（{verified_email}）与当前账户（{account.email}）不一致")
 
+        if flow.get("provider") == "microsoft":
+            current_id = (account.config or {}).get("microsoft_user_id")
+            if current_id and current_id != flow.get("microsoft_user_id"):
+                raise ValueError("微软用户身份与原账户不一致，未更新凭据")
         staged = dict(flow.get("staged_credentials") or {})
         keep_existing_refresh = bool(flow.get("keep_existing_refresh_token"))
         client_type = str(flow.get("client_type") or "public")
@@ -702,12 +594,19 @@ def consume_oauth_flow_for_reauthorize(
             **(config_patch or {}),
             "provider_profile": provider_profile,
             "oauth_client_type": client_type,
+            **({"oauth_tenant": flow["tenant"], "microsoft_user_id": flow["microsoft_user_id"]}
+               if provider_profile == "microsoft" else {}),
         }
         from mail_core.accounts.connection import validate_connection
 
         validate_connection(account.email, account.provider, merged_config, None, require_credentials=False)
         cred_ref = account.credential_ref or f"account:{account.id}"
         with credential_edit(get_credential_store(), cred_ref, session=session) as saved:
+            if provider_profile == "microsoft":
+                from mail_core.accounts.microsoft_oauth import resolve_tenant
+                resolve_tenant(flow["tenant"], account.config or {}, saved)
+                if saved.get("client_id") and saved["client_id"] != staged.get("client_id"):
+                    raise ValueError("原账户客户端配置已变化，请重新发起授权")
             if keep_existing_refresh and not staged.get("refresh_token"):
                 if str(saved.get("client_id") or "").strip() == str(staged.get("client_id") or "").strip() and str(saved.get("refresh_token") or "").strip():
                     staged["refresh_token"] = str(saved["refresh_token"])

@@ -6,7 +6,7 @@ import html
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,12 @@ from mail_core.accounts.oauth_flow import (
 from mail_core.api.deps import require_auth
 from mail_core.security.auth import AuthPrincipal
 
-router = APIRouter(tags=["accounts-oauth"])
+def prevent_oauth_cache(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+
+
+router = APIRouter(tags=["accounts-oauth"], dependencies=[Depends(prevent_oauth_cache)])
 
 
 class OAuthMetadataOut(BaseModel):
@@ -43,6 +48,8 @@ class OAuthStartIn(BaseModel):
     client_type: Literal["public", "confidential"] | None = None
     client_id: str | None = Field(default=None, max_length=512)
     client_secret: str | None = Field(default=None, max_length=512)
+    method: Literal["authorization_code", "device_code"] = "authorization_code"
+    tenant: str | None = Field(default=None, max_length=253)
 
 
 class OAuthStartOut(BaseModel):
@@ -54,6 +61,10 @@ class OAuthStartOut(BaseModel):
     redirect_uri: str
     client_type: Literal["public", "confidential"]
     expires_at: float
+    method: Literal["authorization_code", "device_code"] = "authorization_code"
+    tenant: str | None = None
+    user_code: str | None = None
+    verification_uri: str | None = None
 
 
 class OAuthFlowStatusOut(BaseModel):
@@ -69,6 +80,10 @@ class OAuthFlowStatusOut(BaseModel):
     error: str | None = None
     redirect_uri: str
     expires_at: float
+    method: Literal["authorization_code", "device_code"] = "authorization_code"
+    tenant: str | None = None
+    user_code: str | None = None
+    verification_uri: str | None = None
 
 
 class OAuthActiveOut(BaseModel):
@@ -80,9 +95,10 @@ class OAuthCancelOut(BaseModel):
     status: str = "cancelled"
 
 
-def _callback_html(ok: bool, message: str) -> str:
+def _callback_html(ok: bool, message: str, provider: str = "google") -> str:
     safe_msg = html.escape(message)
-    title = "Google 授权已完成" if ok else "Google 授权未完成"
+    label = "Microsoft" if provider == "microsoft" else "Google"
+    title = f"{label} 授权已完成" if ok else f"{label} 授权未完成"
     badge = "授权已核实并暂存" if ok else "授权未完成"
     color = "#10b981" if ok else "#ef4444"
     return f"""<!doctype html>
@@ -157,6 +173,8 @@ def api_oauth_start(
             client_type=body.client_type,
             client_id=body.client_id,
             client_secret=body.client_secret,
+            method=body.method,
+            tenant=body.tenant,
         )
         return OAuthStartOut(**res)
     except LookupError as exc:
@@ -179,6 +197,19 @@ def api_oauth_flow_status(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/api/accounts/oauth/flows/{flow_id}/poll", response_model=OAuthFlowStatusOut)
+def api_oauth_device_poll(flow_id: str, principal: AuthPrincipal = Depends(require_auth)) -> OAuthFlowStatusOut:
+    from mail_core.accounts.device_oauth import poll_device_flow
+    try:
+        return OAuthFlowStatusOut(**poll_device_flow(flow_id, principal))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.post("/api/accounts/oauth/flows/{flow_id}/cancel", response_model=OAuthCancelOut)
@@ -217,7 +248,7 @@ def api_oauth_callback(
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
     }
     return HTMLResponse(
-        content=_callback_html(ok, message),
+        content=_callback_html(ok, message, provider),
         status_code=status_code,
         headers=headers,
     )

@@ -74,3 +74,13 @@ python -c "from mail_core.runtime.bootstrap import bootstrap_data_dir; bootstrap
 ```
 
 `--data-dir` 下会生成并持久化会话 / blob / 备份密钥（`secrets/`，0600），未配置登录密码时生成一次性 `initial-password.txt`；已在环境变量中提供的值优先。完整变量列表见 [src/mail_core/README.md](../../src/mail_core/README.md)。
+
+## Microsoft 账户登录
+
+设置页选择 Microsoft 后，可使用浏览器登录或设备码登录。两种方式都由应用自动取得 Refresh Token，账号门户只提供 Client ID 与需要时的 Secret value。
+
+浏览器登录：网页部署复用 `MAIL_CORE_PUBLIC_ORIGIN`，在自有 Entra 应用登记 Web 回调 `<Origin>/api/accounts/oauth/callback/microsoft`，填写匹配的 Secret value。Electron 选择移动和桌面应用，登记表单显示的 localhost 回调路径；微软对 localhost 忽略动态端口，但路径仍须匹配，此规则不适用于 127.0.0.1。
+
+设备码登录：在 Entra Authentication 启用 Allow public client flows，回到设置页选择设备码方式。复制短验证码，打开界面给出的微软官方验证页，输入代码并登录，返回 kkmail 等待授权确认，再点击添加或保存。无需公网回调、固定本地端口或 Secret。
+
+应用账号类型及租户须包含目标个人或组织账号。添加 Graph 委托 Mail.ReadWrite 与 User.Read，持续后台访问由应用自动申请。应用注册需要可用 Entra 租户与注册权限，企业可能要求管理员同意；并非每个个人微软账号都能自行创建应用。新增/编辑的帮助弹窗提供完整步骤与官方链接。
