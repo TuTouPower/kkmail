@@ -834,6 +834,54 @@
             "conflicts_with": "",
             "note": "来源 p038；保留不可选择父目录与子目录关系，不删除历史邮件位置",
             "dir": "docs/archive/tasks/t052_qq_noselect_folder_state"
+        },
+        {
+            "tid": "t053",
+            "slug": "provider_account_forms",
+            "title": "按邮箱供应商定制添加与编辑账户表单",
+            "status": "done",
+            "branch": "main",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "e124a27a4baa5917fd39f3bb5190d54334014639",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源：用户确认；供应商定制新增/编辑表单、获取凭据帮助图标与弹窗、下线 Microsoft IMAP；当前运行 DB 25 Graph/9 IMAP，未发现 Microsoft IMAP；Google/Microsoft 跳转回调分别由 t054/t055 交付; 2026-10-25T02:00:57+08:00 用户明确授权补归档；直接 main 执行提交 4ef9bf7ada1aaa9b67ea67dfccc1dfcd9b98d10a；历史双路 Review 指纹 4072f20530f238a5 已核实；无 attempt，不伪造 ledger/handoff",
+            "dir": "docs/archive/tasks/t053_provider_account_forms"
+        },
+        {
+            "tid": "t054",
+            "slug": "google_oauth_callback",
+            "title": "支持 Google OAuth 跳转回调与账户重新授权",
+            "status": "done",
+            "branch": "main",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "4ef9bf7ada1aaa9b67ea67dfccc1dfcd9b98d10a",
+            "depends_on": "t053",
+            "conflicts_with": "",
+            "note": "来源：用户补充；Google 保留 IMAP 应用密码并新增 OAuth 授权码跳转回调，覆盖网页与 Electron；依赖 t053; 2026-10-25T02:00:57+08:00 用户明确授权补归档；直接 main 执行提交 e1dee2549e35486fbb36172579bf0d6564f2dedc；历史双路 Review 指纹 82374890bf0a9881 已核实；无 attempt，不伪造 ledger/handoff",
+            "dir": "docs/archive/tasks/t054_google_oauth_callback"
+        },
+        {
+            "tid": "t055",
+            "slug": "microsoft_oauth_callback",
+            "title": "支持 Microsoft OAuth 跳转与设备码登录",
+            "status": "done",
+            "branch": "main",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "e1dee2549e35486fbb36172579bf0d6564f2dedc",
+            "depends_on": "t054",
+            "conflicts_with": "",
+            "note": "来源：用户明确增加设备码；Microsoft 支持跳转回调与设备码两条新增/重新授权路径，统一获取并加密保存令牌；复用 t054 会话绑定与最终保存；不做 Microsoft IMAP 或迁移; 2026-10-25T02:00:57+08:00 用户明确授权补归档；直接 main 执行提交 87d69ac75d781bc0337f2f746291868b799f8329；历史双路 Review 指纹 42658742333b6b92 已核实；无 attempt，不伪造 ledger/handoff",
+            "dir": "docs/archive/tasks/t055_microsoft_oauth_callback"
         }
     ]
 }
