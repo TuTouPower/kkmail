@@ -178,6 +178,47 @@ def test_imap_modseq_emits_flag_changes(monkeypatch):
     assert flag.remote_id == rid
 
 
+@pytest.mark.parametrize("failure", ["non_ok", "exception", "partial", "missing_flags", "malformed"])
+def test_imap_modseq_flag_fetch_failure_aborts_delta(monkeypatch, failure):
+    class FakeImap:
+        def select(self, folder, readonly=True):
+            return "OK", [b"1"]
+
+        def status(self, folder, items):
+            return "OK", [b"INBOX (UIDVALIDITY 7 HIGHESTMODSEQ 50)"]
+
+        def logout(self):
+            return "OK", []
+
+        def uid(self, cmd, *args):
+            if cmd == "SEARCH":
+                return "OK", [b"5 6"]
+            if cmd == "FETCH":
+                if failure == "non_ok":
+                    return "NO", []
+                if failure == "exception":
+                    raise OSError("connection lost during FLAGS FETCH")
+                if failure == "partial":
+                    return "OK", [(b"5 (FLAGS (\\Seen) UID 5)", b"")]
+                if failure == "malformed":
+                    return "OK", [()]
+                return "OK", [
+                    (b"5 (FLAGS (\\Seen) UID 5)", b""),
+                    (b"6 (UID 6)", b""),
+                ]
+            return "NO", []
+
+    def unexpected_uid_fallback(*_args, **_kwargs):
+        pytest.fail("failed MODSEQ flag fetch must abort instead of falling back")
+
+    monkeypatch.setattr(ImapProvider, "_connect", lambda self: FakeImap())
+    monkeypatch.setattr(ImapProvider, "fetch_metadata_page", unexpected_uid_fallback)
+    provider = ImapProvider(host="h", port=993, username="u", password="p")
+
+    with pytest.raises(RuntimeError, match="flag FETCH"):
+        provider.delta_changes("INBOX", {"modseq": 40, "uidvalidity": 7, "uid_next": 10})
+
+
 def test_imap_delta_changes_capping_and_pagination(monkeypatch):
     class FakeImapBulk:
         def select(self, folder, readonly=True):

@@ -311,6 +311,10 @@ def _parse_message_meta_from_fetch(
     )
 
 
+class _ImapFlagFetchError(RuntimeError):
+    """A MODSEQ flag FETCH did not return a complete usable result."""
+
+
 @dataclass
 class ImapProvider:
     host: str
@@ -611,31 +615,50 @@ class ImapProvider:
             return []
         changes: list[DeltaChange] = []
         uid_spec = ",".join(str(u) for u in uids)
-        typ, fetched = c.uid("FETCH", uid_spec, "(FLAGS UID)")
+        try:
+            typ, fetched = c.uid("FETCH", uid_spec, "(FLAGS UID)")
+        except Exception as exc:
+            raise _ImapFlagFetchError(f"IMAP flag FETCH failed for {folder_remote_id}") from exc
         if typ != "OK" or not fetched:
-            return changes
-        for idx, blob in enumerate(fetched):
-            if blob is None:
-                continue
-            meta_bytes = blob[0] if isinstance(blob, tuple) else blob
-            if not isinstance(meta_bytes, (bytes, str)):
-                continue
-            meta_s = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
-            m_uid = re.search(r"\bUID\s+(\d+)", meta_s)
-            uid = int(m_uid.group(1)) if m_uid else (uids[idx] if idx < len(uids) else None)
-            if uid is None:
-                continue
-            is_read, is_flagged = _parse_fetch_flags(meta_s)
-            if is_read is None:
-                continue
-            rid = format_imap_remote_id(folder_remote_id, int(uidvalidity), uid)
-            changes.append(
-                DeltaChange(
-                    kind="flag",
-                    remote_id=rid,
-                    flags={"is_read": is_read, "is_flagged": is_flagged},
+            raise _ImapFlagFetchError(f"IMAP flag FETCH failed for {folder_remote_id}")
+
+        try:
+            expected_uids = set(uids)
+            seen_uids: set[int] = set()
+            for blob in fetched:
+                if blob is None:
+                    continue
+                meta_bytes = blob[0] if isinstance(blob, tuple) else blob
+                if not isinstance(meta_bytes, (bytes, str)):
+                    raise _ImapFlagFetchError("IMAP flag FETCH returned an invalid response")
+                meta_s = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
+                m_uid = re.search(r"\bUID\s+(\d+)", meta_s)
+                if m_uid is None:
+                    if meta_s.strip() in ("", ")"):
+                        continue
+                    raise _ImapFlagFetchError("IMAP flag FETCH response omitted UID")
+                uid = int(m_uid.group(1))
+                if uid not in expected_uids or uid in seen_uids:
+                    raise _ImapFlagFetchError("IMAP flag FETCH returned an unexpected UID")
+                is_read, is_flagged = _parse_fetch_flags(meta_s)
+                if is_read is None or is_flagged is None:
+                    raise _ImapFlagFetchError("IMAP flag FETCH response omitted FLAGS")
+                seen_uids.add(uid)
+                rid = format_imap_remote_id(folder_remote_id, int(uidvalidity), uid)
+                changes.append(
+                    DeltaChange(
+                        kind="flag",
+                        remote_id=rid,
+                        flags={"is_read": is_read, "is_flagged": is_flagged},
+                    )
                 )
-            )
+
+            if seen_uids != expected_uids:
+                raise _ImapFlagFetchError("IMAP flag FETCH returned an incomplete UID set")
+        except _ImapFlagFetchError:
+            raise
+        except Exception as exc:
+            raise _ImapFlagFetchError("IMAP flag FETCH returned an invalid response") from exc
         return changes
 
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:
@@ -733,6 +756,8 @@ class ImapProvider:
                             next_cursor=next_cursor,
                             exhausted=exhausted,
                         )
+                except _ImapFlagFetchError:
+                    raise
                 except Exception:
                     pass
 
