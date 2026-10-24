@@ -54,7 +54,7 @@
 
 - `contextIsolation`、无 `nodeIntegration`、`sandbox`、禁用 `webviewTag`
 - `will-attach-webview` 一律 `preventDefault`
-- `setPermissionRequestHandler` / `setPermissionCheckHandler` 全部拒绝
+- 权限请求与检查仅允许可信 `appOrigin` 的顶层页面写入 `clipboard-sanitized-write`；邮件 iframe、外部页面、子 frame 及其它权限（包括 `clipboard-read`、媒体设备、定位和通知）一律拒绝
 - 会话级 Content-Security-Policy：`default-src 'self'`，禁止 `object`，`connect-src` 仅同源；邮件 HTML 仍由阅读器 iframe 的独立 CSP 约束（默认不加载远程图）
 - 外链仅 `http(s):` / `mailto:` 交给系统浏览器；离开本地 origin 的导航被拦截
 
