@@ -374,7 +374,7 @@ class ImapProvider:
             raise
         return client
 
-    def list_folders(self) -> Sequence[RemoteFolder]:
+    def list_folder_catalog(self) -> Sequence[RemoteFolder]:
         c = self._connect()
         try:
             typ, data = c.list()
@@ -406,8 +406,9 @@ class ImapProvider:
                     remote_id = m_fallback.group(1).strip() if m_fallback else line.rsplit(" ", 1)[-1].strip('"')
 
                 flag_lower = {f.lower() for f in flags}
-                if "\\noselect" in flag_lower or "\\nonexistent" in flag_lower:
+                if "\\nonexistent" in flag_lower:
                     continue
+                selectable = "\\noselect" not in flag_lower
 
                 name = decode_mutf7(remote_id)
                 parent_remote_id = None
@@ -452,6 +453,7 @@ class ImapProvider:
                         name=name,
                         role=role,
                         parent_remote_id=parent_remote_id,
+                        selectable=selectable,
                     )
                 )
             if not any(f.remote_id.upper() == "INBOX" for f in folders):
@@ -462,6 +464,10 @@ class ImapProvider:
                 c.logout()
             except Exception:
                 pass
+
+    def list_folders(self) -> Sequence[RemoteFolder]:
+        """Return only mailboxes that can be selected for message operations."""
+        return [folder for folder in self.list_folder_catalog() if folder.selectable]
 
     def full_scan(self, folder_remote_id: str, cursor: dict[str, Any] | None) -> MetadataPage:
         return self.fetch_metadata_page(folder_remote_id, cursor)

@@ -92,6 +92,7 @@ class AccountFolderStatsItemOut(BaseModel):
     folder_id: UUID
     role: str
     name: str
+    sync_status: str
     total_count: int | None
     unread_count: int | None
     remote_id: str

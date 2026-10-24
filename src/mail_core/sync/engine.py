@@ -77,7 +77,9 @@ def sync_account_folders(
     try:
         provider = build_provider(account_snapshot, store or get_credential_store())
         try:
-            remote_folders = list(provider.list_folders())  # network
+            list_catalog = getattr(provider, "list_folder_catalog", None)
+            list_remote_folders = list_catalog if callable(list_catalog) else provider.list_folders
+            remote_folders = list(list_remote_folders())  # network
         except RateLimitedError as exc:
             delay = float(exc.retry_after_seconds or 60)
             delay = max(1.0, min(delay, 86400.0))
@@ -169,6 +171,7 @@ def sync_account_folders(
                     name=rf.name,
                     role=rf.role,
                     parent_remote_id=rf.parent_remote_id,
+                    sync_status="idle" if rf.selectable else "paused",
                 )
                 session.add(existing)
                 session.flush()
@@ -177,14 +180,16 @@ def sync_account_folders(
                 existing.name = rf.name
                 existing.role = rf.role
                 existing.parent_remote_id = rf.parent_remote_id
+                existing.sync_status = "idle" if rf.selectable else "paused"
             folder_ids.append(existing.id)
-            enqueue_job(
-                session,
-                job_type=JobType.SYNC_FOLDER_METADATA.value,
-                account_id=account_id,
-                payload={"folder_id": str(existing.id)},
-                priority=50,
-            )
+            if rf.selectable:
+                enqueue_job(
+                    session,
+                    job_type=JobType.SYNC_FOLDER_METADATA.value,
+                    account_id=account_id,
+                    payload={"folder_id": str(existing.id)},
+                    priority=50,
+                )
         session.add(
             OutboxEvent(
                 event_type=OutboxEventType.SYNC_PROGRESS.value,
@@ -245,6 +250,8 @@ def sync_folder_metadata(
             raise ValueError("account/folder not found")
         if not account.sync_enabled:
             return {"status": "sync_disabled"}
+        if folder.sync_status == "paused":
+            return {"status": "skipped", "reason": "folder_not_selectable"}
         try:
             lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=lease_ttl)
         except LeaseBusy:
