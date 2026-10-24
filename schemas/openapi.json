@@ -316,6 +316,17 @@
             ],
             "title": "Oauth Client Type"
           },
+          "oauth_tenant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oauth Tenant"
+          },
           "provider": {
             "title": "Provider",
             "type": "string"
@@ -1404,6 +1415,15 @@
             "title": "Intent",
             "type": "string"
           },
+          "method": {
+            "default": "authorization_code",
+            "enum": [
+              "authorization_code",
+              "device_code"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
           "provider": {
             "title": "Provider",
             "type": "string"
@@ -1423,6 +1443,39 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
+          },
+          "user_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Code"
+          },
+          "verification_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Uri"
           },
           "verified_email": {
             "anyOf": [
@@ -1598,11 +1651,32 @@
             "title": "Intent",
             "type": "string"
           },
+          "method": {
+            "default": "authorization_code",
+            "enum": [
+              "authorization_code",
+              "device_code"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
           "provider": {
             "default": "google",
             "maxLength": 32,
             "title": "Provider",
             "type": "string"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
           }
         },
         "title": "OAuthStartIn",
@@ -1638,6 +1712,15 @@
             "title": "Intent",
             "type": "string"
           },
+          "method": {
+            "default": "authorization_code",
+            "enum": [
+              "authorization_code",
+              "device_code"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
           "provider": {
             "title": "Provider",
             "type": "string"
@@ -1649,6 +1732,39 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
+          },
+          "user_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Code"
+          },
+          "verification_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Uri"
           }
         },
         "required": [
@@ -2465,6 +2581,56 @@
           }
         ],
         "summary": "Api Oauth Flow Cancel",
+        "tags": [
+          "accounts-oauth"
+        ]
+      }
+    },
+    "/api/accounts/oauth/flows/{flow_id}/poll": {
+      "post": {
+        "operationId": "api_oauth_device_poll_api_accounts_oauth_flows__flow_id__poll_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "title": "Flow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthFlowStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Oauth Device Poll",
         "tags": [
           "accounts-oauth"
         ]

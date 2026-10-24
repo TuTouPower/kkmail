@@ -47,6 +47,7 @@ class AccountDTO:
     imap_config: dict[str, Any] | None = None
     provider_profile: str | None = None
     oauth_client_type: str | None = None
+    oauth_tenant: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +130,7 @@ def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDT
         imap_config=imap_config,
         provider_profile=(acc.config or {}).get("provider_profile"),
         oauth_client_type=(acc.config or {}).get("oauth_client_type"),
+        oauth_tenant=(acc.config or {}).get("oauth_tenant"),
     )
 
 
@@ -163,6 +165,8 @@ def create_account_app(
     oauth_flow_id: str | None = None,
     principal: Any = None,
 ) -> AccountDTO:
+    if oauth_flow_id and credentials:
+        raise ValueError("不能同时提交 OAuth 授权结果和手动凭据，请选择一种保存方式")
     Session = get_session_factory()
     with Session() as session:
         try:
@@ -215,6 +219,8 @@ def update_account_app(
     oauth_flow_id: str | None = None,
     principal: Any = None,
 ) -> AccountDTO:
+    if oauth_flow_id and credentials:
+        raise ValueError("不能同时提交 OAuth 授权结果和手动凭据，请选择一种保存方式")
     Session = get_session_factory()
     with Session() as session:
         group_arg: object = ...

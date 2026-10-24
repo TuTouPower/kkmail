@@ -39,6 +39,9 @@ def validate_connection(email: str, provider: str, config: dict, credentials: di
     client_type = config.get('oauth_client_type', 'public')
     if not isinstance(client_type, str) or client_type not in ('public', 'confidential'):
         raise ValueError('config.oauth_client_type: unsupported client type')
+    for key in ('oauth_tenant', 'microsoft_user_id'):
+        if config.get(key) is not None and not isinstance(config[key], str):
+            raise ValueError(f'config.{key}: must be a string')
     for key in ('imap_user', 'username'):
         if config.get(key) is not None and not isinstance(config.get(key), str):
             raise ValueError(f'config.{key}: must be a string')
