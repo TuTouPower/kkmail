@@ -9,7 +9,6 @@ the API process.
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import logging
 import threading
 from collections import defaultdict
@@ -87,7 +86,7 @@ class OutboxDispatcher:
             return False
 
     def _fanout_one(self, loop: asyncio.AbstractEventLoop, q: asyncio.Queue, event: dict[str, Any]) -> bool:
-        """Put on the subscriber loop. Same-thread: call directly (avoid deadlock)."""
+        """Deliver on the subscriber loop without blocking the dispatcher thread."""
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
@@ -98,34 +97,29 @@ class OutboxDispatcher:
                 self._isolate(q)
             return ok
 
-        fut: concurrent.futures.Future[bool] = concurrent.futures.Future()
-
         def _run() -> None:
             try:
-                res = self._put(q, event)
-                fut.set_result(res)
-            except Exception as exc:  # noqa: BLE001
-                fut.set_exception(exc)
+                if not self._put(q, event):
+                    self._isolate(q)
+            except Exception:  # noqa: BLE001
+                log.exception("failed to fan out SSE event id=%s", event.get("id"))
+                self._isolate(q)
 
         try:
             loop.call_soon_threadsafe(_run)
         except RuntimeError:
             self._isolate(q)
             return False  # loop closed; subscriber is going away
-        try:
-            ok = bool(fut.result(timeout=0.5))
-            if not ok:
-                self._isolate(q)
-            return ok
-        except Exception:
-            self._isolate(q)
-            return False
+        return True
 
     def _fanout(self, event: dict[str, Any]) -> bool:
         """Deliver to local subscribers. Returns True if every target accepted the event.
 
-        No subscribers → True (idle drain may mark). Any QueueFull drop → False
-        (do **not** mark dispatched; a resync hint was queued for that client).
+        No subscribers returns False so rows remain undispatched. A subscriber
+        on another loop is considered scheduled as soon as
+        ``call_soon_threadsafe`` succeeds. QueueFull is detected on that loop:
+        the consumer is isolated and receives a resync hint from the durable
+        outbox. A closed loop or same-thread full queue returns False.
         """
         account_id = event.get("account_id")
         with self._lock:
