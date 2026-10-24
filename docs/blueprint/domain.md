@@ -18,5 +18,5 @@ kkmail 的核心领域概念与数据实体术语表。各层代码、数据迁�
 |**MessageBlobLink**|`message_blob_links`|邮件与存储 blob 的强引用关系，用于支持内容去重与引用计数垃圾回收 (GC)。|
 |**RemoteOperation**|`remote_operations`|出站异步写回操作。记录读状态、星标、移入废纸篓等本地期望，支持幂等合并与指数退避重试。|
 |**AccountSyncLease**|`account_sync_leases`|账户级排他执行租约。防止多个 Worker 抢占同一账户引发并发踩踏，维护递增 `fencing_token`。|
-|**OutboxEvent**|`outbox_events`|事务性本地事件出箱。由写事务原子产生，经由 PostgreSQL `LISTEN/NOTIFY` 驱动 SSE 实时推送到前端。|
+|**OutboxEvent**|`outbox`|事务性本地事件出箱。由写事务原子产生，经由 PostgreSQL `LISTEN/NOTIFY` 驱动 SSE 实时推送到前端。|
 |**AuthCredential**|`auth_credentials`|登录密码与会话状态持久化存储。权威记录登录 bcrypt hash 与全局 `session_epoch` 版本号。|
