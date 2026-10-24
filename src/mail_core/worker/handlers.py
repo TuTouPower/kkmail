@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -64,8 +65,11 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
         if not followup_was_scheduled and not next_run_after and payload.get("_followup_run_after"):
             try:
                 next_run_after = datetime.fromisoformat(payload["_followup_run_after"])
-            except Exception:
-                pass
+            except (TypeError, ValueError):
+                log.warning(
+                    "job %s has unparseable _followup_run_after; ignoring the invalid schedule",
+                    job.id,
+                )
         complete_job(session, job, worker_id=worker_id)
         if status == "ok":
             _recover_account_sync_status(session, job)

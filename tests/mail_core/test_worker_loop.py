@@ -335,5 +335,38 @@ def test_evaluate_result_retains_business_payload_for_followup():
         mock_enqueue.assert_called_once()
         _, kwargs = mock_enqueue.call_args
         assert kwargs["payload"] == {"folder_id": "f-12345", "account_id": "acc-999"}
+        assert kwargs["run_after"] == datetime(2026, 10, 23, 10, 0, tzinfo=timezone.utc)
         assert "_followup_needed" not in kwargs["payload"]
         assert "_followup_run_after" not in kwargs["payload"]
+
+
+def test_evaluate_result_logs_unparseable_followup_run_after(caplog):
+    """Malformed scheduling metadata is visible without logging its contents."""
+    import uuid
+    from mail_core.mail.domain.enums import JobType
+    from mail_core.mail.storage.models import WorkerJob
+    from mail_core.worker.handlers import _evaluate_result
+
+    job = WorkerJob(
+        job_type=JobType.SYNC_FOLDER_DELTA.value,
+        account_id=uuid.uuid4(),
+        status="claimed",
+        payload={"_followup_needed": True, "_followup_run_after": "not-a-date"},
+        priority=5,
+        dedupe_key="dedupe-invalid-time",
+    )
+    job.id = uuid.uuid4()
+    session = MagicMock()
+
+    with (
+        patch("mail_core.worker.handlers.complete_job"),
+        patch("mail_core.sync.jobs.enqueue_job") as mock_enqueue,
+        caplog.at_level("WARNING", logger="mail_core.worker.handlers"),
+    ):
+        ok = _evaluate_result(session, job, {"status": "ok"}, worker_id="test-worker")
+
+    assert ok is True
+    mock_enqueue.assert_called_once()
+    assert mock_enqueue.call_args.kwargs["run_after"] is None
+    assert "unparseable _followup_run_after" in caplog.text
+    assert "not-a-date" not in caplog.text
