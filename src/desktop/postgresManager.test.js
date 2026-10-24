@@ -100,6 +100,125 @@ function testStopIdempotentNoThrowaway() {
   fs.rmSync(dataRoot, { recursive: true, force: true })
 }
 
+function testStartReconcilesManagedPortAfterInitialization() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-port-reconcile-'))
+  const pgData = path.join(dataRoot, 'pgdata')
+  const secrets = path.join(dataRoot, 'secrets')
+  fs.mkdirSync(pgData, { recursive: true })
+  fs.mkdirSync(secrets, { recursive: true })
+  fs.writeFileSync(path.join(pgData, 'PG_VERSION'), '16\n')
+  const confPath = path.join(pgData, 'postgresql.conf')
+  fs.writeFileSync(confPath, "# existing config\nlisten_addresses = '127.0.0.1'\nport = 54329\n")
+  fs.writeFileSync(path.join(secrets, 'db-created'), 'created\n')
+
+  let observedPortAtStart = null
+  const mgr = new PostgresManager({
+    dataRoot,
+    pgBinDir: path.join(dataRoot, 'bin'),
+    port: 55445,
+    spawnSync: (_cmd, args) => {
+      if (args[0] === 'status') return { error: null, status: 1, stdout: '', stderr: '' }
+      if (args[0] === 'start') {
+        const conf = fs.readFileSync(confPath, 'utf8')
+        const matches = [...conf.matchAll(/^port\s*=\s*(\d+)/gm)]
+        observedPortAtStart = Number(matches.at(-1)?.[1])
+        return { error: null, status: 0, stdout: '', stderr: '' }
+      }
+      return { error: null, status: 0, stdout: '', stderr: '' }
+    },
+  })
+  mgr._binsCache = {
+    initdb: '/fake/bin/initdb',
+    pg_ctl: '/fake/bin/pg_ctl',
+    postgres: '/fake/bin/postgres',
+    createdb: '/fake/bin/createdb',
+  }
+
+  try {
+    const result = mgr.start()
+    assert.strictEqual(result.ok, true, result.reason)
+    assert.strictEqual(observedPortAtStart, 55445, 'config must be reconciled before pg_ctl starts')
+    const conf = fs.readFileSync(confPath, 'utf8')
+    assert.match(conf, /listen_addresses = '127\.0\.0\.1'/)
+    assert.match(conf, /port = 55445/)
+    assert.strictEqual((conf.match(/BEGIN kkmail managed PostgreSQL settings/g) || []).length, 1)
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
+function testStartRejectsRunningClusterOnDifferentPort() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-port-running-'))
+  const pgData = path.join(dataRoot, 'pgdata')
+  fs.mkdirSync(pgData, { recursive: true })
+  fs.writeFileSync(path.join(pgData, 'PG_VERSION'), '16\n')
+  fs.writeFileSync(path.join(pgData, 'postgresql.conf'), "listen_addresses = '127.0.0.1'\nport = 54329\n")
+  fs.writeFileSync(path.join(pgData, 'postmaster.pid'), `12345\n${pgData}\n0\n54329\n/tmp\n127.0.0.1\n`)
+
+  let databaseConnectionAttempted = false
+  const mgr = new PostgresManager({
+    dataRoot,
+    pgBinDir: path.join(dataRoot, 'bin'),
+    port: 55445,
+    spawnSync: (_cmd, args) => {
+      if (args[0] === 'status') return { error: null, status: 0, stdout: 'server is running', stderr: '' }
+      databaseConnectionAttempted = true
+      return { error: null, status: 0, stdout: '', stderr: '' }
+    },
+  })
+  mgr._binsCache = {
+    initdb: '/fake/bin/initdb',
+    pg_ctl: '/fake/bin/pg_ctl',
+    postgres: '/fake/bin/postgres',
+    createdb: '/fake/bin/createdb',
+  }
+
+  try {
+    const result = mgr.start()
+    assert.strictEqual(result.ok, false)
+    assert.match(result.reason, /configured_port=55445.*actual_port=54329/)
+    assert.strictEqual(databaseConnectionAttempted, false, 'must not connect to a different service on the configured port')
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
+function testStartRejectsRunningClusterOnNonLoopbackAddress() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-listen-running-'))
+  const pgData = path.join(dataRoot, 'pgdata')
+  fs.mkdirSync(pgData, { recursive: true })
+  fs.writeFileSync(path.join(pgData, 'PG_VERSION'), '16\n')
+  fs.writeFileSync(path.join(pgData, 'postgresql.conf'), "listen_addresses = '*'\nport = 55445\n")
+  fs.writeFileSync(path.join(pgData, 'postmaster.pid'), `12345\n${pgData}\n0\n55445\n/tmp\n0.0.0.0\n`)
+
+  let databaseConnectionAttempted = false
+  const mgr = new PostgresManager({
+    dataRoot,
+    pgBinDir: path.join(dataRoot, 'bin'),
+    port: 55445,
+    spawnSync: (_cmd, args) => {
+      if (args[0] === 'status') return { error: null, status: 0, stdout: 'server is running', stderr: '' }
+      databaseConnectionAttempted = true
+      return { error: null, status: 0, stdout: '', stderr: '' }
+    },
+  })
+  mgr._binsCache = {
+    initdb: '/fake/bin/initdb',
+    pg_ctl: '/fake/bin/pg_ctl',
+    postgres: '/fake/bin/postgres',
+    createdb: '/fake/bin/createdb',
+  }
+
+  try {
+    const result = mgr.start()
+    assert.strictEqual(result.ok, false)
+    assert.match(result.reason, /configured_listen_addresses=127\.0\.0\.1.*actual_listen_addresses=0\.0\.0\.0/)
+    assert.strictEqual(databaseConnectionAttempted, false, 'must not connect while the running server is bound beyond loopback')
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
 function testInitPwfileCleanupLegacy() {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-pwfile-'))
   const mgr = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
@@ -190,6 +309,9 @@ testStopIdempotentNoThrowaway()
 testStopFailureAndRetry()
 testInitPwfileCleanupLegacy()
 testInvalidPortRejectedAtConstruct()
+testStartReconcilesManagedPortAfterInitialization()
+testStartRejectsRunningClusterOnDifferentPort()
+testStartRejectsRunningClusterOnNonLoopbackAddress()
 console.log('postgresManager.test.js: ok')
 
 function testVendorBinDirDefault() {

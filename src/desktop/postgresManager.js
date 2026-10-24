@@ -17,6 +17,8 @@ const { scrubEnv } = require('./startup')
 
 const DEFAULT_PORT = 54329
 const BIN_PROBE_TIMEOUT_MS = 5000
+const MANAGED_CONFIG_BEGIN = '# BEGIN kkmail managed PostgreSQL settings'
+const MANAGED_CONFIG_END = '# END kkmail managed PostgreSQL settings'
 
 /** Official PG binaries: packaged resources/pgsql/bin, else desktop/vendor/pgsql/bin. */
 function defaultVendorBinDir() {
@@ -78,6 +80,69 @@ function parsePgPort(raw, fallback = DEFAULT_PORT) {
     throw new Error(`KKMAIL_PG_PORT 无效（需要 1–65535 的整数）: ${raw}`)
   }
   return n
+}
+
+function reconcilePostgresConfig(confPath, port) {
+  let config
+  try {
+    config = fs.readFileSync(confPath, 'utf8')
+  } catch (err) {
+    return { ok: false, reason: `Could not read postgresql.conf: ${err.message}` }
+  }
+
+  const block = `${MANAGED_CONFIG_BEGIN}\nlisten_addresses = '127.0.0.1'\nport = ${port}\n${MANAGED_CONFIG_END}`
+  if (config.trimEnd().endsWith(block)) return { ok: true, changed: false }
+
+  let base = config
+  while (true) {
+    const begin = base.indexOf(MANAGED_CONFIG_BEGIN)
+    const end = begin === -1 ? -1 : base.indexOf(MANAGED_CONFIG_END, begin)
+    if (begin === -1) {
+      if (base.includes(MANAGED_CONFIG_END)) {
+        return { ok: false, reason: 'postgresql.conf has an unmatched kkmail managed settings marker' }
+      }
+      break
+    }
+    if (end === -1) {
+      return { ok: false, reason: 'postgresql.conf has an incomplete kkmail managed settings block' }
+    }
+    base = base.slice(0, begin) + base.slice(end + MANAGED_CONFIG_END.length)
+  }
+
+  const updated = `${base.replace(/\s*$/, '')}\n\n${block}\n`
+  const tempPath = `${confPath}.kkmail-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`
+  let fd = null
+  try {
+    const mode = fs.statSync(confPath).mode & 0o777
+    fd = fs.openSync(tempPath, 'wx', mode)
+    fs.writeFileSync(fd, updated, 'utf8')
+    fs.fsyncSync(fd)
+    fs.closeSync(fd)
+    fd = null
+    fs.chmodSync(tempPath, mode)
+    fs.renameSync(tempPath, confPath)
+  } catch (err) {
+    return { ok: false, reason: `Could not update postgresql.conf: ${err.message}` }
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd) } catch (_) { /* ignore */ }
+    }
+    try { fs.unlinkSync(tempPath) } catch (_) { /* already renamed or absent */ }
+  }
+  return { ok: true, changed: true }
+}
+
+function runningPostmasterSettings(pgData) {
+  try {
+    const lines = fs.readFileSync(path.join(pgData, 'postmaster.pid'), 'utf8').split(/\r?\n/)
+    const port = Number(lines[3])
+    return {
+      port: Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null,
+      listenAddresses: lines[5] ? lines[5].trim() : null,
+    }
+  } catch (_) {
+    return null
+  }
 }
 
 function PostgresManager(options = {}) {
@@ -244,7 +309,8 @@ PostgresManager.prototype.initIfNeeded = function initIfNeeded() {
   }
   // Listen on loopback only; port already validated by parsePgPort.
   const conf = path.join(p.pgData, 'postgresql.conf')
-  fs.appendFileSync(conf, `\nlisten_addresses = '127.0.0.1'\nport = ${this.port}\n`)
+  const configured = reconcilePostgresConfig(conf, this.port)
+  if (!configured.ok) return configured
   return { ok: true, initialized: true, pgData: p.pgData }
 }
 
@@ -261,6 +327,15 @@ PostgresManager.prototype.start = function start() {
     }
   }
   if (st.running) {
+    const actual = runningPostmasterSettings(this.paths().pgData)
+    if (actual?.port !== this.port || actual?.listenAddresses !== '127.0.0.1') {
+      return {
+        ok: false,
+        reason: `PostgreSQL settings mismatch: configured_port=${this.port}, actual_port=${actual?.port ?? 'unknown'}, configured_listen_addresses=127.0.0.1, actual_listen_addresses=${actual?.listenAddresses ?? 'unknown'}. Stop the running cluster before changing KKMAIL_PG_PORT or listen_addresses.`,
+      }
+    }
+    const configured = reconcilePostgresConfig(path.join(this.paths().pgData, 'postgresql.conf'), this.port)
+    if (!configured.ok) return configured
     const bins = this.hasBinaries()
     const created = this.ensureDatabase(bins)
     if (!created.ok) return created
@@ -270,6 +345,8 @@ PostgresManager.prototype.start = function start() {
   if (!init.ok) return init
   const bins = this.hasBinaries()
   const p = this.paths()
+  const configured = reconcilePostgresConfig(path.join(p.pgData, 'postgresql.conf'), this.port)
+  if (!configured.ok) return configured
   try {
     const { rotateLogFile } = require('./logRotation')
     rotateLogFile(p.logFile)
