@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -106,6 +106,54 @@ def test_push_mark_read_and_reconcile_deletes():
             # Ensure checkpoint still marks full scan complete
             cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
             assert cp.full_scan_complete is True
+    finally:
+        _restore(originals)
+        set_credential_store(None)
+
+
+def test_reconcile_renews_lease_between_bounded_delete_batches(monkeypatch):
+    store = DictCredentialStore({"r": "x"})
+    set_credential_store(store)
+    now = datetime.now(timezone.utc)
+    provider = MemoryProvider(folders=[RemoteFolder("INBOX", "INBOX", "inbox")])
+    provider.seed(
+        "INBOX",
+        [
+            RemoteMessageMeta(str(i), f"Message {i}", "a@b.c", "A", now, False, False, uid=i)
+            for i in range(1, 4)
+        ],
+    )
+    originals = _patch_provider(provider)
+    Session = get_session_factory()
+    real_heartbeat = __import__("mail_core.sync.leases", fromlist=["heartbeat_lease"]).heartbeat_lease
+    heartbeats = []
+
+    def record_heartbeat(session, **kwargs):
+        heartbeats.append(kwargs["fencing_token"])
+        return real_heartbeat(session, **kwargs)
+
+    monkeypatch.setattr(reconcile_mod, "heartbeat_lease", record_heartbeat, raising=False)
+    monkeypatch.setattr(reconcile_mod, "RECONCILE_DELETE_BATCH_SIZE", 1, raising=False)
+    try:
+        with Session() as session:
+            acc = create_account(session, email=f"reconcile-batch-{uuid.uuid4().hex[:8]}@ex.com", provider="memory", credential_ref="r")
+            session.commit()
+            account_id = acc.id
+
+        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        with Session() as session:
+            folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"] is True
+
+        provider.messages["INBOX"] = []
+        result = reconcile_folder(account_id, folder_id, worker_id="w", store=store, lease_ttl=timedelta(seconds=30))
+
+        assert result["status"] == "ok"
+        assert result["deleted"] == 3
+        assert len(heartbeats) == 3
+        with Session() as session:
+            remaining = session.scalar(select(func.count()).select_from(Message).where(Message.account_id == account_id))
+            assert remaining == 0
     finally:
         _restore(originals)
         set_credential_store(None)

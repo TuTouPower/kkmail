@@ -15,10 +15,11 @@ from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent
 from mail_core.providers.factory import build_provider
 from mail_core.sync.engine import local_remote_ids_for_folder
-from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, assert_fencing, release_lease
+from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, heartbeat_lease, release_lease
 from mail_core.mail.storage.models import SyncCheckpoint
 
 log = logging.getLogger("mail_core.sync.reconcile")
+RECONCILE_DELETE_BATCH_SIZE = 200
 
 
 def reconcile_folder(
@@ -27,7 +28,7 @@ def reconcile_folder(
     *,
     worker_id: str,
     store: CredentialStore | None = None,
-    lease_ttl: timedelta = timedelta(seconds=120),
+    lease_ttl: timedelta = timedelta(minutes=10),
 ) -> dict:
     """Reconcile local vs remote IDs after a complete scan.
 
@@ -81,51 +82,84 @@ def reconcile_folder(
         return {"status": "provider_error", "error": err_summary}
 
     deleted = 0
-    with Session() as session:
-        try:
-            assert_fencing(session, account_id=account_id, fencing_token=fencing)
-        except FencingMismatch:
-            return {"status": "fencing_mismatch"}
-        for action in actions:
-            if action.kind != "delete":
-                continue
-            msg = session.scalar(
-                select(Message).where(Message.account_id == account_id, Message.remote_id == action.remote_id)
-            )
-            if msg is None:
-                continue
-            # Remove only this folder location; delete message if orphaned.
-            loc = session.scalar(
-                select(MessageLocation).where(
-                    MessageLocation.message_id == msg.id,
-                    MessageLocation.folder_id == folder_id,
-                )
-            )
-            if loc is not None:
-                session.delete(loc)
-                session.flush()
-            remaining = session.scalar(
-                select(MessageLocation).where(MessageLocation.message_id == msg.id)
-            )
-            if remaining is None:
-                session.add(
-                    OutboxEvent(
-                        event_type=OutboxEventType.MESSAGE_REMOVED.value,
+    batch_starts = range(0, max(1, len(actions)), RECONCILE_DELETE_BATCH_SIZE)
+    try:
+        for start in batch_starts:
+            batch = actions[start : start + RECONCILE_DELETE_BATCH_SIZE]
+            is_last_batch = start + RECONCILE_DELETE_BATCH_SIZE >= len(actions)
+            with Session() as session:
+                try:
+                    # Renew and lock the lease row in the same short transaction
+                    # that applies this batch. A worker that lost the fence cannot
+                    # apply deletes after a newer owner takes over.
+                    heartbeat_lease(
+                        session,
                         account_id=account_id,
-                        payload={"message_id": str(msg.id), "remote_id": action.remote_id},
+                        owner_id=worker_id,
+                        fencing_token=fencing,
+                        ttl=lease_ttl,
                     )
-                )
-                session.delete(msg)
-                deleted += 1
-        # refresh stats via SQL aggregate count
-        recompute_folder_stats(session, folder_id)
-        session.add(
-            OutboxEvent(
-                event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
-                account_id=account_id,
-                payload={"folder_id": str(folder_id), "reconcile_deleted": deleted},
-            )
-        )
-        release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-        session.commit()
+                except FencingMismatch:
+                    session.rollback()
+                    return {"status": "fencing_mismatch", "deleted": deleted, "actions": len(actions)}
+
+                batch_deleted = 0
+                for action in batch:
+                    if action.kind != "delete":
+                        continue
+                    msg = session.scalar(
+                        select(Message).where(Message.account_id == account_id, Message.remote_id == action.remote_id)
+                    )
+                    if msg is None:
+                        continue
+                    # Remove only this folder location; delete message if orphaned.
+                    loc = session.scalar(
+                        select(MessageLocation).where(
+                            MessageLocation.message_id == msg.id,
+                            MessageLocation.folder_id == folder_id,
+                        )
+                    )
+                    if loc is not None:
+                        session.delete(loc)
+                        session.flush()
+                    remaining = session.scalar(
+                        select(MessageLocation).where(MessageLocation.message_id == msg.id)
+                    )
+                    if remaining is None:
+                        session.add(
+                            OutboxEvent(
+                                event_type=OutboxEventType.MESSAGE_REMOVED.value,
+                                account_id=account_id,
+                                payload={"message_id": str(msg.id), "remote_id": action.remote_id},
+                            )
+                        )
+                        session.delete(msg)
+                        batch_deleted += 1
+                total_deleted = deleted + batch_deleted
+                if batch_deleted or is_last_batch:
+                    recompute_folder_stats(session, folder_id)
+                    session.add(
+                        OutboxEvent(
+                            event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
+                            account_id=account_id,
+                            payload={"folder_id": str(folder_id), "reconcile_deleted": total_deleted},
+                        )
+                    )
+                if is_last_batch:
+                    release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+                deleted = total_deleted
+    except FencingMismatch:
+        return {"status": "fencing_mismatch", "deleted": deleted, "actions": len(actions)}
+    except Exception:
+        with Session() as session:
+            try:
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            except FencingMismatch:
+                session.rollback()
+            except Exception:
+                session.rollback()
+                log.warning("could not release reconcile lease after batch failure for folder %s", folder_id)
+        raise
     return {"status": "ok", "deleted": deleted, "actions": len(actions)}
