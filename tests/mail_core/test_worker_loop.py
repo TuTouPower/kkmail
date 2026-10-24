@@ -340,7 +340,7 @@ def test_evaluate_result_retains_business_payload_for_followup():
         assert "_followup_run_after" not in kwargs["payload"]
 
 
-def test_evaluate_result_logs_unparseable_followup_run_after(caplog):
+def test_evaluate_result_logs_unparseable_followup_run_after():
     """Malformed scheduling metadata is visible without logging its contents."""
     import uuid
     from mail_core.mail.domain.enums import JobType
@@ -361,12 +361,14 @@ def test_evaluate_result_logs_unparseable_followup_run_after(caplog):
     with (
         patch("mail_core.worker.handlers.complete_job"),
         patch("mail_core.sync.jobs.enqueue_job") as mock_enqueue,
-        caplog.at_level("WARNING", logger="mail_core.worker.handlers"),
+        patch("mail_core.worker.handlers.log.warning") as warning,
     ):
         ok = _evaluate_result(session, job, {"status": "ok"}, worker_id="test-worker")
 
     assert ok is True
     mock_enqueue.assert_called_once()
     assert mock_enqueue.call_args.kwargs["run_after"] is None
-    assert "unparseable _followup_run_after" in caplog.text
-    assert "not-a-date" not in caplog.text
+    warning.assert_called_once()
+    warning_message = " ".join(str(arg) for arg in warning.call_args.args)
+    assert "unparseable _followup_run_after" in warning_message
+    assert "not-a-date" not in warning_message
