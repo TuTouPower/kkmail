@@ -289,7 +289,7 @@ components:
     textColor: "{colors.neutral}"
 ---
 
-> **Scope:** this file is the UI design system (tokens, components, layout) and is not a system design. System architecture lives in [docs/blueprint/architecture.md](../docs/blueprint/architecture.md); backend modules in [src/mail_core/README.md](../src/mail_core/README.md). The action inventory below (compose, reply, forward, archive, junk, move, standard folders) is the visual reference for where controls belong; what the product actually ships is listed in [docs/blueprint/decisions.md](../docs/blueprint/decisions.md). Tokens are implemented in `src/frontend/src/design-system/tokens.css`.
+> **Scope:** this file is the UI design system (tokens, components, layout) and is not a system design. System architecture lives in [docs/blueprint/architecture.md](../docs/blueprint/architecture.md); backend modules in [src/mail_core/README.md](../src/mail_core/README.md). Compose, reply, forward, Send, and Save Draft references below are visual placement examples only; kkmail does not ship these flows, and they are not implementation requirements. What the product actually ships is listed in [docs/blueprint/decisions.md](../docs/blueprint/decisions.md). Tokens are implemented in `src/frontend/src/design-system/tokens.css`.
 
 # Mail Multi-Account — Design System
 
@@ -299,7 +299,7 @@ Mail is a multi-account email workspace inspired by the clarity, density, and re
 
 The interface prioritizes the email itself. Avoid a permanent branded masthead: no decorative logo or product-name row at the top of the workspace. Use available vertical space for mail navigation, message lists, and reading. The sidebar starts with a compact collapse control above Personal Favorites. Settings live behind one settings entry at the bottom of the sidebar; account management and appearance preferences belong inside that settings surface rather than scattered across the main chrome.
 
-The information architecture has three desktop regions: a navigation sidebar, a message list, and a reading pane. The sidebar supports independently collapsible account groups and independently collapsible accounts, with standard folders nested under each account. The message list owns list-scoped controls such as search, filtering, sorting, refresh, compose, selection, and Mark All as Read. The reading pane owns actions that affect the current message, including reply, reply all, forward, mark read/unread, archive, trash, junk, move, flag, and secondary actions. A given action should have one obvious home; do not duplicate the same primary action in multiple toolbars.
+The information architecture has three desktop regions: a navigation sidebar, a message list, and a reading pane. The sidebar supports independently collapsible account groups and independently collapsible accounts, with standard folders nested under each account. The message list owns list-scoped controls such as search, filtering, sorting, refresh, selection, and Mark All as Read. Compose placement shown in older visual references is non-shipped. The reading pane owns shipped actions that affect the current message, including mark read/unread, archive, trash, junk, move, flag, and secondary actions. Reply, reply all, and forward are visual references only and are not shipped actions. A given action should have one obvious home; do not duplicate the same primary action in multiple toolbars.
 
 Dark mode is the default visual reference for the current prototype. Light mode is a first-class theme, not an afterthought. Use semantic tokens rather than hard-coded color values so both themes remain consistent. The product must not rely on Apple-only APIs or platform-specific window chrome for core interaction; platform-native polish is welcome, but interaction and hierarchy must remain consistent across operating systems and browsers.
 
@@ -340,7 +340,7 @@ The sidebar can collapse to a narrow 48px rail. Its collapse control must remain
 
 ### Message list
 
-The list header contains the current folder or account title and message counts, with compose and refresh controls nearby. Search spans all mail sources by default and should have a clear action when a query is present. Filters (All, Unread, Flagged), Mark All as Read, sorting, and list-level selection actions remain grouped in the list header. Mark All as Read affects the current visible scope—respecting the selected account/folder and active search or filters—and should be disabled when there are no unread messages in that scope.
+The list header contains the current folder or account title and message counts, with refresh controls nearby. Compose controls shown in older visual references are non-shipped. Search spans all mail sources by default and should have a clear action when a query is present. Filters (All, Unread, Flagged), Mark All as Read, sorting, and list-level selection actions remain grouped in the list header. Mark All as Read affects the current visible scope—respecting the selected account/folder and active search or filters—and should be disabled when there are no unread messages in that scope.
 
 Message rows should be compact but scannable. Use a consistent order: sender and timestamp, subject, preview, then account/folder metadata and compact status icons. Truncate long subjects and previews gracefully. Hover, keyboard focus, selected, checked, and unread states must be visually distinct. Selection checkboxes may appear on hover on desktop, but should remain easy to discover and operate on touch devices.
 
@@ -362,7 +362,7 @@ The bottom-left sidebar control is Settings. Account management, add-account flo
 
 ## Elevation & Depth
 
-Use tonal separation first and shadows second. Column boundaries and panel boundaries are defined by thin neutral dividers. Hover and selection states use surface changes, not large elevation jumps. Reserve a soft, stronger shadow for overlays such as Settings, compose, and contextual menus so they read as temporary layers above the workspace.
+Use tonal separation first and shadows second. Column boundaries and panel boundaries are defined by thin neutral dividers. Hover and selection states use surface changes, not large elevation jumps. Reserve a soft, stronger shadow for overlays such as Settings and contextual menus so they read as temporary layers above the workspace. Compose mockups are non-shipped visual references.
 
 Avoid stacking cards inside cards. The email client is a dense productivity tool; the list itself should remain a continuous surface, with individual message rows separated primarily by spacing and subtle state backgrounds. Popovers and modals must have enough contrast from the content behind them and must close predictably with Escape or an explicit close action.
 
@@ -384,8 +384,8 @@ Borders are thin and low-contrast at rest, but must become more visible on hover
 
 ### Toolbars and actions
 
-- **List toolbar:** compose, refresh, search, list filters, sorting, Mark All as Read, and list selection / overflow actions. These operate on the current list scope.
-- **Reader toolbar:** reply, reply all, forward, mark read/unread, archive, trash, junk, move, flag, and secondary actions. These operate on the selected message or explicitly selected message set.
+- **List toolbar:** refresh, search, list filters, sorting, Mark All as Read, and list selection / overflow actions. Compose placement in older mockups is a non-shipped visual reference.
+- **Reader toolbar:** mark read/unread, archive, trash, junk, move, flag, and secondary actions. Reply, reply all, and forward are non-shipped visual references; the shipped actions operate on the selected message or explicitly selected message set.
 - **No duplicated actions:** do not repeat reply/forward controls both in the reader toolbar and again as a second row at the bottom of the same message. Do not repeat refresh, search, theme, or account management across multiple persistent toolbars.
 - **Primary button:** use the primary blue only for the most important commit action in a modal or flow. Secondary actions use neutral surfaces and subtle borders.
 - **Icon button:** use an outlined icon, consistent dimensions, hover feedback, accessible label, tooltip where appropriate, and visible keyboard focus. Icon-only buttons must not be ambiguous.
@@ -408,7 +408,7 @@ Borders are thin and low-contrast at rest, but must become more visible on hover
 
 - **Settings panel:** categories for Account Management, Appearance, and General. Theme selection is available here only. Display the current theme and mark the selected option clearly.
 - **Account management:** list configured accounts with provider, address, group, and connection state. Add/remove/re-authorize actions must be explicit. Never ask users to type account passwords into a generic front-end dialog; use provider OAuth or a secure backend-managed connection flow in production.
-- **Compose dialog:** clear sender identity, recipient, CC, subject, and body fields. Keep Send as the primary action and Save Draft as secondary. Make the sending state and errors explicit.
+- **Compose mockup (non-shipped):** sender identity, recipient, CC, subject, and body fields may appear in visual references only. kkmail does not ship a compose dialog, Send action, or Save Draft action; do not implement or present these as working product controls.
 - **Toast feedback:** acknowledge successful local actions such as archive, move, theme change, and mark-as-read. Do not claim a real email was sent or synchronized unless the backend confirms it.
 - **Responsive dialog:** use a bounded viewport height with internal scrolling. On mobile, avoid a desktop-width dialog that overflows the screen.
 
@@ -431,4 +431,4 @@ The following component tokens are the implementation reference for recurring co
 - **Don't** use color alone to represent unread, selected, flagged, connected, warning, or error states.
 - **Don't** place account management or theme switching as separate permanent buttons beside the Settings entry.
 - **Don't** let message HTML or remote content silently execute or load without a deliberate, secure content policy.
-- **Don't** imply that demo-only send, sync, download, or account-connect controls operate on real accounts.
+- **Don't** present compose/send, reply/forward, sync, download, or account-connect controls as working actions unless the shipped product scope explicitly supports them.
