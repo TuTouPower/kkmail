@@ -16,6 +16,16 @@ from mail_core.realtime.notify import try_notify_outbox
 from mail_core.sync.jobs import enqueue_job
 
 MARK_ALL_READ_BATCH_SIZE = 500
+_PRIMARY_LOCATION_ROLE_PRIORITY = {
+    "inbox": 0,
+    "archive": 1,
+    "sent": 2,
+    "drafts": 3,
+    "junk": 4,
+    "trash": 5,
+    "all": 6,
+    "other": 7,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,11 +47,19 @@ class UnaddressableMessageError(ValueError):
     """Raised when an operation requires a provider ID that is unknown."""
 
 
+def _primary_location_sort_key(folder_role: str, folder_id: uuid.UUID) -> tuple[int, str]:
+    return (_PRIMARY_LOCATION_ROLE_PRIORITY.get(folder_role, len(_PRIMARY_LOCATION_ROLE_PRIORITY)), str(folder_id))
+
+
 def _primary_location(session: Session, message_id: uuid.UUID) -> tuple[Folder | None, MessageLocation | None]:
-    loc = session.scalar(select(MessageLocation).where(MessageLocation.message_id == message_id).limit(1))
-    if loc is None:
+    rows = session.execute(
+        select(MessageLocation, Folder)
+        .join(Folder, MessageLocation.folder_id == Folder.id)
+        .where(MessageLocation.message_id == message_id)
+    ).all()
+    if not rows:
         return None, None
-    folder = session.get(Folder, loc.folder_id)
+    loc, folder = min(rows, key=lambda row: _primary_location_sort_key(row[1].role, row[1].id))
     return folder, loc
 
 
@@ -316,14 +334,14 @@ def mark_all_messages_read(
         return MarkAllReadBatchResult(count=0, last_message_id=None)
 
     loc_rows = session.execute(
-        select(MessageLocation.message_id, MessageLocation.folder_id, Folder.remote_id)
+        select(MessageLocation.message_id, MessageLocation.folder_id, Folder.remote_id, Folder.role)
         .join(Folder, MessageLocation.folder_id == Folder.id)
         .where(MessageLocation.message_id.in_([m.id for m in messages]))
     ).all()
 
-    msg_folders: dict[uuid.UUID, list[tuple[uuid.UUID, str]]] = {}
-    for mid, fid, f_remote_id in loc_rows:
-        msg_folders.setdefault(mid, []).append((fid, f_remote_id or "INBOX"))
+    msg_folders: dict[uuid.UUID, list[tuple[uuid.UUID, str, str]]] = {}
+    for mid, fid, f_remote_id, role in loc_rows:
+        msg_folders.setdefault(mid, []).append((fid, f_remote_id or "INBOX", role))
 
     affected_accounts: set[uuid.UUID] = set()
     remote_operation_accounts: set[uuid.UUID] = set()
@@ -333,8 +351,9 @@ def mark_all_messages_read(
         msg.is_read = True
         affected_accounts.add(msg.account_id)
         folders = msg_folders.get(msg.id, [])
-        folder_ids = [fid for fid, _ in folders]
-        primary_folder_remote = folders[0][1] if folders else "INBOX"
+        folder_ids = [fid for fid, _remote_id, _role in folders]
+        primary = min(folders, key=lambda row: _primary_location_sort_key(row[2], row[0])) if folders else None
+        primary_folder_remote = primary[1] if primary else "INBOX"
 
         if msg.account_id not in affected_folders_by_account:
             affected_folders_by_account[msg.account_id] = set()
