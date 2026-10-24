@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+from contextlib import contextmanager
 from typing import Any, Protocol
 
 
@@ -272,3 +274,51 @@ def get_credential_store() -> CredentialStore:
 def set_credential_store(store: CredentialStore | None) -> None:
     global _default_store
     _default_store = store
+
+
+@contextmanager
+def credential_edit(store: CredentialStore, ref: str, *, session=None, allow_readonly: bool = False, readonly_cache: dict[str, Any] | None = None):
+    """Serialize edits and token rotation on the same durable credential row."""
+    target = store._pick(ref) if isinstance(store, CompositeCredentialStore) else store
+    if isinstance(target, DbCredentialStore):
+        from sqlalchemy import select
+        from mail_core.mail.storage.models import CredentialSecret
+        owned = session is None
+        current = session if session is not None else target._sessions()()
+        try:
+            current.scalar(select(CredentialSecret).where(CredentialSecret.ref == ref).with_for_update())
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+            row = current.get(CredentialSecret, ref)
+            data = json.loads(AESGCM(target._key(row.key_version)).decrypt(row.nonce, row.ciphertext, ref.encode()).decode()) if row else {}
+            if not isinstance(data, dict):
+                raise ValueError('credential secret must be a JSON object')
+            original = dict(data)
+            yield data
+            if data != original:
+                save_json_secret(target, ref, data, session=current)
+            if owned:
+                current.commit()
+        except BaseException:
+            if owned:
+                current.rollback()
+            raise
+        finally:
+            if owned:
+                current.close()
+    else:
+        # Non-DB stores are used for operator-managed refs and isolated tests.
+        try:
+            data = load_json_secret(store, ref)
+        except KeyError:
+            data = {}
+        if isinstance(target, EnvCredentialStore) and readonly_cache:
+            data = dict(readonly_cache)
+        original = dict(data)
+        yield data
+        if data != original:
+            try:
+                save_json_secret(store, ref, data, session=session)
+            except ReadOnlyCredentialRef:
+                if not allow_readonly:
+                    raise
+                logging.getLogger(__name__).warning('refreshed OAuth token cannot be persisted to an operator-managed read-only credential')

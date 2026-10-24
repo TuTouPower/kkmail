@@ -409,6 +409,7 @@ describe('<SettingsModal />', () => {
     await click([...settings.querySelectorAll('button')].find(b => b.textContent?.includes('添加账户')) || null)
     await typeInto(settings.querySelector('#account-email'), 'added@example.test')
     await typeInto(settings.querySelector('#account-imap-host'), 'imap.example.test')
+    await typeInto(settings.querySelector('#account-password'), 'test-app-password')
     const addButton = [...settings.querySelectorAll('button')].find((button) => button.textContent === '添加') || null
     await click(addButton)
 

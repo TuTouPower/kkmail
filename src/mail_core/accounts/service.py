@@ -37,6 +37,11 @@ def create_account(
 ) -> Account:
     _lock_sidebar_layout(session)
     email_norm = email.strip().lower()
+    from mail_core.accounts.connection import reject_microsoft_imap, validate_connection
+    if str(provider).lower() == "imap":
+        reject_microsoft_imap(email_norm, config or {})
+    if config:
+        validate_connection(email_norm, str(provider).lower(), config, credentials, require_credentials=credentials is not None)
     if str(provider).lower() == "imap" and config:
         imap_host = config.get("imap_host") or config.get("host")
         if imap_host:
@@ -111,9 +116,28 @@ def update_account(
 ) -> Account:
     if group_id is not ...:
         _lock_sidebar_layout(session)
-    acc = session.get(Account, account_id)
+    acc = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
     if acc is None:
         raise LookupError("account not found")
+    from mail_core.accounts.connection import validate_connection, merge_credentials, reject_microsoft_imap
+    from mail_core.accounts.credentials import credential_edit
+    effective_config = {**(acc.config or {}), **(config_patch or {})}
+    if acc.provider == "imap" and (config_patch or credentials or sync_enabled is True):
+        reject_microsoft_imap(acc.email, effective_config)
+    if config_patch:
+        validate_connection(acc.email, acc.provider, effective_config, None, require_credentials=False)
+    auth_config_changed = any(key in (config_patch or {}) and effective_config.get(key) != (acc.config or {}).get(key) for key in ("oauth_client_type",))
+    if credentials or auth_config_changed:
+        ref = acc.credential_ref or f"account:{acc.id}"
+        with credential_edit(get_credential_store(), ref, session=session) as saved:
+            merged_credentials = merge_credentials(acc.provider, saved, credentials or {})
+            validate_connection(acc.email, acc.provider, effective_config, merged_credentials)
+            if auth_config_changed:
+                merged_credentials.pop("access_token", None)
+                merged_credentials.pop("expires_at", None)
+            saved.clear()
+            saved.update(merged_credentials)
+        acc.credential_ref = ref
     if display_name is not None:
         acc.display_name = display_name
     if group_id is not ...:
@@ -125,6 +149,9 @@ def update_account(
     if config_patch:
         merged = dict(acc.config or {})
         merged.update(config_patch)
+        for key in ("imap_user", "username"):
+            if key in config_patch and (config_patch[key] is None or not str(config_patch[key]).strip()):
+                merged.pop(key, None)
         if (acc.provider or "").lower() == "imap":
             imap_host = merged.get("imap_host") or merged.get("host")
             if imap_host:
@@ -132,10 +159,6 @@ def update_account(
 
                 validate_imap_host(imap_host)
         acc.config = merged
-    if credentials is not None:
-        ref = acc.credential_ref or f"account:{acc.id}"
-        acc.credential_ref = ref
-        save_json_secret(get_credential_store(), ref, credentials, session=session)
     session.flush()
     return acc
 

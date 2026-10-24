@@ -20,7 +20,10 @@ def test_create_and_update_and_delete_account_passes_session_to_credential_store
         provider="imap",
         credential_ref="account:123",
     )
+    mock_acc.config = {"imap_host": "imap.example.test"}
     mock_session.get.return_value = mock_acc
+    mock_session.scalar.return_value = None
+    mock_store.get_secret.return_value = '{"password": "old"}'
 
     with patch("mail_core.accounts.service.get_credential_store", return_value=mock_store):
         # 1. create_account
@@ -38,7 +41,9 @@ def test_create_and_update_and_delete_account_passes_session_to_credential_store
         mock_store.reset_mock()
 
         # 2. update_account
-        update_account(
+        mock_session.scalar.return_value = mock_acc
+        with patch("mail_core.providers.factory.validate_imap_host"):
+            update_account(
             mock_session,
             acc_id,
             credentials={"password": "new_pwd"},

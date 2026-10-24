@@ -88,25 +88,6 @@ describe('settings workspace redesign', () => {
     expect(container.textContent).toContain('two@example.com：分组写入失败')
   })
 
-  it('opens account creation on demand and rejects non-object credentials before sending', async () => {
-    const { container } = await render(<SettingsPage />)
-    expect(container.querySelector('#account-email')).toBeNull()
-    await click([...container.querySelectorAll('button')].find(b => b.textContent?.includes('添加账户')) || null)
-    expect(container.querySelector('dialog[open]')).not.toBeNull()
-    await typeInto(container.querySelector('#account-email'), 'new@example.com')
-    await typeInto(container.querySelector('#account-imap-host'), 'imap.example.com')
-    const credentials = container.querySelector('#account-credentials') as HTMLTextAreaElement
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
-    const { act } = await import('react')
-    await act(async () => {
-      setter.call(credentials, '[]')
-      credentials.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    await click([...container.querySelectorAll('button')].find(b => b.textContent === '添加') || null)
-    await waitFor(() => expect(container.textContent).toContain('凭据必须是 JSON 对象'))
-    expect(writes).toEqual([])
-  })
-
   it('renames groups in their own section and retains general drafts across query refresh', async () => {
     const { container } = await render(<SettingsPage />)
     await click([...container.querySelectorAll('button')].find(b => b.textContent === '分组管理') || null)
