@@ -50,6 +50,7 @@ function formatMessage(level, args) {
 
 class DesktopLogger {
   constructor(options = {}) {
+    this.app = options.app || null
     this.logDir = options.logDir || (options.app && typeof options.app.getPath === 'function' ? options.app.getPath('userData') : process.cwd())
     this.logPath = options.logPath || path.join(this.logDir, 'desktop.log')
     this.stream = null
@@ -134,6 +135,14 @@ class DesktopLogger {
 
     this._onUncaughtException = (err, origin) => {
       this.write('FATAL', ['Uncaught exception in main process:', err, origin || ''])
+      return this.end().catch(() => {}).then(() => {
+        process.exitCode = 1
+        if (this.app && typeof this.app.quit === 'function') {
+          this.app.quit()
+        } else {
+          process.exit(1)
+        }
+      })
     }
     this._onUnhandledRejection = (reason, promise) => {
       this.write('ERROR', ['Unhandled rejection in main process:', reason])

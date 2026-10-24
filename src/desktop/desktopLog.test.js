@@ -46,9 +46,12 @@ async function runTests() {
   // 4. Hook console & process test
   const tempDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-log-hook-test-'))
   const logFile2 = path.join(tempDir2, 'desktop.log')
+  const previousExitCode = process.exitCode
 
   try {
-    const logger = new DesktopLogger({ logPath: logFile2 })
+    let signalQuit
+    const quitCalled = new Promise((resolve) => { signalQuit = resolve })
+    const logger = new DesktopLogger({ logPath: logFile2, app: { quit: signalQuit } })
     logger.hookConsoleAndProcess()
 
     // Test console hooking
@@ -56,9 +59,11 @@ async function runTests() {
     console.warn('Hooked console.warn message')
     console.error('Hooked console.error message')
 
-    // Test process listeners
-    process.emit('uncaughtException', new Error('Simulated uncaught exception'))
+    // Test process listeners. The fatal handler must flush before asking Electron to quit.
     process.emit('unhandledRejection', 'Simulated unhandled rejection')
+    process.emit('uncaughtException', new Error('Simulated uncaught exception'))
+    await quitCalled
+    assert.strictEqual(process.exitCode, 1, 'fatal exception must leave a failing process exit code')
 
     await logger.end()
 
@@ -69,6 +74,7 @@ async function runTests() {
     assert.ok(content2.includes('[FATAL] Uncaught exception in main process: Error: Simulated uncaught exception'))
     assert.ok(content2.includes('[ERROR] Unhandled rejection in main process: Simulated unhandled rejection'))
   } finally {
+    process.exitCode = previousExitCode === undefined ? 0 : previousExitCode
     try { fs.rmSync(tempDir2, { recursive: true, force: true }) } catch (_) {}
   }
 
