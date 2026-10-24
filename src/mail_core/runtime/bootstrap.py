@@ -8,6 +8,7 @@ Environment variables always win. Nothing here ever falls back to a constant.
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import secrets
 import time
@@ -18,8 +19,18 @@ import bcrypt
 INITIAL_PASSWORD_FILE = "initial-password.txt"
 
 
+def _restrict_secret_file_permissions(path: Path) -> None:
+    try:
+        os.chmod(path, 0o600)
+    except OSError as exc:
+        logging.getLogger(__name__).warning(
+            "could not restrict secret file permissions for %s: %s", path, exc
+        )
+
+
 def _read_or_create(path: Path, factory) -> str:
     if path.is_file():
+        _restrict_secret_file_permissions(path)
         value = path.read_text(encoding="utf-8").strip()
         if value:
             return value
@@ -28,6 +39,7 @@ def _read_or_create(path: Path, factory) -> str:
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
+        _restrict_secret_file_permissions(path)
         for _ in range(10):
             existing = path.read_text(encoding="utf-8").strip()
             if existing:
@@ -54,6 +66,18 @@ def bootstrap_data_dir(data_dir: str | os.PathLike[str], env: dict[str, str] | N
         os.chmod(secrets_dir, 0o700)
     except OSError:  # pragma: no cover - Windows ACLs
         pass
+
+    hash_path = secrets_dir / "login-password.bcrypt"
+    for path in (
+        secrets_dir / "session.key",
+        secrets_dir / "blob-v1.key",
+        secrets_dir / "backup.key",
+        hash_path,
+        root / INITIAL_PASSWORD_FILE,
+    ):
+        if path.is_file():
+            _restrict_secret_file_permissions(path)
+
     applied: dict[str, str] = {}
 
     def setdefault(name: str, value_factory) -> None:
@@ -69,7 +93,6 @@ def bootstrap_data_dir(data_dir: str | os.PathLike[str], env: dict[str, str] | N
     setdefault("MAIL_CORE_BLOB_ROOT", lambda: str(root / "blobs"))
     setdefault("MAIL_CORE_BACKUP_DIR", lambda: str(root / "backups"))
 
-    hash_path = secrets_dir / "login-password.bcrypt"
     if not any((env.get(k) or "").strip() for k in ("MAIL_CORE_LOGIN_PASSWORD_HASH", "MAIL_CORE_LOGIN_PASSWORD")):
         env.setdefault("MAIL_CORE_PASSWORD_HASH_PATH", str(hash_path))
         if not hash_path.is_file():
