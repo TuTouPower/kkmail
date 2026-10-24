@@ -137,30 +137,49 @@ pinned_archive_sha256() {
 
 assert_tar_safe() {
   local archive="$1"
-  local member
+  local listing line member
+  listing="$(tar -tzf "$archive")" || return 1
+  local verbose_listing
+  verbose_listing="$(tar -tvzf "$archive")" || return 1
+  while IFS= read -r line; do
+    case "${line:0:1}" in
+      -|d) ;;
+      *)
+        echo "Refusing archive link or special member: $line" >&2
+        return 1
+        ;;
+    esac
+  done <<< "$verbose_listing"
   while IFS= read -r member; do
     case "$member" in
       "" ) continue ;;
-      /* | *../* | */../* | */.. | .. | ../* | *.. )
+      /* | \\* | [A-Za-z]:* | ../* | */../* | */.. | .. | *\\* )
         echo "Refusing archive member with unsafe path: $member" >&2
         return 1
         ;;
     esac
-  done < <(tar -tzf "$archive")
+  done <<< "$listing"
 }
 
 assert_zip_safe() {
   local archive="$1"
-  local member
+  local listing attributes unsafe_type member
+  listing="$(unzip -Z1 "$archive")" || return 1
+  attributes="$(unzip -Z -v "$archive")" || return 1
+  unsafe_type="$(printf '%s\n' "$attributes" | awk '/Unix file attributes \(/ { mode = $NF; if (mode ~ /^[lbhcp]/) { print mode; exit } }')"
+  if [[ -n "$unsafe_type" ]]; then
+    echo "Refusing zip link or special member type: $unsafe_type" >&2
+    return 1
+  fi
   while IFS= read -r member; do
     case "$member" in
       "" ) continue ;;
-      /* | *../* | */../* | */.. | .. | ../* | *.. )
+      /* | \\* | [A-Za-z]:* | ../* | */../* | */.. | .. | *\\* )
         echo "Refusing zip member with unsafe path: $member" >&2
         return 1
         ;;
     esac
-  done < <(unzip -Z1 "$archive")
+  done <<< "$listing"
 }
 
 fix_macos_rpath() {

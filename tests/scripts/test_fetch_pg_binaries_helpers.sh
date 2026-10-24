@@ -28,6 +28,35 @@ if assert_tar_safe "$TMP/evil.tgz" 2>/dev/null; then
   exit 1
 fi
 
+# A safe-looking name can still escape through a symlink member.
+python3 -c '
+import io, sys, tarfile
+with tarfile.open(sys.argv[1], "w:gz") as tar:
+    link = tarfile.TarInfo(name="redirect")
+    link.type = tarfile.SYMTYPE
+    link.linkname = "../../outside"
+    tar.addfile(link)
+    child = tarfile.TarInfo(name="redirect/escaped")
+    child.size = 1
+    tar.addfile(child, io.BytesIO(b"x"))
+' "$TMP/link.tgz"
+if assert_tar_safe "$TMP/link.tgz" 2>/dev/null; then
+  echo "expected symlink member reject" >&2
+  exit 1
+fi
+python3 -c '
+import sys, tarfile
+with tarfile.open(sys.argv[1], "w:gz") as tar:
+    link = tarfile.TarInfo(name="hardlink")
+    link.type = tarfile.LNKTYPE
+    link.linkname = "../../outside"
+    tar.addfile(link)
+' "$TMP/hardlink.tgz"
+if assert_tar_safe "$TMP/hardlink.tgz" 2>/dev/null; then
+  echo "expected hardlink member reject" >&2
+  exit 1
+fi
+
 # Allowlist patterns (calling production url_allowed)
 url_allowed "https://github.com/theseus-rs/postgresql-binaries/releases/download/16.6.0/postgresql-16.6.0-x86_64-unknown-linux-gnu.tar.gz"
 url_allowed "https://github.com/theseus-rs/postgresql-binaries/releases/download/16.6.0/postgresql-16.6.0-aarch64-apple-darwin.tar.gz"
@@ -116,6 +145,26 @@ grep -q "SHA-256 OK ($FALLBACK_SHA)" "$TMP/manifest.log"
 if command -v zip >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
   (cd "$TMP/safe" && zip -q "$TMP/safe.zip" bin/pg_ctl)
   assert_zip_safe "$TMP/safe.zip"
+
+  python3 - "$TMP/evil.zip" "$TMP/link.zip" <<'PYZIP'
+import stat, sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("../evil_bin", "x")
+with zipfile.ZipFile(sys.argv[2], "w") as archive:
+    link = zipfile.ZipInfo("redirect")
+    link.create_system = 3
+    link.external_attr = (stat.S_IFLNK | 0o777) << 16
+    archive.writestr(link, "../../outside")
+    archive.writestr("redirect/escaped", "x")
+PYZIP
+  if assert_zip_safe "$TMP/evil.zip" 2>/dev/null; then
+    echo "expected zip traversal reject" >&2
+    exit 1
+  fi
+  if assert_zip_safe "$TMP/link.zip" 2>/dev/null; then
+    echo "expected zip symlink reject" >&2
+    exit 1
+  fi
 fi
 
 echo "test_fetch_pg_binaries_helpers: ok"
