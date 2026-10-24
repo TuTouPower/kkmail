@@ -16,6 +16,7 @@ const path = require('path')
 const cp = require('child_process')
 const { PostgresManager } = require('../postgresManager')
 const { freePort } = require('../startup')
+const { assertSmokeMarkerPersisted, writeSmokeMarker } = require('./packaged_smoke_db')
 
 const desktopRoot = path.resolve(__dirname, '..')
 const repoRoot = path.resolve(desktopRoot, '../..')
@@ -110,14 +111,11 @@ async function main() {
     assert.strictEqual(fs.statSync(pwFile).mode & 0o777, 0o600, 'Password file mode must be 0600')
   }
 
-  // Write a marker table to verify data persistence across restart (AC-003)
-  const markerTableSql = 'CREATE TABLE IF NOT EXISTS kkmail_smoke_marker (key text primary key, value text); INSERT INTO kkmail_smoke_marker VALUES (\'test_key\', \'persisted_ok\');'
-  const psqlBin = path.join(packagedPgBin, 'psql')
-  if (fs.existsSync(psqlBin)) {
-    cp.spawnSync(psqlBin, ['-h', '127.0.0.1', '-p', String(port), '-U', 'postgres', '-d', 'postgres', '-c', markerTableSql], {
-      env: { ...process.env, PGPASSWORD: mgr1.password() },
-    })
-  }
+  // Write the marker as the actual application role in the application database.
+  const psqlName = process.platform === 'win32' ? 'psql.exe' : 'psql'
+  const psqlBin = path.join(packagedPgBin, psqlName)
+  assert.ok(fs.existsSync(psqlBin), `Packaged psql binary missing: ${psqlBin}`)
+  writeSmokeMarker({ psqlBin, manager: mgr1 })
 
   console.log('✓ AC-002: Packaged PostgreSQL initialized and started successfully.')
 
@@ -157,6 +155,7 @@ async function main() {
 
   // Password must match previously persisted value
   assert.strictEqual(mgr2.password(), mgr1.password(), 'Password regenerated unexpectedly')
+  assertSmokeMarkerPersisted({ psqlBin, manager: mgr2 })
 
   // Clean stop for mgr2
   const stop2 = mgr2.stop()

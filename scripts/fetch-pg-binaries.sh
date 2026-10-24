@@ -248,12 +248,12 @@ main() {
   mkdir -p "$VENDOR"
 
   if [[ "$OS_NORM" == "windows" ]]; then
-    if [[ -f "$DEST/bin/pg_ctl.exe" && -f "$DEST/bin/initdb.exe" ]]; then
+    if [[ -f "$DEST/bin/pg_ctl.exe" && -f "$DEST/bin/initdb.exe" && -f "$DEST/bin/psql.exe" ]]; then
       echo "Already present: $DEST/bin — skipping download (rm -rf $DEST to refresh)"
       exit 0
     fi
   else
-    if [[ -x "$DEST/bin/pg_ctl" && -x "$DEST/bin/initdb" ]]; then
+    if [[ -x "$DEST/bin/pg_ctl" && -x "$DEST/bin/initdb" && -x "$DEST/bin/psql" ]]; then
       echo "Already present: $DEST/bin — skipping download (rm -rf $DEST to refresh)"
       "$DEST/bin/pg_ctl" --version 2>/dev/null || true
       exit 0
@@ -347,14 +347,14 @@ HINT
   rm -rf "$DEST/include" "$DEST/doc" "$DEST/man" "$DEST/share/doc" "$DEST/share/man"
   find "$DEST" -type f \( -name "*.a" -o -name "*.pdb" -o -name "*.dSYM" \) -delete 2>/dev/null || true
 
-  # Retain only required core binaries (initdb, pg_ctl, postgres) and runtime libraries
+  # Retain PostgreSQL runtime binaries plus psql for packaged lifecycle verification.
   if [[ -d "$DEST/bin" ]]; then
     for f in "$DEST/bin"/*; do
       [[ -f "$f" ]] || continue
       local base
       base="$(basename "$f")"
       case "$base" in
-        initdb|initdb.exe|pg_ctl|pg_ctl.exe|postgres|postgres.exe|createdb|createdb.exe|*.dll)
+        initdb|initdb.exe|pg_ctl|pg_ctl.exe|postgres|postgres.exe|createdb|createdb.exe|psql|psql.exe|*.dll)
           ;;
         *)
           rm -f "$f"
