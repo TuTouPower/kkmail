@@ -627,6 +627,7 @@ def get_unconverged_field_intents(
                     ),
                 )
             )
+            .order_by(RemoteOperation.created_at.asc(), RemoteOperation.id.asc())
         ).all()
     )
     intents: dict[str, dict[str, Any]] = {}

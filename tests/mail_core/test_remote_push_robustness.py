@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+from mail_core.mail.domain.enums import RemoteOperationStatus
 from mail_core.providers.http import ProviderHttpError, RateLimitedError
-from mail_core.sync.remote_push import is_rate_limited_error, is_transient_error
+from mail_core.sync.remote_push import (
+    get_unconverged_field_intents,
+    is_rate_limited_error,
+    is_transient_error,
+)
 
 
 def test_is_transient_error_detection():
@@ -40,3 +49,51 @@ def test_is_rate_limited_error_requires_status_or_known_prefix():
         ProviderHttpError("bad request", status=400),
         "HTTP 429 Too Many Requests",
     )
+
+
+def test_latest_created_field_intent_wins_over_stale_done_intent():
+    created_at = datetime(2026, 10, 25, 10, 0, tzinfo=timezone.utc)
+    stale_done = SimpleNamespace(
+        id=uuid.UUID(int=1),
+        entity_key="msg:remote-1:read",
+        desired_state={"is_read": True},
+        status=RemoteOperationStatus.DONE.value,
+        created_at=created_at,
+        updated_at=created_at + timedelta(seconds=1),
+    )
+    newer_pending = SimpleNamespace(
+        id=uuid.UUID(int=2),
+        entity_key="msg:remote-1:read",
+        desired_state={"is_read": False},
+        status=RemoteOperationStatus.PENDING.value,
+        created_at=created_at + timedelta(seconds=2),
+        updated_at=created_at + timedelta(seconds=2),
+    )
+
+    class Result:
+        def all(self):
+            return sorted(
+                [newer_pending, stale_done],
+                key=lambda op: (op.created_at, op.id),
+            )
+
+    class Session:
+        statement = None
+
+        def scalars(self, statement):
+            self.statement = statement
+            return Result()
+
+    session = Session()
+    intents = get_unconverged_field_intents(
+        session,
+        uuid.uuid4(),
+        ["remote-1"],
+        now=created_at + timedelta(seconds=3),
+    )
+
+    sql = str(session.statement).lower()
+    order_by = sql.split("order by", 1)[1]
+    assert "remote_operations.created_at asc" in order_by
+    assert "remote_operations.id asc" in order_by
+    assert intents == {"remote-1": {"is_read": False}}
