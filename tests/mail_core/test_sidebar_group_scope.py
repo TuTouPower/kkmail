@@ -576,6 +576,11 @@ def test_group_scope_covers_roles_pagination_search_offsets_and_member_changes()
     assert stats.json()["total_unread"] is None
     sent_stats = client.get("/api/mail/stats", params={"group_id": str(group_id), "folder_role": "sent"})
     assert sent_stats.json()["total_unread"] == 0
+    global_sent_stats = client.get("/api/mail/stats", params={"folder_role": "sent"})
+    assert global_sent_stats.status_code == 200
+    global_sent_by_account = {row["account_id"]: row for row in global_sent_stats.json()["accounts"]}
+    assert global_sent_by_account[str(first_id)]["unread_count"] == 0
+    assert global_sent_by_account[str(second_id)]["unread_count"] == 0
 
     search_first = client.get("/api/mail/search", params={"q": "indexed scoped lighthouse", "group_id": str(group_id), "limit": 2, "offset": 0})
     search_second = client.get("/api/mail/search", params={"q": "indexed scoped lighthouse", "group_id": str(group_id), "limit": 2, "offset": 2})

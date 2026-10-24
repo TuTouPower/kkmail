@@ -208,7 +208,7 @@ def api_global_inbox_stats(group_id: UUID | None = None, folder_role: str = "inb
                 return query_group_inbox_stats(session, group_id, folder_role=folder_role)
             except LookupError as exc:
                 raise HTTPException(404, str(exc)) from exc
-        return query_global_inbox_stats(session)
+        return query_global_inbox_stats(session, folder_role=folder_role)
 
 
 @router.get("/inbox", response_model=PageOut)

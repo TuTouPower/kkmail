@@ -13,7 +13,6 @@ from pydantic import BaseModel
 from sqlalchemy import and_, cast, func, or_, select, String
 from sqlalchemy.orm import Session
 
-from mail_core.mail.domain.enums import FolderRole
 from mail_core.mail.storage.models import Account, AccountGroup, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
 
 
@@ -378,8 +377,8 @@ class GlobalStatsOut(BaseModel):
     accounts: list[AccountInboxStatsOut]
 
 
-def query_global_inbox_stats(session: Session) -> GlobalStatsOut:
-    """Return complete inbox stats, keeping accounts with missing folder stats unknown."""
+def query_global_inbox_stats(session: Session, *, folder_role: str = "inbox") -> GlobalStatsOut:
+    """Return stats for a folder role, keeping missing folder stats unknown."""
     stmt = (
         select(
             Account.id,
@@ -392,7 +391,7 @@ def query_global_inbox_stats(session: Session) -> GlobalStatsOut:
             Account.sync_status,
         )
         .select_from(Account)
-        .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == FolderRole.INBOX.value))
+        .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == folder_role))
         .outerjoin(FolderStats, FolderStats.folder_id == Folder.id)
         .group_by(Account.id, Account.sync_enabled, Account.sync_status)
         .order_by(Account.id.asc())
