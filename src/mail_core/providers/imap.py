@@ -281,6 +281,8 @@ def _check_uidvalidity(cursor: dict[str, Any] | None, uidvalidity: int | None) -
 
 def _quote_mailbox(name: str) -> str:
     """Safely quote an IMAP mailbox name if it contains spaces or special characters."""
+    if any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in name):
+        raise ValueError("IMAP mailbox name contains control characters")
     if not name:
         return '""'
     if name.startswith('"') and name.endswith('"'):
@@ -971,9 +973,23 @@ class ImapProvider:
         folder = str(desired_state.get("folder_remote_id") or (parsed[1] if parsed else "") or "INBOX")
         uid_str = imap_uid_for_command(remote_id)
         op = normalize_op_type(op_type)
+        try:
+            quoted_folder = _quote_mailbox(folder)
+            quoted_dest: str | None = None
+            if op == OP_MOVE:
+                dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
+                if not dest:
+                    return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
+                quoted_dest = _quote_mailbox(dest)
+            elif op == OP_TRASH:
+                trash = str(desired_state.get("trash_folder_remote_id") or "Trash")
+                quoted_dest = _quote_mailbox(trash)
+        except ValueError as exc:
+            return RemoteOperationResult(success=False, error=str(exc))
+
         c = self._connect()
         try:
-            typ, _ = c.select(_quote_mailbox(folder))
+            typ, _ = c.select(quoted_folder)
             if typ != "OK":
                 return RemoteOperationResult(success=False, error=f"select {folder} failed")
 
@@ -1004,11 +1020,9 @@ class ImapProvider:
                 return RemoteOperationResult(success=True, remote_state={"is_flagged": want})
 
             if op == OP_MOVE:
-                dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
-                if not dest:
-                    return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
                 # Prefer UID MOVE (RFC 6851); never STORE \Deleted or expunge entire mailbox
-                typ, response_data = c.uid("MOVE", uid_str, _quote_mailbox(dest))
+                assert quoted_dest is not None
+                typ, response_data = c.uid("MOVE", uid_str, quoted_dest)
                 if typ != "OK":
                     return RemoteOperationResult(
                         success=False,
@@ -1023,9 +1037,9 @@ class ImapProvider:
                 return RemoteOperationResult(success=True, remote_state=remote_state)
 
             if op == OP_TRASH:
-                trash = str(desired_state.get("trash_folder_remote_id") or "Trash")
                 # Try move into trash mailbox first; never STORE \Deleted or expunge entire mailbox
-                typ, response_data = c.uid("MOVE", uid_str, _quote_mailbox(trash))
+                assert quoted_dest is not None
+                typ, response_data = c.uid("MOVE", uid_str, quoted_dest)
                 if typ != "OK":
                     return RemoteOperationResult(
                         success=False,

@@ -42,6 +42,12 @@ def test_quote_mailbox_spaces_and_special_chars():
     assert _quote_mailbox("Folder\\Backslash") == '"Folder\\\\Backslash"'
 
 
+@pytest.mark.parametrize("control", ["\r", "\n", "\x00", "\x1f", "\x7f", "\x85"])
+def test_quote_mailbox_rejects_control_characters(control):
+    with pytest.raises(ValueError, match="control characters"):
+        _quote_mailbox(f"Folder{control}Name")
+
+
 def test_imap_provider_quotes_folder_in_commands():
     from unittest.mock import MagicMock
 
@@ -60,6 +66,30 @@ def test_imap_provider_quotes_folder_in_commands():
     assert res.success is True
     mock_client.select.assert_called_with('"Sent Items"')
     mock_client.uid.assert_called_with("MOVE", "1", '"Deleted Items"')
+
+
+@pytest.mark.parametrize(
+    ("op_type", "destination_field"),
+    [("move", "dest_folder_remote_id"), ("trash", "trash_folder_remote_id")],
+)
+def test_imap_remote_write_rejects_control_destination_before_connect(
+    monkeypatch,
+    op_type,
+    destination_field,
+):
+    provider = ImapProvider(host="imap.example.com", port=993, username="u", password="p", use_ssl=False)
+    monkeypatch.setattr(provider, "_connect", lambda: pytest.fail("must reject destination before connecting"))
+    result = provider.apply_remote_operation(
+        op_type,
+        {
+            "remote_id": "1",
+            "folder_remote_id": "INBOX",
+            destination_field: "Archive\r\nUID STORE 1 +FLAGS (\\Deleted)",
+        },
+    )
+
+    assert result.success is False
+    assert "control characters" in (result.error or "")
 
 
 def test_imap_provider_list_folders_sent_mapping():
