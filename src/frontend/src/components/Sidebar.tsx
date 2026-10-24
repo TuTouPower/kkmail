@@ -205,7 +205,22 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
     return priority || (a.name || '').localeCompare(b.name || '', 'zh-CN')
   }).map((folder) => {
     const role = folder.role || 'other'
-    const displayName = getStandardName(role, folder.name || '')
+    const rawName = folder.name || folder.remote_id || folder.folder_id || ''
+    const displayBase = getStandardName(role, rawName)
+    const sameLabelFolders = folders.filter((candidate) =>
+      (candidate.role || 'other') === role && getStandardName(role, candidate.name || candidate.remote_id || candidate.folder_id || '') === displayBase,
+    )
+    const sameNameFolders = sameLabelFolders.filter((candidate) =>
+      (candidate.name || candidate.remote_id || candidate.folder_id || '') === rawName,
+    )
+    let duplicateSuffix = ''
+    if (sameNameFolders.length > 1) {
+      const ordered = [...sameNameFolders].sort((a, b) => (a.folder_id || '').localeCompare(b.folder_id || ''))
+      duplicateSuffix = ` #${ordered.findIndex((candidate) => candidate.folder_id === folder.folder_id) + 1}`
+    }
+    const displayName = sameLabelFolders.length > 1
+      ? `${displayBase} · ${rawName}${duplicateSuffix}`
+      : displayBase
     const folderId = String(folder.folder_id || '')
     const active = view.type === 'folder' && view.accountId === accountId && view.folderId === folderId
     const children = folder.remote_id ? childrenMap.get(folder.remote_id) || [] : []
