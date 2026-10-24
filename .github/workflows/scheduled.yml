@@ -23,9 +23,9 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install uv
+          python -m pip install uv==0.12.11
           uv venv .venv
-          uv pip install --python .venv/bin/python -r requirements-dev.txt
+          uv pip install --python .venv/bin/python --require-hashes -r requirements-ci.lock
 
       - name: Start Dedicated Test Services
         env:

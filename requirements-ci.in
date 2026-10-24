@@ -1,0 +1,3 @@
+# Inputs for requirements-ci.lock; compile with uv for Python 3.13.
+-r requirements-dev.txt
+pyyaml
