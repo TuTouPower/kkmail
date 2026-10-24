@@ -50,6 +50,7 @@ from mail_core.mail.storage.models import (
     Message,
     MessageArchiveState,
     MessageBlob,
+    MessageBlobLink,
     MessageBody,
     MessageSearch,
     WorkerJob,
@@ -260,6 +261,119 @@ def test_a35_gc_digest_lock_and_race_prevention(tmp_path):
     unlinked2 = unlink_gc_paths([blob_path])
     assert unlinked2 == 1
     assert not blob_path.exists(), "Unreferenced blob file should now be deleted."
+
+
+def test_a26_mime_publish_holds_digest_lock_against_gc(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAIL_CORE_BLOB_ROOT", str(tmp_path))
+    monkeypatch.setenv("MAIL_CORE_BLOB_KEY_V1", base64.b64encode(b"A" * 32).decode())
+    monkeypatch.setenv("MAIL_CORE_BLOB_ACTIVE_VERSION", "1")
+    store = DictCredentialStore({"cred-ref": "pass"})
+    set_credential_store(store)
+    now = datetime.now(timezone.utc)
+    raw_mime = (
+        b"From: sender@example.com\r\n"
+        b"To: recipient@example.com\r\n"
+        b"Subject: Digest lock race\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        b"The file must survive concurrent GC.\r\n"
+    )
+    provider = MemoryProvider(folders=[RemoteFolder("INBOX", "INBOX", "inbox")])
+    provider.seed(
+        "INBOX",
+        [RemoteMessageMeta("mime-race", "Digest lock race", "sender@example.com", "Sender", now, False, False, uid=1)],
+        {"mime-race": raw_mime},
+    )
+    monkeypatch.setattr(engine_mod, "build_provider", lambda *args, **kwargs: provider)
+    monkeypatch.setattr(archive_mod, "build_provider", lambda *args, **kwargs: provider)
+    original_put = BlobStore.put
+    published = threading.Event()
+    allow_archive = threading.Event()
+    put_timeout = 10
+
+    def publish_then_pause(blob_store, data):
+        result = original_put(blob_store, data)
+        if data == raw_mime:
+            published.set()
+            if not allow_archive.wait(put_timeout):
+                raise TimeoutError("test did not release MIME publication")
+        return result
+
+    monkeypatch.setattr(BlobStore, "put", publish_then_pause)
+    Session = get_session_factory()
+    pool = ThreadPoolExecutor(max_workers=2)
+    archive_future = None
+    gc_future = None
+    waiting_for_digest_lock = False
+    try:
+        with Session() as session:
+            account, folder = _setup_account_and_folder(session, store)
+            message = Message(
+                account_id=account.id,
+                remote_id="mime-race",
+                subject="Digest lock race",
+                from_address="sender@example.com",
+                sort_time=now,
+            )
+            session.add(message)
+            session.flush()
+            session.add(MessageArchiveState(message_id=message.id, state=ArchiveState.ARCHIVE_PENDING.value))
+            session.commit()
+            account_id = account.id
+            message_id = message.id
+
+        archive_future = pool.submit(
+            run_archive_batch,
+            account_id=account_id,
+            worker_id="mime-publish-worker",
+            store=store,
+            payload={"batch_size": 10},
+        )
+        assert published.wait(10), "archive did not publish the MIME blob"
+        digest = hashlib.sha256(raw_mime).hexdigest()
+        blob_path = BlobStore(tmp_path, keyring=Keyring({1: b"A" * 32}, active_version=1)).path_for(digest)
+        assert blob_path.is_file()
+
+        gc_started = threading.Event()
+
+        def gc_unlink():
+            gc_started.set()
+            return unlink_gc_paths([blob_path])
+
+        gc_future = pool.submit(gc_unlink)
+        assert gc_started.wait(5)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not gc_future.done():
+            with Session() as session:
+                waiting_for_digest_lock = bool(
+                    session.scalar(
+                        text(
+                            "SELECT EXISTS (SELECT 1 FROM pg_locks "
+                            "WHERE locktype = 'advisory' AND NOT granted "
+                            "AND database = (SELECT oid FROM pg_database WHERE datname = current_database()))"
+                        )
+                    )
+                )
+            if waiting_for_digest_lock:
+                break
+            time.sleep(0.02)
+
+        allow_archive.set()
+        archive_result = archive_future.result(timeout=15)
+        gc_unlinked = gc_future.result(timeout=15)
+        assert waiting_for_digest_lock, "GC did not wait on the publisher's digest lock"
+        assert archive_result["status"] == "ok"
+        assert archive_result["completed"] == 1
+        assert gc_unlinked == 0
+        assert blob_path.is_file()
+        with Session() as session:
+            blob = session.scalar(select(MessageBlob).where(MessageBlob.content_sha256 == digest))
+            assert blob is not None
+            assert session.get(MessageBlobLink, message_id) is not None
+        assert BlobStore(tmp_path, keyring=Keyring({1: b"A" * 32}, active_version=1)).get(digest) == raw_mime
+    finally:
+        allow_archive.set()
+        pool.shutdown(wait=True)
+        set_credential_store(None)
 
 
 def test_a36_strict_hard_quota_reservation_and_release(tmp_path, monkeypatch):

@@ -756,16 +756,6 @@ def run_archive_batch(
                     }
                 s_res.commit()
 
-        try:
-            write = blob_store.put(mime)
-            current_used_bytes += write.size_bytes
-        except Exception:
-            if res_id is not None:
-                with Session() as s_cleanup:
-                    release_quota_reservation(s_cleanup, res_id)
-                    s_cleanup.commit()
-            raise
-
         with Session() as session:
             try:
                 if res_id is not None:
@@ -782,7 +772,20 @@ def run_archive_batch(
                         return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
 
                 # A35: 以 digest 跨进程锁协调发布与回收
-                acquire_blob_digest_lock(session, write.content_sha256)
+                acquire_blob_digest_lock(session, mime_digest)
+                try:
+                    # Keep the digest lock's transaction open across file publication
+                    # and the MessageBlob/MessageBlobLink inserts below. GC uses the
+                    # same lock while checking references and unlinking the file.
+                    write = blob_store.put(mime)
+                    current_used_bytes += write.size_bytes
+                except Exception:
+                    session.rollback()
+                    if res_id is not None:
+                        with Session() as s_cleanup:
+                            release_quota_reservation(s_cleanup, res_id)
+                            s_cleanup.commit()
+                    raise
 
                 st = session.get(MessageArchiveState, mid)
                 if (
