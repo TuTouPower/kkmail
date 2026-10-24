@@ -34,6 +34,7 @@ interface FolderStatsItem {
   unread_count?: number | null
   total_count?: number | null
   role?: string
+  sync_status?: string
   name?: string
   remote_id?: string
   parent_remote_id?: string | null
@@ -205,6 +206,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
     return priority || (a.name || '').localeCompare(b.name || '', 'zh-CN')
   }).map((folder) => {
     const role = folder.role || 'other'
+    const notSelectable = folder.sync_status === 'paused'
     const rawName = folder.name || folder.remote_id || folder.folder_id || ''
     const displayBase = getStandardName(role, rawName)
     const sameLabelFolders = folders.filter((candidate) =>
@@ -229,18 +231,19 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
       <div key={folderId || folder.remote_id || folder.name} className="tree-folder-node">
         <button
           type="button"
+          disabled={notSelectable}
           className={`tree-nav-row tree-folder-row ${active ? 'active' : ''}`}
           style={{ paddingLeft: `${48 + level * 24}px` }}
           onClick={() => {
             setView({ type: 'folder', accountId, email: accountEmail, folderId, folderName: displayName, folderRole: role })
             setListFilter('all')
           }}
-          title={displayName}
+          title={notSelectable ? `${displayName}（目录容器）` : displayName}
         >
           <span className="tree-disclosure-slot" aria-hidden="true" />
           <Icon size={16} aria-hidden="true" />
           <span className="tree-label">{displayName}</span>
-          {folder.unread_count === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : folder.unread_count ? <span className="side-count unread-badge">{folder.unread_count}</span> : null}
+          {!notSelectable && (folder.unread_count === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : folder.unread_count ? <span className="side-count unread-badge">{folder.unread_count}</span> : null)}
         </button>
         {children.length > 0 && renderTree(children, level + 1)}
       </div>

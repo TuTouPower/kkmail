@@ -19,7 +19,7 @@ const accounts = [
   { id: 'acc-2', email: 'notes@a.example', status: 'active', account_type: 'imap', provider: 'imap', group_id: null },
 ]
 
-function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
+function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
   const calls: Array<{ url: string; method: string; body?: string }> = []
   let currentAccounts: Array<{
     id: string
@@ -113,6 +113,10 @@ function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partial
       if (options.duplicateInboxFoldersAcc1) return json({ account_id: 'acc-1', folders: [
         { folder_id: 'inbox-1', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', unread_count: 2, total_count: 9, parent_remote_id: null },
         { folder_id: 'inbox-alias', remote_id: '收件箱', name: '收件箱', role: 'inbox', unread_count: 0, total_count: 0, parent_remote_id: null },
+      ] })
+      if (options.nonSelectableParentAcc1) return json({ account_id: 'acc-1', folders: [
+        { folder_id: 'other-parent', remote_id: 'Other', name: '其他文件夹', role: 'other', sync_status: 'paused', unread_count: null, total_count: null, parent_remote_id: null },
+        { folder_id: 'qq-subscription', remote_id: 'Other/QQ邮件订阅', name: 'QQ邮件订阅', role: 'other', sync_status: 'idle', unread_count: 0, total_count: 0, parent_remote_id: 'Other' },
       ] })
       if (options.missingInboxAcc1) return json({ account_id: 'acc-1', folders: [
         { folder_id: 'sent-1', remote_id: 'Sent', name: 'Sent', role: 'sent', unread_count: 4, total_count: 8 },
@@ -261,6 +265,26 @@ describe('<Sidebar />', () => {
     expect(useMailStore.getState().view).toMatchObject({ type: 'folder', folderId: 'inbox-1' })
     await click(aliasRow)
     expect(useMailStore.getState().view).toMatchObject({ type: 'folder', folderId: 'inbox-alias' })
+  })
+
+  it('shows a noselect parent as a disabled container without an unknown-count badge', async () => {
+    mockApi({ nonSelectableParentAcc1: true })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-account-id="acc-1"] .tree-disclosure')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-account-id="acc-1"]')!
+    await click(account.querySelector('.tree-disclosure'))
+
+    await waitFor(() => expect(account.textContent).toContain('QQ邮件订阅'))
+    const parentRow = [...account.querySelectorAll('.tree-folder-row')]
+      .find((row) => row.querySelector('.tree-label')?.textContent === '其他文件夹') as HTMLButtonElement
+    const childRow = [...account.querySelectorAll('.tree-folder-row')]
+      .find((row) => row.querySelector('.tree-label')?.textContent === 'QQ邮件订阅')
+    expect(parentRow.disabled).toBe(true)
+    expect(parentRow.querySelector('.unread-badge')).toBeNull()
+    expect(childRow?.getAttribute('style')).toContain('padding-left: 72px')
+
+    await click(childRow ?? null)
+    expect(useMailStore.getState().view).toMatchObject({ type: 'folder', folderId: 'qq-subscription' })
   })
 
   it('persists account-list reorder without changing existing group membership', async () => {

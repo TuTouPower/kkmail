@@ -10,14 +10,17 @@ from sqlalchemy import select
 
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import JobStatus, JobType
-from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, WorkerJob
+from mail_core.mail.application.queries import list_folder_stats_for_account
+from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, SyncCheckpoint, WorkerJob
+from mail_core.providers.base import RemoteFolder
 from mail_core.providers.http import CursorInvalidError
 from mail_core.sync.delta import sync_folder_delta
-from mail_core.sync.engine import sync_folder_metadata
+from mail_core.sync.engine import sync_account_folders, sync_folder_metadata
 from mail_core.sync.leases import acquire_lease
 from mail_core.worker.handlers import _evaluate_result, handle_job
 import mail_core.sync.delta as delta_mod
 import mail_core.sync.engine as engine_mod
+import mail_core.sync.reconcile as reconcile_mod
 import mail_core.worker.handlers as handlers_mod
 
 pytestmark_db = pytest.mark.skipif(
@@ -224,3 +227,136 @@ def test_metadata_cursor_invalid_marks_rebuild_as_scheduled(monkeypatch):
         )
         assert len(successors) == 1
         assert successors[0].payload.get("reason") == "cursor_invalid"
+
+
+@pytestmark_db
+def test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job(monkeypatch):
+    Session = get_session_factory()
+    with Session() as session:
+        account = Account(email=f"noselect-{uuid.uuid4().hex}@example.test", provider="imap")
+        session.add(account)
+        session.flush()
+        parent = Folder(
+            account_id=account.id,
+            remote_id="Other",
+            name="其他文件夹",
+            role="other",
+            sync_status="idle",
+        )
+        message = Message(account_id=account.id, remote_id="preserved-message", subject="keep")
+        session.add_all([parent, message])
+        session.flush()
+        session.add(MessageLocation(message_id=message.id, folder_id=parent.id, uid=1))
+        checkpoint = SyncCheckpoint(
+            account_id=account.id,
+            folder_id=parent.id,
+            cursor={"uid_next": 7},
+            uidvalidity=42,
+            full_scan_complete=True,
+        )
+        session.add(checkpoint)
+        old_jobs = {
+            job_type: WorkerJob(
+                job_type=job_type.value,
+                account_id=account.id,
+                payload={"folder_id": str(parent.id)},
+                status=JobStatus.CLAIMED.value,
+                locked_by="worker-noselect",
+                attempts=1,
+            )
+            for job_type in (
+                JobType.SYNC_FOLDER_METADATA,
+                JobType.SYNC_FOLDER_DELTA,
+                JobType.RECONCILE_FOLDER,
+            )
+        }
+        session.add_all(old_jobs.values())
+        session.commit()
+        account_id, parent_id, message_id = account.id, parent.id, message.id
+        old_job_ids = {job_type: job.id for job_type, job in old_jobs.items()}
+
+    class CatalogProvider:
+        def list_folders(self):
+            return [RemoteFolder("INBOX", "INBOX", "inbox")]
+
+        def list_folder_catalog(self):
+            return [
+                RemoteFolder("INBOX", "INBOX", "inbox"),
+                RemoteFolder("Other", "其他文件夹", "other", selectable=False),
+                RemoteFolder("Other/QQ邮件订阅", "QQ邮件订阅", "other", parent_remote_id="Other"),
+            ]
+
+    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None: CatalogProvider())
+    def unexpected_provider(*_args, **_kwargs):
+        raise AssertionError("non-selectable folder must not call a provider")
+
+    monkeypatch.setattr(delta_mod, "build_provider", unexpected_provider)
+    monkeypatch.setattr(reconcile_mod, "build_provider", unexpected_provider)
+    result = sync_account_folders(account_id, worker_id="worker-noselect", store=object())
+    assert result["status"] == "ok"
+
+    with Session() as session:
+        parent = session.get(Folder, parent_id)
+        assert parent is not None
+        assert parent.sync_status == "paused"
+        assert session.get(Message, message_id) is not None
+        assert session.scalar(
+            select(MessageLocation.id).where(
+                MessageLocation.folder_id == parent_id,
+                MessageLocation.message_id == message_id,
+            )
+        ) is not None
+        checkpoint = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": parent_id})
+        assert checkpoint is not None
+        assert checkpoint.cursor == {"uid_next": 7}
+        assert checkpoint.uidvalidity == 42
+        assert checkpoint.full_scan_complete is True
+        child = session.scalar(select(Folder).where(Folder.remote_id == "Other/QQ邮件订阅"))
+        assert child is not None
+        assert child.parent_remote_id == "Other"
+        parent_stats = next(
+            row for row in list_folder_stats_for_account(session, account_id)
+            if row["folder_id"] == str(parent_id)
+        )
+        assert parent_stats["sync_status"] == "paused"
+        assert parent_stats["total_count"] is None
+        assert parent_stats["unread_count"] is None
+        child_jobs = list(
+            session.scalars(
+                select(WorkerJob).where(
+                    WorkerJob.account_id == account_id,
+                    WorkerJob.job_type == JobType.SYNC_FOLDER_METADATA.value,
+                    WorkerJob.payload["folder_id"].astext == str(child.id),
+                )
+            )
+        )
+        assert len(child_jobs) == 1
+        assert child_jobs[0].status == JobStatus.PENDING.value
+        for job_type, job_id in old_job_ids.items():
+            old_job = session.get(WorkerJob, job_id)
+            assert old_job is not None
+            parent_jobs = list(
+                session.scalars(
+                    select(WorkerJob).where(
+                        WorkerJob.account_id == account_id,
+                        WorkerJob.job_type == job_type.value,
+                        WorkerJob.payload["folder_id"].astext == str(parent_id),
+                    )
+                )
+            )
+            assert [job.id for job in parent_jobs] == [job_id]
+            with patch("mail_core.worker.handlers.get_credential_store", return_value=object()):
+                assert handle_job(session, old_job, worker_id="worker-noselect") is True
+            session.commit()
+
+    with Session() as session:
+        for job_id in old_job_ids.values():
+            completed = session.get(WorkerJob, job_id)
+            assert completed is not None
+            assert completed.status == JobStatus.DONE.value
+            assert completed.attempts == 1
+        checkpoint = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": parent_id})
+        assert checkpoint is not None
+        assert checkpoint.cursor == {"uid_next": 7}
+        assert checkpoint.uidvalidity == 42
+        assert checkpoint.full_scan_complete is True

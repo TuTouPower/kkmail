@@ -557,6 +557,8 @@ export interface components {
             remote_id: string;
             /** Role */
             role: string;
+            /** Sync Status */
+            sync_status: string;
             /** Total Count */
             total_count: number | null;
             /** Unread Count */

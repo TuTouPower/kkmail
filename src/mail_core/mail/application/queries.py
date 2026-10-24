@@ -167,6 +167,7 @@ def list_folder_stats_for_account(session: Session, account_id: uuid.UUID) -> li
                 "remote_id": folder.remote_id,
                 "name": folder.name,
                 "role": folder.role,
+                "sync_status": folder.sync_status,
                 "parent_remote_id": folder.parent_remote_id,
                 "total_count": stats.total_count if stats else None,
                 "unread_count": stats.unread_count if stats else None,
