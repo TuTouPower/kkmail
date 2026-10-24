@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -32,9 +33,80 @@ log = logging.getLogger("mail_core.sync.remote_push")
 
 DEFAULT_MAX_REMOTE_OP_ATTEMPTS = 5
 
+_HTTP_STATUS_PREFIXES = (
+    re.compile(
+        r"^HTTP(?:Error)?(?:/\d+(?:\.\d+)?)?\s+(?:ERROR\s+)?(?P<status>\d{3})\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^[A-Za-z][A-Za-z0-9_.]*\s+status=(?P<status>\d{3})(?:\s|$)", re.IGNORECASE),
+    re.compile(
+        r"^(?P<status>429|5\d{2})\s+"
+        r"(?:too many requests|server error|internal server error|bad gateway|"
+        r"service unavailable|gateway timeout|temporarily unavailable)\b",
+        re.IGNORECASE,
+    ),
+)
+_TRANSIENT_ERROR_PREFIXES = (
+    re.compile(
+        r"^(?:TimeoutError|TimeoutException|ConnectTimeout|ReadTimeout|WriteTimeout|PoolTimeout|"
+        r"NetworkError|SocketError)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:request|operation|connection|connect|read|write)\s+"
+        r"(?:timed out|timeout|reset|refused|closed|failed|error)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:server error|internal server error|service unavailable|temporarily unavailable|"
+        r"gateway timeout|bad gateway)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:temporary|transient)\s+(?:server|provider)\s+(?:failure|error)\b",
+        re.IGNORECASE,
+    ),
+)
+_RATE_LIMIT_ERROR_PREFIXES = (
+    re.compile(
+        r"^(?:rate[- ]limited(?:error)?|ratelimited(?:error)?|rate limit(?:ed)?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^too many requests\b", re.IGNORECASE),
+)
+
 
 class RemoteIdentityConflict(ValueError):
     """The provider returned a remote id already owned by another local message."""
+
+
+def _coerce_status_code(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and len(value) == 3 and value.isascii() and value.isdigit():
+        return int(value)
+    return None
+
+
+def _exception_status_code(exc: Exception) -> int | None:
+    status = getattr(exc, "status", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    if status is None and hasattr(exc, "response"):
+        status = getattr(getattr(exc, "response"), "status_code", None)
+    return _coerce_status_code(status)
+
+
+def _error_text_status_code(err_msg: str) -> int | None:
+    for pattern in _HTTP_STATUS_PREFIXES:
+        match = pattern.match(err_msg.strip())
+        if match:
+            return int(match.group("status"))
+    return None
+
+
+def _is_transient_status(status_code: int | None) -> bool:
+    return status_code == 429 or (status_code is not None and 500 <= status_code < 600)
 
 
 def _persist_move_remote_state(
@@ -187,35 +259,16 @@ def is_transient_error(exc: Exception | None = None, err_msg: str | None = None)
             return True
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             return True
+        status_code = _exception_status_code(exc)
+        if status_code is not None:
+            return _is_transient_status(status_code)
         name = type(exc).__name__.lower()
         if any(term in name for term in ("timeout", "connect", "network", "socket")):
             return True
-        status_code = getattr(exc, "status", None)
-        if status_code is None:
-            status_code = getattr(exc, "status_code", None)
-        if status_code is None and hasattr(exc, "response"):
-            status_code = getattr(getattr(exc, "response"), "status_code", None)
-        if isinstance(status_code, int) and (status_code == 429 or status_code >= 500):
-            return True
     if err_msg:
-        err_lower = err_msg.lower()
-        if any(
-            term in err_lower
-            for term in (
-                "timeout",
-                "timed out",
-                "connection",
-                "rate limit",
-                "ratelimited",
-                "429",
-                "500",
-                "502",
-                "503",
-                "504",
-                "server error",
-                "temporar",
-            )
-        ):
+        if _is_transient_status(_error_text_status_code(err_msg)):
+            return True
+        if any(pattern.match(err_msg.strip()) for pattern in _TRANSIENT_ERROR_PREFIXES):
             return True
     return False
 
@@ -224,16 +277,13 @@ def is_rate_limited_error(exc: Exception | None = None, err_msg: str | None = No
     if exc is not None:
         if isinstance(exc, RateLimitedError):
             return True
-        status_code = getattr(exc, "status", None)
-        if status_code is None:
-            status_code = getattr(exc, "status_code", None)
-        if status_code is None and hasattr(exc, "response"):
-            status_code = getattr(getattr(exc, "response"), "status_code", None)
-        if status_code == 429:
-            return True
+        status_code = _exception_status_code(exc)
+        if status_code is not None:
+            return status_code == 429
     if err_msg:
-        err_lower = err_msg.lower()
-        if "rate limit" in err_lower or "429" in err_lower or "ratelimited" in err_lower:
+        if _error_text_status_code(err_msg) == 429:
+            return True
+        if any(pattern.match(err_msg.strip()) for pattern in _RATE_LIMIT_ERROR_PREFIXES):
             return True
     return False
 
