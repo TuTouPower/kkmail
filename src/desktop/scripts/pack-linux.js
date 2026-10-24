@@ -93,8 +93,29 @@ function run() {
   const vendorPg = path.join(root, 'vendor', 'pgsql')
   const vendorBin = path.join(vendorPg, 'bin', 'pg_ctl')
   const frontendDist = path.join(repoRoot, 'src', 'frontend', 'dist')
+  const withPg = process.argv.includes('--with-pg') || process.env.npm_lifecycle_event === 'pack:linux:with-pg'
 
   fs.mkdirSync(path.join(vendorPg, 'bin'), { recursive: true })
+
+  if (withPg) {
+    const fetchScript = path.join(repoRoot, 'scripts', 'fetch-pg-binaries.sh')
+    const fetchResult = spawnSync('bash', [fetchScript, '--os', 'linux', '--arch', 'x64'], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+      env: process.env,
+    })
+    const fetchStatus = fetchResult.status == null ? 1 : fetchResult.status
+    if (fetchResult.error || fetchStatus !== 0) {
+      console.error('PostgreSQL vendor fetch failed', fetchResult.error || fetchStatus)
+      process.exitCode = fetchStatus > 0 ? fetchStatus : 1
+      return
+    }
+    if (!fs.existsSync(vendorBin)) {
+      console.error(`PostgreSQL fetch succeeded but required binary is missing: ${vendorBin}`)
+      process.exitCode = 1
+      return
+    }
+  }
 
   const stubState = createStubIfNeeded(frontendDist)
 

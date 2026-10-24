@@ -16,7 +16,7 @@
     "test:packaged": "node scripts/packaged-smoke.js",
     "dist:linux:dir": "node scripts/pack-linux.js",
     "pack:linux": "node scripts/pack-linux.js",
-    "pack:linux:with-pg": "node scripts/pack-linux.js"
+    "pack:linux:with-pg": "node scripts/pack-linux.js --with-pg"
   },
   "devDependencies": {
     "electron": "44.9.2",

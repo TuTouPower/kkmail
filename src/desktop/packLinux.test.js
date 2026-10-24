@@ -123,9 +123,14 @@ try {
     const softResult = runPackFixture(scriptPath, { KKMAIL_PACK_SOFT: '1' })
     assert.strictEqual(softResult.status, 0, softResult.stderr)
 
+    const npmFetch = createFetchFixture(fixtureRoot)
     const npmSoftResult = runPackFixture(scriptPath, {
       KKMAIL_PACK_SOFT: '1',
       npm_lifecycle_event: 'pack:linux:with-pg',
+      FETCH_ARGS_FILE: npmFetch.argsFile,
+      PG_CTL_PATH: npmFetch.pgCtl,
+      CREATE_PG_CTL: '1',
+      FETCH_EXIT_CODE: '0',
     })
     assert.strictEqual(npmSoftResult.status, 23, npmSoftResult.stderr)
 
@@ -133,6 +138,47 @@ try {
     const successScript = createPackFixture(successRoot, 0)
     const successResult = runPackFixture(successScript, {})
     assert.strictEqual(successResult.status, 0, successResult.stdout)
+
+    const withPgRoot = path.join(tmpRoot, 'cli-with-pg')
+    const withPgScript = createPackFixture(withPgRoot, 0)
+    const fetchFixture = createFetchFixture(withPgRoot)
+    const withPgResult = runPackFixture(withPgScript, {
+      FETCH_ARGS_FILE: fetchFixture.argsFile,
+      PG_CTL_PATH: fetchFixture.pgCtl,
+      CREATE_PG_CTL: '1',
+      FETCH_EXIT_CODE: '0',
+    }, ['--with-pg'])
+    assert.strictEqual(withPgResult.status, 0, withPgResult.stderr)
+    assert.deepStrictEqual(fs.readFileSync(fetchFixture.argsFile, 'utf8').trim().split('\n'), [
+      '--os', 'linux', '--arch', 'x64',
+    ])
+    assert.ok(fs.existsSync(fetchFixture.pgCtl), 'with-pg must retain the fetched pg_ctl binary')
+    assert.ok(withPgResult.stdout.includes('Including vendor PostgreSQL'))
+
+    const missingPgRoot = path.join(tmpRoot, 'cli-with-pg-missing-binary')
+    const missingPgScript = createPackFixture(missingPgRoot, 0)
+    const missingPgFetch = createFetchFixture(missingPgRoot)
+    const missingPgResult = runPackFixture(missingPgScript, {
+      FETCH_ARGS_FILE: missingPgFetch.argsFile,
+      PG_CTL_PATH: missingPgFetch.pgCtl,
+      CREATE_PG_CTL: '0',
+      FETCH_EXIT_CODE: '0',
+    }, ['--with-pg'])
+    assert.strictEqual(missingPgResult.status, 1, missingPgResult.stderr)
+    assert.ok(missingPgResult.stderr.includes('required binary is missing'))
+    assert.ok(!missingPgResult.stdout.includes('pack:linux ok'), 'builder must not run without pg_ctl')
+
+    const failedFetchRoot = path.join(tmpRoot, 'cli-with-pg-fetch-failure')
+    const failedFetchScript = createPackFixture(failedFetchRoot, 0)
+    const failedFetch = createFetchFixture(failedFetchRoot)
+    const failedFetchResult = runPackFixture(failedFetchScript, {
+      FETCH_ARGS_FILE: failedFetch.argsFile,
+      PG_CTL_PATH: failedFetch.pgCtl,
+      CREATE_PG_CTL: '0',
+      FETCH_EXIT_CODE: '23',
+    }, ['--with-pg'])
+    assert.strictEqual(failedFetchResult.status, 23, failedFetchResult.stderr)
+    assert.ok(failedFetchResult.stderr.includes('PostgreSQL vendor fetch failed'))
   }
 
   // npm packaging scripts never opt into soft-ok.
@@ -143,6 +189,7 @@ try {
         assert.ok(!command.includes('KKMAIL_PACK_SOFT'), `${name} must not enable KKMAIL_PACK_SOFT`)
       }
     }
+    assert.ok(scripts['pack:linux:with-pg'].includes('--with-pg'))
     assert.strictEqual(canSoftExit({ KKMAIL_PACK_SOFT: '1', npm_lifecycle_event: 'dist:linux:dir' }), false)
     assert.strictEqual(canSoftExit({ KKMAIL_PACK_SOFT: '1', npm_lifecycle_event: undefined }), true)
   }
@@ -169,10 +216,29 @@ function createPackFixture(fixtureRoot, builderExitCode) {
   return scriptPath
 }
 
-function runPackFixture(scriptPath, env) {
-  return spawnSync(process.execPath, [scriptPath], {
+function runPackFixture(scriptPath, env, args = []) {
+  return spawnSync(process.execPath, [scriptPath, ...args], {
     cwd: path.resolve(scriptPath, '..', '..', '..', '..'),
     encoding: 'utf8',
     env: { ...process.env, ...env },
   })
+}
+
+function createFetchFixture(fixtureRoot) {
+  const argsFile = path.join(fixtureRoot, 'fetch-args.txt')
+  const pgCtl = path.join(fixtureRoot, 'src', 'desktop', 'vendor', 'pgsql', 'bin', 'pg_ctl')
+  const fetchScript = path.join(fixtureRoot, 'scripts', 'fetch-pg-binaries.sh')
+  fs.mkdirSync(path.dirname(fetchScript), { recursive: true })
+  fs.writeFileSync(fetchScript, [
+    '#!/bin/bash',
+    'printf "%s\\n" "$@" > "$FETCH_ARGS_FILE"',
+    'if [[ "$CREATE_PG_CTL" == "1" ]]; then',
+    '  mkdir -p "$(dirname "$PG_CTL_PATH")"',
+    '  touch "$PG_CTL_PATH"',
+    'fi',
+    'exit "$FETCH_EXIT_CODE"',
+    '',
+  ].join('\n'), { mode: 0o755 })
+  fs.chmodSync(fetchScript, 0o755)
+  return { argsFile, pgCtl }
 }
