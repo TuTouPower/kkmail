@@ -99,8 +99,8 @@ def session_binding_key(principal: AuthPrincipal | None) -> str:
     if principal.via == "session" and principal.csrf_token:
         digest = hashlib.sha256(principal.csrf_token.encode("utf-8")).hexdigest()
         return f"session:{digest}"
-    if principal.via == "api_key":
-        return "api_key:default"
+    if principal.via == "api_key" and principal.api_key_digest:
+        return f"api_key:{principal.api_key_digest}"
     raise PermissionError("authentication required")
 
 

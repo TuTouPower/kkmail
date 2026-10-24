@@ -20,6 +20,7 @@ from mail_core.api.app import app
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import Account
 from mail_core.providers.oauth import OAuthTokenClient
+from mail_core.security.auth import AuthPrincipal, digest_api_key
 from mail_core.security.redact import redact
 from tests.mail_core.conftest import TEST_LOGIN_PASSWORD
 
@@ -31,6 +32,10 @@ def _login_session_client() -> tuple[TestClient, str]:
     csrf = res.json()["csrf_token"]
     client.headers.update({"X-CSRF-Token": csrf})
     return client, csrf
+
+
+def _api_key_principal() -> AuthPrincipal:
+    return AuthPrincipal(via="api_key", api_key_digest=digest_api_key("oauth-flow-test-api-key"))
 
 
 def test_oauth_metadata_distinguishes_web_and_desktop_without_trusting_headers_or_query(
@@ -812,10 +817,8 @@ def test_reauthorization_and_normal_group_move_share_lock_order_pg(monkeypatch):
     from mail_core.accounts import oauth_flow, service
     from mail_core.accounts.credentials import get_credential_store
     from mail_core.mail.application.accounts import create_account_app, update_account_app, create_group_app
-    from mail_core.security.auth import AuthPrincipal
-
     monkeypatch.setenv('KKMAIL_SIDECAR', '1')
-    principal = AuthPrincipal(via='api_key')
+    principal = _api_key_principal()
     a = create_account_app(email='review-lock@gmail.com', provider='gmail',
                            config={'oauth_client_type': 'public'}, credentials={'client_id':'cid','refresh_token':'rt'})
     group = create_group_app(name='review-group')
@@ -874,10 +877,8 @@ def test_clearing_old_active_pointer_cannot_erase_concurrent_start_pg(monkeypatc
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event, current_thread
     from mail_core.accounts import oauth_flow
-    from mail_core.security.auth import AuthPrincipal
-
     monkeypatch.setenv("KKMAIL_SIDECAR", "1")
-    principal = AuthPrincipal(via="api_key")
+    principal = _api_key_principal()
     old = oauth_flow.start_oauth_flow(principal, client_id="pointer-client")
     snapshot_read, new_started, cleaner_started = Event(), Event(), Event()
     original_load = oauth_flow.load_json_secret
@@ -926,10 +927,8 @@ def test_oauth_create_and_group_reauthorization_share_lock_order_pg(monkeypatch)
     from mail_core.accounts import oauth_flow, service
     from mail_core.accounts.credentials import get_credential_store
     from mail_core.mail.application import accounts as application
-    from mail_core.security.auth import AuthPrincipal
-
     monkeypatch.setenv('KKMAIL_SIDECAR', '1')
-    principal = AuthPrincipal(via='api_key')
+    principal = _api_key_principal()
     account = application.create_account_app(email='old-lock@gmail.com',provider='gmail',
         config={'oauth_client_type':'public'},credentials={'client_id':'cid','refresh_token':'old-rt'})
     group = application.create_group_app(name='new-group')

@@ -13,12 +13,13 @@ Env contract:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -47,6 +48,7 @@ class AuthConfigError(RuntimeError):
 class AuthPrincipal:
     via: Literal["session", "api_key"]
     csrf_token: str | None = None
+    api_key_digest: str | None = field(default=None, repr=False)
 
 
 _session_epoch: int = 1
@@ -371,6 +373,11 @@ def api_key_matches(token: str) -> bool:
         if secrets.compare_digest(token, key):
             return True
     return False
+
+
+def digest_api_key(token: str) -> str:
+    """Return a non-reversible fingerprint for binding API-key-owned state."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def extract_bearer(authorization: str | None) -> str | None:

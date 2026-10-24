@@ -12,6 +12,7 @@ from mail_core.security.auth import (
     AuthPrincipal,
     api_key_matches,
     csrf_header_value,
+    digest_api_key,
     extract_bearer,
     read_session,
 )
@@ -34,7 +35,7 @@ def authenticate_request(
     )
     if bearer is not None:
         if api_key_matches(bearer):
-            return AuthPrincipal(via="api_key")
+            return AuthPrincipal(via="api_key", api_key_digest=digest_api_key(bearer))
         raise HTTPException(status_code=401, detail="invalid api key")
 
     raw = cookie_token if isinstance(cookie_token, str) else request.cookies.get(SESSION_COOKIE_NAME)

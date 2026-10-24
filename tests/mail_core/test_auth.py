@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 
 from mail_core.api.app import app
@@ -43,6 +45,30 @@ def test_api_key_ok(api_client):
 def test_invalid_api_key_401():
     client = TestClient(app, headers={"Authorization": "Bearer wrong-key"})
     assert client.get("/api/mail/inbox").status_code == 401
+
+
+def test_authenticated_api_keys_have_distinct_oauth_flow_bindings(monkeypatch):
+    import mail_core.api.deps as auth_deps
+    from mail_core.accounts.oauth_flow import session_binding_key
+    from mail_core.security.auth import AuthPrincipal, digest_api_key
+
+    monkeypatch.setattr(auth_deps, "api_key_matches", lambda _token: True)
+    request = SimpleNamespace(headers={})
+
+    def authenticate(key):
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=key)
+        return auth_deps.authenticate_request(request, bearer_creds=credentials, cookie_token=None)
+
+    first_key = "api-key-first-for-test"
+    second_key = "api-key-second-for-test"
+    first = authenticate(first_key)
+    second = authenticate(second_key)
+
+    assert first.api_key_digest == digest_api_key(first_key)
+    assert session_binding_key(first) != session_binding_key(second)
+    assert first_key not in session_binding_key(first)
+    with pytest.raises(PermissionError, match="authentication required"):
+        session_binding_key(AuthPrincipal(via="api_key"))
 
 
 @pytest.mark.skipif(not DATABASE_URL, reason="database required")
