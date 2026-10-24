@@ -162,6 +162,17 @@ def sync_account_folders(
             f.remote_id: f
             for f in session.scalars(select(Folder).where(Folder.account_id == account_id)).all()
         }
+        remote_ids = {rf.remote_id for rf in remote_folders}
+        for existing in by_remote.values():
+            if existing.remote_id not in remote_ids and existing.sync_status != "paused":
+                existing.sync_status = "paused"
+                session.add(
+                    OutboxEvent(
+                        event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
+                        account_id=account_id,
+                        payload={"folder_id": str(existing.id)},
+                    )
+                )
         for rf in remote_folders:
             existing = by_remote.get(rf.remote_id)
             if existing is None:
@@ -189,6 +200,7 @@ def sync_account_folders(
                     account_id=account_id,
                     payload={"folder_id": str(existing.id)},
                     priority=50,
+                    dedupe_key=f"metadata:{account_id}:{existing.id}",
                 )
         session.add(
             OutboxEvent(

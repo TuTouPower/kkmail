@@ -360,3 +360,84 @@ def test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job(monke
         assert checkpoint.cursor == {"uid_next": 7}
         assert checkpoint.uidvalidity == 42
         assert checkpoint.full_scan_complete is True
+
+
+@pytestmark_db
+def test_folder_discovery_pauses_missing_remote_and_deduplicates_metadata_job(monkeypatch):
+    from mail_core.mail.storage.models import OutboxEvent
+
+    Session = get_session_factory()
+    with Session() as session:
+        account = Account(email=f"folders-{uuid.uuid4().hex}@example.test", provider="imap")
+        session.add(account)
+        session.flush()
+        missing = Folder(
+            account_id=account.id,
+            remote_id="Deleted/Remote",
+            name="Old folder",
+            role="other",
+            sync_status="idle",
+        )
+        message = Message(account_id=account.id, remote_id="kept-message", subject="Keep")
+        session.add_all([missing, message])
+        session.flush()
+        session.add_all(
+            [
+                MessageLocation(message_id=message.id, folder_id=missing.id, uid=9),
+                SyncCheckpoint(
+                    account_id=account.id,
+                    folder_id=missing.id,
+                    cursor={"uid_next": 10},
+                    full_scan_complete=True,
+                ),
+            ]
+        )
+        session.commit()
+        account_id, missing_id, message_id = account.id, missing.id, message.id
+
+    class ListingProvider:
+        def list_folders(self):
+            return [RemoteFolder("INBOX", "INBOX", "inbox")]
+
+    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None: ListingProvider())
+    sync_account_folders(account_id, worker_id="folders-test", store=object())
+    sync_account_folders(account_id, worker_id="folders-test", store=object())
+
+    with Session() as session:
+        missing = session.get(Folder, missing_id)
+        assert missing is not None and missing.sync_status == "paused"
+        assert session.get(Message, message_id) is not None
+        assert session.scalar(
+            select(MessageLocation.id).where(
+                MessageLocation.folder_id == missing_id,
+                MessageLocation.message_id == message_id,
+            )
+        ) is not None
+        checkpoint = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": missing_id})
+        assert checkpoint is not None and checkpoint.cursor == {"uid_next": 10}
+        events = session.scalars(
+            select(OutboxEvent).where(
+                OutboxEvent.account_id == account_id,
+                OutboxEvent.event_type == "folder.stats_updated",
+                OutboxEvent.payload["folder_id"].astext == str(missing_id),
+            )
+        ).all()
+        assert len(events) == 1
+        assert session.scalar(
+            select(WorkerJob.id).where(
+                WorkerJob.account_id == account_id,
+                WorkerJob.job_type == JobType.SYNC_FOLDER_METADATA.value,
+                WorkerJob.payload["folder_id"].astext == str(missing_id),
+            )
+        ) is None
+
+        inbox = session.scalar(select(Folder).where(Folder.account_id == account_id, Folder.remote_id == "INBOX"))
+        assert inbox is not None
+        jobs = session.scalars(
+            select(WorkerJob).where(
+                WorkerJob.account_id == account_id,
+                WorkerJob.job_type == JobType.SYNC_FOLDER_METADATA.value,
+                WorkerJob.dedupe_key == f"metadata:{account_id}:{inbox.id}",
+            )
+        ).all()
+        assert len(jobs) == 1
