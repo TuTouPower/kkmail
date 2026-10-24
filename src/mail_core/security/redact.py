@@ -30,11 +30,11 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 
-def redact(text: str | None, *, limit: int = MAX_ERROR_CHARS) -> str:
+def redact(text: str | None, *, limit: int | None = MAX_ERROR_CHARS) -> str:
     out = str(text or "")
     for pattern, repl in _PATTERNS:
         out = pattern.sub(repl, out)
-    if len(out) > limit:
+    if limit is not None and len(out) > limit:
         out = out[: limit - 1] + "…"
     return out
 

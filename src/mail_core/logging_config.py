@@ -47,7 +47,7 @@ class RedactingTraceFormatter(logging.Formatter):
             tid = get_trace_id()
             record.trace_id = tid if tid else "-"
         formatted = super().format(record)
-        return redact(formatted, limit=4000)
+        return redact(formatted, limit=None)
 
 
 def configure_logging(

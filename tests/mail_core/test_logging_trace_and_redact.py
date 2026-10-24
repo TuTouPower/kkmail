@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from fastapi.testclient import TestClient
 
 from mail_core.logging_config import (
@@ -76,6 +77,30 @@ def test_redacting_trace_formatter_injects_trace_and_redacts():
         assert "[req_12345]" in out2
         assert "clear_text_pw" not in out2
         assert "[REDACTED]" in out2
+
+
+def test_redacting_trace_formatter_preserves_long_traceback_tail():
+    formatter = RedactingTraceFormatter("%(message)s")
+    try:
+        raise RuntimeError("final-root-cause password=clear_text_pw")
+    except RuntimeError:
+        exc_info = sys.exc_info()
+
+    record = logging.LogRecord(
+        name="test",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=10,
+        msg="context " + ("x" * 5000),
+        args=(),
+        exc_info=exc_info,
+    )
+
+    out = formatter.format(record)
+
+    assert len(out) > 4000
+    assert "RuntimeError: final-root-cause password=[REDACTED]" in out
+    assert "clear_text_pw" not in out
 
 
 def test_redacting_filter_sanitizes_record():
