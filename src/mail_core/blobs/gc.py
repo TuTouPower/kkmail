@@ -21,6 +21,7 @@ from mail_core.blobs.quota import acquire_blob_digest_lock, digest_to_lock_id
 from mail_core.mail.storage.models import Attachment, MessageBlob, MessageBlobLink
 
 log = logging.getLogger("mail_core.blobs.gc")
+_GC_RECONCILE_BATCH_SIZE = 1000
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,37 +36,49 @@ class GcResult:
 def mark_unreferenced_blobs(session: Session, *, now: datetime | None = None) -> int:
     """Reconcile ref_count from links; stamp/clear ``gc_eligible_at``."""
     now = now or datetime.now(timezone.utc)
-    # Batch count links and attachments via GROUP BY to avoid N+1 queries (V4-02)
-    link_counts = dict(
-        session.execute(
-            select(MessageBlobLink.blob_id, func.count())
-            .group_by(MessageBlobLink.blob_id)
-        ).all()
-    )
-    att_counts = dict(
-        session.execute(
-            select(Attachment.blob_id, func.count())
-            .where(Attachment.blob_id.is_not(None))
-            .group_by(Attachment.blob_id)
-        ).all()
-    )
-
-    blobs = list(session.scalars(select(MessageBlob)).all())
     marked = 0
-    for blob in blobs:
-        n = int(link_counts.get(blob.id, 0)) + int(att_counts.get(blob.id, 0))
-        prev = int(blob.ref_count)
-        if prev != n:
-            blob.ref_count = n
-            marked += 1
-        if n <= 0:
-            if blob.gc_eligible_at is None:
-                blob.gc_eligible_at = now
+    last_id = None
+    while True:
+        query = select(MessageBlob).order_by(MessageBlob.id).limit(_GC_RECONCILE_BATCH_SIZE)
+        if last_id is not None:
+            query = query.where(MessageBlob.id > last_id)
+        blobs = list(session.scalars(query).all())
+        if not blobs:
+            break
+
+        blob_ids = [blob.id for blob in blobs]
+        link_counts = dict(
+            session.execute(
+                select(MessageBlobLink.blob_id, func.count())
+                .where(MessageBlobLink.blob_id.in_(blob_ids))
+                .group_by(MessageBlobLink.blob_id)
+            ).all()
+        )
+        att_counts = dict(
+            session.execute(
+                select(Attachment.blob_id, func.count())
+                .where(Attachment.blob_id.in_(blob_ids))
+                .where(Attachment.blob_id.is_not(None))
+                .group_by(Attachment.blob_id)
+            ).all()
+        )
+
+        for blob in blobs:
+            n = int(link_counts.get(blob.id, 0)) + int(att_counts.get(blob.id, 0))
+            prev = int(blob.ref_count)
+            if prev != n:
+                blob.ref_count = n
                 marked += 1
-        elif blob.gc_eligible_at is not None:
-            blob.gc_eligible_at = None
-            marked += 1
-    session.flush()
+            if n <= 0:
+                if blob.gc_eligible_at is None:
+                    blob.gc_eligible_at = now
+                    marked += 1
+            elif blob.gc_eligible_at is not None:
+                blob.gc_eligible_at = None
+                marked += 1
+
+        last_id = blobs[-1].id
+        session.flush()
     return marked
 
 

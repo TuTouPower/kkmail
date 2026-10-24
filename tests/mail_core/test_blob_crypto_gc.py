@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from mail_core.blobs.crypto import MAGIC, BlobCryptoError, wrap
 from mail_core.blobs.gc import sweep_expired_blobs
@@ -92,6 +92,60 @@ def test_delayed_gc_respects_cooloff(tmp_path, monkeypatch):
         from mail_core.blobs.gc import unlink_gc_paths
         unlink_gc_paths(paths)
         assert not (tmp_path / rel).exists()
+
+
+@pytest.mark.skipif(not os.environ.get("MAIL_CORE_DATABASE_URL"), reason="PG required")
+def test_mark_unreferenced_blobs_reconciles_in_bounded_id_pages(monkeypatch):
+    from mail_core.blobs import gc as gc_mod
+
+    monkeypatch.setattr(gc_mod, "_GC_RECONCILE_BATCH_SIZE", 2)
+    Session = get_session_factory()
+    now = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc)
+    with Session() as session:
+        blobs = [
+            MessageBlob(
+                content_sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+                key_version=1,
+                size_bytes=1,
+                storage_path=f"gc-batch/{index}.blob",
+                ref_count=3,
+                gc_eligible_at=(now - timedelta(hours=1)) if index in (1, 3) else None,
+            )
+            for index in range(5)
+        ]
+        session.add_all(blobs)
+        session.flush()
+
+        select_statements = []
+
+        def capture_blob_select(_conn, _cursor, statement, _params, _context, _many):
+            normalized = " ".join(statement.lower().split())
+            if normalized.startswith("select") and " from message_blobs " in normalized:
+                select_statements.append((normalized, _params))
+
+        engine = session.get_bind()
+        event.listen(engine, "before_cursor_execute", capture_blob_select)
+        try:
+            marked = gc_mod.mark_unreferenced_blobs(session, now=now)
+        finally:
+            event.remove(engine, "before_cursor_execute", capture_blob_select)
+
+        assert len(select_statements) == 4
+        assert all(" limit " in statement for statement, _params in select_statements)
+        assert all(
+            2 in (params.values() if isinstance(params, dict) else params)
+            for _statement, params in select_statements
+        )
+        assert marked == 8
+        assert all(blob.ref_count == 0 for blob in blobs)
+        assert [blob.gc_eligible_at for blob in blobs] == [
+            now,
+            now - timedelta(hours=1),
+            now,
+            now - timedelta(hours=1),
+            now,
+        ]
+        session.commit()
 
 
 def test_unlink_gc_paths_fails_closed_on_db_exception(tmp_path):
