@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { __resetCsrfForTests } from './client'
 import { fetchMailCoreInbox, fetchMailCoreSearch, postMailCoreMarkAllRead, postMailCoreMessageFlag, postMailCoreMessageRead } from './mailCore'
-import { ALL_ACCOUNTS, flagOptimistic, markReadOptimistic, queryClient, queryKeys, type MailItem } from './queries'
+import { ALL_ACCOUNTS, flagOptimistic, markReadOptimistic, queryClient, queryKeys, setCachedReadState, setReadOptimistic, type MailItem } from './queries'
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -101,6 +101,25 @@ describe('optimistic updates', () => {
     stubFetch(() => json(500, { detail: 'boom' }))
     await expect(markReadOptimistic([item()])).rejects.toThrow('boom')
     expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_read).toBe(false)
+  })
+
+  it('preserves interleaved read state on failure and invalidates mail lists', async () => {
+    const inboxKey = queryKeys.inbox(ALL_ACCOUNTS)
+    const searchKey = queryKeys.search('needle', ALL_ACCOUNTS)
+    const unknownRead = item({ is_read: null })
+    queryClient.setQueryData(inboxKey, [unknownRead])
+    queryClient.setQueryData(searchKey, [unknownRead])
+    stubFetch(() => {
+      setCachedReadState([unknownRead.id], false)
+      return json(500, { detail: 'boom' })
+    })
+
+    await expect(setReadOptimistic([unknownRead], true)).rejects.toThrow('boom')
+
+    expect(queryClient.getQueryData<MailItem[]>(inboxKey)?.[0].is_read).toBe(false)
+    expect(queryClient.getQueryData<MailItem[]>(searchKey)?.[0].is_read).toBe(false)
+    expect(queryClient.getQueryState(inboxKey)?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(searchKey)?.isInvalidated).toBe(true)
   })
 
   it('markReadOptimistic keeps the read state on success', async () => {

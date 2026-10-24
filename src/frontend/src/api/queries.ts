@@ -258,6 +258,21 @@ function patchCachedMail(keys: Iterable<string>, patch: Partial<MailItem>) {
   )
 }
 
+function readStatesForKeys(keys: Iterable<string>): Map<string, Array<MailItem['is_read']>> {
+  const wanted = new Set(keys)
+  const states = new Map<string, Array<MailItem['is_read']>>()
+  for (const query of queryClient.getQueryCache().findAll({ predicate: (item) => isMailListQueryKey(item.queryKey) })) {
+    for (const mail of extractItemsFromCache(query.state.data)) {
+      const key = mailKey(mail)
+      if (!wanted.has(key)) continue
+      const values = states.get(key) || []
+      values.push(mail.is_read)
+      states.set(key, values)
+    }
+  }
+  return states
+}
+
 /** Drop messages from every cached list (e.g. after trash). */
 export function removeCachedMail(keys: Iterable<string>) {
   const gone = new Set(keys)
@@ -284,16 +299,29 @@ export async function setReadOptimistic(items: MailItem[], nextRead: boolean) {
     const batch = targets.slice(start, start + READ_MUTATION_BATCH_SIZE)
     const results = await Promise.allSettled(batch.map((m) => postMailCoreMessageRead(m.id, nextRead)))
     const failed: string[] = []
+    const failedItems: MailItem[] = []
     results.forEach((result, index) => {
       if (result.status === 'rejected') {
-        patchCachedMail([mailKey(batch[index])], { is_read: batch[index].is_read })
+        failedItems.push(batch[index])
         const reason = result.reason as { message?: unknown } | undefined
         failed.push(typeof reason?.message === 'string' ? reason.message : String(result.reason))
       }
     })
     if (failed.length) {
-      for (const unprocessed of targets.slice(start + batch.length)) {
-        patchCachedMail([mailKey(unprocessed)], { is_read: unprocessed.is_read })
+      const rollbackItems = [...failedItems, ...targets.slice(start + batch.length)]
+      const currentStates = readStatesForKeys(rollbackItems.map(mailKey))
+      let shouldInvalidate = false
+      for (const item of rollbackItems) {
+        const key = mailKey(item)
+        const states = currentStates.get(key) || []
+        if (states.length > 0 && states.every((state) => state === nextRead)) {
+          patchCachedMail([key], { is_read: item.is_read })
+        } else {
+          shouldInvalidate = true
+        }
+      }
+      if (shouldInvalidate) {
+        await queryClient.invalidateQueries({ predicate: (query) => isMailListQueryKey(query.queryKey) })
       }
       throw new Error(failed.join('；'))
     }
