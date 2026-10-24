@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
-from mail_core.mail.domain.enums import JobType, OutboxEventType, SyncPhase
+from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
@@ -268,16 +268,22 @@ def sync_folder_metadata(
             lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=lease_ttl)
         except LeaseBusy:
             # Re-queue later
-            enqueue_job(
+            followup = enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_METADATA.value,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id)},
                 priority=50,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=5),
+                dedupe_key=f"metadata:{account_id}:{folder_id}",
             )
+            followup_coalesced = followup.status == JobStatus.CLAIMED.value
             session.commit()
-            return {"status": "lease_busy", "followup_scheduled": True}
+            return {
+                "status": "lease_busy",
+                "followup_scheduled": True,
+                "followup_coalesced": followup_coalesced,
+            }
         fencing = lease.fencing_token
         remote_id = folder.remote_id
         account_snapshot = Account(
@@ -349,7 +355,7 @@ def sync_folder_metadata(
                 invalidate_checkpoint_for_rebuild(
                     session, account_id=account_id, folder_id=folder_id, fencing_token=fencing
                 )
-                enqueue_job(
+                followup = enqueue_job(
                     session,
                     job_type=JobType.SYNC_FOLDER_METADATA.value,
                     account_id=account_id,
@@ -359,7 +365,9 @@ def sync_folder_metadata(
                         "detail": safe_provider_summary(exc),
                     },
                     priority=40,
+                    dedupe_key=f"metadata:{account_id}:{folder_id}",
                 )
+                followup_coalesced = followup.status == JobStatus.CLAIMED.value
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
                 session.commit()
             except FencingMismatch:
@@ -368,6 +376,7 @@ def sync_folder_metadata(
         return {
             "status": "cursor_invalid",
             "followup_scheduled": True,
+            "followup_coalesced": followup_coalesced,
             "upserted": total,
             "pages": pages,
         }
@@ -382,6 +391,7 @@ def sync_folder_metadata(
                 payload={"folder_id": str(folder_id)},
                 priority=50,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
+                dedupe_key=f"metadata:{account_id}:{folder_id}",
             )
             _release_lease_quiet(session, account_id=account_id, worker_id=worker_id, fencing_token=fencing)
             session.commit()
@@ -412,6 +422,7 @@ def sync_folder_metadata(
                 payload={"folder_id": str(folder_id)},
                 priority=60,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=2),
+                dedupe_key=f"delta:{account_id}:{folder_id}",
             )
             enqueue_job(
                 session,
@@ -433,6 +444,7 @@ def sync_folder_metadata(
                 account_id=account_id,
                 payload={"folder_id": str(folder_id)},
                 priority=50,
+                dedupe_key=f"metadata:{account_id}:{folder_id}",
             )
         release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
         session.commit()

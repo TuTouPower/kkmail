@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
-from mail_core.mail.domain.enums import JobType, OutboxEventType, SyncPhase
+from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
 from mail_core.providers.factory import build_provider
@@ -291,16 +291,22 @@ def sync_folder_delta(
         try:
             lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=lease_ttl)
         except LeaseBusy:
-            enqueue_job(
+            followup = enqueue_job(
                 session,
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id)},
                 priority=60,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=5),
+                dedupe_key=f"delta:{account_id}:{folder_id}",
             )
+            followup_coalesced = followup.status == JobStatus.CLAIMED.value
             session.commit()
-            return {"status": "lease_busy", "followup_scheduled": True}
+            return {
+                "status": "lease_busy",
+                "followup_scheduled": True,
+                "followup_coalesced": followup_coalesced,
+            }
         fencing = lease.fencing_token
         remote_id = folder.remote_id
         cursor = dict(cp.cursor or {})
@@ -359,6 +365,7 @@ def sync_folder_delta(
                             "detail": safe_provider_summary(exc),
                         },
                         priority=40,
+                        dedupe_key=f"metadata:{account_id}:{folder_id}",
                     )
                     release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
                     session.commit()
@@ -377,6 +384,7 @@ def sync_folder_delta(
                     payload={"folder_id": str(folder_id)},
                     priority=60,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
+                    dedupe_key=f"delta:{account_id}:{folder_id}",
                 )
                 _release_quiet(session)
                 session.commit()
@@ -385,7 +393,7 @@ def sync_folder_delta(
             err_summary = safe_provider_summary(exc)
             log.exception("delta provider I/O failed for folder %s: %s", folder_id, err_summary)
             with Session() as session:
-                enqueue_job(
+                followup = enqueue_job(
                     session,
                     job_type=JobType.SYNC_FOLDER_DELTA.value,
                     account_id=account_id,
@@ -396,13 +404,16 @@ def sync_folder_delta(
                     },
                     priority=60,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=15),
+                    dedupe_key=f"delta:{account_id}:{folder_id}",
                 )
+                followup_coalesced = followup.status == JobStatus.CLAIMED.value
                 _release_quiet(session)
                 session.commit()
             return {
                 "status": "provider_error",
                 "error": err_summary,
                 "followup_scheduled": True,
+                "followup_coalesced": followup_coalesced,
                 "pages": pages,
                 **totals,
             }
@@ -463,6 +474,7 @@ def sync_folder_delta(
                 account_id=account_id,
                 payload={"folder_id": str(folder_id)},
                 priority=60,
+                dedupe_key=f"delta:{account_id}:{folder_id}",
             )
         else:
             # Schedule next poll and periodic reconcile

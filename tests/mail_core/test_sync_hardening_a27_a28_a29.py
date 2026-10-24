@@ -275,6 +275,7 @@ def test_a28_worker_handler_rate_limited_single_job(monkeypatch):
             assert len(pending) == 1
             successor = pending[0]
             assert successor.job_type == JobType.SYNC_FOLDER_DELTA.value
+            assert successor.dedupe_key == f"delta:{account_id}:{folder_id}"
             assert successor.run_after >= now + timedelta(seconds=115)
     finally:
         set_credential_store(None)

@@ -59,7 +59,9 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
         )
     if status in ("ok", "sync_disabled", "skipped", "rate_limited") or result.get("followup_scheduled"):
         payload = dict(job.payload or {})
-        followup_was_scheduled = bool(result.get("followup_scheduled"))
+        followup_was_scheduled = bool(result.get("followup_scheduled")) and not bool(
+            result.get("followup_coalesced")
+        )
         followup = not followup_was_scheduled and bool(result.get("has_more") or payload.get("_followup_needed"))
         next_run_after = None if followup_was_scheduled else result.get("next_run_after")
         if not followup_was_scheduled and not next_run_after and payload.get("_followup_run_after"):

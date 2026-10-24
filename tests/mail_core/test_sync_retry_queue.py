@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -110,7 +110,7 @@ def test_delta_provider_error_completes_claim_and_leaves_one_pending_retry(monke
             status=JobStatus.CLAIMED.value,
             locked_by="retry-worker",
             attempts=1,
-            dedupe_key=f"delta:{folder_id}",
+            dedupe_key=f"delta:{account_id}:{folder_id}",
         )
         session.add(job)
         session.commit()
@@ -148,6 +148,7 @@ def test_delta_provider_error_completes_claim_and_leaves_one_pending_retry(monke
         )
         pending = [row for row in jobs if row.status == JobStatus.PENDING.value]
         assert len(pending) == 1
+        assert pending[0].dedupe_key == f"delta:{account_id}:{folder_id}"
         assert pending[0].last_error is None
         assert session.get(WorkerJob, job_id).status == JobStatus.DONE.value
         account = session.get(Account, account_id)
@@ -173,6 +174,111 @@ def test_delta_and_metadata_lease_busy_results_mark_existing_retries():
     assert delta_result["followup_scheduled"] is True
     assert metadata_result["status"] == "lease_busy"
     assert metadata_result["followup_scheduled"] is True
+    with Session() as session:
+        jobs = session.scalars(
+            select(WorkerJob).where(
+                WorkerJob.account_id == account_id,
+                WorkerJob.status == JobStatus.PENDING.value,
+            )
+        ).all()
+        assert {job.dedupe_key for job in jobs} == {
+            f"delta:{account_id}:{folder_id}",
+            f"metadata:{account_id}:{folder_id}",
+        }
+
+
+@pytestmark_db
+@pytest.mark.parametrize(
+    ("job_type", "key_prefix"),
+    [
+        (JobType.SYNC_FOLDER_DELTA.value, "delta"),
+        (JobType.SYNC_FOLDER_METADATA.value, "metadata"),
+    ],
+)
+def test_claimed_sync_job_coalesces_lease_busy_followup(job_type, key_prefix):
+    Session = get_session_factory()
+    account_id, folder_id = _seed_folder(full_scan_complete=True)
+    worker_id = f"{key_prefix}-worker"
+    dedupe_key = f"{key_prefix}:{account_id}:{folder_id}"
+    with Session() as session:
+        acquire_lease(session, account_id=account_id, owner_id="lease-holder", ttl=timedelta(minutes=5))
+        job = WorkerJob(
+            job_type=job_type,
+            account_id=account_id,
+            payload={"folder_id": str(folder_id)},
+            status=JobStatus.CLAIMED.value,
+            locked_by=worker_id,
+            attempts=1,
+            dedupe_key=dedupe_key,
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    with Session() as session:
+        job = session.get(WorkerJob, job_id)
+        assert job is not None
+        with patch("mail_core.worker.handlers.get_credential_store", return_value=object()):
+            assert handle_job(session, job, worker_id=worker_id) is True
+        session.commit()
+
+    with Session() as session:
+        followups = session.scalars(
+            select(WorkerJob).where(
+                WorkerJob.account_id == account_id,
+                WorkerJob.dedupe_key == dedupe_key,
+                WorkerJob.status == JobStatus.PENDING.value,
+            )
+        ).all()
+        assert len(followups) == 1
+        assert followups[0].run_after >= datetime.now(timezone.utc) + timedelta(seconds=4)
+
+
+@pytestmark_db
+@pytest.mark.parametrize(
+    ("sync_path", "exhausted", "expected_type", "key_prefix"),
+    [
+        ("metadata", False, JobType.SYNC_FOLDER_METADATA.value, "metadata"),
+        ("delta", False, JobType.SYNC_FOLDER_DELTA.value, "delta"),
+        ("metadata", True, JobType.SYNC_FOLDER_DELTA.value, "delta"),
+    ],
+)
+def test_page_followups_use_job_type_dedupe_key(monkeypatch, sync_path, exhausted, expected_type, key_prefix):
+    from mail_core.providers.base import DeltaPage, MetadataPage
+
+    Session = get_session_factory()
+    account_id, folder_id = _seed_folder(full_scan_complete=sync_path == "delta")
+
+    class PartialProvider:
+        def fetch_metadata_page(self, _remote_id, _cursor):
+            return MetadataPage(items=[], next_cursor={"uid_next": 2}, exhausted=exhausted)
+
+        def delta_changes(self, _remote_id, _cursor):
+            if exhausted:
+                raise AssertionError("delta path case must remain non-exhausted")
+            return DeltaPage(changes=[], next_cursor={"historyId": "2"}, exhausted=False)
+
+    provider = PartialProvider()
+    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None: provider)
+    monkeypatch.setattr(delta_mod, "build_provider", lambda _account, _store=None: provider)
+    if sync_path == "metadata":
+        result = sync_folder_metadata(account_id, folder_id, worker_id="page-followup", store=object(), max_pages=1)
+    else:
+        result = sync_folder_delta(account_id, folder_id, worker_id="page-followup", store=object(), max_pages=1)
+    assert result["status"] == "ok"
+    assert result["exhausted"] is exhausted
+
+    dedupe_key = f"{key_prefix}:{account_id}:{folder_id}"
+    with Session() as session:
+        followups = session.scalars(
+            select(WorkerJob).where(
+                WorkerJob.account_id == account_id,
+                WorkerJob.job_type == expected_type,
+                WorkerJob.dedupe_key == dedupe_key,
+                WorkerJob.status == JobStatus.PENDING.value,
+            )
+        ).all()
+        assert len(followups) == 1
 
 
 @pytestmark_db
@@ -198,6 +304,7 @@ def test_delta_cursor_invalid_marks_metadata_rebuild_as_scheduled(monkeypatch):
             )
         )
         assert successor is not None
+        assert successor.dedupe_key == f"metadata:{account_id}:{folder_id}"
         assert successor.payload.get("reason") == "cursor_invalid"
 
 
@@ -226,6 +333,7 @@ def test_metadata_cursor_invalid_marks_rebuild_as_scheduled(monkeypatch):
             )
         )
         assert len(successors) == 1
+        assert successors[0].dedupe_key == f"metadata:{account_id}:{folder_id}"
         assert successors[0].payload.get("reason") == "cursor_invalid"
 
 
