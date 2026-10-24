@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -26,6 +27,9 @@ from mail_core.accounts import (
 )
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import Account, AccountGroup
+from mail_core.security.redact import safe_error
+
+log = logging.getLogger("mail_core.mail.application.accounts")
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +81,13 @@ class SyncJobDTO:
 class SyncAllDTO:
     job_ids: list[str]
     count: int
+
+
+def _enqueue_initial_sync(session: Any, account_id: UUID) -> None:
+    try:
+        enqueue_account_sync(session, account_id)
+    except Exception as exc:
+        log.warning("initial sync enqueue failed for account %s: %s", account_id, safe_error(exc))
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,10 +206,7 @@ def create_account_app(
             )
             # AC-002: Automatically enqueue initial sync job for newly created accounts
             if acc.sync_enabled:
-                try:
-                    enqueue_account_sync(session, acc.id)
-                except Exception:
-                    pass
+                _enqueue_initial_sync(session, acc.id)
             session.commit()
         except Exception:
             session.rollback()
@@ -256,10 +264,7 @@ def update_account_app(
                 credentials=credentials,
             )
             if oauth_flow_id and acc.sync_enabled:
-                try:
-                    enqueue_account_sync(session, acc.id)
-                except Exception:
-                    pass
+                _enqueue_initial_sync(session, acc.id)
             session.commit()
         except Exception:
             session.rollback()

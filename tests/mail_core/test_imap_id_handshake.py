@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import imaplib
+import logging
 import os
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from sqlalchemy import select
@@ -12,6 +13,25 @@ from mail_core.mail.application.accounts import create_account_app
 from mail_core.mail.domain.enums import JobType
 from mail_core.mail.storage.models import WorkerJob
 from mail_core.providers.imap import ImapProvider
+
+
+def test_initial_sync_enqueue_failure_is_safely_logged(monkeypatch, caplog):
+    import mail_core.mail.application.accounts as accounts_app
+
+    account_id = uuid.uuid4()
+    monkeypatch.setattr(
+        accounts_app,
+        "enqueue_account_sync",
+        Mock(side_effect=RuntimeError("password=private-secret")),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="mail_core.mail.application.accounts"):
+        accounts_app._enqueue_initial_sync(None, account_id)
+
+    assert str(account_id) in caplog.text
+    assert "initial sync enqueue failed" in caplog.text
+    assert "password=[REDACTED]" in caplog.text
+    assert "private-secret" not in caplog.text
 
 
 def test_imap_connect_sends_id_command():
