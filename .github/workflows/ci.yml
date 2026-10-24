@@ -141,6 +141,9 @@ jobs:
           uv venv .venv
           uv pip install --python .venv/bin/python -r requirements-dev.txt
 
+      - name: Verify live backend OpenAPI schema
+        run: python scripts/export_openapi.py --check
+
       - name: Start Dedicated Test Services
         env:
           KKMAIL_TEST_PG_PASSWORD: "ci_test_password_secret_123"
