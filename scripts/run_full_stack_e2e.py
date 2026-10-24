@@ -8,6 +8,7 @@ import contextlib
 import json
 import logging
 import os
+import secrets
 import signal
 import socket
 import subprocess
@@ -76,11 +77,19 @@ def main():
     run_id = uuid.uuid4().hex[:12]
     db_name = f"kkmail_e2e_{run_id}"
     owner_role = f"kkmail_e2e_owner_{run_id}"
+    app_db_password = secrets.token_hex(32)
     from sqlalchemy import create_engine, text
     from sqlalchemy.engine import URL
 
     admin_url_obj = URL.create("postgresql+psycopg", username="postgres", password=pg_password, host="127.0.0.1", port=pg_port, database="postgres")
-    app_url_obj = URL.create("postgresql+psycopg", username="postgres", password=pg_password, host="127.0.0.1", port=pg_port, database=db_name)
+    app_url_obj = URL.create(
+        "postgresql+psycopg",
+        username=owner_role,
+        password=app_db_password,
+        host="127.0.0.1",
+        port=pg_port,
+        database=db_name,
+    )
     admin_db_url = admin_url_obj.render_as_string(hide_password=False)
     app_db_url = app_url_obj.render_as_string(hide_password=False)
 
@@ -95,7 +104,7 @@ def main():
 
         LOG.info("Creating dedicated test database: %s", db_name)
         with engine.connect() as conn:
-            conn.execute(text(f'CREATE ROLE "{owner_role}" NOLOGIN'))
+            conn.execute(text(f'CREATE ROLE "{owner_role}" LOGIN PASSWORD \'{app_db_password}\''))
             conn.execute(text(f'CREATE DATABASE "{db_name}" OWNER "{owner_role}"'))
             conn.execute(text(f'COMMENT ON DATABASE "{db_name}" IS \'kkmail-e2e-run:{run_id}\''))
 

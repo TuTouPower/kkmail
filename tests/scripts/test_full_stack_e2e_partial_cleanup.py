@@ -36,6 +36,19 @@ def test_partial_database_creation_is_cleaned_after_setup_failure(tmp_path, monk
     monkeypatch.setenv("KKMAIL_TEST_PG_PASSWORD", secrets.token_urlsafe(32))
 
     statements = []
+    created_urls = []
+    original_url_create = sqlalchemy.engine.URL.create
+
+    def record_url_create(*args, **kwargs):
+        url = original_url_create(*args, **kwargs)
+        created_urls.append(url)
+        return url
+
+    monkeypatch.setattr(
+        sqlalchemy.engine.URL,
+        "create",
+        staticmethod(record_url_create),
+    )
 
     class FakeConnection:
         def execute(self, statement):
@@ -60,8 +73,14 @@ def test_partial_database_creation_is_cleaned_after_setup_failure(tmp_path, monk
     with pytest.raises(RuntimeError, match="simulated database creation failure"):
         module.main()
 
-    assert any(statement.startswith("CREATE ROLE ") for statement in statements)
+    assert any(
+        statement.startswith("CREATE ROLE ") and " LOGIN PASSWORD " in statement
+        for statement in statements
+    )
     assert any(statement.startswith("CREATE DATABASE ") for statement in statements)
     assert any(statement.startswith("DROP DATABASE IF EXISTS ") for statement in statements)
     assert any(statement.startswith("DROP ROLE IF EXISTS ") for statement in statements)
+    assert created_urls[0].username == "postgres"
+    assert created_urls[1].username.startswith("kkmail_e2e_owner_")
+    assert created_urls[1].password != created_urls[0].password
     assert engine.disposed
