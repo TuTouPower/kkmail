@@ -373,7 +373,9 @@ class WorkerJob(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))
     priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("100"))
     run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Claim count, including claims reclaimed after worker interruption.
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    failure_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     locked_by: Mapped[Optional[str]] = mapped_column(String(128))
     locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[Optional[str]] = mapped_column(Text)

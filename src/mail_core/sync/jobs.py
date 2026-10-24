@@ -168,15 +168,20 @@ def fail_job(
     max_attempts: int | None = None,
     now: datetime | None = None,
 ) -> None:
-    """Mark failed permanently or requeue with exponential backoff using attempts."""
+    """Count a failed execution and requeue with backoff until the failure cap."""
     _assert_job_owner(job, worker_id)
     now = now or datetime.now(timezone.utc)
     cap = max_attempts if max_attempts is not None else _max_attempts()
     from mail_core.security.redact import safe_error
 
     job.last_error = safe_error(error) or None
-    if int(job.attempts) < cap:
-        delay = backoff_seconds(int(job.attempts))
+    if hasattr(job, "failure_attempts"):
+        failure_attempts = int(job.failure_attempts) + 1
+    else:  # Compatibility for minimal job test doubles without the mapped field.
+        failure_attempts = int(job.attempts)
+    job.failure_attempts = failure_attempts
+    if failure_attempts < cap:
+        delay = backoff_seconds(failure_attempts)
         if hasattr(error, "retry_after_seconds") and getattr(error, "retry_after_seconds", None) is not None:
             try:
                 retry_after = float(getattr(error, "retry_after_seconds"))

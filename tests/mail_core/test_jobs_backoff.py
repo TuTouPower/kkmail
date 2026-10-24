@@ -50,3 +50,40 @@ def test_fail_job_permanent_when_attempts_exhausted():
     fail_job(_FakeSession(), job, "x" * 5000, max_attempts=8)  # type: ignore[arg-type]
     assert job.status == JobStatus.FAILED.value
     assert len(job.last_error) == 500  # redacted + truncated (MAX_ERROR_CHARS)
+
+
+def test_claim_count_does_not_exhaust_failure_retry_budget():
+    job = SimpleNamespace(
+        attempts=25,
+        failure_attempts=0,
+        status=JobStatus.CLAIMED.value,
+        last_error=None,
+        locked_by="w1",
+        locked_at=datetime.now(timezone.utc),
+        run_after=datetime.now(timezone.utc),
+    )
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    fail_job(_FakeSession(), job, "boom", max_attempts=3, now=now)  # type: ignore[arg-type]
+
+    assert job.status == JobStatus.PENDING.value
+    assert job.attempts == 25
+    assert job.failure_attempts == 1
+    assert job.run_after == now + timedelta(seconds=1)
+
+
+def test_failure_cap_counts_real_failures():
+    job = SimpleNamespace(
+        attempts=25,
+        failure_attempts=2,
+        status=JobStatus.CLAIMED.value,
+        last_error=None,
+        locked_by="w1",
+        locked_at=datetime.now(timezone.utc),
+        run_after=datetime.now(timezone.utc),
+    )
+
+    fail_job(_FakeSession(), job, "boom", max_attempts=3)  # type: ignore[arg-type]
+
+    assert job.status == JobStatus.FAILED.value
+    assert job.failure_attempts == 3
