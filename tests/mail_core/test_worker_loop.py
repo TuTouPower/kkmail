@@ -2,6 +2,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,6 +42,32 @@ def test_reclaim_once_calls_reclaim_stale_claims():
         session.commit.assert_called()
 
 
+def test_run_reclaims_on_a_separate_time_cadence(monkeypatch):
+    clock = iter((0.0, 10.0, 60.0, 61.0))
+    monkeypatch.setattr(worker_main, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None))
+    monkeypatch.setattr(worker_main, "RECLAIM_INTERVAL_S", 60.0)
+    monkeypatch.setattr("mail_core.blobs.crypto.load_keyring_from_env", lambda: {})
+    reclaim = MagicMock()
+    monkeypatch.setattr(worker_main, "_reclaim_once", reclaim)
+    ticks = 0
+
+    def tick(_worker_id):
+        nonlocal ticks
+        ticks += 1
+        if ticks == 4:
+            worker_main.request_stop()
+        return worker_main.CLAIM_BATCH
+
+    monkeypatch.setattr(worker_main, "_tick", tick)
+    thread = threading.Thread(target=worker_main.run, kwargs={"poll_interval_s": 0.01}, daemon=True)
+    thread.start()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert ticks == 4
+    assert reclaim.call_count == 2
+
+
 @pytestmark_db
 def test_tick_reclaims_stale_and_isolates_job_sessions():
     from mail_core.db.session import get_session_factory
@@ -66,6 +93,7 @@ def test_tick_reclaims_stale_and_isolates_job_sessions():
         session.commit()
         stale_id, id1, id2 = stale.id, j1.id, j2.id
 
+    worker_main._reclaim_once()
     with patch("mail_core.realtime.notify.try_notify_outbox"):
         handled = worker_main._tick("test-worker-iso")
     assert handled >= 2

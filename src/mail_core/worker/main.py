@@ -16,6 +16,7 @@ log = logging.getLogger("mail_core.worker")
 
 _stop = False
 CLAIM_BATCH = 5
+RECLAIM_INTERVAL_S = 60.0
 
 
 def _handle_stop(signum: int, _frame: object) -> None:
@@ -88,8 +89,6 @@ def _tick(worker_id: str) -> int:
     except Exception as exc:  # pragma: no cover
         log.error("worker degraded: tick imports failed (%s); skipping claim batch", exc)
         return 0
-
-    _reclaim_once()
 
     Session = get_session_factory()
     claim_tokens: list[tuple] = []
@@ -178,7 +177,18 @@ def run(poll_interval_s: float | None = None) -> None:
     max_idle = float(os.environ.get("MAIL_CORE_WORKER_MAX_IDLE_S") or max(interval, 10.0))
     log.info("worker %s starting (poll=%ss, max_idle=%ss)", worker_id, interval, max_idle)
     sleep_s = interval
+    last_reclaim_at: float | None = None
     while not _stop:
+        now = time.monotonic()
+        if last_reclaim_at is None or now - last_reclaim_at >= RECLAIM_INTERVAL_S:
+            last_reclaim_at = now
+            try:
+                _reclaim_once()
+            except Exception as exc:  # pragma: no cover
+                from mail_core.security.redact import safe_error
+
+                log.error("reclaim sweep failed: %s", safe_error(exc))
+
         n = 0
         try:
             n = _tick(worker_id)
