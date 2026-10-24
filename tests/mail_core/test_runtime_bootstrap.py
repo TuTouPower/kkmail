@@ -115,3 +115,26 @@ def test_read_or_create_concurrent_race_eliminated(tmp_path):
     assert len(set(results)) == 1
     assert target_file.read_text().strip() == results[0]
 
+
+def test_concurrent_first_bootstrap_keeps_initial_password_and_hash_paired(tmp_path):
+    import concurrent.futures
+    import threading
+
+    environments: list[dict[str, str]] = [{}, {}]
+    start = threading.Barrier(len(environments))
+
+    def bootstrap(env):
+        start.wait()
+        return bootstrap_data_dir(tmp_path, env)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(environments)) as executor:
+        list(executor.map(bootstrap, environments))
+
+    initial = (tmp_path / INITIAL_PASSWORD_FILE).read_text(encoding="utf-8").strip()
+    password_hash = (tmp_path / "secrets" / "login-password.bcrypt").read_bytes()
+    assert bcrypt.checkpw(initial.encode("utf-8"), password_hash)
+    assert all(
+        env["MAIL_CORE_PASSWORD_HASH_PATH"] == str(tmp_path / "secrets" / "login-password.bcrypt")
+        for env in environments
+    )
+

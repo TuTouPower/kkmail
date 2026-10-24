@@ -17,6 +17,8 @@ from pathlib import Path
 import bcrypt
 
 INITIAL_PASSWORD_FILE = "initial-password.txt"
+_SECRET_FILE_WRITE_TIMEOUT_S = 5.0
+_BCRYPT_HASH_BYTES = 60
 
 
 def _restrict_secret_file_permissions(path: Path) -> None:
@@ -40,16 +42,32 @@ def _read_or_create(path: Path, factory) -> str:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         _restrict_secret_file_permissions(path)
-        for _ in range(10):
-            existing = path.read_text(encoding="utf-8").strip()
+        deadline = time.monotonic() + _SECRET_FILE_WRITE_TIMEOUT_S
+        while time.monotonic() < deadline:
+            try:
+                existing = path.read_text(encoding="utf-8").strip()
+            except FileNotFoundError:
+                existing = ""
             if existing:
                 return existing
             time.sleep(0.01)
-        return path.read_text(encoding="utf-8").strip()
+        raise RuntimeError(f"secret file {path} was created but remained empty")
 
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(value + "\n")
     return value
+
+
+def _wait_for_bcrypt_hash(path: Path) -> None:
+    deadline = time.monotonic() + _SECRET_FILE_WRITE_TIMEOUT_S
+    while time.monotonic() < deadline:
+        try:
+            if path.is_file() and path.stat().st_size == _BCRYPT_HASH_BYTES:
+                return
+        except OSError:
+            pass
+        time.sleep(0.01)
+    raise RuntimeError(f"login password hash file {path} was not fully written")
 
 
 def _b64_key() -> str:
@@ -95,13 +113,22 @@ def bootstrap_data_dir(data_dir: str | os.PathLike[str], env: dict[str, str] | N
 
     if not any((env.get(k) or "").strip() for k in ("MAIL_CORE_LOGIN_PASSWORD_HASH", "MAIL_CORE_LOGIN_PASSWORD")):
         env.setdefault("MAIL_CORE_PASSWORD_HASH_PATH", str(hash_path))
-        if not hash_path.is_file():
-            initial = secrets.token_urlsafe(12)
+        if hash_path.is_file():
+            _wait_for_bcrypt_hash(hash_path)
+        else:
+            initial = _read_or_create(
+                root / INITIAL_PASSWORD_FILE,
+                lambda: secrets.token_urlsafe(12),
+            )
             hashed = bcrypt.hashpw(initial.encode("utf-8"), bcrypt.gensalt())
-            fd = os.open(hash_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(hashed)
-            _read_or_create(root / INITIAL_PASSWORD_FILE, lambda: initial)
+            try:
+                fd = os.open(hash_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                _restrict_secret_file_permissions(hash_path)
+            else:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(hashed)
+            _wait_for_bcrypt_hash(hash_path)
             applied["MAIL_CORE_PASSWORD_HASH_PATH"] = "initial-password-generated"
     return applied
 
