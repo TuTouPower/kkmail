@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from mail_core.realtime.dispatcher import OutboxDispatcher
 
 log = logging.getLogger("mail_core.realtime.listener")
+_NOTIFY_WAIT_POLL_S = 0.5
 
 
 def _dsn_from_settings() -> str:
@@ -42,6 +43,7 @@ class OutboxListenThread:
         self.idle_timeout_s = idle_timeout_s
         self.reconnect_s = reconnect_s
         self._stop = threading.Event()
+        self._lifecycle_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._started = threading.Event()
 
@@ -55,17 +57,23 @@ class OutboxListenThread:
         return self.is_alive and self._started.is_set()
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._started.clear()
-        self._thread = threading.Thread(target=self._run, name="mail-core-outbox-listen", daemon=True)
-        self._thread.start()
+        with self._lifecycle_lock:
+            previous = self._thread
+            if previous and previous.is_alive():
+                if not self._stop.is_set():
+                    return
+                previous.join()
+            self._stop.clear()
+            self._started.clear()
+            self._thread = threading.Thread(target=self._run, name="mail-core-outbox-listen", daemon=True)
+            self._thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=timeout)
+        with self._lifecycle_lock:
+            self._stop.set()
+            thread = self._thread
+        if thread:
+            thread.join(timeout=timeout)
 
     def wait_started(self, timeout: float = 5.0) -> bool:
         return self._started.wait(timeout)
@@ -86,17 +94,24 @@ class OutboxListenThread:
                     log.exception("initial dispatch after LISTEN failed")
 
                 while not self._stop.is_set():
-                    # Block until NOTIFY or idle timeout (then opportunistic drain).
+                    # Poll in short waits so stop is responsive without changing idle drain cadence.
+                    deadline = time.monotonic() + self.idle_timeout_s
                     got = False
-                    for notify in conn.notifies(timeout=self.idle_timeout_s, stop_after=50):
-                        got = True
-                        log.debug("NOTIFY %s (%d bytes)", notify.channel, len(notify.payload or ""))
-                        if self._stop.is_set():
+                    while not self._stop.is_set():
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
                             break
-                        try:
-                            self.dispatcher.dispatch_once(require_subscribers=True)
-                        except Exception:
-                            log.exception("dispatch after NOTIFY failed")
+                        for notify in conn.notifies(
+                            timeout=min(remaining, _NOTIFY_WAIT_POLL_S), stop_after=50
+                        ):
+                            got = True
+                            log.debug("NOTIFY %s (%d bytes)", notify.channel, len(notify.payload or ""))
+                            if self._stop.is_set():
+                                break
+                            try:
+                                self.dispatcher.dispatch_once(require_subscribers=True)
+                            except Exception:
+                                log.exception("dispatch after NOTIFY failed")
                     if self._stop.is_set():
                         break
                     if not got:
@@ -110,7 +125,7 @@ class OutboxListenThread:
                     break
                 # Type only: driver messages can embed DSN fragments / payloads.
                 log.warning("LISTEN loop error (%s); reconnecting in %ss", type(exc).__name__, self.reconnect_s)
-                time.sleep(self.reconnect_s)
+                self._stop.wait(self.reconnect_s)
             finally:
                 if conn is not None:
                     try:
