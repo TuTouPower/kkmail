@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -15,6 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 from mail_core.db.session import get_session_factory
 from mail_core.realtime.dispatcher import get_dispatcher
@@ -132,17 +132,6 @@ def _release_sse_slot() -> None:
         _sse_active = max(0, _sse_active - 1)
 
 
-@asynccontextmanager
-async def sse_connection_slot() -> AsyncIterator[bool]:
-    """Acquire an active SSE connection slot for the generator lifetime."""
-    acquired = _acquire_sse_slot()
-    try:
-        yield acquired
-    finally:
-        if acquired:
-            _release_sse_slot()
-
-
 @router.get(
     "/events",
     response_class=StreamingResponse,
@@ -166,50 +155,67 @@ async def stream_events(
             malformed = True
             cursor = 0
 
-    with _sse_active_lock:
-        if _sse_active >= MAX_SSE_CONNECTIONS:
-            return JSONResponse(
-                {"detail": "too many sse connections", "max": MAX_SSE_CONNECTIONS},
-                status_code=503,
-            )
+    if not _acquire_sse_slot():
+        return JSONResponse(
+            {"detail": "too many sse connections", "max": MAX_SSE_CONNECTIONS},
+            status_code=503,
+        )
+
+    slot_release_lock = threading.Lock()
+    slot_released = False
+
+    def release_slot() -> None:
+        nonlocal slot_released
+        with slot_release_lock:
+            if slot_released:
+                return
+            slot_released = True
+        _release_sse_slot()
 
     async def gen() -> AsyncIterator[str]:
-        async with sse_connection_slot() as acquired:
-            if not acquired:
-                return
+        dispatcher = None
+        queue = None
+        try:
             # Subscribe BEFORE replay so events committed during replay land in the queue
             # and are not lost between DB read and live-tail. Dedupe by event id below.
             dispatcher = get_dispatcher()
             queue = dispatcher.subscribe(account_id=str(account_id) if account_id else None)
             seen = BoundedSet(maxsize=1000)
             cursor_local = cursor
+            plan = await asyncio.to_thread(_build_replay, cursor, account_id, malformed=malformed)
+            for eid, etype, data in plan.frames:
+                yield _format_sse(eid, etype, data)
+                seen.add(eid)
+            cursor_local = plan.cursor
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    # Comment keepalive only. Dispatch is owned by the LISTEN thread
+                    # (single dispatcher; no per-connection polling / dual dispatch).
+                    yield ": keepalive\n\n"
+                    continue
+                # Account filter: keep globals (NULL account_id) for account streams.
+                if account_id and event.get("account_id") and event["account_id"] != str(account_id):
+                    continue
+                eid = int(event["id"])
+                if eid in seen or eid <= cursor_local:
+                    continue
+                yield _format_sse(eid, event["event"], event.get("data") or {})
+                seen.add(eid)
+                cursor_local = eid
+        finally:
             try:
-                plan = await asyncio.to_thread(_build_replay, cursor, account_id, malformed=malformed)
-                for eid, etype, data in plan.frames:
-                    yield _format_sse(eid, etype, data)
-                    seen.add(eid)
-                cursor_local = plan.cursor
-
-                while True:
-                    if await request.is_disconnected():
-                        break
-                    try:
-                        event = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    except asyncio.TimeoutError:
-                        # Comment keepalive only. Dispatch is owned by the LISTEN thread
-                        # (single dispatcher; no per-connection polling / dual dispatch).
-                        yield ": keepalive\n\n"
-                        continue
-                    # Account filter: keep globals (NULL account_id) for account streams.
-                    if account_id and event.get("account_id") and event["account_id"] != str(account_id):
-                        continue
-                    eid = int(event["id"])
-                    if eid in seen or eid <= cursor_local:
-                        continue
-                    yield _format_sse(eid, event["event"], event.get("data") or {})
-                    seen.add(eid)
-                    cursor_local = eid
+                if dispatcher is not None and queue is not None:
+                    dispatcher.unsubscribe(queue, account_id=str(account_id) if account_id else None)
             finally:
-                dispatcher.unsubscribe(queue, account_id=str(account_id) if account_id else None)
+                release_slot()
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        background=BackgroundTask(release_slot),
+    )

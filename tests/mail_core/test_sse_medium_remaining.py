@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 
 from mail_core.api import sse as sse_mod
@@ -166,6 +170,28 @@ def test_sse_connection_cap_returns_503(monkeypatch):
         resp = _client().get("/api/events")
         assert resp.status_code == 503
         assert resp.json()["detail"] == "too many sse connections"
+
+
+def test_sse_slot_is_reserved_before_stream_response_is_created(monkeypatch):
+    monkeypatch.setattr(sse_mod, "MAX_SSE_CONNECTIONS", 1)
+    scope = {"type": "http", "method": "GET", "path": "/api/events", "headers": [], "query_string": b""}
+    with _sse_slot_reset():
+        first = asyncio.run(
+            sse_mod.stream_events(Request(scope), last_event_id=None, after=None, account_id=None)
+        )
+        assert isinstance(first, StreamingResponse)
+        assert sse_mod._sse_active == 1
+
+        second = asyncio.run(
+            sse_mod.stream_events(Request(scope), last_event_id=None, after=None, account_id=None)
+        )
+        assert isinstance(second, JSONResponse)
+        assert second.status_code == 503
+        assert sse_mod._sse_active == 1
+
+        assert first.background is not None
+        asyncio.run(first.background())
+        assert sse_mod._sse_active == 0
 
 @_requires_db
 def test_build_replay_runs_without_event_loop():
