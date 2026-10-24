@@ -98,7 +98,7 @@ scripts/run-mail-core-tests.sh cleanup <run_uuid>
 
 所有权或实例身份不符时拒绝清理；不扫描删除未知数据库。显式 `stop` 遇到带运行标记的数据库时拒绝停止。每轮使用独立 NOLOGIN owner role 原子标记建库归属，覆盖建库与 comment 写入间中断；creating 状态仅回收所有者匹配的确切数据库，运行态额外要求 comment 匹配。
 
-当前验证：17 项保护测试通过，独立仓库并发、真实迁移失败与 SIGTERM 清理已验证。t014 已收口 Outbox 残留与旧测试前置；最终 seed 41、17 连续两轮均 352 passed / 2 skipped（仅 IMAP 服务未启用），无 PG 条件跳过。两轮容器和 PG 服务进程复用，数据库独立，结束后无测试库或 owner role 残留。
+t013/t014 的测试数量、seed 与运行产物属于当时的 task 结果，以 [t013 task archive](../archive/tasks/t013_test_pg_runtime/task.md)、[t014 task archive](../archive/tasks/t014_backend_test_isolation/task.md) 及其 review 为准。本文件只在下方“当前验证基线”保留近期门禁计数。
 
 ## 后端逐用例隔离与确定性验证（t014）
 
@@ -117,7 +117,7 @@ KKMAIL_TEST_SEED=41 scripts/run-mail-core-tests.sh run
 
 每轮目录包含 `.coverage`、`coverage.xml`、`coverage.json`、`junit.xml` 和 `test_summary.json`。覆盖仅统计生产 `mail_core`，启用分支覆盖；汇总列出实际收集、执行、错误、跳过原因和未执行清单，不用统一覆盖率百分比代替行为验收。依赖安装单独执行，pytest-cov 缺失会失败，不在测试入口自动安装。
 
-实测基线：快速套件 252 passed / 102 skipped；完整 seed 41、17 各 352 passed / 2 IMAP skipped，约 260/273 秒。87 个生产模块文件行/分支综合覆盖 78.63% / 78.66%，不代表未覆盖行为安全。IMAP 真实路径由 t016 接续，不将当前协议跳过计为通过。
+t014 的快速/完整套件计数、seed 和覆盖报告是历史结果，以 [t014 task archive](../archive/tasks/t014_backend_test_isolation/task.md) 与 [t014 test review](../archive/tasks/t014_backend_test_isolation/review_test.md) 为准。IMAP 真实路径由 t016 接续；未启用协议服务时的跳过不计为协议验证通过。
 
 ## 前端测试运行时与隔离（t015）
 
@@ -141,7 +141,7 @@ KKMAIL_TEST_SEED=41 scripts/run-mail-core-tests.sh run
 - 移除测试中绑定的全局 window 事件监听器；
 - 卸载已渲染 DOM 组件节点，恢复全局 fetch、timers 与 navigator 替身。
 
-覆盖率报告基于 `@vitest/coverage-v8` 输出至 `.scratch/frontend_coverage`，覆盖范围仅限 `src/**/*.{ts,tsx}` 生产代码，排除测试文件与生成代码。实测全量 34 个测试文件共 168 项用例全通，行覆盖率约 78%。
+覆盖率报告基于 `@vitest/coverage-v8` 输出至 `.scratch/frontend_coverage`，覆盖范围仅限 `src/**/*.{ts,tsx}` 生产代码，排除测试文件与生成代码。t015 实施期的文件数、用例数与覆盖率以 [t015 task archive](../archive/tasks/t015_frontend_test_runtime/task.md) 及其 review 为准。
 
 ## 真实 IMAP 与服务商协议契约验证（t016）
 
@@ -154,7 +154,7 @@ scripts/run-mail-core-tests.sh run -k test_imap
 
 真实协议层门禁特性：
 
-- **无静默跳过**：完整测试运行期间必须确保测试 IMAP 服务处于监听与认证就绪状态，全量套件实现 0 项 IMAP 条件跳过（361 passed / 0 skipped）；
+- **无静默跳过**：完整验证必须确保测试 IMAP 服务处于监听与认证就绪状态；未启用服务时的 PostgreSQL-only 运行不视为真实协议验证。t016 历史运行结果以 [t016 task archive](../archive/tasks/t016_mail_protocol_integration/task.md) 及其 review 为准；
 - **全链路同步验证**：覆盖中文多部分正文、二进制附件落库加密与流式解密校验、相同 Message-ID 邮件处理，以及多轮同步的严格幂等性；
 - **增量收敛与服务端可观察性**：测试远端 Flag 变更与删除在本地库的增量同步；验证本地读状态更新经 `push_remote_operations` 写回到真实服务端后能在 IMAP 协议（`\Seen`）上直接观测；
 - **安全废纸篓与 TLS 防护**：验证仅移动目标邮件至 Trash，在缺少 MOVE 能力时拒绝不安全的全目录 EXPUNGE；非 SSL 端口开启 TLS 时必须握手失败直接阻断；
@@ -276,10 +276,10 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 |**前置契约**|模板契约与工具链冒烟|`pytest .repo_template/tests -q -m contract`|
 |**前端全量**|样式/类型/单元/构建/OpenAPI|`(cd src/frontend && npm test && npx tsc -b && npm run build && npm run lint)`|
 |**桌面全量**|进程管理单测 + 原生打包冒烟|`(cd src/desktop && npm test && npm run test:packaged)`|
-|**后端快速**|无数据库/内存 Provider 单元|`scripts/run-mail-core-tests.sh unit` (256 passed / 105 skipped)|
-|**后端全量**|专用 PG (15433) + 真实 IMAP (1143)|`scripts/run-mail-core-tests.sh run` (361 passed / 0 skipped)|
-|**全栈 E2E**|真实 FastAPI + PG + Worker + SPA|`python3 scripts/run_full_stack_e2e.py` (3 passed, 16s)|
-|**快速 E2E**|轻量浏览器 stubApi 冒烟|`npm --prefix src/frontend run test:e2e` (3 passed, 4s)|
+|**后端快速**|无数据库/内存 Provider 单元|`scripts/run-mail-core-tests.sh unit`|
+|**后端全量**|专用 PG (15433) + 真实 IMAP (1143)|`scripts/run-mail-core-tests.sh run`|
+|**全栈 E2E**|真实 FastAPI + PG + Worker + SPA|`python3 scripts/run_full_stack_e2e.py`|
+|**快速 E2E**|轻量浏览器 stubApi 冒烟|`npm --prefix src/frontend run test:e2e`|
 |**扩展演练**|备份跨库还原 / 迁移升级 / 混沌恢复|`scripts/run-mail-core-tests.sh run -k "test_backup_restore_drill_live or test_migration_validation or test_worker_process_recovery"`|
 |**性能基准**|确定性规模延迟分位数与资源测定|`python3 scripts/benchmark_mailbox.py --scale 1000 --runs 3`|
 
@@ -290,6 +290,21 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 - **定时与手动扩展套件 (`.github/workflows/scheduled.yml`)**：
     每天定时或手动触发，完整执行真实备份跨库恢复、多版本历史数据平滑升级、多进程 Worker 故障恢复和大邮箱性能基准测试；
 - **权限与环境安全**：工作流配置最小 `contents: read` 权限，不申请发布权限；测试使用的数据库密码与环境变量严格隔离于专用测试环境。
+
+### 3. 当前验证基线（最近证据：2026-10-24 至 2026-10-25）
+
+本表集中记录近期完整门禁的结果。各行注明结果日期和证据；task 专项历史结果仍以对应归档 task 为准。
+
+|证据时间|门禁|结果|可追溯证据|
+|---|---|---|---|
+|2026-10-25T01:53:04+08:00|后端完整 PostgreSQL 套件|569 passed，0 failed，0 skipped|运行 `1b1f4a8e4f114631b9a2c42a04ee01eb` 的 `test_summary.json` 与 `junit.xml`：`.scratch/test_runs/1b1f4a8e4f114631b9a2c42a04ee01eb/`|
+|2026-10-24T19:09:23+08:00|模板契约|149 passed，1 skipped|[t055 test review](../archive/tasks/t055_microsoft_oauth_callback/review_test.md)；对应 task 汇总见 [t055 task archive](../archive/tasks/t055_microsoft_oauth_callback/task.md)|
+|2026-10-24T23:47:17+08:00|前端全量测试、OpenAPI 与 CSS token 检查|302 passed；检查通过|[t055 test review](../archive/tasks/t055_microsoft_oauth_callback/review_test.md) 与 [t055 task archive](../archive/tasks/t055_microsoft_oauth_callback/task.md)|
+|2026-10-24T23:47:17+08:00|桌面单测与 packaged smoke|通过|[t055 task archive](../archive/tasks/t055_microsoft_oauth_callback/task.md)|
+|2026-10-24T23:47:17+08:00|快速浏览器 UI E2E|16 passed|[t055 test review](../archive/tasks/t055_microsoft_oauth_callback/review_test.md)|
+|2026-10-24T23:47:17+08:00|真实全栈 E2E|8 passed|[t055 test review](../archive/tasks/t055_microsoft_oauth_callback/review_test.md) 与 [t055 task archive](../archive/tasks/t055_microsoft_oauth_callback/task.md)|
+
+后端全量记录引用本地运行产物；task archive 中记录的其他数字均为各 task 当时的历史快照，不应用作当前基线。
 
 ## 分组侧栏与分组邮件范围（t027）
 
