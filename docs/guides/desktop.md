@@ -1,6 +1,6 @@
 # mail-core 桌面 PostgreSQL 子进程
 
-架构依据：`docs/blueprint/architecture.md` §4.3 / M6。
+架构依据：`docs/blueprint/architecture.md`「系统拓扑与进程划分」中的「桌面集成」。
 
 ## 数据目录（安装目录之外）
 
