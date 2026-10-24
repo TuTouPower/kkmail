@@ -19,6 +19,7 @@ from mail_core.api import sse as sse_mod
 from mail_core.api.app import app
 from mail_core.mail.domain.enums import OutboxEventType
 from mail_core.mail.storage import OutboxEvent
+from mail_core.realtime.dispatcher import SSE_STREAM_CLOSE
 from mail_core.realtime import events as events_mod
 from mail_core.realtime.outbox import fetch_since, prune_dispatched
 from tests.mail_core.conftest import TEST_API_KEY
@@ -53,6 +54,56 @@ def test_frontend_subscribes_to_core_sse_events():
     missing = [e for e in events_mod.SSE_CORE_CLIENT_EVENTS if e not in listed]
     assert not missing, f"frontend missing core SSE events: {missing}"
     # archive.* may be omitted by the UI until archive progress is surfaced (documented drift).
+
+
+@pytest.mark.parametrize("queue_size", [1, 4])
+def test_isolated_sse_stream_ends_after_resync_hint(monkeypatch, queue_size):
+    queue = asyncio.Queue(maxsize=queue_size)
+    hint = {
+        "id": 42,
+        "event": "client.resync_hint",
+        "account_id": None,
+        "data": {"reason": "sse_queue_full"},
+    }
+    queue.put_nowait(hint)
+    if queue_size == 1:
+        hint["_mail_core_close_after_delivery"] = True
+    else:
+        queue.put_nowait(SSE_STREAM_CLOSE)
+
+    class FakeDispatcher:
+        def __init__(self):
+            self.unsubscribed = []
+
+        def subscribe(self, **_kwargs):
+            return queue
+
+        def unsubscribe(self, subscriber, **_kwargs):
+            self.unsubscribed.append(subscriber)
+
+    dispatcher = FakeDispatcher()
+    monkeypatch.setattr(sse_mod, "get_dispatcher", lambda: dispatcher)
+    monkeypatch.setattr(sse_mod, "_build_replay", lambda *_args, **_kwargs: sse_mod._ReplayPlan([], 0))
+
+    class FakeRequest:
+        async def is_disconnected(self):
+            return False
+
+    async def run_stream():
+        before = sse_mod._sse_active
+        response = await sse_mod.stream_events(
+            FakeRequest(), last_event_id=None, after=None, account_id=None
+        )
+        frames = response.body_iterator
+        hint = await anext(frames)
+        with pytest.raises(StopAsyncIteration):
+            await anext(frames)
+        assert sse_mod._sse_active == before
+        assert dispatcher.unsubscribed == [queue]
+        return hint
+
+    hint_frame = asyncio.run(run_stream())
+    assert "event: client.resync_hint" in hint_frame
 
 
 @_requires_db

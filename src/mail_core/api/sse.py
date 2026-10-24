@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from mail_core.db.session import get_session_factory
-from mail_core.realtime.dispatcher import get_dispatcher
+from mail_core.realtime.dispatcher import SSE_STREAM_CLOSE, get_dispatcher
 from mail_core.realtime.outbox import fetch_since, head_event_id, to_item
 
 log = logging.getLogger("mail_core.api.sse")
@@ -198,8 +198,15 @@ async def stream_events(
                     # (single dispatcher; no per-connection polling / dual dispatch).
                     yield ": keepalive\n\n"
                     continue
+                if event is SSE_STREAM_CLOSE:
+                    break
+                close_after_delivery = (
+                    isinstance(event, dict) and event.get("_mail_core_close_after_delivery")
+                )
                 # Account filter: keep globals (NULL account_id) for account streams.
                 if account_id and event.get("account_id") and event["account_id"] != str(account_id):
+                    if close_after_delivery:
+                        break
                     continue
                 eid = int(event["id"])
                 if eid in seen or eid <= cursor_local:
@@ -207,6 +214,8 @@ async def stream_events(
                 yield _format_sse(eid, event["event"], event.get("data") or {})
                 seen.add(eid)
                 cursor_local = eid
+                if close_after_delivery:
+                    break
         finally:
             try:
                 if dispatcher is not None and queue is not None:

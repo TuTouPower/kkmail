@@ -20,6 +20,7 @@ from mail_core.realtime.outbox import fetch_undispatched, mark_dispatched, to_it
 log = logging.getLogger("mail_core.realtime.dispatcher")
 
 Subscriber = Callable[[dict[str, Any]], None]
+SSE_STREAM_CLOSE = object()
 
 
 @dataclass
@@ -48,12 +49,34 @@ class OutboxDispatcher:
         with self._lock:
             self._subs[key] = [(lp, qq) for (lp, qq) in self._subs.get(key, []) if qq is not q]
 
-    def _isolate(self, q: asyncio.Queue) -> None:
-        """Isolate a slow consumer whose queue filled up so it does not block the global outbox."""
+    def _isolate(self, q: asyncio.Queue, *, signal_stream: bool = True) -> None:
+        """Isolate and close a slow consumer so it reconnects and replays."""
         log.warning("isolating slow consumer queue %s", id(q))
         with self._lock:
+            if getattr(q, "_mail_core_isolated", False):
+                return
+            setattr(q, "_mail_core_isolated", True)
             for key in list(self._subs.keys()):
                 self._subs[key] = [(lp, qq) for (lp, qq) in self._subs[key] if qq is not q]
+        if not signal_stream:
+            return
+        try:
+            q.put_nowait(SSE_STREAM_CLOSE)
+        except asyncio.QueueFull:
+            resync_hint = None
+            while not q.empty():
+                try:
+                    item = q.get_nowait()
+                    if isinstance(item, dict) and item.get("event") == "client.resync_hint":
+                        resync_hint = item
+                except asyncio.QueueEmpty:
+                    break
+            if resync_hint is not None:
+                # A one-slot queue cannot hold both the hint and a separate sentinel.
+                resync_hint["_mail_core_close_after_delivery"] = True
+                q.put_nowait(resync_hint)
+            else:
+                q.put_nowait(SSE_STREAM_CLOSE)
 
     def has_local_subscribers(self) -> bool:
         with self._lock:
@@ -62,6 +85,8 @@ class OutboxDispatcher:
     @staticmethod
     def _put(q: asyncio.Queue, event: dict[str, Any]) -> bool:
         """Enqueue ``event``. On QueueFull, push a resync hint instead and return False."""
+        if getattr(q, "_mail_core_isolated", False):
+            return False
         try:
             q.put_nowait(event)
             return True
@@ -75,11 +100,12 @@ class OutboxDispatcher:
                 "created_at": event.get("created_at"),
             }
             try:
-                # Make room for the hint so the client knows to resync.
-                try:
-                    q.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
+                # Discard stale live events; the hint triggers a durable replay/refetch.
+                while not q.empty():
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
                 q.put_nowait(hint)
             except asyncio.QueueFull:
                 log.warning("sse queue full; could not deliver resync hint id=%s", event.get("id"))
@@ -108,7 +134,7 @@ class OutboxDispatcher:
         try:
             loop.call_soon_threadsafe(_run)
         except RuntimeError:
-            self._isolate(q)
+            self._isolate(q, signal_stream=False)
             return False  # loop closed; subscriber is going away
         return True
 
@@ -148,8 +174,8 @@ class OutboxDispatcher:
 
         When ``require_subscribers`` is True and this process has none, skip
         entirely so a worker / idle process cannot steal events from the API.
-        Events dropped due to a full SSE queue are left undispatched and the
-        slow client receives ``client.resync_hint``.
+        Events dropped due to a full SSE queue are left undispatched; the slow
+        client receives ``client.resync_hint`` and its stream closes to reconnect.
         """
         if require_subscribers and not self.has_local_subscribers():
             return 0

@@ -39,7 +39,9 @@ def test_fanout_isolates_a_queue_full_consumer_on_its_loop():
     loop.callback()
 
     assert not dispatcher.has_local_subscribers()
-    assert queue.get_nowait()["event"] == "client.resync_hint"
+    hint = queue.get_nowait()
+    assert hint["event"] == "client.resync_hint"
+    assert hint["_mail_core_close_after_delivery"] is True
 
 
 def test_listener_requires_subscribers_for_initial_notify_and_idle_dispatch(monkeypatch):

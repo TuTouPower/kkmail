@@ -14,7 +14,7 @@ from mail_core.blobs.gc import run_gc_blobs
 from mail_core.providers.http import ProviderHttpError
 from mail_core.providers.imap import ImapProvider
 from mail_core.providers.oauth import urllib_json_request
-from mail_core.realtime.dispatcher import OutboxDispatcher
+from mail_core.realtime.dispatcher import OutboxDispatcher, SSE_STREAM_CLOSE
 
 pytestmark_db = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
@@ -137,18 +137,26 @@ def test_dispatch_queue_full_does_not_mark_and_sends_resync_hint():
             )
             n = dispatcher.dispatch_once()
         dispatcher.unsubscribe(q)
-        # Drain: expect a resync_hint somewhere after pads.
+        # Isolation replaces stale queued events with a hint followed by a close sentinel.
         hints = []
+        sentinels = 0
+        queued_events = []
         while not q.empty():
             ev = q.get_nowait()
-            if ev.get("event") == "client.resync_hint":
+            if ev is SSE_STREAM_CLOSE:
+                sentinels += 1
+            else:
+                queued_events.append(ev)
+            if isinstance(ev, dict) and ev.get("event") == "client.resync_hint":
                 hints.append(ev)
-        return n, hints, marked_ids
+        return n, hints, marked_ids, sentinels, queued_events
 
-    n, hints, marked = asyncio.run(_setup_and_dispatch())
+    n, hints, marked, sentinels, queued_events = asyncio.run(_setup_and_dispatch())
     assert n == 0
     assert marked == []
     assert hints and hints[0]["data"]["reason"] == "sse_queue_full"
+    assert sentinels == 1
+    assert queued_events == hints
 
 
 @pytestmark_db
