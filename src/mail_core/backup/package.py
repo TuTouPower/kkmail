@@ -29,6 +29,9 @@ from mail_core.db.session import database_url
 
 log = logging.getLogger("mail_core.backup")
 
+_MANIFEST_FILENAME = "MANIFEST.json"
+_MANIFEST_CHECKSUM_FILENAME = "MANIFEST.sha256"
+
 
 @dataclass(frozen=True, slots=True)
 class BackupManifest:
@@ -318,11 +321,11 @@ def create_backup_package(
         manifest = _build_plain_dir(
             out, url=url, root=root, include_blobs=include_blobs, allow_dump_stub=allow_dump_stub
         )
-        man_path = out / "MANIFEST.json"
+        man_path = out / _MANIFEST_FILENAME
         man_path.write_text(json.dumps(asdict(manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         _set_private_file(man_path)
-        sha_path = out / "MANIFEST.sha256"
-        sha_path.write_text(f"{_sha256_file(man_path)}  MANIFEST.json\n", encoding="utf-8")
+        sha_path = out / _MANIFEST_CHECKSUM_FILENAME
+        sha_path.write_text(f"{_sha256_file(man_path)}  {_MANIFEST_FILENAME}\n", encoding="utf-8")
         _set_private_file(sha_path)
 
         # Clean up any stale sealed artifacts from previous runs
@@ -345,11 +348,11 @@ def create_backup_package(
         manifest = _build_plain_dir(
             plain_stage, url=url, root=root, include_blobs=include_blobs, allow_dump_stub=allow_dump_stub
         )
-        man_path = plain_stage / "MANIFEST.json"
+        man_path = plain_stage / _MANIFEST_FILENAME
         man_path.write_text(json.dumps(asdict(manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         _set_private_file(man_path)
-        sha_path = plain_stage / "MANIFEST.sha256"
-        sha_path.write_text(f"{_sha256_file(man_path)}  MANIFEST.json\n", encoding="utf-8")
+        sha_path = plain_stage / _MANIFEST_CHECKSUM_FILENAME
+        sha_path.write_text(f"{_sha256_file(man_path)}  {_MANIFEST_FILENAME}\n", encoding="utf-8")
         _set_private_file(sha_path)
 
         with tarfile.open(tar_tmp, mode="w") as tar:
@@ -374,14 +377,14 @@ def create_backup_package(
             backup_key_version=version,
             note=manifest.note,
         )
-        out_man = out / "MANIFEST.json"
+        out_man = out / _MANIFEST_FILENAME
         out_man.write_text(
             json.dumps(asdict(sealed_manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
         _set_private_file(out_man)
-        out_sha = out / "MANIFEST.sha256"
+        out_sha = out / _MANIFEST_CHECKSUM_FILENAME
         out_sha.write_text(
-            f"{_sha256_file(out_man)}  MANIFEST.json\n", encoding="utf-8"
+            f"{_sha256_file(out_man)}  {_MANIFEST_FILENAME}\n", encoding="utf-8"
         )
         _set_private_file(out_sha)
         log.info("encrypted backup written to %s", kkbak)
@@ -391,7 +394,10 @@ def create_backup_package(
         _safe_rmtree(tar_tmp)
 
 
-_INNER_TAR_ALLOWLIST = _PLAIN_MEMBER_ALLOWLIST | {"MANIFEST.json", "MANIFEST.sha256"}
+_INNER_TAR_ALLOWLIST = _PLAIN_MEMBER_ALLOWLIST | {
+    _MANIFEST_FILENAME,
+    _MANIFEST_CHECKSUM_FILENAME,
+}
 
 
 def _check_plain_members(
@@ -488,7 +494,7 @@ def verify_backup_package(
     checked = 0
     kkbak = root / "backup.kkbak"
 
-    outer_man = root / "MANIFEST.json"
+    outer_man = root / _MANIFEST_FILENAME
     is_sealed = False
     if outer_man.is_file():
         try:
@@ -503,14 +509,20 @@ def verify_backup_package(
         # --- Outer sealed integrity (previously skipped) ---
         if not outer_man.is_file():
             return RestoreVerifyResult(
-                ok=False, members_checked=0, errors=["outer MANIFEST.json missing"]
+                ok=False,
+                members_checked=0,
+                errors=[f"outer {_MANIFEST_FILENAME} missing"],
             )
-        _verify_manifest_file_checksum(outer_man, root / "MANIFEST.sha256", errors)
+        _verify_manifest_file_checksum(
+            outer_man, root / _MANIFEST_CHECKSUM_FILENAME, errors
+        )
         try:
             outer = json.loads(outer_man.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             return RestoreVerifyResult(
-                ok=False, members_checked=0, errors=[f"outer MANIFEST.json invalid: {exc}"]
+                ok=False,
+                members_checked=0,
+                errors=[f"outer {_MANIFEST_FILENAME} invalid: {exc}"],
             )
         outer_members = outer.get("members") or {}
         meta = outer_members.get("backup.kkbak") or {}
@@ -581,12 +593,12 @@ def _verify_plain_tree(
     key_version: int | None,
     allow_stub: bool,
 ) -> RestoreVerifyResult:
-    man_path = work / "MANIFEST.json"
+    man_path = work / _MANIFEST_FILENAME
     if not man_path.is_file():
         return RestoreVerifyResult(
             ok=False,
             members_checked=checked,
-            errors=errors + ["MANIFEST.json missing"],
+            errors=errors + [f"{_MANIFEST_FILENAME} missing"],
             backup_key_version=key_version,
         )
     try:
@@ -595,10 +607,12 @@ def _verify_plain_tree(
         return RestoreVerifyResult(
             ok=False,
             members_checked=checked,
-            errors=errors + [f"MANIFEST.json invalid: {exc}"],
+            errors=errors + [f"{_MANIFEST_FILENAME} invalid: {exc}"],
             backup_key_version=key_version,
         )
-    _verify_manifest_file_checksum(man_path, work / "MANIFEST.sha256", errors)
+    _verify_manifest_file_checksum(
+        man_path, work / _MANIFEST_CHECKSUM_FILENAME, errors
+    )
     members = manifest.get("members") or {}
     if "postgres.dump" not in members:
         errors.append("required member postgres.dump missing from manifest")
@@ -751,9 +765,9 @@ def restore_backup_package(
         if not _extract_tar_file(tar_to_extract, extract_dir, errors):
             raise RuntimeError(f"tar extraction failed: {errors}")
 
-        man_path = extract_dir / "manifest.json"
+        man_path = extract_dir / _MANIFEST_FILENAME
         if not man_path.is_file():
-            raise RuntimeError("missing manifest.json in backup archive")
+            raise RuntimeError(f"missing {_MANIFEST_FILENAME} in backup archive")
         manifest = json.loads(man_path.read_text(encoding="utf-8"))
 
         # Reject stubs unless allow_stub explicitly granted

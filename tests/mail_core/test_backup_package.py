@@ -3,12 +3,18 @@ from __future__ import annotations
 import base64
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from mail_core.backup.crypto import MAGIC, BackupCryptoError, load_backup_key
-from mail_core.backup.package import create_backup_package, verify_backup_package
+from mail_core.backup import package as backup_package
+from mail_core.backup.package import (
+    create_backup_package,
+    restore_backup_package,
+    verify_backup_package,
+)
 
 
 def test_create_backup_package_writes_manifest(tmp_path, monkeypatch):
@@ -40,6 +46,40 @@ def test_create_backup_package_writes_manifest(tmp_path, monkeypatch):
     ok_stub = verify_backup_package(out, allow_stub=True)
     assert ok_stub.ok
     assert ok_stub.members_checked >= 2
+
+
+def test_restore_sealed_backup_reads_manifest_filename_case(tmp_path, monkeypatch):
+    assert backup_package._MANIFEST_FILENAME == "MANIFEST.json"
+
+    backup_key = os.urandom(32)
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", base64.b64encode(backup_key).decode())
+    monkeypatch.delenv("MAIL_CORE_BACKUP_KEYS", raising=False)
+
+    package_dir = tmp_path / "sealed-backup"
+    create_backup_package(
+        package_dir,
+        include_blobs=False,
+        database_url_override="postgresql://nobody:nope@127.0.0.1:1/none",
+        encrypt=True,
+        allow_dump_stub=True,
+    )
+    monkeypatch.setattr(backup_package.shutil, "which", lambda name: "/fake/pg_restore")
+    monkeypatch.setattr(
+        backup_package.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b""),
+    )
+
+    result = restore_backup_package(
+        package_dir,
+        target_database_url="postgresql://restore:pw@127.0.0.1:5432/target",
+        target_blobs_dir=tmp_path / "restored-blobs",
+        keyring={1: backup_key},
+        allow_stub=True,
+    )
+
+    assert result.ok
+    assert result.database_restored
 
 
 def test_encrypted_backup_roundtrip_verify(tmp_path, monkeypatch):
