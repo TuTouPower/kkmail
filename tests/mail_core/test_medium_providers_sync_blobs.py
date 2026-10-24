@@ -177,7 +177,14 @@ def test_imap_metadata_pages_reuse_uid_search_until_scan_exhaustion(monkeypatch)
                 return "OK", [b" ".join(uids)]
             if command == "FETCH":
                 self.fetch_sets.append(args[0])
-                return "OK", [None]
+                uids = [int(value) for value in args[0].split(",")]
+                return "OK", [
+                    (
+                        f"{uid} (UID {uid} FLAGS () INTERNALDATE \"21-Oct-2026 10:00:00 +0000\")".encode(),
+                        f"From: user@example.com\r\nSubject: Message {uid}\r\n\r\n".encode(),
+                    )
+                    for uid in uids
+                ]
             return "NO", []
 
     client = FakeIMAP()
@@ -224,7 +231,14 @@ def test_imap_uidvalidity_change_discards_cached_uid_scan(monkeypatch):
                 start = int(query.split()[1].split(":")[0])
                 return "OK", [b" ".join(str(uid).encode() for uid in range(start, 5))]
             if command == "FETCH":
-                return "OK", [None]
+                uids = [int(value) for value in args[0].split(",")]
+                return "OK", [
+                    (
+                        f"{uid} (UID {uid} FLAGS () INTERNALDATE \"21-Oct-2026 10:00:00 +0000\")".encode(),
+                        f"From: user@example.com\r\nSubject: Message {uid}\r\n\r\n".encode(),
+                    )
+                    for uid in uids
+                ]
             return "NO", []
 
     client = FakeIMAP()
@@ -511,6 +525,9 @@ def test_update_account_sync_status():
 
 def test_imap_fetch_metadata_page_deleted_message_skips_without_raising(monkeypatch):
     class FakeIMAPDeleted:
+        def __init__(self):
+            self.search_calls = 0
+
         def select(self, *a, **k):
             return "OK", [b"1"]
 
@@ -519,7 +536,8 @@ def test_imap_fetch_metadata_page_deleted_message_skips_without_raising(monkeypa
 
         def uid(self, cmd, *args):
             if cmd == "SEARCH":
-                return "OK", [b"42"]
+                self.search_calls += 1
+                return "OK", [b"42"] if self.search_calls == 1 else [b""]
             if cmd == "FETCH":
                 return "OK", [None]
             return "NO", []
@@ -528,7 +546,67 @@ def test_imap_fetch_metadata_page_deleted_message_skips_without_raising(monkeypa
             return "OK", []
 
     prov = ImapProvider("h", 993, "u", "p", use_ssl=False)
-    monkeypatch.setattr(prov, "_connect", lambda: FakeIMAPDeleted())
+    client = FakeIMAPDeleted()
+    monkeypatch.setattr(prov, "_connect", lambda: client)
     page = prov.fetch_metadata_page("INBOX", {"uid_next": 42, "page_size": 1})
     assert len(page.items) == 0
-    assert page.next_cursor["uid_next"] == 43
+    assert page.next_cursor["uid_next"] == 42
+    assert not page.exhausted
+
+    confirmed_deleted = prov.fetch_metadata_page("INBOX", page.next_cursor)
+    assert len(confirmed_deleted.items) == 0
+    assert confirmed_deleted.next_cursor["uid_next"] == 42
+    assert confirmed_deleted.exhausted
+    assert client.search_calls == 2
+
+
+def test_imap_metadata_fetch_gap_retries_from_first_missing_uid(monkeypatch):
+    class FakeIMAPGap:
+        def __init__(self):
+            self.search_args = []
+            self.fetch_specs = []
+
+        def select(self, *a, **k):
+            return "OK", [b"1"]
+
+        def status(self, *a, **k):
+            return "OK", [b"INBOX (UIDVALIDITY 10)"]
+
+        def uid(self, cmd, *args):
+            if cmd == "SEARCH":
+                self.search_args.append(args[-1])
+                if len(self.search_args) == 1:
+                    return "OK", [b"42 43 44"]
+                return "OK", [b"43 44"]
+            if cmd == "FETCH":
+                self.fetch_specs.append(args[0])
+                uids = [int(value) for value in str(args[0]).split(",")]
+                if len(self.fetch_specs) == 1:
+                    uids.remove(43)
+                return "OK", [
+                    (
+                        f'{uid} (UID {uid} FLAGS (\\Seen) INTERNALDATE "21-Oct-2026 10:00:00 +0000")'.encode(),
+                        f"From: user@example.com\r\nSubject: Message {uid}\r\n\r\n".encode(),
+                    )
+                    for uid in uids
+                ]
+            return "NO", []
+
+        def logout(self):
+            return "BYE", []
+
+    client = FakeIMAPGap()
+    provider = ImapProvider("h", 993, "u", "p", use_ssl=False)
+    monkeypatch.setattr(provider, "_connect", lambda: client)
+
+    first = provider.fetch_metadata_page("INBOX", {"uid_next": 42, "page_size": 3})
+    assert {item.uid for item in first.items} == {42, 44}
+    assert first.next_cursor["uid_next"] == 43
+    assert not first.exhausted
+
+    second = provider.fetch_metadata_page("INBOX", first.next_cursor)
+    assert {item.uid for item in second.items} == {43, 44}
+    assert second.next_cursor["uid_next"] == 45
+    assert second.exhausted
+    assert client.search_args == ["UID 42:*", "UID 43:*"]
+    assert client.fetch_specs == ["42,43,44", "43,44"]

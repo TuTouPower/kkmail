@@ -334,6 +334,15 @@ def _parse_fetch_flags(meta: str) -> tuple[bool | None, bool | None]:
     return "\\seen" in flags, "\\flagged" in flags
 
 
+def _uid_from_fetch_blob(flags_blob: tuple[Any, ...]) -> int | None:
+    if not flags_blob:
+        return None
+    meta_bytes = flags_blob[0]
+    meta = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
+    match = re.search(r"\bUID\s+(\d+)", meta, flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
 def _parse_message_meta_from_fetch(
     flags_blob: tuple[Any, ...],
     uid_fallback: int,
@@ -628,16 +637,22 @@ class ImapProvider:
                 )
                 if typ != "OK":
                     raise RuntimeError(f"UID FETCH {folder_remote_id} uids={uid_spec} failed: {typ}")
-                if fetched and fetched[0] is not None:
-                    blobs = [b for b in fetched if isinstance(b, tuple)]
-                    for idx, blob in enumerate(blobs):
-                        fallback_uid = batch[idx] if idx < len(batch) else batch[-1]
-                        meta = _parse_message_meta_from_fetch(
-                            blob, fallback_uid, folder_remote_id, int(uidvalidity or 0)
-                        )
-                        if meta is not None:
-                            items.append(meta)
-                # If fetched is empty or [None], assume deleted on server and skip without raising RuntimeError (A21)
+                blobs = [blob for blob in (fetched or ()) if isinstance(blob, tuple)]
+                returned_uids: set[int] = set()
+                for idx, blob in enumerate(blobs):
+                    fetched_uid = _uid_from_fetch_blob(blob)
+                    if fetched_uid is None:
+                        if len(blobs) != len(batch):
+                            continue
+                        fetched_uid = batch[idx]
+                    if fetched_uid not in batch:
+                        continue
+                    returned_uids.add(fetched_uid)
+                    meta = _parse_message_meta_from_fetch(
+                        blob, fetched_uid, folder_remote_id, int(uidvalidity or 0)
+                    )
+                    if meta is not None:
+                        items.append(meta)
             if not batch:
                 self._metadata_uid_scan = None
                 return MetadataPage(
@@ -645,10 +660,17 @@ class ImapProvider:
                     next_cursor={"uid_next": start, "uidvalidity": uidvalidity},
                     exhausted=True,
                 )
-            next_uid = batch[-1] + 1
-            exhausted = not has_more
-            if exhausted:
+            missing_uids = [uid for uid in batch if uid not in returned_uids]
+            if missing_uids:
+                # Retry the first UID omitted by FETCH using a fresh SEARCH.
                 self._metadata_uid_scan = None
+                next_uid = missing_uids[0]
+                exhausted = False
+            else:
+                next_uid = batch[-1] + 1
+                exhausted = not has_more
+                if exhausted:
+                    self._metadata_uid_scan = None
             return MetadataPage(
                 items=items,
                 next_cursor={"uid_next": next_uid, "uidvalidity": uidvalidity, "page_size": batch_size},
