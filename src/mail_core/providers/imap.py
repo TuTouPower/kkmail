@@ -13,6 +13,7 @@ import imaplib
 import logging
 import re
 import ssl
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -409,6 +410,9 @@ class ImapProvider:
     timeout: float = 30.0
     _active_client: Any = field(default=None, init=False, repr=False)
     _current_folder: str | None = field(default=None, init=False, repr=False)
+    _metadata_uid_scan: tuple[str, int | None, list[int]] | None = field(
+        default=None, init=False, repr=False
+    )
 
     def open_session(self) -> None:
         if self._active_client is None:
@@ -561,7 +565,7 @@ class ImapProvider:
         return self.fetch_metadata_page(folder_remote_id, cursor)
 
     def fetch_metadata_page(self, folder_remote_id: str, cursor: dict[str, Any] | None) -> MetadataPage:
-        """Page by UID ascending. Cursor keys: uid_next, uidvalidity, page_size."""
+        """Page by UID ascending, reusing one UID search for this provider scan."""
         c = self._connect()
         try:
             typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
@@ -576,32 +580,44 @@ class ImapProvider:
                 m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
                 if m:
                     uidvalidity = int(m.group(1))
-            _check_uidvalidity(cursor, uidvalidity)
+            try:
+                _check_uidvalidity(cursor, uidvalidity)
+            except CursorInvalidError:
+                self._metadata_uid_scan = None
+                raise
             start = int((cursor or {}).get("uid_next") or 1)
-            typ, data = c.uid("SEARCH", None, f"UID {start}:*")
-            if typ != "OK":
-                if typ == "NO" and _is_mailbox_noselect(c, folder_remote_id):
-                    return MetadataPage(items=[], next_cursor=None, exhausted=True)
-                # Never treat a failed SEARCH as "folder exhausted" — that silently stops sync.
-                raise RuntimeError(f"UID SEARCH {folder_remote_id} failed: {typ}")
-            batch_size = int((cursor or {}).get("page_size") or 50)
-            batch: list[int] = []
-            has_more = False
-            for chunk in (data or ()):
-                if not chunk:
-                    continue
-                raw_chunk = chunk if isinstance(chunk, bytes) else str(chunk).encode()
-                for m in re.finditer(rb"\d+", raw_chunk):
-                    val = int(m.group(0))
-                    if val < start:
+            scan_uidvalidity = uidvalidity
+            cached_scan = self._metadata_uid_scan
+            if (
+                cached_scan is None
+                or cached_scan[0] != folder_remote_id
+                or cached_scan[1] != scan_uidvalidity
+            ):
+                self._metadata_uid_scan = None
+                typ, data = c.uid("SEARCH", None, f"UID {start}:*")
+                if typ != "OK":
+                    if typ == "NO" and _is_mailbox_noselect(c, folder_remote_id):
+                        return MetadataPage(items=[], next_cursor=None, exhausted=True)
+                    # Never treat a failed SEARCH as "folder exhausted" — that silently stops sync.
+                    raise RuntimeError(f"UID SEARCH {folder_remote_id} failed: {typ}")
+                uids = []
+                for chunk in data or ():
+                    if not chunk:
                         continue
-                    if len(batch) < batch_size:
-                        batch.append(val)
-                    else:
-                        has_more = True
-                        break
-                if has_more:
-                    break
+                    raw_chunk = chunk if isinstance(chunk, bytes) else str(chunk).encode()
+                    for match in re.finditer(rb"\d+", raw_chunk):
+                        value = int(match.group(0))
+                        if value >= start:
+                            uids.append(value)
+                uids.sort()
+                self._metadata_uid_scan = (folder_remote_id, scan_uidvalidity, uids)
+                cached_scan = self._metadata_uid_scan
+
+            batch_size = int((cursor or {}).get("page_size") or 50)
+            uid_list = cached_scan[2]
+            offset = bisect_left(uid_list, start)
+            batch = uid_list[offset : offset + batch_size]
+            has_more = offset + len(batch) < len(uid_list)
             items: list[RemoteMessageMeta] = []
             if batch:
                 uid_spec = ",".join(str(u) for u in batch)
@@ -623,6 +639,7 @@ class ImapProvider:
                             items.append(meta)
                 # If fetched is empty or [None], assume deleted on server and skip without raising RuntimeError (A21)
             if not batch:
+                self._metadata_uid_scan = None
                 return MetadataPage(
                     items=(),
                     next_cursor={"uid_next": start, "uidvalidity": uidvalidity},
@@ -630,6 +647,8 @@ class ImapProvider:
                 )
             next_uid = batch[-1] + 1
             exhausted = not has_more
+            if exhausted:
+                self._metadata_uid_scan = None
             return MetadataPage(
                 items=items,
                 next_cursor={"uid_next": next_uid, "uidvalidity": uidvalidity, "page_size": batch_size},

@@ -14,6 +14,7 @@ import pytest
 from mail_core.mail.domain.enums import JobStatus
 from mail_core.providers.gmail import GmailProvider
 from mail_core.providers.graph import GraphProvider
+from mail_core.providers.http import CursorInvalidError
 from mail_core.providers.imap import ImapProvider
 from mail_core.sync.jobs import JobOwnershipError, complete_job, fail_job
 
@@ -150,6 +151,98 @@ def test_imap_search_failure_raises_not_exhausted(monkeypatch):
     p = ImapProvider(host="h", port=993, username="u", password="p")
     with pytest.raises(RuntimeError, match="UID SEARCH"):
         p.fetch_metadata_page("INBOX", {"uid_next": 1, "uidvalidity": 7})
+
+
+def test_imap_metadata_pages_reuse_uid_search_until_scan_exhaustion(monkeypatch):
+    class FakeIMAP:
+        def __init__(self):
+            self.search_queries = []
+            self.fetch_sets = []
+
+        def select(self, *_args, **_kwargs):
+            return "OK", [b"1"]
+
+        def status(self, *_args, **_kwargs):
+            return "OK", [b"INBOX (UIDVALIDITY 7)"]
+
+        def logout(self):
+            return "OK", []
+
+        def uid(self, command, *args):
+            if command == "SEARCH":
+                query = args[-1]
+                self.search_queries.append(query)
+                start = int(query.split()[1].split(":")[0])
+                uids = [str(uid).encode() for uid in range(start, 8)]
+                return "OK", [b" ".join(uids)]
+            if command == "FETCH":
+                self.fetch_sets.append(args[0])
+                return "OK", [None]
+            return "NO", []
+
+    client = FakeIMAP()
+    provider = ImapProvider(host="h", port=993, username="u", password="p")
+    monkeypatch.setattr(provider, "_connect", lambda: client)
+    cursor = {"uid_next": 1, "uidvalidity": 7, "page_size": 3}
+
+    page1 = provider.fetch_metadata_page("INBOX", cursor)
+    page2 = provider.fetch_metadata_page("INBOX", page1.next_cursor)
+    page3 = provider.fetch_metadata_page("INBOX", page2.next_cursor)
+    next_scan = provider.fetch_metadata_page("INBOX", page3.next_cursor)
+
+    assert [
+        page1.next_cursor["uid_next"],
+        page2.next_cursor["uid_next"],
+        page3.next_cursor["uid_next"],
+    ] == [4, 7, 8]
+    assert [page1.exhausted, page2.exhausted, page3.exhausted] == [False, False, True]
+    assert next_scan.exhausted
+    assert client.search_queries == ["UID 1:*", "UID 8:*"]
+    assert client.fetch_sets == ["1,2,3", "4,5,6", "7"]
+
+
+def test_imap_uidvalidity_change_discards_cached_uid_scan(monkeypatch):
+    class FakeIMAP:
+        uidvalidity = 7
+
+        def __init__(self):
+            self.search_queries = []
+
+        def select(self, *_args, **_kwargs):
+            return "OK", [b"1"]
+
+        def status(self, *_args, **_kwargs):
+            return "OK", [f"INBOX (UIDVALIDITY {self.uidvalidity})".encode()]
+
+        def logout(self):
+            return "OK", []
+
+        def uid(self, command, *args):
+            if command == "SEARCH":
+                query = args[-1]
+                self.search_queries.append(query)
+                start = int(query.split()[1].split(":")[0])
+                return "OK", [b" ".join(str(uid).encode() for uid in range(start, 5))]
+            if command == "FETCH":
+                return "OK", [None]
+            return "NO", []
+
+    client = FakeIMAP()
+    provider = ImapProvider(host="h", port=993, username="u", password="p")
+    monkeypatch.setattr(provider, "_connect", lambda: client)
+    first = provider.fetch_metadata_page(
+        "INBOX", {"uid_next": 1, "uidvalidity": 7, "page_size": 2}
+    )
+
+    client.uidvalidity = 8
+    with pytest.raises(CursorInvalidError, match="UIDVALIDITY changed"):
+        provider.fetch_metadata_page("INBOX", first.next_cursor)
+
+    refreshed = provider.fetch_metadata_page(
+        "INBOX", {"uid_next": 1, "uidvalidity": 8, "page_size": 2}
+    )
+    assert refreshed.next_cursor["uid_next"] == 3
+    assert client.search_queries == ["UID 1:*", "UID 1:*"]
 
 
 def test_complete_job_requires_owner():
