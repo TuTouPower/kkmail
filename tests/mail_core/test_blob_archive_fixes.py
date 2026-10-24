@@ -9,13 +9,16 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import os
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
 from mail_core.blobs.archive import (
@@ -36,6 +39,7 @@ from mail_core.blobs.quota import (
     release_quota_reservation,
     reserve_quota,
 )
+import mail_core.blobs.quota as quota_mod
 from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import ArchiveState, JobStatus, JobType
@@ -320,6 +324,86 @@ def test_a36_strict_hard_quota_reservation_and_release(tmp_path, monkeypatch):
         pruned = prune_expired_quota_reservations(session)
         assert pruned >= 1
         session.commit()
+
+
+def test_a23_concurrent_hard_quota_reservations_cannot_oversubscribe(tmp_path, monkeypatch):
+    Session = get_session_factory()
+    get_active = quota_mod.get_active_reserved_bytes
+    with Session() as session:
+        baseline_reserved = get_active(session)
+
+    def delay_after_read(session, now=None):
+        reserved = get_active(session, now=now)
+        time.sleep(0.5)
+        return reserved
+
+    monkeypatch.setattr(quota_mod, "get_active_reserved_bytes", delay_after_read)
+    start = threading.Barrier(2)
+
+    def reserve(worker_id: str):
+        with Session() as session:
+            start.wait(timeout=5)
+            reservation_id = reserve_quota(
+                session,
+                root=tmp_path,
+                needed_bytes=60,
+                worker_id=worker_id,
+                hard_limit_bytes=baseline_reserved + 100,
+            )
+            session.commit()
+            return reservation_id
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(reserve, ("quota-a", "quota-b")))
+
+    assert sum(result is not None for result in results) == 1
+    with Session() as session:
+        assert get_active(session) == baseline_reserved + 60
+
+
+def test_a23_quota_advisory_lock_releases_on_commit_and_rollback(tmp_path):
+    Session = get_session_factory()
+    with Session() as session:
+        baseline_reserved = get_active_reserved_bytes(session)
+    lock_params = {
+        "namespace": quota_mod.QUOTA_RESERVATION_LOCK_NAMESPACE,
+        "resource": quota_mod.QUOTA_RESERVATION_LOCK_RESOURCE,
+    }
+    try_lock = text("SELECT pg_try_advisory_xact_lock(:namespace, :resource)")
+
+    with Session() as first:
+        assert reserve_quota(
+            first,
+            root=tmp_path,
+            needed_bytes=60,
+            worker_id="quota-rollback",
+            hard_limit_bytes=baseline_reserved + 100,
+        ) is not None
+        with Session() as second:
+            assert second.scalar(try_lock, lock_params) is False
+            second.rollback()
+        first.rollback()
+
+    with Session() as after_rollback:
+        assert after_rollback.scalar(try_lock, lock_params) is True
+        after_rollback.rollback()
+
+    with Session() as rejected:
+        assert reserve_quota(
+            rejected,
+            root=tmp_path,
+            needed_bytes=200,
+            worker_id="quota-rejected",
+            hard_limit_bytes=baseline_reserved + 100,
+        ) is None
+        with Session() as second:
+            assert second.scalar(try_lock, lock_params) is False
+            second.rollback()
+        rejected.commit()
+
+    with Session() as after_rejection:
+        assert after_rejection.scalar(try_lock, lock_params) is True
+        after_rejection.rollback()
 
 
 def test_a38_multiple_attachments_same_filename_preserved_and_idempotent(tmp_path, monkeypatch):

@@ -8,10 +8,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from mail_core.blobs.crypto import CHUNK_SIZE, HEADER_LEN, TAG_LEN
+
+QUOTA_RESERVATION_LOCK_NAMESPACE = 0x4B4B5154  # Dedicated two-key PostgreSQL advisory-lock namespace.
+QUOTA_RESERVATION_LOCK_RESOURCE = 0x52455356  # Singleton resource for global hard-quota reservations.
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +77,19 @@ def get_active_reserved_bytes(session: Session, now: datetime | None = None) -> 
     return int(session.scalar(stmt) or 0)
 
 
+def _lock_hard_quota_reservations(session: Session) -> None:
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        raise RuntimeError("hard quota reservations require PostgreSQL advisory locks")
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(:namespace, :resource)"),
+        {
+            "namespace": QUOTA_RESERVATION_LOCK_NAMESPACE,
+            "resource": QUOTA_RESERVATION_LOCK_RESOURCE,
+        },
+    )
+
+
 def reserve_quota(
     session: Session,
     *,
@@ -93,6 +109,7 @@ def reserve_quota(
         return None
     now = now or datetime.now(timezone.utc)
     if hard_limit_bytes is not None:
+        _lock_hard_quota_reservations(session)
         disk_used = dir_size_bytes(root)
         active_reserved = get_active_reserved_bytes(session, now=now)
         if disk_used + active_reserved + needed_bytes > hard_limit_bytes:
