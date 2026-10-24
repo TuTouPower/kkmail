@@ -89,6 +89,21 @@ def test_gmail_and_graph_folder_roles():
     assert graph_folder_role({"id": "4", "displayName": "Custom"}) == "other"
 
 
+def test_graph_inbox_name_fallback_does_not_override_canonical_inbox_id():
+    assert graph_folder_role(
+        {"id": "canonical-inbox", "displayName": "Inbox"}, inbox_id="canonical-inbox"
+    ) == "inbox"
+    assert graph_folder_role(
+        {"id": "other-folder", "displayName": "INBOX"}, inbox_id="canonical-inbox"
+    ) == "other"
+    assert graph_folder_role({"id": "fallback-inbox", "displayName": "Inbox"}) == "inbox"
+
+
+def test_graph_outbox_and_conversation_history_stay_other_without_well_known_role():
+    assert graph_folder_role({"id": "outbox", "displayName": "Outbox"}) == "other"
+    assert graph_folder_role({"id": "history", "displayName": "Conversation History"}) == "other"
+
+
 def _patch_all(provider):
     originals = {
         "engine": engine_mod.build_provider,

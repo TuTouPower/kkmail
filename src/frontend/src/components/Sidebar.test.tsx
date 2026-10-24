@@ -19,7 +19,7 @@ const accounts = [
   { id: 'acc-2', email: 'notes@a.example', status: 'active', account_type: 'imap', provider: 'imap', group_id: null },
 ]
 
-function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
+function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
   const calls: Array<{ url: string; method: string; body?: string }> = []
   let currentAccounts: Array<{
     id: string
@@ -110,6 +110,10 @@ function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partial
     if (url.pathname === '/api/mail/accounts/acc-1/folder-stats') {
       if (options.failAcc1Stats) return json({ detail: 'folder stats unavailable' }, 500)
       if (options.emptyFoldersAcc1) return json({ account_id: 'acc-1', folders: [] })
+      if (options.duplicateInboxFoldersAcc1) return json({ account_id: 'acc-1', folders: [
+        { folder_id: 'inbox-1', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', unread_count: 2, total_count: 9, parent_remote_id: null },
+        { folder_id: 'inbox-alias', remote_id: '收件箱', name: '收件箱', role: 'inbox', unread_count: 0, total_count: 0, parent_remote_id: null },
+      ] })
       if (options.missingInboxAcc1) return json({ account_id: 'acc-1', folders: [
         { folder_id: 'sent-1', remote_id: 'Sent', name: 'Sent', role: 'sent', unread_count: 4, total_count: 8 },
         { folder_id: 'other-1', remote_id: 'Other', name: 'Other', role: 'other', unread_count: 6, total_count: 10 },
@@ -233,6 +237,30 @@ describe('<Sidebar />', () => {
     await click(masterAccount?.querySelector('.tree-disclosure') || null)
     await waitFor(() => expect(masterAccount?.textContent).toContain('收件箱'))
     expect(masterAccount?.querySelector('.tree-folder-row')).not.toBeNull()
+  })
+
+  it('disambiguates same-role folders while keeping each folder id navigable', async () => {
+    mockApi({ duplicateInboxFoldersAcc1: true })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-account-id="acc-1"] .tree-disclosure')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-account-id="acc-1"]')!
+    await click(account.querySelector('.tree-disclosure'))
+
+    await waitFor(() => expect(
+      [...account.querySelectorAll('.tree-folder-row')]
+        .filter((row) => row.querySelector('.tree-label')?.textContent?.startsWith('收件箱')),
+    ).toHaveLength(2))
+    const inboxRows = [...account.querySelectorAll('.tree-folder-row')]
+      .filter((row) => row.querySelector('.tree-label')?.textContent?.startsWith('收件箱'))
+    const labels = inboxRows.map((row) => row.querySelector('.tree-label')?.textContent)
+    expect(new Set(labels).size).toBe(2)
+
+    const inboxRow = inboxRows.find((row) => row.querySelector('.tree-label')?.textContent?.includes('INBOX'))!
+    const aliasRow = inboxRows.find((row) => row !== inboxRow)!
+    await click(inboxRow)
+    expect(useMailStore.getState().view).toMatchObject({ type: 'folder', folderId: 'inbox-1' })
+    await click(aliasRow)
+    expect(useMailStore.getState().view).toMatchObject({ type: 'folder', folderId: 'inbox-alias' })
   })
 
   it('persists account-list reorder without changing existing group membership', async () => {

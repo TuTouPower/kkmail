@@ -102,6 +102,25 @@ def test_imap_list_folders_special_use_and_mutf7_priority(monkeypatch):
     assert folder_map["Personal"].name == "Personal"
 
 
+def test_imap_deleted_messages_is_trash_role(monkeypatch):
+    class FakeIMAPDeletedMessages:
+        def list(self):
+            return "OK", [
+                b'(\\HasNoChildren) "/" "INBOX"',
+                b'(\\HasNoChildren) "/" "Deleted Messages"',
+            ]
+
+        def logout(self):
+            return "OK", []
+
+    provider = ImapProvider("imap.example.com", 993, "user", "pass", use_ssl=False)
+    monkeypatch.setattr(provider, "_connect", lambda: FakeIMAPDeletedMessages())
+
+    folders = {folder.remote_id: folder for folder in provider.list_folders()}
+
+    assert folders["Deleted Messages"].role == "trash"
+
+
 # --- AC-004 & AC-005 & AC-007: 精确 folder_id 查询、分页多位置去重与单目录批量已读 ---
 
 
