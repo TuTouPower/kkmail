@@ -67,6 +67,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
   const [isComposing, setIsComposing] = useState(false)
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- sync local input when shared navigation search changes.
     setSearchInput(search)
   }, [search])
 

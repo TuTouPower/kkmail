@@ -67,8 +67,10 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
   // Re-scan when active and on scroll/resize/mutation
   useEffect(() => {
     if (!active) {
+      // oxlint-disable react/set-state-in-effect -- clear transient overlay state when the shortcut closes the overlay.
       setBadges([])
       setToast(null)
+      // oxlint-enable react/set-state-in-effect
       return
     }
 

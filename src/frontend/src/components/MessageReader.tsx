@@ -79,11 +79,13 @@ const MessageReader = memo(function MessageReader() {
     }
   }, [selected, syncingBody])
 
+  // oxlint-disable react/set-state-in-effect -- clear request state from the previously selected message.
   useEffect(() => {
     setSyncingBody(false)
     setSyncError(null)
     autoSyncedMsgIdRef.current = null
   }, [selectedKey])
+  // oxlint-enable react/set-state-in-effect
 
   useEffect(() => {
     if (isPendingArchive && !detailQuery.isLoading && !syncingBody && !syncError && selected?.id) {
