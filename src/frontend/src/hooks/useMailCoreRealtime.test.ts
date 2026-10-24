@@ -51,11 +51,24 @@ describe('createThrottledInvalidator', () => {
 
     vi.advanceTimersByTime(100)
 
-    // Should invalidate ['mail-core'] once, and details for id-1 and id-2 once each
-    expect(mockQc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['mail-core'] })
+    // List and stats caches are invalidated separately; details for id-1 and id-2 once each.
     expect(mockQc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['detail', 'mail-core', 'id-1'] })
     expect(mockQc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['detail', 'mail-core', 'id-2'] })
-    expect(mockQc.invalidateQueries).toHaveBeenCalledTimes(3)
+    expect(mockQc.invalidateQueries).toHaveBeenCalledTimes(4)
+
+    const invalidations = (mockQc.invalidateQueries as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .map(([options]) => options as { predicate?: (query: unknown) => boolean })
+    const listPredicate = invalidations.find((options) =>
+      options.predicate?.({ queryKey: ['mail-core', 'inbox', 'all'] }))?.predicate
+    const statsPredicate = invalidations.find((options) =>
+      options.predicate?.({ queryKey: ['mail-core', 'stats'] }))?.predicate
+
+    expect(listPredicate).toBeDefined()
+    expect(listPredicate?.({ queryKey: ['mail-core', 'account-folders', 'account-1'] })).toBe(false)
+    expect(listPredicate?.({ queryKey: ['mail-core', 'stats'] })).toBe(false)
+    expect(statsPredicate).toBeDefined()
+    expect(statsPredicate?.({ queryKey: ['mail-core', 'folder-stats', 'all', 'inbox', ''] })).toBe(true)
+    expect(statsPredicate?.({ queryKey: ['mail-core', 'inbox', 'all'] })).toBe(false)
 
     vi.useRealTimers()
   })

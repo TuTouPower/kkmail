@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { subscribeMailCoreStream } from '../api/sseStream'
-import { queryClient } from '../api/queries'
+import { isMailListQueryKey, queryClient } from '../api/queries'
 import { UNAUTHORIZED_EVENT } from '../api/client'
 
 /** Events that mean cached message lists may be stale. */
@@ -15,6 +15,12 @@ export const MAIL_CORE_INBOX_INVALIDATE_EVENTS = new Set([
 
 export function shouldInvalidateMailCoreInbox(eventType: string): boolean {
   return MAIL_CORE_INBOX_INVALIDATE_EVENTS.has(eventType)
+}
+
+function isMailStatsQueryKey(key: unknown): boolean {
+  return Array.isArray(key)
+    && key[0] === 'mail-core'
+    && (key[1] === 'stats' || key[1] === 'folder-stats' || key[1] === 'account-folders')
 }
 
 export function extractMessageIds(data: unknown): string[] {
@@ -39,7 +45,8 @@ export const REALTIME_THROTTLE_MS = 150
 
 export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REALTIME_THROTTLE_MS) {
   let timer: ReturnType<typeof setTimeout> | null = null
-  let invalidateMailCore = false
+  let invalidateMailLists = false
+  let invalidateMailStats = false
   let invalidateAllDetails = false
   const detailIdsToInvalidate = new Set<string>()
 
@@ -48,9 +55,13 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
       clearTimeout(timer)
       timer = null
     }
-    if (invalidateMailCore) {
-      invalidateMailCore = false
-      void qc.invalidateQueries({ queryKey: ['mail-core'] })
+    if (invalidateMailLists) {
+      invalidateMailLists = false
+      void qc.invalidateQueries({ predicate: (query) => isMailListQueryKey(query.queryKey) })
+    }
+    if (invalidateMailStats) {
+      invalidateMailStats = false
+      void qc.invalidateQueries({ predicate: (query) => isMailStatsQueryKey(query.queryKey) })
     }
     if (invalidateAllDetails) {
       invalidateAllDetails = false
@@ -74,7 +85,10 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
   function handleEvent(type: string, data: unknown) {
     let scheduled = false
     if (shouldInvalidateMailCoreInbox(type)) {
-      invalidateMailCore = true
+      invalidateMailLists = true
+      if (type === 'folder.stats_updated' || type === 'sync.completed') {
+        invalidateMailStats = true
+      }
       scheduled = true
     }
     if (type === 'message.upserted' || type === 'message.removed') {
@@ -97,7 +111,8 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
       timer = null
     }
     detailIdsToInvalidate.clear()
-    invalidateMailCore = false
+    invalidateMailLists = false
+    invalidateMailStats = false
     invalidateAllDetails = false
   }
 
