@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from mail_core.accounts import (
     create_account,
@@ -96,6 +96,10 @@ class SettingsDTO:
     settings: dict[str, str]
 
 
+def _groups_by_id(session: Any) -> dict[UUID, AccountGroup]:
+    return {group.id: group for group in session.scalars(select(AccountGroup)).all()}
+
+
 def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDTO:
     g = groups.get(acc.group_id) if acc.group_id else None
     remark = None
@@ -155,7 +159,7 @@ def list_accounts_app(
     Session = get_session_factory()
     with Session() as session:
         rows, total = list_accounts(session, group_id=group_id, limit=limit, offset=offset)
-        gmap = {g.id: g for g, _n in list_groups(session)}
+        gmap = _groups_by_id(session)
         items = [_to_account_dto(a, gmap) for a in rows]
         return AccountPageDTO(
             accounts=items,
@@ -212,7 +216,7 @@ def create_account_app(
         except Exception:
             session.rollback()
             raise
-        gmap = {g.id: g for g, _n in list_groups(session)}
+        gmap = _groups_by_id(session)
         return _to_account_dto(acc, gmap)
 
 
@@ -272,7 +276,7 @@ def update_account_app(
         except Exception:
             session.rollback()
             raise
-        gmap = {g.id: g for g, _n in list_groups(session)}
+        gmap = _groups_by_id(session)
         return _to_account_dto(acc, gmap)
 
 
@@ -362,7 +366,12 @@ def rename_group_app(group_id: UUID, *, name: str) -> GroupDTO:
     with Session() as session:
         try:
             group = rename_group(session, group_id, name=name)
-            count = len(list(session.scalars(select(Account.id).where(Account.group_id == group_id)).all()))
+            count = int(
+                session.scalar(
+                    select(func.count()).select_from(Account).where(Account.group_id == group_id)
+                )
+                or 0
+            )
             session.commit()
             return GroupDTO(id=str(group.id), name=group.name, color=group.color, account_count=count, sort_order=group.sort_order)
         except Exception:
