@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 class LoginIn(BaseModel):
-    password: str = Field(min_length=1)
+    password: str = Field(min_length=1, max_length=1024)
 
 
 class LoginOut(BaseModel):
@@ -92,8 +92,8 @@ def me(principal: AuthPrincipal = Depends(require_auth)) -> MeOut:
 
 
 class PasswordChangeIn(BaseModel):
-    current_login_password: str = Field(min_length=1)
-    login_password: str = Field(min_length=8)
+    current_login_password: str = Field(min_length=1, max_length=1024)
+    login_password: str = Field(min_length=8, max_length=1024)
 
 
 class PasswordChangeOut(BaseModel):
