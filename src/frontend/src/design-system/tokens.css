@@ -1156,12 +1156,12 @@ button:hover .icon,
 
 /* 列表拥有焦点时的选中态 (AC-002) */
 .message-list:focus-within .message-row.selected {
-  background: #0A60FE;
-  color: #FFFFFF;
+  background: var(--primary);
+  color: var(--on-primary);
 }
 
 .message-list:focus-within .message-row.selected .sender {
-  color: #FFFFFF;
+  color: var(--on-primary);
 }
 
 .message-list:focus-within .message-row.selected .subject,
@@ -1169,11 +1169,11 @@ button:hover .icon,
 .message-list:focus-within .message-row.selected .message-date,
 .message-list:focus-within .message-row.selected .mail-account-tag,
 .message-list:focus-within .message-row.selected .message-meta {
-  color: #D0E2FF;
+  color: color-mix(in srgb, var(--on-primary) 82%, var(--primary));
 }
 
 .message-list:focus-within .message-row.selected .message-meta svg {
-  color: #D0E2FF;
+  color: color-mix(in srgb, var(--on-primary) 82%, var(--primary));
 }
 
 .avatar {
@@ -1185,8 +1185,8 @@ button:hover .icon,
   border-radius: 50%;
   font-weight: 700;
   font-size: 13px;
-  color: white;
-  background: #6d8fd1;
+  color: var(--on-primary);
+  background: var(--primary);
 }
 
 .message-content {
@@ -1559,7 +1559,7 @@ button:hover .icon,
   border: 1.5px solid var(--line-strong);
   border-radius: 5px;
   background: var(--surface);
-  color: var(--on-primary, #fff);
+  color: var(--on-primary);
   opacity: 0;
   transition: opacity 0.12s;
 }

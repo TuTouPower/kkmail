@@ -7,6 +7,7 @@ import {
   extractDeclaredTokens,
   extractReferencedTokens,
   validateCssTokens,
+  validateRawHexColors,
   validateDesignDarkTokens,
 } from './check_css_tokens.mjs'
 
@@ -67,6 +68,27 @@ test('accepts CSS variables declared in local stylesheet files', () => {
   }, ':root { --primary: #0066cc; }')
   assert.equal(result.ok, true)
   assert.deepEqual(result.errors, [])
+})
+
+test('rejects raw hex colors outside token declaration blocks', () => {
+  const result = validateRawHexColors({
+    'src/design-system/tokens.css': [
+      ':root {',
+      '  --primary: #0066CC;',
+      '}',
+      '.focused { color: #fff; }',
+      '.fallback { color: var(--primary, #000); }',
+    ].join('\n'),
+    'src/components/panel.css': '.panel { color: #123456; }',
+  })
+  assert.deepEqual(result, {
+    errors: [
+      { color: '#fff', file: 'src/design-system/tokens.css', line: 4 },
+      { color: '#000', file: 'src/design-system/tokens.css', line: 5 },
+      { color: '#123456', file: 'src/components/panel.css', line: 1 },
+    ],
+    ok: false,
+  })
 })
 
 test('project token CSS declares the design system essentials', () => {

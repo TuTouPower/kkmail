@@ -36,16 +36,11 @@ describe('Dark mode Apple Mail theme and contrast (AC-001, AC-002)', () => {
     expect(css).not.toMatch(/\.reader-action:focus(?:-visible)?\s*[,{}]/)
   })
 
-  it('configures focused selected and unfocused selected item styling (AC-002)', () => {
-    // 聚焦选中：.message-list:focus-within .message-row.selected
-    expect(css).toContain('.message-list:focus-within .message-row.selected')
-    expect(css).toMatch(/\.message-list:focus-within \.message-row\.selected\s*\{[^}]*background:\s*#0A60FE;/is)
-    expect(css).toMatch(/\.message-list:focus-within \.message-row\.selected\s*\{[^}]*color:\s*#FFFFFF;/is)
-
-    // 时间与副标题变为 #D0E2FF
-    expect(css).toMatch(/\.message-list:focus-within \.message-row\.selected \.subject[^}]*color:\s*#D0E2FF;/is)
-
-    // 失焦选中：.message-row.selected 背景使用 --selected (#323236 in dark mode)
+  // Replaces the deleted exact-color assertion: focused selection now derives colors from design tokens (A153).
+  it('uses design tokens for focused selected items', () => {
+    expect(css).toMatch(/\.message-list:focus-within \.message-row\.selected\s*\{[^}]*background:\s*var\(--primary\);/is)
+    expect(css).toMatch(/\.message-list:focus-within \.message-row\.selected\s*\{[^}]*color:\s*var\(--on-primary\);/is)
+    expect(css).toMatch(/\.message-list:focus-within \.message-row\.selected \.subject[^}]*color:\s*color-mix\(in srgb, var\(--on-primary\) 82%, var\(--primary\)\);/is)
     expect(css).toMatch(/\.message-row\.selected\s*\{[^}]*background:\s*var\(--selected\);/s)
   })
 })

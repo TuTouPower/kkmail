@@ -10,6 +10,9 @@ const srcDir = resolve(root, 'src')
 
 const TOKEN_DECL_REGEX = /(--[a-zA-Z0-9_-]+)\s*:/g
 const TOKEN_REF_REGEX = /var\(\s*(--[a-zA-Z0-9_-]+)/g
+const HEX_COLOR_REGEX = /#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b/g
+const TOKEN_BLOCK_REGEX = /^\s*(?::root|html\[data-theme="(?:dark|light)"\])\s*\{([^{}]*)\}/gm
+const TOKEN_COLOR_DECLARATION_REGEX = /--[a-zA-Z0-9_-]+\s*:[^;]*;/g
 const DESIGN_DARK_TOKEN_MAP = Object.freeze({
   'background-dark': ['--canvas'],
   'sidebar-dark': ['--sidebar'],
@@ -50,6 +53,42 @@ export function extractReferencedTokens(content) {
     }
   }
   return refs
+}
+
+function stripCssComments(css) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, ' '))
+}
+
+function tokenColorDeclarationRanges(css) {
+  const ranges = []
+  TOKEN_BLOCK_REGEX.lastIndex = 0
+  let block
+  while ((block = TOKEN_BLOCK_REGEX.exec(css)) !== null) {
+    const bodyOffset = block.index + block[0].lastIndexOf('{') + 1
+    TOKEN_COLOR_DECLARATION_REGEX.lastIndex = 0
+    let declaration
+    while ((declaration = TOKEN_COLOR_DECLARATION_REGEX.exec(block[1])) !== null) {
+      const start = bodyOffset + declaration.index
+      ranges.push([start, start + declaration[0].length])
+    }
+  }
+  return ranges
+}
+
+export function validateRawHexColors(files) {
+  const errors = []
+  for (const [filePath, content] of Object.entries(files)) {
+    if (!filePath.endsWith('.css')) continue
+    const css = stripCssComments(content)
+    const tokenRanges = filePath === 'src/design-system/tokens.css' ? tokenColorDeclarationRanges(css) : []
+    HEX_COLOR_REGEX.lastIndex = 0
+    let match
+    while ((match = HEX_COLOR_REGEX.exec(css)) !== null) {
+      if (tokenRanges.some(([start, end]) => match.index >= start && match.index < end)) continue
+      errors.push({ color: match[0], file: filePath, line: css.slice(0, match.index).split('\n').length })
+    }
+  }
+  return { errors, ok: errors.length === 0 }
 }
 
 export function validateCssTokens(files, tokensCssContent) {
@@ -152,9 +191,19 @@ function runChecks() {
     allFiles.map((filePath) => [relative(root, filePath), readFileSync(filePath, 'utf8')]),
   )
   const cssTokenResult = validateCssTokens(files, tokensCss)
+  const rawHexResult = validateRawHexColors(files)
 
   const designMarkdown = readFileSync(designDocPath, 'utf8')
   const designTokenErrors = validateDesignDarkTokens(designMarkdown, tokensCss)
+
+  if (rawHexResult.errors.length > 0) {
+    console.error(`❌ Found ${rawHexResult.errors.length} hard-coded hex color(s) outside design token declarations:`)
+    for (const error of rawHexResult.errors) {
+      console.error(`  - ${error.file}:${error.line} -> ${error.color}`)
+    }
+  } else {
+    console.log('✅ No hard-coded hex colors outside design token declarations.')
+  }
 
   if (cssTokenResult.errors.length > 0) {
     console.error(`❌ Found ${cssTokenResult.errors.length} undeclared CSS variable reference(s):`)
@@ -175,7 +224,7 @@ function runChecks() {
     console.log('✅ Dark design colors in DESIGN.md match tokens.css.')
   }
 
-  if (!cssTokenResult.ok || designTokenErrors.length > 0) process.exitCode = 1
+  if (!cssTokenResult.ok || !rawHexResult.ok || designTokenErrors.length > 0) process.exitCode = 1
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
