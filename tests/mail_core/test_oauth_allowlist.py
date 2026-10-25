@@ -54,3 +54,18 @@ def test_allowlisted_google_uri_ok():
     )
     client = OAuthTokenClient(credential_ref="ref", store=store, provider="gmail")
     assert client.token_uri().startswith("https://oauth2.googleapis.com/")
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [
+        ("gmail", "https://oauth2.googleapis.com/token"),
+        ("graph", "https://login.microsoftonline.com/common/oauth2/v2.0/token"),
+    ],
+)
+def test_missing_token_uri_uses_allowlisted_provider_default(provider, expected):
+    store = DictCredentialStore()
+    store.put_secret("ref", json.dumps({"refresh_token": "r", "client_id": "c"}))
+    client = OAuthTokenClient(credential_ref="ref", store=store, provider=provider)
+
+    assert client.token_uri() == expected
