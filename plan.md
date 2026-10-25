@@ -12,7 +12,7 @@
 4. 统一邮箱地址复制。
 5. 全量回归、文档更新及 pending 收尾。
 
-阶段状态：阶段 1、2、3 已完成；阶段 4 及收尾待开始。
+阶段状态：阶段 1—4 已完成；全量门禁、spec 与 pending 收尾进行中。
 
 ## 阶段一：禁用账号退出侧栏与聚合范围
 
@@ -130,5 +130,5 @@
 |阶段一 禁用账号范围|完成|PostgreSQL 23 passed；前端 53 passed；MessageList 35 passed；TypeScript 通过|1e02e3b、4527721|
 |阶段二 未读统计|完成|后端 PostgreSQL 30 passed；前端 368 passed；OpenAPI/CSS、TypeScript、build、变更文件 oxlint 通过|77d275f|
 |阶段三 账号搜索|完成|Sidebar 36 passed；TypeScript、CSS、Sidebar oxlint 通过；Playwright p043 1 passed|88afca7|
-|阶段四 地址复制|待开始|—|—|
+|阶段四 地址复制|完成|前端 378 passed；详情 PostgreSQL 10 passed；Playwright E2E 18 passed；desktop npm test 通过；test:packaged 因缺少打包内 `psql` 未通过|8a80186|
 |文档与 pending 收尾|待开始|—|—|
