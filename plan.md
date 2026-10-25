@@ -12,7 +12,7 @@
 4. 统一邮箱地址复制。
 5. 全量回归、文档更新及 pending 收尾。
 
-阶段状态：阶段 1 已完成（补齐邮件列表统计回退路径）；阶段 2、3、4 及收尾待开始。
+阶段状态：阶段 1、2 已完成；阶段 3、4 及收尾待开始。
 
 ## 阶段一：禁用账号退出侧栏与聚合范围
 
@@ -127,8 +127,8 @@
 |阶段|状态|验证|提交|
 |---|---|---|---|
 |计划|完成|工作区初始状态已核对|5d13599|
-|阶段一 禁用账号范围|完成|PostgreSQL 23 passed；前端 53 passed；MessageList 35 passed；TypeScript 通过|待提交|
-|阶段二 未读统计|待开始|—|—|
+|阶段一 禁用账号范围|完成|PostgreSQL 23 passed；前端 53 passed；MessageList 35 passed；TypeScript 通过|1e02e3b、4527721|
+|阶段二 未读统计|完成|后端 PostgreSQL 30 passed；前端 368 passed；OpenAPI/CSS、TypeScript、build、变更文件 oxlint 通过|77d275f|
 |阶段三 账号搜索|待开始|—|—|
 |阶段四 地址复制|待开始|—|—|
 |文档与 pending 收尾|待开始|—|—|
