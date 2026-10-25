@@ -444,13 +444,10 @@ def format_read_status(is_read: bool | None) -> str:
 
 
 def main() -> None:
-    # Pre-parse --json so it works globally regardless of position
-    output_json = "--json" in sys.argv
-    cleaned_argv = [a for a in sys.argv[1:] if a != "--json"]
-
     parser = argparse.ArgumentParser(
         description="kkmail Agent CLI client. Interacts with kkmail instance over HTTP (loopback only) or HTTPS (remote)."
     )
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     parser.add_argument(
         "--url",
         default=DEFAULT_BASE_URL,
@@ -509,21 +506,21 @@ def main() -> None:
     p_add.add_argument("--password", dest="acc_password", help="Account password (prefer KKMAIL_ACCOUNT_PASSWORD env var)")
     p_add.add_argument("--credentials-json", help="Raw JSON string for credentials")
 
-    args = parser.parse_args(cleaned_argv)
+    args = parser.parse_args()
 
     try:
         client = KKMailClient(base_url=args.url, api_key=args.api_key, password=args.password)
 
         if args.cmd == "health":
             res = client.health()
-            if output_json:
+            if args.json:
                 print_json(res)
             else:
                 print(f"kkmail status: {res.get('status')} (service: {res.get('service')}, schema: {res.get('schema_head')})")
 
         elif args.cmd == "stats":
             res = client.stats()
-            if output_json:
+            if args.json:
                 print_json(res)
             else:
                 total_unread = res.get("total_unread")
@@ -539,7 +536,7 @@ def main() -> None:
                 client.sync_account()
                 print("All accounts queued for sync.")
             items = client.list_accounts()
-            if output_json:
+            if args.json:
                 print_json(items)
             else:
                 print(f"Accounts ({len(items)}):")
@@ -548,7 +545,7 @@ def main() -> None:
 
         elif args.cmd == "sync":
             res = client.sync_account(args.account_id)
-            if output_json:
+            if args.json:
                 print_json(res)
             else:
                 print(f"Sync queued successfully: {res}")
@@ -561,7 +558,7 @@ def main() -> None:
                 flagged_only=args.flagged,
                 cursor=args.cursor,
             )
-            if output_json:
+            if args.json:
                 print_json(res)
             else:
                 items = res.get("items", [])
@@ -576,7 +573,7 @@ def main() -> None:
 
         elif args.cmd == "search":
             res = client.search(query=args.query, limit=args.limit, account_id=args.account)
-            if output_json:
+            if args.json:
                 print_json(res)
             else:
                 items = res.get("items", [])
@@ -590,7 +587,7 @@ def main() -> None:
 
         elif args.cmd == "read":
             msg = client.get_message(args.message_id)
-            if output_json:
+            if args.json:
                 print_json(msg)
             elif args.body_only:
                 print(msg.get("body") or msg.get("snippet") or "(Empty body)")
@@ -609,7 +606,7 @@ def main() -> None:
 
         elif args.cmd == "mark":
             res = client.mark_message(args.message_id, args.action)
-            if output_json:
+            if args.json:
                 print_json(res)
             else:
                 print(f"Message {args.message_id} marked as '{args.action}': {res}")
@@ -626,7 +623,7 @@ def main() -> None:
             if args.provider == "imap" and args.host:
                 cfg = {"imap_host": args.host, "imap_port": args.port, "use_ssl": not args.no_ssl}
             res = client.add_account(args.email, args.provider, creds, cfg)
-            if output_json:
+            if args.json:
                 print_json(res)
             else:
                 print(f"Account added successfully: {res.get('id')} ({args.email})")

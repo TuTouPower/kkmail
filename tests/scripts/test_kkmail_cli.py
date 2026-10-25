@@ -230,6 +230,53 @@ def test_stats_renders_unknown_total_unread_as_dash(monkeypatch, capsys):
     assert "Total unread messages: -" in capsys.readouterr().out
 
 
+def test_json_option_before_subcommand_renders_json(monkeypatch, capsys):
+    expected = {"total_unread": 4, "accounts": []}
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def stats(self):
+            return expected
+
+    monkeypatch.setattr(kkmail_cli, "KKMailClient", FakeClient)
+    monkeypatch.setattr(kkmail_cli.sys, "argv", ["kkmail_cli.py", "--json", "stats"])
+
+    kkmail_cli.main()
+
+    assert json.loads(capsys.readouterr().out) == expected
+
+
+def test_json_after_subcommand_is_rejected(monkeypatch, capsys):
+    monkeypatch.setattr(kkmail_cli.sys, "argv", ["kkmail_cli.py", "stats", "--json"])
+
+    with pytest.raises(SystemExit) as error:
+        kkmail_cli.main()
+
+    assert error.value.code == 2
+    assert "unrecognized arguments: --json" in capsys.readouterr().err
+
+
+def test_search_accepts_literal_json_option_after_separator(monkeypatch):
+    queries = []
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def search(self, query, **_kwargs):
+            queries.append(query)
+            return {"items": []}
+
+    monkeypatch.setattr(kkmail_cli, "KKMailClient", FakeClient)
+    monkeypatch.setattr(kkmail_cli.sys, "argv", ["kkmail_cli.py", "search", "--", "--json"])
+
+    kkmail_cli.main()
+
+    assert queries == ["--json"]
+
+
 def test_session_cache_permissions_default_mode(tmp_path, monkeypatch):
     """Default session cache directory must be 0700 and file must be 0600."""
     fake_home = tmp_path / "home"
