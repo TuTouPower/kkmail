@@ -20,7 +20,7 @@ from starlette.background import BackgroundTask
 from mail_core.api.deps import require_auth
 from mail_core.db.session import get_session_factory
 from mail_core.realtime.dispatcher import SSE_STREAM_CLOSE, get_dispatcher
-from mail_core.realtime.outbox import fetch_since, head_event_id, to_item
+from mail_core.realtime.outbox import fetch_published_since, publication_head, to_item
 from mail_core.security.auth import AuthPrincipal
 
 log = logging.getLogger("mail_core.api.sse")
@@ -69,14 +69,15 @@ def _get_session_epoch(force_refresh: bool = False) -> int:
     return get_session_epoch(force_refresh=force_refresh)
 
 
-def _format_sse(event_id: int, event: str, data: dict) -> str:
-    return f"id: {event_id}\nevent: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+def _format_sse(cursor_id: str, event: str, data: dict) -> str:
+    return f"id: {cursor_id}\nevent: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 @dataclass(frozen=True, slots=True)
 class _ReplayPlan:
-    frames: list[tuple[int, str, dict[str, Any]]]
-    cursor: int
+    frames: list[tuple[str, str, dict[str, Any]]]
+    cursor: str
+    cursor_seq: int
 
 
 class BoundedSet:
@@ -84,10 +85,10 @@ class BoundedSet:
 
     def __init__(self, maxsize: int = 1000) -> None:
         self.maxsize = maxsize
-        self._set: set[int] = set()
-        self._order: deque[int] = deque()
+        self._set: set[str] = set()
+        self._order: deque[str] = deque()
 
-    def add(self, item: int) -> None:
+    def add(self, item: str) -> None:
         if item in self._set:
             return
         self._set.add(item)
@@ -96,60 +97,92 @@ class BoundedSet:
             old = self._order.popleft()
             self._set.discard(old)
 
-    def __contains__(self, item: int) -> bool:
+    def __contains__(self, item: str) -> bool:
         return item in self._set
 
 
-def _build_replay(cursor: int, account_id: UUID | None, *, malformed: bool) -> _ReplayPlan:
+def _parse_v2_cursor(raw: str | None) -> tuple[str | None, int | None, bool]:
+    if not raw:
+        return None, None, False
+    raw = raw.strip()
+    if raw.startswith("v2:"):
+        parts = raw.split(":")
+        if len(parts) == 3:
+            epoch_str, seq_str = parts[1], parts[2]
+            try:
+                UUID(epoch_str)
+                seq = int(seq_str)
+                if seq >= 0:
+                    return epoch_str, seq, False
+            except (ValueError, TypeError):
+                pass
+    return None, None, True
+
+
+def _build_replay(raw_cursor: str | None, account_id: UUID | None) -> _ReplayPlan:
     """Synchronous DB work for SSE replay — run via ``asyncio.to_thread``."""
     Session = get_session_factory()
-    frames: list[tuple[int, str, dict[str, Any]]] = []
-    cursor_local = cursor
+    frames: list[tuple[str, str, dict[str, Any]]] = []
     with Session() as session:
-        head = head_event_id(session)
+        current_epoch, head_seq = publication_head(session)
+        head_cursor = f"v2:{current_epoch}:{head_seq}"
 
-        if malformed:
-            payload = {"reason": "malformed_last_event_id", "head": head}
-            frames.append((head, "client.resync_hint", payload))
-            return _ReplayPlan(frames=frames, cursor=head)
+        if not raw_cursor:
+            # First connect without cursor: send resync hint with head cursor
+            payload = {"reason": "initial_connect", "head": head_cursor}
+            frames.append((head_cursor, "client.resync_hint", payload))
+            return _ReplayPlan(frames=frames, cursor=head_cursor, cursor_seq=head_seq)
 
-        if cursor > head:
-            payload = {"reason": "cursor_ahead", "head": head, "last_event_id": cursor}
-            frames.append((head, "client.resync_hint", payload))
-            return _ReplayPlan(frames=frames, cursor=head)
+        epoch, seq, malformed = _parse_v2_cursor(raw_cursor)
+        if malformed or epoch != current_epoch:
+            payload = {"reason": "epoch_mismatch", "head": head_cursor}
+            frames.append((head_cursor, "client.resync_hint", payload))
+            return _ReplayPlan(frames=frames, cursor=head_cursor, cursor_seq=head_seq)
 
-        if cursor > 0 and head - cursor > RESYNC_GAP:
-            payload = {"reason": "gap_too_large", "head": head, "last_event_id": cursor}
-            frames.append((head, "client.resync_hint", payload))
-            return _ReplayPlan(frames=frames, cursor=head)
+        assert seq is not None
+        if seq > head_seq:
+            payload = {"reason": "cursor_ahead", "head": head_cursor, "last_seq": seq}
+            frames.append((head_cursor, "client.resync_hint", payload))
+            return _ReplayPlan(frames=frames, cursor=head_cursor, cursor_seq=head_seq)
 
-        rows = fetch_since(
+        if head_seq - seq > RESYNC_GAP:
+            payload = {"reason": "gap_too_large", "head": head_cursor, "last_seq": seq}
+            frames.append((head_cursor, "client.resync_hint", payload))
+            return _ReplayPlan(frames=frames, cursor=head_cursor, cursor_seq=head_seq)
+
+        rows = fetch_published_since(
             session,
-            last_event_id=cursor,
+            after_seq=seq,
             limit=REPLAY_LIMIT,
             account_id=account_id,
         )
-        seen: set[int] = set()
+        seen: set[str] = set()
+        cursor_seq_local = seq
         for row in rows:
+            r_seq = int(row.publication_seq or 0)
+            cursor_id = f"v2:{current_epoch}:{r_seq}"
             item = to_item(row)
-            # Extra guard: other accounts only (globals have account_id None).
             if account_id and item.account_id and item.account_id != str(account_id):
                 continue
-            if item.id in seen:
+            if cursor_id in seen:
                 continue
-            frames.append((item.id, item.event_type, item.payload))
-            seen.add(item.id)
-            cursor_local = item.id
-        if len(rows) >= REPLAY_LIMIT and cursor_local < head:
+            frames.append((cursor_id, item.event_type, item.payload))
+            seen.add(cursor_id)
+            cursor_seq_local = max(cursor_seq_local, r_seq)
+
+        final_cursor = f"v2:{current_epoch}:{cursor_seq_local}"
+        if len(rows) >= REPLAY_LIMIT and cursor_seq_local < head_seq:
             payload = {
                 "reason": "replay_truncated",
-                "head": head,
-                "last_event_id": cursor_local,
+                "head": head_cursor,
+                "last_seq": cursor_seq_local,
                 "replay_limit": REPLAY_LIMIT,
             }
-            frames.append((head, "client.resync_hint", payload))
-            cursor_local = head
-    return _ReplayPlan(frames=frames, cursor=cursor_local)
+            frames.append((head_cursor, "client.resync_hint", payload))
+            final_cursor = head_cursor
+            cursor_seq_local = head_seq
+
+        return _ReplayPlan(frames=frames, cursor=final_cursor, cursor_seq=cursor_seq_local)
 
 
 def _acquire_sse_slot() -> bool:
@@ -175,25 +208,14 @@ def _release_sse_slot() -> None:
 async def stream_events(
     request: Request,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-    after: int | None = Query(default=None, description="Same as Last-Event-ID, for EventSource polyfills"),
+    after: str | None = Query(default=None, description="Same as Last-Event-ID, for EventSource polyfills"),
     account_id: UUID | None = Query(default=None),
     principal: AuthPrincipal = Depends(require_auth),
 ):
     """Server-Sent Events stream. Subscribe first, replay, then live-tail (dedupe by eid)."""
 
     session_epoch = principal.session_epoch if principal.via == "session" else None
-    cursor = 0
-    malformed = False
-    raw = last_event_id or (str(after) if after is not None else None)
-    if raw:
-        try:
-            cursor = int(raw)
-        except ValueError:
-            malformed = True
-            cursor = 0
-        if cursor < 0:
-            malformed = True
-            cursor = 0
+    raw_cursor = last_event_id or after
 
     if not _acquire_sse_slot():
         return JSONResponse(
@@ -216,33 +238,27 @@ async def stream_events(
         dispatcher = None
         queue = None
         try:
-            # Subscribe BEFORE replay so events committed during replay land in the queue
-            # and are not lost between DB read and live-tail. Dedupe by event id below.
             dispatcher = get_dispatcher()
             queue = dispatcher.subscribe(
                 account_id=str(account_id) if account_id else None,
                 session_epoch=session_epoch,
             )
             seen = BoundedSet(maxsize=1000)
-            cursor_local = cursor
-            # Subscribe before a fresh epoch read so no revocation signal can fall
-            # between validation and the initial SSE replay.
             if session_epoch is not None:
                 current_epoch = await asyncio.to_thread(_get_session_epoch, True)
                 if current_epoch != session_epoch:
                     return
             next_epoch_recheck = time.monotonic() + SESSION_EPOCH_RECHECK_INTERVAL_S
-            plan = await asyncio.to_thread(_build_replay, cursor, account_id, malformed=malformed)
+            plan = await asyncio.to_thread(_build_replay, raw_cursor, account_id)
             for eid, etype, data in plan.frames:
                 yield _format_sse(eid, etype, data)
                 seen.add(eid)
-            cursor_local = plan.cursor
+            cursor_seq_local = plan.cursor_seq
 
             while True:
                 if await request.is_disconnected():
                     break
                 now = time.monotonic()
-                # Keepalive stays cheap; database fallback runs at most once per interval.
                 if session_epoch is not None and now >= next_epoch_recheck:
                     try:
                         current_epoch = await asyncio.to_thread(_get_session_epoch)
@@ -265,8 +281,6 @@ async def stream_events(
                 except asyncio.TimeoutError:
                     if session_epoch is not None and time.monotonic() >= next_epoch_recheck:
                         continue
-                    # Comment keepalive only. Dispatch is owned by the LISTEN thread
-                    # (single dispatcher; no per-connection polling / dual dispatch).
                     yield ": keepalive\n\n"
                     continue
                 if event is SSE_STREAM_CLOSE:
@@ -274,17 +288,18 @@ async def stream_events(
                 close_after_delivery = (
                     isinstance(event, dict) and event.get("_mail_core_close_after_delivery")
                 )
-                # Account filter: keep globals (NULL account_id) for account streams.
                 if account_id and event.get("account_id") and event["account_id"] != str(account_id):
                     if close_after_delivery:
                         break
                     continue
-                eid = int(event["id"])
-                if eid in seen or eid <= cursor_local:
+                cursor_id = str(event["id"])
+                event_seq = event.get("publication_seq")
+                if cursor_id in seen or (event_seq is not None and event_seq <= cursor_seq_local):
                     continue
-                yield _format_sse(eid, event["event"], event.get("data") or {})
-                seen.add(eid)
-                cursor_local = eid
+                yield _format_sse(cursor_id, event["event"], event.get("data") or {})
+                seen.add(cursor_id)
+                if event_seq is not None:
+                    cursor_seq_local = max(cursor_seq_local, int(event_seq))
                 if close_after_delivery:
                     break
         finally:

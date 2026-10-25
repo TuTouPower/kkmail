@@ -108,7 +108,13 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
 
   function handleEvent(type: string, data: unknown) {
     let scheduled = false
-    if (type === 'account.updated') {
+    if (type === 'client.resync_hint') {
+      invalidateAccounts = true
+      invalidateMailLists = true
+      invalidateMailStats = true
+      invalidateAllDetails = true
+      scheduled = true
+    } else if (type === 'account.updated') {
       invalidateAccounts = true
       scheduled = true
     } else if (shouldInvalidateMailCoreInbox(type)) {
