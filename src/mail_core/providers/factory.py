@@ -21,6 +21,7 @@ from mail_core.providers.oauth import (
     urllib_json_request,
 )
 from mail_core.providers.stub_memory import MemoryProvider
+from mail_core.security.redact import safe_error
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,12 @@ def build_provider(
         try:
             from mail_core.accounts.settings_store import get_fetch_timeout_seconds
             timeout = get_fetch_timeout_seconds(session)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "fetch timeout lookup failed for account id=%s; using default 30s: %s",
+                account.id,
+                safe_error(exc),
+            )
             timeout = 30.0
     elif timeout is None:
         try:
@@ -109,7 +115,12 @@ def build_provider(
             SessionFactory = get_session_factory()
             with SessionFactory() as s:
                 timeout = get_fetch_timeout_seconds(s)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "fetch timeout lookup failed for account id=%s; using default 30s: %s",
+                account.id,
+                safe_error(exc),
+            )
             timeout = 30.0
 
     effective_timeout = float(timeout) if timeout is not None else 30.0

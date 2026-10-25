@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import uuid
 from mail_core.accounts.settings_store import (
     PUBLIC_SETTING_KEYS,
     _is_secret_key,
@@ -141,3 +143,47 @@ def test_runtime_timeout_uses_persisted_setting_without_injected_session(provide
     assert provider.timeout == 75.0
     if provider_name in ('gmail', 'graph'):
         assert provider.transport.token_client.timeout == 75.0
+
+
+@pytest.mark.parametrize("lookup_path", ["injected_session", "session_factory"])
+def test_build_provider_logs_timeout_lookup_failure_with_account_context(
+    lookup_path, caplog
+):
+    from unittest.mock import patch
+
+    from mail_core.accounts.credentials import DictCredentialStore
+    from mail_core.mail.storage.models import Account
+    from mail_core.providers.factory import build_provider
+
+    account_id = uuid.uuid4()
+    account = Account(
+        id=account_id,
+        email="user@example.com",
+        provider="imap",
+        credential_ref="credential",
+        config={"imap_host": "imap.example.test"},
+    )
+    store = DictCredentialStore({"credential": "secret"})
+    session = None
+    factory_patch = None
+    if lookup_path == "injected_session":
+        session = MagicMock()
+        session.get.side_effect = RuntimeError("password=top-secret")
+    else:
+        factory_patch = patch(
+            "mail_core.db.session.get_session_factory",
+            side_effect=RuntimeError("password=top-secret"),
+        )
+
+    caplog.set_level(logging.WARNING, logger="mail_core.providers.factory")
+    with patch("mail_core.providers.factory.validate_imap_host"):
+        if factory_patch is None:
+            provider = build_provider(account, store, session=session)
+        else:
+            with factory_patch:
+                provider = build_provider(account, store)
+
+    assert provider.timeout == 30.0
+    assert f"account id={account_id}" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "top-secret" not in caplog.text
