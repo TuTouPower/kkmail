@@ -23,22 +23,12 @@ import {
 } from 'lucide-react'
 import { api, apiRequest, type AccountSummary } from '../api/client'
 import { fetchAccounts, fetchGroups, queryClient, queryKeys, resetGroupMailQueries, type GroupItem } from '../api/queries'
+import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
 import { fetchGlobalStats } from '../api/mailCore'
 import { confirmAction, errorMessage } from '../lib/actions'
 import { useMailStore, type FavoriteCategory } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
 import AccountIcon from './AccountIcon'
-
-interface FolderStatsItem {
-  folder_id?: string
-  unread_count?: number | null
-  total_count?: number | null
-  role?: string
-  sync_status?: string
-  name?: string
-  remote_id?: string
-  parent_remote_id?: string | null
-}
 
 const ROLE_PRIORITY: Record<string, number> = {
   inbox: 1,
@@ -92,12 +82,8 @@ function getFolderIcon(role: string) {
 }
 
 async function fetchAccountFolders(accountId: string, signal?: AbortSignal): Promise<number | null> {
-  const res = await apiRequest(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`, { signal })
-  const folders: FolderStatsItem[] = Array.isArray(res)
-    ? res
-    : Array.isArray((res as { folders?: unknown })?.folders)
-      ? (res as { folders: FolderStatsItem[] }).folders
-      : []
+  const res = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`, { signal })
+  const folders = res.folders
   const inboxFolders = folders.filter((folder) => folder.role === 'inbox')
   if (!inboxFolders.length || inboxFolders.some((folder) => folder.unread_count == null)) return null
   return inboxFolders.reduce((sum, folder) => sum + (folder.unread_count || 0), 0)
@@ -170,7 +156,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
   const foldersQuery = useQuery({
     queryKey: ['mail-core', 'account-folders', accountId],
     queryFn: async ({ signal }) => {
-      const response = await apiRequest<{ account_id: string; folders: FolderStatsItem[] }>(
+      const response = await apiRequest<AccountFolderStatsOut>(
         `/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`, { signal },
       )
       return response.folders || []
@@ -189,8 +175,8 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
   }
 
   const folderMap = new Map(folders.filter((folder) => folder.remote_id).map((folder) => [folder.remote_id!, folder]))
-  const childrenMap = new Map<string, FolderStatsItem[]>()
-  const roots: FolderStatsItem[] = []
+  const childrenMap = new Map<string, AccountFolderStatsItemOut[]>()
+  const roots: AccountFolderStatsItemOut[] = []
   for (const folder of foldersQuery.data) {
     if (folder.parent_remote_id && folderMap.has(folder.parent_remote_id)) {
       const children = childrenMap.get(folder.parent_remote_id) || []
@@ -201,7 +187,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
     }
   }
 
-  const renderTree = (items: FolderStatsItem[], level = 0): React.ReactNode => [...items].sort((a, b) => {
+  const renderTree = (items: AccountFolderStatsItemOut[], level = 0): React.ReactNode => [...items].sort((a, b) => {
     const priority = getRolePriority(a.role || 'other') - getRolePriority(b.role || 'other')
     return priority || (a.name || '').localeCompare(b.name || '', 'zh-CN')
   }).map((folder) => {
