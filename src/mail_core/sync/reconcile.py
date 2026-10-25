@@ -72,7 +72,7 @@ def reconcile_folder(
         from mail_core.security.redact import safe_provider_summary
 
         err_summary = safe_provider_summary(exc)
-        log.exception("reconcile provider I/O failed for folder %s: %s", folder_id, err_summary)
+        log.error("reconcile provider I/O failed for folder %s: %s", folder_id, err_summary)
         with Session() as session:
             try:
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)

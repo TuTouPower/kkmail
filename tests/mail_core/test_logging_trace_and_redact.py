@@ -154,3 +154,60 @@ def test_http_request_id_middleware_and_trace_header():
     trace_id = "trace.v1-_09"
     response = client.get("/health", headers={"X-Trace-ID": trace_id})
     assert response.headers["X-Request-ID"] == trace_id
+
+
+def test_redact_handles_token_keys_and_query_params():
+    from mail_core.security.redact import redact
+
+    text1 = "auth failure token=SECRET_RAW_TOKEN_999 and token: 'SECRET_QUOTED_888'"
+    redacted1 = redact(text1)
+    assert "SECRET_RAW_TOKEN" not in redacted1
+    assert "SECRET_QUOTED" not in redacted1
+    assert "[REDACTED]" in redacted1
+
+    text2 = 'JSON payload: {"token": "SECRET_JSON_777", "other": "ok"}'
+    redacted2 = redact(text2)
+    assert "SECRET_JSON" not in redacted2
+    assert "[REDACTED]" in redacted2
+
+    text3 = "GET https://api.provider.com/v1/sync?token=QUERY_TOKEN_555&next_cursor=xyz"
+    redacted3 = redact(text3)
+    assert "QUERY_TOKEN" not in redacted3
+    assert "xyz" in redacted3
+
+
+def test_redacting_trace_formatter_provider_exception_chain_never_leaks_body_or_token():
+    import io
+    from mail_core.providers.http import ProviderHttpError
+
+    logger = logging.getLogger("test_provider_leak_prevention")
+    logger.setLevel(logging.DEBUG)
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    formatter = RedactingTraceFormatter("[%(trace_id)s] %(levelname)s %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+    try:
+        try:
+            raise ProviderHttpError(
+                "Sensitive crash message token=SECRET_LEAK_111",
+                status=500,
+                body={"raw_body_secret": "TOP_SECRET_BODY_PAYLOAD_222"},
+            )
+        except Exception as exc:
+            try:
+                raise RuntimeError("Outer operation failed: token=SECRET_LEAK_333") from exc
+            except Exception:
+                with trace_scope("trace_provider_leak_test"):
+                    logger.exception("Provider call encountered critical failure")
+
+        log_output = stream.getvalue()
+        assert "[trace_provider_leak_test]" in log_output
+        assert "SECRET_LEAK_111" not in log_output
+        assert "TOP_SECRET_BODY_PAYLOAD_222" not in log_output
+        assert "SECRET_LEAK_333" not in log_output
+        assert "ProviderHttpError status=500" in log_output
+        assert "RuntimeError" in log_output
+    finally:
+        logger.removeHandler(handler)
