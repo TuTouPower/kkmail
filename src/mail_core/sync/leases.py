@@ -128,11 +128,14 @@ def assert_fencing(
     """Call inside the same short TX that commits checkpoints / message writes."""
     now = now or _utcnow()
     row = session.get(AccountSyncLease, account_id, with_for_update=True)
+    expires_at = row.lease_expires_at if row is not None else None
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
     if (
         row is None
         or int(row.fencing_token) != fencing_token
-        or row.lease_expires_at is None
-        or row.lease_expires_at <= now
+        or expires_at is None
+        or expires_at <= now
     ):
         raise FencingMismatch(
             f"fencing token {fencing_token} rejected; current="
