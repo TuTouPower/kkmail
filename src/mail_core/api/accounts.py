@@ -177,10 +177,24 @@ class SettingsOut(BaseModel):
     settings: dict[str, str]
 
 
+_SETTINGS_MAX_KEYS = 100
+_SETTINGS_MAX_KEY_LENGTH = 128
+_SETTINGS_MAX_VALUE_LENGTH = 4096
+
+
 class SettingsUpdateIn(BaseModel):
     """Public settings patch. Unknown / secret keys are rejected by the service."""
 
-    settings: dict[str, str] = Field(default_factory=dict)
+    settings: dict[str, str] = Field(default_factory=dict, max_length=_SETTINGS_MAX_KEYS)
+
+    @field_validator("settings")
+    @classmethod
+    def bound_settings(cls, value: dict[str, str]) -> dict[str, str]:
+        if any(len(key) > _SETTINGS_MAX_KEY_LENGTH for key in value):
+            raise ValueError(f"setting keys must not exceed {_SETTINGS_MAX_KEY_LENGTH} characters")
+        if any(len(item) > _SETTINGS_MAX_VALUE_LENGTH for item in value.values()):
+            raise ValueError(f"setting values must not exceed {_SETTINGS_MAX_VALUE_LENGTH} characters")
+        return value
 
 
 @router.get("/api/accounts", response_model=AccountsPage)
