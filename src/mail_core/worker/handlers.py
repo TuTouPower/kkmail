@@ -123,36 +123,9 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
             error=str(result.get("error") or status),
         )
     if status in ("ok", "sync_disabled", "skipped", "rate_limited") or result.get("followup_scheduled"):
-        payload = dict(job.payload or {})
-        followup_was_scheduled = bool(result.get("followup_scheduled")) and not bool(
-            result.get("followup_coalesced")
-        )
-        followup = not followup_was_scheduled and bool(result.get("has_more") or payload.get("_followup_needed"))
-        next_run_after = None if followup_was_scheduled else result.get("next_run_after")
-        if not followup_was_scheduled and not next_run_after and payload.get("_followup_run_after"):
-            try:
-                next_run_after = datetime.fromisoformat(payload["_followup_run_after"])
-            except (TypeError, ValueError):
-                log.warning(
-                    "job %s has unparseable _followup_run_after; ignoring the invalid schedule",
-                    job.id,
-                )
-        complete_job(session, job, worker_id=worker_id)
+        complete_job(session, job, worker_id=worker_id, result=result)
         if status == "ok":
             _recover_account_sync_status(session, job)
-        if not followup_was_scheduled and (followup or next_run_after):
-            from mail_core.sync.jobs import enqueue_job
-
-            next_payload = {k: v for k, v in payload.items() if not k.startswith("_followup_")}
-            enqueue_job(
-                session,
-                job_type=job.job_type,
-                account_id=job.account_id,
-                payload=next_payload,
-                priority=job.priority,
-                run_after=next_run_after,
-                dedupe_key=job.dedupe_key,
-            )
         return True
 
     err_msg = str(result.get("error") or status or "job failed")
