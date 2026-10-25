@@ -49,3 +49,44 @@ def test_put_verifies_integrity_and_rewrites_corrupted_blob(tmp_path):
     # Verify that get() now succeeds and returns the original data
     assert store.get(res2.content_sha256) == data
 
+
+def test_put_propagates_unknown_key_version_without_replacing_blob(tmp_path):
+    import pytest
+    from mail_core.blobs.crypto import BlobCryptoError, Keyring
+
+    data = b"blob encrypted with a key version unavailable to this store"
+    writer = BlobStore(tmp_path, keyring=Keyring({1: b"1" * 32}, active_version=1))
+    result = writer.put(data)
+    blob_path = writer.path_for(result.content_sha256)
+    original_blob = blob_path.read_bytes()
+    reader = BlobStore(tmp_path, keyring=Keyring({2: b"2" * 32}, active_version=2))
+
+    with pytest.raises(BlobCryptoError, match="unknown blob key version 1"):
+        reader.put(data)
+
+    assert blob_path.read_bytes() == original_blob
+
+
+def test_put_propagates_existing_blob_read_errors(tmp_path, monkeypatch):
+    import pytest
+    from pathlib import Path
+    from mail_core.blobs.crypto import Keyring
+
+    store = BlobStore(tmp_path, keyring=Keyring({1: b"k" * 32}, active_version=1))
+    data = b"blob read errors must not be treated as corrupt content"
+    result = store.put(data)
+    blob_path = store.path_for(result.content_sha256)
+    original_blob = blob_path.read_bytes()
+    original_open = Path.open
+
+    def fail_existing_blob_open(path, *args, **kwargs):
+        if path == blob_path:
+            raise PermissionError("blob read denied")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_existing_blob_open)
+    with pytest.raises(PermissionError, match="blob read denied"):
+        store.put(data)
+
+    monkeypatch.setattr(Path, "open", original_open)
+    assert blob_path.read_bytes() == original_blob

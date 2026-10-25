@@ -11,7 +11,7 @@ from pathlib import Path
 
 from collections.abc import Iterator
 
-from mail_core.blobs.crypto import BlobCryptoError, Keyring, iter_unwrap, load_keyring_from_env, read_key_version, wrap
+from mail_core.blobs.crypto import BlobIntegrityError, Keyring, iter_unwrap, load_keyring_from_env, read_key_version, wrap
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -84,10 +84,10 @@ class BlobStore:
                     for chunk in iter_unwrap(fh, keyring=self.keyring):
                         h.update(chunk)
                     if h.hexdigest() != digest:
-                        raise BlobCryptoError("existing blob hash mismatch")
+                        raise BlobIntegrityError("existing blob hash mismatch")
                 disk_size = dest.stat().st_size
                 return BlobWriteResult(digest, disk_size, rel, disk_version)
-            except Exception:
+            except BlobIntegrityError:
                 pass
         dest.parent.mkdir(parents=True, exist_ok=True)
         payload = wrap(data, keyring=self.keyring, key_version=self.key_version)
@@ -131,4 +131,4 @@ class BlobStore:
                 h.update(chunk)
                 yield chunk
         if h.hexdigest() != digest:
-            raise BlobCryptoError("blob content does not match its digest")
+            raise BlobIntegrityError("blob content does not match its digest")

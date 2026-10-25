@@ -41,6 +41,10 @@ class BlobCryptoError(Exception):
     pass
 
 
+class BlobIntegrityError(BlobCryptoError):
+    """Stored blob format, authentication, or content digest verification failed."""
+
+
 @dataclass(frozen=True, slots=True)
 class Keyring:
     keys: dict[int, bytes]
@@ -153,14 +157,14 @@ def wrap(plaintext: bytes, *, keyring: Keyring, key_version: int | None = None) 
 def _read_exact(fh: BinaryIO, n: int) -> bytes:
     data = fh.read(n)
     if len(data) != n:
-        raise BlobCryptoError("ciphertext truncated")
+        raise BlobIntegrityError("ciphertext truncated")
     return data
 
 
 def read_key_version(fh: BinaryIO) -> int:
     header = fh.read(HEADER_LEN)
     if len(header) < HEADER_LEN or header[:4] != MAGIC:
-        raise BlobCryptoError("not an encrypted kkmail blob (missing KKMS header)")
+        raise BlobIntegrityError("not an encrypted kkmail blob (missing KKMS header)")
     return struct.unpack(">I", header[4:8])[0]
 
 
@@ -168,7 +172,7 @@ def iter_unwrap(fh: BinaryIO, *, keyring: Keyring) -> Iterator[bytes]:
     """Decrypt a framed blob incrementally (bounded memory: one chunk at a time)."""
     header = fh.read(HEADER_LEN)
     if len(header) < HEADER_LEN or header[:4] != MAGIC:
-        raise BlobCryptoError("not an encrypted kkmail blob (missing KKMS header)")
+        raise BlobIntegrityError("not an encrypted kkmail blob (missing KKMS header)")
     version = struct.unpack(">I", header[4:8])[0]
     prefix = header[8:HEADER_LEN]
     aead = AESGCM(keyring.get(version))
@@ -176,10 +180,10 @@ def iter_unwrap(fh: BinaryIO, *, keyring: Keyring) -> Iterator[bytes]:
     while True:
         raw_len = fh.read(4)
         if not raw_len:
-            raise BlobCryptoError("ciphertext truncated (no final frame)")
+            raise BlobIntegrityError("ciphertext truncated (no final frame)")
         (ct_len,) = struct.unpack(">I", _pad4(raw_len))
         if ct_len < TAG_LEN or ct_len > CHUNK_SIZE + TAG_LEN:
-            raise BlobCryptoError("invalid frame length")
+            raise BlobIntegrityError("invalid frame length")
         ct = _read_exact(fh, ct_len)
         try:
             pt = aead.decrypt(_nonce(prefix, index), ct, _aad(header, index, False))
@@ -188,19 +192,19 @@ def iter_unwrap(fh: BinaryIO, *, keyring: Keyring) -> Iterator[bytes]:
             try:
                 pt = aead.decrypt(_nonce(prefix, index), ct, _aad(header, index, True))
             except InvalidTag as exc:
-                raise BlobCryptoError("blob authentication failed") from exc
+                raise BlobIntegrityError("blob authentication failed") from exc
             final = True
         yield pt
         index += 1
         if final:
             if fh.read(1):
-                raise BlobCryptoError("trailing data after final frame")
+                raise BlobIntegrityError("trailing data after final frame")
             return
 
 
 def _pad4(raw: bytes) -> bytes:
     if len(raw) != 4:
-        raise BlobCryptoError("ciphertext truncated")
+        raise BlobIntegrityError("ciphertext truncated")
     return raw
 
 
