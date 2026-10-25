@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   ChevronDown,
@@ -162,11 +162,52 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
       return response.folders || []
     },
   })
+  const folders = foldersQuery.data || []
+  const folderDisplayNames = useMemo(() => {
+    const groups = new Map<string, AccountFolderStatsItemOut[]>()
+    for (const folder of folders) {
+      const role = folder.role || 'other'
+      const rawName = folder.name || folder.remote_id || folder.folder_id || ''
+      const displayBase = getStandardName(role, rawName)
+      const groupKey = JSON.stringify([role, displayBase])
+      const group = groups.get(groupKey) || []
+      group.push(folder)
+      groups.set(groupKey, group)
+    }
+
+    const names = new Map<string, string>()
+    for (const group of groups.values()) {
+      const first = group[0]
+      const role = first.role || 'other'
+      const displayBase = getStandardName(role, first.name || first.remote_id || first.folder_id || '')
+      const sameNameGroups = new Map<string, AccountFolderStatsItemOut[]>()
+      for (const folder of group) {
+        const rawName = folder.name || folder.remote_id || folder.folder_id || ''
+        const sameName = sameNameGroups.get(rawName) || []
+        sameName.push(folder)
+        sameNameGroups.set(rawName, sameName)
+      }
+
+      for (const [rawName, sameNameFolders] of sameNameGroups) {
+        const suffixes = new Map<string, string>()
+        if (sameNameFolders.length > 1) {
+          const ordered = [...sameNameFolders].sort((a, b) => (a.folder_id || '').localeCompare(b.folder_id || ''))
+          ordered.forEach((folder, index) => suffixes.set(folder.folder_id, ` #${index + 1}`))
+        }
+        for (const folder of sameNameFolders) {
+          const displayName = group.length > 1
+            ? `${displayBase} · ${rawName}${suffixes.get(folder.folder_id) || ''}`
+            : displayBase
+          names.set(folder.folder_id, displayName)
+        }
+      }
+    }
+    return names
+  }, [folders])
 
   if (foldersQuery.isLoading) return <div className="tree-folder-status" style={{ paddingLeft: '48px' }}>正在加载文件夹…</div>
   if (foldersQuery.isError || !foldersQuery.data) return <div className="tree-folder-status tree-error" style={{ paddingLeft: '48px' }}>文件夹加载失败 <button className="tree-retry" type="button" onClick={() => void foldersQuery.refetch()}>重试</button></div>
 
-  const folders = foldersQuery.data
   if (folders.length === 0) {
     if (syncStatus === 'auth_failed' || syncStatus === 'failed') {
       return <div className="tree-folder-status tree-error" role="status" style={{ paddingLeft: '48px' }}>同步失败，请检查账户设置</div>
@@ -195,20 +236,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
     const notSelectable = folder.sync_status === 'paused'
     const rawName = folder.name || folder.remote_id || folder.folder_id || ''
     const displayBase = getStandardName(role, rawName)
-    const sameLabelFolders = folders.filter((candidate) =>
-      (candidate.role || 'other') === role && getStandardName(role, candidate.name || candidate.remote_id || candidate.folder_id || '') === displayBase,
-    )
-    const sameNameFolders = sameLabelFolders.filter((candidate) =>
-      (candidate.name || candidate.remote_id || candidate.folder_id || '') === rawName,
-    )
-    let duplicateSuffix = ''
-    if (sameNameFolders.length > 1) {
-      const ordered = [...sameNameFolders].sort((a, b) => (a.folder_id || '').localeCompare(b.folder_id || ''))
-      duplicateSuffix = ` #${ordered.findIndex((candidate) => candidate.folder_id === folder.folder_id) + 1}`
-    }
-    const displayName = sameLabelFolders.length > 1
-      ? `${displayBase} · ${rawName}${duplicateSuffix}`
-      : displayBase
+    const displayName = folderDisplayNames.get(folder.folder_id) || displayBase
     const folderId = String(folder.folder_id || '')
     const active = view.type === 'folder' && view.accountId === accountId && view.folderId === folderId
     const children = folder.remote_id ? childrenMap.get(folder.remote_id) || [] : []
