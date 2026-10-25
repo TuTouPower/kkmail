@@ -1,7 +1,8 @@
 # Dedicated test instance. Never use the application Compose or its volumes.
 services:
   postgres:
-    image: postgres:16
+    # Tested tag: postgres:16.15; pinned to its multi-platform index digest.
+    image: postgres:16.15@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
     labels:
       io.kkmail.test_pg: "v1"
     environment:
