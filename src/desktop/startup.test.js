@@ -8,6 +8,7 @@ const {
   scrubEnv,
   redactSecrets,
   stopChildTree,
+  forceKillChildTreeImmediately,
   ENV_ALLOW_EXACT,
   ENV_ALLOW_PREFIX,
   SIDECAR_CONFIG_KEYS,
@@ -132,6 +133,28 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
   } finally {
     process.kill = origKill
   }
+}
+
+{
+  // The process-exit fallback must force-kill synchronously after the soft shutdown attempt.
+  const signals = []
+  const child = { pid: 424242, exitCode: null, signalCode: null, kill: (signal) => signals.push(['child', signal]) }
+  const result = forceKillChildTreeImmediately(child, {
+    platform: 'linux',
+    killProcess: (pid, signal) => signals.push([pid, signal]),
+  })
+  assert.ok(result.ok)
+  assert.deepStrictEqual(signals, [[-424242, 'SIGKILL']])
+
+  let taskkill = null
+  const windowsResult = forceKillChildTreeImmediately(child, {
+    platform: 'win32',
+    runSync: (...args) => { taskkill = args; return { status: 0 } },
+  })
+  assert.ok(windowsResult.ok)
+  assert.deepStrictEqual(taskkill, [
+    'taskkill', ['/pid', '424242', '/T', '/F'], { stdio: 'ignore', windowsHide: true },
+  ])
 }
 
 {

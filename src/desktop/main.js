@@ -17,6 +17,7 @@ const {
   redactSecrets,
   isChildDead,
   stopChildTree,
+  forceKillChildTreeImmediately,
   collectSidecarExtras,
 } = require('./startup')
 const {
@@ -353,6 +354,7 @@ process.on('exit', () => {
   if (!shutdownFinished) {
     if (backend && !isChildDead(backend)) {
       try { stopChildTree(backend, { escalateAfterMs: 0 }) } catch (_) {}
+      try { forceKillChildTreeImmediately(backend) } catch (_) {}
     }
     stopMailCorePg()
     if (backendLogStream) {

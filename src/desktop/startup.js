@@ -1,7 +1,7 @@
 /** Port / health / child-process helpers for the Electron main process (unit-testable). */
 const http = require('http')
 const net = require('net')
-const { spawn } = require('child_process')
+const { spawn, spawnSync } = require('child_process')
 
 const DEFAULT_PORT = 18765
 
@@ -290,6 +290,46 @@ function stopChildTree(child, opts = {}) {
   return { ok: true, pid, escalateAfterMs }
 }
 
+/** Synchronously force-stop a child tree when the process is already exiting. */
+function forceKillChildTreeImmediately(child, options = {}) {
+  if (isChildDead(child)) return { ok: true, alreadyDead: true }
+  const pid = child && child.pid
+  if (!pid) return { ok: false, reason: 'missing-pid' }
+  const platform = options.platform || process.platform
+  const killProcess = options.killProcess || process.kill
+  const runSync = options.runSync || spawnSync
+
+  if (platform === 'win32') {
+    try {
+      const result = runSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      if (!result.error && result.status === 0) return { ok: true, pid }
+    } catch (_) {
+      // Fall through to the direct child kill.
+    }
+    try {
+      child.kill()
+      return { ok: true, pid, direct: true }
+    } catch (error) {
+      return { ok: false, pid, error }
+    }
+  }
+
+  try {
+    killProcess(-pid, 'SIGKILL')
+    return { ok: true, pid }
+  } catch (_) {
+    try {
+      child.kill('SIGKILL')
+      return { ok: true, pid, direct: true }
+    } catch (error) {
+      return { ok: false, pid, error }
+    }
+  }
+}
+
 module.exports = {
   DEFAULT_PORT,
   ENV_ALLOW_EXACT,
@@ -304,4 +344,5 @@ module.exports = {
   redactSecrets,
   isChildDead,
   stopChildTree,
+  forceKillChildTreeImmediately,
 }
