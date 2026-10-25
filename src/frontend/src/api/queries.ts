@@ -313,7 +313,10 @@ export async function setReadOptimistic(items: MailItem[], nextRead: boolean) {
   setCachedReadState(targets.map(mailKey), nextRead)
   for (let start = 0; start < targets.length; start += READ_MUTATION_BATCH_SIZE) {
     const batch = targets.slice(start, start + READ_MUTATION_BATCH_SIZE)
-    const results = await Promise.allSettled(batch.map((m) => postMailCoreMessageRead(m.id, nextRead)))
+    const results = await Promise.allSettled(batch.map(async (m) => {
+      const result = await postMailCoreMessageRead(m.id, nextRead)
+      if (result.success === false) throw new Error('服务器未接受已读状态更新')
+    }))
     const failed: string[] = []
     const failedItems: MailItem[] = []
     results.forEach((result, index) => {
@@ -356,7 +359,8 @@ export async function flagOptimistic(item: MailItem, nextFlagged: boolean): Prom
   const priorFlagged = cached ? cached.is_flagged : item.is_flagged
   patchCachedMail([key], { is_flagged: nextFlagged })
   try {
-    await postMailCoreMessageFlag(item.id, nextFlagged)
+    const result = await postMailCoreMessageFlag(item.id, nextFlagged)
+    if (result.success === false) throw new Error('服务器未接受旗标更新')
   } catch (err) {
     // Restore the captured prior value — do not blind re-toggle (!nextFlagged).
     patchCachedMail([key], { is_flagged: priorFlagged })

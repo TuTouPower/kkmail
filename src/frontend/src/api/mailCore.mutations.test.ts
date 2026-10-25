@@ -103,6 +103,14 @@ describe('optimistic updates', () => {
     expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_read).toBe(false)
   })
 
+  it('markReadOptimistic reverts when HTTP 200 reports success=false', async () => {
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item()])
+    stubFetch(() => json(200, { success: false }))
+
+    await expect(markReadOptimistic([item()])).rejects.toThrow('服务器未接受已读状态更新')
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_read).toBe(false)
+  })
+
   it('preserves interleaved read state on failure and invalidates mail lists', async () => {
     const inboxKey = queryKeys.inbox(ALL_ACCOUNTS)
     const searchKey = queryKeys.search('needle', ALL_ACCOUNTS)
@@ -187,6 +195,14 @@ describe('optimistic updates', () => {
     stubFetch(() => json(503, { detail: 'down' }))
     await expect(flagOptimistic(item({ is_flagged: true }), false)).rejects.toMatchObject({ status: 503 })
     expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_flagged).toBe(true)
+  })
+
+  it('flagOptimistic reverts when HTTP 200 reports success=false', async () => {
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item()])
+    stubFetch(() => json(200, { success: false }))
+
+    await expect(flagOptimistic(item(), true)).rejects.toThrow('服务器未接受旗标更新')
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_flagged).toBe(false)
   })
 
   it('flagOptimistic restores the prior cache snapshot (not a blind re-toggle)', async () => {
