@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ErrorBoundary from './ErrorBoundary'
 import { cleanup, click, render, waitFor } from '../test/render'
@@ -8,6 +9,19 @@ function BuggyComponent({ shouldThrow }: { shouldThrow: boolean }) {
     throw new Error('Test render crash')
   }
   return <div>Normal Content</div>
+}
+
+function RecoverableBoundary() {
+  const [resetKey, setResetKey] = useState(0)
+  const [shouldThrow, setShouldThrow] = useState(true)
+  return (
+    <>
+      <button type="button" onClick={() => { setShouldThrow(false); setResetKey(1) }}>切换视图</button>
+      <ErrorBoundary resetKey={resetKey}>
+        <BuggyComponent shouldThrow={shouldThrow} />
+      </ErrorBoundary>
+    </>
+  )
 }
 
 describe('<ErrorBoundary />', () => {
@@ -20,6 +34,7 @@ describe('<ErrorBoundary />', () => {
   afterEach(() => {
     consoleSpy.mockRestore()
     cleanup()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -99,5 +114,36 @@ describe('<ErrorBoundary />', () => {
     await waitFor(() => {
       expect(copyBtn!.textContent).toBe('复制失败')
     })
+  })
+
+  it('clears the copy feedback timer when unmounted', async () => {
+    vi.useFakeTimers()
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    const { container } = await render(
+      <ErrorBoundary>
+        <BuggyComponent shouldThrow />
+      </ErrorBoundary>,
+    )
+
+    const copyBtn = [...container.querySelectorAll('button')].find((button) => button.textContent === '复制诊断日志')
+    await click(copyBtn!)
+    const timerIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 2000)
+    expect(timerIndex).toBeGreaterThanOrEqual(0)
+    const timerId = setTimeoutSpy.mock.results[timerIndex].value
+
+    cleanup()
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(timerId)
+  })
+
+  it('resets a caught error when resetKey changes', async () => {
+    const { container } = await render(<RecoverableBoundary />)
+    expect(container.textContent).toContain('页面出错了')
+
+    await click(container.querySelector('button'))
+
+    expect(container.textContent).toContain('Normal Content')
+    expect(container.textContent).not.toContain('页面出错了')
   })
 })

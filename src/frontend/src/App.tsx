@@ -26,6 +26,10 @@ function App() {
   const mobileSidebarOpen = useMailStore((s) => s.mobileSidebarOpen)
   const closeMobileSidebar = useMailStore((s) => s.closeMobileSidebar)
   const settingsOpen = useMailStore((s) => s.settingsOpen)
+  const view = useMailStore((s) => s.view)
+  const selectedKey = useMailStore((s) => s.selectedKey)
+  const listFilter = useMailStore((s) => s.listFilter)
+  const search = useMailStore((s) => s.search)
   const toggleSidebar = useMailStore((s) => s.toggleSidebar)
   const toggleMobileSidebar = useMailStore((s) => s.toggleMobileSidebar)
   const sidebarWidth = useMailStore((s) => s.sidebarWidth)
@@ -138,6 +142,9 @@ function App() {
     sidebarWidth,
     listWidth,
   })
+  const viewResetKey = JSON.stringify(view)
+  const listResetKey = JSON.stringify([view, listFilter, search, selectedKey])
+  const readerResetKey = JSON.stringify([view, selectedKey])
 
   return (
     <div
@@ -174,7 +181,7 @@ function App() {
         style={gridColumns ? { gridTemplateColumns: gridColumns } : undefined}
       >
         {(!wide || !sidebarCollapsed) && (
-          <ErrorBoundary inline fallbackTitle="侧栏加载失败">
+          <ErrorBoundary inline fallbackTitle="侧栏加载失败" resetKey={viewResetKey}>
             <Suspense fallback={null}><Sidebar /></Suspense>
           </ErrorBoundary>
         )}
@@ -208,7 +215,7 @@ function App() {
           </ErrorBoundary>
         ) : (
           <>
-            <ErrorBoundary inline fallbackTitle="邮件列表加载失败">
+            <ErrorBoundary inline fallbackTitle="邮件列表加载失败" resetKey={listResetKey}>
               <MessageList sidebarToggleRef={sidebarToggleRef} />
             </ErrorBoundary>
             {wide && (
@@ -235,7 +242,7 @@ function App() {
                 }}
               />
             )}
-            <ErrorBoundary inline fallbackTitle="邮件详情加载失败">
+            <ErrorBoundary inline fallbackTitle="邮件详情加载失败" resetKey={readerResetKey}>
               <Suspense fallback={null}><MessageReader /></Suspense>
             </ErrorBoundary>
           </>

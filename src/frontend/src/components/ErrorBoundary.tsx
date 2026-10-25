@@ -5,14 +5,28 @@ type Props = {
   children: ReactNode
   inline?: boolean
   fallbackTitle?: string
+  resetKey?: string | number | null
 }
-type State = { error: Error | null; copied: boolean; copyFailed: boolean }
+type State = { error: Error | null; copied: boolean; copyFailed: boolean; resetKey: Props['resetKey'] }
 
 /** Catches render errors and offers a Chinese reload affordance. */
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null, copied: false, copyFailed: false }
+  private copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null
+  private mounted = false
 
-  static getDerivedStateFromError(error: Error): State {
+  constructor(props: Props) {
+    super(props)
+    this.state = { error: null, copied: false, copyFailed: false, resetKey: props.resetKey }
+  }
+
+  static getDerivedStateFromProps(props: Props, state: State): Partial<State> | null {
+    if (props.resetKey !== state.resetKey) {
+      return { error: null, copied: false, copyFailed: false, resetKey: props.resetKey }
+    }
+    return null
+  }
+
+  static getDerivedStateFromError(error: Error): Partial<State> {
     return { error, copied: false, copyFailed: false }
   }
 
@@ -27,17 +41,47 @@ export default class ErrorBoundary extends Component<Props, State> {
     )
   }
 
+  componentDidMount() {
+    this.mounted = true
+  }
+
+  componentDidUpdate(prevProps: Props) {
+    if (prevProps.resetKey !== this.props.resetKey) {
+      this.clearCopyFeedbackTimer()
+    }
+  }
+
+  componentWillUnmount() {
+    this.mounted = false
+    this.clearCopyFeedbackTimer()
+  }
+
+  private clearCopyFeedbackTimer() {
+    if (this.copyFeedbackTimer !== null) {
+      clearTimeout(this.copyFeedbackTimer)
+      this.copyFeedbackTimer = null
+    }
+  }
+
+  private showCopyFeedback(copied: boolean) {
+    if (!this.mounted) return
+    this.clearCopyFeedbackTimer()
+    this.setState({ copied, copyFailed: !copied })
+    this.copyFeedbackTimer = setTimeout(() => {
+      this.copyFeedbackTimer = null
+      this.setState({ copied: false, copyFailed: false })
+    }, 2000)
+  }
+
   copyReport = async () => {
     try {
       if (!navigator?.clipboard?.writeText) {
         throw new Error('剪贴板不可用')
       }
       await navigator.clipboard.writeText(exportDiagnosticsAsText())
-      this.setState({ copied: true, copyFailed: false })
-      setTimeout(() => this.setState({ copied: false }), 2000)
+      this.showCopyFeedback(true)
     } catch {
-      this.setState({ copied: false, copyFailed: true })
-      setTimeout(() => this.setState({ copyFailed: false }), 2000)
+      this.showCopyFeedback(false)
     }
   }
 
@@ -83,7 +127,8 @@ export default class ErrorBoundary extends Component<Props, State> {
               type="button"
               onClick={() => {
                 if (isInline) {
-                  this.setState({ error: null })
+                  this.clearCopyFeedbackTimer()
+                  this.setState({ error: null, copied: false, copyFailed: false })
                 } else {
                   window.location.reload()
                 }
