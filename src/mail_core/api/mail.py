@@ -6,6 +6,7 @@ Routes call the application layer only (queries / search / mutations / attachmen
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
@@ -185,6 +186,8 @@ class MarkAllReadOut(BaseModel):
     success: bool = True
     count: int
     account_id: str | None = None
+    scope_type: Literal["global", "account", "group", "folder"]
+    scope_id: str | None
 
 
 class MutationOut(BaseModel):
@@ -383,6 +386,15 @@ def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
                 group_account_ids = account_ids_for_group(scope_session, body.group_id)
             except LookupError as exc:
                 raise HTTPException(404, str(exc)) from exc
+    if body.group_id is not None:
+        scope_type, scope_id = "group", str(body.group_id)
+    elif body.folder_id is not None:
+        scope_type, scope_id = "folder", str(body.folder_id)
+    elif body.account_id is not None:
+        scope_type, scope_id = "account", str(body.account_id)
+    else:
+        scope_type, scope_id = "global", None
+
     total_count = 0
     after_message_id = None
     while True:
@@ -412,6 +424,8 @@ def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
         success=True,
         count=total_count,
         account_id=str(body.account_id) if body.account_id else None,
+        scope_type=scope_type,
+        scope_id=scope_id,
     )
 
 

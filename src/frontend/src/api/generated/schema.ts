@@ -923,6 +923,13 @@ export interface components {
             account_id?: string | null;
             /** Count */
             count: number;
+            /** Scope Id */
+            scope_id: string | null;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "global" | "account" | "group" | "folder";
             /**
              * Success
              * @default true

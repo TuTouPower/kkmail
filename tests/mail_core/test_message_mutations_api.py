@@ -185,6 +185,8 @@ def test_mark_all_read_api():
     res = r.json()
     assert res["success"] is True
     assert res["count"] >= 1
+    assert res["scope_type"] == "global"
+    assert res["scope_id"] is None
 
     r2 = client.post("/api/mail/mark-all-read", json={"folder_role": "inbox"})
     assert r2.status_code == 200
@@ -223,6 +225,8 @@ def test_mark_all_read_api_commits_bounded_batches(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["count"] == 5
+    assert response.json()["scope_type"] == "account"
+    assert response.json()["scope_id"] == str(account_id)
     assert batch_counts == [2, 2, 1]
     assert batch_cursors == [None, *batch_last_ids[:2]]
 
@@ -304,6 +308,9 @@ def test_mark_all_read_api_freezes_group_members_across_batches(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["count"] == 5
+    assert response.json()["scope_type"] == "group"
+    assert response.json()["scope_id"] == str(group_id)
+    assert response.json()["account_id"] is None
     assert batch_scopes == [[account_id], [account_id], [account_id]]
     Session = get_session_factory()
     with Session() as session:

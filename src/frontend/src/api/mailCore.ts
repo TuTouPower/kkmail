@@ -52,6 +52,8 @@ export interface MarkAllReadResult {
   success: boolean
   count: number
   account_id?: string | null
+  scope_type: 'global' | 'account' | 'group' | 'folder'
+  scope_id: string | null
 }
 
 export function postMailCoreMarkAllRead(

@@ -943,6 +943,27 @@
             "title": "Count",
             "type": "integer"
           },
+          "scope_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_type": {
+            "enum": [
+              "global",
+              "account",
+              "group",
+              "folder"
+            ],
+            "title": "Scope Type",
+            "type": "string"
+          },
           "success": {
             "default": true,
             "title": "Success",
@@ -950,7 +971,9 @@
           }
         },
         "required": [
-          "count"
+          "count",
+          "scope_type",
+          "scope_id"
         ],
         "title": "MarkAllReadOut",
         "type": "object"
