@@ -83,15 +83,20 @@ def upsert_message_search_batch(session: Session, *, messages: Sequence[Message]
 _MATCH = """
     (
         document @@ plainto_tsquery('simple', :q)
-        OR from_text ILIKE '%' || :q || '%'
-        OR subject ILIKE '%' || :q || '%'
+        OR from_text ILIKE '%' || :like_q || '%' ESCAPE E'\\\\'
+        OR subject ILIKE '%' || :like_q || '%' ESCAPE E'\\\\'
         OR from_text % :q
     )
 """
 
 
+def _escape_like_literal(query: str) -> str:
+    """Escape LIKE metacharacters while retaining literal query semantics."""
+    return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _filters(query: str, account_ids: list[uuid.UUID] | None, folder_id: uuid.UUID | None) -> tuple[str, dict]:
-    params: dict = {"q": query}
+    params: dict = {"q": query, "like_q": _escape_like_literal(query)}
     filters: list[str] = []
     if account_ids is not None:
         filters.append("account_id = ANY(:account_ids)")
