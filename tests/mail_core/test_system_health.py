@@ -228,3 +228,54 @@ def test_worker_healthcheck_cli(monkeypatch):
     # Case 4: specific worker ID not matching
     monkeypatch.setenv("MAIL_CORE_WORKER_ID", "w2")
     assert healthcheck_main() == 1
+
+
+def test_system_health_sync_metrics_with_real_sync_run_done_status():
+    import uuid
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.enums import SyncPhase, SyncRunStatus
+    from mail_core.mail.storage.models import Account, SyncRun
+
+    Session = get_session_factory()
+    with Session() as session:
+        account = Account(
+            id=uuid.uuid4(),
+            email=f"metrics-{uuid.uuid4().hex[:6]}@example.com",
+            provider="imap",
+            sync_enabled=True,
+            sync_status="idle",
+        )
+        session.add(account)
+        session.flush()
+
+        # Insert a RUNNING sync run first
+        running_run = SyncRun(
+            id=uuid.uuid4(),
+            account_id=account.id,
+            status=SyncRunStatus.RUNNING.value,
+            phase=SyncPhase.FOLDER_DISCOVERY.value,
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        session.add(running_run)
+        session.flush()
+
+        report_running = get_system_health_metrics(session)
+        assert report_running.sync.last_sync_success_at is None
+
+        # Insert a DONE sync run
+        finished_time = datetime.now(timezone.utc) - timedelta(seconds=30)
+        done_run = SyncRun(
+            id=uuid.uuid4(),
+            account_id=account.id,
+            status=SyncRunStatus.DONE.value,
+            phase=SyncPhase.INCREMENTAL_READY.value,
+            started_at=finished_time - timedelta(minutes=1),
+            finished_at=finished_time,
+        )
+        session.add(done_run)
+        session.flush()
+
+        report_done = get_system_health_metrics(session)
+        assert report_done.sync.last_sync_success_at is not None
+        assert report_done.sync.max_sync_lag_seconds is not None
+        assert report_done.sync.max_sync_lag_seconds >= 25.0
