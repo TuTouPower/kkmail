@@ -175,6 +175,7 @@ class ReadyOut(BaseModel):
     schema_revision: str | None = None
     schema_head: str | None = None
     listener: bool | None = None
+    worker: bool | None = None
     reason: str | None = None
 
 
@@ -188,7 +189,7 @@ def health(response: Response) -> HealthOut:
 
 @app.get("/ready", response_model=ReadyOut, responses={503: {"model": ReadyOut}})
 def ready():
-    """Readiness: DB reachable, schema at code head, outbox listener running."""
+    """Readiness: DB reachable, schema at code head, outbox listener running, worker active."""
     from fastapi.responses import JSONResponse
 
     from mail_core.mail.storage.health import get_current_schema_revision
@@ -209,7 +210,42 @@ def ready():
     if not listener_ok:
         body = ReadyOut(status="not_ready", schema_revision=rev, schema_head=head, listener=False, reason="outbox_listener")
         return JSONResponse(status_code=503, content=body.model_dump())
-    return ReadyOut(status="ready", schema_revision=rev, schema_head=head, listener=True)
+
+    worker_ok = None
+    try:
+        from mail_core.db.session import get_session_factory
+        from mail_core.worker.heartbeat import get_worker_heartbeats
+
+        Session = get_session_factory()
+        with Session() as session:
+            worker_ok, _, _ = get_worker_heartbeats(session)
+    except Exception:
+        pass
+
+    if os.environ.get("MAIL_CORE_REQUIRE_WORKER_READY") == "1" and not worker_ok:
+        body = ReadyOut(
+            status="not_ready",
+            schema_revision=rev,
+            schema_head=head,
+            listener=listener_ok,
+            worker=False,
+            reason="worker_not_running",
+        )
+        return JSONResponse(status_code=503, content=body.model_dump())
+
+    return ReadyOut(status="ready", schema_revision=rev, schema_head=head, listener=True, worker=worker_ok)
+
+
+@app.get("/api/system/health")
+@app.get("/health/metrics", include_in_schema=False)
+def system_health():
+    """Lightweight operational and business health metrics."""
+    from mail_core.db.session import get_session_factory
+    from mail_core.system_metrics import get_system_health_metrics
+
+    Session = get_session_factory()
+    with Session() as session:
+        return get_system_health_metrics(session).model_dump()
 
 
 _DIST = _frontend_dist()

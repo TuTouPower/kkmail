@@ -130,7 +130,7 @@ services:
         condition: service_completed_successfully
         required: false
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/ready || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -161,6 +161,12 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "mail_core.worker.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     command: ["python", "-m", "mail_core.worker.main"]
     restart: unless-stopped
 

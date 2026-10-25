@@ -88,8 +88,13 @@ def _reclaim_once() -> int:
             resumed = maybe_resume_quota_paused_archives(session, limit=100)
             if resumed:
                 log.info("resumed %s quota paused archive(s)", resumed)
+            from mail_core.worker.heartbeat import cleanup_stale_heartbeats
+
+            cleaned_heartbeats = cleanup_stale_heartbeats(session)
+            if cleaned_heartbeats:
+                log.info("cleaned %s expired worker heartbeat(s)", cleaned_heartbeats)
             session.commit()
-            return n + a + pruned + pruned_jobs
+            return n + a + pruned + pruned_jobs + cleaned_heartbeats
         except Exception:
             session.rollback()
             log.exception("reclaim_stale_claims failed")
@@ -275,11 +280,28 @@ def run(poll_interval_s: float | None = None) -> None:
         signal.signal(signal.SIGINT, _handle_stop)
         signal.signal(signal.SIGTERM, _handle_stop)
     max_idle = _positive_float_setting("MAIL_CORE_WORKER_MAX_IDLE_S", max(interval, 10.0))
+    heartbeat_interval = _positive_float_setting("MAIL_CORE_WORKER_HEARTBEAT_S", 15.0)
     log.info("worker %s starting (poll=%ss, max_idle=%ss)", worker_id, interval, max_idle)
     sleep_s = interval
     last_reclaim_at: float | None = None
+    last_heartbeat_at: float | None = None
     while not _stop:
         now = time.monotonic()
+        if last_heartbeat_at is None or now - last_heartbeat_at >= heartbeat_interval:
+            last_heartbeat_at = now
+            try:
+                from mail_core.db.session import get_session_factory
+                from mail_core.worker.heartbeat import record_heartbeat
+
+                Session = get_session_factory()
+                with Session() as session:
+                    record_heartbeat(session, worker_id=worker_id)
+                    session.commit()
+            except Exception as exc:  # pragma: no cover
+                from mail_core.security.redact import safe_error
+
+                log.warning("worker heartbeat write failed: %s", safe_error(exc))
+
         if last_reclaim_at is None or now - last_reclaim_at >= RECLAIM_INTERVAL_S:
             last_reclaim_at = now
             try:

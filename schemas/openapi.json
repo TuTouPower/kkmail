@@ -2052,6 +2052,17 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "worker": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker"
           }
         },
         "required": [
@@ -4553,6 +4564,23 @@
         ]
       }
     },
+    "/api/system/health": {
+      "get": {
+        "description": "Lightweight operational and business health metrics.",
+        "operationId": "system_health_api_system_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "System Health"
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health_health_get",
@@ -4573,7 +4601,7 @@
     },
     "/ready": {
       "get": {
-        "description": "Readiness: DB reachable, schema at code head, outbox listener running.",
+        "description": "Readiness: DB reachable, schema at code head, outbox listener running, worker active.",
         "operationId": "ready_ready_get",
         "responses": {
           "200": {
