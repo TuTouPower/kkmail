@@ -53,6 +53,50 @@ function testPasswordPersisted0600() {
   fs.rmSync(dataRoot, { recursive: true, force: true })
 }
 
+function testPasswordOverridePersisted0600() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-pw-override-'))
+  const override = 'operator-supplied-pg-password'
+  const file = path.join(dataRoot, 'secrets', 'pg-password')
+  const originalOverride = process.env.KKMAIL_PG_PASSWORD
+  try {
+    process.env.KKMAIL_PG_PASSWORD = override
+    const mgr = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
+    assert.strictEqual(mgr.password(), override)
+    assert.strictEqual(fs.readFileSync(file, 'utf8').trim(), override)
+    if (process.platform !== 'win32') assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600)
+
+    delete process.env.KKMAIL_PG_PASSWORD
+    const nextLaunch = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
+    assert.strictEqual(nextLaunch.password(), override)
+  } finally {
+    if (originalOverride === undefined) delete process.env.KKMAIL_PG_PASSWORD
+    else process.env.KKMAIL_PG_PASSWORD = originalOverride
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
+function testPasswordOverrideDoesNotReplaceAnExistingSecret() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-pw-existing-'))
+  const file = path.join(dataRoot, 'secrets', 'pg-password')
+  try {
+    const existing = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') }).password()
+    const override = new PostgresManager({
+      dataRoot,
+      pgBinDir: path.join(dataRoot, 'missing-bin'),
+      password: 'temporary-override',
+    })
+
+    assert.strictEqual(override.password(), 'temporary-override')
+    assert.strictEqual(fs.readFileSync(file, 'utf8').trim(), existing)
+    assert.strictEqual(
+      new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') }).password(),
+      existing,
+    )
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
 function testEnsureDirsWritesMarker() {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-'))
   const mgr = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
@@ -304,6 +348,8 @@ testFallbackDataRootNotSharedTmp()
 testParsePgPort()
 testEnsureDirsWritesMarker()
 testPasswordPersisted0600()
+testPasswordOverridePersisted0600()
+testPasswordOverrideDoesNotReplaceAnExistingSecret()
 testHasBinariesCachesAndTimeout()
 testStopIdempotentNoThrowaway()
 testStopFailureAndRetry()

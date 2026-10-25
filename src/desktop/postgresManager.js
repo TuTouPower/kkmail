@@ -161,10 +161,18 @@ function PostgresManager(options = {}) {
   this._spawnSync = options.spawnSync || cp.spawnSync
 }
 
-/** Per-install random PG password persisted (0600) under the data root. */
+/** Per-install PG password persisted (0600); an override is saved only on first use. */
 PostgresManager.prototype.password = function password() {
-  if (this._passwordOverride) return this._passwordOverride
   const file = path.join(this.dataRoot, 'secrets', 'pg-password')
+  if (this._passwordOverride) {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    try {
+      fs.writeFileSync(file, this._passwordOverride + '\n', { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err
+    }
+    return this._passwordOverride
+  }
   try {
     const v = fs.readFileSync(file, 'utf8').trim()
     if (v) return v
