@@ -1,3 +1,5 @@
+import pytest
+
 from mail_core.search.index import count_messages, search_messages, search_messages_with_total
 
 
@@ -33,3 +35,20 @@ def test_search_escapes_like_metacharacters_only_for_ilike_branches():
         assert parameters["q"] == query
         assert parameters["like_q"] == r"\%\_\\x"
         assert statement.count("ESCAPE E'\\\\'") == 2
+
+
+@pytest.mark.parametrize(("limit", "expected"), [(0, 1), (-10, 1), (500, 200)])
+def test_search_messages_clamps_limit(limit, expected):
+    session = _Session()
+
+    search_messages(session, account_ids=None, query="term", limit=limit)
+
+    assert session.parameters[0]["limit"] == expected
+
+
+def test_search_messages_with_total_clamps_limit():
+    session = _Session()
+
+    assert search_messages_with_total(session, account_ids=None, query="term", limit=500) == ([], 0)
+
+    assert session.parameters[0]["limit"] == 200

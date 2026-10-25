@@ -95,6 +95,10 @@ def _escape_like_literal(query: str) -> str:
     return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _clamp_search_limit(limit: int) -> int:
+    return min(200, max(1, int(limit)))
+
+
 def _filters(query: str, account_ids: list[uuid.UUID] | None, folder_id: uuid.UUID | None) -> tuple[str, dict]:
     params: dict = {"q": query, "like_q": _escape_like_literal(query)}
     filters: list[str] = []
@@ -129,7 +133,7 @@ def search_messages(
     if not query.strip():
         return []
     scope_filter, params = _filters(query, account_ids, folder_id)
-    params.update(limit=limit, offset=max(0, offset))
+    params.update(limit=_clamp_search_limit(limit), offset=max(0, offset))
     rows = session.execute(
         sql_text(
             f"""
@@ -182,7 +186,7 @@ def search_messages_with_total(
     if not query.strip():
         return [], 0
     scope_filter, params = _filters(query, account_ids, folder_id)
-    params.update(limit=limit, offset=max(0, offset))
+    params.update(limit=_clamp_search_limit(limit), offset=max(0, offset))
     rows = session.execute(
         sql_text(
             f"""
