@@ -179,10 +179,10 @@ jobs:
           uv pip install --python .venv/bin/python --require-hashes -r requirements-ci.lock
 
       - name: Verify live backend OpenAPI schema
-        run: python scripts/export_openapi.py --check
+        run: .venv/bin/python scripts/export_openapi.py --check
 
       - name: Verify dependency locks consistency
-        run: python scripts/check_dep_locks.py --check
+        run: .venv/bin/python scripts/check_dep_locks.py --check
 
       - name: Start Dedicated Test Services
         run: |
@@ -197,7 +197,7 @@ jobs:
 
       - name: Run Full Stack E2E Suite
         run: |
-          python3 scripts/run_full_stack_e2e.py
+          .venv/bin/python scripts/run_full_stack_e2e.py
 
       - name: Upload Test Artifacts on Failure
         if: failure()
