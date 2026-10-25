@@ -217,13 +217,8 @@ def test_restore_blob_copy_failure_preserves_existing_file(tmp_path, monkeypatch
     dest_file.parent.mkdir(parents=True)
     dest_file.write_bytes(b"existing blob")
 
-    def fail_after_partial_copy(source, dest, length=0):
-        assert length > 0
-        dest.write(source.read(8))
-        raise OSError("simulated disk full")
-
-    monkeypatch.setattr(backup_package.shutil, "copyfileobj", fail_after_partial_copy)
-    with pytest.raises(OSError, match="simulated disk full"):
+    # Upgraded per D02: non-empty destination is rejected upfront to prevent overwrite
+    with pytest.raises(RuntimeError, match="non-empty target blobs dir"):
         restore_backup_package(
             package_dir,
             target_database_url="postgresql://restore:pw@127.0.0.1:5432/target",
@@ -355,7 +350,14 @@ def test_restore_backup_package_succeeds_offline_with_fake_postgres_tools(
     assert result.blobs_restored == 1
     assert (target_blobs / "aa" / "bb" / "message.blob").read_bytes() == b"offline blob payload"
     restore_args = json.loads(restore_record.read_text())
-    assert restore_args[:5] == ["--clean", "--if-exists", "--no-owner", "--no-privileges", "--dbname"]
+    # Upgraded per D02: remove --clean/--if-exists, enforce --exit-on-error --single-transaction
+    assert restore_args[:5] == [
+        "--exit-on-error",
+        "--single-transaction",
+        "--no-owner",
+        "--no-privileges",
+        "--dbname",
+    ]
     assert "target-pw" not in " ".join(restore_args)
 
 
@@ -1054,4 +1056,16 @@ def test_validate_restore_destination_matrix(tmp_path):
     valid_empty = tmp_path / "empty_blobs"
     valid_empty.mkdir()
     assert _validate_restore_destination(valid_empty) == valid_empty.resolve()
+
+
+def test_restore_database_identity_ignores_username_and_normalizes_aliases():
+    from mail_core.backup.package import _restore_database_identity
+
+    id1 = _restore_database_identity("postgresql://user_alice:pass1@localhost:5432/kkmail_db")
+    id2 = _restore_database_identity("postgresql+psycopg://user_bob:pass2@127.0.0.1:5432/kkmail_db")
+    id3 = _restore_database_identity("postgresql://postgres:admin@[::1]:5432/kkmail_db")
+
+    assert id1 == id2
+    assert id2 == id3
+    assert id1 == ("postgresql", "127.0.0.1", 5432, "kkmail_db")
 
