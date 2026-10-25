@@ -34,6 +34,17 @@ from mail_core.threading.rules import assign_thread_for_message
 
 log = logging.getLogger("mail_core.sync.delta")
 
+
+def _flag_patch_values(change: DeltaChange) -> dict[str, object]:
+    flags = dict(change.flags or {})
+    if not flags and change.meta is not None:
+        for field_name in ("is_read", "is_flagged"):
+            value = getattr(change.meta, field_name)
+            if value is not None:
+                flags[field_name] = value
+    return flags
+
+
 def _apply_flag_patches(
     session: Session,
     *,
@@ -46,9 +57,7 @@ def _apply_flag_patches(
 
     patches: list[tuple[str, dict]] = []
     for change in changes:
-        flags = dict(change.flags or {})
-        if change.meta is not None and not flags and change.meta.is_read is not None:
-            flags["is_read"] = change.meta.is_read
+        flags = _flag_patch_values(change)
         if flags:
             patches.append((change.remote_id, flags))
     if not patches:
@@ -129,9 +138,7 @@ def apply_delta_page(
             merged.pop(rid, None)
             pending_flags.pop(rid, None)
         elif change.kind == "flag":
-            patch = dict(change.flags)
-            if not patch and change.meta is not None and change.meta.is_read is not None:
-                patch["is_read"] = change.meta.is_read
+            patch = _flag_patch_values(change)
             pending_flags.setdefault(rid, {}).update(patch)
         elif change.kind == "upsert" and change.meta is not None:
             newer = change.meta
