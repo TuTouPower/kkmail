@@ -97,6 +97,43 @@ function testPasswordOverrideDoesNotReplaceAnExistingSecret() {
   }
 }
 
+function testPasswordCreationRaceUsesFirstWriterValue() {
+  const originalOverride = process.env.KKMAIL_PG_PASSWORD
+  delete process.env.KKMAIL_PG_PASSWORD
+  try {
+    for (const password of [undefined, 'losing-override']) {
+      const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-pw-race-'))
+      const file = path.join(dataRoot, 'secrets', 'pg-password')
+      const originalWriteFileSync = fs.writeFileSync
+      try {
+        const mgr = new PostgresManager({
+          dataRoot,
+          pgBinDir: path.join(dataRoot, 'missing-bin'),
+          password,
+        })
+        fs.writeFileSync = function simulateConcurrentCreate(filePath, data, options) {
+          if (filePath === file && options && options.flag === 'wx') {
+            originalWriteFileSync(filePath, 'first-writer-password\n', options)
+            const error = new Error('file already exists')
+            error.code = 'EEXIST'
+            throw error
+          }
+          return originalWriteFileSync.apply(this, arguments)
+        }
+
+        assert.strictEqual(mgr.password(), 'first-writer-password')
+        assert.strictEqual(fs.readFileSync(file, 'utf8').trim(), 'first-writer-password')
+      } finally {
+        fs.writeFileSync = originalWriteFileSync
+        fs.rmSync(dataRoot, { recursive: true, force: true })
+      }
+    }
+  } finally {
+    if (originalOverride === undefined) delete process.env.KKMAIL_PG_PASSWORD
+    else process.env.KKMAIL_PG_PASSWORD = originalOverride
+  }
+}
+
 function testEnsureDirsWritesMarker() {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-'))
   const mgr = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
@@ -350,6 +387,7 @@ testEnsureDirsWritesMarker()
 testPasswordPersisted0600()
 testPasswordOverridePersisted0600()
 testPasswordOverrideDoesNotReplaceAnExistingSecret()
+testPasswordCreationRaceUsesFirstWriterValue()
 testHasBinariesCachesAndTimeout()
 testStopIdempotentNoThrowaway()
 testStopFailureAndRetry()

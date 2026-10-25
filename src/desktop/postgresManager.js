@@ -164,14 +164,26 @@ function PostgresManager(options = {}) {
 /** Per-install PG password persisted (0600); an override is saved only on first use. */
 PostgresManager.prototype.password = function password() {
   const file = path.join(this.dataRoot, 'secrets', 'pg-password')
+  const persistPasswordOnce = value => {
+    try {
+      fs.writeFileSync(file, value + '\n', { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+      return value
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err
+      const persisted = fs.readFileSync(file, 'utf8').trim()
+      if (!persisted) throw new Error('PostgreSQL password file is empty after concurrent creation')
+      return persisted
+    }
+  }
   if (this._passwordOverride) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     try {
-      fs.writeFileSync(file, this._passwordOverride + '\n', { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+      fs.accessSync(file, fs.constants.F_OK)
+      return this._passwordOverride
     } catch (err) {
-      if (err.code !== 'EEXIST') throw err
+      if (err.code !== 'ENOENT') throw err
     }
-    return this._passwordOverride
+    return persistPasswordOnce(this._passwordOverride)
   }
   try {
     const v = fs.readFileSync(file, 'utf8').trim()
@@ -179,8 +191,7 @@ PostgresManager.prototype.password = function password() {
   } catch (_) { /* create below */ }
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const v = crypto.randomBytes(24).toString('hex')
-  fs.writeFileSync(file, v + '\n', { encoding: 'utf8', mode: 0o600 })
-  return v
+  return persistPasswordOnce(v)
 }
 
 PostgresManager.prototype.databaseUrl = function databaseUrl() {
