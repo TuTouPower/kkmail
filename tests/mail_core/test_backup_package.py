@@ -501,6 +501,44 @@ def test_pg_dump_failure_raises_without_stub(tmp_path, monkeypatch):
         )
 
 
+@pytest.mark.parametrize("existing_output", [False, True])
+def test_failed_plain_backup_dump_keeps_partial_file_in_staging_only(
+    tmp_path, monkeypatch, existing_output
+):
+    out = tmp_path / "plain-backup"
+    if existing_output:
+        out.mkdir()
+        (out / "keep.txt").write_text("previous package", encoding="utf-8")
+
+    monkeypatch.setattr(
+        backup_package.shutil,
+        "which",
+        lambda name: "/fake/pg_dump" if name == "pg_dump" else None,
+    )
+
+    def fail_after_partial_dump(command, **_kwargs):
+        dump_path = Path(command[command.index("--file") + 1])
+        dump_path.write_bytes(b"partial dump")
+        raise subprocess.CalledProcessError(1, command, stderr=b"simulated pg_dump failure")
+
+    monkeypatch.setattr(backup_package.subprocess, "run", fail_after_partial_dump)
+    with pytest.raises(backup_package.PgDumpError, match="pg_dump failed"):
+        create_backup_package(
+            out,
+            include_blobs=False,
+            database_url_override="postgresql://backup:pw@127.0.0.1:5432/source",
+            encrypt=False,
+            allow_dump_stub=False,
+        )
+
+    if existing_output:
+        assert (out / "keep.txt").read_text(encoding="utf-8") == "previous package"
+        assert not (out / "postgres.dump").exists()
+    else:
+        assert not out.exists()
+    assert not list(tmp_path.glob(".staging_plain_*"))
+
+
 def test_missing_pg_dump_raises_a_dump_specific_error(tmp_path, monkeypatch):
     from mail_core.backup.package import PgDumpError, _pg_dump_to
 

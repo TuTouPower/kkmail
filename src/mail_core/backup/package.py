@@ -371,24 +371,49 @@ def create_backup_package(
     do_encrypt = True if encrypt is None else encrypt
 
     if not do_encrypt:
-        _make_private_dir(out)
-        manifest = _build_plain_dir(
-            out, url=url, root=root, include_blobs=include_blobs, allow_dump_stub=allow_dump_stub
-        )
-        man_path = out / _MANIFEST_FILENAME
-        man_path.write_text(json.dumps(asdict(manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        _set_private_file(man_path)
-        sha_path = out / _MANIFEST_CHECKSUM_FILENAME
-        sha_path.write_text(f"{_sha256_file(man_path)}  {_MANIFEST_FILENAME}\n", encoding="utf-8")
-        _set_private_file(sha_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        plain_stage = out.parent / f".staging_plain_{out.name}_{uuid.uuid4().hex}"
+        if plain_stage.is_symlink():
+            raise RuntimeError(f"refusing plain staging dir as symlink: {plain_stage}")
+        _make_private_dir(plain_stage)
+        try:
+            manifest = _build_plain_dir(
+                plain_stage,
+                url=url,
+                root=root,
+                include_blobs=include_blobs,
+                allow_dump_stub=allow_dump_stub,
+            )
+            man_path = plain_stage / _MANIFEST_FILENAME
+            man_path.write_text(
+                json.dumps(asdict(manifest), indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            _set_private_file(man_path)
+            sha_path = plain_stage / _MANIFEST_CHECKSUM_FILENAME
+            sha_path.write_text(
+                f"{_sha256_file(man_path)}  {_MANIFEST_FILENAME}\n",
+                encoding="utf-8",
+            )
+            _set_private_file(sha_path)
 
-        # Clean up any stale sealed artifacts from previous runs
-        for stale_name in ("backup.kkbak", "backup.kkbak.sha256"):
-            stale_f = out / stale_name
-            if stale_f.exists():
-                stale_f.unlink()
-        log.info("backup package written to %s (plaintext)", out)
-        return out
+            old_dir = out.parent / f".old_{out.name}_{uuid.uuid4().hex}"
+            if out.exists():
+                if out.is_symlink():
+                    raise RuntimeError(f"refusing existing destination as symlink: {out}")
+                out.rename(old_dir)
+            try:
+                plain_stage.rename(out)
+                if old_dir.exists():
+                    _safe_rmtree(old_dir)
+            except Exception:
+                if old_dir.exists():
+                    old_dir.rename(out)
+                raise
+            log.info("backup package written to %s (plaintext)", out)
+            return out
+        finally:
+            _safe_rmtree(plain_stage)
 
     key, version = load_backup_key()
     _ensure_backup_key_separate_from_blobs(key)
