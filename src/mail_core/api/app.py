@@ -66,16 +66,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-_forwarded_allow_ips = (os.environ.get("MAIL_CORE_FORWARDED_ALLOW_IPS") or "").strip()
-if _forwarded_allow_ips:
+def _install_proxy_headers(app: FastAPI, forwarded_allow_ips: str) -> None:
+    trusted = [host.strip() for host in forwarded_allow_ips.split(",") if host.strip()]
+    if not trusted:
+        return
     try:
         from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-
-        trusted = [h.strip() for h in _forwarded_allow_ips.split(",") if h.strip()]
-        if trusted:
-            app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
     except ImportError:
-        pass
+        logging.getLogger("mail_core.api").error(
+            "MAIL_CORE_FORWARDED_ALLOW_IPS is set but uvicorn ProxyHeadersMiddleware could not be imported; "
+            "forwarded headers remain disabled"
+        )
+        return
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted)
+
+
+_forwarded_allow_ips = (os.environ.get("MAIL_CORE_FORWARDED_ALLOW_IPS") or "").strip()
+_install_proxy_headers(app, _forwarded_allow_ips)
 
 app.add_middleware(
     CORSMiddleware,

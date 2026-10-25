@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from types import ModuleType
@@ -46,3 +47,19 @@ def test_main_proxy_header_options_use_trusted_hosts_and_warn_without_them(monke
         "192.0.2.10",
     ])
     assert trusted_hosts_at_run[-1] == "192.0.2.10"
+
+
+def test_api_logs_when_proxy_headers_middleware_import_fails(monkeypatch, caplog):
+    from fastapi import FastAPI
+
+    from mail_core.api.app import _install_proxy_headers
+
+    monkeypatch.setitem(sys.modules, "uvicorn.middleware.proxy_headers", None)
+    app = FastAPI()
+    caplog.set_level(logging.ERROR, logger="mail_core.api")
+
+    _install_proxy_headers(app, "192.0.2.10")
+
+    assert "MAIL_CORE_FORWARDED_ALLOW_IPS is set" in caplog.text
+    assert "ProxyHeadersMiddleware could not be imported" in caplog.text
+    assert app.user_middleware == []
