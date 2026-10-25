@@ -1,11 +1,12 @@
 # kkmail 审阅问题与 p045–p052 修复计划
 
 - 制定时间：`2026-10-26T01:10:44+08:00`。
-- 代码核对基准：`55a54fb3fb37460671cb3b9bb07a69c08131390f`。相对审阅终点 `6f6605b6`，新增提交只调整 pending 文档，相关生产实现未变化。
+- 初版核对基准：`55a54fb3fb37460671cb3b9bb07a69c08131390f`；技术方案补充核对基准：`60366915c5efe5b0eeb7c7303835f2c58883faaa`。相对审阅终点 `6f6605b6`，新增提交只调整 pending/review 文档，相关生产实现未变化。
 - 来源：[审阅报告](review_report.md)、[验证证据](review_evidence.md)、[p045](../../pending/todo/p045_sidebar_search_click_outside_auto_hide.md)、[p046](../../pending/todo/p046_sync_button_spin_and_remove_banner.md)、[p047](../../pending/todo/p047_incoming_mail_sync_latency.md)、[p048](../../pending/todo/p048_message_reader_already_archived_race.md)、[p049](../../pending/todo/p049_settings_header_cleanup_and_sidebar_toggle_relocate.md)、[p050](../../pending/todo/p050_sidebar_settings_button_background_style.md)、[p051](../../pending/todo/p051_sidebar_account_folder_order_and_indent.md)、[p052](../../pending/todo/p052_ui_reference_overlay_prod_and_shortcut_setting.md)。
 - 目标：修复计划内行为，恢复相关门禁，完成隔离验证后统一合入。目标版本尚未指定。
 - 状态：**计划，未实施**。本次授权仅为编写计划，不创建分支/worktree，不运行修复，不创建 commit 或 merge。
 - 执行方式：按用户明确要求采用**直接 Git 分支、独立 worktree、多 Agent、多 commit**。不使用 task、attempt、task-run、task-work、task-integrate 流程，不创建 task/spec 目录，不套用单 task 一个实现 commit 的限制。
+- 详细技术方案：[technical_design.md](technical_design.md)。**两份文件共同构成完整修复计划**：本文规定顺序、写权、commit 和合入；技术设计规定代码算法、函数/DTO、表与迁移、失败恢复、测试改造和文档修改。实施与 review 必须同时核对，不能只按排期表开工。
 
 ## 1. 范围与完成定义
 
@@ -138,7 +139,7 @@ F10 与 F11 **不并行改代码**：二者都修改设置页，可能修改 App
 |共享区域|可能涉及的包|处理方式|
 |---|---|---|
 |`sync/delta.py` 的 provider 错误、任务后继及统计|F01、F03、F05、F10|分别安排波次 1、2、3、4，避免日志修复与队列修复同波改同一生产文件|
-|`sync/jobs.py`、`worker/handlers.py`、delta 调度|F03、F05、F08、F10|按波次串行；F10 基于已合入 F03，禁止重写回旧标记语义|
+|`sync/jobs.py`、`worker/handlers.py`、delta 调度|F03、F05、F08、F10|F03/F10 分波修改公共队列；波次3的 F05/F08 只接入已稳定 helper，不同时编辑 jobs.py/handlers.py。F10 基于已合入 F03，禁止重写回旧标记语义|
 |`worker/main.py`|F06、F10|F06 先行；F10 继承独立心跳和退出清理|
 |`Sidebar.tsx`、`Sidebar.test.tsx`、`index.css`|F04、F09、F10、F11|生产样式与导航变更串行；新测试按场景单独文件减少同文件冲突|
 |`App.tsx`、`SettingsModal.tsx`、`mailStore.ts`、UI registry|F09、F10、F11|后两个包不得从旧基线开发；F11 最后整合入口及偏好|
@@ -183,7 +184,7 @@ F10 与 F11 **不并行改代码**：二者都修改设置页，可能修改 App
 
 ### F00 基线恢复与测试分类
 
-**负责**：I；开始于 B0，结束产生 S0。当前仅 review 目录未跟踪；正式执行前先将用户指定的审阅资料纳入单独文档 commit，不能混入后续生产修复。
+**负责**：I；开始于 B0，结束产生 S0。初版审阅资料已在 `60366915` 纳入文档 commit；正式执行前核对本次技术补充是否已经入库。尚未入库的审阅资料单独提交，不能混入后续生产修复。
 
 1. 复核原始 7 项后端失败是否仍存在，按 [验证证据](review_evidence.md) 分类，而非一律当成生产缺陷。
 2. C01 从当前后端导出 OpenAPI 并生成前端类型，提交 JSON/TS 的真实差异；此步只关闭初始 P2-08 漂移，不修 P2-05 鉴权。
@@ -220,7 +221,7 @@ F10 与 F11 **不并行改代码**：二者都修改设置页，可能修改 App
 **C02 源库身份与恢复事务**：
 
 1. URL 静态归一化移除用户名作为数据库身份维度，继续拒绝身份改写 query、多 host 和不完整 URL。
-2. 只读连接源、目标，验证实际 PostgreSQL cluster `system_identifier` 与 database OID/名称。通过同一地址的不同角色、DNS/loopback/代理别名不能绕过；权限不足、源不可达或身份无法证明时拒绝进入破坏阶段，不回退为“字符串不同即可”。
+2. 在线源与目标只读查询实际 PostgreSQL cluster `system_identifier` 与 database OID/名称，不允许不同角色、DNS/loopback/代理别名绕过。为支持源离线灾难恢复，新加密包在认证内层 manifest 保存真实源身份；源离线时以该身份与可独立查询的目标身份验证。旧包/普通 checksum 不能充当离线源身份权威；证据不足或权限不足拒绝恢复，不回退为“字符串不同即可”。具体包读取矩阵见技术设计 D02。
 3. `pg_control_system()` 等身份查询的实际权限在目标 PG16 环境验证；仅允许提供必要只读执行权限，不要求扩大为 superuser。克隆实例可能保留相同 system identifier，默认保守拒绝身份不明目标，不能为了演练成功减弱判定。
 4. 默认要求新建空目标数据库，移除常规恢复对 `--clean` 的依赖；真实演练当前即创建新库。校验目标不含业务对象后，以 `pg_restore --exit-on-error --single-transaction --no-owner --no-privileges` 恢复，确认参数与实际二进制版本匹配。
 5. 身份预检和进程启动之间仍存在目标被运维切换的竞态；执行时目标必须由操作者独占，恢复过程持有该目标的可证明所有权，禁止边运行边改连接目标。此约束写进指南和测试，不声称只读查询能抵御恶意 DBA 同时换库。
@@ -483,6 +484,8 @@ integration 分支构建期间不冻结用户其他工作。如果 main 出现�
 - 数据库已经升级：代码 revert 不等于数据库回退；按 F07/F10 迁移演练结果执行。恢复备份、降级或清理数据不包含在普通 Git 回退授权中。
 
 ## 8. 执行记录与最终交付
+
+技术实施依据为 [详细技术设计 D00–D12](technical_design.md)。各包的交付记录必须逐项回答：改了哪些生产函数；哪些字段/状态/接口发生变化；如何证明竞争或失败路径正确；新增/替换哪些测试以及实际 runner 是否收集；哪些长期文档需要同步。D12 列明迁移顺序、旧测试处置及逐文件文档清单；不能以“补测试、更新文档”代替具体交付。
 
 未来真正执行时，在本目录追加以下文档；本次不预填不存在的 SHA/PASS：
 
