@@ -260,7 +260,10 @@ def urllib_json_request(
     """Generic JSON HTTP for Gmail/Graph API calls (stdlib).
 
     Maps 404/410 → ``CursorInvalidError`` only for History / delta endpoints.
-    Retries transient 503/504 errors and network/TLS dropouts for GET/HEAD only.
+    Retries transient 503/504 errors and network/TLS dropouts for GET/HEAD only,
+    with up to 3 retries (4 attempts total). Delays increase linearly by one
+    second per retry unless a positive Retry-After header overrides the delay
+    for 503/504 responses (capped at 10 seconds).
     Other methods are never replayed; ambiguous 5xx/transport outcomes raise
     ``AmbiguousOutcomeError``.
     """
