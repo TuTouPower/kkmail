@@ -90,6 +90,25 @@ def _legacy_group_target_names(legacy_groups: list[sqlite3.Row]) -> dict[int, st
     }
 
 
+def _update_account_from_legacy(
+    account: Account,
+    *,
+    provider: str,
+    credential_ref: str,
+    display_name: str,
+    config: dict[str, object],
+    group_id: uuid.UUID | None,
+    sync_enabled: bool,
+) -> None:
+    """Converge source-owned fields while preserving runtime status and sidebar order."""
+    account.provider = provider
+    account.credential_ref = credential_ref
+    account.display_name = display_name
+    account.config = config
+    account.group_id = group_id
+    account.sync_enabled = sync_enabled
+
+
 class MigrationError(RuntimeError):
     """Base exception for migration failures."""
 
@@ -494,6 +513,15 @@ def migrate(sqlite_path: Path, target_url: str) -> None:
                 else:
                     acc_id = existing.id
                     account_id_map[a["id"]] = acc_id
+                    _update_account_from_legacy(
+                        existing,
+                        provider=provider,
+                        credential_ref=ref,
+                        display_name=a["remark"] or email_norm,
+                        config=cfg,
+                        group_id=group_id,
+                        sync_enabled=bool(a["status"] == "active"),
+                    )
 
                 save_json_secret(cred_store, ref, creds)
 
