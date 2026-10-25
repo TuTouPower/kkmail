@@ -45,10 +45,13 @@ def test_sync_message_body_only_enqueues_high_priority_archive(monkeypatch):
     )
     message = SimpleNamespace(account_id=account_id, remote_id="verified-remote-id")
     session = Mock()
+    # Current production reads the Message via session.get but loads the
+    # archive state via session.scalar(select(...).with_for_update()) so
+    # the claim row is locked; the fake must serve both access paths.
     session.get.side_effect = lambda model, _message_id: {
         Message: message,
-        MessageArchiveState: state,
     }.get(model)
+    session.scalar.side_effect = lambda _statement: state
 
     class SessionFactory:
         def __enter__(self):
@@ -65,7 +68,12 @@ def test_sync_message_body_only_enqueues_high_priority_archive(monkeypatch):
 
     result = message_details.sync_message_body(message_id)
 
-    assert result == job_id
+    # sync_message_body now returns a SyncBodyResult instead of the bare
+    # job id; the contract asserted here is the same (queued job for this
+    # message), expressed through the current return type.
+    assert result.message_id == message_id
+    assert result.job_id == job_id
+    assert result.status == "queued"
     assert state.state == ArchiveState.ARCHIVE_PENDING.value
     assert state.priority == 0
     enqueue.assert_called_once()
@@ -82,7 +90,15 @@ def test_sync_body_route_returns_accepted_job_contract(monkeypatch):
 
     message_id = uuid.uuid4()
     job_id = uuid.uuid4()
-    monkeypatch.setattr(mail, "sync_message_body", lambda _message_id: job_id)
+    # The route now consumes a SyncBodyResult (status/job_id/message_id),
+    # not a bare job UUID; the fake returns the current production type.
+    monkeypatch.setattr(
+        mail,
+        "sync_message_body",
+        lambda _message_id: message_details.SyncBodyResult(
+            message_id=_message_id, job_id=job_id, status="queued"
+        ),
+    )
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
 
     response = client.post(f"/api/mail/messages/{message_id}/sync-body")

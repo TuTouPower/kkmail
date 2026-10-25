@@ -13,7 +13,6 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
-from sqlalchemy import select
 
 from mail_core.api import sse as sse_mod
 from mail_core.api.app import app
@@ -21,7 +20,7 @@ from mail_core.mail.domain.enums import OutboxEventType
 from mail_core.mail.storage import OutboxEvent
 from mail_core.realtime.dispatcher import SSE_STREAM_CLOSE
 from mail_core.realtime import events as events_mod
-from mail_core.realtime.outbox import fetch_since, prune_dispatched
+from mail_core.realtime.outbox import fetch_since, prune_published
 from mail_core.security.auth import AuthPrincipal
 from tests.mail_core.conftest import TEST_API_KEY
 
@@ -82,7 +81,14 @@ def test_isolated_sse_stream_ends_after_resync_hint(monkeypatch, queue_size):
 
     dispatcher = FakeDispatcher()
     monkeypatch.setattr(sse_mod, "get_dispatcher", lambda: dispatcher)
-    monkeypatch.setattr(sse_mod, "_build_replay", lambda *_args, **_kwargs: sse_mod._ReplayPlan([], 0))
+    # _ReplayPlan now requires an explicit cursor_seq (design §11).
+    monkeypatch.setattr(
+        sse_mod,
+        "_build_replay",
+        lambda *_args, **_kwargs: sse_mod._ReplayPlan(
+            frames=[], cursor=f"v2:{uuid.uuid4()}:0", cursor_seq=0
+        ),
+    )
 
     class FakeRequest:
         async def is_disconnected(self):
@@ -94,10 +100,15 @@ def test_isolated_sse_stream_ends_after_resync_hint(monkeypatch, queue_size):
             FakeRequest(), last_event_id=None, after=None, account_id=None,
             principal=AuthPrincipal(via="api_key"),
         )
+        # Consume the controllable body iterator directly with bounded
+        # waits, and always close it so the SSE slot is returned (§11).
         frames = response.body_iterator
-        hint = await anext(frames)
-        with pytest.raises(StopAsyncIteration):
-            await anext(frames)
+        try:
+            hint = await asyncio.wait_for(anext(frames), timeout=5)
+            with pytest.raises(StopAsyncIteration):
+                await asyncio.wait_for(anext(frames), timeout=5)
+        finally:
+            await frames.aclose()
         assert sse_mod._sse_active == before
         assert dispatcher.unsubscribed == [queue]
         return hint
@@ -111,9 +122,18 @@ def test_isolated_sse_stream_ends_after_resync_hint(monkeypatch, queue_size):
     [("not-an-int", None), ("-1", None), (None, -1)],
 )
 def test_malformed_or_negative_replay_cursors_emit_resync_hint(monkeypatch, last_event_id, after):
+    # Whole-test replacement (design §9.2 / §11): the pre-v2 protocol
+    # passed integer cursors plus a `malformed` flag to _build_replay and
+    # emitted reason="malformed_last_event_id". The current protocol
+    # passes the raw cursor string through to _build_replay(raw_cursor,
+    # account_id) and answers any unparseable / non-v2 cursor with a
+    # resync hint whose reason is "epoch_mismatch". The behavioural
+    # contract — a malformed or negative cursor yields exactly one
+    # resync hint and the stream then ends — is unchanged.
     captured = {}
     queue = asyncio.Queue(maxsize=2)
     queue.put_nowait(SSE_STREAM_CLOSE)
+    head_cursor = f"v2:{uuid.uuid4()}:0"
 
     class FakeDispatcher:
         def subscribe(self, **_kwargs):
@@ -126,11 +146,12 @@ def test_malformed_or_negative_replay_cursors_emit_resync_hint(monkeypatch, last
         async def is_disconnected(self):
             return False
 
-    def build_replay(cursor, account_id, *, malformed):
-        captured.update(cursor=cursor, account_id=account_id, malformed=malformed)
+    def build_replay(cursor, account_id):
+        captured.update(cursor=cursor, account_id=account_id)
         return sse_mod._ReplayPlan(
-            [(0, "client.resync_hint", {"reason": "malformed_last_event_id"})],
-            0,
+            frames=[(head_cursor, "client.resync_hint", {"reason": "epoch_mismatch"})],
+            cursor=head_cursor,
+            cursor_seq=0,
         )
 
     monkeypatch.setattr(sse_mod, "get_dispatcher", lambda: FakeDispatcher())
@@ -141,17 +162,34 @@ def test_malformed_or_negative_replay_cursors_emit_resync_hint(monkeypatch, last
                 FakeRequest(), last_event_id=last_event_id, after=after, account_id=None,
                 principal=AuthPrincipal(via="api_key"),
             )
-            return [frame async for frame in response.body_iterator]
+            # Bounded, explicitly closed consumption of the body
+            # iterator (§11); the slot must be returned afterwards.
+            frames_iter = response.body_iterator
+            frames = []
+            try:
+                while True:
+                    try:
+                        frames.append(await asyncio.wait_for(anext(frames_iter), timeout=5))
+                    except StopAsyncIteration:
+                        break
+            finally:
+                await frames_iter.aclose()
+            return frames
 
         frames = asyncio.run(drain_stream())
+        assert sse_mod._sse_active == 0
 
-    assert captured == {"cursor": 0, "account_id": None, "malformed": True}
+    assert captured == {"cursor": last_event_id or after, "account_id": None}
     assert len(frames) == 1
-    assert "malformed_last_event_id" in frames[0]
+    assert "client.resync_hint" in frames[0]
+    assert "epoch_mismatch" in frames[0]
 
 
 @_requires_db
 def test_malformed_last_event_id_emits_resync_hint():
+    # Current v2 protocol semantics (design §9.2): a Last-Event-ID that is
+    # not a v2:epoch:seq cursor is answered with reason="epoch_mismatch"
+    # (the pre-v2 "malformed_last_event_id" reason no longer exists).
     from mail_core.db.session import get_session_factory
 
     Session = get_session_factory()
@@ -164,25 +202,29 @@ def test_malformed_last_event_id_emits_resync_hint():
         buf = ""
         for chunk in resp.iter_text():
             buf += chunk
-            if "malformed_last_event_id" in buf:
+            if "epoch_mismatch" in buf:
                 break
             if buf.count("event:") >= 3:
                 break
         assert "client.resync_hint" in buf
-        assert "malformed_last_event_id" in buf
+        assert "epoch_mismatch" in buf
 
 
 @_requires_db
 def test_cursor_ahead_of_head_emits_resync_hint():
+    # Replay cursors are v2:epoch:seq over publication_seq (design §9.2);
+    # a v2 cursor ahead of the publication head emits cursor_ahead.
     from mail_core.db.session import get_session_factory
+    from mail_core.realtime.outbox import publication_head
 
     Session = get_session_factory()
     with Session() as session:
         session.add(OutboxEvent(event_type="sync.progress", payload={}))
         session.commit()
-        head = session.scalar(select(OutboxEvent.id).order_by(OutboxEvent.id.desc()))
+        epoch, head_seq = publication_head(session)
 
-    with _client().stream("GET", "/api/events", headers={"Last-Event-ID": str(head + 1000)}) as resp:
+    ahead_cursor = f"v2:{epoch}:{head_seq + 1000}"
+    with _client().stream("GET", "/api/events", headers={"Last-Event-ID": ahead_cursor}) as resp:
         buf = ""
         for chunk in resp.iter_text():
             buf += chunk
@@ -218,31 +260,46 @@ def test_account_filtered_replay_includes_global_null_account():
 
 
 @_requires_db
-def test_prune_dispatched_removes_old_keeps_undispatched():
+def test_prune_published_removes_old_keeps_unpublished():
+    # Whole-test replacement (design §9.2): retention no longer keys on
+    # the removed dispatched_at column / prune_dispatched name. The
+    # current prune_published deletes the expired continuous prefix of
+    # rows ordered by publication_seq (by published_at), never deletes
+    # unpublished rows, and advances pruned_through_seq with the prefix.
     from mail_core.db.session import get_session_factory
+    from mail_core.realtime.outbox import pruned_through_seq
+    from mail_core.realtime.publication import get_publication_state
 
     Session = get_session_factory()
     with Session() as session:
-        old = OutboxEvent(event_type="sync.progress", payload={"old": True})
-        fresh = OutboxEvent(event_type="sync.progress", payload={"fresh": True})
+        state = get_publication_state(session)
+        base_seq = int(state.next_seq)
+        now = datetime.now(timezone.utc)
+        old = OutboxEvent(
+            event_type="sync.progress", payload={"old": True},
+            publication_seq=base_seq, published_at=now - timedelta(days=30),
+        )
+        fresh = OutboxEvent(
+            event_type="sync.progress", payload={"fresh": True},
+            publication_seq=base_seq + 1, published_at=now - timedelta(hours=1),
+        )
         pending = OutboxEvent(event_type="sync.progress", payload={"pending": True})
         session.add_all([old, fresh, pending])
-        session.flush()
-        now = datetime.now(timezone.utc)
-        old.dispatched_at = now - timedelta(days=30)
-        fresh.dispatched_at = now - timedelta(hours=1)
-        # pending.dispatched_at stays None
+        state.next_seq = base_seq + 2
         session.commit()
         old_id, fresh_id, pending_id = old.id, fresh.id, pending.id
 
     with Session() as session:
-        n = prune_dispatched(session, older_than=timedelta(days=7), limit=1000)
+        n = prune_published(session, older_than=timedelta(days=7), limit=1000)
         session.commit()
-        assert n >= 1
+        # Only the old row is an expired prefix: the fresh row behind it
+        # blocks any later deletion, and the unpublished row is immune.
+        assert n == 1
         assert session.get(OutboxEvent, old_id) is None
         assert session.get(OutboxEvent, fresh_id) is not None
         assert session.get(OutboxEvent, pending_id) is not None
-        assert session.get(OutboxEvent, pending_id).dispatched_at is None
+        assert session.get(OutboxEvent, pending_id).publication_seq is None
+        assert pruned_through_seq(session) == base_seq
 
 
 
@@ -309,7 +366,14 @@ def test_sse_slot_is_reserved_before_stream_response_is_created(monkeypatch):
 
 @_requires_db
 def test_build_replay_runs_without_event_loop():
-    """Regression: replay helper is sync and safe for asyncio.to_thread."""
-    plan = sse_mod._build_replay(0, None, malformed=False)
+    """Regression: replay helper is sync and safe for asyncio.to_thread.
+
+    Adapted to the v2 protocol: _build_replay takes the raw cursor
+    (str | None) — the integer cursor and the removed `malformed` kwarg
+    are gone — and returns a plan whose cursor is a v2:epoch:seq string
+    with an explicit cursor_seq.
+    """
+    plan = sse_mod._build_replay(None, None)
     assert isinstance(plan.frames, list)
-    assert plan.cursor >= 0
+    assert plan.cursor.startswith("v2:")
+    assert plan.cursor_seq >= 0

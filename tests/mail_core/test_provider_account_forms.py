@@ -18,7 +18,12 @@ from mail_core.providers.factory import build_provider
 def test_microsoft_imap_is_rejected_before_connecting(email, host):
     with pytest.raises(ValueError, match='Microsoft'):
         validate_connection(email, 'imap', {'imap_host': host}, {'password': 'test-password'})
-    account = SimpleNamespace(email=email, provider='imap', config={'imap_host': host}, credential_ref='test')
+    # The fake account must carry an `id` like a real Account row:
+    # build_provider's fetch-timeout lookup runs before the Microsoft
+    # rejection in unit mode (no DB), and its warning path logs
+    # account.id — without it the warning itself raised AttributeError
+    # and masked the rejection this test asserts.
+    account = SimpleNamespace(id=None, email=email, provider='imap', config={'imap_host': host}, credential_ref='test')
     with pytest.raises(ValueError, match='Microsoft'):
         build_provider(account, DictCredentialStore({'test': json.dumps({'password': 'test-password'})}))
 

@@ -60,11 +60,26 @@ def test_account_creation_normalizes_email_before_persistence(monkeypatch):
 
 
 def test_email_migration_is_the_single_linear_head():
+    # Replacement for the former assertion that pinned 20261025_0021 as
+    # the forever head: design §9.1 keeps 0021 as a historical migration,
+    # while the head moves with every new linear revision. This test now
+    # derives the single head from the migration graph and asserts 0021 is
+    # an ancestor in that one linear chain, so the next migration does not
+    # break it again.
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory(str(MIGRATION_PATH.parent.parent))
 
-    assert script.get_heads() == ["20261025_0021"]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    chain = list(script.walk_revisions("base", heads[0]))
+    chain_ids = [revision.revision for revision in chain]
+    assert len(chain_ids) == len(set(chain_ids))
+    # The chain is strictly linear: each revision points at the next one.
+    for revision, next_revision in zip(chain, chain[1:]):
+        assert revision.down_revision == next_revision.revision
+    assert chain[-1].down_revision is None
+    assert "20261025_0021" in chain_ids
     assert script.get_revision("20261025_0021").down_revision == "20261025_0020"
 
 

@@ -82,12 +82,23 @@ def test_gc_dry_run_reports_would_delete_not_deleted(tmp_path, monkeypatch):
 
 
 def test_dispatch_queue_full_does_not_mark_and_sends_resync_hint():
-    """Slow SSE consumer: drop must not mark_dispatched; client gets resync_hint."""
+    """Slow SSE consumer: drop must not advance dispatch; client gets resync_hint.
+
+    Whole-test replacement (design §9.2 / §11): the G-part-2 outbox
+    rewrite removed fetch_undispatched/mark_dispatched/dispatched_at —
+    the dispatcher now commits publication_seq before broadcast and
+    "marked dispatched" is the local _last_dispatched_seq cursor. The
+    behaviour contract is preserved: a queue-full event is not counted
+    as dispatched, the local cursor does not advance past it, and the
+    isolated consumer receives a resync hint plus the close sentinel.
+    """
+    from types import SimpleNamespace
+
+    epoch = str(uuid.uuid4())
 
     class _FakeSession:
         def __init__(self):
             self.committed = False
-            self.marked = None
 
         def __enter__(self):
             return self
@@ -98,22 +109,21 @@ def test_dispatch_queue_full_does_not_mark_and_sends_resync_hint():
         def commit(self):
             self.committed = True
 
-    class _Row:
-        def __init__(self, eid):
-            self.id = eid
-            self.event_type = "sync.progress"
-            self.account_id = None
-            self.payload = {"n": 1}
-            self.created_at = datetime.now(timezone.utc)
-
     fake = _FakeSession()
-    row = _Row(42)
-    marked_ids = []
+    row = SimpleNamespace(
+        id=10042,
+        publication_seq=42,
+        event_type="sync.progress",
+        account_id=None,
+        payload={"n": 1},
+        created_at=datetime.now(timezone.utc),
+    )
 
     def fake_factory():
         return lambda: fake
 
     dispatcher = OutboxDispatcher()
+    dispatcher._last_dispatched_seq = 41
 
     async def _setup_and_dispatch():
         q = dispatcher.subscribe()
@@ -122,21 +132,18 @@ def test_dispatch_queue_full_does_not_mark_and_sends_resync_hint():
             q.put_nowait({"id": i, "event": "pad", "data": {}, "account_id": None, "created_at": ""})
         with (
             patch("mail_core.db.session.get_session_factory", fake_factory),
-            patch("mail_core.realtime.dispatcher.fetch_undispatched", return_value=[row]),
-            patch("mail_core.realtime.dispatcher.mark_dispatched", side_effect=lambda s, ids: marked_ids.extend(ids)),
-            patch("mail_core.realtime.dispatcher.to_item") as ti,
+            patch(
+                "mail_core.realtime.publication.publish_committed_batch",
+                return_value=SimpleNamespace(count=0, first_seq=None, last_seq=None),
+            ),
+            patch("mail_core.realtime.outbox.publication_head", return_value=(epoch, 42)),
+            patch("mail_core.realtime.outbox.pruned_through_seq", return_value=0),
+            patch(
+                "mail_core.realtime.outbox.fetch_published_since",
+                return_value=[row],
+            ),
         ):
-            from mail_core.realtime.outbox import OutboxItem
-
-            ti.return_value = OutboxItem(
-                id=42,
-                event_type="sync.progress",
-                account_id=None,
-                payload={"n": 1},
-                created_at=row.created_at,
-            )
             n = dispatcher.dispatch_once()
-        dispatcher.unsubscribe(q)
         # Isolation replaces stale queued events with a hint followed by a close sentinel.
         hints = []
         sentinels = 0
@@ -149,11 +156,12 @@ def test_dispatch_queue_full_does_not_mark_and_sends_resync_hint():
                 queued_events.append(ev)
             if isinstance(ev, dict) and ev.get("event") == "client.resync_hint":
                 hints.append(ev)
-        return n, hints, marked_ids, sentinels, queued_events
+        return n, hints, sentinels, queued_events
 
-    n, hints, marked, sentinels, queued_events = asyncio.run(_setup_and_dispatch())
+    n, hints, sentinels, queued_events = asyncio.run(_setup_and_dispatch())
+    assert fake.committed is True  # publication is committed before broadcast
     assert n == 0
-    assert marked == []
+    assert dispatcher._last_dispatched_seq == 41  # not marked dispatched
     assert hints and hints[0]["data"]["reason"] == "sse_queue_full"
     assert sentinels == 1
     assert queued_events == hints

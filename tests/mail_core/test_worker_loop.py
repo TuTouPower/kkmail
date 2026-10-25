@@ -26,6 +26,36 @@ def test_positive_float_setting_warns_and_uses_default(monkeypatch, caplog, raw)
     assert raw in caplog.text
 
 
+def _stub_run_infrastructure(monkeypatch):
+    """Stub the run()-level infrastructure the loop tests do not exercise.
+
+    worker_main.run() now builds a session factory and starts a
+    WorkerHeartbeatLoop before entering the tick loop. These tests fake
+    _tick/_reclaim_once, so they must also fake that startup seam —
+    otherwise run() raises DatabaseConfigError in unit mode (no
+    MAIL_CORE_DATABASE_URL) before any tick happens.
+    """
+
+    class _FakeHeartbeatLoop:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self, timeout=None):
+            pass
+
+    monkeypatch.setattr(
+        "mail_core.db.session.get_session_factory",
+        lambda: (lambda: MagicMock()),
+    )
+    monkeypatch.setattr(
+        "mail_core.worker.heartbeat.WorkerHeartbeatLoop",
+        _FakeHeartbeatLoop,
+    )
+
+
 def test_worker_stops_on_flag(monkeypatch):
     ticked = threading.Event()
 
@@ -33,6 +63,7 @@ def test_worker_stops_on_flag(monkeypatch):
         ticked.set()
         return worker_main.TickResult(claimed=0, handled=0)
 
+    _stub_run_infrastructure(monkeypatch)
     monkeypatch.setattr(worker_main, "_reclaim_once", lambda: 0)
     monkeypatch.setattr(worker_main, "_tick", fake_tick)
     t = threading.Thread(target=lambda: worker_main.run(poll_interval_s=0.01), daemon=True)
@@ -111,6 +142,7 @@ def test_claim_heartbeat_refreshes_all_jobs_in_claimed_batch(monkeypatch):
 
 
 def test_run_reclaims_on_a_separate_time_cadence(monkeypatch):
+    _stub_run_infrastructure(monkeypatch)
     clock = iter((0.0, 10.0, 60.0, 61.0))
     monkeypatch.setattr(worker_main, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None))
     monkeypatch.setattr(worker_main, "RECLAIM_INTERVAL_S", 60.0)
@@ -137,6 +169,7 @@ def test_run_reclaims_on_a_separate_time_cadence(monkeypatch):
 
 
 def test_run_uses_base_poll_after_claimed_jobs_fail(monkeypatch):
+    _stub_run_infrastructure(monkeypatch)
     delays = []
 
     def stop_after_sleep(delay):

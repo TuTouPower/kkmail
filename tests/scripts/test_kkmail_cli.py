@@ -313,6 +313,11 @@ def test_session_cache_custom_path_does_not_modify_parent_permissions(tmp_path, 
     """Custom KKMAIL_SESSION_CACHE must not chmod user's shared parent directory."""
     parent_dir = tmp_path / "shared"
     parent_dir.mkdir(mode=0o755)
+    # mkdir's mode is masked by the process umask (this host runs with
+    # umask 0007, which turns 0o755 into 0o750), so set the intended
+    # starting mode explicitly; the assertion below then measures only
+    # whether _save_session_cache modifies the parent, as intended.
+    os.chmod(parent_dir, 0o755)
     custom_cache = parent_dir / "my_session.json"
     monkeypatch.setenv("KKMAIL_SESSION_CACHE", str(custom_cache))
 

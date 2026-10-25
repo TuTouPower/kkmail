@@ -1,6 +1,7 @@
 """Tests for worker heartbeat, healthcheck CLI, and system health metrics."""
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
@@ -230,6 +231,10 @@ def test_worker_healthcheck_cli(monkeypatch):
     assert healthcheck_main() == 1
 
 
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 def test_system_health_sync_metrics_with_real_sync_run_done_status():
     import uuid
     from mail_core.db.session import get_session_factory

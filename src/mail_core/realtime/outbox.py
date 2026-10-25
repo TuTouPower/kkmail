@@ -189,9 +189,3 @@ def prune_published(
     state.pruned_through_seq = int(prefix[-1].publication_seq)
     session.flush()
     return len(prefix)
-
-
-# Backwards-compatible alias for callers/tests written against the old
-# dispatched_at-based name. The semantics are the publication retention
-# above; nothing is keyed on dispatched_at any more (the column is gone).
-prune_dispatched = prune_published

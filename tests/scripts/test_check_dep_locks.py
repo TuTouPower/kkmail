@@ -1,5 +1,6 @@
 """Tests for production dependency lock consistency and build gate verification."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,11 +20,21 @@ def test_mail_core_lock_exists_and_contains_hashes():
 
 def test_check_dep_locks_script_passes():
     script = ROOT / "scripts" / "check_dep_locks.py"
+    # The script shells out to a bare `uv`, which is installed into the
+    # project's venv. When pytest is invoked as .venv/bin/python without
+    # the venv activated, the venv's bin directory is not on PATH and the
+    # script dies with FileNotFoundError('uv') before checking anything.
+    # Put the running interpreter's directory first on PATH for the
+    # subprocess (test-harness env only; the check itself is unchanged).
+    env = dict(os.environ)
+    venv_bin = str(Path(sys.executable).parent)
+    env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
     proc = subprocess.run(
         [sys.executable, str(script), "--check"],
         cwd=ROOT,
         capture_output=True,
         text=True,
+        env=env,
     )
     assert proc.returncode == 0, f"check_dep_locks.py --check failed: {proc.stderr}\n{proc.stdout}"
     assert "synchronized" in proc.stdout

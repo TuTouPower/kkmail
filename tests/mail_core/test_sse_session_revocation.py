@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import threading
+import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
@@ -72,11 +73,19 @@ def test_listener_routes_session_revocation_notifications_to_stream_closure():
 
 def test_sse_fallback_closes_stream_when_database_epoch_changes(monkeypatch):
     epochs = iter((10, 11))
+    released = []
     monkeypatch.setattr(sse_module, "_get_session_epoch", lambda _force_refresh=False: next(epochs))
     monkeypatch.setattr(sse_module, "SESSION_EPOCH_RECHECK_INTERVAL_S", 0.0)
     monkeypatch.setattr(sse_module, "_acquire_sse_slot", lambda: True)
-    monkeypatch.setattr(sse_module, "_release_sse_slot", lambda: None)
-    monkeypatch.setattr(sse_module, "_build_replay", lambda *_args, **_kwargs: sse_module._ReplayPlan([], 0))
+    monkeypatch.setattr(sse_module, "_release_sse_slot", lambda: released.append(True))
+    # _ReplayPlan now requires an explicit cursor_seq (design §11).
+    monkeypatch.setattr(
+        sse_module,
+        "_build_replay",
+        lambda *_args, **_kwargs: sse_module._ReplayPlan(
+            frames=[], cursor=f"v2:{uuid.uuid4()}:0", cursor_seq=0
+        ),
+    )
 
     class FakeDispatcher:
         def subscribe(self, **_kwargs):
@@ -96,9 +105,23 @@ def test_sse_fallback_closes_stream_when_database_epoch_changes(monkeypatch):
             FakeRequest(), last_event_id=None, after=None, account_id=None,
             principal=AuthPrincipal(via="session", csrf_token="csrf", session_epoch=10),
         )
-        return [frame async for frame in response.body_iterator]
+        # Bounded, explicitly closed consumption of the body iterator
+        # (§11) instead of an unbounded comprehension over the stream.
+        frames_iter = response.body_iterator
+        frames = []
+        try:
+            while True:
+                try:
+                    frames.append(await asyncio.wait_for(anext(frames_iter), timeout=5))
+                except StopAsyncIteration:
+                    break
+        finally:
+            await frames_iter.aclose()
+        return frames
 
     assert asyncio.run(collect_stream()) == []
+    # The stream's finally path returned the (fake) SSE slot exactly once.
+    assert released == [True]
 
 
 def test_listener_registers_outbox_and_revocation_channels(monkeypatch):

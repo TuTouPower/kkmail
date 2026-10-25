@@ -52,7 +52,16 @@ def test_evaluate_result_completes_job_when_retry_is_already_scheduled():
         )
 
     assert result is True
-    complete.assert_called_once_with(session, job, worker_id="retry-worker")
+    # complete_job now receives the handler result as part of the job
+    # settlement signature (design §11 test-contract adaptation); the
+    # behavioural assertion is unchanged: a scheduled followup completes
+    # the job instead of failing it.
+    complete.assert_called_once_with(
+        session,
+        job,
+        worker_id="retry-worker",
+        result={"status": "provider_error", "error": "RuntimeError", "followup_scheduled": True},
+    )
     fail.assert_not_called()
 
 
