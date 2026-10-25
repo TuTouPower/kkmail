@@ -32,6 +32,7 @@ from mail_core.mail.application.mutations import (
 from mail_core.mail.application.queries import (
     GlobalStatsOut,
     InvalidCursor,
+    MessageDetail,
     MessageListItem,
     account_emails_by_id,
     get_folder_stats,
@@ -130,6 +131,38 @@ class MessageDetailOut(BaseModel):
     parse_error: str | None
     is_archived: bool | None
     attachments: list[AttachmentOut]
+
+
+def _detail_out(detail: MessageDetail, is_archived: bool | None) -> MessageDetailOut:
+    return MessageDetailOut(
+        id=str(detail.id),
+        account_id=str(detail.account_id),
+        subject=detail.subject,
+        from_address=detail.from_address,
+        from_name=detail.from_name,
+        from_=(f"{detail.from_name} <{detail.from_address}>" if detail.from_name else detail.from_address),
+        to=", ".join(str(value) for value in detail.to_addresses) if detail.to_addresses else "",
+        cc=", ".join(str(value) for value in detail.cc_addresses) if detail.cc_addresses else "",
+        date=detail.sort_time,
+        is_read=detail.is_read,
+        is_flagged=detail.is_flagged,
+        has_attachments=detail.has_attachments,
+        snippet=detail.snippet,
+        body=detail.body,
+        body_type=detail.body_type,
+        parse_error=detail.parse_error,
+        is_archived=is_archived,
+        attachments=[
+            AttachmentOut(
+                id=str(attachment.id),
+                name=attachment.filename,
+                contentType=attachment.content_type,
+                size=attachment.size_bytes,
+                is_inline=attachment.is_inline,
+            )
+            for attachment in detail.attachments
+        ],
+    )
 
 
 class ReadBody(BaseModel):
@@ -309,36 +342,7 @@ def api_get_message(message_id: UUID) -> MessageDetailOut:
         result = get_message_detail_with_archive_status(session, message_id)
         if result is None:
             raise HTTPException(404, "message not found")
-        d, is_archived = result
-        return MessageDetailOut(
-            id=str(d.id),
-            account_id=str(d.account_id),
-            subject=d.subject,
-            from_address=d.from_address,
-            from_name=d.from_name,
-            from_=(f"{d.from_name} <{d.from_address}>" if d.from_name else d.from_address),
-            to=", ".join(str(x) for x in d.to_addresses) if d.to_addresses else "",
-            cc=", ".join(str(x) for x in d.cc_addresses) if d.cc_addresses else "",
-            date=d.sort_time,
-            is_read=d.is_read,
-            is_flagged=d.is_flagged,
-            has_attachments=d.has_attachments,
-            snippet=d.snippet,
-            body=d.body,
-            body_type=d.body_type,
-            parse_error=d.parse_error,
-            is_archived=is_archived,
-            attachments=[
-                AttachmentOut(
-                    id=str(a.id),
-                    name=a.filename,
-                    contentType=a.content_type,
-                    size=a.size_bytes,
-                    is_inline=a.is_inline,
-                )
-                for a in d.attachments
-            ],
-        )
+        return _detail_out(*result)
 
 
 @router.post("/messages/{message_id}/sync-body", response_model=MessageDetailOut, response_model_by_alias=True)
@@ -350,36 +354,7 @@ def api_sync_message_body(message_id: UUID) -> MessageDetailOut:
         raise HTTPException(409, str(exc)) from exc
     if result is None:
         raise HTTPException(404, "message not found")
-    d, is_archived = result
-    return MessageDetailOut(
-        id=str(d.id),
-        account_id=str(d.account_id),
-        subject=d.subject,
-        from_address=d.from_address,
-        from_name=d.from_name,
-        from_=(f"{d.from_name} <{d.from_address}>" if d.from_name else d.from_address),
-        to=", ".join(str(x) for x in d.to_addresses) if d.to_addresses else "",
-        cc=", ".join(str(x) for x in d.cc_addresses) if d.cc_addresses else "",
-        date=d.sort_time,
-        is_read=d.is_read,
-        is_flagged=d.is_flagged,
-        has_attachments=d.has_attachments,
-        snippet=d.snippet,
-        body=d.body,
-        body_type=d.body_type,
-        parse_error=d.parse_error,
-        is_archived=is_archived,
-        attachments=[
-            AttachmentOut(
-                id=str(a.id),
-                name=a.filename,
-                contentType=a.content_type,
-                size=a.size_bytes,
-                is_inline=a.is_inline,
-            )
-            for a in d.attachments
-        ],
-    )
+    return _detail_out(*result)
 
 
 @router.post("/messages/{message_id}/read", response_model=MutationOut)

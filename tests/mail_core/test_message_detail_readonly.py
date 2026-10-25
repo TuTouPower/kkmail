@@ -27,3 +27,46 @@ def test_detail_with_archive_status_does_not_mutate_or_enqueue(monkeypatch):
     assert state.priority == 2
     enqueue.assert_not_called()
     session.commit.assert_not_called()
+
+def test_detail_out_serializes_shared_detail_and_attachment_fields():
+    from mail_core.api.mail import _detail_out
+    from mail_core.mail.application.queries import AttachmentItem, MessageDetail
+
+    message_id, account_id, attachment_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    detail = MessageDetail(
+        id=message_id,
+        account_id=account_id,
+        subject="Subject",
+        from_address="sender@example.test",
+        from_name="Sender",
+        to_addresses=["to@example.test"],
+        cc_addresses=["cc@example.test"],
+        sort_time=None,
+        is_read=False,
+        is_flagged=True,
+        has_attachments=True,
+        snippet="Snippet",
+        body_text="Body",
+        body_html=None,
+        body="Body",
+        body_type="text",
+        parse_error=None,
+        attachments=[
+            AttachmentItem(
+                id=attachment_id,
+                filename="part.txt",
+                content_type="text/plain",
+                size_bytes=4,
+                is_inline=False,
+            )
+        ],
+    )
+
+    result = _detail_out(detail, True)
+
+    assert result.id == str(message_id)
+    assert result.from_ == "Sender <sender@example.test>"
+    assert result.to == "to@example.test"
+    assert result.cc == "cc@example.test"
+    assert result.is_archived is True
+    assert result.attachments[0].contentType == "text/plain"
