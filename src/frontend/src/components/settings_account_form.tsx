@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { CircleHelp, X } from 'lucide-react'
-import { api, type AccountSummary, type OAuthFlowStatusOut, type OAuthMetadataOut } from '../api/client'
+import { api, type AccountSummary, type ApiError, type OAuthFlowStatusOut, type OAuthMetadataOut } from '../api/client'
 import type { GroupItem } from '../api/queries'
 import { errorMessage } from '../lib/actions'
 import { vendors, inferVendor, defaultProtocol, type Vendor, type Protocol } from '../lib/account_providers'
@@ -45,8 +45,10 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
   const [popupBlockedUrl, setPopupBlockedUrl] = useState('')
   const [copyTip, setCopyTip] = useState('')
   const flowRef = useRef<string | null>(null)
+  const devicePollNotBeforeRef = useRef(0)
 
   const updateOauthFlow = (next: (OAuthFlowStatusOut & { auth_url?: string }) | null) => {
+    if (flowRef.current !== next?.flow_id) devicePollNotBeforeRef.current = 0
     flowRef.current = next?.flow_id || null
     setOauthFlow(next)
   }
@@ -54,6 +56,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
   const clearActiveFlow = (cancelRemote = true) => {
     const id = flowRef.current
     flowRef.current = null
+    devicePollNotBeforeRef.current = 0
     setOauthFlow(null)
     setPopupBlockedUrl('')
     setCopyTip('')
@@ -135,9 +138,11 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
     if (!oauthFlow || oauthFlow.status !== 'pending' || typeof api.getOAuthFlowStatus !== 'function') return
     let stopped = false
     const check = async () => {
+      if (oauthFlow.method === 'device_code' && Date.now() < devicePollNotBeforeRef.current) return
       try {
         const next = await (oauthFlow.method === 'device_code' ? api.pollOAuthFlow(oauthFlow.flow_id) : api.getOAuthFlowStatus(oauthFlow.flow_id))
         if (stopped) return
+        if (oauthFlow.method === 'device_code') devicePollNotBeforeRef.current = 0
         setOauthFlow(prev => prev && prev.flow_id === next.flow_id ? { ...prev, ...next } : prev)
         if (next.status === 'authorized') {
           if (!account && next.verified_email) setEmail(next.verified_email)
@@ -147,6 +152,13 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
           setStatus(next.error)
         }
       } catch (err) {
+        if (!stopped && oauthFlow.method === 'device_code' && err && typeof err === 'object') {
+          const apiError = err as ApiError
+          if (apiError.status === 429) {
+            devicePollNotBeforeRef.current = Date.now() + Math.max(1, apiError.retryAfterSeconds ?? 5) * 1000
+            return
+          }
+        }
         if (!stopped) setStatus(errorMessage(err, `获取 ${oauthLabel} 授权状态失败`))
       }
     }

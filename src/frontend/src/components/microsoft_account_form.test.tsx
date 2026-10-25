@@ -55,6 +55,7 @@ it.each([false, true])('Microsoft browser login saves a verified result (edit=%s
 it('device code needs no callback or Secret, copies only the short code, polls and cancels', async () => {
   const requests: { url: string; body: Record<string, unknown> }[] = []
   const open = vi.fn()
+  let pollAttempts = 0
   vi.stubGlobal('open', open)
   const writeText = vi.fn(async () => {})
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
@@ -69,9 +70,13 @@ it('device code needs no callback or Secret, copies only the short code, polls a
     else if (url.endsWith('/oauth/start')) value = { flow_id: 'device-flow', provider: 'microsoft', intent: 'create',
       method: 'device_code', tenant: 'common', status: 'pending', auth_url: 'https://microsoft.com/devicelogin',
       client_type: 'public', redirect_uri: '', user_code: 'ABCD-EFGH', verification_uri: 'https://microsoft.com/devicelogin', expires_at: Date.now() / 1000 + 600 }
-    else if (url.endsWith('/poll')) value = { flow_id: 'device-flow', provider: 'microsoft', intent: 'create',
-      method: 'device_code', status: 'pending', client_type: 'public', user_code: 'ABCD-EFGH',
-      verification_uri: 'https://microsoft.com/devicelogin', expires_at: Date.now() / 1000 + 600 }
+    else if (url.endsWith('/poll')) {
+      pollAttempts += 1
+      return new Response(JSON.stringify({ detail: '设备码轮询间隔尚未到达，请稍后重试。' }), {
+        status: 429,
+        headers: { 'content-type': 'application/json', 'Retry-After': '5' },
+      })
+    }
     return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
   }))
   const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
@@ -91,6 +96,9 @@ it('device code needs no callback or Secret, copies only the short code, polls a
   expect(link.href).toBe('https://microsoft.com/devicelogin')
   window.dispatchEvent(new Event('focus'))
   await waitFor(() => expect(requests.some(r => r.url.endsWith('/poll'))).toBe(true))
+  await new Promise(resolve => setTimeout(resolve, 1200))
+  expect(pollAttempts).toBe(1)
+  expect(container.textContent).not.toContain('设备码轮询间隔尚未到达')
   await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '取消授权')!)
   await waitFor(() => expect(requests.some(r => r.url.endsWith('/cancel'))).toBe(true))
   expect(container.textContent).not.toContain('ABCD-EFGH')

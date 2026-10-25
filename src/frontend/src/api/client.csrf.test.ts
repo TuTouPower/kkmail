@@ -75,6 +75,21 @@ describe('CSRF handling', () => {
     })
   })
 
+  it('preserves Retry-After seconds on paced API errors', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/api/auth/me')) return json(200, { csrf_token: 'csrf' })
+      return new Response(JSON.stringify({ detail: 'poll interval has not elapsed' }), {
+        status: 429,
+        headers: { 'content-type': 'application/json', 'Retry-After': '5' },
+      })
+    }))
+
+    await expect(postJson('/api/accounts/oauth/flows/device-flow/poll')).rejects.toMatchObject({
+      status: 429,
+      retryAfterSeconds: 5,
+    })
+  })
+
   it('GET requests need no CSRF token', async () => {
     const fetchMock = vi.fn(async () => json(200, { ok: true }))
     vi.stubGlobal('fetch', fetchMock)

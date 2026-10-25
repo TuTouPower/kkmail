@@ -11,6 +11,12 @@ from mail_core.accounts.microsoft_oauth import (
 from mail_core.providers.http import ProviderHttpError
 
 
+class DevicePollTooSoon(RuntimeError):
+    def __init__(self, retry_after_seconds: int) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__("device-code poll interval has not elapsed")
+
+
 def begin_device_authorization(flow: dict) -> None:
     from mail_core.accounts import oauth_flow as lifecycle
     try:
@@ -63,7 +69,7 @@ def poll_device_flow(flow_id, principal):
             flow.pop('device_code', None)
             return lifecycle._public_flow_view(flow)
         if now < flow['next_poll_at']:
-            return lifecycle._public_flow_view(flow)
+            raise DevicePollTooSoon(max(1, math.ceil(flow['next_poll_at'] - now)))
         # The durable flow lock covers due check + HTTP exchange, including across API processes.
         interval = float(flow['interval'])
         flow['next_poll_at'] = now + interval

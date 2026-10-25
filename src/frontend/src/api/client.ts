@@ -44,6 +44,7 @@ export interface ApiError {
   message: string
   code?: string
   payload?: unknown
+  retryAfterSeconds?: number
 }
 
 export const UNAUTHORIZED_EVENT = 'kkmail:unauthorized'
@@ -90,7 +91,7 @@ async function fetchCsrfToken(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<string | 
           if (tmo.timedOut()) throw err
           /* non-JSON or empty error body */
         }
-        throw errorFromBody(res.status, res.statusText, body)
+        throw errorFromBody(res.status, res.statusText, body, res.headers.get('Retry-After'))
       }
       const data = (await underTimeout(res.json(), tmo.signal, timeoutMs, tmo.timedOut)) as { csrf_token?: string }
       csrfToken = data.csrf_token || null
@@ -141,7 +142,7 @@ function withTimeout(signal: AbortSignal | null | undefined, timeoutMs: number) 
   }
 }
 
-function errorFromBody(status: number, statusText: string, body: unknown): ApiError {
+function errorFromBody(status: number, statusText: string, body: unknown, retryAfterHeader?: string | null): ApiError {
   let message = statusText || `HTTP ${status}`
   if (body && typeof body === 'object') {
     const detail = (body as { detail?: unknown }).detail
@@ -153,7 +154,9 @@ function errorFromBody(status: number, statusText: string, body: unknown): ApiEr
       message = detail.map((d) => (d && typeof d === 'object' && 'msg' in d ? String((d as { msg: unknown }).msg) : String(d))).join('; ')
     }
   }
-  return { status, message, payload: body }
+  const retryAfter = retryAfterHeader?.trim()
+  const retryAfterSeconds = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) : undefined
+  return { status, message, payload: body, ...(retryAfterSeconds ? { retryAfterSeconds } : {}) }
 }
 
 function isApiError(error: unknown): error is ApiError {
@@ -217,7 +220,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}, 
         tmo.done()
         return apiRequest<T>(path, options, true)
       }
-      throw errorFromBody(res.status, res.statusText, body)
+      throw errorFromBody(res.status, res.statusText, body, res.headers.get('Retry-After'))
     }
     if (res.status === 204) return undefined as T
     const contentType = res.headers.get('content-type') || ''
@@ -271,7 +274,7 @@ export const api = {
         if (tmo.timedOut()) throw err
         /* ignore */
       }
-      if (!res.ok) throw errorFromBody(res.status, res.statusText, body)
+      if (!res.ok) throw errorFromBody(res.status, res.statusText, body, res.headers.get('Retry-After'))
       setCsrfToken((body as LoginOut | null)?.csrf_token)
     } catch (err) {
       if (tmo.timedOut()) {

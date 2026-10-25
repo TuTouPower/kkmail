@@ -177,7 +177,9 @@ def test_device_poll_interval_slowdown_owner_csrf_cancel_and_expiry(monkeypatch)
     assert client.post(endpoint + '/poll', headers={'X-CSRF-Token': ''}).status_code == 403
     assert client.get(endpoint).status_code == 200
     assert len(calls) == 1
-    assert client.post(endpoint + '/poll').json()['status'] == 'pending'
+    early = client.post(endpoint + '/poll')
+    assert early.status_code == 429
+    assert early.headers['Retry-After'] == '5'
     assert len(calls) == 1
     clock[0] += 5
     assert client.post(endpoint + '/poll').json()['status'] == 'pending'
@@ -186,7 +188,9 @@ def test_device_poll_interval_slowdown_owner_csrf_cancel_and_expiry(monkeypatch)
     assert client.post(endpoint + '/poll').json()['status'] == 'pending'
     assert len(calls) == 3
     clock[0] += 5
-    client.post(endpoint + '/poll')
+    early = client.post(endpoint + '/poll')
+    assert early.status_code == 429
+    assert early.headers['Retry-After'] == '5'
     assert len(calls) == 3  # slow_down extended interval to ten seconds
     clock[0] += 5
     client.post(endpoint + '/poll')

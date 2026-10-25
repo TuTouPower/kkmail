@@ -201,9 +201,15 @@ def api_oauth_flow_status(
 
 @router.post("/api/accounts/oauth/flows/{flow_id}/poll", response_model=OAuthFlowStatusOut)
 def api_oauth_device_poll(flow_id: str, principal: AuthPrincipal = Depends(require_auth)) -> OAuthFlowStatusOut:
-    from mail_core.accounts.device_oauth import poll_device_flow
+    from mail_core.accounts.device_oauth import DevicePollTooSoon, poll_device_flow
     try:
         return OAuthFlowStatusOut(**poll_device_flow(flow_id, principal))
+    except DevicePollTooSoon as exc:
+        raise HTTPException(
+            429,
+            detail="设备码轮询间隔尚未到达，请稍后重试。",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     except PermissionError as exc:
