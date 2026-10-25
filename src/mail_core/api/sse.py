@@ -179,6 +179,9 @@ async def stream_events(
         except ValueError:
             malformed = True
             cursor = 0
+        if cursor < 0:
+            malformed = True
+            cursor = 0
 
     if not _acquire_sse_slot():
         return JSONResponse(

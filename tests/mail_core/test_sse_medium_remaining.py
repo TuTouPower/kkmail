@@ -106,6 +106,49 @@ def test_isolated_sse_stream_ends_after_resync_hint(monkeypatch, queue_size):
     assert "event: client.resync_hint" in hint_frame
 
 
+@pytest.mark.parametrize(
+    "last_event_id,after",
+    [("not-an-int", None), ("-1", None), (None, -1)],
+)
+def test_malformed_or_negative_replay_cursors_emit_resync_hint(monkeypatch, last_event_id, after):
+    captured = {}
+    queue = asyncio.Queue(maxsize=2)
+    queue.put_nowait(SSE_STREAM_CLOSE)
+
+    class FakeDispatcher:
+        def subscribe(self, **_kwargs):
+            return queue
+
+        def unsubscribe(self, *_args, **_kwargs):
+            return None
+
+    class FakeRequest:
+        async def is_disconnected(self):
+            return False
+
+    def build_replay(cursor, account_id, *, malformed):
+        captured.update(cursor=cursor, account_id=account_id, malformed=malformed)
+        return sse_mod._ReplayPlan(
+            [(0, "client.resync_hint", {"reason": "malformed_last_event_id"})],
+            0,
+        )
+
+    monkeypatch.setattr(sse_mod, "get_dispatcher", lambda: FakeDispatcher())
+    monkeypatch.setattr(sse_mod, "_build_replay", build_replay)
+    with _sse_slot_reset():
+        async def drain_stream():
+            response = await sse_mod.stream_events(
+                FakeRequest(), last_event_id=last_event_id, after=after, account_id=None
+            )
+            return [frame async for frame in response.body_iterator]
+
+        frames = asyncio.run(drain_stream())
+
+    assert captured == {"cursor": 0, "account_id": None, "malformed": True}
+    assert len(frames) == 1
+    assert "malformed_last_event_id" in frames[0]
+
+
 @_requires_db
 def test_malformed_last_event_id_emits_resync_hint():
     from mail_core.db.session import get_session_factory
