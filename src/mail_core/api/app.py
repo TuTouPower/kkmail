@@ -24,6 +24,23 @@ from mail_core.api.oauth_routes import router as oauth_router
 from mail_core.api.sse import router as sse_router
 
 
+_RESERVED_SPA_ROOTS = frozenset({"api", "health", "ready", "docs", "openapi.json", "assets"})
+
+
+def _is_reserved_spa_path(full_path: str) -> bool:
+    return full_path.partition("/")[0] in _RESERVED_SPA_ROOTS
+
+
+def _resolve_spa_candidate(dist_root: Path, full_path: str) -> Path | None:
+    try:
+        candidate = (dist_root / full_path).resolve()
+        if candidate.is_relative_to(dist_root) and candidate.is_file():
+            return candidate
+    except Exception as exc:
+        logging.getLogger("mail_core.api").debug("SPA fallback path resolution failed (%s)", type(exc).__name__)
+    return None
+
+
 def _frontend_dist() -> Path | None:
     env = os.environ.get("KKMAIL_FRONTEND_DIST", "").strip()
     candidates = []
@@ -207,16 +224,12 @@ if _DIST is not None:
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa_fallback(full_path: str):
-        # Do not swallow API/health
-        if full_path.startswith(("api/", "health", "ready", "docs", "openapi.json", "assets/")):
+        # Do not swallow API/health.
+        if _is_reserved_spa_path(full_path):
             from fastapi import HTTPException
 
             raise HTTPException(404)
-        dist_root = _DIST.resolve()
-        try:
-            candidate = (_DIST / full_path).resolve()
-            if candidate.is_relative_to(dist_root) and candidate.is_file():
-                return FileResponse(candidate)
-        except Exception:
-            pass
+        candidate = _resolve_spa_candidate(_DIST.resolve(), full_path)
+        if candidate is not None:
+            return FileResponse(candidate)
         return FileResponse(_DIST / "index.html")
