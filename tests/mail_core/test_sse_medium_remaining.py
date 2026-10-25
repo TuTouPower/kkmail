@@ -214,8 +214,21 @@ class _sse_slot_reset:
             sse_mod._sse_active = self._prev
 
 
+def test_sse_connection_cap_invalid_env_falls_back_and_warns(monkeypatch, caplog):
+    monkeypatch.delenv("MAIL_CORE_SSE_MAX_CONNECTIONS", raising=False)
+    monkeypatch.setenv("MAIL_CORE_SSE_MAX_CONNECTIONS", "not-a-number")
+    monkeypatch.setattr(sse_mod, "_sse_max_connections_cache", None)
+
+    with caplog.at_level("WARNING", logger="mail_core.api.sse"):
+        assert sse_mod._max_sse_connections() == 128
+        assert sse_mod._max_sse_connections() == 128
+
+    assert caplog.text.count("invalid MAIL_CORE_SSE_MAX_CONNECTIONS") == 1
+    assert "not-a-number" in caplog.text
+
+
 def test_sse_connection_cap_returns_503(monkeypatch):
-    monkeypatch.setattr(sse_mod, "MAX_SSE_CONNECTIONS", 0)
+    monkeypatch.setattr(sse_mod, "_sse_max_connections_cache", 0)
     # Force counter path: acquire fails immediately.
     with _sse_slot_reset():
         resp = _client().get("/api/events")
@@ -224,7 +237,7 @@ def test_sse_connection_cap_returns_503(monkeypatch):
 
 
 def test_sse_slot_is_reserved_before_stream_response_is_created(monkeypatch):
-    monkeypatch.setattr(sse_mod, "MAX_SSE_CONNECTIONS", 1)
+    monkeypatch.setattr(sse_mod, "_sse_max_connections_cache", 1)
     scope = {"type": "http", "method": "GET", "path": "/api/events", "headers": [], "query_string": b""}
     with _sse_slot_reset():
         first = asyncio.run(

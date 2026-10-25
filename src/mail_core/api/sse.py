@@ -29,9 +29,34 @@ RESYNC_GAP = 500
 REPLAY_LIMIT = RESYNC_GAP
 
 # Soft cap on concurrent SSE streams per process (503 when exceeded).
-MAX_SSE_CONNECTIONS = int(os.environ.get("MAIL_CORE_SSE_MAX_CONNECTIONS", "128"))
+_DEFAULT_SSE_CONNECTIONS = 128
+_sse_max_connections_cache: int | None = None
+_sse_max_connections_lock = threading.Lock()
 _sse_active = 0
 _sse_active_lock = threading.Lock()
+
+
+def _max_sse_connections() -> int:
+    global _sse_max_connections_cache
+    if _sse_max_connections_cache is not None:
+        return _sse_max_connections_cache
+    with _sse_max_connections_lock:
+        if _sse_max_connections_cache is not None:
+            return _sse_max_connections_cache
+        raw = os.environ.get("MAIL_CORE_SSE_MAX_CONNECTIONS", "128")
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 0
+        if value <= 0:
+            log.warning(
+                "invalid MAIL_CORE_SSE_MAX_CONNECTIONS=%r; using default %s",
+                raw,
+                _DEFAULT_SSE_CONNECTIONS,
+            )
+            value = _DEFAULT_SSE_CONNECTIONS
+        _sse_max_connections_cache = value
+        return value
 
 
 def _format_sse(event_id: int, event: str, data: dict) -> str:
@@ -120,7 +145,7 @@ def _build_replay(cursor: int, account_id: UUID | None, *, malformed: bool) -> _
 def _acquire_sse_slot() -> bool:
     global _sse_active
     with _sse_active_lock:
-        if _sse_active >= MAX_SSE_CONNECTIONS:
+        if _sse_active >= _max_sse_connections():
             return False
         _sse_active += 1
         return True
@@ -157,7 +182,7 @@ async def stream_events(
 
     if not _acquire_sse_slot():
         return JSONResponse(
-            {"detail": "too many sse connections", "max": MAX_SSE_CONNECTIONS},
+            {"detail": "too many sse connections", "max": _max_sse_connections()},
             status_code=503,
         )
 
