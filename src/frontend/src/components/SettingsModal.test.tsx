@@ -506,7 +506,7 @@ describe('<SettingsModal />', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url)
       if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
-      if (u.startsWith('/api/accounts/sync-all')) return json({ count: 7, enqueued: true })
+      if (u.startsWith('/api/accounts/sync-all')) return json({ target_count: 7, mode: 'full', trigger: 'manual', state: 'queued' })
       if (u.startsWith('/api/accounts')) return json({ accounts: [], total: 0, limit: 200, offset: 0, has_more: false })
       if (u === '/api/groups') return json({ groups: [] })
       return json({ detail: 'unexpected' }, 404)
@@ -518,7 +518,7 @@ describe('<SettingsModal />', () => {
     await click(syncBtn)
 
     await waitFor(() => {
-      expect(container.textContent).toContain('已排队 7 个同步任务')
+      expect(container.textContent).toContain('已排队 7 个全量同步任务')
     })
   })
 

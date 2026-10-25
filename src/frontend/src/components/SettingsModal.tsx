@@ -304,7 +304,7 @@ export default function SettingsPage({
                 {!accountsQuery.isPending && !accountsQuery.isError && !filtered.length && <div className="settings-empty"><Inbox size={26} /><strong>{accounts.length ? '没有匹配的账户' : '还没有添加账户'}</strong><span>{accounts.length ? '调整搜索词或筛选条件。' : '添加邮箱后，即可在此管理同步与分组。'}</span></div>}
               </div>
             </div>
-            <div className="settings-list-footer"><span>显示 {filtered.length} / {accounts.length} 个账户</span><button type="button" className="settings-button" disabled={pending || accountsQuery.isPending || accountsQuery.isError} onClick={() => void run('accounts', '全量同步', async () => { const result = await api.syncAll(); await qc.invalidateQueries({ queryKey: queryKeys.accounts }); return result }, result => `已排队 ${result.count ?? 0} 个同步任务`)}><RefreshCw size={14} />同步全部账户</button></div>
+            <div className="settings-list-footer"><span>显示 {filtered.length} / {accounts.length} 个账户</span><button type="button" className="settings-button" disabled={pending || accountsQuery.isPending || accountsQuery.isError} onClick={() => void run('accounts', '全量同步', async () => { const result = await api.syncAll(); await qc.invalidateQueries({ queryKey: queryKeys.accounts }); return result }, result => `已排队 ${result.target_count ?? 0} 个全量同步任务`)}><RefreshCw size={14} />同步全部账户</button></div>
           </>}
 
           {section === 'groups' && <>
