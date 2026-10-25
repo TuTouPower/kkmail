@@ -424,7 +424,7 @@ def push_remote_operations(
                 remote_state = candidate_state if isinstance(candidate_state, dict) else {}
             except Exception as exc:  # noqa: BLE001 — isolate per-op provider failures
                 err_summary = safe_provider_summary(exc)
-                log.exception("remote push op %s failed: %s", op_id, err_summary)
+                log.error("remote push op %s failed: %s", op_id, err_summary)
                 caught_exc = exc
                 ok = False
                 err = err_summary

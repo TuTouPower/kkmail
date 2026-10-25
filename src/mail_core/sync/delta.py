@@ -398,7 +398,7 @@ def sync_folder_delta(
             return {"status": "rate_limited", "retry_after": delay, "pages": pages, **totals}
         except Exception as exc:
             err_summary = safe_provider_summary(exc)
-            log.exception("delta provider I/O failed for folder %s: %s", folder_id, err_summary)
+            log.error("delta provider I/O failed for folder %s: %s", folder_id, err_summary)
             with Session() as session:
                 followup = enqueue_job(
                     session,

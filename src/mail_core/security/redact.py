@@ -14,9 +14,13 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9\-._~+/]+=*"), r"\1 [REDACTED]"),
     (
         re.compile(
-            r"(?i)([\"']?(?:access_token|refresh_token|id_token|client_secret|code_verifier|device_code|state|password|passwd|secret|api_key|apikey|code)[\"']?\s*[:=]\s*)"
+            r"(?i)([\"']?(?:access_token|refresh_token|id_token|token|client_secret|code_verifier|device_code|state|password|passwd|secret|api_key|apikey|code)[\"']?\s*[:=]\s*)"
             r"(\"[^\"]*\"|'[^']*'|[^\s,&}]+)"
         ),
+        r"\1[REDACTED]",
+    ),
+    (
+        re.compile(r"(?i)([?&](?:access_token|refresh_token|id_token|token|client_secret|code|password|secret)=)[^&\s\"'#]+"),
         r"\1[REDACTED]",
     ),
     (
