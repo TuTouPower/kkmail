@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
+_engine_lock = threading.Lock()
 
 
 class DatabaseConfigError(RuntimeError):
@@ -33,9 +35,8 @@ def _pool_kwargs() -> dict:
     }
 
 
-def get_engine(url: str | None = None) -> Engine:
+def _get_engine_locked(resolved: str) -> Engine:
     global _engine, _SessionLocal
-    resolved = url or database_url()
     # Compare unmasked URLs (str(engine.url) masks the password and never matches).
     if _engine is None or _engine.url.render_as_string(hide_password=False) != resolved:
         if _engine is not None:
@@ -45,7 +46,16 @@ def get_engine(url: str | None = None) -> Engine:
     return _engine
 
 
+def get_engine(url: str | None = None) -> Engine:
+    resolved = url or database_url()
+    with _engine_lock:
+        return _get_engine_locked(resolved)
+
+
 def get_session_factory(url: str | None = None) -> sessionmaker[Session]:
-    get_engine(url)
-    assert _SessionLocal is not None
-    return _SessionLocal
+    global _SessionLocal
+    resolved = url or database_url()
+    with _engine_lock:
+        _get_engine_locked(resolved)
+        assert _SessionLocal is not None
+        return _SessionLocal
