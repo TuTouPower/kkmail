@@ -1,10 +1,11 @@
 import { useEffect } from 'react'
 import { subscribeMailCoreStream } from '../api/sseStream'
-import { isMailListQueryKey, queryClient } from '../api/queries'
+import { isMailListQueryKey, queryClient, queryKeys } from '../api/queries'
 import { UNAUTHORIZED_EVENT } from '../api/client'
 
 /** Events that mean cached message lists may be stale. */
 export const MAIL_CORE_INBOX_INVALIDATE_EVENTS = new Set([
+  'account.updated',
   'message.upserted',
   'message.removed',
   'folder.stats_updated',
@@ -55,6 +56,7 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
   let timer: ReturnType<typeof setTimeout> | null = null
   let invalidateMailLists = false
   let invalidateMailStats = false
+  let invalidateAccounts = false
   let invalidateAllDetails = false
   const detailIdsToInvalidate = new Set<string>()
 
@@ -63,13 +65,27 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
       clearTimeout(timer)
       timer = null
     }
-    if (invalidateMailLists) {
+    if (invalidateAccounts) {
+      invalidateAccounts = false
       invalidateMailLists = false
-      void qc.invalidateQueries({ predicate: (query) => isMailListQueryKey(query.queryKey) })
-    }
-    if (invalidateMailStats) {
       invalidateMailStats = false
-      void qc.invalidateQueries({ predicate: (query) => isMailStatsQueryKey(query.queryKey) })
+      void Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.accounts }),
+        qc.invalidateQueries({ queryKey: queryKeys.groups }),
+        qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout }),
+      ]).then(() => Promise.all([
+        qc.invalidateQueries({ predicate: (query) => isMailListQueryKey(query.queryKey) }),
+        qc.invalidateQueries({ predicate: (query) => isMailStatsQueryKey(query.queryKey) }),
+      ]))
+    } else {
+      if (invalidateMailLists) {
+        invalidateMailLists = false
+        void qc.invalidateQueries({ predicate: (query) => isMailListQueryKey(query.queryKey) })
+      }
+      if (invalidateMailStats) {
+        invalidateMailStats = false
+        void qc.invalidateQueries({ predicate: (query) => isMailStatsQueryKey(query.queryKey) })
+      }
     }
     if (invalidateAllDetails) {
       invalidateAllDetails = false
@@ -92,7 +108,10 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
 
   function handleEvent(type: string, data: unknown) {
     let scheduled = false
-    if (shouldInvalidateMailCoreInbox(type)) {
+    if (type === 'account.updated') {
+      invalidateAccounts = true
+      scheduled = true
+    } else if (shouldInvalidateMailCoreInbox(type)) {
       invalidateMailLists = true
       if (type === 'folder.stats_updated' || type === 'sync.completed') {
         invalidateMailStats = true
@@ -126,6 +145,7 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
     detailIdsToInvalidate.clear()
     invalidateMailLists = false
     invalidateMailStats = false
+    invalidateAccounts = false
     invalidateAllDetails = false
   }
 

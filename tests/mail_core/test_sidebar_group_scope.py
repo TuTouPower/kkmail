@@ -120,6 +120,178 @@ def test_group_scope_is_empty_safe_and_applies_to_search_stats_and_mark_all():
     assert empty_marked.status_code == 200 and empty_marked.json()["count"] == 0
 
 
+def test_disabled_accounts_are_excluded_from_aggregate_scopes_but_remain_directly_addressable():
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    Session = get_session_factory()
+    now = datetime.now(timezone.utc)
+    phrase = f"disabled-scope-{uuid.uuid4().hex}"
+    with Session() as session:
+        group = AccountGroup(name=f"disabled-scope-{uuid.uuid4().hex}")
+        disabled_only_group = AccountGroup(name=f"disabled-only-{uuid.uuid4().hex}")
+        session.add_all([group, disabled_only_group])
+        session.flush()
+        enabled = Account(email=f"enabled-{uuid.uuid4().hex}@example.test", provider="memory", group_id=group.id)
+        disabled = Account(
+            email=f"disabled-{uuid.uuid4().hex}@example.test",
+            provider="memory",
+            group_id=group.id,
+            sync_enabled=False,
+        )
+        disabled_only = Account(
+            email=f"disabled-only-{uuid.uuid4().hex}@example.test",
+            provider="memory",
+            group_id=disabled_only_group.id,
+            sync_enabled=False,
+        )
+        session.add_all([enabled, disabled, disabled_only])
+        session.flush()
+        accounts = (enabled, disabled, disabled_only)
+        folders = [Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox") for account in accounts]
+        session.add_all(folders)
+        session.flush()
+        messages = [
+            Message(
+                account_id=account.id,
+                remote_id=f"{phrase}-{index}",
+                subject=phrase,
+                from_address="sender@example.test",
+                sort_time=now,
+                is_read=False,
+            )
+            for index, account in enumerate(accounts)
+        ]
+        session.add_all(messages)
+        session.flush()
+        for index, (message, folder) in enumerate(zip(messages, folders, strict=True), 1):
+            session.add(MessageLocation(message_id=message.id, folder_id=folder.id, uid=index))
+            session.add(FolderStats(folder_id=folder.id, total_count=1, unread_count=1))
+            upsert_message_search(session, message_id=message.id, body_text=phrase)
+        group_id = group.id
+        disabled_only_group_id = disabled_only_group.id
+        enabled_id, disabled_id, disabled_only_id = (account.id for account in accounts)
+        enabled_message_id, disabled_message_id, disabled_only_message_id = (message.id for message in messages)
+        disabled_folder_id = folders[1].id
+        session.commit()
+
+    group_inbox = client.get("/api/mail/inbox", params={"group_id": str(group_id)})
+    assert group_inbox.status_code == 200
+    assert [item["account_id"] for item in group_inbox.json()["items"]] == [str(enabled_id)]
+
+    global_inbox = client.get("/api/mail/inbox")
+    assert global_inbox.status_code == 200
+    assert str(disabled_id) not in {item["account_id"] for item in global_inbox.json()["items"]}
+
+    group_search = client.get("/api/mail/search", params={"q": phrase, "group_id": str(group_id)})
+    assert group_search.status_code == 200
+    assert group_search.json()["total"] == 1
+    assert [item["account_id"] for item in group_search.json()["items"]] == [str(enabled_id)]
+
+    global_search = client.get("/api/mail/search", params={"q": phrase})
+    assert global_search.status_code == 200
+    assert str(disabled_id) not in {item["account_id"] for item in global_search.json()["items"]}
+    assert global_search.json()["total"] == 1
+
+    group_stats = client.get("/api/mail/stats", params={"group_id": str(group_id)})
+    assert group_stats.status_code == 200
+    assert [item["account_id"] for item in group_stats.json()["accounts"]] == [str(enabled_id)]
+    global_stats = client.get("/api/mail/stats")
+    assert global_stats.status_code == 200
+    assert global_stats.json()["total_unread"] == 1
+    assert str(disabled_id) not in {item["account_id"] for item in global_stats.json()["accounts"]}
+
+    disabled_only_inbox = client.get("/api/mail/inbox", params={"group_id": str(disabled_only_group_id)})
+    assert disabled_only_inbox.status_code == 200 and disabled_only_inbox.json()["items"] == []
+    disabled_only_search = client.get("/api/mail/search", params={"q": phrase, "group_id": str(disabled_only_group_id)})
+    assert disabled_only_search.status_code == 200 and disabled_only_search.json()["total"] == 0
+    disabled_only_stats = client.get("/api/mail/stats", params={"group_id": str(disabled_only_group_id)})
+    assert disabled_only_stats.status_code == 200
+    assert disabled_only_stats.json() == {"total_unread": 0, "accounts": []}
+
+    direct_disabled = client.get("/api/mail/inbox", params={"account_id": str(disabled_id)})
+    assert direct_disabled.status_code == 200
+    assert [item["account_id"] for item in direct_disabled.json()["items"]] == [str(disabled_id)]
+    direct_folder = client.get("/api/mail/inbox", params={"folder_id": str(disabled_folder_id)})
+    assert direct_folder.status_code == 200
+    assert [item["account_id"] for item in direct_folder.json()["items"]] == [str(disabled_id)]
+
+    marked = client.post("/api/mail/mark-all-read", json={"group_id": str(group_id)})
+    assert marked.status_code == 200 and marked.json()["count"] == 1
+    disabled_only_marked = client.post("/api/mail/mark-all-read", json={"group_id": str(disabled_only_group_id)})
+    assert disabled_only_marked.status_code == 200 and disabled_only_marked.json()["count"] == 0
+    global_marked = client.post("/api/mail/mark-all-read", json={})
+    assert global_marked.status_code == 200 and global_marked.json()["count"] == 0
+    with Session() as session:
+        assert session.get(Message, enabled_message_id).is_read is True
+        assert session.get(Message, disabled_message_id).is_read is False
+        assert session.get(Message, disabled_only_message_id).is_read is False
+        assert session.get(Account, disabled_id).sync_enabled is False
+        assert session.get(Account, disabled_only_id).sync_enabled is False
+
+    layout_before_enable = client.get("/api/sidebar/layout").json()
+    disabled_all_active = client.patch(f"/api/accounts/{enabled_id}", json={"sync_enabled": False})
+    assert disabled_all_active.status_code == 200
+    assert client.get("/api/mail/inbox").json()["items"] == []
+    assert client.get("/api/mail/search", params={"q": phrase}).json()["total"] == 0
+    global_stats_with_all_disabled = client.get("/api/mail/stats").json()
+    assert global_stats_with_all_disabled == {"total_unread": 0, "accounts": []}
+
+    no_op_update = client.patch(f"/api/accounts/{disabled_id}", json={"sync_enabled": False})
+    assert no_op_update.status_code == 200
+    with Session() as session:
+        assert session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.account_id == disabled_id,
+                OutboxEvent.event_type == "account.updated",
+            )
+        ) is None
+
+    enabled_again = client.patch(f"/api/accounts/{disabled_id}", json={"sync_enabled": True})
+    assert enabled_again.status_code == 200, enabled_again.text
+    assert enabled_again.json()["sync_enabled"] is True
+    still_disabled_group = client.get("/api/mail/inbox", params={"group_id": str(group_id)})
+    assert {item["account_id"] for item in still_disabled_group.json()["items"]} == {str(disabled_id)}
+    enabled_after_empty = client.patch(f"/api/accounts/{enabled_id}", json={"sync_enabled": True})
+    assert enabled_after_empty.status_code == 200
+    assert enabled_after_empty.json()["sync_enabled"] is True
+    group_after_enable = client.get("/api/mail/inbox", params={"group_id": str(group_id)})
+    assert {item["account_id"] for item in group_after_enable.json()["items"]} == {str(enabled_id), str(disabled_id)}
+
+    disabled_again = client.patch(f"/api/accounts/{enabled_id}", json={"sync_enabled": False})
+    assert disabled_again.status_code == 200 and disabled_again.json()["sync_enabled"] is False
+    group_after_disable = client.get("/api/mail/inbox", params={"group_id": str(group_id)})
+    assert {item["account_id"] for item in group_after_disable.json()["items"]} == {str(disabled_id)}
+    enabled_once_more = client.patch(f"/api/accounts/{enabled_id}", json={"sync_enabled": True})
+    assert enabled_once_more.status_code == 200 and enabled_once_more.json()["sync_enabled"] is True
+
+    layout_after_enable = client.get("/api/sidebar/layout").json()
+    assert layout_after_enable["master_account_ids"] == layout_before_enable["master_account_ids"]
+    assert layout_after_enable["group_account_ids"] == layout_before_enable["group_account_ids"]
+    with Session() as session:
+        account_updates = list(session.scalars(
+            select(OutboxEvent)
+            .where(
+                OutboxEvent.account_id == disabled_id,
+                OutboxEvent.event_type == "account.updated",
+            )
+            .order_by(OutboxEvent.id)
+        ))
+        enabled_account_updates = list(session.scalars(
+            select(OutboxEvent)
+            .where(
+                OutboxEvent.account_id == enabled_id,
+                OutboxEvent.event_type == "account.updated",
+            )
+            .order_by(OutboxEvent.id)
+        ))
+        assert [event.payload for event in account_updates] == [{"sync_enabled": True}]
+        assert [event.payload for event in enabled_account_updates] == [
+            {"sync_enabled": False},
+            {"sync_enabled": True},
+            {"sync_enabled": False},
+            {"sync_enabled": True},
+        ]
+
+
 def test_global_and_group_stats_keep_missing_folder_stats_unknown():
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     Session = get_session_factory()

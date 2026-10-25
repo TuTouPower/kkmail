@@ -26,7 +26,8 @@ from mail_core.accounts import (
     update_public_settings,
 )
 from mail_core.db.session import get_session_factory
-from mail_core.mail.storage.models import Account, AccountGroup
+from mail_core.mail.domain.enums import OutboxEventType
+from mail_core.mail.storage.models import Account, AccountGroup, OutboxEvent
 from mail_core.security.redact import safe_error
 
 log = logging.getLogger("mail_core.mail.application.accounts")
@@ -238,6 +239,12 @@ def update_account_app(
     Session = get_session_factory()
     with Session() as session:
         group_arg: object = ...
+        prior_sync_enabled = None
+        if sync_enabled is not None:
+            account_row = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
+            if account_row is None:
+                raise LookupError("account not found")
+            prior_sync_enabled = account_row.sync_enabled
         if clear_group:
             group_arg = None
         elif group_id is not None:
@@ -270,6 +277,12 @@ def update_account_app(
                 credentials=credentials,
                 clear_credentials=clear_credentials,
             )
+            if prior_sync_enabled is not None and prior_sync_enabled != acc.sync_enabled:
+                session.add(OutboxEvent(
+                    event_type=OutboxEventType.ACCOUNT_UPDATED.value,
+                    account_id=acc.id,
+                    payload={"sync_enabled": acc.sync_enabled},
+                ))
             if oauth_flow_id and acc.sync_enabled:
                 _enqueue_initial_sync(session, acc.id)
             session.commit()

@@ -13,6 +13,7 @@ from mail_core.accounts.credentials import (
 )
 from mail_core.accounts.service import (
     account_ids_for_group,
+    enabled_account_ids,
     create_account,
     create_group,
     delete_account,
@@ -46,6 +47,7 @@ __all__ = [
     "ReadOnlyCredentialRef",
     "create_account",
     "account_ids_for_group",
+    "enabled_account_ids",
     "create_group",
     "delete_account",
     "delete_group",

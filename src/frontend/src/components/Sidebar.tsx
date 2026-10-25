@@ -285,6 +285,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
 function Sidebar() {
   const view = useMailStore((state) => state.view)
   const setView = useMailStore((state) => state.setView)
+  const setSearch = useMailStore((state) => state.setSearch)
   const listFilter = useMailStore((state) => state.listFilter)
   const setListFilter = useMailStore((state) => state.setListFilter)
   const openSettings = useMailStore((state) => state.openSettings)
@@ -298,6 +299,7 @@ function Sidebar() {
   const toggleExpandedCategory = useMailStore((state) => state.toggleSidebarCategory)
   const mobileSidebarOpen = useMailStore((state) => state.mobileSidebarOpen)
   const closeMobileSidebar = useMailStore((state) => state.closeMobileSidebar)
+  const clearSelected = useMailStore((state) => state.clearSelected)
   const wide = useIsWide()
   const drawerOpen = mobileSidebarOpen && !wide
   const sidebarRef = useRef<HTMLElement | null>(null)
@@ -306,6 +308,18 @@ function Sidebar() {
   const layoutQuery = useQuery({ queryKey: queryKeys.sidebarLayout, queryFn: () => api.getSidebarLayout() })
   const groups = groupsQuery.data || []
   const accounts = accountsQuery.data || []
+  const enabledAccounts = useMemo(() => accounts.filter((account) => account.sync_enabled !== false), [accounts])
+  const enabledAccountIds = useMemo(() => new Set(enabledAccounts.map((account) => account.id)), [enabledAccounts])
+  const selectedAccountId = view.type === 'account' || view.type === 'folder' || view.type === 'favorite'
+    ? view.accountId
+    : undefined
+  useEffect(() => {
+    if (!accountsQuery.isSuccess || !selectedAccountId || enabledAccountIds.has(selectedAccountId)) return
+    setView({ type: 'allInbox' })
+    setSearch('')
+    clearSelected()
+  }, [accountsQuery.isSuccess, clearSelected, enabledAccountIds, selectedAccountId, setSearch, setView])
+  const visibleAccounts = enabledAccounts
   const [actionError, setActionError] = useState('')
   const [newGroupOpen, setNewGroupOpen] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
@@ -357,9 +371,11 @@ function Sidebar() {
     queryFn: async ({ signal }) => {
       try {
         const response = await fetchGlobalStats(signal)
-        const byAccount = new Map(response.accounts.map((entry) => [entry.account_id, entry.unread_count] as const))
+        const byAccount = new Map(response.accounts
+          .filter((entry) => enabledAccountIds.has(entry.account_id))
+          .map((entry) => [entry.account_id, entry.unread_count] as const))
         let complete = true
-        for (const account of accounts) {
+        for (const account of enabledAccounts) {
           if (!byAccount.has(account.id)) {
             byAccount.set(account.id, null)
             complete = false
@@ -374,7 +390,7 @@ function Sidebar() {
         let total = 0
         let failed = false
         let succeeded = 0
-        await Promise.all(accounts.map(async (account) => {
+        await Promise.all(enabledAccounts.map(async (account) => {
           const isFaulty = (account.sync_enabled === false || account.sync_status === 'failed' || account.sync_status === 'auth_failed')
           try {
             const unread = await fetchAccountFolders(account.id, signal)
@@ -395,7 +411,7 @@ function Sidebar() {
             byAccount.set(account.id, null)
           }
         }))
-        if (accounts.length && !succeeded) throw globalError
+        if (enabledAccounts.length && !succeeded) throw globalError
         return { totalUnread: failed ? null : total, byAccount }
       }
     },
@@ -706,7 +722,9 @@ function Sidebar() {
     const active = scope.type === 'all'
       ? ((category === 'inbox' && view.type === 'allInbox' && listFilter === 'all') || (view.type === 'favorite' && !view.accountId && view.category === category))
       : view.type === 'group' && view.groupId === scope.id && view.category === category
-    const categoryAccounts = scope.type === 'all' ? accounts : orderedMembers(accounts, scope.id)
+    const categoryAccounts = scope.type === 'all'
+      ? visibleAccounts
+      : orderedMembers(accounts, scope.id).filter((account) => account.sync_enabled !== false)
     return (
       <div key={key} className="tree-category-block">
         <div className={`tree-category-heading ${active ? 'active' : ''}`} style={{ paddingLeft: '24px' }}>
@@ -777,7 +795,7 @@ function Sidebar() {
   }
 
   const groupSections = groups.map((group) => {
-    const members = orderedMembers(accounts, group.id)
+    const members = orderedMembers(accounts, group.id).filter((account) => account.sync_enabled !== false)
     const groupUnread = members.reduce<number | null>((total, account) => {
       const isFaulty = (account.sync_enabled === false || account.sync_status === 'failed' || account.sync_status === 'auth_failed')
       const count = unreadByAccount.get(account.id)
@@ -910,7 +928,7 @@ function Sidebar() {
             {(groupsQuery.isLoading || accountsQuery.isLoading || layoutQuery.isLoading) && <div className="tree-loading" style={{ paddingLeft: '24px' }}>正在加载账户…</div>}
             {(groupsQuery.error || accountsQuery.error || layoutQuery.error) && <div className="tree-load-error" role="alert" style={{ paddingLeft: '24px' }}><span>{errorMessage(accountsQuery.error || groupsQuery.error || layoutQuery.error, '账户加载失败')}</span><button className="tree-retry" type="button" onClick={() => { void groupsQuery.refetch(); void accountsQuery.refetch(); void layoutQuery.refetch() }}>重试</button></div>}
             {statsQuery.error && <div className="tree-folder-status" role="status" style={{ paddingLeft: '24px' }}>未读统计暂不可用：{errorMessage(statsQuery.error, '统计加载失败')} <button className="tree-retry" type="button" onClick={() => void statsQuery.refetch()}>重试统计</button></div>}
-            {accounts.map((account) => renderAccount(account, 'master', account.group_id || null, 1))}
+            {visibleAccounts.map((account) => renderAccount(account, 'master', account.group_id || null, 1))}
           </div>}
         </section>
       </div>

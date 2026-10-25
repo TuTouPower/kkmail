@@ -407,6 +407,16 @@ def account_ids_for_group(session: Session, group_id: uuid.UUID) -> list[uuid.UU
     return list(session.scalars(select(Account.id).where(Account.group_id == group_id).order_by(Account.id)).all())
 
 
+def enabled_account_ids(session: Session, group_id: uuid.UUID | None = None) -> list[uuid.UUID]:
+    """Return enabled accounts for an aggregate scope, validating a requested group."""
+    stmt = select(Account.id).where(Account.sync_enabled.is_(True))
+    if group_id is not None:
+        if session.get(AccountGroup, group_id) is None:
+            raise LookupError("group not found")
+        stmt = stmt.where(Account.group_id == group_id)
+    return list(session.scalars(stmt.order_by(Account.id)).all())
+
+
 def delete_group(session: Session, group_id: uuid.UUID) -> None:
     lock_sidebar_layout(session)
     g = session.scalar(select(AccountGroup).where(AccountGroup.id == group_id).with_for_update())

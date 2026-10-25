@@ -1,3 +1,4 @@
+import uuid
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -27,8 +28,11 @@ def test_search_strips_query_before_search(monkeypatch):
     monkeypatch.setattr(mail_api, "get_session_factory", lambda: Session)
     monkeypatch.setattr(mail_api, "search_messages_page", search)
     monkeypatch.setattr(mail_api, "account_emails_by_id", Mock(return_value={}))
+    enabled_ids = [uuid.UUID(int=1)]
+    monkeypatch.setattr(mail_api, "enabled_account_ids", lambda _session: enabled_ids)
 
     result = mail_api.api_search(q="  cats  ", limit=50, offset=0)
 
     assert result.query == "cats"
     assert search.call_args.kwargs["query"] == "cats"
+    assert search.call_args.kwargs["account_ids"] == enabled_ids

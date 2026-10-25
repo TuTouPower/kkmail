@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from mail_core.api.http_headers import content_disposition_attachment
 from mail_core.db.session import get_session_factory
-from mail_core.accounts import account_ids_for_group
+from mail_core.accounts import enabled_account_ids
 from mail_core.mail.application.attachments import (
     AttachmentAccessError,
     PathTraversalRejected,
@@ -286,7 +286,14 @@ def api_unified_inbox(
         if group_id is not None and (account_id is not None or folder_id is not None):
             raise HTTPException(400, "group_id cannot be combined with account_id or folder_id")
         try:
-            account_ids = account_ids_for_group(session, group_id) if group_id is not None else ([account_id] if account_id else None)
+            if group_id is not None:
+                account_ids = enabled_account_ids(session, group_id)
+            elif account_id is not None:
+                account_ids = [account_id]
+            elif folder_id is None:
+                account_ids = enabled_account_ids(session)
+            else:
+                account_ids = None
             page = unified_inbox(
                 session,
                 account_ids=account_ids,
@@ -346,7 +353,14 @@ def api_search(
         if group_id is not None and (account_id is not None or folder_id is not None):
             raise HTTPException(400, "group_id cannot be combined with account_id or folder_id")
         try:
-            account_ids = account_ids_for_group(session, group_id) if group_id is not None else ([account_id] if account_id else None)
+            if group_id is not None:
+                account_ids = enabled_account_ids(session, group_id)
+            elif account_id is not None:
+                account_ids = [account_id]
+            elif folder_id is None:
+                account_ids = enabled_account_ids(session)
+            else:
+                account_ids = None
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
         page = search_messages_page(
@@ -421,13 +435,16 @@ def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
     Session = get_session_factory()
     if body.group_id is not None and (body.account_id is not None or body.folder_id is not None):
         raise HTTPException(400, "group_id cannot be combined with account_id or folder_id")
-    group_account_ids = None
+    scope_account_ids = None
     if body.group_id is not None:
         with Session() as scope_session:
             try:
-                group_account_ids = account_ids_for_group(scope_session, body.group_id)
+                scope_account_ids = enabled_account_ids(scope_session, body.group_id)
             except LookupError as exc:
                 raise HTTPException(404, str(exc)) from exc
+    elif body.account_id is None and body.folder_id is None:
+        with Session() as scope_session:
+            scope_account_ids = enabled_account_ids(scope_session)
     if body.group_id is not None:
         scope_type, scope_id = "group", str(body.group_id)
     elif body.folder_id is not None:
@@ -448,8 +465,8 @@ def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
                     folder_role=body.folder_role,
                     folder_id=body.folder_id,
                     is_flagged=body.is_flagged,
-                    group_id=body.group_id if group_account_ids is None else None,
-                    account_ids=group_account_ids,
+                    group_id=body.group_id if scope_account_ids is None else None,
+                    account_ids=scope_account_ids,
                     after_message_id=after_message_id,
                     limit=MARK_ALL_READ_BATCH_SIZE,
                 )

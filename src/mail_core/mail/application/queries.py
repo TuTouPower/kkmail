@@ -419,6 +419,7 @@ def _query_inbox_stats(
         .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == folder_role))
         .outerjoin(FolderStats, FolderStats.folder_id == Folder.id)
         .group_by(Account.id, Account.sync_enabled, Account.sync_status)
+        .where(Account.sync_enabled.is_(True))
         .order_by(Account.id.asc())
     )
     if group_id is not None:
@@ -428,6 +429,8 @@ def _query_inbox_stats(
     active_accounts: list[AccountInboxStatsOut] = []
     for row in session.execute(stmt).all():
         values = row._mapping
+        if not values["sync_enabled"]:
+            continue
         folder_count = values["folder_count"]
         stats_count = values["stats_count"]
         known_unread_count = values["known_unread_count"]

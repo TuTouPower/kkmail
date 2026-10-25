@@ -34,7 +34,7 @@ _group_account_ids = [uuid4()]
             None,
             "global",
             None,
-            {"account_id": None, "group_id": None, "account_ids": None, "folder_id": None},
+            {"account_id": None, "group_id": None, "account_ids": [], "folder_id": None},
         ),
         (
             _account_body,
@@ -74,7 +74,7 @@ _group_account_ids = [uuid4()]
         ),
     ],
 )
-def test_mark_all_read_response_reports_effective_scope(
+def test_mark_all_read_response_reports_enabled_effective_scope(
     monkeypatch, body, group_account_ids, scope_type, scope_id, expected_kwargs
 ):
     captured = {}
@@ -85,11 +85,9 @@ def test_mark_all_read_response_reports_effective_scope(
         lambda _session, **kwargs: captured.update(kwargs) or MarkAllReadBatchResult(0, None),
     )
     if body.group_id is not None:
-        monkeypatch.setattr(
-            mail_api,
-            "account_ids_for_group",
-            lambda _session, _group_id: group_account_ids,
-        )
+        monkeypatch.setattr(mail_api, "enabled_account_ids", lambda _session, _group_id: group_account_ids)
+    elif body.account_id is None and body.folder_id is None:
+        monkeypatch.setattr(mail_api, "enabled_account_ids", lambda _session: [])
 
     result = mail_api.api_mark_all_read(body)
 

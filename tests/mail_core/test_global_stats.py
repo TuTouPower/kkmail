@@ -27,12 +27,10 @@ def _stats_row(account_id, folder_count, stats_count, unread, total, known_unrea
     )
 
 
-def test_query_global_inbox_stats_excludes_faulty_zero_folder_account():
+def test_query_global_inbox_stats_excludes_disabled_accounts_and_keeps_enabled_sync_failures():
     session = MagicMock()
     acc1, acc2, acc3 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-    # acc1: normal active, 1 inbox folder, unread=5
-    # acc2: faulty, disabled & auth_failed, 0 inbox folders
-    # acc3: faulty, enabled but sync_status='failed', 0 inbox folders
+    # Disabled accounts are outside aggregate output; enabled failed accounts remain visible.
     session.execute.return_value.all.return_value = [
         _stats_row(acc1, 1, 1, 5, 10, 1, True, "idle"),
         _stats_row(acc2, 0, 0, None, None, 0, False, "auth_failed"),
@@ -40,9 +38,9 @@ def test_query_global_inbox_stats_excludes_faulty_zero_folder_account():
     ]
     result = query_global_inbox_stats(session)
     assert result.total_unread == 5
+    assert [account.account_id for account in result.accounts] == [acc1, acc3]
     assert result.accounts[0].unread_count == 5
     assert result.accounts[1].unread_count is None
-    assert result.accounts[2].unread_count is None
 
 
 def test_query_global_inbox_stats_normal_account_missing_folder_stats_propagates_null():
@@ -60,7 +58,7 @@ def test_query_global_inbox_stats_normal_account_missing_folder_stats_propagates
     assert result.accounts[1].unread_count is None
 
 
-def test_query_group_inbox_stats_excludes_faulty_zero_folder_account():
+def test_query_group_inbox_stats_excludes_disabled_accounts():
     session = MagicMock()
     group_id = uuid.uuid4()
     session.get.return_value = MagicMock(spec=AccountGroup)
@@ -71,8 +69,8 @@ def test_query_group_inbox_stats_excludes_faulty_zero_folder_account():
     ]
     result = query_group_inbox_stats(session, group_id)
     assert result.total_unread == 3
+    assert [account.account_id for account in result.accounts] == [acc1]
     assert result.accounts[0].unread_count == 3
-    assert result.accounts[1].unread_count is None
 
 
 # Replaces the complete-only aggregate fixture: nullable unread counters now require

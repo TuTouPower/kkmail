@@ -19,7 +19,7 @@ const accounts = [
   { id: 'acc-2', email: 'notes@a.example', status: 'active', account_type: 'imap', provider: 'imap', group_id: null },
 ]
 
-function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
+function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; disabledAcc1?: boolean; disabledAcc2?: boolean; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
   const calls: Array<{ url: string; method: string; body?: string }> = []
   let currentAccounts: Array<{
     id: string
@@ -30,9 +30,11 @@ function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partial
     provider: string
     group_id: string | null
     group_name?: string
+    sync_enabled?: boolean
   }> = accounts.map((account) => ({
     ...account,
     group_id: account.group_id ?? null,
+    sync_enabled: account.id === 'acc-1' ? !options.disabledAcc1 : !options.disabledAcc2,
     sync_status: account.id === 'acc-1' && options.syncStatusAcc1 ? options.syncStatusAcc1 : 'idle',
   }))
   let currentGroups = groups.map((group) => ({ ...group }))
@@ -101,6 +103,10 @@ function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partial
     }
     if (url.pathname === '/api/mail/stats') {
       if (options.failStats) return json({ detail: 'stats unavailable' }, 500)
+      if (options.disabledAcc1 && options.disabledAcc2) return json({ total_unread: 0, accounts: [] })
+      if (options.disabledAcc1) return json({ total_unread: 1, accounts: [
+        { account_id: 'acc-2', unread_count: 1, total_count: 4 },
+      ] })
       if (options.partialStats) return json({ total_unread: 1, accounts: [{ account_id: 'acc-2', unread_count: 1, total_count: 4 }] })
       return json({ total_unread: 3, accounts: [
       { account_id: 'acc-1', unread_count: 2, total_count: 9 },
@@ -224,6 +230,45 @@ describe('<Sidebar />', () => {
     await waitFor(() => expect(container.querySelectorAll('.tree-category-account')).toHaveLength(2))
     const inboxAccountBadges = [...container.querySelectorAll('.tree-category-account')].map((row) => row.querySelector('.unread-badge')?.textContent)
     expect(inboxAccountBadges).toEqual(['1', '2'])
+  })
+
+  it('hides disabled accounts from every sidebar entry without changing the full layout snapshot', async () => {
+    const calls = mockApi({ disabledAcc1: true })
+    useMailStore.setState({
+      view: { type: 'account', accountId: 'acc-1', email: 'finance@z.example' },
+      selectedKey: 'mail:acc-1:message-1',
+      selectedIds: ['mail:acc-1:message-1'],
+      search: 'stale search',
+    })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(useMailStore.getState().view).toEqual({ type: 'allInbox' }))
+    expect(useMailStore.getState().selectedKey).toBeNull()
+    expect(useMailStore.getState().selectedIds).toEqual([])
+    expect(useMailStore.getState().search).toBe('')
+    expect(container.querySelector('.tree-account-block[data-account-id="acc-1"]')).toBeNull()
+    expect(container.querySelector('.tree-account-block[data-account-id="acc-2"]')).not.toBeNull()
+    await click(container.querySelector('[aria-label="展开 所有收件箱"]'))
+    expect(container.querySelector('.tree-category-account')?.textContent).not.toContain('finance@z.example')
+    await click(container.querySelector('[aria-label="展开分组 税务归档"]'))
+    expect(container.querySelector('[data-group-id="group-1"] .tree-account-block[data-account-id="acc-1"]')).toBeNull()
+    expect(container.querySelector('[data-group-id="group-1"] .tree-count')?.textContent).toBe('0')
+    expect(calls.some((call) => call.url === '/api/sidebar/layout' && call.method === 'PUT')).toBe(false)
+  })
+
+  it('does not request disabled-account stats in the fallback path', async () => {
+    const calls = mockApi({ disabledAcc1: true, failStats: true, failAcc1Stats: true })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-account-id="acc-2"] .unread-badge')?.textContent).toBe('1'))
+    expect(calls.some((call) => call.url === '/api/mail/accounts/acc-1/folder-stats')).toBe(false)
+    expect(calls.some((call) => call.url === '/api/mail/accounts/acc-2/folder-stats')).toBe(true)
+  })
+
+  it('shows zero unread and no account rows when all accounts are disabled', async () => {
+    const calls = mockApi({ disabledAcc1: true, disabledAcc2: true, failStats: true, failAcc1Stats: true, failAcc2Stats: true })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block')).toBeNull())
+    expect(container.querySelector('.unread-badge')).toBeNull()
+    expect(calls.some((call) => call.url.includes('/folder-stats'))).toBe(false)
   })
 
   it('focuses and traps keyboard focus inside the mobile navigation dialog', async () => {

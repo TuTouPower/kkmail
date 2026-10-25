@@ -204,6 +204,7 @@ describe('subscribeMailCoreStream', () => {
 
   it('dispatches every named mail-core outbox event from the fetch stream', async () => {
     const eventTypes = [
+      'account.updated',
       'message.upserted',
       'message.removed',
       'folder.stats_updated',

@@ -14,6 +14,7 @@ SSE_WIRE_EVENTS: frozenset[str] = frozenset(e.value for e in OutboxEventType)
 # Core events every mail UI should subscribe to. Archive.* are optional for UIs
 # that do not surface MIME-archive progress.
 SSE_CORE_CLIENT_EVENTS: tuple[str, ...] = (
+    OutboxEventType.ACCOUNT_UPDATED.value,
     OutboxEventType.MESSAGE_UPSERTED.value,
     OutboxEventType.MESSAGE_REMOVED.value,
     OutboxEventType.FOLDER_STATS_UPDATED.value,

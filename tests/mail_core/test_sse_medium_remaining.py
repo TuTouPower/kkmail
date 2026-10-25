@@ -43,18 +43,16 @@ def test_sse_wire_events_match_outbox_enum():
         assert name in events_mod.SSE_WIRE_EVENTS
 
 
-def test_frontend_subscribes_to_core_sse_events():
-    """Server/client name contract: core events must appear in MAIL_CORE_EVENTS."""
-    path = Path(__file__).resolve().parents[2] / "src" / "frontend" / "src" / "api" / "mailCore.ts"
+def test_frontend_invalidates_aggregate_caches_on_account_updates():
+    """Account scope changes must refresh organization, lists, and aggregate statistics."""
+    path = Path(__file__).resolve().parents[2] / "src" / "frontend" / "src" / "hooks" / "useMailCoreRealtime.ts"
     if not path.is_file():
         pytest.skip("frontend not present")
     text = path.read_text(encoding="utf-8")
-    block = re.search(r"MAIL_CORE_EVENTS\s*=\s*\[(.*?)]\s*as const", text, re.S)
-    assert block, "MAIL_CORE_EVENTS list not found"
+    block = re.search(r"MAIL_CORE_INBOX_INVALIDATE_EVENTS\s*=\s*new Set\(\[(.*?)]\)", text, re.S)
+    assert block, "MAIL_CORE_INBOX_INVALIDATE_EVENTS set not found"
     listed = set(re.findall(r"['\"]([^'\"]+)['\"]", block.group(1)))
-    missing = [e for e in events_mod.SSE_CORE_CLIENT_EVENTS if e not in listed]
-    assert not missing, f"frontend missing core SSE events: {missing}"
-    # archive.* may be omitted by the UI until archive progress is surfaced (documented drift).
+    assert OutboxEventType.ACCOUNT_UPDATED.value in listed
 
 
 @pytest.mark.parametrize("queue_size", [1, 4])

@@ -80,6 +80,7 @@ class JobStatus(StrEnum):
 
 
 class OutboxEventType(StrEnum):
+    ACCOUNT_UPDATED = "account.updated"
     MESSAGE_UPSERTED = "message.upserted"
     MESSAGE_REMOVED = "message.removed"
     FOLDER_STATS_UPDATED = "folder.stats_updated"

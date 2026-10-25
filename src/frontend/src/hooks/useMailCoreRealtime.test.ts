@@ -15,6 +15,7 @@ describe('shouldInvalidateMailCoreInbox', () => {
     expect(shouldInvalidateMailCoreInbox('remote_operation.updated')).toBe(true)
     expect(shouldInvalidateMailCoreInbox('client.resync_hint')).toBe(true)
     expect(shouldInvalidateMailCoreInbox('sync.completed')).toBe(true)
+    expect(shouldInvalidateMailCoreInbox('account.updated')).toBe(true)
   })
 
   it('ignores progress-only events', () => {
@@ -90,6 +91,22 @@ describe('createThrottledInvalidator', () => {
     expect(statsPredicate?.({ queryKey: ['mail-core', 'folder-stats', 'all', 'inbox', ''] })).toBe(true)
     expect(statsPredicate?.({ queryKey: ['mail-core', 'inbox', 'all'] })).toBe(false)
 
+    vi.useRealTimers()
+  })
+
+  it('refreshes organization and aggregate caches after an account is enabled or disabled', async () => {
+    vi.useFakeTimers()
+    const mockQc = { invalidateQueries: vi.fn() } as unknown as typeof queryClient
+    const throttler = createThrottledInvalidator(mockQc, 100)
+    throttler.handleEvent('account.updated', { sync_enabled: false })
+    await vi.advanceTimersByTimeAsync(100)
+
+    const calls = (mockQc.invalidateQueries as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([arg]) => arg)
+    expect(calls).toHaveLength(5)
+    expect(calls).toContainEqual({ queryKey: ['accounts'] })
+    expect(calls).toContainEqual({ queryKey: ['groups'] })
+    expect(calls).toContainEqual({ queryKey: ['sidebar-layout'] })
+    expect(calls.some((arg) => (arg as { predicate?: unknown }).predicate)).toBe(true)
     vi.useRealTimers()
   })
 })
