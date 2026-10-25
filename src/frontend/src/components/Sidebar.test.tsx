@@ -628,6 +628,28 @@ describe('<Sidebar />', () => {
     expect(useMailStore.getState().view).toMatchObject({ type: 'folder', folderId: 'qq-subscription' })
   })
 
+  it('renders inbox before unread, followed by other folders with aligned indent (p051)', async () => {
+    mockApi()
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-account-id="acc-1"] .tree-disclosure')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-account-id="acc-1"]')!
+    await click(account.querySelector('.tree-disclosure'))
+
+    await waitFor(() => expect(account.textContent).toContain('收件箱'))
+    const folderRows = [...account.querySelectorAll('.tree-folder-row')]
+    const labels = folderRows.map((row) => row.querySelector('.tree-label')?.textContent?.trim())
+
+    const inboxIdx = labels.indexOf('收件箱')
+    const unreadIdx = labels.indexOf('未读邮件')
+    expect(inboxIdx).toBeGreaterThanOrEqual(0)
+    expect(unreadIdx).toBeGreaterThanOrEqual(0)
+    expect(inboxIdx).toBeLessThan(unreadIdx)
+
+    // Check padding of inbox and unread (depth=2: 48px)
+    expect(folderRows[inboxIdx].getAttribute('style')).toContain('padding-left: 48px')
+    expect(folderRows[unreadIdx].getAttribute('style')).toContain('padding-left: 48px')
+  })
+
   it('persists account-list reorder without changing existing group membership', async () => {
     const calls = mockApi()
     const { container } = await render(<Sidebar />)

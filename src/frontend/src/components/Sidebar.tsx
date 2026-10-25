@@ -215,14 +215,14 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
     return names
   }, [folders])
 
-  if (foldersQuery.isLoading) return <div className="tree-folder-status" style={{ paddingLeft: '48px' }}>正在加载文件夹…</div>
-  if (foldersQuery.isError || !foldersQuery.data) return <div className="tree-folder-status tree-error" style={{ paddingLeft: '48px' }}>文件夹加载失败 <button className="tree-retry" type="button" onClick={() => void foldersQuery.refetch()}>重试</button></div>
+  if (foldersQuery.isLoading) return <div className="tree-folder-status" style={{ paddingLeft: '90px' }}>正在加载文件夹…</div>
+  if (foldersQuery.isError || !foldersQuery.data) return <div className="tree-folder-status tree-error" style={{ paddingLeft: '90px' }}>文件夹加载失败 <button className="tree-retry" type="button" onClick={() => void foldersQuery.refetch()}>重试</button></div>
 
   if (folders.length === 0) {
     if (syncStatus === 'auth_failed' || syncStatus === 'failed') {
-      return <div className="tree-folder-status tree-error" role="status" style={{ paddingLeft: '48px' }}>同步失败，请检查账户设置</div>
+      return <div className="tree-folder-status tree-error" role="status" style={{ paddingLeft: '90px' }}>同步失败，请检查账户设置</div>
     }
-    return <div className="tree-folder-status" style={{ paddingLeft: '48px' }}>暂无文件夹</div>
+    return <div className="tree-folder-status" style={{ paddingLeft: '90px' }}>暂无文件夹</div>
   }
 
   const folderMap = new Map(folders.filter((folder) => folder.remote_id).map((folder) => [folder.remote_id!, folder]))
@@ -238,6 +238,15 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
     }
   }
 
+  function hasInbox(folder: AccountFolderStatsItemOut): boolean {
+    if (folder.role === 'inbox') return true
+    const children = folder.remote_id ? childrenMap.get(folder.remote_id) || [] : []
+    return children.some(hasInbox)
+  }
+
+  const inboxRoots = roots.filter(hasInbox)
+  const otherRoots = roots.filter((folder) => !hasInbox(folder))
+
   const renderTree = (items: AccountFolderStatsItemOut[], level = 0): React.ReactNode => [...items].sort((a, b) => {
     const priority = getRolePriority(a.role || 'other') - getRolePriority(b.role || 'other')
     return priority || (a.name || '').localeCompare(b.name || '', 'zh-CN')
@@ -251,13 +260,14 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
     const active = view.type === 'folder' && view.accountId === accountId && view.folderId === folderId
     const children = folder.remote_id ? childrenMap.get(folder.remote_id) || [] : []
     const Icon = getFolderIcon(role)
+    const depth = 2 + level
     return (
       <div key={folderId || folder.remote_id || folder.name} className="tree-folder-node">
         <button
           type="button"
           disabled={notSelectable}
           className={`tree-nav-row tree-folder-row ${active ? 'active' : ''}`}
-          style={{ paddingLeft: `${48 + level * 24}px` }}
+          style={{ paddingLeft: `${depth * 24}px` }}
           onClick={() => {
             setView({ type: 'folder', accountId, email: accountEmail, folderId, folderName: displayName, folderRole: role })
             setListFilter('all')
@@ -276,8 +286,9 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
   const syncFailed = syncStatus === 'auth_failed' || syncStatus === 'failed'
   return (
     <>
-      {syncFailed && <div className="tree-folder-status tree-error" role="status" style={{ paddingLeft: '48px' }}>同步失败，请检查账户设置</div>}
+      {syncFailed && <div className="tree-folder-status tree-error" role="status" style={{ paddingLeft: '90px' }}>同步失败，请检查账户设置</div>}
       <div className="tree-folder-list">
+        {renderTree(inboxRoots)}
         <button type="button" className="tree-nav-row tree-folder-row" style={{ paddingLeft: '48px' }} onClick={() => {
           setView({ type: 'favorite', category: 'unread', accountId, email: accountEmail })
           setListFilter('unread')
@@ -286,7 +297,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
           <MailOpen size={16} aria-hidden="true" /><span className="tree-label">未读邮件</span>
           {unreadCount === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : unreadCount && unreadCount > 0 ? <span className="side-count unread-badge">{unreadCount}</span> : null}
         </button>
-        {renderTree(roots)}
+        {renderTree(otherRoots)}
       </div>
     </>
   )
