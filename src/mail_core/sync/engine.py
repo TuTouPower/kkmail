@@ -104,25 +104,6 @@ def sync_account_folders(
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
                 session.commit()
             return {"status": "rate_limited", "retry_after": delay}
-        except Exception as exc:
-            with Session() as session:
-                try:
-                    acc = session.get(Account, account_id)
-                    if acc is not None:
-                        acc.sync_status = "failed"
-                        cfg = dict(acc.config or {})
-                        cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
-                        cfg["last_sync_error"] = safe_provider_summary(exc)
-                        acc.config = cfg
-                        if hasattr(acc, "last_synced_at"):
-                            setattr(acc, "last_synced_at", datetime.now(timezone.utc))
-                    release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-                    session.commit()
-                except FencingMismatch:
-                    session.rollback()
-                except Exception:
-                    session.rollback()
-            raise
     except Exception as exc:
         with Session() as session:
             try:
