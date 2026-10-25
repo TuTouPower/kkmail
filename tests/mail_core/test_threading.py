@@ -30,6 +30,12 @@ def test_normalize_and_extract_ids():
     assert normalize_subject("Re: Fwd: Hello") == "hello"
 
 
+def test_normalize_message_id_rejects_bare_arbitrary_tokens():
+    assert normalize_message_id("12345") is None
+    assert normalize_message_id("not-an-email") is None
+    assert normalize_message_id("<already-bracketed>") == "<already-bracketed>"
+
+
 @_requires_db
 def test_in_reply_to_links_and_creates_parent_thread():
     Session = get_session_factory()

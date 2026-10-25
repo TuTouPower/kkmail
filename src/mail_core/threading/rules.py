@@ -47,7 +47,7 @@ def normalize_message_id(value: str | None) -> str | None:
         return f"<{m.group(1)}>"
     if value.startswith("<") and value.endswith(">"):
         return value
-    return f"<{value}>"
+    return None
 
 
 def extract_message_ids(*parts: str | None) -> list[str]:
