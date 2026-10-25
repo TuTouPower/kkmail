@@ -137,6 +137,50 @@ def test_restore_plain_backup_uses_package_directory_as_restore_tree(tmp_path, m
     assert package_dir.is_dir(), "restore must preserve the source plain package"
 
 
+def test_restore_blob_copy_failure_preserves_existing_file(tmp_path, monkeypatch):
+    source_blobs = tmp_path / "source-blobs"
+    source_blob = source_blobs / "aa" / "bb" / "message.blob"
+    source_blob.parent.mkdir(parents=True)
+    source_blob.write_bytes(b"replacement blob payload")
+    package_dir = tmp_path / "plain-backup"
+    create_backup_package(
+        package_dir,
+        include_blobs=True,
+        database_url_override="postgresql://backup:pw@127.0.0.1:5432/source",
+        blobs_dir=source_blobs,
+        encrypt=False,
+        allow_dump_stub=True,
+    )
+    monkeypatch.setattr(
+        backup_package,
+        "verify_backup_package",
+        lambda *_args, **_kwargs: backup_package.RestoreVerifyResult(True, 1, []),
+    )
+
+    target_blobs = tmp_path / "restored-blobs"
+    dest_file = target_blobs / "aa" / "bb" / "message.blob"
+    dest_file.parent.mkdir(parents=True)
+    dest_file.write_bytes(b"existing blob")
+
+    def fail_after_partial_copy(source, dest, length=0):
+        assert length > 0
+        dest.write(source.read(8))
+        raise OSError("simulated disk full")
+
+    monkeypatch.setattr(backup_package.shutil, "copyfileobj", fail_after_partial_copy)
+    with pytest.raises(OSError, match="simulated disk full"):
+        restore_backup_package(
+            package_dir,
+            target_database_url="postgresql://restore:pw@127.0.0.1:5432/target",
+            target_blobs_dir=target_blobs,
+            source_database_url="postgresql://backup:pw@127.0.0.1:5432/source",
+            allow_stub=True,
+        )
+
+    assert dest_file.read_bytes() == b"existing blob"
+    assert not list(target_blobs.rglob("*.restore-*"))
+
+
 def test_restore_sealed_backup_reads_manifest_filename_case(tmp_path, monkeypatch):
     assert backup_package._MANIFEST_FILENAME == "MANIFEST.json"
 

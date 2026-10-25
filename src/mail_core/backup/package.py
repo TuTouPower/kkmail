@@ -837,7 +837,21 @@ def restore_backup_package(
                         dest_file.parent.mkdir(parents=True, exist_ok=True)
                         f = t.extractfile(member)
                         if f:
-                            dest_file.write_bytes(f.read())
+                            temp_file = dest_file.with_name(f".{dest_file.name}.restore-{uuid.uuid4().hex}")
+                            created = False
+                            try:
+                                with f, temp_file.open("xb") as out:
+                                    created = True
+                                    shutil.copyfileobj(f, out, length=1024 * 1024)
+                                    out.flush()
+                                    os.fsync(out.fileno())
+                                temp_file.replace(dest_file)
+                            finally:
+                                if created:
+                                    try:
+                                        temp_file.unlink(missing_ok=True)
+                                    except OSError:
+                                        pass
                             blobs_restored += 1
 
         # 2. Restore PostgreSQL dump
