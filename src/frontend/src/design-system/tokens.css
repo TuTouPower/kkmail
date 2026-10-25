@@ -1004,17 +1004,28 @@ button:hover .icon,
   justify-content: flex-start;
   gap: 7px;
   height: 34px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 9px;
-  background: var(--surface);
+  background: transparent;
   color: var(--subtle);
   flex: 1;
   padding: 0 10px;
+  cursor: pointer;
 }
 
 .footer-btn:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+.footer-btn:active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.footer-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* List pane */
