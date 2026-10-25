@@ -2,6 +2,8 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from mail_core.mail.application.mutations import _primary_location
 
 
@@ -30,3 +32,31 @@ def test_primary_location_prefers_inbox_then_uses_folder_id_for_ties():
 
     assert folder is other_folder_1
     assert location.folder_id == other_folder_1.id
+
+
+def test_resolve_imap_trash_folder():
+    from mail_core.mail.application.mutations import (
+        _resolve_imap_trash_folder,
+        UnaddressableMessageError,
+    )
+    from mail_core.mail.storage.models import Folder
+
+    account_id = uuid.uuid4()
+    mock_session = MagicMock()
+
+    # 1. Exactly one trash folder
+    mock_trash = Folder(account_id=account_id, remote_id="INBOX.Deleted Items", role="trash", sync_status="idle")
+    mock_session.scalars.return_value.all.return_value = [mock_trash]
+    resolved = _resolve_imap_trash_folder(mock_session, account_id)
+    assert resolved == "INBOX.Deleted Items"
+
+    # 2. No trash folder -> raises
+    mock_session.scalars.return_value.all.return_value = []
+    with pytest.raises(UnaddressableMessageError, match="no selectable trash folder"):
+        _resolve_imap_trash_folder(mock_session, account_id)
+
+    # 3. Multiple trash folders -> raises
+    mock_trash2 = Folder(account_id=account_id, remote_id="Trash2", role="trash", sync_status="idle")
+    mock_session.scalars.return_value.all.return_value = [mock_trash, mock_trash2]
+    with pytest.raises(UnaddressableMessageError, match="multiple ambiguous"):
+        _resolve_imap_trash_folder(mock_session, account_id)

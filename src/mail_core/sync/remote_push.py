@@ -411,6 +411,16 @@ def push_remote_operations(
 
         caught_exc: Exception | None = None
         remote_state: dict = {}
+        if op_type == "trash" and getattr(provider, "name", "") == "imap":
+            if claimed_desired.get("trash_folder_remote_id") in (None, "", "Trash"):
+                try:
+                    from mail_core.mail.application.mutations import _resolve_imap_trash_folder
+
+                    with Session() as s:
+                        real_trash = _resolve_imap_trash_folder(s, account_id)
+                        claimed_desired["trash_folder_remote_id"] = real_trash
+                except Exception:
+                    pass
         remote_id = claimed_desired.get("remote_id")
         if not isinstance(remote_id, str) or not remote_id.strip():
             ok = False
