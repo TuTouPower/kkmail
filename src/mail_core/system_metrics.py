@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from mail_core.mail.domain.enums import SyncRunStatus
 from mail_core.mail.storage.models import (
     Account,
     AppSetting,
@@ -136,7 +137,7 @@ def get_system_health_metrics(session: Session) -> SystemHealthReport:
     total_accs, active_accs = acc_counts
 
     last_sync = session.execute(
-        select(func.max(SyncRun.finished_at)).where(SyncRun.status == "success")
+        select(func.max(SyncRun.finished_at)).where(SyncRun.status == SyncRunStatus.DONE.value)
     ).scalar()
 
     last_sync_iso: str | None = None
