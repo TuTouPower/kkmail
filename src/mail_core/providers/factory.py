@@ -10,8 +10,8 @@ import socket
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.storage.models import Account
 from mail_core.providers.base import MailProvider
-from mail_core.providers.gmail import GmailProvider
-from mail_core.providers.graph import GraphProvider
+from mail_core.providers.gmail import GmailNotConfiguredError, GmailProvider
+from mail_core.providers.graph import GraphNotConfiguredError, GraphProvider
 from mail_core.providers.host_security import is_restricted_ip, private_hosts_allowed
 from mail_core.providers.imap import ImapProvider
 from mail_core.providers.oauth import (
@@ -158,7 +158,7 @@ def build_provider(
     if provider == "gmail":
         ref = account.credential_ref or ""
         if not ref:
-            return GmailProvider(credential_ref="", timeout=effective_timeout)
+            raise GmailNotConfiguredError("Gmail account missing credential_ref")
         transport = _oauth_transport(
             credential_ref=ref,
             store=store,
@@ -172,7 +172,7 @@ def build_provider(
     if provider == "graph":
         ref = account.credential_ref or ""
         if not ref:
-            return GraphProvider(credential_ref="", timeout=effective_timeout)
+            raise GraphNotConfiguredError("Graph account missing credential_ref")
         transport = _oauth_transport(
             credential_ref=ref,
             store=store,

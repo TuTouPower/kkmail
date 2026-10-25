@@ -11,6 +11,7 @@ from mail_core.accounts import DictCredentialStore
 from mail_core.mail.storage.models import Account
 from mail_core.providers.factory import build_provider
 from mail_core.providers.gmail import GmailNotConfiguredError, GmailProvider
+from mail_core.providers.graph import GraphNotConfiguredError
 from mail_core.providers.http import AmbiguousOutcomeError, ProviderHttpError
 from mail_core.providers.oauth import (
     BearerTransport,
@@ -184,8 +185,15 @@ def test_factory_wires_gmail_oauth_and_not_configured_without_ref():
     assert api_calls and "Bearer tok" in api_calls[0][2]
 
     bare = Account(email="b@g.com", provider="gmail", credential_ref="")
-    with pytest.raises(GmailNotConfiguredError):
-        build_provider(bare, store).delta_changes("INBOX", {"historyId": "1"})
+    with pytest.raises(GmailNotConfiguredError, match="missing credential_ref"):
+        build_provider(bare, store, timeout=5.0)
+
+
+def test_oauth_factory_rejects_missing_graph_credential_ref():
+    account = Account(email="m@outlook.com", provider="graph", credential_ref="")
+
+    with pytest.raises(GraphNotConfiguredError, match="missing credential_ref"):
+        build_provider(account, DictCredentialStore(), timeout=5.0)
 
 
 def test_factory_wires_graph_oauth():
