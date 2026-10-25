@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import signal
 import threading
@@ -19,6 +20,20 @@ _stop = False
 CLAIM_BATCH = 5
 RECLAIM_INTERVAL_S = 60.0
 CLAIM_HEARTBEAT_MAX_INTERVAL_S = 60.0
+
+
+def _positive_float_setting(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if value is None or not math.isfinite(value) or value <= 0:
+        log.warning("invalid numeric environment setting %s=%r; using default %s", name, raw, default)
+        return default
+    return value
 
 
 class TickResult(NamedTuple):
@@ -54,7 +69,7 @@ def _reclaim_once() -> int:
     Session = get_session_factory()
     with Session() as session:
         try:
-            reclaim_sec = float(os.environ.get("MAIL_CORE_RECLAIM_STALE_SECONDS") or 300)
+            reclaim_sec = _positive_float_setting("MAIL_CORE_RECLAIM_STALE_SECONDS", 300.0)
             n = reclaim_stale_claims(session, older_than=timedelta(seconds=reclaim_sec), limit=100)
             if n:
                 log.info("reclaimed %s stale CLAIMED job(s)", n)
@@ -82,12 +97,7 @@ def _reclaim_once() -> int:
 
 
 def _claim_heartbeat_interval_s() -> float:
-    try:
-        stale_after_s = float(os.environ.get("MAIL_CORE_RECLAIM_STALE_SECONDS") or 300)
-    except ValueError:
-        stale_after_s = 300.0
-    if stale_after_s <= 0:
-        return 0.1
+    stale_after_s = _positive_float_setting("MAIL_CORE_RECLAIM_STALE_SECONDS", 300.0)
     return max(0.1, min(CLAIM_HEARTBEAT_MAX_INTERVAL_S, stale_after_s / 3))
 
 
@@ -255,12 +265,16 @@ def run(poll_interval_s: float | None = None) -> None:
     # Fail fast: worker must not process jobs without blob keys.
     load_keyring_from_env()
 
-    interval = poll_interval_s if poll_interval_s is not None else float(os.environ.get("MAIL_CORE_WORKER_POLL_S", "2"))
+    interval = (
+        poll_interval_s
+        if poll_interval_s is not None
+        else _positive_float_setting("MAIL_CORE_WORKER_POLL_S", 2.0)
+    )
     worker_id = os.environ.get("MAIL_CORE_WORKER_ID") or f"worker-{uuid.uuid4().hex[:8]}"
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGINT, _handle_stop)
         signal.signal(signal.SIGTERM, _handle_stop)
-    max_idle = float(os.environ.get("MAIL_CORE_WORKER_MAX_IDLE_S") or max(interval, 10.0))
+    max_idle = _positive_float_setting("MAIL_CORE_WORKER_MAX_IDLE_S", max(interval, 10.0))
     log.info("worker %s starting (poll=%ss, max_idle=%ss)", worker_id, interval, max_idle)
     sleep_s = interval
     last_reclaim_at: float | None = None

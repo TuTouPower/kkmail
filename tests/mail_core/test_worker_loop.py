@@ -15,6 +15,18 @@ pytestmark_db = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize("raw", ["bad", "nan", "inf", "0", "-1"])
+def test_positive_float_setting_warns_and_uses_default(monkeypatch, caplog, raw):
+    monkeypatch.setenv("MAIL_CORE_WORKER_POLL_S", raw)
+
+    with caplog.at_level("WARNING", logger="mail_core.worker"):
+        value = worker_main._positive_float_setting("MAIL_CORE_WORKER_POLL_S", 2.0)
+
+    assert value == 2.0
+    assert "invalid numeric environment setting MAIL_CORE_WORKER_POLL_S" in caplog.text
+    assert raw in caplog.text
+
+
 def test_worker_stops_on_flag():
     def run():
         worker_main.run(poll_interval_s=0.05)
