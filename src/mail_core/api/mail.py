@@ -311,6 +311,9 @@ def api_search(
     offset: int = Query(0, ge=0, le=10_000),
 ) -> SearchPageOut:
     """Ranked search; rows are hydrated like /inbox. Paginate with `next_offset`."""
+    q = q.strip()
+    if not q:
+        raise HTTPException(422, "search query must not be blank")
     Session = get_session_factory()
     with Session() as session:
         if group_id is not None and (account_id is not None or folder_id is not None):
