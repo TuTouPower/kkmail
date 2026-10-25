@@ -113,8 +113,13 @@ def update_account(
     credentials: dict | None = None,
     clear_credentials: list[str] | None = None,
 ) -> Account:
-    if group_id is not ...:
-        lock_sidebar_layout(session)
+    # R16: take the sidebar (organization) advisory lock before the
+    # Account row lock for every update, not only group changes, so no
+    # caller of this service can invert the unified order
+    # sidebar -> Account -> OAuth flow/credentials. Re-acquisition by a
+    # caller that already holds the lock in this transaction is a no-op
+    # wait (the session already owns it).
+    lock_sidebar_layout(session)
     acc = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
     if acc is None:
         raise LookupError("account not found")

@@ -239,22 +239,34 @@ def update_account_app(
     Session = get_session_factory()
     with Session() as session:
         group_arg: object = ...
-        prior_sync_enabled = None
-        if sync_enabled is not None:
-            account_row = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
-            if account_row is None:
-                raise LookupError("account not found")
-            prior_sync_enabled = account_row.sync_enabled
         if clear_group:
             group_arg = None
         elif group_id is not None:
             group_arg = group_id
         try:
+            # R16: unified lock order for every account update is
+            # sidebar (organization) advisory lock -> Account row ->
+            # OAuth flow/credentials. The sidebar lock must be taken
+            # before ANY Account row lock in this entry path — including
+            # the prior_sync_enabled snapshot below and plain
+            # sync-preference-only updates — otherwise a combined PATCH
+            # (account lock held, then waiting for the sidebar lock)
+            # deadlocks against layout/organization transactions that
+            # take sidebar -> Account (SQLSTATE 40P01).
+            from mail_core.accounts.service import lock_sidebar_layout
+
+            lock_sidebar_layout(session)
+            prior_sync_enabled = None
+            if sync_enabled is not None:
+                account_row = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
+                if account_row is None:
+                    raise LookupError("account not found")
+                prior_sync_enabled = account_row.sync_enabled
             if oauth_flow_id:
                 from mail_core.accounts.oauth_flow import consume_oauth_flow_for_reauthorize
-                from mail_core.accounts.service import lock_sidebar_layout
 
-                lock_sidebar_layout(session)
+                # Sidebar lock already held (see above); next lock the
+                # Account row, then consume the OAuth flow/credentials.
                 acc_row = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
                 if acc_row is None:
                     raise LookupError("account not found")
