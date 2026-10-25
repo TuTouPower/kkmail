@@ -202,6 +202,7 @@ def apply_delta_page(
     message_event_ids.extend(flag_touched)
     if message_event_ids:
         session.add(messages_upserted_event(account_id, folder_id, list(dict.fromkeys(message_event_ids))))
+    location_removed_count = 0
     for change in page.changes:
         if change.kind in ("upsert", "flag"):
             continue
@@ -221,6 +222,7 @@ def apply_delta_page(
             if loc is not None:
                 session.delete(loc)
                 session.flush()
+                location_removed_count += 1
             remaining = session.scalar(select(MessageLocation).where(MessageLocation.message_id == msg.id))
             if remaining is None:
                 session.add(
@@ -232,7 +234,15 @@ def apply_delta_page(
                 )
                 session.delete(msg)
                 deleted += 1
-    dirty_folder_ids = {folder_id} if (touched or deleted) else set()
+            elif loc is not None:
+                session.add(
+                    OutboxEvent(
+                        event_type=OutboxEventType.MESSAGE_UPSERTED.value,
+                        account_id=account_id,
+                        payload={"folder_id": str(folder_id), "message_ids": [str(msg.id)]},
+                    )
+                )
+    dirty_folder_ids = {folder_id} if (touched or deleted or location_removed_count > 0) else set()
     if touched:
         shared_folders = session.scalars(
             select(MessageLocation.folder_id).where(MessageLocation.message_id.in_(touched))
