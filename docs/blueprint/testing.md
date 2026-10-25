@@ -53,6 +53,12 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
     python3 scripts/export_openapi.py --check
     (cd src/frontend && npm run openapi:check)
     ```
+
+## 邮件已读统计即时同步
+
+- 后端 PostgreSQL 用例覆盖 inbox/search 的多文件夹 `locations`、精确 folder 优先定位及同账户边界：`scripts/run-mail-core-tests.sh run -k "folder_role_inbox_api or fts_inbox_api" --no-cov`。
+- 前端缓存、组件与实时事件用例覆盖读/未读增减、多账号/分组/角色/folder scope、未知值、反向并发、SSE 延后、mark-all 与单封写排序及部分失败收敛：`cd src/frontend && npx vitest run src/api/mailCore.mutations.test.ts src/components/MessageList.test.tsx src/components/Sidebar.test.tsx src/hooks/useMailCoreRealtime.test.ts`。
+- API DTO 改动必须同步导出 OpenAPI 和 TypeScript 类型，执行 `python3 scripts/export_openapi.py --check` 与 `npm --prefix src/frontend run openapi:check`。
 - **合并后动作**：确认生成文件已暂存，无 schema drift。
 - **migration 窗口**：涉及数据库表变动时编写 Alembic 迁移脚本，版本号保持严格线性无分叉。
 

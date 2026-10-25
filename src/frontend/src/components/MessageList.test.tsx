@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MessageList from './MessageList'
 import { useMailStore } from '../store/mailStore'
 import { __resetCsrfForTests } from '../api/client'
+import * as queryApi from '../api/queries'
 import { cleanup, click, render, typeInto, waitFor } from '../test/render'
 
 let intersectionCallback: IntersectionObserverCallback | null = null
@@ -31,6 +32,7 @@ const row = (id: string, over: Record<string, unknown> = {}) => ({
   has_attachments: false,
   snippet: `snippet ${id}`,
   folder_id: 'f1',
+  locations: [{ folder_id: 'f1', role: 'inbox' }],
   ...over,
 })
 
@@ -581,6 +583,81 @@ describe('<MessageList />', () => {
     })
   })
 
+  it('decrements the list unread count immediately when opening an unread message', async () => {
+    const originalFetch = vi.mocked(fetch)
+    const markRead = vi.spyOn(queryApi, 'markReadOptimistic')
+    let resolveRead!: (response: Response) => void
+    let readStarted = false
+    let readComplete = false
+    const readRequest = new Promise<Response>((resolve) => { resolveRead = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith('/api/auth/me')) return json({ csrf_token: 'test-csrf' })
+      if (String(url).includes('/api/mail/messages/') && String(url).endsWith('/read')) {
+        readStarted = true
+        await readRequest
+        return json({ id: 'a', is_read: true })
+      }
+      if (String(url).includes('/folder-stats') && readComplete) {
+        return json({ folders: [{ folder_id: 'f1', role: 'inbox', unread_count: 0, total_count: 2 }] })
+      }
+      return originalFetch(url, init)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('2 封邮件 · 1 封未读'))
+    await click(container.querySelector('.message-row.unread'))
+    expect(useMailStore.getState().selectedKey).not.toBeNull()
+    expect(markRead).toHaveBeenCalled()
+    await waitFor(() => expect(readStarted).toBe(true))
+    await waitFor(() => expect(container.querySelector('.message-row.unread')).toBeNull())
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('2 封邮件 · 0 封未读'))
+    readComplete = true
+    resolveRead(json({ id: 'a', is_read: true }))
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('2 封邮件 · 0 封未读'))
+  })
+
+  it('decrements every matching folder count for a message in multiple same-role folders', async () => {
+    useMailStore.setState({ view: { type: 'account', accountId: 'acc-1', email: 'box@x.test' } })
+    let resolveRead!: (response: Response) => void
+    let readComplete = false
+    const readRequest = new Promise<Response>((resolve) => { resolveRead = resolve })
+    const originalFetch = vi.mocked(fetch)
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/api/auth/me')) return json({ csrf_token: 'test-csrf' })
+      if (u.includes('/api/mail/messages/') && u.endsWith('/read')) {
+        await readRequest
+        return json({ is_read: true })
+      }
+      if (u.startsWith('/api/mail/inbox')) {
+        return json({ items: [row('multi', { locations: [
+          { folder_id: 'f1', role: 'inbox' },
+          { folder_id: 'f2', role: 'inbox' },
+        ] })], next_cursor: null })
+      }
+      if (u.includes('/folder-stats')) {
+        return json({ folders: readComplete
+          ? [
+            { folder_id: 'f1', role: 'inbox', unread_count: 1, total_count: 5 },
+            { folder_id: 'f2', role: 'inbox', unread_count: 0, total_count: 4 },
+          ]
+          : [
+            { folder_id: 'f1', role: 'inbox', unread_count: 2, total_count: 5 },
+            { folder_id: 'f2', role: 'inbox', unread_count: 1, total_count: 4 },
+          ] })
+      }
+      return originalFetch(url, init)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('9 封邮件 · 3 封未读'))
+    await click(container.querySelector('.message-row.unread'))
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('9 封邮件 · 1 封未读'))
+    readComplete = true
+    resolveRead(json({ is_read: true }))
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('9 封邮件 · 1 封未读'))
+  })
+
   it('shows unknown unread count when folder stats are incomplete', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
       const u = String(url)
@@ -628,6 +705,35 @@ describe('<MessageList />', () => {
 
     await click(markAllBtn)
     await waitFor(() => expect(markAllPayload).toEqual({ folder_role: 'inbox' }))
+  })
+
+  it('refetches authoritative read state after a partially committed mark-all failure', async () => {
+    let serverCommittedOne = false
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'box@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) {
+        return json({ items: [row('a', { is_read: serverCommittedOne }), row('b', { is_read: true })], next_cursor: null })
+      }
+      if (u.includes('/folder-stats')) {
+        return json({ folders: [{ folder_id: 'f1', role: 'inbox', total_count: 2, unread_count: serverCommittedOne ? 0 : 1 }] })
+      }
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (u === '/api/mail/mark-all-read') {
+        serverCommittedOne = true
+        return json({ detail: 'batch failed after one commit' }, 500)
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('2 封邮件 · 1 封未读'))
+    await click(container.querySelector('.mark-all-btn'))
+    await waitFor(() => expect(container.querySelector('.list-note.error')?.textContent).toContain('标记全部已读失败'))
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('2 封邮件 · 0 封未读'))
+    expect(container.querySelector('.message-row.unread')).toBeNull()
   })
 
   it('clicking refresh in unified view triggers syncAll and invalidates cache', async () => {

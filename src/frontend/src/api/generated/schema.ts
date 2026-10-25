@@ -994,6 +994,13 @@ export interface components {
             /** To */
             to: string;
         };
+        /** MessageFolderLocationOut */
+        MessageFolderLocationOut: {
+            /** Folder Id */
+            folder_id: string;
+            /** Role */
+            role: string;
+        };
         /** MessageOut */
         MessageOut: {
             /** Account Email */
@@ -1020,6 +1027,8 @@ export interface components {
             is_flagged: boolean | null;
             /** Is Read */
             is_read: boolean | null;
+            /** Locations */
+            locations: components["schemas"]["MessageFolderLocationOut"][];
             /** Snippet */
             snippet: string | null;
             /** Sort Time */

@@ -64,6 +64,11 @@ def _safe_attachment_media_type(value: str | None) -> str:
     return "application/octet-stream"
 
 
+class MessageFolderLocationOut(BaseModel):
+    folder_id: str
+    role: str
+
+
 class MessageOut(BaseModel):
     id: str
     account_id: str
@@ -78,6 +83,7 @@ class MessageOut(BaseModel):
     snippet: str | None
     body_preview: str = Field("", description="Display-only fallback from an existing body when snippet is empty; never persisted.")
     folder_id: str | None
+    locations: list[MessageFolderLocationOut]
 
 
 class PageOut(BaseModel):
@@ -242,6 +248,10 @@ def _rows(items: list[MessageListItem], emails: dict) -> list[MessageOut]:
             snippet=i.snippet,
             body_preview=i.body_preview,
             folder_id=str(i.folder_id) if i.folder_id else None,
+            locations=[
+                MessageFolderLocationOut(folder_id=str(location.folder_id), role=location.role)
+                for location in i.locations
+            ],
         )
         for i in items
     ]

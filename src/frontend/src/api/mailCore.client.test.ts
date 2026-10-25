@@ -187,10 +187,12 @@ describe('mail endpoints', () => {
     const row: MailCoreMessage = {
       id: 'u', account_id: 'acc', account_email: null, subject: '', from_address: 'x@y.z', from_name: null,
       sort_time: '2024-01-01T00:00:00Z', is_read: true, is_flagged: false, has_attachments: false, snippet: null, body_preview: '', folder_id: null,
+      locations: [],
     }
     expect(mailCoreToMailItem(row)).toEqual({
       id: 'u', subject: '', from: 'x@y.z', date: '2024-01-01T00:00:00Z', is_read: true, is_flagged: false,
       has_attachments: false, body_preview: undefined, folder: undefined, accountEmail: '', accountId: 'acc',
+      locations: [],
     })
   })
 

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Mail, MailOpen, Trash2, Flag, ArrowLeft, RefreshCw } from 'lucide-react'
-import { findCachedMail, flagOptimistic, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail } from '../api/queries'
+import { findCachedMail, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail } from '../api/queries'
 import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash, postMailCoreSyncMessageBody } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
@@ -165,7 +165,7 @@ const MessageReader = memo(function MessageReader() {
       setActionStatus('')
       removeCachedMail([mailKey(selected)])
       setSelectedKey(null)
-      await queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+      await Promise.all([invalidateMailListQueries(), invalidateMailStatsQueries()])
     } catch (err) {
       setActionStatus(errorMessage(err, '删除失败'))
     }

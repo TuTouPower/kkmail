@@ -17,6 +17,7 @@ describe('mailCoreToMailItem', () => {
       snippet: 'preview',
       body_preview: '',
       folder_id: 'f1',
+      locations: [{ folder_id: 'f1', role: 'inbox' }],
     }
     const item = mailCoreToMailItem(row)
     expect(item.id).toBe('uuid-1')
@@ -26,6 +27,7 @@ describe('mailCoreToMailItem', () => {
     expect(item.is_flagged).toBe(true)
     expect(item.has_attachments).toBe(true)
     expect(item.folder).toBe('f1')
+    expect(item.locations).toEqual([{ folder_id: 'f1', role: 'inbox' }])
     expect(item.accountEmail).not.toBe(item.accountId)
   })
 })
@@ -125,7 +127,7 @@ describe('list preview source', () => {
     id: 'm-preview', account_id: 'account', subject: 'subject',
     from_address: 'sender@example.com', from_name: null,
     sort_time: '2026-10-23T00:00:00Z', is_read: false, is_flagged: false,
-    has_attachments: false, snippet: null, folder_id: 'folder', body_preview: 'Body fallback',
+      has_attachments: false, snippet: null, folder_id: 'folder', locations: [{ folder_id: 'folder', role: 'inbox' }], body_preview: 'Body fallback',
   }
   it('uses existing body preview only when provider snippet is absent', () => {
     expect(mailCoreToMailItem(row).body_preview).toBe('Body fallback')
@@ -141,7 +143,7 @@ describe('plain body preview display boundary', () => {
   const row: MailCoreMessage = {
     id: 'plain', account_id: 'account', subject: '', from_address: 'sender@example.com',
     from_name: null, sort_time: '2026-10-23T00:00:00Z', is_read: false,
-    is_flagged: false, has_attachments: false, folder_id: null,
+    is_flagged: false, has_attachments: false, folder_id: null, locations: [],
     snippet: null, body_preview: 'Use <div> &amp; <support@example.com> literally',
   }
   it('keeps body fallback as plain text while cleaning only provider HTML for display', () => {

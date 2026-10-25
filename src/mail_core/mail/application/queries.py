@@ -20,6 +20,12 @@ _BODY_PREVIEW_SOURCE_CHARS = 4096
 
 
 @dataclass(frozen=True, slots=True)
+class MessageFolderLocation:
+    folder_id: uuid.UUID
+    role: str
+
+
+@dataclass(frozen=True, slots=True)
 class MessageListItem:
     id: uuid.UUID
     account_id: uuid.UUID
@@ -32,6 +38,7 @@ class MessageListItem:
     has_attachments: bool | None
     snippet: str | None
     folder_id: uuid.UUID | None
+    locations: list[MessageFolderLocation]
     body_preview: str = ""
 
 
@@ -70,7 +77,12 @@ def decode_cursor(token: str) -> tuple[datetime | None, uuid.UUID]:
         raise InvalidCursor("invalid cursor") from exc
 
 
-def _list_item(m: Message, folder_id: Any, body_preview: str = "") -> MessageListItem:
+def _list_item(
+    m: Message,
+    folder_id: Any,
+    body_preview: str = "",
+    locations: list[MessageFolderLocation] | None = None,
+) -> MessageListItem:
     fid_uuid = uuid.UUID(str(folder_id)) if folder_id else None
     return MessageListItem(
         id=m.id,
@@ -84,8 +96,28 @@ def _list_item(m: Message, folder_id: Any, body_preview: str = "") -> MessageLis
         has_attachments=m.has_attachments,
         snippet=m.snippet,
         folder_id=fid_uuid,
+        locations=locations or [],
         body_preview=body_preview,
     )
+
+
+def _folder_locations_by_message_ids(
+    session: Session,
+    message_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[MessageFolderLocation]]:
+    locations: dict[uuid.UUID, list[MessageFolderLocation]] = {message_id: [] for message_id in message_ids}
+    if not message_ids:
+        return locations
+    rows = session.execute(
+        select(MessageLocation.message_id, Folder.id, Folder.role)
+        .join(Message, Message.id == MessageLocation.message_id)
+        .join(Folder, and_(Folder.id == MessageLocation.folder_id, Folder.account_id == Message.account_id))
+        .where(MessageLocation.message_id.in_(message_ids))
+        .order_by(MessageLocation.message_id, Folder.id)
+    ).all()
+    for message_id, folder_id, role in rows:
+        locations[message_id].append(MessageFolderLocation(folder_id=folder_id, role=role))
+    return locations
 
 
 class _BodyPreviewParser(HTMLParser):
@@ -148,9 +180,10 @@ def messages_by_ids(session: Session, ids: list[uuid.UUID]) -> list[MessageListI
         .where(Message.id.in_(ids))
     ).all()
     previews = _body_previews(session, list({m.id: m for m, _ in rows}.values()))
+    locations = _folder_locations_by_message_ids(session, list(dict.fromkeys(ids)))
     by_id: dict[uuid.UUID, MessageListItem] = {}
     for m, fid in rows:
-        by_id.setdefault(m.id, _list_item(m, fid, previews.get(m.id, "")))
+        by_id.setdefault(m.id, _list_item(m, fid, previews.get(m.id, ""), locations.get(m.id, [])))
     return [by_id[i] for i in ids if i in by_id]
 
 
@@ -252,7 +285,11 @@ def list_messages_keyset(
     has_more = len(rows) > limit
     rows = rows[:limit]
     previews = _body_previews(session, [m for m, _ in rows])
-    items = [_list_item(m, fid, previews.get(m.id, "")) for m, fid in rows]
+    locations = _folder_locations_by_message_ids(session, [message.id for message, _ in rows])
+    items = [
+        _list_item(m, fid, previews.get(m.id, ""), locations.get(m.id, []))
+        for m, fid in rows
+    ]
     next_cursor = None
     if has_more and items:
         last = items[-1]

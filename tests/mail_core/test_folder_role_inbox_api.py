@@ -150,3 +150,67 @@ def test_inbox_and_detail_keep_unknown_received_time_as_null():
     assert inbox.json()["items"][0]["sort_time"] is None
     assert detail.status_code == 200
     assert detail.json()["date"] is None
+
+
+def test_inbox_and_search_return_all_message_folder_locations():
+    from mail_core.search.index import upsert_message_search
+
+    Session = get_session_factory()
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    phrase = f"all-locations-{uuid.uuid4().hex}"
+    with Session() as session:
+        account = create_account(
+            session,
+            email=f"locations-{uuid.uuid4().hex[:8]}@ex.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
+        inbox = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+        inbox_alias = Folder(account_id=account.id, remote_id="InboxAlias", name="Inbox Alias", role="inbox")
+        archive = Folder(account_id=account.id, remote_id="Archive", name="Archive", role="archive")
+        session.add_all([inbox, inbox_alias, archive])
+        session.flush()
+        message = Message(
+            account_id=account.id,
+            remote_id=phrase,
+            subject=phrase,
+            from_address="sender@example.test",
+            sort_time=datetime.now(timezone.utc),
+            is_read=False,
+        )
+        session.add(message)
+        session.flush()
+        session.add_all([
+            MessageLocation(message_id=message.id, folder_id=inbox.id, uid=1),
+            MessageLocation(message_id=message.id, folder_id=inbox_alias.id, uid=2),
+            MessageLocation(message_id=message.id, folder_id=archive.id, uid=3),
+        ])
+        upsert_message_search(session, message_id=message.id, body_text=phrase)
+        account_id = account.id
+        message_id = str(message.id)
+        inbox_id, inbox_alias_id, archive_id = map(str, (inbox.id, inbox_alias.id, archive.id))
+        session.commit()
+
+    expected_locations = {
+        (inbox_id, "inbox"),
+        (inbox_alias_id, "inbox"),
+        (archive_id, "archive"),
+    }
+    inbox_result = client.get("/api/mail/inbox", params={"account_id": str(account_id)})
+    assert inbox_result.status_code == 200
+    inbox_item = next(item for item in inbox_result.json()["items"] if item["id"] == message_id)
+    assert {(location["folder_id"], location["role"]) for location in inbox_item["locations"]} == expected_locations
+
+    exact_folder_result = client.get(
+        "/api/mail/inbox",
+        params={"account_id": str(account_id), "folder_id": inbox_alias_id},
+    )
+    assert exact_folder_result.status_code == 200
+    exact_item = next(item for item in exact_folder_result.json()["items"] if item["id"] == message_id)
+    assert exact_item["folder_id"] == inbox_alias_id
+    assert {(location["folder_id"], location["role"]) for location in exact_item["locations"]} == expected_locations
+
+    search_result = client.get("/api/mail/search", params={"q": phrase, "account_id": str(account_id)})
+    assert search_result.status_code == 200
+    search_item = next(item for item in search_result.json()["items"] if item["id"] == message_id)
+    assert {(location["folder_id"], location["role"]) for location in search_item["locations"]} == expected_locations

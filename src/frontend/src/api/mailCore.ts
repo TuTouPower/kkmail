@@ -127,6 +127,10 @@ export function mailCoreToMailItem(m: MailCoreMessage): MailItem {
     // email vs id must stay split — never fall back account_id into accountEmail.
     accountEmail: m.account_email ?? '',
     accountId: m.account_id,
+    locations: (m.locations || []).map((location) => ({
+      folder_id: location.folder_id,
+      role: location.role,
+    })),
   }
 }
 

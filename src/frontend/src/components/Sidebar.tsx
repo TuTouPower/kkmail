@@ -162,7 +162,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
       return response.folders || []
     },
   })
-  const folders = foldersQuery.data || []
+  const folders = useMemo(() => foldersQuery.data || [], [foldersQuery.data])
   const folderDisplayNames = useMemo(() => {
     const groups = new Map<string, AccountFolderStatsItemOut[]>()
     for (const folder of folders) {
@@ -308,7 +308,10 @@ function Sidebar() {
   const layoutQuery = useQuery({ queryKey: queryKeys.sidebarLayout, queryFn: () => api.getSidebarLayout() })
   const groups = groupsQuery.data || []
   const accounts = accountsQuery.data || []
-  const enabledAccounts = useMemo(() => accounts.filter((account) => account.sync_enabled !== false), [accounts])
+  const enabledAccounts = useMemo(
+    () => (accountsQuery.data || []).filter((account) => account.sync_enabled !== false),
+    [accountsQuery.data],
+  )
   const enabledAccountIds = useMemo(() => new Set(enabledAccounts.map((account) => account.id)), [enabledAccounts])
   const selectedAccountId = view.type === 'account' || view.type === 'folder' || view.type === 'favorite'
     ? view.accountId

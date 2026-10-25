@@ -102,8 +102,6 @@ def test_unified_inbox_folder_stats_search_and_thread():
 
 
 def test_list_body_preview_is_read_only_and_preserves_provider_snippets():
-    from sqlalchemy import event
-    from mail_core.mail.application.queries import messages_by_ids
     from mail_core.mail.storage import MessageBody
 
     Session = get_session_factory()
@@ -148,6 +146,45 @@ def test_list_body_preview_is_read_only_and_preserves_provider_snippets():
             assert rows[str(mid)]["body_preview"] == expected
 
     with Session() as session:
+        for mid, (snippet, _, _, _, _) in zip(ids, cases):
+            assert session.get(Message, mid).snippet == snippet
+
+
+def test_message_folder_locations_are_loaded_in_one_batch_for_many_search_results():
+    from sqlalchemy import event
+    from mail_core.mail.application.queries import messages_by_ids
+
+    Session = get_session_factory()
+    with Session() as session:
+        account = create_account(
+            session,
+            email=f"location-batch-{uuid.uuid4().hex[:8]}@example.com",
+            provider="imap",
+            config={"imap_host": "8.8.8.8"},
+        )
+        inbox = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+        archive = Folder(account_id=account.id, remote_id="Archive", name="Archive", role="archive")
+        session.add_all([inbox, archive])
+        session.flush()
+        messages = []
+        for index in range(6):
+            message = Message(
+                account_id=account.id,
+                remote_id=f"batch-{index}",
+                subject=f"Batch {index}",
+                from_address="sender@example.test",
+                snippet="provider summary",
+                sort_time=datetime.now(timezone.utc),
+            )
+            session.add(message)
+            session.flush()
+            session.add_all([
+                MessageLocation(message_id=message.id, folder_id=inbox.id, uid=index + 1),
+                MessageLocation(message_id=message.id, folder_id=archive.id, uid=index + 101),
+            ])
+            messages.append(message)
+        session.flush()
+
         statements = []
 
         def capture(connection, cursor, statement, parameters, context, executemany):
@@ -155,14 +192,14 @@ def test_list_body_preview_is_read_only_and_preserves_provider_snippets():
 
         event.listen(session.get_bind(), "before_cursor_execute", capture)
         try:
-            items = messages_by_ids(session, ids)
+            items = messages_by_ids(session, [message.id for message in messages])
         finally:
             event.remove(session.get_bind(), "before_cursor_execute", capture)
-        assert [item.id for item in items] == ids
-        assert len(statements) == 2  # metadata + one body batch, regardless of page size
-        session.commit()
-        for mid, (snippet, _, _, _, _) in zip(ids, cases):
-            assert session.get(Message, mid).snippet == snippet
+
+        assert len(items) == 6
+        assert all(len(item.locations) == 2 for item in items)
+        assert len(statements) == 2  # one metadata query plus one batched locations query
+        assert sum("FROM message_locations" in statement and "JOIN folders" in statement for statement in statements) == 1
 
 
 # The previous combined test incorrectly excluded readable partial text; conventions §9.3 allows it with parse_error.

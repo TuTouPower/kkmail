@@ -2,7 +2,7 @@
 import { createElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { createThrottledInvalidator, extractMessageIds, shouldInvalidateMailCoreInbox, useMailCoreRealtime } from './useMailCoreRealtime'
-import type { queryClient } from '../api/queries'
+import { queryClient, queryKeys, setReadOptimistic, type MailItem } from '../api/queries'
 import * as sseModule from '../api/sseStream'
 import { UNAUTHORIZED_EVENT } from '../api/client'
 import { render, cleanup } from '../test/render'
@@ -108,6 +108,46 @@ describe('createThrottledInvalidator', () => {
     expect(calls).toContainEqual({ queryKey: ['sidebar-layout'] })
     expect(calls.some((arg) => (arg as { predicate?: unknown }).predicate)).toBe(true)
     vi.useRealTimers()
+  })
+
+  it('defers SSE list and stats invalidation until an optimistic read settles', async () => {
+    queryClient.clear()
+    const message: MailItem = {
+      id: 'read-1', subject: 'S', from: 'a@b.c', is_read: false, is_flagged: false,
+      has_attachments: false, accountEmail: 'acc@x.test', accountId: 'acc-1',
+      locations: [{ folder_id: 'inbox-1', role: 'inbox' }],
+    }
+    queryClient.setQueryData(queryKeys.inbox(), [message])
+    queryClient.setQueryData(queryKeys.stats, { totalUnread: 1, byAccount: new Map([['acc-1', 1]]) })
+    let releaseRead!: () => void
+    let readStarted!: () => void
+    const started = new Promise<void>((resolve) => { readStarted = resolve })
+    const gate = new Promise<void>((resolve) => { releaseRead = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'test' }), { status: 200 })
+      if (url.endsWith('/messages/read-1/read')) {
+        readStarted()
+        await gate
+        return new Response(JSON.stringify({ id: 'read-1', is_read: true }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ detail: 'unexpected' }), { status: 404 })
+    }))
+    const mutation = setReadOptimistic([message], true)
+    await started
+
+    const throttler = createThrottledInvalidator(queryClient, 0)
+    throttler.handleEvent('folder.stats_updated', {})
+    throttler.flush()
+    expect(queryClient.getQueryState(queryKeys.inbox())?.isInvalidated).toBe(false)
+    expect(queryClient.getQueryState(queryKeys.stats)?.isInvalidated).toBe(false)
+
+    releaseRead()
+    await mutation
+    expect(queryClient.getQueryState(queryKeys.inbox())?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(queryKeys.stats)?.isInvalidated).toBe(true)
+    throttler.cancel()
+    queryClient.clear()
+    vi.unstubAllGlobals()
   })
 })
 

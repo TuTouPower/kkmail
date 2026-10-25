@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { subscribeMailCoreStream } from '../api/sseStream'
-import { isMailListQueryKey, queryClient, queryKeys } from '../api/queries'
+import { invalidateMailListQueries, invalidateMailStatsQueries, queryClient, queryKeys } from '../api/queries'
 import { UNAUTHORIZED_EVENT } from '../api/client'
 
 /** Events that mean cached message lists may be stale. */
@@ -24,12 +24,6 @@ export function shouldInvalidateMailCoreInbox(eventType: string): boolean {
   return MAIL_CORE_INBOX_INVALIDATE_EVENTS.has(eventType)
 }
 
-function isMailStatsQueryKey(key: unknown): boolean {
-  return Array.isArray(key)
-    && key[0] === 'mail-core'
-    && (key[1] === 'stats' || key[1] === 'folder-stats' || key[1] === 'account-folders')
-}
-
 export function extractMessageIds(data: unknown): string[] {
   if (!data) return []
   if (typeof data === 'string') return [data]
@@ -48,6 +42,12 @@ export function extractMessageIds(data: unknown): string[] {
     return [...ids]
   }
   return []
+}
+
+function refreshMailCoreCaches() {
+  void invalidateMailListQueries()
+  void invalidateMailStatsQueries()
+  void queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core'] })
 }
 
 export const REALTIME_THROTTLE_MS = 150
@@ -74,17 +74,17 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
         qc.invalidateQueries({ queryKey: queryKeys.groups }),
         qc.invalidateQueries({ queryKey: queryKeys.sidebarLayout }),
       ]).then(() => Promise.all([
-        qc.invalidateQueries({ predicate: (query) => isMailListQueryKey(query.queryKey) }),
-        qc.invalidateQueries({ predicate: (query) => isMailStatsQueryKey(query.queryKey) }),
+        invalidateMailListQueries(qc),
+        invalidateMailStatsQueries(qc),
       ]))
     } else {
       if (invalidateMailLists) {
         invalidateMailLists = false
-        void qc.invalidateQueries({ predicate: (query) => isMailListQueryKey(query.queryKey) })
+        void invalidateMailListQueries(qc)
       }
       if (invalidateMailStats) {
         invalidateMailStats = false
-        void qc.invalidateQueries({ predicate: (query) => isMailStatsQueryKey(query.queryKey) })
+        void invalidateMailStatsQueries(qc)
       }
     }
     if (invalidateAllDetails) {
@@ -167,11 +167,11 @@ export function useMailCoreRealtime(enabled: boolean): void {
     const throttler = createThrottledInvalidator(queryClient)
 
     const onOnline = () => {
-      void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+      refreshMailCoreCaches()
     }
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+        refreshMailCoreCaches()
       }
     }
 
@@ -182,14 +182,14 @@ export function useMailCoreRealtime(enabled: boolean): void {
       (type, data) => {
         if (isReconnecting) {
           isReconnecting = false
-          void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+          refreshMailCoreCaches()
         }
         throttler.handleEvent(type, data)
       },
       {
         onOpen: () => {
           if (hasConnectedOnce || isReconnecting) {
-            void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+            refreshMailCoreCaches()
           }
           hasConnectedOnce = true
           isReconnecting = false
@@ -202,7 +202,7 @@ export function useMailCoreRealtime(enabled: boolean): void {
           window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
         },
         onVisibilityRecovery: () => {
-          void queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+          refreshMailCoreCaches()
         },
       },
     )

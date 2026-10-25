@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type Ref } fro
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, ExternalLink, PanelLeft } from 'lucide-react'
 import { api, apiRequest } from '../api/client'
-import { accountScope, fetchAccounts, flagOptimistic, markReadOptimistic, setCachedReadState, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
+import { accountScope, beginReadMutation, fetchAccounts, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, markReadOptimistic, setCachedReadState, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchGlobalStats, fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
 import { hasMailId, mailKey } from '../lib/mailKey'
@@ -179,8 +179,9 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     retry: false,
   })
 
+  const folderStatsScope = groupId ? `group:${groupId}` : accountId ? `account:${accountId}` : 'all'
   const folderStatsQuery = useQuery({
-    queryKey: ['mail-core', 'folder-stats', groupId ?? accountId ?? 'all', folderRole, folderId ?? ''],
+    queryKey: ['mail-core', 'folder-stats', folderStatsScope, folderRole, folderId ?? ''],
     queryFn: async ({ signal }) => {
       if (groupId) {
         const stats = await fetchGlobalStats(signal, groupId, folderRole)
@@ -200,12 +201,12 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         if (stats.folders.length === 0) {
           return { total: null, unread: null }
         }
-        const targetFolder = folderId
-          ? stats.folders.find((f: AccountFolderStatsItemOut) => String(f.folder_id) === folderId)
-          : stats.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
+        const targetFolders = folderId
+          ? stats.folders.filter((f: AccountFolderStatsItemOut) => String(f.folder_id) === folderId)
+          : stats.folders.filter((f: AccountFolderStatsItemOut) => f.role === folderRole)
         return {
-          total: targetFolder ? targetFolder.total_count : 0,
-          unread: targetFolder ? targetFolder.unread_count : 0,
+          total: targetFolders.length ? sumKnownCounts(targetFolders.map((folder) => folder.total_count)) : 0,
+          unread: targetFolders.length ? sumKnownCounts(targetFolders.map((folder) => folder.unread_count)) : 0,
         }
       }
       const enabledAccounts = accounts.filter((account) => account.sync_enabled !== false)
@@ -231,9 +232,9 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
           unreadUnknown = true
           continue
         }
-        const targetFolder = s.folders.find((f: AccountFolderStatsItemOut) => f.role === folderRole)
-        const accountTotal = targetFolder ? targetFolder.total_count : 0
-        const accountUnread = targetFolder ? targetFolder.unread_count : 0
+        const targetFolders = s.folders.filter((f: AccountFolderStatsItemOut) => f.role === folderRole)
+        const accountTotal = targetFolders.length ? sumKnownCounts(targetFolders.map((folder) => folder.total_count)) : 0
+        const accountUnread = targetFolders.length ? sumKnownCounts(targetFolders.map((folder) => folder.unread_count)) : 0
         if (accountTotal === null) totalUnknown = true
         else total += accountTotal
         if (accountUnread === null) unreadUnknown = true
@@ -276,7 +277,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     folderStatsQuery.data === undefined ||
     folderStatsQuery.data.unread === null
   )
-  const unreadCount = unreadUnknown ? null : Math.max(serverUnread ?? 0, raw.filter((m) => m.is_read === false).length)
+  const unreadCount = unreadUnknown ? null : searching ? raw.filter((m) => m.is_read === false).length : serverUnread ?? 0
 
   const [actionStatus, setActionStatus] = useState('')
   const sentinelRef = useRef<HTMLDivElement | null>(null)
@@ -427,7 +428,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
       await postMailCoreMessageTrash(m.id)
       removeCachedMail([mailKey(m)])
       if (selectedKey === mailKey(m)) setSelectedKey(null)
-      await queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+      await Promise.all([invalidateMailListQueries(), invalidateMailStatsQueries()])
     } catch (err) {
       setActionStatus(errorMessage(err, '删除失败'))
     }
@@ -435,10 +436,11 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
 
   async function markAll() {
     const unreadKeys = raw.filter((m) => m.is_read === false).map(mailKey)
-    if (unreadKeys.length) {
-      setCachedReadState(unreadKeys, true)
-    }
+    const finishReadMutation = await beginReadMutation()
     try {
+      if (unreadKeys.length) {
+        setCachedReadState(unreadKeys, true)
+      }
       await postMailCoreMarkAllRead({
         accountId,
         groupId,
@@ -446,13 +448,16 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         folder_id: folderId,
         is_flagged: is_flagged,
       })
-      await queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+      await Promise.all([invalidateMailListQueries(), invalidateMailStatsQueries()])
       setActionStatus('')
     } catch (err) {
       if (unreadKeys.length) {
         setCachedReadState(unreadKeys, false)
       }
+      await Promise.all([invalidateMailListQueries(), invalidateMailStatsQueries()])
       setActionStatus(`标记全部已读失败：${errorMessage(err)}`)
+    } finally {
+      await finishReadMutation()
     }
   }
 
@@ -482,7 +487,8 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
       setActionStatus(`同步触发失败：${errorMessage(err)}`)
     } finally {
       setIsSyncing(false)
-      void queryClient.invalidateQueries({ queryKey: ['mail-core'], refetchType: 'active' })
+      void invalidateMailListQueries()
+      void invalidateMailStatsQueries()
       void queryClient.invalidateQueries({ queryKey: queryKeys.accounts })
       void queryClient.invalidateQueries({ queryKey: queryKeys.stats })
     }
@@ -505,7 +511,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     } else {
       setActionStatus(`已删除 ${chosen.length} 封邮件`)
     }
-    await queryClient.invalidateQueries({ queryKey: ['mail-core'] })
+    await Promise.all([invalidateMailListQueries(), invalidateMailStatsQueries()])
   }
 
   return (

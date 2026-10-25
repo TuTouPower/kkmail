@@ -3,6 +3,7 @@ import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Sidebar from './Sidebar'
 import { useMailStore } from '../store/mailStore'
+import { setReadOptimistic } from '../api/queries'
 import { __resetCsrfForTests } from '../api/client'
 import { cleanup, render, waitFor, click, typeInto } from '../test/render'
 
@@ -21,6 +22,8 @@ const accounts = [
 
 function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; disabledAcc1?: boolean; disabledAcc2?: boolean; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
   const calls: Array<{ url: string; method: string; body?: string }> = []
+  let acc1Unread = 2
+  let acc2Unread = 1
   let currentAccounts: Array<{
     id: string
     email: string
@@ -105,13 +108,18 @@ function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partial
       if (options.failStats) return json({ detail: 'stats unavailable' }, 500)
       if (options.disabledAcc1 && options.disabledAcc2) return json({ total_unread: 0, accounts: [] })
       if (options.disabledAcc1) return json({ total_unread: 1, accounts: [
-        { account_id: 'acc-2', unread_count: 1, total_count: 4 },
+        { account_id: 'acc-2', unread_count: acc2Unread, total_count: 4 },
       ] })
-      if (options.partialStats) return json({ total_unread: 1, accounts: [{ account_id: 'acc-2', unread_count: 1, total_count: 4 }] })
-      return json({ total_unread: 3, accounts: [
-      { account_id: 'acc-1', unread_count: 2, total_count: 9 },
-      { account_id: 'acc-2', unread_count: 1, total_count: 4 },
+      if (options.partialStats) return json({ total_unread: acc2Unread, accounts: [{ account_id: 'acc-2', unread_count: acc2Unread, total_count: 4 }] })
+      return json({ total_unread: acc1Unread + acc2Unread, accounts: [
+      { account_id: 'acc-1', unread_count: acc1Unread, total_count: 9 },
+      { account_id: 'acc-2', unread_count: acc2Unread, total_count: 4 },
     ] })
+    }
+    if (url.pathname.startsWith('/api/mail/messages/') && url.pathname.endsWith('/read') && method === 'POST') {
+      const messageId = url.pathname.split('/').at(-2) || ''
+      if (messageId === 'read-acc1') acc1Unread = Math.max(0, acc1Unread - 1)
+      return json({ id: messageId, is_read: true })
     }
     if (url.pathname === '/api/mail/accounts/acc-1/folder-stats') {
       if (options.failAcc1Stats) return json({ detail: 'folder stats unavailable' }, 500)
@@ -269,6 +277,45 @@ describe('<Sidebar />', () => {
     await waitFor(() => expect(container.querySelector('.tree-account-block')).toBeNull())
     expect(container.querySelector('.unread-badge')).toBeNull()
     expect(calls.some((call) => call.url.includes('/folder-stats'))).toBe(false)
+  })
+
+  it('updates global, group, and account unread badges before the read request settles', async () => {
+    mockApi()
+    const originalFetch = vi.mocked(fetch)
+    let releaseRead!: () => void
+    let readStarted!: () => void
+    const started = new Promise<void>((resolve) => { readStarted = resolve })
+    const gate = new Promise<void>((resolve) => { releaseRead = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/read')) {
+        readStarted()
+        await gate
+      }
+      return originalFetch(url, init)
+    }))
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('[data-group-id="group-1"] .unread-badge')?.textContent).toBe('2'))
+    await click(container.querySelector('[aria-label="展开分组 税务归档"]'))
+
+    const mutation = setReadOptimistic([{
+      id: 'read-acc1',
+      subject: 'Unread',
+      from: 'sender@example.test',
+      is_read: false,
+      is_flagged: false,
+      has_attachments: false,
+      accountEmail: 'finance@z.example',
+      accountId: 'acc-1',
+      locations: [{ folder_id: 'inbox-1', role: 'inbox' }],
+    }], true)
+
+    await started
+    await waitFor(() => expect(container.querySelector('[data-group-id="group-1"] .unread-badge')?.textContent).toBe('1'))
+    expect(container.querySelector('[data-ui="SB13"][aria-label="所有收件箱"] .unread-badge')?.textContent).toBe('2')
+    expect(container.querySelector('.tree-account-block[data-account-id="acc-1"] .unread-badge')?.textContent).toBe('1')
+    releaseRead()
+    await mutation
+    await waitFor(() => expect(container.querySelector('[data-ui="SB13"][aria-label="所有收件箱"] .unread-badge')?.textContent).toBe('2'))
   })
 
   it('focuses and traps keyboard focus inside the mobile navigation dialog', async () => {
