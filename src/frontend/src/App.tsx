@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { PanelLeft } from 'lucide-react'
 import { useMailStore } from './store/mailStore'
 import MessageList from './components/MessageList'
@@ -33,6 +33,8 @@ function App() {
   const setSidebarWidth = useMailStore((s) => s.setSidebarWidth)
   const setListWidth = useMailStore((s) => s.setListWidth)
   const [authed, setAuthed] = useState<boolean | null>(null)
+  const [oauthReturnPending, setOAuthReturnPending] = useState(false)
+  const consumeOAuthReturn = useCallback(() => setOAuthReturnPending(false), [])
   useMailCoreRealtime(authed === true)
 
   useEffect(() => {
@@ -94,9 +96,10 @@ function App() {
   }, [wide, mobileSidebarOpen, closeMobileSidebar])
 
   useEffect(() => {
-    if (authed && typeof window !== 'undefined' && window.location.hash === '#oauth-return') {
-      useMailStore.getState().openSettings()
-    }
+    if (!authed || typeof window === 'undefined' || window.location.hash !== '#oauth-return') return
+    useMailStore.getState().openSettings()
+    setOAuthReturnPending(true)
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
   }, [authed])
 
   useEffect(() => {
@@ -201,7 +204,7 @@ function App() {
         )}
         {settingsOpen ? (
           <ErrorBoundary inline fallbackTitle="设置加载失败">
-            <Suspense fallback={<div role="status">正在加载设置…</div>}><SettingsPage sidebarToggleRef={sidebarToggleRef} /></Suspense>
+            <Suspense fallback={<div role="status">正在加载设置…</div>}><SettingsPage sidebarToggleRef={sidebarToggleRef} oauthReturn={oauthReturnPending} onOAuthReturnConsumed={consumeOAuthReturn} /></Suspense>
           </ErrorBoundary>
         ) : (
           <>

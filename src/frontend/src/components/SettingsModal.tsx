@@ -23,7 +23,15 @@ function Status({ value }: { value?: Feedback }) {
 }
 
 /** Settings occupies the workspace after the mail sidebar. */
-export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: Ref<HTMLButtonElement> } = {}) {
+export default function SettingsPage({
+  sidebarToggleRef,
+  oauthReturn = false,
+  onOAuthReturnConsumed,
+}: {
+  sidebarToggleRef?: Ref<HTMLButtonElement>
+  oauthReturn?: boolean
+  onOAuthReturnConsumed?: () => void
+} = {}) {
   const theme = useMailStore(s => s.theme)
   const setTheme = useMailStore(s => s.setTheme)
   const accountIconMode = useMailStore(s => s.accountIconMode)
@@ -83,13 +91,12 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
   }, [filteredSelected, allSelected])
 
   useEffect(() => {
-    if (typeof window === 'undefined' || window.location.hash !== '#oauth-return' || typeof api.getActiveOAuthFlow !== 'function') return
-    if (accountsQuery.isPending) return
+    const hasOAuthReturn = oauthReturn || (typeof window !== 'undefined' && window.location.hash === '#oauth-return')
+    if (!hasOAuthReturn || typeof api.getActiveOAuthFlow !== 'function' || accountsQuery.isPending) return
     const loadedAccounts = accountsQuery.data || []
     let cancelled = false
     void api.getActiveOAuthFlow().then(res => {
       if (cancelled || !res?.flow) return
-      window.history?.replaceState?.(null, '', window.location.pathname)
       setSection('accounts')
       if (res.flow.intent === 'create') {
         setEditingAccount(null)
@@ -101,9 +108,15 @@ export default function SettingsPage({ sidebarToggleRef }: { sidebarToggleRef?: 
           setEditingAccount(target)
         }
       }
-    }).catch(() => {})
+    }).catch(() => {}).finally(() => {
+      if (cancelled) return
+      if (typeof window !== 'undefined' && window.location.hash === '#oauth-return') {
+        window.history?.replaceState?.(null, '', `${window.location.pathname}${window.location.search}`)
+      }
+      onOAuthReturnConsumed?.()
+    })
     return () => { cancelled = true }
-  }, [accountsQuery.isPending, accountsQuery.data])
+  }, [accountsQuery.isPending, accountsQuery.data, oauthReturn, onOAuthReturnConsumed])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

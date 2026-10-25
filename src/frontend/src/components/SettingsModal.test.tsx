@@ -145,6 +145,30 @@ describe('<SettingsModal />', () => {
     ]))
   })
 
+  it('consumes an App-delivered OAuth return when no active flow exists', async () => {
+    const activeFlowCalls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u === '/api/accounts/oauth/active') {
+        activeFlowCalls.push(u)
+        return json({ flow: null })
+      }
+      if (u.startsWith('/api/accounts')) return json({ accounts: [], total: 0, limit: 200, offset: 0, has_more: false })
+      if (u === '/api/groups') return json({ groups: [] })
+      if (u === '/api/settings') return json({ settings: {} })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+    window.location.hash = ''
+    const consumed = vi.fn()
+
+    await render(<SettingsPage oauthReturn onOAuthReturnConsumed={consumed} />)
+    await waitFor(() => expect(consumed).toHaveBeenCalledOnce())
+
+    expect(activeFlowCalls).toEqual(['/api/accounts/oauth/active'])
+    expect(window.location.hash).toBe('')
+  })
+
   it('renders default 30s placeholder when mail_fetch_timeout_seconds is unset', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url)
