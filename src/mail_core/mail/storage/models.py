@@ -351,6 +351,7 @@ class OutboxEvent(Base):
     __table_args__ = (
         Index("ix_outbox_undispatched", "dispatched_at", "id"),
         Index("ix_outbox_publication_seq", "publication_seq", unique=True),
+        Index("ix_outbox_unassigned", "id", postgresql_where=text("publication_seq IS NULL")),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -359,7 +360,7 @@ class OutboxEvent(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    publication_seq: Mapped[Optional[int]] = mapped_column(BigInteger, unique=True)
+    publication_seq: Mapped[Optional[int]] = mapped_column(BigInteger)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
