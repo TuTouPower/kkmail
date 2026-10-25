@@ -37,6 +37,15 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
   const manualVendor = useRef(!!account)
   const connectionEdited = useRef(false)
   const [username, setUsername] = useState(account?.imap_config?.imap_user || '')
+  // p057: progressive disclosure — most providers use the email address as
+  // the IMAP login name (backend falls back to email when imap_user is
+  // unset), so the field stays hidden unless the user opts into a custom
+  // login name. Editing an account whose stored imap_user differs from its
+  // email auto-enables the toggle so the distinct value stays visible.
+  const [useCustomUsername, setUseCustomUsername] = useState(() => {
+    const stored = account?.imap_config?.imap_user
+    return !!stored && stored !== account?.email
+  })
   const [oauth, setOauth] = useState({ client_id: '', refresh_token: '', client_secret: '', token_uri: '', scope: '' })
   const [clearClientSecret, setClearClientSecret] = useState(false)
   const [clientType, setClientType] = useState(account?.oauth_client_type || 'public')
@@ -319,7 +328,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
   const isGoogleImap = vendor === 'google' && provider === 'imap'
   const imapHostField = <label className="settings-field" htmlFor="account-imap-host"><span>IMAP 服务器</span><input id="account-imap-host" name="imap_host" value={host} onChange={event => { connectionEdited.current = true; setHost(event.target.value) }} required placeholder="imap.example.com" /></label>
   const imapPortSslFields = <div className="settings-fields"><label className="settings-field" htmlFor="account-imap-port"><span>端口</span><input id="account-imap-port" name="imap_port" type="number" min={1} max={65535} required value={port} onChange={event => { connectionEdited.current = true; setPort(event.target.value) }} /></label><label className="settings-checkbox"><input id="account-imap-ssl" name="use_ssl" type="checkbox" checked={ssl} onChange={event => { connectionEdited.current = true; setSsl(event.target.checked); if (port === '993' && !event.target.checked) setPort('143'); else if (port === '143' && event.target.checked) setPort('993') }} />SSL / TLS</label></div>
-  const imapUsernameField = <label className="settings-field" htmlFor="account-username"><span>IMAP 登录名</span><input id="account-username" value={username} onChange={event => setUsername(event.target.value)} placeholder={email || '默认完整邮箱地址'} /></label>
+  const imapUsernameField = <><label className="settings-checkbox" htmlFor="account-use-custom-username"><input id="account-use-custom-username" type="checkbox" checked={useCustomUsername} onChange={event => setUseCustomUsername(event.target.checked)} />使用自定义登录名</label>{useCustomUsername && <label className="settings-field" htmlFor="account-username"><span>IMAP 登录名</span><input id="account-username" value={username} onChange={event => setUsername(event.target.value)} placeholder={email || '默认完整邮箱地址'} /></label>}</>
   const imapPasswordField = <label className="settings-field" htmlFor="account-password"><span>{isGoogleImap ? '应用专用密码（16 位）' : vendors[vendor].credential}</span><input id="account-password" name="mailbox-password" type="password" autoComplete="new-password" value={password} required={!account} onChange={event => setPassword(event.target.value)} placeholder={account ? '留空保持已保存密码不变' : isGoogleImap ? '请输入 16 位应用专用密码' : '邮箱服务商提供的密码或授权码'} /></label>
 
   return <dialog className="settings-dialog" ref={dialogRef} aria-labelledby="account-dialog-title" onCancel={event => {
@@ -348,8 +357,12 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
       let credentials: Record<string, unknown> = {}
       if (provider === 'imap' && password) credentials = { password }
       if (provider !== 'imap' && !oauthAuthorized) credentials = Object.fromEntries(Object.entries(oauth).filter(([, value]) => value !== ''))
+      // p057 payload: with the custom-login toggle off, a new account omits
+      // imap_user entirely (backend falls back to email); editing an account
+      // that stored one sends '' — the existing clear convention, which the
+      // backend treats as removing imap_user.
       const config = {
-        ...(provider === 'imap' ? { imap_host: host.trim(), imap_port: Number(port), use_ssl: ssl, ...(username.trim() ? { imap_user: username.trim() } : account?.imap_config?.imap_user ? { imap_user: '' } : {}) } : {}),
+        ...(provider === 'imap' ? { imap_host: host.trim(), imap_port: Number(port), use_ssl: ssl, ...(useCustomUsername && username.trim() ? { imap_user: username.trim() } : account?.imap_config?.imap_user ? { imap_user: '' } : {}) } : {}),
         ...(!account || vendor !== initialVendor ? { provider_profile: vendor } : {}),
         ...(provider !== 'imap' && (!account || (clientTypeEdited.current && clientType !== (account.oauth_client_type || 'public'))) ? { oauth_client_type: clientType } : {}),
       }

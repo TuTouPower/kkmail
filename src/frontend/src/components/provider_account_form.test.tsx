@@ -90,13 +90,138 @@ it('CredentialHelp for Google renders the 3 app-password steps and the apppasswo
   }
 })
 
+// p057 replacement note: this test previously typed into #account-username
+// while the field was always rendered flat. p057 hides it behind the
+// 「使用自定义登录名」 toggle, so the test was replaced wholesale to check
+// the toggle first; its original assertions (manually entered host and
+// username survive an email change) are unchanged.
 it('does not replace manually entered host when the address changes', async () => {
   const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
   await typeInto(container.querySelector('#account-imap-host'), 'custom.example.test')
+  await click(container.querySelector('#account-use-custom-username'))
   await typeInto(container.querySelector('#account-username'), 'independent-login')
   await typeInto(container.querySelector('#account-email'), 'hello@qq.com')
   expect((container.querySelector('#account-imap-host') as HTMLInputElement).value).toBe('custom.example.test')
   expect((container.querySelector('#account-username') as HTMLInputElement).value).toBe('independent-login')
+})
+
+it('p057: hides the IMAP username by default and submits without a custom imap_user', async () => {
+  const writes: Array<{ url: string; body: Record<string, unknown> }> = []
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
+    const url = String(input)
+    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }))
+    if ((init.method || 'GET') !== 'GET') writes.push({ url, body: JSON.parse(String(init.body)) })
+    return new Response(JSON.stringify({ id: 'new' }))
+  }))
+  const onSaved = vi.fn(async () => {})
+  const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={onSaved} />)
+  const toggle = container.querySelector('#account-use-custom-username') as HTMLInputElement
+  expect(toggle).not.toBeNull()
+  expect(toggle.checked).toBe(false)
+  expect(container.querySelector('label[for="account-use-custom-username"]')?.textContent).toContain('使用自定义登录名')
+  expect(container.querySelector('#account-username')).toBeNull()
+  await typeInto(container.querySelector('#account-email'), 'person@example.test')
+  await typeInto(container.querySelector('#account-imap-host'), 'imap.example.test')
+  await typeInto(container.querySelector('#account-password'), 'secret-password')
+  await click(container.querySelector('button[type="submit"]'))
+  await waitFor(() => expect(onSaved).toHaveBeenCalled())
+  expect(writes).toHaveLength(1)
+  expect(writes[0].url).toMatch(/\/api\/accounts$/)
+  expect(writes[0].body).toMatchObject({
+    email: 'person@example.test',
+    provider: 'imap',
+    credentials: { password: 'secret-password' },
+    config: { imap_host: 'imap.example.test', imap_port: 993, use_ssl: true },
+  })
+  expect(writes[0].body.config as Record<string, unknown>).not.toHaveProperty('imap_user')
+  expect(JSON.stringify(writes)).not.toContain('imap_user')
+})
+
+it('p057: checking the custom-login toggle reveals the username field and submits its value', async () => {
+  const writes: Array<{ url: string; body: Record<string, unknown> }> = []
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
+    const url = String(input)
+    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }))
+    if ((init.method || 'GET') !== 'GET') writes.push({ url, body: JSON.parse(String(init.body)) })
+    return new Response(JSON.stringify({ id: 'new' }))
+  }))
+  const onSaved = vi.fn(async () => {})
+  const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={onSaved} />)
+  expect(container.querySelector('#account-username')).toBeNull()
+  await click(container.querySelector('#account-use-custom-username'))
+  expect((container.querySelector('#account-use-custom-username') as HTMLInputElement).checked).toBe(true)
+  expect(container.querySelector('#account-username')).not.toBeNull()
+  await typeInto(container.querySelector('#account-email'), 'person@example.test')
+  await typeInto(container.querySelector('#account-imap-host'), 'imap.example.test')
+  await typeInto(container.querySelector('#account-username'), 'sys-user-42')
+  await typeInto(container.querySelector('#account-password'), 'secret-password')
+  await click(container.querySelector('button[type="submit"]'))
+  await waitFor(() => expect(onSaved).toHaveBeenCalled())
+  expect(writes).toHaveLength(1)
+  expect(writes[0].body).toMatchObject({
+    email: 'person@example.test',
+    provider: 'imap',
+    config: { imap_host: 'imap.example.test', imap_user: 'sys-user-42' },
+  })
+})
+
+it('p057: editing an account with a differing stored imap_user auto-checks the toggle and shows the value', async () => {
+  const writes: Array<{ url: string; body: Record<string, unknown> }> = []
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
+    const url = String(input)
+    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }))
+    if ((init.method || 'GET') !== 'GET') writes.push({ url, body: JSON.parse(String(init.body)) })
+    return new Response(JSON.stringify({ id: 'acc-custom' }))
+  }))
+  const onSaved = vi.fn(async () => {})
+  const account = {
+    id: 'acc-custom',
+    email: 'person@example.test',
+    provider: 'imap',
+    status: 'active',
+    sync_status: 'idle',
+    sync_enabled: true,
+    account_type: 'imap',
+    imap_config: { imap_host: 'imap.example.test', imap_port: 993, use_ssl: true, imap_user: 'sys-user-42' },
+  }
+  const { container } = await render(<AccountDialog account={account} groups={[]} groupsAvailable onClose={vi.fn()} onSaved={onSaved} />)
+  expect((container.querySelector('#account-use-custom-username') as HTMLInputElement).checked).toBe(true)
+  expect((container.querySelector('#account-username') as HTMLInputElement).value).toBe('sys-user-42')
+  await click(container.querySelector('button[type="submit"]'))
+  await waitFor(() => expect(onSaved).toHaveBeenCalled())
+  expect(writes).toHaveLength(1)
+  expect(writes[0].url).toMatch(/\/api\/accounts\/acc-custom$/)
+  expect(writes[0].body).toMatchObject({ config: { imap_user: 'sys-user-42' } })
+})
+
+it('p057: editing an account whose stored imap_user equals its email keeps the toggle off and clears it on save', async () => {
+  const writes: Array<{ url: string; body: Record<string, unknown> }> = []
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
+    const url = String(input)
+    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }))
+    if ((init.method || 'GET') !== 'GET') writes.push({ url, body: JSON.parse(String(init.body)) })
+    return new Response(JSON.stringify({ id: 'acc-same' }))
+  }))
+  const onSaved = vi.fn(async () => {})
+  const account = {
+    id: 'acc-same',
+    email: 'person@example.test',
+    provider: 'imap',
+    status: 'active',
+    sync_status: 'idle',
+    sync_enabled: true,
+    account_type: 'imap',
+    imap_config: { imap_host: 'imap.example.test', imap_port: 993, use_ssl: true, imap_user: 'person@example.test' },
+  }
+  const { container } = await render(<AccountDialog account={account} groups={[]} groupsAvailable onClose={vi.fn()} onSaved={onSaved} />)
+  expect((container.querySelector('#account-use-custom-username') as HTMLInputElement).checked).toBe(false)
+  expect(container.querySelector('#account-username')).toBeNull()
+  await click(container.querySelector('button[type="submit"]'))
+  await waitFor(() => expect(onSaved).toHaveBeenCalled())
+  expect(writes).toHaveLength(1)
+  // '' is the form's existing clear convention: the backend removes the
+  // stored imap_user and falls back to the email address.
+  expect(writes[0].body).toMatchObject({ config: { imap_user: '' } })
 })
 
 it('updates a single OAuth field without echoing or replacing saved secrets', async () => {
