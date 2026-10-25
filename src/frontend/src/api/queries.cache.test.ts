@@ -53,6 +53,72 @@ describe('mail list cache policy', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('stops after collecting the reported account total', async () => {
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      const offset = Number(url.searchParams.get('offset'))
+      const limit = Number(url.searchParams.get('limit'))
+      const accounts = Array.from({ length: limit }, (_, index) => ({ id: `account-${offset + index}` }))
+      return new Response(JSON.stringify({ accounts, total: 200, limit, offset, has_more: true }), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      const accounts = await fetchAccounts()
+      expect(accounts).toHaveLength(200)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('rejects account pages that do not match the requested offset', async () => {
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      const requestedOffset = Number(url.searchParams.get('offset'))
+      const limit = Number(url.searchParams.get('limit'))
+      calls += 1
+      const offset = calls === 1 ? requestedOffset : 0
+      const accounts = Array.from({ length: limit }, (_, index) => ({ id: `account-${offset + index}` }))
+      return new Response(JSON.stringify({ accounts, total: 1_000, limit, offset, has_more: true }), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    try {
+      await expect(fetchAccounts()).rejects.toThrow('unexpected offset')
+      expect(calls).toBe(2)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('caps pathological account pagination at 10,000 pages', async () => {
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      const offset = Number(url.searchParams.get('offset'))
+      const limit = Number(url.searchParams.get('limit'))
+      return new Response(JSON.stringify({
+        accounts: [{ id: `account-${offset}` }],
+        total: 10_001,
+        limit,
+        offset,
+        has_more: true,
+      }), { headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      await expect(fetchAccounts()).rejects.toThrow('exceeded 10000 pages')
+      expect(fetchMock).toHaveBeenCalledTimes(10_000)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
 
 describe('findCachedMail', () => {

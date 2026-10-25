@@ -146,17 +146,31 @@ export async function fetchGroups(): Promise<GroupItem[]> {
 }
 
 const ACCOUNT_PAGE_SIZE = 200
+const ACCOUNT_MAX_PAGES = 10_000
 
 /** Load every account page (limit/offset/has_more). */
 export async function fetchAccounts(): Promise<AccountSummary[]> {
   const all: AccountSummary[] = []
-  for (;;) {
-    const res = await api.getAccounts({ limit: ACCOUNT_PAGE_SIZE, offset: all.length })
+  let offset = 0
+  for (let page = 0; page < ACCOUNT_MAX_PAGES; page += 1) {
+    const res = await api.getAccounts({ limit: ACCOUNT_PAGE_SIZE, offset })
+    if (!Number.isSafeInteger(res.total) || res.total < 0) {
+      throw new Error('Account pagination returned an invalid total')
+    }
+    if (res.offset !== offset) {
+      throw new Error('Account pagination returned an unexpected offset')
+    }
     all.push(...res.accounts)
-    if (!res.has_more) break
+    if (all.length >= res.total) return all.slice(0, res.total)
+    if (!res.has_more) return all
     if (!res.accounts.length) throw new Error('Account pagination returned an empty page while more accounts remain')
+    const nextOffset = offset + res.accounts.length
+    if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset) {
+      throw new Error('Account pagination offset did not advance')
+    }
+    offset = nextOffset
   }
-  return all
+  throw new Error(`Account pagination exceeded ${ACCOUNT_MAX_PAGES} pages`)
 }
 
 function extractItemsFromCache(data: unknown): MailItem[] {
