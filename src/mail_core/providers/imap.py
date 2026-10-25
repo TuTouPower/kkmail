@@ -441,25 +441,57 @@ class ImapProvider:
     password: str = field(repr=False)
     use_ssl: bool = True
     timeout: float = 30.0
+    # Connection-budget wiring (design §7): the permit is acquired before
+    # the real connection is established and held for exactly the
+    # connection's lifetime — a reused session counts as one connection.
+    traffic_class: Any = "foreground"
+    permit_factory: Any = None
     _active_client: Any = field(default=None, init=False, repr=False)
+    _session_permit: Any = field(default=None, init=False, repr=False)
     _current_folder: str | None = field(default=None, init=False, repr=False)
     _metadata_uid_scan: tuple[str, int | None, list[int]] | None = field(
         default=None, init=False, repr=False
     )
 
+    def _connect_with_permit(self) -> tuple[Any, Any]:
+        """Acquire a permit first, then establish the real connection.
+
+        Auth failure, peer-verification failure, or any other connect
+        error releases the permit before propagating.  A control-plane
+        failure raises before any provider I/O is attempted.
+        """
+        from mail_core.providers.connection_slots import acquire_permit
+
+        permit = acquire_permit(self.permit_factory, self.traffic_class)
+        try:
+            client = self._connect()
+        except BaseException:
+            if permit is not None:
+                permit.release()
+            raise
+        return client, permit
+
+    @staticmethod
+    def _close_client(client: Any, permit: Any) -> None:
+        try:
+            client.logout()
+        except Exception:
+            pass
+        if permit is not None:
+            permit.release()
+
     def open_session(self) -> None:
         if self._active_client is None:
-            self._active_client = self._connect()
+            self._active_client, self._session_permit = self._connect_with_permit()
             self._current_folder = None
 
     def close_session(self) -> None:
         if self._active_client is not None:
-            try:
-                self._active_client.logout()
-            except Exception:
-                pass
+            client, permit = self._active_client, self._session_permit
             self._active_client = None
+            self._session_permit = None
             self._current_folder = None
+            self._close_client(client, permit)
 
     def __repr__(self) -> str:
         # Never leak IMAP password via logging / traceback repr.
@@ -508,7 +540,7 @@ class ImapProvider:
         return client
 
     def list_folder_catalog(self) -> Sequence[RemoteFolder]:
-        c = self._connect()
+        c, _permit = self._connect_with_permit()
         try:
             typ, data = c.list()
             if typ != "OK":
@@ -593,10 +625,7 @@ class ImapProvider:
                 folders.insert(0, RemoteFolder("INBOX", "INBOX", "inbox"))
             return folders
         finally:
-            try:
-                c.logout()
-            except Exception:
-                pass
+            self._close_client(c, _permit)
 
     def list_folders(self) -> Sequence[RemoteFolder]:
         """Return only mailboxes that can be selected for message operations."""
@@ -607,7 +636,7 @@ class ImapProvider:
 
     def fetch_metadata_page(self, folder_remote_id: str, cursor: dict[str, Any] | None) -> MetadataPage:
         """Page by UID ascending, reusing one UID search for this provider scan."""
-        c = self._connect()
+        c, _permit = self._connect_with_permit()
         try:
             typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
             if typ != "OK":
@@ -709,10 +738,7 @@ class ImapProvider:
                 exhausted=exhausted,
             )
         finally:
-            try:
-                c.logout()
-            except Exception:
-                pass
+            self._close_client(c, _permit)
 
     def fetch_mime(self, remote_id: str, *, folder_remote_id: str | None = None) -> bytes:
         parsed = parse_imap_remote_id(remote_id)
@@ -730,7 +756,10 @@ class ImapProvider:
                 "(uidvalidity\\x1ffolder\\x1fuid)"
             )
         reuse = self._active_client
-        c = reuse if reuse is not None else self._connect()
+        if reuse is not None:
+            c, _permit = reuse, None  # session permit already held by open_session
+        else:
+            c, _permit = self._connect_with_permit()
         try:
             if reuse is None or self._current_folder != folder:
                 typ, _ = c.select(_quote_mailbox(folder), readonly=True)
@@ -755,10 +784,7 @@ class ImapProvider:
             raise
         finally:
             if reuse is None:
-                try:
-                    c.logout()
-                except Exception:
-                    pass
+                self._close_client(c, _permit)
 
     def _fetch_flags_for_uids(
         self,
@@ -829,7 +855,7 @@ class ImapProvider:
         changes for MODSEQ hits. Also page new UIDs since ``uid_next``. Deletions
         are *not* inferred here — use reconcile after a complete scan.
         """
-        c = self._connect()
+        c, _permit = self._connect_with_permit()
         connection_open = True
 
         def close_connection() -> None:
@@ -837,10 +863,7 @@ class ImapProvider:
             if not connection_open:
                 return
             connection_open = False
-            try:
-                c.logout()
-            except Exception:
-                pass
+            self._close_client(c, _permit)
 
         try:
             typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
@@ -1006,7 +1029,7 @@ class ImapProvider:
         except ValueError as exc:
             return RemoteOperationResult(success=False, error=str(exc))
 
-        c = self._connect()
+        c, _permit = self._connect_with_permit()
         try:
             typ, _ = c.select(quoted_folder)
             if typ != "OK":
@@ -1074,14 +1097,11 @@ class ImapProvider:
 
             return RemoteOperationResult(success=False, error=f"imap apply not implemented: {op_type}")
         finally:
-            try:
-                c.logout()
-            except Exception:
-                pass
+            self._close_client(c, _permit)
 
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
         """Return delete actions for local IDs missing remotely — caller must have completed a full scan."""
-        c = self._connect()
+        c, _permit = self._connect_with_permit()
         try:
             typ, _ = c.select(_quote_mailbox(folder_remote_id), readonly=True)
             if typ != "OK":
@@ -1113,10 +1133,7 @@ class ImapProvider:
             local = set(local_remote_ids)
             return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote)]
         finally:
-            try:
-                c.logout()
-            except Exception:
-                pass
+            self._close_client(c, _permit)
 
     def rate_limit_hint(self) -> RateLimitHint:
         return RateLimitHint(max_requests_per_minute=120, reason="imap default")

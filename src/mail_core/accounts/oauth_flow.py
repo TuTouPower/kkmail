@@ -325,13 +325,26 @@ def start_oauth_flow(
 def _call_token_endpoint(url: str, form: dict[str, str]) -> dict[str, Any]:
     if _token_http_post is not None:
         return _token_http_post(url, form)
-    return default_urllib_token_post("POST", url, form, {"Content-Type": "application/x-www-form-urlencoded"})
+    # Interactive OAuth is foreground provider I/O under the global
+    # connection budget (design §7); the refresh completes and releases
+    # its permit before the profile call below opens its connection.
+    from mail_core.providers.connection_slots import TrafficClass, default_permit_factory
+
+    return default_urllib_token_post(
+        "POST", url, form, {"Content-Type": "application/x-www-form-urlencoded"},
+        permit_factory=default_permit_factory(), traffic_class=TrafficClass.FOREGROUND,
+    )
 
 
 def _call_profile_endpoint(url: str, access_token: str) -> dict[str, Any]:
     if _profile_http_get is not None:
         return _profile_http_get(url, access_token)
-    res = urllib_json_request("GET", url, None, {"Authorization": f"Bearer {access_token}", "Accept": "application/json"})
+    from mail_core.providers.connection_slots import TrafficClass, default_permit_factory
+
+    res = urllib_json_request(
+        "GET", url, None, {"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+        permit_factory=default_permit_factory(), traffic_class=TrafficClass.FOREGROUND,
+    )
     return res if isinstance(res, dict) else {}
 
 

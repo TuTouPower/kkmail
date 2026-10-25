@@ -14,6 +14,12 @@ from mail_core.mail.application.remote_ops import mark_remote_operation, reclaim
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, RemoteOperationStatus
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, RemoteOperation, WorkerJob
+from mail_core.providers.connection_slots import (
+    CAPACITY_ERRORS,
+    CAPACITY_RETRY_SECONDS,
+    TrafficClass,
+    is_capacity_error,
+)
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import ProviderHttpError, RateLimitedError
 from mail_core.providers.remote_writeback import OP_MOVE, OP_TRASH, normalize_op_type
@@ -308,6 +314,7 @@ def push_remote_operations(
     store: CredentialStore | None = None,
     limit: int = 20,
     lease_ttl: timedelta = timedelta(seconds=120),
+    traffic_class: TrafficClass = TrafficClass.FOREGROUND,
 ) -> dict:
     """Push pending remote ops with per-op isolation and fencing *before* side effects.
 
@@ -370,7 +377,15 @@ def push_remote_operations(
         return {"status": "ok", "pushed": 0, "failed": 0}
 
     try:
-        provider = build_provider(account_snapshot, store or get_credential_store())
+        provider = build_provider(account_snapshot, store or get_credential_store(), traffic_class=traffic_class)
+    except CAPACITY_ERRORS:
+        with Session() as session:
+            try:
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            except FencingMismatch:
+                pass
+        return {"status": "capacity_unavailable", "retry_after": CAPACITY_RETRY_SECONDS, "pushed": 0, "failed": 0}
     except Exception:
         with Session() as session:
             try:
@@ -438,6 +453,49 @@ def push_remote_operations(
                 caught_exc = exc
                 ok = False
                 err = err_summary
+
+        if is_capacity_error(caught_exc):
+            # Budget deferral (design §7): the op must NOT advance to a
+            # terminal/failed state or consume an attempt.  Reset it to
+            # PENDING (fencing-checked), reschedule the push, release
+            # the lease, and let the worker reschedule this job.
+            delay = float(getattr(caught_exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+            next_attempt = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            with Session() as session:
+                try:
+                    assert_fencing(session, account_id=account_id, fencing_token=fencing)
+                except FencingMismatch:
+                    return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
+                op = session.get(RemoteOperation, op_id, with_for_update=True)
+                if op is not None and op.status == RemoteOperationStatus.IN_PROGRESS.value:
+                    mark_remote_operation(
+                        session,
+                        op,
+                        status=RemoteOperationStatus.PENDING,
+                        error=None,
+                        next_attempt_at=next_attempt,
+                    )
+                enqueue_job(
+                    session,
+                    job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                    account_id=account_id,
+                    payload={},
+                    priority=40,
+                    run_after=next_attempt,
+                    dedupe_key=f"remote-op-push:{account_id}",
+                )
+                try:
+                    release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                except FencingMismatch:
+                    pass
+                session.commit()
+            return {
+                "status": "capacity_unavailable",
+                "retry_after": delay,
+                "followup_scheduled": True,
+                "pushed": pushed,
+                "failed": failed,
+            }
 
         with Session() as session:
             try:

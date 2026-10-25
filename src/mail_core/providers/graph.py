@@ -86,13 +86,21 @@ class GraphProvider:
     credential_ref: str
     transport: Any | None = None
     timeout: float = 30.0
+    # Connection-budget wiring (design §7): see GmailProvider.  The class
+    # travels on the instance; build_provider wires the budget into the
+    # urllib transport stack and leaves ``permit_factory`` None here.
+    traffic_class: Any = "foreground"
+    permit_factory: Any = None
     _calls: list[str] = field(default_factory=list, repr=False)
 
     def _call(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
         if self.transport is None:
             raise GraphNotConfiguredError("Graph HTTP transport not configured")
+        from mail_core.providers.connection_slots import permit_scope
+
         try:
-            return self.transport(method, path, params or {})
+            with permit_scope(self.permit_factory, self.traffic_class):
+                return self.transport(method, path, params or {})
         except RateLimitedError:
             raise
         except CursorInvalidError:

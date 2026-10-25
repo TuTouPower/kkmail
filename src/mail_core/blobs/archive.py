@@ -42,7 +42,12 @@ from mail_core.mail.storage.models import (
     MessageBody,
     OutboxEvent,
 )
-from mail_core.providers.connection_slots import ProviderCapacityUnavailable
+from mail_core.providers.connection_slots import (
+    CAPACITY_ERRORS,
+    ProviderCapacityUnavailable,
+    TrafficClass,
+    traffic_class_for_job,
+)
 from mail_core.providers.factory import build_provider
 from mail_core.sync.jobs import enqueue_job
 
@@ -674,8 +679,13 @@ def run_archive_batch(
     worker_id: str,
     store: CredentialStore | None = None,
     payload: dict | None = None,
+    traffic_class: TrafficClass | None = None,
 ) -> dict:
     payload = payload or {}
+    if traffic_class is None:
+        # Routine batches are background; a batch targeted at one
+        # message_id is an on-demand foreground fetch (design §7).
+        traffic_class = traffic_class_for_job(JobType.ARCHIVE_MIME_BATCH.value, payload=payload)
     limit = int(payload.get("batch_size") or os.environ.get("MAIL_CORE_ARCHIVE_BATCH") or DEFAULT_BATCH)
     recent_days = int(payload.get("recent_days") or DEFAULT_RECENT_DAYS)
     soft = payload.get("soft_limit_bytes")
@@ -864,7 +874,7 @@ def run_archive_batch(
                         credential_ref=acc.credential_ref,
                         config=dict(acc.config or {}),
                     )
-                p = build_provider(snap, store or get_credential_store())
+                p = build_provider(snap, store or get_credential_store(), traffic_class=traffic_class)
                 if hasattr(p, "open_session"):
                     try:
                         p.open_session()
@@ -876,7 +886,7 @@ def run_archive_batch(
                 # error through the unified settlement for every still-active
                 # claim of this account instead of silently reverting to
                 # pending; other accounts in the batch continue.
-                if isinstance(exc, ProviderCapacityUnavailable):
+                if isinstance(exc, CAPACITY_ERRORS):
                     with Session() as session:
                         applied = settle_archive_claims(
                             session, _active_claims(), "capacity", account_id=account_id
@@ -908,7 +918,7 @@ def run_archive_batch(
             mime = provider.fetch_mime(remote_id)  # network
             log.info("archive fetch_mime success message=%s bytes=%d elapsed_ms=%.1f", mid, len(mime), (time.monotonic() - t_fetch) * 1000)
         except Exception as exc:
-            if isinstance(exc, ProviderCapacityUnavailable):
+            if isinstance(exc, CAPACITY_ERRORS):
                 with Session() as session:
                     applied = settle_archive_claims(
                         session, _active_claims(), "capacity", account_id=account_id

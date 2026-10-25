@@ -14,6 +14,11 @@ from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
+from mail_core.providers.connection_slots import (
+    CAPACITY_ERRORS,
+    CAPACITY_RETRY_SECONDS,
+    TrafficClass,
+)
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
 from mail_core.security.redact import safe_provider_summary
@@ -293,6 +298,7 @@ def sync_folder_delta(
     lease_ttl: timedelta = timedelta(seconds=120),
     max_pages: int = 20,
     poll_round: int = 0,
+    traffic_class: TrafficClass = TrafficClass.FOREGROUND,
 ) -> dict:
     """Apply provider delta pages under fencing.
 
@@ -369,7 +375,13 @@ def sync_folder_delta(
             session.rollback()
 
     try:
-        provider = build_provider(account_snapshot, store or get_credential_store())
+        provider = build_provider(account_snapshot, store or get_credential_store(), traffic_class=traffic_class)
+    except CAPACITY_ERRORS as exc:
+        with Session() as session:
+            _release_quiet(session)
+            session.commit()
+        delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+        return {"status": "capacity_unavailable", "retry_after": delay}
     except Exception:
         with Session() as session:
             _release_quiet(session)
@@ -424,6 +436,31 @@ def sync_folder_delta(
                 _release_quiet(session)
                 session.commit()
             return {"status": "rate_limited", "retry_after": delay, "pages": pages, **totals}
+        except CAPACITY_ERRORS as exc:
+            # Budget deferral: delayed followup, no provider_error, no
+            # account failure marking (design §7).
+            delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+            with Session() as session:
+                followup = enqueue_job(
+                    session,
+                    job_type=JobType.SYNC_FOLDER_DELTA.value,
+                    account_id=account_id,
+                    payload={"folder_id": str(folder_id)},
+                    priority=60,
+                    run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
+                    dedupe_key=f"delta:{account_id}:{folder_id}",
+                )
+                followup_coalesced = followup.status == JobStatus.CLAIMED.value
+                _release_quiet(session)
+                session.commit()
+            return {
+                "status": "capacity_unavailable",
+                "retry_after": delay,
+                "followup_scheduled": True,
+                "followup_coalesced": followup_coalesced,
+                "pages": pages,
+                **totals,
+            }
         except Exception as exc:
             err_summary = safe_provider_summary(exc)
             log.error("delta provider I/O failed for folder %s: %s", folder_id, err_summary)

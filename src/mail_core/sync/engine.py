@@ -16,6 +16,11 @@ from sqlalchemy.orm import Session
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncRunStatus, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
+from mail_core.providers.connection_slots import (
+    CAPACITY_ERRORS,
+    CAPACITY_RETRY_SECONDS,
+    TrafficClass,
+)
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
 from mail_core.security.redact import safe_provider_summary
@@ -106,6 +111,7 @@ def sync_account_folders(
     full: bool = False,
     scan_generation: uuid.UUID | None = None,
     request_id: uuid.UUID | None = None,
+    traffic_class: TrafficClass = TrafficClass.FOREGROUND,
 ) -> dict:
     """Discover remote folders, upsert local Folder rows, enqueue metadata jobs.
 
@@ -135,11 +141,37 @@ def sync_account_folders(
         )
 
     try:
-        provider = build_provider(account_snapshot, store or get_credential_store())
+        provider = build_provider(account_snapshot, store or get_credential_store(), traffic_class=traffic_class)
         try:
             list_catalog = getattr(provider, "list_folder_catalog", None)
             list_remote_folders = list_catalog if callable(list_catalog) else provider.list_folders
             remote_folders = list(list_remote_folders())  # network
+        except CAPACITY_ERRORS as exc:
+            # Budget deferral: delayed followup, no failure marking.
+            delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+            with Session() as session:
+                retry_payload: dict = {}
+                if request_id is not None:
+                    retry_payload["request_id"] = str(request_id)
+                retry_payload.update(_scan_context_payload(full, scan_generation, request_id))
+                followup = enqueue_job(
+                    session,
+                    job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+                    account_id=account_id,
+                    payload=retry_payload,
+                    priority=60,
+                    run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
+                    dedupe_key=f"sync:{account_id}",
+                )
+                followup_coalesced = followup.status == JobStatus.CLAIMED.value
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            return {
+                "status": "capacity_unavailable",
+                "retry_after": delay,
+                "followup_scheduled": True,
+                "followup_coalesced": followup_coalesced,
+            }
         except RateLimitedError as exc:
             delay = float(exc.retry_after_seconds or 60)
             delay = max(1.0, min(delay, 86400.0))
@@ -323,6 +355,7 @@ def sync_folder_metadata(
     full: bool = False,
     scan_generation: uuid.UUID | None = None,
     request_id: uuid.UUID | None = None,
+    traffic_class: TrafficClass = TrafficClass.FOREGROUND,
 ) -> dict:
     """Pull metadata pages until exhausted or max_pages; enqueue reconcile when done.
 
@@ -391,7 +424,7 @@ def sync_folder_metadata(
     exhausted = False
     pages = 0
     try:
-        provider = build_provider(account_snapshot, store or get_credential_store())
+        provider = build_provider(account_snapshot, store or get_credential_store(), traffic_class=traffic_class)
         while pages < max_pages:
             page = provider.fetch_metadata_page(remote_id, cursor)  # network
             with Session() as session:
@@ -470,6 +503,29 @@ def sync_folder_metadata(
                 return {"status": "fencing_mismatch", "upserted": total}
         return {
             "status": "cursor_invalid",
+            "followup_scheduled": True,
+            "followup_coalesced": followup_coalesced,
+            "upserted": total,
+            "pages": pages,
+        }
+    except CAPACITY_ERRORS as exc:
+        delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+        with Session() as session:
+            followup = enqueue_job(
+                session,
+                job_type=JobType.SYNC_FOLDER_METADATA.value,
+                account_id=account_id,
+                payload={"folder_id": str(folder_id), **_scan_context_payload(full, scan_generation, request_id)},
+                priority=50,
+                run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
+                dedupe_key=f"metadata:{account_id}:{folder_id}",
+            )
+            followup_coalesced = followup.status == JobStatus.CLAIMED.value
+            _release_lease_quiet(session, account_id=account_id, worker_id=worker_id, fencing_token=fencing)
+            session.commit()
+        return {
+            "status": "capacity_unavailable",
+            "retry_after": delay,
             "followup_scheduled": True,
             "followup_coalesced": followup_coalesced,
             "upserted": total,

@@ -344,6 +344,35 @@ def complete_job(
     return successor_job
 
 
+def reschedule_job(
+    session: Session,
+    job: WorkerJob,
+    *,
+    worker_id: str | None = None,
+    delay_seconds: float = 5.0,
+    now: datetime | None = None,
+) -> None:
+    """Delay a job *without* counting a failure (design §7 deferral).
+
+    Used for local capacity/control deferrals (provider connection
+    budget saturated, slot control connection failed): the job returns
+    to PENDING with a short delay, ``failure_attempts`` and
+    ``last_error`` are untouched, and bound sync-request targets stay
+    open on the same execution generation.
+    """
+    _assert_job_owner(job, worker_id)
+    now = now or datetime.now(timezone.utc)
+    delay = max(0.5, float(delay_seconds))
+    job.status = JobStatus.PENDING.value
+    job.run_after = now + timedelta(seconds=delay)
+    job.locked_by = None
+    job.locked_at = None
+    session.flush()
+    from mail_core.sync.execution import refresh_requests, settle_job_bindings
+
+    refresh_requests(session, settle_job_bindings(session, job, outcome="retriable"))
+
+
 def heartbeat_job_claim(
     session: Session,
     *,

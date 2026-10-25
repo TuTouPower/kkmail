@@ -14,7 +14,12 @@ from mail_core.accounts.credentials import get_credential_store
 from mail_core.accounts.service import update_account_sync_status
 from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
 from mail_core.mail.storage.models import Account, WorkerJob
-from mail_core.sync.jobs import complete_job, fail_job
+from mail_core.providers.connection_slots import (
+    CAPACITY_RETRY_SECONDS,
+    is_capacity_error,
+    traffic_class_for_job,
+)
+from mail_core.sync.jobs import complete_job, fail_job, reschedule_job
 
 log = logging.getLogger("mail_core.worker.handlers")
 _ACCOUNT_SYNC_JOB_TYPES = (
@@ -120,6 +125,23 @@ def _recover_account_sync_status(session: Session, job: WorkerJob) -> None:
 
 def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: str) -> bool:
     status = result.get("status")
+    if status == "capacity_unavailable":
+        # Connection-budget deferral (design §7): never a business
+        # failure, never an account sync/auth failure.  Either the
+        # handler already enqueued a delayed followup (then completing
+        # this job is correct) or the current job itself is rescheduled
+        # without counting an attempt.
+        if result.get("followup_scheduled"):
+            complete_job(session, job, worker_id=worker_id, result=result)
+            return True
+        delay = result.get("retry_after")
+        reschedule_job(
+            session,
+            job,
+            worker_id=worker_id,
+            delay_seconds=float(delay) if delay else CAPACITY_RETRY_SECONDS,
+        )
+        return False
     if (
         status in ("provider_error", "rate_limited")
         and job.account_id is not None
@@ -171,6 +193,9 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         )
         return False
     account_id = job.account_id
+    # Explicit traffic class from the actual job type (+ message_id for
+    # archive jobs), propagated into provider construction (design §7).
+    traffic_class = traffic_class_for_job(job.job_type, payload=payload)
 
     try:
         if job.job_type in (
@@ -201,6 +226,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 account_id,
                 worker_id=worker_id,
                 store=get_credential_store(),
+                traffic_class=traffic_class,
                 full=bool(payload.get("full")),
                 scan_generation=_uuid_or_none(payload.get("scan_generation")),
                 request_id=_uuid_or_none(payload.get("request_id")),
@@ -227,6 +253,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 folder_id,
                 worker_id=worker_id,
                 store=get_credential_store(),
+                traffic_class=traffic_class,
                 full=bool(payload.get("full")),
                 scan_generation=_uuid_or_none(payload.get("scan_generation")),
                 request_id=_uuid_or_none(payload.get("request_id")),
@@ -241,7 +268,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.reconcile import reconcile_folder
 
             session.commit()
-            result = reconcile_folder(account_id, folder_id, worker_id=worker_id, store=get_credential_store())
+            result = reconcile_folder(account_id, folder_id, worker_id=worker_id, store=get_credential_store(), traffic_class=traffic_class)
             log.info("reconcile_folder %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
@@ -251,7 +278,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.remote_push import push_remote_operations
 
             session.commit()
-            result = push_remote_operations(account_id, worker_id=worker_id, store=get_credential_store())
+            result = push_remote_operations(account_id, worker_id=worker_id, store=get_credential_store(), traffic_class=traffic_class)
             log.info("remote_operation_push %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
@@ -264,6 +291,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 worker_id=worker_id,
                 store=get_credential_store(),
                 payload=payload,
+                traffic_class=traffic_class,
             )
             log.info("archive_mime_batch %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
@@ -290,6 +318,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 folder_id,
                 worker_id=worker_id,
                 store=get_credential_store(),
+                traffic_class=traffic_class,
                 poll_round=int(payload.get("poll_round") or 0),
             )
             log.info("sync_folder_delta %s", _result_log_summary(result))
@@ -324,6 +353,18 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         from mail_core.security.redact import safe_error
         from mail_core.providers.http import PermanentAuthError
 
+        if is_capacity_error(exc):
+            # Budget/control deferral: reschedule without counting a
+            # failure and without touching account sync/auth status.
+            log.info("job %s (%s) deferred: provider connection capacity", job.id, job.job_type)
+            session.rollback()
+            reschedule_job(
+                session,
+                job,
+                worker_id=worker_id,
+                delay_seconds=float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS),
+            )
+            return False
         log.error("job %s (%s) failed: %s", job.id, job.job_type, safe_error(exc))
         log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()

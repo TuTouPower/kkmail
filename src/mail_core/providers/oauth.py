@@ -76,6 +76,11 @@ class OAuthTokenClient:
     http_post: TokenHttpFn | None = None
     skew_seconds: float = 60.0
     timeout: float = 30.0
+    # Connection-budget wiring (design §7): the refresh request acquires a
+    # permit, completes, and releases it *before* any mail API connection
+    # is opened by the caller — permits are never nested.
+    permit_factory: Any = None
+    traffic_class: Any = "foreground"
     _cached: dict[str, Any] = field(default_factory=dict, repr=False)
     _refresh_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -144,7 +149,13 @@ class OAuthTokenClient:
             else:
                 post = lambda m, u, f, h=None: default_urllib_token_post(m, u, f, h, timeout=self.timeout)
             try:
-                resp = post("POST", uri, form, {"Content-Type": "application/x-www-form-urlencoded"})
+                # Acquire + complete + release the refresh permit inside
+                # this scope; get_access_token returns before the caller
+                # opens any mail API connection (no nested slot holding).
+                from mail_core.providers.connection_slots import permit_scope
+
+                with permit_scope(self.permit_factory, self.traffic_class):
+                    resp = post("POST", uri, form, {"Content-Type": "application/x-www-form-urlencoded"})
             except ProviderHttpError as exc:
                 raise OAuthError(f"token endpoint HTTP {exc.status}: {exc}") from exc
             if resp.get("error"):
@@ -172,19 +183,30 @@ def default_urllib_token_post(
     headers: dict[str, str] | None = None,
     *,
     timeout: float = 30.0,
+    permit_factory: Any = None,
+    traffic_class: Any = "foreground",
 ) -> dict[str, Any]:
-    """Stdlib token POST (used when no injectable http_post is given at runtime)."""
+    """Stdlib token POST (used when no injectable http_post is given at runtime).
+
+    When ``permit_factory`` is given the urlopen lifecycle holds one
+    connection permit.  Callers going through :class:`OAuthTokenClient`
+    must not pass a factory here as well — the client already scopes the
+    whole refresh call, and permits are never nested.
+    """
     import json
     import urllib.error
     import urllib.request
+
+    from mail_core.providers.connection_slots import permit_scope
 
     body = urlencode(form).encode("utf-8")
     req = urllib.request.Request(url, data=body, method=method or "POST")
     for k, v in (headers or {}).items():
         req.add_header(k, v)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — operator-configured token URI
-            return json.loads(resp.read().decode("utf-8"))
+        with permit_scope(permit_factory, traffic_class):
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — operator-configured token URI
+                return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         raise ProviderHttpError(raw or str(exc), status=exc.code, body=raw, headers=dict(exc.headers or {})) from exc
@@ -268,6 +290,8 @@ def urllib_json_request(
     *,
     timeout: float = 60.0,
     _sleep_fn: Any = None,
+    permit_factory: Any = None,
+    traffic_class: Any = "foreground",
 ) -> Any:
     """Generic JSON HTTP for Gmail/Graph API calls (stdlib).
 
@@ -278,6 +302,10 @@ def urllib_json_request(
     for 503/504 responses (capped at 10 seconds).
     Other methods are never replayed; ambiguous 5xx/transport outcomes raise
     ``AmbiguousOutcomeError``.
+
+    Connection budget (design §7): when ``permit_factory`` is given, each
+    attempt's urlopen lifecycle holds exactly one permit; the permit is
+    released *before* any retry wait, never across sleeps.
     """
     import http.client
     import json
@@ -286,6 +314,8 @@ def urllib_json_request(
     import urllib.error
     import urllib.parse
     import urllib.request
+
+    from mail_core.providers.connection_slots import permit_scope
 
     sleep = _sleep_fn or time.sleep
     max_retries = 3
@@ -312,27 +342,49 @@ def urllib_json_request(
         if data is not None and method_upper != "GET":
             req.add_header("Content-Type", "application/json")
 
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-                raw = resp.read()
-                if not raw:
-                    return {}
-                ctype = resp.headers.get("Content-Type", "")
-                if "application/json" in ctype or raw[:1] in (b"{", b"["):
-                    return json.loads(raw.decode("utf-8"))
-                return {"raw_bytes": raw}
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            hdrs = {k: v for k, v in exc.headers.items()} if exc.headers else {}
-            if exc.code == 429:
+        # The permit scope covers only the urlopen lifecycle.  HTTP and
+        # transport failures are captured inside the scope (reading an
+        # HTTPError body still needs the connection) and mapped *after*
+        # the permit has been released, so retry waits hold no slot.
+        http_outcome: tuple[int, str, dict] | None = None
+        http_exc: BaseException | None = None
+        transport_exc: BaseException | None = None
+        with permit_scope(permit_factory, traffic_class):
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                    raw = resp.read()
+                    if not raw:
+                        return {}
+                    ctype = resp.headers.get("Content-Type", "")
+                    if "application/json" in ctype or raw[:1] in (b"{", b"["):
+                        return json.loads(raw.decode("utf-8"))
+                    return {"raw_bytes": raw}
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                hdrs = {k: v for k, v in exc.headers.items()} if exc.headers else {}
+                http_outcome = (exc.code, body, hdrs)
+                http_exc = exc
+            except (
+                urllib.error.URLError,
+                http.client.RemoteDisconnected,
+                http.client.IncompleteRead,
+                OSError,
+                ssl.SSLEOFError,
+            ) as exc:
+                transport_exc = exc
+
+        if http_outcome is not None:
+            code, body, hdrs = http_outcome
+            exc = http_exc
+            if code == 429:
                 raise RateLimitedError(body or str(exc), status=429, body=body, headers=hdrs) from exc
-            if exc.code in (404, 410) and _url_is_sync_cursor_endpoint(url):
-                raise CursorInvalidError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
-            if exc.code >= 500 and not retryable:
+            if code in (404, 410) and _url_is_sync_cursor_endpoint(url):
+                raise CursorInvalidError(body or str(exc), status=code, body=body, headers=hdrs) from exc
+            if code >= 500 and not retryable:
                 raise AmbiguousOutcomeError(
-                    f"{method_upper} outcome ambiguous after HTTP {exc.code}"
+                    f"{method_upper} outcome ambiguous after HTTP {code}"
                 ) from exc
-            if exc.code in (503, 504) and retryable and attempt <= max_retries:
+            if code in (503, 504) and retryable and attempt <= max_retries:
                 delay = attempt * 1.0
                 if hdrs.get("Retry-After"):
                     try:
@@ -343,14 +395,10 @@ def urllib_json_request(
                         pass
                 sleep(delay)
                 continue
-            raise ProviderHttpError(body or str(exc), status=exc.code, body=body, headers=hdrs) from exc
-        except (
-            urllib.error.URLError,
-            http.client.RemoteDisconnected,
-            http.client.IncompleteRead,
-            OSError,
-            ssl.SSLEOFError,
-        ) as exc:
+            raise ProviderHttpError(body or str(exc), status=code, body=body, headers=hdrs) from exc
+
+        if transport_exc is not None:
+            exc = transport_exc
             reason = getattr(exc, "reason", str(exc))
             reason_str = str(reason).lower()
             if "certificate_verify_failed" in reason_str:

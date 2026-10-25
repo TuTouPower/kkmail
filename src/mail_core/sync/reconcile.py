@@ -13,6 +13,11 @@ from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.domain.enums import OutboxEventType, SyncStatus
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent
+from mail_core.providers.connection_slots import (
+    CAPACITY_ERRORS,
+    CAPACITY_RETRY_SECONDS,
+    TrafficClass,
+)
 from mail_core.providers.factory import build_provider
 from mail_core.sync.engine import local_remote_ids_for_folder
 from mail_core.sync.leases import FencingMismatch, LeaseBusy, acquire_lease, heartbeat_lease, release_lease
@@ -29,6 +34,7 @@ def reconcile_folder(
     worker_id: str,
     store: CredentialStore | None = None,
     lease_ttl: timedelta = timedelta(minutes=10),
+    traffic_class: TrafficClass = TrafficClass.FOREGROUND,
 ) -> dict:
     """Reconcile local vs remote IDs after a complete scan.
 
@@ -66,8 +72,19 @@ def reconcile_folder(
         )
 
     try:
-        provider = build_provider(account_snapshot, store or get_credential_store())
+        provider = build_provider(account_snapshot, store or get_credential_store(), traffic_class=traffic_class)
         actions = list(provider.reconcile(remote_folder, local_ids))  # network / full scan inside provider
+    except CAPACITY_ERRORS as exc:
+        # Budget deferral: the worker reschedules this job without a
+        # failure count; reconcile must not surface as provider_error.
+        with Session() as session:
+            try:
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+                session.commit()
+            except FencingMismatch:
+                session.rollback()
+        delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+        return {"status": "capacity_unavailable", "retry_after": delay}
     except Exception as exc:
         from mail_core.security.redact import safe_provider_summary
 
