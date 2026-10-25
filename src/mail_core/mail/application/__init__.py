@@ -16,11 +16,16 @@ _EXPORTS: dict[str, str] = {
     "MessageListItem": "queries",
     "MessagePage": "queries",
     "account_emails_by_id": "queries",
+    "decode_cursor": "queries",
+    "encode_cursor": "queries",
     "get_folder_stats": "queries",
     "get_message_detail": "queries",
     "list_folder_stats_for_account": "queries",
     "list_messages_keyset": "queries",
     "messages_by_ids": "queries",
+    "query_global_inbox_stats": "queries",
+    "query_group_inbox_stats": "queries",
+    "select_display_body": "queries",
     "unified_inbox": "queries",
     # search
     "SearchPage": "search",
@@ -28,16 +33,21 @@ _EXPORTS: dict[str, str] = {
     "search_messages_page": "search",
     # mutations
     "MutationResult": "mutations",
+    "mark_all_messages_read": "mutations",
     "set_message_flagged": "mutations",
     "set_message_read": "mutations",
     "trash_message": "mutations",
     # remote operations
     "enqueue_remote_operation": "remote_ops",
     "mark_remote_operation": "remote_ops",
+    "reclaim_stale_in_progress": "remote_ops",
     # attachments
     "AttachmentAccessError": "attachments",
     "PathTraversalRejected": "attachments",
     "load_attachment": "attachments",
+    # message details
+    "get_message_detail_with_archive_status": "message_details",
+    "sync_message_body": "message_details",
     # accounts
     "AccountDTO": "accounts",
     "AccountPageDTO": "accounts",
@@ -54,6 +64,10 @@ _EXPORTS: dict[str, str] = {
     "list_groups_app": "accounts",
     "create_group_app": "accounts",
     "delete_group_app": "accounts",
+    "rename_group_app": "accounts",
+    "save_sidebar_layout_app": "accounts",
+    "get_sidebar_layout_app": "accounts",
+    "reset_sidebar_account_order_app": "accounts",
     "get_settings_app": "accounts",
     "update_settings_app": "accounts",
 }
