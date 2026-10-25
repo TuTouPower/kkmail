@@ -24,6 +24,11 @@ export async function copyTextToClipboard(text: string): Promise<void> {
 
 function fallbackCopy(text: string): boolean {
   if (typeof document === 'undefined') return false
+
+  const activeDialog = document.querySelector('dialog[open], [role="dialog"][aria-modal="true"], .settings-dialog')
+  const container = activeDialog ?? document.body
+  const prevActiveElement = document.activeElement as HTMLElement | null
+
   const ta = document.createElement('textarea')
   ta.value = text
   ta.style.position = 'fixed'
@@ -32,7 +37,7 @@ function fallbackCopy(text: string): boolean {
   ta.style.opacity = '0'
   ta.setAttribute('readonly', '')
   ta.setAttribute('aria-hidden', 'true')
-  document.body.appendChild(ta)
+  container.appendChild(ta)
   ta.focus()
   ta.select()
   let ok = false
@@ -41,7 +46,14 @@ function fallbackCopy(text: string): boolean {
   } catch {
     ok = false
   } finally {
-    document.body.removeChild(ta)
+    container.removeChild(ta)
+    if (prevActiveElement && typeof prevActiveElement.focus === 'function') {
+      try {
+        prevActiveElement.focus()
+      } catch {
+        /* ignore */
+      }
+    }
   }
   return ok
 }
