@@ -1,5 +1,6 @@
 /** Pure helpers shared by main.js and its tests. */
 const path = require('path')
+const net = require('net')
 
 const SIDECAR_NAME = 'kkmail-backend'
 
@@ -17,13 +18,20 @@ function frontendDistPath(resourcesPath) {
   return path.join(resourcesPath, 'frontend', 'dist')
 }
 
+function isLoopbackHostname(hostname) {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+  if (host === 'localhost' || host.endsWith('.localhost')) return true
+  if (net.isIP(host) === 4) return Number(host.split('.')[0]) === 127
+  return net.isIP(host) === 6 && host === '::1'
+}
+
 function isAllowedExternalUrl(target) {
   try {
     const u = new URL(target)
     // Reject embedded credentials (https://user:pass@host/…) — phishing / leak risk.
     if (u.username || u.password) return false
-    const { protocol } = u
-    return protocol === 'https:' || protocol === 'http:' || protocol === 'mailto:'
+    if (u.protocol === 'https:' || u.protocol === 'mailto:') return true
+    return u.protocol === 'http:' && isLoopbackHostname(u.hostname)
   } catch {
     return false
   }
@@ -37,9 +45,11 @@ function isLocalAppUrl(target, origin) {
   }
 }
 
-function createExternalWindowHandler(openExternal) {
+function createExternalWindowHandler(openExternal, appOrigin) {
   return ({ url }) => {
-    if (isAllowedExternalUrl(url)) openExternal(url)
+    if (!isAllowedExternalUrl(url)) return { action: 'deny' }
+    if (isLocalAppUrl(url, appOrigin)) return { action: 'allow' }
+    openExternal(url)
     return { action: 'deny' }
   }
 }

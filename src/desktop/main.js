@@ -184,7 +184,7 @@ function createWindow(url) {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show()
   })
   mainWindow.loadURL(url)
-  mainWindow.webContents.setWindowOpenHandler(createExternalWindowHandler(target => shell.openExternal(target)))
+  mainWindow.webContents.setWindowOpenHandler(createExternalWindowHandler(target => shell.openExternal(target), appOrigin))
   const handleExternalNavigation = (event, target) => {
     if (isLocalAppUrl(target, appOrigin)) return
     event.preventDefault()
