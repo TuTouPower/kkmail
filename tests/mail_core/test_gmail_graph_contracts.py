@@ -701,6 +701,39 @@ def test_gmail_missing_or_invalid_internal_date_remains_unknown(internal_date):
     assert history.changes[0].meta.sort_time is None
 
 
+def test_gmail_history_stub_marks_only_present_fields_supplied():
+    stub = {
+        "id": "history-stub",
+        "threadId": "thread-1",
+        "labelIds": ["INBOX", "UNREAD"],
+    }
+    stub_page = parse_gmail_history(
+        {"history": [{"messagesAdded": [{"message": stub}]}]}
+    )
+    stub_meta = stub_page.changes[0].meta
+
+    assert stub_meta is not None
+    assert stub_meta.supplied_fields == frozenset({"provider_thread_key", "is_read", "is_flagged"})
+    assert stub_meta.supplied_fields == _meta_from_gmail_message(stub).supplied_fields
+
+    fuller = {
+        "id": "history-full",
+        "payload": {"headers": []},
+        "labelIds": [],
+        "internalDate": "1000",
+        "snippet": "preview",
+        "threadId": "thread-2",
+        "has_attachments": False,
+    }
+    full_page = parse_gmail_history(
+        {"history": [{"messagesAdded": [{"message": fuller}]}]}
+    )
+    full_meta = full_page.changes[0].meta
+
+    assert full_meta is not None
+    assert full_meta.supplied_fields == _meta_from_gmail_message(fuller).supplied_fields
+
+
 def test_gmail_valid_internal_date_is_preserved_in_both_parser_paths():
     message = {"id": "gmail-valid-time", "internalDate": "1000", "payload": {"headers": []}}
 

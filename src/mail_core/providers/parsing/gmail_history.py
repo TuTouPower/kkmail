@@ -32,7 +32,43 @@ def _parse_address_list(raw: str | None) -> tuple[str, ...]:
 
 def _minimal_meta(message: dict[str, Any]) -> RemoteMessageMeta:
     """Build meta from a History message stub or fuller fixture payload."""
-    headers = {h["name"].lower(): h["value"] for h in (message.get("payload") or {}).get("headers") or [] if "name" in h}
+    payload = message.get("payload") or {}
+    headers = {
+        h["name"].lower(): h["value"]
+        for h in payload.get("headers") or []
+        if "name" in h
+    }
+    supplied_fields: set[str] = set()
+    if "headers" in payload:
+        supplied_fields.update(
+            {
+                "subject",
+                "from_address",
+                "from_name",
+                "internet_message_id",
+                "to_addresses",
+                "cc_addresses",
+                "in_reply_to",
+                "references",
+            }
+        )
+    for source, fields in {
+        "subject": ("subject",),
+        "from_address": ("from_address",),
+        "from_name": ("from_name",),
+        "internet_message_id": ("internet_message_id",),
+        "to_addresses": ("to_addresses",),
+        "cc_addresses": ("cc_addresses",),
+        "in_reply_to": ("in_reply_to",),
+        "references": ("references",),
+        "labelIds": ("is_read", "is_flagged"),
+        "internalDate": ("sort_time",),
+        "snippet": ("snippet",),
+        "threadId": ("provider_thread_key",),
+        "has_attachments": ("has_attachments",),
+    }.items():
+        if source in message:
+            supplied_fields.update(fields)
     subject = message.get("subject") or headers.get("subject") or ""
     frm = message.get("from_address") or headers.get("from") or ""
     from_name = message.get("from_name")
@@ -46,6 +82,7 @@ def _minimal_meta(message: dict[str, Any]) -> RemoteMessageMeta:
     to_addrs = tuple(message.get("to_addresses") or ()) or _parse_address_list(headers.get("to"))
     cc_addrs = tuple(message.get("cc_addresses") or ()) or _parse_address_list(headers.get("cc"))
     return RemoteMessageMeta(
+        supplied_fields=frozenset(supplied_fields),
         remote_id=str(message["id"]),
         subject=str(subject),
         from_address=str(frm),
