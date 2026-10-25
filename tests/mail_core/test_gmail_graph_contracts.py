@@ -255,6 +255,50 @@ def test_gmail_429_and_invalid_history():
         GmailProvider(credential_ref="x", transport=boom_404).delta_changes("INBOX", {"historyId": "stale"})
 
 
+def test_gmail_history_404_maps_without_matching_error_text():
+    def missing_history(_method, path, params):
+        assert path.endswith("/history")
+        assert params["startHistoryId"] == "stale"
+        raise ProviderHttpError("resource not found", status=404, body={"error": {"message": "not found"}})
+
+    with pytest.raises(CursorInvalidError):
+        GmailProvider(credential_ref="x", transport=missing_history).delta_changes(
+            "INBOX", {"historyId": "stale"}
+        )
+
+
+def test_gmail_message_404_with_historyid_text_does_not_map_to_cursor_error():
+    def missing_message(_method, path, _params):
+        assert "/messages/" in path
+        raise ProviderHttpError(
+            "message lookup failed",
+            status=404,
+            body={"error": {"message": "message historyId metadata unavailable"}},
+        )
+
+    with pytest.raises(ProviderHttpError) as exc_info:
+        GmailProvider(credential_ref="x", transport=missing_message).fetch_mime("m-1")
+
+    assert not isinstance(exc_info.value, CursorInvalidError)
+
+
+def test_gmail_non_404_history_error_does_not_map_to_cursor_error():
+    def invalid_request(_method, path, _params):
+        assert path.endswith("/history")
+        raise ProviderHttpError(
+            "invalid request",
+            status=400,
+            body={"error": {"message": "historyId invalid"}},
+        )
+
+    with pytest.raises(ProviderHttpError) as exc_info:
+        GmailProvider(credential_ref="x", transport=invalid_request).delta_changes(
+            "INBOX", {"historyId": "stale"}
+        )
+
+    assert not isinstance(exc_info.value, CursorInvalidError)
+
+
 def test_gmail_list_folders_via_transport(caplog):
     def transport(method, path, params):
         return {

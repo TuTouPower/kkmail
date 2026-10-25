@@ -14,6 +14,7 @@ Without ``transport`` (and without a live credential HTTP client), methods raise
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -61,11 +62,18 @@ def gmail_label_role(label_id: str | None, name: str | None = None) -> str:
     return "other"
 
 
-def _raise_mapped(exc: ProviderHttpError) -> None:
-    """Map transport errors. 404/410 → CursorInvalid only for history/sync semantics."""
+_GMAIL_HISTORY_ENDPOINT = re.compile(r"^/gmail/v1/users/[^/]+/history/?$")
+
+
+def _raise_mapped(
+    exc: ProviderHttpError,
+    *,
+    path: str,
+    params: dict[str, Any],
+) -> None:
+    """Map a 404 from history.list with a startHistoryId to an invalid cursor."""
     status = exc.status or 0
     body = exc.body
-    text = str(body).lower() if body is not None else str(exc).lower()
     if status == 429:
         raise RateLimitedError(
             str(exc),
@@ -73,11 +81,9 @@ def _raise_mapped(exc: ProviderHttpError) -> None:
             body=body,
             headers=exc.headers,
         ) from exc
-    # Do not treat every resource 404 (labels, messages.get) as cursor invalid.
-    if "historyid" in text or (
-        status in (404, 410)
-        and ("history" in text or ("sync" in text and "invalid" in text))
-    ):
+    # Gmail documents 404 for an invalid/out-of-date startHistoryId on history.list.
+    # Other endpoints or status codes must not trigger a full cursor rebuild.
+    if status == 404 and _GMAIL_HISTORY_ENDPOINT.fullmatch(path) and params.get("startHistoryId"):
         raise CursorInvalidError(str(exc), status=status, body=body, headers=exc.headers) from exc
     raise exc
 
@@ -212,7 +218,7 @@ class GmailProvider:
         except CursorInvalidError:
             raise
         except ProviderHttpError as exc:
-            _raise_mapped(exc)
+            _raise_mapped(exc, path=path, params=params or {})
             raise  # pragma: no cover
 
     def _confirmed_deleted_ids(self, folder_remote_id: str, remote_ids: Sequence[str]) -> set[str]:
