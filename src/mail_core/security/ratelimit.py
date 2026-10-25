@@ -1,8 +1,9 @@
-"""In-process failed-login limiter (per client address, sliding window).
+"""In-process failed-login limiter keyed by the verified request client address.
 
-Keyed on the socket peer (``request.client.host``) — never on X-Forwarded-For,
-which a client can forge. Behind a reverse proxy, run uvicorn with
-``--proxy-headers --forwarded-allow-ips=<proxy>`` so the peer is the real client.
+When ``MAIL_CORE_FORWARDED_ALLOW_IPS`` configures trusted proxies, the API's
+``ProxyHeadersMiddleware`` rewrites ``request.client.host`` to the forwarded
+client address. Never read ``X-Forwarded-For`` directly; untrusted clients can
+forge it.
 """
 
 from __future__ import annotations

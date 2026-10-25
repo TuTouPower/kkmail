@@ -203,6 +203,32 @@ def test_login_rate_limited_per_client():
     assert client.post("/api/auth/login", json={"password": TEST_LOGIN_PASSWORD}).status_code == 200
 
 
+def test_login_rate_limiter_uses_forwarded_address_from_trusted_proxy(monkeypatch):
+    from fastapi import FastAPI
+
+    import mail_core.api.auth_routes as auth_routes
+    from mail_core.api.app import _install_proxy_headers
+
+    forwarded = []
+    monkeypatch.setenv("MAIL_CORE_FORWARDED_ALLOW_IPS", "testclient")
+    monkeypatch.setattr(auth_routes, "verify_password", lambda _password: False)
+    monkeypatch.setattr(auth_routes.login_limiter, "retry_after", lambda _client: 0)
+    monkeypatch.setattr(auth_routes.login_limiter, "record_failure", forwarded.append)
+
+    test_app = FastAPI()
+    test_app.include_router(auth_routes.router)
+    _install_proxy_headers(test_app, os.environ["MAIL_CORE_FORWARDED_ALLOW_IPS"])
+
+    response = TestClient(test_app).post(
+        "/api/auth/login",
+        json={"password": "wrong"},
+        headers={"X-Forwarded-For": "203.0.113.45"},
+    )
+
+    assert response.status_code == 401
+    assert forwarded == ["203.0.113.45"]
+
+
 def test_limiter_window_expires():
     from mail_core.security.ratelimit import LoginRateLimiter
 

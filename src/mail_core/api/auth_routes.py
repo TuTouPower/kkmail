@@ -60,6 +60,8 @@ def _clear_session_cookie(response: Response) -> None:
 
 @router.post("/login", response_model=LoginOut)
 def login(body: LoginIn, request: Request, response: Response) -> LoginOut:
+    # Trusted ProxyHeadersMiddleware rewrites request.client.host when
+    # MAIL_CORE_FORWARDED_ALLOW_IPS is set.
     client = request.client.host if request.client else "unknown"
     wait = login_limiter.retry_after(client)
     if wait:
