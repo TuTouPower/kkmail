@@ -52,7 +52,7 @@ def test_invalid_bearer_falls_back_to_valid_session_cookie(monkeypatch):
     from mail_core.security.auth import AuthPrincipal
 
     monkeypatch.setattr(auth_deps, "api_key_matches", lambda _token: False)
-    monkeypatch.setattr(auth_deps, "read_session", lambda _token: {"csrf": "session-csrf"})
+    monkeypatch.setattr(auth_deps, "read_session", lambda _token: {"csrf": "session-csrf", "epoch": 1})
     request = SimpleNamespace(headers={})
     bearer = HTTPAuthorizationCredentials(scheme="Bearer", credentials="invalid-key")
 
@@ -62,7 +62,7 @@ def test_invalid_bearer_falls_back_to_valid_session_cookie(monkeypatch):
         cookie_token="valid-session",
     )
 
-    assert principal == AuthPrincipal(via="session", csrf_token="session-csrf")
+    assert principal == AuthPrincipal(via="session", csrf_token="session-csrf", session_epoch=1)
 
 
 def test_authenticated_api_keys_have_distinct_oauth_flow_bindings(monkeypatch):

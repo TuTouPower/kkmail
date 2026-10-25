@@ -22,6 +22,7 @@ from mail_core.mail.storage import OutboxEvent
 from mail_core.realtime.dispatcher import SSE_STREAM_CLOSE
 from mail_core.realtime import events as events_mod
 from mail_core.realtime.outbox import fetch_since, prune_dispatched
+from mail_core.security.auth import AuthPrincipal
 from tests.mail_core.conftest import TEST_API_KEY
 
 _requires_db = pytest.mark.skipif(
@@ -92,7 +93,8 @@ def test_isolated_sse_stream_ends_after_resync_hint(monkeypatch, queue_size):
     async def run_stream():
         before = sse_mod._sse_active
         response = await sse_mod.stream_events(
-            FakeRequest(), last_event_id=None, after=None, account_id=None
+            FakeRequest(), last_event_id=None, after=None, account_id=None,
+            principal=AuthPrincipal(via="api_key"),
         )
         frames = response.body_iterator
         hint = await anext(frames)
@@ -138,7 +140,8 @@ def test_malformed_or_negative_replay_cursors_emit_resync_hint(monkeypatch, last
     with _sse_slot_reset():
         async def drain_stream():
             response = await sse_mod.stream_events(
-                FakeRequest(), last_event_id=last_event_id, after=after, account_id=None
+                FakeRequest(), last_event_id=last_event_id, after=after, account_id=None,
+                principal=AuthPrincipal(via="api_key"),
             )
             return [frame async for frame in response.body_iterator]
 
@@ -284,13 +287,19 @@ def test_sse_slot_is_reserved_before_stream_response_is_created(monkeypatch):
     scope = {"type": "http", "method": "GET", "path": "/api/events", "headers": [], "query_string": b""}
     with _sse_slot_reset():
         first = asyncio.run(
-            sse_mod.stream_events(Request(scope), last_event_id=None, after=None, account_id=None)
+            sse_mod.stream_events(
+                Request(scope), last_event_id=None, after=None, account_id=None,
+                principal=AuthPrincipal(via="api_key"),
+            )
         )
         assert isinstance(first, StreamingResponse)
         assert sse_mod._sse_active == 1
 
         second = asyncio.run(
-            sse_mod.stream_events(Request(scope), last_event_id=None, after=None, account_id=None)
+            sse_mod.stream_events(
+                Request(scope), last_event_id=None, after=None, account_id=None,
+                principal=AuthPrincipal(via="api_key"),
+            )
         )
         assert isinstance(second, JSONResponse)
         assert second.status_code == 503

@@ -7,18 +7,21 @@ import json
 import logging
 import os
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
+from mail_core.api.deps import require_auth
 from mail_core.db.session import get_session_factory
 from mail_core.realtime.dispatcher import SSE_STREAM_CLOSE, get_dispatcher
 from mail_core.realtime.outbox import fetch_since, head_event_id, to_item
+from mail_core.security.auth import AuthPrincipal
 
 log = logging.getLogger("mail_core.api.sse")
 router = APIRouter()
@@ -27,6 +30,7 @@ router = APIRouter()
 RESYNC_GAP = 500
 # Replay page size must be >= RESYNC_GAP so a full page implies a true gap, not truncation.
 REPLAY_LIMIT = RESYNC_GAP
+SESSION_EPOCH_RECHECK_INTERVAL_S = 60.0
 
 # Soft cap on concurrent SSE streams per process (503 when exceeded).
 _DEFAULT_SSE_CONNECTIONS = 128
@@ -57,6 +61,12 @@ def _max_sse_connections() -> int:
             value = _DEFAULT_SSE_CONNECTIONS
         _sse_max_connections_cache = value
         return value
+
+
+def _get_session_epoch(force_refresh: bool = False) -> int:
+    from mail_core.security.auth import get_session_epoch
+
+    return get_session_epoch(force_refresh=force_refresh)
 
 
 def _format_sse(event_id: int, event: str, data: dict) -> str:
@@ -167,9 +177,11 @@ async def stream_events(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     after: int | None = Query(default=None, description="Same as Last-Event-ID, for EventSource polyfills"),
     account_id: UUID | None = Query(default=None),
+    principal: AuthPrincipal = Depends(require_auth),
 ):
     """Server-Sent Events stream. Subscribe first, replay, then live-tail (dedupe by eid)."""
 
+    session_epoch = principal.session_epoch if principal.via == "session" else None
     cursor = 0
     malformed = False
     raw = last_event_id or (str(after) if after is not None else None)
@@ -207,9 +219,19 @@ async def stream_events(
             # Subscribe BEFORE replay so events committed during replay land in the queue
             # and are not lost between DB read and live-tail. Dedupe by event id below.
             dispatcher = get_dispatcher()
-            queue = dispatcher.subscribe(account_id=str(account_id) if account_id else None)
+            queue = dispatcher.subscribe(
+                account_id=str(account_id) if account_id else None,
+                session_epoch=session_epoch,
+            )
             seen = BoundedSet(maxsize=1000)
             cursor_local = cursor
+            # Subscribe before a fresh epoch read so no revocation signal can fall
+            # between validation and the initial SSE replay.
+            if session_epoch is not None:
+                current_epoch = await asyncio.to_thread(_get_session_epoch, True)
+                if current_epoch != session_epoch:
+                    return
+            next_epoch_recheck = time.monotonic() + SESSION_EPOCH_RECHECK_INTERVAL_S
             plan = await asyncio.to_thread(_build_replay, cursor, account_id, malformed=malformed)
             for eid, etype, data in plan.frames:
                 yield _format_sse(eid, etype, data)
@@ -219,9 +241,30 @@ async def stream_events(
             while True:
                 if await request.is_disconnected():
                     break
+                now = time.monotonic()
+                # Keepalive stays cheap; database fallback runs at most once per interval.
+                if session_epoch is not None and now >= next_epoch_recheck:
+                    try:
+                        current_epoch = await asyncio.to_thread(_get_session_epoch)
+                    except Exception as exc:
+                        log.warning(
+                            "closing SSE stream after session epoch check failed (error type=%s)",
+                            type(exc).__name__,
+                        )
+                        break
+                    if current_epoch != session_epoch:
+                        break
+                    next_epoch_recheck = now + SESSION_EPOCH_RECHECK_INTERVAL_S
+                timeout = (
+                    min(15.0, max(0.0, next_epoch_recheck - time.monotonic()))
+                    if session_epoch is not None
+                    else 15.0
+                )
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    event = await asyncio.wait_for(queue.get(), timeout=timeout)
                 except asyncio.TimeoutError:
+                    if session_epoch is not None and time.monotonic() >= next_epoch_recheck:
+                        continue
                     # Comment keepalive only. Dispatch is owned by the LISTEN thread
                     # (single dispatcher; no per-connection polling / dual dispatch).
                     yield ": keepalive\n\n"

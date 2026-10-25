@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 CHANNEL = "mail_core_outbox"
+SESSION_REVOCATION_CHANNEL = "mail_core_session_revoked"
 log = logging.getLogger("mail_core.realtime.notify")
 _monotonic = time.monotonic
 _NOTIFY_WARNING_INTERVAL_S = 3600.0
@@ -22,6 +23,22 @@ _notify_last_warning_at: float | None = None
 def notify_outbox(session: Session) -> None:
     """Emit NOTIFY after outbox inserts (delivered when the transaction commits)."""
     session.execute(text(f"SELECT pg_notify('{CHANNEL}', 'wake')"))
+
+
+def notify_session_revocation(session: Session, session_epoch: int) -> None:
+    """Publish a committed session-epoch change to every API process listener."""
+    session.execute(
+        text("SELECT pg_notify(:channel, :payload)"),
+        {"channel": SESSION_REVOCATION_CHANNEL, "payload": str(session_epoch)},
+    )
+
+
+def try_notify_session_revocation(session: Session, session_epoch: int) -> None:
+    try:
+        with session.begin_nested():
+            notify_session_revocation(session, session_epoch)
+    except Exception as exc:
+        _warn_notify_failure(exc)
 
 
 def _warn_notify_failure(exc: Exception) -> None:

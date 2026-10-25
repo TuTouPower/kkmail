@@ -7,7 +7,7 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-from mail_core.realtime.notify import CHANNEL
+from mail_core.realtime.notify import CHANNEL, SESSION_REVOCATION_CHANNEL
 
 if TYPE_CHECKING:
     from mail_core.realtime.dispatcher import OutboxDispatcher
@@ -87,6 +87,16 @@ class OutboxListenThread:
     def wait_started(self, timeout: float = 5.0) -> bool:
         return self._started.wait(timeout)
 
+    def _handle_notification(self, channel: str, payload: str | None = None) -> None:
+        if channel == SESSION_REVOCATION_CHANNEL:
+            try:
+                current_epoch = int(payload) if payload is not None else None
+            except ValueError:
+                current_epoch = None
+            self.dispatcher.close_session_streams(current_epoch=current_epoch)
+        elif channel == CHANNEL:
+            self.dispatcher.dispatch_once(require_subscribers=True)
+
     def _run(self) -> None:
         import psycopg
 
@@ -95,7 +105,8 @@ class OutboxListenThread:
             try:
                 conn = psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
                 conn.execute(f"LISTEN {CHANNEL}")
-                log.info("LISTEN %s started", CHANNEL)
+                conn.execute(f"LISTEN {SESSION_REVOCATION_CHANNEL}")
+                log.info("LISTEN %s and %s started", CHANNEL, SESSION_REVOCATION_CHANNEL)
                 self._started.set()
                 try:
                     self.dispatcher.dispatch_once(require_subscribers=True)
@@ -118,9 +129,9 @@ class OutboxListenThread:
                             if self._stop.is_set():
                                 break
                             try:
-                                self.dispatcher.dispatch_once(require_subscribers=True)
+                                self._handle_notification(notify.channel, notify.payload)
                             except Exception:
-                                log.exception("dispatch after NOTIFY failed")
+                                log.exception("handling LISTEN notification failed")
                     if self._stop.is_set():
                         break
                     if not got:

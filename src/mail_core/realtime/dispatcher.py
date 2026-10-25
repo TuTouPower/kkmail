@@ -35,10 +35,17 @@ class OutboxDispatcher:
     _dispatch_lock: threading.Lock = field(default_factory=threading.Lock)
     _stop: bool = False
 
-    def subscribe(self, *, account_id: str | None = None) -> asyncio.Queue:
+    def subscribe(
+        self,
+        *,
+        account_id: str | None = None,
+        session_epoch: int | None = None,
+    ) -> asyncio.Queue:
         """Register a queue bound to the caller's running event loop."""
         key = account_id or "*"
         q: asyncio.Queue = asyncio.Queue(maxsize=256)
+        if session_epoch is not None:
+            setattr(q, "_mail_core_session_epoch", session_epoch)
         loop = asyncio.get_running_loop()
         with self._lock:
             self._subs[key].append((loop, q))
@@ -208,6 +215,56 @@ class OutboxDispatcher:
             mark_dispatched(session, ids)
             session.commit()
             return len(ids)
+
+    def close_session_streams(self, *, current_epoch: int | None = None) -> None:
+        """Close session-authenticated SSE queues with an old or unknown epoch."""
+        with self._lock:
+            targets: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue]] = []
+            target_ids: set[int] = set()
+            seen: set[int] = set()
+            for subscriptions in self._subs.values():
+                for loop, queue in subscriptions:
+                    queue_id = id(queue)
+                    queue_epoch = getattr(queue, "_mail_core_session_epoch", None)
+                    if (
+                        queue_id not in seen
+                        and queue_epoch is not None
+                        and (current_epoch is None or queue_epoch != current_epoch)
+                    ):
+                        seen.add(queue_id)
+                        target_ids.add(queue_id)
+                        targets.append((loop, queue))
+            for key, subscriptions in self._subs.items():
+                self._subs[key] = [
+                    (loop, queue) for loop, queue in subscriptions if id(queue) not in target_ids
+                ]
+
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        for loop, queue in targets:
+            def close_queue(subscriber=queue) -> None:
+                setattr(subscriber, "_mail_core_isolated", True)
+                while True:
+                    try:
+                        subscriber.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                try:
+                    subscriber.put_nowait(SSE_STREAM_CLOSE)
+                except asyncio.QueueFull:
+                    log.error("could not enqueue SSE close sentinel after session revocation")
+
+            if loop is running_loop:
+                close_queue()
+                continue
+            try:
+                loop.call_soon_threadsafe(close_queue)
+            except RuntimeError:
+                # The subscriber loop has already closed and cannot keep a stream alive.
+                continue
 
     def request_stop(self) -> None:
         self._stop = True

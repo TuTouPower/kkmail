@@ -78,6 +78,7 @@ class AuthPrincipal:
     via: Literal["session", "api_key"]
     csrf_token: str | None = None
     api_key_digest: str | None = field(default=None, repr=False)
+    session_epoch: int | None = None
 
 
 _session_epoch: int = 1
@@ -216,6 +217,7 @@ def _persist_db_password_hash(hash_str: str, increment_epoch: bool = False) -> b
     try:
         from mail_core.db.session import get_session_factory
         from mail_core.mail.storage.models import AuthCredential
+        from mail_core.realtime.notify import try_notify_session_revocation
 
         Session = get_session_factory()
         with Session() as session:
@@ -228,9 +230,12 @@ def _persist_db_password_hash(hash_str: str, increment_epoch: bool = False) -> b
                 cred.login_password_hash = hash_str
                 if increment_epoch:
                     cred.session_epoch = (getattr(cred, "session_epoch", None) or 1) + 1
+            if increment_epoch:
+                try_notify_session_revocation(session, int(cred.session_epoch))
             session.commit()
             if increment_epoch and cred is not None:
                 _update_session_epoch_cache(cred.session_epoch)
+                _close_local_session_streams(current_epoch=int(cred.session_epoch))
             return True
     except Exception as exc:
         log.warning("could not persist password hash to database: %s", exc)
@@ -308,8 +313,11 @@ def validate_auth_config() -> None:
     load_api_keys()  # validate JSON if present
 
 
-def get_session_epoch() -> int:
+def get_session_epoch(*, force_refresh: bool = False) -> int:
     """Fetch the session epoch from a short-lived cache or the authoritative database.
+
+    ``force_refresh`` bypasses the process cache when an SSE stream subscribes,
+    closing the race between session validation and subscription setup.
 
     Raises:
         AuthConfigError: If database is configured but query fails (fail-closed).
@@ -320,7 +328,7 @@ def get_session_epoch() -> int:
 
     now = time.monotonic()
     cached = _session_epoch_cache
-    if cached is not None and now - cached[1] < _SESSION_EPOCH_CACHE_TTL_SECONDS:
+    if not force_refresh and cached is not None and now - cached[1] < _SESSION_EPOCH_CACHE_TTL_SECONDS:
         return cached[0]
     generation = _session_epoch_generation
 
@@ -345,6 +353,18 @@ def get_session_epoch() -> int:
         raise AuthConfigError(f"could not fetch session epoch from database: {exc}") from exc
 
 
+def _close_local_session_streams(*, current_epoch: int | None = None) -> None:
+    try:
+        from mail_core.realtime.dispatcher import get_dispatcher
+
+        get_dispatcher().close_session_streams(current_epoch=current_epoch)
+    except Exception as exc:
+        log.warning(
+            "could not close local SSE streams after session invalidation (error type=%s)",
+            type(exc).__name__,
+        )
+
+
 def invalidate_all_sessions() -> None:
     """Invalidate all active sessions by incrementing the session epoch in database and memory.
 
@@ -352,11 +372,14 @@ def invalidate_all_sessions() -> None:
         AuthConfigError: If database is configured but update fails.
     """
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
-        _update_session_epoch_cache(_session_epoch + 1)
+        current_epoch = _session_epoch + 1
+        _update_session_epoch_cache(current_epoch)
+        _close_local_session_streams(current_epoch=current_epoch)
         return
     try:
         from mail_core.db.session import get_session_factory
         from mail_core.mail.storage.models import AuthCredential
+        from mail_core.realtime.notify import try_notify_session_revocation
 
         Session = get_session_factory()
         with Session() as session:
@@ -370,8 +393,10 @@ def invalidate_all_sessions() -> None:
                 session.add(cred)
             else:
                 cred.session_epoch = (getattr(cred, "session_epoch", None) or 1) + 1
+            try_notify_session_revocation(session, int(cred.session_epoch))
             session.commit()
             _update_session_epoch_cache(cred.session_epoch)
+        _close_local_session_streams(current_epoch=int(cred.session_epoch))
     except Exception as exc:
         log.error("could not increment session epoch in database: %s", exc)
         raise AuthConfigError(f"could not increment session epoch in database: {exc}") from exc
@@ -457,7 +482,9 @@ def change_login_password(*, current: str, new: str) -> None:
 
     # If without DB, increment epoch in memory
     if not has_db:
-        _update_session_epoch_cache(_session_epoch + 1)
+        current_epoch = _session_epoch + 1
+        _update_session_epoch_cache(current_epoch)
+        _close_local_session_streams(current_epoch=current_epoch)
 
     # Refresh in-memory cache only after DB commit succeeded
     _password_hash = hashed

@@ -40,7 +40,11 @@ def authenticate_request(
     if raw:
         data = read_session(raw)
         if data:
-            return AuthPrincipal(via="session", csrf_token=str(data["csrf"]))
+            return AuthPrincipal(
+                via="session",
+                csrf_token=str(data["csrf"]),
+                session_epoch=int(data["epoch"]),
+            )
 
     raise HTTPException(status_code=401, detail="authentication required")
 
