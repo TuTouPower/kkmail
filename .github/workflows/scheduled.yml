@@ -28,10 +28,8 @@ jobs:
           uv pip install --python .venv/bin/python --require-hashes -r requirements-ci.lock
 
       - name: Start Dedicated Test Services
-        env:
-          KKMAIL_TEST_PG_PASSWORD: "ci_drill_password_secret_456"
         run: |
-          echo "KKMAIL_TEST_PG_PASSWORD='ci_drill_password_secret_456'" > .env.test
+          printf "KKMAIL_TEST_PG_PASSWORD='%s'\n" "$(openssl rand -hex 32)" > .env.test
           chmod 600 .env.test
           scripts/run-mail-core-tests.sh start
           scripts/start-mail-core-imap.sh
