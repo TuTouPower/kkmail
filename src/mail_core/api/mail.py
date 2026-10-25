@@ -5,6 +5,7 @@ Routes call the application layer only (queries / search / mutations / attachmen
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -50,6 +51,14 @@ from mail_core.mail.application.message_details import (
 from mail_core.mail.application.search import search_messages_page
 
 router = APIRouter(prefix="/api/mail", tags=["mail"])
+_MEDIA_TYPE_TOKEN = r"[A-Za-z0-9!#$%&'*+.^_`|~-]+"
+_MEDIA_TYPE_PATTERN = re.compile(rf"{_MEDIA_TYPE_TOKEN}/{_MEDIA_TYPE_TOKEN}", re.ASCII)
+
+
+def _safe_attachment_media_type(value: str | None) -> str:
+    if value and _MEDIA_TYPE_PATTERN.fullmatch(value):
+        return value
+    return "application/octet-stream"
 
 
 class MessageOut(BaseModel):
@@ -482,7 +491,7 @@ def api_get_attachment(attachment_id: str):
     }
     if payload.size_bytes is not None:
         headers["X-Attachment-Size"] = str(payload.size_bytes)
-    media = payload.content_type or "application/octet-stream"
+    media = _safe_attachment_media_type(payload.content_type)
     # Stream-decrypt chunk by chunk; never materialise the whole attachment.
     return StreamingResponse(payload.open_stream(), media_type=media, headers=headers)
 
