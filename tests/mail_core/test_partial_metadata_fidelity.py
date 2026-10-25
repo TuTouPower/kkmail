@@ -6,6 +6,7 @@ import uuid
 import pytest
 
 from mail_core.providers.gmail import GmailProvider
+from mail_core.providers.graph import GraphProvider
 from mail_core.providers.parsing.graph_delta import parse_graph_delta
 
 
@@ -27,6 +28,30 @@ def test_gmail_rejects_incomplete_or_mismatched_hydration(detail, delta):
             provider.delta_changes("INBOX", {"historyId": "1"})
         else:
             provider.fetch_metadata_page("INBOX", None)
+
+
+def test_graph_metadata_list_materializes_status_only_items():
+    next_link = "https://graph.example/messages?$skiptoken=next"
+    provider = GraphProvider(
+        credential_ref="test",
+        transport=lambda *_args: {
+            "value": [
+                {"id": "read-only", "isRead": True},
+                {"id": "flag-only", "flag": {"flagStatus": "flagged"}},
+            ],
+            "@odata.nextLink": next_link,
+        },
+    )
+
+    page = provider.fetch_metadata_page("inbox", None)
+
+    assert [item.remote_id for item in page.items] == ["read-only", "flag-only"]
+    assert page.items[0].supplied_fields == frozenset({"is_read"})
+    assert page.items[0].is_read is True
+    assert page.items[1].supplied_fields == frozenset({"is_flagged"})
+    assert page.items[1].is_flagged is True
+    assert page.next_cursor == {"next_link": next_link}
+    assert page.exhausted is False
 
 
 def test_gmail_hydration_failure_never_uses_partial_history_headers():

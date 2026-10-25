@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
+from mail_core.providers.base import DeltaChange, DeltaPage, MetadataPage, RemoteMessageMeta
 
 
 def _parse_dt(raw: str | None) -> datetime | None:
@@ -62,6 +62,25 @@ def _meta_from_graph(item: dict[str, Any]) -> RemoteMessageMeta:
         to_addresses=to_addrs,
         cc_addresses=cc_addrs,
     )
+
+
+def parse_graph_metadata_page(data: dict[str, Any]) -> MetadataPage:
+    """Parse a messages-list page without treating status-only items as delta patches."""
+    items: list[RemoteMessageMeta] = []
+    for item in data.get("value") or []:
+        if not isinstance(item, dict) or not item.get("id") or "@removed" in item:
+            continue
+        items.append(_meta_from_graph(item))
+
+    next_link = data.get("@odata.nextLink") or data.get("next_link")
+    delta_link = data.get("@odata.deltaLink") or data.get("delta_link")
+    if next_link:
+        cursor: dict[str, Any] = {"next_link": next_link}
+        if delta_link:
+            cursor["delta_link"] = delta_link
+        return MetadataPage(items=items, next_cursor=cursor, exhausted=False)
+    cursor = {"delta_link": delta_link} if delta_link else None
+    return MetadataPage(items=items, next_cursor=cursor, exhausted=True)
 
 
 def parse_graph_delta(data: dict[str, Any]) -> DeltaPage:

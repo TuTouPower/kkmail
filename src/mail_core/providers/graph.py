@@ -24,7 +24,7 @@ from mail_core.providers.base import (
     RemoteOperationResult,
 )
 from mail_core.providers.http import CursorInvalidError, ProviderHttpError, RateLimitedError
-from mail_core.providers.parsing.graph_delta import parse_graph_delta
+from mail_core.providers.parsing.graph_delta import parse_graph_delta, parse_graph_metadata_page
 
 
 class GraphNotConfiguredError(NotImplementedError):
@@ -168,10 +168,7 @@ class GraphProvider:
             raise GraphNotConfiguredError("Graph message list not wired yet")
         path = (cursor or {}).get("next_link") or f"/me/mailFolders/{folder_remote_id}/messages"
         data = self._call("GET", path, {})
-        # Reuse delta parser shape for list (value + nextLink)
-        page = parse_graph_delta(data)
-        items = [c.meta for c in page.changes if c.meta is not None]
-        return MetadataPage(items=items, next_cursor=page.next_cursor, exhausted=page.exhausted)
+        return parse_graph_metadata_page(data)
 
     def fetch_mime(self, remote_id: str, *, folder_remote_id: str | None = None) -> bytes:
         if self.transport is None:
