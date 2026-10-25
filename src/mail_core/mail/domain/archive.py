@@ -38,8 +38,6 @@ class IllegalArchiveTransition(ValueError):
 
 
 def can_transition(current: ArchiveState, new: ArchiveState) -> bool:
-    if current == new:
-        return True
     return new in ARCHIVE_TRANSITIONS.get(current, frozenset())
 
 

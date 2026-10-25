@@ -20,5 +20,12 @@ def test_complete_is_terminal():
         assert_transition(ArchiveState.ARCHIVE_COMPLETE, ArchiveState.METADATA_SYNCED)
 
 
+@pytest.mark.parametrize("state", list(ArchiveState))
+def test_same_state_is_not_an_implicit_transition(state):
+    assert not can_transition(state, state)
+    with pytest.raises(IllegalArchiveTransition):
+        assert_transition(state, state)
+
+
 def test_cannot_skip_to_complete():
     assert not can_transition(ArchiveState.METADATA_SYNCED, ArchiveState.ARCHIVE_COMPLETE)
