@@ -21,12 +21,13 @@ class LoginRateLimiter:
         self._lock = threading.Lock()
 
     def _prune(self, key: str, now: float) -> deque[float]:
-        q = self._fails.setdefault(key, deque())
+        q = self._fails.get(key)
+        if q is None:
+            return deque()
         while q and now - q[0] > self.window_s:
             q.popleft()
         if not q:
             self._fails.pop(key, None)
-            q = self._fails.setdefault(key, deque())
         return q
 
     def retry_after(self, key: str, now: float | None = None) -> int:
@@ -41,7 +42,9 @@ class LoginRateLimiter:
     def record_failure(self, key: str, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
         with self._lock:
-            self._prune(key, now).append(now)
+            q = self._prune(key, now)
+            q.append(now)
+            self._fails[key] = q
 
     def reset(self, key: str | None = None) -> None:
         with self._lock:

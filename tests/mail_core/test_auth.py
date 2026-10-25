@@ -196,6 +196,20 @@ def test_limiter_window_expires():
     assert lim.retry_after("a", now=12) == 0
 
 
+def test_limiter_does_not_retain_keys_without_failures():
+    from mail_core.security.ratelimit import LoginRateLimiter
+
+    lim = LoginRateLimiter(max_failures=2, window_s=10)
+    for index in range(100):
+        assert lim.retry_after(f"client-{index}", now=0) == 0
+    assert lim._fails == {}
+
+    lim.record_failure("failed-client", now=0)
+    assert set(lim._fails) == {"failed-client"}
+    assert lim.retry_after("failed-client", now=11) == 0
+    assert lim._fails == {}
+
+
 def test_login_rate_limiter_not_bypassed_by_forged_x_forwarded_for():
     """A21: Untrusted client cannot bypass login rate limit by forging X-Forwarded-For."""
     from mail_core.security.ratelimit import login_limiter
