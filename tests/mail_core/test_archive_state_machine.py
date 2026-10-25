@@ -1,6 +1,14 @@
+from types import SimpleNamespace
+
 import pytest
 
-from mail_core.mail.domain import ArchiveState, IllegalArchiveTransition, assert_transition, can_transition
+from mail_core.mail.domain.archive import apply_transition
+from mail_core.mail.domain import (
+    ArchiveState,
+    IllegalArchiveTransition,
+    assert_transition,
+    can_transition,
+)
 
 
 def test_happy_path():
@@ -29,3 +37,10 @@ def test_same_state_is_not_an_implicit_transition(state):
 
 def test_cannot_skip_to_complete():
     assert not can_transition(ArchiveState.METADATA_SYNCED, ArchiveState.ARCHIVE_COMPLETE)
+
+
+def test_apply_transition_rejects_unknown_stored_state_with_domain_error():
+    row = SimpleNamespace(state="corrupt-archive-state")
+
+    with pytest.raises(IllegalArchiveTransition, match="unknown archive state 'corrupt-archive-state'"):
+        apply_transition(row, ArchiveState.ARCHIVE_PENDING)

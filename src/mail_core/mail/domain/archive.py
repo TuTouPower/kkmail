@@ -51,5 +51,9 @@ def apply_transition(row, new: ArchiveState) -> None:
 
     Every archive state write goes through here so the FSM is the single authority.
     """
-    assert_transition(ArchiveState(row.state), new)
+    try:
+        current = ArchiveState(row.state)
+    except ValueError as exc:
+        raise IllegalArchiveTransition(f"unknown archive state {row.state!r}") from exc
+    assert_transition(current, new)
     row.state = new.value
