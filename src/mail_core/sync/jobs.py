@@ -216,6 +216,8 @@ def fail_job(
         job.locked_at = None
     else:
         job.status = JobStatus.FAILED.value
+        job.locked_by = None
+        job.locked_at = None
     session.flush()
 
 
