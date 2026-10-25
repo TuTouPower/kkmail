@@ -598,6 +598,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/system/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * System Health
+         * @description Lightweight operational and business health metrics.
+         */
+        get: operations["system_health_api_system_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -624,7 +644,7 @@ export interface paths {
         };
         /**
          * Ready
-         * @description Readiness: DB reachable, schema at code head, outbox listener running.
+         * @description Readiness: DB reachable, schema at code head, outbox listener running, worker active.
          */
         get: operations["ready_ready_get"];
         put?: never;
@@ -1281,6 +1301,8 @@ export interface components {
             schema_revision?: string | null;
             /** Status */
             status: string;
+            /** Worker */
+            worker?: boolean | null;
         };
         /** SearchPageOut */
         SearchPageOut: {
@@ -2592,6 +2614,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    system_health_api_system_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
