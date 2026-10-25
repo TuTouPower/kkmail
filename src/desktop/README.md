@@ -20,7 +20,7 @@ Host Node ≥ 22.12 is recommended (Electron 44 engines range). See also `../../
 |`KKMAIL_PG_PORT`|PostgresManager|Loopback PG port (integer 1–65535)|
 |`KKMAIL_FRONTEND_DIST`|mail-core API|Optional path to built SPA (`src/frontend/dist`)|
 |`MAIL_CORE_*`|mail-core child|Set by `startup.js` (DB URL, blob keys, data dir, …) — not inherited from the parent shell|
-|`PG*`|pg_ctl / createdb|Allowlisted by `scrubEnv` when spawning Postgres|
+|`PGPORT`, `PGPASSWORD`|`pg_ctl` / `createdb`|Passed only as explicit per-call extras (`PGPORT` to `pg_ctl start`, `PGPASSWORD` to `createdb`); parent `PG*` variables are not inherited by `scrubEnv`|
 
 Packaging: macOS DMG/ZIP artifacts are named **`kkmail.dmg`** / **`kkmail.zip`** (`build.mac.artifactName`).
 
@@ -50,7 +50,8 @@ External links open in the system browser only for `http(s):`/`mailto:`; other n
 
 ## Child-process hardening (`startup.js` / `postgresManager.js`)
 
-- mail-core and `pg_ctl`/`createdb` get an **allowlisted** env (`scrubEnv`) plus explicit `MAIL_CORE_*` / `PG*` extras — parent secrets are not inherited
+- mail-core gets `scrubEnv` plus explicit `MAIL_CORE_*` settings; PostgreSQL tools get `scrubEnv`.
+    `PGPORT` is added only to `pg_ctl start`, and `PGPASSWORD` only to `createdb`; parent variables are not inherited.
 - backend **stdio is piped** to `mail-core-data/mail-core.log` with password / DB-URL redaction (no `inherit`)
 - shutdown is **single-flight**: SIGTERM the process group (Unix) or the child, escalate to SIGKILL / `taskkill /T /F` after 4s; `PostgresManager.stop()` is idempotent
 - PG binary probes are **cached** with a spawn timeout; `KKMAIL_PG_PORT` must be an integer 1–65535 before writing `postgresql.conf`
