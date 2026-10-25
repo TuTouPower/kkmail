@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import os
 import re
 import secrets
@@ -123,7 +124,17 @@ def _validate_public_origin(raw_origin: str) -> str | None:
         "on",
     )
     host = (parts.hostname or "").lower()
-    valid_scheme = parts.scheme == "https" or (parts.scheme == "http" and allow_loopback and host in ("127.0.0.1", "localhost"))
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    loopback_host = host == "localhost" or host.endswith(".localhost") or bool(address and address.is_loopback)
+    local_hostname = loopback_host or host.endswith(".local")
+    non_public_ip = bool(address and not address.is_global)
+    allowed_local_ip = bool(allow_loopback and address and (address.is_loopback or address.is_link_local))
+    if (local_hostname and not allow_loopback) or (non_public_ip and not allowed_local_ip):
+        return None
+    valid_scheme = parts.scheme == "https" or (parts.scheme == "http" and allow_loopback and loopback_host)
     if not host or not valid_scheme or parts.username or parts.password or parts.query or parts.fragment or parts.path not in ("", "/"):
         return None
     return f"{parts.scheme}://{parts.netloc}"
