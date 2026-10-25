@@ -34,7 +34,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
 
 - **同步引擎与协议适配 (`src/mail_core/sync/`, `src/mail_core/providers/`)**：
 
-    - 适配器：IMAP (带 TLS 校验与特殊文件夹转义；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务)、Gmail REST (repeated historyTypes + History hydration)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归，传输层对 503/504 及 TLS 瞬断提供最多 3 次指数退避重试)。
+    - 适配器：IMAP (带 TLS 校验与特殊文件夹转义；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务)、Gmail REST (repeated historyTypes + History hydration)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放)。
     - 并发保护：基于数据库的租约锁 (`AccountSyncLease`) 与递增 fencing token。
     - 元数据保真：provider 通过 `RemoteMessageMeta.supplied_fields` 区分完整快照与部分返回字段，metadata upsert 按字段存在性应用；同页 partial/flag 按响应顺序合并，缺省字段不清空本地事实。Graph 内容字段显式空值仍可清空；Gmail metadata hydration 必须具备匹配 ID、labels 与 headers，失败时不返回成功页。
     - 未知状态：邮件 read/flag/attachment 使用 nullable 布尔契约贯穿 PostgreSQL、查询 DTO、API 与前端；新建邮件不补 false。文件夹存在未知读状态时未读统计为 null，账号/分组/全局聚合传播未知而保留可知总数。旧库仅迁移已有状态列，无 flag 来源时保留 null。
