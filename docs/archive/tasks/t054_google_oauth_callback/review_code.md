@@ -3,7 +3,7 @@
 - task：`t054_google_oauth_callback`
 - spec：`docs/tasks/t054_google_oauth_callback/spec.md`
 - diff_anchor：`4ef9bf7ada1aaa9b67ea67dfccc1dfcd9b98d10a`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 4ef9bf7ada1aaa9b67ea67dfccc1dfcd9b98d10a`
+- target：`git -C '<local-path>' diff 4ef9bf7ada1aaa9b67ea67dfccc1dfcd9b98d10a`
 - round：1
 - reviewed_at：2026-10-24T15:20:00+08:00
 

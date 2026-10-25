@@ -3,7 +3,7 @@
 - task：`t032_sidebar_shell_controls`
 - spec：`docs/tasks/t032_sidebar_shell_controls/spec.md`
 - diff_anchor：`1b1407ae5e68ebd732dce46d5386355f9e9b0d56`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 1b1407ae5e68ebd732dce46d5386355f9e9b0d56`
+- target：`git -C '<local-path>' diff 1b1407ae5e68ebd732dce46d5386355f9e9b0d56`
 - round：1
 - reviewed_at：2026-10-23T08:28:27+08:00
 

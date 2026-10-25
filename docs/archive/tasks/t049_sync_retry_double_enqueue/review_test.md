@@ -108,7 +108,7 @@ verdict: PASS
 - task：`t049_sync_retry_double_enqueue`
 - spec：`docs/tasks/t049_sync_retry_double_enqueue/spec.md`
 - diff_anchor：`2185a75bbeaa53b10d9c81c3fb4b73ba634ee563`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 2185a75bbeaa53b10d9c81c3fb4b73ba634ee563`
+- target：`git -C '<local-path>' diff 2185a75bbeaa53b10d9c81c3fb4b73ba634ee563`
 - 审查范围：t049 最终 task worktree 交付；排除任何独立 task 登记内容。
 - round：5
 - reviewed_at：2026-10-24T04:15:13+08:00

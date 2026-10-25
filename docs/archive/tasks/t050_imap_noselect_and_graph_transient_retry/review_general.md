@@ -3,7 +3,7 @@
 - task：`t050_imap_noselect_and_graph_transient_retry`
 - spec：`docs/tasks/t050_imap_noselect_and_graph_transient_retry/spec.md`
 - diff_anchor：`cdfafc7317b37209678c512cb49adefa3fa17e63`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff cdfafc7317b37209678c512cb49adefa3fa17e63`
+- target：`git -C '<local-path>' diff cdfafc7317b37209678c512cb49adefa3fa17e63`
 - round：1
 - reviewed_at：2026-10-24T12:00:00+08:00
 reviewed_scope: d3f6743c91ff4390

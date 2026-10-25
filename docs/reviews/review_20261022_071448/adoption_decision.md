@@ -286,7 +286,7 @@ docs/reviews/review_20261022_071448
 - 位置：docs/skills/kkmail/scripts/kkmail_cli.py:22-L46
 - 优先级：MEDIUM
 - 结论：采纳
-- 详细判断理由：源码写 cache 未设置权限；风险依赖 home 是否可遍历，故维持 MEDIUM，不升级为无条件跨用户泄漏。无需为此引入新 TTL/禁用选项。不能 chmod 整个共享 ~/.cache。
+- 详细判断理由：源码写 cache 未设置权限；风险依赖 home 是否可遍历，故维持 MEDIUM，不升级为无条件跨用户泄漏。无需为此引入新 TTL/禁用选项。不能 chmod 整个共享 <local-path>
 - 修复说明：在 docs/skills/kkmail/scripts/kkmail_cli.py 将默认缓存放到应用专属 0700 子目录，session 文件及同目录临时文件为 0600；拒绝可疑软链，原子替换，修正已有缓存权限。自定义路径仅操作专属文件/临时文件，不收紧用户共享父目录；旧缓存迁移仅在必要时安全处理。
 
 ### A5. 旧凭据解密失败立即终止迁移

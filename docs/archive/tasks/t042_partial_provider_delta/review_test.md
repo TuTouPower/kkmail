@@ -3,7 +3,7 @@
 - task：`t042_partial_provider_delta`
 - spec：`docs/tasks/t042_partial_provider_delta/spec.md`
 - diff_anchor：`3cedba6`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 3cedba6` 中 p025 明确交付路径，以及直接读取新增测试文件
+- target：`git -C '<local-path>' diff 3cedba6` 中 p025 明确交付路径，以及直接读取新增测试文件
 - round：1
 - reviewed_at：2026-10-23T19:15:16+08:00
 - 范围：`providers/base.py` 的字段存在性契约、`providers/gmail.py`、`providers/parsing/{graph_delta,gmail_history}.py`、`sync/{metadata,delta}.py`、`tests/mail_core/test_partial_metadata_fidelity.py`、`test_gmail_graph_contracts.py` 相关差异与既有同步意图保护测试。不评审自身实施的 p024 改动。

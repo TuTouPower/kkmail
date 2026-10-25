@@ -3,7 +3,7 @@
 - task：`t005_sync_refresh_and_imap_id`
 - spec：`docs/tasks/t005_sync_refresh_and_imap_id/spec.md`
 - diff_anchor：`51947c44b01f95ed69799ce2de4cf13b924d95a3`
-- target：`git -C '/Users/developer/kar/code/kkmail_t005' diff 51947c44b01f95ed69799ce2de4cf13b924d95a3`
+- target：`git -C '<local-path>' diff 51947c44b01f95ed69799ce2de4cf13b924d95a3`
 - round: 1
 - reviewed_at: 2026-10-22T11:25:00+08:00
 

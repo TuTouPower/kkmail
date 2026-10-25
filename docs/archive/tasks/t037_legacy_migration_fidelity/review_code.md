@@ -3,7 +3,7 @@
 - task：`t037_legacy_migration_fidelity`
 - spec：`docs/tasks/t037_legacy_migration_fidelity/spec.md`
 - diff_anchor：`22a3f23c48fa7e66daff400ca6f2db3c7cfd0c19`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 22a3f23c48fa7e66daff400ca6f2db3c7cfd0c19`
+- target：`git -C '<local-path>' diff 22a3f23c48fa7e66daff400ca6f2db3c7cfd0c19`
 - round：1
 - reviewed_at：2026-10-23T17:32:12+08:00
 

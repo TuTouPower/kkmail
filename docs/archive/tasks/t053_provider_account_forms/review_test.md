@@ -3,7 +3,7 @@
 - task：`t053_provider_account_forms`
 - spec：`docs/tasks/t053_provider_account_forms/spec.md`
 - diff_anchor：`e124a27a4baa5917fd39f3bb5190d54334014639`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff e124a27a4baa5917fd39f3bb5190d54334014639`
+- target：`git -C '<local-path>' diff e124a27a4baa5917fd39f3bb5190d54334014639`
 - round：1
 - reviewed_at：2026-10-24T14:09:04+08:00
 
@@ -39,7 +39,7 @@ reviewed_scope: c862c6944024541a
 
 - 改测方向复核：既有 expect 未被改为新实现输出；`SettingsModal.test.tsx:412` 新增必填密码输入属于有效夹具补齐，断言保留。`test_accounts_api_unit.py:150` 同理补齐新建连接必填数据。`test_account_credentials_unit.py:44` 新增主机校验 mock 不承担安全校验证据，仅保留原来的 store/session 参数测试；真实 API/PG 测试另行覆盖保存和回滚。
 - 删除测试复核：删除 `settings_redesign.test.tsx` 的 JSON 对象编辑器测试合理，spec 明确移除该输入路径；新的命名字段提交与真实 API/PG 校验覆盖新语义。`full_stack.spec.ts:113` 将旧 JSON 输入改为密码框 `.fill()` 是真实 UI 输入适配，后续 Worker/邮件断言未删除、未放宽，不构成迁就实现。
-- 独立执行：`npm --prefix [REDACTED_LOCAL_PATH] exec -- vitest run src/components/provider_account_form.test.tsx`，3 passed。真实 PG 和全量前端测试日志分别为 35 passed、278 passed；前者本 reviewer 未重跑 DB，依赖所列隔离运行日志。
+- 独立执行：`npm --prefix <local-path> exec -- vitest run src/components/provider_account_form.test.tsx`，3 passed。真实 PG 和全量前端测试日志分别为 35 passed、278 passed；前者本 reviewer 未重跑 DB，依赖所列隔离运行日志。
 - 黑盒证据：原 `.scratch/t053_full_stack.log` 为 1 failed / 7 passed，错误来自已移除 JSON 编辑器。实现侧已修正输入步骤并重跑；本轮不把尚未独立核对的后续日志计为初次黑盒成功。已有 `.scratch/t053_e2e.log` 的 3 项浏览器测试通过，但没有覆盖上述缺口。
 - 危险模式：未发现新增 only、条件跳过断言、容差/重试放宽或程序赋值冒充点击/键盘。新增 PG skipif 为项目约定，真实 PG 日志证明相应用例已执行，不是豁免 DB 门禁。现有全栈用例中原有条件点击未被本 task 弱化。
 - 正交体检：已扫测试相关安全（草稿/秘密）、正确性（保存/回滚）、契约（供应商矩阵）、性能/资源（轮换并发）、架构（边界桩）、健壮性（异常校验）、测试/文档/规格。阻断项为上列三个完整 AC 测试空白，无凑数 finding。
@@ -90,7 +90,7 @@ reviewed_scope: 7eae57520071c604
 ### 本轮新增扫描与验证
 
 - 独立核对实际 diff 指纹：`7eae57520071c604`，与本轮注入 prompt 一致。所有实现/测试新文件均进入 diff，review 报告本身为排除项。
-- 独立执行生产组件测试：`npm --prefix [REDACTED_LOCAL_PATH] exec -- vitest run src/components/provider_account_form.test.tsx`，14 passed。
+- 独立执行生产组件测试：`npm --prefix <local-path> exec -- vitest run src/components/provider_account_form.test.tsx`，14 passed。
 - 独立执行新增后端合同回归：`KKMAIL_TEST_MODE=unit .venv/bin/python -m pytest tests/mail_core/test_provider_account_forms.py -q --no-cov`，14 passed。该命令明确为无 DB 快速验证，未冒充 PostgreSQL 运行。
 - 核对 `.scratch/t053_backend_review_final.log`：真实隔离 PostgreSQL 37 passed，并有迁移与清理成功记录；核对 `.scratch/t053_full_stack_final.log`：真实认证、IMAP 新增和 Worker 同步等 8 passed，数据库已清理。未将旧失败日志覆盖为成功，也未把边界桩伪称真实服务商授权。
 - 新增 `test_invalid_profile_type_is_a_validation_error` 以非法列表输入调用生产校验函数；`test_operator_managed_environment_refresh_still_returns_access` 调用真实 EnvCredentialStore/OAuthTokenClient，只替换远端 token HTTP 边界，并验证环境内凭据未被修改。
@@ -142,9 +142,9 @@ reviewed_scope: 4072f20530f238a5
 
 ### 本轮新增测试复核与验证
 
-- 仓库落点校验：`git rev-parse --show-toplevel` 精确等于 `[REDACTED_LOCAL_PATH]
+- 仓库落点校验：`git rev-parse --show-toplevel` 精确等于 `<local-path>`。
 - 独立执行后端单测：`KKMAIL_TEST_MODE=unit .venv/bin/python -m pytest tests/mail_core/test_provider_account_forms.py -q --no-cov`，14 passed。
-- 独立执行前端组件测试：`npm --prefix [REDACTED_LOCAL_PATH] exec -- vitest run --root [REDACTED_LOCAL_PATH] src/components/provider_account_form.test.tsx`，14 passed。
+- 独立执行前端组件测试：`npm --prefix <local-path> exec -- vitest run --root <local-path> src/components/provider_account_form.test.tsx`，14 passed。
 - 核对 `tests/mail_core/test_provider_account_forms.py`：
     - `test_invalid_profile_and_imap_user_types_are_validation_errors`（`:55`）直接调用生产 `validate_connection`，验证非法 `provider_profile: []` 及 `require_credentials=False` 下非法 `imap_user`/`username` 列表类型均抛出字段级 `ValueError`。
     - `test_operator_managed_environment_refresh_caches_access_and_rotated_refresh_token`（`:70`）通过真实 `EnvCredentialStore` 与 `OAuthTokenClient`（仅在 HTTP token 端点边界注入 `token_post`）验证：首次刷新获取 `renewed-1`，二次调用命中内存缓存不重复请求（`len(calls) == 1`），`force_refresh=True` 时携带内存缓存中轮换后的 `rotated-1` 发起第二次刷新（`calls[1]['refresh_token'] == 'rotated-1'`），且底层只读环境变量保持原值不变。

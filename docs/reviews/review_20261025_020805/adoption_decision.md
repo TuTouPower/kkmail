@@ -1218,7 +1218,7 @@ docs/reviews/review_20261025_020805
 - 位置：.github/workflows/ci.yml:134
 - 优先级：LOW
 - 详细判断理由：审阅在此处确认“（预存）Duplicated Playwright installs and duplicated OpenAPI check per CI run”仍可触发；会造成错误行为、失败不可见或契约偏差，修复收益明确且范围局部，采纳。
-- 修复说明：drop the standalone openapi:check step and cache ~/.cache/ms-playwright across jobs.
+- 修复说明：drop the standalone openapi:check step and cache <local-path> across jobs.
 
 ### A144. Benchmark is Unix-only despite the repo's cross-platform desktop targets
 

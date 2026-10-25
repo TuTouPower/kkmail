@@ -3,7 +3,7 @@
 - task：`t034_on_demand_body_sync_and_archive_priority`
 - spec：`docs/tasks/t034_on_demand_body_sync_and_archive_priority/spec.md`
 - diff_anchor：`ed3bfeecc579b99de892b9c364de03101efb9531`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff ed3bfeecc579b99de892b9c364de03101efb9531`
+- target：`git -C '<local-path>' diff ed3bfeecc579b99de892b9c364de03101efb9531`
 - round：1
 - reviewed_at：2026-10-23T14:20:00+08:00
 

@@ -3,7 +3,7 @@
 - task：`t004_fix_accounts_dto_and_sidebar_error`
 - spec：`docs/tasks/t004_fix_accounts_dto_and_sidebar_error/spec.md`
 - diff_anchor：`f915e78bcfc81767386f86b5e9f2448235f44fa7`
-- target：`git -C '/Users/developer/kar/code/kkmail_t004' diff f915e78bcfc81767386f86b5e9f2448235f44fa7`
+- target：`git -C '<local-path>' diff f915e78bcfc81767386f86b5e9f2448235f44fa7`
 - round: 1
 - reviewed_at: 2026-10-22T07:37:00+08:00
 

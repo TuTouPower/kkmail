@@ -3,7 +3,7 @@
 - task：`t009_sidebar_full_hide`
 - spec：`docs/tasks/t009_sidebar_full_hide/spec.md`
 - diff_anchor：`77f8cdc44f122e11f8666bfa5958a166d1425f74`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 77f8cdc44f122e11f8666bfa5958a166d1425f74`
+- target：`git -C '<local-path>' diff 77f8cdc44f122e11f8666bfa5958a166d1425f74`
 - round：1
 - reviewed_at：2026-10-23T00:50:00+08:00
 

@@ -3,7 +3,7 @@
 - task：`t046_mail_list_cache_isolation`
 - spec：`docs/tasks/t046_mail_list_cache_isolation/spec.md`
 - diff_anchor：`2a5fabadae189b5498a80320cf64a7b12aded81e`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 2a5fabadae189b5498a80320cf64a7b12aded81e`
+- target：`git -C '<local-path>' diff 2a5fabadae189b5498a80320cf64a7b12aded81e`
 - round：1
 - reviewed_at：2026-10-23T22:30:00+08:00
 reviewed_scope: a1c4169e6ab77a54

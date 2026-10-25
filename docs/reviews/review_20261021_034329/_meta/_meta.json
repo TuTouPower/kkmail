@@ -1,8 +1,8 @@
 {
   "t0_unix": 1792525409,
   "timeout_sec": 14400,
-  "cwd": "/Users/developer/kar/code/kkmail",
-  "outdir": "/Users/developer/kar/code/kkmail/docs/reviews/review_20261021_034329",
+  "cwd": "<local-path>",
+  "outdir": "<local-path>",
   "outdir_rel": "docs/reviews/review_20261021_034329",
   "expected_reports": [
     "bundle_pkg_root.md",

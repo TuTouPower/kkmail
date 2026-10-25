@@ -3,7 +3,7 @@
 - task：`t044_sidebar_tree_alignment`
 - spec：`docs/tasks/t044_sidebar_tree_alignment/spec.md`
 - diff_anchor：`2fc7335da1d57ac980a59fc3b0acd4b32f659d81`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 2fc7335da1d57ac980a59fc3b0acd4b32f659d81`
+- target：`git -C '<local-path>' diff 2fc7335da1d57ac980a59fc3b0acd4b32f659d81`
 - round：1
 - reviewed_at：2026-10-23T21:55:00+08:00
 reviewed_scope: 756df69247bd6c12

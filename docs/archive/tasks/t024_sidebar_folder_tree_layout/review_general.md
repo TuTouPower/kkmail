@@ -3,7 +3,7 @@
 - task：`t024_sidebar_folder_tree_layout`
 - spec：`docs/tasks/t024_sidebar_folder_tree_layout/spec.md`
 - diff_anchor：`9454a1d2cc9412caf86c5381b427619fdb661a86`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 9454a1d2cc9412caf86c5381b427619fdb661a86`
+- target：`git -C '<local-path>' diff 9454a1d2cc9412caf86c5381b427619fdb661a86`
 - round: 1
 - reviewed_at: 2026-10-23T03:15:00+08:00
 

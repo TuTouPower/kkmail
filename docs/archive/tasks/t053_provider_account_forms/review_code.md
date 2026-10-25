@@ -3,7 +3,7 @@
 - task：`t053_provider_account_forms`
 - spec：`docs/tasks/t053_provider_account_forms/spec.md`
 - diff_anchor：`e124a27a4baa5917fd39f3bb5190d54334014639`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff e124a27a4baa5917fd39f3bb5190d54334014639`
+- target：`git -C '<local-path>' diff e124a27a4baa5917fd39f3bb5190d54334014639`
 - round：1
 - reviewed_at：2026-10-24T14:10:51+08:00
 
@@ -139,7 +139,7 @@ reviewed_scope: 4072f20530f238a5
 
 ### 全量复核及 AC 复验方式
 
-- 对照 `git -C '[REDACTED_LOCAL_PATH]' diff e124a27a4baa5917fd39f3bb5190d54334014639` 全量复核 27 个变更文件，覆盖安全、实现正确性、公开契约与 Breaking、性能与资源、架构可维护性、健壮性与可观测、文档与规格一致性七个视角。
+- 对照 `git -C '<local-path>' diff e124a27a4baa5917fd39f3bb5190d54334014639` 全量复核 27 个变更文件，覆盖安全、实现正确性、公开契约与 Breaking、性能与资源、架构可维护性、健壮性与可观测、文档与规格一致性七个视角。
 - 独立执行后端单测：`scripts/run-mail-core-tests.sh unit -k 'provider_account_forms or account_credentials_unit or accounts_api_unit or oauth_transport or oauth_allowlist' --no-cov`（35 passed）。
 - 独立执行后端 PG 集成测试：`scripts/run-mail-core-tests.sh run -k 'provider_accounts_pg or provider_account_forms' --no-cov`（19 passed）。
 - 独立执行前端单测与契约检查：`npm --prefix src/frontend test -- --run src/components/provider_account_form.test.tsx src/components/SettingsModal.test.tsx src/components/settings_redesign.test.tsx`（41 test files / 289 tests passed，`openapi:check` 与 CSS token 检查通过）。

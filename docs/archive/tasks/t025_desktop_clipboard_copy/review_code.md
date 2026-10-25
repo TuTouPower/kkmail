@@ -3,7 +3,7 @@
 - task：`t025_desktop_clipboard_copy`
 - spec：`docs/tasks/t025_desktop_clipboard_copy/spec.md`
 - diff_anchor：`9454a1d2cc9412caf86c5381b427619fdb661a86`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 9454a1d2cc9412caf86c5381b427619fdb661a86`
+- target：`git -C '<local-path>' diff 9454a1d2cc9412caf86c5381b427619fdb661a86`
 - round：1
 - reviewed_at：2026-10-23T03:30:00+08:00
 

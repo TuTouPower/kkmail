@@ -3,7 +3,7 @@
 - task：`t055_microsoft_oauth_callback`
 - spec：`docs/tasks/t055_microsoft_oauth_callback/spec.md`
 - diff_anchor：`e1dee25`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff e1dee25`
+- target：`git -C '<local-path>' diff e1dee25`
 - round：1
 - reviewed_at：2026-10-24T19:11:15+08:00
 

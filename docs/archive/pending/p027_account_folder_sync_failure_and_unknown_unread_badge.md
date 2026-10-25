@@ -8,7 +8,7 @@
     2. 只要实例或分组内存在任一未落库 `role='inbox'` 文件夹的账号（含登录失败账号及已被 `PermanentAuthError` 设为 `sync_enabled=false` 的失效账号），全局「所有收件箱」与所属分组的未读角标即被传染为 `null`（显示 `-`），31 个正常已同步账号的真实未读汇总完全不可见；同时 `MessageList` 对缺失 `inbox` 的账号按 `0` 计入总数，造成侧栏 `-` 与列表头部邮件总数语义矛盾。
     3. 网易 126/163 密码或授权码错误返回 `LOGIN Login error or password error` 时未被识别为永久认证失败，触发无意义 8 次退避重试且残留 `sync_status='failed'`，后台跟进任务重入队又因丢失 `payload` 触发 `KeyError: 'folder_id'`。
 - 根因：
-    1. 实例数据/凭据层（环境与配置事实）：`[REDACTED_EMAIL]`（`[REDACTED_UUID]`）在 `imap.126.com:993` 登录时返回 `imaplib.IMAP4.error: LOGIN Login error or password error`（当前保存口令长 13 位，非有效 16 位网易客户端授权码或口令错误），导致 `sync_account_folders` 8 次重试全部失败，数据库 `folders` 与 `messages` 表均为 0 行（并非只拉取了未读邮件）。另有 `[REDACTED_EMAIL]`、`[REDACTED_EMAIL]` 因 `[AUTHENTICATIONFAILED] Login fail` 同样为 0 文件夹。
+    1. 实例数据/凭据层（环境与配置事实）：`[REDACTED_EMAIL]`（`[REDACTED_ID]`）在 `imap.126.com:993` 登录时返回 `imaplib.IMAP4.error: LOGIN Login error or password error`（当前保存口令长 13 位，非有效 16 位网易客户端授权码或口令错误），导致 `sync_account_folders` 8 次重试全部失败，数据库 `folders` 与 `messages` 表均为 0 行（并非只拉取了未读邮件）。另有 `[REDACTED_EMAIL]`、`[REDACTED_EMAIL]` 因 `[AUTHENTICATIONFAILED] Login fail` 同样为 0 文件夹。
     2. 前端文件夹树渲染缺陷（产品缺陷，`src/frontend/src/components/Sidebar.tsx:164-236, 649-687`）：
         - `AccountFolders` 请求 `/api/mail/accounts/{id}/folder-stats` 得到 `folders: []`（HTTP 200 空数组）时，仅判断了 `isLoading` 与 `isError || !foldersQuery.data`，未处理 `folders.length === 0`；
         - 组件在 `Sidebar.tsx:226-232` 无条件渲染硬编码虚拟筛选按钮「未读邮件」（切换到 `category: 'unread'`，即 `folder_role=inbox&is_read=false`），而 `renderTree(roots)` 为空，且 `renderAccount`（`Sidebar.tsx:649-687`）未展示 `account.sync_status`（`failed` / `auth_failed`）错误态，导致用户看到账号下仅有「未读邮件」一项。

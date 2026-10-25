@@ -3,7 +3,7 @@
 - task：`t006_dark_reader_theme`
 - spec：`docs/tasks/t006_dark_reader_theme/spec.md`
 - diff_anchor：`7d7a5b3d915b94d200f252ad17425345b1be632f`
-- target：`git -C '/Users/developer/kar/code/kkmail_t006' diff 7d7a5b3d915b94d200f252ad17425345b1be632f`
+- target：`git -C '<local-path>' diff 7d7a5b3d915b94d200f252ad17425345b1be632f`
 - round：1
 - reviewed_at：2026-10-22T19:15:00+08:00
 

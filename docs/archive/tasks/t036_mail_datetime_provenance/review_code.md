@@ -3,7 +3,7 @@
 - task：`t036_mail_datetime_provenance`
 - spec：`docs/tasks/t036_mail_datetime_provenance/spec.md`
 - diff_anchor：`ce342a38d6950fe08fd985262f0735f898b2b042`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff ce342a38d6950fe08fd985262f0735f898b2b042`
+- target：`git -C '<local-path>' diff ce342a38d6950fe08fd985262f0735f898b2b042`
 - round：1
 - reviewed_at：2026-10-23T09:31:53+08:00
 

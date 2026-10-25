@@ -3,7 +3,7 @@
 - task：`t048_mime_parse_error_with_body_and_fetch_isolation`
 - spec：`docs/tasks/t048_mime_parse_error_with_body_and_fetch_isolation/spec.md`
 - diff_anchor：`0c8c13278374c46de79d3732554b6eb74406ca3e`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 0c8c13278374c46de79d3732554b6eb74406ca3e`
+- target：`git -C '<local-path>' diff 0c8c13278374c46de79d3732554b6eb74406ca3e`
 - round：1
 - reviewed_at：2026-10-23T23:25:00+08:00
 reviewed_scope: 6b35458f0220547a

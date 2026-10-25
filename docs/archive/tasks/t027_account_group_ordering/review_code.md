@@ -3,7 +3,7 @@
 - task：`t027_account_group_ordering`
 - spec：`docs/tasks/t027_account_group_ordering/spec.md`
 - diff_anchor：`c8cee92446f9c24e7a0a2a501d52d0bd49068041`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041`
+- target：`git -C '<local-path>' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041`
 - round：1
 - reviewed_at：2026-10-23T05:11:04+08:00
 
@@ -187,7 +187,7 @@ verdict: FAIL
 - task：t027_account_group_ordering
 - spec：docs/tasks/t027_account_group_ordering/spec.md
 - diff_anchor：c8cee92446f9c24e7a0a2a501d52d0bd49068041
-- target：git -C '[REDACTED_LOCAL_PATH]' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041
+- target：git -C '<local-path>' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041
 - round：2
 - reviewed_at：2026-10-23T05:53:49+08:00
 
@@ -307,7 +307,7 @@ verdict: FAIL
 - task：t027_account_group_ordering
 - spec：docs/tasks/t027_account_group_ordering/spec.md
 - diff_anchor：c8cee92446f9c24e7a0a2a501d52d0bd49068041
-- target：git -C '[REDACTED_LOCAL_PATH]' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041
+- target：git -C '<local-path>' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041
 - round：3
 - reviewed_at：2026-10-23T06:36:05+08:00
 
@@ -412,7 +412,7 @@ verdict: FAIL
 - task：t027_account_group_ordering
 - spec：docs/tasks/t027_account_group_ordering/spec.md
 - diff_anchor：c8cee92446f9c24e7a0a2a501d52d0bd49068041
-- target：git -C '[REDACTED_LOCAL_PATH]' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041
+- target：git -C '<local-path>' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041
 - round：4
 - reviewed_at：2026-10-23T06:44:51+08:00
 
@@ -492,7 +492,7 @@ verdict: FAIL
 - task：t027_account_group_ordering
 - spec：docs/tasks/t027_account_group_ordering/spec.md
 - diff_anchor：c8cee92446f9c24e7a0a2a501d52d0bd49068041
-- target：git -C '[REDACTED_LOCAL_PATH]' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041
+- target：git -C '<local-path>' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041
 - round：5
 - reviewed_at：2026-10-23T06:49:16+08:00
 

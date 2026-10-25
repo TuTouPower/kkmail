@@ -30,7 +30,7 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 - 当前 attempt：`attempt=1`，`execution_id=235b282b69f742bfa00aaa7e14ebc2a6`；`diff_anchor=2185a75bbeaa53b10d9c81c3fb4b73ba634ee563`。
 - 门禁说明：active 初始 `preflight --require-verified` PASS。当前 validator 将只有 `[x]` 的已完成 AC 当成空验收标准；最终 AC 标记后不把该错误报告为 preflight 通过，AC 与行为证据由 Round 5 review 复核。
 - final preflight 复验结果：工具报 `spec.md 验收标准为空`，原因是 `validate_task_documents` 仅识别 `- [ ]`，不接受已完成 `- [x]`；review checker 为 PASS，未修改 `.repo_template` 工具链。
-- 备份：`[backup.kkbak](../../[REDACTED]+08:00/backup.kkbak)`，密封校验 3 members，4,190,955,556 bytes，SHA-256 `[REDACTED]`。
+- 备份：`[backup.kkbak](../../<local-backup>)`，密封校验 3 members，4,190,955,556 bytes，SHA-256 `[REDACTED]`。
 - 部署：Compose distributed profile 重建 API、Worker、migrate；迁移退出码 0，`/health` 与 `/ready` 返回 200，schema `20261023_0019`。SPA、JS、CSS HTTP 200，资源 hash 与本地 dist 一致；部署前镜像保留为 `rollback-0ffe35c`。
 - review prompt 渲染要求非空 `diff_anchor`，而直接 main 没有该字段。代码与测试 reviewer 按既有 direct-main 约定独立审查，Round 4 PASS，`reviewed_scope=1eb3b40c21ee29c1`；不声称通过 task-work attempt 门禁。
 

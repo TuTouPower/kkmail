@@ -3,7 +3,7 @@
 - task：`t035_partial_provider_metadata`
 - spec：`docs/tasks/t035_partial_provider_metadata/spec.md`
 - diff_anchor：`852c01372e17a4d858050eb2e9fed148870e5495`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 852c01372e17a4d858050eb2e9fed148870e5495`
+- target：`git -C '<local-path>' diff 852c01372e17a4d858050eb2e9fed148870e5495`
 - round：1
 - reviewed_at：2026-10-23T08:43:33+08:00
 

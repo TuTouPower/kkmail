@@ -8,7 +8,7 @@
     3. 同类 `parse_error` 混用位点：`run_archive_batch` 在 `provider.fetch_mime` 发生网络/限流错误（如网易 IMAP `error: [ALERT] Too many login attempts, try again later`，当前库内共 383 封邮件）时，将拉取错误写入 `MessageBody.parse_error`，导致阅读器误报「邮件解析失败」且阻断按需同步与手动重试按钮。
 - 根因：
     1. 数据修复脚本与阅读器互斥契约冲突（数据/产品耦合）：
-        - `[REDACTED]:86-102` 与 `[REDACTED]` 在修复 `[REDACTED_UUID]`、`[REDACTED_UUID]`、`[REDACTED_UUID]`、`[REDACTED_UUID]`、`[REDACTED_UUID]` 共 5 封邮件的 `message_bodies.text_html` 时，将审计说明写入了 `message_bodies.parse_error`；
+        - `[REDACTED]:86-102` 与 `[REDACTED]` 在修复 `[REDACTED_ID]`、`[REDACTED_ID]`、`[REDACTED_ID]`、`[REDACTED_ID]`、`[REDACTED_ID]` 共 5 封邮件的 `message_bodies.text_html` 时，将审计说明写入了 `message_bodies.parse_error`；
         - 但 `src/frontend/src/components/MessageReader.tsx:194-213`（及 `docs/blueprint/conventions.md` §九.3）将 `detail?.parse_error` 作为最高优先级互斥错误分支：只要 `parse_error` 非空，即只渲染 `MR-PARSE-ERROR` 告警框并跳过 `detail.body` 渲染；同时 `src/mail_core/mail/application/queries.py:121`（`_hydrate_body_previews`）过滤 `MessageBody.parse_error.is_(None)`，导致这 5 封邮件的正文与列表预览全部被屏蔽。
     2. 生产 MIME 正文解析器对局部编码瑕疵零容忍（产品缺陷，`src/mail_core/blobs/archive.py:167-187, 776-789`）：
         - 腾讯企业微信发送的 `Content-Type: text/html; charset="gb2312"` + `Content-Transfer-Encoding: quoted-printable` 邮件在 `<meta name="viewport" content="width=device-width">` 中未将 `=` 编码为 `=3D`，Python QP 解码将 `=de` 解为字节 `0xDE`，触发 `gb2312` `strict` 解码 `UnicodeDecodeError`；

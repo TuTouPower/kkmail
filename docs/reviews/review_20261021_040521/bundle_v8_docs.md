@@ -9,7 +9,7 @@
 - 时间：`2026-10-21T05:05:00+08:00`（报告记录时间；未执行运行验证）。
 - 输入：`bundle.json`，168 文件、40 bundles；另读 `.env.example`、`frontend/.env.example`、`Dockerfile.mail-core`、`desktop/vendor/README.md`、`tests/mail_core/fixtures/README.md`、相关测试/包配置。
 - Findings：Critical / High / Medium / Low / Info = **0 / 4 / 8 / 10 / 0**。结论：**REQUEST CHANGES**。
-- 规范：`/Users/developer/kar/code/my_file/coding_agent/skills_mine/intensive-review/SKILL.md` §3 视角8；`/Users/developer/kar/code/my_file/coding_agent/docs/DOCUMENTATION_STANDARD.md`（下称 DS）§2、§3.2、§4、§8.1、§8.4；仓库 `AGENTS.md`。
+- 规范：`<local-path>` §3 视角8；`<local-path>`（下称 DS）§2、§3.2、§4、§8.1、§8.4；仓库 `AGENTS.md`。
 
 ## High
 

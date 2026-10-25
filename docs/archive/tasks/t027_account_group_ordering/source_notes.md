@@ -3,8 +3,8 @@
 ## 核实范围
 
 - 核实日期：2026-10-23（Asia/Shanghai）。代码基线：`main@26a8eee`。
-- [设计聊天](https://chatgpt.com/c/[REDACTED_UUID])：通过 ego lite 读取完整对话正文，以最后一次用户反馈为准，覆盖此前相冲突方案。
-- 原始文件：`[REDACTED_LOCAL_PATH] [reference_demo.html](reference_demo.html)，SHA-256：`[REDACTED]`。
+- [设计聊天](https://chatgpt.com/c/[redacted])：通过 ego lite 读取完整对话正文，以最后一次用户反馈为准，覆盖此前相冲突方案。
+- 原始文件：`<local-path>`。只读访问；原样副本见 [reference_demo.html](reference_demo.html)，SHA-256：`[REDACTED]`。
 - 通过 ego lite 预览网页深色、desktop 浅色，查看分组菜单，实际将组内账号拖回账号列表，确认账号保留且离开分组。截图位于已忽略的 `.scratch/sidebar_assessment_20261023/`，不作为可移植需求来源。
 - 当前产品评估基于源码、现行 blueprint 与已完成 task，不包含对真实业务实例的在线验收。未操作真实邮箱、生产数据库或正在运行的桌面实例。
 - 主仓初始工作区干净；另有已登记 `kkmail_t026` 工作区，包含正在进行的 MIME 解析任务改动，未修改该工作区。

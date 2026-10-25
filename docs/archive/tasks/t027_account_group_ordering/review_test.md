@@ -3,7 +3,7 @@
 - task：`t027_account_group_ordering`
 - spec：`docs/tasks/t027_account_group_ordering/spec.md`
 - diff_anchor：`c8cee92446f9c24e7a0a2a501d52d0bd49068041`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041`
+- target：`git -C '<local-path>' diff c8cee92446f9c24e7a0a2a501d52d0bd49068041`
 - round：1
 - reviewed_at：2026-10-23T05:06:07+08:00
 

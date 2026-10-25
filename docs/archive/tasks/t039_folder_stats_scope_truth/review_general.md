@@ -3,7 +3,7 @@
 - task：`t039_folder_stats_scope_truth`
 - spec：`docs/tasks/t039_folder_stats_scope_truth/spec.md`
 - diff_anchor：`852c01372e17a4d858050eb2e9fed148870e5495`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 852c01372e17a4d858050eb2e9fed148870e5495`
+- target：`git -C '<local-path>' diff 852c01372e17a4d858050eb2e9fed148870e5495`
 - round：1
 - reviewed_at：2026-10-23T08:32:07+08:00
 

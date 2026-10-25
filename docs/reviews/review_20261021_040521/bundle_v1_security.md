@@ -43,7 +43,7 @@
 
 ## Appendix — Traceability / 限制
 
-- Skill：`/Users/developer/kar/code/my_file/coding_agent/skills_mine/intensive-review/SKILL.md` §3 视角1、§4、§6。
+- Skill：`<local-path>` §3 视角1、§4、§6。
 - 全库审查按主任务约定保留当前仍存在问题，不因其早于 HEAD 起源过滤。关键行已检查 git blame，历史泄露直接定位完整 commit。
 - Git patch 扫描覆盖 private-key block、GitHub/Google API token、JWT、refresh/password/client-secret 常量、常见私人邮箱域；未把测试示例、公开联系信息直接认定私人信息泄露。除报告所列历史账户材料外，无其他高置信真实密钥泄露结论。此为启发式扫描，不能证明所有秘密均已排除。
 - 无真实凭据/邮箱写入本报告，未验证历史凭据有效性，未调用真实第三方账户。

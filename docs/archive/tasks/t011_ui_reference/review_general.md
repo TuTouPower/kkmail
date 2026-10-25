@@ -3,7 +3,7 @@
 - task：`t011_ui_reference`
 - spec：`docs/tasks/t011_ui_reference/spec.md`
 - diff_anchor：`7a1f6280a717da31ae985d7f7cbf930da3709f02`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 7a1f6280a717da31ae985d7f7cbf930da3709f02`
+- target：`git -C '<local-path>' diff 7a1f6280a717da31ae985d7f7cbf930da3709f02`
 - round：1
 - reviewed_at：2026-10-23T01:18:00+08:00
 

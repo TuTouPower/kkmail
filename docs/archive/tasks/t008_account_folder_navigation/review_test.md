@@ -3,7 +3,7 @@
 - task：`t008_account_folder_navigation`
 - spec：`docs/tasks/t008_account_folder_navigation/spec.md`
 - diff_anchor：`06f714cfaf9d77157b1eb90cf4c289ff14982836`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 06f714cfaf9d77157b1eb90cf4c289ff14982836`
+- target：`git -C '<local-path>' diff 06f714cfaf9d77157b1eb90cf4c289ff14982836`
 - round：1
 - reviewed_at：2026-10-23T00:35:00+08:00
 

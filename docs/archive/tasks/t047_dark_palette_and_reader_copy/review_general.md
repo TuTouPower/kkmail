@@ -3,7 +3,7 @@
 - task：`t047_dark_palette_and_reader_copy`
 - spec：`docs/tasks/t047_dark_palette_and_reader_copy/spec.md`
 - diff_anchor：`70092c148d5fae963d0b1966f60b780e2b7ecacd`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 70092c148d5fae963d0b1966f60b780e2b7ecacd`
+- target：`git -C '<local-path>' diff 70092c148d5fae963d0b1966f60b780e2b7ecacd`
 - round：1
 - reviewed_at：2026-10-23T22:45:00+08:00
 reviewed_scope: 3c6bc7c88ad54e3f

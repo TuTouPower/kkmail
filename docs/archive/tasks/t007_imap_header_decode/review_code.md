@@ -3,7 +3,7 @@
 - task：`t007_imap_header_decode`
 - spec：`docs/tasks/t007_imap_header_decode/spec.md`
 - diff_anchor：`f9cc7ade0022aa687cf5d7eedaf5ce05203c18ef`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff f9cc7ade0022aa687cf5d7eedaf5ce05203c18ef`
+- target：`git -C '<local-path>' diff f9cc7ade0022aa687cf5d7eedaf5ce05203c18ef`
 - round：1
 - reviewed_at：2026-10-22T23:35:00+08:00
 

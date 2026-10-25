@@ -3,7 +3,7 @@
 - task：`t012_mark_read_convergence`
 - spec：`docs/tasks/t012_mark_read_convergence/spec.md`
 - diff_anchor：`330008b1dfc166f67b60766d639b697d04e37915`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 330008b1dfc166f67b60766d639b697d04e37915`
+- target：`git -C '<local-path>' diff 330008b1dfc166f67b60766d639b697d04e37915`
 - round：1
 - reviewed_at：2026-10-23T01:50:00+08:00
 

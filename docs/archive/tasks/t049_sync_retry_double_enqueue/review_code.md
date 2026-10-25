@@ -3,7 +3,7 @@
 - task：`t049_sync_retry_double_enqueue`
 - spec：`docs/tasks/t049_sync_retry_double_enqueue/spec.md`
 - diff_anchor：`d3fd350`。
-- target：`git -C [REDACTED_LOCAL_PATH] diff d3fd350`。
+- target：`git -C <local-path> diff d3fd350`。
 - 审查方式：独立审查 d3fd350 后的 t049 变更；未修改生产代码。
 - 流程限制：用户授权直接 main，task front matter 的 `diff_anchor` 为空；现工具只能在 start worktree 时赋值，因此无法渲染正式 prompt。本报告按 code/shared prompt 规则人工审查；不伪造 active/done 或 worktree identity，不声称通过 task-work 状态门禁。
 - round：1
@@ -32,7 +32,7 @@ verdict: FAIL
 
 reviewed_scope: aea9011519a4c39a
 
-- target：`git -C [REDACTED_LOCAL_PATH] diff d3fd350 -- src/mail_core/sync/delta.py src/mail_core/sync/engine.py src/mail_core/worker/handlers.py tests/mail_core/test_sync_retry_queue.py docs/blueprint/conventions.md`。
+- target：`git -C <local-path> diff d3fd350 -- src/mail_core/sync/delta.py src/mail_core/sync/engine.py src/mail_core/worker/handlers.py tests/mail_core/test_sync_retry_queue.py docs/blueprint/conventions.md`。
 
 ### 前轮 finding 复核
 
@@ -56,7 +56,7 @@ verdict: PASS
 
 reviewed_scope: bf3efa390aac9033
 
-- target：`git -C [REDACTED_LOCAL_PATH] diff d3fd350`。
+- target：`git -C <local-path> diff d3fd350`。
 - 复核范围：最终 spec、Worker 与同步入口实现、队列回归测试及 blueprint；生产代码相对 Round 2 无变化。
 
 ### 前轮 finding 复核
@@ -76,7 +76,7 @@ verdict: PASS
 
 reviewed_scope: 1eb3b40c21ee29c1
 
-- target：`git -C [REDACTED_LOCAL_PATH] diff cdfafc7`。
+- target：`git -C <local-path> diff cdfafc7`。
 - 范围隔离：以修复前 main HEAD `cdfafc7` 为基线；该提交包含独立 t050 登记，本轮仅审查其后的 t049 最终交付，不纳入 t050 task 登记。
 - 复核内容：最终 spec 的 AC 勾选、同步层标记、Worker 处理、队列回归测试与 blueprint；t049 生产代码与 Round 3 相同。
 
@@ -99,7 +99,7 @@ verdict: PASS
 ## Round 5 (2026-10-24T04:13:35+08:00)
 
 reviewed_scope: 8f66d190d7e01e1a
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 2185a75bbeaa53b10d9c81c3fb4b73ba634ee563`。
+- target：`git -C '<local-path>' diff 2185a75bbeaa53b10d9c81c3fb4b73ba634ee563`。
 - 复核内容：当前 spec 的 AC-001..003、生产实现、测试与既有 Round 1–4 报告。相对该 diff_anchor 的交付变化只有 AC 完成勾选和 task closeout 文档；本轮仍逐项复验其基线中的实现与既有 finding。
 
 ### 前轮 finding 复核

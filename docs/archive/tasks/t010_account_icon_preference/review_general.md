@@ -3,7 +3,7 @@
 - task：`t010_account_icon_preference`
 - spec：`docs/tasks/t010_account_icon_preference/spec.md`
 - diff_anchor：`a673de4bc2d94863f8369f8d2dd3bc84b070f7c7`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff a673de4bc2d94863f8369f8d2dd3bc84b070f7c7`
+- target：`git -C '<local-path>' diff a673de4bc2d94863f8369f8d2dd3bc84b070f7c7`
 - round：1
 - reviewed_at：2026-10-23T01:00:00+08:00
 

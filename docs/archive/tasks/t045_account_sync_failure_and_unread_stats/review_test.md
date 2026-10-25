@@ -3,7 +3,7 @@
 - task：`t045_account_sync_failure_and_unread_stats`
 - spec：`docs/tasks/t045_account_sync_failure_and_unread_stats/spec.md`
 - diff_anchor：`f925d16094950ec856dc837319e40c15b91dbfe8`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff f925d16094950ec856dc837319e40c15b91dbfe8`
+- target：`git -C '<local-path>' diff f925d16094950ec856dc837319e40c15b91dbfe8`
 - round：1
 - reviewed_at：2026-10-23T22:20:00+08:00
 reviewed_scope: 3a36868d176bf82c

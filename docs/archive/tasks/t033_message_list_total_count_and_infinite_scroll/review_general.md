@@ -3,7 +3,7 @@
 - task：`t033_message_list_total_count_and_infinite_scroll`
 - spec：`docs/tasks/t033_message_list_total_count_and_infinite_scroll/spec.md`
 - diff_anchor：`5b3f449ee1406d2f282be98f27571b05f90aa555`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 5b3f449ee1406d2f282be98f27571b05f90aa555`
+- target：`git -C '<local-path>' diff 5b3f449ee1406d2f282be98f27571b05f90aa555`
 - round: 1
 - reviewed_at: 2026-10-23T05:40:00+08:00
 

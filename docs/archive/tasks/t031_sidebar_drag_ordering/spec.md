@@ -44,7 +44,7 @@ v3 要求直接拖动账号行与分组行，不占用拖动手柄。总列表�
 
 ## 上下文区
 
-- 来源：[设计聊天](https://chatgpt.com/c/[REDACTED_UUID]) 与 [v3 参考原型](../t027_account_group_ordering/reference_demo.html)；2026-10-23 经 ego lite 读取聊天正文、预览深浅主题和 desktop 模式，并实测账号拖回总列表。现状与取舍见 [评估记录](../t027_account_group_ordering/source_notes.md)。
+- 来源：[设计聊天](https://chatgpt.com/c/[redacted]) 与 [v3 参考原型](../t027_account_group_ordering/reference_demo.html)；2026-10-23 经 ego lite 读取聊天正文、预览深浅主题和 desktop 模式，并实测账号拖回总列表。现状与取舍见 [评估记录](../t027_account_group_ordering/source_notes.md)。
 
 ### 有意不测
 

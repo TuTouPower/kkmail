@@ -1,6 +1,6 @@
 # p035 已归档合法空正文邮件在阅读器误提示邮件正文尚未完成同步
 
-- 现象：库内真实邮件（如 126 邮箱中由 163 发送的主题为 `12313` 的邮件 `[REDACTED_UUID]`，发件方未填写正文内容，原始 MIME 只有报头、正文 0 字节）在后台已成功归档（`message_archive_state.state = 'archive_complete'`, `is_archived = True`, `parse_error = None`, `body = ""`），但在前端 `MessageReader` 中打开该邮件时，正文占位区域仍显示大字提示“邮件正文尚未完成同步”，使用户误以为该邮件处于未同步异常状态。用户确认：合法空邮件正文直接保持留白即可，不需要任何提示文字干扰用户。
+- 现象：库内真实邮件（如 126 邮箱中由 163 发送的主题为 `12313` 的邮件 `[REDACTED_ID]`，发件方未填写正文内容，原始 MIME 只有报头、正文 0 字节）在后台已成功归档（`message_archive_state.state = 'archive_complete'`, `is_archived = True`, `parse_error = None`, `body = ""`），但在前端 `MessageReader` 中打开该邮件时，正文占位区域仍显示大字提示“邮件正文尚未完成同步”，使用户误以为该邮件处于未同步异常状态。用户确认：合法空邮件正文直接保持留白即可，不需要任何提示文字干扰用户。
 - 影响：
     1. 任何纯主题无正文的合法空邮件（`is_archived === true && !body && !parse_error`）在阅读器中均被误报为“邮件正文尚未完成同步”，造成用户对同步状态产生混淆。
     2. 产生无意义的占位框与文案干扰，破坏留白体验。
@@ -18,5 +18,5 @@
     1. `src/frontend/src/components/MessageReader.test.tsx` 缺少对已归档合法空邮件（`is_archived: true, body: ""`）断言 `.empty-body-placeholder` 为 `null`、正文直接保持空白且绝不包含“邮件正文尚未完成同步”的用例。
 - 线索：
     - `.scratch/repro_empty_body_placeholder.test.tsx`：最小复现用例，已证实当前对 `is_archived: true, body: ''` 的邮件输出了“邮件正文尚未完成同步”。
-    - 数据库事实：`Message id: [REDACTED_UUID], subject: '12313', state: 'archive_complete', MIME payload length: 717 bytes (header only)`。
+    - 数据库事实：`Message id: [REDACTED_ID], subject: '12313', state: 'archive_complete', MIME payload length: 717 bytes (header only)`。
 - 处理：main

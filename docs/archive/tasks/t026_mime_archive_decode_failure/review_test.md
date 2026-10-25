@@ -3,7 +3,7 @@
 - task：`t026_mime_archive_decode_failure`
 - spec：`docs/tasks/t026_mime_archive_decode_failure/spec.md`
 - diff_anchor：`76865ff7a3a72e3cd40aff368bd6297d4b3d775f`
-- target：`git -C '[REDACTED_LOCAL_PATH]' diff 76865ff7a3a72e3cd40aff368bd6297d4b3d775f`
+- target：`git -C '<local-path>' diff 76865ff7a3a72e3cd40aff368bd6297d4b3d775f`
 - round：1
 - reviewed_at：2026-10-23T03:35:00+08:00
 
