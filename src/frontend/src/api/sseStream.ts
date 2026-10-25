@@ -33,7 +33,7 @@ export function parseSseChunk(
 
   for (const line of lines) {
     if (line === '') {
-      if (state.dataBuffer.length > 0 || state.eventName !== 'message') {
+      if (state.dataBuffer.length > 0) {
         const rawData = state.dataBuffer.join('\n')
         let parsed: unknown = rawData
         try {

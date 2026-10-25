@@ -59,6 +59,26 @@ describe('parseSseChunk', () => {
     parseSseChunk('data: line 2\n\n', state, (event, data, id) => events.push({ event, data, id }))
     expect(events).toEqual([{ event: 'message', data: 'line 1\nline 2', id: null }])
   })
+
+  it('does not dispatch a named event without data but keeps explicit empty data', () => {
+    const state: SseParserState = {
+      buffer: '',
+      eventName: 'message',
+      dataBuffer: [],
+      lastEventId: null,
+      retryMs: null,
+    }
+    const onEvent = vi.fn()
+
+    parseSseChunk('id: ev-2\nevent: named\n\n', state, onEvent)
+    expect(onEvent).not.toHaveBeenCalled()
+    expect(state.eventName).toBe('message')
+    expect(state.lastEventId).toBe('ev-2')
+
+    parseSseChunk('event: empty-data\ndata:\n\n', state, onEvent)
+    expect(onEvent).toHaveBeenCalledTimes(1)
+    expect(onEvent).toHaveBeenCalledWith('empty-data', '', 'ev-2')
+  })
 })
 
 describe('subscribeMailCoreStream', () => {
