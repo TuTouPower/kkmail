@@ -350,6 +350,10 @@ function useScopedSearchDismiss({
       ) {
         return
       }
+      if (related) {
+        onClose(false)
+        return
+      }
       requestAnimationFrame(() => {
         if (!containerRef.current) return
         const active = document.activeElement as HTMLElement | null
