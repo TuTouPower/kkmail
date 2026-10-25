@@ -1585,6 +1585,16 @@ button:hover .icon,
 .field-hint { font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 4px; white-space: pre-line; }
 
 /* Apple Mail–style 3-line list cards */
+.message-row-slot {
+  display: flex;
+  align-items: stretch;
+}
+
+.message-list.windowed .message-row.apple-card {
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
 .message-row.apple-card {
   gap: 8px;
   padding: 10px 12px 11px;

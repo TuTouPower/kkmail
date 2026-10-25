@@ -20,6 +20,11 @@ import { getDesktopPlatform } from '../lib/desktopShell'
 export const SEARCH_MIN_CHARS = 2
 export const SEARCH_DEBOUNCE_MS = 250
 const LIST_LIMIT = 100
+const MESSAGE_ROW_HEIGHT = 96
+const MESSAGE_ROW_GAP = 4
+const MESSAGE_ROW_SLOT_HEIGHT = MESSAGE_ROW_HEIGHT + MESSAGE_ROW_GAP
+const MESSAGE_LIST_OVERSCAN = 8
+const FALLBACK_MESSAGE_LIST_HEIGHT = 600
 
 /** Whether query meets CJK threshold (1+ CJK char). */
 function isCjkTrigger(q: string): boolean {
@@ -62,6 +67,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
   const toggleSelected = useMailStore((s) => s.toggleSelected)
   const selectAll = useMailStore((s) => s.selectAll)
   const clearSelected = useMailStore((s) => s.clearSelected)
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
 
   const [searchInput, setSearchInput] = useState(search)
   const [isComposing, setIsComposing] = useState(false)
@@ -273,6 +279,25 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
 
   const [actionStatus, setActionStatus] = useState('')
   const sentinelRef = useRef<HTMLDivElement | null>(null)
+  const messageListRef = useRef<HTMLDivElement | null>(null)
+  const [messageListScrollTop, setMessageListScrollTop] = useState(0)
+  const [messageListHeight, setMessageListHeight] = useState(FALLBACK_MESSAGE_LIST_HEIGHT)
+
+  useEffect(() => {
+    const element = messageListRef.current
+    if (!element) return
+    const updateHeight = () => {
+      setMessageListHeight(element.clientHeight || FALLBACK_MESSAGE_LIST_HEIGHT)
+    }
+    updateHeight()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateHeight)
+      return () => window.removeEventListener('resize', updateHeight)
+    }
+    const observer = new ResizeObserver(updateHeight)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   const handleLoadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return
@@ -307,6 +332,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
   const handleScroll = useCallback(
     (e: React.UIEvent<HTMLDivElement>) => {
       const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+      setMessageListScrollTop((previous) => (previous === scrollTop ? previous : scrollTop))
       if (scrollHeight - scrollTop - clientHeight < 150) {
         void handleLoadMore()
       }
@@ -323,6 +349,17 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
       })
       .sort((a, b) => compareMailDates(a.date, b.date, sortNewest))
   }, [raw, favoriteCategory, listFilter, sortNewest])
+
+  const virtualWindow = useMemo(() => {
+    const firstVisible = Math.min(visible.length, Math.floor(messageListScrollTop / MESSAGE_ROW_SLOT_HEIGHT))
+    const start = Math.max(0, firstVisible - MESSAGE_LIST_OVERSCAN)
+    const visibleCount = Math.max(1, Math.ceil(messageListHeight / MESSAGE_ROW_SLOT_HEIGHT))
+    const end = Math.min(
+      visible.length,
+      firstVisible + visibleCount + MESSAGE_LIST_OVERSCAN,
+    )
+    return { start, end, items: visible.slice(start, end) }
+  }, [visible, messageListHeight, messageListScrollTop])
 
   const loading = active.isLoading && !active.data
   const failure = active.error ? errorMessage(active.error, '加载邮件失败') : ''
@@ -451,7 +488,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
   }
 
   async function deleteSelected() {
-    const chosen = visible.filter((m) => selectedIds.includes(mailKey(m)))
+    const chosen = visible.filter((m) => selectedIdSet.has(mailKey(m)))
     if (!chosen.length) return
     if (!confirmAction(`将所选 ${chosen.length} 封邮件移到废纸篓？`)) return
     const results = await Promise.allSettled(chosen.map((m) => postMailCoreMessageTrash(m.id)))
@@ -572,7 +609,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
           </div>
         )}
       </div>
-      <div className={`message-list ${selecting ? 'selecting' : ''}`} onScroll={handleScroll}>
+      <div ref={messageListRef} className={`message-list windowed ${selecting ? 'selecting' : ''}`} onScroll={handleScroll}>
         {actionStatus && <div role="status" className={`list-note ${actionStatus.includes('失败') ? 'error' : ''}`}>{actionStatus}</div>}
         {failure && <div role="alert" className="list-note error">{failure}</div>}
         {!loading && visible.length === 0 && (
@@ -580,62 +617,70 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
             {accounts.length === 0 ? '还没有账户。在设置中添加账户后，这里会显示邮件。' : searching ? '没有匹配的邮件' : '没有邮件'}
           </div>
         )}
-        {visible.map((m) => {
+        {visible.length > 0 && virtualWindow.start > 0 && (
+          <div aria-hidden="true" className="message-list-spacer" style={{ height: virtualWindow.start * MESSAGE_ROW_SLOT_HEIGHT }} />
+        )}
+        {virtualWindow.items.map((m) => {
           const key = mailKey(m)
-          const checked = selectedIds.includes(key)
+          const checked = selectedIdSet.has(key)
           return (
-            <article
-              data-ui="ML08"
-              key={key}
-              tabIndex={0}
-              aria-label={`邮件：${m.subject || '（无主题）'}，来自 ${displayName(m.from)}`}
-              className={`message-row apple-card ${selectedKey === key ? 'selected' : ''} ${m.is_read === false ? 'unread' : ''} ${checked ? 'checked' : ''}`}
-              onClick={() => openMessage(m)}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                const menuWidth = 180
-                const menuHeight = 260
-                const x = Math.min(e.clientX, (window.innerWidth || 800) - menuWidth - 8)
-                const y = Math.min(e.clientY, (window.innerHeight || 600) - menuHeight - 8)
-                setContextMenu({ x, y, mail: m })
-                setSelectedKey(mailKey(m))
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
+            <div key={key} className="message-row-slot" style={{ height: MESSAGE_ROW_SLOT_HEIGHT }}>
+              <article
+                data-ui="ML08"
+                tabIndex={0}
+                aria-label={`邮件：${m.subject || '（无主题）'}，来自 ${displayName(m.from)}`}
+                className={`message-row apple-card ${selectedKey === key ? 'selected' : ''} ${m.is_read === false ? 'unread' : ''} ${checked ? 'checked' : ''}`}
+                style={{ height: MESSAGE_ROW_HEIGHT, width: "100%", flex: "none" }}
+                onClick={() => openMessage(m)}
+                onContextMenu={(e) => {
                   e.preventDefault()
-                  openMessage(m)
-                }
-              }}
-            >
-              <button
-                className="message-check"
-                role="checkbox"
-                aria-checked={checked}
-                aria-label={`选择邮件：${m.subject}`}
-                onClick={(e) => { e.stopPropagation(); toggleSelected(key) }}
-                onKeyDown={(e) => e.stopPropagation()}
-                title="选择邮件"
+                  const menuWidth = 180
+                  const menuHeight = 260
+                  const x = Math.min(e.clientX, (window.innerWidth || 800) - menuWidth - 8)
+                  const y = Math.min(e.clientY, (window.innerHeight || 600) - menuHeight - 8)
+                  setContextMenu({ x, y, mail: m })
+                  setSelectedKey(mailKey(m))
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    openMessage(m)
+                  }
+                }}
               >
-                {checked && <Check size={12} />}
-              </button>
-              <div className="message-content">
-                <div className="message-top">
-                  <span data-ui="ML09" className="sender">
-                    {m.is_read === false && <span className="unread-dot" aria-label="未读" />}
-                    {displayName(m.from)}
-                  </span>
-                  <div className="message-meta">
-                    {m.is_flagged && <Flag size={12} aria-label="已标记" />}
-                    {m.has_attachments && <Paperclip size={12} aria-label="有附件" />}
-                    <time data-ui="ML11" className="message-date">{formatListDate(m.date)}</time>
+                <button
+                  className="message-check"
+                  role="checkbox"
+                  aria-checked={checked}
+                  aria-label={`选择邮件：${m.subject}`}
+                  onClick={(e) => { e.stopPropagation(); toggleSelected(key) }}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  title="选择邮件"
+                >
+                  {checked && <Check size={12} />}
+                </button>
+                <div className="message-content">
+                  <div className="message-top">
+                    <span data-ui="ML09" className="sender">
+                      {m.is_read === false && <span className="unread-dot" aria-label="未读" />}
+                      {displayName(m.from)}
+                    </span>
+                    <div className="message-meta">
+                      {m.is_flagged && <Flag size={12} aria-label="已标记" />}
+                      {m.has_attachments && <Paperclip size={12} aria-label="有附件" />}
+                      <time data-ui="ML11" className="message-date">{formatListDate(m.date)}</time>
+                    </div>
                   </div>
+                  <div data-ui="ML10" className="subject">{m.subject}</div>
+                  <div data-ui="ML12" className="preview">{previewText(m.body_preview)}</div>
                 </div>
-                <div data-ui="ML10" className="subject">{m.subject}</div>
-                <div data-ui="ML12" className="preview">{previewText(m.body_preview)}</div>
-              </div>
-            </article>
+              </article>
+            </div>
           )
         })}
+        {visible.length > 0 && virtualWindow.end < visible.length && (
+          <div aria-hidden="true" className="message-list-spacer" style={{ height: (visible.length - virtualWindow.end) * MESSAGE_ROW_SLOT_HEIGHT }} />
+        )}
         {!loading && (
           <div className="list-footer" style={{ padding: '16px', textAlign: 'center' }}>
             {hasMore && (

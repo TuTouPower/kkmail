@@ -86,6 +86,37 @@ describe('<MessageList />', () => {
     expect(calls.some((u) => u.startsWith('/api/mail/inbox?limit=100'))).toBe(true)
   })
 
+  it('windows long message lists and follows scroll position', async () => {
+    const originalFetch = vi.mocked(fetch)
+    const items = Array.from({ length: 2000 }, (_, index) => row(`many-${index}`))
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).startsWith('/api/mail/inbox')) {
+        return json({ items, next_cursor: null })
+      }
+      return originalFetch(url, init)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container).length).toBeGreaterThan(0))
+    expect(container.querySelectorAll('.message-row').length).toBeLessThan(40)
+    expect(subjects(container)[0]).toBe('Subject many-0')
+    const firstRow = container.querySelector('.message-row') as HTMLElement
+    expect(firstRow.style.width).toBe('100%')
+    expect(firstRow.style.flex).toBe('0 0 auto')
+    expect(firstRow.style.height).toBe('96px')
+    expect(firstRow.parentElement?.style.height).toBe('100px')
+
+    const list = container.querySelector('.message-list') as HTMLDivElement
+    Object.defineProperty(list, 'clientHeight', { configurable: true, value: 500 })
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 200_000 })
+    list.scrollTop = 100 * 40
+    const { act } = await import('react')
+    await act(async () => list.dispatchEvent(new Event('scroll', { bubbles: true })))
+
+    await waitFor(() => expect(subjects(container)[0]).toBe('Subject many-32'))
+    expect(container.querySelectorAll('.message-row').length).toBeLessThan(40)
+  })
+
   it('flagged filter uses the server-side is_flagged field', async () => {
     const { container } = await render(<MessageList />)
     await waitFor(() => expect(subjects(container)).toHaveLength(2))
