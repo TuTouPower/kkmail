@@ -188,11 +188,11 @@ function underTimeout<T>(work: Promise<T>, signal: AbortSignal, timeoutMs: numbe
 export async function apiRequest<T>(path: string, options: RequestOptions = {}, retriedCsrf = false): Promise<T> {
   const url = `${apiBaseUrl()}${path}`
   const { headers: extraHeaders, timeoutMs = DEFAULT_TIMEOUT_MS, signal: callerSignal, ...rest } = options
-  const headers: Record<string, string> = {
+  const headers = new Headers({
     Accept: 'application/json',
     ...(rest.body != null ? { 'Content-Type': 'application/json' } : {}),
-    ...(extraHeaders as Record<string, string> | undefined),
-  }
+  })
+  new Headers(extraHeaders).forEach((value, name) => headers.set(name, value))
   const method = (rest.method || 'GET').toUpperCase()
   const unsafe = method !== 'GET' && method !== 'HEAD'
   if (unsafe) {
@@ -201,7 +201,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}, 
       // Never send a state-changing request without CSRF protection.
       throw { status: 0, code: 'csrf_unavailable', message: '无法获取 CSRF 令牌，请稍后重试' } as ApiError
     }
-    headers['X-CSRF-Token'] = token
+    headers.set('X-CSRF-Token', token)
   }
   const tmo = withTimeout(callerSignal, timeoutMs)
   try {

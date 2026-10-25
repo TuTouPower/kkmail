@@ -17,7 +17,7 @@ describe('CSRF handling', () => {
     let posts = 0
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
       if (String(url).endsWith('/api/auth/me')) return json(200, { csrf_token: `tok${++tokenN}`, via: 'session' })
-      tokens.push(((init.headers || {}) as Record<string, string>)['X-CSRF-Token'])
+      tokens.push(new Headers(init.headers).get('X-CSRF-Token') || undefined)
       posts += 1
       if (posts === 1) return json(403, { detail: { error: 'CSRF validation failed', csrf_error: true } })
       return json(200, { id: '1', is_read: true })
@@ -120,7 +120,7 @@ describe('CSRF handling', () => {
     const writeCalls = fetchMock.mock.calls.filter((c) => !String(c[0]).endsWith('/api/auth/me'))
     expect(writeCalls).toHaveLength(2)
     for (const [, init] of writeCalls) {
-      expect(((init?.headers || {}) as Record<string, string>)['X-CSRF-Token']).toBe('shared')
+      expect(new Headers(init?.headers).get('X-CSRF-Token')).toBe('shared')
     }
   })
 })

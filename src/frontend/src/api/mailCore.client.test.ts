@@ -33,8 +33,29 @@ describe('transport', () => {
     const [, init] = calls(mock)[0]
     expect(init.credentials).toBe('include')
     expect(init.method).toBe('GET')
-    expect((init.headers as Record<string, string>).Accept).toBe('application/json')
-    expect((init.headers as Record<string, string>)['X-CSRF-Token']).toBeUndefined()
+    const headers = new Headers(init.headers)
+    expect(headers.get('Accept')).toBe('application/json')
+    expect(headers.get('X-CSRF-Token')).toBeNull()
+  })
+
+  it('preserves caller headers supplied as records, Headers, or tuples', async () => {
+    const mock = vi.fn(async () => json(200, {}))
+    vi.stubGlobal('fetch', mock)
+    const tupleHeaders: [string, string][] = [['X-Caller', 'tuple']]
+    const forms: Array<{ headers: HeadersInit; expected: string }> = [
+      { headers: { 'X-Caller': 'record' }, expected: 'record' },
+      { headers: new Headers({ 'X-Caller': 'headers' }), expected: 'headers' },
+      { headers: tupleHeaders, expected: 'tuple' },
+    ]
+
+    for (const form of forms) {
+      await apiRequest('/api/groups', { headers: form.headers })
+      const recordedCalls = calls(mock)
+      const [, init] = recordedCalls[recordedCalls.length - 1]
+      const sentHeaders = new Headers(init.headers)
+      expect(sentHeaders.get('X-Caller')).toBe(form.expected)
+      expect(sentHeaders.get('Accept')).toBe('application/json')
+    }
   })
 
   it('reuses a cached CSRF token across writes', async () => {
@@ -48,7 +69,7 @@ describe('transport', () => {
     const urls = calls(mock).map(([u]) => u)
     expect(urls).toEqual(['/api/auth/me', '/api/mail/messages/m/trash', '/api/mail/messages/m/trash'])
     for (const [, init] of calls(mock).slice(1)) {
-      expect((init.headers as Record<string, string>)['X-CSRF-Token']).toBe('tok')
+      expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('tok')
       expect(init.method).toBe('POST')
       expect(init.body).toBe('{}')
     }
@@ -69,7 +90,7 @@ describe('transport', () => {
     await postJson('/api/auth/logout')
     const sent = calls(mock)
       .filter(([u]) => !u.endsWith('/api/auth/me'))
-      .map(([, init]) => (init.headers as Record<string, string>)['X-CSRF-Token'])
+      .map(([, init]) => new Headers(init.headers).get('X-CSRF-Token'))
     expect(sent).toEqual(['tok1', 'tok2'])
   })
 

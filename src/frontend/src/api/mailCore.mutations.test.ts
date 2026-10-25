@@ -45,7 +45,7 @@ describe('mail-core mutations', () => {
     expect(url).toBe('/api/mail/messages/m1/read')
     expect(init.method).toBe('POST')
     expect(init.credentials).toBe('include')
-    expect((init.headers as Record<string, string>)['X-CSRF-Token']).toBe('tok')
+    expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('tok')
     expect(JSON.parse(String(init.body))).toEqual({ is_read: false })
   })
 
