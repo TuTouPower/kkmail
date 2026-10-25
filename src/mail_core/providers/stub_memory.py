@@ -15,6 +15,9 @@ from mail_core.providers.base import (
     RemoteMessageMeta,
     RemoteOperationResult,
 )
+from mail_core.providers.http import CursorInvalidError
+
+_MAX_CHANGE_LOG_ENTRIES = 10_000
 
 
 @dataclass
@@ -25,8 +28,10 @@ class MemoryProvider:
     page_size: int = 50
     # Per-folder monotonic modseq; change log for incremental sync.
     modseq: dict[str, int] = field(default_factory=dict)
-    # folder -> list of (modseq, DeltaChange)
+    # folder -> list of (modseq, DeltaChange); bounded, with a rebuild fallback
+    # for consumers whose cursor predates the retained history.
     change_log: dict[str, list[tuple[int, DeltaChange]]] = field(default_factory=dict)
+    change_log_pruned_through: dict[str, int] = field(default_factory=dict)
     flagged: set[str] = field(default_factory=set)
 
     @classmethod
@@ -41,7 +46,12 @@ class MemoryProvider:
     def _bump(self, folder_remote_id: str, change: DeltaChange) -> None:
         n = int(self.modseq.get(folder_remote_id, 0)) + 1
         self.modseq[folder_remote_id] = n
-        self.change_log.setdefault(folder_remote_id, []).append((n, change))
+        log = self.change_log.setdefault(folder_remote_id, [])
+        log.append((n, change))
+        overflow = len(log) - _MAX_CHANGE_LOG_ENTRIES
+        if overflow > 0:
+            self.change_log_pruned_through[folder_remote_id] = log[overflow - 1][0]
+            del log[:overflow]
 
     def seed(
         self,
@@ -126,7 +136,10 @@ class MemoryProvider:
         return self.mime[remote_id]
 
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:
+        """Return retained deltas or request a full rebuild for a stale cursor."""
         since = int(cursor.get("modseq") or 0)
+        if since < self.change_log_pruned_through.get(folder_remote_id, 0):
+            raise CursorInvalidError("memory provider cursor predates retained change history")
         log = self.change_log.get(folder_remote_id, [])
         pending = [(n, ch) for n, ch in log if n > since]
         batch = pending[: self.page_size]
