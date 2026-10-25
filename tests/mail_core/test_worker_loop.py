@@ -467,6 +467,27 @@ def test_handle_job_skips_credential_store_for_outbox_wake():
         assert handle_job(session, job, worker_id="test-worker") is True
 
 
+def test_worker_result_log_summary_keeps_only_safe_fields():
+    from mail_core.worker.handlers import _result_log_summary
+
+    result = {
+        "status": "provider_error",
+        "upserted": 4,
+        "pages": 2,
+        "duration_seconds": 1.25,
+        "error": "password=private-secret",
+        "email": "person@example.com",
+        "payload": {"token": "private-token"},
+    }
+
+    assert _result_log_summary(result) == {
+        "status": "provider_error",
+        "upserted": 4,
+        "pages": 2,
+        "duration_seconds": 1.25,
+    }
+
+
 def test_evaluate_result_retains_business_payload_for_followup():
     """AC-005: Worker _evaluate_result must retain business payload and strip _followup_* fields."""
     import uuid

@@ -28,6 +28,36 @@ _FOLDER_SYNC_JOB_TYPES = (
     JobType.SYNC_FOLDER_DELTA.value,
     JobType.RECONCILE_FOLDER.value,
 )
+_RESULT_LOG_COUNT_KEYS = (
+    "actions",
+    "claimed",
+    "completed",
+    "deleted",
+    "failed",
+    "flagged",
+    "folders",
+    "pages",
+    "pushed",
+    "upserted",
+    "used_bytes",
+)
+_RESULT_LOG_DURATION_KEYS = ("duration_s", "duration_seconds")
+
+
+def _result_log_summary(result: dict[str, Any]) -> dict[str, str | int | float]:
+    summary: dict[str, str | int | float] = {}
+    status = result.get("status")
+    if isinstance(status, str):
+        summary["status"] = status
+    for key in _RESULT_LOG_COUNT_KEYS:
+        value = result.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            summary[key] = value
+    for key in _RESULT_LOG_DURATION_KEYS:
+        value = result.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            summary[key] = value
+    return summary
 
 
 def _validate_job_payload(job: WorkerJob) -> tuple[dict[str, Any], str | None]:
@@ -186,7 +216,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
 
             session.commit()
             result = sync_account_folders(account_id, worker_id=worker_id, store=get_credential_store())
-            log.info("sync_account_folders %s", result)
+            log.info("sync_account_folders %s", _result_log_summary(result))
             if result.get("status") in ("lease_busy", "provider_error"):
                 update_account_sync_status(
                     session,
@@ -204,7 +234,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
 
             session.commit()
             result = sync_folder_metadata(account_id, folder_id, worker_id=worker_id, store=get_credential_store())
-            log.info("sync_folder_metadata %s", result)
+            log.info("sync_folder_metadata %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.RECONCILE_FOLDER.value:
@@ -215,7 +245,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
 
             session.commit()
             result = reconcile_folder(account_id, folder_id, worker_id=worker_id, store=get_credential_store())
-            log.info("reconcile_folder %s", result)
+            log.info("reconcile_folder %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.REMOTE_OPERATION_PUSH.value:
@@ -225,7 +255,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
 
             session.commit()
             result = push_remote_operations(account_id, worker_id=worker_id, store=get_credential_store())
-            log.info("remote_operation_push %s", result)
+            log.info("remote_operation_push %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.ARCHIVE_MIME_BATCH.value:
@@ -238,7 +268,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 store=get_credential_store(),
                 payload=payload,
             )
-            log.info("archive_mime_batch %s", result)
+            log.info("archive_mime_batch %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.OUTBOX_DISPATCH_WAKE.value:
@@ -265,7 +295,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 store=get_credential_store(),
                 poll_round=int(payload.get("poll_round") or 0),
             )
-            log.info("sync_folder_delta %s", result)
+            log.info("sync_folder_delta %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.GC_BLOBS.value:
@@ -275,7 +305,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             session.commit()
             hours = float(payload.get("cool_off_hours") or 24)
             result = run_gc_blobs(cool_off_hours=hours, dry_run=bool(payload.get("dry_run")))
-            log.info("gc_blobs %s", result)
+            log.info("gc_blobs %s", _result_log_summary(result))
             if not payload.get("dry_run"):
                 try:
                     maybe_resume_quota_paused_archives()
@@ -288,7 +318,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
 
             session.commit()
             result = run_backup(output_dir=payload.get("output_dir"))
-            log.info("backup_run %s", result)
+            log.info("backup_run %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
         fail_job(session, job, f"unknown job_type {job.job_type}", worker_id=worker_id)
