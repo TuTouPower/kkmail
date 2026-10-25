@@ -19,6 +19,7 @@ Generate a key with:
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 import struct
@@ -52,10 +53,13 @@ class Keyring:
             raise BlobCryptoError(f"unknown blob key version {version}") from exc
 
 
-def _b64key(raw: str) -> bytes:
-    key = base64.b64decode(raw)
+def _b64key(raw: str, *, variable: str) -> bytes:
+    try:
+        key = base64.b64decode(raw, validate=True)
+    except (binascii.Error, TypeError, ValueError) as exc:
+        raise BlobCryptoError(f"{variable} must contain valid base64") from exc
     if len(key) != 32:
-        raise BlobCryptoError("blob keys must be 32 bytes (AES-256)")
+        raise BlobCryptoError(f"{variable} must encode 32 bytes (AES-256)")
     return key
 
 
@@ -65,12 +69,21 @@ def load_keyring_from_env(env: dict[str, str] | None = None) -> Keyring:
     keys: dict[int, bytes] = {}
     blob = env.get("MAIL_CORE_BLOB_KEYS")
     if blob:
-        data = json.loads(blob)
-        for k, v in data.items():
-            keys[int(k)] = _b64key(v)
+        try:
+            entries = json.loads(blob)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise BlobCryptoError("MAIL_CORE_BLOB_KEYS must contain a valid JSON object") from exc
+        if not isinstance(entries, dict):
+            raise BlobCryptoError("MAIL_CORE_BLOB_KEYS must contain a JSON object")
+        for version_text, encoded_key in entries.items():
+            try:
+                version = int(version_text)
+            except (TypeError, ValueError) as exc:
+                raise BlobCryptoError("MAIL_CORE_BLOB_KEYS must use integer key versions") from exc
+            keys[version] = _b64key(encoded_key, variable="MAIL_CORE_BLOB_KEYS")
     # Convenience single-key
     if env.get("MAIL_CORE_BLOB_KEY_V1"):
-        key_v1 = _b64key(env["MAIL_CORE_BLOB_KEY_V1"])
+        key_v1 = _b64key(env["MAIL_CORE_BLOB_KEY_V1"], variable="MAIL_CORE_BLOB_KEY_V1")
         if 1 in keys and keys[1] != key_v1:
             raise BlobCryptoError("MAIL_CORE_BLOB_KEY_V1 conflicts with MAIL_CORE_BLOB_KEYS version 1")
         keys[1] = key_v1
@@ -81,7 +94,16 @@ def load_keyring_from_env(env: dict[str, str] | None = None) -> Keyring:
             "Generate with: python3 -c 'import os,base64; "
             "print(base64.b64encode(os.urandom(32)).decode())'"
         )
-    active = int(env.get("MAIL_CORE_BLOB_KEY_VERSION") or env.get("MAIL_CORE_BLOB_ACTIVE_VERSION") or max(keys))
+    active_version_text = env.get("MAIL_CORE_BLOB_KEY_VERSION") or env.get("MAIL_CORE_BLOB_ACTIVE_VERSION")
+    active_version_variable = (
+        "MAIL_CORE_BLOB_KEY_VERSION"
+        if env.get("MAIL_CORE_BLOB_KEY_VERSION")
+        else "MAIL_CORE_BLOB_ACTIVE_VERSION"
+    )
+    try:
+        active = int(active_version_text) if active_version_text else max(keys)
+    except (TypeError, ValueError) as exc:
+        raise BlobCryptoError(f"{active_version_variable} must be an integer") from exc
     if active not in keys:
         raise BlobCryptoError(f"active key version {active} missing from keyring")
     return Keyring(keys=keys, active_version=active)

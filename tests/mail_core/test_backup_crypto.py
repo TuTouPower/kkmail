@@ -15,7 +15,29 @@ from mail_core.backup.crypto import (
     decrypt_file,
     encrypt_bytes,
     encrypt_file,
+    load_backup_key,
+    load_backup_keyring,
 )
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"MAIL_CORE_BACKUP_KEYS": "{"},
+        {"MAIL_CORE_BACKUP_KEYS": "[]"},
+        {"MAIL_CORE_BACKUP_KEYS": '{"bad-version": "AA=="}'},
+        {"MAIL_CORE_BACKUP_KEYS": '{"1": "%"}'},
+    ],
+)
+def test_load_backup_keyring_rejects_malformed_configuration(env):
+    with pytest.raises(BackupCryptoError, match="MAIL_CORE_BACKUP_KEYS"):
+        load_backup_keyring(env)
+
+
+def test_load_backup_key_rejects_malformed_active_version():
+    key = base64.b64encode(os.urandom(32)).decode()
+    with pytest.raises(BackupCryptoError, match="MAIL_CORE_BACKUP_KEY_VERSION"):
+        load_backup_key({"MAIL_CORE_BACKUP_KEY": key, "MAIL_CORE_BACKUP_KEY_VERSION": "invalid"})
 
 
 def test_crypto_streaming_roundtrip_chunked(tmp_path):

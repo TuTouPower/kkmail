@@ -10,6 +10,7 @@ Wire format for ``*.kkbak``:
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 import struct
@@ -32,10 +33,13 @@ class BackupCryptoError(Exception):
     pass
 
 
-def _b64key(raw: str) -> bytes:
-    key = base64.b64decode(raw)
+def _b64key(raw: str, *, variable: str) -> bytes:
+    try:
+        key = base64.b64decode(raw, validate=True)
+    except (binascii.Error, TypeError, ValueError) as exc:
+        raise BackupCryptoError(f"{variable} must contain valid base64") from exc
     if len(key) != 32:
-        raise BackupCryptoError("backup keys must be 32 bytes (AES-256)")
+        raise BackupCryptoError(f"{variable} must encode 32 bytes (AES-256)")
     return key
 
 
@@ -45,10 +49,23 @@ def load_backup_keyring(env: dict[str, str] | None = None) -> dict[int, bytes]:
     keys: dict[int, bytes] = {}
     blob = env.get("MAIL_CORE_BACKUP_KEYS")
     if blob:
-        for k, v in json.loads(blob).items():
-            keys[int(k)] = _b64key(v)
+        try:
+            entries = json.loads(blob)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise BackupCryptoError("MAIL_CORE_BACKUP_KEYS must contain a valid JSON object") from exc
+        if not isinstance(entries, dict):
+            raise BackupCryptoError("MAIL_CORE_BACKUP_KEYS must contain a JSON object")
+        for version_text, encoded_key in entries.items():
+            try:
+                version = int(version_text)
+            except (TypeError, ValueError) as exc:
+                raise BackupCryptoError("MAIL_CORE_BACKUP_KEYS must use integer key versions") from exc
+            keys[version] = _b64key(encoded_key, variable="MAIL_CORE_BACKUP_KEYS")
     if env.get("MAIL_CORE_BACKUP_KEY"):
-        keys.setdefault(1, _b64key(env["MAIL_CORE_BACKUP_KEY"]))
+        keys.setdefault(
+            1,
+            _b64key(env["MAIL_CORE_BACKUP_KEY"], variable="MAIL_CORE_BACKUP_KEY"),
+        )
     if not keys:
         raise BackupCryptoError("MAIL_CORE_BACKUP_KEY or MAIL_CORE_BACKUP_KEYS required to encrypt backups")
     return keys
@@ -58,7 +75,11 @@ def load_backup_key(env: dict[str, str] | None = None) -> tuple[bytes, int]:
     """Active (key, version) for writing new backups."""
     env = os.environ if env is None else env
     keys = load_backup_keyring(env)
-    version = int(env.get("MAIL_CORE_BACKUP_KEY_VERSION") or max(keys))
+    version_text = env.get("MAIL_CORE_BACKUP_KEY_VERSION")
+    try:
+        version = int(version_text) if version_text else max(keys)
+    except (TypeError, ValueError) as exc:
+        raise BackupCryptoError("MAIL_CORE_BACKUP_KEY_VERSION must be an integer") from exc
     if version not in keys:
         raise BackupCryptoError(f"backup key version {version} missing")
     return keys[version], version

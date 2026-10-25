@@ -57,8 +57,35 @@ def test_load_keyring_rejects_conflicting_v1_sources():
 
 def test_load_keyring_rejects_wrong_length():
     short = base64.b64encode(b"too-short").decode()
-    with pytest.raises(BlobCryptoError, match="32 bytes"):
+    with pytest.raises(BlobCryptoError, match="MAIL_CORE_BLOB_KEY_V1.*32 bytes"):
         load_keyring_from_env(env={"MAIL_CORE_BLOB_KEY_V1": short})
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"MAIL_CORE_BLOB_KEYS": "{"},
+        {"MAIL_CORE_BLOB_KEYS": "[]"},
+        {"MAIL_CORE_BLOB_KEYS": '{"bad-version": "AA=="}'},
+        {"MAIL_CORE_BLOB_KEYS": '{"1": "%"}'},
+    ],
+)
+def test_load_keyring_rejects_malformed_key_map(env):
+    with pytest.raises(BlobCryptoError, match="MAIL_CORE_BLOB_KEYS"):
+        load_keyring_from_env(env=env)
+
+
+@pytest.mark.parametrize(
+    ("variable", "env"),
+    [
+        ("MAIL_CORE_BLOB_KEY_VERSION", {"MAIL_CORE_BLOB_KEY_VERSION": "invalid"}),
+        ("MAIL_CORE_BLOB_ACTIVE_VERSION", {"MAIL_CORE_BLOB_ACTIVE_VERSION": "invalid"}),
+    ],
+)
+def test_load_keyring_rejects_malformed_active_version(variable, env):
+    key = base64.b64encode(os.urandom(32)).decode()
+    with pytest.raises(BlobCryptoError, match=variable):
+        load_keyring_from_env(env={"MAIL_CORE_BLOB_KEY_V1": key, **env})
 
 
 def test_worker_run_fails_fast_without_keys(monkeypatch):
