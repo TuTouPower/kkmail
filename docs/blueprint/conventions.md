@@ -4,9 +4,7 @@
 
 ## 一、 核心安全与设计基线
 
-1. **单用户 · UUID 即能力凭据 (Capability-based)**：
-    - 实例无多租户角色或行级用户 ACL。
-    - 在已认证的 Session / API Key 边界内，掌握资源 UUID 即可访问该资源；不得将其作为“多租户防 IDOR”缺陷处理。详见 `docs/guides/security.md`。
+1. **授权模型**：UUID capability 语义以 [docs/guides/security.md](../guides/security.md)「授权模型」为准。
 2. **邮件 HTML 渲染沙箱与主题边界**：
     - 邮件 HTML 正文只能经由 `src/frontend/src/lib/mailBody.ts` 进行 DOMPurify 过滤与保守主题分类；
     - 必须在带有 CSP 约束的无脚本 `iframe` 沙箱（`srcDoc`）中呈现，严禁使用 `dangerouslySetInnerHTML`；

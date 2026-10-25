@@ -8,10 +8,7 @@ ______________________________________________________________________
 
 以下条目已由产品与架构方案明确锁定，确认为当前阶段不予处理或超出产品范围的设计：
 
-1. **单用户能力凭据模型 (Single-user & Capability-based UUID)**：
-
-    - **裁决**：单登录密码保护实例，无多租户、用户角色或行级 ACL；Bearer API Key 具备同等全量权限。
-    - **理由**：在此单用户边界内，资源 UUID（邮件、附件、账户等）即能力凭据（Capability），知晓 UUID 即获 API 访问权限，不得作为多租户防 IDOR 缺陷处理。
+1. **单用户能力凭据模型 (Single-user & Capability-based UUID)**：完整授权定义见 [docs/guides/security.md](../guides/security.md)「授权模型」。
 
 2. **永久废弃浏览器扩展 (No browser extension - wontfix)**：
 
