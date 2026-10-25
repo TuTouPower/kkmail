@@ -12,8 +12,13 @@ function json(body: unknown, status = 200) {
 }
 
 const puts: Array<{ url: string; body: unknown }> = []
+let settingsResponse: Record<string, string>
 
 beforeEach(() => {
+  settingsResponse = {
+    app_timezone: 'Asia/Shanghai',
+    mail_fetch_timeout_seconds: '120',
+  }
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   puts.length = 0
@@ -28,12 +33,7 @@ beforeEach(() => {
         puts.push({ url: u, body: parsed })
         return json({ ok: true, settings: parsed.settings })
       }
-      return json({
-        settings: {
-          app_timezone: 'Asia/Shanghai',
-          mail_fetch_timeout_seconds: '120',
-        },
-      })
+      return json({ settings: settingsResponse })
     }
     return json({ detail: 'unexpected' }, 404)
   }))
@@ -110,6 +110,39 @@ describe('<SettingsModal />', () => {
       ])
     })
     await waitFor(() => expect(container.textContent).toContain('设置已保存'))
+  })
+
+  it('saves a timezone when the fetch timeout is unset', async () => {
+    settingsResponse = { app_timezone: 'Asia/Shanghai' }
+    const { container } = await render(<SettingsPage />)
+    await click([...container.querySelectorAll('button')].find((button) => button.textContent?.includes('通用')) || null)
+
+    const timezoneInput = container.querySelector('#settings-timezone') as HTMLInputElement
+    await waitFor(() => expect(timezoneInput.value).toBe('Asia/Shanghai'))
+    await typeInto(timezoneInput, 'UTC')
+    await click([...container.querySelectorAll('button')].find((button) => button.textContent === '保存') || null)
+
+    await waitFor(() => expect(puts).toEqual([
+      { url: '/api/settings', body: { settings: { app_timezone: 'UTC' } } },
+    ]))
+  })
+
+  it('saves a timeout without revalidating an unchanged timezone', async () => {
+    settingsResponse = {
+      app_timezone: 'Invalid/Zone',
+      mail_fetch_timeout_seconds: '120',
+    }
+    const { container } = await render(<SettingsPage />)
+    await click([...container.querySelectorAll('button')].find((button) => button.textContent?.includes('通用')) || null)
+
+    const timeoutInput = container.querySelector('#settings-timeout') as HTMLInputElement
+    await waitFor(() => expect(timeoutInput.value).toBe('120'))
+    await typeInto(timeoutInput, '90')
+    await click([...container.querySelectorAll('button')].find((button) => button.textContent === '保存') || null)
+
+    await waitFor(() => expect(puts).toEqual([
+      { url: '/api/settings', body: { settings: { mail_fetch_timeout_seconds: '90' } } },
+    ]))
   })
 
   it('renders default 30s placeholder when mail_fetch_timeout_seconds is unset', async () => {
