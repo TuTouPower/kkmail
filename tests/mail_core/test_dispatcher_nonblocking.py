@@ -103,7 +103,10 @@ def test_listener_requires_subscribers_for_initial_notify_and_idle_dispatch(monk
     listener._run()
 
     assert dispatcher.calls == [{"require_subscribers": True}] * 3
-    assert connection.statements == ["LISTEN mail_core_outbox"]
+    assert connection.statements == [
+        "LISTEN mail_core_outbox",
+        "LISTEN mail_core_session_revoked",
+    ]
     assert connection.closed
 
 

@@ -24,7 +24,8 @@ def _port_open(host: str, port: int) -> bool:
 pytestmark = pytest.mark.skipif(not _port_open(HOST, PORT), reason="local IMAP not available")
 
 
-def test_imap_list_and_metadata_page():
+def test_imap_list_and_metadata_page(monkeypatch):
+    monkeypatch.setenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", "1")
     p = ImapProvider(host=HOST, port=PORT, username=USER, password=PASS, use_ssl=False)
     folders = p.list_folders()
     assert any(f.remote_id.upper() == "INBOX" for f in folders)
