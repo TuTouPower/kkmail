@@ -2300,22 +2300,32 @@
       "SyncBodyAcceptedOut": {
         "properties": {
           "job_id": {
-            "title": "Job Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
           },
           "message_id": {
             "title": "Message Id",
             "type": "string"
           },
           "status": {
-            "const": "queued",
+            "enum": [
+              "queued",
+              "in_progress",
+              "complete"
+            ],
             "title": "Status",
             "type": "string"
           }
         },
         "required": [
           "message_id",
-          "job_id",
           "status"
         ],
         "title": "SyncBodyAcceptedOut",

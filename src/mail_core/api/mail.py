@@ -11,7 +11,7 @@ from email.utils import formataddr, getaddresses
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -296,8 +296,8 @@ class MutationOut(BaseModel):
 
 class SyncBodyAcceptedOut(BaseModel):
     message_id: str
-    job_id: str
-    status: Literal["queued"]
+    job_id: str | None = None
+    status: Literal["queued", "in_progress", "complete"]
 
 
 def _rows(items: list[MessageListItem], emails: dict) -> list[MessageOut]:
@@ -481,17 +481,25 @@ def api_get_message(message_id: UUID) -> MessageDetailOut:
     response_model_by_alias=True,
     status_code=202,
 )
-def api_sync_message_body(message_id: UUID) -> SyncBodyAcceptedOut:
+def api_sync_message_body(message_id: UUID, response: Response) -> SyncBodyAcceptedOut:
     """Queue an on-demand highest-priority body sync for a message."""
     try:
-        job_id = sync_message_body(message_id)
+        result = sync_message_body(message_id)
     except MessageHasNoProviderRemoteId as exc:
         raise HTTPException(409, str(exc)) from exc
-    except (MessageArchiveStateUnavailable, MessageBodyAlreadyArchived) as exc:
+    except MessageArchiveStateUnavailable as exc:
         raise HTTPException(409, str(exc)) from exc
-    if job_id is None:
+    if result is None:
         raise HTTPException(404, "message not found")
-    return SyncBodyAcceptedOut(message_id=str(message_id), job_id=str(job_id), status="queued")
+    if result.status == "complete":
+        response.status_code = 200
+    else:
+        response.status_code = 202
+    return SyncBodyAcceptedOut(
+        message_id=str(result.message_id),
+        job_id=str(result.job_id) if result.job_id else None,
+        status=result.status,  # type: ignore[arg-type]
+    )
 
 
 @router.post("/messages/{message_id}/read", response_model=MutationOut)

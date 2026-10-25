@@ -390,3 +390,42 @@ def test_p039_archive_batch_releases_claims_on_fencing_mismatch():
         # Must NOT remain stuck in ARCHIVE_IN_PROGRESS with claimed_by held!
         assert st.claimed_by is None, "claimed_by must be released on fencing mismatch"
         assert st.state == ArchiveState.ARCHIVE_PENDING.value, "state must be restored to ARCHIVE_PENDING"
+
+
+def test_sync_body_idempotent_when_already_complete_or_in_progress():
+    """p048: On-demand sync is idempotent; returns 200 complete or 202 in_progress without 409 conflict."""
+    _, mid = _seed_unarchived_message()
+    Session = get_session_factory()
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+
+    # 1. Test in_progress status
+    with Session() as session:
+        state = session.get(MessageArchiveState, mid)
+        assert state is not None
+        state.state = ArchiveState.ARCHIVE_IN_PROGRESS.value
+        state.claimed_by = "active-worker-99"
+        session.commit()
+
+    resp_in_progress = client.post(f"/api/mail/messages/{mid}/sync-body")
+    assert resp_in_progress.status_code == 202
+    data_ip = resp_in_progress.json()
+    assert data_ip["status"] == "in_progress"
+    assert data_ip.get("job_id") is None
+
+    # Verify claim was NOT trampled
+    with Session() as session:
+        state = session.get(MessageArchiveState, mid)
+        assert state.claimed_by == "active-worker-99"
+
+    # 2. Test already complete status
+    with Session() as session:
+        state = session.get(MessageArchiveState, mid)
+        state.state = ArchiveState.ARCHIVE_COMPLETE.value
+        state.claimed_by = None
+        session.commit()
+
+    resp_complete = client.post(f"/api/mail/messages/{mid}/sync-body")
+    assert resp_complete.status_code == 200
+    data_done = resp_complete.json()
+    assert data_done["status"] == "complete"
+    assert data_done.get("job_id") is None

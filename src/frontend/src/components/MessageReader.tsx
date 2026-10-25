@@ -103,17 +103,26 @@ const MessageReader = memo(function MessageReader() {
 
   const handleSyncBody = useCallback(async () => {
     if (!selected?.id || syncingBody) return
+    const targetMsgId = selected.id
     setSyncingBody(true)
     setSyncQueued(false)
     setSyncError(null)
     try {
-      await postMailCoreSyncMessageBody(selected.id)
-      setSyncQueued(true)
-      void queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core', selected.id] })
+      const res = await postMailCoreSyncMessageBody(targetMsgId)
+      if (selected?.id !== targetMsgId) return
+      if (res.status === 'complete') {
+        setSyncQueued(false)
+      } else {
+        setSyncQueued(true)
+      }
+      void queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core', targetMsgId] })
     } catch (err) {
+      if (selected?.id !== targetMsgId) return
       setSyncError(errorMessage(err, '同步邮件正文失败'))
     } finally {
-      setSyncingBody(false)
+      if (selected?.id === targetMsgId) {
+        setSyncingBody(false)
+      }
     }
   }, [selected, syncingBody])
 
