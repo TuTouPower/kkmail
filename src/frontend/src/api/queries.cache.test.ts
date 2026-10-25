@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { MAIL_STALE_TIME_MS, fetchAccounts, findCachedMail, queryClient, queryKeys, resetGroupMailQueries, type MailItem } from './queries'
+import { MAIL_STALE_TIME_MS, fetchAccounts, findCachedMail, queryClient, queryKeys, resetGroupMailQueries, setCachedReadState, type MailItem } from './queries'
 
 describe('mail list cache policy', () => {
   it('keeps lists fresh for several minutes', () => {
@@ -180,6 +180,21 @@ describe('findCachedMail', () => {
     useMailStore.setState({ view: { type: 'group', groupId: 'grp-1', groupName: 'G', category: 'inbox' } })
     expect(findCachedMail('m-scope')?.subject).toBe('Group Scope')
   })
+
+  it('finds and optimistically patches a bare PageOut cache entry', () => {
+    const item: MailItem = {
+      id: 'plain-page-mail', subject: 'PageOut', from: 'a@x.test', accountEmail: 'a@x.test',
+      is_read: false, is_flagged: false, has_attachments: false,
+    }
+    const page = { items: [item], total: 1, offset: 0, next_offset: null }
+    const key = queryKeys.inbox('plain-page')
+    queryClient.setQueryData(key, page)
+
+    expect(findCachedMail(item.id)).toEqual(item)
+    setCachedReadState([item.id], true)
+    expect(queryClient.getQueryData(key)).toEqual({ ...page, items: [{ ...item, is_read: true }] })
+  })
+
 })
 
 describe('cache isolation from non-list query keys (AC-001)', () => {

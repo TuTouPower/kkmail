@@ -190,6 +190,9 @@ function extractItemsFromCache(data: unknown): MailItem[] {
     }
     return all
   }
+  if (data && typeof data === 'object' && 'items' in data && Array.isArray((data as { items: unknown[] }).items)) {
+    return (data as { items: unknown[] }).items.filter(isValidMailItem)
+  }
   return []
 }
 
@@ -219,6 +222,11 @@ function updateItemsInCache(data: unknown, updater: (items: MailItem[]) => MailI
       return p
     })
     return { ...inf, pages: newPages }
+  }
+  if (data && typeof data === 'object' && 'items' in data && Array.isArray((data as { items: unknown[] }).items)) {
+    const page = data as { items: unknown[]; [key: string]: unknown }
+    if (page.items.length > 0 && !page.items.every(isValidMailItem)) return data
+    return { ...page, items: updater(page.items as MailItem[]) }
   }
   return data
 }
