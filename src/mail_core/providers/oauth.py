@@ -22,6 +22,7 @@ No send/SMTP. Access tokens are never logged.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -55,6 +56,14 @@ TokenHttpFn = Callable[[str, str, dict[str, str], dict[str, str] | None], dict[s
 
 class OAuthError(RuntimeError):
     """Token endpoint failure."""
+
+
+_OAUTH_ERROR_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _sanitize_token_error_text(value: Any, *, limit: int) -> str:
+    cleaned = _OAUTH_ERROR_CONTROL_CHARS.sub(" ", str(value or ""))
+    return " ".join(cleaned.split())[:limit]
 
 
 @dataclass
@@ -139,7 +148,10 @@ class OAuthTokenClient:
             except ProviderHttpError as exc:
                 raise OAuthError(f"token endpoint HTTP {exc.status}: {exc}") from exc
             if resp.get("error"):
-                raise OAuthError(f"token endpoint error: {resp.get('error')} {resp.get('error_description')}")
+                error_code = _sanitize_token_error_text(resp.get("error"), limit=80)
+                error_description = _sanitize_token_error_text(resp.get("error_description"), limit=200)
+                details = " ".join(part for part in (error_code, error_description) if part)
+                raise OAuthError(f"token endpoint error: {details}")
             access = resp.get("access_token")
             if not access:
                 raise OAuthError("token endpoint returned no access_token")

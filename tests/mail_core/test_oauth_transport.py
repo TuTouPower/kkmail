@@ -236,6 +236,29 @@ def test_oauth_error_on_token_failure():
         client.get_access_token()
 
 
+def test_oauth_token_error_text_strips_controls_and_caps_length():
+    store = DictCredentialStore(
+        {"oauth:x": json.dumps({"refresh_token": "rt", "client_id": "c"})}
+    )
+    client = OAuthTokenClient(
+        credential_ref="oauth:x",
+        store=store,
+        provider="gmail",
+        http_post=lambda *_args: {
+            "error": "invalid_grant\nInjected-Header: value",
+            "error_description": "provider detail\r" + "x" * 500,
+        },
+    )
+
+    with pytest.raises(OAuthError) as error:
+        client.get_access_token()
+
+    message = str(error.value)
+    assert "\n" not in message and "\r" not in message
+    assert "Injected-Header" in message
+    assert len(message) <= len("token endpoint error: ") + 80 + 1 + 200
+
+
 def test_keyring_store_has_no_silent_memory_fallback(monkeypatch):
     import builtins
 
