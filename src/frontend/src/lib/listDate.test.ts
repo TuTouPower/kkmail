@@ -21,6 +21,9 @@ describe('formatListDate', () => {
   it('shows no date text for an unknown date', () => {
     expect(formatListDate(null, now)).toBe('')
   })
+  it('shows no date text for an unparseable date', () => {
+    expect(formatListDate('not-a-date', now)).toBe('')
+  })
 })
 
 describe('formatReaderDate', () => {

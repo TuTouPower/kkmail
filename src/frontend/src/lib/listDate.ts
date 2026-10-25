@@ -6,7 +6,7 @@ const DAY_MS = 24 * 60 * 60 * 1000
 export function formatListDate(value?: string | null, now = Date.now()): string {
   if (!value) return ''
   const ms = parseMailDate(value)
-  if (!Number.isFinite(ms) || ms <= 0) return value.slice(0, 16)
+  if (!Number.isFinite(ms) || ms <= 0) return ''
   const d = new Date(ms)
   const age = now - ms
   if (age >= 0 && age < DAY_MS) {
