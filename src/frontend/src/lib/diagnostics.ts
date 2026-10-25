@@ -54,6 +54,12 @@ function redactContext(context: Record<string, unknown>): Record<string, unknown
   return redactContextValue(context) as Record<string, unknown>
 }
 
+function isApiErrorReason(reason: unknown): reason is { status: number; message: string; code?: string } {
+  return reason !== null && typeof reason === 'object'
+    && typeof (reason as { status?: unknown }).status === 'number'
+    && typeof (reason as { message?: unknown }).message === 'string'
+}
+
 export function logDiagnostic(
   level: DiagnosticLevel,
   category: DiagnosticCategory,
@@ -124,6 +130,16 @@ export function initGlobalDiagnostics(): void {
 
   window.addEventListener('unhandledrejection', (event) => {
     const reason = event.reason
+    if (isApiErrorReason(reason)) {
+      const code = reason.code ? ` (${reason.code})` : ''
+      logDiagnostic(
+        'error',
+        'api',
+        `Unhandled API rejection: HTTP ${reason.status}${code}: ${reason.message}`,
+        { status: reason.status, ...(reason.code ? { code: reason.code } : {}) },
+      )
+      return
+    }
     const msg = reason instanceof Error ? reason.message : String(reason)
     const stack = reason instanceof Error ? reason.stack : undefined
     logDiagnostic('error', 'runtime', `Unhandled rejection: ${msg}`, undefined, stack)

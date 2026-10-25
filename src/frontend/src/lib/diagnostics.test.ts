@@ -91,6 +91,28 @@ describe('diagnostics telemetry', () => {
     expect(text).toContain('Stack: Error: boom')
   })
 
+  it('logs structured ApiError rejections with status and code', () => {
+    initGlobalDiagnostics()
+    const event = new Event('unhandledrejection') as PromiseRejectionEvent
+    Object.defineProperty(event, 'reason', {
+      value: {
+        status: 503,
+        code: 'database_unavailable',
+        message: 'Database unavailable token=diagnostic-secret',
+        payload: { api_key: 'payload-secret' },
+      },
+    })
+    window.dispatchEvent(event)
+
+    const [entry] = getDiagnosticLogs()
+    expect(entry.category).toBe('api')
+    expect(entry.message).toContain('HTTP 503 (database_unavailable)')
+    expect(entry.message).toContain('Database unavailable')
+    expect(entry.message).not.toContain('[object Object]')
+    expect(entry.message).not.toContain('diagnostic-secret')
+    expect(exportDiagnosticsAsText()).not.toContain('payload-secret')
+  })
+
   it('initializes global window listeners without crashing', () => {
     initGlobalDiagnostics()
     expect((window as unknown as { __kkmail_diagnostics?: object }).__kkmail_diagnostics).toBeDefined()
