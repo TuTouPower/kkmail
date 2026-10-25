@@ -2,7 +2,7 @@ export type Vendor = 'other' | 'google' | 'microsoft' | 'qq' | 'netease_163' | '
 export type Protocol = 'imap' | 'gmail' | 'graph'
 export const vendors: Record<Vendor, { label: string; host: string; credential: string; steps: string[]; url: string }> = {
   other: { label: '其他 / 自定义 IMAP', host: '', credential: '密码或授权码', steps: ['向邮箱管理员获取 IMAP 服务器、端口和登录名。', '使用管理员提供的密码或客户端授权码，默认采用 TLS 993。'], url: '' },
-  google: { label: 'Google / Gmail', host: 'imap.gmail.com', credential: '应用专用密码', steps: ['IMAP：先在 Google 账号安全设置启用两步验证，再生成应用专用密码，填写到密码框。普通 Google 登录密码不能使用。', 'Gmail API 权限使用 gmail.modify；该范围包含供应商定义的发送能力，本产品不提供发信，也不额外申请 gmail.send 或 https://mail.google.com/ 全量权限。', 'OAuth：在 Google Cloud 启用 Gmail API，配置同意屏幕、测试用户及 OAuth 客户端。自托管网页使用 Web 应用（机密客户端，需配置 Client Secret 并登记表单显示的固定 HTTPS 回调地址），Electron 桌面端使用桌面应用（Desktop app 公共客户端，采用 127.0.0.1 动态端口 loopback 回调），回调地址必须匹配。', '个人部署也需自有 Google 应用配置，授权按钮不会代办注册或应用验证。点击登录或重新授权完成后，返回窗口保存即可自动保存凭据并继续后台同步。测试模式的 Gmail 授权常见 7 天到期；组织策略或高级保护可能禁止应用密码。个人 Gmail 的 IMAP 默认开启。'], url: 'https://support.google.com/accounts/answer/185833' },
+  google: { label: 'Google / Gmail', host: 'imap.gmail.com', credential: '应用专用密码', steps: ['在 Google 账号中开启两步验证（2-Step Verification）。', '打开应用专用密码页面：https://myaccount.google.com/apppasswords', '生成 16 位应用专用密码，并粘贴到 kkmail 的密码框中。普通 Google 登录密码不能使用。'], url: 'https://myaccount.google.com/apppasswords' },
   microsoft: { label: 'Microsoft / Outlook / Microsoft 365', host: '', credential: '', steps: [
     '在 Microsoft Entra ID → App registrations → New registration 注册自有应用，选择包含目标个人 Outlook/Hotmail/Live 或 Microsoft 365 组织账号的账号类型。Overview 复制 Application (client) ID。同一 Client ID 标识应用，可供多个邮箱授权。',
     '应用注册需要可用 Entra 租户及注册权限，不能保证每个个人微软账号都能自行注册。组织可能要求管理员同意；应用不会代办注册或绕过策略。',
@@ -22,4 +22,7 @@ export const vendors: Record<Vendor, { label: string; host: string; credential: 
 }
 const domains: Record<string, Vendor> = { 'gmail.com': 'google', 'googlemail.com': 'google', 'outlook.com': 'microsoft', 'outlook.cn': 'microsoft', 'hotmail.com': 'microsoft', 'live.com': 'microsoft', 'msn.com': 'microsoft', 'hotmail.co.uk': 'microsoft', 'live.co.uk': 'microsoft', 'hotmail.fr': 'microsoft', 'live.fr': 'microsoft', 'hotmail.de': 'microsoft', 'live.de': 'microsoft', 'outlook.de': 'microsoft', 'qq.com': 'qq', 'foxmail.com': 'qq', '163.com': 'netease_163', '126.com': 'netease_126', 'yeah.net': 'netease_yeah', 'icloud.com': 'icloud', 'me.com': 'icloud', 'mac.com': 'icloud', 'yahoo.com': 'yahoo', 'yahoo.co.uk': 'yahoo', 'zoho.com': 'zoho', 'zohomail.com': 'zoho' }
 export const inferVendor = (email: string): Vendor => domains[email.trim().toLowerCase().split('@')[1]] || 'other'
-export const defaultProtocol = (vendor: Vendor): Protocol => vendor === 'google' ? 'gmail' : vendor === 'microsoft' ? 'graph' : 'imap'
+// 'gmail' stays in the Protocol union so existing Gmail-API accounts still
+// render/edit, but it is never the default for a new account: Google
+// onboarding (p055) is IMAP app-password only.
+export const defaultProtocol = (vendor: Vendor): Protocol => vendor === 'microsoft' ? 'graph' : 'imap'

@@ -107,6 +107,10 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
         const flow = res.flow
         const matches = account ? (flow.intent === 'reauthorize' && flow.account_id === account.id) : flow.intent === 'create'
         if (!matches || !['google', 'microsoft'].includes(flow.provider)) return
+        // p055: Google OAuth is no longer offered when adding an account, so a
+        // stale Google "create" flow must not resurrect the OAuth form.
+        // Existing Gmail-API accounts (reauthorize, account present) still restore.
+        if (!account && flow.provider === 'google') return
         if (!account) {
           manualVendor.current = true
           setVendor(flow.provider === 'microsoft' ? 'microsoft' : 'google')
@@ -251,6 +255,11 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
 
   const oauthAuthorized = provider !== 'imap' && oauthFlow?.status === 'authorized'
   const displayedRedirectUri = oauthFlow?.redirect_uri || oauthMeta?.redirect_uri || oauthMeta?.callback_path || `/api/accounts/oauth/callback/${oauthProvider}`
+  const isGoogleImap = vendor === 'google' && provider === 'imap'
+  const imapHostField = <label className="settings-field" htmlFor="account-imap-host"><span>IMAP 服务器</span><input id="account-imap-host" name="imap_host" value={host} onChange={event => { connectionEdited.current = true; setHost(event.target.value) }} required placeholder="imap.example.com" /></label>
+  const imapPortSslFields = <div className="settings-fields"><label className="settings-field" htmlFor="account-imap-port"><span>端口</span><input id="account-imap-port" name="imap_port" type="number" min={1} max={65535} required value={port} onChange={event => { connectionEdited.current = true; setPort(event.target.value) }} /></label><label className="settings-checkbox"><input id="account-imap-ssl" name="use_ssl" type="checkbox" checked={ssl} onChange={event => { connectionEdited.current = true; setSsl(event.target.checked); if (port === '993' && !event.target.checked) setPort('143'); else if (port === '143' && event.target.checked) setPort('993') }} />SSL / TLS</label></div>
+  const imapUsernameField = <label className="settings-field" htmlFor="account-username"><span>IMAP 登录名</span><input id="account-username" value={username} onChange={event => setUsername(event.target.value)} placeholder={email || '默认完整邮箱地址'} /></label>
+  const imapPasswordField = <label className="settings-field" htmlFor="account-password"><span>{isGoogleImap ? '应用专用密码（16 位）' : vendors[vendor].credential}</span><input id="account-password" name="mailbox-password" type="password" autoComplete="new-password" value={password} required={!account} onChange={event => setPassword(event.target.value)} placeholder={account ? '留空保持已保存密码不变' : isGoogleImap ? '请输入 16 位应用专用密码' : '邮箱服务商提供的密码或授权码'} /></label>
 
   return <dialog className="settings-dialog" ref={dialogRef} aria-labelledby="account-dialog-title" onCancel={event => {
     event.preventDefault()
@@ -320,15 +329,24 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
       <fieldset disabled={busy}>
         <label className="settings-field" htmlFor="account-email"><span>邮箱地址</span><input ref={emailRef} id="account-email" name="email" type="email" autoComplete="email" value={email} onChange={event => { setEmail(event.target.value); if (!manualVendor.current) changeVendor(inferVendor(event.target.value), false) }} readOnly={!!account || oauthAuthorized} required={!oauthAuthorized} placeholder="name@example.com" maxLength={320} /></label>
         <label className="settings-field" htmlFor="account-vendor"><span>邮箱供应商</span><select id="account-vendor" value={vendor} disabled={!!account} onChange={event => changeVendor(event.target.value as Vendor)}>{Object.entries(vendors).map(([key, info]) => <option key={key} value={key}>{info.label}</option>)}</select></label>
-        <div className="settings-fields"><label className="settings-field" htmlFor="account-provider"><span>连接方式</span><select id="account-provider" value={provider} disabled={!!account} onChange={event => { clearActiveFlow(true); setProvider(event.target.value as Protocol); setPassword(''); setOauth({ client_id: '', refresh_token: '', client_secret: '', token_uri: '', scope: '' }); setClearClientSecret(false) }}>{vendor === 'microsoft' ? <option value="graph">Microsoft OAuth / Graph</option> : vendor === 'google' ? <><option value="gmail">Google OAuth / Gmail API</option><option value="imap">IMAP 应用专用密码</option></> : <option value="imap">IMAP</option>}</select></label><label className="settings-field" htmlFor="account-group"><span>所属分组</span><select id="account-group" value={groupId} onChange={event => setGroupId(event.target.value)} disabled={!groupsAvailable}><option value="">不加入分组</option>{groups.map(group => <option value={group.id} key={group.id}>{group.name}</option>)}</select></label></div>
+        <div className="settings-fields"><label className="settings-field" htmlFor="account-provider"><span>连接方式</span><select id="account-provider" value={provider} disabled={!!account} onChange={event => { clearActiveFlow(true); setProvider(event.target.value as Protocol); setPassword(''); setOauth({ client_id: '', refresh_token: '', client_secret: '', token_uri: '', scope: '' }); setClearClientSecret(false) }}>{vendor === 'microsoft' ? <option value="graph">Microsoft OAuth / Graph</option> : vendor === 'google' && account && provider === 'gmail' ? <option value="gmail">Google OAuth / Gmail API</option> : vendor === 'google' ? <option value="imap">IMAP（应用专用密码）</option> : <option value="imap">IMAP</option>}</select></label><label className="settings-field" htmlFor="account-group"><span>所属分组</span><select id="account-group" value={groupId} onChange={event => setGroupId(event.target.value)} disabled={!groupsAvailable}><option value="">不加入分组</option>{groups.map(group => <option value={group.id} key={group.id}>{group.name}</option>)}</select></label></div>
         <button type="button" className="settings-button" aria-label="如何获取账户凭据" onClick={() => setHelp(true)}><CircleHelp size={16} /> 如何获取凭据</button>
         {/@(proton\.me|protonmail\.com|pm\.me|protonmail\.ch)$/i.test(email.trim()) && <p className="settings-notice">Proton 不能使用登录密码直接连接公网 IMAP。需要付费 Proton Mail Bridge，本产品尚未集成；不会自动放开本机或私网连接。</p>}
         {vendor === 'zoho' && <p className="settings-notice">实际主机以账号内数据中心配置为准；付费企业通常使用 imappro.zoho.com，部分免费计划不支持 IMAP。启用两步验证或 SAML 时使用应用密码。</p>}
         {provider === 'imap' ? <>
-          <label className="settings-field" htmlFor="account-imap-host"><span>IMAP 服务器</span><input id="account-imap-host" name="imap_host" value={host} onChange={event => { connectionEdited.current = true; setHost(event.target.value) }} required placeholder="imap.example.com" /></label>
-          <div className="settings-fields"><label className="settings-field" htmlFor="account-imap-port"><span>端口</span><input id="account-imap-port" name="imap_port" type="number" min={1} max={65535} required value={port} onChange={event => { connectionEdited.current = true; setPort(event.target.value) }} /></label><label className="settings-checkbox"><input id="account-imap-ssl" name="use_ssl" type="checkbox" checked={ssl} onChange={event => { connectionEdited.current = true; setSsl(event.target.checked); if (port === '993' && !event.target.checked) setPort('143'); else if (port === '143' && event.target.checked) setPort('993') }} />SSL / TLS</label></div>
-          <label className="settings-field" htmlFor="account-username"><span>IMAP 登录名</span><input id="account-username" value={username} onChange={event => setUsername(event.target.value)} placeholder={email || '默认完整邮箱地址'} /></label>
-          <label className="settings-field" htmlFor="account-password"><span>{vendors[vendor].credential}</span><input id="account-password" name="mailbox-password" type="password" autoComplete="new-password" value={password} required={!account} onChange={event => setPassword(event.target.value)} placeholder={account ? '留空保持已保存密码不变' : '邮箱服务商提供的密码或授权码'} /></label>
+          {isGoogleImap ? <>
+            {imapPasswordField}
+            <details className="settings-advanced"><summary>高级网络设置</summary>
+              {imapHostField}
+              {imapPortSslFields}
+              {imapUsernameField}
+            </details>
+          </> : <>
+            {imapHostField}
+            {imapPortSslFields}
+            {imapUsernameField}
+            {imapPasswordField}
+          </>}
         </> : <>
           <p className="settings-notice">{account ? '已保存凭据不会回显。只填写需要更新的字段，留空保持不变。' : '使用已有 OAuth 凭据连接；获取方法见帮助说明。'}</p>
           <label className="settings-field" htmlFor="account-client-type"><span>OAuth 应用类型</span><select id="account-client-type" value={clientType} disabled={provider === 'graph' && oauthMethod === 'device_code'} onChange={event => { clientTypeEdited.current = true; clearActiveFlow(true); setClientType(event.target.value) }}><option value="public">公共客户端 / 桌面应用</option><option value="confidential">机密客户端 / Web 应用</option></select></label>

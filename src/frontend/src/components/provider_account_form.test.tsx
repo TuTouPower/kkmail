@@ -13,19 +13,81 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); __resetCsrfForTests() })
 
-it('offers Google IMAP and OAuth, Microsoft OAuth only, and contextual credential help', async () => {
+it('Google onboarding offers only IMAP app-password: no OAuth fields, Gmail presets prefilled, Microsoft still OAuth only', async () => {
   const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
   await changeSelect(container.querySelector('#account-vendor'), 'google')
-  await changeSelect(container.querySelector('#account-provider'), 'imap')
+  // Connection method is locked to IMAP app-password: it is the only option.
+  const providerSelect = container.querySelector('#account-provider') as HTMLSelectElement
+  expect(providerSelect.value).toBe('imap')
+  expect([...providerSelect.options].map(option => option.value)).toEqual(['imap'])
+  expect([...providerSelect.options].map(option => option.textContent)).toEqual(['IMAP（应用专用密码）'])
+  // No OAuth developer fields anywhere in the Google add-account form.
+  for (const id of ['account-client-id', 'account-client-secret', 'account-refresh-token', 'account-token-uri', 'account-scope', 'account-redirect-uri', 'account-client-type']) {
+    expect(container.querySelector(`#${id}`)).toBeNull()
+  }
+  for (const label of ['Client ID', 'Client Secret', 'Refresh Token', 'OAuth 回调地址', '令牌端点', 'Token Endpoint', 'Redirect URI']) {
+    expect(container.textContent).not.toContain(label)
+  }
+  // Gmail server params are prefilled (imap.gmail.com / 993 / SSL), tucked into 高级网络设置.
+  const advanced = [...container.querySelectorAll('details.settings-advanced')].find(d => d.querySelector('summary')?.textContent === '高级网络设置')
+  expect(advanced).toBeTruthy()
+  expect(advanced!.querySelector('#account-imap-host')).not.toBeNull()
   expect((container.querySelector('#account-imap-host') as HTMLInputElement).value).toBe('imap.gmail.com')
-  await click(container.querySelector('button[aria-label="如何获取账户凭据"]'))
-  expect(container.querySelector('dialog[aria-labelledby="credential-help-title"]')?.textContent).toContain('两步验证')
-  await click(container.querySelector('button[aria-label="关闭凭据帮助"]'))
-  expect(container.querySelector('dialog[open]')).not.toBeNull()
+  expect((container.querySelector('#account-imap-port') as HTMLInputElement).value).toBe('993')
+  expect((container.querySelector('#account-imap-ssl') as HTMLInputElement).checked).toBe(true)
+  // The password field is labelled/hinted as the 16-digit app password.
+  expect(container.querySelector('label[for="account-password"]')?.textContent).toContain('应用专用密码')
+  expect((container.querySelector('#account-password') as HTMLInputElement).placeholder).toContain('应用专用密码')
+  expect((container.querySelector('#account-password') as HTMLInputElement).placeholder).toContain('16')
+  // Microsoft still offers OAuth only.
   await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
   expect(container.querySelector('#account-imap-host')).toBeNull()
   expect(container.querySelector('#account-client-id')).not.toBeNull()
   expect(container.querySelector('#account-credentials')).toBeNull()
+})
+
+it('submitting the Google form creates an IMAP account with the Gmail params', async () => {
+  const writes: Array<{ url: string; body: Record<string, unknown> }> = []
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
+    const url = String(input)
+    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }))
+    if ((init.method || 'GET') !== 'GET') writes.push({ url, body: JSON.parse(String(init.body)) })
+    return new Response(JSON.stringify({ id: 'new' }))
+  }))
+  const onSaved = vi.fn(async () => {})
+  const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={onSaved} />)
+  await changeSelect(container.querySelector('#account-vendor'), 'google')
+  await typeInto(container.querySelector('#account-email'), 'someone@gmail.com')
+  await typeInto(container.querySelector('#account-password'), 'abcd efgh ijkl mnop')
+  await click(container.querySelector('button[type="submit"]'))
+  await waitFor(() => expect(onSaved).toHaveBeenCalled())
+  expect(writes).toHaveLength(1)
+  expect(writes[0].url).toMatch(/\/api\/accounts$/)
+  expect(writes[0].body).toMatchObject({
+    email: 'someone@gmail.com',
+    provider: 'imap',
+    credentials: { password: 'abcd efgh ijkl mnop' },
+    config: { imap_host: 'imap.gmail.com', imap_port: 993, use_ssl: true, provider_profile: 'google' },
+  })
+  expect(JSON.stringify(writes)).not.toMatch(/client_id|client_secret|refresh_token|token_uri|oauth/)
+})
+
+it('CredentialHelp for Google renders the 3 app-password steps and the apppasswords link, with no Cloud Console/CASA content', async () => {
+  const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
+  await changeSelect(container.querySelector('#account-vendor'), 'google')
+  await click(container.querySelector('button[aria-label="如何获取账户凭据"]'))
+  const dialog = container.querySelector('dialog[aria-labelledby="credential-help-title"]')!
+  const steps = [...dialog.querySelectorAll('ol li')]
+  expect(steps).toHaveLength(3)
+  expect(steps[0].textContent).toContain('两步验证')
+  expect(steps[1].textContent).toContain('https://myaccount.google.com/apppasswords')
+  expect(steps[2].textContent).toContain('16 位')
+  expect(steps[2].textContent).toContain('kkmail')
+  const link = [...dialog.querySelectorAll('a')].find(a => a.getAttribute('href') === 'https://myaccount.google.com/apppasswords')
+  expect(link).toBeTruthy()
+  for (const banned of ['Google Cloud', 'Cloud Console', 'CASA', 'OAuth', 'Gmail API']) {
+    expect(dialog.textContent).not.toContain(banned)
+  }
 })
 
 it('does not replace manually entered host when the address changes', async () => {
@@ -52,7 +114,7 @@ it('updates a single OAuth field without echoing or replacing saved secrets', as
   expect(calls[0].credentials).toEqual({ refresh_token: 'new-refresh' })
 })
 
-it('validates a custom OAuth token URI before submitting account credentials', async () => {
+it('validates a custom OAuth token URI before submitting account credentials (Microsoft)', async () => {
   const writes: Array<{ url: string; body: Record<string, unknown> }> = []
   vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
     const url = String(input)
@@ -62,11 +124,10 @@ it('validates a custom OAuth token URI before submitting account credentials', a
   }))
 
   const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
-  await changeSelect(container.querySelector('#account-vendor'), 'google')
-  await changeSelect(container.querySelector('#account-provider'), 'gmail')
-  await typeInto(container.querySelector('#account-email'), 'hello@gmail.com')
-  await typeInto(container.querySelector('#account-client-id'), 'google-client')
-  await typeInto(container.querySelector('#account-refresh-token'), 'google-refresh')
+  await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
+  await typeInto(container.querySelector('#account-email'), 'hello@outlook.com')
+  await typeInto(container.querySelector('#account-client-id'), 'ms-client')
+  await typeInto(container.querySelector('#account-refresh-token'), 'ms-refresh')
   await click(container.querySelector('.settings-advanced summary'))
 
   const tokenUri = container.querySelector('#account-token-uri') as HTMLInputElement
@@ -80,11 +141,11 @@ it('validates a custom OAuth token URI before submitting account credentials', a
   await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('有效的完整 URL'))
   expect(writes).toHaveLength(0)
 
-  await typeInto(tokenUri, 'https://oauth2.googleapis.com/token')
+  await typeInto(tokenUri, 'https://login.microsoftonline.com/common/oauth2/v2.0/token')
   await click(container.querySelector('button[type="submit"]'))
   await waitFor(() => expect(writes).toHaveLength(1))
   expect(writes[0].url).toMatch(/\/api\/accounts$/)
-  expect(writes[0].body).toMatchObject({ credentials: { token_uri: 'https://oauth2.googleapis.com/token' } })
+  expect(writes[0].body).toMatchObject({ credentials: { token_uri: 'https://login.microsoftonline.com/common/oauth2/v2.0/token' } })
 })
 
 it('releases save controls when the account write succeeds but refresh fails', async () => {
@@ -151,8 +212,9 @@ it.each([
   if (vendor === 'zoho') for (const text of ['个人', '付费企业', '数据中心', '免费计划', '两步验证', 'SAML']) expect(dialog.textContent).toContain(text)
 })
 
+// p055: the Google row was removed wholesale — Google help is now the
+// app-password guide, covered by the dedicated CredentialHelp test above.
 it.each([
-  ['google', ['gmail.modify', 'gmail.send', '不额外申请', 'https://mail.google.com/', 'Web 应用', 'Desktop app', '7 天', '自有 Google 应用配置', '不会代办']],
   ['microsoft', ['Mail.ReadWrite', 'offline_access', '后台继续同步', 'secret ID', 'Application (client) ID']],
 ])('explains provider %s authorization requirements through the help dialog', async (vendor, expected) => {
   const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
@@ -162,20 +224,24 @@ it.each([
   for (const item of expected as string[]) expect(text).toContain(item)
 })
 
-it('clears credentials across supplier and authentication changes and sends only current fields', async () => {
+it('clears credentials across supplier changes and sends only current fields', async () => {
   const writes: Record<string, unknown>[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
     if (String(input).includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }))
+    if ((init.method || 'GET') === 'GET') return new Response(JSON.stringify({ flow: null }))
     writes.push(JSON.parse(String(init.body)))
     return new Response(JSON.stringify({ id: 'new' }))
   }))
   const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
-  await typeInto(container.querySelector('#account-email'), 'x@gmail.com')
-  await typeInto(container.querySelector('#account-client-id'), 'google-client')
-  await typeInto(container.querySelector('#account-refresh-token'), 'google-token')
-  await typeInto(container.querySelector('#account-client-secret'), 'google-secret')
-  await changeSelect(container.querySelector('#account-provider'), 'imap')
+  await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
+  await typeInto(container.querySelector('#account-client-id'), 'ms-client-1')
+  await typeInto(container.querySelector('#account-refresh-token'), 'ms-token-1')
+  await typeInto(container.querySelector('#account-client-secret'), 'ms-secret-1')
+  // Switching to Google shows the IMAP form (no OAuth fields carry over).
+  await changeSelect(container.querySelector('#account-vendor'), 'google')
+  expect(container.querySelector('#account-client-id')).toBeNull()
   await typeInto(container.querySelector('#account-password'), 'google-imap-password')
+  // Switching back to Microsoft clears both the OAuth fields and the IMAP password.
   await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
   for (const id of ['client-id', 'refresh-token', 'client-secret']) expect((container.querySelector(`#account-${id}`) as HTMLInputElement).value).toBe('')
   await typeInto(container.querySelector('#account-email'), 'x@outlook.com')
@@ -184,7 +250,7 @@ it('clears credentials across supplier and authentication changes and sends only
   await click(container.querySelector('button[type="submit"]'))
   await waitFor(() => expect(writes).toHaveLength(1))
   expect(writes[0]).toMatchObject({ provider: 'graph', credentials: { client_id: 'ms-client', refresh_token: 'ms-refresh' } })
-  expect(JSON.stringify(writes)).not.toMatch(/google-|imap_host|password/)
+  expect(JSON.stringify(writes)).not.toMatch(/ms-client-1|google-imap-password|imap_host/)
 })
 
 it('discards credentials when the dialog is closed and reopened', async () => {
@@ -200,118 +266,6 @@ it('discards credentials when the dialog is closed and reopened', async () => {
   expect((container.querySelector('#account-password') as HTMLInputElement).value).toBe('')
   expect(Object.keys(localStorage).map(key => localStorage.getItem(key)).join('')).not.toContain('must-disappear')
   expect(Object.keys(sessionStorage).map(key => sessionStorage.getItem(key)).join('')).not.toContain('must-disappear')
-})
-
-it('supports Google OAuth redirect sign-in, popup-blocked fallback, and atomic account creation', async () => {
-  const requests: Array<{ url: string; method: string; body?: Record<string, unknown> }> = []
-  let flowStatus: 'pending' | 'authorized' = 'pending'
-  vi.stubGlobal('open', vi.fn(() => null))
-  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
-    const url = String(input)
-    const method = (init.method || 'GET').toUpperCase()
-    const body = init.body ? JSON.parse(String(init.body)) : undefined
-    requests.push({ url, method, body })
-    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }), { headers: { 'content-type': 'application/json' } })
-    if (url.includes('/api/accounts/oauth/metadata')) {
-      return new Response(JSON.stringify({
-        provider: 'google',
-        runtime_mode: 'web',
-        default_client_type: 'public',
-        redirect_uri: 'https://mail.example.com/api/accounts/oauth/callback/google',
-        callback_path: '/api/accounts/oauth/callback/google',
-        origin_configured: true,
-      }), { headers: { 'content-type': 'application/json' } })
-    }
-    if (url.includes('/api/accounts/oauth/active')) {
-      return new Response(JSON.stringify({ flow: null }), { headers: { 'content-type': 'application/json' } })
-    }
-    if (url.includes('/api/accounts/oauth/start')) {
-      return new Response(JSON.stringify({
-        flow_id: 'flow-create-1',
-        provider: 'google',
-        intent: 'create',
-        status: 'pending',
-        auth_url: 'https://accounts.google.com/o/oauth2/v2/auth?state=s1',
-        redirect_uri: 'http://127.0.0.1:18765/api/accounts/oauth/callback/google',
-        client_type: 'public',
-        expires_at: 9999999999,
-      }), { headers: { 'content-type': 'application/json' } })
-    }
-    if (url.includes('/api/accounts/oauth/flows/flow-create-1')) {
-      return new Response(JSON.stringify({
-        flow_id: 'flow-create-1',
-        provider: 'google',
-        intent: 'create',
-        group_id: 'g-1',
-        client_type: 'public',
-        client_id: 'desktop-cid',
-        status: flowStatus,
-        verified_email: flowStatus === 'authorized' ? 'verified@gmail.com' : null,
-        error: null,
-        redirect_uri: 'http://127.0.0.1:18765/api/accounts/oauth/callback/google',
-        expires_at: 9999999999,
-      }), { headers: { 'content-type': 'application/json' } })
-    }
-    if (url.endsWith('/api/accounts') && method === 'POST') {
-      return new Response(JSON.stringify({ id: 'created-gmail-id', email: 'verified@gmail.com' }), { headers: { 'content-type': 'application/json' } })
-    }
-    return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } })
-  }))
-
-  const onSaved = vi.fn(async () => {})
-  const { container } = await render(
-    <AccountDialog
-      groups={[{ id: 'g-1', name: '主力组', account_count: 0, sort_order: 0 }]}
-      groupsAvailable
-      onClose={vi.fn()}
-      onSaved={onSaved}
-    />,
-  )
-  await changeSelect(container.querySelector('#account-vendor'), 'google')
-  await changeSelect(container.querySelector('#account-group'), 'g-1')
-  await waitFor(() => expect((container.querySelector('#account-redirect-uri') as HTMLInputElement).value).toBe('https://mail.example.com/api/accounts/oauth/callback/google'))
-
-  // Clipboard copy button: when clipboard unavailable, reports manual fallback (never false positive)
-  Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
-  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '复制回调地址')!)
-  expect(container.textContent).toContain('请手动复制上方回调地址')
-
-  // When navigator.clipboard is undefined but execCommand succeeds, reports success
-  const execCommand = vi.fn().mockReturnValue(true)
-  document.execCommand = execCommand
-  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '复制回调地址')!)
-  expect(container.textContent).toContain('已复制回调地址')
-  expect(execCommand).toHaveBeenCalledWith('copy')
-
-  // When clipboard.writeText is available, copies exact redirect URI and reports success
-  const writeText = vi.fn(async () => {})
-  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
-  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '复制回调地址')!)
-  await waitFor(() => expect(writeText).toHaveBeenCalledWith('https://mail.example.com/api/accounts/oauth/callback/google'))
-  expect(container.textContent).toContain('已复制回调地址')
-
-  // Missing Client ID is explicitly reported before starting OAuth
-  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '使用 Google 登录')!)
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain('Client ID')
-
-  await typeInto(container.querySelector('#account-client-id'), 'desktop-cid')
-  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '使用 Google 登录')!)
-  await waitFor(() => expect(container.textContent).toContain('浏览器拦截了授权窗口'))
-
-  flowStatus = 'authorized'
-  window.dispatchEvent(new Event('focus'))
-  await waitFor(() => expect(container.textContent).toContain('已完成 Google 授权：verified@gmail.com'))
-  expect((container.querySelector('#account-email') as HTMLInputElement).value).toBe('verified@gmail.com')
-
-  await click(container.querySelector('button[type="submit"]'))
-  await waitFor(() => expect(onSaved).toHaveBeenCalledWith('g-1'))
-  const createCall = requests.find(r => r.url.endsWith('/api/accounts') && r.method === 'POST')
-  expect(createCall?.body).toMatchObject({
-    email: 'verified@gmail.com',
-    provider: 'gmail',
-    group_id: 'g-1',
-    oauth_flow_id: 'flow-create-1',
-  })
 })
 
 it.each(['failed', 'expired'] as const)('supports Gmail API reauthorization retry after %s and PATCH save with oauth_flow_id', async initialStatus => {
@@ -385,9 +339,11 @@ it.each(['failed', 'expired'] as const)('supports Gmail API reauthorization retr
     <AccountDialog account={account} groups={[]} groupsAvailable onClose={onClose} onSaved={onSaved} />,
   )
 
-  // Help dialog works in edit mode as well (AC-013)
+  // Help dialog works in edit mode as well (AC-013). p055: Google help is the
+  // app-password guide everywhere — no OAuth/Gmail-API content remains.
   await click(container.querySelector('button[aria-label="如何获取账户凭据"]'))
-  expect(container.querySelector('dialog[aria-labelledby="credential-help-title"]')?.textContent).toContain('gmail.modify')
+  expect(container.querySelector('dialog[aria-labelledby="credential-help-title"]')?.textContent).toContain('https://myaccount.google.com/apppasswords')
+  expect(container.querySelector('dialog[aria-labelledby="credential-help-title"]')?.textContent).not.toContain('gmail.modify')
   await click(container.querySelector('button[aria-label="关闭凭据帮助"]'))
 
   // 1st attempt fails: displays redacted error alert, clears opener, allows cancel and retry
@@ -412,7 +368,7 @@ it.each(['failed', 'expired'] as const)('supports Gmail API reauthorization retr
   expect(patchCall?.body).toMatchObject({ oauth_flow_id: 'flow-reauth-1' })
 })
 
-it('restores active Google OAuth draft on #oauth-return in SettingsPage and AccountDialog', async () => {
+it('restores active Microsoft OAuth draft on #oauth-return in SettingsPage and AccountDialog', async () => {
   queryClient.clear()
   window.location.hash = '#oauth-return'
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
@@ -422,27 +378,27 @@ it('restores active Google OAuth draft on #oauth-return in SettingsPage and Acco
       return new Response(JSON.stringify({
         flow: {
           flow_id: 'flow-return-1',
-          provider: 'google',
+          provider: 'microsoft',
           intent: 'create',
           account_id: null,
           group_id: 'grp-restore',
           client_type: 'confidential',
           client_id: 'restored-client-id',
           status: 'authorized',
-          verified_email: 'restored@gmail.com',
+          verified_email: 'restored@outlook.com',
           error: null,
-          redirect_uri: 'https://mail.example.com/api/accounts/oauth/callback/google',
+          redirect_uri: 'https://mail.example.com/api/accounts/oauth/callback/microsoft',
           expires_at: 9999999999,
         },
       }), { headers: { 'content-type': 'application/json' } })
     }
     if (url.includes('/api/accounts/oauth/metadata')) {
       return new Response(JSON.stringify({
-        provider: 'google',
+        provider: 'microsoft',
         runtime_mode: 'web',
         default_client_type: 'confidential',
-        redirect_uri: 'https://mail.example.com/api/accounts/oauth/callback/google',
-        callback_path: '/api/accounts/oauth/callback/google',
+        redirect_uri: 'https://mail.example.com/api/accounts/oauth/callback/microsoft',
+        callback_path: '/api/accounts/oauth/callback/microsoft',
         origin_configured: true,
       }), { headers: { 'content-type': 'application/json' } })
     }
@@ -463,9 +419,41 @@ it('restores active Google OAuth draft on #oauth-return in SettingsPage and Acco
       <SettingsPage />
     </QueryClientProvider>,
   )
-  await waitFor(() => expect(container.textContent).toContain('已完成 Google 授权：restored@gmail.com'))
-  expect((container.querySelector('#account-email') as HTMLInputElement).value).toBe('restored@gmail.com')
+  await waitFor(() => expect(container.textContent).toContain('已完成 Microsoft 授权：restored@outlook.com'))
+  expect((container.querySelector('#account-email') as HTMLInputElement).value).toBe('restored@outlook.com')
   expect((container.querySelector('#account-group') as HTMLSelectElement).value).toBe('grp-restore')
   expect((container.querySelector('#account-client-id') as HTMLInputElement).value).toBe('restored-client-id')
   expect(window.location.hash).toBe('')
+})
+
+it('ignores a stale Google OAuth create flow instead of resurrecting the OAuth form', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+    const url = String(input)
+    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }), { headers: { 'content-type': 'application/json' } })
+    if (url.includes('/api/accounts/oauth/active')) {
+      return new Response(JSON.stringify({
+        flow: {
+          flow_id: 'flow-stale-google',
+          provider: 'google',
+          intent: 'create',
+          account_id: null,
+          group_id: null,
+          client_type: 'public',
+          client_id: 'stale-client-id',
+          status: 'authorized',
+          verified_email: 'stale@gmail.com',
+          error: null,
+          redirect_uri: 'https://mail.example.com/api/accounts/oauth/callback/google',
+          expires_at: 9999999999,
+        },
+      }), { headers: { 'content-type': 'application/json' } })
+    }
+    return new Response(JSON.stringify({}), { headers: { 'content-type': 'application/json' } })
+  }))
+  const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
+  // Give the active-flow lookup a chance to (not) apply.
+  await new Promise(resolve => setTimeout(resolve, 50))
+  expect(container.querySelector('#account-client-id')).toBeNull()
+  expect((container.querySelector('#account-email') as HTMLInputElement).value).toBe('')
+  expect(container.textContent).not.toContain('已完成 Google 授权')
 })
