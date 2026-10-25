@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import platform
-import resource
 import shutil
 import subprocess
 import sys
@@ -23,6 +22,11 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+try:
+    import resource
+except ImportError:  # Windows does not provide the resource module.
+    resource = None
 
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -32,6 +36,8 @@ LOG = logging.getLogger("benchmark")
 
 
 def get_process_rss_mb() -> float:
+    if resource is None:
+        return 0.0
     usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin":
         return usage / (1024.0 * 1024.0)  # bytes -> MB

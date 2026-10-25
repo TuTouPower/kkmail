@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import create_engine
 
 from mail_core.db.session import get_engine
-from scripts.benchmark_mailbox import compare_reports, run_benchmark
+from scripts.benchmark_mailbox import compare_reports, resource, run_benchmark
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -63,7 +63,10 @@ def test_mailbox_performance_baseline_metrics(tmp_path):
 
     # AC-003: Assert resource metrics, database size and EXPLAIN plan
     res = report["resources"]
-    assert res["peak_rss_mb"] > 0, "Missing or zero process RSS measurement"
+    if resource is None:
+        assert res["peak_rss_mb"] == 0, "Unavailable RSS must use the documented unknown value"
+    else:
+        assert res["peak_rss_mb"] > 0, "Missing or zero process RSS measurement"
     assert res["db_size_bytes"] > 0, "Missing or zero database size measurement"
     assert res["messages_table_bytes"] > 0, "Missing or zero messages table size"
     assert res["blob_dir_bytes"] > 0, "Missing or zero blob storage footprint"
