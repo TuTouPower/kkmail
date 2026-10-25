@@ -4,6 +4,7 @@ import { api, type AccountSummary, type ApiError, type OAuthFlowStatusOut, type 
 import type { GroupItem } from '../api/queries'
 import { errorMessage } from '../lib/actions'
 import { vendors, inferVendor, defaultProtocol, type Vendor, type Protocol } from '../lib/account_providers'
+import { copyTextToClipboard } from '../lib/clipboard'
 import { getDesktopPlatform } from '../lib/desktopShell'
 import CredentialHelp from './credential_help'
 
@@ -342,8 +343,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
             <div className="settings-dialog-actions">
               {!(provider === 'graph' && oauthMethod === 'device_code') && <button type="button" className="settings-button" onClick={async () => {
                 try {
-                  if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
-                  await navigator.clipboard.writeText(displayedRedirectUri)
+                  await copyTextToClipboard(displayedRedirectUri)
                   setCopyTip('已复制回调地址')
                 } catch {
                   setCopyTip('请手动复制上方回调地址')
@@ -357,8 +357,12 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
               <p>验证码：<strong>{oauthFlow.user_code}</strong> · 剩余 {Math.max(0, Math.ceil(oauthFlow.expires_at - now / 1000))} 秒</p>
               <p>{oauthFlow.verification_uri}</p>
               <button type="button" className="settings-button" onClick={async () => {
-                try { if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable'); await navigator.clipboard.writeText(oauthFlow.user_code || ''); setCopyTip('已复制验证码') }
-                catch { setCopyTip('复制失败，请手动复制验证码') }
+                try {
+                  await copyTextToClipboard(oauthFlow.user_code || '')
+                  setCopyTip('已复制验证码')
+                } catch {
+                  setCopyTip('复制失败，请手动复制验证码')
+                }
               }}>复制验证码</button>
               <a href={oauthFlow.verification_uri || undefined} target="_blank" rel="noopener noreferrer">打开微软登录页</a>
             </div>}

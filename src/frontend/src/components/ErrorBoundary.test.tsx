@@ -116,6 +116,29 @@ describe('<ErrorBoundary />', () => {
     })
   })
 
+  it('shows copied status when navigator.clipboard is missing but execCommand succeeds', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+    })
+    const execCommand = vi.fn().mockReturnValue(true)
+    document.execCommand = execCommand
+
+    const { container } = await render(
+      <ErrorBoundary>
+        <BuggyComponent shouldThrow={true} />
+      </ErrorBoundary>,
+    )
+
+    const copyBtn = [...container.querySelectorAll('button')].find((b) => b.textContent === '复制诊断日志')
+    await click(copyBtn!)
+
+    await waitFor(() => {
+      expect(execCommand).toHaveBeenCalledWith('copy')
+      expect(copyBtn!.textContent).toBe('已复制日志')
+    })
+  })
+
   it('clears the copy feedback timer when unmounted', async () => {
     vi.useFakeTimers()
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })

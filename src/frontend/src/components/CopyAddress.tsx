@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Copy } from 'lucide-react'
+import { copyTextToClipboard } from '../lib/clipboard'
 
 interface CopyAddressProps {
   address: string
@@ -44,10 +45,7 @@ export default function CopyAddress({ address, children, className = '', variant
     event.stopPropagation()
     const bounds = event.currentTarget.getBoundingClientRect()
     try {
-      if (typeof navigator === 'undefined' || typeof navigator.clipboard?.writeText !== 'function') {
-        throw new Error('当前环境不支持剪贴板写入')
-      }
-      await navigator.clipboard.writeText(normalizedAddress)
+      await copyTextToClipboard(normalizedAddress)
       if (!mountedRef.current) return
       showFeedback('已复制地址', 2000, false, bounds)
     } catch (error) {

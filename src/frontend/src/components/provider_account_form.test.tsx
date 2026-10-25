@@ -276,6 +276,13 @@ it('supports Google OAuth redirect sign-in, popup-blocked fallback, and atomic a
   await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '复制回调地址')!)
   expect(container.textContent).toContain('请手动复制上方回调地址')
 
+  // When navigator.clipboard is undefined but execCommand succeeds, reports success
+  const execCommand = vi.fn().mockReturnValue(true)
+  document.execCommand = execCommand
+  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '复制回调地址')!)
+  expect(container.textContent).toContain('已复制回调地址')
+  expect(execCommand).toHaveBeenCalledWith('copy')
+
   // When clipboard.writeText is available, copies exact redirect URI and reports success
   const writeText = vi.fn(async () => {})
   Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })

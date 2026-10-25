@@ -218,4 +218,46 @@ describe('<UiReferenceOverlay /> (t011 AC-001 ~ AC-006)', () => {
       expect(document.body.textContent).toContain('复制失败')
     })
   })
+
+  it('copies via document.execCommand when navigator.clipboard is missing and fallback succeeds', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+    })
+    const execCommand = vi.fn().mockReturnValue(true)
+    document.execCommand = execCommand
+
+    const el = document.createElement('div')
+    el.setAttribute('data-ui', 'SB02')
+    vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({
+      top: 10, left: 10, width: 40, height: 40, right: 50, bottom: 50, x: 10, y: 10, toJSON: () => {},
+    })
+    document.body.appendChild(el)
+
+    await render(<UiReferenceOverlay />)
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: '.',
+        code: 'Period',
+        metaKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+
+    await waitFor(() => {
+      expect(document.querySelector('.ui-ref-badge')).not.toBeNull()
+    })
+
+    const badge = document.querySelector('.ui-ref-badge') as HTMLElement
+    const { click: fireClick } = await import('../test/render')
+    await fireClick(badge)
+
+    await waitFor(() => {
+      expect(execCommand).toHaveBeenCalledWith('copy')
+      expect(document.body.textContent).toContain('已复制引用')
+    })
+  })
 })

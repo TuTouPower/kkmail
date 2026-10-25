@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { copyTextToClipboard } from '../lib/clipboard'
 import { formatUiReferenceText, isUiReferenceShortcut } from '../lib/uiReference'
 
 interface ElementBadge {
@@ -133,10 +134,7 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
     e.stopPropagation()
     const text = formatUiReferenceText(id)
     try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error('剪贴板不可用')
-      }
-      await navigator.clipboard.writeText(text)
+      await copyTextToClipboard(text)
       setToast({ text: `已复制引用：${text}` })
     } catch {
       setToast({ text: `复制失败：剪贴板不可用或未获授权`, error: true })

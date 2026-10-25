@@ -52,6 +52,17 @@ describe('<CopyAddress />', () => {
     expect(document.body.querySelector('[role="status"]')?.textContent).toContain('手动选择并复制地址')
   })
 
+  it('copies via document.execCommand fallback in insecure context without navigator.clipboard', async () => {
+    setClipboard()
+    const execCommand = vi.fn().mockReturnValue(true)
+    document.execCommand = execCommand
+    const { container } = await render(<CopyAddress address="fallback@example.test">fallback@example.test</CopyAddress>)
+    const button = container.querySelector<HTMLButtonElement>('button')!
+    await act(async () => { button.click(); await Promise.resolve() })
+    expect(execCommand).toHaveBeenCalledWith('copy')
+    expect(document.body.querySelector('[role="status"]')?.textContent).toBe('已复制地址')
+  })
+
   it('clears its feedback timer when unmounted', async () => {
     vi.useFakeTimers()
     setClipboard(vi.fn().mockResolvedValue(undefined))

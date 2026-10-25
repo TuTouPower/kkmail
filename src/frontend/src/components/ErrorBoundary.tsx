@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { copyTextToClipboard } from '../lib/clipboard'
 import { exportDiagnosticsAsText, logDiagnostic } from '../lib/diagnostics'
 
 type Props = {
@@ -75,10 +76,7 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   copyReport = async () => {
     try {
-      if (!navigator?.clipboard?.writeText) {
-        throw new Error('剪贴板不可用')
-      }
-      await navigator.clipboard.writeText(exportDiagnosticsAsText())
+      await copyTextToClipboard(exportDiagnosticsAsText())
       this.showCopyFeedback(true)
     } catch {
       this.showCopyFeedback(false)
