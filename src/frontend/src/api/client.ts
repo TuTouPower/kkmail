@@ -287,6 +287,7 @@ export const api = {
   },
 
   async logout(): Promise<void> {
+    let unauthorizedEventDispatched = false
     try {
       await postJson('/api/auth/logout')
     } catch (err: unknown) {
@@ -294,9 +295,11 @@ export const api = {
       if (status !== 401 && status !== 403) {
         throw err
       }
+      unauthorizedEventDispatched = status === 401
     }
     csrfToken = null
     csrfInflight = null
+    if (!unauthorizedEventDispatched) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
     window.location.assign('/')
   },
 

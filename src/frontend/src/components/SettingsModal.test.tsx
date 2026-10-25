@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import SettingsPage from './SettingsModal'
 import Sidebar from './Sidebar'
-import { __resetCsrfForTests } from '../api/client'
+import { __resetCsrfForTests, UNAUTHORIZED_EVENT } from '../api/client'
 import { queryClient, queryKeys } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
 import { changeSelect, cleanup, click, render, typeInto, waitFor } from '../test/render'
@@ -194,7 +194,10 @@ describe('<SettingsModal />', () => {
 
   it('renders logout button and calls logout API on click', async () => {
     const assignMock = vi.fn()
-    vi.stubGlobal('window', Object.assign(new EventTarget(), { location: { assign: assignMock } }))
+    const target = Object.assign(new EventTarget(), { location: { assign: assignMock } })
+    const unauthorized = vi.fn()
+    target.addEventListener(UNAUTHORIZED_EVENT, unauthorized)
+    vi.stubGlobal('window', target)
 
     let logoutCalled = false
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -220,6 +223,7 @@ describe('<SettingsModal />', () => {
 
     await waitFor(() => {
       expect(logoutCalled).toBe(true)
+      expect(unauthorized).toHaveBeenCalledTimes(1)
       expect(assignMock).toHaveBeenCalledWith('/')
     })
   })
