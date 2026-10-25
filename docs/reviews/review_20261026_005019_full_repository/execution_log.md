@@ -9,7 +9,7 @@
 
 |屏障|基线/进入条件|包含工作包|合入顺序|产出 SHA|状态|
 |---|---|---|---|---|---|
-|S0|B0 (`332de0ff`)|F00|I 直推 integration|待定|进行中|
+|S0|B0 (`332de0ff`)|F00|I 直推 integration|`7e0d0e77`|已完成|
 |S1|S0|F01, F04, F06|F01 → F04 → F06|待定|待开始|
 |S2|S1|F02, F03, F07|F02 → F03 → F07|待定|待开始|
 |S3|S2|F05, F08, F09|F05 → F08 → F09|待定|待开始|
@@ -21,7 +21,7 @@
 
 |工作包|分支|Worktree|负责人|目标 Commit 数|交付状态|
 |---|---|---|---|---|---|
-|F00|`review_fix/integration`|`kkmail_review_integration`|I|2|进行中|
+|F00|`review_fix/integration`|`kkmail_review_integration`|I|2|已交付 (`0b05890f`, `7e0d0e77`)|
 |F01|`review_fix/f01_logging`|`kkmail_review_f01_logging`|A|1|待开始|
 |F04|`review_fix/f04_sidebar`|`kkmail_review_f04_sidebar`|B|3|待开始|
 |F06|`review_fix/f06_health`|`kkmail_review_f06_health`|C|2|待开始|
