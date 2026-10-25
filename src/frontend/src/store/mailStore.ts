@@ -68,6 +68,7 @@ const navigationReset = () => ({
   mobileSidebarOpen: false,
   settingsOpen: false,
   search: '',
+  listFilter: 'all' as const,
 })
 
 export const useMailStore = create<MailUiState>()(
@@ -93,7 +94,7 @@ export const useMailStore = create<MailUiState>()(
       setMobileView: (view) => set({ mobileView: view }),
       view: { type: 'allInbox' },
       setView: (view) => set({ view, ...navigationReset() }),
-      openSmartView: (filter) => set({ view: { type: 'allInbox' }, listFilter: filter, ...navigationReset() }),
+      openSmartView: (filter) => set({ ...navigationReset(), view: { type: 'allInbox' }, listFilter: filter }),
       selectedKey: null,
       setSelectedKey: (key) => set({ selectedKey: key }),
       search: '',

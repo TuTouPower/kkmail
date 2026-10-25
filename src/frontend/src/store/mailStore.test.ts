@@ -13,6 +13,7 @@ const dirtyState = {
   selectedIds: ['dirty-key'],
   mobileView: 'detail' as const,
   settingsOpen: true,
+  listFilter: 'flagged' as const,
 }
 
 function expectNavigationReset() {
@@ -25,7 +26,7 @@ function expectNavigationReset() {
 
 describe('mobile drawer closes on every navigation', () => {
   beforeEach(() => {
-    useMailStore.setState({ ...dirtyState, listFilter: 'all', view: { type: 'allInbox' } })
+    useMailStore.setState({ ...dirtyState, view: { type: 'allInbox' } })
   })
 
   it.each(['all', 'unread', 'flagged'] as const)('smart view %s closes the drawer and sets the filter', (filter) => {
@@ -48,6 +49,7 @@ describe('mobile drawer closes on every navigation', () => {
     s().setView({ type: 'account', accountId: '2', email: 'b@x' })
     expectNavigationReset()
     expect(s().view).toEqual({ type: 'account', accountId: '2', email: 'b@x' })
+    expect(s().listFilter).toBe('all')
   })
 
   it('selecting a favorite view closes the drawer', () => {
@@ -58,5 +60,14 @@ describe('mobile drawer closes on every navigation', () => {
     s().setView({ type: 'favorite', category: 'inbox', accountId: 'acc-1', email: 'a@x' })
     expectNavigationReset()
     expect(s().view).toEqual({ type: 'favorite', category: 'inbox', accountId: 'acc-1', email: 'a@x' })
+  })
+
+  it('clears smart-view filters when navigating to an account or folder', () => {
+    s().setView({ type: 'account', accountId: '2', email: 'b@x' })
+    expect(s().listFilter).toBe('all')
+
+    s().setListFilter('unread')
+    s().setView({ type: 'folder', accountId: '2', email: 'b@x', folderId: 'folder-1', folderName: 'Archive' })
+    expect(s().listFilter).toBe('all')
   })
 })
