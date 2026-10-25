@@ -358,6 +358,48 @@ describe('<MessageList />', () => {
     })
   })
 
+  it('excludes disabled accounts from the aggregate folder-stats fallback', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      calls.push(u)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [
+          { id: 'acc-1', email: 'paused@x.test', status: 'active', sync_enabled: false, account_type: 'imap', provider: 'imap' },
+          { id: 'acc-2', email: 'active@x.test', status: 'active', sync_enabled: true, account_type: 'imap', provider: 'imap' },
+        ], total: 2, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      if (u.includes('/api/mail/accounts/acc-1/folder-stats')) return json({ detail: 'disabled account must not be queried' }, 500)
+      if (u.includes('/api/mail/accounts/acc-2/folder-stats')) {
+        return json({ folders: [{ folder_id: 'inbox-2', role: 'inbox', total_count: 5, unread_count: 2 }] })
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('5 封邮件 · 2 封未读'))
+    expect(calls.some((url) => url.includes('/api/mail/accounts/acc-1/folder-stats'))).toBe(false)
+    expect(calls.filter((url) => url.includes('/folder-stats'))).toHaveLength(1)
+  })
+
+  it('returns zero aggregate counts when every account is disabled', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      calls.push(u)
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [
+          { id: 'acc-1', email: 'paused@x.test', status: 'active', sync_enabled: false, account_type: 'imap', provider: 'imap' },
+        ], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(container.querySelector('.list-count')?.textContent).toBe('0 封邮件 · 0 封未读'))
+    expect(calls.some((url) => url.includes('/folder-stats'))).toBe(false)
+  })
+
   it('does not substitute other folders for a missing role in all-account stats', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url)

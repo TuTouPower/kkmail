@@ -195,7 +195,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         }
       }
       if (accountId) {
-        const stats = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`).catch(() => null)
+        const stats = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(accountId)}/folder-stats`, { signal }).catch(() => null)
         if (!stats) return null
         if (stats.folders.length === 0) {
           return { total: null, unread: null }
@@ -208,9 +208,10 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
           unread: targetFolder ? targetFolder.unread_count : 0,
         }
       }
+      const enabledAccounts = accounts.filter((account) => account.sync_enabled !== false)
       const statsList = await Promise.all(
-        accounts.map(async (a) => {
-          const res = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(a.id)}/folder-stats`).catch(() => null)
+        enabledAccounts.map(async (a) => {
+          const res = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(a.id)}/folder-stats`, { signal }).catch(() => null)
           return { account: a, stats: res }
         }),
       )
@@ -221,7 +222,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
       let unreadUnknown = false
       for (const { account: a, stats: s } of statsList) {
         if (!s) return null
-        const isFaulty = (a.sync_enabled === false || a.sync_status === 'failed' || a.sync_status === 'auth_failed') && s.folders.length === 0
+        const isFaulty = (a.sync_status === 'failed' || a.sync_status === 'auth_failed') && s.folders.length === 0
         if (isFaulty) {
           continue
         }
