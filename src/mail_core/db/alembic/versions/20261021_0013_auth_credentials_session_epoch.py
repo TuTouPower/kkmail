@@ -29,6 +29,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    connection = op.get_bind()
+    has_null_hashes = connection.execute(
+        sa.text("SELECT EXISTS (SELECT 1 FROM auth_credentials WHERE login_password_hash IS NULL)")
+    ).scalar_one()
+    if has_null_hashes:
+        raise RuntimeError("cannot downgrade while auth_credentials.login_password_hash contains NULL values")
     op.alter_column(
         "auth_credentials",
         "login_password_hash",
