@@ -215,6 +215,68 @@ def _libpq_dsn_and_password(url: str) -> tuple[str, str | None]:
     return safe, password
 
 
+def _validate_blob_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
+    """Validate all members in blobs.tar. Refuses path traversal, symlinks, absolute paths, devices, duplicates."""
+    validated: list[tarfile.TarInfo] = []
+    seen_dest_paths = set()
+    for member in tar.getmembers():
+        name = member.name
+        if any(c in name for c in ("\r", "\n", "\0", "\\")):
+            raise RuntimeError(f"unsafe member path in blobs.tar: invalid characters in {name!r}")
+        if member.issym() or member.islnk() or member.isdev() or member.ischr() or member.isfifo():
+            raise RuntimeError(f"unsafe member type in blobs.tar: {member.type} ({name!r})")
+        if name.startswith("/") or name.startswith("\\"):
+            raise RuntimeError(f"unsafe absolute path in blobs.tar: {name!r}")
+        if ":" in name.split("/")[0]:
+            raise RuntimeError(f"unsafe drive specification in blobs.tar: {name!r}")
+
+        parts = [p for p in name.split("/") if p != ""]
+        if any(p in ("..", ".") for p in parts):
+            raise RuntimeError(f"path traversal detected in blobs.tar member: {name!r}")
+
+        if member.isdir():
+            if not name.startswith("blobs"):
+                raise RuntimeError(f"disallowed directory in blobs.tar: {name!r}")
+            validated.append(member)
+            continue
+
+        if not member.isfile():
+            raise RuntimeError(f"only regular files allowed in blobs.tar: {name!r}")
+
+        if not name.startswith("blobs/"):
+            raise RuntimeError(f"member does not start with blobs/ in blobs.tar: {name!r}")
+
+        rel_path = name[len("blobs/") :].strip("/")
+        if not rel_path or "//" in name:
+            raise RuntimeError(f"invalid empty or double-slash member path: {name!r}")
+
+        if rel_path in seen_dest_paths:
+            raise RuntimeError(f"duplicate member path in blobs.tar: {name!r}")
+        seen_dest_paths.add(rel_path)
+        validated.append(member)
+    return validated
+
+
+def _validate_restore_destination(target_blobs_dir: str | Path) -> Path:
+    raw_path = Path(target_blobs_dir)
+    if any(part in ("..", ".") for part in raw_path.parts):
+        raise RuntimeError(f"path traversal detected in target blobs dir: {target_blobs_dir}")
+    if raw_path.is_symlink():
+        raise RuntimeError(f"refusing target blobs dir as symlink: {target_blobs_dir}")
+    resolved = raw_path.resolve()
+    if resolved.is_symlink():
+        raise RuntimeError(f"refusing resolved target blobs dir as symlink: {resolved}")
+    if resolved.exists():
+        if not resolved.is_dir():
+            raise RuntimeError(f"target blobs destination is not a directory: {resolved}")
+        try:
+            if any(resolved.iterdir()):
+                raise RuntimeError(f"refusing to restore into non-empty target blobs dir: {resolved}")
+        except PermissionError:
+            raise RuntimeError(f"permission denied accessing target blobs dir: {resolved}")
+    return resolved
+
+
 def _safe_member_relpath(name: str, *, allowlist: frozenset[str]) -> str | None:
     """Return ``name`` if it is an allowlisted relative path with no traversal."""
     if not isinstance(name, str) or name not in allowlist:
@@ -891,16 +953,14 @@ def restore_backup_package(
     if _restore_database_identity(source_database_url) == _restore_database_identity(target_database_url):
         raise RuntimeError("refusing to restore onto source database")
 
-    target_blobs = Path(target_blobs_dir).resolve()
-    if target_blobs.is_symlink():
-        raise RuntimeError(f"refusing target blobs dir as symlink: {target_blobs}")
-    if any(part in ("..", ".") for part in Path(target_blobs_dir).parts):
-        raise RuntimeError(f"path traversal detected in target blobs dir: {target_blobs_dir}")
+    target_blobs = _validate_restore_destination(target_blobs_dir)
 
     temp_parent = pkg_dir.parent
     work_dir = temp_parent / f".restore_staging_{uuid.uuid4().hex}"
     _make_private_dir(work_dir)
     snapshot_dir = work_dir / "package"
+    staging_blobs = work_dir / "staging_blobs"
+    _make_private_dir(staging_blobs)
     errors: list[str] = []
     blobs_restored = 0
     db_restored = False
@@ -937,36 +997,39 @@ def restore_backup_package(
         if dump_fmt == _SQL_STUB_METHOD and not allow_stub:
             raise RuntimeError("refusing to restore stub backup without allow_stub")
 
-        # 1. Restore blobs if blobs.tar is present
+        # 1. Restore blobs into isolated staging first
         blobs_tar = extract_dir / "blobs.tar"
         if blobs_tar.is_file():
-            target_blobs.mkdir(parents=True, exist_ok=True)
             with tarfile.open(blobs_tar, "r") as t:
-                for member in t.getmembers():
-                    if member.name.startswith("blobs/") and not member.name.endswith("/"):
-                        rel_path = member.name[len("blobs/"):]
-                        if not rel_path or any(part in ("..", ".") for part in Path(rel_path).parts):
-                            continue
-                        dest_file = target_blobs / rel_path
-                        dest_file.parent.mkdir(parents=True, exist_ok=True)
-                        f = t.extractfile(member)
-                        if f:
-                            temp_file = dest_file.with_name(f".{dest_file.name}.restore-{uuid.uuid4().hex}")
-                            created = False
-                            try:
-                                with f, temp_file.open("xb") as out:
-                                    created = True
-                                    shutil.copyfileobj(f, out, length=1024 * 1024)
-                                    out.flush()
-                                    os.fsync(out.fileno())
-                                temp_file.replace(dest_file)
-                            finally:
-                                if created:
-                                    try:
-                                        temp_file.unlink(missing_ok=True)
-                                    except OSError:
-                                        pass
-                            blobs_restored += 1
+                validated_members = _validate_blob_members(t)
+                for member in validated_members:
+                    if member.isdir():
+                        rel = member.name[len("blobs/") :].strip("/") if member.name.startswith("blobs/") else ""
+                        if rel:
+                            d = staging_blobs / rel
+                            d.mkdir(parents=True, exist_ok=True)
+                        continue
+                    rel_path = member.name[len("blobs/") :].strip("/")
+                    dest_file = staging_blobs / rel_path
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    f = t.extractfile(member)
+                    if f:
+                        temp_file = dest_file.with_name(f".{dest_file.name}.restore-{uuid.uuid4().hex}")
+                        created = False
+                        try:
+                            with f, temp_file.open("xb") as out:
+                                created = True
+                                shutil.copyfileobj(f, out, length=1024 * 1024)
+                                out.flush()
+                                os.fsync(out.fileno())
+                            temp_file.replace(dest_file)
+                        finally:
+                            if created:
+                                try:
+                                    temp_file.unlink(missing_ok=True)
+                                except OSError:
+                                    pass
+                        blobs_restored += 1
 
         # 2. Restore PostgreSQL dump
         dump_file = extract_dir / "postgres.dump"
@@ -1012,6 +1075,20 @@ def restore_backup_package(
             raise RuntimeError(f"pg_restore failed ({res.returncode}): {err_msg}")
 
         db_restored = True
+
+        # Atomically publish staging blobs into target directory only after successful DB restore
+        if blobs_tar.is_file() and blobs_restored > 0:
+            target_blobs.mkdir(parents=True, exist_ok=True)
+            for item in staging_blobs.iterdir():
+                target_dest = target_blobs / item.name
+                if target_dest.exists():
+                    if target_dest.is_dir():
+                        shutil.copytree(item, target_dest, dirs_exist_ok=True)
+                    else:
+                        item.replace(target_dest)
+                else:
+                    item.replace(target_dest)
+
         duration = (datetime.now(timezone.utc) - begun).total_seconds()
         return RestoreResult(
             ok=True,
