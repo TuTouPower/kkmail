@@ -74,11 +74,13 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
     MAIL_CORE_HOST: '127.0.0.1',
     MAIL_CORE_PORT: '18765',
     KKMAIL_SIDECAR: '1',
+    KKMAIL_INSTANCE_TOKEN: 'instance-token-from-child-env',
   }
   const sidecarExtras = collectSidecarExtras(parentEnv, baseExtras)
   assert.strictEqual(sidecarExtras.MAIL_CORE_HOST, '127.0.0.1', 'baseExtras must win')
   assert.strictEqual(sidecarExtras.MAIL_CORE_PORT, '18765')
   assert.strictEqual(sidecarExtras.KKMAIL_SIDECAR, '1')
+  assert.strictEqual(sidecarExtras.KKMAIL_INSTANCE_TOKEN, 'instance-token-from-child-env')
   assert.strictEqual(sidecarExtras.MAIL_CORE_PUBLIC_ORIGIN, 'https://mail.example.test')
   assert.strictEqual(sidecarExtras.MAIL_CORE_ALLOW_LOOPBACK_OAUTH_ORIGIN, '1')
   assert.ok(SIDECAR_CONFIG_KEYS.has('MAIL_CORE_PUBLIC_ORIGIN'))
@@ -91,6 +93,7 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
 
   const finalEnv = scrubEnv(parentEnv, sidecarExtras)
   assert.strictEqual(finalEnv.MAIL_CORE_HOST, '127.0.0.1')
+  assert.strictEqual(finalEnv.KKMAIL_INSTANCE_TOKEN, 'instance-token-from-child-env')
   assert.strictEqual(finalEnv.MAIL_CORE_LOG_LEVEL, 'DEBUG')
   assert.strictEqual(finalEnv.MAIL_CORE_SECRET_KEY, 'custom-secret')
   assert.strictEqual(finalEnv.MAIL_CORE_RANDOM_UNAUDITED, undefined)

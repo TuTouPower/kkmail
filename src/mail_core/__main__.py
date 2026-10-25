@@ -40,7 +40,6 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--host", default=os.environ.get("MAIL_CORE_HOST") or "127.0.0.1")
     parser.add_argument("--port", type=int, default=int(os.environ.get("MAIL_CORE_PORT") or 8000))
     parser.add_argument("--data-dir", default=os.environ.get("MAIL_CORE_DATA_DIR") or "")
-    parser.add_argument("--instance-token", default=os.environ.get("KKMAIL_INSTANCE_TOKEN") or "")
     parser.add_argument("--no-worker", action="store_true", default=os.environ.get("MAIL_CORE_EMBEDDED_WORKER") == "0")
     parser.add_argument("--skip-migrations", action="store_true", default=os.environ.get("MAIL_CORE_SKIP_MIGRATIONS") == "1")
     parser.add_argument(
@@ -59,8 +58,6 @@ def main(argv: list[str] | None = None) -> None:
     from mail_core.logging_config import configure_logging
 
     configure_logging(service_name="mail-core")
-    if args.instance_token:
-        os.environ["KKMAIL_INSTANCE_TOKEN"] = args.instance_token
     if args.data_dir:
         from mail_core.runtime.bootstrap import bootstrap_data_dir
 

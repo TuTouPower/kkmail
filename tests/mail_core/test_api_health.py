@@ -1,6 +1,8 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from mail_core.api.app import _code_schema_head, app
+from mail_core.__main__ import main as mail_core_main
 
 
 def test_health_reports_schema_head():
@@ -27,6 +29,16 @@ def test_health_returns_instance_token_only_in_header(monkeypatch):
     res_without_token = client.get("/health")
     assert res_without_token.status_code == 200
     assert "X-Instance-Token" not in res_without_token.headers
+
+
+def test_instance_token_is_not_accepted_as_a_command_line_argument(capsys):
+    with pytest.raises(SystemExit) as error:
+        mail_core_main(["--instance-token", "visible-in-process-list"])
+
+    assert error.value.code == 2
+    assert (
+        "unrecognized arguments: --instance-token visible-in-process-list" in capsys.readouterr().err
+    )
 
 
 def test_ready_without_db_returns_503(monkeypatch):

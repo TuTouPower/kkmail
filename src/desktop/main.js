@@ -131,7 +131,7 @@ async function startBackend() {
 
   // Own process group on Unix so stopChildTree can SIGTERM/SIGKILL the whole tree.
   const detached = process.platform !== 'win32'
-  backend = spawn(target.cmd, [...target.args, '--data-dir', dataRoot, '--instance-token', instanceToken], {
+  backend = spawn(target.cmd, [...target.args, '--data-dir', dataRoot], {
     cwd: target.cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
