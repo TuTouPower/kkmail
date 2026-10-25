@@ -495,11 +495,10 @@ class ImapProvider:
                 pass
         except imaplib.IMAP4.error as exc:
             msg = str(exc)
-            if (
-                "basic authentication is disabled" in msg.lower()
-                or "authenticationfailed" in msg.lower()
-                or "login error or password error" in msg.lower()
-            ):
+            response_code = re.search(r"\[([A-Z0-9-]+)(?:\s|\])", msg, re.IGNORECASE)
+            # RFC 5530 defines EXPIRED as requiring a new passphrase. Other
+            # authentication failures may be temporary provider lockouts.
+            if response_code and response_code.group(1).upper() == "EXPIRED":
                 from mail_core.providers.http import PermanentAuthError
 
                 raise PermanentAuthError(f"IMAP authentication rejected permanently: {msg}") from exc

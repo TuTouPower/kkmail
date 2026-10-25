@@ -164,10 +164,15 @@ def test_create_account_app_enqueues_initial_sync():
         assert job.status in ("pending", "claimed", "done")
 
 
-def test_imap_connect_netease_login_error_raises_permanent_auth_error():
-    """AC-003: NetEase 126/163 Login error or password error must raise PermanentAuthError."""
-    from mail_core.providers.http import PermanentAuthError
-
+@pytest.mark.parametrize(
+    "response",
+    [
+        "LOGIN Login error or password error",
+        "[AUTHENTICATIONFAILED] too many login attempts",
+        "NO Basic authentication is disabled",
+    ],
+)
+def test_imap_connect_leaves_unclassified_login_errors_retryable(response):
     provider = ImapProvider(
         host="imap.126.com",
         port=993,
@@ -179,7 +184,30 @@ def test_imap_connect_netease_login_error_raises_permanent_auth_error():
     mock_client = MagicMock(spec=imaplib.IMAP4_SSL)
     mock_client.sock = Mock()
     mock_client.sock.getpeername.return_value = ("8.8.8.8", 993)
-    mock_client.login.side_effect = imaplib.IMAP4.error("LOGIN Login error or password error")
+    mock_client.login.side_effect = imaplib.IMAP4.error(response)
+
+    with patch("imaplib.IMAP4_SSL", return_value=mock_client):
+        with pytest.raises(imaplib.IMAP4.error) as exc_info:
+            provider._connect()
+
+    assert str(exc_info.value) == response
+
+
+def test_imap_connect_expired_response_code_raises_permanent_auth_error():
+    from mail_core.providers.http import PermanentAuthError
+
+    provider = ImapProvider(
+        host="imap.example.com",
+        port=993,
+        username="user@example.com",
+        password="badpassword",
+        use_ssl=True,
+    )
+
+    mock_client = MagicMock(spec=imaplib.IMAP4_SSL)
+    mock_client.sock = Mock()
+    mock_client.sock.getpeername.return_value = ("8.8.8.8", 993)
+    mock_client.login.side_effect = imaplib.IMAP4.error("[EXPIRED] passphrase is no longer valid")
 
     with patch("imaplib.IMAP4_SSL", return_value=mock_client):
         with pytest.raises(PermanentAuthError, match="IMAP authentication rejected permanently"):
