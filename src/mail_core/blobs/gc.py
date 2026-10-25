@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from mail_core.blobs.archive import blob_root
 from mail_core.blobs.quota import acquire_blob_digest_lock, digest_to_lock_id
+from mail_core.blobs.store import BlobStore
 from mail_core.mail.storage.models import Attachment, MessageBlob, MessageBlobLink
 
 log = logging.getLogger("mail_core.blobs.gc")
@@ -132,6 +133,7 @@ def unlink_gc_paths(
     paths: tuple[Path, ...] | list[Path],
     *,
     session: Session | None = None,
+    root: Path | None = None,
 ) -> int:
     """Phase 2: remove files after DB commit. Returns unlink count.
 
@@ -139,6 +141,35 @@ def unlink_gc_paths(
     races where a concurrent archive re-referenced the same digest (V2-21 / R12).
     Coordinates via digest advisory lock to serialize with concurrent archive publishing.
     """
+    root = Path(root or blob_root()).resolve()
+    if not root.is_dir():
+        return 0
+    try:
+        store = BlobStore(root)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("gc unlink path validation unavailable: %s (skipping)", exc)
+        return 0
+
+    validated_paths: list[tuple[Path, str]] = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        if not path.is_file() or path.is_symlink():
+            continue
+        digest = path.stem.lower()
+        try:
+            expected = store.path_for(digest)
+            candidate = path.resolve()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("gc unlink rejected non-canonical path %s: %s", path, exc)
+            continue
+        if candidate != expected:
+            log.warning("gc unlink rejected path outside canonical blob layout: %s", path)
+            continue
+        validated_paths.append((path, digest))
+
+    if not validated_paths:
+        return 0
+
     n = 0
     own_session = None
     if session is None:
@@ -152,32 +183,16 @@ def unlink_gc_paths(
         check_session = session
 
     try:
-        for path in paths:
+        for path, digest in validated_paths:
             try:
-                if not path.is_file():
+                if check_session is None:
+                    log.warning("gc unlink safety check has no db session for %s; skipping", path)
                     continue
-                digest = path.stem.lower()
-                if len(digest) == 64:
-                    if check_session is None:
-                        log.warning("gc unlink safety check has no db session for %s; skipping", path)
-                        continue
-                    try:
-                        if own_session is not None:
-                            with own_session.begin():
-                                acquire_blob_digest_lock(own_session, digest)
-                                live_refs = own_session.scalar(
-                                    select(func.count())
-                                    .select_from(MessageBlob)
-                                    .where(MessageBlob.content_sha256 == digest)
-                                ) or 0
-                                if int(live_refs) > 0:
-                                    log.info("gc unlink skipped newly referenced blob: %s", path)
-                                    continue
-                                path.unlink(missing_ok=True)
-                                n += 1
-                        else:
-                            acquire_blob_digest_lock(check_session, digest)
-                            live_refs = check_session.scalar(
+                try:
+                    if own_session is not None:
+                        with own_session.begin():
+                            acquire_blob_digest_lock(own_session, digest)
+                            live_refs = own_session.scalar(
                                 select(func.count())
                                 .select_from(MessageBlob)
                                 .where(MessageBlob.content_sha256 == digest)
@@ -187,12 +202,21 @@ def unlink_gc_paths(
                                 continue
                             path.unlink(missing_ok=True)
                             n += 1
-                    except Exception as exc:
-                        log.warning("gc unlink safety check query error for %s: %s (skipping)", path, exc)
-                        continue
-                else:
-                    path.unlink(missing_ok=True)
-                    n += 1
+                    else:
+                        acquire_blob_digest_lock(check_session, digest)
+                        live_refs = check_session.scalar(
+                            select(func.count())
+                            .select_from(MessageBlob)
+                            .where(MessageBlob.content_sha256 == digest)
+                        ) or 0
+                        if int(live_refs) > 0:
+                            log.info("gc unlink skipped newly referenced blob: %s", path)
+                            continue
+                        path.unlink(missing_ok=True)
+                        n += 1
+                except Exception as exc:
+                    log.warning("gc unlink safety check query error for %s: %s (skipping)", path, exc)
+                    continue
             except OSError as exc:
                 log.warning("gc unlink failed %s: %s", path, exc)
     finally:

@@ -248,7 +248,7 @@ def test_a35_gc_digest_lock_and_race_prevention(tmp_path):
         session.commit()
 
     # unlink_gc_paths should inspect the DB under lock and skip unlinking since live_refs > 0
-    unlinked = unlink_gc_paths([blob_path])
+    unlinked = unlink_gc_paths([blob_path], root=tmp_path)
     assert unlinked == 0
     assert blob_path.is_file(), "Active blob file must NOT be deleted by GC!"
 
@@ -258,7 +258,7 @@ def test_a35_gc_digest_lock_and_race_prevention(tmp_path):
         session.commit()
 
     # Now unlink succeeds
-    unlinked2 = unlink_gc_paths([blob_path])
+    unlinked2 = unlink_gc_paths([blob_path], root=tmp_path)
     assert unlinked2 == 1
     assert not blob_path.exists(), "Unreferenced blob file should now be deleted."
 
@@ -337,7 +337,7 @@ def test_a26_mime_publish_holds_digest_lock_against_gc(tmp_path, monkeypatch):
 
         def gc_unlink():
             gc_started.set()
-            return unlink_gc_paths([blob_path])
+            return unlink_gc_paths([blob_path], root=tmp_path)
 
         gc_future = pool.submit(gc_unlink)
         assert gc_started.wait(5)

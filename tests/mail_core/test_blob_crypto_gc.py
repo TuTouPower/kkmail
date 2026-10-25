@@ -118,7 +118,7 @@ def test_delayed_gc_respects_cooloff(tmp_path, monkeypatch):
         assert r2.deleted == 1
         # Phase 2 unlink after commit
         from mail_core.blobs.gc import unlink_gc_paths
-        unlink_gc_paths(paths)
+        unlink_gc_paths(paths, root=tmp_path)
         assert not (tmp_path / rel).exists()
 
 
@@ -181,14 +181,46 @@ def test_unlink_gc_paths_fails_closed_on_db_exception(tmp_path):
     from mail_core.blobs.gc import unlink_gc_paths
 
     digest = "a" * 64
-    fake_file = tmp_path / f"{digest}.blob"
+    fake_file = BlobStore(tmp_path).path_for(digest)
+    fake_file.parent.mkdir(parents=True, exist_ok=True)
     fake_file.write_bytes(b"important data")
 
     broken_session = MagicMock()
     broken_session.scalar.side_effect = RuntimeError("DB connection dropped")
 
-    unlinked_count = unlink_gc_paths([fake_file], session=broken_session)
+    unlinked_count = unlink_gc_paths([fake_file], session=broken_session, root=tmp_path)
     assert unlinked_count == 0
     # The file must NOT have been unlinked!
     assert fake_file.is_file()
+
+
+def test_unlink_gc_paths_skips_non_digest_names_without_db_check(tmp_path):
+    from unittest.mock import MagicMock
+    from mail_core.blobs.gc import unlink_gc_paths
+
+    fake_file = tmp_path / "unexpected-name.blob"
+    fake_file.write_bytes(b"preserve")
+    session = MagicMock()
+
+    assert unlink_gc_paths([fake_file], session=session, root=tmp_path) == 0
+    assert fake_file.is_file()
+    session.scalar.assert_not_called()
+
+
+def test_unlink_gc_paths_rejects_valid_digest_outside_blob_root(tmp_path):
+    from unittest.mock import MagicMock
+    from mail_core.blobs.gc import unlink_gc_paths
+
+    digest = "b" * 64
+    root = tmp_path / "blob-root"
+    outside_root = tmp_path / "outside"
+    root.mkdir()
+    fake_file = BlobStore(outside_root).path_for(digest)
+    fake_file.parent.mkdir(parents=True, exist_ok=True)
+    fake_file.write_bytes(b"preserve")
+    session = MagicMock()
+
+    assert unlink_gc_paths([fake_file], session=session, root=root) == 0
+    assert fake_file.is_file()
+    session.scalar.assert_not_called()
 
