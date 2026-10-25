@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import hashlib
+import inspect
 import logging
 import os
 import threading
@@ -18,6 +19,22 @@ class CredentialStore(Protocol):
     def put_secret(self, credential_ref: str, secret: str) -> None: ...
 
     def delete_secret(self, credential_ref: str) -> None: ...
+
+
+def _may_accept_keyword(method: Any, keyword: str) -> bool:
+    try:
+        parameters = inspect.signature(method).parameters.values()
+    except (TypeError, ValueError):
+        # An unknown signature is not proof that omitting the session is safe.
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        or (
+            parameter.name == keyword
+            and parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        )
+        for parameter in parameters
+    )
 
 
 class ReadOnlyCredentialRef(ValueError):
@@ -217,6 +234,14 @@ class CompositeCredentialStore:
         self.env = env or EnvCredentialStore()
         self.keyring = keyring or KeyringCredentialStore()
         self.db = db or DbCredentialStore()
+        stores = {id(store): store for store in (self.env, self.keyring, self.db)}
+        self._session_keyword_support = {
+            store_id: {
+                operation: _may_accept_keyword(getattr(store, operation), "session")
+                for operation in ("put_secret", "delete_secret")
+            }
+            for store_id, store in stores.items()
+        }
 
     def _pick(self, credential_ref: str) -> CredentialStore:
         if credential_ref.startswith("env:"):
@@ -230,16 +255,16 @@ class CompositeCredentialStore:
 
     def put_secret(self, credential_ref: str, secret: str, *, session: Any = None) -> None:
         target = self._pick(credential_ref)
-        try:
+        if self._session_keyword_support[id(target)]["put_secret"]:
             target.put_secret(credential_ref, secret, session=session)
-        except TypeError:
+        else:
             target.put_secret(credential_ref, secret)
 
     def delete_secret(self, credential_ref: str, *, session: Any = None) -> None:
         target = self._pick(credential_ref)
-        try:
+        if self._session_keyword_support[id(target)]["delete_secret"]:
             target.delete_secret(credential_ref, session=session)
-        except TypeError:
+        else:
             target.delete_secret(credential_ref)
 
 
@@ -258,10 +283,14 @@ def save_json_secret(
     *,
     session: Any = None,
 ) -> None:
-    try:
-        store.put_secret(credential_ref, json.dumps(data), session=session)
-    except TypeError:
-        store.put_secret(credential_ref, json.dumps(data))
+    secret = json.dumps(data)
+    if session is not None and (
+        isinstance(store, CompositeCredentialStore)
+        or _may_accept_keyword(store.put_secret, "session")
+    ):
+        store.put_secret(credential_ref, secret, session=session)
+    else:
+        store.put_secret(credential_ref, secret)
 
 
 _default_store: CredentialStore | None = None
