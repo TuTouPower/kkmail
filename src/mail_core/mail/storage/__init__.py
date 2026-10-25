@@ -2,9 +2,13 @@
 
 from mail_core.mail.storage.models import (
     Account,
+    AccountGroup,
     AccountSyncLease,
+    AppSetting,
+    AuthCredential,
     Attachment,
     BlobQuotaReservation,
+    CredentialSecret,
     Folder,
     FolderStats,
     Message,
@@ -25,9 +29,13 @@ from mail_core.mail.storage.models import (
 
 __all__ = [
     "Account",
+    "AccountGroup",
     "AccountSyncLease",
+    "AppSetting",
+    "AuthCredential",
     "Attachment",
     "BlobQuotaReservation",
+    "CredentialSecret",
     "Folder",
     "FolderStats",
     "Message",
