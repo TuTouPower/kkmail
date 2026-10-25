@@ -55,11 +55,17 @@ def test_imap_connect_sends_id_command():
 
     assert client is mock_client
     mock_client.login.assert_called_once_with("user@example.com", "secretpassword")
-    # Verify ID command was issued
-    mock_client._simple_command.assert_called_once()
-    args, _ = mock_client._simple_command.call_args
-    assert args[0] == "ID"
-    assert "kkmail" in args[1]
+    # Use the public ID method when the Python runtime provides it; otherwise
+    # retain the legacy private-command fallback.
+    if callable(getattr(mock_client, "id", None)):
+        mock_client.id.assert_called_once_with(
+            {"name": "kkmail", "version": "3.0.20", "vendor": "kkmail"}
+        )
+    else:
+        mock_client._simple_command.assert_called_once()
+        args, _ = mock_client._simple_command.call_args
+        assert args[0] == "ID"
+        assert "kkmail" in args[1]
 
 
 def test_imap_connect_tolerates_missing_id_support():
@@ -76,7 +82,10 @@ def test_imap_connect_tolerates_missing_id_support():
     mock_client.sock = Mock()
     mock_client.sock.getpeername.return_value = ("8.8.8.8", 993)
     mock_client.login.return_value = ("OK", [b"LOGIN completed"])
-    mock_client._simple_command.side_effect = imaplib.IMAP4.error("BAD command unknown: ID")
+    if callable(getattr(mock_client, "id", None)):
+        mock_client.id.side_effect = imaplib.IMAP4.error("BAD command unknown: ID")
+    else:
+        mock_client._simple_command.side_effect = imaplib.IMAP4.error("BAD command unknown: ID")
 
     with patch("imaplib.IMAP4_SSL", return_value=mock_client):
         client = provider._connect()
@@ -84,6 +93,25 @@ def test_imap_connect_tolerates_missing_id_support():
     # Connection must succeed despite ID error
     assert client is mock_client
 
+
+
+def test_imap_id_helper_prefers_public_method_when_available():
+    from types import SimpleNamespace
+
+    from mail_core.providers.imap import _send_imap_id
+
+    public_method = Mock(return_value=("OK", [b"ID completed"]))
+    private_method = Mock()
+    client = SimpleNamespace(id=public_method, _simple_command=private_method)
+
+    _send_imap_id(client)
+
+    public_method.assert_called_once_with({"name": "kkmail", "version": "3.0.20", "vendor": "kkmail"})
+    private_method.assert_not_called()
+
+
+def test_imap_id_command_is_registered_at_module_import():
+    assert imaplib.Commands["ID"] == ("AUTH", "SELECTED")
 
 def test_imap_connect_rejects_private_peer_before_login(monkeypatch):
     monkeypatch.delenv("MAIL_CORE_ALLOW_PRIVATE_HOSTS", raising=False)

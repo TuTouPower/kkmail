@@ -13,6 +13,7 @@ import imaplib
 import logging
 import re
 import ssl
+import threading
 from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -34,6 +35,24 @@ from mail_core.providers.host_security import validate_imap_peer_address
 from mail_core.security.redact import safe_error
 
 log = logging.getLogger("mail_core.providers.imap")
+
+_IMAP_ID_FIELDS = {"name": "kkmail", "version": "3.0.20", "vendor": "kkmail"}
+_IMAP_ID_ARGUMENT = '("name" "kkmail" "version" "3.0.20" "vendor" "kkmail")'
+_IMAP_COMMANDS_LOCK = threading.Lock()
+with _IMAP_COMMANDS_LOCK:
+    imaplib.Commands.setdefault("ID", ("AUTH", "SELECTED"))
+
+
+def _send_imap_id(client: imaplib.IMAP4):
+    """Use public imaplib ID support when available, with a legacy fallback."""
+    public_method = getattr(client, "id", None)
+    if callable(public_method):
+        return public_method(dict(_IMAP_ID_FIELDS))
+    private_method = getattr(client, "_simple_command", None)
+    if callable(private_method):
+        return private_method("ID", _IMAP_ID_ARGUMENT)
+    return None
+
 
 _FOLDER_ROLE = {
     "INBOX": "inbox",
@@ -471,8 +490,7 @@ class ImapProvider:
             client.login(self.username, self.password)
             # RFC 2971: Client identification (required by NetEase 163/126 to prevent 'SELECT Unsafe Login')
             try:
-                imaplib.Commands.setdefault("ID", ("AUTH", "SELECTED"))
-                client._simple_command("ID", '("name" "kkmail" "version" "3.0.20" "vendor" "kkmail")')
+                _send_imap_id(client)
             except Exception:
                 pass
         except imaplib.IMAP4.error as exc:
