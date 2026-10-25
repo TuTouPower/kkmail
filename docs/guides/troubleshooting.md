@@ -47,7 +47,6 @@
         updated_at = NOW()
     WHERE id = 'default';
     ```
-3. 重启 mail-core 服务使新密码及内存缓存生效。
 
 ### 方法二：清空数据库凭据后重新引导
 
