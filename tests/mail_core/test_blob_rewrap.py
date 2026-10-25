@@ -4,11 +4,51 @@ from __future__ import annotations
 
 import base64
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import mail_core.blobs.rotate as rotate
 from mail_core.blobs.crypto import Keyring, load_keyring_from_env, unwrap, wrap
 from mail_core.blobs.rotate import RewrapResult, rewrap_all_blobs, rewrap_blob_file
 from mail_core.blobs.store import BlobStore
+
+
+def test_concurrent_rewrap_uses_distinct_temp_files(tmp_path, monkeypatch):
+    keyring = Keyring(keys={1: os.urandom(32), 2: os.urandom(32)}, active_version=2)
+    path = tmp_path / "blob.blob"
+    path.write_bytes(wrap(b"concurrent-rewrap", keyring=keyring, key_version=1))
+
+    both_waiting = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    call_count = 0
+    original_iter_wrap = rotate.iter_wrap
+
+    def synchronized_iter_wrap(chunks, *, keyring, key_version=None):
+        nonlocal call_count
+        with lock:
+            call_count += 1
+            if call_count == 2:
+                both_waiting.set()
+        if not release.wait(timeout=5):
+            raise TimeoutError("concurrent rewrap barrier timed out")
+        yield from original_iter_wrap(chunks, keyring=keyring, key_version=key_version)
+
+    monkeypatch.setattr(rotate, "iter_wrap", synchronized_iter_wrap)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(rewrap_blob_file, path, keyring=keyring)
+            for _ in range(2)
+        ]
+        try:
+            assert both_waiting.wait(timeout=5)
+            assert len(list(tmp_path.glob("*.rewrap*"))) == 2
+        finally:
+            release.set()
+        assert [future.result(timeout=5) for future in futures] == [(True, 2), (True, 2)]
+
+    assert unwrap(path.read_bytes(), keyring=keyring) == (b"concurrent-rewrap", 2)
+    assert not list(tmp_path.glob("*.rewrap*"))
 
 
 def test_rewrap_moves_to_new_key_version(tmp_path, monkeypatch):

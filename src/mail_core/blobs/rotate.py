@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,20 +122,22 @@ def rewrap_blob_file(
         old_ver = read_key_version(fh)
     if old_ver == target:
         return False, old_ver
-    tmp = path.with_suffix(path.suffix + ".rewrap")
+    tmp = path.with_name(f"{path.name}.rewrap-{uuid.uuid4().hex}")
+    created = False
     try:
-        with path.open("rb") as src, tmp.open("wb") as dst:
+        with path.open("rb") as src, tmp.open("xb") as dst:
+            created = True
             for piece in iter_wrap(iter_unwrap(src, keyring=keyring), keyring=keyring, key_version=target):
                 dst.write(piece)
             dst.flush()
             os.fsync(dst.fileno())
         tmp.replace(path)
-    except Exception:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+    finally:
+        if created:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
     return True, target
 
 

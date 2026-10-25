@@ -360,7 +360,7 @@ def test_rewrap_cleans_tmp_on_failure(tmp_path, monkeypatch):
     path.write_bytes(path.read_bytes()[:8])
     with pytest.raises(Exception):
         rewrap_blob_file(path, keyring=keyring)
-    assert not list(tmp_path.rglob("*.rewrap"))
+    assert not list(tmp_path.rglob("*.rewrap*"))
 
 
 @pytest.mark.skipif(not os.environ.get("MAIL_CORE_DATABASE_URL"), reason="PG required")
