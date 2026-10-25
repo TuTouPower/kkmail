@@ -46,6 +46,60 @@ def backoff_seconds(attempts: int) -> int:
     return min(3600, 2**exp)
 
 
+def _record_claimed_followup(
+    job: WorkerJob,
+    *,
+    payload: dict,
+    priority: int,
+    run_after: datetime,
+) -> None:
+    p = dict(job.payload or {})
+    next_req = dict(p.get("_queue_next") or {})
+    merged_payload = dict(next_req.get("payload") or {})
+    for k, v in payload.items():
+        if not k.startswith("_"):
+            merged_payload[k] = v
+
+    current_pri = next_req.get("priority", priority)
+    merged_priority = min(current_pri, priority)
+
+    current_run_after_str = next_req.get("run_after")
+    if current_run_after_str:
+        try:
+            current_ra = datetime.fromisoformat(current_run_after_str)
+            merged_ra = min(current_ra, run_after)
+        except (ValueError, TypeError):
+            merged_ra = run_after
+    else:
+        merged_ra = run_after
+
+    p["_queue_next"] = {
+        "payload": merged_payload,
+        "priority": merged_priority,
+        "run_after": merged_ra.isoformat(),
+    }
+    p["_followup_needed"] = True
+    p["_followup_run_after"] = merged_ra.isoformat()
+    job.payload = p
+
+
+def _merge_into_pending_job(
+    job: WorkerJob,
+    *,
+    payload: dict,
+    priority: int,
+    run_after: datetime,
+) -> None:
+    p = dict(job.payload or {})
+    for k, v in payload.items():
+        if not k.startswith("_"):
+            p[k] = v
+    job.payload = p
+    job.priority = min(job.priority, priority)
+    if job.run_after is None or run_after < job.run_after:
+        job.run_after = run_after
+
+
 def enqueue_job(
     session: Session,
     *,
@@ -56,66 +110,70 @@ def enqueue_job(
     run_after: datetime | None = None,
     dedupe_key: str | None = None,
 ) -> WorkerJob:
-    """Enqueue a job. If ``dedupe_key`` matches a PENDING/CLAIMED row, return it."""
-    if dedupe_key:
-        existing = session.scalar(
-            select(WorkerJob)
-            .where(WorkerJob.dedupe_key == dedupe_key)
-            .where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
-            .limit(1)
-        )
-        if existing is not None:
-            if existing.status == JobStatus.CLAIMED.value:
-                p = dict(existing.payload or {})
-                p["_followup_needed"] = True
-                if run_after:
-                    p["_followup_run_after"] = run_after.isoformat()
-                existing.payload = p
-                session.flush()
-            return existing
-    job = WorkerJob(
-        job_type=job_type,
-        account_id=account_id,
-        payload=payload or {},
-        priority=priority,
-        run_after=run_after or datetime.now(timezone.utc),
-        status=JobStatus.PENDING.value,
-        dedupe_key=dedupe_key,
-    )
-    if dedupe_key:
-        try:
-            with session.begin_nested():
-                session.add(job)
-                session.flush()
-        except IntegrityError:
-            existing = session.scalar(
+    """Enqueue a job. If ``dedupe_key`` matches a PENDING/CLAIMED row, atomically merge and wake."""
+    now_utc = datetime.now(timezone.utc)
+    target_run_after = run_after or now_utc
+    req_payload = payload or {}
+
+    attempts = 0
+    while attempts < 10:
+        attempts += 1
+        if dedupe_key:
+            stmt = (
                 select(WorkerJob)
                 .where(WorkerJob.dedupe_key == dedupe_key)
                 .where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
+                .with_for_update()
                 .limit(1)
             )
+            existing = session.scalar(stmt)
             if existing is not None:
-                if existing.status == JobStatus.CLAIMED.value:
-                    p = dict(existing.payload or {})
-                    p["_followup_needed"] = True
-                    if run_after:
-                        p["_followup_run_after"] = run_after.isoformat()
-                    existing.payload = p
+                session.refresh(existing)
+                if existing.status == JobStatus.PENDING.value:
+                    _merge_into_pending_job(
+                        existing,
+                        payload=req_payload,
+                        priority=priority,
+                        run_after=target_run_after,
+                    )
                     session.flush()
-                return existing
-            latest = session.scalar(
-                select(WorkerJob)
-                .where(WorkerJob.dedupe_key == dedupe_key)
-                .order_by(WorkerJob.created_at.desc())
-                .limit(1)
-            )
-            if latest is not None:
-                return latest
-            raise
-    else:
-        session.add(job)
-        session.flush()
-    return job
+                    return existing
+                elif existing.status == JobStatus.CLAIMED.value:
+                    _record_claimed_followup(
+                        existing,
+                        payload=req_payload,
+                        priority=priority,
+                        run_after=target_run_after,
+                    )
+                    session.flush()
+                    return existing
+
+        job = WorkerJob(
+            job_type=job_type,
+            account_id=account_id,
+            payload=dict(req_payload),
+            priority=priority,
+            run_after=target_run_after,
+            status=JobStatus.PENDING.value,
+            dedupe_key=dedupe_key,
+        )
+        if dedupe_key:
+            try:
+                with session.begin_nested():
+                    session.add(job)
+                    session.flush()
+                return job
+            except IntegrityError as exc:
+                err_text = str(exc).lower()
+                if "dedupe_key" in err_text or "unique" in err_text:
+                    continue
+                raise
+        else:
+            session.add(job)
+            session.flush()
+            return job
+
+    raise RuntimeError(f"failed to enqueue job with dedupe_key {dedupe_key!r} after retries")
 
 
 def claim_jobs(
@@ -151,12 +209,102 @@ def claim_jobs(
     return rows
 
 
-def complete_job(session: Session, job: WorkerJob, *, worker_id: str | None = None) -> None:
+def complete_job(
+    session: Session,
+    job: WorkerJob,
+    *,
+    worker_id: str | None = None,
+    result: dict | None = None,
+) -> WorkerJob | None:
     _assert_job_owner(job, worker_id)
-    job.status = JobStatus.DONE.value
-    job.locked_by = None
-    job.locked_at = None
-    session.flush()
+
+    locked_job = session.scalar(
+        select(WorkerJob).where(WorkerJob.id == job.id).with_for_update()
+    )
+    if locked_job is None:
+        return None
+    session.refresh(locked_job)
+    _assert_job_owner(locked_job, worker_id)
+
+    payload = dict(locked_job.payload or {})
+    queue_next = payload.get("_queue_next")
+    has_followup_flag = payload.get("_followup_needed")
+
+    followup_was_scheduled = bool(result and result.get("followup_scheduled")) and not bool(
+        result and result.get("followup_coalesced")
+    )
+    handler_has_more = bool(result and result.get("has_more"))
+
+    needs_successor = not followup_was_scheduled and (
+        bool(queue_next) or bool(has_followup_flag) or handler_has_more
+    )
+
+    successor_job = None
+    if needs_successor:
+        successor_payload: dict = {}
+        for k, v in payload.items():
+            if not k.startswith("_"):
+                successor_payload[k] = v
+
+        successor_priority = locked_job.priority
+        successor_run_after = datetime.now(timezone.utc)
+
+        if queue_next and isinstance(queue_next, dict):
+            req_pl = queue_next.get("payload") or {}
+            for k, v in req_pl.items():
+                if not k.startswith("_"):
+                    successor_payload[k] = v
+            if "priority" in queue_next:
+                successor_priority = queue_next["priority"]
+            if "run_after" in queue_next:
+                try:
+                    successor_run_after = datetime.fromisoformat(queue_next["run_after"])
+                except (ValueError, TypeError):
+                    pass
+        elif payload.get("_followup_run_after"):
+            try:
+                successor_run_after = datetime.fromisoformat(payload["_followup_run_after"])
+            except (ValueError, TypeError):
+                pass
+
+        if result and result.get("next_run_after"):
+            successor_run_after = result["next_run_after"]
+
+        locked_job.status = JobStatus.DONE.value
+        locked_job.locked_by = None
+        locked_job.locked_at = None
+        clean_p = {
+            k: v
+            for k, v in payload.items()
+            if not k.startswith("_queue_") and not k.startswith("_followup_")
+        }
+        locked_job.payload = clean_p
+        session.flush()
+
+        successor_job = WorkerJob(
+            job_type=locked_job.job_type,
+            account_id=locked_job.account_id,
+            payload=successor_payload,
+            priority=successor_priority,
+            run_after=successor_run_after,
+            status=JobStatus.PENDING.value,
+            dedupe_key=locked_job.dedupe_key,
+        )
+        session.add(successor_job)
+        session.flush()
+    else:
+        locked_job.status = JobStatus.DONE.value
+        locked_job.locked_by = None
+        locked_job.locked_at = None
+        clean_p = {
+            k: v
+            for k, v in payload.items()
+            if not k.startswith("_queue_") and not k.startswith("_followup_")
+        }
+        locked_job.payload = clean_p
+        session.flush()
+
+    return successor_job
 
 
 def heartbeat_job_claim(

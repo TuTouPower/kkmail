@@ -517,52 +517,56 @@ def test_evaluate_result_retains_business_payload_for_followup():
     job.id = uuid.uuid4()
 
     session = MagicMock()
-    with (
-        patch("mail_core.worker.handlers.complete_job"),
-        patch("mail_core.sync.jobs.enqueue_job") as mock_enqueue,
-    ):
+    with patch("mail_core.worker.handlers.complete_job") as mock_complete:
         ok = _evaluate_result(session, job, {"status": "ok", "has_more": True}, worker_id="test-worker")
         assert ok is True
-        mock_enqueue.assert_called_once()
-        _, kwargs = mock_enqueue.call_args
-        assert kwargs["payload"] == {"folder_id": "f-12345", "account_id": "acc-999"}
-        assert kwargs["run_after"] == datetime(2026, 10, 23, 10, 0, tzinfo=timezone.utc)
-        assert "_followup_needed" not in kwargs["payload"]
-        assert "_followup_run_after" not in kwargs["payload"]
+        mock_complete.assert_called_once_with(
+            session,
+            job,
+            worker_id="test-worker",
+            result={"status": "ok", "has_more": True},
+        )
 
 
-def test_evaluate_result_logs_unparseable_followup_run_after():
-    """Malformed scheduling metadata is visible without logging its contents."""
+def test_complete_job_retains_business_payload_for_atomic_successor():
+    """D03: complete_job atomically creates successor with merged payload and clean metadata."""
     import uuid
     from mail_core.mail.domain.enums import JobType
     from mail_core.mail.storage.models import WorkerJob
-    from mail_core.worker.handlers import _evaluate_result
+    from mail_core.sync.jobs import complete_job
 
+    job_id = uuid.uuid4()
     job = WorkerJob(
         job_type=JobType.SYNC_FOLDER_DELTA.value,
         account_id=uuid.uuid4(),
         status="claimed",
-        payload={"_followup_needed": True, "_followup_run_after": "not-a-date"},
-        priority=5,
-        dedupe_key="dedupe-invalid-time",
+        payload={
+            "folder_id": "f-12345",
+            "account_id": "acc-999",
+            "_queue_next": {
+                "payload": {"folder_id": "f-12345", "account_id": "acc-999", "new_key": "val_new"},
+                "priority": 10,
+                "run_after": "2026-10-23T10:00:00+00:00",
+            },
+        },
+        priority=50,
+        dedupe_key="dedupe-123",
+        locked_by="test-worker",
     )
-    job.id = uuid.uuid4()
-    session = MagicMock()
+    job.id = job_id
 
-    with (
-        patch("mail_core.worker.handlers.complete_job"),
-        patch("mail_core.sync.jobs.enqueue_job") as mock_enqueue,
-        patch("mail_core.worker.handlers.log.warning") as warning,
-    ):
-        ok = _evaluate_result(session, job, {"status": "ok"}, worker_id="test-worker")
+    mock_session = MagicMock()
+    mock_session.scalar.return_value = job
 
-    assert ok is True
-    mock_enqueue.assert_called_once()
-    assert mock_enqueue.call_args.kwargs["run_after"] is None
-    warning.assert_called_once()
-    warning_message = " ".join(str(arg) for arg in warning.call_args.args)
-    assert "unparseable _followup_run_after" in warning_message
-    assert "not-a-date" not in warning_message
+    successor = complete_job(mock_session, job, worker_id="test-worker")
+    assert successor is not None
+    assert successor.status == "pending"
+    assert successor.payload == {"folder_id": "f-12345", "account_id": "acc-999", "new_key": "val_new"}
+    assert successor.priority == 10
+    assert successor.run_after == datetime(2026, 10, 23, 10, 0, tzinfo=timezone.utc)
+    assert "_queue_next" not in successor.payload
+    assert "_queue_next" not in job.payload
+    assert job.status == "done"
 
 
 def test_worker_heartbeat_loop_runs_independently_and_stops():
