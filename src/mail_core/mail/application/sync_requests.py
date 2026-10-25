@@ -24,7 +24,34 @@ from mail_core.mail.storage.models import (
     SyncRequestTarget,
     WorkerJob,
 )
+from mail_core.sync.execution import bind_target, binding_generation_for
 from mail_core.sync.jobs import enqueue_job
+
+
+def _inflight_full_root_generation(session: Session, account_id: uuid.UUID) -> uuid.UUID | None:
+    """Root scan generation of an in-flight full scan for this account, if any."""
+    job = session.scalar(
+        select(WorkerJob)
+        .where(WorkerJob.dedupe_key == f"sync:{account_id}")
+        .where(WorkerJob.status.in_(["pending", "claimed"]))
+        .limit(1)
+    )
+    if job is None:
+        return None
+    payload = job.payload or {}
+    if not payload.get("full"):
+        # A claimed job may carry the full request only in its successor.
+        queue_next = payload.get("_queue_next") or {}
+        payload = queue_next.get("payload") or {}
+        if not payload.get("full"):
+            return None
+    raw = payload.get("scan_generation")
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(str(raw))
+    except (ValueError, TypeError):
+        return None
 
 
 class SyncTargetErrorOut(BaseModel):
@@ -234,7 +261,6 @@ def create_sync_request(
             session.add(req)
             session.flush()
 
-            generation = uuid.uuid4()
             for cand in candidates:
                 target = SyncRequestTarget(
                     id=uuid.uuid4(),
@@ -242,14 +268,18 @@ def create_sync_request(
                     account_id=cand.account_id,
                     folder_id=cand.folder_id,
                     target_key=cand.target_key,
-                    requested_generation=generation,
+                    requested_generation=uuid.uuid4(),
                     state="queued",
                     created_at=now,
                 )
                 session.add(target)
                 session.flush()
 
-                # Enqueue corresponding worker job
+                # Enqueue the worker job and bind this target to the actual
+                # execution in the same transaction (design §5.2): a pending
+                # deduplicated job is observed under its own generation; a
+                # CLAIMED job's observer binds the pre-allocated successor
+                # generation, never the running execution.
                 if mode == "delta":
                     if cand.folder_id is not None:
                         job = enqueue_job(
@@ -260,6 +290,7 @@ def create_sync_request(
                             priority=20,
                             dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
                         )
+                        phase = "delta"
                     else:
                         job = enqueue_job(
                             session,
@@ -269,16 +300,50 @@ def create_sync_request(
                             priority=20,
                             dedupe_key=f"sync:{cand.account_id}",
                         )
+                        phase = "folder_discovery"
+                    generation, bound_job = binding_generation_for(session, job)
+                    bind_target(
+                        session,
+                        target=target,
+                        execution_generation=generation,
+                        job=bound_job,
+                        phase=phase,
+                        folder_id=cand.folder_id,
+                        status="queued",
+                    )
+                    # For delta the bound execution is the logical root.
+                    target.requested_generation = generation
                 else:
+                    # Full scan: reuse the in-flight scan's root generation
+                    # when one is already running for this account, so the
+                    # new request observes the same scan instead of forcing
+                    # a second cursor reset (design §5.2/§5.3).
+                    root_generation = _inflight_full_root_generation(session, cand.account_id)
+                    if root_generation is None:
+                        root_generation = uuid.uuid4()
                     job = enqueue_job(
                         session,
                         job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                         account_id=cand.account_id,
-                        payload={"request_id": str(request_id), "full": True},
+                        payload={
+                            "request_id": str(request_id),
+                            "full": True,
+                            "scan_generation": str(root_generation),
+                        },
                         priority=50,
                         dedupe_key=f"sync:{cand.account_id}",
                     )
-                target.current_job_id = job.id
+                    generation, bound_job = binding_generation_for(session, job)
+                    bind_target(
+                        session,
+                        target=target,
+                        execution_generation=generation,
+                        job=bound_job,
+                        phase="folder_discovery",
+                        folder_id=cand.folder_id,
+                        status="queued",
+                    )
+                    target.requested_generation = root_generation
 
             session.flush()
     except IntegrityError:
@@ -313,15 +378,11 @@ def get_sync_request_report(session: Session, request_id: uuid.UUID) -> SyncRequ
     failed = sum(1 for t in targets if t.state == "failed")
     total = len(targets)
 
-    # Re-evaluate overall state if all targets finished
+    # Read-only: request state/finished_at are persisted by the settlement
+    # path (mail_core.sync.execution.refresh_requests) in the write
+    # transaction; GET never mutates them (design §5.2).
     current_state = req.state
-    if total > 0 and (completed + failed == total):
-        current_state = "failed" if failed > 0 else "complete"
-        if req.state != current_state:
-            req.state = current_state
-            req.finished_at = req.finished_at or datetime.now(timezone.utc)
-            session.flush()
-    elif total == 0:
+    if total == 0:
         current_state = "complete"
 
     errors = [

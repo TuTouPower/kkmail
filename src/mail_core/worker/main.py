@@ -82,6 +82,11 @@ def _reclaim_once() -> int:
             pruned_jobs = prune_completed_jobs(session, older_than=timedelta(days=7), limit=1000)
             if pruned_jobs:
                 log.info("pruned %s completed/failed worker job(s)", pruned_jobs)
+            from mail_core.sync.execution import converge_orphaned_bindings
+
+            converged = converge_orphaned_bindings(session, limit=200)
+            if converged:
+                log.info("converged %s orphaned sync-request binding(s)", converged)
             pruned_reservations = prune_expired_quota_reservations(session)
             if pruned_reservations:
                 log.info("pruned %s expired blob quota reservation(s)", pruned_reservations)

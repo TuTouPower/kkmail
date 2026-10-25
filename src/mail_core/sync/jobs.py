@@ -73,11 +73,16 @@ def _record_claimed_followup(
     else:
         merged_ra = run_after
 
-    p["_queue_next"] = {
+    queue_next_record: dict = {
         "payload": merged_payload,
         "priority": merged_priority,
         "run_after": merged_ra.isoformat(),
     }
+    # A successor generation pre-allocated for sync-request bindings (R06)
+    # must survive later claimed-job wakeups merging into _queue_next.
+    if next_req.get("execution_generation"):
+        queue_next_record["execution_generation"] = next_req["execution_generation"]
+    p["_queue_next"] = queue_next_record
     p["_followup_needed"] = True
     p["_followup_run_after"] = merged_ra.isoformat()
     job.payload = p
@@ -206,6 +211,11 @@ def claim_jobs(
         job.locked_at = now
         job.attempts = int(job.attempts) + 1
     session.flush()
+    if rows:
+        # Sync-request bindings observing these executions become running.
+        from mail_core.sync.execution import mark_bindings_running
+
+        mark_bindings_running(session, rows)
     return rows
 
 
@@ -270,6 +280,16 @@ def complete_job(
         if result and result.get("next_run_after"):
             successor_run_after = result["next_run_after"]
 
+        # Requests that bound this CLAIMED job's successor carry the
+        # generation pre-allocated in _queue_next (design §5.2); the
+        # successor must be created with exactly that generation.
+        successor_generation = None
+        if queue_next and isinstance(queue_next, dict) and queue_next.get("execution_generation"):
+            try:
+                successor_generation = uuid.UUID(str(queue_next["execution_generation"]))
+            except (ValueError, TypeError):
+                successor_generation = None
+
         locked_job.status = JobStatus.DONE.value
         locked_job.locked_by = None
         locked_job.locked_at = None
@@ -281,6 +301,9 @@ def complete_job(
         locked_job.payload = clean_p
         session.flush()
 
+        successor_kwargs: dict = {}
+        if successor_generation is not None:
+            successor_kwargs["execution_generation"] = successor_generation
         successor_job = WorkerJob(
             job_type=locked_job.job_type,
             account_id=locked_job.account_id,
@@ -289,6 +312,7 @@ def complete_job(
             run_after=successor_run_after,
             status=JobStatus.PENDING.value,
             dedupe_key=locked_job.dedupe_key,
+            **successor_kwargs,
         )
         session.add(successor_job)
         session.flush()
@@ -303,6 +327,19 @@ def complete_job(
         }
         locked_job.payload = clean_p
         session.flush()
+
+    # Settle sync-request bindings in this same transaction, before the
+    # current execution ends: open targets are carried onto the successor
+    # (except periodic poll successors), finished ones are aggregated into
+    # their requests (design §5.2). Lock order: this WorkerJob row is
+    # already locked above; settlement then takes generation → target →
+    # request locks.
+    from mail_core.sync.execution import refresh_requests, settle_job_bindings
+
+    request_ids = settle_job_bindings(
+        session, locked_job, outcome="complete", result=result, successor=successor_job
+    )
+    refresh_requests(session, request_ids)
 
     return successor_job
 
@@ -362,11 +399,30 @@ def fail_job(
         job.run_after = now + timedelta(seconds=delay)
         job.locked_by = None
         job.locked_at = None
+        session.flush()
+        # Retriable failure: bound targets stay open on the same generation.
+        from mail_core.sync.execution import refresh_requests, settle_job_bindings
+
+        refresh_requests(session, settle_job_bindings(session, job, outcome="retriable"))
+        return
     else:
         job.status = JobStatus.FAILED.value
         job.locked_by = None
         job.locked_at = None
     session.flush()
+    # Terminal failure: bound targets fail with a stable code + sanitized text.
+    from mail_core.sync.execution import refresh_requests, settle_job_bindings
+
+    refresh_requests(
+        session,
+        settle_job_bindings(
+            session,
+            job,
+            outcome="failed",
+            error_code="job_failed",
+            safe_error=job.last_error,
+        ),
+    )
 
 
 def reclaim_stale_claims(
@@ -389,6 +445,7 @@ def reclaim_stale_claims(
         .limit(max(1, int(limit)))
     )
     rows = list(session.scalars(stmt).all())
+    request_ids: set[uuid.UUID] = set()
     for job in rows:
         job.status = JobStatus.PENDING.value
         job.locked_by = None
@@ -398,6 +455,14 @@ def reclaim_stale_claims(
         if suffix not in prev:
             job.last_error = (prev + suffix)[:2000]
     session.flush()
+    if rows:
+        # Reclaim keeps the job's execution_generation; its bindings go back
+        # to queued rather than failing (design §5.1).
+        from mail_core.sync.execution import refresh_requests, reset_bindings_for_job
+
+        for job in rows:
+            request_ids |= reset_bindings_for_job(session, job)
+        refresh_requests(session, request_ids)
     return len(rows)
 
 

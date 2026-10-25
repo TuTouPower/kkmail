@@ -21,11 +21,20 @@ def test_delta_apply_counts_only_changed_upserts(monkeypatch):
     monkeypatch.setattr(delta, "commit_checkpoint", lambda *_args, **_kwargs: None)
 
     class Session:
+        # Package C test-contract adaptation: apply_delta_page legitimately
+        # queries shared folders via session.scalars(...).all(); the fake
+        # models "no shared folders" instead of lacking the method.
         def add(self, _value):
             pass
 
         def flush(self):
             pass
+
+        def scalars(self, *_args, **_kwargs):
+            return SimpleNamespace(all=lambda: [])
+
+        def scalar(self, *_args, **_kwargs):
+            return None
 
     metas = [
         RemoteMessageMeta(

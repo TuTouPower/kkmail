@@ -312,7 +312,17 @@ def sync_folder_delta(
             return {"status": "skipped", "reason": "folder_not_selectable"}
         cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
         if cp is None or not cp.full_scan_complete:
-            return {"status": "skipped", "reason": "baseline_incomplete"}
+            # Delta needs a completed baseline (design §5.3): bind the
+            # in-flight initialization scan when one exists; otherwise return
+            # an explicit baseline_required — a list-view delta must never
+            # implicitly start a heavy full scan.
+            from mail_core.sync.execution import find_active_job
+
+            init_job = find_active_job(session, f"metadata:{account_id}:{folder_id}")
+            scan_in_progress = cp is not None and cp.scan_generation is not None
+            if init_job is not None or scan_in_progress:
+                return {"status": "skipped", "reason": "baseline_pending", "await_initialization": True}
+            return {"status": "skipped", "reason": "baseline_required", "baseline_required": True}
         try:
             lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=lease_ttl)
         except LeaseBusy:

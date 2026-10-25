@@ -94,6 +94,7 @@ class OutboxEventType(StrEnum):
     MESSAGE_REMOVED = "message.removed"
     FOLDER_STATS_UPDATED = "folder.stats_updated"
     SYNC_PROGRESS = "sync.progress"
+    SYNC_REQUEST_UPDATED = "sync.request_updated"
     SYNC_COMPLETED = "sync.completed"
     SYNC_ERROR = "sync.error"
     ARCHIVE_PROGRESS = "archive.progress"

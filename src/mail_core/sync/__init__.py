@@ -21,6 +21,8 @@ _EXPORTS: dict[str, str] = {
     "assert_fencing": "mail_core.sync.leases",
     "claim_jobs": "mail_core.sync.jobs",
     "commit_checkpoint": "mail_core.sync.checkpoints",
+    "begin_scan_generation": "mail_core.sync.checkpoints",
+    "ScanGenerationMismatch": "mail_core.sync.checkpoints",
     "invalidate_checkpoint_for_rebuild": "mail_core.sync.checkpoints",
     "JobOwnershipError": "mail_core.sync.jobs",
     "complete_job": "mail_core.sync.jobs",

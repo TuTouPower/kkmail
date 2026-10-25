@@ -271,6 +271,9 @@ class SyncCheckpoint(Base):
     history_id: Mapped[Optional[str]] = mapped_column(String(128))
     delta_link: Mapped[Optional[str]] = mapped_column(Text)
     full_scan_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # Root generation of the full scan that owns the current cursor state;
+    # NULL until the first tracked full scan initializes this checkpoint.
+    scan_generation: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     # Last fencing token that successfully committed this checkpoint.
     fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -394,6 +397,9 @@ class WorkerJob(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    # Stable identity of one logical job execution; retries/reclaims of the
+    # same job row keep it, successors get a fresh one (design §5.1).
+    execution_generation: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True, default=_uuid)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
     account_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"))
     dedupe_key: Mapped[Optional[str]] = mapped_column(String(128))
@@ -466,17 +472,45 @@ class SyncRequestTarget(Base):
     __table_args__ = (
         UniqueConstraint("request_id", "target_key", name="uq_sync_targets_request_key"),
         Index("ix_sync_targets_account_state", "account_id", "state"),
-        Index("ix_sync_targets_job_id", "current_job_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sync_requests.id", ondelete="CASCADE"), nullable=False)
     account_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"))
     folder_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="SET NULL"))
-    current_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("worker_jobs.id", ondelete="SET NULL"))
     target_key: Mapped[str] = mapped_column(String(255), nullable=False)
     requested_generation: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'queued'"))
+    error_code: Mapped[Optional[str]] = mapped_column(String(64))
+    safe_error: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class SyncRequestTargetJob(Base):
+    """Relational binding between a sync-request target and one job execution.
+
+    One target may bind several executions (full-scan phases, continuations);
+    several targets may observe the same deduplicated execution. ``job_id``
+    is NULL while the bound execution is a pre-allocated successor that has
+    not been created yet, and is set NULL again if the job row is pruned —
+    the terminal result stays readable on this row (design §5.1).
+    """
+
+    __tablename__ = "sync_request_target_jobs"
+    __table_args__ = (
+        UniqueConstraint("target_id", "execution_generation", name="uq_sync_target_jobs_target_generation"),
+        Index("ix_sync_target_jobs_job", "job_id"),
+        Index("ix_sync_target_jobs_generation", "execution_generation"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sync_request_targets.id", ondelete="CASCADE"), nullable=False)
+    execution_generation: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    job_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("worker_jobs.id", ondelete="SET NULL"))
+    phase: Mapped[str] = mapped_column(String(64), nullable=False, server_default=text("'sync'"))
+    folder_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'queued'"))
     error_code: Mapped[Optional[str]] = mapped_column(String(64))
     safe_error: Mapped[Optional[str]] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

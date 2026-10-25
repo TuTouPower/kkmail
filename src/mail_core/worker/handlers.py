@@ -60,6 +60,15 @@ def _result_log_summary(result: dict[str, Any]) -> dict[str, str | int | float]:
     return summary
 
 
+def _uuid_or_none(value: Any) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
 def _validate_job_payload(job: WorkerJob) -> tuple[dict[str, Any], str | None]:
     if job.payload is None:
         payload: dict[str, Any] = {}
@@ -188,7 +197,14 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.engine import sync_account_folders
 
             session.commit()
-            result = sync_account_folders(account_id, worker_id=worker_id, store=get_credential_store())
+            result = sync_account_folders(
+                account_id,
+                worker_id=worker_id,
+                store=get_credential_store(),
+                full=bool(payload.get("full")),
+                scan_generation=_uuid_or_none(payload.get("scan_generation")),
+                request_id=_uuid_or_none(payload.get("request_id")),
+            )
             log.info("sync_account_folders %s", _result_log_summary(result))
             if result.get("status") in ("lease_busy", "provider_error"):
                 update_account_sync_status(
@@ -206,7 +222,15 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.engine import sync_folder_metadata
 
             session.commit()
-            result = sync_folder_metadata(account_id, folder_id, worker_id=worker_id, store=get_credential_store())
+            result = sync_folder_metadata(
+                account_id,
+                folder_id,
+                worker_id=worker_id,
+                store=get_credential_store(),
+                full=bool(payload.get("full")),
+                scan_generation=_uuid_or_none(payload.get("scan_generation")),
+                request_id=_uuid_or_none(payload.get("request_id")),
+            )
             log.info("sync_folder_metadata %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 

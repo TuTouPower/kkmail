@@ -190,6 +190,17 @@ def delete_account(session: Session, account_id: uuid.UUID) -> None:
     acc = session.get(Account, account_id)
     if acc is None:
         raise LookupError("account not found")
+    # Converge associated sync-request flows first, then delete the entity
+    # (design §5.2): open targets for this account fail explicitly instead of
+    # being orphaned by the FK SET NULL.
+    from mail_core.sync.execution import fail_open_targets
+
+    fail_open_targets(
+        session,
+        account_id=account_id,
+        error_code="account_deleted",
+        safe_error="Account was deleted before the sync completed",
+    )
     ref = acc.credential_ref
     session.delete(acc)
     session.flush()

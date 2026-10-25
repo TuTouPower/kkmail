@@ -19,9 +19,40 @@ from mail_core.providers.imap import ImapProvider
 from mail_core.sync.jobs import JobOwnershipError, complete_job, fail_job
 
 
+class _FakeScalars:
+    def all(self):
+        return []
+
+    def first(self):
+        return None
+
+
 class _FakeSession:
+    """Minimal Session double for job-settlement tests (Package C adaptation:
+    complete_job now re-reads the locked row via scalar(), refreshes it, and
+    probes for sync-request bindings via scalars()/execute(); the double
+    models an empty binding set, which is what these ownership tests cover).
+    """
+
+    scalar_result = None
+
     def flush(self):
         return None
+
+    def refresh(self, *_args, **_kwargs):
+        return None
+
+    def add(self, *_args, **_kwargs):
+        return None
+
+    def execute(self, *_args, **_kwargs):
+        return None
+
+    def scalar(self, *_args, **_kwargs):
+        return self.scalar_result
+
+    def scalars(self, *_args, **_kwargs):
+        return _FakeScalars()
 
 
 def test_gmail_raw_mime_pads_only_as_needed():
@@ -261,15 +292,28 @@ def test_imap_uidvalidity_change_discards_cached_uid_scan(monkeypatch):
 
 
 def test_complete_job_requires_owner():
+    # Package C test-contract adaptation: the job double now carries the
+    # fields a real WorkerJob row exposes to complete_job (payload,
+    # execution_generation, dedupe/priority/account), and the fake session
+    # returns the row for complete_job's locked re-read. Ownership
+    # assertions are unchanged.
     job = SimpleNamespace(
         id=uuid.uuid4(),
         status=JobStatus.CLAIMED.value,
         locked_by="w1",
         locked_at=datetime.now(timezone.utc),
+        payload={},
+        execution_generation=uuid.uuid4(),
+        dedupe_key=None,
+        priority=100,
+        account_id=None,
+        job_type="sync_folder_delta",
     )
+    fake = _FakeSession()
+    fake.scalar_result = job
     with pytest.raises(JobOwnershipError):
-        complete_job(_FakeSession(), job, worker_id="other")  # type: ignore[arg-type]
-    complete_job(_FakeSession(), job, worker_id="w1")  # type: ignore[arg-type]
+        complete_job(fake, job, worker_id="other")  # type: ignore[arg-type]
+    complete_job(fake, job, worker_id="w1")  # type: ignore[arg-type]
     assert job.status == JobStatus.DONE.value
     assert job.locked_by is None
 
