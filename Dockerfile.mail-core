@@ -10,8 +10,8 @@ FROM python:3.13-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
-COPY requirements-mail-core.txt .
-RUN pip install --no-cache-dir -r requirements-mail-core.txt
+COPY requirements-mail-core.txt requirements-mail-core.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements-mail-core.lock
 COPY src/mail_core ./src/mail_core
 COPY --from=frontend /fe/dist ./frontend/dist
 RUN useradd --system --uid 10001 --home-dir /app kkmail \

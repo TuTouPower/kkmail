@@ -181,6 +181,9 @@ jobs:
       - name: Verify live backend OpenAPI schema
         run: python scripts/export_openapi.py --check
 
+      - name: Verify dependency locks consistency
+        run: python scripts/check_dep_locks.py --check
+
       - name: Start Dedicated Test Services
         run: |
           printf "KKMAIL_TEST_PG_PASSWORD='%s'\n" "$(openssl rand -hex 32)" > .env.test
