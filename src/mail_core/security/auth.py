@@ -44,6 +44,23 @@ class AuthConfigError(RuntimeError):
     pass
 
 
+def _write_password_hash_file(path: Path, password_hash: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        else:
+            os.chmod(path, 0o600)
+        stream = os.fdopen(fd, "wb")
+        fd = -1
+        with stream as output:
+            output.write(password_hash)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 @dataclass(frozen=True, slots=True)
 class AuthPrincipal:
     via: Literal["session", "api_key"]
@@ -240,9 +257,7 @@ def get_login_password_hash() -> bytes:
         raise AuthConfigError("failed to persist bootstrap password hash to database")
     if path_raw:
         try:
-            path = Path(path_raw)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(_password_hash)
+            _write_password_hash_file(Path(path_raw), _password_hash)
         except Exception as exc:
             log.warning("could not write password hash path: %s", exc)
     return _password_hash
@@ -424,9 +439,7 @@ def change_login_password(*, current: str, new: str) -> None:
     path_raw = (os.environ.get("MAIL_CORE_PASSWORD_HASH_PATH") or "").strip()
     if path_raw:
         try:
-            path = Path(path_raw)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(hashed)
+            _write_password_hash_file(Path(path_raw), hashed)
         except Exception as exc:
             log.warning("could not write password hash to %s: %s", path_raw, exc)
 

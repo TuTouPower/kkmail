@@ -435,3 +435,24 @@ def test_get_session_epoch_does_not_create_a_missing_credential_row():
         reset_auth_caches()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+def test_password_hash_file_is_private_on_initial_and_update(tmp_path, monkeypatch):
+    from stat import S_IMODE
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "")
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "initial_password_1")
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", str(tmp_path / "login-password.bcrypt"))
+    monkeypatch.setenv("MAIL_CORE_DATA_DIR", "")
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD_HASH", raising=False)
+    reset_auth_caches()
+
+    try:
+        password_hash_path = tmp_path / "login-password.bcrypt"
+        get_login_password_hash()
+        assert S_IMODE(password_hash_path.stat().st_mode) == 0o600
+
+        password_hash_path.chmod(0o644)
+        change_login_password(current="initial_password_1", new="new_password_2026")
+        assert S_IMODE(password_hash_path.stat().st_mode) == 0o600
+    finally:
+        reset_auth_caches()
