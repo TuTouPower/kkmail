@@ -21,7 +21,12 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [email, setEmail] = useState(account?.email || '')
-  const [provider, setProvider] = useState<'imap' | 'gmail' | 'graph'>(account?.provider === 'gmail' || account?.provider === 'graph' ? account.provider : 'imap')
+  const initialProvider: 'imap' | 'gmail' | 'graph' = account?.provider === 'gmail'
+    ? 'gmail'
+    : account?.provider === 'graph'
+      ? 'graph'
+      : 'imap'
+  const [provider, setProvider] = useState(initialProvider)
   const [host, setHost] = useState(account?.imap_config?.imap_host || '')
   const [port, setPort] = useState(String(account?.imap_config?.imap_port || (account?.imap_config?.use_ssl === false ? 143 : 993)))
   const [ssl, setSsl] = useState(account?.imap_config?.use_ssl !== false)
