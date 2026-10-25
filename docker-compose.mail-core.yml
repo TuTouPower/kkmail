@@ -20,6 +20,7 @@ services:
     # Tested tag: postgres:16.15; pinned to its multi-platform index digest.
     image: postgres:16.15@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
     container_name: kkmail-mail-core-pg
+    restart: unless-stopped
     environment:
       POSTGRES_USER: kkmail
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
@@ -53,6 +54,7 @@ services:
       context: .
       dockerfile: Dockerfile.mail-core
     container_name: kkmail-mail-core-api
+    restart: unless-stopped
     environment:
       # POSTGRES_PASSWORD is embedded in this URL; use URL-safe hex/base64url characters.
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
