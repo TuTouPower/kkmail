@@ -563,3 +563,32 @@ def test_evaluate_result_logs_unparseable_followup_run_after():
     warning_message = " ".join(str(arg) for arg in warning.call_args.args)
     assert "unparseable _followup_run_after" in warning_message
     assert "not-a-date" not in warning_message
+
+
+def test_worker_heartbeat_loop_runs_independently_and_stops():
+    import time
+    from mail_core.worker.heartbeat import WorkerHeartbeatLoop
+
+    calls: list[int] = []
+    fake_session = MagicMock()
+
+    def fake_factory():
+        fake_session.__enter__ = MagicMock(return_value=fake_session)
+        fake_session.__exit__ = MagicMock(return_value=False)
+        return fake_session
+
+    with patch("mail_core.worker.heartbeat.record_heartbeat") as mock_record:
+        loop = WorkerHeartbeatLoop("test-worker-1", fake_factory, interval_s=0.05)
+        loop.set_active_jobs(3)
+        loop.start()
+
+        time.sleep(0.15)
+        loop.set_active_jobs(1)
+        time.sleep(0.1)
+        loop.stop(timeout=1.0)
+
+        assert mock_record.call_count >= 2
+        # Verify active jobs was reported
+        jobs_recorded = [call.kwargs.get("active_jobs") for call in mock_record.call_args_list]
+        assert 3 in jobs_recorded
+        assert loop._thread is None

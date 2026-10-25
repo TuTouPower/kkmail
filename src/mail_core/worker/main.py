@@ -284,51 +284,46 @@ def run(poll_interval_s: float | None = None) -> None:
     log.info("worker %s starting (poll=%ss, max_idle=%ss)", worker_id, interval, max_idle)
     sleep_s = interval
     last_reclaim_at: float | None = None
-    last_heartbeat_at: float | None = None
-    while not _stop:
-        now = time.monotonic()
-        if last_heartbeat_at is None or now - last_heartbeat_at >= heartbeat_interval:
-            last_heartbeat_at = now
-            try:
-                from mail_core.db.session import get_session_factory
-                from mail_core.worker.heartbeat import record_heartbeat
 
-                Session = get_session_factory()
-                with Session() as session:
-                    record_heartbeat(session, worker_id=worker_id)
-                    session.commit()
-            except Exception as exc:  # pragma: no cover
+    from mail_core.db.session import get_session_factory
+    from mail_core.worker.heartbeat import WorkerHeartbeatLoop
+
+    Session = get_session_factory()
+    heartbeat_loop = WorkerHeartbeatLoop(worker_id, Session, interval_s=heartbeat_interval)
+    heartbeat_loop.start()
+
+    try:
+        while not _stop:
+            now = time.monotonic()
+            if last_reclaim_at is None or now - last_reclaim_at >= RECLAIM_INTERVAL_S:
+                last_reclaim_at = now
+                try:
+                    _reclaim_once()
+                except Exception as exc:  # pragma: no cover
+                    from mail_core.security.redact import safe_error
+
+                    log.error("reclaim sweep failed: %s", safe_error(exc))
+
+            tick_result = TickResult(claimed=0, handled=0)
+            try:
+                tick_result = _tick(worker_id)
+                if tick_result.handled:
+                    log.info("handled %s job(s)", tick_result.handled)
+            except Exception as exc:
                 from mail_core.security.redact import safe_error
 
-                log.warning("worker heartbeat write failed: %s", safe_error(exc))
-
-        if last_reclaim_at is None or now - last_reclaim_at >= RECLAIM_INTERVAL_S:
-            last_reclaim_at = now
-            try:
-                _reclaim_once()
-            except Exception as exc:  # pragma: no cover
-                from mail_core.security.redact import safe_error
-
-                log.error("reclaim sweep failed: %s", safe_error(exc))
-
-        tick_result = TickResult(claimed=0, handled=0)
-        try:
-            tick_result = _tick(worker_id)
-            if tick_result.handled:
-                log.info("handled %s job(s)", tick_result.handled)
-        except Exception as exc:
-            from mail_core.security.redact import safe_error
-
-            log.error("tick failed: %s", safe_error(exc))
-        sleep_s = next_poll_delay(
-            tick_result.handled,
-            sleep_s,
-            base=interval,
-            max_idle=max_idle,
-            claimed=tick_result.claimed,
-        )
-        if sleep_s:
-            time.sleep(sleep_s)
+                log.error("tick failed: %s", safe_error(exc))
+            sleep_s = next_poll_delay(
+                tick_result.handled,
+                sleep_s,
+                base=interval,
+                max_idle=max_idle,
+                claimed=tick_result.claimed,
+            )
+            if sleep_s:
+                time.sleep(sleep_s)
+    finally:
+        heartbeat_loop.stop(timeout=5.0)
     log.info("worker loop stopped")
 
 
