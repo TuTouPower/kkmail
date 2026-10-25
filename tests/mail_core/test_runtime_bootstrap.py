@@ -138,3 +138,14 @@ def test_concurrent_first_bootstrap_keeps_initial_password_and_hash_paired(tmp_p
         for env in environments
     )
 
+
+def test_existing_initial_password_over_72_utf8_bytes_is_not_hashed(tmp_path):
+    from mail_core.security.auth import AuthConfigError
+
+    (tmp_path / INITIAL_PASSWORD_FILE).write_text("é" * 37, encoding="utf-8")
+    hash_path = tmp_path / "secrets" / "login-password.bcrypt"
+
+    with pytest.raises(AuthConfigError, match="72 bytes when encoded as UTF-8"):
+        bootstrap_data_dir(tmp_path, {})
+
+    assert not hash_path.exists()

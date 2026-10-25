@@ -44,6 +44,16 @@ class AuthConfigError(RuntimeError):
     pass
 
 
+_BCRYPT_MAX_PASSWORD_BYTES = 72
+
+
+def _bcrypt_password_bytes(password: str) -> bytes:
+    encoded = password.encode("utf-8")
+    if len(encoded) > _BCRYPT_MAX_PASSWORD_BYTES:
+        raise AuthConfigError("password must not exceed 72 bytes when encoded as UTF-8")
+    return encoded
+
+
 def _write_password_hash_file(path: Path, password_hash: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -252,7 +262,7 @@ def get_login_password_hash() -> bytes:
     if not plain:
         raise AuthConfigError("Set MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt) or MAIL_CORE_LOGIN_PASSWORD for mail-core login")
 
-    _password_hash = bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt())
+    _password_hash = bcrypt.hashpw(_bcrypt_password_bytes(plain), bcrypt.gensalt())
     if not _persist_db_password_hash(_password_hash.decode("utf-8")):
         raise AuthConfigError("failed to persist bootstrap password hash to database")
     if path_raw:
@@ -421,7 +431,7 @@ def change_login_password(*, current: str, new: str) -> None:
         raise AuthConfigError("current password incorrect")
     if len(new) < 8:
         raise AuthConfigError("new password must be at least 8 characters")
-    hashed = bcrypt.hashpw(new.encode("utf-8"), bcrypt.gensalt())
+    hashed = bcrypt.hashpw(_bcrypt_password_bytes(new), bcrypt.gensalt())
     hashed_str = hashed.decode("utf-8")
 
     has_db = bool((os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip())

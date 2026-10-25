@@ -456,3 +456,40 @@ def test_password_hash_file_is_private_on_initial_and_update(tmp_path, monkeypat
         assert S_IMODE(password_hash_path.stat().st_mode) == 0o600
     finally:
         reset_auth_caches()
+
+
+def test_new_password_limit_uses_utf8_byte_length_and_preserves_existing_hash(monkeypatch):
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "")
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "initial_password_1")
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
+    monkeypatch.setenv("MAIL_CORE_DATA_DIR", "")
+    reset_auth_caches()
+
+    try:
+        password_at_limit = "é" * 36
+        change_login_password(current="initial_password_1", new=password_at_limit)
+        stored_hash = get_login_password_hash()
+        assert verify_password(password_at_limit)
+
+        with pytest.raises(AuthConfigError, match="72 bytes when encoded as UTF-8"):
+            change_login_password(current=password_at_limit, new="é" * 37)
+
+        assert get_login_password_hash() == stored_hash
+        assert verify_password(password_at_limit)
+    finally:
+        reset_auth_caches()
+
+
+def test_initial_plaintext_password_rejects_more_than_72_utf8_bytes(monkeypatch):
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "")
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "é" * 37)
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
+    reset_auth_caches()
+
+    try:
+        with pytest.raises(AuthConfigError, match="72 bytes when encoded as UTF-8"):
+            get_login_password_hash()
+    finally:
+        reset_auth_caches()

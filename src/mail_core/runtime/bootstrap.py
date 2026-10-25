@@ -120,7 +120,9 @@ def bootstrap_data_dir(data_dir: str | os.PathLike[str], env: dict[str, str] | N
                 root / INITIAL_PASSWORD_FILE,
                 lambda: secrets.token_urlsafe(12),
             )
-            hashed = bcrypt.hashpw(initial.encode("utf-8"), bcrypt.gensalt())
+            from mail_core.security.auth import _bcrypt_password_bytes
+
+            hashed = bcrypt.hashpw(_bcrypt_password_bytes(initial), bcrypt.gensalt())
             try:
                 fd = os.open(hash_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             except FileExistsError:
