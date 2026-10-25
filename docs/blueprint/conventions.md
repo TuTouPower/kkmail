@@ -14,7 +14,7 @@
     - 显式固定浅色富文本邮件以独立纸张卡片承载并保留自身原色，无显式配色邮件自适应深色底与高对比度文字。
 3. **前端语义颜色与 Token 纪律**：
     - 前端组件与样式一律引用 `src/frontend/src/design-system/tokens.css` 声明的语义 CSS 变量；
-    - `npm test` 与 `scripts/check_css_tokens.mjs` 门禁静态扫描所有源码中的 `var(--...)` 引用，拦截未定义变量与脱离设计系统值。
+    - `npm test` 与 `src/frontend/scripts/check_css_tokens.mjs` 门禁静态扫描所有源码中的 `var(--...)` 引用，拦截未定义变量与脱离设计系统值。
 4. **HTTP 传输与状态机**：
     - 前端写操作一律走 `src/frontend/src/api/client.ts` 的 `apiRequest` / `postJson`；
     - 不安全请求自动带 `X-CSRF-Token`，缺失立即 Fail-Closed；
