@@ -33,7 +33,12 @@ from mail_core.backup.crypto import (
     load_backup_keyring,
 )
 from mail_core.blobs.archive import blob_root
-from mail_core.blobs.crypto import BlobCryptoError, load_keyring_from_env
+from mail_core.blobs.crypto import (
+    MAGIC as _BLOB_MAGIC,
+    BlobCryptoError,
+    iter_unwrap,
+    load_keyring_from_env,
+)
 from mail_core.db.session import database_url
 
 log = logging.getLogger("mail_core.backup")
@@ -323,7 +328,8 @@ def _validate_blob_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
     return validated
 
 
-def _validate_restore_destination(target_blobs_dir: str | Path) -> Path:
+def _resolve_restore_target(target_blobs_dir: str | Path) -> Path:
+    """Resolve a restore target blobs dir (traversal/symlink guards only)."""
     raw_path = Path(target_blobs_dir)
     if any(part in ("..", ".") for part in raw_path.parts):
         raise RuntimeError(f"path traversal detected in target blobs dir: {target_blobs_dir}")
@@ -332,9 +338,14 @@ def _validate_restore_destination(target_blobs_dir: str | Path) -> Path:
     resolved = raw_path.resolve()
     if resolved.is_symlink():
         raise RuntimeError(f"refusing resolved target blobs dir as symlink: {resolved}")
+    if resolved.exists() and not resolved.is_dir():
+        raise RuntimeError(f"target blobs destination is not a directory: {resolved}")
+    return resolved
+
+
+def _validate_restore_destination(target_blobs_dir: str | Path) -> Path:
+    resolved = _resolve_restore_target(target_blobs_dir)
     if resolved.exists():
-        if not resolved.is_dir():
-            raise RuntimeError(f"target blobs destination is not a directory: {resolved}")
         try:
             if any(resolved.iterdir()):
                 raise RuntimeError(f"refusing to restore into non-empty target blobs dir: {resolved}")
@@ -983,6 +994,714 @@ def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) ->
         finally:
             _safe_rmtree(staging_dir)
 
+# ---------------------------------------------------------------------------
+# Cross-volume-safe restore (R12, repair design section 8).
+#
+# Sequencing is "publish blobs fully, THEN commit the database":
+#   1. verify the backup's private snapshot, target DB identity, emptiness;
+#      take the restore operation's exclusive lock;
+#   2. stage blobs INSIDE the target blob root (same filesystem as the
+#      final files), validating every tar member before extracting;
+#   3. publish staging contents item-by-item into the target's standard
+#      paths (renames only ever inside the target root), then mark the
+#      operation log ``blobs_published`` (atomic write + fsync);
+#   4. ``pg_restore --single-transaction --exit-on-error`` — when the DB
+#      commits, every blob is already in place; there is no post-commit
+#      cross-volume publish step anymore;
+#   5. verify schema / business associations / blob decryption samples and
+#      only then mark the operation ``complete``.
+#
+# Preconditions (unchanged): the restore target is exclusive, the target
+# database and blob root must be empty, and the application and worker
+# must be stopped for the duration of the restore.
+#
+# The operation log records ONLY: operation_id, package digest, canonical
+# target paths, DB cluster/database identity, and stage. Never passwords
+# or keys.
+# ---------------------------------------------------------------------------
+
+_RESTORE_OPERATION_LOG_FILENAME = ".restore_operation.json"
+_RESTORE_STAGING_PREFIX = ".restore_staging_"
+_RESTORE_OPERATION_LOG_KEYS = (
+    "operation_id",
+    "package_digest",
+    "target_paths",
+    "database_identity",
+    "stage",
+)
+_RESTORE_REQUIRED_TABLES = frozenset(
+    {"accounts", "messages", "message_bodies", "message_blobs", "message_blob_links", "attachments"}
+)
+
+
+class RestoreCommitUncertainError(RuntimeError):
+    """pg_restore may or may not have committed (e.g. it timed out)."""
+
+
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as fh:
+        os.fsync(fh.fileno())
+
+
+def _restore_operation_log_path(target_blobs: Path) -> Path:
+    return target_blobs / _RESTORE_OPERATION_LOG_FILENAME
+
+
+def _restore_staging_dir(target_blobs: Path, operation_id: str) -> Path:
+    return target_blobs / f"{_RESTORE_STAGING_PREFIX}{operation_id}"
+
+
+def _validate_operation_id(operation_id: str) -> str:
+    if (
+        not operation_id
+        or len(operation_id) > 64
+        or any(not (c.isalnum() or c in "-_") for c in operation_id)
+    ):
+        raise RuntimeError(f"invalid restore operation_id: {operation_id!r}")
+    return operation_id
+
+
+def _operation_log_payload(
+    *,
+    operation_id: str,
+    package_digest: str,
+    target_blobs: Path,
+    target_database_url: str,
+    target_ident: DatabaseIdentity | None,
+    stage: str,
+) -> dict:
+    scheme, host, port, database_name = _restore_database_identity(target_database_url)
+    return {
+        "operation_id": operation_id,
+        "package_digest": package_digest,
+        "target_paths": {"blobs_dir": str(target_blobs)},
+        "database_identity": {
+            "scheme": scheme,
+            "host": host,
+            "port": port,
+            "database_name": database_name,
+            "system_identifier": target_ident.system_identifier if target_ident else None,
+            "database_oid": target_ident.database_oid if target_ident else None,
+        },
+        "stage": stage,
+    }
+
+
+def _write_restore_operation_log(target_blobs: Path, payload: dict, *, stage: str) -> dict:
+    """Atomically write the operation log (temp file + rename + fsync).
+
+    Temp file, log file and target live in the same directory, so the
+    rename can never cross a filesystem boundary.
+    """
+    data = {key: payload[key] for key in _RESTORE_OPERATION_LOG_KEYS}
+    data["stage"] = stage
+    tmp = target_blobs / f"{_RESTORE_OPERATION_LOG_FILENAME}.tmp-{uuid.uuid4().hex}"
+    with tmp.open("xb") as fh:
+        fh.write((json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        fh.flush()
+        os.fsync(fh.fileno())
+    _set_private_file(tmp)
+    tmp.replace(_restore_operation_log_path(target_blobs))
+    _fsync_dir(target_blobs)
+    return data
+
+
+def _read_restore_operation_log(target_blobs: Path) -> dict | None:
+    path = _restore_operation_log_path(target_blobs)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"restore operation log is corrupt: {path}: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("operation_id"), str):
+        raise RuntimeError(f"restore operation log is corrupt: {path}")
+    return data
+
+
+def _assert_operation_log_matches(
+    op_log: dict,
+    *,
+    operation_id: str,
+    target_blobs: Path,
+    target_database_url: str | None = None,
+    target_ident: DatabaseIdentity | None = None,
+) -> None:
+    """Ownership/identity verification shared by resume, verify and cleanup."""
+    if op_log.get("operation_id") != operation_id:
+        raise RuntimeError(
+            "restore operation id mismatch: target belongs to operation "
+            f"{op_log.get('operation_id')!r}, not {operation_id!r}"
+        )
+    logged_target = (op_log.get("target_paths") or {}).get("blobs_dir")
+    if logged_target != str(target_blobs):
+        raise RuntimeError(
+            "restore operation target path mismatch: log records "
+            f"{logged_target!r}, not {str(target_blobs)!r}"
+        )
+    if target_database_url is None:
+        return
+    scheme, host, port, database_name = _restore_database_identity(target_database_url)
+    identity = op_log.get("database_identity") or {}
+    nominal = {
+        "scheme": scheme,
+        "host": host,
+        "port": port,
+        "database_name": database_name,
+    }
+    for key, current in nominal.items():
+        if identity.get(key) is not None and identity.get(key) != current:
+            raise RuntimeError(
+                "restore operation database identity mismatch: "
+                f"{key} is {identity.get(key)!r} in the operation log, not {current!r}"
+            )
+    if target_ident is not None:
+        for key, current in (
+            ("system_identifier", target_ident.system_identifier),
+            ("database_oid", target_ident.database_oid),
+        ):
+            logged = identity.get(key)
+            if logged is not None and current is not None and logged != current:
+                raise RuntimeError(
+                    "restore operation database identity mismatch: "
+                    f"cluster {key} is {logged!r} in the operation log, not {current!r}"
+                )
+
+
+def _package_snapshot_digest(snapshot_dir: Path) -> str:
+    """Digest of the verified private package snapshot (names + file hashes)."""
+    h = hashlib.sha256()
+    for path in sorted(
+        (p for p in snapshot_dir.iterdir() if p.is_file()), key=lambda p: p.name
+    ):
+        h.update(path.name.encode("utf-8"))
+        h.update(b"\0")
+        h.update(_sha256_file(path).encode("ascii"))
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedRestorePackage:
+    manifest: dict
+    package_size: int
+    package_digest: str
+    dump_file: Path
+    blobs_tar: Path | None
+
+
+def _prepare_restore_package(
+    pkg_dir: Path,
+    work_dir: Path,
+    *,
+    keyring: dict[int, bytes] | None,
+    allow_stub: bool,
+    source_ident: DatabaseIdentity | None,
+    target_ident: DatabaseIdentity | None,
+    check_source_cluster: bool = True,
+) -> _PreparedRestorePackage:
+    """Snapshot + verify + decrypt a backup package inside ``work_dir``.
+
+    This only reads the package filesystem; no blob is staged or published
+    here, so nothing depends on the package and target sharing a volume.
+    """
+    errors: list[str] = []
+    snapshot_dir = work_dir / "package"
+    _make_private_dir(snapshot_dir)
+    _copy_restore_package_snapshot(pkg_dir, snapshot_dir)
+    pkg_size = sum(f.stat().st_size for f in snapshot_dir.glob("**/*") if f.is_file())
+    vr = verify_backup_package(snapshot_dir, allow_stub=allow_stub)
+    if not vr.ok:
+        raise RuntimeError(f"backup package verification failed: {vr.errors}")
+    package_digest = _package_snapshot_digest(snapshot_dir)
+
+    kkbak = snapshot_dir / "backup.kkbak"
+    if kkbak.is_file():
+        plain_tar = work_dir / "plain.tar"
+        keyring_to_use = keyring or load_backup_keyring()
+        decrypt_file(kkbak, plain_tar, keyring=keyring_to_use)
+        extract_dir = work_dir / "extracted"
+        _make_private_dir(extract_dir)
+        if not _extract_tar_file(plain_tar, extract_dir, errors):
+            raise RuntimeError(f"tar extraction failed: {errors}")
+    else:
+        # Plain package members come from the same private snapshot that was verified.
+        extract_dir = snapshot_dir
+
+    man_path = extract_dir / _MANIFEST_FILENAME
+    if not man_path.is_file():
+        raise RuntimeError(f"missing {_MANIFEST_FILENAME} in backup archive")
+    manifest = json.loads(man_path.read_text(encoding="utf-8"))
+
+    effective_source = source_ident
+    manifest_src_ident = manifest.get("source_database_identity")
+    if not check_source_cluster:
+        effective_source = None
+        manifest_src_ident = None
+    if effective_source is None and isinstance(manifest_src_ident, dict):
+        effective_source = DatabaseIdentity(
+            system_identifier=manifest_src_ident.get("system_identifier"),
+            database_oid=manifest_src_ident.get("database_oid"),
+            database_name=manifest_src_ident.get("database_name", ""),
+        )
+    if effective_source is not None and target_ident is not None:
+        if (
+            effective_source.system_identifier is not None
+            and target_ident.system_identifier is not None
+            and effective_source.system_identifier == target_ident.system_identifier
+            and (
+                (
+                    effective_source.database_oid is not None
+                    and effective_source.database_oid == target_ident.database_oid
+                )
+                or effective_source.database_name == target_ident.database_name
+            )
+        ):
+            raise RuntimeError("refusing to restore onto source database")
+
+    dump_meta = manifest.get("members", {}).get("postgres.dump", {})
+    if dump_meta.get("method", "custom") == _SQL_STUB_METHOD and not allow_stub:
+        raise RuntimeError("refusing to restore stub backup without allow_stub")
+
+    dump_file = extract_dir / "postgres.dump"
+    blobs_tar = extract_dir / "blobs.tar"
+    return _PreparedRestorePackage(
+        manifest=manifest,
+        package_size=pkg_size,
+        package_digest=package_digest,
+        dump_file=dump_file,
+        blobs_tar=blobs_tar if blobs_tar.is_file() else None,
+    )
+
+
+def _blob_tar_inventory(blobs_tar: Path) -> tuple[dict[str, str], list[str]]:
+    """Validate ALL tar members, then return {relpath: sha256} and dir relpaths."""
+    inventory: dict[str, str] = {}
+    dirs: list[str] = []
+    with tarfile.open(blobs_tar, "r") as t:
+        validated_members = _validate_blob_members(t)
+        for member in validated_members:
+            if member.isdir():
+                rel = (
+                    member.name[len("blobs/") :].strip("/")
+                    if member.name.startswith("blobs/")
+                    else ""
+                )
+                if rel:
+                    dirs.append(rel)
+                continue
+            rel_path = member.name[len("blobs/") :].strip("/")
+            f = t.extractfile(member)
+            if f is None:
+                raise RuntimeError(f"cannot read blobs.tar member: {member.name!r}")
+            h = hashlib.sha256()
+            with f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(chunk)
+            inventory[rel_path] = h.hexdigest()
+    return inventory, dirs
+
+
+def _extract_blobs_to_staging(
+    blobs_tar: Path, staging_blobs: Path
+) -> tuple[dict[str, str], list[str]]:
+    """Stream-extract blobs.tar into staging (inside the target blob root).
+
+    Every member is validated before the first file is written; each file
+    is written to a temp file in its destination directory, fsynced, then
+    renamed within that same directory.
+    """
+    inventory: dict[str, str] = {}
+    dirs: list[str] = []
+    with tarfile.open(blobs_tar, "r") as t:
+        validated_members = _validate_blob_members(t)
+        for member in validated_members:
+            if member.isdir():
+                rel = (
+                    member.name[len("blobs/") :].strip("/")
+                    if member.name.startswith("blobs/")
+                    else ""
+                )
+                if rel:
+                    dirs.append(rel)
+                    (staging_blobs / rel).mkdir(parents=True, exist_ok=True)
+                continue
+            rel_path = member.name[len("blobs/") :].strip("/")
+            dest_file = staging_blobs / rel_path
+            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            f = t.extractfile(member)
+            if f is None:
+                raise RuntimeError(f"cannot read blobs.tar member: {member.name!r}")
+            temp_file = dest_file.with_name(
+                f".{dest_file.name}.restore-{uuid.uuid4().hex}"
+            )
+            created = False
+            streamed = hashlib.sha256()
+            try:
+                with f, temp_file.open("xb") as out:
+                    created = True
+                    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                        streamed.update(chunk)
+                        out.write(chunk)
+                    out.flush()
+                    os.fsync(out.fileno())
+                temp_file.replace(dest_file)
+            finally:
+                if created:
+                    try:
+                        temp_file.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            # The bytes that landed on the target filesystem must be the
+            # bytes that were streamed out of the verified tar.
+            if _sha256_file(dest_file) != streamed.hexdigest():
+                raise RuntimeError(
+                    f"extracted blob checksum mismatch for {rel_path}: "
+                    "staged file does not match the blobs.tar member"
+                )
+            inventory[rel_path] = streamed.hexdigest()
+    return inventory, dirs
+
+
+def _publish_rename(src: Path, dst: Path, root: Path) -> None:
+    """Rename one staged file to its final path, inside ``root`` only."""
+    src_resolved = src.resolve()
+    dst_resolved = dst.resolve(strict=False)
+    if root not in src_resolved.parents:
+        raise RuntimeError(f"refusing publish rename from outside the target root: {src}")
+    if root not in dst_resolved.parents:
+        raise RuntimeError(f"refusing publish rename to outside the target root: {dst}")
+    src.replace(dst)
+
+
+def _publish_staged_blobs(
+    staging_blobs: Path,
+    target_blobs: Path,
+    inventory: dict[str, str],
+    dirs: list[str],
+) -> int:
+    """Publish staged files item-by-item into the target's standard paths.
+
+    A destination that already holds this operation's identical file
+    (partial publish from an earlier attempt of the same operation) is
+    kept; any other existing file is refused, never overwritten.
+    """
+    for rel_dir in dirs:
+        (target_blobs / rel_dir).mkdir(parents=True, exist_ok=True)
+    for rel_path in sorted(inventory):
+        expected = inventory[rel_path]
+        dest_file = target_blobs / rel_path
+        staged_file = staging_blobs / rel_path
+        if dest_file.is_file():
+            if _sha256_file(dest_file) != expected:
+                raise RuntimeError(
+                    f"refusing to overwrite existing blob with a different checksum: {rel_path}"
+                )
+            if staged_file.is_file():
+                staged_file.unlink()
+            continue
+        if dest_file.exists():
+            raise RuntimeError(f"refusing to overwrite existing blob path: {rel_path}")
+        if not staged_file.is_file():
+            raise RuntimeError(f"staged blob missing before publish: {rel_path}")
+        dest_file.parent.mkdir(parents=True, exist_ok=True)
+        _publish_rename(staged_file, dest_file, target_blobs)
+        _fsync_dir(dest_file.parent)
+    _safe_rmtree(staging_blobs)
+    _fsync_dir(target_blobs)
+    return len(inventory)
+
+
+def _target_blob_files(target_blobs: Path) -> dict[str, Path]:
+    """Regular files in the target root, excluding log and staging areas."""
+    found: dict[str, Path] = {}
+    if not target_blobs.is_dir():
+        return found
+    for path in target_blobs.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(target_blobs).as_posix()
+        first = rel.split("/", 1)[0]
+        if first == _RESTORE_OPERATION_LOG_FILENAME or first.startswith(
+            _RESTORE_OPERATION_LOG_FILENAME + ".tmp-"
+        ):
+            continue
+        if first.startswith(_RESTORE_STAGING_PREFIX):
+            continue
+        found[rel] = path
+    return found
+
+
+def _verify_published_blob_files(target_blobs: Path, inventory: dict[str, str]) -> None:
+    """Exact-set + checksum verification of published blobs against the package."""
+    actual = _target_blob_files(target_blobs)
+    if set(actual) != set(inventory):
+        missing = sorted(set(inventory) - set(actual))
+        unexpected = sorted(set(actual) - set(inventory))
+        raise RuntimeError(
+            "published blob file set mismatch with the backup package: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    for rel_path, path in actual.items():
+        if _sha256_file(path) != inventory[rel_path]:
+            raise RuntimeError(f"published blob checksum mismatch: {rel_path}")
+
+
+def _verify_published_blob_subset(target_blobs: Path, inventory: dict[str, str]) -> None:
+    """Every file already published must belong to, and match, the package."""
+    for rel_path, path in _target_blob_files(target_blobs).items():
+        if rel_path not in inventory:
+            raise RuntimeError(
+                f"unexpected file in restore target, not from this backup: {rel_path}"
+            )
+        if _sha256_file(path) != inventory[rel_path]:
+            raise RuntimeError(f"published blob checksum mismatch: {rel_path}")
+
+
+def _database_is_empty(target_database_url: str) -> bool | None:
+    """True if provably empty, False if provably non-empty, None if unknown."""
+    try:
+        _assert_target_database_is_empty(target_database_url)
+        return True
+    except RuntimeError as exc:
+        if "non-empty" in str(exc):
+            return False
+        return None
+
+
+def _verify_restored_state(
+    target_database_url: str,
+    target_blobs: Path,
+    inventory: dict[str, str],
+    *,
+    db_reachable: bool,
+) -> None:
+    """Post-commit verification: blobs on disk, then (when the DB is
+    reachable) schema, business associations and blob decryption samples.
+
+    Raises RuntimeError on any verified failure. When the target DB was
+    not reachable at restore start (offline drills), only the local blob
+    checks can run and the DB checks are skipped.
+    """
+    _verify_published_blob_files(target_blobs, inventory)
+    if not db_reachable:
+        return
+
+    dsn, password = _libpq_dsn_and_password(target_database_url)
+    import psycopg
+
+    conn_kwargs = {"autocommit": True, "connect_timeout": 5}
+    if password is not None:
+        conn_kwargs["password"] = password
+    storage_paths: list[str] = []
+    try:
+        with psycopg.connect(dsn, **conn_kwargs) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema NOT IN ('pg_catalog', 'information_schema')"
+                )
+                tables = {str(row[0]) for row in cur.fetchall()}
+                missing_tables = sorted(_RESTORE_REQUIRED_TABLES - tables)
+                if missing_tables:
+                    raise RuntimeError(
+                        "restored database schema verification failed: "
+                        f"missing tables {missing_tables}"
+                    )
+                orphan_queries = {
+                    "message_blob_links without message_blobs": (
+                        "SELECT count(*) FROM message_blob_links l "
+                        "LEFT JOIN message_blobs b ON b.id = l.blob_id WHERE b.id IS NULL"
+                    ),
+                    "attachments without message_blobs": (
+                        "SELECT count(*) FROM attachments a "
+                        "LEFT JOIN message_blobs b ON b.id = a.blob_id "
+                        "WHERE a.blob_id IS NOT NULL AND b.id IS NULL"
+                    ),
+                    "message_bodies without messages": (
+                        "SELECT count(*) FROM message_bodies mb "
+                        "LEFT JOIN messages m ON m.id = mb.message_id WHERE m.id IS NULL"
+                    ),
+                }
+                for label, query in orphan_queries.items():
+                    cur.execute(query)
+                    row = cur.fetchone()
+                    if row and row[0] > 0:
+                        raise RuntimeError(
+                            "restored database business association verification "
+                            f"failed: {row[0]} rows of {label}"
+                        )
+                cur.execute(
+                    "SELECT storage_path FROM message_blobs "
+                    "WHERE storage_path IS NOT NULL LIMIT 50"
+                )
+                storage_paths = [str(row[0]) for row in cur.fetchall()]
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"restored database verification failed: {exc}") from exc
+
+    samples: list[Path] = []
+    for storage_path in storage_paths:
+        path = target_blobs / storage_path
+        if not path.is_file():
+            raise RuntimeError(
+                f"restored blob referenced by the database is missing: {storage_path}"
+            )
+        with path.open("rb") as fh:
+            if fh.read(len(_BLOB_MAGIC)) == _BLOB_MAGIC and len(samples) < 3:
+                samples.append(path)
+    if samples:
+        try:
+            keyring = load_keyring_from_env()
+        except BlobCryptoError as exc:
+            raise RuntimeError(
+                f"blob decryption sample verification failed: {exc}"
+            ) from exc
+        for path in samples:
+            try:
+                with path.open("rb") as fh:
+                    plaintext = b"".join(iter_unwrap(fh, keyring=keyring))
+            except BlobCryptoError as exc:
+                raise RuntimeError(
+                    f"blob decryption sample verification failed for "
+                    f"{path.relative_to(target_blobs)}: {exc}"
+                ) from exc
+            stem = path.name.removesuffix(".blob")
+            if len(stem) == 64 and all(c in "0123456789abcdef" for c in stem):
+                if hashlib.sha256(plaintext).hexdigest() != stem:
+                    raise RuntimeError(
+                        "blob decryption sample verification failed: plaintext "
+                        f"digest mismatch for {path.relative_to(target_blobs)}"
+                    )
+
+
+def _run_pg_restore(dump_file: Path, target_database_url: str) -> None:
+    """Run the single-transaction restore. Definite failure -> RuntimeError;
+    an outcome that cannot be known (timeout) -> RestoreCommitUncertainError."""
+    if not dump_file.is_file():
+        raise RuntimeError("missing postgres.dump in backup archive")
+    dsn, password = _libpq_dsn_and_password(target_database_url)
+    pg_restore = shutil.which("pg_restore")
+    if not pg_restore:
+        raise RuntimeError("pg_restore executable not found on PATH")
+    env = os.environ.copy()
+    env.pop("PGPASSFILE", None)
+    env["PGCONNECT_TIMEOUT"] = os.environ.get("MAIL_CORE_PG_CONNECT_TIMEOUT", "10")
+    if password is not None:
+        env["PGPASSWORD"] = password
+    else:
+        env.pop("PGPASSWORD", None)
+    restore_timeout = float(os.environ.get("MAIL_CORE_PG_RESTORE_TIMEOUT", "300"))
+    cmd = [
+        pg_restore,
+        "--exit-on-error",
+        "--single-transaction",
+        "--no-owner",
+        "--no-privileges",
+        "--dbname",
+        dsn,
+        str(dump_file),
+    ]
+    try:
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            env=env,
+            timeout=restore_timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RestoreCommitUncertainError(
+            f"pg_restore timed out after {restore_timeout}s; its commit outcome is unknown"
+        ) from exc
+    if res.returncode != 0:
+        err_msg = (res.stderr or b"").decode("utf-8", errors="replace").strip()[:1000]
+        if not err_msg:
+            err_msg = "(no stderr output)"
+        log.warning("pg_restore returned code %d: %s", res.returncode, err_msg)
+        raise RuntimeError(f"pg_restore failed ({res.returncode}): {err_msg}")
+
+
+def _execute_db_step(
+    *,
+    target_blobs: Path,
+    log_payload: dict,
+    dump_file: Path,
+    target_database_url: str,
+    target_ident: DatabaseIdentity | None,
+    begun: datetime,
+    package_size: int,
+    blobs_restored: int,
+    inventory: dict[str, str],
+) -> RestoreResult:
+    """Steps 4-5: commit the DB (blobs are already published), verify, complete."""
+    operation_id = log_payload["operation_id"]
+    try:
+        _run_pg_restore(dump_file, target_database_url)
+    except RestoreCommitUncertainError as exc:
+        _write_restore_operation_log(target_blobs, log_payload, stage="needs_verification")
+        raise RuntimeError(
+            f"restore operation {operation_id} entered needs_verification: {exc}"
+        ) from exc
+    except RuntimeError:
+        _write_restore_operation_log(target_blobs, log_payload, stage="db_failed")
+        raise
+    try:
+        _verify_restored_state(
+            target_database_url,
+            target_blobs,
+            inventory,
+            db_reachable=target_ident is not None,
+        )
+    except Exception as exc:
+        _write_restore_operation_log(target_blobs, log_payload, stage="needs_verification")
+        raise RuntimeError(
+            f"restore operation {operation_id} entered needs_verification: "
+            f"post-restore verification did not complete: {exc}"
+        ) from exc
+    _write_restore_operation_log(target_blobs, log_payload, stage="complete")
+    duration = (datetime.now(timezone.utc) - begun).total_seconds()
+    return RestoreResult(
+        ok=True,
+        database_restored=True,
+        blobs_restored=blobs_restored,
+        duration_seconds=duration,
+        package_size_bytes=package_size,
+        errors=[],
+        operation_id=operation_id,
+        stage="complete",
+    )
+
+
+def _read_target_identity(target_database_url: str) -> DatabaseIdentity | None:
+    try:
+        return _read_database_identity(target_database_url)
+    except Exception:
+        return None
+
+
+def _resolve_package_dir(package_path: str | Path) -> Path:
+    pkg = Path(package_path).resolve()
+    if pkg.is_dir():
+        return pkg
+    if pkg.is_file():
+        return pkg.parent
+    raise FileNotFoundError(f"backup package not found: {pkg}")
+
+
 @dataclass(frozen=True, slots=True)
 class RestoreResult:
     ok: bool
@@ -991,6 +1710,8 @@ class RestoreResult:
     duration_seconds: float
     package_size_bytes: int
     errors: list[str]
+    operation_id: str = ""
+    stage: str = ""
 
 
 def restore_backup_package(
@@ -1001,43 +1722,42 @@ def restore_backup_package(
     keyring: dict[int, bytes] | None = None,
     allow_stub: bool = False,
     source_database_url: str,
+    operation_id: str | None = None,
 ) -> RestoreResult:
-    """Restore a backup package into a dedicated disposable target database and blob directory.
+    """Restore a backup package into an empty target database and blob root.
 
-    Verifies checksums and signatures before unpacking. Enforces destination safety guards.
+    Cross-volume-safe sequencing (repair design section 8): blobs are
+    staged inside the target blob root, published in full, and only then
+    is the database committed with ``pg_restore --single-transaction``.
+
+    Preconditions: the target is exclusive to this operation, the target
+    database and blob root are empty, and the application and worker are
+    stopped for the duration of the restore. A target that already
+    belongs to an earlier restore operation is never replayed, wiped or
+    overwritten here — use :func:`resume_restore_backup_package`,
+    :func:`verify_restore_operation` or :func:`cleanup_restore_operation`.
     """
     begun = datetime.now(timezone.utc)
-    pkg = Path(package_path).resolve()
-    if pkg.is_dir():
-        pkg_dir = pkg
-    elif pkg.is_file():
-        pkg_dir = pkg.parent
-    else:
-        raise FileNotFoundError(f"backup package not found: {pkg}")
+    pkg_dir = _resolve_package_dir(package_path)
 
     # Guard AC-004: Prevent restoring onto the same source database.
-    if _restore_database_identity(source_database_url) == _restore_database_identity(target_database_url):
+    if _restore_database_identity(source_database_url) == _restore_database_identity(
+        target_database_url
+    ):
         raise RuntimeError("refusing to restore onto source database")
 
-    target_ident: DatabaseIdentity | None = None
-    try:
-        target_ident = _read_database_identity(target_database_url)
-    except Exception:
-        pass
-
-    source_ident: DatabaseIdentity | None = None
-    try:
-        source_ident = _read_database_identity(source_database_url)
-    except Exception:
-        pass
-
+    target_ident = _read_target_identity(target_database_url)
+    source_ident = _read_target_identity(source_database_url)
     if source_ident is not None and target_ident is not None:
         if (
             source_ident.system_identifier is not None
             and target_ident.system_identifier is not None
             and source_ident.system_identifier == target_ident.system_identifier
             and (
-                (source_ident.database_oid is not None and source_ident.database_oid == target_ident.database_oid)
+                (
+                    source_ident.database_oid is not None
+                    and source_ident.database_oid == target_ident.database_oid
+                )
                 or source_ident.database_name == target_ident.database_name
             )
         ):
@@ -1047,170 +1767,438 @@ def restore_backup_package(
     if target_ident is not None:
         _assert_target_database_is_empty(target_database_url)
 
-    target_blobs = _validate_restore_destination(target_blobs_dir)
+    target_blobs = _resolve_restore_target(target_blobs_dir)
 
-    temp_parent = pkg_dir.parent
-    work_dir = temp_parent / f".restore_staging_{uuid.uuid4().hex}"
-    _make_private_dir(work_dir)
-    snapshot_dir = work_dir / "package"
-    staging_blobs = work_dir / "staging_blobs"
-    _make_private_dir(staging_blobs)
-    errors: list[str] = []
-    blobs_restored = 0
-    db_restored = False
-
-    try:
-        _copy_restore_package_snapshot(pkg_dir, snapshot_dir)
-        pkg_size = sum(f.stat().st_size for f in snapshot_dir.glob("**/*") if f.is_file())
-        vr = verify_backup_package(snapshot_dir, allow_stub=allow_stub)
-        if not vr.ok:
-            raise RuntimeError(f"backup package verification failed: {vr.errors}")
-
-        kkbak = snapshot_dir / "backup.kkbak"
-        # Decrypt if encrypted
-        if kkbak.is_file():
-            plain_tar = work_dir / "plain.tar.gz"
-            keyring_to_use = keyring or load_backup_keyring()
-            decrypt_file(kkbak, plain_tar, keyring=keyring_to_use)
-            extract_dir = work_dir / "extracted"
-            _make_private_dir(extract_dir)
-            if not _extract_tar_file(plain_tar, extract_dir, errors):
-                raise RuntimeError(f"tar extraction failed: {errors}")
-        else:
-            # Plain package members come from the same private snapshot that was verified.
-            extract_dir = snapshot_dir
-
-        man_path = extract_dir / _MANIFEST_FILENAME
-        if not man_path.is_file():
-            raise RuntimeError(f"missing {_MANIFEST_FILENAME} in backup archive")
-        manifest = json.loads(man_path.read_text(encoding="utf-8"))
-
-        manifest_src_ident = manifest.get("source_database_identity")
-        if source_ident is None and isinstance(manifest_src_ident, dict):
-            source_ident = DatabaseIdentity(
-                system_identifier=manifest_src_ident.get("system_identifier"),
-                database_oid=manifest_src_ident.get("database_oid"),
-                database_name=manifest_src_ident.get("database_name", ""),
+    # A target owned by an earlier operation is never auto-replayed or
+    # auto-deleted. A log stuck at blobs_published means the DB commit
+    # outcome is unknown, so the operation first enters needs_verification.
+    if target_blobs.is_dir():
+        existing_log = _read_restore_operation_log(target_blobs)
+        if existing_log is not None:
+            existing_stage = str(existing_log.get("stage") or "")
+            if existing_stage == "blobs_published":
+                _write_restore_operation_log(
+                    target_blobs, existing_log, stage="needs_verification"
+                )
+                existing_stage = "needs_verification"
+            raise RuntimeError(
+                "refusing fresh restore: target already belongs to restore "
+                f"operation {existing_log.get('operation_id')} (stage "
+                f"{existing_stage}); use resume, verification or cleanup "
+                "for that operation instead"
             )
 
-        if source_ident is not None and target_ident is not None:
-            if (
-                source_ident.system_identifier is not None
-                and target_ident.system_identifier is not None
-                and source_ident.system_identifier == target_ident.system_identifier
-                and (
-                    (source_ident.database_oid is not None and source_ident.database_oid == target_ident.database_oid)
-                    or source_ident.database_name == target_ident.database_name
+    target_blobs = _validate_restore_destination(target_blobs_dir)
+    op_id = _validate_operation_id(operation_id or uuid.uuid4().hex)
+
+    target_blobs.parent.mkdir(parents=True, exist_ok=True)
+    target_blobs.mkdir(parents=True, exist_ok=True)
+
+    # Exclusive restore target: one operation at a time per blob root.
+    with _backup_destination_lock(target_blobs):
+        if _read_restore_operation_log(target_blobs) is not None:
+            raise RuntimeError(
+                "refusing fresh restore: a restore operation log appeared "
+                "in the target while acquiring the exclusive lock"
+            )
+        work_dir = pkg_dir.parent / f".restore_work_{uuid.uuid4().hex}"
+        _make_private_dir(work_dir)
+        try:
+            prepared = _prepare_restore_package(
+                pkg_dir,
+                work_dir,
+                keyring=keyring,
+                allow_stub=allow_stub,
+                source_ident=source_ident,
+                target_ident=target_ident,
+            )
+            log_payload = _operation_log_payload(
+                operation_id=op_id,
+                package_digest=prepared.package_digest,
+                target_blobs=target_blobs,
+                target_database_url=target_database_url,
+                target_ident=target_ident,
+                stage="staging",
+            )
+            _write_restore_operation_log(target_blobs, log_payload, stage="staging")
+
+            # Stage blobs INSIDE the target root (same filesystem as the
+            # final files), then publish them fully — before any DB work.
+            inventory: dict[str, str] = {}
+            if prepared.blobs_tar is not None:
+                staging_blobs = _restore_staging_dir(target_blobs, op_id)
+                _make_private_dir(staging_blobs)
+                inventory, dirs = _extract_blobs_to_staging(
+                    prepared.blobs_tar, staging_blobs
                 )
-            ):
-                raise RuntimeError("refusing to restore onto source database")
+                _publish_staged_blobs(staging_blobs, target_blobs, inventory, dirs)
+            _write_restore_operation_log(
+                target_blobs, log_payload, stage="blobs_published"
+            )
 
-        # Reject stubs unless allow_stub explicitly granted
-        dump_meta = manifest.get("members", {}).get("postgres.dump", {})
-        dump_fmt = dump_meta.get("method", "custom")
-        if dump_fmt == _SQL_STUB_METHOD and not allow_stub:
-            raise RuntimeError("refusing to restore stub backup without allow_stub")
+            return _execute_db_step(
+                target_blobs=target_blobs,
+                log_payload=log_payload,
+                dump_file=prepared.dump_file,
+                target_database_url=target_database_url,
+                target_ident=target_ident,
+                begun=begun,
+                package_size=prepared.package_size,
+                blobs_restored=len(inventory),
+                inventory=inventory,
+            )
+        finally:
+            _safe_rmtree(work_dir)
 
-        # 1. Restore blobs into isolated staging first
-        blobs_tar = extract_dir / "blobs.tar"
-        if blobs_tar.is_file():
-            with tarfile.open(blobs_tar, "r") as t:
-                validated_members = _validate_blob_members(t)
-                for member in validated_members:
-                    if member.isdir():
-                        rel = member.name[len("blobs/") :].strip("/") if member.name.startswith("blobs/") else ""
-                        if rel:
-                            d = staging_blobs / rel
-                            d.mkdir(parents=True, exist_ok=True)
-                        continue
-                    rel_path = member.name[len("blobs/") :].strip("/")
-                    dest_file = staging_blobs / rel_path
-                    dest_file.parent.mkdir(parents=True, exist_ok=True)
-                    f = t.extractfile(member)
-                    if f:
-                        temp_file = dest_file.with_name(f".{dest_file.name}.restore-{uuid.uuid4().hex}")
-                        created = False
-                        try:
-                            with f, temp_file.open("xb") as out:
-                                created = True
-                                shutil.copyfileobj(f, out, length=1024 * 1024)
-                                out.flush()
-                                os.fsync(out.fileno())
-                            temp_file.replace(dest_file)
-                        finally:
-                            if created:
-                                try:
-                                    temp_file.unlink(missing_ok=True)
-                                except OSError:
-                                    pass
-                        blobs_restored += 1
 
-        # 2. Restore PostgreSQL dump
-        dump_file = extract_dir / "postgres.dump"
-        if not dump_file.is_file():
-            raise RuntimeError("missing postgres.dump in backup archive")
+def resume_restore_backup_package(
+    package_path: str | Path,
+    *,
+    operation_id: str,
+    target_database_url: str,
+    target_blobs_dir: str | Path,
+    keyring: dict[int, bytes] | None = None,
+    allow_stub: bool = False,
+    source_database_url: str,
+) -> RestoreResult:
+    """Resume an earlier restore operation without overwriting anything.
 
-        dsn, password = _libpq_dsn_and_password(target_database_url)
-        pg_restore = shutil.which("pg_restore")
-        if not pg_restore:
-            raise RuntimeError("pg_restore executable not found on PATH")
+    The operation's published files are reused ONLY when the operation
+    id, target paths, database identity, package digest and every
+    published file checksum match the operation log and the package.
+    A ``needs_verification`` operation is never auto-replayed.
+    """
+    begun = datetime.now(timezone.utc)
+    pkg_dir = _resolve_package_dir(package_path)
+    if _restore_database_identity(source_database_url) == _restore_database_identity(
+        target_database_url
+    ):
+        raise RuntimeError("refusing to restore onto source database")
+    op_id = _validate_operation_id(operation_id)
 
-        env = os.environ.copy()
-        env.pop("PGPASSFILE", None)
-        env["PGCONNECT_TIMEOUT"] = os.environ.get("MAIL_CORE_PG_CONNECT_TIMEOUT", "10")
-        if password is not None:
-            env["PGPASSWORD"] = password
-        else:
-            env.pop("PGPASSWORD", None)
-
-        restore_timeout = float(os.environ.get("MAIL_CORE_PG_RESTORE_TIMEOUT", "300"))
-        cmd = [
-            pg_restore,
-            "--exit-on-error",
-            "--single-transaction",
-            "--no-owner",
-            "--no-privileges",
-            "--dbname",
-            dsn,
-            str(dump_file),
-        ]
-        res = subprocess.run(
-            cmd,
-            capture_output=True,
-            env=env,
-            timeout=restore_timeout,
+    target_blobs = _resolve_restore_target(target_blobs_dir)
+    if not target_blobs.is_dir():
+        raise RuntimeError(
+            "restore resume refused: target blobs dir does not exist: "
+            f"{target_blobs}"
         )
-        if res.returncode != 0:
-            err_msg = (res.stderr or b"").decode("utf-8", errors="replace").strip()[:1000]
-            if not err_msg:
-                err_msg = "(no stderr output)"
-            log.warning("pg_restore returned code %d: %s", res.returncode, err_msg)
-            errors.append(f"pg_restore failed: {err_msg}")
-            raise RuntimeError(f"pg_restore failed ({res.returncode}): {err_msg}")
+    op_log = _read_restore_operation_log(target_blobs)
+    if op_log is None:
+        raise RuntimeError(
+            "restore resume refused: no restore operation log in target: "
+            f"{target_blobs}"
+        )
+    target_ident = _read_target_identity(target_database_url)
+    _assert_operation_log_matches(
+        op_log,
+        operation_id=op_id,
+        target_blobs=target_blobs,
+        target_database_url=target_database_url,
+        target_ident=target_ident,
+    )
+    stage = str(op_log.get("stage") or "")
+    if stage == "needs_verification":
+        raise RuntimeError(
+            f"restore operation {op_id} is in needs_verification; explicit "
+            "verification is required before any replay, and the database "
+            "must not be auto-deleted or auto-restored"
+        )
 
-        db_restored = True
+    source_ident = _read_target_identity(source_database_url)
+    with _backup_destination_lock(target_blobs):
+        work_dir = pkg_dir.parent / f".restore_work_{uuid.uuid4().hex}"
+        _make_private_dir(work_dir)
+        try:
+            prepared = _prepare_restore_package(
+                pkg_dir,
+                work_dir,
+                keyring=keyring,
+                allow_stub=allow_stub,
+                source_ident=source_ident,
+                target_ident=target_ident,
+                check_source_cluster=False,
+            )
+            if prepared.package_digest != op_log.get("package_digest"):
+                raise RuntimeError(
+                    "restore resume refused: package digest mismatch with "
+                    "the restore operation log"
+                )
+            inventory: dict[str, str] = {}
+            dirs: list[str] = []
+            if prepared.blobs_tar is not None:
+                inventory, dirs = _blob_tar_inventory(prepared.blobs_tar)
+            log_payload = _operation_log_payload(
+                operation_id=op_id,
+                package_digest=prepared.package_digest,
+                target_blobs=target_blobs,
+                target_database_url=target_database_url,
+                target_ident=target_ident,
+                stage=stage,
+            )
 
-        # Atomically publish staging blobs into target directory only after successful DB restore
-        if blobs_tar.is_file() and blobs_restored > 0:
-            target_blobs.mkdir(parents=True, exist_ok=True)
-            for item in staging_blobs.iterdir():
-                target_dest = target_blobs / item.name
-                if target_dest.exists():
-                    if target_dest.is_dir():
-                        shutil.copytree(item, target_dest, dirs_exist_ok=True)
-                    else:
-                        item.replace(target_dest)
-                else:
-                    item.replace(target_dest)
+            if stage == "complete":
+                _verify_published_blob_files(target_blobs, inventory)
+                return RestoreResult(
+                    ok=True,
+                    database_restored=True,
+                    blobs_restored=len(inventory),
+                    duration_seconds=(
+                        datetime.now(timezone.utc) - begun
+                    ).total_seconds(),
+                    package_size_bytes=prepared.package_size,
+                    errors=[],
+                    operation_id=op_id,
+                    stage="complete",
+                )
 
-        duration = (datetime.now(timezone.utc) - begun).total_seconds()
+            if stage == "staging":
+                # Only this operation's own partial publish may be present;
+                # staging itself is private and is rebuilt from the package.
+                _verify_published_blob_subset(target_blobs, inventory)
+                _write_restore_operation_log(
+                    target_blobs, log_payload, stage="staging"
+                )
+                staging_blobs = _restore_staging_dir(target_blobs, op_id)
+                _safe_rmtree(staging_blobs)
+                if prepared.blobs_tar is not None:
+                    _make_private_dir(staging_blobs)
+                    inventory, dirs = _extract_blobs_to_staging(
+                        prepared.blobs_tar, staging_blobs
+                    )
+                    _publish_staged_blobs(
+                        staging_blobs, target_blobs, inventory, dirs
+                    )
+                _write_restore_operation_log(
+                    target_blobs, log_payload, stage="blobs_published"
+                )
+            elif stage in ("blobs_published", "db_failed"):
+                _verify_published_blob_files(target_blobs, inventory)
+                if target_ident is not None:
+                    empty = _database_is_empty(target_database_url)
+                    if empty is False:
+                        _write_restore_operation_log(
+                            target_blobs, log_payload, stage="needs_verification"
+                        )
+                        raise RuntimeError(
+                            f"restore operation {op_id} entered "
+                            "needs_verification: target database is not "
+                            "empty, so the earlier pg_restore may have "
+                            "committed; refusing to auto-replay the restore"
+                        )
+            else:
+                raise RuntimeError(
+                    f"restore resume refused: unknown operation stage {stage!r}"
+                )
+
+            return _execute_db_step(
+                target_blobs=target_blobs,
+                log_payload=log_payload,
+                dump_file=prepared.dump_file,
+                target_database_url=target_database_url,
+                target_ident=target_ident,
+                begun=begun,
+                package_size=prepared.package_size,
+                blobs_restored=len(inventory),
+                inventory=inventory,
+            )
+        finally:
+            _safe_rmtree(work_dir)
+
+
+def verify_restore_operation(
+    package_path: str | Path,
+    *,
+    operation_id: str,
+    target_database_url: str,
+    target_blobs_dir: str | Path,
+    keyring: dict[int, bytes] | None = None,
+    allow_stub: bool = False,
+    source_database_url: str,
+) -> RestoreResult:
+    """Explicitly verify a ``needs_verification`` restore operation.
+
+    If the database is verified still empty, the operation returns to
+    ``blobs_published`` and a retry via resume is allowed (result
+    ``ok=False``). If the database is non-empty, schema, business
+    associations, published-file checksums and blob decryption samples
+    are verified before the operation is marked ``complete``. Nothing is
+    replayed and nothing is deleted here.
+    """
+    begun = datetime.now(timezone.utc)
+    pkg_dir = _resolve_package_dir(package_path)
+    if _restore_database_identity(source_database_url) == _restore_database_identity(
+        target_database_url
+    ):
+        raise RuntimeError("refusing to restore onto source database")
+    op_id = _validate_operation_id(operation_id)
+
+    target_blobs = _resolve_restore_target(target_blobs_dir)
+    op_log = (
+        _read_restore_operation_log(target_blobs) if target_blobs.is_dir() else None
+    )
+    if op_log is None:
+        raise RuntimeError(
+            "restore verification refused: no restore operation log in "
+            f"target: {target_blobs}"
+        )
+    target_ident = _read_target_identity(target_database_url)
+    _assert_operation_log_matches(
+        op_log,
+        operation_id=op_id,
+        target_blobs=target_blobs,
+        target_database_url=target_database_url,
+        target_ident=target_ident,
+    )
+    stage = str(op_log.get("stage") or "")
+    if stage == "complete":
         return RestoreResult(
             ok=True,
-            database_restored=db_restored,
-            blobs_restored=blobs_restored,
-            duration_seconds=duration,
-            package_size_bytes=pkg_size,
-            errors=errors,
+            database_restored=True,
+            blobs_restored=len(_target_blob_files(target_blobs)),
+            duration_seconds=(datetime.now(timezone.utc) - begun).total_seconds(),
+            package_size_bytes=0,
+            errors=[],
+            operation_id=op_id,
+            stage="complete",
         )
-    finally:
-        _safe_rmtree(work_dir)
+    if stage != "needs_verification":
+        raise RuntimeError(
+            f"restore operation {op_id} is in stage {stage!r}, not "
+            "needs_verification; use resume for that stage"
+        )
+
+    source_ident = _read_target_identity(source_database_url)
+    with _backup_destination_lock(target_blobs):
+        work_dir = pkg_dir.parent / f".restore_work_{uuid.uuid4().hex}"
+        _make_private_dir(work_dir)
+        try:
+            prepared = _prepare_restore_package(
+                pkg_dir,
+                work_dir,
+                keyring=keyring,
+                allow_stub=allow_stub,
+                source_ident=source_ident,
+                target_ident=target_ident,
+                check_source_cluster=False,
+            )
+            if prepared.package_digest != op_log.get("package_digest"):
+                raise RuntimeError(
+                    "restore verification refused: package digest mismatch "
+                    "with the restore operation log"
+                )
+            inventory: dict[str, str] = {}
+            if prepared.blobs_tar is not None:
+                inventory, _dirs = _blob_tar_inventory(prepared.blobs_tar)
+            _verify_published_blob_files(target_blobs, inventory)
+
+            if target_ident is None:
+                raise RuntimeError(
+                    f"restore operation {op_id} remains needs_verification: "
+                    "target database is not reachable, so its state cannot "
+                    "be verified"
+                )
+            empty = _database_is_empty(target_database_url)
+            if empty is None:
+                raise RuntimeError(
+                    f"restore operation {op_id} remains needs_verification: "
+                    "target database empty state could not be determined"
+                )
+            log_payload = _operation_log_payload(
+                operation_id=op_id,
+                package_digest=prepared.package_digest,
+                target_blobs=target_blobs,
+                target_database_url=target_database_url,
+                target_ident=target_ident,
+                stage=stage,
+            )
+            if empty:
+                _write_restore_operation_log(
+                    target_blobs, log_payload, stage="blobs_published"
+                )
+                return RestoreResult(
+                    ok=False,
+                    database_restored=False,
+                    blobs_restored=len(inventory),
+                    duration_seconds=(
+                        datetime.now(timezone.utc) - begun
+                    ).total_seconds(),
+                    package_size_bytes=prepared.package_size,
+                    errors=[
+                        "target database verified still empty; the restore "
+                        "may be retried via resume"
+                    ],
+                    operation_id=op_id,
+                    stage="blobs_published",
+                )
+            try:
+                _verify_restored_state(
+                    target_database_url,
+                    target_blobs,
+                    inventory,
+                    db_reachable=True,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"restore operation {op_id} remains needs_verification: "
+                    f"{exc}"
+                ) from exc
+            _write_restore_operation_log(
+                target_blobs, log_payload, stage="complete"
+            )
+            return RestoreResult(
+                ok=True,
+                database_restored=True,
+                blobs_restored=len(inventory),
+                duration_seconds=(
+                    datetime.now(timezone.utc) - begun
+                ).total_seconds(),
+                package_size_bytes=prepared.package_size,
+                errors=[],
+                operation_id=op_id,
+                stage="complete",
+            )
+        finally:
+            _safe_rmtree(work_dir)
+
+
+def cleanup_restore_operation(
+    target_blobs_dir: str | Path,
+    *,
+    operation_id: str,
+) -> int:
+    """Remove one unfinished operation's files from its target blob root.
+
+    Requires the operation id and verifies ownership against the
+    operation log before deleting anything. Completed operations are
+    refused: their files are the restored data, not cleanup material.
+    Returns the number of files removed.
+    """
+    op_id = _validate_operation_id(operation_id)
+    target_blobs = _resolve_restore_target(target_blobs_dir)
+    op_log = (
+        _read_restore_operation_log(target_blobs) if target_blobs.is_dir() else None
+    )
+    if op_log is None:
+        raise RuntimeError(
+            "restore cleanup refused: no restore operation log in target: "
+            f"{target_blobs}"
+        )
+    _assert_operation_log_matches(
+        op_log, operation_id=op_id, target_blobs=target_blobs
+    )
+    if str(op_log.get("stage") or "") == "complete":
+        raise RuntimeError(
+            f"restore cleanup refused: operation {op_id} is complete; its "
+            "files are the restored data"
+        )
+    removed = 0
+    with _backup_destination_lock(target_blobs):
+        for child in sorted(target_blobs.iterdir(), key=lambda p: p.name):
+            if child.is_dir() and not child.is_symlink():
+                removed += sum(1 for p in child.rglob("*") if p.is_file())
+                shutil.rmtree(child)
+            elif child.is_symlink() or child.is_file():
+                child.unlink()
+                removed += 1
+        _fsync_dir(target_blobs)
+    return removed
