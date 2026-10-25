@@ -103,12 +103,12 @@ function App() {
     if (wide && mobileSidebarOpen) closeMobileSidebar()
   }, [wide, mobileSidebarOpen, closeMobileSidebar])
 
-  useEffect(() => {
-    if (!authed || typeof window === 'undefined' || window.location.hash !== '#oauth-return') return
+  function consumeOAuthReturnIfPresent(): boolean {
+    if (typeof window === 'undefined' || window.location.hash !== '#oauth-return') return false
     useMailStore.getState().openSettings()
-    setOAuthReturnPending(true)
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
-  }, [authed])
+    return true
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -117,6 +117,9 @@ function App() {
         if (!cancelled) {
           setSessionCheckFailed(false)
           setAuthed(ok)
+          if (ok && consumeOAuthReturnIfPresent()) {
+            setOAuthReturnPending(true)
+          }
         }
       })
       .catch(() => { if (!cancelled) setSessionCheckFailed(true) })
@@ -162,7 +165,13 @@ function App() {
     return (
       <>
         {macLoginDragRegion}
-        <LoginPage onSuccess={() => { setAuthed(true); void queryClient.invalidateQueries() }} />
+        <LoginPage onSuccess={() => {
+          setAuthed(true)
+          if (consumeOAuthReturnIfPresent()) {
+            setOAuthReturnPending(true)
+          }
+          void queryClient.invalidateQueries()
+        }} />
         {UiReferenceOverlay && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
       </>
     )

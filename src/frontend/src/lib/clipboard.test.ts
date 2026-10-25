@@ -64,4 +64,31 @@ describe('copyTextToClipboard', () => {
     await expect(copyTextToClipboard('fail@example.com')).rejects.toThrow('Permission denied')
     expect(document.body.querySelectorAll('textarea').length).toBe(0)
   })
+
+  it('appends textarea inside active dialog and restores focus on fallback copy (P2-10)', async () => {
+    const dialog = document.createElement('dialog')
+    dialog.setAttribute('open', '')
+    const button = document.createElement('button')
+    dialog.appendChild(button)
+    document.body.appendChild(dialog)
+    button.focus()
+    expect(document.activeElement).toBe(button)
+
+    let textareaParent: Node | null = null
+    const execCommand = vi.fn(() => {
+      const ta = document.querySelector('textarea')
+      textareaParent = ta ? ta.parentElement : null
+      return true
+    })
+    document.execCommand = execCommand
+
+    await copyTextToClipboard('modal-copy@test.com')
+    expect(execCommand).toHaveBeenCalledWith('copy')
+    // Verify textarea was appended inside dialog, NOT directly to body
+    expect(textareaParent).toBe(dialog)
+    // Verify focus was restored to the button
+    expect(document.activeElement).toBe(button)
+
+    document.body.removeChild(dialog)
+  })
 })

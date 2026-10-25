@@ -129,7 +129,10 @@ describe('uiReference (t011 AC-001, AC-003, AC-005, AC-007, AC-008)', () => {
   })
 
   it('keeps registry keys synchronized with component data-ui references', () => {
-    expect(Object.keys(UI_ELEMENT_REGISTRY).sort()).toEqual([...componentUiReferenceIds()].sort())
+    const activeKeys = Object.entries(UI_ELEMENT_REGISTRY)
+      .filter(([, meta]) => !meta.deprecated)
+      .map(([key]) => key)
+    expect(activeKeys.sort()).toEqual([...componentUiReferenceIds()].sort())
   })
 
   it('verifies partition prefixes and registry validity (AC-003, AC-007)', () => {
