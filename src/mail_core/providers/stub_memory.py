@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
 from mail_core.providers.base import (
@@ -68,23 +68,7 @@ class MemoryProvider:
         for i, m in enumerate(msgs):
             if m.remote_id != remote_id:
                 continue
-            updated = RemoteMessageMeta(
-                remote_id=m.remote_id,
-                subject=m.subject,
-                from_address=m.from_address,
-                from_name=m.from_name,
-                sort_time=m.sort_time,
-                is_read=is_read,
-                has_attachments=m.has_attachments,
-                is_flagged=m.is_flagged,
-                internet_message_id=m.internet_message_id,
-                snippet=m.snippet,
-                provider_thread_key=m.provider_thread_key,
-                uid=m.uid,
-                size_bytes=m.size_bytes,
-                to_addresses=m.to_addresses,
-                cc_addresses=m.cc_addresses,
-            )
+            updated = replace(m, is_read=is_read)
             msgs[i] = updated
             self._bump(
                 folder_remote_id,
