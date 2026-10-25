@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import html
+import logging
+import os
+from dataclasses import asdict
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
+from mail_core.accounts import enqueue_account_sync
+from mail_core.accounts.microsoft_oauth import exchange_redirect_url_for_tokens
 from mail_core.accounts.oauth_flow import (
     cancel_oauth_flow,
     complete_oauth_callback,
@@ -18,8 +24,15 @@ from mail_core.accounts.oauth_flow import (
     get_oauth_metadata,
     start_oauth_flow,
 )
+from mail_core.api.accounts import AccountOut
 from mail_core.api.deps import require_auth
+from mail_core.db.session import get_session_factory
+from mail_core.mail.application.accounts import create_account_app, update_account_app
+from mail_core.mail.storage.models import Account, AccountGroup
 from mail_core.security.auth import AuthPrincipal
+from mail_core.security.redact import safe_error
+
+log = logging.getLogger("mail_core.api.oauth_routes")
 
 def prevent_oauth_cache(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
@@ -93,6 +106,80 @@ class OAuthActiveOut(BaseModel):
 class OAuthCancelOut(BaseModel):
     ok: bool = True
     status: str = "cancelled"
+
+
+class ExchangeRedirectUrlRequest(BaseModel):
+    """p056: pasted Microsoft redirect URL exchanged for a Graph account."""
+
+    redirected_url: str = Field(max_length=8192)
+    email: str | None = Field(default=None, max_length=320)
+    group_id: str | None = Field(default=None, max_length=64)
+    client_id: str | None = Field(default=None, max_length=512)
+
+
+def _find_graph_account_id(email: str) -> UUID | None:
+    if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
+        return None
+    with get_session_factory()() as session:
+        return session.scalar(select(Account.id).where(Account.email == email.strip().lower()))
+
+
+def _ensure_group_exists(group_id: UUID) -> None:
+    if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
+        return
+    with get_session_factory()() as session:
+        if session.get(AccountGroup, group_id) is None:
+            raise LookupError("group not found")
+
+
+def _enqueue_sync_best_effort(account_id: UUID) -> None:
+    try:
+        with get_session_factory()() as session:
+            enqueue_account_sync(session, account_id)
+            session.commit()
+    except Exception as exc:  # sync is queued again on demand; never fail the save
+        log.warning("initial sync enqueue failed for account %s: %s", account_id, safe_error(exc))
+
+
+def _save_redirect_exchange_account(
+    *,
+    email: str,
+    client_id: str,
+    refresh_token: str,
+    group_id: UUID | None,
+    principal: AuthPrincipal,
+):
+    """Create or update the Graph account through the shared account services.
+
+    Create goes through create_account_app, which validates the public-client
+    credentials and enqueues the first sync. An existing account (same
+    verified email) is updated in place with the fresh credentials instead.
+    """
+    credentials = {"client_id": client_id, "refresh_token": refresh_token}
+    config = {"provider_profile": "microsoft", "oauth_client_type": "public"}
+    if group_id is not None:
+        _ensure_group_exists(group_id)
+    existing_id = _find_graph_account_id(email)
+    if existing_id is not None:
+        dto = update_account_app(
+            existing_id,
+            group_id=group_id,
+            config=config,
+            credentials=credentials,
+            clear_credentials=["client_secret"],
+            principal=principal,
+        )
+        if dto.sync_enabled:
+            _enqueue_sync_best_effort(existing_id)
+        return dto
+    return create_account_app(
+        email=email,
+        provider="graph",
+        group_id=group_id,
+        config=config,
+        credentials=credentials,
+        principal=principal,
+    )
 
 
 def _callback_html(ok: bool, message: str, provider: str = "google") -> str:
@@ -181,6 +268,46 @@ def api_oauth_start(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/api/accounts/oauth/exchange-redirect-url", response_model=AccountOut)
+def api_exchange_redirect_url(
+    body: ExchangeRedirectUrlRequest,
+    principal: AuthPrincipal = Depends(require_auth),
+) -> AccountOut:
+    group_uuid: UUID | None = None
+    if body.group_id and body.group_id.strip():
+        try:
+            group_uuid = UUID(body.group_id.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="所属分组无效，请重新选择分组") from exc
+    try:
+        tokens = exchange_redirect_url_for_tokens(body.redirected_url, body.client_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # transport failures: sanitized, never leak provider detail
+        log.error("microsoft redirect exchange failed: %s", safe_error(exc))
+        raise HTTPException(status_code=502, detail="Microsoft 令牌交换失败，请检查网络后重试。") from None
+    # Spec 4.3 step 3: the Microsoft-returned primary email is authoritative.
+    # A mismatched form email does not block onboarding — the account is
+    # created/updated under the verified Microsoft email, because the stored
+    # refresh token only ever belongs to that identity.
+    email = str(tokens["email"])
+    try:
+        dto = _save_redirect_exchange_account(
+            email=email,
+            client_id=str(tokens["client_id"]),
+            refresh_token=str(tokens["refresh_token"]),
+            group_id=group_uuid,
+            principal=principal,
+        )
+        return AccountOut(**asdict(dto))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

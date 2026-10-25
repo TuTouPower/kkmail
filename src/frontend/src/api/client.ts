@@ -11,6 +11,7 @@ import type {
   AccountUpdateIn,
   AccountSummary,
   AccountsResponse,
+  ExchangeRedirectUrlRequest,
   GroupCreateIn,
   GroupOut,
   GroupsResponse,
@@ -411,6 +412,10 @@ export const api = {
 
   cancelOAuthFlow(flowId: string) {
     return postJson<OAuthCancelOut>(`/api/accounts/oauth/flows/${encodeURIComponent(flowId)}/cancel`)
+  },
+
+  exchangeMicrosoftRedirectUrl(payload: ExchangeRedirectUrlRequest) {
+    return postJson<AccountSummary>('/api/accounts/oauth/exchange-redirect-url', payload)
   },
 }
 

@@ -56,6 +56,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/oauth/exchange-redirect-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Exchange Redirect Url */
+        post: operations["api_exchange_redirect_url_api_accounts_oauth_exchange_redirect_url_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/oauth/flows/{flow_id}": {
         parameters: {
             query?: never;
@@ -918,6 +935,20 @@ export interface components {
              */
             trigger: "manual" | "focus" | "navigation";
         };
+        /**
+         * ExchangeRedirectUrlRequest
+         * @description p056: pasted Microsoft redirect URL exchanged for a Graph account.
+         */
+        ExchangeRedirectUrlRequest: {
+            /** Client Id */
+            client_id?: string | null;
+            /** Email */
+            email?: string | null;
+            /** Group Id */
+            group_id?: string | null;
+            /** Redirected Url */
+            redirected_url: string;
+        };
         /** FlagBody */
         FlagBody: {
             /** Is Flagged */
@@ -1655,6 +1686,39 @@ export interface operations {
                 };
                 content: {
                     "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_exchange_redirect_url_api_accounts_oauth_exchange_redirect_url_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExchangeRedirectUrlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountOut"];
                 };
             };
             /** @description Validation Error */

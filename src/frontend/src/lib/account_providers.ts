@@ -4,13 +4,9 @@ export const vendors: Record<Vendor, { label: string; host: string; credential: 
   other: { label: '其他 / 自定义 IMAP', host: '', credential: '密码或授权码', steps: ['向邮箱管理员获取 IMAP 服务器、端口和登录名。', '使用管理员提供的密码或客户端授权码，默认采用 TLS 993。'], url: '' },
   google: { label: 'Google / Gmail', host: 'imap.gmail.com', credential: '应用专用密码', steps: ['在 Google 账号中开启两步验证（2-Step Verification）。', '打开应用专用密码页面：https://myaccount.google.com/apppasswords', '生成 16 位应用专用密码，并粘贴到 kkmail 的密码框中。普通 Google 登录密码不能使用。'], url: 'https://myaccount.google.com/apppasswords' },
   microsoft: { label: 'Microsoft / Outlook / Microsoft 365', host: '', credential: '', steps: [
-    '在 Microsoft Entra ID → App registrations → New registration 注册自有应用，选择包含目标个人 Outlook/Hotmail/Live 或 Microsoft 365 组织账号的账号类型。Overview 复制 Application (client) ID。同一 Client ID 标识应用，可供多个邮箱授权。',
-    '应用注册需要可用 Entra 租户及注册权限，不能保证每个个人微软账号都能自行注册。组织可能要求管理员同意；应用不会代办注册或绕过策略。',
-    '浏览器登录与熟悉的 Google 登录相似：填写应用配置 → 打开微软登录页 → 同意 → 返回 kkmail 保存。自托管网页登记 Web 类型的表单 HTTPS 回调，并提供 Secret value；不要登记 SPA 类型，因为换码发生在后端。',
-    'Electron 使用移动和桌面应用的 localhost loopback 回调。微软仅对 localhost 忽略动态端口，路径仍须匹配；127.0.0.1 不享受此端口规则，不能套用 Google 设置。按表单实际地址登记 localhost 路径，不需要固定本地端口。',
-    '设备码登录：Authentication → Advanced settings → Allow public client flows 设为 Yes。无需回调地址或 Client Secret。回到 kkmail 选择设备码登录 → 复制短验证码 → 打开微软官方验证页 → 输入代码并登录 → 返回 kkmail 等待确认并保存。',
-    'API permissions 添加 Microsoft Graph 委托 Mail.ReadWrite、User.Read；User.Read 用于核对当前用户与邮箱，不申请 Mail.Send 或 IMAP 权限。两种方式均自动申请 offline_access（允许后台继续同步），无需另外勾选、填写或购买。',
-    '仅 Web 机密客户端创建并复制 Client Secret 的 value；secret ID 不是密钥。Refresh Token 由本产品完成登录后自动获取，不能在门户直接查看。已有合法 Refresh Token 可在高级命名字段更新，但必须匹配原应用、租户及邮件权限；不提供抓包或第三方 Token 工具步骤。',
+    '点击「微软授权登录」，在打开的微软页面登录 Outlook / Microsoft 365 账号并同意授权。',
+    '授权完成后，浏览器会跳转到一个打不开的 localhost 地址，复制地址栏中的完整网址。',
+    '把完整网址粘贴回 kkmail 的输入框，点击「换取 Token 并添加」即可完成添加；无需注册 Azure 应用，也无需填写 Client Secret。',
   ], url: 'https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app' },
   qq: { label: 'QQ / Foxmail 邮箱', host: 'imap.qq.com', credential: '客户端授权码', steps: ['登录 QQ 邮箱网页版，进入设置 → 账号，开启 IMAP 服务。', '生成客户端授权码，填写到授权码框。使用完整邮箱地址作为登录名；不是 QQ 登录密码。'], url: 'https://service.mail.qq.com/detail/0/141' },
   netease_163: { label: '网易 163', host: 'imap.163.com', credential: '客户端授权码', steps: ['登录网易邮箱网页版 → 设置 → POP3/SMTP/IMAP，开启 IMAP 客户端协议。', '新增通用客户端授权码并保存，填写到授权码框。'], url: 'https://help.mail.163.com/faq.do?m=list&categoryID=90' },
@@ -26,3 +22,26 @@ export const inferVendor = (email: string): Vendor => domains[email.trim().toLow
 // render/edit, but it is never the default for a new account: Google
 // onboarding (p055) is IMAP app-password only.
 export const defaultProtocol = (vendor: Vendor): Protocol => vendor === 'microsoft' ? 'graph' : 'imap'
+
+// p056: Microsoft simplified onboarding uses the built-in public client
+// (mirrors DEFAULT_MICROSOFT_CLIENT_ID / DEFAULT_MICROSOFT_REDIRECT_URI in
+// mail_core/accounts/microsoft_oauth.py). Public clients have no secret.
+export const MICROSOFT_PUBLIC_CLIENT_ID = '9e5f94bc-e8a4-4e73-b8be-63364c29d753'
+export const MICROSOFT_DEFAULT_REDIRECT_URI = 'http://localhost:8080'
+export const MICROSOFT_GRAPH_SCOPES = 'https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read offline_access'
+
+export function buildMicrosoftAuthorizeUrl(opts: { clientId?: string; redirectUri?: string; email?: string; state?: string } = {}): string {
+  const state = opts.state || (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const params = new URLSearchParams({
+    client_id: opts.clientId?.trim() || MICROSOFT_PUBLIC_CLIENT_ID,
+    response_type: 'code',
+    redirect_uri: opts.redirectUri?.trim() || MICROSOFT_DEFAULT_REDIRECT_URI,
+    response_mode: 'query',
+    scope: MICROSOFT_GRAPH_SCOPES,
+    state,
+    prompt: 'select_account',
+  })
+  const hint = opts.email?.trim()
+  if (hint) params.set('login_hint', hint)
+  return `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params.toString()}`
+}

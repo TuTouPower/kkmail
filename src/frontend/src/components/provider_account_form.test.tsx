@@ -114,39 +114,13 @@ it('updates a single OAuth field without echoing or replacing saved secrets', as
   expect(calls[0].credentials).toEqual({ refresh_token: 'new-refresh' })
 })
 
-it('validates a custom OAuth token URI before submitting account credentials (Microsoft)', async () => {
-  const writes: Array<{ url: string; body: Record<string, unknown> }> = []
-  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
-    const url = String(input)
-    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }))
-    if ((init.method || 'GET') !== 'GET') writes.push({ url, body: JSON.parse(String(init.body)) })
-    return new Response(JSON.stringify({ id: 'new' }))
-  }))
-
-  const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
-  await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
-  await typeInto(container.querySelector('#account-email'), 'hello@outlook.com')
-  await typeInto(container.querySelector('#account-client-id'), 'ms-client')
-  await typeInto(container.querySelector('#account-refresh-token'), 'ms-refresh')
-  await click(container.querySelector('.settings-advanced summary'))
-
-  const tokenUri = container.querySelector('#account-token-uri') as HTMLInputElement
-  await typeInto(tokenUri, 'http://127.0.0.1:18765/token')
-  await click(container.querySelector('button[type="submit"]'))
-  await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('必须使用 HTTPS'))
-  expect(writes).toHaveLength(0)
-
-  await typeInto(tokenUri, 'not-a-url')
-  await click(container.querySelector('button[type="submit"]'))
-  await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('有效的完整 URL'))
-  expect(writes).toHaveLength(0)
-
-  await typeInto(tokenUri, 'https://login.microsoftonline.com/common/oauth2/v2.0/token')
-  await click(container.querySelector('button[type="submit"]'))
-  await waitFor(() => expect(writes).toHaveLength(1))
-  expect(writes[0].url).toMatch(/\/api\/accounts$/)
-  expect(writes[0].body).toMatchObject({ credentials: { token_uri: 'https://login.microsoftonline.com/common/oauth2/v2.0/token' } })
-})
+// p056 replacement note: the previous test here ("validates a custom OAuth
+// token URI before submitting account credentials (Microsoft)") asserted the
+// OLD flat Microsoft add-account form — manual Client ID / Refresh Token /
+// token_uri fields submitted as credentials. That behavior was removed by
+// the simplified redirect-URL onboarding (covered in
+// microsoft_account_form.test.tsx), so the test was removed wholesale rather
+// than having its expectations rewritten in place.
 
 it('releases save controls when the account write succeeds but refresh fails', async () => {
   const writes: string[] = []
@@ -214,17 +188,29 @@ it.each([
 
 // p055: the Google row was removed wholesale — Google help is now the
 // app-password guide, covered by the dedicated CredentialHelp test above.
-it.each([
-  ['microsoft', ['Mail.ReadWrite', 'offline_access', '后台继续同步', 'secret ID', 'Application (client) ID']],
-])('explains provider %s authorization requirements through the help dialog', async (vendor, expected) => {
+// p056: the Microsoft row was replaced wholesale — the help dialog now shows
+// the concise 3-step redirect-URL guidance instead of the Azure registration
+// walkthrough asserted before.
+it('explains provider microsoft authorization through the concise 3-step help dialog', async () => {
   const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
-  await changeSelect(container.querySelector('#account-vendor'), vendor as string)
+  await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
   await click(container.querySelector('button[aria-label="如何获取账户凭据"]'))
-  const text = container.querySelector('dialog[aria-labelledby="credential-help-title"]')!.textContent
-  for (const item of expected as string[]) expect(text).toContain(item)
+  const dialog = container.querySelector('dialog[aria-labelledby="credential-help-title"]')!
+  const steps = [...dialog.querySelectorAll('ol li')]
+  expect(steps).toHaveLength(3)
+  expect(steps[0].textContent).toContain('微软授权登录')
+  expect(steps[1].textContent).toContain('localhost')
+  expect(steps[1].textContent).toContain('地址栏')
+  expect(steps[2].textContent).toContain('换取 Token 并添加')
+  expect(dialog.textContent).not.toContain('New registration')
 })
 
-it('clears credentials across supplier changes and sends only current fields', async () => {
+// p056 replacement note: the previous version of this test typed manual
+// Microsoft credentials (client id / refresh token / secret) into the OLD
+// flat add-account form and submitted them. That form was removed; the test
+// was replaced wholesale with the same vendor-switch hygiene asserted
+// against the simplified Microsoft form and the Google IMAP form.
+it('clears credentials across supplier changes (Microsoft simplified form)', async () => {
   const writes: Record<string, unknown>[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
     if (String(input).includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }))
@@ -234,23 +220,25 @@ it('clears credentials across supplier changes and sends only current fields', a
   }))
   const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
   await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
+  // The only credential-adjacent field left is the collapsed custom Client ID.
   await typeInto(container.querySelector('#account-client-id'), 'ms-client-1')
-  await typeInto(container.querySelector('#account-refresh-token'), 'ms-token-1')
-  await typeInto(container.querySelector('#account-client-secret'), 'ms-secret-1')
+  expect(container.querySelector('#account-refresh-token')).toBeNull()
+  expect(container.querySelector('#account-client-secret')).toBeNull()
   // Switching to Google shows the IMAP form (no OAuth fields carry over).
   await changeSelect(container.querySelector('#account-vendor'), 'google')
   expect(container.querySelector('#account-client-id')).toBeNull()
   await typeInto(container.querySelector('#account-password'), 'google-imap-password')
-  // Switching back to Microsoft clears both the OAuth fields and the IMAP password.
+  // Switching back to Microsoft clears the custom Client ID and the IMAP password.
   await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
-  for (const id of ['client-id', 'refresh-token', 'client-secret']) expect((container.querySelector(`#account-${id}`) as HTMLInputElement).value).toBe('')
-  await typeInto(container.querySelector('#account-email'), 'x@outlook.com')
-  await typeInto(container.querySelector('#account-client-id'), 'ms-client')
-  await typeInto(container.querySelector('#account-refresh-token'), 'ms-refresh')
+  expect((container.querySelector('#account-client-id') as HTMLInputElement).value).toBe('')
+  // Submitting the Google form still sends only the current IMAP fields.
+  await changeSelect(container.querySelector('#account-vendor'), 'google')
+  await typeInto(container.querySelector('#account-email'), 'someone@gmail.com')
+  await typeInto(container.querySelector('#account-password'), 'abcd efgh ijkl mnop')
   await click(container.querySelector('button[type="submit"]'))
   await waitFor(() => expect(writes).toHaveLength(1))
-  expect(writes[0]).toMatchObject({ provider: 'graph', credentials: { client_id: 'ms-client', refresh_token: 'ms-refresh' } })
-  expect(JSON.stringify(writes)).not.toMatch(/ms-client-1|google-imap-password|imap_host/)
+  expect(writes[0]).toMatchObject({ provider: 'imap', credentials: { password: 'abcd efgh ijkl mnop' } })
+  expect(JSON.stringify(writes)).not.toMatch(/ms-client-1|client_id|refresh_token/)
 })
 
 it('discards credentials when the dialog is closed and reopened', async () => {

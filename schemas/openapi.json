@@ -635,6 +635,57 @@
         "title": "DeltaSyncIn",
         "type": "object"
       },
+      "ExchangeRedirectUrlRequest": {
+        "description": "p056: pasted Microsoft redirect URL exchanged for a Graph account.",
+        "properties": {
+          "client_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "redirected_url": {
+            "maxLength": 8192,
+            "title": "Redirected Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "redirected_url"
+        ],
+        "title": "ExchangeRedirectUrlRequest",
+        "type": "object"
+      },
       "FlagBody": {
         "properties": {
           "is_flagged": {
@@ -2837,6 +2888,55 @@
           }
         },
         "summary": "Api Oauth Callback",
+        "tags": [
+          "accounts-oauth"
+        ]
+      }
+    },
+    "/api/accounts/oauth/exchange-redirect-url": {
+      "post": {
+        "operationId": "api_exchange_redirect_url_api_accounts_oauth_exchange_redirect_url_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExchangeRedirectUrlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Exchange Redirect Url",
         "tags": [
           "accounts-oauth"
         ]

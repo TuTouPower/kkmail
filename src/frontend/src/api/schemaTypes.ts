@@ -44,6 +44,7 @@ export type OAuthStartOut = schemas['OAuthStartOut']
 export type OAuthFlowStatusOut = schemas['OAuthFlowStatusOut']
 export type OAuthActiveOut = schemas['OAuthActiveOut']
 export type OAuthCancelOut = schemas['OAuthCancelOut']
+export type ExchangeRedirectUrlRequest = schemas['ExchangeRedirectUrlRequest']
 
 /** Previous hand-written names → OpenAPI schemas (API layer). */
 export type MailCoreMessage = MessageOut

@@ -93,7 +93,20 @@ def validate_connection(email: str, provider: str, config: dict, credentials: di
         raise ValueError("credentials.refresh_token: unsupported field")
     required = ['password'] if provider == 'imap' else ['client_id', 'refresh_token']
     if provider in ('graph', 'gmail') and client_type == 'confidential':
-        required.append('client_secret')
+        # p056 public-client mode: the built-in Microsoft public client
+        # (DEFAULT_MICROSOFT_CLIENT_ID, or its MICROSOFT_CLIENT_ID override)
+        # is a public client by registration and never has a Client Secret,
+        # so a graph credential set carrying that client_id is valid
+        # without one even when the runtime defaulted to "confidential"
+        # (Web deployments). Self-registered apps keep the existing
+        # confidential requirement, and Gmail is unchanged.
+        is_builtin_public_graph = False
+        if provider == 'graph':
+            from mail_core.accounts.microsoft_oauth import default_microsoft_client_id
+
+            is_builtin_public_graph = str(values.get('client_id') or '').strip() == default_microsoft_client_id()
+        if not is_builtin_public_graph:
+            required.append('client_secret')
     for key in required:
         value = values.get(key) or (values.get('secret') if key == 'password' else None)
         if not isinstance(value, str) or not value.strip():

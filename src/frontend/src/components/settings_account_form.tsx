@@ -3,7 +3,7 @@ import { CircleHelp, X } from 'lucide-react'
 import { api, type AccountSummary, type ApiError, type OAuthFlowStatusOut, type OAuthMetadataOut } from '../api/client'
 import type { GroupItem } from '../api/queries'
 import { errorMessage } from '../lib/actions'
-import { vendors, inferVendor, defaultProtocol, type Vendor, type Protocol } from '../lib/account_providers'
+import { vendors, inferVendor, defaultProtocol, buildMicrosoftAuthorizeUrl, MICROSOFT_PUBLIC_CLIENT_ID, MICROSOFT_DEFAULT_REDIRECT_URI, type Vendor, type Protocol } from '../lib/account_providers'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { getDesktopPlatform } from '../lib/desktopShell'
 import CredentialHelp from './credential_help'
@@ -53,6 +53,14 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
   const [copyTip, setCopyTip] = useState('')
   const flowRef = useRef<string | null>(null)
   const devicePollNotBeforeRef = useRef(0)
+  // p056: Microsoft simplified onboarding (add-account only) — two stages:
+  // 'start' shows just email/group + the authorize button; 'paste' guides
+  // the user to paste the full localhost redirect URL back for exchange.
+  const [msStage, setMsStage] = useState<'start' | 'paste'>('start')
+  const [msRedirectUrl, setMsRedirectUrl] = useState('')
+  const [msError, setMsError] = useState('')
+  const [msRedirectUri, setMsRedirectUri] = useState(MICROSOFT_DEFAULT_REDIRECT_URI)
+  const [msAuthUrl, setMsAuthUrl] = useState('')
 
   const updateOauthFlow = (next: (OAuthFlowStatusOut & { auth_url?: string }) | null) => {
     if (flowRef.current !== next?.flow_id) devicePollNotBeforeRef.current = 0
@@ -81,6 +89,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
     if (manual) manualVendor.current = true
     if (next === vendor) return
     clearActiveFlow(true)
+    setMsStage('start'); setMsRedirectUrl(''); setMsError(''); setMsAuthUrl('')
     setVendor(next)
     if (!account) setProvider(defaultProtocol(next))
     setPassword(''); setOauth({ client_id: '', refresh_token: '', client_secret: '', token_uri: '', scope: '' }); setClearClientSecret(false)
@@ -253,7 +262,59 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
     }
   }
 
+  // p056 handlers: build the authorize URL per spec 4.2 and open it in a new
+  // tab; there is deliberately no MAIL_CORE_PUBLIC_ORIGIN / Client Secret
+  // gate on this path — the built-in public client needs neither.
+  const openMicrosoftAuth = () => {
+    const url = buildMicrosoftAuthorizeUrl({
+      clientId: oauth.client_id.trim() || MICROSOFT_PUBLIC_CLIENT_ID,
+      redirectUri: msRedirectUri.trim() || MICROSOFT_DEFAULT_REDIRECT_URI,
+      email: email.trim(),
+    })
+    setMsAuthUrl(url)
+    const opened = typeof window.open === 'function' ? window.open(url, '_blank') : null
+    if (opened && typeof opened === 'object') {
+      try { opened.opener = null } catch { /* ignore */ }
+    }
+    setMsError('')
+    setStatus('')
+    setMsStage('paste')
+  }
+
+  const submitMicrosoftExchange = async () => {
+    if (busyRef.current) return
+    if (!msRedirectUrl.trim()) {
+      setMsError('请粘贴地址栏中的完整重定向链接后再提交。')
+      return
+    }
+    busyRef.current = true
+    setBusy(true)
+    setMsError('')
+    let saved = false
+    try {
+      await api.exchangeMicrosoftRedirectUrl({
+        redirected_url: msRedirectUrl.trim(),
+        ...(email.trim() ? { email: email.trim() } : {}),
+        ...(groupId && groupsAvailable ? { group_id: groupId } : {}),
+        ...(oauth.client_id.trim() ? { client_id: oauth.client_id.trim() } : {}),
+      })
+      saved = true
+      await onSaved(groupId)
+    } catch (err) {
+      if (saved) setStatus(`账户已添加，刷新失败：${errorMessage(err)}。请关闭窗口后刷新页面。`)
+      else setMsError(errorMessage(err, '换取 Token 失败，请检查粘贴的链接后重试'))
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
   const oauthAuthorized = provider !== 'imap' && oauthFlow?.status === 'authorized'
+  // Simplified Microsoft onboarding replaces the flat OAuth form only for
+  // adding an account. Editing/reauthorizing an existing Graph account —
+  // and completing an OAuth flow restored from elsewhere — keeps the
+  // existing flow-based form below.
+  const showMicrosoftSimplified = !account && vendor === 'microsoft' && provider === 'graph' && !oauthFlow
   const displayedRedirectUri = oauthFlow?.redirect_uri || oauthMeta?.redirect_uri || oauthMeta?.callback_path || `/api/accounts/oauth/callback/${oauthProvider}`
   const isGoogleImap = vendor === 'google' && provider === 'imap'
   const imapHostField = <label className="settings-field" htmlFor="account-imap-host"><span>IMAP 服务器</span><input id="account-imap-host" name="imap_host" value={host} onChange={event => { connectionEdited.current = true; setHost(event.target.value) }} required placeholder="imap.example.com" /></label>
@@ -269,6 +330,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
     <form data-ui="ST05" onSubmit={async event => {
       event.preventDefault()
       if (busyRef.current) return
+      if (showMicrosoftSimplified) { setStatus('请点击「微软授权登录」完成授权，再粘贴重定向链接添加账户'); return }
       if (provider === 'imap' && !host.trim()) { setStatus('请输入 IMAP 服务器地址'); return }
       if (provider !== 'imap' && !oauthAuthorized && oauth.token_uri !== '') {
         let tokenUri: URL
@@ -347,6 +409,29 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
             {imapUsernameField}
             {imapPasswordField}
           </>}
+        </> : showMicrosoftSimplified ? <>
+          {msStage === 'start' ? <>
+            <p className="settings-notice">使用微软授权登录添加 Outlook / Microsoft 365 邮箱：无需注册 Azure 应用，也无需填写 Client Secret。</p>
+            <details className="settings-advanced"><summary>高级选项</summary>
+              <label className="settings-field" htmlFor="account-client-id"><span>自定义 Client ID（留空使用内置公共客户端）</span><input id="account-client-id" value={oauth.client_id} onChange={event => setOauth(old => ({ ...old, client_id: event.target.value }))} placeholder={MICROSOFT_PUBLIC_CLIENT_ID} /></label>
+              <label className="settings-field" htmlFor="account-ms-redirect-uri"><span>自定义重定向 URI</span><input id="account-ms-redirect-uri" value={msRedirectUri} onChange={event => setMsRedirectUri(event.target.value)} placeholder={MICROSOFT_DEFAULT_REDIRECT_URI} /></label>
+            </details>
+            <div className="settings-dialog-actions"><button type="button" className="settings-button is-primary" onClick={openMicrosoftAuth}>微软授权登录</button></div>
+          </> : <>
+            <div className="settings-notice">
+              <p>1. 在已打开的微软窗口中登录您的 Outlook 邮箱并同意授权；</p>
+              <p>2. 授权完成后，页面会跳转到一个打不开的网址（例如 http://localhost:8080/?code=...）；</p>
+              <p>3. 复制浏览器地址栏的完整网址，粘贴到下方输入框。</p>
+            </div>
+            <label className="settings-field" htmlFor="account-ms-redirect-url"><span>重定向链接</span><input id="account-ms-redirect-url" value={msRedirectUrl} onChange={event => setMsRedirectUrl(event.target.value)} placeholder="请粘贴地址栏中的完整重定向链接..." /></label>
+            {msError && <p className="settings-feedback is-error" role="alert">{msError}</p>}
+            <div className="settings-dialog-actions">
+              <button type="button" className="settings-button is-primary" onClick={() => void submitMicrosoftExchange()}>换取 Token 并添加</button>
+              <button type="button" className="settings-button" onClick={openMicrosoftAuth}>重新打开授权页面</button>
+              <button type="button" className="settings-button" onClick={() => { setMsStage('start'); setMsError('') }}>返回上一步</button>
+            </div>
+            {msAuthUrl && <p className="settings-notice">授权页面已在新窗口打开；若被浏览器拦截，可从历史记录重新打开，或点「重新打开授权页面」。</p>}
+          </>}
         </> : <>
           <p className="settings-notice">{account ? '已保存凭据不会回显。只填写需要更新的字段，留空保持不变。' : '使用已有 OAuth 凭据连接；获取方法见帮助说明。'}</p>
           <label className="settings-field" htmlFor="account-client-type"><span>OAuth 应用类型</span><select id="account-client-type" value={clientType} disabled={provider === 'graph' && oauthMethod === 'device_code'} onChange={event => { clientTypeEdited.current = true; clearActiveFlow(true); setClientType(event.target.value) }}><option value="public">公共客户端 / 桌面应用</option><option value="confidential">机密客户端 / Web 应用</option></select></label>
@@ -401,7 +486,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
         </>}
       </fieldset>
       {status && <div className="settings-feedback is-error" role="alert">{status}</div>}
-      <div className="settings-dialog-actions"><button type="button" className="settings-button" onClick={handleClose} disabled={busy && !status}>取消</button><button type="submit" className="settings-button is-primary" disabled={busy}>{busy && !status ? '正在保存…' : account ? '保存修改' : '添加'}</button></div>
+      <div className="settings-dialog-actions"><button type="button" className="settings-button" onClick={handleClose} disabled={busy && !status}>取消</button>{!showMicrosoftSimplified && <button type="submit" className="settings-button is-primary" disabled={busy}>{busy && !status ? '正在保存…' : account ? '保存修改' : '添加'}</button>}</div>
     </form>
     {help && <CredentialHelp vendor={vendor} protocol={provider} onClose={() => setHelp(false)} />}
   </dialog>

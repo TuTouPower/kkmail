@@ -3,16 +3,107 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import uuid
-from typing import Any
-from urllib.parse import urlsplit
+from typing import Any, Callable
+from urllib.parse import parse_qs, urlsplit
 
 from mail_core.providers.http import ProviderHttpError
 
 MICROSOFT_SCOPE = 'https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read offline_access'
 PROFILE_URI = 'https://graph.microsoft.com/v1.0/me?$select=id,mail'
 MAILBOX_URI = 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox?$select=id'
+# p056: built-in public client (no Client Secret, RFC 6749 public-client
+# flow) so self-hosted users can onboard without registering an Azure app.
+DEFAULT_MICROSOFT_CLIENT_ID = "9e5f94bc-e8a4-4e73-b8be-63364c29d753"
+DEFAULT_MICROSOFT_REDIRECT_URI = "http://localhost:8080"
+MICROSOFT_TOKEN_URI = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+MICROSOFT_ME_URI = "https://graph.microsoft.com/v1.0/me"
+
+TokenPostFn = Callable[[str, dict[str, str]], dict[str, Any]]
+ProfileGetFn = Callable[[str, str], dict[str, Any]]
+
+
+def default_microsoft_client_id() -> str:
+    """Effective public Client ID: MICROSOFT_CLIENT_ID env overrides the built-in."""
+    return (os.environ.get("MICROSOFT_CLIENT_ID") or "").strip() or DEFAULT_MICROSOFT_CLIENT_ID
+
+
+def parse_redirect_code(redirected_url: str) -> str:
+    """Extract the authorization code from a pasted post-consent redirect URL."""
+    params = parse_qs(urlsplit((redirected_url or "").strip()).query)
+    errors = params.get("error")
+    if errors:
+        description = (params.get("error_description") or [""])[0].strip()
+        raise ValueError(f"微软授权失败：{description or errors[0]}")
+    codes = params.get("code")
+    if not codes or not codes[0].strip():
+        raise ValueError("链接中未找到授权码 (code)，请确保复制的是授权完成后的完整地址")
+    return codes[0]
+
+
+def exchange_redirect_url_for_tokens(
+    redirected_url: str,
+    client_id: str | None = None,
+    *,
+    token_post: TokenPostFn | None = None,
+    profile_get: ProfileGetFn | None = None,
+) -> dict[str, Any]:
+    """Exchange a pasted redirect URL for tokens and the verified account email.
+
+    Public-client flow: no client_secret is sent. Transports default to the
+    shared OAuth flow hooks (``oauth_flow._call_token_endpoint`` /
+    ``_call_profile_endpoint``), so tests can inject fakes either here or via
+    ``oauth_flow.set_oauth_http_hooks``. Provider error descriptions are
+    mapped through :func:`friendly_error` and never echoed (they may carry
+    tokens or tenant details).
+    """
+    from mail_core.accounts import oauth_flow as lifecycle
+
+    code = parse_redirect_code(redirected_url)
+    effective_client_id = (client_id or "").strip() or default_microsoft_client_id()
+    post = token_post or lifecycle._call_token_endpoint
+    get = profile_get or lifecycle._call_profile_endpoint
+    form = {
+        "client_id": effective_client_id,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": DEFAULT_MICROSOFT_REDIRECT_URI,
+        "scope": MICROSOFT_SCOPE,
+    }
+    try:
+        result = post(MICROSOFT_TOKEN_URI, form)
+    except ProviderHttpError as exc:
+        err, desc = http_error(exc)
+        raise ValueError(
+            friendly_error(err, desc) if err else "Microsoft 令牌交换网络或服务错误，请检查网络后重试。"
+        ) from exc
+    except Exception as exc:
+        raise ValueError("Microsoft 令牌交换失败，请检查网络后重试。") from exc
+    if not isinstance(result, dict):
+        raise ValueError("Microsoft 令牌端点响应格式无效，请重试。")
+    if result.get("error"):
+        raise ValueError(friendly_error(*response_error(result)))
+    access = result.get("access_token")
+    refresh = result.get("refresh_token")
+    if not isinstance(access, str) or not access.strip():
+        raise ValueError("Microsoft 未返回有效 Access Token，请重新授权。")
+    if not isinstance(refresh, str) or not refresh.strip():
+        raise ValueError("Microsoft 未返回 Refresh Token，无法后台继续同步；请重新授权并允许持续访问。")
+    try:
+        profile = get(MICROSOFT_ME_URI, access)
+    except Exception as exc:
+        raise ValueError("无法核实 Microsoft 账号邮箱，请确认授权后重试。") from exc
+    email = profile.get("mail") or profile.get("userPrincipalName") if isinstance(profile, dict) else None
+    if not isinstance(email, str) or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email.strip()):
+        raise ValueError("Graph /me 未返回已核实的邮箱地址；账号可能没有可用邮箱，请确认 Microsoft 邮箱服务已启用。")
+    return {
+        "client_id": effective_client_id,
+        "access_token": access,
+        "refresh_token": refresh,
+        "email": email.strip().lower(),
+    }
 _TENANT = re.compile(r'^(common|consumers|organizations|[a-zA-Z0-9][a-zA-Z0-9.-]{0,252})$')
 
 
