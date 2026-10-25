@@ -1,4 +1,11 @@
 /** Strip HTML tags and collapse whitespace for list previews. */
+function decodeNumericEntity(_match: string, hex?: string, decimal?: string): string {
+  const codePoint = Number.parseInt(hex ?? decimal ?? '', hex ? 16 : 10)
+  const isSurrogate = codePoint >= 0xd800 && codePoint <= 0xdfff
+  if (!Number.isInteger(codePoint) || codePoint <= 0 || codePoint > 0x10ffff || isSurrogate) return '\uFFFD'
+  return String.fromCodePoint(codePoint)
+}
+
 export function stripHtmlToText(html: string): string {
   let text = html.replace(/<!--[\s\S]*?(?:-->|$)|<!doctype\b[^>]*(?:>|$)/gi, ' ')
   text = text.replace(/<(head|script|style)\b[\s\S]*?(?:<\/\1>|$)/gi, ' ')
@@ -7,17 +14,20 @@ export function stripHtmlToText(html: string): string {
   text = text.replace(/<\/?[a-z][a-z0-9]*(?:\s[^<>]*|\s*\/?)>/gi, ' ')
   text = text.replace(/<\/?(?:html|head|body|meta|div|p|span|table|br|a|img)(?=[\s/]|$)[^>]*$/gi, ' ')
   text = text
+    .replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, decodeNumericEntity)
     .replace(/&nbsp;/gi, ' ')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&amp;/gi, '&')
     .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
   return text.replace(/\s+/g, ' ').trim()
 }
 
 function looksLikeHtml(src: string): boolean {
-  return /<\/?[a-z][a-z0-9]*(?:\s[^<>]*|\s*\/?)>/i.test(src) || /&[a-z]+;/i.test(src) || src.startsWith('<!')
+  return /<\/?[a-z][a-z0-9]*(?:\s[^<>]*|\s*\/?)>/i.test(src)
+    || /&[a-z]+;/i.test(src)
+    || /&#(?:\d+|x[0-9a-f]+);/i.test(src)
+    || src.startsWith('<!')
 }
 
 /** Turn a body_preview (which may still contain HTML) into plain list text. */

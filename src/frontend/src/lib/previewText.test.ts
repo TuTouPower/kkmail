@@ -5,6 +5,10 @@ describe('previewText', () => {
   it('strips HTML tags from previews', () => {
     expect(previewText('<html><head></head><body><p>你好世界</p></body></html>')).toBe('你好世界')
   })
+  it('decodes decimal and hexadecimal numeric entities in plain text and HTML', () => {
+    expect(previewText('Today&#8217;s mail &#x1F642;')).toBe('Today’s mail 🙂')
+    expect(previewText('<p>Quote: &#x201C;hello&#x201D;</p>')).toBe('Quote: “hello”')
+  })
   it('leaves plain text alone and truncates', () => {
     expect(previewText('a'.repeat(200), 10)).toBe(`${'a'.repeat(10)}…`)
   })
