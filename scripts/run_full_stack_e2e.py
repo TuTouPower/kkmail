@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import signal
 import socket
 import subprocess
@@ -98,6 +99,7 @@ def main():
     worker_proc = None
     api_log = None
     worker_log = None
+    blob_dir = None
 
     try:
         engine = create_engine(admin_db_url, isolation_level="AUTOCOMMIT")
@@ -231,6 +233,9 @@ def main():
             api_log.close()
         if worker_log is not None:
             worker_log.close()
+
+        if blob_dir is not None:
+            shutil.rmtree(blob_dir, ignore_errors=True)
 
         if engine is not None:
             try:
