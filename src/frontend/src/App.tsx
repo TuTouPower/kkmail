@@ -17,7 +17,9 @@ import { getDesktopPlatform } from './lib/desktopShell'
 const Sidebar = lazy(() => import('./components/Sidebar'))
 const MessageReader = lazy(() => import('./components/MessageReader'))
 const SettingsPage = lazy(() => import('./components/SettingsModal'))
-const UiReferenceOverlay = lazy(() => import('./components/UiReferenceOverlay'))
+const UiReferenceOverlay = import.meta.env.DEV
+  ? lazy(() => import('./components/UiReferenceOverlay'))
+  : null
 
 function App() {
   const theme = useMailStore((s) => s.theme)
@@ -130,7 +132,7 @@ function App() {
       <>
         {macLoginDragRegion}
         <LoginPage onSuccess={() => { setAuthed(true); void queryClient.invalidateQueries() }} />
-        <Suspense fallback={null}><UiReferenceOverlay /></Suspense>
+        {UiReferenceOverlay && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
       </>
     )
   }
@@ -263,7 +265,7 @@ function App() {
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeMobileSidebar() }}
         />
       )}
-      <Suspense fallback={null}><UiReferenceOverlay /></Suspense>
+      {UiReferenceOverlay && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
     </div>
   )
 }
