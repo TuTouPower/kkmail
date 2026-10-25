@@ -580,6 +580,8 @@
             "title": "Account Id"
           },
           "client_request_id": {
+            "maxLength": 64,
+            "minLength": 1,
             "title": "Client Request Id",
             "type": "string"
           },

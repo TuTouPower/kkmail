@@ -302,7 +302,7 @@ def api_delete_account(account_id: UUID) -> Response:
 @router.post("/api/accounts/{account_id}/sync", response_model=SyncRequestOut, status_code=202)
 def api_sync_account(account_id: UUID) -> SyncRequestOut:
     Session = get_session_factory()
-    client_req_id = f"full:{account_id}:{uuid.uuid4().hex}"
+    client_req_id = uuid.uuid4().hex
     with Session() as session:
         try:
             req, _ = create_sync_request(
@@ -327,7 +327,7 @@ def api_sync_account(account_id: UUID) -> SyncRequestOut:
 @router.post("/api/accounts/sync-all", response_model=SyncRequestOut, status_code=202)
 def api_sync_all_accounts() -> SyncRequestOut:
     Session = get_session_factory()
-    client_req_id = f"full:all:{uuid.uuid4().hex}"
+    client_req_id = uuid.uuid4().hex
     with Session() as session:
         req, _ = create_sync_request(
             session,

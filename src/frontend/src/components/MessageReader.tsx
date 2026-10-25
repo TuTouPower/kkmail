@@ -96,41 +96,76 @@ const MessageReader = memo(function MessageReader() {
   const archivePaused = archiveState === 'archive_paused_quota'
   const archiveProcessing = archiveState === 'archive_in_progress'
 
-  const [syncingBody, setSyncingBody] = useState(false)
-  const [syncQueued, setSyncQueued] = useState(false)
-  const [syncError, setSyncError] = useState<string | null>(null)
+  // Body-submit state is bound to {message_id, request_generation}: every
+  // submission gets a fresh generation and selection changes invalidate all
+  // older generations, so a late result (even for an A→B→A reselection of the
+  // same message) can never write state for the current selection.
+  interface BodySyncState {
+    messageId: string
+    generation: number
+    syncing: boolean
+    queued: boolean
+    error: string | null
+  }
+  const [bodySync, setBodySync] = useState<BodySyncState | null>(null)
+  const bodySyncGenerationRef = useRef(0)
+  const bodySyncAbortRef = useRef<AbortController | null>(null)
+  const selectedIdRef = useRef<string | null>(null)
   const autoSyncedMsgIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    selectedIdRef.current = selected?.id ?? null
+  }, [selected?.id])
+
+  // Rendering also filters by the current message: state recorded for another
+  // message is invisible even before the selection-change cleanup runs.
+  const currentBodySync = bodySync && selected?.id && bodySync.messageId === selected.id ? bodySync : null
+  const syncingBody = currentBodySync?.syncing ?? false
+  const syncQueued = currentBodySync?.queued ?? false
+  const syncError = currentBodySync?.error ?? null
 
   const handleSyncBody = useCallback(async () => {
     if (!selected?.id || syncingBody) return
     const targetMsgId = selected.id
-    setSyncingBody(true)
-    setSyncQueued(false)
-    setSyncError(null)
+    const generation = ++bodySyncGenerationRef.current
+    bodySyncAbortRef.current?.abort()
+    const controller = new AbortController()
+    bodySyncAbortRef.current = controller
+    const isCurrent = () =>
+      selectedIdRef.current === targetMsgId && bodySyncGenerationRef.current === generation
+    setBodySync({ messageId: targetMsgId, generation, syncing: true, queued: false, error: null })
     try {
-      const res = await postMailCoreSyncMessageBody(targetMsgId)
-      if (selected?.id !== targetMsgId) return
-      if (res.status === 'complete') {
-        setSyncQueued(false)
-      } else {
-        setSyncQueued(true)
-      }
+      const res = await postMailCoreSyncMessageBody(targetMsgId, controller.signal)
+      if (!isCurrent()) return
+      setBodySync({
+        messageId: targetMsgId,
+        generation,
+        syncing: false,
+        queued: res.status !== 'complete',
+        error: null,
+      })
       void queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core', targetMsgId] })
     } catch (err) {
-      if (selected?.id !== targetMsgId) return
-      setSyncError(errorMessage(err, '同步邮件正文失败'))
-    } finally {
-      if (selected?.id === targetMsgId) {
-        setSyncingBody(false)
-      }
+      if (controller.signal.aborted || !isCurrent()) return
+      setBodySync({
+        messageId: targetMsgId,
+        generation,
+        syncing: false,
+        queued: false,
+        error: errorMessage(err, '同步邮件正文失败'),
+      })
     }
   }, [selected, syncingBody])
 
   // oxlint-disable react/set-state-in-effect -- clear request state from the previously selected message.
   useEffect(() => {
-    setSyncingBody(false)
-    setSyncQueued(false)
-    setSyncError(null)
+    // Invalidate every in-flight generation and cancel its network wait; a
+    // request that already reached the server still completes in the
+    // background, but its result is generation-checked away above.
+    bodySyncGenerationRef.current += 1
+    bodySyncAbortRef.current?.abort()
+    bodySyncAbortRef.current = null
+    setBodySync(null)
     autoSyncedMsgIdRef.current = null
   }, [selectedKey])
   // oxlint-enable react/set-state-in-effect

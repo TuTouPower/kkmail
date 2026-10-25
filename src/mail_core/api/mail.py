@@ -6,6 +6,7 @@ Routes call the application layer only (queries / search / mutations / attachmen
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import datetime
 from email.utils import formataddr, getaddresses
 from typing import Literal
@@ -647,7 +648,7 @@ class DeltaSyncIn(BaseModel):
     folder_id: UUID | None = None
     folder_role: str | None = "inbox"
     trigger: Literal["manual", "focus", "navigation"] = "manual"
-    client_request_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    client_request_id: str = Field(default_factory=lambda: uuid.uuid4().hex, min_length=1, max_length=64)
 
 
 class ActivityIn(BaseModel):
@@ -675,6 +676,8 @@ def api_sync_delta(body: DeltaSyncIn, response: Response) -> SyncRequestOut:
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
         except ValueError as exc:
+            if "client_request_id_conflict" in str(exc):
+                raise HTTPException(409, "client_request_id_conflict") from exc
             if "account_disabled" in str(exc):
                 raise HTTPException(409, "account_disabled") from exc
             if "folder_not_selectable" in str(exc):

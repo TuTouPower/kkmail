@@ -791,4 +791,112 @@ describe('<MessageReader />', () => {
     // m-1 should NOT show sync error
     expect(container.textContent).not.toContain('同步邮件正文失败')
   })
+
+  // R15: unlike the p048 case above (switch to an already-archived message),
+  // both messages here are unarchived, so B has its own in-flight/queued body
+  // state that A's late failure must not overwrite.
+  it('does not let a late failure for A write syncError onto unarchived B (R15)', async () => {
+    const lateA: MailItem = {
+      id: 'm-late-a', subject: 'Late A', from: 'A <a@x.test>', is_read: false, is_flagged: false,
+      has_attachments: false, accountEmail: 'box@x.test', accountId: 'acc-1', folder: 'inbox',
+    }
+    const lateB: MailItem = {
+      id: 'm-late-b', subject: 'Late B', from: 'B <b@x.test>', is_read: false, is_flagged: false,
+      has_attachments: false, accountEmail: 'box@x.test', accountId: 'acc-1', folder: 'inbox',
+    }
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [lateA, lateB])
+    useMailStore.setState({ selectedKey: 'm-late-a' })
+
+    let resolveASync!: (res: Response) => void
+    const aSyncPromise = new Promise<Response>((r) => { resolveASync = r })
+    const detailFor = (m: MailItem) => json({
+      id: m.id, account_id: 'acc-1', subject: m.subject, from_address: 'x@x.test', from_name: 'X',
+      from: 'X <x@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T08:00:00Z', is_read: false,
+      is_flagged: false, has_attachments: false, snippet: null, body: '', body_type: 'empty',
+      parse_error: null, is_archived: false, attachments: [],
+    })
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u === '/api/mail/messages/m-late-a') return detailFor(lateA)
+      if (u === '/api/mail/messages/m-late-b') return detailFor(lateB)
+      if (u.includes('m-late-a/sync-body') && init.method === 'POST') return aSyncPromise
+      if (u.includes('m-late-b/sync-body') && init.method === 'POST') {
+        return json({ message_id: 'm-late-b', job_id: 'job-b', status: 'queued' }, 202)
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.textContent).toContain('正在提交正文同步任务…'))
+
+    // Switch to B; B's own sync is accepted as queued.
+    await act(async () => { useMailStore.setState({ selectedKey: 'm-late-b' }) })
+    await waitFor(() => expect(container.textContent).toContain('正文同步任务已排队'))
+
+    // A's request now fails late — B must keep its queued state, with no error.
+    await act(async () => { resolveASync(json({ detail: 'A late failure unique' }, 500)) })
+    await waitFor(() => expect(container.textContent).toContain('Late B'))
+    expect(container.textContent).toContain('正文同步任务已排队')
+    expect(container.textContent).not.toContain('A late failure unique')
+    expect(container.textContent).not.toContain('同步邮件正文失败')
+  })
+
+  // R15 generation check: A→B→A must distinguish the two A submissions; the
+  // first A's late failure must not disturb the second A's in-flight state.
+  it('distinguishes two A requests across an A→B→A reselection (R15)', async () => {
+    const lateA: MailItem = {
+      id: 'm-late-a', subject: 'Late A', from: 'A <a@x.test>', is_read: false, is_flagged: false,
+      has_attachments: false, accountEmail: 'box@x.test', accountId: 'acc-1', folder: 'inbox',
+    }
+    const lateB: MailItem = {
+      id: 'm-late-b', subject: 'Late B', from: 'B <b@x.test>', is_read: false, is_flagged: false,
+      has_attachments: false, accountEmail: 'box@x.test', accountId: 'acc-1', folder: 'inbox',
+    }
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [lateA, lateB])
+    useMailStore.setState({ selectedKey: 'm-late-a' })
+
+    let resolveFirstA!: (res: Response) => void
+    const firstAPromise = new Promise<Response>((r) => { resolveFirstA = r })
+    let aSyncCalls = 0
+    const detailFor = (m: MailItem) => json({
+      id: m.id, account_id: 'acc-1', subject: m.subject, from_address: 'x@x.test', from_name: 'X',
+      from: 'X <x@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T08:00:00Z', is_read: false,
+      is_flagged: false, has_attachments: false, snippet: null, body: '', body_type: 'empty',
+      parse_error: null, is_archived: false, attachments: [],
+    })
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u === '/api/mail/messages/m-late-a') return detailFor(lateA)
+      if (u === '/api/mail/messages/m-late-b') return detailFor(lateB)
+      if (u.includes('m-late-a/sync-body') && init.method === 'POST') {
+        aSyncCalls += 1
+        if (aSyncCalls === 1) return firstAPromise
+        return new Promise<Response>(() => {}) // second A stays in flight
+      }
+      if (u.includes('m-late-b/sync-body') && init.method === 'POST') {
+        return json({ message_id: 'm-late-b', job_id: 'job-b', status: 'queued' }, 202)
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(aSyncCalls).toBe(1))
+
+    await act(async () => { useMailStore.setState({ selectedKey: 'm-late-b' }) })
+    await waitFor(() => expect(container.textContent).toContain('正文同步任务已排队'))
+
+    await act(async () => { useMailStore.setState({ selectedKey: 'm-late-a' }) })
+    await waitFor(() => expect(aSyncCalls).toBe(2))
+    await waitFor(() => expect(container.textContent).toContain('正在提交正文同步任务…'))
+
+    // The first (stale-generation) A request fails late; the second A request
+    // is still submitting and must not inherit the error.
+    await act(async () => { resolveFirstA(json({ detail: 'first A stale failure' }, 500)) })
+    await waitFor(() => expect(container.textContent).toContain('Late A'))
+    expect(container.textContent).toContain('正在提交正文同步任务…')
+    expect(container.textContent).not.toContain('first A stale failure')
+    expect(container.textContent).not.toContain('同步邮件正文失败')
+  })
 })

@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiBaseUrl } from '../lib/apiBase'
+import { postJson, UNAUTHORIZED_EVENT } from '../api/client'
+import { errorMessage } from '../lib/actions'
+import { logDiagnostic } from '../lib/diagnostics'
 import { viewToSyncScope } from '../lib/sync_scope'
 import { useMailStore } from '../store/mailStore'
 
 const AUTO_TRIGGER_COOLDOWN_MS = 12_000
 const ACTIVITY_HEARTBEAT_MS = 20_000
+
+interface SyncRequestResponse {
+  id: string
+  state: string
+  errors?: Array<{ safe_message?: string | null }>
+}
 
 export function useScopeSync(enabled: boolean = true) {
   const view = useMailStore((s) => s.view)
@@ -23,25 +31,14 @@ export function useScopeSync(enabled: boolean = true) {
       setLastError(null)
 
       try {
-        const res = await fetch(`${apiBaseUrl()}/api/mail/sync/delta`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-          body: JSON.stringify({
-            ...scope,
-            trigger,
-            client_request_id: clientRequestId,
-          }),
+        // Unified client: CSRF token, token refresh, 401 handling, timeout
+        // and ApiError parsing are shared with every other write.
+        const data = await postJson<SyncRequestResponse>('/api/mail/sync/delta', {
+          ...scope,
+          trigger,
+          client_request_id: clientRequestId,
         })
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}))
-          throw new Error(errData.detail || `同步失败 (${res.status})`)
-        }
-
-        const data = await res.json()
         activeRequestIdRef.current = data.id
 
         if (data.state === 'complete' || data.state === 'failed') {
@@ -52,7 +49,7 @@ export function useScopeSync(enabled: boolean = true) {
         }
       } catch (err: unknown) {
         setIsSyncing(false)
-        setLastError(err instanceof Error ? err.message : '同步请求失败')
+        setLastError(errorMessage(err, '同步请求失败'))
       }
     },
     [enabled, view],
@@ -93,23 +90,30 @@ export function useScopeSync(enabled: boolean = true) {
     }
   }, [enabled, executeDeltaSync])
 
-  // Periodic activity heartbeat
+  // Periodic activity heartbeat: visible page + live session only. Failures
+  // are background telemetry — they go to the sanitized diagnostics channel,
+  // never to the user-facing error banner (which would repeat every 20s).
   useEffect(() => {
     if (!enabled || typeof window === 'undefined') return
+    let loggedIn = true
+    const onUnauthorized = () => { loggedIn = false }
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
     const interval = setInterval(() => {
+      if (!loggedIn) return
       if (document.visibilityState !== 'visible') return
       const scope = viewToSyncScope(view)
       const accountIds = scope.account_id ? [scope.account_id] : []
-      if (accountIds.length > 0) {
-        void fetch(`${apiBaseUrl()}/api/mail/sync/activity`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ account_ids: accountIds }),
-        }).catch(() => {})
-      }
+      if (accountIds.length === 0) return
+      void postJson('/api/mail/sync/activity', { account_ids: accountIds }).catch((err: unknown) => {
+        logDiagnostic('warn', 'api', '活动心跳上报失败', {
+          error: errorMessage(err, '未知错误'),
+        })
+      })
     }, ACTIVITY_HEARTBEAT_MS)
-    return () => clearInterval(interval)
+    return () => {
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+      clearInterval(interval)
+    }
   }, [enabled, view])
 
   return {

@@ -48,6 +48,48 @@ class SyncRequestOut(BaseModel):
     errors: list[SyncTargetErrorOut] = Field(default_factory=list)
 
 
+_SCOPE_KEYS = ("account_id", "group_id", "folder_id", "folder_role", "all")
+
+
+def _canonical_scope(
+    scope: dict[str, Any] | None,
+    *,
+    account_id: uuid.UUID | None = None,
+    group_id: uuid.UUID | None = None,
+    folder_id: uuid.UUID | None = None,
+    folder_role: str | None = None,
+) -> dict[str, Any]:
+    """Normalize a sync scope so idempotency compares intent, not serialization.
+
+    Only scope-defining fields survive: trigger / client_request_id stored in a
+    raw request dump, ordering, and UUID-vs-string spellings must not make the
+    same intent look different. Explicit arguments win over the scope dict.
+    """
+    canonical: dict[str, Any] = {}
+    raw = scope or {}
+    for key in _SCOPE_KEYS:
+        value = raw.get(key)
+        if value is not None:
+            canonical[key] = str(value) if key != "all" else bool(value)
+    for key, value in (
+        ("account_id", account_id),
+        ("group_id", group_id),
+        ("folder_id", folder_id),
+        ("folder_role", folder_role),
+    ):
+        if value is not None:
+            canonical[key] = str(value)
+    return canonical
+
+
+def _intent_matches(existing: SyncRequest, *, mode: str, trigger: str, canonical_scope: dict[str, Any]) -> bool:
+    return (
+        existing.mode == mode
+        and existing.trigger == trigger
+        and _canonical_scope(existing.scope) == canonical_scope
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class TargetCandidate:
     account_id: uuid.UUID
@@ -88,17 +130,25 @@ def resolve_sync_targets(
         remaining = [aid for aid in acc_ids if aid not in activity_rows]
         acc_ids = (activity_rows + remaining)[:limit_accounts]
 
+    if folder_id is not None:
+        # An exact folder target resolves against its owning account only;
+        # ownership is validated against the requested scope (enabled accounts,
+        # or the requested group/account), never degraded to a broader sync.
+        folder = session.get(Folder, folder_id)
+        if folder is None or folder.account_id not in acc_ids:
+            raise LookupError("folder not found in account scope")
+        if folder.sync_status == SyncStatus.PAUSED.value:
+            raise ValueError("folder_not_selectable")
+        key = f"account:{folder.account_id}:folder:{folder_id}:role:{folder.role or 'all'}"
+        return [
+            TargetCandidate(
+                account_id=folder.account_id, folder_id=folder_id, folder_role=folder.role, target_key=key
+            )
+        ]
+
     targets: list[TargetCandidate] = []
     for aid in acc_ids:
-        if folder_id is not None:
-            folder = session.get(Folder, folder_id)
-            if folder is None or folder.account_id != aid:
-                raise LookupError("folder not found in account scope")
-            if folder.sync_status == SyncStatus.PAUSED.value:
-                raise ValueError("folder_not_selectable")
-            key = f"account:{aid}:folder:{folder_id}:role:{folder.role or 'all'}"
-            targets.append(TargetCandidate(account_id=aid, folder_id=folder_id, folder_role=folder.role, target_key=key))
-        elif folder_role is not None:
+        if folder_role is not None:
             # All selectable folders matching this role
             role_folders = list(
                 session.scalars(
@@ -132,12 +182,30 @@ def create_sync_request(
     folder_role: str | None = None,
     limit_accounts: int | None = None,
 ) -> tuple[SyncRequest, bool]:
-    """Create or retrieve idempotent SyncRequest, enqueuing actual worker jobs."""
+    """Create or retrieve idempotent SyncRequest, enqueuing actual worker jobs.
+
+    Idempotency is keyed by client_request_id plus intent: the same ID with the
+    same normalized scope/mode/trigger returns the existing request; the same ID
+    with a different intent is a conflict (callers map it to 409). A unique
+    violation from a concurrent insert is resolved by savepoint rollback and a
+    re-read, never surfaced as a 500.
+    """
+    if not 1 <= len(client_request_id) <= 64:
+        raise ValueError("client_request_id must be between 1 and 64 characters")
+    if group_id is not None and (account_id is not None or folder_id is not None):
+        raise ValueError("group_id cannot be combined with account_id or folder_id")
+
+    canonical_scope = _canonical_scope(
+        scope, account_id=account_id, group_id=group_id, folder_id=folder_id, folder_role=folder_role
+    )
+
     existing = session.scalar(
         select(SyncRequest).where(SyncRequest.client_request_id == client_request_id)
     )
     if existing is not None:
-        return existing, False
+        if _intent_matches(existing, mode=mode, trigger=trigger, canonical_scope=canonical_scope):
+            return existing, False
+        raise ValueError("client_request_id_conflict")
 
     candidates = resolve_sync_targets(
         session,
@@ -157,60 +225,74 @@ def create_sync_request(
         mode=mode,
         trigger=trigger,
         state=initial_state,
-        scope=scope,
+        scope=canonical_scope,
         created_at=now,
         finished_at=now if not candidates else None,
     )
-    session.add(req)
-    session.flush()
+    try:
+        with session.begin_nested():
+            session.add(req)
+            session.flush()
 
-    generation = uuid.uuid4()
-    for cand in candidates:
-        target = SyncRequestTarget(
-            id=uuid.uuid4(),
-            request_id=request_id,
-            account_id=cand.account_id,
-            folder_id=cand.folder_id,
-            target_key=cand.target_key,
-            requested_generation=generation,
-            state="queued",
-            created_at=now,
+            generation = uuid.uuid4()
+            for cand in candidates:
+                target = SyncRequestTarget(
+                    id=uuid.uuid4(),
+                    request_id=request_id,
+                    account_id=cand.account_id,
+                    folder_id=cand.folder_id,
+                    target_key=cand.target_key,
+                    requested_generation=generation,
+                    state="queued",
+                    created_at=now,
+                )
+                session.add(target)
+                session.flush()
+
+                # Enqueue corresponding worker job
+                if mode == "delta":
+                    if cand.folder_id is not None:
+                        job = enqueue_job(
+                            session,
+                            job_type=JobType.SYNC_FOLDER_DELTA.value,
+                            account_id=cand.account_id,
+                            payload={"folder_id": str(cand.folder_id), "request_id": str(request_id)},
+                            priority=20,
+                            dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
+                        )
+                    else:
+                        job = enqueue_job(
+                            session,
+                            job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+                            account_id=cand.account_id,
+                            payload={"request_id": str(request_id)},
+                            priority=20,
+                            dedupe_key=f"sync:{cand.account_id}",
+                        )
+                else:
+                    job = enqueue_job(
+                        session,
+                        job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+                        account_id=cand.account_id,
+                        payload={"request_id": str(request_id), "full": True},
+                        priority=50,
+                        dedupe_key=f"sync:{cand.account_id}",
+                    )
+                target.current_job_id = job.id
+
+            session.flush()
+    except IntegrityError:
+        # A concurrent request with the same client_request_id won the insert;
+        # the savepoint rollback left the session usable, so re-read and apply
+        # the same intent rules instead of failing with a 500.
+        existing = session.scalar(
+            select(SyncRequest).where(SyncRequest.client_request_id == client_request_id)
         )
-        session.add(target)
-        session.flush()
-
-        # Enqueue corresponding worker job
-        if mode == "delta":
-            if cand.folder_id is not None:
-                job = enqueue_job(
-                    session,
-                    job_type=JobType.SYNC_FOLDER_DELTA.value,
-                    account_id=cand.account_id,
-                    payload={"folder_id": str(cand.folder_id), "request_id": str(request_id)},
-                    priority=20,
-                    dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
-                )
-            else:
-                job = enqueue_job(
-                    session,
-                    job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
-                    account_id=cand.account_id,
-                    payload={"request_id": str(request_id)},
-                    priority=20,
-                    dedupe_key=f"sync:{cand.account_id}",
-                )
-        else:
-            job = enqueue_job(
-                session,
-                job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
-                account_id=cand.account_id,
-                payload={"request_id": str(request_id), "full": True},
-                priority=50,
-                dedupe_key=f"sync:{cand.account_id}",
-            )
-        target.current_job_id = job.id
-
-    session.flush()
+        if existing is None:
+            raise
+        if _intent_matches(existing, mode=mode, trigger=trigger, canonical_scope=canonical_scope):
+            return existing, False
+        raise ValueError("client_request_id_conflict") from None
     return req, True
 
 
