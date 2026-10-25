@@ -17,7 +17,7 @@ from mail_core.security.auth import (
     read_session,
 )
 
-_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 bearer_scheme = HTTPBearer(auto_error=False)
 cookie_scheme = APIKeyCookie(name=SESSION_COOKIE_NAME, auto_error=False)
