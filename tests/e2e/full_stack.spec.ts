@@ -486,7 +486,7 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
     await expect(first).toBeVisible({ timeout: 15000 })
     await expect(group.locator('.tree-group-heading')).toBeVisible()
     await first.locator('xpath=..').locator('.tree-disclosure').click()
-    await group.locator('.tree-icon-action').click()
+    await group.getByRole('button', { name: /^分组操作/ }).click()
     await page.keyboard.press('Escape')
     await first.dragTo(first)
 
