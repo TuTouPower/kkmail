@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import event, select
 
-from mail_core.blobs.crypto import MAGIC, BlobCryptoError, wrap
+from mail_core.blobs.crypto import MAGIC, BlobCryptoError, BlobIntegrityError, wrap
 from mail_core.blobs.gc import sweep_expired_blobs
 from mail_core.blobs.quota import acquire_blob_digest_lock
 from mail_core.blobs.store import BlobStore
@@ -63,6 +63,21 @@ def test_aes_gcm_roundtrip_and_key_version(tmp_path, monkeypatch):
     path.write_bytes(b"legacy")
     with pytest.raises(BlobCryptoError):
         store.get(digest)
+
+
+def test_streaming_digest_mismatch_raises_after_yielding_authenticated_chunks(tmp_path):
+    store = BlobStore(tmp_path)
+    payload = b"authenticated frame with mismatched content digest"
+    stored = store.put(payload)
+    wrong_digest = ("0" if stored.content_sha256[0] != "0" else "1") + stored.content_sha256[1:]
+    wrong_path = store.path_for(wrong_digest)
+    wrong_path.parent.mkdir(parents=True, exist_ok=True)
+    wrong_path.write_bytes(store.path_for(stored.content_sha256).read_bytes())
+
+    stream = store.iter_plaintext(wrong_digest)
+    assert next(stream) == payload
+    with pytest.raises(BlobIntegrityError, match="does not match its digest"):
+        list(stream)
 
 
 def test_streaming_roundtrip_large_and_tamper(tmp_path):

@@ -120,8 +120,11 @@ class BlobStore:
     def iter_plaintext(self, digest: str) -> Iterator[bytes]:
         """Stream-decrypt one chunk at a time; verifies the SHA-256 at the end.
 
-        AES-GCM authenticates every frame, and the final-frame flag rejects
-        truncation, so only authenticated bytes are ever yielded.
+        AES-GCM authenticates each frame before yielding its chunk, but the
+        content digest is checked only after the iterator is exhausted. Streaming
+        callers must treat any terminal ``BlobCryptoError`` as a failed response
+        and discard partial output. Use ``get()`` when verification must finish
+        before plaintext is exposed to the caller.
         """
         digest = self._normalize_digest(digest)
         path = self.path_for(digest)
