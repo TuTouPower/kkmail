@@ -168,10 +168,8 @@ jobs:
         run: python scripts/export_openapi.py --check
 
       - name: Start Dedicated Test Services
-        env:
-          KKMAIL_TEST_PG_PASSWORD: "ci_test_password_secret_123"
         run: |
-          echo "KKMAIL_TEST_PG_PASSWORD='ci_test_password_secret_123'" > .env.test
+          printf "KKMAIL_TEST_PG_PASSWORD='%s'\n" "$(openssl rand -hex 32)" > .env.test
           chmod 600 .env.test
           scripts/run-mail-core-tests.sh start
           scripts/start-mail-core-imap.sh
