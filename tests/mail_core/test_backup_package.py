@@ -457,6 +457,18 @@ def test_pg_dump_failure_raises_without_stub(tmp_path, monkeypatch):
         )
 
 
+def test_missing_pg_dump_raises_a_dump_specific_error(tmp_path, monkeypatch):
+    from mail_core.backup.package import PgDumpError, _pg_dump_to
+
+    monkeypatch.setattr("mail_core.backup.package.shutil.which", lambda _name: None)
+
+    with pytest.raises(PgDumpError, match="pg_dump binary not found on PATH"):
+        _pg_dump_to(
+            tmp_path / "postgres.dump",
+            "postgresql://nobody:nope@127.0.0.1:1/none",
+        )
+
+
 def test_libpq_dsn_strips_password_from_uri():
     from mail_core.backup.package import _libpq_dsn_and_password
 

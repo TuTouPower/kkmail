@@ -57,6 +57,10 @@ class RestoreVerifyResult:
     backup_key_version: int | None = None
 
 
+class PgDumpError(RuntimeError):
+    """Raised when pg_dump is unavailable or cannot create a database dump."""
+
+
 def _redact_url(url: str) -> str:
     if "://" in url and "@" in url:
         scheme, rest = url.split("://", 1)
@@ -290,14 +294,14 @@ def _pg_dump_to(dest: Path, url: str, *, allow_stub: bool = False) -> str:
         except subprocess.TimeoutExpired as exc:
             log.warning("pg_dump timed out after %ss", dump_timeout)
             if not allow_stub:
-                raise RuntimeError(f"pg_dump timed out after {dump_timeout}s") from exc
+                raise PgDumpError(f"pg_dump timed out after {dump_timeout}s") from exc
         except subprocess.CalledProcessError as exc:
             detail = exc.stderr.decode(errors="replace")[:500] if exc.stderr else str(exc)
             log.warning("pg_dump failed: %s", detail)
             if not allow_stub:
-                raise RuntimeError(f"pg_dump failed: {detail}") from exc
+                raise PgDumpError(f"pg_dump failed: {detail}") from exc
     elif not allow_stub:
-        raise RuntimeError("pg_dump binary not found on PATH")
+        raise PgDumpError("pg_dump binary not found on PATH")
     dest.write_text(
         "-- mail-core backup stub: pg_dump unavailable or failed\n"
         f"-- url={_redact_url(url)}\n"

@@ -120,7 +120,7 @@ export KKMAIL_DRILL_OUT="$OUT"
 import os
 from pathlib import Path
 
-from mail_core.backup.package import create_backup_package, verify_backup_package
+from mail_core.backup.package import PgDumpError, create_backup_package, verify_backup_package
 
 out = Path(os.environ["KKMAIL_DRILL_OUT"])
 url = "postgresql://nobody:nope@127.0.0.1:1/none"
@@ -132,9 +132,9 @@ try:
     assert vr.ok, vr.errors
     print("created", path)
     print("verify", vr)
-except RuntimeError as exc:
+except PgDumpError as exc:
     # Offline drill: explicit stub dump must NOT verify clean without allow_stub.
-    print("pg_dump unavailable (", exc, "); crypto-only stub drill")
+    print("pg_dump unavailable or failed (", exc, "); crypto-only stub drill")
     path = create_backup_package(
         out,
         include_blobs=True,
