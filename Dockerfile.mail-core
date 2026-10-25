@@ -11,7 +11,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements-mail-core.txt requirements-mail-core.lock ./
-RUN pip install --no-cache-dir --require-hashes -r requirements-mail-core.lock
+RUN pip install --no-cache-dir --retries 5 --require-hashes -r requirements-mail-core.lock
 COPY src/mail_core ./src/mail_core
 COPY --from=frontend /fe/dist ./frontend/dist
 RUN useradd --system --uid 10001 --home-dir /app kkmail \

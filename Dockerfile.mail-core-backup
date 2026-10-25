@@ -7,7 +7,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY requirements-mail-core.txt requirements-mail-core.lock /tmp/
 RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir --require-hashes -r /tmp/requirements-mail-core.lock
+    && /opt/venv/bin/pip install --no-cache-dir --retries 5 --require-hashes -r /tmp/requirements-mail-core.lock
 COPY src/mail_core ./src/mail_core
 
 ENV PATH=/opt/venv/bin:$PATH \
