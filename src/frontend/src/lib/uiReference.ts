@@ -12,17 +12,12 @@ export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
   LG04: { id: 'LG04', region: '登录', description: '登录错误提示' },
 
   // Sidebar (SB)
-  SB01: { id: 'SB01', region: '侧栏', description: '折叠或关闭侧栏按钮' },
-  SB02: { id: 'SB02', region: '侧栏', description: '个人收藏分类标题' },
-  SB03: { id: 'SB03', region: '侧栏', description: '所有收件箱分类' },
-  SB04: { id: 'SB04', region: '侧栏', description: '所有未读分类' },
-  SB05: { id: 'SB05', region: '侧栏', description: '已发邮件分类' },
-  SB06: { id: 'SB06', region: '侧栏', description: '草稿箱分类' },
-  SB07: { id: 'SB07', region: '侧栏', description: '废纸篓分类' },
-  SB08: { id: 'SB08', region: '侧栏', description: '垃圾邮件分类' },
-  SB09: { id: 'SB09', region: '侧栏', description: '邮箱账户分组标题' },
   SB10: { id: 'SB10', region: '侧栏', description: '邮箱账户行模板' },
   SB11: { id: 'SB11', region: '侧栏', description: '侧栏底部设置按钮' },
+  SB12: { id: 'SB12', region: '侧栏', description: '所有账号标题' },
+  SB13: { id: 'SB13', region: '侧栏', description: '所有账号邮件分类项' },
+  SB15: { id: 'SB15', region: '侧栏', description: '分组邮件分类项' },
+  SB16: { id: 'SB16', region: '侧栏', description: '账号列表标题' },
 
   // Message List (ML)
   ML01: { id: 'ML01', region: '邮件列表', description: '侧栏展开按钮' },
@@ -38,7 +33,6 @@ export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
   ML11: { id: 'ML11', region: '邮件列表', description: '邮件接收日期' },
   ML12: { id: 'ML12', region: '邮件列表', description: '邮件正文摘要' },
   ML13: { id: 'ML13', region: '邮件列表', description: '列表空状态' },
-  ML14: { id: 'ML14', region: '邮件列表', description: '列表加载更多按钮' },
 
   // Message Reader (MR)
   MR01: { id: 'MR01', region: '邮件详情', description: '阅读器顶部工具栏' },
@@ -51,6 +45,7 @@ export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
   MR08: { id: 'MR08', region: '邮件详情', description: '正文沙箱容器' },
   MR09: { id: 'MR09', region: '邮件详情', description: '附件列表' },
   MR10: { id: 'MR10', region: '邮件详情', description: '详情空状态' },
+  'MR-PARSE-ERROR': { id: 'MR-PARSE-ERROR', region: '邮件详情', description: '正文解析错误提示' },
 
   // Settings (ST)
   ST01: { id: 'ST01', region: '设置', description: '设置侧栏展开按钮' },
