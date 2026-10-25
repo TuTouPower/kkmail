@@ -17,9 +17,7 @@ import { getDesktopPlatform } from './lib/desktopShell'
 const Sidebar = lazy(() => import('./components/Sidebar'))
 const MessageReader = lazy(() => import('./components/MessageReader'))
 const SettingsPage = lazy(() => import('./components/SettingsModal'))
-const UiReferenceOverlay = import.meta.env.DEV
-  ? lazy(() => import('./components/UiReferenceOverlay'))
-  : null
+const UiReferenceOverlay = lazy(() => import('./components/UiReferenceOverlay'))
 
 function App() {
   const theme = useMailStore((s) => s.theme)
@@ -38,6 +36,7 @@ function App() {
   const listWidth = useMailStore((s) => s.listWidth)
   const setSidebarWidth = useMailStore((s) => s.setSidebarWidth)
   const setListWidth = useMailStore((s) => s.setListWidth)
+  const uiReferenceEnabled = useMailStore((s) => s.uiReferenceEnabled ?? true)
   const [authed, setAuthed] = useState<boolean | null>(null)
   const [sessionCheckFailed, setSessionCheckFailed] = useState(false)
   const [sessionCheckAttempt, setSessionCheckAttempt] = useState(0)
@@ -172,7 +171,7 @@ function App() {
           }
           void queryClient.invalidateQueries()
         }} />
-        {UiReferenceOverlay && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
+        {uiReferenceEnabled && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
       </>
     )
   }
@@ -305,7 +304,7 @@ function App() {
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeMobileSidebar() }}
         />
       )}
-      {UiReferenceOverlay && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
+      {uiReferenceEnabled && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
     </div>
   )
 }
