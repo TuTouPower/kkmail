@@ -47,6 +47,24 @@ def test_invalid_api_key_401():
     assert client.get("/api/mail/inbox").status_code == 401
 
 
+def test_invalid_bearer_falls_back_to_valid_session_cookie(monkeypatch):
+    import mail_core.api.deps as auth_deps
+    from mail_core.security.auth import AuthPrincipal
+
+    monkeypatch.setattr(auth_deps, "api_key_matches", lambda _token: False)
+    monkeypatch.setattr(auth_deps, "read_session", lambda _token: {"csrf": "session-csrf"})
+    request = SimpleNamespace(headers={})
+    bearer = HTTPAuthorizationCredentials(scheme="Bearer", credentials="invalid-key")
+
+    principal = auth_deps.authenticate_request(
+        request,
+        bearer_creds=bearer,
+        cookie_token="valid-session",
+    )
+
+    assert principal == AuthPrincipal(via="session", csrf_token="session-csrf")
+
+
 def test_authenticated_api_keys_have_distinct_oauth_flow_bindings(monkeypatch):
     import mail_core.api.deps as auth_deps
     from mail_core.accounts.oauth_flow import session_binding_key

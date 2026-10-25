@@ -33,10 +33,8 @@ def authenticate_request(
         if isinstance(bearer_creds, HTTPAuthorizationCredentials)
         else extract_bearer(request.headers.get("Authorization"))
     )
-    if bearer is not None:
-        if api_key_matches(bearer):
-            return AuthPrincipal(via="api_key", api_key_digest=digest_api_key(bearer))
-        raise HTTPException(status_code=401, detail="invalid api key")
+    if bearer is not None and api_key_matches(bearer):
+        return AuthPrincipal(via="api_key", api_key_digest=digest_api_key(bearer))
 
     raw = cookie_token if isinstance(cookie_token, str) else request.cookies.get(SESSION_COOKIE_NAME)
     if raw:
