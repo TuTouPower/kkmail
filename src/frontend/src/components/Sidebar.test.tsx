@@ -401,6 +401,16 @@ describe('<Sidebar />', () => {
     expect(calls.some((call) => call.url.startsWith('/api/accounts'))).toBe(true)
   })
 
+  it('reports a statistics-only failure separately from account loading', async () => {
+    mockApi({ failStats: true, failAcc1Stats: true, failAcc2Stats: true })
+    const { container } = await render(<Sidebar />)
+
+    await waitFor(() => expect(container.querySelector('.tree-folder-status')?.textContent).toContain('未读统计暂不可用'), 3000)
+    expect(container.querySelector('.tree-load-error')).toBeNull()
+    expect(container.textContent).not.toContain('账户加载失败')
+    expect(container.querySelector('.tree-folder-status .tree-retry')?.textContent).toBe('重试统计')
+  })
+
   it('shows unknown global, account, and group unread counts when one account stats source fails', async () => {
     mockApi({ failStats: true, failAcc1Stats: true })
     const result = await render(<Sidebar />)

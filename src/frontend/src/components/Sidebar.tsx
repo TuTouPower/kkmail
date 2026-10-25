@@ -894,7 +894,8 @@ function Sidebar() {
           </div>
           {sidebarSections.accountList && <div className="tree-account-list" onDragOver={allowDrop} onDrop={(event) => void onDropListHeader(event)}>
             {(groupsQuery.isLoading || accountsQuery.isLoading || layoutQuery.isLoading) && <div className="tree-loading" style={{ paddingLeft: '24px' }}>正在加载账户…</div>}
-            {(groupsQuery.error || accountsQuery.error || layoutQuery.error || statsQuery.error) && <div className="tree-load-error" role="alert" style={{ paddingLeft: '24px' }}><span>{errorMessage(accountsQuery.error || groupsQuery.error || layoutQuery.error || statsQuery.error, '账户加载失败')}</span><button className="tree-retry" type="button" onClick={() => { void groupsQuery.refetch(); void accountsQuery.refetch(); void layoutQuery.refetch(); void statsQuery.refetch() }}>重试</button></div>}
+            {(groupsQuery.error || accountsQuery.error || layoutQuery.error) && <div className="tree-load-error" role="alert" style={{ paddingLeft: '24px' }}><span>{errorMessage(accountsQuery.error || groupsQuery.error || layoutQuery.error, '账户加载失败')}</span><button className="tree-retry" type="button" onClick={() => { void groupsQuery.refetch(); void accountsQuery.refetch(); void layoutQuery.refetch() }}>重试</button></div>}
+            {statsQuery.error && <div className="tree-folder-status" role="status" style={{ paddingLeft: '24px' }}>未读统计暂不可用：{errorMessage(statsQuery.error, '统计加载失败')} <button className="tree-retry" type="button" onClick={() => void statsQuery.refetch()}>重试统计</button></div>}
             {accounts.map((account) => renderAccount(account, 'master', account.group_id || null, 1))}
           </div>}
         </section>
