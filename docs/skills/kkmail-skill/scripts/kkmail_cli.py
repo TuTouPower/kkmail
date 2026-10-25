@@ -141,8 +141,8 @@ class KKMailClient:
         # Validate URL immediately (loopback allows HTTP; remote requires HTTPS)
         validate_target_url(self.base_url)
 
-        self.api_key = api_key.strip()
-        self.password = password.strip()
+        self.api_key = api_key
+        self.password = password
         self.cookie: str | None = None
         self.csrf_token: str | None = None
 

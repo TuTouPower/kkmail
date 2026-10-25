@@ -385,3 +385,14 @@ def test_session_cache_refuses_symlink_directory(tmp_path, monkeypatch):
     # Nothing should be written to real_dir
     assert list(real_dir.iterdir()) == []
 
+
+def test_client_preserves_password_and_api_key_whitespace():
+    """Credential values are opaque; surrounding spaces may be intentional."""
+    client = kkmail_cli.KKMailClient(
+        base_url="http://127.0.0.1:37281",
+        api_key="  key with spaces  ",
+        password="  password with spaces  ",
+    )
+
+    assert client.api_key == "  key with spaces  "
+    assert client.password == "  password with spaces  "
