@@ -292,6 +292,78 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
   )
 }
 
+function useScopedSearchDismiss({
+  open,
+  containerRef,
+  triggerRef,
+  onClose,
+}: {
+  open: boolean
+  containerRef: React.RefObject<HTMLElement | null>
+  triggerRef: React.RefObject<HTMLElement | null>
+  onClose: (restoreFocus: boolean) => void
+}) {
+  useEffect(() => {
+    if (!open) return
+
+    function isInside(target: EventTarget | null): boolean {
+      if (!(target instanceof Node)) return false
+      if (containerRef.current?.contains(target)) return true
+      if (triggerRef.current?.contains(target)) return true
+      return false
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null
+      const path = event.composedPath ? event.composedPath() : []
+      const inPath = path.some((el) => el === containerRef.current || el === triggerRef.current)
+      if (inPath || isInside(target)) return
+      if (
+        target?.closest?.('.tree-account-search') ||
+        target?.closest?.('[data-search-toggle-group-id]') ||
+        target?.closest?.('[aria-label="搜索账号列表"]')
+      ) {
+        return
+      }
+      onClose(false)
+    }
+
+    function handleFocusOut(event: FocusEvent) {
+      if (!isInside(event.target)) return
+      const related = event.relatedTarget as HTMLElement | null
+      if (related && isInside(related)) return
+      if (
+        related?.closest?.('.tree-account-search') ||
+        related?.closest?.('[data-search-toggle-group-id]') ||
+        related?.closest?.('[aria-label="搜索账号列表"]')
+      ) {
+        return
+      }
+      requestAnimationFrame(() => {
+        if (!containerRef.current) return
+        const active = document.activeElement as HTMLElement | null
+        if (active && isInside(active)) return
+        if (
+          active?.closest?.('.tree-account-search') ||
+          active?.closest?.('[data-search-toggle-group-id]') ||
+          active?.closest?.('[aria-label="搜索账号列表"]')
+        ) {
+          return
+        }
+        onClose(false)
+      })
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    document.addEventListener('focusout', handleFocusOut, true)
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true)
+      document.removeEventListener('focusout', handleFocusOut, true)
+    }
+  }, [open, containerRef, triggerRef, onClose])
+}
+
 function Sidebar() {
   const view = useMailStore((state) => state.view)
   const setView = useMailStore((state) => state.setView)
@@ -358,6 +430,16 @@ function Sidebar() {
   const newGroupTrigger = useRef<HTMLButtonElement | null>(null)
   const masterSearchInputRef = useRef<HTMLInputElement | null>(null)
   const masterSearchTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const masterSearchContainerRef = useRef<HTMLDivElement | null>(null)
+
+  useScopedSearchDismiss({
+    open: masterSearchOpen,
+    containerRef: masterSearchContainerRef,
+    triggerRef: masterSearchTriggerRef,
+    onClose: (restoreFocus) => {
+      closeMasterSearch(restoreFocus)
+    },
+  })
   const previousOpenGroupSearchIds = useRef<string[]>([])
   useEffect(() => {
     const newlyOpened = openGroupSearchIds.find((id) => !previousOpenGroupSearchIds.current.includes(id))
@@ -657,7 +739,7 @@ function Sidebar() {
     setListFilter(category === 'unread' ? 'unread' : 'all')
   }
 
-  function closeGroupSearch(groupId: string) {
+  function closeGroupSearch(groupId: string, restoreFocus = true) {
     setOpenGroupSearchIds((current) => current.filter((id) => id !== groupId))
     setGroupSearchTerms((current) => {
       if (!(groupId in current)) return current
@@ -665,30 +747,34 @@ function Sidebar() {
       delete next[groupId]
       return next
     })
-    requestAnimationFrame(() => {
-      const trigger = [...document.querySelectorAll<HTMLButtonElement>('[data-search-toggle-group-id]')]
-        .find((element) => element.dataset.searchToggleGroupId === groupId)
-      trigger?.focus()
-    })
+    if (restoreFocus) {
+      requestAnimationFrame(() => {
+        const trigger = [...document.querySelectorAll<HTMLButtonElement>('[data-search-toggle-group-id]')]
+          .find((element) => element.dataset.searchToggleGroupId === groupId)
+        trigger?.focus()
+      })
+    }
   }
 
   function toggleGroupSearch(groupId: string) {
     if (openGroupSearchIds.includes(groupId)) {
-      closeGroupSearch(groupId)
+      closeGroupSearch(groupId, true)
       return
     }
     setOpenGroupSearchIds((current) => current.includes(groupId) ? current : [...current, groupId])
   }
 
-  function closeMasterSearch() {
+  function closeMasterSearch(restoreFocus = true) {
     setMasterSearchOpen(false)
     setMasterSearchTerm('')
-    requestAnimationFrame(() => masterSearchTriggerRef.current?.focus())
+    if (restoreFocus) {
+      requestAnimationFrame(() => masterSearchTriggerRef.current?.focus())
+    }
   }
 
   function toggleMasterSearch() {
     if (masterSearchOpen) {
-      closeMasterSearch()
+      closeMasterSearch(true)
       return
     }
     setMasterSearchOpen(true)
@@ -1052,7 +1138,7 @@ function Sidebar() {
             <button type="button" className="tree-icon-action" aria-label="恢复默认排序" title="恢复默认排序" onClick={() => void resetOrder()}><ArrowDownWideNarrow size={16} /></button>
           </div>
           {masterSectionExpanded && <div className="tree-account-list" data-search-active={masterSearchActive} onDragOver={(event) => masterSearchActive ? suppressDragDrop(event) : allowDrop(event)} onDrop={(event) => masterSearchActive ? suppressDragDrop(event) : void onDropListHeader(event)}>
-            {masterSearchOpen && <div className="tree-account-search" data-no-drag="true">
+            {masterSearchOpen && <div ref={masterSearchContainerRef} className="tree-account-search" data-no-drag="true">
               <Search size={14} aria-hidden="true" />
               <input
                 ref={masterSearchInputRef}
@@ -1065,7 +1151,7 @@ function Sidebar() {
                   if (event.key !== 'Escape') return
                   event.preventDefault()
                   event.stopPropagation()
-                  closeMasterSearch()
+                  closeMasterSearch(true)
                 }}
               />
               {masterSearchTerm && <button type="button" aria-label="清除账号列表搜索" title="清除搜索" onClick={() => {
@@ -1101,7 +1187,7 @@ interface SidebarGroupSectionProps {
   searchActive: boolean
   onToggleSearch: () => void
   onSearchTermChange: (value: string) => void
-  onCloseSearch: () => void
+  onCloseSearch: (restoreFocus?: boolean) => void
   active: boolean
   menuOpen: boolean
   editing: boolean
@@ -1131,6 +1217,18 @@ function SidebarGroupSection(props: SidebarGroupSectionProps) {
     event.stopPropagation()
     event.currentTarget.classList.remove('tree-drop-target')
   }
+  const groupSearchContainerRef = useRef<HTMLDivElement | null>(null)
+  const groupSearchTriggerRef = useRef<HTMLButtonElement | null>(null)
+
+  useScopedSearchDismiss({
+    open: props.searchOpen,
+    containerRef: groupSearchContainerRef,
+    triggerRef: groupSearchTriggerRef,
+    onClose: (restoreFocus) => {
+      props.onCloseSearch(restoreFocus)
+    },
+  })
+
   const menus = props.menuOpen && <div className="tree-group-menu" role="menu">
     <button type="button" role="menuitem" onClick={props.onRenameStart}><Pencil size={14} />重命名分组</button>
     <button type="button" role="menuitem" className="danger" onClick={props.onDelete}><Trash2 size={14} />删除分组</button>
@@ -1140,12 +1238,12 @@ function SidebarGroupSection(props: SidebarGroupSectionProps) {
       <div className={`tree-group-heading ${props.active ? 'active' : ''}`} draggable={!props.searchActive && !props.editing && !props.savingLayout && props.layoutReady} onDragStart={(event) => props.searchActive ? suppressDragDrop(event) : props.onDragStart(event)} onDragEnd={props.onDragEnd}>
         <button type="button" data-no-drag="true" className="tree-disclosure" aria-label={props.collapsed ? `展开分组 ${props.group.name}` : `折叠分组 ${props.group.name}`} aria-expanded={!props.collapsed} onClick={props.onToggle}>{props.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button>
         <button type="button" className="tree-group-select" onClick={props.onToggle}><FolderIcon size={16} /><span className="tree-label">{props.group.name}</span><span className="tree-count">{props.members.length}</span>{unread === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}</button>
-        <button type="button" data-search-toggle-group-id={props.group.id} data-no-drag="true" className="tree-icon-action" aria-label={props.searchOpen ? `关闭分组搜索 ${props.group.name}` : `搜索分组 ${props.group.name}`} aria-expanded={props.searchOpen} title={props.searchOpen ? '关闭搜索' : '搜索账号'} onClick={props.onToggleSearch}><Search size={15} /></button>
+        <button ref={groupSearchTriggerRef} type="button" data-search-toggle-group-id={props.group.id} data-no-drag="true" className="tree-icon-action" aria-label={props.searchOpen ? `关闭分组搜索 ${props.group.name}` : `搜索分组 ${props.group.name}`} aria-expanded={props.searchOpen} title={props.searchOpen ? '关闭搜索' : '搜索账号'} onClick={props.onToggleSearch}><Search size={15} /></button>
         <button type="button" data-no-drag="true" className="tree-icon-action" aria-label={`分组操作 ${props.group.name}`} aria-expanded={props.menuOpen} onClick={(event) => props.onOpenMenu(event.currentTarget)}><MoreHorizontal size={16} /></button>
         {menus}
       </div>
       {props.editing && <form className="tree-inline-form" onSubmit={props.onRenameSubmit}><input autoFocus aria-label="重命名分组" maxLength={128} value={props.editingName} disabled={props.savingRename} onChange={(event) => props.onRenameName(event.target.value)} /><button type="submit" aria-label="保存分组名称" disabled={props.savingRename}><CheckIcon size={15} /></button><button type="button" aria-label="取消重命名" disabled={props.savingRename} onClick={props.onRenameCancel}><X size={15} /></button></form>}
-      {props.searchOpen && <div className="tree-account-search" data-no-drag="true">
+      {props.searchOpen && <div ref={groupSearchContainerRef} className="tree-account-search" data-no-drag="true">
         <Search size={14} aria-hidden="true" />
         <input
           data-search-group-id={props.group.id}
@@ -1158,7 +1256,7 @@ function SidebarGroupSection(props: SidebarGroupSectionProps) {
             if (event.key !== 'Escape') return
             event.preventDefault()
             event.stopPropagation()
-            props.onCloseSearch()
+            props.onCloseSearch(true)
           }}
         />
         {props.searchTerm && <button type="button" aria-label={`清除分组搜索 ${props.group.name}`} title="清除搜索" onClick={(event) => {

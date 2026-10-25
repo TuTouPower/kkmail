@@ -329,6 +329,45 @@ describe('<Sidebar />', () => {
     expect((container.querySelector('input[aria-label="搜索账号列表"]') as HTMLInputElement).value).toBe('')
   })
 
+  it('closes scoped search on outside pointerdown and outside focusout (p045)', async () => {
+    mockApi()
+    useMailStore.setState({ sidebarSections: { allAccounts: true, accountList: true } })
+    const { container } = await render(<Sidebar />)
+
+    // 1. Group search outside pointerdown closes search
+    await waitFor(() => expect(container.querySelector('[aria-label="搜索分组 税务归档"]')).not.toBeNull())
+    const groupTrigger = container.querySelector('[aria-label="搜索分组 税务归档"]') as HTMLButtonElement
+    await click(groupTrigger)
+    const groupSearch = container.querySelector('input[aria-label="搜索分组账号：税务归档"]') as HTMLInputElement
+    expect(groupSearch).not.toBeNull()
+    await typeInto(groupSearch, 'corp')
+
+    // Click outside: dispatch pointerdown on document.body
+    await act(async () => {
+      document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
+    })
+    await waitFor(() => {
+      expect(container.querySelector('input[aria-label="搜索分组账号：税务归档"]')).toBeNull()
+    })
+
+    // 2. Master search outside focusout closes search
+    const masterTrigger = container.querySelector('[aria-label="搜索账号列表"]') as HTMLButtonElement
+    await click(masterTrigger)
+    const masterSearch = container.querySelector('input[aria-label="搜索账号列表"]') as HTMLInputElement
+    expect(masterSearch).not.toBeNull()
+    await typeInto(masterSearch, 'test')
+
+    // Focus out to an external element (new group button)
+    const newGroupBtn = container.querySelector('[aria-label="新建分组"]') as HTMLButtonElement
+    await act(async () => {
+      newGroupBtn.focus()
+      await new Promise((r) => requestAnimationFrame(r))
+    })
+    await waitFor(() => {
+      expect(container.querySelector('input[aria-label="搜索账号列表"]')).toBeNull()
+    })
+  })
+
   it('disables account dragging and drop targets inside filtered group and master lists', async () => {
     const calls = mockApi({ additionalAccounts: [{ id: 'acc-3', email: 'records@b.example', group_id: 'group-2' }] })
     const { container } = await render(<Sidebar />)
