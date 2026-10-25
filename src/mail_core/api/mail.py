@@ -23,6 +23,7 @@ from mail_core.mail.application.sync_requests import (
     SyncRequestOut,
     create_sync_request,
     get_sync_request_report,
+    list_recent_sync_requests,
     record_account_activity,
 )
 from mail_core.mail.application.attachments import (
@@ -689,6 +690,27 @@ def api_sync_delta(body: DeltaSyncIn, response: Response) -> SyncRequestOut:
         if report and report.target_count == 0:
             response.status_code = 200
         return report  # type: ignore[return-value]
+
+
+@router.get("/sync/requests", response_model=list[SyncRequestOut])
+def api_list_sync_requests(
+    account_id: UUID | None = None,
+    group_id: UUID | None = None,
+    folder_id: UUID | None = None,
+    folder_role: str | None = None,
+    limit: int = 50,
+) -> list[SyncRequestOut]:
+    """Recent unfinished requests for a scope (progress recovery, design §6)."""
+    Session = get_session_factory()
+    with Session() as session:
+        return list_recent_sync_requests(
+            session,
+            account_id=account_id,
+            group_id=group_id,
+            folder_id=folder_id,
+            folder_role=folder_role,
+            limit=limit,
+        )
 
 
 @router.get("/sync/requests/{request_id}", response_model=SyncRequestOut)

@@ -407,6 +407,53 @@ def get_sync_request_report(session: Session, request_id: uuid.UUID) -> SyncRequ
     )
 
 
+def list_recent_sync_requests(
+    session: Session,
+    *,
+    account_id: uuid.UUID | None = None,
+    group_id: uuid.UUID | None = None,
+    folder_id: uuid.UUID | None = None,
+    folder_role: str | None = None,
+    states: tuple[str, ...] = ("queued", "running"),
+    limit: int = 50,
+) -> list[SyncRequestOut]:
+    """Recent unfinished requests matching a scope (repair design §6).
+
+    The frontend progress hook uses this after a reload to re-adopt the
+    current scope's in-flight request instead of POSTing a duplicate.
+    Scope filters compare against each request's canonical scope; a
+    filter that is not provided matches any request. Results are newest
+    first and capped at 50.
+    """
+    wanted = _canonical_scope(
+        None,
+        account_id=account_id,
+        group_id=group_id,
+        folder_id=folder_id,
+        folder_role=folder_role,
+    )
+    capped = max(1, min(int(limit), 50))
+    rows = list(
+        session.scalars(
+            select(SyncRequest)
+            .where(SyncRequest.state.in_(states))
+            .order_by(SyncRequest.created_at.desc())
+            .limit(200)
+        ).all()
+    )
+    reports: list[SyncRequestOut] = []
+    for req in rows:
+        canonical = _canonical_scope(req.scope)
+        if any(canonical.get(key) != value for key, value in wanted.items()):
+            continue
+        report = get_sync_request_report(session, req.id)
+        if report is not None:
+            reports.append(report)
+        if len(reports) >= capped:
+            break
+    return reports
+
+
 def record_account_activity(session: Session, account_ids: list[uuid.UUID], ttl_seconds: int = 45) -> None:
     now = datetime.now(timezone.utc)
     expires = now + timedelta(seconds=ttl_seconds)

@@ -174,3 +174,34 @@ def test_single_account_full_sync_succeeds_with_generated_id_within_column_limit
         stored = session.get(SyncRequest, uuid.UUID(data["id"]))
         assert stored is not None
         assert len(stored.client_request_id) <= 64
+
+
+def test_list_recent_sync_requests_recovers_unfinished_scope_request():
+    group_id, acc1_id, acc2_id, f1_id = _seed_accounts()
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+
+    body = {
+        "account_id": str(acc1_id),
+        "trigger": "manual",
+        "client_request_id": f"test-list-req-{uuid.uuid4().hex}",
+    }
+    r = client.post("/api/mail/sync/delta", json=body)
+    assert r.status_code == 202
+    created = r.json()
+    assert created["state"] == "queued"
+
+    # Unfiltered list contains the unfinished request.
+    r = client.get("/api/mail/sync/requests")
+    assert r.status_code == 200
+    ids = [item["id"] for item in r.json()]
+    assert created["id"] in ids
+
+    # Scope-filtered by the owning account finds it; another account does not.
+    r = client.get("/api/mail/sync/requests", params={"account_id": str(acc1_id)})
+    assert created["id"] in [item["id"] for item in r.json()]
+    r = client.get("/api/mail/sync/requests", params={"account_id": str(acc2_id)})
+    assert created["id"] not in [item["id"] for item in r.json()]
+
+    # Limit is honoured and capped.
+    r = client.get("/api/mail/sync/requests", params={"limit": 1})
+    assert len(r.json()) <= 1

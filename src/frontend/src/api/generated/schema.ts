@@ -579,6 +579,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mail/sync/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api List Sync Requests
+         * @description Recent unfinished requests for a scope (progress recovery, design §6).
+         */
+        get: operations["api_list_sync_requests_api_mail_sync_requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/mail/sync/requests/{request_id}": {
         parameters: {
             query?: never;
@@ -2631,6 +2651,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SyncRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_list_sync_requests_api_mail_sync_requests_get: {
+        parameters: {
+            query?: {
+                account_id?: string | null;
+                group_id?: string | null;
+                folder_id?: string | null;
+                folder_role?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncRequestOut"][];
                 };
             };
             /** @description Validation Error */
