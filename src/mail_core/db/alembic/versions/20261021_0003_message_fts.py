@@ -40,4 +40,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Indexes on message_search drop with the table. Do not DROP EXTENSION pg_trgm —
     # other schemas may depend on it.
-    op.execute("DROP TABLE IF EXISTS message_search CASCADE")
+    op.execute("DROP TABLE IF EXISTS message_search")
