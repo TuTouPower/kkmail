@@ -12,7 +12,7 @@
 |S0|B0 (`332de0ff`)|F00|I 直推 integration|`7e0d0e77`|已完成|
 |S1|S0|F01, F04, F06|F01 → F04 → F06|`1b97013d`|已完成|
 |S2|S1|F02, F03, F07|F02 → F03 → F07|`9546cc4c`|已完成|
-|S3|S2|F05, F08, F09|F05 → F08 → F09|待定|待开始|
+|S3|S2|F05, F08, F09|F05 → F08 → F09|`ae0cb4c2`|已完成|
 |S4|S3|F10|F10|待定|待开始|
 |S5|S4|F11|F11|待定|待开始|
 |S-final|S5|F12|F12 (文档与收尾)|待定|待开始|
@@ -28,9 +28,9 @@
 |F02|`review_fix/f02_restore`|`kkmail_review_f02_restore`|A|2|已交付 (`008825b8`, `a7992618`)|
 |F03|`review_fix/f03_jobs`|`kkmail_review_f03_jobs`|B|2|已交付 (`8af7746c`, `f53b1a99`)|
 |F07|`review_fix/f07_realtime`|`kkmail_review_f07_realtime`|C|2|已交付 (`e08160f6`, `da7daaf6`)|
-|F05|`review_fix/f05_mail_state`|`kkmail_review_f05_mail_state`|A|3|待开始|
-|F08|`review_fix/f08_reader`|`kkmail_review_f08_reader`|B|1|待开始|
-|F09|`review_fix/f09_settings`|`kkmail_review_f09_settings`|C|3|待开始|
+|F05|`review_fix/f05_mail_state`|`kkmail_review_f05_mail_state`|A|3|已交付 (`7ba43b3c`, `bab48228`, `a4180e96`)|
+|F08|`review_fix/f08_reader`|`kkmail_review_f08_reader`|B|1|已交付 (`50014f6b`)|
+|F09|`review_fix/f09_settings`|`kkmail_review_f09_settings`|C|3|已交付 (`0b7b2ebe`, `bdcc135b`, `af8b8342`)|
 |F10|`review_fix/f10_sync`|`kkmail_review_f10_sync`|A|4|待开始|
 |F11|`review_fix/f11_overlay`|`kkmail_review_f11_overlay`|B|2|待开始|
 |F12|`review_fix/integration`|`kkmail_review_integration`|I|1|待开始|
