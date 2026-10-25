@@ -820,6 +820,27 @@ def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) ->
                 if old_dir.exists():
                     old_dir.rename(dest)
                 raise
+            try:
+                from datetime import datetime, timezone
+                import json
+                from mail_core.db.session import get_session_factory
+                from mail_core.mail.storage.models import AppSetting
+
+                Session = get_session_factory()
+                with Session() as session:
+                    val = json.dumps(
+                        {"finished_at": datetime.now(timezone.utc).isoformat(), "status": "ok"},
+                        sort_keys=True,
+                    )
+                    row = session.get(AppSetting, "backup:last_success")
+                    if row is None:
+                        session.add(AppSetting(key="backup:last_success", value=val))
+                    else:
+                        row.value = val
+                    session.commit()
+            except Exception:
+                pass
+
             return {
                 "status": "ok",
                 "path": str(dest),
