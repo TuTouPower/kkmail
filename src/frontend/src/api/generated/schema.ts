@@ -545,6 +545,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mail/sync/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Report Sync Activity */
+        post: operations["api_report_sync_activity_api_mail_sync_activity_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mail/sync/delta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Api Sync Delta */
+        post: operations["api_sync_delta_api_mail_sync_delta_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mail/sync/requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Api Get Sync Request */
+        get: operations["api_get_sync_request_api_mail_sync_requests__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -807,6 +858,11 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** ActivityIn */
+        ActivityIn: {
+            /** Account Ids */
+            account_ids?: string[];
+        };
         /** AttachmentOut */
         AttachmentOut: {
             /** Contenttype */
@@ -819,6 +875,28 @@ export interface components {
             name: string;
             /** Size */
             size: number | null;
+        };
+        /** DeltaSyncIn */
+        DeltaSyncIn: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Client Request Id */
+            client_request_id?: string;
+            /** Folder Id */
+            folder_id?: string | null;
+            /**
+             * Folder Role
+             * @default inbox
+             */
+            folder_role: string | null;
+            /** Group Id */
+            group_id?: string | null;
+            /**
+             * Trigger
+             * @default manual
+             * @enum {string}
+             */
+            trigger: "manual" | "focus" | "navigation";
         };
         /** FlagBody */
         FlagBody: {
@@ -1369,13 +1447,6 @@ export interface components {
             /** Ungrouped Account Ids */
             ungrouped_account_ids: string[];
         };
-        /** SyncAllOut */
-        SyncAllOut: {
-            /** Count */
-            count: number;
-            /** Job Ids */
-            job_ids: string[];
-        };
         /** SyncBodyAcceptedOut */
         SyncBodyAcceptedOut: {
             /** Job Id */
@@ -1388,10 +1459,50 @@ export interface components {
              */
             status: "queued" | "in_progress" | "complete";
         };
-        /** SyncJobOut */
-        SyncJobOut: {
-            /** Job Id */
-            job_id: string;
+        /** SyncRequestOut */
+        SyncRequestOut: {
+            /** Completed Count */
+            completed_count: number;
+            /** Created At */
+            created_at: string;
+            /** Errors */
+            errors?: components["schemas"]["SyncTargetErrorOut"][];
+            /** Failed Count */
+            failed_count: number;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "delta" | "full";
+            /** Queued Count */
+            queued_count: number;
+            /** Running Count */
+            running_count: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "queued" | "running" | "complete" | "failed";
+            /** Target Count */
+            target_count: number;
+            /**
+             * Trigger
+             * @enum {string}
+             */
+            trigger: "manual" | "focus" | "navigation" | "initialization";
+        };
+        /** SyncTargetErrorOut */
+        SyncTargetErrorOut: {
+            /** Code */
+            code: string;
+            /** Safe Message */
+            safe_message?: string | null;
+            /** Target Id */
+            target_id: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -1704,12 +1815,12 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SyncAllOut"];
+                    "application/json": components["schemas"]["SyncRequestOut"];
                 };
             };
         };
@@ -1790,12 +1901,12 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SyncJobOut"];
+                    "application/json": components["schemas"]["SyncRequestOut"];
                 };
             };
             /** @description Validation Error */
@@ -2456,6 +2567,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GlobalStatsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_report_sync_activity_api_mail_sync_activity_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivityIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_sync_delta_api_mail_sync_delta_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeltaSyncIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_get_sync_request_api_mail_sync_requests__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncRequestOut"];
                 };
             };
             /** @description Validation Error */

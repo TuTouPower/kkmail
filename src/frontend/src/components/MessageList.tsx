@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, ExternalLink, PanelLeft } from 'lucide-react'
-import { api, apiRequest } from '../api/client'
+import { apiRequest } from '../api/client'
 import { accountScope, beginReadMutation, fetchAccounts, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, markReadOptimistic, setCachedReadState, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchGlobalStats, fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
@@ -14,6 +14,7 @@ import { displayName } from '../lib/displayName'
 import { formatListDate } from '../lib/listDate'
 import { previewText } from '../lib/previewText'
 import { useMailStore } from '../store/mailStore'
+import { useScopeSync } from '../hooks/use_scope_sync'
 import { getDesktopPlatform } from '../lib/desktopShell'
 
 /** Server-side search kicks in from this many characters. */
@@ -469,24 +470,18 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     }
   }
 
-  const [isSyncing, setIsSyncing] = useState(false)
+  const [isLocalSyncing, setIsLocalSyncing] = useState(false)
+  const { isSyncing: isScopeSyncing, lastError: scopeSyncError, triggerManualSync } = useScopeSync(accounts.length > 0)
+  const isSyncing = isLocalSyncing || isScopeSyncing
 
   async function refreshView() {
-    setIsSyncing(true)
-    setActionStatus('正在同步邮件…')
+    setIsLocalSyncing(true)
     try {
-      const activeAccountId = 'accountId' in view && typeof view.accountId === 'string' ? view.accountId : undefined
-      if (activeAccountId) {
-        await api.syncAccount(activeAccountId)
-        setActionStatus('已触发账户同步')
-      } else {
-        await api.syncAll()
-        setActionStatus('已触发全量同步')
-      }
+      triggerManualSync()
     } catch (err) {
       setActionStatus(`同步触发失败：${errorMessage(err)}`)
     } finally {
-      setIsSyncing(false)
+      setIsLocalSyncing(false)
       void invalidateMailListQueries()
       void invalidateMailStatsQueries()
       void queryClient.invalidateQueries({ queryKey: queryKeys.accounts })
@@ -543,8 +538,8 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
             <button
               data-ui="ML03"
               className={`list-primary-btn ${isSyncing ? 'loading' : ''}`}
-              title={isSyncing ? '正在同步…' : '刷新并同步'}
-              aria-label={isSyncing ? '正在同步…' : '刷新并同步'}
+              title={isSyncing ? '正在检查新邮件…' : '增量同步（检查新邮件）'}
+              aria-label={isSyncing ? '正在检查新邮件…' : '增量同步（检查新邮件）'}
               disabled={isSyncing}
               onClick={refreshView}
             >
@@ -617,7 +612,8 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         )}
       </div>
       <div ref={messageListRef} className={`message-list windowed ${selecting ? 'selecting' : ''}`} onScroll={handleScroll}>
-        {actionStatus && <div role="status" className={`list-note ${actionStatus.includes('失败') ? 'error' : ''}`}>{actionStatus}</div>}
+        {actionStatus && actionStatus.includes('失败') && <div role="status" className="list-note error">{actionStatus}</div>}
+        {scopeSyncError && <div role="alert" className="list-note error">{scopeSyncError}</div>}
         {failure && <div role="alert" className="list-note error">{failure}</div>}
         {!loading && visible.length === 0 && (
           <div data-ui="ML13" style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
