@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,13 +12,16 @@ from fastapi.testclient import TestClient
 from mail_core.api.app import app
 from tests.mail_core.conftest import TEST_API_KEY
 from mail_core.blobs.access import (
+    AttachmentAccessError,
     PathTraversalRejected,
     assert_not_path_param,
     parse_attachment_id,
+    resolve_attachment_bytes,
     safe_blob_path,
     validate_content_digest,
 )
 from mail_core.blobs.store import BlobStore, InvalidBlobDigest
+from mail_core.mail.storage.models import Attachment, MessageBlob
 from mail_core.security.defaults import REMOTE_IMAGES_DEFAULT_ON, require_encrypted_volume_docs
 
 
@@ -66,6 +70,22 @@ def test_digest_validation(tmp_path):
         store.path_for("../" + "b" * 62)
     with pytest.raises(InvalidBlobDigest):
         store.get("not-hex")
+
+
+def test_attachment_with_invalid_blob_digest_is_unavailable_not_unhandled(tmp_path):
+    attachment_id = uuid.uuid4()
+    blob_id = uuid.uuid4()
+    rows = {
+        (Attachment, attachment_id): SimpleNamespace(blob_id=blob_id),
+        (MessageBlob, blob_id): SimpleNamespace(content_sha256="not-a-valid-digest"),
+    }
+
+    class Session:
+        def get(self, model, row_id):
+            return rows.get((model, row_id))
+
+    with pytest.raises(AttachmentAccessError, match="attachment blob is unavailable"):
+        resolve_attachment_bytes(Session(), attachment_id, store=BlobStore(tmp_path))
 
 
 def test_safe_blob_path_stays_under_root(tmp_path):

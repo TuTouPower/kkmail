@@ -78,7 +78,10 @@ def resolve_attachment_bytes(
     blob = session.get(MessageBlob, att.blob_id)
     if blob is None:
         raise AttachmentAccessError("blob record missing")
-    digest = validate_content_digest(blob.content_sha256)
+    try:
+        digest = validate_content_digest(blob.content_sha256)
+    except InvalidBlobDigest as exc:
+        raise AttachmentAccessError("attachment blob is unavailable") from exc
     # Never use storage_path from DB as a user-controlled path; re-derive from digest.
     path = store.path_for(digest)
     if not path.is_file():
