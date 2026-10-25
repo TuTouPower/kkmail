@@ -199,6 +199,7 @@ describe('mail endpoints', () => {
   it('maps empty bodies and optional attachment fields', () => {
     const d: MailCoreMessageDetail = {
       id: 'm', account_id: 'a', subject: 'S', from_address: 'a@b.c', from_name: null, from: 'a@b.c', to: '', cc: '',
+      to_addresses: [], cc_addresses: [],
       date: '2024-01-01T00:00:00Z', is_read: true, is_flagged: false, has_attachments: true, snippet: null, body: '',
       body_type: 'empty', parse_error: null, is_archived: true,
       archive_state: 'archive_complete', archive_has_error: false,

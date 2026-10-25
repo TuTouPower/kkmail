@@ -86,6 +86,8 @@ def test_get_message_detail_query_and_api():
     assert data["body_type"] == "html"
     assert "hi" in data["body"]
     assert data["attachments"][0]["name"] == "note.txt"
+    assert data["to"] == "you@ex.com"
+    assert data["to_addresses"] == [{"name": None, "address": "you@ex.com", "text": None}]
 
     assert data["from"] and data["is_flagged"] is False
     # Body-only duplicate endpoint is gone; GET /messages/{id} is the reader source.

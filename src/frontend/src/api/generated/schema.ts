@@ -967,6 +967,8 @@ export interface components {
             body_type: string;
             /** Cc */
             cc: string;
+            /** Cc Addresses */
+            cc_addresses: components["schemas"]["MessageEmailAddressOut"][];
             /** Date */
             date: string | null;
             /** From */
@@ -993,6 +995,17 @@ export interface components {
             subject: string;
             /** To */
             to: string;
+            /** To Addresses */
+            to_addresses: components["schemas"]["MessageEmailAddressOut"][];
+        };
+        /** MessageEmailAddressOut */
+        MessageEmailAddressOut: {
+            /** Address */
+            address: string | null;
+            /** Name */
+            name: string | null;
+            /** Text */
+            text?: string | null;
         };
         /** MessageFolderLocationOut */
         MessageFolderLocationOut: {

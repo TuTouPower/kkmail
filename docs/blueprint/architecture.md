@@ -29,6 +29,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 账户生命周期、用户自定义单层分组、邮件查询、聚合收件箱游标检索与全文搜索。分组顺序、账号总列表顺序与组内顺序持久化在 PostgreSQL；`GET /api/sidebar/layout` 返回完整布局与 revision，`PUT /api/sidebar/layout` 和默认顺序恢复携 expected_revision，在事务锁下拒绝过期快照并原子保存；账号、分组与布局写入共用 PostgreSQL advisory lock，默认账号顺序按邮箱域名及完整地址确定。
     - `/api/mail/inbox` 支持通过 `folder_role`（默认 `inbox`，支持 `sent`/`drafts`/`trash`/`junk`/`archive` 等）或精确 `folder_id` 联合 `account_id` 或 `group_id` 实现多账号统一、单账号、分组分类及特定文件夹检索；`/api/mail/search` 同样支持全局、单账号、分组或精确文件夹范围，拒绝分组与账号/文件夹混用，保证搜索统计和邮件列表隔离。批量已读按当前分组成员解析；空组保持空结果，不存在分组或歧义范围请求失败关闭。
     - `sync_enabled=false` 的账户不进入全局/分组聚合邮件列表、搜索、统计与批量已读；显式账号/文件夹查询保持直达语义。列表和搜索响应返回每封邮件在所属账号内的全部文件夹位置，按页批量读取，支持准确乐观更新同角色多文件夹计数。
+    - 邮件详情保留原始 `to`/`cc` 展示文本，并通过标准邮件地址解析器返回结构化 `to_addresses`/`cc_addresses`；可靠地址单独提供邮箱，无法可靠解析的片段保留文本且不生成复制目标。
     - 批量标记已读在请求开始时固定分组成员集，按 `Message.id` 升序 keyset 每批最多 500 封独立事务提交；中途失败保留已完成批次，重试只处理余下未读邮件，每封远端操作仍经 `remote_operations` 与事务性 Outbox 收敛。
     - 远端文件夹身份由 `remote_id` 确定，`role` 只用于分类查询；同账号多个文件夹即使共享 role，也必须保持独立可访问并在侧栏显示可区分名称。Graph 已取得 well-known Inbox ID 时以该 ID 为准，不将同名自定义文件夹回退为第二个收件箱。
     - 出站写回状态机：基于 `remote_operations` 队列与单调递增 `revision` 的乐观并发控制 (CAS)；支持多批次自动续跑、瞬时错误与限流退避延迟唤醒、跨同步边界的本地字段意图保护与孤儿任务安全对账恢复。
@@ -56,7 +57,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 文本复制授权遵循最小权限原则：Electron 会话加固仅对受信任的本地顶层应用页面（`details.isMainFrame === true` 且请求 URL 匹配 `appOrigin`）开放 `clipboard-sanitized-write` 权限；
     - 邮件内容沙箱隔离：邮件正文所在的无脚本 `iframe` 显式属于子 frame（`isMainFrame === false`），其剪贴板写入请求被严格拒绝，无法写入系统剪贴板；
     - 权限降级与防范：剪贴板读取（`clipboard-read`）、媒体设备（`media`）、定位及通知等无关系统权限无条件保持拒绝；
-    - 前端显式入口调用：UI 编号浮标（`UiReferenceOverlay`）与错误边界（`ErrorBoundary`）复制诊断日志在桌面与 Web 端均通过标准 `navigator.clipboard.writeText` 写入，缺失或被拒时提供明确的失败反馈，不使错误边界二次崩溃。
+    - 前端显式入口调用：UI 编号浮标（`UiReferenceOverlay`）、错误边界（`ErrorBoundary`）与邮箱复制控件（`CopyAddress`）均由用户点击后通过标准 `navigator.clipboard.writeText` 写入；缺失或被拒时提供明确失败反馈，不新增 IPC，也不使错误边界二次崩溃。
 
 ## 按需邮件正文同步与归档优先级治理 (t034)
 

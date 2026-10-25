@@ -1049,6 +1049,13 @@
             "title": "Cc",
             "type": "string"
           },
+          "cc_addresses": {
+            "items": {
+              "$ref": "#/components/schemas/MessageEmailAddressOut"
+            },
+            "title": "Cc Addresses",
+            "type": "array"
+          },
           "date": {
             "anyOf": [
               {
@@ -1157,6 +1164,13 @@
           "to": {
             "title": "To",
             "type": "string"
+          },
+          "to_addresses": {
+            "items": {
+              "$ref": "#/components/schemas/MessageEmailAddressOut"
+            },
+            "title": "To Addresses",
+            "type": "array"
           }
         },
         "required": [
@@ -1168,6 +1182,8 @@
           "from",
           "to",
           "cc",
+          "to_addresses",
+          "cc_addresses",
           "date",
           "is_read",
           "is_flagged",
@@ -1180,6 +1196,49 @@
           "attachments"
         ],
         "title": "MessageDetailOut",
+        "type": "object"
+      },
+      "MessageEmailAddressOut": {
+        "properties": {
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "name",
+          "address"
+        ],
+        "title": "MessageEmailAddressOut",
         "type": "object"
       },
       "MessageFolderLocationOut": {

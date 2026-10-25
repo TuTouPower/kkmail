@@ -43,6 +43,8 @@ describe('mailCoreToMailDetail', () => {
       from: 'A <a@b.c>',
       to: 'you@x.com',
       cc: '',
+      to_addresses: [{ name: 'Doe, Jane', address: 'jane@example.test' }],
+      cc_addresses: [{ name: null, address: null, text: 'malformed recipient' }],
       date: '2024-01-01T00:00:00Z',
       is_read: true,
       is_flagged: false,
@@ -60,6 +62,10 @@ describe('mailCoreToMailDetail', () => {
     expect(out.body_type).toBe('html')
     expect(out.body).toContain('<p>')
     expect(out.parse_error).toBeNull()
+    expect(out.fromAddress).toBe('a@b.c')
+    expect(out.fromName).toBe('A')
+    expect(out.toAddresses).toEqual([{ name: 'Doe, Jane', address: 'jane@example.test', text: null }])
+    expect(out.ccAddresses).toEqual([{ name: null, address: null, text: 'malformed recipient' }])
   })
 
   it('preserves parse_error in MailDetail', () => {
@@ -72,6 +78,8 @@ describe('mailCoreToMailDetail', () => {
       from: 'A <a@b.c>',
       to: 'you@x.com',
       cc: '',
+      to_addresses: [],
+      cc_addresses: [],
       date: '2024-01-01T00:00:00Z',
       is_read: true,
       is_flagged: false,
@@ -99,6 +107,8 @@ describe('mailCoreToMailDetail', () => {
       from: 'a@b.c',
       to: '',
       cc: '',
+      to_addresses: [],
+      cc_addresses: [],
       date: null,
       is_read: false,
       is_flagged: false,

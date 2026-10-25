@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from email.utils import formataddr, getaddresses
 from typing import Literal
 from uuid import UUID
 
@@ -130,6 +131,12 @@ class AttachmentOut(BaseModel):
     is_inline: bool
 
 
+class MessageEmailAddressOut(BaseModel):
+    name: str | None
+    address: str | None
+    text: str | None = None
+
+
 class MessageDetailOut(BaseModel):
     id: str
     account_id: str
@@ -140,6 +147,8 @@ class MessageDetailOut(BaseModel):
     from_: str = Field(serialization_alias="from")
     to: str
     cc: str
+    to_addresses: list[MessageEmailAddressOut]
+    cc_addresses: list[MessageEmailAddressOut]
     date: datetime | None
     is_read: bool | None
     is_flagged: bool | None
@@ -152,6 +161,63 @@ class MessageDetailOut(BaseModel):
     archive_state: str | None = None
     archive_has_error: bool = False
     attachments: list[AttachmentOut]
+
+
+def _is_reliable_email_address(value: str) -> bool:
+    if not value or any(character.isspace() or character in "<>,;" for character in value):
+        return False
+    if value.count("@") != 1:
+        return False
+    local, domain = value.split("@", 1)
+    local_punctuation = "!#$%&'*+-/=?^_`{|}~."
+    if (
+        not local
+        or local.startswith(".")
+        or local.endswith(".")
+        or ".." in local
+        or any(not (character.isalnum() or character in local_punctuation) for character in local)
+        or len(domain) > 253
+    ):
+        return False
+    labels = domain.split(".")
+    return bool(labels) and all(
+        label
+        and len(label) <= 63
+        and label[0].isalnum()
+        and label[-1].isalnum()
+        and all(character.isalnum() or character == "-" for character in label)
+        for label in labels
+    )
+
+
+def _recipient_addresses(values: list[object]) -> list[MessageEmailAddressOut]:
+    result: list[MessageEmailAddressOut] = []
+    for value in values:
+        raw = "" if value is None else str(value).strip()
+        if not raw:
+            continue
+        try:
+            parsed = getaddresses([raw])
+        except (TypeError, ValueError):
+            parsed = []
+        reliable = [
+            (name.strip() or None, address.strip())
+            for name, address in parsed
+            if _is_reliable_email_address(address.strip())
+        ]
+        if not reliable:
+            result.append(MessageEmailAddressOut(name=None, address=None, text=raw))
+            continue
+        reliable_set = set(reliable)
+        for name, address in parsed:
+            normalized_name = name.strip() or None
+            normalized_address = address.strip()
+            if (normalized_name, normalized_address) in reliable_set:
+                result.append(MessageEmailAddressOut(name=normalized_name, address=normalized_address))
+            else:
+                text = formataddr((name, address)).strip() or raw
+                result.append(MessageEmailAddressOut(name=None, address=None, text=text))
+    return result
 
 
 def _detail_out(
@@ -169,6 +235,8 @@ def _detail_out(
         from_=(f"{detail.from_name} <{detail.from_address}>" if detail.from_name else detail.from_address),
         to=", ".join(str(value) for value in detail.to_addresses) if detail.to_addresses else "",
         cc=", ".join(str(value) for value in detail.cc_addresses) if detail.cc_addresses else "",
+        to_addresses=_recipient_addresses(detail.to_addresses),
+        cc_addresses=_recipient_addresses(detail.cc_addresses),
         date=detail.sort_time,
         is_read=detail.is_read,
         is_flagged=detail.is_flagged,

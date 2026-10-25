@@ -61,6 +61,33 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
     }
   })
 
+  test('p042: 邮件与导航邮箱可写入系统剪贴板且复制不触发导航', async ({ page, context }) => {
+    await setupStubApi(page, { authedInitially: true })
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+    await page.goto('/')
+    await expect(page.getByText('欢迎体验 kkmail 邮件内核')).toBeVisible({ timeout: 10000 })
+    await page.getByText('欢迎体验 kkmail 邮件内核').first().click()
+    await expect(page.locator('.detail-subject')).toContainText('欢迎体验 kkmail 邮件内核')
+
+    const reader = page.locator('.reader-pane')
+    await reader.locator('.reader-location').getByRole('button', { name: '复制邮箱地址 user@example.com' }).click()
+    await expect(page.getByText('已复制地址')).toBeVisible()
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('user@example.com')
+    await reader.getByRole('button', { name: '复制邮箱地址 team@kkmail.local' }).click()
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('team@kkmail.local')
+    const recipientCopy = reader.locator('[data-ui="MR07"]').getByRole('button', { name: '复制邮箱地址 user@example.com' })
+    await recipientCopy.click()
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('user@example.com')
+    await expect(page.locator('.detail-subject')).toContainText('欢迎体验 kkmail 邮件内核')
+
+    const account = page.locator('.tree-account-list .tree-account-block[data-account-id="acc-00000000-0000-0000-0000-000000000001"]')
+    const accountSelect = account.locator('.tree-account-select')
+    await expect(accountSelect).toHaveAttribute('aria-expanded', 'false')
+    await account.getByRole('button', { name: '复制邮箱地址 user@example.com' }).click()
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('user@example.com')
+    await expect(accountSelect).toHaveAttribute('aria-expanded', 'false')
+  })
+
   test('通过设置面板中的退出登录按钮完成登出链路', async ({ page }) => {
     await setupStubApi(page, { authedInitially: true })
 

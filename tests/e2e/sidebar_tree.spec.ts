@@ -288,7 +288,7 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await expect(group.locator('.tree-group-heading')).toBeVisible()
     await group.locator('.tree-disclosure').click()
     await expect(group.locator('.tree-group-children')).toBeVisible()
-    await accountSection.getByRole('button', { name: '账号列表' }).click()
+    await accountSection.getByRole('button', { name: '账号列表', exact: true }).click()
     await expect(accountSection.locator('.tree-account-list')).toHaveCount(0)
     await expect(group.locator('.tree-group-children')).toBeVisible()
 
@@ -298,7 +298,7 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await globalSection.getByRole('button', { name: '展开 所有收件箱' }).click()
     const nestedCategoryAccountIndent = await globalSection.locator('.tree-category-account').first().evaluate((node) => getComputedStyle(node).paddingLeft)
     expect(nestedCategoryAccountIndent).toBe('48px')
-    await accountSection.getByRole('button', { name: '账号列表' }).click()
+    await accountSection.getByRole('button', { name: '账号列表', exact: true }).click()
     const accountIndent = await masterAccount.locator('.tree-account-row').evaluate((node) => getComputedStyle(node).paddingLeft)
     expect(accountIndent).toBe('24px')
     await masterAccount.locator('.tree-disclosure').click()

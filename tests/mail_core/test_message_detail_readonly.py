@@ -136,3 +136,51 @@ def test_detail_out_serializes_shared_detail_and_attachment_fields():
     assert result.cc == "cc@example.test"
     assert result.is_archived is True
     assert result.attachments[0].contentType == "text/plain"
+
+
+def test_detail_out_structures_recipient_addresses_and_keeps_unparseable_text():
+    from mail_core.api.mail import _detail_out
+    from mail_core.mail.application.queries import MessageDetail
+
+    detail = MessageDetail(
+        id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
+        subject="Recipients",
+        from_address="sender@example.test",
+        from_name="Sender",
+        to_addresses=[
+            '"Doe, Jane" <jane@example.test>, Team <team@example.test>',
+            "malformed recipient",
+            "valid@example.test, malformed",
+            "bad@bad..example",
+        ],
+        cc_addresses=["Copy <copy@example.test>"],
+        sort_time=None,
+        is_read=True,
+        is_flagged=False,
+        has_attachments=False,
+        snippet=None,
+        body_text=None,
+        body_html=None,
+        body="",
+        body_type="empty",
+        parse_error=None,
+        attachments=[],
+    )
+
+    result = _detail_out(detail, None)
+
+    assert result.to == '"Doe, Jane" <jane@example.test>, Team <team@example.test>, malformed recipient, valid@example.test, malformed, bad@bad..example'
+    assert [(address.name, address.address) for address in result.to_addresses[:2]] == [
+        ("Doe, Jane", "jane@example.test"),
+        ("Team", "team@example.test"),
+    ]
+    assert result.to_addresses[2].address is None
+    assert result.to_addresses[2].text == "malformed recipient"
+    assert result.to_addresses[3].address == "valid@example.test"
+    assert result.to_addresses[4].address is None
+    assert result.to_addresses[4].text == "malformed"
+    assert result.to_addresses[5].address is None
+    assert result.to_addresses[5].text == "bad@bad..example"
+    assert result.cc == "Copy <copy@example.test>"
+    assert [(address.name, address.address) for address in result.cc_addresses] == [("Copy", "copy@example.test")]

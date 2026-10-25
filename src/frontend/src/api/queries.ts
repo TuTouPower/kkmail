@@ -34,8 +34,12 @@ export interface MailDetail {
   id?: string
   subject?: string
   from?: string
+  fromAddress?: string
+  fromName?: string | null
   to?: string
   cc?: string
+  toAddresses?: Array<{ name: string | null; address: string | null; text?: string | null }>
+  ccAddresses?: Array<{ name: string | null; address: string | null; text?: string | null }>
   date?: string | null
   body?: string
   body_type?: 'html' | 'text'

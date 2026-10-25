@@ -366,6 +366,29 @@ describe('<Sidebar />', () => {
     expect(calls.filter((call) => call.method === 'PUT')).toHaveLength(0)
   })
 
+  it('copies account addresses without toggling navigation or folder expansion', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    mockApi()
+    useMailStore.setState({
+      expandedSidebarGroups: ['group-1'],
+      expandedSidebarCategories: ['all:inbox', 'group:group-1:inbox'],
+    })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-list .tree-account-block[data-account-id="acc-2"]')).not.toBeNull())
+    const originalView = useMailStore.getState().view
+    const originalExpandedAccounts = useMailStore.getState().expandedSidebarAccounts
+
+    await click(container.querySelector('.tree-category-account-row button[aria-label="复制邮箱地址 finance@z.example"]'))
+    expect(writeText).toHaveBeenLastCalledWith('finance@z.example')
+    expect(useMailStore.getState().view).toEqual(originalView)
+    await click(container.querySelector('.tree-account-list .tree-account-block[data-account-id="acc-2"] button[aria-label="复制邮箱地址 notes@a.example"]'))
+    expect(writeText).toHaveBeenLastCalledWith('notes@a.example')
+    expect(useMailStore.getState().view).toEqual(originalView)
+    expect(useMailStore.getState().expandedSidebarAccounts).toEqual(originalExpandedAccounts)
+    expect(container.querySelector('.tree-account-list .tree-account-block[data-account-id="acc-2"] .tree-folder-list')).toBeNull()
+  })
+
   it('keeps all six existing global categories and renders only user groups', async () => {
     const calls = mockApi()
     const { container } = await render(<Sidebar />)

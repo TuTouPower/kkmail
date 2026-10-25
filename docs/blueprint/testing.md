@@ -67,6 +67,13 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
 - `src/frontend/src/components/Sidebar.test.tsx` 覆盖分组与总列表独立过滤、邮箱/域名/名称匹配、禁用账号排除、空结果、清空/Esc/触发按钮关闭、焦点与展开状态恢复及过滤区拖放禁用。
 - `tests/e2e/sidebar_tree.spec.ts` 的 p043 用例覆盖 180px 窄侧栏、移动抽屉、全局分类不受过滤影响以及搜索状态不跨刷新保存；执行 `npm --prefix src/frontend run test:e2e`。
 
+## 邮箱地址复制
+
+- `src/frontend/src/components/CopyAddress.test.tsx` 覆盖写入纯地址、成功/拒绝/API 缺失反馈、连续点击计时重置与卸载清理。
+- `src/mail_core/api/mail.py` 的详情 DTO 变更同步 OpenAPI/TypeScript；PostgreSQL 详情测试验证标准解析、名称逗号、多收件人与不可复制原文保留。
+- `src/frontend/src/components/MessageReader.test.tsx`、`Sidebar.test.tsx` 与 `SettingsModal.test.tsx` 验证邮件归属/发件人/收件人/抄送、侧栏、设置地址以及复制不触发导航或选择；`tests/e2e/smoke.spec.ts` 的 p042 用例通过真实浏览器剪贴板检查纯地址写入。
+- `npm --prefix src/desktop test` 包含 Electron 剪贴板集成测试，验证顶层页面系统剪贴板写入及 frame 权限隔离；`test:packaged` 另外验证打包 PostgreSQL 生命周期。
+
 ## 门禁类别覆盖清单
 
 |类别|项目对应实现|命令或验证方式|

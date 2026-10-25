@@ -12,6 +12,27 @@ import { displayEmail, displayName } from '../lib/displayName'
 import { formatFileSize } from '../lib/formatSize'
 import { resolveTheme } from '../lib/theme'
 import { logDiagnostic } from '../lib/diagnostics'
+import CopyAddress from './CopyAddress'
+
+type RecipientAddress = { name: string | null; address: string | null; text?: string | null }
+
+function formatRecipientName(name: string): string {
+  return /[",]/.test(name) ? `"${name.replace(/(["\\])/g, '\\$1')}"` : name
+}
+
+function RecipientList({ raw, addresses }: { raw?: string; addresses?: RecipientAddress[] }) {
+  if (!addresses?.length) return <>{raw || ''}</>
+  return <>
+    {addresses.map((recipient, index) => <span key={`${recipient.address || recipient.text || recipient.name || 'recipient'}-${index}`}>
+      {index > 0 ? ', ' : ''}
+      {recipient.address ? <>
+        {recipient.name ? `${formatRecipientName(recipient.name)} <` : ''}
+        <CopyAddress address={recipient.address}>{recipient.address}</CopyAddress>
+        {recipient.name ? '>' : ''}
+      </> : recipient.text || recipient.name || ''}
+    </span>)}
+  </>
+}
 
 const MessageReader = memo(function MessageReader() {
   const themePref = useMailStore((s) => s.theme)
@@ -60,6 +81,9 @@ const MessageReader = memo(function MessageReader() {
   }, [detailQuery.error, selected?.id])
 
   const detail = detailQuery.data
+  const senderDisplay = detail?.from || selected?.from || ''
+  const senderAddress = detail?.fromAddress || displayEmail(senderDisplay)
+  const hasCc = Boolean(detail?.cc || detail?.ccAddresses?.length)
   const body = detail?.body || ''
   const html = Boolean(detail?.body && isHtmlBody(detail.body_type))
   const currentMailKey = selected ? mailKey(selected) : undefined
@@ -185,7 +209,7 @@ const MessageReader = memo(function MessageReader() {
     <section className="reader-pane" aria-label="邮件正文">
       <div data-ui="MR01" className="reader-toolbar">
         <button className="reader-action mobile-only" title="返回列表" aria-label="返回列表" onClick={() => setMobileView('list')}><ArrowLeft size={18} /></button>
-        <div className="reader-location">{selected.accountEmail}</div>
+        <div className="reader-location"><CopyAddress address={selected.accountEmail}>{selected.accountEmail}</CopyAddress></div>
         <div className="reader-toolbar-actions">
           <button
             data-ui="MR02"
@@ -211,19 +235,19 @@ const MessageReader = memo(function MessageReader() {
         <div data-ui="MR08" className="message-paper">
           <div data-ui="MR05" className="detail-subject">{detail?.subject || selected.subject}</div>
           <div style={{ fontSize: 12, marginBottom: 8 }}>
-            <strong data-ui="MR06">{displayName(detail?.from || selected.from)}</strong>
+            <strong data-ui="MR06">{displayName(senderDisplay)}</strong>
             <span style={{ color: 'var(--muted)' }}> · {formatReaderDate(detail ? detail.date : selected.date)}</span>
           </div>
           <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 4, overflowWrap: 'anywhere' }}>
-            {displayEmail(detail?.from || selected.from) ? `发件人：${displayEmail(detail?.from || selected.from)}` : ''}
+            {senderAddress ? <>发件人：<CopyAddress address={senderAddress}>{senderAddress}</CopyAddress></> : ''}
           </div>
           {detail && (
-            <div data-ui="MR07" style={{ color: 'var(--muted)', fontSize: 11, marginBottom: detail.cc ? 4 : 16, overflowWrap: 'anywhere' }}>
-              收件人：{detail.to || ''}
+            <div data-ui="MR07" style={{ color: 'var(--muted)', fontSize: 11, marginBottom: hasCc ? 4 : 16, overflowWrap: 'anywhere' }}>
+              收件人：<RecipientList raw={detail.to} addresses={detail.toAddresses} />
             </div>
           )}
-          {detail?.cc && (
-            <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 16, overflowWrap: 'anywhere' }}>抄送：{detail.cc}</div>
+          {hasCc && detail && (
+            <div style={{ color: 'var(--muted)', fontSize: 11, marginBottom: 16, overflowWrap: 'anywhere' }}>抄送：<RecipientList raw={detail.cc} addresses={detail.ccAddresses} /></div>
           )}
           {actionStatus && <div role="status" style={{ color: 'var(--red)', fontSize: 12, marginBottom: 8 }}>{actionStatus}</div>}
           {detailQuery.isLoading ? (

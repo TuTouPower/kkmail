@@ -464,6 +464,7 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
         snippet: m.body_preview,
         folder_id: 'f-inbox',
         account_id: m.accountId,
+        account_email: currentAccounts.find((account) => account.id === m.accountId)?.email ?? null,
       }))
       return route.fulfill({
         status: 200,
@@ -487,6 +488,7 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
         snippet: m.body_preview,
         folder_id: 'f-inbox',
         account_id: m.accountId,
+        account_email: currentAccounts.find((account) => account.id === m.accountId)?.email ?? null,
       }))
       return route.fulfill({
         status: 200,

@@ -393,6 +393,39 @@ describe('<MessageReader />', () => {
     await waitFor(() => expect(container.querySelector('[data-ui="MR07"]')?.textContent).toBe('收件人：box@x.test'))
   })
 
+  it('copies reader ownership, sender, each recipient and cc address without changing selection', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const response = await originalFetch(url, init)
+      if (String(url) !== '/api/mail/messages/m-1') return response
+      return json({
+        ...await response.json(),
+        to: '"Doe, Jane" <jane@example.test>, Ops <ops@example.test>, malformed recipient',
+        cc: 'Copy <copy@example.test>',
+        to_addresses: [
+          { name: 'Doe, Jane', address: 'jane@example.test' },
+          { name: 'Ops', address: 'ops@example.test' },
+          { name: null, address: null, text: 'malformed recipient' },
+        ],
+        cc_addresses: [{ name: 'Copy', address: 'copy@example.test' }],
+      })
+    }))
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.querySelector('[data-ui="MR07"]')?.textContent).toContain('jane@example.test'))
+
+    for (const address of ['box@x.test', 'ann@x.test', 'jane@example.test', 'ops@example.test', 'copy@example.test']) {
+      await click(container.querySelector(`button[aria-label="复制邮箱地址 ${address}"]`))
+      await waitFor(() => expect(document.body.querySelector('[role="status"]')?.textContent).toBe('已复制地址'))
+      expect(writeText).toHaveBeenLastCalledWith(address)
+      expect(useMailStore.getState().selectedKey).toBe('m-1')
+    }
+    expect(container.querySelector('[data-ui="MR07"]')?.textContent).toContain('malformed recipient')
+    expect(container.querySelector('[data-ui="MR07"]')?.textContent).toContain('"Doe, Jane" <jane@example.test>')
+    expect(container.querySelector('[data-ui="MR07"] button[aria-label*="malformed"]')).toBeNull()
+  })
+
   it('renders only API-provided recipients and keeps account ownership separate', async () => {
     const originalFetch = globalThis.fetch
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {

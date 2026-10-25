@@ -7,6 +7,7 @@ import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
 import { useIsWide } from '../lib/viewport'
 import AccountIcon from './AccountIcon'
+import CopyAddress from './CopyAddress'
 import AccountDialog from './settings_account_form'
 
 type Section = 'accounts' | 'groups' | 'general'
@@ -272,7 +273,7 @@ export default function SettingsPage({
                     else next.delete(account.id)
                     return next
                   })} />
-                  <div className="settings-account-identity"><AccountIcon email={account.email} provider={account.provider} accountType={account.account_type} groupColor={account.group_color} /><div><strong title={account.email}>{account.email}</strong><small>{providers[account.provider] || account.provider}{account.group_name ? ` · ${account.group_name}` : ''}</small></div></div>
+                  <div className="settings-account-identity"><AccountIcon email={account.email} provider={account.provider} accountType={account.account_type} groupColor={account.group_color} /><div><strong title={account.email}><CopyAddress address={account.email} className="settings-copy-email">{account.email}</CopyAddress></strong><small>{providers[account.provider] || account.provider}{account.group_name ? ` · ${account.group_name}` : ''}</small></div></div>
                   <select aria-label={`移动 ${account.email}`} value={account.group_id ?? ''} disabled={pending || !groupsQuery.isSuccess} onChange={event => {
                     const groupId = event.target.value
                     void run('accounts', '移动账号', async () => { await moveAccount(account, groupId); await refreshOrganization() }, '账号分组已更新')

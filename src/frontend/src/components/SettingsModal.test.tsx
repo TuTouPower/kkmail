@@ -644,6 +644,33 @@ describe('<SettingsModal />', () => {
     await waitFor(() => expect(updates.sort()).toEqual(['qq-work-1', 'qq-work-2']))
   })
 
+  it('copies a settings account address without triggering account actions', async () => {
+    const account = {
+      id: 'copy-account', email: 'copy@example.test', status: 'active', sync_status: 'idle', sync_enabled: true,
+      account_type: 'imap', provider: 'imap', group_id: null, group_name: null,
+    }
+    const calls: Array<{ method: string; url: string }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init: RequestInit = {}) => {
+      const url = new URL(String(input), 'http://localhost')
+      calls.push({ method: init.method || 'GET', url: url.pathname })
+      if (url.pathname === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (url.pathname === '/api/accounts') return json({ accounts: [account], total: 1, limit: 200, offset: 0, has_more: false })
+      if (url.pathname === '/api/groups') return json({ groups: [] })
+      if (url.pathname === '/api/settings') return json({ settings: settingsResponse })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelector('.settings-account-row')).not.toBeNull())
+    await click(container.querySelector('.settings-account-row button[aria-label="复制邮箱地址 copy@example.test"]'))
+
+    expect(writeText).toHaveBeenCalledWith('copy@example.test')
+    await waitFor(() => expect(document.body.querySelector('[role="status"]')?.textContent).toBe('已复制地址'))
+    expect(calls.some((call) => call.method === 'PATCH')).toBe(false)
+  })
+
   it('opens the edit dialog and saves connection settings, credentials, and group through PATCH', async () => {
     const groups = [
       { id: 'work', name: '工作', color: null, account_count: 1, sort_order: 0 },

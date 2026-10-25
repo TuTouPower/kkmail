@@ -30,6 +30,7 @@ import { confirmAction, errorMessage } from '../lib/actions'
 import { useMailStore, type FavoriteCategory } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
 import AccountIcon from './AccountIcon'
+import CopyAddress from './CopyAddress'
 
 const ROLE_PRIORITY: Record<string, number> = {
   inbox: 1,
@@ -838,15 +839,18 @@ function Sidebar() {
         {expanded && <div className="tree-category-accounts">{categoryAccounts.map((account) => {
           const unread = unreadByAccount.get(account.id) ?? (statsQuery.data || statsQuery.isError ? null : undefined)
           const activeAccount = view.type === 'favorite' && view.category === category && view.accountId === account.id
-          return <button key={account.id} type="button" className={`tree-nav-row tree-category-account ${activeAccount ? 'active' : ''}`} style={{ paddingLeft: '48px' }} title={account.email} onClick={() => {
-            setView({ type: 'favorite', category, accountId: account.id, email: account.email })
-            setListFilter(category === 'unread' ? 'unread' : 'all')
-          }}>
-            <span className="tree-disclosure-slot" aria-hidden="true" />
-            <AccountIcon email={account.email} provider={account.provider} accountType={account.account_type} groupColor={account.group_color} />
-            <span className="tree-label">{account.email}</span>
-            {(category === 'inbox' || category === 'unread') && unread === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : (category === 'inbox' || category === 'unread') && unread && unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}
-          </button>
+          return <div key={account.id} className="tree-category-account-row">
+            <button type="button" className={`tree-nav-row tree-category-account ${activeAccount ? 'active' : ''}`} style={{ paddingLeft: '48px' }} title={account.email} onClick={() => {
+              setView({ type: 'favorite', category, accountId: account.id, email: account.email })
+              setListFilter(category === 'unread' ? 'unread' : 'all')
+            }}>
+              <span className="tree-disclosure-slot" aria-hidden="true" />
+              <AccountIcon email={account.email} provider={account.provider} accountType={account.account_type} groupColor={account.group_color} />
+              <span className="tree-label">{account.email}</span>
+              {(category === 'inbox' || category === 'unread') && unread === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : (category === 'inbox' || category === 'unread') && unread && unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}
+            </button>
+            <CopyAddress variant="icon" address={account.email} />
+          </div>
         })}</div>}
       </div>
     )
@@ -891,6 +895,7 @@ function Sidebar() {
             {(account.sync_status === 'failed' || account.sync_status === 'auth_failed') && <span className="tree-account-sync-error" role="img" aria-label="同步失败" title="同步失败"><AlertCircle size={14} /></span>}
             {unread === null ? <span className="side-count unread-badge unread-badge-unknown" aria-label="未读数未知">-</span> : unread && unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}
           </button>
+          <CopyAddress variant="icon" address={account.email} />
         </div>
         {expanded && <AccountFolders accountId={account.id} accountEmail={account.email} unreadCount={unread} syncStatus={account.sync_status} />}
       </div>
