@@ -71,7 +71,7 @@ docs/reviews/review_20261025_020805
 ## 统计
 
 - 采纳：296 项（A1–A296）
-- 不采纳：90 项（R1–R90）
+- 不采纳：92 项（R1–R92）
 - 待决定：0 项
 
 ## 采纳项
@@ -2425,8 +2425,8 @@ docs/reviews/review_20261025_020805
 - 来源：bundle_cross_validation, bundle_docs_archive, bundle_docs_reviews, bundle_privacy_history, bundle_regression, bundle_regression_addendum, review_intensive
 - 位置：docs/reviews/review_20261021_040521/bundle_v1_security.md:21; docs/reviews/review_20261022_052842/bundle_v1_security.md:10; docs/reviews/review_20261022_052842/bundle_cross_validation.md:17; docs/reviews/review_20261022_052842/bundle_v1_security.md:12; docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11; docs/reviews/review_20261022_052842/review_intensive.md:18; docs/reviews/review_20261022_052842/bundle_v6_robustness.md:11; docs/reviews/review_20261022_052842/bundle_cross_validation.md:47; docs/reviews/review_20261021_040521/summary_verification_report.md:38; docs/archive/pending/p028_mail_list_cache_prefix_folder_collision.md:4; docs/reviews/review_20261021_040521/bundle_cross_validation.md:21; web_outlook_app.py:27; docs/reviews/review_20261022_052842/bundle_v1_security.md:11; docs/archive/tasks/t055_microsoft_oauth_callback/review_code.md:6; docs/archive/tasks/t053_provider_account_forms/review_test.md:145; docs/archive/pending/p034_account_sync_failure_self_healing_and_sidebar_status_discrepancy.md:4; docs/archive/tasks/t027_account_group_ordering/source_notes.md:6; docs/reviews/review_20261022_052842/bundle_v1_security.md:19; docs/reviews/review_20261022_052842/adoption_decision.md:452; docs/reviews/review_20261021_040521/bundle_v1_security.md:46; docs/archive/pending/p031_repaired_mime_parse_error_blocks_body_and_fetch_error_conflation.md:6; docs/archive/tasks/t006_dark_reader_theme/review_code.md:6; docs/reviews/review_20261021_034329/\_meta/\_meta.json:4; docs/reviews/review_20261021_040521/\_meta/\_meta.json:4; docs/reviews/review_20261021_064335/review_da57df7_findings_and_decisions.md:3; docs/reviews/review_20261021_040521/bundle_v8_docs.md:12; docs/reviews/review_20261021_034329/\_meta/rubric.md:35; docs/archive/pending/p031_repaired_mime_parse_error_blocks_body_and_fetch_error_conflation.md:11; docs/archive/tasks/t049_sync_retry_double_enqueue/task.md:33; docs/archive/pending/p035_empty_archived_mail_body_placeholder.md:3; docs/reviews/（多个历史审阅包；聚合项）
 - 优先级：CRITICAL
-- 详细判断理由：用户选择原 D1-B：清理当前副本并撤销/轮换可确认的凭据，完成备份和恢复核验后安排所有分支与 tag 的历史清理。凭据撤销、历史重写影响大，必须先确认目标并验证备份可恢复；远端 force-push 仍需单独明确授权。
-- 修复说明：逐项核实并移除当前工作树中的敏感值、个人标识和机器路径，撤销或轮换已确认凭据；历史重写前备份全部 refs/tags 并完成恢复演练，再安排本地所有分支与 tag 的清理。远端 force-push 不属于本项授权范围。
+- 详细判断理由：用户最初选择原 D1-B。已完成当前副本清理、全 refs/tags 备份与恢复核验，以及本地所有 refs/tags 和远端原有 `main`/120 个 tag 的历史重写。后续用户确认历史 `EMAIL` 对应账户不属于本人，并明确将凭据撤销/轮换及 GitHub PR 引用/缓存清理请求列为不采纳，见 R91/R92。远端 `refs/pull/1/head` 未改写，仍可达旧历史；账户凭据有效性未知。
+- 修复说明：从当前树移除敏感值、个人标识和机器路径；备份并恢复核验全部本地 refs/tags；重写本地历史，并以 lease 更新远端原有分支/tag refs，不发布本地领先提交。第三方账户凭据撤销及 GitHub PR 引用/缓存清理按 R91/R92 拒绝处理。
 
 ### A295. 保留 LAN HTTP 部署并明确 Cookie 安全边界
 
@@ -3075,3 +3075,17 @@ docs/reviews/review_20261025_020805
 - 位置：src/frontend/src/types/schemaTypes.ts:1
 - 优先级：LOW
 - 详细判断理由：生产导入使用 api/schemaTypes；该转发模块没有调用方。清理只减少冗余入口，不修复现有行为，与同类死代码项保持一致，不采纳。
+
+### R91. 拒绝撤销或轮换历史记录中的第三方 Outlook 凭据
+
+- 来源：用户后续决策
+- 位置：历史 `outlook_mail_reader.py` 的 `EMAIL`、密码与 refresh token；远端历史
+- 优先级：CRITICAL
+- 详细判断理由：用户确认该账户不属于本人，并要求将撤销/轮换记为拒绝。不得代第三方登录或更改账户凭据；凭据当前有效性未知，由账户所有者处理。
+
+### R92. 拒绝向 GitHub Support 提交 PR 历史与缓存清理请求
+
+- 来源：用户后续决策
+- 位置：GitHub `refs/pull/1/head` 及其缓存视图
+- 优先级：HIGH
+- 详细判断理由：用户要求将该外部支持请求记为拒绝。远端分支与 tag 历史已清理，但 GitHub 管理的 PR 引用仍指向旧历史；未向 GitHub Support 发送请求。
