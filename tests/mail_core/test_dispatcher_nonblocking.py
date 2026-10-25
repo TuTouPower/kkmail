@@ -26,6 +26,21 @@ def test_fanout_schedules_other_loop_without_waiting_for_callback():
     assert queue.get_nowait() == event
 
 
+def test_queue_full_resync_hint_reports_oldest_evicted_event():
+    queue = asyncio.Queue(maxsize=3)
+    for event_id in (10, 11, 12):
+        queue.put_nowait({"id": event_id, "event": "message.updated"})
+
+    accepted = OutboxDispatcher._put(queue, {"id": 13, "event": "message.updated"})
+
+    assert accepted is False
+    hint = queue.get_nowait()
+    assert hint["event"] == "client.resync_hint"
+    assert hint["id"] == 13
+    assert hint["data"]["dropped_event_id"] == 10
+    assert queue.empty()
+
+
 def test_fanout_isolates_a_queue_full_consumer_on_its_loop():
     dispatcher = OutboxDispatcher()
     loop = DeferredLoop()

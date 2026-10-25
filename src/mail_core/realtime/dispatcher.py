@@ -92,20 +92,25 @@ class OutboxDispatcher:
             return True
         except asyncio.QueueFull:
             log.warning("sse queue full; dropping event id=%s", event.get("id"))
+            dropped_event_id = None
+            captured_dropped_event = False
+            while not q.empty():
+                try:
+                    item = q.get_nowait()
+                    if not captured_dropped_event and isinstance(item, dict):
+                        dropped_event_id = item.get("id")
+                        captured_dropped_event = True
+                except asyncio.QueueEmpty:
+                    break
             hint = {
                 "id": event.get("id"),
                 "event": "client.resync_hint",
                 "account_id": event.get("account_id"),
-                "data": {"reason": "sse_queue_full", "dropped_event_id": event.get("id")},
+                "data": {"reason": "sse_queue_full", "dropped_event_id": dropped_event_id},
                 "created_at": event.get("created_at"),
             }
             try:
-                # Discard stale live events; the hint triggers a durable replay/refetch.
-                while not q.empty():
-                    try:
-                        q.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
+                # The hint triggers a durable replay/refetch after stale events are discarded.
                 q.put_nowait(hint)
             except asyncio.QueueFull:
                 log.warning("sse queue full; could not deliver resync hint id=%s", event.get("id"))
