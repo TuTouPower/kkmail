@@ -1919,7 +1919,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description Same as Last-Event-ID, for EventSource polyfills */
-                after?: number | null;
+                after?: string | null;
                 account_id?: string | null;
             };
             header?: {
