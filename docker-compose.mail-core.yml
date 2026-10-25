@@ -52,6 +52,41 @@ services:
     command: ["alembic", "-c", "src/mail_core/db/alembic.ini", "upgrade", "head"]
     restart: "no"
 
+  backup:
+    profiles: ["maintenance"]
+    image: kkmail-mail-core-backup
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    build:
+      context: .
+      dockerfile: Dockerfile.mail-core-backup
+    environment:
+      MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
+      MAIL_CORE_BLOB_KEY_V1: ${MAIL_CORE_BLOB_KEY_V1:?set MAIL_CORE_BLOB_KEY_V1 (base64 32-byte key)}
+      MAIL_CORE_BACKUP_KEY: ${MAIL_CORE_BACKUP_KEY:?set MAIL_CORE_BACKUP_KEY (must differ from blob key)}
+      MAIL_CORE_BLOB_ROOT: "/var/lib/kkmail/blobs"
+      MAIL_CORE_BACKUP_DIR: "/backup"
+    volumes:
+      - kkmail_mail_core_blobs:/var/lib/kkmail/blobs:ro
+      - "${MAIL_CORE_DEPLOY_BACKUP_DIR:-./.scratch/deploy_backup}:/backup"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - -c
+      - |
+        import json, sys
+        from mail_core.backup import run_backup
+        try:
+            result = run_backup(output_dir="/backup/package")
+        except Exception as exc:
+            print("sealed_backup_failed:" + type(exc).__name__, file=sys.stderr)
+            raise SystemExit(1)
+        verify = result.get("verify", {})
+        print(json.dumps({"status": result.get("status"), "verified": verify.get("ok"), "members_checked": verify.get("members_checked")}, sort_keys=True))
+        if result.get("status") != "ok" or not verify.get("ok"):
+            raise SystemExit(1)
+
   api:
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]

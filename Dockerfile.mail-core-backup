@@ -1,0 +1,17 @@
+FROM postgres:16.15@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-venv python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements-mail-core.txt /tmp/requirements-mail-core.txt
+RUN python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements-mail-core.txt
+COPY src/mail_core ./src/mail_core
+
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONPATH=/app/src
+
+USER 10001:999
+ENTRYPOINT ["python3"]
