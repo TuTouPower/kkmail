@@ -7,4 +7,4 @@
         - 去掉右上角的“返回邮件”按钮（`<button className="settings-button settings-back">返回邮件</button>`），不再占用单独整行。
     2. 收纳侧栏折叠/展开按钮：
         - 将原本位于设置顶部通栏最左侧的主侧栏折叠/展开按钮（`PanelLeft`，`sidebar-expand-btn`）下移并整合收纳进设置界面的左侧导航栏（`settings-nav`）顶部或合适位置，使布局紧凑合理，避免单为一个小按钮浪费一整行空间。
-- 处理：未开
+- 处理：review_20261026_005019

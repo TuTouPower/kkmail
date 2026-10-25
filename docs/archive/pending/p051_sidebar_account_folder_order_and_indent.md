@@ -14,4 +14,4 @@
 - 测试缺口：
     - `src/frontend/src/components/Sidebar.test.tsx` 仅断言包含“收件箱”文本及行数，未对子项渲染顺序（收件箱在未读邮件前）以及精确计算的 padding/indent style 做断言；应在组件测试中补充顺序和层级缩进断言。
 - 线索：`.scratch/reproduce_sidebar_and_shortcut.js`
-- 处理：未开
+- 处理：review_20261026_005019

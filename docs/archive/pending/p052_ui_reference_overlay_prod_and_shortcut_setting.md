@@ -13,4 +13,4 @@
     - `UiReferenceOverlay.test.tsx` 仅单独挂载 `<UiReferenceOverlay />` 组件测试快捷键触发，未测试在生产环境（`import.meta.env.PROD`）下的加载逻辑；
     - `SettingsModal.test.tsx` 缺少快捷键配置项的读取与修改覆盖。应在端到端或设置页单元测试中补充快捷键配置和生效断言。
 - 线索：`.scratch/reproduce_sidebar_and_shortcut.js`
-- 处理：未开
+- 处理：review_20261026_005019

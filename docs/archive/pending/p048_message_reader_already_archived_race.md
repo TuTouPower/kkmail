@@ -12,4 +12,4 @@
     1. `tests/mail_core/test_on_demand_body_sync.py` 缺失按需同步正文在并发/已完成归档时的幂等性验证。
     2. `src/frontend/src/components/MessageReader.test.tsx` 缺少当接口返回已归档冲突时前端自动刷新并恢复正文展示的测试用例。
 - 线索：`.scratch/repro_already_archived.py` 验证了后端 `MessageBodyAlreadyArchived` 抛出与未幂等处理机制。
-- 处理：未开
+- 处理：review_20261026_005019
