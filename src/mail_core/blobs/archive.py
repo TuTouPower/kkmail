@@ -13,11 +13,12 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select, update
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.blobs.quota import (
@@ -41,16 +42,9 @@ from mail_core.mail.storage.models import (
     MessageBody,
     OutboxEvent,
 )
+from mail_core.providers.connection_slots import ProviderCapacityUnavailable
 from mail_core.providers.factory import build_provider
 from mail_core.sync.jobs import enqueue_job
-from mail_core.sync.leases import (
-    FencingMismatch,
-    LeaseBusy,
-    acquire_lease,
-    assert_fencing,
-    release_lease,
-    renew_lease,
-)
 
 log = logging.getLogger("mail_core.blobs.archive")
 
@@ -80,6 +74,189 @@ class MimeParseError(RuntimeError):
         self.partial_plain = partial_plain
         self.partial_html = partial_html
         self.attachments = attachments or []
+
+
+@dataclass(frozen=True)
+class ArchiveClaim:
+    """One archive execution's ownership token (repair design §4.1).
+
+    Every success / error / quota-pause / release / heartbeat write for an
+    in-flight archive takes this object; ownership is never judged by
+    ``worker_id`` alone. ``revision`` is the ``claim_revision`` value this
+    execution claimed at, and ``remote_id_snapshot`` is the provider remote
+    id observed at claim time.
+    """
+
+    message_id: uuid.UUID
+    owner: str
+    revision: int
+    remote_id_snapshot: str
+
+
+def _revision_of(state: Any) -> int:
+    return int(getattr(state, "claim_revision", 0) or 0)
+
+
+def _is_postgres(session: Any) -> bool:
+    try:
+        bind = session.get_bind()
+    except Exception:
+        return False
+    return getattr(getattr(bind, "dialect", None), "name", None) == "postgresql"
+
+
+def _lock_archive_rows(session: Any, claim: ArchiveClaim, *, lock_message: bool) -> None:
+    """Lock Message -> MessageArchiveState (in that order) for ``claim``.
+
+    The SELECTs only take the row locks; the caller re-reads the rows via
+    ``session.get`` (identity map) and revalidates them. On PostgreSQL this
+    is a real ``FOR UPDATE`` lock held until the caller commits; other
+    dialects fall back to a plain read (single-writer test doubles).
+    """
+    if lock_message:
+        stmt = select(Message.id).where(Message.id == claim.message_id)
+        if _is_postgres(session):
+            stmt = stmt.with_for_update()
+        session.execute(stmt)
+    stmt = select(MessageArchiveState.message_id).where(
+        MessageArchiveState.message_id == claim.message_id
+    )
+    if _is_postgres(session):
+        stmt = stmt.with_for_update()
+    session.execute(stmt)
+
+
+def _claim_is_current(
+    session: Any, claim: ArchiveClaim
+) -> tuple[Message | None, MessageArchiveState | None, bool]:
+    """Revalidate a claim against the (already locked) current rows."""
+    msg = session.get(Message, claim.message_id)
+    st = session.get(MessageArchiveState, claim.message_id)
+    ok = (
+        msg is not None
+        and st is not None
+        and st.state == ArchiveState.ARCHIVE_IN_PROGRESS.value
+        and st.claimed_by == claim.owner
+        and _revision_of(st) == claim.revision
+        and (msg.remote_id or "") == (claim.remote_id_snapshot or "")
+    )
+    return msg, st, ok
+
+
+def settle_archive_claim(
+    session: Any,
+    claim: ArchiveClaim,
+    outcome: str,
+    *,
+    error: BaseException | str | None = None,
+    account_id: uuid.UUID | None = None,
+) -> bool:
+    """Unified failure / quota / release settlement for one claim (design §4.2).
+
+    Locks the archive-state row, revalidates (state, owner, revision,
+    remote_id) and only then writes. A claim that is no longer current is
+    left completely untouched, so a stale execution can never overwrite a
+    newer claim. The caller commits. Returns True when applied.
+
+    Outcomes:
+    - ``provider_error`` / ``storage_error``: sanitized ``last_error`` is
+      persisted, ``retry_count`` is incremented, the claim is released and
+      the row returns to ``archive_pending`` (or ``archive_failed`` once
+      retries are exhausted).
+    - ``quota``: ``archive_paused_quota`` with ``pause_reason=quota``; the
+      claim and reservation are released and no retry is counted.
+    - ``capacity``: local connection-slot shortage; the claim is released
+      back to ``archive_pending`` without counting a retry/failure and
+      without touching ``last_error``.
+    - ``release``: plain release back to ``archive_pending``.
+    """
+    _lock_archive_rows(session, claim, lock_message=False)
+    _msg, st, ok = _claim_is_current(session, claim)
+    if not ok or st is None:
+        return False
+    now = datetime.now(timezone.utc)
+    event_type = OutboxEventType.ARCHIVE_PROGRESS.value
+    if outcome == "quota":
+        apply_transition(st, ArchiveState.ARCHIVE_PAUSED_QUOTA)
+        st.pause_reason = "quota"
+        event_type = OutboxEventType.ARCHIVE_PAUSED_QUOTA.value
+    elif outcome in ("provider_error", "storage_error"):
+        st.retry_count = int(st.retry_count or 0) + 1
+        if error is not None:
+            st.last_error = safe_error(error)[:2000]
+        apply_transition(
+            st,
+            ArchiveState.ARCHIVE_FAILED if st.retry_count >= 5 else ArchiveState.ARCHIVE_PENDING,
+        )
+    elif outcome in ("capacity", "release"):
+        apply_transition(st, ArchiveState.ARCHIVE_PENDING)
+    else:
+        raise ValueError(f"unknown archive settlement outcome: {outcome!r}")
+    st.claimed_by = None
+    st.claimed_at = None
+    st.updated_at = now
+    session.add(
+        OutboxEvent(
+            event_type=event_type,
+            account_id=account_id,
+            payload={
+                "message_id": str(claim.message_id),
+                "message_ids": [str(claim.message_id)],
+                "state": st.state,
+                "has_error": bool(st.last_error),
+            },
+        )
+    )
+    return True
+
+
+def settle_archive_claims(
+    session: Any,
+    claims: list[ArchiveClaim],
+    outcome: str,
+    *,
+    error: BaseException | str | None = None,
+    account_id: uuid.UUID | None = None,
+) -> int:
+    """Apply :func:`settle_archive_claim` to each claim; returns how many applied."""
+    applied = 0
+    for claim in claims:
+        if settle_archive_claim(session, claim, outcome, error=error, account_id=account_id):
+            applied += 1
+    return applied
+
+
+def heartbeat_archive_claims(
+    session: Any,
+    claims: list[ArchiveClaim],
+    *,
+    now: datetime | None = None,
+) -> list[ArchiveClaim]:
+    """Refresh ``claimed_at`` for still-owned claims; returns the live ones.
+
+    The UPDATE is conditioned on (owner, revision, state), so a claim that
+    was reclaimed/revoked by another worker is never refreshed. The caller
+    commits this short transaction; no business row locks are held during
+    network I/O.
+    """
+    now = now or datetime.now(timezone.utc)
+    alive: list[ArchiveClaim] = []
+    for claim in claims:
+        result = session.execute(
+            update(MessageArchiveState)
+            .where(
+                MessageArchiveState.message_id == claim.message_id,
+                MessageArchiveState.claimed_by == claim.owner,
+                MessageArchiveState.claim_revision == claim.revision,
+                MessageArchiveState.state == ArchiveState.ARCHIVE_IN_PROGRESS.value,
+            )
+            .values(claimed_at=now, updated_at=now)
+        )
+        rowcount = getattr(result, "rowcount", None)
+        if isinstance(rowcount, int) and rowcount != 1:
+            continue
+        alive.append(claim)
+    return alive
 
 
 def blob_root() -> Path:
@@ -260,8 +437,14 @@ def claim_archive_batch(
     recent_days: int,
     target_message_id: uuid.UUID | None = None,
     now: datetime | None = None,
-) -> list[uuid.UUID]:
-    """Select metadata_synced / pending rows and mark archive_in_progress."""
+) -> list[ArchiveClaim]:
+    """Select metadata_synced / pending rows and mark archive_in_progress.
+
+    Short claim transaction: ``claim_revision`` is incremented here and the
+    caller commits before any network I/O. Each claimed row is returned as
+    an :class:`ArchiveClaim` carrying the new revision and the remote_id
+    snapshot observed at claim time.
+    """
     now = now or datetime.now(timezone.utc)
     stmt = (
         select(MessageArchiveState, Message)
@@ -289,7 +472,7 @@ def claim_archive_batch(
         .with_for_update(of=MessageArchiveState, skip_locked=True)
     )
     rows = list(session.execute(stmt).all())
-    claimed: list[uuid.UUID] = []
+    claimed: list[ArchiveClaim] = []
     for state, msg in rows:
         # Promote metadata_synced → pending → in_progress
         if state.state == ArchiveState.METADATA_SYNCED.value:
@@ -301,9 +484,17 @@ def claim_archive_batch(
         state.claimed_by = worker_id
         state.claimed_at = now
         state.updated_at = now
-        claimed.append(msg.id)
+        claimed.append(
+            ArchiveClaim(
+                message_id=msg.id,
+                owner=worker_id,
+                revision=int(state.claim_revision),
+                remote_id_snapshot=msg.remote_id or "",
+            )
+        )
     session.flush()
-    if target_message_id is not None and target_message_id not in claimed:
+    claimed_ids = [c.message_id for c in claimed]
+    if target_message_id is not None and target_message_id not in claimed_ids:
         target_st = session.get(MessageArchiveState, target_message_id)
         log.info(
             "claim_archive_batch target_message_id=%s not claimed: state=%s claimed_by=%s retry_count=%s",
@@ -313,24 +504,6 @@ def claim_archive_batch(
             getattr(target_st, "retry_count", None),
         )
     return claimed
-
-
-def _release_fencing_claims(session, message_ids: list[uuid.UUID], worker_id: str) -> None:
-    changed_ids: list[str] = []
-    for mid in message_ids:
-        st = session.get(MessageArchiveState, mid)
-        if st is not None and st.claimed_by == worker_id:
-            st.claimed_by = None
-            apply_transition(st, ArchiveState.ARCHIVE_PENDING)
-            st.updated_at = datetime.now(timezone.utc)
-            changed_ids.append(str(mid))
-    if changed_ids:
-        session.add(
-            OutboxEvent(
-                event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
-                payload={"message_ids": changed_ids, "state": ArchiveState.ARCHIVE_PENDING.value},
-            )
-        )
 
 
 def reclaim_stale_archive_claims(
@@ -366,6 +539,9 @@ def reclaim_stale_archive_claims(
         apply_transition(st, ArchiveState.ARCHIVE_PENDING)
         st.claimed_by = None
         st.claimed_at = None
+        # Revoking a claim bumps its revision so the stale execution's
+        # heartbeat / publish validation can never succeed afterwards.
+        st.claim_revision = int(getattr(st, "claim_revision", 0) or 0) + 1
         st.updated_at = now
         suffix = "|reclaimed_stale_archive_claim"
         prev = st.last_error or ""
@@ -387,78 +563,11 @@ def reclaim_stale_archive_claims(
 
 def _pause_quota(
     session,
-    message_ids: list[uuid.UUID],
+    claims: list[ArchiveClaim],
     account_id: uuid.UUID | None,
-    worker_id: str | None = None,
-) -> None:
-    paused_count = 0
-    for mid in message_ids:
-        st = session.get(MessageArchiveState, mid)
-        if st is None:
-            continue
-        if worker_id is not None and st.claimed_by != worker_id:
-            continue
-        if st.state != ArchiveState.ARCHIVE_IN_PROGRESS.value:
-            continue
-        apply_transition(st, ArchiveState.ARCHIVE_PAUSED_QUOTA)
-        st.pause_reason = "quota"
-        st.claimed_by = None
-        st.updated_at = datetime.now(timezone.utc)
-        paused_count += 1
-    session.add(
-        OutboxEvent(
-            event_type=OutboxEventType.ARCHIVE_PAUSED_QUOTA.value,
-            account_id=account_id,
-            payload={
-                "count": paused_count,
-                "message_ids": [str(mid) for mid in message_ids],
-                "state": ArchiveState.ARCHIVE_PAUSED_QUOTA.value,
-            },
-        )
-    )
-
-
-def _release_archive_claims_and_lease(
-    session,
-    message_ids: list[uuid.UUID],
-    *,
-    worker_id: str,
-    account_id: uuid.UUID | None = None,
-    fencing: int | None = None,
-    error: BaseException | str | None = None,
-) -> None:
-    now = datetime.now(timezone.utc)
-    from mail_core.security.redact import safe_provider_summary
-
-    err_str = safe_provider_summary(error) if error else None
-    changed_ids: list[str] = []
-    for mid in message_ids:
-        st = session.get(MessageArchiveState, mid)
-        if st is not None and st.claimed_by == worker_id and st.state == ArchiveState.ARCHIVE_IN_PROGRESS.value:
-            apply_transition(st, ArchiveState.ARCHIVE_PENDING)
-            st.claimed_by = None
-            st.claimed_at = None
-            st.updated_at = now
-            if err_str:
-                st.last_error = err_str
-            changed_ids.append(str(mid))
-    if changed_ids:
-        session.add(
-            OutboxEvent(
-                event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
-                account_id=account_id,
-                payload={
-                    "message_ids": changed_ids,
-                    "state": ArchiveState.ARCHIVE_PENDING.value,
-                    "has_error": bool(err_str),
-                },
-            )
-        )
-    if account_id is not None and fencing is not None:
-        try:
-            release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-        except FencingMismatch:
-            pass
+) -> int:
+    """Quota-pause every still-current claim via the unified settlement."""
+    return settle_archive_claims(session, claims, "quota", account_id=account_id)
 
 
 def resume_quota_paused_archives(
@@ -625,8 +734,10 @@ def run_archive_batch(
     # Capacity is below recovery threshold — automatically resume quota-paused archives (A25)
     resume_quota_paused_archives(account_id=account_id, limit=limit)
 
+    # Short claim transaction: revision is incremented and committed before
+    # any network I/O (design §4.1 step 1).
     with Session() as session:
-        claimed_ids = claim_archive_batch(
+        raw_claims = claim_archive_batch(
             session,
             account_id=account_id,
             worker_id=worker_id,
@@ -634,14 +745,32 @@ def run_archive_batch(
             recent_days=recent_days,
             target_message_id=target_msg_id,
         )
-        work: list[tuple[uuid.UUID, str, uuid.UUID, int]] = []
-        for mid in claimed_ids:
-            msg = session.get(Message, mid)
-            st = session.get(MessageArchiveState, mid)
-            if msg is None or not msg.remote_id or not msg.remote_id.strip() or st is None:
+        claims: list[ArchiveClaim] = []
+        account_by_message: dict[uuid.UUID, uuid.UUID] = {}
+        for item in raw_claims:
+            if isinstance(item, ArchiveClaim):
+                claim = item
+            else:
+                # Test doubles may still return bare message ids; normalize
+                # them into claims from the rows read in this transaction.
+                bare_id = item if isinstance(item, uuid.UUID) else uuid.UUID(str(item))
+                bare_msg = session.get(Message, bare_id)
+                bare_st = session.get(MessageArchiveState, bare_id)
+                if bare_msg is None or bare_st is None:
+                    continue
+                claim = ArchiveClaim(
+                    message_id=bare_id,
+                    owner=worker_id,
+                    revision=_revision_of(bare_st),
+                    remote_id_snapshot=bare_msg.remote_id or "",
+                )
+            msg = session.get(Message, claim.message_id)
+            if msg is None or not msg.remote_id or not msg.remote_id.strip():
                 continue
-            work.append((mid, msg.remote_id, msg.account_id, int(getattr(st, "claim_revision", 0) or 0)))
-        if claimed_ids:
+            claims.append(claim)
+            account_by_message[claim.message_id] = msg.account_id
+        if claims:
+            claimed_ids = [c.message_id for c in claims]
             status_payload = {
                 "message_ids": [str(mid) for mid in claimed_ids],
                 "state": ArchiveState.ARCHIVE_IN_PROGRESS.value,
@@ -660,22 +789,69 @@ def run_archive_batch(
     completed = 0
     failed = 0
     provider_cache: dict[uuid.UUID, object] = {}
+    done_ids: set[uuid.UUID] = set()
 
-    for idx, (mid, remote_id, msg_account_id, expected_rev) in enumerate(work):
+    def _close_providers() -> None:
+        for p in provider_cache.values():
+            if hasattr(p, "close_session"):
+                try:
+                    p.close_session()
+                except Exception:
+                    pass
+
+    def _active_claims() -> list[ArchiveClaim]:
+        return [c for c in claims if c.message_id not in done_ids]
+
+    def _heartbeat_active() -> list[ArchiveClaim]:
+        """Refresh claimed_at for this batch's in-flight claims (short txn)."""
+        active = _active_claims()
+        if not active:
+            return active
+        with Session() as hb_session:
+            alive = heartbeat_archive_claims(hb_session, active)
+            hb_session.commit()
+        return alive
+
+    def _release_reservation(reservation_id: uuid.UUID | None) -> None:
+        if reservation_id is None:
+            return
+        with Session() as s_cleanup:
+            release_quota_reservation(s_cleanup, reservation_id)
+            s_cleanup.commit()
+
+    for claim in claims:
+        mid = claim.message_id
+        remote_id = claim.remote_id_snapshot
+        if mid in done_ids:
+            continue
+
+        # Heartbeat this batch's in-flight claims before touching the next
+        # message; a claim whose heartbeat fails was revoked and must not be
+        # fetched for or published by this stale execution.
+        alive_ids = {c.message_id for c in _heartbeat_active()}
+        if mid not in alive_ids:
+            done_ids.add(mid)
+            continue
+
         # Incremental quota check: avoid per-message full disk walk (V4-01)
         soft_exceeded = soft_i is not None and current_used_bytes >= soft_i
         hard_exceeded = hard_i is not None and current_used_bytes >= hard_i
         if soft_exceeded or hard_exceeded:
             with Session() as session:
-                remaining = [w[0] for w in work[idx:]]
-                _pause_quota(session, remaining, account_id, worker_id=worker_id)
+                _pause_quota(session, _active_claims(), account_id)
                 session.commit()
+            _close_providers()
             return {
                 "status": "paused_quota",
                 "completed": completed,
                 "failed": failed,
                 "used_bytes": current_used_bytes,
             }
+
+        msg_account_id = account_by_message.get(mid)
+        if msg_account_id is None:
+            done_ids.add(mid)
+            continue
 
         if msg_account_id not in provider_cache:
             try:
@@ -696,12 +872,35 @@ def run_archive_batch(
                         log.warning("open_session failed for %s: %s", msg_account_id, safe_error(open_exc))
                 provider_cache[msg_account_id] = p
             except Exception as exc:
+                # Provider construction failure (R18): persist the sanitized
+                # error through the unified settlement for every still-active
+                # claim of this account instead of silently reverting to
+                # pending; other accounts in the batch continue.
+                if isinstance(exc, ProviderCapacityUnavailable):
+                    with Session() as session:
+                        applied = settle_archive_claims(
+                            session, _active_claims(), "capacity", account_id=account_id
+                        )
+                        session.commit()
+                    _close_providers()
+                    return {
+                        "status": "capacity_unavailable",
+                        "completed": completed,
+                        "failed": failed,
+                        "deferred": applied,
+                        "used_bytes": current_used_bytes,
+                    }
+                log.warning("archive provider construction failed account=%s: %s", msg_account_id, safe_error(exc))
+                affected = [c for c in _active_claims() if account_by_message.get(c.message_id) == msg_account_id]
                 with Session() as session:
-                    remaining_ids = [w[0] for w in work[idx:]]
-                    _release_fencing_claims(session, remaining_ids, worker_id)
+                    applied = settle_archive_claims(
+                        session, affected, "provider_error", error=exc, account_id=account_id
+                    )
                     session.commit()
-                raise
-            provider = provider_cache[msg_account_id]
+                failed += applied
+                done_ids.update(c.message_id for c in affected)
+                continue
+        provider = provider_cache[msg_account_id]
 
         try:
             t_fetch = time.monotonic()
@@ -709,28 +908,65 @@ def run_archive_batch(
             mime = provider.fetch_mime(remote_id)  # network
             log.info("archive fetch_mime success message=%s bytes=%d elapsed_ms=%.1f", mid, len(mime), (time.monotonic() - t_fetch) * 1000)
         except Exception as exc:
+            if isinstance(exc, ProviderCapacityUnavailable):
+                with Session() as session:
+                    applied = settle_archive_claims(
+                        session, _active_claims(), "capacity", account_id=account_id
+                    )
+                    session.commit()
+                _close_providers()
+                return {
+                    "status": "capacity_unavailable",
+                    "completed": completed,
+                    "failed": failed,
+                    "deferred": applied,
+                    "used_bytes": current_used_bytes,
+                }
             log.warning("archive fetch failed message=%s: %s", mid, safe_error(exc))
             with Session() as session:
-                st = session.get(MessageArchiveState, mid)
-                if (
-                    st is not None
-                    and st.claimed_by == worker_id
-                    and st.state == ArchiveState.ARCHIVE_IN_PROGRESS.value
-                ):
-                    st.retry_count = int(st.retry_count) + 1
-                    err_msg = safe_error(exc)
-                    st.last_error = err_msg
-                    apply_transition(
-                        st,
-                        ArchiveState.ARCHIVE_FAILED if st.retry_count >= 5 else ArchiveState.ARCHIVE_PENDING,
-                    )
-                    st.claimed_by = None
-                    st.updated_at = datetime.now(timezone.utc)
+                applied = settle_archive_claims(
+                    session, [claim], "provider_error", error=exc, account_id=account_id
+                )
                 session.commit()
-            failed += 1
+            failed += applied
+            done_ids.add(mid)
             continue
 
+        # The fetch may have taken long enough for this claim to be revoked;
+        # refresh the batch heartbeat and never publish a revoked claim.
+        alive_ids = {c.message_id for c in _heartbeat_active()}
+        if mid not in alive_ids:
+            done_ids.add(mid)
+            continue
+
+        # MIME parsing and attachment digest computation happen OUTSIDE the
+        # publish transaction (design §4.1 step 2). A parse failure keeps the
+        # raw MIME plus whatever partial results the parser produced.
+        try:
+            plain_text, html_text, parsed_attachments = parse_mime_content(mime)
+            parse_err = None
+        except MimeParseError as parse_exc:
+            stage = getattr(parse_exc, "stage", "content")
+            err_str = safe_error(parse_exc)[:2000]
+            log.warning("archive mime parse error for message %s stage=%s: %s", mid, stage, err_str)
+            plain_text = parse_exc.partial_plain
+            html_text = parse_exc.partial_html
+            parsed_attachments = parse_exc.attachments
+            parse_err = err_str
+        except Exception as parse_exc:
+            stage = getattr(parse_exc, "stage", "content")
+            err_str = safe_error(parse_exc)[:2000]
+            log.warning("archive mime parse error for message %s stage=%s: %s", mid, stage, err_str)
+            plain_text = None
+            html_text = None
+            parsed_attachments = []
+            parse_err = err_str
+
         mime_digest = hashlib.sha256(mime).hexdigest()
+        attachment_digests = [
+            hashlib.sha256(att_info["data"]).hexdigest() for att_info in parsed_attachments
+        ]
+
         needed_bytes = 0 if blob_store.exists(mime_digest) else estimate_encrypted_size(len(mime))
         res_id = None
         if needed_bytes > 0:
@@ -744,14 +980,9 @@ def run_archive_batch(
                     hard_limit_bytes=hard_i,
                 )
                 if res_id is None:
-                    remaining = [w[0] for w in work[idx:]]
-                    _pause_quota(s_res, remaining, account_id, worker_id=worker_id)
-                    if account_id is not None and fencing is not None:
-                        try:
-                            release_lease(s_res, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-                        except FencingMismatch:
-                            pass
+                    _pause_quota(s_res, _active_claims(), account_id)
                     s_res.commit()
+                    _close_providers()
                     return {
                         "status": "paused_quota",
                         "completed": completed,
@@ -760,47 +991,41 @@ def run_archive_batch(
                     }
                 s_res.commit()
 
+        # Publish transaction (design §4.1 steps 3-4): lock Message ->
+        # MessageArchiveState FOR UPDATE, revalidate the claim, only then
+        # take quota/digest locks (digests in stable order) and atomically
+        # save blob refs, body, attachments, archive state and Outbox event.
+        publish_outcome = "completed"
+        storage_error: Exception | None = None
         with Session() as session:
             try:
+                _lock_archive_rows(session, claim, lock_message=True)
+                msg_record, st, claim_ok = _claim_is_current(session, claim)
+                if not claim_ok:
+                    # Stale execution: commit nothing derived. This
+                    # execution's quota reservation is released by ownership
+                    # below; any file it may already have published without
+                    # references is left to the existing safe GC.
+                    session.rollback()
+                    _release_reservation(res_id)
+                    done_ids.add(mid)
+                    continue
+
                 if res_id is not None:
                     release_quota_reservation(session, res_id)
 
-                # A35: 以 digest 跨进程锁协调发布与回收
-                acquire_blob_digest_lock(session, mime_digest)
-                try:
-                    # Keep the digest lock's transaction open across file publication
-                    # and the MessageBlob/MessageBlobLink inserts below. GC uses the
-                    # same lock while checking references and unlinking the file.
-                    write = blob_store.put(mime)
-                    current_used_bytes += write.size_bytes
-                except Exception:
-                    session.rollback()
-                    if res_id is not None:
-                        with Session() as s_cleanup:
-                            release_quota_reservation(s_cleanup, res_id)
-                            s_cleanup.commit()
-                    raise
+                # A35: digest cross-process locks coordinate publish vs GC.
+                # All digests are locked in stable order, and never while
+                # waiting on message/archive-state rows (already held).
+                for digest in sorted({mime_digest, *attachment_digests}):
+                    acquire_blob_digest_lock(session, digest)
 
-                st = session.get(MessageArchiveState, mid)
-                if (
-                    st is None
-                    or st.state != ArchiveState.ARCHIVE_IN_PROGRESS.value
-                    or st.claimed_by != worker_id
-                    or getattr(st, "claim_revision", 0) != expected_rev
-                ):
-                    # 状态或 revision 失效时安全核验孤儿文件
-                    live = session.scalar(
-                        select(func.count())
-                        .select_from(MessageBlob)
-                        .where(MessageBlob.content_sha256 == write.content_sha256)
-                    ) or 0
-                    if int(live) == 0:
-                        try:
-                            blob_store.path_for(write.content_sha256).unlink(missing_ok=True)
-                        except OSError:
-                            pass
-                    session.commit()
-                    continue
+                # Keep the digest locks' transaction open across file
+                # publication and the MessageBlob/MessageBlobLink inserts
+                # below. GC uses the same locks while checking references
+                # and unlinking files.
+                write = blob_store.put(mime)
+                current_used_bytes += write.size_bytes
 
                 blob = session.scalar(
                     select(MessageBlob).where(
@@ -823,28 +1048,6 @@ def run_archive_batch(
                     blob.ref_count = int(blob.ref_count) + 1
                     blob.gc_eligible_at = None
 
-                # A26: Parse MIME body and attachments into domain models; sync FTS
-                parsed_attachments = []
-                try:
-                    plain_text, html_text, parsed_attachments = parse_mime_content(mime)
-                    parse_err = None
-                except MimeParseError as parse_exc:
-                    stage = getattr(parse_exc, "stage", "content")
-                    err_str = safe_error(parse_exc)[:2000]
-                    log.warning("archive mime parse error for message %s stage=%s: %s", mid, stage, err_str)
-                    plain_text = parse_exc.partial_plain
-                    html_text = parse_exc.partial_html
-                    parsed_attachments = parse_exc.attachments
-                    parse_err = err_str
-                except Exception as parse_exc:
-                    stage = getattr(parse_exc, "stage", "content")
-                    err_str = safe_error(parse_exc)[:2000]
-                    log.warning("archive mime parse error for message %s stage=%s: %s", mid, stage, err_str)
-                    plain_text = None
-                    html_text = None
-                    parsed_attachments = []
-                    parse_err = err_str
-
                 body = session.get(MessageBody, mid)
                 if body is None:
                     session.add(MessageBody(message_id=mid, text_plain=plain_text, text_html=html_text, parse_error=parse_err))
@@ -857,7 +1060,6 @@ def run_archive_batch(
 
                 # A26: 正文归档事务同步更新 FTS 索引
                 # 若因元数据增量缺陷导致发件人或主题缺失，自动从 MIME 报头回填
-                msg_record = session.get(Message, mid)
                 if msg_record is not None and (not msg_record.from_address or not msg_record.subject):
                     try:
                         import email.utils
@@ -875,145 +1077,147 @@ def run_archive_batch(
                     from mail_core.search.index import upsert_message_search
                     upsert_message_search(session, message_id=mid, body_text=plain_text)
 
-                storage_failed = False
                 if parsed_attachments:
-                    try:
-                        msg_record = session.get(Message, mid)
-                        if msg_record is not None:
-                            msg_record.has_attachments = True
+                    if msg_record is not None:
+                        msg_record.has_attachments = True
 
-                        existing_atts = {
-                            att.part_id: att
-                            for att in session.scalars(select(Attachment).where(Attachment.message_id == mid)).all()
-                            if att.part_id
-                        }
+                    existing_atts = {
+                        att.part_id: att
+                        for att in session.scalars(select(Attachment).where(Attachment.message_id == mid)).all()
+                        if att.part_id
+                    }
 
-                        for att_info in parsed_attachments:
-                            pid = str(att_info["part_id"])
-                            att_data = att_info["data"]
-                            att_digest = hashlib.sha256(att_data).hexdigest()
+                    for att_info, att_digest in zip(parsed_attachments, attachment_digests):
+                        pid = str(att_info["part_id"])
+                        att_data = att_info["data"]
 
-                            att_needed = 0 if blob_store.exists(att_digest) else estimate_encrypted_size(len(att_data))
-                            att_res_id = None
-                            if att_needed > 0:
-                                att_res_id = reserve_quota(
-                                    session,
-                                    root=root,
-                                    needed_bytes=att_needed,
-                                    worker_id=worker_id,
-                                    message_id=mid,
-                                    hard_limit_bytes=hard_i,
+                        att_needed = 0 if blob_store.exists(att_digest) else estimate_encrypted_size(len(att_data))
+                        att_res_id = None
+                        if att_needed > 0:
+                            att_res_id = reserve_quota(
+                                session,
+                                root=root,
+                                needed_bytes=att_needed,
+                                worker_id=worker_id,
+                                message_id=mid,
+                                hard_limit_bytes=hard_i,
+                            )
+                            if att_res_id is None:
+                                raise QuotaExceededError(f"attachment quota exceeded for message {mid}")
+
+                        try:
+                            att_write = blob_store.put(att_data)
+                            current_used_bytes += att_write.size_bytes
+                            att_blob = session.scalar(
+                                select(MessageBlob).where(
+                                    MessageBlob.content_sha256 == att_write.content_sha256,
+                                    MessageBlob.key_version == att_write.key_version,
                                 )
-                                if att_res_id is None:
-                                    raise QuotaExceededError(f"attachment quota exceeded for message {mid}")
-
-                            try:
-                                acquire_blob_digest_lock(session, att_digest)
-                                att_write = blob_store.put(att_data)
-                                current_used_bytes += att_write.size_bytes
-                                att_blob = session.scalar(
-                                    select(MessageBlob).where(
-                                        MessageBlob.content_sha256 == att_write.content_sha256,
-                                        MessageBlob.key_version == att_write.key_version,
-                                    )
+                            )
+                            if att_blob is None:
+                                att_blob = MessageBlob(
+                                    content_sha256=att_write.content_sha256,
+                                    key_version=att_write.key_version,
+                                    size_bytes=att_write.size_bytes,
+                                    storage_path=att_write.storage_path,
+                                    ref_count=0,
                                 )
-                                if att_blob is None:
-                                    att_blob = MessageBlob(
-                                        content_sha256=att_write.content_sha256,
-                                        key_version=att_write.key_version,
-                                        size_bytes=att_write.size_bytes,
-                                        storage_path=att_write.storage_path,
-                                        ref_count=0,
-                                    )
-                                    session.add(att_blob)
-                                    session.flush()
+                                session.add(att_blob)
+                                session.flush()
 
-                                if pid in existing_atts:
-                                    # A38: 保护已有 UUID
-                                    attachment = existing_atts[pid]
-                                    if attachment.blob_id != att_blob.id:
-                                        attachment.blob_id = att_blob.id
-                                        att_blob.ref_count = int(att_blob.ref_count) + 1
-                                        att_blob.gc_eligible_at = None
-                                    attachment.filename = att_info["filename"]
-                                    attachment.content_type = att_info["content_type"]
-                                    attachment.size_bytes = att_info["size_bytes"]
-                                    attachment.content_id = att_info["content_id"]
-                                    attachment.is_inline = att_info["is_inline"]
-                                else:
-                                    # A38: 稳定 MIME part 身份入库
-                                    attachment = Attachment(
-                                        message_id=mid,
-                                        part_id=pid,
-                                        blob_id=att_blob.id,
-                                        filename=att_info["filename"],
-                                        content_type=att_info["content_type"],
-                                        size_bytes=att_info["size_bytes"],
-                                        content_id=att_info["content_id"],
-                                        is_inline=att_info["is_inline"],
-                                    )
-                                    session.add(attachment)
+                            if pid in existing_atts:
+                                # A38: 保护已有 UUID
+                                attachment = existing_atts[pid]
+                                if attachment.blob_id != att_blob.id:
+                                    attachment.blob_id = att_blob.id
                                     att_blob.ref_count = int(att_blob.ref_count) + 1
                                     att_blob.gc_eligible_at = None
-                                    existing_atts[pid] = attachment
-                            finally:
-                                if att_res_id is not None:
-                                    release_quota_reservation(session, att_res_id)
-                    except QuotaExceededError:
-                        session.rollback()
-                        with Session() as s_pause:
-                            remaining = [w[0] for w in work[idx:]]
-                            _pause_quota(s_pause, remaining, account_id, worker_id=worker_id)
-                            if account_id is not None and fencing is not None:
-                                try:
-                                    release_lease(s_pause, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-                                except FencingMismatch:
-                                    pass
-                            s_pause.commit()
-                        return {
-                            "status": "paused_quota",
-                            "completed": completed,
-                            "failed": failed,
-                            "used_bytes": current_used_bytes,
-                        }
-                    except Exception as store_exc:
-                        log.warning("archive attachment storage error for message %s: %s", mid, safe_error(store_exc))
-                        session.rollback()
-                        st = session.get(MessageArchiveState, mid)
-                        if st is not None:
-                            st.retry_count = int(st.retry_count) + 1
-                            st.last_error = safe_error(store_exc)
-                            apply_transition(
-                                st,
-                                ArchiveState.ARCHIVE_FAILED if st.retry_count >= 5 else ArchiveState.ARCHIVE_PENDING,
-                            )
-                            st.claimed_by = None
-                            st.updated_at = datetime.now(timezone.utc)
-                        session.commit()
-                        failed += 1
-                        storage_failed = True
-
-                if storage_failed:
-                    continue
+                                attachment.filename = att_info["filename"]
+                                attachment.content_type = att_info["content_type"]
+                                attachment.size_bytes = att_info["size_bytes"]
+                                attachment.content_id = att_info["content_id"]
+                                attachment.is_inline = att_info["is_inline"]
+                            else:
+                                # A38: 稳定 MIME part 身份入库
+                                attachment = Attachment(
+                                    message_id=mid,
+                                    part_id=pid,
+                                    blob_id=att_blob.id,
+                                    filename=att_info["filename"],
+                                    content_type=att_info["content_type"],
+                                    size_bytes=att_info["size_bytes"],
+                                    content_id=att_info["content_id"],
+                                    is_inline=att_info["is_inline"],
+                                )
+                                session.add(attachment)
+                                att_blob.ref_count = int(att_blob.ref_count) + 1
+                                att_blob.gc_eligible_at = None
+                                existing_atts[pid] = attachment
+                        finally:
+                            if att_res_id is not None:
+                                release_quota_reservation(session, att_res_id)
 
                 apply_transition(st, ArchiveState.ARCHIVE_COMPLETE)
                 st.claimed_by = None
+                st.claimed_at = None
                 st.last_error = None
                 st.pause_reason = None
                 st.updated_at = datetime.now(timezone.utc)
-                completed += 1
+                session.add(
+                    OutboxEvent(
+                        event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
+                        account_id=account_id,
+                        payload={
+                            "message_id": str(mid),
+                            "message_ids": [str(mid)],
+                            "state": ArchiveState.ARCHIVE_COMPLETE.value,
+                            "has_error": False,
+                        },
+                    )
+                )
                 session.commit()
+                completed += 1
                 log.info("archive commit success message=%s", mid)
-            except Exception:
+            except QuotaExceededError:
+                # Roll back the derived transaction, then quota-pause the
+                # still-current claims in a separate short transaction.
                 session.rollback()
-                raise
+                publish_outcome = "quota"
+            except Exception as store_exc:
+                # Storage I/O failure: roll back the derived transaction,
+                # then record the archive error under the still-valid claim
+                # in a separate short transaction (design §4.2).
+                session.rollback()
+                log.warning("archive storage error for message %s: %s", mid, safe_error(store_exc))
+                publish_outcome = "storage_error"
+                storage_error = store_exc
 
-    for p in provider_cache.values():
-        if hasattr(p, "close_session"):
-            try:
-                p.close_session()
-            except Exception:
-                pass
+        if publish_outcome == "quota":
+            _release_reservation(res_id)
+            with Session() as s_pause:
+                # Current claim is still active here, so this pauses it and
+                # every remaining claim of the batch.
+                _pause_quota(s_pause, _active_claims(), account_id)
+                s_pause.commit()
+            _close_providers()
+            return {
+                "status": "paused_quota",
+                "completed": completed,
+                "failed": failed,
+                "used_bytes": current_used_bytes,
+            }
+        if publish_outcome == "storage_error":
+            _release_reservation(res_id)
+            with Session() as s_err:
+                applied = settle_archive_claims(
+                    s_err, [claim], "storage_error", error=storage_error, account_id=account_id
+                )
+                s_err.commit()
+            failed += applied
+        done_ids.add(mid)
+
+
+    _close_providers()
 
     with Session() as session:
         target_state = session.get(MessageArchiveState, target_msg_id) if target_msg_id is not None else None
@@ -1026,7 +1230,7 @@ def run_archive_batch(
             if target_msg_id is not None
             else {}
         )
-        batch_message_ids = [str(w[0]) for w in work]
+        batch_message_ids = [str(c.message_id) for c in claims]
         if completed:
             session.add(
                 OutboxEvent(
@@ -1076,4 +1280,4 @@ def run_archive_batch(
                 )
         session.commit()
 
-    return {"status": "ok", "completed": completed, "failed": failed, "claimed": len(work)}
+    return {"status": "ok", "completed": completed, "failed": failed, "claimed": len(claims)}

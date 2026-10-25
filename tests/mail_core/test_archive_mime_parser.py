@@ -181,9 +181,19 @@ def test_resume_quota_paused_archives_transition():
 
 
 def test_archive_distinguishes_mime_parse_from_storage_failures():
+    """Storage I/O failure during publish settles as an archive error.
+
+    Wholesale replacement (Package B, R04/R05/R18): the previous version
+    patched the removed AccountSyncLease/fencing helpers
+    (``assert_fencing``/``acquire_lease``/``renew_lease``/``release_lease``)
+    and used a claim fake without ``claim_revision``. The behavioral
+    assertions are unchanged: a storage failure must NOT complete the
+    archive; the state returns to ARCHIVE_PENDING with retry_count
+    incremented, a persisted last_error, and the claim released.
+    """
     from unittest.mock import MagicMock, patch
     import uuid
-    from mail_core.blobs.archive import run_archive_batch
+    from mail_core.blobs.archive import ArchiveClaim, run_archive_batch
     from mail_core.mail.domain.enums import ArchiveState
     from mail_core.mail.storage.models import Account, Message, MessageArchiveState
 
@@ -194,6 +204,7 @@ def test_archive_distinguishes_mime_parse_from_storage_failures():
         message_id=mid,
         state=ArchiveState.ARCHIVE_IN_PROGRESS.value,
         claimed_by="worker-1",
+        claim_revision=1,
         retry_count=0,
     )
     fake_msg = Message(
@@ -259,17 +270,17 @@ def test_archive_distinguishes_mime_parse_from_storage_failures():
     fake_quota.hard_exceeded = False
     fake_quota.soft_exceeded = False
 
+    claim = ArchiveClaim(
+        message_id=mid, owner="worker-1", revision=1, remote_id_snapshot="remote-1"
+    )
     with (
         patch("mail_core.db.session.get_session_factory", return_value=lambda: fake_session),
         patch("mail_core.blobs.archive.BlobStore", return_value=fake_blob_store),
         patch("mail_core.blobs.archive.check_quota", return_value=fake_quota),
         patch("mail_core.blobs.archive.build_provider", return_value=fake_provider),
-        patch("mail_core.blobs.archive.assert_fencing"),
-            patch("mail_core.blobs.archive.acquire_lease"),
-            patch("mail_core.blobs.archive.renew_lease"),
-            patch("mail_core.blobs.archive.release_lease"),
         patch("mail_core.blobs.archive.enqueue_job"),
-            patch("mail_core.blobs.archive.claim_archive_batch", return_value=[mid]),
+        patch("mail_core.blobs.archive.resume_quota_paused_archives", return_value=0),
+        patch("mail_core.blobs.archive.claim_archive_batch", return_value=[claim]),
     ):
         res = run_archive_batch(account_id=acc_id, worker_id="worker-1", payload={"batch_size": 1})
 
