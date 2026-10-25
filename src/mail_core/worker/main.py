@@ -53,14 +53,14 @@ def request_stop() -> None:
 
 
 def _reclaim_once() -> int:
-    """Periodically reclaim stuck claims and prune old dispatched outbox rows."""
+    """Periodically reclaim stuck claims and prune expired published outbox rows."""
     try:
         from datetime import timedelta
 
         from mail_core.blobs.archive import maybe_resume_quota_paused_archives, reclaim_stale_archive_claims
         from mail_core.blobs.quota import prune_expired_quota_reservations
         from mail_core.db.session import get_session_factory
-        from mail_core.realtime.outbox import prune_dispatched
+        from mail_core.realtime.outbox import prune_published
         from mail_core.sync.jobs import prune_completed_jobs, reclaim_stale_claims
     except Exception as exc:  # pragma: no cover
         log.error("worker degraded: reclaim imports failed (%s); skipping reclaim", exc)
@@ -76,9 +76,9 @@ def _reclaim_once() -> int:
             a = reclaim_stale_archive_claims(session, older_than=timedelta(minutes=15), limit=100)
             if a:
                 log.info("reclaimed %s stale archive_in_progress claim(s)", a)
-            pruned = prune_dispatched(session, older_than=timedelta(days=7), limit=2000)
+            pruned = prune_published(session, older_than=timedelta(days=7), limit=5000)
             if pruned:
-                log.info("pruned %s dispatched outbox row(s)", pruned)
+                log.info("pruned %s published outbox row(s)", pruned)
             pruned_jobs = prune_completed_jobs(session, older_than=timedelta(days=7), limit=1000)
             if pruned_jobs:
                 log.info("pruned %s completed/failed worker job(s)", pruned_jobs)

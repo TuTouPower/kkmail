@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Sequence
+from typing import Any
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from mail_core.mail.storage.models import OutboxEvent
+from mail_core.mail.storage.models import OutboxEvent, OutboxPublicationState
+
+# Retention deletes at most this many rows per call (design §9.2); larger
+# backlogs are drained incrementally by repeated worker sweeps.
+MAX_PRUNE_BATCH = 5000
+RETENTION_WINDOW = timedelta(days=7)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +38,18 @@ def publication_head(session: Session) -> tuple[str, int]:
 
     state = get_publication_state(session)
     return str(state.epoch), int(state.next_seq - 1)
+
+
+def pruned_through_seq(session: Session) -> int:
+    """Highest publication_seq deleted by retention (0 when nothing pruned).
+
+    Same-epoch replay/dispatch cursors below this watermark reference rows
+    that no longer exist and must resync instead of replaying partially.
+    """
+    from mail_core.realtime.publication import get_publication_state
+
+    state = get_publication_state(session)
+    return int(state.pruned_through_seq or 0)
 
 
 def fetch_published_since(
@@ -68,18 +85,6 @@ def to_item(row: OutboxEvent) -> OutboxItem:
     )
 
 
-def fetch_undispatched(session: Session, *, limit: int = 100) -> list[OutboxEvent]:
-    return list(
-        session.scalars(
-            select(OutboxEvent)
-            .where(OutboxEvent.dispatched_at.is_(None))
-            .order_by(OutboxEvent.id.asc())
-            .limit(limit)
-            .with_for_update(skip_locked=True)
-        ).all()
-    )
-
-
 def fetch_since(
     session: Session,
     *,
@@ -106,41 +111,87 @@ def fetch_since(
     return list(session.scalars(stmt).all())
 
 
-def mark_dispatched(session: Session, event_ids: Sequence[int], *, now: datetime | None = None) -> None:
-    if not event_ids:
-        return
-    now = now or datetime.now(timezone.utc)
-    session.execute(
-        update(OutboxEvent)
-        .where(OutboxEvent.id.in_(list(event_ids)))
-        .values(dispatched_at=now)
-    )
+def _as_utc(value: datetime) -> datetime:
+    """Normalize a stored timestamp for comparison (SQLite drops tzinfo)."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
-def prune_dispatched(
+def prune_published(
     session: Session,
     *,
-    older_than: timedelta = timedelta(days=7),
-    limit: int = 5000,
+    older_than: timedelta = RETENTION_WINDOW,
+    limit: int = MAX_PRUNE_BATCH,
     now: datetime | None = None,
 ) -> int:
-    """Delete old **dispatched** outbox rows (architecture §13 delayed trim).
+    """Delete the expired continuous prefix of published outbox rows.
 
-    Never touches undispatched rows. Caps each call at ``limit`` ids so workers
-    can prune incrementally without long locks.
+    Retention is defined over the v2 publication stream (design §9.2), not
+    the removed single-consumer ``dispatched_at`` marker:
+
+    - Only rows with ``publication_seq IS NOT NULL`` are candidates; an
+      unpublished row is never deleted, regardless of age.
+    - Candidates are scanned in ``publication_seq`` order starting just
+      above the ``pruned_through_seq`` watermark. Deletion stops at the
+      first candidate whose ``published_at`` is inside the retention
+      window — a newer row interleaved in sequence order blocks every
+      later row, so the retained stream never develops a hole below the
+      watermark.
+    - At most ``limit`` rows (hard-capped at 5000) are deleted per call.
+    - The prefix deletion and the ``pruned_through_seq`` advance happen in
+      the caller's transaction (this function flushes but does not commit),
+      so the watermark never claims rows that were not deleted and never
+      lags rows that were.
+
+    Returns the number of rows deleted in this call.
     """
+    if limit <= 0:
+        return 0
+    batch = min(int(limit), MAX_PRUNE_BATCH)
     now = now or datetime.now(timezone.utc)
     cutoff = now - older_than
-    ids = list(
+
+    # Lock the singleton first: publication also locks this row before
+    # assigning sequences, so pruning is serialized against publishing and
+    # against concurrent pruners.
+    state = session.scalar(
+        select(OutboxPublicationState)
+        .where(OutboxPublicationState.id == 1)
+        .with_for_update()
+    )
+    if state is None:
+        from mail_core.realtime.publication import get_publication_state
+
+        state = get_publication_state(session)
+    watermark = int(state.pruned_through_seq or 0)
+
+    rows = list(
         session.scalars(
-            select(OutboxEvent.id)
-            .where(OutboxEvent.dispatched_at.is_not(None))
-            .where(OutboxEvent.dispatched_at < cutoff)
-            .order_by(OutboxEvent.id.asc())
-            .limit(limit)
+            select(OutboxEvent)
+            .where(OutboxEvent.publication_seq.is_not(None))
+            .where(OutboxEvent.publication_seq > watermark)
+            .order_by(OutboxEvent.publication_seq.asc())
+            .limit(batch)
         ).all()
     )
-    if not ids:
+
+    prefix: list[OutboxEvent] = []
+    for row in rows:
+        if row.published_at is None or _as_utc(row.published_at) >= cutoff:
+            break
+        prefix.append(row)
+
+    if not prefix:
         return 0
-    session.execute(delete(OutboxEvent).where(OutboxEvent.id.in_(ids)))
-    return len(ids)
+
+    session.execute(delete(OutboxEvent).where(OutboxEvent.id.in_([r.id for r in prefix])))
+    state.pruned_through_seq = int(prefix[-1].publication_seq)
+    session.flush()
+    return len(prefix)
+
+
+# Backwards-compatible alias for callers/tests written against the old
+# dispatched_at-based name. The semantics are the publication retention
+# above; nothing is keyed on dispatched_at any more (the column is gone).
+prune_dispatched = prune_published

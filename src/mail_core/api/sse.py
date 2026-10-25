@@ -20,7 +20,7 @@ from starlette.background import BackgroundTask
 from mail_core.api.deps import require_auth
 from mail_core.db.session import get_session_factory
 from mail_core.realtime.dispatcher import SSE_STREAM_CLOSE, get_dispatcher
-from mail_core.realtime.outbox import fetch_published_since, publication_head, to_item
+from mail_core.realtime.outbox import fetch_published_since, pruned_through_seq, publication_head, to_item
 from mail_core.security.auth import AuthPrincipal
 
 log = logging.getLogger("mail_core.api.sse")
@@ -142,6 +142,22 @@ def _build_replay(raw_cursor: str | None, account_id: UUID | None) -> _ReplayPla
         assert seq is not None
         if seq > head_seq:
             payload = {"reason": "cursor_ahead", "head": head_cursor, "last_seq": seq}
+            frames.append((head_cursor, "client.resync_hint", payload))
+            return _ReplayPlan(frames=frames, cursor=head_cursor, cursor_seq=head_seq)
+
+        # Retention gap (design §9.2): the rows after this cursor have been
+        # pruned, so no replay — however small the distance to head — can be
+        # complete. This check is on the global publication watermark: it
+        # applies equally to an empty retention window, account-filtered
+        # streams, and consumers that lag far behind.
+        pruned_seq = pruned_through_seq(session)
+        if seq < pruned_seq:
+            payload = {
+                "reason": "retention_gap",
+                "head": head_cursor,
+                "last_seq": seq,
+                "pruned_through_seq": pruned_seq,
+            }
             frames.append((head_cursor, "client.resync_hint", payload))
             return _ReplayPlan(frames=frames, cursor=head_cursor, cursor_seq=head_seq)
 

@@ -15,8 +15,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from mail_core.realtime.outbox import fetch_undispatched, mark_dispatched, to_item
-
 log = logging.getLogger("mail_core.realtime.dispatcher")
 
 Subscriber = Callable[[dict[str, Any]], None]
@@ -183,32 +181,64 @@ class OutboxDispatcher:
         return ok
 
     def dispatch_once(self, *, require_subscribers: bool = False) -> int:
-        """Publish committed rows, assign publication_seq, and fan out to local subscribers."""
+        """Publish committed rows, commit publication_seq, then fan out locally.
+
+        The sequence assignment is committed *before* any broadcast
+        (design §9.2): a subscriber must never observe a ``v2:epoch:seq``
+        cursor whose sequence assignment could still roll back.
+        """
         from mail_core.db.session import get_session_factory
-        from mail_core.realtime.outbox import fetch_published_since, publication_head, to_item
+        from mail_core.realtime.outbox import (
+            fetch_published_since,
+            pruned_through_seq,
+            publication_head,
+            to_item,
+        )
         from mail_core.realtime.publication import publish_committed_batch
 
         Session = get_session_factory()
-        with self._dispatch_lock, Session() as session:
-            batch = publish_committed_batch(session, limit=100)
-            epoch, head_seq = publication_head(session)
+        with self._dispatch_lock:
+            # Phase 1: assign publication_seq and commit it before broadcast.
+            with Session() as session:
+                batch = publish_committed_batch(session, limit=100)
+                epoch, head_seq = publication_head(session)
+                pruned_seq = pruned_through_seq(session)
+                session.commit()
 
             if require_subscribers and not self.has_local_subscribers():
-                session.commit()
                 return 0
 
             if self._last_dispatched_seq == 0 and head_seq > 0:
                 self._last_dispatched_seq = max(0, head_seq - batch.count)
 
-            rows = fetch_published_since(session, after_seq=self._last_dispatched_seq, limit=100)
-            if not rows:
-                session.commit()
+            # Retention gap: rows this dispatcher still needs to fan out
+            # have been pruned. It must not silently skip them — emit the
+            # re-fetch hint and rebuild the local cursor at head.
+            if self._last_dispatched_seq < pruned_seq:
+                hint = {
+                    "id": f"v2:{epoch}:{head_seq}",
+                    "publication_seq": head_seq,
+                    "event": "client.resync_hint",
+                    "account_id": None,
+                    "data": {
+                        "reason": "retention_gap",
+                        "pruned_through_seq": pruned_seq,
+                        "last_seq": self._last_dispatched_seq,
+                    },
+                    "created_at": None,
+                }
+                self._fanout(hint)
+                self._last_dispatched_seq = head_seq
                 return 0
 
+            # Phase 2: read the committed stream (no transaction is held
+            # across the fan-out below).
+            with Session() as session:
+                rows = fetch_published_since(session, after_seq=self._last_dispatched_seq, limit=100)
+                items = [(int(row.publication_seq), to_item(row)) for row in rows]
+
             dispatched_count = 0
-            for row in rows:
-                seq = int(row.publication_seq)
-                item = to_item(row)
+            for seq, item in items:
                 payload = {
                     "id": f"v2:{epoch}:{seq}",
                     "publication_seq": seq,
@@ -221,7 +251,6 @@ class OutboxDispatcher:
                     dispatched_count += 1
                     self._last_dispatched_seq = max(self._last_dispatched_seq, seq)
 
-            session.commit()
             return dispatched_count
 
     def close_session_streams(self, *, current_epoch: int | None = None) -> None:

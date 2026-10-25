@@ -297,8 +297,8 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.OUTBOX_DISPATCH_WAKE.value:
-            # Worker must NOT mark_dispatched — that steals events from the API
-            # process (no local SSE subscribers here). Only wake the API LISTEN.
+            # Worker must NOT dispatch — fan-out is owned by the API process
+            # (no local SSE subscribers here). Only wake the API LISTEN.
             from mail_core.realtime.notify import try_notify_outbox
 
             try_notify_outbox(session)

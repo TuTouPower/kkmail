@@ -46,16 +46,16 @@ def test_target_no_longer_has_current_job_id_and_binding_table_shape():
     assert job_fk and next(iter(job_fk)).ondelete == "SET NULL"
 
 
-def test_alembic_chain_single_head_is_0025_and_linear():
+def test_alembic_chain_single_head_is_0026_and_linear():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     cfg = Config(str(ROOT / "src/mail_core/db/alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "src/mail_core/db/alembic"))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == ["20261026_0025"]
-    current = script.get_revision("20261026_0025")
-    assert current.down_revision == "20261026_0024"
+    assert script.get_heads() == ["20261026_0026"]
+    current = script.get_revision("20261026_0026")
+    assert current.down_revision == "20261026_0025"
     visited = []
     while current is not None:
         visited.append(current.revision)
@@ -65,7 +65,7 @@ def test_alembic_chain_single_head_is_0025_and_linear():
         assert isinstance(down, str), f"fork at {current.revision}"
         current = script.get_revision(down)
     assert visited[-1] == "20261020_0001"
-    assert len(visited) == 25
+    assert len(visited) == 26
 
 
 def test_settle_is_noop_for_job_double_without_generation():
