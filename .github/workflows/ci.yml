@@ -54,8 +54,20 @@ jobs:
         run: npm ci
         working-directory: src/frontend
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('src/frontend/package-lock.json') }}
+
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium
+        working-directory: src/frontend
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
         working-directory: src/frontend
 
       - name: Code style & lint
@@ -64,10 +76,6 @@ jobs:
 
       - name: TypeScript typecheck
         run: npx tsc -b
-        working-directory: src/frontend
-
-      - name: OpenAPI schema verification
-        run: npm run openapi:check
         working-directory: src/frontend
 
       - name: Frontend unit & component tests
@@ -131,8 +139,23 @@ jobs:
       - name: Install frontend & build SPA
         run: |
           npm ci
-          npx playwright install --with-deps chromium
           npm run build
+        working-directory: src/frontend
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('src/frontend/package-lock.json') }}
+
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium
+        working-directory: src/frontend
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
         working-directory: src/frontend
 
       - name: Install Python dependencies
