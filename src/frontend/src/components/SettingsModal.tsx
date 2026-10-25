@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Check, Folder, Inbox, LoaderCircle, Monitor, Moon, PanelLeft, Pencil, Plus, RefreshCw, Search, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react'
+import { Check, Folder, Inbox, LoaderCircle, Monitor, Moon, PanelLeft, Pencil, Plus, RefreshCw, Search, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState, type Ref } from 'react'
 import { api, type AccountSummary } from '../api/client'
 import { fetchAccounts, fetchGroups, queryKeys, resetGroupMailQueries, resetMailListQueries } from '../api/queries'
@@ -215,6 +215,22 @@ export default function SettingsPage({
     }, '已删除')
   }
 
+  // Sync-preference toggles stay silent on success (p054); only failures surface feedback.
+  async function toggleSyncPreference(account: AccountSummary) {
+    if (pendingRef.current) return
+    pendingRef.current = true
+    setPending(true)
+    try {
+      await api.updateAccount(account.id, { sync_enabled: account.sync_enabled === false })
+      await refreshOrganization()
+    } catch (error) {
+      report('accounts', errorMessage(error, '更新同步偏好失败'), true)
+    } finally {
+      pendingRef.current = false
+      setPending(false)
+    }
+  }
+
   function showGroupAccounts(id: string) {
     setSearch('')
     setGroupFilter(id)
@@ -243,15 +259,6 @@ export default function SettingsPage({
               <PanelLeft size={18} />
             </button>
             <span className="settings-nav-title">设置</span>
-            <button
-              type="button"
-              className="settings-nav-close"
-              aria-label="关闭设置"
-              title="返回邮件"
-              onClick={closeSettings}
-            >
-              <ArrowLeft size={16} />
-            </button>
           </div>
           <span className="settings-nav-caption">邮箱管理</span>
           <button type="button" className="settings-nav-item" aria-current={section === 'accounts' ? 'page' : undefined} onClick={() => setSection('accounts')}><Inbox size={16} />账户管理</button>
@@ -261,15 +268,21 @@ export default function SettingsPage({
         </nav>
         <div className={`settings-content settings-content-${section}`}>
           {section === 'accounts' && <>
-            <div className="settings-section-head"><div><h1>账户管理</h1><p>管理邮箱连接、同步状态与所属分组。</p></div><button type="button" className="settings-button is-primary" onClick={() => { setEditingAccount(null); setAddOpen(true) }} disabled={pending}><Plus size={15} />添加账户</button></div>
-            <div className="settings-summary"><span>账户总数 <strong>{accountsQuery.isPending ? '—' : accounts.length}</strong></span><span>已启用同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled !== false).length}</strong></span><span>已暂停同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled === false).length}</strong></span></div>
+            <div className="settings-section-head"><div><h1>账户管理</h1></div></div>
             {accountsQuery.isError && <div className="settings-feedback is-error" role="alert">加载账户失败：{errorMessage(accountsQuery.error)} <button type="button" className="settings-text-button" onClick={() => void accountsQuery.refetch()}>重试</button></div>}
             {groupsQuery.isError && <div className="settings-feedback is-error" role="alert">加载分组失败：{errorMessage(groupsQuery.error)} <button type="button" className="settings-text-button" onClick={() => void groupsQuery.refetch()}>重试</button></div>}
-            <div className="settings-toolbar">
-              <label className="settings-search"><Search size={15} /><input type="search" aria-label="搜索账户" placeholder="搜索邮箱、域名、服务商或分组" value={search} onChange={event => setSearch(event.target.value)} /></label>
-              <select aria-label="按分组筛选" value={groupFilter} onChange={event => setGroupFilter(event.target.value)} disabled={groupsQuery.isError}><option value="all">所有分组</option><option value="ungrouped">未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
-              <select aria-label="按同步状态筛选" value={stateFilter} onChange={event => setStateFilter(event.target.value)}><option value="all">全部状态</option><option value="enabled">已启用同步</option><option value="disabled">已暂停同步</option><option value="failed">同步异常</option></select>
-              <select aria-label="按邮箱域名筛选" value={domainFilter} onChange={event => setDomainFilter(event.target.value)}><option value="all">所有域名</option>{domains.map(domain => <option key={domain} value={domain}>{domain}</option>)}</select>
+            <div className="settings-accounts-first-row">
+              <div className="settings-summary"><span>账户总数 <strong>{accountsQuery.isPending ? '—' : accounts.length}</strong></span><span>已显示 <strong>{accountsQuery.isPending ? '—' : filtered.length}</strong></span><span>已同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled !== false).length}</strong></span><span>已暂停同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled === false).length}</strong></span></div>
+              <div className="settings-accounts-actions">
+                <button type="button" className="settings-button is-primary" onClick={() => { setEditingAccount(null); setAddOpen(true) }} disabled={pending}><Plus size={15} />添加账户</button>
+                <button type="button" className="settings-button" disabled={pending || accountsQuery.isPending || accountsQuery.isError} onClick={() => void run('accounts', '全量同步', async () => { const result = await api.syncAll(); await qc.invalidateQueries({ queryKey: queryKeys.accounts }); return result }, result => `已排队 ${result.target_count ?? 0} 个全量同步任务`)}><RefreshCw size={14} />同步全部账户</button>
+              </div>
+              <div className="settings-toolbar">
+                <label className="settings-search"><Search size={15} /><input type="search" aria-label="搜索账户" placeholder="搜索邮箱、域名、服务商或分组" value={search} onChange={event => setSearch(event.target.value)} /></label>
+                <select aria-label="按分组筛选" value={groupFilter} onChange={event => setGroupFilter(event.target.value)} disabled={groupsQuery.isError}><option value="all">所有分组</option><option value="ungrouped">未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
+                <select aria-label="按同步状态筛选" value={stateFilter} onChange={event => setStateFilter(event.target.value)}><option value="all">全部状态</option><option value="enabled">已启用同步</option><option value="disabled">已暂停同步</option><option value="failed">同步异常</option></select>
+                <select aria-label="按邮箱域名筛选" value={domainFilter} onChange={event => setDomainFilter(event.target.value)}><option value="all">所有域名</option>{domains.map(domain => <option key={domain} value={domain}>{domain}</option>)}</select>
+              </div>
             </div>
             {selectedAccounts.length > 0 && <div className="settings-bulk-bar" aria-label="批量账户操作">
               <strong>已选 {selectedAccounts.length} 个账户</strong><select aria-label="批量移动分组" value={bulkGroup} onChange={event => setBulkGroup(event.target.value)} disabled={pending || groupsQuery.isError}><option value="">移至未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
@@ -300,16 +313,12 @@ export default function SettingsPage({
                     void run('accounts', '移动账号', async () => { await moveAccount(account, groupId); await refreshOrganization() }, '账号分组已更新')
                   }}><option value="">不加入分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
                   <span className={`settings-sync-status${syncFailed(account) ? ' is-error' : ''}`}><i />{syncStates[account.sync_status] || account.sync_status || '状态未知'}</span>
-                  <button className="settings-switch" type="button" role="switch" aria-checked={account.sync_enabled !== false} aria-label={`${account.sync_enabled === false ? '启用' : '暂停'}同步 ${account.email}`} disabled={pending} onClick={() => void run('accounts', '更新同步偏好', async () => {
-                    await api.updateAccount(account.id, { sync_enabled: account.sync_enabled === false })
-                    await refreshOrganization()
-                  }, '同步偏好已更新')}><span /></button>
+                  <button className="settings-switch" type="button" role="switch" aria-checked={account.sync_enabled !== false} aria-label={`${account.sync_enabled === false ? '启用' : '暂停'}同步 ${account.email}`} disabled={pending} onClick={() => void toggleSyncPreference(account)}><span /></button>
                   <div className="settings-row-actions"><button type="button" className="settings-icon-button" title="编辑账户" aria-label={`编辑账户 ${account.email}`} disabled={pending} onClick={() => { setAddOpen(false); setEditingAccount(account) }}><Pencil size={14} /></button><button type="button" className="settings-icon-button" title="立即同步" aria-label={`同步 ${account.email}`} disabled={pending || account.sync_enabled === false} onClick={() => void run('accounts', '同步', async () => { await api.syncAccount(account.id); await qc.invalidateQueries({ queryKey: queryKeys.accounts }) }, '已排队同步')}><RefreshCw size={14} /></button><button type="button" className="settings-icon-button is-danger" aria-label={`删除账户 ${account.email}`} title="删除账户" disabled={pending} onClick={() => void deleteAccount(account)}><Trash2 size={14} /><span className="settings-sr-only">删除</span></button></div>
                 </div>)}
                 {!accountsQuery.isPending && !accountsQuery.isError && !filtered.length && <div className="settings-empty"><Inbox size={26} /><strong>{accounts.length ? '没有匹配的账户' : '还没有添加账户'}</strong><span>{accounts.length ? '调整搜索词或筛选条件。' : '添加邮箱后，即可在此管理同步与分组。'}</span></div>}
               </div>
             </div>
-            <div className="settings-list-footer"><span>显示 {filtered.length} / {accounts.length} 个账户</span><button type="button" className="settings-button" disabled={pending || accountsQuery.isPending || accountsQuery.isError} onClick={() => void run('accounts', '全量同步', async () => { const result = await api.syncAll(); await qc.invalidateQueries({ queryKey: queryKeys.accounts }); return result }, result => `已排队 ${result.target_count ?? 0} 个全量同步任务`)}><RefreshCw size={14} />同步全部账户</button></div>
           </>}
 
           {section === 'groups' && <>

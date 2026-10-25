@@ -771,6 +771,110 @@ describe('<SettingsModal />', () => {
     await waitFor(() => expect(container.querySelector('dialog')).toBeNull())
   })
 
+  it('p054: integrates stats, actions and filters into a single first row directly above the account list', async () => {
+    const groups = [{ id: 'work', name: '工作', color: null, account_count: 1, sort_order: 0 }]
+    const accounts = [
+      { id: 'a-gmail', email: 'ada@gmail.com', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
+      { id: 'a-qq-enabled', email: 'bob@qq.com', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: null, group_name: null },
+      { id: 'a-qq-paused', email: 'carol@qq.com', status: 'active', sync_status: 'idle', sync_enabled: false, account_type: 'imap', provider: 'imap', group_id: null, group_name: null },
+    ]
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (url.pathname === '/api/accounts') return json({ accounts, total: accounts.length, limit: 200, offset: 0, has_more: false })
+      if (url.pathname === '/api/groups') return json({ groups })
+      if (url.pathname === '/api/settings') return json({ settings: {} })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelectorAll('.settings-account-row')).toHaveLength(3))
+
+    // The subtitle under the account-management title is gone.
+    expect(container.textContent).not.toContain('管理邮箱连接、同步状态与所属分组。')
+
+    // A single first row holds stats, actions, search and the three filters.
+    const firstRow = container.querySelector('.settings-accounts-first-row')
+    expect(firstRow).not.toBeNull()
+    const summaryText = () => [...(firstRow?.querySelectorAll('.settings-summary > span') || [])].map(node => node.textContent)
+    expect(summaryText()).toEqual(['账户总数 3', '已显示 3', '已同步 2', '已暂停同步 1'])
+    expect([...(firstRow?.querySelectorAll('button') || [])].map(button => button.textContent)).toEqual(
+      expect.arrayContaining(['添加账户', '同步全部账户']),
+    )
+    expect(firstRow?.querySelector('input[aria-label="搜索账户"]')).not.toBeNull()
+    expect(firstRow?.querySelector('select[aria-label="按分组筛选"]')).not.toBeNull()
+    expect(firstRow?.querySelector('select[aria-label="按同步状态筛选"]')).not.toBeNull()
+    expect(firstRow?.querySelector('select[aria-label="按邮箱域名筛选"]')).not.toBeNull()
+
+    // The old footer bar (count text + bottom-right sync-all) is gone.
+    expect(container.querySelector('.settings-list-footer')).toBeNull()
+    expect(container.textContent).not.toMatch(/显示 \d+ \/ \d+ 个账户/)
+
+    // The account list directly follows the first row.
+    expect(container.querySelector('.settings-account-table')?.previousElementSibling).toBe(firstRow)
+
+    // 已显示 reflects the active search/filter while the totals stay global.
+    await typeInto(container.querySelector('input[aria-label="搜索账户"]'), 'gmail')
+    await waitFor(() => expect(container.querySelectorAll('.settings-account-row')).toHaveLength(1))
+    expect(summaryText()).toEqual(['账户总数 3', '已显示 1', '已同步 2', '已暂停同步 1'])
+  })
+
+  it('p054: sync-preference toggle shows no success feedback on success', async () => {
+    const account = {
+      id: 'toggle-account', email: 'toggle@example.test', status: 'active', sync_status: 'idle', sync_enabled: true,
+      account_type: 'imap', provider: 'imap', group_id: null, group_name: null,
+    }
+    const patches: unknown[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init: RequestInit = {}) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (url.pathname === '/api/accounts/toggle-account' && init.method === 'PATCH') {
+        patches.push(JSON.parse(String(init.body)))
+        return json({ ...account, sync_enabled: false })
+      }
+      if (url.pathname === '/api/accounts') return json({ accounts: [account], total: 1, limit: 200, offset: 0, has_more: false })
+      if (url.pathname === '/api/groups') return json({ groups: [] })
+      if (url.pathname === '/api/settings') return json({ settings: {} })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelector('.settings-account-row')).not.toBeNull())
+    const toggle = container.querySelector('button[aria-label="暂停同步 toggle@example.test"]') as HTMLButtonElement
+    await click(toggle)
+
+    await waitFor(() => expect(patches).toEqual([{ sync_enabled: false }]))
+    await waitFor(() => expect(toggle.disabled).toBe(false))
+    expect(container.textContent).not.toContain('同步偏好已更新')
+    expect(container.querySelector('.settings-feedback')).toBeNull()
+  })
+
+  it('p054: sync-preference toggle still reports an error feedback on failure', async () => {
+    const account = {
+      id: 'toggle-fail-account', email: 'toggle-fail@example.test', status: 'active', sync_status: 'idle', sync_enabled: true,
+      account_type: 'imap', provider: 'imap', group_id: null, group_name: null,
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init: RequestInit = {}) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (url.pathname === '/api/accounts/toggle-fail-account' && init.method === 'PATCH') {
+        return json({ detail: '同步开关保存失败' }, 500)
+      }
+      if (url.pathname === '/api/accounts') return json({ accounts: [account], total: 1, limit: 200, offset: 0, has_more: false })
+      if (url.pathname === '/api/groups') return json({ groups: [] })
+      if (url.pathname === '/api/settings') return json({ settings: {} })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelector('.settings-account-row')).not.toBeNull())
+    await click(container.querySelector('button[aria-label="暂停同步 toggle-fail@example.test"]'))
+
+    await waitFor(() => expect(container.textContent).toContain('同步开关保存失败'))
+    expect(container.querySelector('.settings-feedback.is-error')).not.toBeNull()
+    expect(container.textContent).not.toContain('同步偏好已更新')
+  })
+
   it('removes settings-page-head and houses sidebar-toggle inside settings-nav (p049)', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
       const url = new URL(String(input), 'http://localhost')
@@ -789,11 +893,10 @@ describe('<SettingsModal />', () => {
     const toggle = container.querySelector('.settings-nav button[data-ui="ST01"]')
     expect(toggle).not.toBeNull()
 
-    // 3. Close button exists inside settings-nav
-    const closeBtn = container.querySelector('.settings-nav .settings-nav-close')
-    expect(closeBtn).not.toBeNull()
-    useMailStore.setState({ settingsOpen: true })
-    await click(closeBtn)
-    expect(useMailStore.getState().settingsOpen).toBe(false)
+    // 3. (p054 supersedes the p049 close-button expectation) The back/close
+    // arrow button at the top of settings-nav is removed.
+    expect(container.querySelector('.settings-nav .settings-nav-close')).toBeNull()
+    expect(container.querySelector('.settings-nav .settings-nav-back')).toBeNull()
+    expect(container.querySelector('button[aria-label="关闭设置"]')).toBeNull()
   })
 })
