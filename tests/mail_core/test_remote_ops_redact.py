@@ -65,3 +65,23 @@ def test_coalesce_in_progress_operation_with_monotonic_revision():
     assert coalesced.desired_state["is_read"] is False
     assert coalesced.desired_state["revision"] == 2
 
+
+def test_mark_remote_operation_clears_stale_error_on_retry_and_success():
+    session = MagicMock()
+    op = RemoteOperation(
+        id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
+        entity_key="test_entity",
+        op_type="mark_read",
+        desired_state={},
+        status=RemoteOperationStatus.PENDING.value,
+        attempts=1,
+        last_error="previous transient failure",
+    )
+
+    mark_remote_operation(session, op, status=RemoteOperationStatus.IN_PROGRESS)
+    assert op.last_error is None
+
+    op.last_error = "stale failure"
+    mark_remote_operation(session, op, status=RemoteOperationStatus.DONE)
+    assert op.last_error is None

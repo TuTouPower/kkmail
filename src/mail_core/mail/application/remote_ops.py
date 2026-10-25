@@ -170,7 +170,9 @@ def mark_remote_operation(
     op.status = status.value
     op.updated_at = datetime.now(timezone.utc)
     op.next_attempt_at = next_attempt_at
-    if error:
+    if status in (RemoteOperationStatus.DONE, RemoteOperationStatus.IN_PROGRESS):
+        op.last_error = None
+    elif error:
         op.last_error = redact(error[:2000])
     if status == RemoteOperationStatus.IN_PROGRESS:
         op.attempts = int(op.attempts) + 1
