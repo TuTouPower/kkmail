@@ -111,6 +111,7 @@ def update_account(
     sync_enabled: bool | None = None,
     config_patch: dict | None = None,
     credentials: dict | None = None,
+    clear_credentials: list[str] | None = None,
 ) -> Account:
     if group_id is not ...:
         lock_sidebar_layout(session)
@@ -120,15 +121,20 @@ def update_account(
     from mail_core.accounts.connection import validate_connection, merge_credentials, reject_microsoft_imap
     from mail_core.accounts.credentials import credential_edit
     effective_config = {**(acc.config or {}), **(config_patch or {})}
-    if acc.provider == "imap" and (config_patch or credentials or sync_enabled is True):
+    if acc.provider == "imap" and (config_patch or credentials or clear_credentials or sync_enabled is True):
         reject_microsoft_imap(acc.email, effective_config)
     if config_patch:
         validate_connection(acc.email, acc.provider, effective_config, None, require_credentials=False)
     auth_config_changed = any(key in (config_patch or {}) and effective_config.get(key) != (acc.config or {}).get(key) for key in ("oauth_client_type",))
-    if credentials or auth_config_changed:
+    if credentials or clear_credentials or auth_config_changed:
         ref = acc.credential_ref or f"account:{acc.id}"
         with credential_edit(get_credential_store(), ref, session=session) as saved:
-            merged_credentials = merge_credentials(acc.provider, saved, credentials or {})
+            merged_credentials = merge_credentials(
+                acc.provider,
+                saved,
+                credentials or {},
+                clear_fields=set(clear_credentials or ()),
+            )
             validate_connection(acc.email, acc.provider, effective_config, merged_credentials)
             if auth_config_changed:
                 merged_credentials.pop("access_token", None)

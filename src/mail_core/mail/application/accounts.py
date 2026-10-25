@@ -225,11 +225,12 @@ def update_account_app(
     sync_enabled: bool | None = None,
     config: dict[str, Any] | None = None,
     credentials: dict[str, Any] | None = None,
+    clear_credentials: list[str] | None = None,
     oauth_flow_id: str | None = None,
     principal: Any = None,
 ) -> AccountDTO:
-    if oauth_flow_id and credentials:
-        raise ValueError("不能同时提交 OAuth 授权结果和手动凭据，请选择一种保存方式")
+    if oauth_flow_id and (credentials or clear_credentials):
+        raise ValueError("不能同时提交 OAuth 授权结果和手动凭据修改，请选择一种保存方式")
     Session = get_session_factory()
     with Session() as session:
         group_arg: object = ...
@@ -263,6 +264,7 @@ def update_account_app(
                 sync_enabled=sync_enabled,
                 config_patch=config,
                 credentials=credentials,
+                clear_credentials=clear_credentials,
             )
             if oauth_flow_id and acc.sync_enabled:
                 _enqueue_initial_sync(session, acc.id)

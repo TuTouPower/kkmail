@@ -380,6 +380,14 @@
       },
       "AccountUpdateIn": {
         "properties": {
+          "clear_credentials": {
+            "description": "Credential fields to remove explicitly; empty values in credentials still preserve stored values.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Clear Credentials",
+            "type": "array"
+          },
           "clear_group": {
             "default": false,
             "title": "Clear Group",

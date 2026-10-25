@@ -99,6 +99,10 @@ class AccountUpdateIn(BaseModel):
     sync_enabled: bool | None = None
     config: dict[str, Any] | None = None
     credentials: dict[str, Any] | None = None
+    clear_credentials: list[str] = Field(
+        default_factory=list,
+        description="Credential fields to remove explicitly; empty values in credentials still preserve stored values.",
+    )
     oauth_flow_id: str | None = Field(default=None, max_length=128)
 
 
@@ -230,6 +234,7 @@ def api_update_account(account_id: UUID, body: AccountUpdateIn, principal: AuthP
             sync_enabled=body.sync_enabled,
             config=body.config,
             credentials=body.credentials,
+            clear_credentials=body.clear_credentials,
             oauth_flow_id=body.oauth_flow_id,
             principal=principal,
         )

@@ -708,4 +708,39 @@ describe('<SettingsModal />', () => {
     await waitFor(() => expect(container.querySelector('dialog')).toBeNull())
     await waitFor(() => expect(container.textContent).toContain('账户设置已更新'))
   })
+
+  it('clears an optional OAuth secret only through the explicit clear list', async () => {
+    const account = {
+      id: 'account-clear-secret', email: 'oauth@example.test', status: 'active', sync_status: 'idle', sync_enabled: true,
+      account_type: 'graph', provider: 'graph', group_id: null, group_name: null,
+      oauth_client_type: 'public', oauth_tenant: 'common', provider_profile: 'microsoft', imap_config: null,
+    }
+    const currentAccount = { ...account }
+    const patches: Array<{ body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init: RequestInit = {}) => {
+      const url = new URL(String(input), 'http://localhost')
+      const method = init.method || 'GET'
+      if (url.pathname === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (url.pathname === '/api/accounts' && method === 'GET') return json({ accounts: [currentAccount], total: 1, limit: 200, offset: 0, has_more: false })
+      if (url.pathname === '/api/accounts/account-clear-secret' && method === 'PATCH') {
+        const body = JSON.parse(String(init.body)) as { clear_credentials?: string[] }
+        patches.push({ body })
+        return json(currentAccount)
+      }
+      if (url.pathname === '/api/groups') return json({ groups: [] })
+      if (url.pathname === '/api/settings') return json({ settings: settingsResponse })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelector('.settings-account-row')).not.toBeNull())
+    await click(container.querySelector('button[aria-label="编辑账户 oauth@example.test"]'))
+
+    const dialog = container.querySelector('dialog') as HTMLDialogElement
+    await click(dialog.querySelector('#account-clear-client-secret'))
+    await click(dialog.querySelector('button[type="submit"]'))
+
+    await waitFor(() => expect(patches).toEqual([{ body: { clear_credentials: ['client_secret'] } }]))
+    await waitFor(() => expect(container.querySelector('dialog')).toBeNull())
+  })
 })

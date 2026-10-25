@@ -748,6 +748,11 @@ export interface components {
         /** AccountUpdateIn */
         AccountUpdateIn: {
             /**
+             * Clear Credentials
+             * @description Credential fields to remove explicitly; empty values in credentials still preserve stored values.
+             */
+            clear_credentials?: string[];
+            /**
              * Clear Group
              * @default false
              */

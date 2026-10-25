@@ -14,9 +14,21 @@ def reject_microsoft_imap(email: str, config: dict) -> None:
         raise ValueError('Microsoft IMAP is not supported; use Microsoft Graph OAuth')
 
 
-def merge_credentials(provider: str, old: dict, patch: dict) -> dict:
+def merge_credentials(
+    provider: str,
+    old: dict,
+    patch: dict,
+    *,
+    clear_fields: set[str] | None = None,
+) -> dict:
     result = dict(old)
     allowed = CREDENTIAL_FIELDS.get(provider, set(patch))
+    clear_fields = set(clear_fields or ())
+    if clear_fields and provider not in CREDENTIAL_FIELDS:
+        raise ValueError(f'credentials: unsupported provider {provider}')
+    for key in clear_fields:
+        if key not in allowed:
+            raise ValueError(f'credentials.{key}: unsupported field')
     for key, value in patch.items():
         if key not in allowed:
             raise ValueError(f'credentials.{key}: unsupported field')
@@ -24,6 +36,8 @@ def merge_credentials(provider: str, old: dict, patch: dict) -> dict:
             raise ValueError(f'credentials.{key}: must be a string')
         if value:
             result[key] = value
+    for key in clear_fields:
+        result.pop(key, None)
     if provider in ('gmail', 'graph') and result != old:
         result.pop('access_token', None)
         result.pop('expires_at', None)

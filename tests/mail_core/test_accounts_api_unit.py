@@ -279,3 +279,36 @@ def test_update_account_serializes_slotted_dto_mock(api_client):
         data = res.json()
         assert data["id"] == str(acc_id)
         assert data["display_name"] == "Updated Account"
+
+
+def test_account_update_passes_explicit_credential_clear_list(api_client, monkeypatch):
+    import uuid
+    from unittest.mock import Mock
+
+    from mail_core.mail.application.accounts import AccountDTO
+
+    account_id = uuid.uuid4()
+    dto = AccountDTO(
+        id=str(account_id),
+        email="oauth@kkmail.test",
+        provider="graph",
+        display_name=None,
+        group_id=None,
+        group_name=None,
+        group_color=None,
+        status="active",
+        sync_status="idle",
+        sync_enabled=True,
+        account_type="graph",
+        remark=None,
+    )
+    update = Mock(return_value=dto)
+    monkeypatch.setattr("mail_core.api.accounts.update_account_app", update)
+
+    response = api_client.patch(
+        f"/api/accounts/{account_id}",
+        json={"clear_credentials": ["client_secret"]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert update.call_args.kwargs["clear_credentials"] == ["client_secret"]

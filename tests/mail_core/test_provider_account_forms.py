@@ -42,6 +42,29 @@ def test_partial_oauth_update_preserves_secrets_but_invalidates_access_cache():
     assert old['access_token'] == 'cached'
 
 
+def test_explicit_clear_removes_optional_oauth_secret_but_empty_input_preserves_it():
+    old = {
+        "client_id": "client",
+        "client_secret": "saved-secret",
+        "refresh_token": "refresh",
+        "access_token": "cached",
+        "expires_at": 9999999999,
+    }
+
+    unchanged = merge_credentials("graph", old, {"client_secret": ""})
+    assert unchanged["client_secret"] == "saved-secret"
+
+    cleared = merge_credentials("graph", old, {}, clear_fields={"client_secret"})
+    assert "client_secret" not in cleared
+    assert "access_token" not in cleared
+    assert "expires_at" not in cleared
+
+
+def test_explicit_clear_rejects_unsupported_credential_fields():
+    with pytest.raises(ValueError, match="credentials.unknown: unsupported field"):
+        merge_credentials("graph", {}, {}, clear_fields={"unknown"})
+
+
 def test_provider_profile_and_client_type_are_validated(monkeypatch):
     monkeypatch.setenv('MAIL_CORE_ALLOW_PRIVATE_HOSTS', '1')
     with pytest.raises(ValueError, match='provider_profile'):
