@@ -178,7 +178,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
   })
 
   if (foldersQuery.isLoading) return <div className="tree-folder-status" style={{ paddingLeft: '48px' }}>正在加载文件夹…</div>
-  if (foldersQuery.isError || !foldersQuery.data) return <div className="tree-folder-status tree-error" style={{ paddingLeft: '48px' }}>文件夹加载失败</div>
+  if (foldersQuery.isError || !foldersQuery.data) return <div className="tree-folder-status tree-error" style={{ paddingLeft: '48px' }}>文件夹加载失败 <button className="tree-retry" type="button" onClick={() => void foldersQuery.refetch()}>重试</button></div>
 
   const folders = foldersQuery.data
   if (folders.length === 0) {

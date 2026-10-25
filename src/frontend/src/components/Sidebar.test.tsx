@@ -438,6 +438,22 @@ describe('<Sidebar />', () => {
     await waitFor(() => expect(financeAccount?.querySelector('.unread-badge')?.textContent).toBe('-'))
   })
 
+  it('retries a failed account folder-tree load', async () => {
+    const calls = mockApi({ failAcc1Stats: true })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-account-id="acc-1"]')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-account-id="acc-1"]')!
+    await click(account.querySelector('.tree-account-select'))
+
+    await waitFor(() => expect(account.querySelector('.tree-folder-status')?.textContent).toContain('文件夹加载失败'), 3000)
+    const retry = account.querySelector('.tree-folder-status .tree-retry') as HTMLButtonElement
+    expect(retry.textContent).toBe('重试')
+    const previousCalls = calls.filter((call) => call.url === '/api/mail/accounts/acc-1/folder-stats').length
+
+    await click(retry)
+    await waitFor(() => expect(calls.filter((call) => call.url === '/api/mail/accounts/acc-1/folder-stats').length).toBeGreaterThan(previousCalls))
+  })
+
   it('account title and disclosure both toggle the folder tree without selecting a mail view', async () => {
     mockApi()
     const { container } = await render(<Sidebar />)
