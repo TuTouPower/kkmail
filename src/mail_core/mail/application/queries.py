@@ -10,7 +10,7 @@ from html.parser import HTMLParser
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import and_, cast, func, or_, select, String
+from sqlalchemy import and_, case, cast, func, or_, select, String
 from sqlalchemy.orm import Session
 
 from mail_core.mail.storage.models import Account, AccountGroup, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
@@ -185,6 +185,7 @@ def list_messages_keyset(
     session: Session,
     *,
     folder_ids: list[uuid.UUID],
+    preferred_folder_id: uuid.UUID | None = None,
     limit: int = 50,
     cursor: str | None = None,
     is_read: bool | None = None,
@@ -197,8 +198,20 @@ def list_messages_keyset(
     cursor_pair = decode_cursor(cursor) if cursor else None
     if not folder_ids:
         return MessagePage(items=[], next_cursor=None)
+    folder_id_text = cast(MessageLocation.folder_id, String)
+    selected_folder_id = func.min(folder_id_text)
+    if preferred_folder_id is not None:
+        selected_folder_id = func.coalesce(
+            func.min(
+                case(
+                    (MessageLocation.folder_id == preferred_folder_id, folder_id_text),
+                    else_=None,
+                )
+            ),
+            selected_folder_id,
+        )
     stmt = (
-        select(Message, func.min(cast(MessageLocation.folder_id, String)).label("folder_id"))
+        select(Message, selected_folder_id.label("folder_id"))
         .join(MessageLocation, MessageLocation.message_id == Message.id)
         .where(MessageLocation.folder_id.in_(folder_ids))
         .group_by(Message.id)
@@ -274,6 +287,7 @@ def unified_inbox(
     return list_messages_keyset(
         session,
         folder_ids=folder_ids,
+        preferred_folder_id=folder_id,
         limit=limit,
         cursor=cursor,
         is_read=is_read,

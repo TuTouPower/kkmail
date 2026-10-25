@@ -140,9 +140,10 @@ def test_folder_id_query_dedup_and_mark_read_scope():
         session.flush()
 
         # Account 1 folders: Inbox, Drafts, FolderA, FolderB (both other), EmptyFolder
-        f_inbox = Folder(account_id=acc1.id, remote_id="INBOX", name="INBOX", role="inbox")
+        folder_id_base = uuid.UUID(int=uuid.uuid4().int & ~1)
+        f_inbox = Folder(id=uuid.UUID(int=folder_id_base.int + 1), account_id=acc1.id, remote_id="INBOX", name="INBOX", role="inbox")
         f_drafts = Folder(account_id=acc1.id, remote_id="Drafts", name="Drafts", role="drafts")
-        f_a = Folder(account_id=acc1.id, remote_id="FolderA", name="FolderA", role="other")
+        f_a = Folder(id=folder_id_base, account_id=acc1.id, remote_id="FolderA", name="FolderA", role="other")
         f_b = Folder(account_id=acc1.id, remote_id="FolderB", name="FolderB", role="other")
         f_empty = Folder(account_id=acc1.id, remote_id="EmptyFolder", name="EmptyFolder", role="other")
 
@@ -172,10 +173,12 @@ def test_folder_id_query_dedup_and_mark_read_scope():
         m_ids_a = [item.id for item in page_a.items]
         # Should contain m3 and m1, but NOT m2 (which is in FolderB)
         assert set(m_ids_a) == {m1.id, m3.id}
+        assert next(item for item in page_a.items if item.id == m3.id).folder_id == f_a.id
 
         # Query by specific folder_id f_b.id
         page_b = unified_inbox(session, folder_id=f_b.id)
         assert [item.id for item in page_b.items] == [m2.id]
+        assert page_b.items[0].folder_id == f_b.id
 
         # Query empty folder: returns empty list without falling back to inbox
         page_empty = unified_inbox(session, folder_id=f_empty.id)
@@ -193,10 +196,18 @@ def test_folder_id_query_dedup_and_mark_read_scope():
         # Querying with both f_inbox and f_a folder_ids (e.g. across folders)
         # m3 has locations in both f_inbox and f_a, but must only appear ONCE
         from mail_core.mail.application.queries import list_messages_keyset
-        page_multi = list_messages_keyset(session, folder_ids=[f_inbox.id, f_a.id])
+        page_multi = list_messages_keyset(
+            session,
+            folder_ids=[f_inbox.id, f_a.id],
+            preferred_folder_id=f_inbox.id,
+        )
         item_ids = [item.id for item in page_multi.items]
         assert len(item_ids) == len(set(item_ids)), "Duplicate messages returned for multi-location message"
         assert item_ids.count(m3.id) == 1
+        assert next(item for item in page_multi.items if item.id == m3.id).folder_id == f_inbox.id
+
+        page_unscoped = list_messages_keyset(session, folder_ids=[f_inbox.id, f_a.id])
+        assert next(item for item in page_unscoped.items if item.id == m3.id).folder_id == f_a.id
 
         # 3. AC-007: mark_all_messages_read with specific folder_id only affects that folder
         batch = mark_all_messages_read(session, account_id=acc1.id, folder_id=f_b.id)

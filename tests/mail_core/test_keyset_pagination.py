@@ -60,6 +60,35 @@ def test_sort_order_validation():
         list_messages_keyset(None, folder_ids=[], sort_order="invalid")
 
 
+def test_preferred_folder_selection_compiles_without_database():
+    from sqlalchemy.dialects import postgresql
+
+    class EmptyResult:
+        def all(self):
+            return []
+
+    class CaptureSession:
+        statement = None
+
+        def execute(self, statement):
+            self.statement = statement
+            return EmptyResult()
+
+    preferred_folder_id = uuid.uuid4()
+    session = CaptureSession()
+    list_messages_keyset(
+        session,
+        folder_ids=[uuid.uuid4(), preferred_folder_id],
+        preferred_folder_id=preferred_folder_id,
+    )
+
+    compiled = session.statement.compile(dialect=postgresql.dialect())
+    assert "coalesce" in str(compiled).lower()
+    assert "case when" in str(compiled).lower()
+    scalar_uuids = [value for value in compiled.params.values() if isinstance(value, uuid.UUID)]
+    assert preferred_folder_id in scalar_uuids
+
+
 @pytestmark_db
 def test_list_messages_keyset_pages_without_overlap():
     from mail_core.accounts import create_account
