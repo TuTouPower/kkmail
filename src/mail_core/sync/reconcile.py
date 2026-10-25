@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
-from mail_core.mail.domain.enums import OutboxEventType
+from mail_core.mail.domain.enums import OutboxEventType, SyncStatus
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent
 from mail_core.providers.factory import build_provider
@@ -44,7 +44,7 @@ def reconcile_folder(
             raise ValueError("account/folder not found")
         if not account.sync_enabled:
             return {"status": "sync_disabled"}
-        if folder.sync_status == "paused":
+        if folder.sync_status == SyncStatus.PAUSED.value:
             return {"status": "skipped", "reason": "folder_not_selectable"}
         cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
         if cp is None or not cp.full_scan_complete:

@@ -371,7 +371,7 @@ def test_tick_failed_job_not_counted_as_handled():
 
 def test_handle_job_sanitizes_error_in_update_account_sync_status():
     import uuid
-    from mail_core.mail.domain.enums import JobType
+    from mail_core.mail.domain.enums import JobType, SyncStatus
     from mail_core.mail.storage.models import Account, WorkerJob
     from mail_core.worker.handlers import handle_job
 
@@ -402,7 +402,10 @@ def test_handle_job_sanitizes_error_in_update_account_sync_status():
         assert ok is False
         mock_update_status.assert_called_once()
         call_kwargs = mock_update_status.call_args[1]
-        assert call_kwargs.get("status") == "failed" or mock_update_status.call_args[0][2] == "failed"
+        assert (
+            call_kwargs.get("status") is SyncStatus.FAILED
+            or mock_update_status.call_args[0][2] is SyncStatus.FAILED
+        )
         passed_error = call_kwargs.get("error", "")
         assert "my_secret_password" not in passed_error
         assert "[REDACTED]" in passed_error

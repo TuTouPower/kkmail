@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from mail_core.accounts.credentials import get_credential_store
 from mail_core.accounts.service import update_account_sync_status
-from mail_core.mail.domain.enums import JobStatus, JobType
+from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
 from mail_core.mail.storage.models import Account, WorkerJob
 from mail_core.sync.jobs import complete_job, fail_job
 
@@ -28,7 +28,7 @@ def _recover_account_sync_status(session: Session, job: WorkerJob) -> None:
     if job.account_id is None or job.job_type not in _ACCOUNT_SYNC_JOB_TYPES:
         return
     account = session.get(Account, job.account_id)
-    if account is None or not account.sync_enabled or account.sync_status != "failed":
+    if account is None or not account.sync_enabled or account.sync_status != SyncStatus.FAILED.value:
         return
     active_error = session.scalar(
         select(WorkerJob.id)
@@ -41,7 +41,7 @@ def _recover_account_sync_status(session: Session, job: WorkerJob) -> None:
         .limit(1)
     )
     if active_error is None:
-        update_account_sync_status(session, job.account_id, "idle")
+        update_account_sync_status(session, job.account_id, SyncStatus.IDLE)
 
 
 def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: str) -> bool:
@@ -54,7 +54,7 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
         update_account_sync_status(
             session,
             job.account_id,
-            "failed",
+            SyncStatus.FAILED,
             error=str(result.get("error") or status),
         )
     if status in ("ok", "sync_disabled", "skipped", "rate_limited") or result.get("followup_scheduled"):
@@ -146,7 +146,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 update_account_sync_status(
                     session,
                     account_id,
-                    "failed",
+                    SyncStatus.FAILED,
                     error=str(result.get("error") or result.get("status")),
                 )
             return _evaluate_result(session, job, result, worker_id)
@@ -257,7 +257,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         session.rollback()
         if account_id is not None and job.job_type in _ACCOUNT_SYNC_JOB_TYPES:
             try:
-                status_label = "auth_failed" if isinstance(exc, PermanentAuthError) else "failed"
+                status_label = SyncStatus.AUTH_FAILED if isinstance(exc, PermanentAuthError) else SyncStatus.FAILED
                 update_account_sync_status(session, account_id, status_label, error=safe_error(exc))
                 if isinstance(exc, PermanentAuthError):
                     acc = session.get(Account, account_id)

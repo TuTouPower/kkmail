@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, case, cast, func, or_, select, String
 from sqlalchemy.orm import Session
 
+from mail_core.mail.domain.enums import SyncStatus
 from mail_core.mail.storage.models import Account, AccountGroup, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
 
 _BODY_PREVIEW_SOURCE_CHARS = 4096
@@ -425,8 +426,10 @@ def query_global_inbox_stats(session: Session, *, folder_role: str = "inbox") ->
         acc_out = AccountInboxStatsOut(account_id=r[0], unread_count=unread, total_count=total)
         accounts.append(acc_out)
         sync_enabled = bool(r[6]) if len(r) > 6 else True
-        sync_status = str(r[7] or "idle") if len(r) > 7 else "idle"
-        is_faulty_without_target = r[1] == 0 and (not sync_enabled or sync_status in ("failed", "auth_failed"))
+        sync_status = str(r[7] or SyncStatus.IDLE.value) if len(r) > 7 else SyncStatus.IDLE.value
+        is_faulty_without_target = r[1] == 0 and (
+            not sync_enabled or sync_status in (SyncStatus.FAILED.value, SyncStatus.AUTH_FAILED.value)
+        )
         if not is_faulty_without_target:
             active_accounts.append(acc_out)
     total_unread = None if any(account.unread_count is None for account in active_accounts) else sum(
@@ -465,8 +468,10 @@ def query_group_inbox_stats(session: Session, group_id: uuid.UUID, *, folder_rol
         acc_out = AccountInboxStatsOut(account_id=row[0], unread_count=unread, total_count=total)
         accounts.append(acc_out)
         sync_enabled = bool(row[6]) if len(row) > 6 else True
-        sync_status = str(row[7] or "idle") if len(row) > 7 else "idle"
-        is_faulty_without_target = row[1] == 0 and (not sync_enabled or sync_status in ("failed", "auth_failed"))
+        sync_status = str(row[7] or SyncStatus.IDLE.value) if len(row) > 7 else SyncStatus.IDLE.value
+        is_faulty_without_target = row[1] == 0 and (
+            not sync_enabled or sync_status in (SyncStatus.FAILED.value, SyncStatus.AUTH_FAILED.value)
+        )
         if not is_faulty_without_target:
             active_accounts.append(acc_out)
     total_unread = None if any(account.unread_count is None for account in active_accounts) else sum(

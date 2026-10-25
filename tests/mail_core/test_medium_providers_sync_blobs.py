@@ -529,6 +529,7 @@ def test_handle_job_skips_when_sync_disabled():
 def test_update_account_sync_status():
     from unittest.mock import MagicMock
     from mail_core.accounts.service import update_account_sync_status
+    from mail_core.mail.domain.enums import SyncStatus
     from mail_core.mail.storage.models import Account
 
     mock_session = MagicMock()
@@ -541,14 +542,16 @@ def test_update_account_sync_status():
     mock_session.get.return_value = acc
 
     # 1. Update to idle
-    res = update_account_sync_status(mock_session, uuid.uuid4(), "idle")
+    res = update_account_sync_status(mock_session, uuid.uuid4(), SyncStatus.IDLE)
     assert res is not None
     assert res.sync_status == "idle"
     assert "last_synced_at" in (res.config or {})
     assert "last_sync_error" not in (res.config or {})
 
     # 2. Update to failed
-    res_failed = update_account_sync_status(mock_session, uuid.uuid4(), "failed", error="timeout connecting")
+    res_failed = update_account_sync_status(
+        mock_session, uuid.uuid4(), SyncStatus.FAILED, error="timeout connecting"
+    )
     assert res_failed is not None
     assert res_failed.sync_status == "failed"
     assert res_failed.config.get("last_sync_error") == "timeout connecting"

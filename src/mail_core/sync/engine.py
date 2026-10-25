@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
-from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase
+from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncRunStatus, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
@@ -86,7 +86,7 @@ def sync_account_folders(
             with Session() as session:
                 acc = session.get(Account, account_id)
                 if acc is not None:
-                    acc.sync_status = "failed"
+                    acc.sync_status = SyncStatus.FAILED.value
                     cfg = dict(acc.config or {})
                     cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
                     cfg["last_sync_error"] = safe_provider_summary(exc)
@@ -109,7 +109,7 @@ def sync_account_folders(
             try:
                 acc = session.get(Account, account_id)
                 if acc is not None:
-                    acc.sync_status = "failed"
+                    acc.sync_status = SyncStatus.FAILED.value
                     cfg = dict(acc.config or {})
                     cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
                     cfg["last_sync_error"] = safe_provider_summary(exc)
@@ -133,7 +133,7 @@ def sync_account_folders(
         run = SyncRun(
             account_id=account_id,
             phase=SyncPhase.FOLDER_DISCOVERY.value,
-            status="running",
+            status=SyncRunStatus.RUNNING.value,
             fencing_token=fencing,
         )
         session.add(run)
@@ -145,8 +145,8 @@ def sync_account_folders(
         }
         remote_ids = {rf.remote_id for rf in remote_folders}
         for existing in by_remote.values():
-            if existing.remote_id not in remote_ids and existing.sync_status != "paused":
-                existing.sync_status = "paused"
+            if existing.remote_id not in remote_ids and existing.sync_status != SyncStatus.PAUSED.value:
+                existing.sync_status = SyncStatus.PAUSED.value
                 session.add(
                     OutboxEvent(
                         event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
@@ -163,7 +163,7 @@ def sync_account_folders(
                     name=rf.name,
                     role=rf.role,
                     parent_remote_id=rf.parent_remote_id,
-                    sync_status="idle" if rf.selectable else "paused",
+                    sync_status=SyncStatus.IDLE.value if rf.selectable else SyncStatus.PAUSED.value,
                 )
                 session.add(existing)
                 session.flush()
@@ -172,7 +172,7 @@ def sync_account_folders(
                 existing.name = rf.name
                 existing.role = rf.role
                 existing.parent_remote_id = rf.parent_remote_id
-                existing.sync_status = "idle" if rf.selectable else "paused"
+                existing.sync_status = SyncStatus.IDLE.value if rf.selectable else SyncStatus.PAUSED.value
             folder_ids.append(existing.id)
             if rf.selectable:
                 enqueue_job(
@@ -190,12 +190,12 @@ def sync_account_folders(
                 payload={"phase": SyncPhase.FOLDER_DISCOVERY.value, "folders": len(folder_ids)},
             )
         )
-        run.status = "done"
+        run.status = SyncRunStatus.DONE.value
         run.finished_at = datetime.now(timezone.utc)
         run.stats = {"folders": len(folder_ids), "upserted": upserted}
         acc = session.get(Account, account_id)
-        if acc is not None and acc.sync_status not in ("failed", "auth_failed"):
-            acc.sync_status = "idle"
+        if acc is not None and acc.sync_status not in (SyncStatus.FAILED.value, SyncStatus.AUTH_FAILED.value):
+            acc.sync_status = SyncStatus.IDLE.value
             cfg = dict(acc.config or {})
             cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
             cfg.pop("last_sync_error", None)
@@ -243,7 +243,7 @@ def sync_folder_metadata(
             raise ValueError("account/folder not found")
         if not account.sync_enabled:
             return {"status": "sync_disabled"}
-        if folder.sync_status == "paused":
+        if folder.sync_status == SyncStatus.PAUSED.value:
             return {"status": "skipped", "reason": "folder_not_selectable"}
         try:
             lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=lease_ttl)

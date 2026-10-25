@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mail_core.db.base import Base
+from mail_core.mail.domain.enums import SyncStatus
 
 
 def _uuid() -> uuid.UUID:
@@ -100,7 +101,9 @@ class Account(Base):
     master_order: Mapped[Optional[int]] = mapped_column(Integer)
     group_order: Mapped[Optional[int]] = mapped_column(Integer)
     sync_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
-    sync_status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'idle'"))
+    sync_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text(f"'{SyncStatus.IDLE.value}'")
+    )
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -118,7 +121,9 @@ class Folder(Base):
     name: Mapped[str] = mapped_column(String(512), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'other'"))
     parent_remote_id: Mapped[Optional[str]] = mapped_column(String(512))
-    sync_status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'idle'"))
+    sync_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text(f"'{SyncStatus.IDLE.value}'")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

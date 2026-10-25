@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.accounts.credentials import get_credential_store, save_json_secret
-from mail_core.mail.domain.enums import JobType, ProviderType
+from mail_core.mail.domain.enums import JobType, ProviderType, SyncStatus
 from mail_core.mail.storage.models import Account, AccountGroup
 from mail_core.sync.jobs import enqueue_job
 
@@ -143,7 +143,7 @@ def update_account(
     if sync_enabled is not None:
         acc.sync_enabled = sync_enabled
         if not sync_enabled:
-            acc.sync_status = "idle"
+            acc.sync_status = SyncStatus.IDLE.value
     if config_patch:
         merged = dict(acc.config or {})
         merged.update(config_patch)
@@ -205,7 +205,7 @@ def enqueue_account_sync(session: Session, account_id: uuid.UUID) -> uuid.UUID:
         priority=50,
         dedupe_key=f"sync-folders:{account_id}",
     )
-    acc.sync_status = "running"
+    acc.sync_status = SyncStatus.RUNNING.value
     session.flush()
     return job.id
 
@@ -420,7 +420,7 @@ def lock_sidebar_layout(session: Session) -> None:
 def update_account_sync_status(
     session: Session,
     account_id: uuid.UUID,
-    status: str,
+    status: SyncStatus,
     *,
     error: str | None = None,
     synced_at: datetime | None = None,
@@ -428,7 +428,7 @@ def update_account_sync_status(
     acc = session.get(Account, account_id)
     if acc is None:
         return None
-    acc.sync_status = status
+    acc.sync_status = status.value
     ts = synced_at or datetime.now(timezone.utc)
     cfg = dict(acc.config or {})
     cfg["last_synced_at"] = ts.isoformat()
@@ -436,7 +436,7 @@ def update_account_sync_status(
         from mail_core.security.redact import safe_provider_summary
 
         cfg["last_sync_error"] = safe_provider_summary(error)
-    elif status == "idle":
+    elif status == SyncStatus.IDLE:
         cfg.pop("last_sync_error", None)
     acc.config = cfg
     if hasattr(acc, "last_synced_at"):

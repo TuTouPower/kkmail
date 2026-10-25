@@ -26,7 +26,13 @@ class SyncStatus(StrEnum):
     IDLE = "idle"
     RUNNING = "running"
     PAUSED = "paused"
-    ERROR = "error"
+    FAILED = "failed"
+    AUTH_FAILED = "auth_failed"
+
+
+class SyncRunStatus(StrEnum):
+    RUNNING = "running"
+    DONE = "done"
 
 
 class SyncPhase(StrEnum):

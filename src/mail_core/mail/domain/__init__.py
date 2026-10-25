@@ -8,6 +8,7 @@ from mail_core.mail.domain.enums import (
     ProviderType,
     RemoteOperationStatus,
     SyncPhase,
+    SyncRunStatus,
     SyncStatus,
 )
 from mail_core.mail.domain.models import AccountRef, FolderRef, MessageMetadata, SyncCheckpointView
@@ -27,6 +28,7 @@ __all__ = [
     "RemoteOperationStatus",
     "SyncCheckpointView",
     "SyncPhase",
+    "SyncRunStatus",
     "SyncStatus",
     "assert_transition",
     "can_transition",
