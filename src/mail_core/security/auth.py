@@ -36,6 +36,8 @@ _password_hash: bytes | None = None
 _api_keys: frozenset[str] | None = None
 _session_epoch: int = 1
 _SESSION_EPOCH_CACHE_TTL_SECONDS = 5.0
+_DEFAULT_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
+_session_max_age_seconds: int | None = None
 _session_epoch_cache: tuple[int, float] | None = None
 _session_epoch_generation = 0
 
@@ -82,13 +84,14 @@ _session_epoch: int = 1
 
 
 def reset_auth_caches() -> None:
-    """Test helper: clear cached password hash / API keys / session epoch."""
-    global _password_hash, _api_keys, _session_epoch, _session_epoch_cache
+    """Test helper: clear cached password hash, API keys, session epoch, and max age."""
+    global _password_hash, _api_keys, _session_epoch, _session_epoch_cache, _session_max_age_seconds
     global _session_epoch_generation
     _password_hash = None
     _api_keys = None
     _session_epoch = 1
     _session_epoch_cache = None
+    _session_max_age_seconds = None
     _session_epoch_generation += 1
 
 
@@ -113,8 +116,19 @@ def _serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(require_secret_key(), salt=_SESSION_SALT)
 
 
+def _parse_session_max_age() -> int:
+    raw = os.environ.get("MAIL_CORE_SESSION_MAX_AGE") or str(_DEFAULT_SESSION_MAX_AGE_SECONDS)
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise AuthConfigError("MAIL_CORE_SESSION_MAX_AGE must be an integer number of seconds") from exc
+
+
 def session_max_age() -> int:
-    return int(os.environ.get("MAIL_CORE_SESSION_MAX_AGE") or str(60 * 60 * 24 * 30))
+    global _session_max_age_seconds
+    if _session_max_age_seconds is None:
+        _session_max_age_seconds = _parse_session_max_age()
+    return _session_max_age_seconds
 
 
 def cookie_secure(request: Any = None) -> bool:
@@ -289,6 +303,7 @@ def verify_password(password: str) -> bool:
 def validate_auth_config() -> None:
     """Fail-fast at process start."""
     require_secret_key()
+    session_max_age()
     get_login_password_hash()
     load_api_keys()  # validate JSON if present
 

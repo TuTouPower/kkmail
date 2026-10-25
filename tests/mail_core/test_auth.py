@@ -285,3 +285,29 @@ def test_logout_fails_when_session_invalidation_fails(monkeypatch):
     out = client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
     assert out.status_code == 500
     assert "failed to invalidate session in database" in out.json()["detail"]
+
+
+def test_validate_auth_config_reports_malformed_session_max_age(monkeypatch):
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "")
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "valid-test-password")
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
+    monkeypatch.setenv("MAIL_CORE_SESSION_MAX_AGE", "not-an-integer")
+    reset_auth_caches()
+
+    with pytest.raises(AuthConfigError, match="MAIL_CORE_SESSION_MAX_AGE"):
+        validate_auth_config()
+
+
+def test_validate_auth_config_parses_session_max_age_once(monkeypatch):
+    from mail_core.security.auth import session_max_age
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "")
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "valid-test-password")
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
+    monkeypatch.setenv("MAIL_CORE_SESSION_MAX_AGE", "120")
+    reset_auth_caches()
+
+    validate_auth_config()
+    monkeypatch.setenv("MAIL_CORE_SESSION_MAX_AGE", "not-an-integer")
+
+    assert session_max_age() == 120
