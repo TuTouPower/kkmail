@@ -22,7 +22,7 @@ export function sanitizeMailHtml(html: string): string {
       'textarea', 'select', 'base', 'meta', 'link', 'svg', 'math', 'video',
       'audio', 'source', 'track', 'details',
     ],
-    FORBID_ATTR: ['srcset', 'formaction', 'action'],
+    FORBID_ATTR: ['srcset', 'formaction', 'action', 'ping', 'background'],
     ALLOW_UNKNOWN_PROTOCOLS: false,
   })
 }

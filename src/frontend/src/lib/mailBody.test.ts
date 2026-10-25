@@ -42,6 +42,17 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(doc).not.toMatch(/onerror/i)
   })
 
+  it('removes link ping beacons and background URL attributes', () => {
+    const out = sanitizeMailHtml(
+      '<a href="https://example.com" ping="https://tracker.example/ping">link</a>' +
+        '<table background="https://tracker.example/bg"><tr><td>mail</td></tr></table>',
+    )
+    expect(out).not.toMatch(/\sping=/i)
+    expect(out).not.toMatch(/\sbackground=/i)
+    expect(out).toContain('link')
+    expect(out).toContain('mail')
+  })
+
   it('enforces rel="noopener noreferrer" and target="_blank" on anchor tags', () => {
     const out = sanitizeMailHtml('<a href="https://example.com">link</a>')
     expect(out).toContain('target="_blank"')
