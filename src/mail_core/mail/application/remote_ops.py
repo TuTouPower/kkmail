@@ -14,6 +14,17 @@ from mail_core.mail.storage.models import OutboxEvent, RemoteOperation
 from mail_core.security.redact import redact
 
 
+def _ensure_operation_owner(
+    existing: RemoteOperation,
+    *,
+    account_id: uuid.UUID,
+    entity_key: str,
+    op_type: str,
+) -> None:
+    if existing.account_id != account_id or existing.entity_key != entity_key or existing.op_type != op_type:
+        raise ValueError("cannot coalesce remote operation owned by another account or operation")
+
+
 def _coalesce_existing(
     session: Session,
     existing: RemoteOperation,
@@ -23,6 +34,12 @@ def _coalesce_existing(
     op_type: str,
     desired_state: dict,
 ) -> RemoteOperation:
+    _ensure_operation_owner(
+        existing,
+        account_id=account_id,
+        entity_key=entity_key,
+        op_type=op_type,
+    )
     now = datetime.now(timezone.utc)
     if existing.status == RemoteOperationStatus.DONE.value:
         existing.created_at = now
@@ -30,8 +47,6 @@ def _coalesce_existing(
     current_rev = int((existing.desired_state or {}).get("revision") or 0)
     new_desired["revision"] = current_rev + 1
     existing.desired_state = new_desired
-    existing.op_type = op_type
-    existing.entity_key = entity_key
     existing.status = RemoteOperationStatus.PENDING.value
     existing.next_attempt_at = None
     existing.updated_at = now
@@ -71,7 +86,11 @@ def enqueue_remote_operation(
     """
     if idempotency_key:
         existing = session.scalar(
-            select(RemoteOperation).where(RemoteOperation.idempotency_key == idempotency_key).limit(1)
+            select(RemoteOperation)
+            .where(RemoteOperation.account_id == account_id)
+            .where(RemoteOperation.idempotency_key == idempotency_key)
+            .limit(1)
+            .with_for_update()
         )
         if existing is not None:
             return _coalesce_existing(
@@ -103,6 +122,7 @@ def enqueue_remote_operation(
             RemoteOperation.created_at.asc(),
         )
         .limit(1)
+        .with_for_update()
     )
     if active_op is not None:
         return _coalesce_existing(
@@ -133,7 +153,10 @@ def enqueue_remote_operation(
                 session.flush()
         except IntegrityError:
             existing = session.scalar(
-                select(RemoteOperation).where(RemoteOperation.idempotency_key == idempotency_key).limit(1)
+                select(RemoteOperation)
+                .where(RemoteOperation.idempotency_key == idempotency_key)
+                .limit(1)
+                .with_for_update()
             )
             if existing is None:
                 raise
