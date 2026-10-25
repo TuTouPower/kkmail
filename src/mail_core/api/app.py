@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -114,12 +115,12 @@ async def trace_id_middleware(request: Request, call_next):
     from mail_core.logging_config import reset_trace_id, set_trace_id
 
     req_id = request.headers.get("X-Request-ID") or request.headers.get("X-Trace-ID")
-    if not req_id or not req_id.strip():
+    if not req_id or re.fullmatch(r"[A-Za-z0-9._-]{1,64}", req_id) is None:
         req_id = f"req_{uuid.uuid4().hex[:10]}"
-    token = set_trace_id(req_id.strip())
+    token = set_trace_id(req_id)
     try:
         response = await call_next(request)
-        response.headers["X-Request-ID"] = req_id.strip()
+        response.headers["X-Request-ID"] = req_id
         return response
     finally:
         reset_trace_id(token)

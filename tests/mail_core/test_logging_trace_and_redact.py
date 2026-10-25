@@ -133,8 +133,24 @@ def test_http_request_id_middleware_and_trace_header():
     assert req_id is not None
     assert req_id.startswith("req_")
 
-    # With incoming header
+    # Valid incoming ids are echoed; malformed and overlong values are replaced.
     custom_id = "custom-trace-999"
     resp2 = client.get("/health", headers={"X-Request-ID": custom_id})
     assert resp2.status_code == 200
     assert resp2.headers.get("X-Request-ID") == custom_id
+
+    for header, invalid_id in (
+        ("X-Request-ID", "bad request id"),
+        ("X-Request-ID", "x" * 65),
+        ("X-Trace-ID", "x" * 65),
+    ):
+        response = client.get("/health", headers={header: invalid_id})
+        generated_id = response.headers["X-Request-ID"]
+        assert response.status_code == 200
+        assert generated_id.startswith("req_")
+        assert len(generated_id) <= 64
+        assert generated_id != invalid_id
+
+    trace_id = "trace.v1-_09"
+    response = client.get("/health", headers={"X-Trace-ID": trace_id})
+    assert response.headers["X-Request-ID"] == trace_id
