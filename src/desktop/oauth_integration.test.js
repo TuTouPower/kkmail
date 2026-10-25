@@ -5,6 +5,11 @@ const assert = require('assert')
 const path = require('path')
 const fs = require('fs')
 
+if (!process.env.KKMAIL_OAUTH_TEST_ORIGIN || !process.env.KKMAIL_OAUTH_TEST_PASSWORD) {
+  process.stdout.write('SKIP Electron OAuth integration: set KKMAIL_OAUTH_TEST_ORIGIN and KKMAIL_OAUTH_TEST_PASSWORD\n')
+  process.exit(0)
+}
+
 if (!process.versions.electron) {
   const child = require('child_process').spawn(process.execPath, [
     path.join(__dirname, 'node_modules/electron/cli.js'), __filename,
