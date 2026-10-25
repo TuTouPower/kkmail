@@ -139,6 +139,31 @@ def test_account_dto_exposes_only_supported_imap_connection_fields():
     assert "password" not in dto.imap_config
 
 
+def test_account_status_remains_active_when_sync_is_disabled():
+    from types import SimpleNamespace
+    import uuid
+
+    from mail_core.mail.application.accounts import _to_account_dto
+
+    account = SimpleNamespace(
+        id=uuid.uuid4(),
+        email="paused@kkmail.test",
+        provider="imap",
+        display_name=None,
+        group_id=None,
+        master_order=None,
+        group_order=None,
+        sync_enabled=False,
+        sync_status="idle",
+        config={},
+    )
+
+    dto = _to_account_dto(account, {})
+
+    assert dto.status == "active"
+    assert dto.sync_enabled is False
+
+
 def test_sync_all_commits_each_page_and_caps_returned_job_ids(monkeypatch):
     import uuid
     from types import SimpleNamespace

@@ -138,7 +138,7 @@ def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDT
         group_color=g.color if g else None,
         master_order=acc.master_order,
         group_order=acc.group_order,
-        status="active" if acc.sync_enabled else "disabled",
+        status="active",
         sync_status=acc.sync_status,
         sync_enabled=acc.sync_enabled,
         account_type=acc.provider,
