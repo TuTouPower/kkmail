@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -68,6 +69,25 @@ from mail_core.mail.storage.models import (
 
 _MAX_POSTGRES_BIGINT = (1 << 63) - 1
 _MAX_POSTGRES_BIGINT_TEXT = str(_MAX_POSTGRES_BIGINT)
+_LEGACY_GROUP_NAME_MAX_LENGTH = 128
+
+
+def _legacy_group_target_name(name: str, legacy_id: int) -> str:
+    suffix = f" (legacy group {legacy_id})"
+    prefix = name[:_LEGACY_GROUP_NAME_MAX_LENGTH - len(suffix)].rstrip()
+    return f"{prefix}{suffix}"
+
+
+def _legacy_group_target_names(legacy_groups: list[sqlite3.Row]) -> dict[int, str]:
+    name_counts = Counter(group["name"] for group in legacy_groups)
+    return {
+        group["id"]: (
+            _legacy_group_target_name(group["name"], group["id"])
+            if name_counts[group["name"]] > 1
+            else group["name"]
+        )
+        for group in legacy_groups
+    }
 
 
 class MigrationError(RuntimeError):
@@ -358,18 +378,51 @@ def migrate(sqlite_path: Path, target_url: str) -> None:
     print("=== 1. Migrating Groups ===")
     group_id_map: dict[int, uuid.UUID] = {}
     with Session() as session:
-        legacy_groups = sqlite_cursor.execute("SELECT id, name, color, sort_order FROM groups").fetchall()
+        legacy_groups = sqlite_cursor.execute(
+            "SELECT id, name, color, sort_order FROM groups ORDER BY id"
+        ).fetchall()
+        target_names = _legacy_group_target_names(legacy_groups)
         for g in legacy_groups:
-            existing = session.query(AccountGroup).filter_by(name=g["name"]).first()
+            target_name = target_names[g["id"]]
+            color = g["color"] or "#1a1a1a"
+            sort_order = g["sort_order"] or 0
+            if target_name != g["name"]:
+                print(
+                    f"Warning: duplicate legacy group name {g['name']!r}; "
+                    f"preserving group id {g['id']} as {target_name!r}.",
+                    file=sys.stderr,
+                )
+                existing = session.query(AccountGroup).filter_by(name=target_name).first()
+            else:
+                existing = session.query(AccountGroup).filter_by(
+                    name=target_name,
+                    color=color,
+                    sort_order=sort_order,
+                ).first()
+                if existing is None:
+                    name_conflict = session.query(AccountGroup).filter_by(name=target_name).first()
+                    if name_conflict is not None:
+                        target_name = _legacy_group_target_name(g["name"], g["id"])
+                        print(
+                            f"Warning: target group name collision {g['name']!r}; "
+                            f"preserving legacy group id {g['id']} as {target_name!r}.",
+                            file=sys.stderr,
+                        )
+                        existing = session.query(AccountGroup).filter_by(name=target_name).first()
             if existing:
+                if target_name != g["name"] and (existing.color != color or existing.sort_order != sort_order):
+                    print(
+                        f"Warning: preserving existing metadata for legacy group id {g['id']}.",
+                        file=sys.stderr,
+                    )
                 group_id_map[g["id"]] = existing.id
             else:
                 new_group_id = uuid.uuid4()
                 ag = AccountGroup(
                     id=new_group_id,
-                    name=g["name"],
-                    color=g["color"] or "#1a1a1a",
-                    sort_order=g["sort_order"] or 0,
+                    name=target_name,
+                    color=color,
+                    sort_order=sort_order,
                 )
                 session.add(ag)
                 group_id_map[g["id"]] = new_group_id
