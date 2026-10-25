@@ -372,6 +372,7 @@ class MessageArchiveState(Base):
     )
 
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    claim_revision: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     state: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'metadata_synced'"))
     priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))

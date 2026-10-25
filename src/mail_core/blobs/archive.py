@@ -297,6 +297,7 @@ def claim_archive_batch(
             if state.priority is None or state.priority > 0:
                 state.priority = _priority_for(msg.sort_time, now=now, recent_days=recent_days)
         apply_transition(state, ArchiveState.ARCHIVE_IN_PROGRESS)
+        state.claim_revision = int(getattr(state, "claim_revision", 0) or 0) + 1
         state.claimed_by = worker_id
         state.claimed_at = now
         state.updated_at = now
@@ -588,17 +589,6 @@ def run_archive_batch(
         except (ValueError, TypeError):
             pass
 
-    fencing = None
-    if account_id is not None:
-        with Session() as session:
-            try:
-                lease = acquire_lease(session, account_id=account_id, owner_id=worker_id, ttl=timedelta(seconds=120))
-            except LeaseBusy:
-                log.info("archive lease busy account=%s worker=%s", account_id, worker_id)
-                return {"status": "lease_busy"}
-            fencing = lease.fencing_token
-            session.commit()
-
     quota = check_quota(root, soft_limit_bytes=soft_i, hard_limit_bytes=hard_i)
     current_used_bytes = quota.used_bytes
     if quota.hard_exceeded or quota.soft_exceeded:
@@ -629,11 +619,6 @@ def run_archive_batch(
                     payload=event_payload,
                 )
             )
-            if account_id is not None and fencing is not None:
-                try:
-                    release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-                except FencingMismatch:
-                    pass
             session.commit()
         return {"status": "paused_quota", "used_bytes": quota.used_bytes}
 
@@ -641,12 +626,6 @@ def run_archive_batch(
     resume_quota_paused_archives(account_id=account_id, limit=limit)
 
     with Session() as session:
-        if account_id is not None and fencing is not None:
-            try:
-                assert_fencing(session, account_id=account_id, fencing_token=fencing)
-            except FencingMismatch:
-                log.warning("archive fencing mismatch before claim account=%s worker=%s fencing=%s", account_id, worker_id, fencing)
-                return {"status": "fencing_mismatch"}
         claimed_ids = claim_archive_batch(
             session,
             account_id=account_id,
@@ -655,13 +634,13 @@ def run_archive_batch(
             recent_days=recent_days,
             target_message_id=target_msg_id,
         )
-        # Load remote ids + account for provider
-        work: list[tuple[uuid.UUID, str, uuid.UUID]] = []
+        work: list[tuple[uuid.UUID, str, uuid.UUID, int]] = []
         for mid in claimed_ids:
             msg = session.get(Message, mid)
-            if msg is None or not msg.remote_id or not msg.remote_id.strip():
+            st = session.get(MessageArchiveState, mid)
+            if msg is None or not msg.remote_id or not msg.remote_id.strip() or st is None:
                 continue
-            work.append((mid, msg.remote_id, msg.account_id))
+            work.append((mid, msg.remote_id, msg.account_id, int(getattr(st, "claim_revision", 0) or 0)))
         if claimed_ids:
             status_payload = {
                 "message_ids": [str(mid) for mid in claimed_ids],
@@ -682,20 +661,14 @@ def run_archive_batch(
     failed = 0
     provider_cache: dict[uuid.UUID, object] = {}
 
-    for idx, (mid, remote_id, msg_account_id) in enumerate(work):
+    for idx, (mid, remote_id, msg_account_id, expected_rev) in enumerate(work):
         # Incremental quota check: avoid per-message full disk walk (V4-01)
         soft_exceeded = soft_i is not None and current_used_bytes >= soft_i
         hard_exceeded = hard_i is not None and current_used_bytes >= hard_i
         if soft_exceeded or hard_exceeded:
             with Session() as session:
-                # O(n) slice from current index — avoid work.index (O(n²) over the loop).
                 remaining = [w[0] for w in work[idx:]]
                 _pause_quota(session, remaining, account_id, worker_id=worker_id)
-                if account_id is not None and fencing is not None:
-                    try:
-                        release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-                    except FencingMismatch:
-                        pass
                 session.commit()
             return {
                 "status": "paused_quota",
@@ -725,37 +698,10 @@ def run_archive_batch(
             except Exception as exc:
                 with Session() as session:
                     remaining_ids = [w[0] for w in work[idx:]]
-                    _release_archive_claims_and_lease(
-                        session,
-                        remaining_ids,
-                        worker_id=worker_id,
-                        account_id=account_id,
-                        fencing=fencing,
-                        error=exc,
-                    )
+                    _release_fencing_claims(session, remaining_ids, worker_id)
                     session.commit()
                 raise
             provider = provider_cache[msg_account_id]
-
-        # Heartbeat account lease during batch downloads (R10)
-        if account_id is not None and fencing is not None:
-            try:
-                with Session() as session:
-                    renew_lease(
-                        session,
-                        account_id=account_id,
-                        owner_id=worker_id,
-                        fencing_token=fencing,
-                        ttl=timedelta(seconds=120),
-                    )
-                    session.commit()
-            except FencingMismatch:
-                log.warning("archive fencing mismatch during renew account=%s worker=%s fencing=%s", account_id, worker_id, fencing)
-                with Session() as s_fencing:
-                    remaining_ids = [w[0] for w in work[idx:]]
-                    _release_fencing_claims(s_fencing, remaining_ids, worker_id)
-                    s_fencing.commit()
-                return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
 
         try:
             t_fetch = time.monotonic()
@@ -765,15 +711,6 @@ def run_archive_batch(
         except Exception as exc:
             log.warning("archive fetch failed message=%s: %s", mid, safe_error(exc))
             with Session() as session:
-                if account_id is not None and fencing is not None:
-                    try:
-                        assert_fencing(session, account_id=account_id, fencing_token=fencing)
-                    except FencingMismatch:
-                        log.warning("archive fencing mismatch after fetch failure account=%s worker=%s fencing=%s", account_id, worker_id, fencing)
-                        remaining_ids = [w[0] for w in work[idx:]]
-                        _release_fencing_claims(session, remaining_ids, worker_id)
-                        session.commit()
-                        return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
                 st = session.get(MessageArchiveState, mid)
                 if (
                     st is not None
@@ -828,16 +765,6 @@ def run_archive_batch(
                 if res_id is not None:
                     release_quota_reservation(session, res_id)
 
-                if account_id is not None and fencing is not None:
-                    try:
-                        assert_fencing(session, account_id=account_id, fencing_token=fencing)
-                    except FencingMismatch:
-                        log.warning("archive fencing mismatch before commit account=%s worker=%s fencing=%s", account_id, worker_id, fencing)
-                        remaining_ids = [w[0] for w in work[idx:]]
-                        _release_fencing_claims(session, remaining_ids, worker_id)
-                        session.commit()
-                        return {"status": "fencing_mismatch", "completed": completed, "failed": failed}
-
                 # A35: 以 digest 跨进程锁协调发布与回收
                 acquire_blob_digest_lock(session, mime_digest)
                 try:
@@ -859,8 +786,9 @@ def run_archive_batch(
                     st is None
                     or st.state != ArchiveState.ARCHIVE_IN_PROGRESS.value
                     or st.claimed_by != worker_id
+                    or getattr(st, "claim_revision", 0) != expected_rev
                 ):
-                    # 状态失效时安全核验孤儿文件
+                    # 状态或 revision 失效时安全核验孤儿文件
                     live = session.scalar(
                         select(func.count())
                         .select_from(MessageBlob)
@@ -1098,7 +1026,7 @@ def run_archive_batch(
             if target_msg_id is not None
             else {}
         )
-        batch_message_ids = [str(mid) for mid, _, _ in work]
+        batch_message_ids = [str(w[0]) for w in work]
         if completed:
             session.add(
                 OutboxEvent(
@@ -1146,11 +1074,6 @@ def run_archive_batch(
                     priority=60,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
                 )
-        if account_id is not None and fencing is not None:
-            try:
-                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-            except FencingMismatch:
-                pass
         session.commit()
 
     return {"status": "ok", "completed": completed, "failed": failed, "claimed": len(work)}
