@@ -9,6 +9,7 @@ from typing import Any, Optional
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -331,11 +332,26 @@ class AccountSyncLease(Base):
     fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
 
 
+class OutboxPublicationState(Base):
+    """Singleton tracking outbox stream epoch and monotonically increasing publication sequence."""
+
+    __tablename__ = "outbox_publication_state"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_outbox_publication_state_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    epoch: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=_uuid)
+    next_seq: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class OutboxEvent(Base):
     """Transactional outbox row (architecture §13.2)."""
 
     __tablename__ = "outbox"
-    __table_args__ = (Index("ix_outbox_undispatched", "dispatched_at", "id"),)
+    __table_args__ = (
+        Index("ix_outbox_undispatched", "dispatched_at", "id"),
+        Index("ix_outbox_publication_seq", "publication_seq", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -343,6 +359,8 @@ class OutboxEvent(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    publication_seq: Mapped[Optional[int]] = mapped_column(BigInteger, unique=True)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class MessageArchiveState(Base):
@@ -354,6 +372,7 @@ class MessageArchiveState(Base):
     )
 
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    claim_revision: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     state: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'metadata_synced'"))
     priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
@@ -420,5 +439,56 @@ class BlobQuotaReservation(Base):
     message_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"))
     reserved_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SyncRequest(Base):
+    """Scoped synchronization request tracking delta or full progress (D10)."""
+
+    __tablename__ = "sync_requests"
+    __table_args__ = (Index("ix_sync_requests_state_created", "state", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    client_request_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(32), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'queued'"))
+    scope: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class SyncRequestTarget(Base):
+    """Individual target execution tracking within a sync request (D10)."""
+
+    __tablename__ = "sync_request_targets"
+    __table_args__ = (
+        UniqueConstraint("request_id", "target_key", name="uq_sync_targets_request_key"),
+        Index("ix_sync_targets_account_state", "account_id", "state"),
+        Index("ix_sync_targets_job_id", "current_job_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sync_requests.id", ondelete="CASCADE"), nullable=False)
+    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="SET NULL"))
+    folder_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="SET NULL"))
+    current_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("worker_jobs.id", ondelete="SET NULL"))
+    target_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    requested_generation: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'queued'"))
+    error_code: Mapped[Optional[str]] = mapped_column(String(64))
+    safe_error: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class AccountSyncActivity(Base):
+    """Tracks account foreground activity for cold/hot sync scheduling (D10)."""
+
+    __tablename__ = "account_sync_activity"
+    __table_args__ = (Index("ix_account_sync_activity_expires", "expires_at"),)
+
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    last_foreground_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

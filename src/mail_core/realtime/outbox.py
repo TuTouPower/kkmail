@@ -15,6 +15,7 @@ from mail_core.mail.storage.models import OutboxEvent
 @dataclass(frozen=True, slots=True)
 class OutboxItem:
     id: int
+    publication_seq: int | None
     event_type: str
     account_id: str | None
     payload: dict[str, Any]
@@ -24,6 +25,47 @@ class OutboxItem:
 def head_event_id(session: Session) -> int:
     """Highest outbox event id (0 when empty)."""
     return int(session.scalar(select(func.max(OutboxEvent.id))) or 0)
+
+
+def publication_head(session: Session) -> tuple[str, int]:
+    """Return current publication stream epoch and highest publication_seq."""
+    from mail_core.realtime.publication import get_publication_state
+
+    state = get_publication_state(session)
+    return str(state.epoch), int(state.next_seq - 1)
+
+
+def fetch_published_since(
+    session: Session,
+    *,
+    after_seq: int,
+    limit: int = 100,
+    account_id: Any = None,
+) -> list[OutboxEvent]:
+    """Fetch committed events ordered strictly by publication_seq."""
+    stmt = (
+        select(OutboxEvent)
+        .where(OutboxEvent.publication_seq.is_not(None))
+        .where(OutboxEvent.publication_seq > after_seq)
+        .order_by(OutboxEvent.publication_seq.asc())
+        .limit(limit)
+    )
+    if account_id is not None:
+        stmt = stmt.where(
+            or_(OutboxEvent.account_id == account_id, OutboxEvent.account_id.is_(None))
+        )
+    return list(session.scalars(stmt).all())
+
+
+def to_item(row: OutboxEvent) -> OutboxItem:
+    return OutboxItem(
+        id=int(row.id),
+        publication_seq=int(row.publication_seq) if row.publication_seq is not None else None,
+        event_type=str(row.event_type),
+        account_id=str(row.account_id) if row.account_id else None,
+        payload=dict(row.payload or {}),
+        created_at=row.created_at,
+    )
 
 
 def fetch_undispatched(session: Session, *, limit: int = 100) -> list[OutboxEvent]:
@@ -102,13 +144,3 @@ def prune_dispatched(
         return 0
     session.execute(delete(OutboxEvent).where(OutboxEvent.id.in_(ids)))
     return len(ids)
-
-
-def to_item(row: OutboxEvent) -> OutboxItem:
-    return OutboxItem(
-        id=int(row.id),
-        event_type=row.event_type,
-        account_id=str(row.account_id) if row.account_id else None,
-        payload=dict(row.payload or {}),
-        created_at=row.created_at,
-    )

@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { copyTextToClipboard } from '../lib/clipboard'
-import { formatUiReferenceText, isUiReferenceShortcut } from '../lib/uiReference'
+import { formatUiReferenceText } from '../lib/uiReference'
+import { matchesShortcut, getDefaultShortcut } from '../lib/ui_shortcut'
+import { useMailStore } from '../store/mailStore'
 
 interface ElementBadge {
   id: string
@@ -57,10 +59,13 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
     }
   }, [active])
 
+  const configuredShortcut = useMailStore((s) => s.uiReferenceShortcut)
+  const activeShortcut = configuredShortcut || getDefaultShortcut()
+
   // Keydown listener for shortcut and Escape
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (isUiReferenceShortcut(e)) {
+      if (matchesShortcut(e, activeShortcut)) {
         e.preventDefault()
         e.stopPropagation()
         setActive((prev) => !prev)
@@ -75,7 +80,7 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [active])
+  }, [active, activeShortcut])
 
   // Re-scan when active and on scroll/resize/mutation
   useEffect(() => {

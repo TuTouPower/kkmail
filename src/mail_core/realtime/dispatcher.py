@@ -33,6 +33,7 @@ class OutboxDispatcher:
     # Serialises dispatch_once across the LISTEN thread so one batch is never
     # fanned out twice (FOR UPDATE SKIP LOCKED covers other API workers).
     _dispatch_lock: threading.Lock = field(default_factory=threading.Lock)
+    _last_dispatched_seq: int = 0
     _stop: bool = False
 
     def subscribe(
@@ -182,39 +183,46 @@ class OutboxDispatcher:
         return ok
 
     def dispatch_once(self, *, require_subscribers: bool = False) -> int:
-        """Fan out undispatched rows to local subscribers and mark successful ones.
-
-        When ``require_subscribers`` is True and this process has none, skip
-        entirely so a worker / idle process cannot steal events from the API.
-        Events dropped due to a full SSE queue are left undispatched; the slow
-        client receives ``client.resync_hint`` and its stream closes to reconnect.
-        """
-        if require_subscribers and not self.has_local_subscribers():
-            return 0
-
+        """Publish committed rows, assign publication_seq, and fan out to local subscribers."""
         from mail_core.db.session import get_session_factory
+        from mail_core.realtime.outbox import fetch_published_since, publication_head, to_item
+        from mail_core.realtime.publication import publish_committed_batch
 
         Session = get_session_factory()
         with self._dispatch_lock, Session() as session:
-            rows = fetch_undispatched(session, limit=100)
+            batch = publish_committed_batch(session, limit=100)
+            epoch, head_seq = publication_head(session)
+
+            if require_subscribers and not self.has_local_subscribers():
+                session.commit()
+                return 0
+
+            if self._last_dispatched_seq == 0 and head_seq > 0:
+                self._last_dispatched_seq = max(0, head_seq - batch.count)
+
+            rows = fetch_published_since(session, after_seq=self._last_dispatched_seq, limit=100)
             if not rows:
                 session.commit()
                 return 0
-            ids: list[int] = []
+
+            dispatched_count = 0
             for row in rows:
+                seq = int(row.publication_seq)
                 item = to_item(row)
                 payload = {
-                    "id": item.id,
+                    "id": f"v2:{epoch}:{seq}",
+                    "publication_seq": seq,
                     "event": item.event_type,
                     "account_id": item.account_id,
                     "data": item.payload,
-                    "created_at": item.created_at.isoformat(),
+                    "created_at": item.created_at.isoformat() if item.created_at else None,
                 }
                 if self._fanout(payload):
-                    ids.append(item.id)
-            mark_dispatched(session, ids)
+                    dispatched_count += 1
+                    self._last_dispatched_seq = max(self._last_dispatched_seq, seq)
+
             session.commit()
-            return len(ids)
+            return dispatched_count
 
     def close_session_streams(self, *, current_epoch: int | None = None) -> None:
         """Close session-authenticated SSE queues with an old or unknown epoch."""

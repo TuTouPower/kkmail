@@ -506,7 +506,7 @@ describe('<SettingsModal />', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url)
       if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
-      if (u.startsWith('/api/accounts/sync-all')) return json({ count: 7, enqueued: true })
+      if (u.startsWith('/api/accounts/sync-all')) return json({ target_count: 7, mode: 'full', trigger: 'manual', state: 'queued' })
       if (u.startsWith('/api/accounts')) return json({ accounts: [], total: 0, limit: 200, offset: 0, has_more: false })
       if (u === '/api/groups') return json({ groups: [] })
       return json({ detail: 'unexpected' }, 404)
@@ -518,7 +518,7 @@ describe('<SettingsModal />', () => {
     await click(syncBtn)
 
     await waitFor(() => {
-      expect(container.textContent).toContain('已排队 7 个同步任务')
+      expect(container.textContent).toContain('已排队 7 个全量同步任务')
     })
   })
 
@@ -769,5 +769,31 @@ describe('<SettingsModal />', () => {
 
     await waitFor(() => expect(patches).toEqual([{ body: { clear_credentials: ['client_secret'] } }]))
     await waitFor(() => expect(container.querySelector('dialog')).toBeNull())
+  })
+
+  it('removes settings-page-head and houses sidebar-toggle inside settings-nav (p049)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (url.pathname === '/api/accounts') return json({ accounts: [], total: 0, limit: 200, offset: 0, has_more: false })
+      if (url.pathname === '/api/groups') return json({ groups: [] })
+      if (url.pathname === '/api/settings') return json({ settings: {} })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    // 1. settings-page-head must NOT exist
+    expect(container.querySelector('.settings-page-head')).toBeNull()
+
+    // 2. sidebar-toggle (ST01) must exist inside settings-nav
+    const toggle = container.querySelector('.settings-nav button[data-ui="ST01"]')
+    expect(toggle).not.toBeNull()
+
+    // 3. Close button exists inside settings-nav
+    const closeBtn = container.querySelector('.settings-nav .settings-nav-close')
+    expect(closeBtn).not.toBeNull()
+    useMailStore.setState({ settingsOpen: true })
+    await click(closeBtn)
+    expect(useMailStore.getState().settingsOpen).toBe(false)
   })
 })

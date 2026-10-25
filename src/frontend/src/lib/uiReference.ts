@@ -2,6 +2,7 @@ export interface UiElementMeta {
   id: string
   region: string
   description: string
+  deprecated?: boolean
 }
 
 export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
@@ -49,8 +50,8 @@ export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
 
   // Settings (ST)
   ST01: { id: 'ST01', region: '设置', description: '设置侧栏展开按钮' },
-  ST02: { id: 'ST02', region: '设置', description: '设置页面标题' },
-  ST03: { id: 'ST03', region: '设置', description: '设置关闭按钮' },
+  ST02: { id: 'ST02', region: '设置', description: '设置页面标题（已废弃）', deprecated: true },
+  ST03: { id: 'ST03', region: '设置', description: '设置关闭按钮（已废弃）', deprecated: true },
   ST04: { id: 'ST04', region: '设置', description: '设置导航选项卡' },
   ST05: { id: 'ST05', region: '设置', description: '添加账户表单' },
   ST06: { id: 'ST06', region: '设置', description: '外观主题选项' },

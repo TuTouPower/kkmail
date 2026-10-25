@@ -11,13 +11,19 @@ from email.utils import formataddr, getaddresses
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from mail_core.api.http_headers import content_disposition_attachment
 from mail_core.db.session import get_session_factory
 from mail_core.accounts import enabled_account_ids
+from mail_core.mail.application.sync_requests import (
+    SyncRequestOut,
+    create_sync_request,
+    get_sync_request_report,
+    record_account_activity,
+)
 from mail_core.mail.application.attachments import (
     AttachmentAccessError,
     PathTraversalRejected,
@@ -296,8 +302,8 @@ class MutationOut(BaseModel):
 
 class SyncBodyAcceptedOut(BaseModel):
     message_id: str
-    job_id: str
-    status: Literal["queued"]
+    job_id: str | None = None
+    status: Literal["queued", "in_progress", "complete"]
 
 
 def _rows(items: list[MessageListItem], emails: dict) -> list[MessageOut]:
@@ -481,17 +487,25 @@ def api_get_message(message_id: UUID) -> MessageDetailOut:
     response_model_by_alias=True,
     status_code=202,
 )
-def api_sync_message_body(message_id: UUID) -> SyncBodyAcceptedOut:
+def api_sync_message_body(message_id: UUID, response: Response) -> SyncBodyAcceptedOut:
     """Queue an on-demand highest-priority body sync for a message."""
     try:
-        job_id = sync_message_body(message_id)
+        result = sync_message_body(message_id)
     except MessageHasNoProviderRemoteId as exc:
         raise HTTPException(409, str(exc)) from exc
-    except (MessageArchiveStateUnavailable, MessageBodyAlreadyArchived) as exc:
+    except MessageArchiveStateUnavailable as exc:
         raise HTTPException(409, str(exc)) from exc
-    if job_id is None:
+    if result is None:
         raise HTTPException(404, "message not found")
-    return SyncBodyAcceptedOut(message_id=str(message_id), job_id=str(job_id), status="queued")
+    if result.status == "complete":
+        response.status_code = 200
+    else:
+        response.status_code = 202
+    return SyncBodyAcceptedOut(
+        message_id=str(result.message_id),
+        job_id=str(result.job_id) if result.job_id else None,
+        status=result.status,  # type: ignore[arg-type]
+    )
 
 
 @router.post("/messages/{message_id}/read", response_model=MutationOut)
@@ -625,3 +639,69 @@ def api_get_attachment(attachment_id: str):
 def api_get_attachment_by_path_rejected(path: str):
     """Explicitly reject path-shaped attachment access (architecture M5)."""
     raise HTTPException(400, "attachment access by filesystem path is forbidden; use attachment UUID")
+
+
+class DeltaSyncIn(BaseModel):
+    account_id: UUID | None = None
+    group_id: UUID | None = None
+    folder_id: UUID | None = None
+    folder_role: str | None = "inbox"
+    trigger: Literal["manual", "focus", "navigation"] = "manual"
+    client_request_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+
+
+class ActivityIn(BaseModel):
+    account_ids: list[UUID] = Field(default_factory=list)
+
+
+@router.post("/sync/delta", response_model=SyncRequestOut, status_code=202)
+def api_sync_delta(body: DeltaSyncIn, response: Response) -> SyncRequestOut:
+    Session = get_session_factory()
+    with Session() as session:
+        try:
+            req, created = create_sync_request(
+                session,
+                client_request_id=body.client_request_id,
+                mode="delta",
+                trigger=body.trigger,
+                scope=body.model_dump(mode="json"),
+                account_id=body.account_id,
+                group_id=body.group_id,
+                folder_id=body.folder_id,
+                folder_role=body.folder_role,
+            )
+            req_id = req.id
+            session.commit()
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            if "account_disabled" in str(exc):
+                raise HTTPException(409, "account_disabled") from exc
+            if "folder_not_selectable" in str(exc):
+                raise HTTPException(422, "folder_not_selectable") from exc
+            raise HTTPException(400, str(exc)) from exc
+
+    with Session() as session:
+        report = get_sync_request_report(session, req_id)
+        if report and report.target_count == 0:
+            response.status_code = 200
+        return report  # type: ignore[return-value]
+
+
+@router.get("/sync/requests/{request_id}", response_model=SyncRequestOut)
+def api_get_sync_request(request_id: UUID) -> SyncRequestOut:
+    Session = get_session_factory()
+    with Session() as session:
+        report = get_sync_request_report(session, request_id)
+        if report is None:
+            raise HTTPException(404, "sync request not found")
+        return report
+
+
+@router.post("/sync/activity", status_code=204)
+def api_report_sync_activity(body: ActivityIn) -> Response:
+    Session = get_session_factory()
+    with Session() as session:
+        record_account_activity(session, body.account_ids)
+        session.commit()
+    return Response(status_code=204)

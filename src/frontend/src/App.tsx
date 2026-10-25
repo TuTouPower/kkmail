@@ -17,9 +17,7 @@ import { getDesktopPlatform } from './lib/desktopShell'
 const Sidebar = lazy(() => import('./components/Sidebar'))
 const MessageReader = lazy(() => import('./components/MessageReader'))
 const SettingsPage = lazy(() => import('./components/SettingsModal'))
-const UiReferenceOverlay = import.meta.env.DEV
-  ? lazy(() => import('./components/UiReferenceOverlay'))
-  : null
+const UiReferenceOverlay = lazy(() => import('./components/UiReferenceOverlay'))
 
 function App() {
   const theme = useMailStore((s) => s.theme)
@@ -38,6 +36,7 @@ function App() {
   const listWidth = useMailStore((s) => s.listWidth)
   const setSidebarWidth = useMailStore((s) => s.setSidebarWidth)
   const setListWidth = useMailStore((s) => s.setListWidth)
+  const uiReferenceEnabled = useMailStore((s) => s.uiReferenceEnabled ?? true)
   const [authed, setAuthed] = useState<boolean | null>(null)
   const [sessionCheckFailed, setSessionCheckFailed] = useState(false)
   const [sessionCheckAttempt, setSessionCheckAttempt] = useState(0)
@@ -103,12 +102,12 @@ function App() {
     if (wide && mobileSidebarOpen) closeMobileSidebar()
   }, [wide, mobileSidebarOpen, closeMobileSidebar])
 
-  useEffect(() => {
-    if (!authed || typeof window === 'undefined' || window.location.hash !== '#oauth-return') return
+  function consumeOAuthReturnIfPresent(): boolean {
+    if (typeof window === 'undefined' || window.location.hash !== '#oauth-return') return false
     useMailStore.getState().openSettings()
-    setOAuthReturnPending(true)
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
-  }, [authed])
+    return true
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -117,6 +116,9 @@ function App() {
         if (!cancelled) {
           setSessionCheckFailed(false)
           setAuthed(ok)
+          if (ok && consumeOAuthReturnIfPresent()) {
+            setOAuthReturnPending(true)
+          }
         }
       })
       .catch(() => { if (!cancelled) setSessionCheckFailed(true) })
@@ -162,8 +164,14 @@ function App() {
     return (
       <>
         {macLoginDragRegion}
-        <LoginPage onSuccess={() => { setAuthed(true); void queryClient.invalidateQueries() }} />
-        {UiReferenceOverlay && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
+        <LoginPage onSuccess={() => {
+          setAuthed(true)
+          if (consumeOAuthReturnIfPresent()) {
+            setOAuthReturnPending(true)
+          }
+          void queryClient.invalidateQueries()
+        }} />
+        {uiReferenceEnabled && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
       </>
     )
   }
@@ -296,7 +304,7 @@ function App() {
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); closeMobileSidebar() }}
         />
       )}
-      {UiReferenceOverlay && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
+      {uiReferenceEnabled && <Suspense fallback={null}><UiReferenceOverlay /></Suspense>}
     </div>
   )
 }

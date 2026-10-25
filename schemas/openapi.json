@@ -504,6 +504,20 @@
         "title": "AccountsPage",
         "type": "object"
       },
+      "ActivityIn": {
+        "properties": {
+          "account_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Account Ids",
+            "type": "array"
+          }
+        },
+        "title": "ActivityIn",
+        "type": "object"
+      },
       "AttachmentOut": {
         "properties": {
           "contentType": {
@@ -549,6 +563,74 @@
           "is_inline"
         ],
         "title": "AttachmentOut",
+        "type": "object"
+      },
+      "DeltaSyncIn": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "client_request_id": {
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id"
+          },
+          "folder_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "inbox",
+            "title": "Folder Role"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "trigger": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "focus",
+              "navigation"
+            ],
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "title": "DeltaSyncIn",
         "type": "object"
       },
       "FlagBody": {
@@ -2276,62 +2358,159 @@
         "title": "SidebarLayoutSnapshotOut",
         "type": "object"
       },
-      "SyncAllOut": {
-        "properties": {
-          "count": {
-            "title": "Count",
-            "type": "integer"
-          },
-          "job_ids": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Job Ids",
-            "type": "array"
-          }
-        },
-        "required": [
-          "job_ids",
-          "count"
-        ],
-        "title": "SyncAllOut",
-        "type": "object"
-      },
       "SyncBodyAcceptedOut": {
         "properties": {
           "job_id": {
-            "title": "Job Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
           },
           "message_id": {
             "title": "Message Id",
             "type": "string"
           },
           "status": {
-            "const": "queued",
+            "enum": [
+              "queued",
+              "in_progress",
+              "complete"
+            ],
             "title": "Status",
             "type": "string"
           }
         },
         "required": [
           "message_id",
-          "job_id",
           "status"
         ],
         "title": "SyncBodyAcceptedOut",
         "type": "object"
       },
-      "SyncJobOut": {
+      "SyncRequestOut": {
         "properties": {
-          "job_id": {
-            "title": "Job Id",
+          "completed_count": {
+            "title": "Completed Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/SyncTargetErrorOut"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "failed_count": {
+            "title": "Failed Count",
+            "type": "integer"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "delta",
+              "full"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "queued_count": {
+            "title": "Queued Count",
+            "type": "integer"
+          },
+          "running_count": {
+            "title": "Running Count",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "running",
+              "complete",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "target_count": {
+            "title": "Target Count",
+            "type": "integer"
+          },
+          "trigger": {
+            "enum": [
+              "manual",
+              "focus",
+              "navigation",
+              "initialization"
+            ],
+            "title": "Trigger",
             "type": "string"
           }
         },
         "required": [
-          "job_id"
+          "id",
+          "mode",
+          "trigger",
+          "state",
+          "target_count",
+          "queued_count",
+          "running_count",
+          "completed_count",
+          "failed_count",
+          "created_at"
         ],
-        "title": "SyncJobOut",
+        "title": "SyncRequestOut",
+        "type": "object"
+      },
+      "SyncTargetErrorOut": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "safe_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Safe Message"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_id",
+          "code"
+        ],
+        "title": "SyncTargetErrorOut",
         "type": "object"
       },
       "ValidationError": {
@@ -2916,11 +3095,11 @@
       "post": {
         "operationId": "api_sync_all_accounts_api_accounts_sync_all_post",
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SyncAllOut"
+                  "$ref": "#/components/schemas/SyncRequestOut"
                 }
               }
             },
@@ -3060,11 +3239,11 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SyncJobOut"
+                  "$ref": "#/components/schemas/SyncRequestOut"
                 }
               }
             },
@@ -3256,7 +3435,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "integer"
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -4366,6 +4545,148 @@
           }
         ],
         "summary": "Api Global Inbox Stats",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/api/mail/sync/activity": {
+      "post": {
+        "operationId": "api_report_sync_activity_api_mail_sync_activity_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivityIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Report Sync Activity",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/api/mail/sync/delta": {
+      "post": {
+        "operationId": "api_sync_delta_api_mail_sync_delta_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeltaSyncIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncRequestOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Sync Delta",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/api/mail/sync/requests/{request_id}": {
+      "get": {
+        "operationId": "api_get_sync_request_api_mail_sync_requests__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncRequestOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Get Sync Request",
         "tags": [
           "mail"
         ]

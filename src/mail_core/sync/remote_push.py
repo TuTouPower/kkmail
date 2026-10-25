@@ -411,6 +411,16 @@ def push_remote_operations(
 
         caught_exc: Exception | None = None
         remote_state: dict = {}
+        if op_type == "trash" and getattr(provider, "name", "") == "imap":
+            if claimed_desired.get("trash_folder_remote_id") in (None, "", "Trash"):
+                try:
+                    from mail_core.mail.application.mutations import _resolve_imap_trash_folder
+
+                    with Session() as s:
+                        real_trash = _resolve_imap_trash_folder(s, account_id)
+                        claimed_desired["trash_folder_remote_id"] = real_trash
+                except Exception:
+                    pass
         remote_id = claimed_desired.get("remote_id")
         if not isinstance(remote_id, str) or not remote_id.strip():
             ok = False
@@ -424,7 +434,7 @@ def push_remote_operations(
                 remote_state = candidate_state if isinstance(candidate_state, dict) else {}
             except Exception as exc:  # noqa: BLE001 — isolate per-op provider failures
                 err_summary = safe_provider_summary(exc)
-                log.exception("remote push op %s failed: %s", op_id, err_summary)
+                log.error("remote push op %s failed: %s", op_id, err_summary)
                 caught_exc = exc
                 ok = False
                 err = err_summary

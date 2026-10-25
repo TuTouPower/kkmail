@@ -548,13 +548,16 @@ def test_update_account_sync_status():
     assert "last_synced_at" in (res.config or {})
     assert "last_sync_error" not in (res.config or {})
 
-    # 2. Update to failed
+    # 2. Update to failed with safe error sanitization
     res_failed = update_account_sync_status(
-        mock_session, uuid.uuid4(), SyncStatus.FAILED, error="timeout connecting"
+        mock_session, uuid.uuid4(), SyncStatus.FAILED, error="timeout connecting token=SECRET123"
     )
     assert res_failed is not None
     assert res_failed.sync_status == "failed"
-    assert res_failed.config.get("last_sync_error") == "timeout connecting"
+    last_error = res_failed.config.get("last_sync_error")
+    assert last_error is not None
+    assert "SECRET123" not in last_error
+    assert last_error == "ProviderError"
 
 
 def test_imap_fetch_metadata_page_deleted_message_skips_without_raising(monkeypatch):

@@ -56,6 +56,7 @@ def test_imap_provider_quotes_folder_in_commands():
     mock_client.select.return_value = ("OK", [b"1"])
     mock_client.uid.return_value = ("OK", [b""])
     mock_client.status.return_value = ("OK", [b"UIDVALIDITY 12345"])
+    mock_client.response.return_value = ("OK", [b"COPYUID 12345 1 200"])
     p._connect = lambda: mock_client
 
     # Test apply MOVE to a folder with spaces
@@ -66,6 +67,27 @@ def test_imap_provider_quotes_folder_in_commands():
     assert res.success is True
     mock_client.select.assert_called_with('"Sent Items"')
     mock_client.uid.assert_called_with("MOVE", "1", '"Deleted Items"')
+    assert res.remote_state is not None
+    assert res.remote_state.get("folder_remote_id") == "Deleted Items"
+
+
+def test_imap_provider_move_without_copyuid_graceful():
+    from unittest.mock import MagicMock
+
+    p = ImapProvider(host="127.0.0.1", port=1, username="u", password="p", use_ssl=False)
+    mock_client = MagicMock()
+    mock_client.select.return_value = ("OK", [b"1"])
+    mock_client.uid.return_value = ("OK", [b""])
+    mock_client.status.return_value = ("OK", [b"UIDVALIDITY 12345"])
+    mock_client.response.return_value = ("NO", [])
+    p._connect = lambda: mock_client
+
+    res = p.apply_remote_operation(
+        "move",
+        {"remote_id": "1", "dest_folder_remote_id": "Archive", "folder_remote_id": "INBOX"},
+    )
+    assert res.success is True
+    assert res.remote_state == {"folder_remote_id": "Archive"}
 
 
 @pytest.mark.parametrize(

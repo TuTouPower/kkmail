@@ -53,6 +53,7 @@ class UpsertOutcome:
     created: bool
     changed: bool
     location_created: bool = False
+    read_changed: bool = False
 
 
 def upsert_messages(
@@ -118,6 +119,7 @@ def upsert_messages(
             elif meta.uid is not None and loc.uid != meta.uid:
                 loc.uid = meta.uid
         changed = created or location_created
+        read_changed = False
         for field in _META_FIELDS:
             if meta.supplied_fields is not None and field not in meta.supplied_fields:
                 continue
@@ -133,6 +135,8 @@ def upsert_messages(
             ):
                 value = intents[meta.remote_id][field]
             if getattr(msg, field) != value:
+                if field == "is_read":
+                    read_changed = True
                 setattr(msg, field, value)
                 changed = True
         for field in ("to_addresses", "cc_addresses"):
@@ -144,7 +148,15 @@ def upsert_messages(
                 changed = True
         if changed:
             msg.updated_at = now
-        out.append(UpsertOutcome(message=msg, created=created, changed=changed, location_created=location_created))
+        out.append(
+            UpsertOutcome(
+                message=msg,
+                created=created,
+                changed=changed,
+                location_created=location_created,
+                read_changed=read_changed,
+            )
+        )
     session.flush()
     return out
 
@@ -204,15 +216,26 @@ def apply_metadata_page(
         folder_stats_dirty = True
     if message_event_ids:
         session.add(messages_upserted_event(account_id, folder_id, list(dict.fromkeys(message_event_ids))))
-    if folder_stats_dirty or session.get(FolderStats, folder_id) is None:
-        recompute_folder_stats(session, folder_id)
-        session.add(
-            OutboxEvent(
-                event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
-                account_id=account_id,
-                payload={"folder_id": str(folder_id)},
+
+    affected_folders = {folder_id} if folder_stats_dirty or session.get(FolderStats, folder_id) is None else set()
+    read_changed_ids = [o.message.id for o in outcomes if o.read_changed]
+    if read_changed_ids:
+        shared_folders = session.scalars(
+            select(MessageLocation.folder_id).where(MessageLocation.message_id.in_(read_changed_ids))
+        ).all()
+        affected_folders.update(shared_folders)
+
+    if affected_folders:
+        session.flush()
+        for fid in sorted(affected_folders):
+            recompute_folder_stats(session, fid)
+            session.add(
+                OutboxEvent(
+                    event_type=OutboxEventType.FOLDER_STATS_UPDATED.value,
+                    account_id=account_id,
+                    payload={"folder_id": str(fid)},
+                )
             )
-        )
     cursor = page.next_cursor or {}
     commit_checkpoint(
         session,

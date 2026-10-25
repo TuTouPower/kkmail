@@ -1004,17 +1004,28 @@ button:hover .icon,
   justify-content: flex-start;
   gap: 7px;
   height: 34px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 9px;
-  background: var(--surface);
+  background: transparent;
   color: var(--subtle);
   flex: 1;
   padding: 0 10px;
+  cursor: pointer;
 }
 
 .footer-btn:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+.footer-btn:active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.footer-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* List pane */
@@ -1824,6 +1835,10 @@ button:hover .icon,
 .settings-title-copy span { font-size: 11px; color: var(--muted); }
 .settings-page-body { display: flex; min-height: 0; flex: 1; }
 .settings-nav { width: 180px; flex: 0 0 auto; padding: 18px 10px; border-right: 1px solid var(--line); background: var(--surface-2); display: flex; flex-direction: column; gap: 4px; overflow: auto; }
+.settings-nav-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 10px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.settings-nav-title { font-size: 14px; font-weight: 600; color: var(--text); flex: 1; }
+.settings-nav-close { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.settings-nav-close:hover { background: var(--surface-hover); color: var(--text); }
 .settings-nav-caption { padding: 10px 12px 5px; color: var(--muted); font-size: 11px; }
 .settings-nav-caption:not(:first-child) { margin-top: 14px; }
 .settings-nav-item { display: flex; align-items: center; gap: 10px; text-align: left; min-height: 38px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-weight: 600; white-space: nowrap; }
@@ -1978,6 +1993,7 @@ button:hover .icon,
   .settings-title-copy span { display: none; }
   .settings-page-body { flex-direction: column; }
   .settings-nav { width: 100%; flex-direction: row; padding: 7px 10px; gap: 4px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  .settings-nav-header { border-bottom: 0; margin-bottom: 0; padding: 0 4px; flex-shrink: 0; }
   .settings-nav-caption { display: none; }
   .settings-nav-item { min-height: 34px; flex-shrink: 0; gap: 7px; font-size: 12px; }
   .settings-page .settings-content { padding: 18px 12px; }

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -123,3 +125,67 @@ def cleanup_stale_heartbeats(
         )
         session.flush()
     return len(keys_to_delete)
+
+
+class WorkerHeartbeatLoop:
+    """Independent background thread for worker process health heartbeats."""
+
+    def __init__(
+        self,
+        worker_id: str,
+        session_factory: Callable[[], Session],
+        *,
+        interval_s: float = 15.0,
+    ) -> None:
+        self.worker_id = worker_id
+        self.session_factory = session_factory
+        self.interval_s = max(interval_s, 0.01)
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._active_jobs = 0
+        self._lock = threading.Lock()
+
+    def set_active_jobs(self, count: int) -> None:
+        with self._lock:
+            self._active_jobs = max(count, 0)
+
+    def get_active_jobs(self) -> int:
+        with self._lock:
+            return self._active_jobs
+
+    def _tick(self) -> None:
+        try:
+            with self.session_factory() as session:
+                record_heartbeat(
+                    session,
+                    worker_id=self.worker_id,
+                    active_jobs=self.get_active_jobs(),
+                )
+                session.commit()
+        except Exception as exc:
+            from mail_core.security.redact import safe_error
+
+            log.warning("worker heartbeat write failed: %s", safe_error(exc))
+
+    def start(self) -> None:
+        self._tick()
+        self._stop_event.clear()
+
+        def _loop() -> None:
+            while not self._stop_event.is_set():
+                if self._stop_event.wait(timeout=self.interval_s):
+                    break
+                self._tick()
+
+        self._thread = threading.Thread(
+            target=_loop,
+            name=f"worker-heartbeat-{self.worker_id}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop_event.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+            self._thread = None

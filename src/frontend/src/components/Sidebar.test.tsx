@@ -329,6 +329,46 @@ describe('<Sidebar />', () => {
     expect((container.querySelector('input[aria-label="搜索账号列表"]') as HTMLInputElement).value).toBe('')
   })
 
+  it('closes scoped search on outside pointerdown and outside focusout (p045)', async () => {
+    mockApi()
+    useMailStore.setState({ sidebarSections: { allAccounts: true, accountList: true } })
+    const { container } = await render(<Sidebar />)
+
+    // 1. Group search outside pointerdown closes search
+    await waitFor(() => expect(container.querySelector('[aria-label="搜索分组 税务归档"]')).not.toBeNull())
+    const groupTrigger = container.querySelector('[aria-label="搜索分组 税务归档"]') as HTMLButtonElement
+    await click(groupTrigger)
+    const groupSearch = container.querySelector('input[aria-label="搜索分组账号：税务归档"]') as HTMLInputElement
+    expect(groupSearch).not.toBeNull()
+    await typeInto(groupSearch, 'corp')
+
+    // Click outside: dispatch pointerdown on document.body
+    await act(async () => {
+      document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
+    })
+    await waitFor(() => {
+      expect(container.querySelector('input[aria-label="搜索分组账号：税务归档"]')).toBeNull()
+    })
+
+    // 2. Master search outside focusout closes search
+    const masterTrigger = container.querySelector('[aria-label="搜索账号列表"]') as HTMLButtonElement
+    await click(masterTrigger)
+    const masterSearch = container.querySelector('input[aria-label="搜索账号列表"]') as HTMLInputElement
+    expect(masterSearch).not.toBeNull()
+    await typeInto(masterSearch, 'test')
+
+    // Focus out to an external element (new group button)
+    const newGroupBtn = container.querySelector('[aria-label="新建分组"]') as HTMLButtonElement
+    await act(async () => {
+      masterSearch.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: newGroupBtn }))
+      newGroupBtn.focus()
+      await new Promise((r) => requestAnimationFrame(r))
+    })
+    await waitFor(() => {
+      expect(container.querySelector('input[aria-label="搜索账号列表"]')).toBeNull()
+    })
+  })
+
   it('disables account dragging and drop targets inside filtered group and master lists', async () => {
     const calls = mockApi({ additionalAccounts: [{ id: 'acc-3', email: 'records@b.example', group_id: 'group-2' }] })
     const { container } = await render(<Sidebar />)
@@ -587,6 +627,28 @@ describe('<Sidebar />', () => {
 
     await click(childRow ?? null)
     expect(useMailStore.getState().view).toMatchObject({ type: 'folder', folderId: 'qq-subscription' })
+  })
+
+  it('renders inbox before unread, followed by other folders with aligned indent (p051)', async () => {
+    mockApi()
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-account-id="acc-1"] .tree-disclosure')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-account-id="acc-1"]')!
+    await click(account.querySelector('.tree-disclosure'))
+
+    await waitFor(() => expect(account.textContent).toContain('收件箱'))
+    const folderRows = [...account.querySelectorAll('.tree-folder-row')]
+    const labels = folderRows.map((row) => row.querySelector('.tree-label')?.textContent?.trim())
+
+    const inboxIdx = labels.indexOf('收件箱')
+    const unreadIdx = labels.indexOf('未读邮件')
+    expect(inboxIdx).toBeGreaterThanOrEqual(0)
+    expect(unreadIdx).toBeGreaterThanOrEqual(0)
+    expect(inboxIdx).toBeLessThan(unreadIdx)
+
+    // Check padding of inbox and unread (depth=2: 48px)
+    expect(folderRows[inboxIdx].getAttribute('style')).toContain('padding-left: 48px')
+    expect(folderRows[unreadIdx].getAttribute('style')).toContain('padding-left: 48px')
   })
 
   it('persists account-list reorder without changing existing group membership', async () => {

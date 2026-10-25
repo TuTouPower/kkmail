@@ -32,6 +32,8 @@ describe('browser preference persistence', () => {
         sidebarSections: { allAccounts: false, accountList: true },
         expandedSidebarCategories: [],
         expandedSidebarGroups: ['group-1'], expandedSidebarAccounts: ['account-1'],
+        uiReferenceEnabled: true,
+        uiReferenceShortcut: null,
       },
       version: 0,
     })

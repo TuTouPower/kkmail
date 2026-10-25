@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import asdict
 from typing import Any, Literal
 from uuid import UUID
@@ -12,6 +13,12 @@ from pydantic import BaseModel, Field, field_validator, field_serializer
 
 from mail_core.accounts import StaleSidebarLayoutError
 from mail_core.api.deps import require_auth
+from mail_core.db.session import get_session_factory
+from mail_core.mail.application.sync_requests import (
+    SyncRequestOut,
+    create_sync_request,
+    get_sync_request_report,
+)
 from mail_core.security.auth import AuthPrincipal
 from mail_core.security.redact import safe_error
 from mail_core.mail.application.accounts import (
@@ -292,19 +299,48 @@ def api_delete_account(account_id: UUID) -> Response:
     return Response(status_code=204)
 
 
-@router.post("/api/accounts/{account_id}/sync", response_model=SyncJobOut)
-def api_sync_account(account_id: UUID) -> SyncJobOut:
-    try:
-        job = sync_account_app(account_id)
-        return SyncJobOut(job_id=job.job_id)
-    except LookupError as exc:
-        raise HTTPException(404, str(exc)) from exc
+@router.post("/api/accounts/{account_id}/sync", response_model=SyncRequestOut, status_code=202)
+def api_sync_account(account_id: UUID) -> SyncRequestOut:
+    Session = get_session_factory()
+    client_req_id = f"full:{account_id}:{uuid.uuid4().hex}"
+    with Session() as session:
+        try:
+            req, _ = create_sync_request(
+                session,
+                client_request_id=client_req_id,
+                mode="full",
+                trigger="manual",
+                scope={"account_id": str(account_id)},
+                account_id=account_id,
+            )
+            req_id = req.id
+            session.commit()
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    with Session() as session:
+        return get_sync_request_report(session, req_id)  # type: ignore[return-value]
 
 
-@router.post("/api/accounts/sync-all", response_model=SyncAllOut)
-def api_sync_all_accounts() -> SyncAllOut:
-    res = sync_all_accounts_app()
-    return SyncAllOut(job_ids=res.job_ids, count=res.count)
+@router.post("/api/accounts/sync-all", response_model=SyncRequestOut, status_code=202)
+def api_sync_all_accounts() -> SyncRequestOut:
+    Session = get_session_factory()
+    client_req_id = f"full:all:{uuid.uuid4().hex}"
+    with Session() as session:
+        req, _ = create_sync_request(
+            session,
+            client_request_id=client_req_id,
+            mode="full",
+            trigger="manual",
+            scope={"all": True},
+        )
+        req_id = req.id
+        session.commit()
+
+    with Session() as session:
+        return get_sync_request_report(session, req_id)  # type: ignore[return-value]
 
 
 @router.get("/api/groups", response_model=GroupsOut)

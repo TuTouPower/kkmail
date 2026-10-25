@@ -198,6 +198,27 @@ def set_message_flagged(
     )
 
 
+def _resolve_imap_trash_folder(session: Session, account_id: uuid.UUID) -> str:
+    """Resolve the remote_id of the account's trash folder (role='trash')."""
+    from mail_core.mail.domain.enums import SyncStatus
+
+    folders = list(
+        session.scalars(
+            select(Folder)
+            .where(Folder.account_id == account_id)
+            .where(Folder.role == "trash")
+            .where(Folder.sync_status != SyncStatus.PAUSED.value)
+        ).all()
+    )
+    if len(folders) == 1:
+        remote_id = folders[0].remote_id
+        if remote_id and remote_id.strip():
+            return remote_id
+    if not folders:
+        raise UnaddressableMessageError("no selectable trash folder found for account")
+    raise UnaddressableMessageError("multiple ambiguous trash folders found for account")
+
+
 def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
     """Local-first trash: remove message metadata locally and enqueue remote trash.
 
@@ -211,12 +232,18 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
         raise LookupError("message not found")
     if not _has_provider_remote_id(msg):
         raise UnaddressableMessageError("message has no verified provider remote id")
+
+    account = session.get(Account, msg.account_id)
+    trash_dest = "Trash"
+    if account and account.provider == "imap":
+        trash_dest = _resolve_imap_trash_folder(session, msg.account_id)
+
     folder_ids = _all_location_folder_ids(session, message_id)
     folder, _loc = _primary_location(session, message_id)
     desired = {
         "remote_id": msg.remote_id,
         "folder_remote_id": folder.remote_id if folder else "INBOX",
-        "trash_folder_remote_id": "Trash",
+        "trash_folder_remote_id": trash_dest,
     }
     op = enqueue_remote_operation(
         session,

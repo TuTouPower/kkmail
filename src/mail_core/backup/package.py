@@ -131,8 +131,15 @@ def _ensure_backup_key_separate_from_blobs(backup_key: bytes) -> None:
         raise BackupCryptoError("backup key must differ from blob keys")
 
 
-def _restore_database_identity(url: str) -> tuple[str, str, int, str, str]:
-    """Return normalized PostgreSQL connection identity without credentials."""
+@dataclass(frozen=True, slots=True)
+class DatabaseIdentity:
+    system_identifier: str | None
+    database_oid: int | None
+    database_name: str
+
+
+def _restore_database_identity(url: str) -> tuple[str, str, int, str]:
+    """Return normalized PostgreSQL connection identity without credentials or username."""
     try:
         parsed = make_url(url)
     except Exception:
@@ -144,7 +151,7 @@ def _restore_database_identity(url: str) -> tuple[str, str, int, str, str]:
     identity_query = {key.lower() for key in parsed.query}
     if identity_query & {"host", "hostaddr", "port", "dbname", "database", "user", "service", "servicefile"}:
         raise RuntimeError("refusing to restore with identity-changing URL query parameters")
-    if not parsed.host or not parsed.database or not parsed.username:
+    if not parsed.host or not parsed.database:
         raise RuntimeError("refusing to restore with an incomplete PostgreSQL URL")
 
     host = parsed.host.strip().rstrip(".")
@@ -164,7 +171,66 @@ def _restore_database_identity(url: str) -> tuple[str, str, int, str, str]:
         raise RuntimeError("refusing to restore with an invalid PostgreSQL port") from None
     if port is None:
         port = 5432
-    return "postgresql", host, port, parsed.database, parsed.username
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        host = "127.0.0.1"
+    return "postgresql", host, port, parsed.database
+
+
+def _read_database_identity(url: str) -> DatabaseIdentity:
+    """Connect to PostgreSQL database and query cluster system_identifier and database OID."""
+    dsn, password = _libpq_dsn_and_password(url)
+    import psycopg
+
+    conn_kwargs = {"autocommit": True, "connect_timeout": 5}
+    if password is not None:
+        conn_kwargs["password"] = password
+    try:
+        with psycopg.connect(dsn, **conn_kwargs) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT oid, datname FROM pg_database WHERE datname = current_database()")
+                row = cur.fetchone()
+                if not row:
+                    raise RuntimeError("failed to query database identity: current_database not found")
+                db_oid, db_name = row[0], row[1]
+
+                sys_id = None
+                try:
+                    cur.execute("SELECT system_identifier::text FROM pg_control_system()")
+                    sys_row = cur.fetchone()
+                    if sys_row:
+                        sys_id = str(sys_row[0])
+                except Exception:
+                    pass
+
+                return DatabaseIdentity(
+                    system_identifier=sys_id,
+                    database_oid=int(db_oid) if db_oid is not None else None,
+                    database_name=str(db_name),
+                )
+    except Exception as exc:
+        raise RuntimeError(f"failed to inspect database identity: {exc}") from None
+
+
+def _assert_target_database_is_empty(target_database_url: str) -> None:
+    dsn, password = _libpq_dsn_and_password(target_database_url)
+    import psycopg
+
+    conn_kwargs = {"autocommit": True, "connect_timeout": 5}
+    if password is not None:
+        conn_kwargs["password"] = password
+    try:
+        with psycopg.connect(dsn, **conn_kwargs) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')"
+                )
+                row = cur.fetchone()
+                if row and row[0] > 0:
+                    raise RuntimeError("refusing to restore into non-empty target database")
+    except Exception as exc:
+        if "refusing to restore into non-empty" in str(exc):
+            raise
+        raise RuntimeError(f"failed to check target database empty state: {exc}") from None
 
 
 def _sha256_file(path: Path) -> str:
@@ -213,6 +279,68 @@ def _libpq_dsn_and_password(url: str) -> tuple[str, str | None]:
         (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
     )
     return safe, password
+
+
+def _validate_blob_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
+    """Validate all members in blobs.tar. Refuses path traversal, symlinks, absolute paths, devices, duplicates."""
+    validated: list[tarfile.TarInfo] = []
+    seen_dest_paths = set()
+    for member in tar.getmembers():
+        name = member.name
+        if any(c in name for c in ("\r", "\n", "\0", "\\")):
+            raise RuntimeError(f"unsafe member path in blobs.tar: invalid characters in {name!r}")
+        if member.issym() or member.islnk() or member.isdev() or member.ischr() or member.isfifo():
+            raise RuntimeError(f"unsafe member type in blobs.tar: {member.type} ({name!r})")
+        if name.startswith("/") or name.startswith("\\"):
+            raise RuntimeError(f"unsafe absolute path in blobs.tar: {name!r}")
+        if ":" in name.split("/")[0]:
+            raise RuntimeError(f"unsafe drive specification in blobs.tar: {name!r}")
+
+        parts = [p for p in name.split("/") if p != ""]
+        if any(p in ("..", ".") for p in parts):
+            raise RuntimeError(f"path traversal detected in blobs.tar member: {name!r}")
+
+        if member.isdir():
+            if not name.startswith("blobs"):
+                raise RuntimeError(f"disallowed directory in blobs.tar: {name!r}")
+            validated.append(member)
+            continue
+
+        if not member.isfile():
+            raise RuntimeError(f"only regular files allowed in blobs.tar: {name!r}")
+
+        if not name.startswith("blobs/"):
+            raise RuntimeError(f"member does not start with blobs/ in blobs.tar: {name!r}")
+
+        rel_path = name[len("blobs/") :].strip("/")
+        if not rel_path or "//" in name:
+            raise RuntimeError(f"invalid empty or double-slash member path: {name!r}")
+
+        if rel_path in seen_dest_paths:
+            raise RuntimeError(f"duplicate member path in blobs.tar: {name!r}")
+        seen_dest_paths.add(rel_path)
+        validated.append(member)
+    return validated
+
+
+def _validate_restore_destination(target_blobs_dir: str | Path) -> Path:
+    raw_path = Path(target_blobs_dir)
+    if any(part in ("..", ".") for part in raw_path.parts):
+        raise RuntimeError(f"path traversal detected in target blobs dir: {target_blobs_dir}")
+    if raw_path.is_symlink():
+        raise RuntimeError(f"refusing target blobs dir as symlink: {target_blobs_dir}")
+    resolved = raw_path.resolve()
+    if resolved.is_symlink():
+        raise RuntimeError(f"refusing resolved target blobs dir as symlink: {resolved}")
+    if resolved.exists():
+        if not resolved.is_dir():
+            raise RuntimeError(f"target blobs destination is not a directory: {resolved}")
+        try:
+            if any(resolved.iterdir()):
+                raise RuntimeError(f"refusing to restore into non-empty target blobs dir: {resolved}")
+        except PermissionError:
+            raise RuntimeError(f"permission denied accessing target blobs dir: {resolved}")
+    return resolved
 
 
 def _safe_member_relpath(name: str, *, allowlist: frozenset[str]) -> str | None:
@@ -891,16 +1019,42 @@ def restore_backup_package(
     if _restore_database_identity(source_database_url) == _restore_database_identity(target_database_url):
         raise RuntimeError("refusing to restore onto source database")
 
-    target_blobs = Path(target_blobs_dir).resolve()
-    if target_blobs.is_symlink():
-        raise RuntimeError(f"refusing target blobs dir as symlink: {target_blobs}")
-    if any(part in ("..", ".") for part in Path(target_blobs_dir).parts):
-        raise RuntimeError(f"path traversal detected in target blobs dir: {target_blobs_dir}")
+    target_ident: DatabaseIdentity | None = None
+    try:
+        target_ident = _read_database_identity(target_database_url)
+    except Exception:
+        pass
+
+    source_ident: DatabaseIdentity | None = None
+    try:
+        source_ident = _read_database_identity(source_database_url)
+    except Exception:
+        pass
+
+    if source_ident is not None and target_ident is not None:
+        if (
+            source_ident.system_identifier is not None
+            and target_ident.system_identifier is not None
+            and source_ident.system_identifier == target_ident.system_identifier
+            and (
+                (source_ident.database_oid is not None and source_ident.database_oid == target_ident.database_oid)
+                or source_ident.database_name == target_ident.database_name
+            )
+        ):
+            raise RuntimeError("refusing to restore onto source database")
+
+    # Enforce empty target database before restore if accessible
+    if target_ident is not None:
+        _assert_target_database_is_empty(target_database_url)
+
+    target_blobs = _validate_restore_destination(target_blobs_dir)
 
     temp_parent = pkg_dir.parent
     work_dir = temp_parent / f".restore_staging_{uuid.uuid4().hex}"
     _make_private_dir(work_dir)
     snapshot_dir = work_dir / "package"
+    staging_blobs = work_dir / "staging_blobs"
+    _make_private_dir(staging_blobs)
     errors: list[str] = []
     blobs_restored = 0
     db_restored = False
@@ -931,42 +1085,65 @@ def restore_backup_package(
             raise RuntimeError(f"missing {_MANIFEST_FILENAME} in backup archive")
         manifest = json.loads(man_path.read_text(encoding="utf-8"))
 
+        manifest_src_ident = manifest.get("source_database_identity")
+        if source_ident is None and isinstance(manifest_src_ident, dict):
+            source_ident = DatabaseIdentity(
+                system_identifier=manifest_src_ident.get("system_identifier"),
+                database_oid=manifest_src_ident.get("database_oid"),
+                database_name=manifest_src_ident.get("database_name", ""),
+            )
+
+        if source_ident is not None and target_ident is not None:
+            if (
+                source_ident.system_identifier is not None
+                and target_ident.system_identifier is not None
+                and source_ident.system_identifier == target_ident.system_identifier
+                and (
+                    (source_ident.database_oid is not None and source_ident.database_oid == target_ident.database_oid)
+                    or source_ident.database_name == target_ident.database_name
+                )
+            ):
+                raise RuntimeError("refusing to restore onto source database")
+
         # Reject stubs unless allow_stub explicitly granted
         dump_meta = manifest.get("members", {}).get("postgres.dump", {})
         dump_fmt = dump_meta.get("method", "custom")
         if dump_fmt == _SQL_STUB_METHOD and not allow_stub:
             raise RuntimeError("refusing to restore stub backup without allow_stub")
 
-        # 1. Restore blobs if blobs.tar is present
+        # 1. Restore blobs into isolated staging first
         blobs_tar = extract_dir / "blobs.tar"
         if blobs_tar.is_file():
-            target_blobs.mkdir(parents=True, exist_ok=True)
             with tarfile.open(blobs_tar, "r") as t:
-                for member in t.getmembers():
-                    if member.name.startswith("blobs/") and not member.name.endswith("/"):
-                        rel_path = member.name[len("blobs/"):]
-                        if not rel_path or any(part in ("..", ".") for part in Path(rel_path).parts):
-                            continue
-                        dest_file = target_blobs / rel_path
-                        dest_file.parent.mkdir(parents=True, exist_ok=True)
-                        f = t.extractfile(member)
-                        if f:
-                            temp_file = dest_file.with_name(f".{dest_file.name}.restore-{uuid.uuid4().hex}")
-                            created = False
-                            try:
-                                with f, temp_file.open("xb") as out:
-                                    created = True
-                                    shutil.copyfileobj(f, out, length=1024 * 1024)
-                                    out.flush()
-                                    os.fsync(out.fileno())
-                                temp_file.replace(dest_file)
-                            finally:
-                                if created:
-                                    try:
-                                        temp_file.unlink(missing_ok=True)
-                                    except OSError:
-                                        pass
-                            blobs_restored += 1
+                validated_members = _validate_blob_members(t)
+                for member in validated_members:
+                    if member.isdir():
+                        rel = member.name[len("blobs/") :].strip("/") if member.name.startswith("blobs/") else ""
+                        if rel:
+                            d = staging_blobs / rel
+                            d.mkdir(parents=True, exist_ok=True)
+                        continue
+                    rel_path = member.name[len("blobs/") :].strip("/")
+                    dest_file = staging_blobs / rel_path
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    f = t.extractfile(member)
+                    if f:
+                        temp_file = dest_file.with_name(f".{dest_file.name}.restore-{uuid.uuid4().hex}")
+                        created = False
+                        try:
+                            with f, temp_file.open("xb") as out:
+                                created = True
+                                shutil.copyfileobj(f, out, length=1024 * 1024)
+                                out.flush()
+                                os.fsync(out.fileno())
+                            temp_file.replace(dest_file)
+                        finally:
+                            if created:
+                                try:
+                                    temp_file.unlink(missing_ok=True)
+                                except OSError:
+                                    pass
+                        blobs_restored += 1
 
         # 2. Restore PostgreSQL dump
         dump_file = extract_dir / "postgres.dump"
@@ -989,8 +1166,8 @@ def restore_backup_package(
         restore_timeout = float(os.environ.get("MAIL_CORE_PG_RESTORE_TIMEOUT", "300"))
         cmd = [
             pg_restore,
-            "--clean",
-            "--if-exists",
+            "--exit-on-error",
+            "--single-transaction",
             "--no-owner",
             "--no-privileges",
             "--dbname",
@@ -1012,6 +1189,20 @@ def restore_backup_package(
             raise RuntimeError(f"pg_restore failed ({res.returncode}): {err_msg}")
 
         db_restored = True
+
+        # Atomically publish staging blobs into target directory only after successful DB restore
+        if blobs_tar.is_file() and blobs_restored > 0:
+            target_blobs.mkdir(parents=True, exist_ok=True)
+            for item in staging_blobs.iterdir():
+                target_dest = target_blobs / item.name
+                if target_dest.exists():
+                    if target_dest.is_dir():
+                        shutil.copytree(item, target_dest, dirs_exist_ok=True)
+                    else:
+                        item.replace(target_dest)
+                else:
+                    item.replace(target_dest)
+
         duration = (datetime.now(timezone.utc) - begun).total_seconds()
         return RestoreResult(
             ok=True,

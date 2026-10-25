@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.db.session import get_session_factory
@@ -27,6 +29,13 @@ class MessageBodyAlreadyArchived(ValueError):
     """Raised when on-demand sync is requested after the body is archived."""
 
 
+@dataclass(frozen=True, slots=True)
+class SyncBodyResult:
+    message_id: UUID
+    job_id: UUID | None
+    status: str  # "queued", "in_progress", "complete"
+
+
 def get_message_detail_with_archive_status(
     session: Session,
     message_id: UUID,
@@ -41,8 +50,8 @@ def get_message_detail_with_archive_status(
     return detail, is_archived
 
 
-def sync_message_body(message_id: UUID) -> UUID | None:
-    """Queue a highest-priority body archive attempt and return its worker job ID."""
+def sync_message_body(message_id: UUID) -> SyncBodyResult | None:
+    """Queue a highest-priority body archive attempt and return its status result."""
     Session = get_session_factory()
     with Session() as session:
         message = session.get(Message, message_id)
@@ -52,13 +61,22 @@ def sync_message_body(message_id: UUID) -> UUID | None:
             raise MessageHasNoProviderRemoteId("message has no verified provider remote id")
 
         account_id = message.account_id
-        state = session.get(MessageArchiveState, message_id)
+        state = session.scalar(
+            select(MessageArchiveState)
+            .where(MessageArchiveState.message_id == message_id)
+            .with_for_update()
+        )
         if state is None:
             raise MessageArchiveStateUnavailable("message archive state is unavailable")
 
         state_value = ArchiveState(state.state)
+        # Idempotent: if already complete, report complete without error
         if state_value == ArchiveState.ARCHIVE_COMPLETE:
-            raise MessageBodyAlreadyArchived("message body is already archived")
+            return SyncBodyResult(message_id=message_id, job_id=None, status="complete")
+
+        # In progress: report in_progress without stomping worker claim
+        if state_value == ArchiveState.ARCHIVE_IN_PROGRESS:
+            return SyncBodyResult(message_id=message_id, job_id=None, status="in_progress")
 
         state.priority = 0
         if state_value == ArchiveState.METADATA_SYNCED:
@@ -72,10 +90,9 @@ def sync_message_body(message_id: UUID) -> UUID | None:
         elif state_value == ArchiveState.ARCHIVE_PENDING and state.retry_count >= 5:
             state.retry_count = 0
 
-        if state_value != ArchiveState.ARCHIVE_IN_PROGRESS:
-            state.last_error = None
-            state.pause_reason = None
-            state.updated_at = datetime.now(timezone.utc)
+        state.last_error = None
+        state.pause_reason = None
+        state.updated_at = datetime.now(timezone.utc)
 
         job = enqueue_job(
             session,
@@ -86,4 +103,4 @@ def sync_message_body(message_id: UUID) -> UUID | None:
             dedupe_key=f"archive_msg:{message_id}",
         )
         session.commit()
-        return job.id
+        return SyncBodyResult(message_id=message_id, job_id=job.id, status="queued")

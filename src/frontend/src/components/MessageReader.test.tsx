@@ -745,4 +745,50 @@ describe('<MessageReader />', () => {
     // Must be bounded to exactly 1 automatic sync call, NOT looping
     expect(syncCalls).toBe(1)
   })
+
+  it('handles idempotent complete response from sync-body without error (p048)', async () => {
+    useMailStore.setState({ selectedKey: 'm-unarchived' })
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      if (u.endsWith('/sync-body') && init.method === 'POST') {
+        return json({ message_id: 'm-unarchived', status: 'complete' }, 200)
+      }
+      return originalFetch(url, init)
+    }))
+
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => {
+      expect(container.textContent).not.toContain('同步邮件正文失败')
+    })
+  })
+
+  it('isolates late response when switching messages before sync-body returns (p048)', async () => {
+    useMailStore.setState({ selectedKey: 'm-unarchived' })
+    let resolveFirstSync: (res: Response) => void
+    const firstSyncPromise = new Promise<Response>((r) => { resolveFirstSync = r })
+
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      if (u.includes('m-unarchived/sync-body') && init.method === 'POST') {
+        return firstSyncPromise
+      }
+      return originalFetch(url, init)
+    }))
+
+    const { container } = await render(<MessageReader />)
+    // Switch to m-1 before m-unarchived finishes
+    await act(async () => {
+      useMailStore.setState({ selectedKey: 'm-1' })
+      // Now resolve first sync with error
+      resolveFirstSync!(json({ detail: 'Failed' }, 500))
+    })
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Quarterly report')
+    })
+    // m-1 should NOT show sync error
+    expect(container.textContent).not.toContain('同步邮件正文失败')
+  })
 })

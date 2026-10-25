@@ -254,9 +254,11 @@ def _copyuid_remote_state(c: imaplib.IMAP4, response_data: Any, source_uid: int,
     remote_state: dict[str, Any] = {"folder_remote_id": dest_folder}
     values = list(response_data or [])
     try:
-        _, response_values = c.response("COPYUID")
-        values.extend(response_values or [])
-    except (AttributeError, imaplib.IMAP4.error):
+        resp = c.response("COPYUID")
+        if isinstance(resp, (tuple, list)) and len(resp) == 2:
+            _, response_values = resp
+            values.extend(response_values or [])
+    except (AttributeError, ValueError, imaplib.IMAP4.error):
         pass
     for value in values:
         text = value.decode("ascii", errors="ignore") if isinstance(value, bytes) else str(value)

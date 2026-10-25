@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+import asyncio
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import OutboxEventType
 from mail_core.mail.storage import OutboxEvent
@@ -18,9 +19,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_listen_thread_dispatches_on_notify():
+def test_listen_thread_dispatches_on_notify_with_subscribers():
     dispatcher = OutboxDispatcher()
     seen: list[int] = []
+
+    # Register a local subscriber so dispatch_once(require_subscribers=True) fans out
+    loop = asyncio.new_event_loop()
+    q: asyncio.Queue = asyncio.Queue()
+    with dispatcher._lock:
+        dispatcher._subs["*"].append((loop, q))
 
     # Capture fanout
     original = dispatcher._fanout
@@ -49,4 +56,36 @@ def test_listen_thread_dispatches_on_notify():
         time.sleep(0.1)
 
     listener.stop()
+    loop.close()
     assert event_id in seen, f"expected event {event_id} in {seen}"
+
+
+def test_listen_thread_idle_without_subscribers_does_not_dispatch():
+    dispatcher = OutboxDispatcher()
+    assert not dispatcher.has_local_subscribers()
+
+    seen: list[int] = []
+    original = dispatcher._fanout
+
+    def _fanout(event):
+        seen.append(int(event["id"]))
+        return original(event)
+
+    dispatcher._fanout = _fanout  # type: ignore[method-assign]
+
+    listener = OutboxListenThread(dispatcher, idle_timeout_s=0.2)
+    listener.start()
+    assert listener.wait_started(5)
+
+    Session = get_session_factory()
+    with Session() as session:
+        row = OutboxEvent(event_type=OutboxEventType.SYNC_PROGRESS.value, payload={"probe_no_sub": True})
+        session.add(row)
+        session.flush()
+        event_id = int(row.id)
+        notify_outbox(session)
+        session.commit()
+
+    time.sleep(0.6)
+    listener.stop()
+    assert event_id not in seen

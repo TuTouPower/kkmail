@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { AccountIconMode } from './accountIcon'
+import type { Shortcut } from '../lib/ui_shortcut'
 
 export type FavoriteCategory = 'inbox' | 'unread' | 'sent' | 'drafts' | 'trash' | 'junk'
 
@@ -57,6 +58,10 @@ interface MailUiState {
   toggleSelected: (key: string) => void
   clearSelected: () => void
   selectAll: (keys: string[]) => void
+  uiReferenceEnabled: boolean
+  setUiReferenceEnabled: (enabled: boolean) => void
+  uiReferenceShortcut: Shortcut | null
+  setUiReferenceShortcut: (shortcut: Shortcut | null) => void
 }
 
 // State every view switch must reset, shared by setView/openSmartView so the
@@ -139,6 +144,10 @@ export const useMailStore = create<MailUiState>()(
         })),
       clearSelected: () => set({ selectedIds: [] }),
       selectAll: (keys: string[]) => set({ selectedIds: keys }),
+      uiReferenceEnabled: true,
+      setUiReferenceEnabled: (enabled) => set({ uiReferenceEnabled: enabled }),
+      uiReferenceShortcut: null,
+      setUiReferenceShortcut: (shortcut) => set({ uiReferenceShortcut: shortcut }),
     }),
     { name: 'mail-ui-storage', partialize: (s) => ({
       theme: s.theme,
@@ -149,6 +158,8 @@ export const useMailStore = create<MailUiState>()(
       expandedSidebarGroups: s.expandedSidebarGroups,
       expandedSidebarCategories: s.expandedSidebarCategories,
       expandedSidebarAccounts: s.expandedSidebarAccounts,
+      uiReferenceEnabled: s.uiReferenceEnabled,
+      uiReferenceShortcut: s.uiReferenceShortcut,
     }) },
   ),
 )
