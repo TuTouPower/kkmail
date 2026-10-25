@@ -15,7 +15,7 @@
 |S3|S2|F05, F08, F09|F05 → F08 → F09|`ae0cb4c2`|已完成|
 |S4|S3|F10|F10|`52270ec6`|已完成|
 |S5|S4|F11|F11|`bb922e9b`|已完成|
-|S-final|S5|F12|F12 (文档与收尾)|待定|待开始|
+|S-final|S5|F12|F12 (文档与收尾)|`b452b58d`|已完成|
 
 ## 工作包执行记录表
 
@@ -33,4 +33,4 @@
 |F09|`review_fix/f09_settings`|`kkmail_review_f09_settings`|C|3|已交付 (`0b7b2ebe`, `bdcc135b`, `af8b8342`)|
 |F10|`review_fix/f10_sync`|`kkmail_review_f10_sync`|A|4|已交付 (`22ce64e9`, `d94b017b`, `2107c33f`, `38e51d6c`)|
 |F11|`review_fix/integration`|`kkmail_review_integration`|B|1|已交付 (`bb922e9b`)|
-|F12|`review_fix/integration`|`kkmail_review_integration`|I|1|待开始|
+|F12|`review_fix/integration`|`kkmail_review_integration`|I|1|已交付 (repair_results.md)|
