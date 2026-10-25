@@ -196,6 +196,66 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await expect(acc1Row.locator('.tree-folder-list')).not.toBeVisible()
   })
 
+  test('p043: 分组和总账号搜索独立工作，并在窄侧栏与移动抽屉内保持可用', async ({ page }) => {
+    await setupStubApi(page, {
+      authedInitially: true,
+      groups: [
+        { id: 'group-finance', name: 'Finance', sort_order: 0 },
+        { id: 'group-archive', name: 'Archive', sort_order: 1 },
+      ],
+      accounts: [
+        { id: 'acc-finance', email: 'alpha@finance.example', group_id: 'group-finance', provider: 'imap', sync_enabled: true },
+        { id: 'acc-archive', email: 'beta@archive.example', group_id: 'group-archive', provider: 'imap', sync_enabled: true },
+        { id: 'acc-master', email: 'records@master.example', provider: 'imap', sync_enabled: true },
+      ],
+      folderStatsByAccount,
+    })
+    await page.addInitScript(() => {
+      localStorage.setItem('mail-ui-storage', JSON.stringify({ state: { sidebarWidth: 180 }, version: 0 }))
+    })
+    await page.setViewportSize({ width: 1200, height: 800 })
+    await page.goto('/')
+
+    const sidebar = page.locator('aside.sidebar')
+    const financeSearchButton = page.getByRole('button', { name: '搜索分组 Finance' })
+    await expect(financeSearchButton).toBeVisible({ timeout: 10000 })
+    await financeSearchButton.click()
+    const financeInput = page.getByRole('searchbox', { name: '搜索分组账号：Finance' })
+    await expect(financeInput).toBeFocused()
+    await financeInput.fill('alpha')
+    await expect(page.locator('[data-group-id="group-finance"] .tree-account-block[data-account-id="acc-finance"]')).toBeVisible()
+    const sidebarBox = await sidebar.boundingBox()
+    const financeInputBox = await financeInput.boundingBox()
+    expect(sidebarBox).not.toBeNull()
+    expect(financeInputBox!.x + financeInputBox!.width).toBeLessThanOrEqual(sidebarBox!.x + sidebarBox!.width + 1)
+
+    await financeInput.press('Escape')
+    await expect(financeInput).toHaveCount(0)
+    await page.getByRole('button', { name: '搜索账号列表' }).click()
+    const masterInput = page.getByRole('searchbox', { name: '搜索账号列表' })
+    await masterInput.fill('beta')
+    await expect(page.locator('.tree-account-list .tree-account-block[data-account-id="acc-archive"]')).toBeVisible()
+    await expect(page.locator('.tree-account-list .tree-account-block[data-account-id="acc-master"]')).toHaveCount(0)
+    const globalSection = page.locator('.tree-section').filter({ has: page.locator('[data-ui="SB12"]') })
+    await globalSection.getByRole('button', { name: '展开 所有收件箱' }).click()
+    await expect(globalSection.locator('.tree-category-account')).toHaveCount(3)
+
+    await page.reload()
+    await expect(page.getByRole('button', { name: '搜索账号列表' })).toBeVisible()
+    await expect(page.getByRole('searchbox', { name: '搜索账号列表' })).toHaveCount(0)
+
+    await page.setViewportSize({ width: 375, height: 667 })
+    await page.getByRole('button', { name: '打开导航' }).click()
+    await expect(sidebar).toBeVisible()
+    await page.getByRole('button', { name: '搜索分组 Archive' }).click()
+    const drawerInput = page.getByRole('searchbox', { name: '搜索分组账号：Archive' })
+    await expect(drawerInput).toBeFocused()
+    const drawerBox = await sidebar.boundingBox()
+    const drawerInputBox = await drawerInput.boundingBox()
+    expect(drawerBox).not.toBeNull()
+    expect(drawerInputBox!.x + drawerInputBox!.width).toBeLessThanOrEqual(drawerBox!.x + drawerBox!.width + 1)
+  })
+
   test('t027: 固定 24px 层级、三区独立折叠、760px 断点与双主题保持布局', async ({ page }) => {
     await setupStubApi(page, {
       authedInitially: true,

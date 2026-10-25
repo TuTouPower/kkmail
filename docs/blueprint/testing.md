@@ -62,6 +62,11 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
 - **合并后动作**：确认生成文件已暂存，无 schema drift。
 - **migration 窗口**：涉及数据库表变动时编写 Alembic 迁移脚本，版本号保持严格线性无分叉。
 
+## 侧栏账号局部搜索
+
+- `src/frontend/src/components/Sidebar.test.tsx` 覆盖分组与总列表独立过滤、邮箱/域名/名称匹配、禁用账号排除、空结果、清空/Esc/触发按钮关闭、焦点与展开状态恢复及过滤区拖放禁用。
+- `tests/e2e/sidebar_tree.spec.ts` 的 p043 用例覆盖 180px 窄侧栏、移动抽屉、全局分类不受过滤影响以及搜索状态不跨刷新保存；执行 `npm --prefix src/frontend run test:e2e`。
+
 ## 门禁类别覆盖清单
 
 |类别|项目对应实现|命令或验证方式|

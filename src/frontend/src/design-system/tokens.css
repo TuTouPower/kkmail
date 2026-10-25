@@ -714,6 +714,77 @@ button:hover .icon,
   cursor: pointer;
 }
 
+.tree-account-search {
+  min-width: 0;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 4px 6px 24px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.tree-account-search:focus-within {
+  border-color: var(--blue);
+  outline: 1px solid var(--blue);
+  outline-offset: 1px;
+}
+
+.tree-account-search > svg {
+  flex: 0 0 14px;
+}
+
+.tree-account-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.tree-account-search input::placeholder {
+  color: var(--muted);
+}
+
+.tree-account-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.tree-account-search > button {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tree-account-search > button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.tree-no-search-results {
+  margin: 4px 8px 6px 48px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .tree-group-menu {
   position: absolute;
   z-index: 20;

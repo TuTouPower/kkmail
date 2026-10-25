@@ -19,6 +19,7 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  Search,
   X,
 } from 'lucide-react'
 import { api, apiRequest, type AccountSummary } from '../api/client'
@@ -113,6 +114,14 @@ function compareAccounts(a: { email: string }, b: { email: string }): number {
   const aDomain = aEmail.slice(aEmail.lastIndexOf('@') + 1)
   const bDomain = bEmail.slice(bEmail.lastIndexOf('@') + 1)
   return aDomain.localeCompare(bDomain, 'en', { sensitivity: 'base' }) || aEmail.localeCompare(bEmail, 'en', { sensitivity: 'base' })
+}
+
+function matchesAccountSearch(account: AccountSummary, value: string): boolean {
+  const query = value.trim().toLowerCase()
+  if (!query) return true
+  const email = account.email.toLowerCase()
+  const domain = email.slice(email.lastIndexOf('@') + 1)
+  return email.includes(query) || domain.includes(query) || (account.display_name || '').toLowerCase().includes(query)
 }
 
 function orderedMembers(accounts: AccountSummary[], groupId: string) {
@@ -303,6 +312,10 @@ function Sidebar() {
   const wide = useIsWide()
   const drawerOpen = mobileSidebarOpen && !wide
   const sidebarRef = useRef<HTMLElement | null>(null)
+  const [openGroupSearchIds, setOpenGroupSearchIds] = useState<string[]>([])
+  const [groupSearchTerms, setGroupSearchTerms] = useState<Record<string, string>>({})
+  const [masterSearchOpen, setMasterSearchOpen] = useState(false)
+  const [masterSearchTerm, setMasterSearchTerm] = useState('')
   const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const layoutQuery = useQuery({ queryKey: queryKeys.sidebarLayout, queryFn: () => api.getSidebarLayout() })
@@ -313,6 +326,12 @@ function Sidebar() {
     [accountsQuery.data],
   )
   const enabledAccountIds = useMemo(() => new Set(enabledAccounts.map((account) => account.id)), [enabledAccounts])
+  const masterSearchActive = masterSearchTerm.trim().length > 0
+  const masterSectionExpanded = sidebarSections.accountList || masterSearchOpen
+  const filteredMasterAccounts = useMemo(
+    () => masterSearchActive ? enabledAccounts.filter((account) => matchesAccountSearch(account, masterSearchTerm)) : enabledAccounts,
+    [enabledAccounts, masterSearchActive, masterSearchTerm],
+  )
   const selectedAccountId = view.type === 'account' || view.type === 'folder' || view.type === 'favorite'
     ? view.accountId
     : undefined
@@ -336,6 +355,25 @@ function Sidebar() {
   const renameSaveInFlight = useRef(false)
   const groupMenuTrigger = useRef<HTMLButtonElement | null>(null)
   const newGroupTrigger = useRef<HTMLButtonElement | null>(null)
+  const masterSearchInputRef = useRef<HTMLInputElement | null>(null)
+  const masterSearchTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const previousOpenGroupSearchIds = useRef<string[]>([])
+  useEffect(() => {
+    const newlyOpened = openGroupSearchIds.find((id) => !previousOpenGroupSearchIds.current.includes(id))
+    previousOpenGroupSearchIds.current = openGroupSearchIds
+    if (!newlyOpened) return
+    const frame = requestAnimationFrame(() => {
+      const input = [...document.querySelectorAll<HTMLInputElement>('[data-search-group-id]')]
+        .find((element) => element.dataset.searchGroupId === newlyOpened)
+      input?.focus()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [openGroupSearchIds])
+  useEffect(() => {
+    if (!masterSearchOpen) return
+    const frame = requestAnimationFrame(() => masterSearchInputRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [masterSearchOpen])
   useEffect(() => {
     if (!drawerOpen) return
     const sidebar = sidebarRef.current
@@ -567,6 +605,13 @@ function Sidebar() {
         expandedSidebarGroups: state.expandedSidebarGroups.filter((id) => id !== groupId),
         expandedSidebarCategories: state.expandedSidebarCategories.filter((key) => !key.startsWith(`group:${groupId}:`)),
       }))
+      setOpenGroupSearchIds((current) => current.filter((id) => id !== groupId))
+      setGroupSearchTerms((current) => {
+        if (!(groupId in current)) return current
+        const next = { ...current }
+        delete next[groupId]
+        return next
+      })
       setOpenMenuGroupId(null)
       await invalidateOrganization()
     } catch (error) {
@@ -611,6 +656,43 @@ function Sidebar() {
     setListFilter(category === 'unread' ? 'unread' : 'all')
   }
 
+  function closeGroupSearch(groupId: string) {
+    setOpenGroupSearchIds((current) => current.filter((id) => id !== groupId))
+    setGroupSearchTerms((current) => {
+      if (!(groupId in current)) return current
+      const next = { ...current }
+      delete next[groupId]
+      return next
+    })
+    requestAnimationFrame(() => {
+      const trigger = [...document.querySelectorAll<HTMLButtonElement>('[data-search-toggle-group-id]')]
+        .find((element) => element.dataset.searchToggleGroupId === groupId)
+      trigger?.focus()
+    })
+  }
+
+  function toggleGroupSearch(groupId: string) {
+    if (openGroupSearchIds.includes(groupId)) {
+      closeGroupSearch(groupId)
+      return
+    }
+    setOpenGroupSearchIds((current) => current.includes(groupId) ? current : [...current, groupId])
+  }
+
+  function closeMasterSearch() {
+    setMasterSearchOpen(false)
+    setMasterSearchTerm('')
+    requestAnimationFrame(() => masterSearchTriggerRef.current?.focus())
+  }
+
+  function toggleMasterSearch() {
+    if (masterSearchOpen) {
+      closeMasterSearch()
+      return
+    }
+    setMasterSearchOpen(true)
+  }
+
   function beginAccountDrag(event: DragEvent<HTMLDivElement>, accountId: string, groupId: string | null, sourceList: 'master' | 'group') {
     event.stopPropagation()
     if (!layoutReady || layoutSaveInFlight.current) {
@@ -629,6 +711,12 @@ function Sidebar() {
   function clearDropState() {
     dragPayload.current = null
     document.querySelectorAll('.tree-drop-target').forEach((element) => element.classList.remove('tree-drop-target'))
+  }
+
+  function suppressDragDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    clearDropState()
   }
 
   function eventMatchesDrag(event: DragEvent<HTMLDivElement>): boolean {
@@ -705,6 +793,10 @@ function Sidebar() {
   }
 
   async function onDropListHeader(event: DragEvent<HTMLDivElement>) {
+    if (masterSearchActive) {
+      suppressDragDrop(event)
+      return
+    }
     if (!eventMatchesDrag(event)) {
       event.preventDefault()
       clearDropState()
@@ -725,9 +817,13 @@ function Sidebar() {
     const active = scope.type === 'all'
       ? ((category === 'inbox' && view.type === 'allInbox' && listFilter === 'all') || (view.type === 'favorite' && !view.accountId && view.category === category))
       : view.type === 'group' && view.groupId === scope.id && view.category === category
-    const categoryAccounts = scope.type === 'all'
+    const availableAccounts = scope.type === 'all'
       ? visibleAccounts
       : orderedMembers(accounts, scope.id).filter((account) => account.sync_enabled !== false)
+    const groupSearchTerm = scope.type === 'group' ? groupSearchTerms[scope.id] || '' : ''
+    const categoryAccounts = scope.type === 'group' && groupSearchTerm.trim()
+      ? availableAccounts.filter((account) => matchesAccountSearch(account, groupSearchTerm))
+      : availableAccounts
     return (
       <div key={key} className="tree-category-block">
         <div className={`tree-category-heading ${active ? 'active' : ''}`} style={{ paddingLeft: '24px' }}>
@@ -756,7 +852,7 @@ function Sidebar() {
     )
   }
 
-  function renderAccount(account: (typeof accounts)[number], sourceList: 'master' | 'group', ownerGroupId: string | null, depth: number) {
+  function renderAccount(account: (typeof accounts)[number], sourceList: 'master' | 'group', ownerGroupId: string | null, depth: number, dragDisabled = false) {
     const expanded = expandedAccounts.includes(account.id)
     const unread = unreadByAccount.get(account.id) ?? (statsQuery.data || statsQuery.isError ? null : undefined)
     const selected = view.type === 'account' && view.accountId === account.id
@@ -765,14 +861,18 @@ function Sidebar() {
       <div
         key={`${targetContext}-${account.id}`}
         className="tree-account-block"
-        draggable={!savingLayout && layoutReady}
+        draggable={!dragDisabled && !savingLayout && layoutReady}
         data-account-id={account.id}
         data-drop-list={targetContext}
         data-ui="SB10"
-        onDragStart={(event) => beginAccountDrag(event, account.id, sourceList === 'group' ? ownerGroupId : account.group_id || null, sourceList)}
+        onDragStart={(event) => dragDisabled
+          ? suppressDragDrop(event)
+          : beginAccountDrag(event, account.id, sourceList === 'group' ? ownerGroupId : account.group_id || null, sourceList)}
         onDragEnd={onDragEnd}
-        onDragOver={allowDrop}
-        onDrop={(event) => void dropAccountOn(event, sourceList === 'group' ? ownerGroupId : null, account.id, sourceList)}
+        onDragOver={(event) => dragDisabled ? suppressDragDrop(event) : allowDrop(event)}
+        onDrop={(event) => dragDisabled
+          ? suppressDragDrop(event)
+          : void dropAccountOn(event, sourceList === 'group' ? ownerGroupId : null, account.id, sourceList)}
       >
         <div className={`tree-account-row ${selected ? 'active' : ''}`} style={{ paddingLeft: `${depth * 24}px` }}>
           <button
@@ -799,6 +899,9 @@ function Sidebar() {
 
   const groupSections = groups.map((group) => {
     const members = orderedMembers(accounts, group.id).filter((account) => account.sync_enabled !== false)
+    const searchOpen = openGroupSearchIds.includes(group.id)
+    const searchTerm = groupSearchTerms[group.id] || ''
+    const searchActive = searchTerm.trim().length > 0
     const groupUnread = members.reduce<number | null>((total, account) => {
       const isFaulty = (account.sync_enabled === false || account.sync_status === 'failed' || account.sync_status === 'auth_failed')
       const count = unreadByAccount.get(account.id)
@@ -818,7 +921,13 @@ function Sidebar() {
         layoutReady={layoutReady}
         savingLayout={savingLayout}
         savingRename={savingRename}
-        collapsed={!expandedGroups.includes(group.id)}
+        collapsed={!expandedGroups.includes(group.id) && !searchOpen}
+        searchOpen={searchOpen}
+        searchTerm={searchTerm}
+        searchActive={searchActive}
+        onToggleSearch={() => toggleGroupSearch(group.id)}
+        onSearchTermChange={(value) => setGroupSearchTerms((current) => ({ ...current, [group.id]: value }))}
+        onCloseSearch={() => closeGroupSearch(group.id)}
         active={view.type === 'group' && view.groupId === group.id}
         menuOpen={openMenuGroupId === group.id}
         editing={editingGroupId === group.id}
@@ -836,6 +945,11 @@ function Sidebar() {
         onDragEnd={clearDropState}
         renderCategory={(category, label, Icon) => renderCategory(category, label, Icon, { type: 'group', id: group.id, name: group.name })}
         onDragStart={(event) => {
+          if (searchActive) {
+            event.preventDefault()
+            event.stopPropagation()
+            return
+          }
           if (!layoutReady || layoutSaveInFlight.current) {
             event.preventDefault()
             return
@@ -849,12 +963,16 @@ function Sidebar() {
           event.dataTransfer.effectAllowed = 'move'
           event.dataTransfer.setData('text/plain', JSON.stringify(dragPayload.current))
         }}
-        onDragOver={allowDrop}
+        onDragOver={(event) => searchActive ? suppressDragDrop(event) : allowDrop(event)}
         onDrop={(event) => {
+          if (searchActive) {
+            suppressDragDrop(event)
+            return
+          }
           if (dragPayload.current?.type === 'group') void dropGroupOn(event, group.id)
           else void dropAccountOn(event, group.id)
         }}
-        renderAccount={(account) => renderAccount(account, 'group', group.id, 1)}
+        renderAccount={(account) => renderAccount(account, 'group', group.id, 1, searchActive)}
       />
     )
   })
@@ -909,29 +1027,52 @@ function Sidebar() {
             className="tree-section-heading tree-drop-zone"
             data-ui="SB16"
             data-drop-kind="master-list"
-            onDragOver={allowDrop}
+            onDragOver={(event) => masterSearchActive ? suppressDragDrop(event) : allowDrop(event)}
             onDrop={(event) => void onDropListHeader(event)}
           >
             <button
               type="button"
               className="tree-disclosure"
-              aria-label={sidebarSections.accountList ? '折叠' : '展开'}
-              aria-expanded={sidebarSections.accountList}
+              aria-label={masterSectionExpanded ? '折叠' : '展开'}
+              aria-expanded={masterSectionExpanded}
               onClick={() => toggleSidebarSection('accountList')}
             >
-              {sidebarSections.accountList ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              {masterSectionExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </button>
-            <button type="button" className="tree-heading-main" aria-expanded={sidebarSections.accountList} onClick={() => toggleSidebarSection('accountList')}>
+            <button type="button" className="tree-heading-main" aria-expanded={masterSectionExpanded} onClick={() => toggleSidebarSection('accountList')}>
               <FolderIcon size={16} aria-hidden="true" /><span className="tree-label">账号列表</span>
             </button>
+            <button ref={masterSearchTriggerRef} type="button" className="tree-icon-action" aria-label={masterSearchOpen ? '关闭账号列表搜索' : '搜索账号列表'} aria-expanded={masterSearchOpen} title={masterSearchOpen ? '关闭搜索' : '搜索账号'} onClick={toggleMasterSearch}><Search size={15} /></button>
             <button ref={newGroupTrigger} type="button" className="tree-icon-action" aria-label="新建分组" title="新建分组" onClick={() => { setNewGroupOpen(true); setActionError('') }}><FolderPlus size={16} /></button>
             <button type="button" className="tree-icon-action" aria-label="恢复默认排序" title="恢复默认排序" onClick={() => void resetOrder()}><ArrowDownWideNarrow size={16} /></button>
           </div>
-          {sidebarSections.accountList && <div className="tree-account-list" onDragOver={allowDrop} onDrop={(event) => void onDropListHeader(event)}>
+          {masterSectionExpanded && <div className="tree-account-list" data-search-active={masterSearchActive} onDragOver={(event) => masterSearchActive ? suppressDragDrop(event) : allowDrop(event)} onDrop={(event) => masterSearchActive ? suppressDragDrop(event) : void onDropListHeader(event)}>
+            {masterSearchOpen && <div className="tree-account-search" data-no-drag="true">
+              <Search size={14} aria-hidden="true" />
+              <input
+                ref={masterSearchInputRef}
+                aria-label="搜索账号列表"
+                type="search"
+                value={masterSearchTerm}
+                placeholder="搜索邮箱或名称"
+                onChange={(event) => setMasterSearchTerm(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Escape') return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  closeMasterSearch()
+                }}
+              />
+              {masterSearchTerm && <button type="button" aria-label="清除账号列表搜索" title="清除搜索" onClick={() => {
+                setMasterSearchTerm('')
+                requestAnimationFrame(() => masterSearchInputRef.current?.focus())
+              }}><X size={14} /></button>}
+            </div>}
             {(groupsQuery.isLoading || accountsQuery.isLoading || layoutQuery.isLoading) && <div className="tree-loading" style={{ paddingLeft: '24px' }}>正在加载账户…</div>}
             {(groupsQuery.error || accountsQuery.error || layoutQuery.error) && <div className="tree-load-error" role="alert" style={{ paddingLeft: '24px' }}><span>{errorMessage(accountsQuery.error || groupsQuery.error || layoutQuery.error, '账户加载失败')}</span><button className="tree-retry" type="button" onClick={() => { void groupsQuery.refetch(); void accountsQuery.refetch(); void layoutQuery.refetch() }}>重试</button></div>}
             {statsQuery.error && <div className="tree-folder-status" role="status" style={{ paddingLeft: '24px' }}>未读统计暂不可用：{errorMessage(statsQuery.error, '统计加载失败')} <button className="tree-retry" type="button" onClick={() => void statsQuery.refetch()}>重试统计</button></div>}
-            {visibleAccounts.map((account) => renderAccount(account, 'master', account.group_id || null, 1))}
+            {masterSearchActive && filteredMasterAccounts.length === 0 && <div className="tree-no-search-results">未找到匹配账号</div>}
+            {filteredMasterAccounts.map((account) => renderAccount(account, 'master', account.group_id || null, 1, masterSearchActive))}
           </div>}
         </section>
       </div>
@@ -950,6 +1091,12 @@ interface SidebarGroupSectionProps {
   savingLayout: boolean
   savingRename: boolean
   collapsed: boolean
+  searchOpen: boolean
+  searchTerm: string
+  searchActive: boolean
+  onToggleSearch: () => void
+  onSearchTermChange: (value: string) => void
+  onCloseSearch: () => void
   active: boolean
   menuOpen: boolean
   editing: boolean
@@ -971,22 +1118,54 @@ interface SidebarGroupSectionProps {
 
 function SidebarGroupSection(props: SidebarGroupSectionProps) {
   const unread = props.unreadCount
+  const visibleMembers = props.searchActive
+    ? props.members.filter((account) => matchesAccountSearch(account, props.searchTerm))
+    : props.members
+  function suppressDragDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.classList.remove('tree-drop-target')
+  }
   const menus = props.menuOpen && <div className="tree-group-menu" role="menu">
     <button type="button" role="menuitem" onClick={props.onRenameStart}><Pencil size={14} />重命名分组</button>
     <button type="button" role="menuitem" className="danger" onClick={props.onDelete}><Trash2 size={14} />删除分组</button>
   </div>
   return (
-    <div className="tree-group-block" data-group-id={props.group.id} onDragOver={props.onDragOver} onDrop={props.onDrop}>
-      <div className={`tree-group-heading ${props.active ? 'active' : ''}`} draggable={!props.editing && !props.savingLayout && props.layoutReady} onDragStart={props.onDragStart} onDragEnd={props.onDragEnd}>
+    <div className="tree-group-block" data-group-id={props.group.id} onDragOver={(event) => props.searchActive ? suppressDragDrop(event) : props.onDragOver(event)} onDrop={(event) => props.searchActive ? suppressDragDrop(event) : props.onDrop(event)}>
+      <div className={`tree-group-heading ${props.active ? 'active' : ''}`} draggable={!props.searchActive && !props.editing && !props.savingLayout && props.layoutReady} onDragStart={(event) => props.searchActive ? suppressDragDrop(event) : props.onDragStart(event)} onDragEnd={props.onDragEnd}>
         <button type="button" data-no-drag="true" className="tree-disclosure" aria-label={props.collapsed ? `展开分组 ${props.group.name}` : `折叠分组 ${props.group.name}`} aria-expanded={!props.collapsed} onClick={props.onToggle}>{props.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button>
         <button type="button" className="tree-group-select" onClick={props.onToggle}><FolderIcon size={16} /><span className="tree-label">{props.group.name}</span><span className="tree-count">{props.members.length}</span>{unread === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}</button>
+        <button type="button" data-search-toggle-group-id={props.group.id} data-no-drag="true" className="tree-icon-action" aria-label={props.searchOpen ? `关闭分组搜索 ${props.group.name}` : `搜索分组 ${props.group.name}`} aria-expanded={props.searchOpen} title={props.searchOpen ? '关闭搜索' : '搜索账号'} onClick={props.onToggleSearch}><Search size={15} /></button>
         <button type="button" data-no-drag="true" className="tree-icon-action" aria-label={`分组操作 ${props.group.name}`} aria-expanded={props.menuOpen} onClick={(event) => props.onOpenMenu(event.currentTarget)}><MoreHorizontal size={16} /></button>
         {menus}
       </div>
       {props.editing && <form className="tree-inline-form" onSubmit={props.onRenameSubmit}><input autoFocus aria-label="重命名分组" maxLength={128} value={props.editingName} disabled={props.savingRename} onChange={(event) => props.onRenameName(event.target.value)} /><button type="submit" aria-label="保存分组名称" disabled={props.savingRename}><CheckIcon size={15} /></button><button type="button" aria-label="取消重命名" disabled={props.savingRename} onClick={props.onRenameCancel}><X size={15} /></button></form>}
+      {props.searchOpen && <div className="tree-account-search" data-no-drag="true">
+        <Search size={14} aria-hidden="true" />
+        <input
+          data-search-group-id={props.group.id}
+          aria-label={`搜索分组账号：${props.group.name}`}
+          type="search"
+          value={props.searchTerm}
+          placeholder="搜索邮箱或名称"
+          onChange={(event) => props.onSearchTermChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') return
+            event.preventDefault()
+            event.stopPropagation()
+            props.onCloseSearch()
+          }}
+        />
+        {props.searchTerm && <button type="button" aria-label={`清除分组搜索 ${props.group.name}`} title="清除搜索" onClick={(event) => {
+          const input = event.currentTarget.parentElement?.querySelector('input')
+          props.onSearchTermChange('')
+          requestAnimationFrame(() => input?.focus())
+        }}><X size={14} /></button>}
+      </div>}
       {!props.collapsed && <div className="tree-group-children">
         {CATEGORY_ITEMS.map(({ category, label, icon: Icon }) => props.renderCategory(category, label, Icon))}
-        {props.members.map(props.renderAccount)}
+        {props.searchActive && visibleMembers.length === 0 && <div className="tree-no-search-results">未找到匹配账号</div>}
+        {visibleMembers.map(props.renderAccount)}
       </div>}
     </div>
   )

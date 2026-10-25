@@ -20,10 +20,32 @@ const accounts = [
   { id: 'acc-2', email: 'notes@a.example', status: 'active', account_type: 'imap', provider: 'imap', group_id: null },
 ]
 
-function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; disabledAcc1?: boolean; disabledAcc2?: boolean; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
+function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; disabledAcc1?: boolean; disabledAcc2?: boolean; displayNameAcc1?: string; additionalAccounts?: Array<{ id: string; email: string; group_id: string | null; display_name?: string }>; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
   const calls: Array<{ url: string; method: string; body?: string }> = []
   let acc1Unread = 2
   let acc2Unread = 1
+  const initialAccounts: Array<{
+    id: string
+    email: string
+    status: string
+    account_type: string
+    provider: string
+    group_id: string | null
+    group_name?: string
+    display_name?: string
+  }> = [
+    ...accounts.map((account) => ({ ...account, group_id: account.group_id ?? null })),
+    ...(options.additionalAccounts || []).map((account) => ({
+      id: account.id,
+      email: account.email,
+      status: 'active',
+      account_type: 'imap',
+      provider: 'imap',
+      group_id: account.group_id,
+      group_name: account.group_id === 'group-2' ? '归档项目' : undefined,
+      display_name: account.display_name,
+    })),
+  ]
   let currentAccounts: Array<{
     id: string
     email: string
@@ -33,10 +55,12 @@ function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partial
     provider: string
     group_id: string | null
     group_name?: string
+    display_name?: string
     sync_enabled?: boolean
-  }> = accounts.map((account) => ({
+  }> = initialAccounts.map((account) => ({
     ...account,
     group_id: account.group_id ?? null,
+    display_name: account.id === 'acc-1' ? options.displayNameAcc1 : account.display_name,
     sync_enabled: account.id === 'acc-1' ? !options.disabledAcc1 : !options.disabledAcc2,
     sync_status: account.id === 'acc-1' && options.syncStatusAcc1 ? options.syncStatusAcc1 : 'idle',
   }))
@@ -51,9 +75,12 @@ function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partial
   } = {
     revision: String(revision).padStart(64, '0'),
     group_ids: groups.map((group) => group.id),
-    master_account_ids: ['acc-2', 'acc-1'],
-    ungrouped_account_ids: ['acc-2'],
-    group_account_ids: { 'group-1': ['acc-1'], 'group-2': [] },
+    master_account_ids: ['acc-2', 'acc-1', ...((options.additionalAccounts || []).map((account) => account.id))],
+    ungrouped_account_ids: ['acc-2', ...((options.additionalAccounts || []).filter((account) => !account.group_id).map((account) => account.id))],
+    group_account_ids: {
+      'group-1': ['acc-1'],
+      'group-2': (options.additionalAccounts || []).filter((account) => account.group_id === 'group-2').map((account) => account.id),
+    },
   }
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost')
@@ -217,6 +244,126 @@ describe('<Sidebar />', () => {
     vi.restoreAllMocks()
     __resetCsrfForTests()
     localStorage.clear()
+  })
+
+  it('filters group and master account entries independently by email, domain, and display name', async () => {
+    mockApi({
+      displayNameAcc1: 'Finance Operations',
+      additionalAccounts: [{ id: 'acc-3', email: 'records@b.example', group_id: 'group-2', display_name: 'Quarterly Reports' }],
+    })
+    useMailStore.setState({ expandedSidebarCategories: ['all:inbox', 'group:group-1:inbox', 'group:group-2:inbox'] })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('[aria-label="搜索分组 税务归档"]')).not.toBeNull())
+
+    await click(container.querySelector('[aria-label="搜索分组 税务归档"]'))
+    const groupOneSearch = container.querySelector('input[aria-label="搜索分组账号：税务归档"]') as HTMLInputElement
+    await waitFor(() => expect(document.activeElement).toBe(groupOneSearch))
+    await click(container.querySelector('[aria-label="搜索分组 归档项目"]'))
+    await click(container.querySelector('[aria-label="搜索账号列表"]'))
+    const groupTwoSearch = container.querySelector('input[aria-label="搜索分组账号：归档项目"]') as HTMLInputElement
+    const masterSearch = container.querySelector('input[aria-label="搜索账号列表"]') as HTMLInputElement
+    await waitFor(() => expect(document.activeElement).toBe(masterSearch))
+    await typeInto(groupOneSearch, 'Z.EXAMPLE')
+    await typeInto(groupTwoSearch, ' quarterly ')
+    await typeInto(masterSearch, ' NOTES@A.EXAMPLE ')
+
+    const groupOne = container.querySelector('[data-group-id="group-1"]')!
+    const groupTwo = container.querySelector('[data-group-id="group-2"]')!
+    const masterList = container.querySelector('.tree-account-list')!
+    expect([...groupOne.querySelectorAll('.tree-account-block')].map((row) => row.getAttribute('data-account-id'))).toEqual(['acc-1'])
+    expect([...groupTwo.querySelectorAll('.tree-account-block')].map((row) => row.getAttribute('data-account-id'))).toEqual(['acc-3'])
+    expect([...masterList.querySelectorAll('.tree-account-block')].map((row) => row.getAttribute('data-account-id'))).toEqual(['acc-2'])
+    expect(groupOne.querySelectorAll('.tree-category-account')).toHaveLength(1)
+    expect(groupTwo.querySelectorAll('.tree-category-account')).toHaveLength(1)
+    expect(container.querySelector('[data-ui="SB12"]')?.closest('.tree-section')?.querySelectorAll('.tree-category-account')).toHaveLength(3)
+    expect(groupOne.querySelector('.tree-count')?.textContent).toBe('1')
+    expect(useMailStore.getState().view).toEqual({ type: 'allInbox' })
+    expect(useMailStore.getState().search).toBe('')
+  })
+
+  it('shows no matches for disabled accounts and restores local expansion and focus when search closes', async () => {
+    mockApi({ disabledAcc1: true, displayNameAcc1: 'Finance Operations' })
+    useMailStore.setState({ sidebarSections: { allAccounts: true, accountList: false } })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('[aria-label="搜索分组 税务归档"]')).not.toBeNull())
+    const groupTrigger = container.querySelector('[aria-label="搜索分组 税务归档"]') as HTMLButtonElement
+    await click(groupTrigger)
+    const groupSearch = container.querySelector('input[aria-label="搜索分组账号：税务归档"]') as HTMLInputElement
+    await typeInto(groupSearch, 'finance')
+    await waitFor(() => expect(container.querySelector('[data-group-id="group-1"] .tree-no-search-results')?.textContent).toBe('未找到匹配账号'))
+    expect(container.querySelector('[data-group-id="group-1"] .tree-account-block[data-account-id="acc-1"]')).toBeNull()
+    expect(localStorage.getItem('mail-ui-storage')).not.toContain('finance')
+    await click(container.querySelector('[aria-label="清除分组搜索 税务归档"]'))
+    expect(groupSearch.value).toBe('')
+    await waitFor(() => expect(document.activeElement).toBe(groupSearch))
+    expect(container.querySelector('[data-group-id="group-1"] .tree-no-search-results')).toBeNull()
+    await typeInto(groupSearch, 'finance')
+    await waitFor(() => expect(container.querySelector('[data-group-id="group-1"] .tree-no-search-results')).not.toBeNull())
+
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    await act(async () => { groupSearch.dispatchEvent(escape) })
+    await waitFor(() => {
+      expect(container.querySelector('input[aria-label="搜索分组账号：税务归档"]')).toBeNull()
+      expect(container.querySelector('[data-group-id="group-1"] .tree-group-children')).toBeNull()
+      expect(document.activeElement).toBe(groupTrigger)
+    })
+
+    const masterTrigger = container.querySelector('[aria-label="搜索账号列表"]') as HTMLButtonElement
+    await click(masterTrigger)
+    const masterSearch = container.querySelector('input[aria-label="搜索账号列表"]') as HTMLInputElement
+    expect(masterSearch).not.toBeNull()
+    expect(container.querySelector('.tree-account-list')).not.toBeNull()
+    await typeInto(masterSearch, 'will-clear')
+    await click(container.querySelector('[aria-label="清除账号列表搜索"]'))
+    expect(masterSearch.value).toBe('')
+    await waitFor(() => expect(document.activeElement).toBe(masterSearch))
+    await typeInto(masterSearch, 'not-found')
+    await click(container.querySelector('[aria-label="关闭账号列表搜索"]'))
+    await waitFor(() => {
+      expect(container.querySelector('input[aria-label="搜索账号列表"]')).toBeNull()
+      expect(container.querySelector('.tree-account-list')).toBeNull()
+      expect(document.activeElement).toBe(masterTrigger)
+    })
+    expect(useMailStore.getState().sidebarSections.accountList).toBe(false)
+    await click(masterTrigger)
+    expect((container.querySelector('input[aria-label="搜索账号列表"]') as HTMLInputElement).value).toBe('')
+  })
+
+  it('disables account dragging and drop targets inside filtered group and master lists', async () => {
+    const calls = mockApi({ additionalAccounts: [{ id: 'acc-3', email: 'records@b.example', group_id: 'group-2' }] })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-list .tree-account-block[data-account-id="acc-2"]')).not.toBeNull())
+    await click(container.querySelector('[aria-label="搜索分组 税务归档"]'))
+    await typeInto(container.querySelector('input[aria-label="搜索分组账号：税务归档"]'), 'finance')
+
+    const groupOne = container.querySelector('[data-group-id="group-1"]')!
+    const filteredAccount = groupOne.querySelector('.tree-account-block[data-account-id="acc-1"]')!
+    const groupHeading = groupOne.querySelector('.tree-group-heading')!
+    expect(filteredAccount.getAttribute('draggable')).toBe('false')
+    expect(groupHeading.getAttribute('draggable')).toBe('false')
+    const blockedStart = new Event('dragstart', { bubbles: true, cancelable: true })
+    Object.defineProperty(blockedStart, 'dataTransfer', { value: createDataTransfer() })
+    filteredAccount.dispatchEvent(blockedStart)
+    expect(blockedStart.defaultPrevented).toBe(true)
+    const sourceTransfer = dispatchDrag(container.querySelector('.tree-account-list .tree-account-block[data-account-id="acc-2"]')!, 'dragstart')
+    const blockedGroupDrop = new Event('drop', { bubbles: true, cancelable: true })
+    Object.defineProperty(blockedGroupDrop, 'dataTransfer', { value: sourceTransfer })
+    groupOne.dispatchEvent(blockedGroupDrop)
+    expect(blockedGroupDrop.defaultPrevented).toBe(true)
+    expect(calls.filter((call) => call.method === 'PUT')).toHaveLength(0)
+
+    await click(container.querySelector('[aria-label="搜索账号列表"]'))
+    await typeInto(container.querySelector('input[aria-label="搜索账号列表"]'), 'notes')
+    const masterList = container.querySelector('.tree-account-list')!
+    expect(masterList.querySelector('.tree-account-block[data-account-id="acc-2"]')?.getAttribute('draggable')).toBe('false')
+    await click(container.querySelector('[aria-label="展开分组 归档项目"]'))
+    const groupAccount = container.querySelector('[data-group-id="group-2"] .tree-account-block[data-account-id="acc-3"]')!
+    const groupTransfer = dispatchDrag(groupAccount, 'dragstart')
+    const blockedMasterDrop = new Event('drop', { bubbles: true, cancelable: true })
+    Object.defineProperty(blockedMasterDrop, 'dataTransfer', { value: groupTransfer })
+    masterList.dispatchEvent(blockedMasterDrop)
+    expect(blockedMasterDrop.defaultPrevented).toBe(true)
+    expect(calls.filter((call) => call.method === 'PUT')).toHaveLength(0)
   })
 
   it('keeps all six existing global categories and renders only user groups', async () => {

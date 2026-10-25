@@ -231,12 +231,16 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
 
     if (path === '/api/accounts' && method === 'GET') {
       const accountsList = currentAccounts
+      const limit = Math.max(1, Number(url.searchParams.get('limit') || 200))
+      const offset = Math.max(0, Number(url.searchParams.get('offset') || 0))
       return route.fulfill({
         status: 200,
         json: {
-          accounts: accountsList,
+          accounts: accountsList.slice(offset, offset + limit),
           total: accountsList.length,
-          has_more: false,
+          limit,
+          offset,
+          has_more: offset + limit < accountsList.length,
         },
       })
     }
