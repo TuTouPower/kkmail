@@ -87,7 +87,10 @@ class AuthCredential(Base):
 
 class Account(Base):
     __tablename__ = "accounts"
-    __table_args__ = (Index("ix_accounts_group_id", "group_id"),)
+    __table_args__ = (
+        Index("ix_accounts_group_id", "group_id"),
+        Index("uq_accounts_email_lower", text("lower(email)"), unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)

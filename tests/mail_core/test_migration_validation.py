@@ -56,11 +56,10 @@ def _get_alembic_config() -> Config:
 # --- AC-001: Linear migration, single head and branch rejection --------------------
 
 
-# Replaces the t037 fixed-head check because 0019 extends the production chain.
-def test_nullable_status_alembic_chain_has_single_head():
+def test_alembic_chain_has_single_head():
     script = ScriptDirectory.from_config(_get_alembic_config())
-    assert script.get_heads() == ["20261023_0019"]
-    current = script.get_revision("20261023_0019")
+    assert script.get_heads() == ["20261025_0021"]
+    current = script.get_revision("20261025_0021")
     visited = []
     while current is not None:
         visited.append(current.revision)
@@ -69,7 +68,7 @@ def test_nullable_status_alembic_chain_has_single_head():
             break
         assert isinstance(down, str), f"Fork at {current.revision}"
         current = script.get_revision(down)
-    assert len(visited) == 19
+    assert len(visited) == 21
     assert visited[-1] == "20261020_0001"
 
 
