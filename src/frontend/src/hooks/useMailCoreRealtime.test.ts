@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { createThrottledInvalidator, extractMessageIds, shouldInvalidateMailCoreInbox, useMailCoreRealtime } from './useMailCoreRealtime'
+import { createThrottledInvalidator, extractMessageIds, extractSyncRequestId, shouldInvalidateMailCoreInbox, useMailCoreRealtime } from './useMailCoreRealtime'
 import { queryClient, queryKeys, setReadOptimistic, type MailItem } from '../api/queries'
 import * as sseModule from '../api/sseStream'
 import { UNAUTHORIZED_EVENT } from '../api/client'
@@ -148,6 +148,34 @@ describe('createThrottledInvalidator', () => {
     throttler.cancel()
     queryClient.clear()
     vi.unstubAllGlobals()
+  })
+})
+
+describe('sync.request_updated handling (R07)', () => {
+  it('extracts the request id from event payloads', () => {
+    expect(extractSyncRequestId({ request_id: 'req-1' })).toBe('req-1')
+    expect(extractSyncRequestId({ sync_request_id: 'req-2' })).toBe('req-2')
+    expect(extractSyncRequestId({ id: 'req-3' })).toBe('req-3')
+    expect(extractSyncRequestId({})).toBeNull()
+    expect(extractSyncRequestId(null)).toBeNull()
+    expect(extractSyncRequestId('req-4')).toBeNull()
+  })
+
+  it('invalidates only the matching sync-request query', () => {
+    vi.useFakeTimers()
+    const mockQc = { invalidateQueries: vi.fn() } as unknown as typeof queryClient
+    const throttler = createThrottledInvalidator(mockQc, 100)
+
+    throttler.handleEvent('sync.request_updated', { request_id: 'req-9', state: 'complete' })
+    throttler.handleEvent('sync.request_updated', { request_id: 'req-9', state: 'complete' })
+    throttler.handleEvent('sync.request_updated', { state: 'complete' })
+    expect(mockQc.invalidateQueries).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(100)
+
+    expect(mockQc.invalidateQueries).toHaveBeenCalledTimes(1)
+    expect(mockQc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['sync-request', 'req-9'], exact: true })
+    vi.useRealTimers()
   })
 })
 

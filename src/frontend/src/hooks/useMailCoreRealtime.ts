@@ -24,6 +24,17 @@ export function shouldInvalidateMailCoreInbox(eventType: string): boolean {
   return MAIL_CORE_INBOX_INVALIDATE_EVENTS.has(eventType)
 }
 
+/** The sync request a `sync.request_updated` event refers to, if it names one. */
+export function extractSyncRequestId(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null
+  const obj = data as Record<string, unknown>
+  for (const key of ['request_id', 'sync_request_id', 'id']) {
+    const value = obj[key]
+    if (typeof value === 'string' && value) return value
+  }
+  return null
+}
+
 export function extractMessageIds(data: unknown): string[] {
   if (!data) return []
   if (typeof data === 'string') return [data]
@@ -59,6 +70,7 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
   let invalidateAccounts = false
   let invalidateAllDetails = false
   const detailIdsToInvalidate = new Set<string>()
+  const syncRequestIdsToInvalidate = new Set<string>()
 
   function flush() {
     if (timer !== null) {
@@ -85,6 +97,13 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
       if (invalidateMailStats) {
         invalidateMailStats = false
         void invalidateMailStatsQueries(qc)
+      }
+    }
+    if (syncRequestIdsToInvalidate.size > 0) {
+      const ids = Array.from(syncRequestIdsToInvalidate)
+      syncRequestIdsToInvalidate.clear()
+      for (const id of ids) {
+        void qc.invalidateQueries({ queryKey: ['sync-request', id], exact: true })
       }
     }
     if (invalidateAllDetails) {
@@ -133,6 +152,15 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
       }
       scheduled = true
     }
+    if (type === 'sync.request_updated') {
+      // Only the named request's authoritative query is invalidated; other
+      // scopes' requests (and every other cache) are untouched.
+      const requestId = extractSyncRequestId(data)
+      if (requestId) {
+        syncRequestIdsToInvalidate.add(requestId)
+        scheduled = true
+      }
+    }
     if (ARCHIVE_DETAIL_INVALIDATE_EVENTS.has(type)) {
       const ids = extractMessageIds(data)
       for (const id of ids) detailIdsToInvalidate.add(id)
@@ -149,6 +177,7 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
       timer = null
     }
     detailIdsToInvalidate.clear()
+    syncRequestIdsToInvalidate.clear()
     invalidateMailLists = false
     invalidateMailStats = false
     invalidateAccounts = false
