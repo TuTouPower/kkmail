@@ -9,6 +9,7 @@ from typing import Any, Optional
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -331,11 +332,26 @@ class AccountSyncLease(Base):
     fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
 
 
+class OutboxPublicationState(Base):
+    """Singleton tracking outbox stream epoch and monotonically increasing publication sequence."""
+
+    __tablename__ = "outbox_publication_state"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_outbox_publication_state_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    epoch: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=_uuid)
+    next_seq: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class OutboxEvent(Base):
     """Transactional outbox row (architecture §13.2)."""
 
     __tablename__ = "outbox"
-    __table_args__ = (Index("ix_outbox_undispatched", "dispatched_at", "id"),)
+    __table_args__ = (
+        Index("ix_outbox_undispatched", "dispatched_at", "id"),
+        Index("ix_outbox_publication_seq", "publication_seq", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -343,6 +359,8 @@ class OutboxEvent(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    publication_seq: Mapped[Optional[int]] = mapped_column(BigInteger, unique=True)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class MessageArchiveState(Base):
