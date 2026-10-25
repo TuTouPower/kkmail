@@ -48,6 +48,61 @@ def test_create_backup_package_writes_manifest(tmp_path, monkeypatch):
     assert ok_stub.members_checked >= 2
 
 
+def test_restore_uses_the_package_snapshot_it_verified(tmp_path, monkeypatch):
+    import mail_core.backup.package as pkg
+
+    package_dir = tmp_path / "mutable-package"
+    expected_dump = b"verified postgres dump"
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "postgresql://u:p@127.0.0.1:1/db")
+
+    def fake_dump(dest, _url, allow_stub=False):
+        dest.write_bytes(expected_dump)
+        return "custom"
+
+    monkeypatch.setattr(pkg, "_pg_dump_to", fake_dump)
+    create_backup_package(
+        package_dir,
+        include_blobs=False,
+        database_url_override="postgresql://backup:pw@127.0.0.1:1/source",
+        encrypt=False,
+        allow_dump_stub=True,
+    )
+    original_verify = pkg.verify_backup_package
+    verified_snapshots = []
+
+    def verify_then_mutate_original(snapshot_dir, **kwargs):
+        snapshot = Path(snapshot_dir)
+        assert snapshot != package_dir
+        result = original_verify(snapshot, **kwargs)
+        verified_snapshots.append(snapshot)
+        (package_dir / "postgres.dump").write_bytes(b"tampered after verification")
+        return result
+
+    restored_dumps = []
+
+    def fake_run(argv, **_kwargs):
+        restored_dumps.append(Path(argv[-1]).read_bytes())
+        return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(pkg, "verify_backup_package", verify_then_mutate_original)
+    monkeypatch.setattr(pkg.shutil, "which", lambda _name: "/fake/pg_restore")
+    monkeypatch.setattr(pkg.subprocess, "run", fake_run)
+
+    result = restore_backup_package(
+        package_dir,
+        target_database_url="postgresql://restore:pw@127.0.0.1:1/target",
+        target_blobs_dir=tmp_path / "restored-blobs",
+        allow_stub=True,
+        source_database_url="postgresql://backup:pw@127.0.0.1:1/source",
+    )
+
+    assert result.ok
+    assert len(verified_snapshots) == 1
+    assert restored_dumps == [expected_dump]
+    assert (package_dir / "postgres.dump").read_bytes() == b"tampered after verification"
+    assert list(tmp_path.glob(".restore_staging_*")) == []
+
+
 def test_restore_rejects_sql_stub_when_verification_is_bypassed(tmp_path, monkeypatch):
     monkeypatch.setattr(backup_package.shutil, "which", lambda _name: None)
     package_dir = tmp_path / "stub-backup"

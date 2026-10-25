@@ -281,6 +281,25 @@ def _set_private_file(path: Path) -> None:
         pass
 
 
+def _copy_restore_package_snapshot(source_dir: Path, snapshot_dir: Path) -> None:
+    """Copy only package members into the private directory used for verify and restore."""
+    _make_private_dir(snapshot_dir)
+    names = (
+        "backup.kkbak",
+        _MANIFEST_FILENAME,
+        _MANIFEST_CHECKSUM_FILENAME,
+        *_PLAIN_MEMBER_ALLOWLIST,
+    )
+    for name in names:
+        source = source_dir / name
+        if source.is_symlink():
+            raise RuntimeError(f"refusing symlink in restore package: {name}")
+        if source.is_file():
+            target = snapshot_dir / name
+            shutil.copyfile(source, target)
+            _set_private_file(target)
+
+
 def _verify_manifest_file_checksum(man_path: Path, sha_path: Path, errors: list[str]) -> None:
     if not sha_path.is_file():
         errors.append(f"{sha_path.name} missing")
@@ -847,8 +866,6 @@ def restore_backup_package(
     else:
         raise FileNotFoundError(f"backup package not found: {pkg}")
 
-    pkg_size = sum(f.stat().st_size for f in pkg_dir.glob("**/*") if f.is_file())
-
     # Guard AC-004: Prevent restoring onto the same source database.
     if _restore_database_identity(source_database_url) == _restore_database_identity(target_database_url):
         raise RuntimeError("refusing to restore onto source database")
@@ -859,20 +876,22 @@ def restore_backup_package(
     if any(part in ("..", ".") for part in Path(target_blobs_dir).parts):
         raise RuntimeError(f"path traversal detected in target blobs dir: {target_blobs_dir}")
 
-    # Verify package first
-    vr = verify_backup_package(pkg_dir, allow_stub=allow_stub)
-    if not vr.ok:
-        raise RuntimeError(f"backup package verification failed: {vr.errors}")
-
     temp_parent = pkg_dir.parent
     work_dir = temp_parent / f".restore_staging_{uuid.uuid4().hex}"
     _make_private_dir(work_dir)
+    snapshot_dir = work_dir / "package"
     errors: list[str] = []
     blobs_restored = 0
     db_restored = False
 
-    kkbak = pkg_dir / "backup.kkbak"
     try:
+        _copy_restore_package_snapshot(pkg_dir, snapshot_dir)
+        pkg_size = sum(f.stat().st_size for f in snapshot_dir.glob("**/*") if f.is_file())
+        vr = verify_backup_package(snapshot_dir, allow_stub=allow_stub)
+        if not vr.ok:
+            raise RuntimeError(f"backup package verification failed: {vr.errors}")
+
+        kkbak = snapshot_dir / "backup.kkbak"
         # Decrypt if encrypted
         if kkbak.is_file():
             plain_tar = work_dir / "plain.tar.gz"
@@ -883,8 +902,8 @@ def restore_backup_package(
             if not _extract_tar_file(plain_tar, extract_dir, errors):
                 raise RuntimeError(f"tar extraction failed: {errors}")
         else:
-            # Plain packages already contain the manifest and members at their root.
-            extract_dir = pkg_dir
+            # Plain package members come from the same private snapshot that was verified.
+            extract_dir = snapshot_dir
 
         man_path = extract_dir / _MANIFEST_FILENAME
         if not man_path.is_file():
