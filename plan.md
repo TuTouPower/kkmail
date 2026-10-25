@@ -12,7 +12,7 @@
 4. 统一邮箱地址复制。
 5. 全量回归、文档更新及 pending 收尾。
 
-阶段状态：阶段 1—4 已完成；全量门禁、spec 与 pending 收尾进行中。
+阶段状态：阶段 1—4、spec 与 pending 收尾已完成；最终门禁已执行，遗留限制见执行记录。
 
 ## 阶段一：禁用账号退出侧栏与聚合范围
 
@@ -131,4 +131,11 @@
 |阶段二 未读统计|完成|后端 PostgreSQL 30 passed；前端 368 passed；OpenAPI/CSS、TypeScript、build、变更文件 oxlint 通过|77d275f|
 |阶段三 账号搜索|完成|Sidebar 36 passed；TypeScript、CSS、Sidebar oxlint 通过；Playwright p043 1 passed|88afca7|
 |阶段四 地址复制|完成|前端 378 passed；详情 PostgreSQL 10 passed；Playwright E2E 18 passed；desktop npm test 通过；test:packaged 因缺少打包内 `psql` 未通过|8a80186|
-|文档与 pending 收尾|待开始|—|—|
+|文档与 pending 收尾|完成|有效 spec、索引与 blueprint 已更新；p041/p042/p043 经 pending.py archive 归档，使用实现提交作闭环引用；工作区范围检查通过|d286dbb|
+|全量门禁|执行完成（有遗留）|模板契约 149 passed/1 skipped；前端 378 passed；浏览器 E2E 18 passed；真实全栈 E2E 8 passed；后端全量 936 passed/7 failed/2 skipped；全仓 lint 与 packaged PostgreSQL 冒烟未通过，详见下方|—|
+
+### 全量门禁遗留
+
+- 后端全量 7 个失败位于本计划未修改的测试/实现：`test_listener_requires_subscribers_for_initial_notify_and_idle_dispatch`（监听器多订阅 channel）；`test_imap_list_and_metadata_page`（SSRF 守卫拒绝私网 IMAP peer）；`test_imap_provider_quotes_folder_in_commands`（COPYUID 测试桩无响应数据）；`test_update_account_sync_status`（ProviderError 语义与旧断言不同）；`test_listen_thread_dispatches_on_notify`（LISTEN 事件未及时到达测试观测）；`test_a27_sync_folder_delta_sanitizes_errors`（旧断言要求错误详情写入任务 payload）；`test_pymap_fallback_passes_private_passfile_and_cleans_it_up`（测试断言 passfile 清理失败）。相关失败集合独立复跑后全部复现；p041/p042 专项后端用例通过。
+- 前端 `npm run lint` 只报未修改的 `src/App.tsx:109`：`react(set-state-in-effect`。本计划修改文件的 oxlint 门禁通过。
+- `src/desktop` 的 `npm test` 通过，含 Electron 系统剪贴板与 iframe 权限隔离；OAuth 集成测试因未设置专用环境跳过。`npm run test:packaged` 因现存 macOS 包缺少 `pgsql/bin/psql` 失败。
