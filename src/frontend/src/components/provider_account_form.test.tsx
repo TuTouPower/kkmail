@@ -52,6 +52,47 @@ it('updates a single OAuth field without echoing or replacing saved secrets', as
   expect(calls[0].credentials).toEqual({ refresh_token: 'new-refresh' })
 })
 
+it('releases save controls when the account write succeeds but refresh fails', async () => {
+  const writes: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
+    const url = String(input)
+    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }))
+    if (url.endsWith('/api/accounts/oauth/active')) return new Response(JSON.stringify({ flow: null }))
+    if (url.endsWith('/api/accounts/acc-1') && init.method === 'PATCH') {
+      writes.push(url)
+      return new Response(JSON.stringify({ id: 'acc-1' }))
+    }
+    return new Response(JSON.stringify({}))
+  }))
+
+  const onSaved = vi.fn()
+    .mockRejectedValueOnce(new Error('refresh failed'))
+    .mockResolvedValue(undefined)
+  const account = {
+    id: 'acc-1',
+    email: 'a@example.test',
+    provider: 'imap',
+    status: 'active',
+    sync_status: 'idle',
+    sync_enabled: true,
+    account_type: 'imap',
+    imap_config: { imap_host: 'imap.example.test', imap_port: 993, use_ssl: true },
+  }
+  const { container } = await render(
+    <AccountDialog account={account} groups={[]} groupsAvailable onClose={vi.fn()} onSaved={onSaved} />,
+  )
+  const submit = container.querySelector('button[type="submit"]') as HTMLButtonElement
+
+  await click(submit)
+  await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('刷新失败'))
+  expect((container.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(false)
+  expect(submit.disabled).toBe(false)
+
+  await click(submit)
+  await waitFor(() => expect(writes).toHaveLength(2))
+  expect(onSaved).toHaveBeenCalledTimes(2)
+})
+
 
 it.each([
   ['qq', 'imap.qq.com', '客户端授权码', '开启 IMAP'],

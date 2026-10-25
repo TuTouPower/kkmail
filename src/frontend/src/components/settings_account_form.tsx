@@ -292,8 +292,8 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
         const action = account ? '更新' : '添加'
         setStatus(saved ? `账户已${action}，刷新失败：${errorMessage(error)}。请关闭窗口后刷新页面。` : errorMessage(error, `账户${action}失败`))
       } finally {
-        busyRef.current = saved
-        setBusy(saved)
+        busyRef.current = false
+        setBusy(false)
       }
     }}>
       <fieldset disabled={busy}>
