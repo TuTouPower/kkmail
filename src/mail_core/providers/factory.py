@@ -128,12 +128,16 @@ def build_provider(
         elif isinstance(secret, str) and secret.strip().startswith("{"):
             try:
                 data = json.loads(secret)
+            except json.JSONDecodeError:
+                password = secret
+            else:
                 if isinstance(data, dict):
-                    password = str(data.get("password") or data.get("secret") or secret)
+                    password_value = data.get("password") or data.get("secret")
+                    if password_value is None:
+                        raise ValueError("credential JSON missing password")
+                    password = str(password_value)
                 else:
                     password = secret
-            except Exception:
-                password = secret
         else:
             password = str(secret or "")
         host = cfg.get("imap_host") or cfg.get("host")

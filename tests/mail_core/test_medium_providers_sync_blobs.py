@@ -415,6 +415,7 @@ def test_build_provider_imap_json_credentials_unpack():
     store = DictCredentialStore({
         "ref-dict": {"password": "real-secret-from-dict"},
         "ref-json": '{"password": "real-secret-from-json"}',
+        "ref-json-secret": '{"secret": "real-secret-alias"}',
     })
 
     acc1 = Account(
@@ -434,6 +435,34 @@ def test_build_provider_imap_json_credentials_unpack():
     )
     p2 = build_provider(acc2, store)
     assert p2.password == "real-secret-from-json"
+
+    acc3 = Account(
+        email="a@b.com",
+        provider="imap",
+        credential_ref="ref-json-secret",
+        config={"imap_host": "mail.test", "port": 993},
+    )
+    p3 = build_provider(acc3, store)
+    assert p3.password == "real-secret-alias"
+
+
+def test_build_provider_imap_json_credentials_rejects_missing_password():
+    from mail_core.accounts.credentials import DictCredentialStore
+    from mail_core.mail.storage.models import Account
+    from mail_core.providers.factory import build_provider
+
+    secret = '{"refresh_token": "must-not-appear-in-error"}'
+    store = DictCredentialStore({"ref-json": secret})
+    account = Account(
+        email="a@b.com",
+        provider="imap",
+        credential_ref="ref-json",
+        config={"imap_host": "mail.test", "port": 993},
+    )
+
+    with pytest.raises(ValueError, match="credential JSON missing password") as error:
+        build_provider(account, store)
+    assert "must-not-appear-in-error" not in str(error.value)
 
 
 def test_create_account_duplicate_does_not_overwrite_credentials(monkeypatch):
