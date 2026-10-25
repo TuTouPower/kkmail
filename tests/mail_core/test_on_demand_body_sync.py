@@ -363,33 +363,40 @@ def test_a293_repeated_sync_body_requests_deduplicate_active_job():
     run_archive_batch.assert_not_called()
 
 
-def test_p039_archive_batch_releases_claims_on_fencing_mismatch():
-    """Fencing mismatch during archive must restore claimed items to ARCHIVE_PENDING (p039)."""
+def test_p039_archive_batch_rejects_commit_on_claim_revision_superseded():
+    """Per D10.4: archive is decoupled from account lease fencing and governed by claim_revision CAS."""
     acc_id, mid = _seed_unarchived_message()
     from mail_core.blobs.archive import run_archive_batch
-    from mail_core.sync.leases import FencingMismatch
 
     sample_mime = b"From: a@b.c\r\n\r\nHello"
     mock_provider = MagicMock()
-    mock_provider.fetch_mime.return_value = sample_mime
 
-    # Simulate fencing token mismatch during the post-fetch commit assert_fencing check
+    def fetch_and_bump_revision(_rid):
+        # Concurrently supersede claim_revision while worker is downloading MIME
+        with get_session_factory()() as session:
+            st = session.get(MessageArchiveState, mid)
+            if st is not None:
+                st.claim_revision = int(st.claim_revision) + 1
+                session.commit()
+        return sample_mime
+
+    mock_provider.fetch_mime.side_effect = fetch_and_bump_revision
+
     with patch("mail_core.blobs.archive.build_provider", return_value=mock_provider):
-        with patch("mail_core.blobs.archive.assert_fencing", side_effect=[None, FencingMismatch("expired token")]):
-            res = run_archive_batch(
-                account_id=acc_id,
-                worker_id="test-fencing-worker",
-                payload={"message_id": str(mid), "batch_size": 1},
-            )
-            assert res["status"] == "fencing_mismatch"
+        res = run_archive_batch(
+            account_id=acc_id,
+            worker_id="test-superseded-worker",
+            payload={"message_id": str(mid), "batch_size": 1},
+        )
+        # The superseded message commit was skipped
+        assert res["completed"] == 0
 
     Session = get_session_factory()
     with Session() as session:
         st = session.get(MessageArchiveState, mid)
         assert st is not None
-        # Must NOT remain stuck in ARCHIVE_IN_PROGRESS with claimed_by held!
-        assert st.claimed_by is None, "claimed_by must be released on fencing mismatch"
-        assert st.state == ArchiveState.ARCHIVE_PENDING.value, "state must be restored to ARCHIVE_PENDING"
+        # Must NOT be marked complete with superseded revision
+        assert st.state != ArchiveState.ARCHIVE_COMPLETE.value
 
 
 def test_sync_body_idempotent_when_already_complete_or_in_progress():
