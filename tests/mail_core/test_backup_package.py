@@ -836,6 +836,69 @@ def test_verify_tar_refuses_symlink(tmp_path, monkeypatch):
     assert not lingering
 
 
+def test_run_backup_serializes_same_destination(tmp_path, monkeypatch):
+    import threading
+
+    import mail_core.backup.package as pkg
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "postgresql://u:p@127.0.0.1:1/db")
+    first_dump_started = threading.Event()
+    second_dump_started = threading.Event()
+    second_lock_attempting = threading.Event()
+    release_first = threading.Event()
+    call_lock = threading.Lock()
+    calls = 0
+    results = []
+    errors = []
+    dest = tmp_path / "shared-backup"
+    original_lock = pkg._backup_destination_lock
+
+    def observed_lock(path):
+        if threading.current_thread().name == "backup-second":
+            second_lock_attempting.set()
+        return original_lock(path)
+
+    def fake_dump(dump_path, _url, allow_stub=False):
+        nonlocal calls
+        with call_lock:
+            calls += 1
+            call_number = calls
+        if call_number == 1:
+            first_dump_started.set()
+            if not release_first.wait(timeout=5):
+                raise RuntimeError("test did not release first dump")
+        else:
+            second_dump_started.set()
+        dump_path.write_bytes(f"dump-{call_number}".encode())
+        return "custom"
+
+    def run_backup():
+        try:
+            results.append(pkg.run_backup(output_dir=str(dest), encrypt=False))
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(pkg, "_backup_destination_lock", observed_lock)
+    monkeypatch.setattr(pkg, "_pg_dump_to", fake_dump)
+    first = threading.Thread(target=run_backup, name="backup-first")
+    second = threading.Thread(target=run_backup, name="backup-second")
+    first.start()
+    assert first_dump_started.wait(timeout=2)
+    second.start()
+    assert second_lock_attempting.wait(timeout=2)
+    try:
+        assert not second_dump_started.wait(timeout=0.05)
+    finally:
+        release_first.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert [result["status"] for result in results] == ["ok", "ok"]
+
+
 def test_run_backup_private_workspace_and_cleanup(tmp_path, monkeypatch):
     import mail_core.backup.package as pkg
 

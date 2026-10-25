@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import ipaddress
 import json
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import tarfile
+import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from sqlalchemy.engine import make_url
@@ -69,6 +74,50 @@ def _redact_url(url: str) -> str:
             host = rest.split("@", 1)[1]
             return f"{scheme}://{user}:***@{host}"
     return url
+
+
+@contextmanager
+def _backup_destination_lock(dest: Path) -> Iterator[None]:
+    lock_path = dest.with_name(f".{dest.name}.lock")
+    if os.name == "nt" and lock_path.is_symlink():
+        raise RuntimeError(f"refusing backup lock symlink: {lock_path}")
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError(f"refusing non-file backup lock: {lock_path}")
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        else:
+            import msvcrt
+
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            while True:
+                os.lseek(fd, 0, os.SEEK_SET)
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EDEADLK, errno.EAGAIN):
+                        raise
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.close(fd)
 
 
 def _ensure_backup_key_separate_from_blobs(backup_key: bytes) -> None:
@@ -717,54 +766,54 @@ def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) ->
         load_backup_key()
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    staging_dir = dest.parent / f".staging_{dest.name}_{uuid.uuid4().hex}"
-    if staging_dir.is_symlink():
-        raise RuntimeError(f"refusing staging dir as symlink: {staging_dir}")
-    _make_private_dir(staging_dir)
-    try:
-        path = create_backup_package(staging_dir, encrypt=do_encrypt)
-        verify = verify_backup_package(path)
-        if not verify.ok:
-            _safe_rmtree(staging_dir)
+    with _backup_destination_lock(dest):
+        staging_dir = dest.parent / f".staging_{dest.name}_{uuid.uuid4().hex}"
+        if staging_dir.is_symlink():
+            raise RuntimeError(f"refusing staging dir as symlink: {staging_dir}")
+        _make_private_dir(staging_dir)
+        try:
+            path = create_backup_package(staging_dir, encrypt=do_encrypt)
+            verify = verify_backup_package(path)
+            if not verify.ok:
+                _safe_rmtree(staging_dir)
+                return {
+                    "status": "verify_failed",
+                    "path": str(dest),
+                    "files": [],
+                    "verify": {
+                        "ok": False,
+                        "members_checked": verify.members_checked,
+                        "errors": verify.errors,
+                        "backup_key_version": verify.backup_key_version,
+                    },
+                }
+            # Atomic replace: swap staging directory into dest
+            old_dir = dest.parent / f".old_{dest.name}_{uuid.uuid4().hex}"
+            if dest.exists():
+                if dest.is_symlink():
+                    raise RuntimeError(f"refusing existing destination as symlink: {dest}")
+                dest.rename(old_dir)
+            try:
+                staging_dir.rename(dest)
+                if old_dir.exists():
+                    _safe_rmtree(old_dir)
+            except Exception:
+                if old_dir.exists():
+                    old_dir.rename(dest)
+                raise
             return {
-                "status": "verify_failed",
+                "status": "ok",
                 "path": str(dest),
-                "files": [],
+                "files": sorted(p.name for p in dest.iterdir() if not p.name.startswith(".")),
                 "verify": {
-                    "ok": False,
+                    "ok": True,
                     "members_checked": verify.members_checked,
                     "errors": verify.errors,
                     "backup_key_version": verify.backup_key_version,
                 },
             }
-        # Atomic replace: swap staging directory into dest
-        old_dir = dest.parent / f".old_{dest.name}_{uuid.uuid4().hex}"
-        if dest.exists():
-            if dest.is_symlink():
-                raise RuntimeError(f"refusing existing destination as symlink: {dest}")
-            dest.rename(old_dir)
-        try:
-            staging_dir.rename(dest)
-            if old_dir.exists():
-                _safe_rmtree(old_dir)
-        except Exception:
-            if old_dir.exists():
-                old_dir.rename(dest)
-            raise
-        return {
-            "status": "ok",
-            "path": str(dest),
-            "files": sorted(p.name for p in dest.iterdir() if not p.name.startswith(".")),
-            "verify": {
-                "ok": True,
-                "members_checked": verify.members_checked,
-                "errors": verify.errors,
-                "backup_key_version": verify.backup_key_version,
-            },
-        }
-    finally:
-        _safe_rmtree(staging_dir)
-
+        finally:
+            _safe_rmtree(staging_dir)
 
 @dataclass(frozen=True, slots=True)
 class RestoreResult:
