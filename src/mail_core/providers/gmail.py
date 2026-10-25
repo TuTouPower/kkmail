@@ -242,9 +242,13 @@ class GmailProvider:
         labels = data.get("labels") or []
         out: list[RemoteFolder] = []
         for lab in labels:
-            name = lab.get("name") or lab.get("id")
-            role = gmail_label_role(lab.get("id"), name)
-            out.append(RemoteFolder(remote_id=lab["id"], name=name, role=role))
+            if not isinstance(lab, dict) or not lab.get("id"):
+                logger.debug("skipping Gmail label payload without id")
+                continue
+            remote_id = lab["id"]
+            name = lab.get("name") or remote_id
+            role = gmail_label_role(remote_id, name)
+            out.append(RemoteFolder(remote_id=remote_id, name=name, role=role))
         return out
 
     def full_scan(self, folder_remote_id: str, cursor: dict[str, Any] | None) -> MetadataPage:

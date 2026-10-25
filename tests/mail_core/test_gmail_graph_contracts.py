@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 import pytest
@@ -254,7 +255,7 @@ def test_gmail_429_and_invalid_history():
         GmailProvider(credential_ref="x", transport=boom_404).delta_changes("INBOX", {"historyId": "stale"})
 
 
-def test_gmail_list_folders_via_transport():
+def test_gmail_list_folders_via_transport(caplog):
     def transport(method, path, params):
         return {
             "labels": [
@@ -263,11 +264,16 @@ def test_gmail_list_folders_via_transport():
                 {"id": "TRASH", "name": "TRASH"},
                 {"id": "SPAM", "name": "SPAM"},
                 {"id": "Label_1", "name": "Work"},
+                {"name": "missing-id"},
+                None,
             ]
         }
 
-    folders = GmailProvider(credential_ref="x", transport=transport).list_folders()
+    with caplog.at_level(logging.DEBUG, logger="mail_core.providers.gmail"):
+        folders = GmailProvider(credential_ref="x", transport=transport).list_folders()
     by_id = {f.remote_id: f for f in folders}
+    assert len(folders) == 5
+    assert caplog.text.count("skipping Gmail label payload without id") == 2
     assert by_id["INBOX"].role == "inbox"
     assert by_id["SENT"].role == "sent"
     assert by_id["TRASH"].role == "trash"
