@@ -1,6 +1,7 @@
 """Google authorization-code response and Gmail identity validation."""
-from typing import Any
+import time
 import uuid
+from typing import Any
 
 from mail_core.providers.http import ProviderHttpError
 from mail_core.security.redact import safe_error
@@ -22,7 +23,7 @@ def _friendly_oauth_error(err_code: str, err_desc: str | None = None) -> str:
 
 def _exchange_and_verify_google(flow: dict[str, Any], clean_code: str, now: float) -> tuple[bool, int, str]:
     from mail_core.accounts.oauth_flow import (
-        GOOGLE_TOKEN_URI, GOOGLE_PROFILE_URI, GOOGLE_REQUIRED_SCOPE,
+        EXPIRED_FLOW_MESSAGE, GOOGLE_TOKEN_URI, GOOGLE_PROFILE_URI, GOOGLE_REQUIRED_SCOPE,
         _call_token_endpoint, _call_profile_endpoint, _fail_flow,
         _email_exists, _load_account_for_reauthorize,
     )
@@ -102,6 +103,9 @@ def _exchange_and_verify_google(flow: dict[str, Any], clean_code: str, now: floa
             staged["expires_at"] = now + float(token_resp["expires_in"])
         except (TypeError, ValueError):
             pass
+
+    if time.time() >= float(flow.get("expires_at") or 0):
+        return _fail_flow(flow, EXPIRED_FLOW_MESSAGE, status="expired")
 
     flow["status"] = "authorized"
     flow["verified_email"] = verified_email

@@ -325,8 +325,13 @@ def _call_profile_endpoint(url: str, access_token: str) -> dict[str, Any]:
 
 
 
-def _fail_flow(flow: dict[str, Any], message: str) -> tuple[bool, int, str]:
-    flow["status"] = "failed"
+def _fail_flow(
+    flow: dict[str, Any],
+    message: str,
+    *,
+    status: str = "failed",
+) -> tuple[bool, int, str]:
+    flow["status"] = status
     flow["error"] = message
     flow.pop("staged_credentials", None)
     for key in ("client_secret", "code_verifier", "device_code"):
