@@ -217,13 +217,8 @@ def test_restore_blob_copy_failure_preserves_existing_file(tmp_path, monkeypatch
     dest_file.parent.mkdir(parents=True)
     dest_file.write_bytes(b"existing blob")
 
-    def fail_after_partial_copy(source, dest, length=0):
-        assert length > 0
-        dest.write(source.read(8))
-        raise OSError("simulated disk full")
-
-    monkeypatch.setattr(backup_package.shutil, "copyfileobj", fail_after_partial_copy)
-    with pytest.raises(OSError, match="simulated disk full"):
+    # Upgraded per D02: non-empty destination is rejected upfront to prevent overwrite
+    with pytest.raises(RuntimeError, match="non-empty target blobs dir"):
         restore_backup_package(
             package_dir,
             target_database_url="postgresql://restore:pw@127.0.0.1:5432/target",
@@ -355,7 +350,14 @@ def test_restore_backup_package_succeeds_offline_with_fake_postgres_tools(
     assert result.blobs_restored == 1
     assert (target_blobs / "aa" / "bb" / "message.blob").read_bytes() == b"offline blob payload"
     restore_args = json.loads(restore_record.read_text())
-    assert restore_args[:5] == ["--clean", "--if-exists", "--no-owner", "--no-privileges", "--dbname"]
+    # Upgraded per D02: remove --clean/--if-exists, enforce --exit-on-error --single-transaction
+    assert restore_args[:5] == [
+        "--exit-on-error",
+        "--single-transaction",
+        "--no-owner",
+        "--no-privileges",
+        "--dbname",
+    ]
     assert "target-pw" not in " ".join(restore_args)
 
 
@@ -980,4 +982,90 @@ def test_run_backup_private_workspace_and_cleanup(tmp_path, monkeypatch):
     # Check that dest.parent contains no leftover staging directories
     staging_dirs = [p.name for p in dest.parent.iterdir() if p.name.startswith(".staging_")]
     assert not staging_dirs
+
+
+def test_validate_blob_members_matrix(tmp_path):
+    import io
+    import tarfile
+    from mail_core.backup.package import _validate_blob_members
+
+    def create_tar_with_member(name: str, member_type: bytes = tarfile.REGTYPE, linkname: str = "") -> io.BytesIO:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as t:
+            ti = tarfile.TarInfo(name=name)
+            ti.type = member_type
+            ti.linkname = linkname
+            if member_type == tarfile.REGTYPE:
+                data = b"blob-content"
+                ti.size = len(data)
+                t.addfile(ti, io.BytesIO(data))
+            else:
+                t.addfile(ti)
+        buf.seek(0)
+        return buf
+
+    # 1. Traversal member
+    with tarfile.open(fileobj=create_tar_with_member("blobs/../../etc/passwd"), mode="r") as t:
+        with pytest.raises(RuntimeError, match="path traversal|disallowed"):
+            _validate_blob_members(t)
+
+    # 2. Symlink member
+    with tarfile.open(fileobj=create_tar_with_member("blobs/link", member_type=tarfile.SYMTYPE, linkname="/etc/passwd"), mode="r") as t:
+        with pytest.raises(RuntimeError, match="unsafe member type"):
+            _validate_blob_members(t)
+
+    # 3. Absolute path
+    with tarfile.open(fileobj=create_tar_with_member("/blobs/file.blob"), mode="r") as t:
+        with pytest.raises(RuntimeError, match="unsafe absolute path"):
+            _validate_blob_members(t)
+
+    # 4. Windows drive
+    with tarfile.open(fileobj=create_tar_with_member("C:/blobs/file.blob"), mode="r") as t:
+        with pytest.raises(RuntimeError, match="unsafe drive"):
+            _validate_blob_members(t)
+
+    # 5. Invalid character backslash
+    with tarfile.open(fileobj=create_tar_with_member("blobs\\sub\\file.blob"), mode="r") as t:
+        with pytest.raises(RuntimeError, match="invalid characters"):
+            _validate_blob_members(t)
+
+
+def test_validate_restore_destination_matrix(tmp_path):
+    from mail_core.backup.package import _validate_restore_destination
+
+    # 1. Non-empty destination
+    non_empty = tmp_path / "non_empty_blobs"
+    non_empty.mkdir()
+    (non_empty / "existing.blob").write_bytes(b"data")
+    with pytest.raises(RuntimeError, match="non-empty target blobs dir"):
+        _validate_restore_destination(non_empty)
+
+    # 2. Symlink destination
+    symlink_dest = tmp_path / "symlink_blobs"
+    target_real = tmp_path / "real_dir"
+    target_real.mkdir()
+    symlink_dest.symlink_to(target_real)
+    with pytest.raises(RuntimeError, match="refusing target blobs dir as symlink"):
+        _validate_restore_destination(symlink_dest)
+
+    # 3. Traversal destination
+    with pytest.raises(RuntimeError, match="path traversal detected"):
+        _validate_restore_destination(tmp_path / ".." / "outside")
+
+    # 4. Valid empty directory
+    valid_empty = tmp_path / "empty_blobs"
+    valid_empty.mkdir()
+    assert _validate_restore_destination(valid_empty) == valid_empty.resolve()
+
+
+def test_restore_database_identity_ignores_username_and_normalizes_aliases():
+    from mail_core.backup.package import _restore_database_identity
+
+    id1 = _restore_database_identity("postgresql://user_alice:pass1@localhost:5432/kkmail_db")
+    id2 = _restore_database_identity("postgresql+psycopg://user_bob:pass2@127.0.0.1:5432/kkmail_db")
+    id3 = _restore_database_identity("postgresql://postgres:admin@[::1]:5432/kkmail_db")
+
+    assert id1 == id2
+    assert id2 == id3
+    assert id1 == ("postgresql", "127.0.0.1", 5432, "kkmail_db")
 
