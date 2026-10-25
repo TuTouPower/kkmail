@@ -130,7 +130,7 @@ describe('uiReference (t011 AC-001, AC-003, AC-005, AC-007, AC-008)', () => {
 
   it('keeps registry keys synchronized with component data-ui references', () => {
     const activeKeys = Object.entries(UI_ELEMENT_REGISTRY)
-      .filter(([_, meta]) => !meta.deprecated)
+      .filter(([, meta]) => !meta.deprecated)
       .map(([key]) => key)
     expect(activeKeys.sort()).toEqual([...componentUiReferenceIds()].sort())
   })
