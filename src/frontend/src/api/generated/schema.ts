@@ -1379,14 +1379,14 @@ export interface components {
         /** SyncBodyAcceptedOut */
         SyncBodyAcceptedOut: {
             /** Job Id */
-            job_id: string;
+            job_id?: string | null;
             /** Message Id */
             message_id: string;
             /**
              * Status
-             * @constant
+             * @enum {string}
              */
-            status: "queued";
+            status: "queued" | "in_progress" | "complete";
         };
         /** SyncJobOut */
         SyncJobOut: {
