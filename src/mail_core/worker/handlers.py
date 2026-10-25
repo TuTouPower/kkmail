@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,40 @@ _ACCOUNT_SYNC_JOB_TYPES = (
     JobType.SYNC_FOLDER_DELTA.value,
     JobType.RECONCILE_FOLDER.value,
 )
+_FOLDER_SYNC_JOB_TYPES = (
+    JobType.SYNC_FOLDER_METADATA.value,
+    JobType.SYNC_FOLDER_DELTA.value,
+    JobType.RECONCILE_FOLDER.value,
+)
+
+
+def _validate_job_payload(job: WorkerJob) -> tuple[dict[str, Any], str | None]:
+    if job.payload is None:
+        payload: dict[str, Any] = {}
+    elif isinstance(job.payload, dict):
+        payload = dict(job.payload)
+    else:
+        return {}, "payload must be an object"
+
+    if job.job_type in _FOLDER_SYNC_JOB_TYPES:
+        folder_id = payload.get("folder_id")
+        if not isinstance(folder_id, str) or not folder_id.strip():
+            return payload, "folder_id is required"
+        try:
+            uuid.UUID(folder_id)
+        except ValueError:
+            return payload, "folder_id must be a UUID"
+
+    if job.job_type == JobType.SYNC_FOLDER_DELTA.value:
+        poll_round = payload.get("poll_round")
+        if poll_round not in (None, ""):
+            if isinstance(poll_round, bool) or not isinstance(poll_round, (int, str)):
+                return payload, "poll_round must be an integer"
+            try:
+                int(poll_round)
+            except ValueError:
+                return payload, "poll_round must be an integer"
+    return payload, None
 
 
 def _recover_account_sync_status(session: Session, job: WorkerJob) -> None:
@@ -112,7 +147,17 @@ def handle_job(session: Session, job: WorkerJob, *, worker_id: str | None = None
 
 def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None = None) -> bool:
     worker_id = worker_id or job.locked_by or "worker"
-    payload = dict(job.payload or {})
+    payload, invalid_payload = _validate_job_payload(job)
+    if invalid_payload is not None:
+        log.warning("job %s (%s) has invalid_payload: %s", job.id, job.job_type, invalid_payload)
+        fail_job(
+            session,
+            job,
+            f"invalid_payload: {invalid_payload}",
+            worker_id=worker_id,
+            max_attempts=1,
+        )
+        return False
     account_id = job.account_id
 
     try:
