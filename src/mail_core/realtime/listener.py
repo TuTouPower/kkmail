@@ -16,15 +16,24 @@ log = logging.getLogger("mail_core.realtime.listener")
 _NOTIFY_WAIT_POLL_S = 0.5
 
 
+def _normalize_listen_dsn(url: str) -> str:
+    scheme, separator, rest = url.partition("://")
+    if not separator or scheme.lower() not in {
+        "postgresql",
+        "postgresql+psycopg",
+        "postgresql+psycopg2",
+    }:
+        raise ValueError(
+            "MAIL_CORE_DATABASE_URL scheme is unsupported for LISTEN; expected "
+            "postgresql://, postgresql+psycopg://, or postgresql+psycopg2://"
+        )
+    return f"postgresql://{rest}"
+
+
 def _dsn_from_settings() -> str:
     from mail_core.db.session import database_url
 
-    url = database_url()
-    if url.startswith("postgresql+psycopg://"):
-        return "postgresql://" + url[len("postgresql+psycopg://") :]
-    if url.startswith("postgresql+psycopg2://"):
-        return "postgresql://" + url[len("postgresql+psycopg2://") :]
-    return url
+    return _normalize_listen_dsn(database_url())
 
 
 class OutboxListenThread:
@@ -84,7 +93,7 @@ class OutboxListenThread:
         while not self._stop.is_set():
             conn = None
             try:
-                conn = psycopg.connect(self.dsn, autocommit=True)
+                conn = psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
                 conn.execute(f"LISTEN {CHANNEL}")
                 log.info("LISTEN %s started", CHANNEL)
                 self._started.set()
