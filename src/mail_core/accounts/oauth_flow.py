@@ -441,19 +441,23 @@ def _public_flow_view(flow: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _expire_flow_if_needed(store: CredentialStore, flow_id: str, flow: dict[str, Any], sess_key: str) -> None:
-    if str(flow.get("status") or "pending") in ("pending", "authorized") and time.time() >= float(flow.get("expires_at") or 0):
-        state = str(flow.get("state") or "").strip()
-        if state:
-            _delete_ref(store, f"oauth_state:{state}")
-        with credential_edit(store, f"oauth_flow:{flow_id}") as current:
-            if current:
-                current["status"] = "expired"
-                current["error"] = current.get("error") or EXPIRED_FLOW_MESSAGE
-                current.pop("staged_credentials", None)
-                current.pop("code_verifier", None)
-                current.pop("client_secret", None)
-        _clear_matching_active_pointer(store, sess_key, flow_id)
+def _expire_flow_if_needed(store: CredentialStore, flow_id: str, sess_key: str) -> None:
+    state = ""
+    with credential_edit(store, f"oauth_flow:{flow_id}") as current:
+        if not current:
+            return
+        status = str(current.get("status") or "pending")
+        if status not in ("pending", "authorized") or time.time() < float(current.get("expires_at") or 0):
+            return
+        state = str(current.get("state") or "").strip()
+        current["status"] = "expired"
+        current["error"] = current.get("error") or EXPIRED_FLOW_MESSAGE
+        current.pop("staged_credentials", None)
+        current.pop("code_verifier", None)
+        current.pop("client_secret", None)
+    if state:
+        _delete_ref(store, f"oauth_state:{state}")
+    _clear_matching_active_pointer(store, sess_key, flow_id)
 
 
 def get_oauth_flow_status(flow_id: str, principal: AuthPrincipal) -> dict[str, Any]:
@@ -461,14 +465,15 @@ def get_oauth_flow_status(flow_id: str, principal: AuthPrincipal) -> dict[str, A
     if not clean_id:
         raise LookupError("OAuth 授权流程不存在")
     store = _flow_store()
-    try:
-        flow = load_json_secret(store, f"oauth_flow:{clean_id}")
-    except KeyError as exc:
-        raise LookupError("OAuth 授权流程不存在或已取消") from exc
-    _verify_flow_owner(flow, principal)
-    view = _public_flow_view(flow)
-    if view["status"] == "expired" and flow.get("status") != "expired":
-        _expire_flow_if_needed(store, clean_id, flow, session_binding_key(principal))
+    flow_ref = f"oauth_flow:{clean_id}"
+    with credential_edit(store, flow_ref) as flow:
+        if not flow:
+            raise LookupError("OAuth 授权流程不存在或已取消")
+        _verify_flow_owner(flow, principal)
+        view = _public_flow_view(flow)
+        should_expire = view["status"] == "expired" and flow.get("status") != "expired"
+    if should_expire:
+        _expire_flow_if_needed(store, clean_id, session_binding_key(principal))
     return view
 
 
@@ -489,7 +494,7 @@ def get_active_oauth_flow(principal: AuthPrincipal) -> dict[str, Any] | None:
         return None
     view = _public_flow_view(flow)
     if view["status"] == "expired":
-        _expire_flow_if_needed(store, flow_id, flow, sess_key)
+        _expire_flow_if_needed(store, flow_id, sess_key)
         return None
     if view["status"] in ("cancelled", "consumed"):
         return None
@@ -501,15 +506,17 @@ def cancel_oauth_flow(flow_id: str, principal: AuthPrincipal) -> dict[str, Any]:
     if not clean_id:
         raise LookupError("OAuth 授权流程不存在")
     store = _flow_store()
-    try:
-        flow = load_json_secret(store, f"oauth_flow:{clean_id}")
-    except KeyError:
-        return {"ok": True, "status": "cancelled"}
-    _verify_flow_owner(flow, principal)
-    state = str(flow.get("state") or "").strip()
+    flow_ref = f"oauth_flow:{clean_id}"
+    state = ""
+    with credential_edit(store, flow_ref) as flow:
+        if not flow:
+            return {"ok": True, "status": "cancelled"}
+        _verify_flow_owner(flow, principal)
+        state = str(flow.get("state") or "").strip()
+        flow.clear()
     if state:
         _delete_ref(store, f"oauth_state:{state}")
-    _delete_ref(store, f"oauth_flow:{clean_id}")
+    _delete_ref(store, flow_ref)
     _clear_matching_active_pointer(store, session_binding_key(principal), clean_id)
     return {"ok": True, "status": "cancelled"}
 
