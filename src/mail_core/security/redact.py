@@ -74,12 +74,69 @@ def safe_provider_summary(exc: BaseException | str | None) -> str:
     if exc is None:
         return ""
     if isinstance(exc, str):
-        cleaned = redact(exc)
-        if ":" in cleaned:
-            prefix, _, _ = cleaned.partition(":")
-            if any(term in prefix.lower() for term in ("error", "exception", "status", "failed", "http")):
-                return prefix.strip()
-        return cleaned
+        value = exc.strip()
+        if not value:
+            return "ProviderError"
+        http_status = re.match(
+            r"^HTTP(?:Error)?(?:/\d+(?:\.\d+)?)?\s+(?:ERROR\s+)?(?P<status>\d{3})\b",
+            value,
+            re.IGNORECASE,
+        )
+        if http_status:
+            return f"HTTP {http_status.group('status')}"
+        bare_status = re.match(
+            r"^(?P<status>429|5\d{2})\s+(?:too many requests|server error|internal server error|"
+            r"bad gateway|service unavailable|gateway timeout|temporarily unavailable)\b",
+            value,
+            re.IGNORECASE,
+        )
+        if bare_status:
+            return f"HTTP {bare_status.group('status')}"
+        error_type = re.match(
+            r"^([A-Za-z][A-Za-z0-9_.]{0,79}(?:Error|Exception))(?:\s+status=(\d{3}))?(?=\s|:|$)",
+            value,
+        )
+        if error_type:
+            summary = error_type.group(1)
+            status = error_type.group(2)
+            return f"{summary} status={status}" if status else summary
+
+        safe_prefixes = (
+            "rate-limited",
+            "rate limited",
+            "rate limit",
+            "too many requests",
+            "request timed out",
+            "request timeout",
+            "operation timed out",
+            "operation timeout",
+            "connection timed out",
+            "connection timeout",
+            "connection reset",
+            "connection refused",
+            "connection closed",
+            "connect timeout",
+            "read timeout",
+            "write timeout",
+            "network error",
+            "socket error",
+            "server error",
+            "internal server error",
+            "service unavailable",
+            "temporarily unavailable",
+            "gateway timeout",
+            "bad gateway",
+            "temporary server failure",
+            "transient provider error",
+            "transient provider failure",
+        )
+        lowered = value.lower()
+        for prefix in safe_prefixes:
+            if lowered.startswith(prefix):
+                return prefix
+        if lowered in {"remote_id_missing", "missing dest_folder_remote_id", "message not found"}:
+            return lowered
+        return "ProviderError"
 
     parts = [type(exc).__name__]
     status = getattr(exc, "status", None)

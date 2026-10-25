@@ -73,9 +73,21 @@ def test_safe_provider_summary_unit():
     assert s4 == "RuntimeError"
     assert "hunter2" not in s4
 
-    # 5. String input with colon
+    # 5. String input keeps only controlled error prefixes, never the body.
     s5 = safe_provider_summary("ProviderHttpError status=500: leaked body content")
     assert s5 == "ProviderHttpError status=500"
+    s6 = safe_provider_summary("raw provider body with client_secret=private-secret")
+    assert s6 == "ProviderError"
+    assert "private-secret" not in s6
+    s7 = safe_provider_summary("HTTP 429: private response body")
+    s8 = safe_provider_summary("request timed out: private response body")
+    assert s7 == "HTTP 429"
+    assert s8 == "request timed out"
+
+    from mail_core.sync.remote_push import is_rate_limited_error, is_transient_error
+
+    assert is_rate_limited_error(None, s7)
+    assert is_transient_error(None, s8)
 
 
 @_requires_db
