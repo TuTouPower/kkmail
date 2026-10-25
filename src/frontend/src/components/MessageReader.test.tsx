@@ -6,6 +6,7 @@ import { useMailStore } from '../store/mailStore'
 import { __resetCsrfForTests } from '../api/client'
 import { ALL_ACCOUNTS, queryClient, queryKeys, type MailItem } from '../api/queries'
 import { cleanup, click, render, waitFor } from '../test/render'
+import { clearDiagnosticLogs, getDiagnosticLogs } from '../lib/diagnostics'
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -125,6 +126,7 @@ const nullDateItem = { ...item, id: 'm-null-date', date: '2026-10-20T08:00:00Z' 
 
 beforeEach(() => {
   posts.length = 0
+  clearDiagnosticLogs()
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
     const u = String(url)
     if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
@@ -241,6 +243,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  clearDiagnosticLogs()
   vi.unstubAllGlobals()
   __resetCsrfForTests()
 })
@@ -352,15 +355,21 @@ describe('<MessageReader />', () => {
     expect(container.querySelector('.empty-body-placeholder')).toBeNull()
   })
 
-  it('shows only the request error when detail loading fails', async () => {
+  it('shows a safe detail error and logs the backend message to diagnostics', async () => {
     const originalFetch = globalThis.fetch
     vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) =>
       String(url) === '/api/mail/messages/m-1'
-        ? Promise.resolve(json({ detail: 'Detail request failed' }, 500))
+        ? Promise.resolve(json({ detail: 'Detail request failed token=detail-secret' }, 500))
         : originalFetch(url, init),
     ))
     const { container } = await render(<MessageReader />)
-    await waitFor(() => expect(container.textContent).toContain('Detail request failed'))
+    await waitFor(() => expect(container.textContent).toContain('邮件正文加载失败'))
+    expect(container.textContent).not.toContain('Detail request failed')
+    expect(container.textContent).not.toContain('detail-secret')
+    const detailError = getDiagnosticLogs().find(entry => entry.message === '邮件详情加载失败')
+    expect(detailError?.context?.error).toContain('Detail request failed token=[REDACTED]')
+    expect(detailError?.context?.error).not.toContain('detail-secret')
+    expect(detailError?.context?.message_id).toBe('m-1')
     expect(container.querySelector('[data-ui="MR07"]')).toBeNull()
     expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test')
     expect(container.querySelector('.email-body')).toBeNull()

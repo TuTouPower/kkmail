@@ -11,6 +11,7 @@ import { formatReaderDate } from '../lib/listDate'
 import { displayEmail, displayName } from '../lib/displayName'
 import { formatFileSize } from '../lib/formatSize'
 import { resolveTheme } from '../lib/theme'
+import { logDiagnostic } from '../lib/diagnostics'
 
 const MessageReader = memo(function MessageReader() {
   const themePref = useMailStore((s) => s.theme)
@@ -50,6 +51,13 @@ const MessageReader = memo(function MessageReader() {
     // Never keep the previous message body while switching selection.
     placeholderData: undefined,
   })
+  useEffect(() => {
+    if (!detailQuery.error || !selected?.id) return
+    logDiagnostic('error', 'api', '邮件详情加载失败', {
+      message_id: selected.id,
+      error: errorMessage(detailQuery.error, '未知详情错误'),
+    })
+  }, [detailQuery.error, selected?.id])
 
   const detail = detailQuery.data
   const body = detail?.body || ''
@@ -205,7 +213,7 @@ const MessageReader = memo(function MessageReader() {
           {detailQuery.isLoading ? (
             <div style={{ color: 'var(--muted)' }}>正在加载正文…</div>
           ) : detailQuery.error ? (
-            <div role="alert" style={{ color: 'var(--red)' }}>{String((detailQuery.error as Error).message)}</div>
+            <div role="alert" style={{ color: 'var(--red)' }}>邮件正文加载失败，请稍后重试。</div>
           ) : (
             <>
               {detail?.parse_error && (
