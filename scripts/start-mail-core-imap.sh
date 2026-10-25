@@ -9,6 +9,14 @@ export MAIL_CORE_IMAP_HOST="${MAIL_CORE_IMAP_HOST:-127.0.0.1}"
 export MAIL_CORE_IMAP_PORT="$PORT"
 export MAIL_CORE_IMAP_USER="${MAIL_CORE_IMAP_USER:-alice@kkmail.test}"
 export MAIL_CORE_IMAP_PASS="${MAIL_CORE_IMAP_PASS:-alice-imap-pass}"
+IMAP_PASSFILE=""
+
+cleanup_imap_passfile() {
+  if [[ -n "$IMAP_PASSFILE" ]]; then
+    rm -f -- "$IMAP_PASSFILE" || echo "Could not remove temporary IMAP passfile." >&2
+  fi
+}
+trap cleanup_imap_passfile EXIT
 
 if [[ -z "${KKMAIL_TEST_PG_PASSWORD:-}" && -f "$ROOT/.env.test" ]]; then
   set -a
@@ -65,10 +73,18 @@ if docker compose -f docker-compose.mail-core.yml --profile imap up -d imap; the
 fi
 if [[ -n "$PY" ]] && "$PY" -c "import pymap" 2>/dev/null; then
   echo "Starting pymap on :$PORT (fallback)"
-  exec "$PY" -m pymap \
-    --host "$MAIL_CORE_IMAP_HOST" --port "$PORT" \
-    --passfile <(echo "$MAIL_CORE_IMAP_USER $MAIL_CORE_IMAP_PASS") \
-    "$ROOT/tests/mail_core/fixtures/maildir"
+  mkdir -p "$ROOT/.scratch"
+  IMAP_PASSFILE="$(mktemp "$ROOT/.scratch/imap-pass.XXXXXX")"
+  chmod 600 "$IMAP_PASSFILE"
+  printf '%s %s\n' "$MAIL_CORE_IMAP_USER" "$MAIL_CORE_IMAP_PASS" > "$IMAP_PASSFILE"
+  if "$PY" -m pymap \
+      --host "$MAIL_CORE_IMAP_HOST" --port "$PORT" \
+      --passfile "$IMAP_PASSFILE" \
+      "$ROOT/tests/mail_core/fixtures/maildir"; then
+    exit 0
+  else
+    exit "$?"
+  fi
 fi
 
 cat >&2 <<HINT
