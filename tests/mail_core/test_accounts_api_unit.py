@@ -16,6 +16,17 @@ def test_accounts_require_auth():
 
 
 def test_account_create_validation_constraints(api_client):
+    from mail_core.api.accounts import _has_basic_email_shape
+
+    assert _has_basic_email_shape("user@localhost")
+    assert not _has_basic_email_shape("not-an-email")
+
+    invalid_memory_email = api_client.post(
+        "/api/accounts",
+        json={"email": "not-an-email", "provider": "memory"},
+    )
+    assert invalid_memory_email.status_code == 422
+
     # Invalid provider
     res = api_client.post("/api/accounts", json={"email": "a@ex.com", "provider": "invalid_provider"})
     assert res.status_code == 422

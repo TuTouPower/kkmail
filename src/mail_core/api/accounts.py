@@ -81,6 +81,13 @@ class AccountsPage(BaseModel):
 AllowedProvider = Literal["imap", "gmail", "graph", "memory", "stub"]
 
 
+def _has_basic_email_shape(email: str) -> bool:
+    if email.count("@") != 1:
+        return False
+    local_part, domain = email.split("@", 1)
+    return bool(local_part and domain and not any(character.isspace() for character in email))
+
+
 class AccountCreateIn(BaseModel):
     email: str = Field(default="", max_length=320)
     provider: AllowedProvider
@@ -194,15 +201,19 @@ def api_list_accounts(
 
 @router.post("/api/accounts", response_model=AccountOut)
 def api_create_account(body: AccountCreateIn, principal: AuthPrincipal = Depends(require_auth)):
-    if not body.oauth_flow_id and len((body.email or "").strip()) < 3:
-        raise HTTPException(422, "email must have at least 3 characters")
+    email = (body.email or "").strip()
+    if not body.oauth_flow_id:
+        if len(email) < 3:
+            raise HTTPException(422, "email must have at least 3 characters")
+        if not _has_basic_email_shape(email):
+            raise HTTPException(422, "email must have a valid address shape")
     try:
         from mail_core.accounts.connection import validate_connection, merge_credentials
         if not body.oauth_flow_id and body.provider in ("imap", "gmail", "graph"):
             cleaned = merge_credentials(body.provider, {}, body.credentials or {})
-            validate_connection(body.email, body.provider, body.config or {}, cleaned)
+            validate_connection(email, body.provider, body.config or {}, cleaned)
         acc = create_account_app(
-            email=body.email,
+            email=email,
             provider=body.provider,
             display_name=body.display_name,
             group_id=body.group_id,
