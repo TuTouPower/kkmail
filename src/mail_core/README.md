@@ -19,7 +19,7 @@ python -m mail_core --data-dir ./.kkmail-data
 |`--data-dir`|`MAIL_CORE_DATA_DIR`|Unset. When set, missing per-install secrets and storage paths are bootstrapped under this directory.|
 |`--no-worker`|`MAIL_CORE_EMBEDDED_WORKER=0`|Embedded worker is enabled by default. To run it separately: `python -m mail_core.worker.main`.|
 |`--skip-migrations`|`MAIL_CORE_SKIP_MIGRATIONS=1`|Migrations run at startup by default.|
-|`--proxy-headers`|`MAIL_CORE_PROXY_HEADERS`|Currently parsed but has no effect by itself; trusted proxy handling is enabled by `--forwarded-allow-ips`.|
+|`--proxy-headers`|`MAIL_CORE_PROXY_HEADERS`|Requests proxy-header handling. Requires `--forwarded-allow-ips` or `MAIL_CORE_FORWARDED_ALLOW_IPS`; without trusted hosts, logs a warning and leaves forwarded headers disabled.|
 |`--forwarded-allow-ips`|`MAIL_CORE_FORWARDED_ALLOW_IPS`|Unset. Comma-separated trusted proxy IPs/CIDRs; enables `X-Forwarded-*` handling for those peers.|
 
 When data-dir bootstrap must create a login credential, it writes a random initial password to `<data-dir>/initial-password.txt` and its bcrypt hash to `<data-dir>/secrets/login-password.bcrypt` (both mode `0600`). The plaintext file remains until the user changes the login password in Settings; then it is removed. With a database configured, `auth_credentials.login_password_hash` is authoritative after bootstrap.
@@ -49,7 +49,7 @@ When data-dir bootstrap must create a login credential, it writes a random initi
 |`MAIL_CORE_EMBEDDED_WORKER`, `MAIL_CORE_WORKER_ID`, `MAIL_CORE_WORKER_POLL_S`, `MAIL_CORE_WORKER_MAX_IDLE_S`|Embedded worker and identity/poll controls. Embedded worker defaults on, poll defaults to 2 seconds, max idle defaults to `max(poll, 10)`; worker ID is generated when unset.|
 |`MAIL_CORE_RECLAIM_STALE_SECONDS`, `MAIL_CORE_JOB_MAX_ATTEMPTS`, `MAIL_CORE_ARCHIVE_BATCH`|Worker reclaim/retry/archive limits. Defaults: 300 seconds / 8 attempts / 20 messages per archive batch.|
 |`MAIL_CORE_PG_CONNECT_TIMEOUT`, `MAIL_CORE_PG_DUMP_TIMEOUT`, `MAIL_CORE_PG_RESTORE_TIMEOUT`|Backup PostgreSQL connection/dump/restore timeouts. Defaults: 10 / 300 / 300 seconds.|
-|`MAIL_CORE_PROXY_HEADERS`|Accepted by argparse but currently unused; trusted proxy middleware is controlled by `MAIL_CORE_FORWARDED_ALLOW_IPS`.|
+|`MAIL_CORE_PROXY_HEADERS`|When enabled, requests proxy-header handling; requires trusted `MAIL_CORE_FORWARDED_ALLOW_IPS`, otherwise warns and leaves forwarded headers disabled.|
 
 ## Layout
 

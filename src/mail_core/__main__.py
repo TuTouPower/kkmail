@@ -22,6 +22,21 @@ from typing import Any
 log = logging.getLogger("mail_core.main")
 
 
+def _configure_proxy_headers(*, enabled: bool, forwarded_allow_ips: str | None) -> None:
+    raw_allow_ips = (
+        forwarded_allow_ips
+        if forwarded_allow_ips is not None
+        else os.environ.get("MAIL_CORE_FORWARDED_ALLOW_IPS")
+    )
+    trusted_hosts = (raw_allow_ips or "").strip()
+    if trusted_hosts:
+        os.environ["MAIL_CORE_FORWARDED_ALLOW_IPS"] = trusted_hosts
+    else:
+        os.environ.pop("MAIL_CORE_FORWARDED_ALLOW_IPS", None)
+        if enabled:
+            log.warning("--proxy-headers requested without trusted proxy hosts; forwarded headers remain disabled")
+
+
 def run_migrations() -> None:
     from alembic import command
     from alembic.config import Config
@@ -63,8 +78,7 @@ def main(argv: list[str] | None = None) -> None:
 
         os.environ["MAIL_CORE_DATA_DIR"] = args.data_dir
         bootstrap_data_dir(args.data_dir)
-    if args.forwarded_allow_ips:
-        os.environ["MAIL_CORE_FORWARDED_ALLOW_IPS"] = args.forwarded_allow_ips
+    _configure_proxy_headers(enabled=args.proxy_headers, forwarded_allow_ips=args.forwarded_allow_ips)
     if not args.skip_migrations:
         run_migrations()
     if not args.no_worker:
