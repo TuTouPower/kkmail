@@ -18,6 +18,7 @@
 services:
   postgres:
     # Tested tag: postgres:16.15; pinned to its multi-platform index digest.
+    # Keep upstream capabilities so its entrypoint can prepare PGDATA and drop to postgres.
     image: postgres:16.15@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
     container_name: kkmail-mail-core-pg
     restart: unless-stopped
@@ -37,6 +38,8 @@ services:
 
   migrate:
     profiles: ["distributed"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     build:
       context: .
       dockerfile: Dockerfile.mail-core
@@ -50,6 +53,8 @@ services:
     restart: "no"
 
   api:
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     build:
       context: .
       dockerfile: Dockerfile.mail-core
@@ -100,6 +105,8 @@ services:
 
   worker:
     profiles: ["distributed"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     build:
       context: .
       dockerfile: Dockerfile.mail-core
