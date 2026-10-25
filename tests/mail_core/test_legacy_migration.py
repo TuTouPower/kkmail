@@ -386,6 +386,7 @@ def test_importer_preserves_legacy_mail_fields_without_mutating_sqlite_source():
             assert report.migrated == 22
             assert report.imported_without_remote_id == 17
             assert report.skipped_existing == 0
+            assert report.flag_state_unavailable == 22
 
             all_messages = list(session.scalars(select(Message).where(Message.account_id == account.id)))
             assert len(all_messages) == 22
@@ -600,6 +601,7 @@ def test_importer_preserves_legacy_mail_fields_without_mutating_sqlite_source():
             assert again.migrated == 0
             assert again.imported_without_remote_id == 0
             assert again.skipped_existing == 22
+            assert again.flag_state_unavailable == 0
             assert session.get(Message, missing_fields.id).subject == "already imported"
             assert missing_fields.is_read is False
             assert missing_fields.has_attachments is False

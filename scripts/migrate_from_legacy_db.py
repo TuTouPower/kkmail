@@ -84,6 +84,20 @@ class MessageMigrationReport:
     skipped_existing: int = 0
     imported_without_remote_id: int = 0
     legacy_total: int = 0
+    flag_state_unavailable: int = 0
+
+
+def _legacy_flag_value(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+        return None
+    return bool(value)
 
 
 def _legacy_sender(raw: str | None) -> tuple[str, str | None]:
@@ -141,6 +155,19 @@ def migrate_retained_messages(
     migrated = 0
     skipped_existing = 0
     imported_without_remote_id = 0
+    flag_state_unavailable = 0
+    legacy_columns = {
+        str(row[1]).lower(): str(row[1])
+        for row in sqlite_cursor.execute("PRAGMA table_info(retained_normal_mail_messages)").fetchall()
+    }
+    flag_column = next(
+        (
+            legacy_columns[name]
+            for name in ("is_flagged", "is_starred", "flagged", "starred")
+            if name in legacy_columns
+        ),
+        None,
+    )
     legacy_total = int(
         sqlite_cursor.execute("SELECT COUNT(*) FROM retained_normal_mail_messages").fetchone()[0]
     )
@@ -176,6 +203,9 @@ def migrate_retained_messages(
         body = legacy_msg["body"] if legacy_msg["body"] else ""
         body_type = legacy_msg["body_type"]
         is_html = body_type == "html"
+        is_flagged = _legacy_flag_value(legacy_msg[flag_column]) if flag_column else None
+        if is_flagged is None:
+            flag_state_unavailable += 1
 
         msg = Message(
             id=msg_id,
@@ -188,7 +218,7 @@ def migrate_retained_messages(
             cc_addresses=_legacy_addresses(legacy_msg["cc"]),
             sort_time=_legacy_received_time(legacy_msg["id_mode"], legacy_msg["received_at"]),
             is_read=bool(legacy_msg["is_read"]),
-            is_flagged=None,
+            is_flagged=is_flagged,
             has_attachments=bool(legacy_msg["has_attachments"]),
             snippet=legacy_msg["body_preview"],
         )
@@ -226,6 +256,7 @@ def migrate_retained_messages(
         skipped_existing=skipped_existing,
         imported_without_remote_id=imported_without_remote_id,
         legacy_total=legacy_total,
+        flag_state_unavailable=flag_state_unavailable,
     )
 
 
@@ -461,6 +492,11 @@ def migrate(sqlite_path: Path, target_url: str) -> None:
         print(
             "Imported "
             f"{message_report.imported_without_remote_id} messages without canonical provider remote IDs."
+        )
+    if message_report.flag_state_unavailable:
+        print(
+            "Flagged state unavailable for "
+            f"{message_report.flag_state_unavailable} migrated messages."
         )
     print("MIGRATION COMPLETED SUCCESSFULLY.")
     sqlite_conn.close()
