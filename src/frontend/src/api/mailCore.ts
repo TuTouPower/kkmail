@@ -12,6 +12,7 @@ import type {
   MailCoreMessageDetail,
   MailCoreSearchPage,
   MutationResult,
+  SyncBodyAcceptedOut,
 } from './schemaTypes'
 
 export type {
@@ -23,6 +24,7 @@ export type {
   MailCoreMessageDetail,
   MailCoreSearchPage,
   MutationResult,
+  SyncBodyAcceptedOut,
 } from './schemaTypes'
 
 export interface MailCoreInboxQuery {
@@ -140,7 +142,7 @@ export function fetchMailCoreMessage(messageId: string, signal?: AbortSignal): P
   return apiRequest(`/api/mail/messages/${encodeURIComponent(messageId)}`, { signal })
 }
 
-export function postMailCoreSyncMessageBody(messageId: string, signal?: AbortSignal): Promise<MailCoreMessageDetail> {
+export function postMailCoreSyncMessageBody(messageId: string, signal?: AbortSignal): Promise<SyncBodyAcceptedOut> {
   return postJson(`/api/mail/messages/${encodeURIComponent(messageId)}/sync-body`, {}, { signal })
 }
 
@@ -165,6 +167,8 @@ export function mailCoreToMailDetail(d: MailCoreMessageDetail): MailDetail {
     body_type: detailBodyType(d.body_type),
     parse_error: d.parse_error ?? null,
     is_archived: d.is_archived ?? null,
+    archive_state: d.archive_state ?? null,
+    archive_has_error: d.archive_has_error ?? false,
     has_attachments: d.has_attachments,
     attachments: d.attachments.map((a: MailCoreAttachment) => ({
       id: a.id,

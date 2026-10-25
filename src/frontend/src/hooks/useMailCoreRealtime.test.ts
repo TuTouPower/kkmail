@@ -36,6 +36,24 @@ describe('extractMessageIds', () => {
 })
 
 describe('createThrottledInvalidator', () => {
+  it('invalidates the affected message detail on archive status events', () => {
+    vi.useFakeTimers()
+    const mockQc = { invalidateQueries: vi.fn() } as unknown as typeof queryClient
+    const throttler = createThrottledInvalidator(mockQc, 100)
+
+    throttler.handleEvent('archive.progress', {
+      message_id: 'm-archive',
+      message_ids: ['m-archive', 'm-archive-2'],
+      state: 'archive_complete',
+    })
+    vi.advanceTimersByTime(100)
+
+    expect(mockQc.invalidateQueries).toHaveBeenCalledTimes(2)
+    expect(mockQc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['detail', 'mail-core', 'm-archive'] })
+    expect(mockQc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['detail', 'mail-core', 'm-archive-2'] })
+    vi.useRealTimers()
+  })
+
   it('batches and throttles multiple rapid events within time window', () => {
     vi.useFakeTimers()
     const mockQc = {

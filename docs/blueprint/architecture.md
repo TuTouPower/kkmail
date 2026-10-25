@@ -60,8 +60,9 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
 ## 按需邮件正文同步与归档优先级治理 (t034)
 
 1. **按需即时正文归档链路**：
-    - 当客户端请求邮件详情（`GET /api/mail/messages/{id}`）或显式触发（`POST /api/mail/messages/{id}/sync-body`）且正文未归档时，系统将该邮件在 `MessageArchiveState` 的优先级提升为最高（`priority = 0`），并向任务队列入队最高优先级即时归档任务（`priority = 10`，去重键 `archive_msg:{id}`）；
-    - `POST /api/mail/messages/{id}/sync-body` 提供就地单封归档尝试，成功后即刻解析正文、附件入库并更新为 `archive_complete`，前端立即响应渲染完整正文；若远端拉取失败或解析出错，持久化记录 `MessageBody.parse_error`，向调用方提供确定性错误反馈。
+    - 当客户端显式触发（`POST /api/mail/messages/{id}/sync-body`）且正文未归档时，系统将该邮件在 `MessageArchiveState` 的优先级提升为最高（`priority = 0`），并向任务队列入队最高优先级即时归档任务（`priority = 10`，去重键 `archive_msg:{id}`）；`GET /api/mail/messages/{id}` 只读，不改变归档状态或创建任务；
+    - `POST /api/mail/messages/{id}/sync-body` 只负责入队并返回 HTTP 202、`message_id` 与 `job_id`；请求进程不执行 MIME 拉取。Worker 完成后更新 `MessageArchiveState` 并保存正文/附件，详情 API 返回 `archive_state` 与脱敏错误是否存在的布尔值；带目标 `message_id` 的 `archive.progress` / `archive.paused_quota` SSE 事件使阅读器刷新状态；
+    - 网络拉取失败写入 `MessageArchiveState.last_error`，MIME 解析失败写入 `MessageBody.parse_error`，两类错误在详情与阅读器中保持区分。阅读器呈现排队、处理中、完成、失败或配额暂停状态，失败时允许重新提交任务。
 2. **Worker 任务调度优先级治理与防饥饿**：
     - 针对文件夹定时空转轮询导致的归档饥饿，调整任务优先级分层：按需归档任务为 **10**，出站写回操作为 **40**，初次目录扫描为 **50**，后台批量正文归档续批为 **60**，文件夹定时空转增量轮询为 **75**，定期对账任务为 **80**；
     - 定时增量空转轮询增加去重键（`delta:{account_id}:{folder_id}`），防止单个文件夹在短时间内重复入队堆积，彻底解除增量轮询对后台批量正文归档的压制。

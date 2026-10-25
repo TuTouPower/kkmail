@@ -50,6 +50,8 @@ describe('mailCoreToMailDetail', () => {
       body_type: 'html',
       parse_error: null,
       is_archived: true,
+      archive_state: 'archive_complete',
+      archive_has_error: false,
       attachments: [],
     }
     const out = mailCoreToMailDetail(d)
@@ -77,6 +79,8 @@ describe('mailCoreToMailDetail', () => {
       body_type: 'empty',
       parse_error: 'body_decode_failed: UnicodeDecodeError: invalid start byte',
       is_archived: true,
+      archive_state: 'archive_complete',
+      archive_has_error: false,
       attachments: [],
     }
     const out = mailCoreToMailDetail(d)
@@ -102,9 +106,13 @@ describe('mailCoreToMailDetail', () => {
       body_type: 'empty',
       parse_error: null,
       is_archived: null,
+      archive_state: null,
+      archive_has_error: false,
       attachments: [],
     }
     expect(mailCoreToMailDetail(d).is_archived).toBeNull()
+    expect(mailCoreToMailDetail(d).archive_state).toBeNull()
+    expect(mailCoreToMailDetail(d).archive_has_error).toBe(false)
 
     const missing = { ...d }
     delete (missing as Partial<MailCoreMessageDetail>).is_archived

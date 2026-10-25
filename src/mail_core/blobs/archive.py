@@ -315,12 +315,21 @@ def claim_archive_batch(
 
 
 def _release_fencing_claims(session, message_ids: list[uuid.UUID], worker_id: str) -> None:
+    changed_ids: list[str] = []
     for mid in message_ids:
         st = session.get(MessageArchiveState, mid)
         if st is not None and st.claimed_by == worker_id:
             st.claimed_by = None
             apply_transition(st, ArchiveState.ARCHIVE_PENDING)
             st.updated_at = datetime.now(timezone.utc)
+            changed_ids.append(str(mid))
+    if changed_ids:
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
+                payload={"message_ids": changed_ids, "state": ArchiveState.ARCHIVE_PENDING.value},
+            )
+        )
 
 
 def reclaim_stale_archive_claims(
@@ -361,6 +370,16 @@ def reclaim_stale_archive_claims(
         prev = st.last_error or ""
         if suffix not in prev:
             st.last_error = (prev + suffix)[:2000]
+    if rows:
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
+                payload={
+                    "message_ids": [str(st.message_id) for st in rows],
+                    "state": ArchiveState.ARCHIVE_PENDING.value,
+                },
+            )
+        )
     session.flush()
     return len(rows)
 
@@ -389,7 +408,11 @@ def _pause_quota(
         OutboxEvent(
             event_type=OutboxEventType.ARCHIVE_PAUSED_QUOTA.value,
             account_id=account_id,
-            payload={"count": paused_count},
+            payload={
+                "count": paused_count,
+                "message_ids": [str(mid) for mid in message_ids],
+                "state": ArchiveState.ARCHIVE_PAUSED_QUOTA.value,
+            },
         )
     )
 
@@ -407,6 +430,7 @@ def _release_archive_claims_and_lease(
     from mail_core.security.redact import safe_provider_summary
 
     err_str = safe_provider_summary(error) if error else None
+    changed_ids: list[str] = []
     for mid in message_ids:
         st = session.get(MessageArchiveState, mid)
         if st is not None and st.claimed_by == worker_id and st.state == ArchiveState.ARCHIVE_IN_PROGRESS.value:
@@ -416,6 +440,19 @@ def _release_archive_claims_and_lease(
             st.updated_at = now
             if err_str:
                 st.last_error = err_str
+            changed_ids.append(str(mid))
+    if changed_ids:
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
+                account_id=account_id,
+                payload={
+                    "message_ids": changed_ids,
+                    "state": ArchiveState.ARCHIVE_PENDING.value,
+                    "has_error": bool(err_str),
+                },
+            )
+        )
     if account_id is not None and fencing is not None:
         try:
             release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
@@ -477,7 +514,11 @@ def resume_quota_paused_archives(
                 OutboxEvent(
                     event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
                     account_id=account_id,
-                    payload={"resumed_from_quota": len(rows)},
+                    payload={
+                        "resumed_from_quota": len(rows),
+                        "message_ids": [str(st.message_id) for st in rows],
+                        "state": ArchiveState.ARCHIVE_PENDING.value,
+                    },
                 )
             )
         return len(rows)
@@ -540,6 +581,13 @@ def run_archive_batch(
     blob_store = BlobStore(root)
     Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
 
+    target_msg_id = None
+    if payload.get("message_id"):
+        try:
+            target_msg_id = uuid.UUID(str(payload["message_id"]))
+        except (ValueError, TypeError):
+            pass
+
     fencing = None
     if account_id is not None:
         with Session() as session:
@@ -555,18 +603,30 @@ def run_archive_batch(
     current_used_bytes = quota.used_bytes
     if quota.hard_exceeded or quota.soft_exceeded:
         with Session() as session:
-            # Nothing claimed yet — emit pause event and stop (soft + hard).
+            event_payload = {
+                "used_bytes": quota.used_bytes,
+                "soft_limit_bytes": soft_i,
+                "hard_limit_bytes": hard_i,
+                "soft_exceeded": quota.soft_exceeded,
+                "hard_exceeded": quota.hard_exceeded,
+            }
+            if target_msg_id is not None:
+                state = session.get(MessageArchiveState, target_msg_id)
+                if state is not None and state.state == ArchiveState.ARCHIVE_PENDING.value:
+                    apply_transition(state, ArchiveState.ARCHIVE_PAUSED_QUOTA)
+                    state.pause_reason = "quota"
+                    state.claimed_by = None
+                    state.claimed_at = None
+                    state.updated_at = datetime.now(timezone.utc)
+                event_payload.update(
+                    message_id=str(target_msg_id),
+                    state=ArchiveState.ARCHIVE_PAUSED_QUOTA.value,
+                )
             session.add(
                 OutboxEvent(
                     event_type=OutboxEventType.ARCHIVE_PAUSED_QUOTA.value,
                     account_id=account_id,
-                    payload={
-                        "used_bytes": quota.used_bytes,
-                        "soft_limit_bytes": soft_i,
-                        "hard_limit_bytes": hard_i,
-                        "soft_exceeded": quota.soft_exceeded,
-                        "hard_exceeded": quota.hard_exceeded,
-                    },
+                    payload=event_payload,
                 )
             )
             if account_id is not None and fencing is not None:
@@ -579,13 +639,6 @@ def run_archive_batch(
 
     # Capacity is below recovery threshold — automatically resume quota-paused archives (A25)
     resume_quota_paused_archives(account_id=account_id, limit=limit)
-
-    target_msg_id = None
-    if payload.get("message_id"):
-        try:
-            target_msg_id = uuid.UUID(str(payload["message_id"]))
-        except (ValueError, TypeError):
-            pass
 
     with Session() as session:
         if account_id is not None and fencing is not None:
@@ -609,6 +662,20 @@ def run_archive_batch(
             if msg is None or not msg.remote_id or not msg.remote_id.strip():
                 continue
             work.append((mid, msg.remote_id, msg.account_id))
+        if claimed_ids:
+            status_payload = {
+                "message_ids": [str(mid) for mid in claimed_ids],
+                "state": ArchiveState.ARCHIVE_IN_PROGRESS.value,
+            }
+            if target_msg_id is not None and target_msg_id in claimed_ids:
+                status_payload["message_id"] = str(target_msg_id)
+            session.add(
+                OutboxEvent(
+                    event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
+                    account_id=account_id,
+                    payload=status_payload,
+                )
+            )
         session.commit()
 
     completed = 0
@@ -1003,6 +1070,8 @@ def run_archive_batch(
 
                 apply_transition(st, ArchiveState.ARCHIVE_COMPLETE)
                 st.claimed_by = None
+                st.last_error = None
+                st.pause_reason = None
                 st.updated_at = datetime.now(timezone.utc)
                 completed += 1
                 session.commit()
@@ -1019,12 +1088,28 @@ def run_archive_batch(
                 pass
 
     with Session() as session:
+        target_state = session.get(MessageArchiveState, target_msg_id) if target_msg_id is not None else None
+        target_event_fields = (
+            {
+                "message_id": str(target_msg_id),
+                "state": target_state.state if target_state is not None else None,
+                "has_error": bool(target_state and target_state.last_error),
+            }
+            if target_msg_id is not None
+            else {}
+        )
+        batch_message_ids = [str(mid) for mid, _, _ in work]
         if completed:
             session.add(
                 OutboxEvent(
                     event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
                     account_id=account_id,
-                    payload={"completed": completed, "failed": failed},
+                    payload={
+                        "completed": completed,
+                        "failed": failed,
+                        "message_ids": batch_message_ids,
+                        **target_event_fields,
+                    },
                 )
             )
             # Schedule another batch if work may remain (only for routine batch archive)
@@ -1043,7 +1128,12 @@ def run_archive_batch(
                 OutboxEvent(
                     event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
                     account_id=account_id,
-                    payload={"completed": completed, "failed": failed},
+                    payload={
+                        "completed": completed,
+                        "failed": failed,
+                        "message_ids": batch_message_ids,
+                        **target_event_fields,
+                    },
                 )
             )
             if not target_msg_id:

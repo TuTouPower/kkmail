@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-import time
-import uuid
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -15,14 +12,19 @@ from mail_core.mail.application.queries import MessageDetail, get_message_detail
 from mail_core.mail.domain.archive import apply_transition
 from mail_core.mail.domain.enums import ArchiveState, JobType
 from mail_core.mail.storage.models import Message, MessageArchiveState
-from mail_core.security.redact import safe_error
 from mail_core.sync.jobs import enqueue_job
-
-log = logging.getLogger("mail_core.mail.application.message_details")
 
 
 class MessageHasNoProviderRemoteId(ValueError):
     """Raised when on-demand sync cannot address a provider message."""
+
+
+class MessageArchiveStateUnavailable(ValueError):
+    """Raised when on-demand sync cannot safely queue an untracked message."""
+
+
+class MessageBodyAlreadyArchived(ValueError):
+    """Raised when on-demand sync is requested after the body is archived."""
 
 
 def get_message_detail_with_archive_status(
@@ -39,8 +41,8 @@ def get_message_detail_with_archive_status(
     return detail, is_archived
 
 
-def sync_message_body(message_id: UUID) -> tuple[MessageDetail, bool | None] | None:
-    """Queue and run one highest-priority body archive attempt, returning current detail."""
+def sync_message_body(message_id: UUID) -> UUID | None:
+    """Queue a highest-priority body archive attempt and return its worker job ID."""
     Session = get_session_factory()
     with Session() as session:
         message = session.get(Message, message_id)
@@ -51,80 +53,37 @@ def sync_message_body(message_id: UUID) -> tuple[MessageDetail, bool | None] | N
 
         account_id = message.account_id
         state = session.get(MessageArchiveState, message_id)
-        if state is not None:
-            state.priority = 0
-            state_value = ArchiveState(state.state)
-            if state_value == ArchiveState.METADATA_SYNCED:
-                apply_transition(state, ArchiveState.ARCHIVE_PENDING)
-            elif state_value in (ArchiveState.ARCHIVE_FAILED, ArchiveState.ARCHIVE_PAUSED_QUOTA):
-                apply_transition(state, ArchiveState.ARCHIVE_PENDING)
-                state.retry_count = 0
-                state.last_error = None
-                state.pause_reason = None
-                state.claimed_by = None
-                state.claimed_at = None
-                state.updated_at = datetime.now(timezone.utc)
-            elif state_value == ArchiveState.ARCHIVE_PENDING and state.retry_count >= 5:
-                state.retry_count = 0
-                state.last_error = None
-                state.pause_reason = None
-                state.updated_at = datetime.now(timezone.utc)
-            enqueue_job(
-                session,
-                job_type=JobType.ARCHIVE_MIME_BATCH.value,
-                account_id=account_id,
-                payload={"message_id": str(message_id), "batch_size": 1},
-                priority=10,
-                dedupe_key=f"archive_msg:{message_id}",
-            )
-            session.commit()
+        if state is None:
+            raise MessageArchiveStateUnavailable("message archive state is unavailable")
 
-    # Import at call time to keep the application queries and archive worker decoupled.
-    from mail_core.blobs.archive import run_archive_batch
+        state_value = ArchiveState(state.state)
+        if state_value == ArchiveState.ARCHIVE_COMPLETE:
+            raise MessageBodyAlreadyArchived("message body is already archived")
 
-    attempt_id = uuid.uuid4().hex[:12]
-    worker_id = f"api-on-demand:{attempt_id}"
-    started_at = time.monotonic()
-    log.info(
-        "api_sync_message_body start attempt=%s account_id=%s message_id=%s",
-        attempt_id,
-        account_id,
-        message_id,
-    )
-    try:
-        result = run_archive_batch(
+        state.priority = 0
+        if state_value == ArchiveState.METADATA_SYNCED:
+            apply_transition(state, ArchiveState.ARCHIVE_PENDING)
+        elif state_value in (ArchiveState.ARCHIVE_FAILED, ArchiveState.ARCHIVE_PAUSED_QUOTA):
+            apply_transition(state, ArchiveState.ARCHIVE_PENDING)
+            state.retry_count = 0
+            state.pause_reason = None
+            state.claimed_by = None
+            state.claimed_at = None
+        elif state_value == ArchiveState.ARCHIVE_PENDING and state.retry_count >= 5:
+            state.retry_count = 0
+
+        if state_value != ArchiveState.ARCHIVE_IN_PROGRESS:
+            state.last_error = None
+            state.pause_reason = None
+            state.updated_at = datetime.now(timezone.utc)
+
+        job = enqueue_job(
+            session,
+            job_type=JobType.ARCHIVE_MIME_BATCH.value,
             account_id=account_id,
-            worker_id=worker_id,
             payload={"message_id": str(message_id), "batch_size": 1},
+            priority=10,
+            dedupe_key=f"archive_msg:{message_id}",
         )
-    except Exception as exc:
-        result = {"status": "error", "error": safe_error(exc)}
-        log.warning("on-demand sync error attempt=%s for message %s: %s", attempt_id, message_id, result["error"])
-
-    if result.get("status") == "paused_quota":
-        with Session() as session:
-            state = session.get(MessageArchiveState, message_id)
-            if state is not None and state.state == ArchiveState.ARCHIVE_PENDING.value:
-                apply_transition(state, ArchiveState.ARCHIVE_PAUSED_QUOTA)
-                state.pause_reason = "quota"
-                state.claimed_by = None
-                state.claimed_at = None
-                state.updated_at = datetime.now(timezone.utc)
-                session.commit()
-
-    elapsed_ms = (time.monotonic() - started_at) * 1000
-    log.info(
-        "api_sync_message_body end attempt=%s message_id=%s elapsed_ms=%.1f result=%s",
-        attempt_id,
-        message_id,
-        elapsed_ms,
-        result,
-    )
-
-    with Session() as session:
-        detail = get_message_detail(session, message_id)
-        if detail is None:
-            return None
-        state = session.get(MessageArchiveState, message_id)
-        is_archived = state.state == ArchiveState.ARCHIVE_COMPLETE.value if state is not None else None
-        return detail, is_archived
+        session.commit()
+        return job.id

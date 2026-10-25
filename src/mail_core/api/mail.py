@@ -44,11 +44,14 @@ from mail_core.mail.application.queries import (
     unified_inbox,
 )
 from mail_core.mail.application.message_details import (
+    MessageArchiveStateUnavailable,
+    MessageBodyAlreadyArchived,
     MessageHasNoProviderRemoteId,
     get_message_detail_with_archive_status,
     sync_message_body,
 )
 from mail_core.mail.application.search import search_messages_page
+from mail_core.mail.storage.models import MessageArchiveState
 
 router = APIRouter(prefix="/api/mail", tags=["mail"])
 _MEDIA_TYPE_TOKEN = r"[A-Za-z0-9!#$%&'*+.^_`|~-]+"
@@ -140,10 +143,17 @@ class MessageDetailOut(BaseModel):
     body_type: str
     parse_error: str | None
     is_archived: bool | None
+    archive_state: str | None = None
+    archive_has_error: bool = False
     attachments: list[AttachmentOut]
 
 
-def _detail_out(detail: MessageDetail, is_archived: bool | None) -> MessageDetailOut:
+def _detail_out(
+    detail: MessageDetail,
+    is_archived: bool | None,
+    archive_state: str | None = None,
+    archive_has_error: bool = False,
+) -> MessageDetailOut:
     return MessageDetailOut(
         id=str(detail.id),
         account_id=str(detail.account_id),
@@ -162,6 +172,8 @@ def _detail_out(detail: MessageDetail, is_archived: bool | None) -> MessageDetai
         body_type=detail.body_type,
         parse_error=detail.parse_error,
         is_archived=is_archived,
+        archive_state=archive_state,
+        archive_has_error=archive_has_error,
         attachments=[
             AttachmentOut(
                 id=str(attachment.id),
@@ -206,6 +218,12 @@ class MutationOut(BaseModel):
     is_read: bool | None = None
     is_flagged: bool | None = None
     success: bool = True
+
+
+class SyncBodyAcceptedOut(BaseModel):
+    message_id: str
+    job_id: str
+    status: Literal["queued"]
 
 
 def _rows(items: list[MessageListItem], emails: dict) -> list[MessageOut]:
@@ -357,19 +375,31 @@ def api_get_message(message_id: UUID) -> MessageDetailOut:
         result = get_message_detail_with_archive_status(session, message_id)
         if result is None:
             raise HTTPException(404, "message not found")
-        return _detail_out(*result)
+        state = session.get(MessageArchiveState, message_id)
+        return _detail_out(
+            *result,
+            archive_state=state.state if state is not None else None,
+            archive_has_error=bool(state and state.last_error),
+        )
 
 
-@router.post("/messages/{message_id}/sync-body", response_model=MessageDetailOut, response_model_by_alias=True)
-def api_sync_message_body(message_id: UUID) -> MessageDetailOut:
-    """Trigger on-demand highest-priority body sync for a message."""
+@router.post(
+    "/messages/{message_id}/sync-body",
+    response_model=SyncBodyAcceptedOut,
+    response_model_by_alias=True,
+    status_code=202,
+)
+def api_sync_message_body(message_id: UUID) -> SyncBodyAcceptedOut:
+    """Queue an on-demand highest-priority body sync for a message."""
     try:
-        result = sync_message_body(message_id)
+        job_id = sync_message_body(message_id)
     except MessageHasNoProviderRemoteId as exc:
         raise HTTPException(409, str(exc)) from exc
-    if result is None:
+    except (MessageArchiveStateUnavailable, MessageBodyAlreadyArchived) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if job_id is None:
         raise HTTPException(404, "message not found")
-    return _detail_out(*result)
+    return SyncBodyAcceptedOut(message_id=str(message_id), job_id=str(job_id), status="queued")
 
 
 @router.post("/messages/{message_id}/read", response_model=MutationOut)

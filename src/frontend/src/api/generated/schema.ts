@@ -479,7 +479,7 @@ export interface paths {
         put?: never;
         /**
          * Api Sync Message Body
-         * @description Trigger on-demand highest-priority body sync for a message.
+         * @description Queue an on-demand highest-priority body sync for a message.
          */
         post: operations["api_sync_message_body_api_mail_messages__message_id__sync_body_post"];
         delete?: never;
@@ -952,6 +952,13 @@ export interface components {
         MessageDetailOut: {
             /** Account Id */
             account_id: string;
+            /**
+             * Archive Has Error
+             * @default false
+             */
+            archive_has_error: boolean;
+            /** Archive State */
+            archive_state?: string | null;
             /** Attachments */
             attachments: components["schemas"]["AttachmentOut"][];
             /** Body */
@@ -1324,6 +1331,18 @@ export interface components {
             count: number;
             /** Job Ids */
             job_ids: string[];
+        };
+        /** SyncBodyAcceptedOut */
+        SyncBodyAcceptedOut: {
+            /** Job Id */
+            job_id: string;
+            /** Message Id */
+            message_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "queued";
         };
         /** SyncJobOut */
         SyncJobOut: {
@@ -2288,12 +2307,12 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MessageDetailOut"];
+                    "application/json": components["schemas"]["SyncBodyAcceptedOut"];
                 };
             };
             /** @description Validation Error */

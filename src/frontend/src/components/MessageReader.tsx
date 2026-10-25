@@ -67,19 +67,25 @@ const MessageReader = memo(function MessageReader() {
   const isPendingArchive = Boolean(
     detail && !detail.parse_error && !detail.body && detail.is_archived === false,
   )
+  const archiveState = detail?.archive_state
+  const archiveHasError = Boolean(detail?.archive_has_error || archiveState === 'archive_failed')
+  const archivePaused = archiveState === 'archive_paused_quota'
+  const archiveProcessing = archiveState === 'archive_in_progress'
 
   const [syncingBody, setSyncingBody] = useState(false)
+  const [syncQueued, setSyncQueued] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const autoSyncedMsgIdRef = useRef<string | null>(null)
 
   const handleSyncBody = useCallback(async () => {
     if (!selected?.id || syncingBody) return
     setSyncingBody(true)
+    setSyncQueued(false)
     setSyncError(null)
     try {
-      const updated = await postMailCoreSyncMessageBody(selected.id)
-      const mapped = mailCoreToMailDetail(updated)
-      queryClient.setQueryData(['detail', 'mail-core', selected.id], mapped)
+      await postMailCoreSyncMessageBody(selected.id)
+      setSyncQueued(true)
+      void queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core', selected.id] })
     } catch (err) {
       setSyncError(errorMessage(err, '同步邮件正文失败'))
     } finally {
@@ -90,19 +96,29 @@ const MessageReader = memo(function MessageReader() {
   // oxlint-disable react/set-state-in-effect -- clear request state from the previously selected message.
   useEffect(() => {
     setSyncingBody(false)
+    setSyncQueued(false)
     setSyncError(null)
     autoSyncedMsgIdRef.current = null
   }, [selectedKey])
   // oxlint-enable react/set-state-in-effect
 
   useEffect(() => {
-    if (isPendingArchive && !detailQuery.isLoading && !syncingBody && !syncError && selected?.id) {
+    if (
+      isPendingArchive
+      && !detailQuery.isLoading
+      && !syncingBody
+      && !syncQueued
+      && !syncError
+      && !archiveHasError
+      && !archivePaused
+      && selected?.id
+    ) {
       if (autoSyncedMsgIdRef.current !== selected.id) {
         autoSyncedMsgIdRef.current = selected.id
         void handleSyncBody()
       }
     }
-  }, [isPendingArchive, detailQuery.isLoading, syncingBody, syncError, handleSyncBody, selected?.id])
+  }, [isPendingArchive, detailQuery.isLoading, syncingBody, syncQueued, syncError, archiveHasError, archivePaused, handleSyncBody, selected?.id])
   const preparedMailHtml = useMemo(() => (body ? prepareMailHtml(body) : null), [body])
   const mailThemeClass = html ? preparedMailHtml?.classification ?? 'plain' : 'plain'
   const mailSrcdoc = useMemo(
@@ -251,8 +267,8 @@ const MessageReader = memo(function MessageReader() {
               {syncingBody ? (
                 <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
                   <RefreshCw size={18} className="spin" style={{ color: 'var(--primary)' }} />
-                  <p style={{ margin: 0, fontWeight: 600, color: 'var(--text)' }}>正在优先同步邮件正文…</p>
-                  <p style={{ margin: 0, fontSize: 12 }}>已将该邮件置为最高优先级，正在向远端拉取完整原文。</p>
+                  <p style={{ margin: 0, fontWeight: 600, color: 'var(--text)' }}>正在提交正文同步任务…</p>
+                  <p style={{ margin: 0, fontSize: 12 }}>任务提交后由后台归档 Worker 拉取完整原文。</p>
                 </div>
               ) : syncError ? (
                 <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
@@ -273,6 +289,40 @@ const MessageReader = memo(function MessageReader() {
                   >
                     立即重试同步
                   </button>
+                </div>
+              ) : archiveHasError ? (
+                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                  <p role="alert" style={{ margin: 0, fontWeight: 600, color: 'var(--red)' }}>正文同步失败</p>
+                  <p style={{ margin: 0, fontSize: 12 }}>后台未能完成正文归档，可重新提交任务。</p>
+                  <button
+                    type="button"
+                    onClick={handleSyncBody}
+                    style={{
+                      marginTop: 4,
+                      padding: '4px 12px',
+                      borderRadius: 6,
+                      border: '1px solid var(--line)',
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                    }}
+                  >
+                    立即重试同步
+                  </button>
+                </div>
+              ) : archivePaused ? (
+                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                  <p style={{ margin: 0, fontWeight: 600 }}>正文同步因存储配额暂停</p>
+                  <p style={{ margin: 0, fontSize: 12 }}>释放存储空间后，后台任务会继续处理。</p>
+                </div>
+              ) : syncQueued || archiveProcessing || archiveState === 'archive_pending' ? (
+                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                  <RefreshCw size={18} className="spin" style={{ color: 'var(--primary)' }} />
+                  <p style={{ margin: 0, fontWeight: 600, color: 'var(--text)' }}>
+                    {archiveProcessing ? '后台正在同步邮件正文…' : '正文同步任务已排队'}
+                  </p>
+                  <p style={{ margin: 0, fontSize: 12 }}>后台归档 Worker 将拉取并保存完整原文。</p>
                 </div>
               ) : isPendingArchive ? (
                 <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>

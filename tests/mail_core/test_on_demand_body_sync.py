@@ -13,8 +13,8 @@ from sqlalchemy import select
 
 from mail_core.api.app import app
 from mail_core.db.session import get_session_factory
-from mail_core.mail.domain.enums import ArchiveState, JobStatus, JobType
-from mail_core.mail.storage.models import Account, Message, MessageArchiveState, MessageBody, WorkerJob
+from mail_core.mail.domain.enums import ArchiveState, JobStatus, JobType, OutboxEventType
+from mail_core.mail.storage.models import Account, Message, MessageArchiveState, MessageBody, OutboxEvent, WorkerJob
 from tests.mail_core.conftest import TEST_API_KEY
 
 pytestmark = pytest.mark.skipif(
@@ -88,55 +88,96 @@ def test_ac001_get_message_unarchived_is_read_only():
         assert job is None, "GET must not enqueue an archive job"
 
 
-def test_ac002_post_sync_body_completes_archive_and_returns_body():
+# A293 removes the old synchronous-response test; the endpoint now only accepts work,
+# while the separate worker test below verifies archive completion.
+def test_a293_post_sync_body_only_queues_archive_job():
     acc_id, mid = _seed_unarchived_message()
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
-
-    sample_mime = (
-        b"From: sender@ex.com\r\n"
-        b"To: user@ex.com\r\n"
-        b"Subject: Test On Demand Subject\r\n"
-        b"Content-Type: text/html; charset=utf-8\r\n\r\n"
-        b"<div><p>Instant full body rendered successfully!</p></div>"
-    )
-
-    mock_provider = MagicMock()
-    mock_provider.fetch_mime.return_value = sample_mime
-
-    with patch("mail_core.blobs.archive.build_provider", return_value=mock_provider):
+    with patch("mail_core.blobs.archive.run_archive_batch") as run_archive_batch:
         resp = client.post(f"/api/mail/messages/{mid}/sync-body")
-        assert resp.status_code == 200
+        assert resp.status_code == 202
         data = resp.json()
-        assert data["id"] == str(mid)
-        assert data["body"] is not None
-        assert "Instant full body rendered successfully!" in data["body"]
-        assert data["parse_error"] is None
+        assert data["message_id"] == str(mid)
+        assert data["status"] == "queued"
+        assert data["job_id"]
+        run_archive_batch.assert_not_called()
 
     Session = get_session_factory()
     with Session() as session:
         st = session.get(MessageArchiveState, mid)
-        assert st.state == ArchiveState.ARCHIVE_COMPLETE.value
+        assert st.state == ArchiveState.ARCHIVE_PENDING.value
+        assert st.priority == 0
         body = session.get(MessageBody, mid)
-        assert body is not None
-        assert "Instant full body rendered successfully!" in (body.text_html or "")
+        assert body is None
         job = session.scalars(
             select(WorkerJob)
             .where(
                 WorkerJob.job_type == JobType.ARCHIVE_MIME_BATCH.value,
                 WorkerJob.account_id == acc_id,
+                WorkerJob.status == "pending",
             )
             .order_by(WorkerJob.created_at.desc())
         ).first()
         assert job is not None
+        assert str(job.id) == data["job_id"]
         assert job.priority == 10, "explicit POST body sync owns the priority boost"
+
+
+def test_a293_worker_completes_queued_body_and_emits_status_events(tmp_path, monkeypatch):
+    acc_id, mid = _seed_unarchived_message()
+    client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
+    accepted = client.post(f"/api/mail/messages/{mid}/sync-body")
+    assert accepted.status_code == 202
+
+    monkeypatch.setenv("MAIL_CORE_BLOB_ROOT", str(tmp_path))
+    mock_provider = MagicMock()
+    mock_provider.fetch_mime.return_value = (
+        b"From: sender@ex.com\r\n"
+        b"To: user@ex.com\r\n"
+        b"Subject: Test On Demand Subject\r\n"
+        b"Content-Type: text/html; charset=utf-8\r\n\r\n"
+        b"<div><p>Worker archived the full body.</p></div>"
+    )
+    from mail_core.blobs.archive import run_archive_batch
+
+    with patch("mail_core.blobs.archive.build_provider", return_value=mock_provider):
+        result = run_archive_batch(
+            account_id=acc_id,
+            worker_id="test-on-demand-worker",
+            payload={"message_id": str(mid), "batch_size": 1},
+        )
+
+    assert result["status"] == "ok"
+    assert result["completed"] == 1
+    detail = client.get(f"/api/mail/messages/{mid}").json()
+    assert detail["is_archived"] is True
+    assert detail["archive_state"] == ArchiveState.ARCHIVE_COMPLETE.value
+    assert detail["archive_has_error"] is False
+    assert "Worker archived the full body." in detail["body"]
+
+    with get_session_factory()() as session:
+        events = session.scalars(
+            select(OutboxEvent).where(OutboxEvent.event_type == OutboxEventType.ARCHIVE_PROGRESS.value)
+        ).all()
+        target_states = [
+            event.payload.get("state")
+            for event in events
+            if event.payload.get("message_id") == str(mid)
+        ]
+    assert target_states == [
+        ArchiveState.ARCHIVE_IN_PROGRESS.value,
+        ArchiveState.ARCHIVE_COMPLETE.value,
+    ]
 
 
 @pytest.mark.parametrize(
     "initial_state",
     [ArchiveState.ARCHIVE_FAILED, ArchiveState.ARCHIVE_PAUSED_QUOTA, ArchiveState.ARCHIVE_PENDING],
 )
-def test_a105_sync_body_retries_terminal_or_exhausted_archive_state(initial_state):
-    acc_id, mid = _seed_unarchived_message()
+# A293 removes the old request-time retry/completion test. Retry requests now only
+# clear retry state and queue a job; worker outcomes are covered separately.
+def test_a293_sync_body_requeues_retryable_archive_state(initial_state):
+    _, mid = _seed_unarchived_message()
     Session = get_session_factory()
     with Session() as session:
         state = session.get(MessageArchiveState, mid)
@@ -147,32 +188,27 @@ def test_a105_sync_body_retries_terminal_or_exhausted_archive_state(initial_stat
         state.pause_reason = "quota" if initial_state == ArchiveState.ARCHIVE_PAUSED_QUOTA else None
         session.commit()
 
-    sample_mime = (
-        b"From: sender@ex.com\r\n"
-        b"Subject: Retry archive\r\n"
-        b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
-        b"Manual archive retry completed."
-    )
-    mock_provider = MagicMock()
-    mock_provider.fetch_mime.return_value = sample_mime
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
-
-    with patch("mail_core.blobs.archive.build_provider", return_value=mock_provider):
+    with patch("mail_core.blobs.archive.run_archive_batch") as run_archive_batch:
         response = client.post(f"/api/mail/messages/{mid}/sync-body")
+        run_archive_batch.assert_not_called()
 
-    assert response.status_code == 200
-    assert "Manual archive retry completed." in response.json()["body"]
+    assert response.status_code == 202
     with Session() as session:
         state = session.get(MessageArchiveState, mid)
         assert state is not None
-        assert state.state == ArchiveState.ARCHIVE_COMPLETE.value
+        assert state.state == ArchiveState.ARCHIVE_PENDING.value
         assert state.retry_count == 0
         assert state.last_error is None
         assert state.pause_reason is None
-        mock_provider.fetch_mime.assert_called_once()
+        job = session.scalar(select(WorkerJob).where(WorkerJob.dedupe_key == f"archive_msg:{mid}"))
+        assert job is not None
+        assert job.priority == 10
 
 
-def test_a105_sync_body_restores_quota_pause_when_capacity_is_still_exceeded():
+# A293 removes the old inline quota-pause test; this verifies only that an explicit
+# retry requeues a quota-paused message for the Worker.
+def test_a293_sync_body_requeues_quota_paused_archive():
     _, mid = _seed_unarchived_message()
     Session = get_session_factory()
     with Session() as session:
@@ -184,19 +220,17 @@ def test_a105_sync_body_restores_quota_pause_when_capacity_is_still_exceeded():
         session.commit()
 
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
-    with patch(
-        "mail_core.blobs.archive.run_archive_batch",
-        return_value={"status": "paused_quota", "completed": 0, "failed": 0},
-    ):
+    with patch("mail_core.blobs.archive.run_archive_batch") as run_archive_batch:
         response = client.post(f"/api/mail/messages/{mid}/sync-body")
+        run_archive_batch.assert_not_called()
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     with Session() as session:
         state = session.get(MessageArchiveState, mid)
         assert state is not None
-        assert state.state == ArchiveState.ARCHIVE_PAUSED_QUOTA.value
+        assert state.state == ArchiveState.ARCHIVE_PENDING.value
         assert state.retry_count == 0
-        assert state.pause_reason == "quota"
+        assert state.pause_reason is None
         assert state.claimed_by is None
         assert state.claimed_at is None
 
@@ -263,21 +297,34 @@ def test_ac003_worker_jobs_priority_governance():
         assert delta_job.dedupe_key == f"delta:{aid}:{fid}", "delta polling should have dedupe_key"
 
 
-def test_ac005_sync_body_captures_provider_or_parse_error():
-    """AC-003: Network/fetch error must record last_error in archive state and NOT write parse_error."""
+# A293 removes the old request-time failure test because provider I/O now belongs to
+# the Worker; this test checks persisted status after a Worker attempt.
+def test_a293_worker_failure_visible_in_message_status():
+    """A worker fetch error is visible in message status and never becomes a MIME parse error."""
     acc_id, mid = _seed_unarchived_message()
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
 
     mock_provider = MagicMock()
     mock_provider.fetch_mime.side_effect = RuntimeError("Remote IMAP server timeout (simulated)")
 
+    resp = client.post(f"/api/mail/messages/{mid}/sync-body")
+    assert resp.status_code == 202
+
+    from mail_core.blobs.archive import run_archive_batch
+
     with patch("mail_core.blobs.archive.build_provider", return_value=mock_provider):
-        resp = client.post(f"/api/mail/messages/{mid}/sync-body")
-        assert resp.status_code == 200
-        data = resp.json()
-        # AC-003: fetch failure must NOT be reported as parse_error
-        assert data["parse_error"] is None
-        assert data["is_archived"] is False
+        result = run_archive_batch(
+            account_id=acc_id,
+            worker_id="test-on-demand-failure",
+            payload={"message_id": str(mid), "batch_size": 1},
+        )
+    assert result["status"] == "ok"
+    assert result["failed"] == 1
+
+    detail = client.get(f"/api/mail/messages/{mid}").json()
+    assert detail["parse_error"] is None
+    assert detail["is_archived"] is False
+    assert detail["archive_has_error"] is True
 
     Session = get_session_factory()
     with Session() as session:
@@ -289,29 +336,31 @@ def test_ac005_sync_body_captures_provider_or_parse_error():
         body = session.get(MessageBody, mid)
         if body is not None:
             assert body.parse_error is None
+        events = session.scalars(
+            select(OutboxEvent).where(OutboxEvent.event_type == OutboxEventType.ARCHIVE_PROGRESS.value)
+        ).all()
+        target_failure = [
+            event.payload
+            for event in events
+            if event.payload.get("message_id") == str(mid)
+            and event.payload.get("has_error") is True
+        ]
+        assert target_failure
 
 
-def test_p039_sync_body_uses_unique_worker_id():
-    """Verify each on-demand sync request receives an isolated worker_id (p039)."""
-    acc_id, mid = _seed_unarchived_message()
+# A293 replaces the old unique inline worker-id test: request calls must coalesce
+# against one queued Worker job and must not execute the archive function.
+def test_a293_repeated_sync_body_requests_deduplicate_active_job():
+    """Repeated requests coalesce with the pending job and never run archive inline."""
+    _, mid = _seed_unarchived_message()
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
 
-    captured_worker_ids = []
-    from mail_core.blobs import archive as archive_mod
-    orig_run = archive_mod.run_archive_batch
+    with patch("mail_core.blobs.archive.run_archive_batch") as run_archive_batch:
+        responses = [client.post(f"/api/mail/messages/{mid}/sync-body") for _ in range(2)]
 
-    def fake_run(**kwargs):
-        captured_worker_ids.append(kwargs.get("worker_id"))
-        return {"status": "ok", "completed": 0, "failed": 0, "claimed": 0}
-
-    with patch.object(archive_mod, "run_archive_batch", side_effect=fake_run):
-        client.post(f"/api/mail/messages/{mid}/sync-body")
-        client.post(f"/api/mail/messages/{mid}/sync-body")
-
-    assert len(captured_worker_ids) == 2
-    assert captured_worker_ids[0].startswith("api-on-demand:")
-    assert captured_worker_ids[1].startswith("api-on-demand:")
-    assert captured_worker_ids[0] != captured_worker_ids[1], "Worker IDs must be unique per attempt"
+    assert [response.status_code for response in responses] == [202, 202]
+    assert responses[0].json()["job_id"] == responses[1].json()["job_id"]
+    run_archive_batch.assert_not_called()
 
 
 def test_p039_archive_batch_releases_claims_on_fencing_mismatch():

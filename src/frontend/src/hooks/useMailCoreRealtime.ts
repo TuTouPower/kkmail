@@ -13,6 +13,12 @@ export const MAIL_CORE_INBOX_INVALIDATE_EVENTS = new Set([
   'sync.completed',
 ])
 
+const ARCHIVE_DETAIL_INVALIDATE_EVENTS = new Set([
+  'archive.progress',
+  'archive.completed',
+  'archive.paused_quota',
+])
+
 export function shouldInvalidateMailCoreInbox(eventType: string): boolean {
   return MAIL_CORE_INBOX_INVALIDATE_EVENTS.has(eventType)
 }
@@ -101,6 +107,11 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
         invalidateAllDetails = true
       }
       scheduled = true
+    }
+    if (ARCHIVE_DETAIL_INVALIDATE_EVENTS.has(type)) {
+      const ids = extractMessageIds(data)
+      for (const id of ids) detailIdsToInvalidate.add(id)
+      scheduled = ids.length > 0 || scheduled
     }
     if (scheduled) {
       schedule()

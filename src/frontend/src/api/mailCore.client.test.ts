@@ -6,6 +6,7 @@ import {
   mailCoreToMailDetail,
   mailCoreToMailItem,
   postMailCoreMessageTrash,
+  postMailCoreSyncMessageBody,
   type MailCoreMessage,
   type MailCoreMessageDetail,
 } from './mailCore'
@@ -167,6 +168,17 @@ describe('mail endpoints', () => {
     expect(calls(mock)[0][0]).toBe('/api/mail/messages/a%2Fb%20c')
   })
 
+  it('returns the accepted archive job contract from sync-body', async () => {
+    const response = { message_id: 'm/1', job_id: 'job-1', status: 'queued' }
+    const mock = vi.fn(async (url: string) =>
+      url.endsWith('/api/auth/me') ? json(200, { csrf_token: 'tok' }) : json(202, response),
+    )
+    vi.stubGlobal('fetch', mock)
+
+    await expect(postMailCoreSyncMessageBody('m/1')).resolves.toEqual(response)
+    expect(calls(mock)[1][0]).toBe('/api/mail/messages/m%2F1/sync-body')
+  })
+
   it('builds attachment URLs by id only', () => {
     expect(mailCoreAttachmentUrl('att 1')).toBe('/api/mail/attachments/att%201')
   })
@@ -187,6 +199,7 @@ describe('mail endpoints', () => {
       id: 'm', account_id: 'a', subject: 'S', from_address: 'a@b.c', from_name: null, from: 'a@b.c', to: '', cc: '',
       date: '2024-01-01T00:00:00Z', is_read: true, is_flagged: false, has_attachments: true, snippet: null, body: '',
       body_type: 'empty', parse_error: null, is_archived: true,
+      archive_state: 'archive_complete', archive_has_error: false,
       attachments: [{ id: 'att', name: 'a.pdf', contentType: null, size: null, is_inline: false }],
     }
     const out = mailCoreToMailDetail(d)

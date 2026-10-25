@@ -276,8 +276,8 @@ describe('<MessageReader />', () => {
     expect(container.querySelector('.empty-body-placeholder')).toBeNull()
   })
 
-  // p035 replaces the previous assertion that treated archived and unknown empty bodies as pending sync.
-  it('shows the empty-body placeholder only while an email is unarchived', async () => {
+  // A293 replaces the old inline-sync text assertion; the unarchived message remains empty while POST is pending.
+  it('shows submission feedback while an unarchived body remains empty (A293)', async () => {
     queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [{ ...unarchivedItem, body_preview: '<html><head><meta charset="utf-8"></head><body>Hidden preview</body></html>' }])
     useMailStore.setState({ selectedKey: 'm-unarchived' })
     const originalFetch = globalThis.fetch
@@ -291,7 +291,7 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
     await waitFor(() => {
       expect(container.querySelector('.empty-body-placeholder')).not.toBeNull()
-      expect(container.textContent).toContain('正在优先同步邮件正文…')
+      expect(container.textContent).toContain('正在提交正文同步任务…')
     })
     expect(container.textContent).not.toContain('Hidden preview')
     expect(container.querySelector('.email-body')).toBeNull()
@@ -590,11 +590,37 @@ describe('<MessageReader />', () => {
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
-  it('displays syncing state on unarchived email and smoothly renders body after on-demand sync (AC-004)', async () => {
+  // A293 removes the old assertion that the POST response itself contained the completed body.
+  it('displays queued state and renders body after asynchronous archive completion (A293)', async () => {
     useMailStore.setState({ selectedKey: 'm-unarchived' })
+    let queued = false
+    let completed = false
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      if (u.endsWith('/sync-body') && init.method === 'POST') {
+        queued = true
+        return json({ message_id: 'm-unarchived', job_id: 'job-1', status: 'queued' }, 202)
+      }
+      if (queued && u === '/api/mail/messages/m-unarchived') {
+        return json({
+          id: 'm-unarchived', account_id: 'acc-1', subject: 'Unarchived Email', from_address: 'u@x.test', from_name: 'Unarchived',
+          from: 'Unarchived <u@x.test>', to: 'box@x.test', cc: '', date: '2018-10-26T12:00:00Z', is_read: false,
+          is_flagged: false, has_attachments: false, snippet: 'Snippet',
+          body: completed ? '<p>Instant fetched on-demand body</p>' : '', body_type: completed ? 'html' : 'empty',
+          parse_error: null, is_archived: completed, archive_state: completed ? 'archive_complete' : 'archive_pending',
+          archive_has_error: false, attachments: [],
+        })
+      }
+      return originalFetch(url, init)
+    }))
     const { container } = await render(<MessageReader />)
 
-    // Trigger on-demand sync and verify body renders
+    await waitFor(() => expect(container.textContent).toContain('正文同步任务已排队'))
+    completed = true
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core', 'm-unarchived'] })
+    })
     await waitFor(() => {
       const iframe = container.querySelector('iframe')
       expect(iframe).not.toBeNull()
@@ -609,6 +635,34 @@ describe('<MessageReader />', () => {
 
     await waitFor(() => {
       expect(container.textContent).toContain('Remote connection timeout')
+      expect(container.textContent).toContain('立即重试同步')
+    })
+  })
+
+  it('shows a background archive failure from message status and offers retry (A293)', async () => {
+    useMailStore.setState({ selectedKey: 'm-sync-failed' })
+    let queued = false
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      if (u.endsWith('/sync-body') && init.method === 'POST') {
+        queued = true
+        return json({ message_id: 'm-sync-failed', job_id: 'job-2', status: 'queued' }, 202)
+      }
+      if (queued && u === '/api/mail/messages/m-sync-failed') {
+        return json({
+          id: 'm-sync-failed', account_id: 'acc-1', subject: 'Sync Failed Email', from_address: 'f@x.test', from_name: 'Fail',
+          from: 'Fail <f@x.test>', to: 'box@x.test', cc: '', date: '2018-10-26T12:00:00Z', is_read: false,
+          is_flagged: false, has_attachments: false, snippet: null, body: '', body_type: 'empty',
+          parse_error: null, is_archived: false, archive_state: 'archive_pending', archive_has_error: true, attachments: [],
+        })
+      }
+      return originalFetch(url, init)
+    }))
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('正文同步失败')
       expect(container.textContent).toContain('立即重试同步')
     })
   })
@@ -637,7 +691,8 @@ describe('<MessageReader />', () => {
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
-  it('stops repeated automatic POST when HTTP 200 returns unarchived message (p039)', async () => {
+  // A293 replaces the old HTTP 200-detail response test with the accepted-job contract.
+  it('stops repeated automatic POST after the asynchronous request is accepted (A293)', async () => {
     useMailStore.setState({ selectedKey: 'm-unarchived' })
     let syncCalls = 0
     const originalFetch = globalThis.fetch
@@ -645,22 +700,14 @@ describe('<MessageReader />', () => {
       const u = String(url)
       if (u.endsWith('/sync-body') && init.method === 'POST') {
         syncCalls++
-        // Return 200 OK with unarchived state (empty body, is_archived: false)
-        return json({
-          id: 'm-unarchived', account_id: 'acc-1', subject: 'Unarchived Email', from_address: 'u@x.test', from_name: 'Unarchived',
-          from: 'Unarchived <u@x.test>', to: 'box@x.test', cc: '', date: '2018-10-26T12:00:00Z', is_read: false,
-          is_flagged: false, has_attachments: false, snippet: 'Snippet',
-          body: '', body_type: 'empty',
-          parse_error: null, is_archived: false, attachments: [],
-        })
+        return json({ message_id: 'm-unarchived', job_id: 'job-1', status: 'queued' }, 202)
       }
       return originalFetch(url, init)
     }))
 
     const { container } = await render(<MessageReader />)
     await waitFor(() => {
-      expect(container.textContent).toContain('邮件正文尚未完成同步')
-      expect(container.textContent).toContain('立即拉取正文')
+      expect(container.textContent).toContain('正文同步任务已排队')
     })
     // Must be bounded to exactly 1 automatic sync call, NOT looping
     expect(syncCalls).toBe(1)

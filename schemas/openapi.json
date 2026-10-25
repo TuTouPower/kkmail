@@ -1013,6 +1013,22 @@
             "title": "Account Id",
             "type": "string"
           },
+          "archive_has_error": {
+            "default": false,
+            "title": "Archive Has Error",
+            "type": "boolean"
+          },
+          "archive_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive State"
+          },
           "attachments": {
             "items": {
               "$ref": "#/components/schemas/AttachmentOut"
@@ -2175,6 +2191,30 @@
           "count"
         ],
         "title": "SyncAllOut",
+        "type": "object"
+      },
+      "SyncBodyAcceptedOut": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "queued",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "job_id",
+          "status"
+        ],
+        "title": "SyncBodyAcceptedOut",
         "type": "object"
       },
       "SyncJobOut": {
@@ -3929,7 +3969,7 @@
     },
     "/api/mail/messages/{message_id}/sync-body": {
       "post": {
-        "description": "Trigger on-demand highest-priority body sync for a message.",
+        "description": "Queue an on-demand highest-priority body sync for a message.",
         "operationId": "api_sync_message_body_api_mail_messages__message_id__sync_body_post",
         "parameters": [
           {
@@ -3944,11 +3984,11 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MessageDetailOut"
+                  "$ref": "#/components/schemas/SyncBodyAcceptedOut"
                 }
               }
             },

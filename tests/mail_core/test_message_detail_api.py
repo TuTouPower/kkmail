@@ -106,7 +106,9 @@ def test_get_message_plain_only():
     assert data["body"] == "plain body"
 
 
-def test_missing_archive_state_stays_unknown_in_detail_and_sync_body():
+# A293 removes the old 200-detail response assertion: a message with no archive
+# state cannot be accepted into the Worker queue, so the new endpoint returns 409.
+def test_a293_missing_archive_state_remains_unknown_and_cannot_queue():
     Session = get_session_factory()
     with Session() as session:
         account = Account(
@@ -136,8 +138,7 @@ def test_missing_archive_state_stays_unknown_in_detail_and_sync_body():
         assert detail.json()["is_archived"] is None
 
         sync_body = client.post(f"/api/mail/messages/{message_id}/sync-body")
-        assert sync_body.status_code == 200
-        assert sync_body.json()["is_archived"] is None
+        assert sync_body.status_code == 409
         build_provider.assert_not_called()
 
     with Session() as session:
