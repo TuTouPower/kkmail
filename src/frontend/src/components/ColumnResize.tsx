@@ -2,10 +2,16 @@ import { useCallback, useEffect, useRef } from 'react'
 
 export default function ColumnResize({
   ariaLabel,
+  value,
+  min,
+  max,
   onDrag,
   onDragEnd,
 }: {
   ariaLabel: string
+  value: number
+  min: number
+  max: number
   onDrag: (deltaX: number) => void
   onDragEnd?: () => void
 }) {
@@ -51,6 +57,9 @@ export default function ColumnResize({
       role="separator"
       aria-orientation="vertical"
       aria-label={ariaLabel}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={value}
       tabIndex={0}
       onPointerDown={onPointerDown}
       onKeyDown={(e) => {

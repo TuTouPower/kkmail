@@ -14,17 +14,20 @@ function key(el: Element, k: string) {
 
 describe('ColumnResize', () => {
   it('renders an accessible, focusable vertical separator', async () => {
-    const { container } = await render(<ColumnResize ariaLabel="调整列宽" onDrag={() => {}} />)
+    const { container } = await render(<ColumnResize ariaLabel="调整列宽" value={300} min={180} max={420} onDrag={() => {}} />)
     const handle = container.querySelector('[role="separator"]')
     expect(handle).not.toBeNull()
     expect(handle?.getAttribute('aria-orientation')).toBe('vertical')
     expect(handle?.getAttribute('aria-label')).toBe('调整列宽')
     expect(handle?.getAttribute('tabindex')).toBe('0')
+    expect(handle?.getAttribute('aria-valuemin')).toBe('180')
+    expect(handle?.getAttribute('aria-valuemax')).toBe('420')
+    expect(handle?.getAttribute('aria-valuenow')).toBe('300')
   })
 
   it('arrow keys resize by 8px steps and other keys are ignored', async () => {
     const onDrag = vi.fn()
-    const { container } = await render(<ColumnResize ariaLabel="resize" onDrag={onDrag} />)
+    const { container } = await render(<ColumnResize ariaLabel="resize" value={300} min={180} max={420} onDrag={onDrag} />)
     const handle = container.querySelector('[role="separator"]')!
     key(handle, 'ArrowLeft')
     key(handle, 'ArrowRight')
@@ -35,7 +38,7 @@ describe('ColumnResize', () => {
 
   it('stops listening on pointercancel and releases capture', async () => {
     const onDrag = vi.fn()
-    const { container } = await render(<ColumnResize ariaLabel="resize" onDrag={onDrag} />)
+    const { container } = await render(<ColumnResize ariaLabel="resize" value={300} min={180} max={420} onDrag={onDrag} />)
     const handle = container.querySelector('[role="separator"]') as HTMLDivElement
     // jsdom lacks pointer-capture APIs; stub them so the cleanup path is testable.
     const release = vi.fn()
@@ -66,7 +69,7 @@ describe('ColumnResize', () => {
   it('calls onDragEnd when drag completes or cancel occurs', async () => {
     const onDrag = vi.fn()
     const onDragEnd = vi.fn()
-    const { container } = await render(<ColumnResize ariaLabel="resize" onDrag={onDrag} onDragEnd={onDragEnd} />)
+    const { container } = await render(<ColumnResize ariaLabel="resize" value={300} min={180} max={420} onDrag={onDrag} onDragEnd={onDragEnd} />)
     const handle = container.querySelector('[role="separator"]') as HTMLDivElement
     Object.defineProperty(handle, 'setPointerCapture', { configurable: true, value: vi.fn() })
     Object.defineProperty(handle, 'releasePointerCapture', { configurable: true, value: vi.fn() })

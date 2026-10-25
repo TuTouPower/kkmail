@@ -188,6 +188,9 @@ function App() {
         {wide && !sidebarCollapsed && (
           <ColumnResize
             ariaLabel="调整侧栏宽度"
+            value={sidebarWidth}
+            min={180}
+            max={420}
             onDrag={(dx) => {
               const next = Math.min(420, Math.max(180, Math.round(dragSidebarRef.current + dx)))
               dragSidebarRef.current = next
@@ -221,6 +224,9 @@ function App() {
             {wide && (
               <ColumnResize
                 ariaLabel="调整邮件列表宽度"
+                value={listWidth}
+                min={260}
+                max={560}
                 onDrag={(dx) => {
                   const next = Math.min(560, Math.max(260, Math.round(dragListRef.current + dx)))
                   dragListRef.current = next
