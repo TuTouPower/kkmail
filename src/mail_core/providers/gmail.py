@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 class GmailNotConfiguredError(NotImplementedError):
-    """Raised until a real Gmail HTTP transport is supplied."""
+    """Raised when Gmail has no HTTP transport, typically because credential_ref is missing."""
 
 
 # Gmail system label id/name → FolderRole value

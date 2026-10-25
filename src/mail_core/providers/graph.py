@@ -28,7 +28,7 @@ from mail_core.providers.parsing.graph_delta import parse_graph_delta
 
 
 class GraphNotConfiguredError(NotImplementedError):
-    """Raised until a real Graph HTTP transport is supplied."""
+    """Raised when Graph has no HTTP transport, typically because credential_ref is missing."""
 
 
 _GRAPH_WELL_KNOWN_ROLES: dict[str, str] = {
