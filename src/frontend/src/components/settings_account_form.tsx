@@ -254,6 +254,19 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
       event.preventDefault()
       if (busyRef.current) return
       if (provider === 'imap' && !host.trim()) { setStatus('请输入 IMAP 服务器地址'); return }
+      if (provider !== 'imap' && !oauthAuthorized && oauth.token_uri !== '') {
+        let tokenUri: URL
+        try {
+          tokenUri = new URL(oauth.token_uri)
+        } catch {
+          setStatus('令牌端点必须是有效的完整 URL')
+          return
+        }
+        if (tokenUri.protocol !== 'https:') {
+          setStatus('令牌端点必须使用 HTTPS')
+          return
+        }
+      }
       let credentials: Record<string, unknown> = {}
       if (provider === 'imap' && password) credentials = { password }
       if (provider !== 'imap' && !oauthAuthorized) credentials = Object.fromEntries(Object.entries(oauth).filter(([, value]) => value !== ''))

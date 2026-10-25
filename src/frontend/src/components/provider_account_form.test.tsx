@@ -52,6 +52,41 @@ it('updates a single OAuth field without echoing or replacing saved secrets', as
   expect(calls[0].credentials).toEqual({ refresh_token: 'new-refresh' })
 })
 
+it('validates a custom OAuth token URI before submitting account credentials', async () => {
+  const writes: Array<{ url: string; body: Record<string, unknown> }> = []
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
+    const url = String(input)
+    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }))
+    if ((init.method || 'GET') !== 'GET') writes.push({ url, body: JSON.parse(String(init.body)) })
+    return new Response(JSON.stringify({ id: 'new' }))
+  }))
+
+  const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
+  await changeSelect(container.querySelector('#account-vendor'), 'google')
+  await changeSelect(container.querySelector('#account-provider'), 'gmail')
+  await typeInto(container.querySelector('#account-email'), 'hello@gmail.com')
+  await typeInto(container.querySelector('#account-client-id'), 'google-client')
+  await typeInto(container.querySelector('#account-refresh-token'), 'google-refresh')
+  await click(container.querySelector('.settings-advanced summary'))
+
+  const tokenUri = container.querySelector('#account-token-uri') as HTMLInputElement
+  await typeInto(tokenUri, 'http://127.0.0.1:18765/token')
+  await click(container.querySelector('button[type="submit"]'))
+  await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('必须使用 HTTPS'))
+  expect(writes).toHaveLength(0)
+
+  await typeInto(tokenUri, 'not-a-url')
+  await click(container.querySelector('button[type="submit"]'))
+  await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain('有效的完整 URL'))
+  expect(writes).toHaveLength(0)
+
+  await typeInto(tokenUri, 'https://oauth2.googleapis.com/token')
+  await click(container.querySelector('button[type="submit"]'))
+  await waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0].url).toMatch(/\/api\/accounts$/)
+  expect(writes[0].body).toMatchObject({ credentials: { token_uri: 'https://oauth2.googleapis.com/token' } })
+})
+
 it('releases save controls when the account write succeeds but refresh fails', async () => {
   const writes: string[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
