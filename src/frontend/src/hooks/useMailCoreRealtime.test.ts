@@ -28,6 +28,8 @@ describe('extractMessageIds', () => {
     expect(extractMessageIds({ message_id: 'm-1' })).toEqual(['m-1'])
     expect(extractMessageIds({ id: 'm-2' })).toEqual(['m-2'])
     expect(extractMessageIds({ message_ids: ['m-3', 'm-4'] })).toEqual(['m-3', 'm-4'])
+    expect(extractMessageIds({ message_id: 'm-5', id: 'other', message_ids: ['m-5', 'm-6', 'm-6'] })).toEqual(['m-5', 'm-6'])
+    expect(extractMessageIds({ id: 'm-7', message_ids: ['m-7', 'm-8'] })).toEqual(['m-7', 'm-8'])
     expect(extractMessageIds('m-5')).toEqual(['m-5'])
     expect(extractMessageIds(null)).toEqual([])
   })

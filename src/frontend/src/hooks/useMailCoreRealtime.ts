@@ -28,15 +28,17 @@ export function extractMessageIds(data: unknown): string[] {
   if (typeof data === 'string') return [data]
   if (typeof data === 'object') {
     const obj = data as Record<string, unknown>
-    const ids: string[] = []
-    if (typeof obj.message_id === 'string' && obj.message_id) ids.push(obj.message_id)
-    if (typeof obj.id === 'string' && obj.id) ids.push(obj.id)
+    const ids = new Set<string>()
+    let primaryId: string | null = null
+    if (typeof obj.message_id === 'string' && obj.message_id) primaryId = obj.message_id
+    else if (typeof obj.id === 'string' && obj.id) primaryId = obj.id
+    if (primaryId) ids.add(primaryId)
     if (Array.isArray(obj.message_ids)) {
       for (const id of obj.message_ids) {
-        if (typeof id === 'string' && id) ids.push(id)
+        if (typeof id === 'string' && id) ids.add(id)
       }
     }
-    return ids
+    return [...ids]
   }
   return []
 }
