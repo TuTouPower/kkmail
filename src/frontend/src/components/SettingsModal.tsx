@@ -221,17 +221,33 @@ export default function SettingsPage({
 
   return (
     <section className="settings-page" aria-label="应用设置">
-      <header className="settings-page-head">
-        <button ref={sidebarToggleRef} data-ui="ST01" data-testid="sidebar-toggle" type="button" className="sidebar-expand-btn settings-icon-button"
-          title={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
-          aria-label={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
-          aria-expanded={wide ? !sidebarCollapsed : mobileSidebarOpen} onClick={wide ? toggleSidebar : toggleMobileSidebar}><PanelLeft size={18} /></button>
-        <span className="settings-title-icon"><SettingsIcon size={18} /></span>
-        <div className="settings-title-copy"><strong data-ui="ST02">设置</strong><span>账户、分组与应用偏好</span></div>
-        <button data-ui="ST03" type="button" className="settings-button settings-back" aria-label="关闭" onClick={closeSettings}><ArrowLeft size={14} />返回邮件</button>
-      </header>
       <div className="settings-page-body">
         <nav data-ui="ST04" className="settings-nav" aria-label="设置分类">
+          <div className="settings-nav-header">
+            <button
+              ref={sidebarToggleRef}
+              data-ui="ST01"
+              data-testid="sidebar-toggle"
+              type="button"
+              className="sidebar-expand-btn settings-icon-button"
+              title={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+              aria-label={wide ? (sidebarCollapsed ? '展开侧栏' : '收起侧栏') : (mobileSidebarOpen ? '关闭导航' : '打开导航')}
+              aria-expanded={wide ? !sidebarCollapsed : mobileSidebarOpen}
+              onClick={wide ? toggleSidebar : toggleMobileSidebar}
+            >
+              <PanelLeft size={18} />
+            </button>
+            <span className="settings-nav-title">设置</span>
+            <button
+              type="button"
+              className="settings-nav-close"
+              aria-label="关闭设置"
+              title="返回邮件"
+              onClick={closeSettings}
+            >
+              <ArrowLeft size={16} />
+            </button>
+          </div>
           <span className="settings-nav-caption">邮箱管理</span>
           <button type="button" className="settings-nav-item" aria-current={section === 'accounts' ? 'page' : undefined} onClick={() => setSection('accounts')}><Inbox size={16} />账户管理</button>
           <button type="button" className="settings-nav-item" aria-current={section === 'groups' ? 'page' : undefined} onClick={() => setSection('groups')}><Folder size={16} />分组管理</button>

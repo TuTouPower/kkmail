@@ -360,6 +360,7 @@ describe('<Sidebar />', () => {
     // Focus out to an external element (new group button)
     const newGroupBtn = container.querySelector('[aria-label="新建分组"]') as HTMLButtonElement
     await act(async () => {
+      masterSearch.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: newGroupBtn }))
       newGroupBtn.focus()
       await new Promise((r) => requestAnimationFrame(r))
     })
