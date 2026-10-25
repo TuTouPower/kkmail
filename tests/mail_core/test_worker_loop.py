@@ -1,6 +1,5 @@
 import os
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -27,15 +26,22 @@ def test_positive_float_setting_warns_and_uses_default(monkeypatch, caplog, raw)
     assert raw in caplog.text
 
 
-def test_worker_stops_on_flag():
-    def run():
-        worker_main.run(poll_interval_s=0.05)
+def test_worker_stops_on_flag(monkeypatch):
+    ticked = threading.Event()
 
-    t = threading.Thread(target=run, daemon=True)
+    def fake_tick(_worker_id):
+        ticked.set()
+        return worker_main.TickResult(claimed=0, handled=0)
+
+    monkeypatch.setattr(worker_main, "_reclaim_once", lambda: 0)
+    monkeypatch.setattr(worker_main, "_tick", fake_tick)
+    t = threading.Thread(target=lambda: worker_main.run(poll_interval_s=0.01), daemon=True)
     t.start()
-    time.sleep(0.12)
-    worker_main.request_stop()
-    t.join(timeout=2)
+    try:
+        assert ticked.wait(timeout=2)
+    finally:
+        worker_main.request_stop()
+        t.join(timeout=2)
     assert not t.is_alive()
 
 
