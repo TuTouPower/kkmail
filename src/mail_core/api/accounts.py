@@ -140,12 +140,23 @@ class GroupUpdateIn(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+_SIDEBAR_MAX_GROUPS = 1000
+_SIDEBAR_MAX_ACCOUNTS = 5000
+
+
 class SidebarLayoutIn(BaseModel):
-    group_ids: list[UUID]
-    master_account_ids: list[UUID]
-    ungrouped_account_ids: list[UUID]
-    group_account_ids: dict[UUID, list[UUID]]
+    group_ids: list[UUID] = Field(max_length=_SIDEBAR_MAX_GROUPS)
+    master_account_ids: list[UUID] = Field(max_length=_SIDEBAR_MAX_ACCOUNTS)
+    ungrouped_account_ids: list[UUID] = Field(max_length=_SIDEBAR_MAX_ACCOUNTS)
+    group_account_ids: dict[UUID, list[UUID]] = Field(max_length=_SIDEBAR_MAX_GROUPS)
     expected_revision: str = Field(min_length=64, max_length=64)
+
+    @field_validator("group_account_ids")
+    @classmethod
+    def bound_group_account_ids(cls, value: dict[UUID, list[UUID]]) -> dict[UUID, list[UUID]]:
+        if sum(len(account_ids) for account_ids in value.values()) > _SIDEBAR_MAX_ACCOUNTS:
+            raise ValueError(f"group account lists must not exceed {_SIDEBAR_MAX_ACCOUNTS} accounts in total")
+        return value
 
 
 class SidebarLayoutRevisionIn(BaseModel):
