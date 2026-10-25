@@ -39,6 +39,8 @@ function App() {
   const setSidebarWidth = useMailStore((s) => s.setSidebarWidth)
   const setListWidth = useMailStore((s) => s.setListWidth)
   const [authed, setAuthed] = useState<boolean | null>(null)
+  const [sessionCheckFailed, setSessionCheckFailed] = useState(false)
+  const [sessionCheckAttempt, setSessionCheckAttempt] = useState(0)
   const [oauthReturnPending, setOAuthReturnPending] = useState(false)
   const consumeOAuthReturn = useCallback(() => setOAuthReturnPending(false), [])
   useMailCoreRealtime(authed === true)
@@ -111,20 +113,49 @@ function App() {
   useEffect(() => {
     let cancelled = false
     api.checkSession()
-      .then((ok) => { if (!cancelled) setAuthed(ok) })
-      .catch(() => { if (!cancelled) setAuthed(false) })
-    const onUnauthorized = () => setAuthed(false)
+      .then((ok) => {
+        if (!cancelled) {
+          setSessionCheckFailed(false)
+          setAuthed(ok)
+        }
+      })
+      .catch(() => { if (!cancelled) setSessionCheckFailed(true) })
+    const onUnauthorized = () => {
+      setSessionCheckFailed(false)
+      setAuthed(false)
+    }
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
     return () => {
       cancelled = true
       window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
     }
-  }, [])
+  }, [sessionCheckAttempt])
 
   if (authed === null) {
     return <>
       {macLoginDragRegion}
-      <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', color: 'var(--muted)' }}>正在检查登录状态…</div>
+      <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', gap: 16, color: 'var(--muted)' }}>
+        {sessionCheckFailed ? <>
+          <div role="alert">无法连接 mail-core，暂时无法检查登录状态。</div>
+          <button
+            type="button"
+            data-testid="retry-session-check"
+            onClick={() => {
+              setSessionCheckFailed(false)
+              setSessionCheckAttempt((attempt) => attempt + 1)
+            }}
+            style={{
+              height: 36,
+              padding: '0 16px',
+              border: 0,
+              borderRadius: 8,
+              background: 'var(--primary)',
+              color: 'var(--on-primary)',
+              cursor: 'pointer',
+            }}
+          >重试</button>
+        </> : <div>正在检查登录状态…</div>}
+      </div>
     </>
   }
   if (!authed) {
