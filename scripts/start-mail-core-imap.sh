@@ -16,6 +16,8 @@ if [[ -z "${KKMAIL_TEST_PG_PASSWORD:-}" && -f "$ROOT/.env.test" ]]; then
   source "$ROOT/.env.test"
   set +a
 fi
+KKMAIL_TEST_IMAP_REVISION="$(git -C "$ROOT" rev-parse --verify HEAD)"
+export KKMAIL_TEST_IMAP_REVISION
 
 PY="$(command -v python3 || true)"
 if [[ -z "$PY" ]]; then

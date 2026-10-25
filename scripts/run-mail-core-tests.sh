@@ -13,6 +13,8 @@ if [[ -z "${KKMAIL_TEST_PG_PASSWORD:-}" && -f "$ROOT/.env.test" ]]; then
     source "$ROOT/.env.test"
     set +a
 fi
+KKMAIL_TEST_IMAP_REVISION="$(git -C "$ROOT" rev-parse --verify HEAD)"
+export KKMAIL_TEST_IMAP_REVISION
 if [[ $# -eq 0 ]]; then
     set -- run
 fi

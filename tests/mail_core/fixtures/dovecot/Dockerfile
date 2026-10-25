@@ -1,4 +1,6 @@
 FROM alpine:3.20
+ARG FIXTURE_REVISION=local
+LABEL org.opencontainers.image.revision="${FIXTURE_REVISION}"
 RUN apk add --no-cache dovecot \
  && adduser -D -u 5000 vmail
 COPY 10-mail.conf 10-auth.conf 10-master.conf /etc/dovecot/conf.d/

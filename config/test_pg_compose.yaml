@@ -18,9 +18,11 @@ services:
       retries: 60
 
   imap:
-    image: kkmail-test-dovecot
+    image: kkmail-test-dovecot:${KKMAIL_TEST_IMAP_REVISION:-local}
     build:
       context: ../tests/mail_core/fixtures/dovecot
+      args:
+        FIXTURE_REVISION: ${KKMAIL_TEST_IMAP_REVISION:-local}
     labels:
       io.kkmail.test_imap: "v1"
     ports:
