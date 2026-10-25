@@ -20,4 +20,4 @@
     - 前端缺少 Google 供应商开箱即用（选 Google 仅展示邮箱与应用专用密码，提交直接创建 IMAP 账号）的组件单测与 E2E 验证。
     - 应补测试：断言选择 Google 时表单无任何 OAuth 字段、正确预填 Gmail IMAP 参数、密码框提示“应用专用密码”、帮助弹窗内容正确直达 Google App Passwords。
 - 线索：`.scratch/reproduce_google_account_form_ux.mjs`
-- 处理：未开
+- 处理：fix/review-20261026-commits

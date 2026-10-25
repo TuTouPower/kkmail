@@ -27,4 +27,4 @@
         - 组件与 E2E 测试：在 `MessageList.test.tsx` 和 E2E 流程中加入页面无 `.list-note.error` 且无未处理 fetch 失败的断言。
         - 后端测试：补充 Cookie session 下调用 `/sync/delta` 校验 CSRF 的 pytest 用例。
 - 线索：`.scratch/reproduce_scope_sync_error.mjs`
-- 处理：未开
+- 处理：fix/review-20261026-commits

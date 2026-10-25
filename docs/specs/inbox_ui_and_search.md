@@ -91,3 +91,8 @@
 - `docs/blueprint/conventions.md`：邮件 HTML 渲染沙箱与响应式布局约定。
 - `docs/blueprint/architecture.md`、`conventions.md`、`decisions.md`、`testing.md`：t027 分组侧栏、邮件范围、独立排序与验证约定。
 - `docs/blueprint/architecture.md`、`conventions.md`、`testing.md`：t032 网页侧栏恢复入口、macOS 原生标题栏、移动抽屉与主题启动约定。
+
+## 同步请求入口与权威进度（fix/review-20261026-commits，2026-10-26）
+
+- 范围同步入口（R01/R02 + p053）：邮件列表的 scope 同步统一走 `postJson` 并携带 Cookie 会话 CSRF；错误信息经 `errorMessage` 防御性提取，不再出现 `[object Object]`。请求 ID 为 bare UUID（32 字符），服务端校验 1–64 字符，同 ID 同意图幂等、同 ID 不同意图返回 409。文件夹角色原样传递（unread 视图映射 inbox）。消息正文读取的加载状态绑定 `{messageId, generation}` 并以 AbortController 取消过期请求。
+- 权威进度（R07）：同步请求进度以 TanStack Query 键 `['sync-request', requestId]` 轮询（≤2s、仅页面可见时、终态停转）；SSE `sync.request_updated` 只失效匹配的查询。请求 ID 按 scope 隔离，页面重载后经 `GET /api/mail/sync/requests` 恢复未终结请求的跟踪。

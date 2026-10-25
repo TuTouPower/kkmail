@@ -97,3 +97,10 @@
 
 - `docs/blueprint/architecture.md`：同步引擎与存储模块说明。
 - `docs/blueprint/decisions.md`：IMAP 删除安全阻断策略。
+
+## 同步执行跟踪、连接预算与保留策略（fix/review-20261026-commits，2026-10-26）
+
+- 同步请求执行跟踪（R06/R08，迁移 `20261026_0025`）：WorkerJob 持有 `execution_generation`（唯一 UUID）；新表 `sync_request_target_jobs` 把同步请求目标绑定到具体作业代次，请求结算按 WorkerJob → 代次 advisory → 绑定/Target（UUID 升序）→ Request（UUID 升序）的锁序执行，孤儿绑定由 reaper 收敛。全量扫描以 `scan_generation` 标识一轮完整扫描，半扫描不触发删除。无基线时 delta 同步返回 `baseline_required`。迁移将无法追踪的历史 queued/running 请求标为 failed（code=`execution_tracking_unavailable`），不伪造历史成功。新增只读接口 `GET /api/mail/sync/requests` 返回当前未终结请求（scope 过滤，limit ≤ 50），供前端重载恢复。
+- 连接预算（R11）：全局 8 槽、后台 6 槽由每许可一张专用 psycopg 控制连接持有会话级 advisory lock 实现（槽位 0–7，后台仅 2–7）；流量类别由作业类型/消息上下文显式计算并传入 IMAP/HTTP/OAuth 刷新 I/O。容量不足走 `jobs.reschedule_job()` 改期，不计失败。
+- Outbox 保留（R13，迁移 `20261026_0026`）：按 `publication_seq` 连续已发布前缀清理，保留 7 天，单批 ≤ 5000，水位 `pruned_through_seq` 与删除同事务推进；`dispatched_at` 已删除。游标低于水位时回放返回 `client.resync_hint(reason=retention_gap)`；分发器先提交发布再广播。
+- 备份恢复（R12）：恢复先在目标 blob 根内同卷 staging，逐文件发布 blob（拒绝发布到目标根之外）后才执行 `pg_restore --single-transaction`；操作日志只含 operation_id、包摘要、目标路径、数据库身份、阶段五键，支持 resume/verify/cleanup 与 `needs_verification` 语义。
