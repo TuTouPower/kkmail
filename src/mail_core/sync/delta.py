@@ -172,6 +172,7 @@ def apply_delta_page(
     message_event_ids: list[uuid.UUID] = []
     for o, change in zip(outcomes, upserts):
         if o.changed:
+            upserted += 1
             touched.append(o.message.id)
             message_event_ids.append(o.message.id)
             upsert_message_search(session, message_id=o.message.id)
@@ -193,7 +194,6 @@ def apply_delta_page(
             )
             if assignment.thread_id != previous_thread_id:
                 message_event_ids.append(o.message.id)
-    upserted = len(upserts)
     flag_count, flag_touched = _apply_flag_patches(
         session, account_id=account_id, folder_id=folder_id, changes=flag_changes
     )
