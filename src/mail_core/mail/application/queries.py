@@ -398,18 +398,22 @@ class GlobalStatsOut(BaseModel):
     accounts: list[AccountInboxStatsOut]
 
 
-def query_global_inbox_stats(session: Session, *, folder_role: str = "inbox") -> GlobalStatsOut:
-    """Return stats for a folder role, keeping missing folder stats unknown."""
+def _query_inbox_stats(
+    session: Session,
+    *,
+    folder_role: str,
+    group_id: uuid.UUID | None,
+) -> GlobalStatsOut:
     stmt = (
         select(
-            Account.id,
+            Account.id.label("account_id"),
             func.count(Folder.id).label("folder_count"),
             func.count(FolderStats.folder_id).label("stats_count"),
             func.sum(FolderStats.unread_count).label("unread_count"),
             func.sum(FolderStats.total_count).label("total_count"),
             func.count(FolderStats.unread_count).label("known_unread_count"),
-            Account.sync_enabled,
-            Account.sync_status,
+            Account.sync_enabled.label("sync_enabled"),
+            Account.sync_status.label("sync_status"),
         )
         .select_from(Account)
         .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == folder_role))
@@ -417,65 +421,43 @@ def query_global_inbox_stats(session: Session, *, folder_role: str = "inbox") ->
         .group_by(Account.id, Account.sync_enabled, Account.sync_status)
         .order_by(Account.id.asc())
     )
-    rows = session.execute(stmt).all()
+    if group_id is not None:
+        stmt = stmt.where(Account.group_id == group_id)
+
     accounts: list[AccountInboxStatsOut] = []
     active_accounts: list[AccountInboxStatsOut] = []
-    for r in rows:
-        unread = int(r[3]) if r[1] > 0 and r[1] == r[5] else None
-        total = int(r[4]) if r[1] > 0 and r[1] == r[2] else None
-        acc_out = AccountInboxStatsOut(account_id=r[0], unread_count=unread, total_count=total)
+    for row in session.execute(stmt).all():
+        values = row._mapping
+        folder_count = values["folder_count"]
+        stats_count = values["stats_count"]
+        known_unread_count = values["known_unread_count"]
+        unread = int(values["unread_count"]) if folder_count > 0 and folder_count == known_unread_count else None
+        total = int(values["total_count"]) if folder_count > 0 and folder_count == stats_count else None
+        acc_out = AccountInboxStatsOut(
+            account_id=values["account_id"], unread_count=unread, total_count=total
+        )
         accounts.append(acc_out)
-        sync_enabled = bool(r[6]) if len(r) > 6 else True
-        sync_status = str(r[7] or SyncStatus.IDLE.value) if len(r) > 7 else SyncStatus.IDLE.value
-        is_faulty_without_target = r[1] == 0 and (
+        sync_enabled = bool(values["sync_enabled"])
+        sync_status = str(values["sync_status"] or SyncStatus.IDLE.value)
+        is_faulty_without_target = folder_count == 0 and (
             not sync_enabled or sync_status in (SyncStatus.FAILED.value, SyncStatus.AUTH_FAILED.value)
         )
         if not is_faulty_without_target:
             active_accounts.append(acc_out)
+
     total_unread = None if any(account.unread_count is None for account in active_accounts) else sum(
         account.unread_count or 0 for account in active_accounts
     )
     return GlobalStatsOut(total_unread=total_unread, accounts=accounts)
+
+
+def query_global_inbox_stats(session: Session, *, folder_role: str = "inbox") -> GlobalStatsOut:
+    """Return stats for a folder role, keeping missing folder stats unknown."""
+    return _query_inbox_stats(session, folder_role=folder_role, group_id=None)
 
 
 def query_group_inbox_stats(session: Session, group_id: uuid.UUID, *, folder_role: str = "inbox") -> GlobalStatsOut:
     """Return role counts for every current member, including unknown counts."""
     if session.get(AccountGroup, group_id) is None:
         raise LookupError("group not found")
-    stmt = (
-        select(
-            Account.id,
-            func.count(Folder.id).label("folder_count"),
-            func.count(FolderStats.folder_id).label("stats_count"),
-            func.sum(FolderStats.unread_count).label("unread_count"),
-            func.sum(FolderStats.total_count).label("total_count"),
-            func.count(FolderStats.unread_count).label("known_unread_count"),
-            Account.sync_enabled,
-            Account.sync_status,
-        )
-        .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == folder_role))
-        .outerjoin(FolderStats, FolderStats.folder_id == Folder.id)
-        .where(Account.group_id == group_id)
-        .group_by(Account.id, Account.sync_enabled, Account.sync_status)
-        .order_by(Account.id.asc())
-    )
-    rows = session.execute(stmt).all()
-    accounts = []
-    active_accounts = []
-    for row in rows:
-        unread = int(row[3]) if row[1] > 0 and row[1] == row[5] else None
-        total = int(row[4]) if row[1] > 0 and row[1] == row[2] else None
-        acc_out = AccountInboxStatsOut(account_id=row[0], unread_count=unread, total_count=total)
-        accounts.append(acc_out)
-        sync_enabled = bool(row[6]) if len(row) > 6 else True
-        sync_status = str(row[7] or SyncStatus.IDLE.value) if len(row) > 7 else SyncStatus.IDLE.value
-        is_faulty_without_target = row[1] == 0 and (
-            not sync_enabled or sync_status in (SyncStatus.FAILED.value, SyncStatus.AUTH_FAILED.value)
-        )
-        if not is_faulty_without_target:
-            active_accounts.append(acc_out)
-    total_unread = None if any(account.unread_count is None for account in active_accounts) else sum(
-        account.unread_count or 0 for account in active_accounts
-    )
-    return GlobalStatsOut(total_unread=total_unread, accounts=accounts)
-
+    return _query_inbox_stats(session, folder_role=folder_role, group_id=group_id)

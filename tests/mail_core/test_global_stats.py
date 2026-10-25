@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -11,6 +12,21 @@ from mail_core.mail.application.queries import GlobalStatsOut, query_global_inbo
 from mail_core.mail.storage.models import AccountGroup
 
 
+def _stats_row(account_id, folder_count, stats_count, unread, total, known_unread_count, sync_enabled, sync_status):
+    return SimpleNamespace(
+        _mapping={
+            "account_id": account_id,
+            "folder_count": folder_count,
+            "stats_count": stats_count,
+            "unread_count": unread,
+            "total_count": total,
+            "known_unread_count": known_unread_count,
+            "sync_enabled": sync_enabled,
+            "sync_status": sync_status,
+        }
+    )
+
+
 def test_query_global_inbox_stats_excludes_faulty_zero_folder_account():
     session = MagicMock()
     acc1, acc2, acc3 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
@@ -18,9 +34,9 @@ def test_query_global_inbox_stats_excludes_faulty_zero_folder_account():
     # acc2: faulty, disabled & auth_failed, 0 inbox folders
     # acc3: faulty, enabled but sync_status='failed', 0 inbox folders
     session.execute.return_value.all.return_value = [
-        (acc1, 1, 1, 5, 10, 1, True, "idle"),
-        (acc2, 0, 0, None, None, 0, False, "auth_failed"),
-        (acc3, 0, 0, None, None, 0, True, "failed"),
+        _stats_row(acc1, 1, 1, 5, 10, 1, True, "idle"),
+        _stats_row(acc2, 0, 0, None, None, 0, False, "auth_failed"),
+        _stats_row(acc3, 0, 0, None, None, 0, True, "failed"),
     ]
     result = query_global_inbox_stats(session)
     assert result.total_unread == 5
@@ -35,8 +51,8 @@ def test_query_global_inbox_stats_normal_account_missing_folder_stats_propagates
     # acc1: normal active, unread=5
     # acc2: normal active, but 0 inbox folders (sync in progress)
     session.execute.return_value.all.return_value = [
-        (acc1, 1, 1, 5, 10, 1, True, "idle"),
-        (acc2, 0, 0, None, None, 0, True, "idle"),
+        _stats_row(acc1, 1, 1, 5, 10, 1, True, "idle"),
+        _stats_row(acc2, 0, 0, None, None, 0, True, "idle"),
     ]
     result = query_global_inbox_stats(session)
     assert result.total_unread is None
@@ -50,8 +66,8 @@ def test_query_group_inbox_stats_excludes_faulty_zero_folder_account():
     session.get.return_value = MagicMock(spec=AccountGroup)
     acc1, acc2 = uuid.uuid4(), uuid.uuid4()
     session.execute.return_value.all.return_value = [
-        (acc1, 1, 1, 3, 8, 1, True, "idle"),
-        (acc2, 0, 0, None, None, 0, False, "auth_failed"),
+        _stats_row(acc1, 1, 1, 3, 8, 1, True, "idle"),
+        _stats_row(acc2, 0, 0, None, None, 0, False, "auth_failed"),
     ]
     result = query_group_inbox_stats(session, group_id)
     assert result.total_unread == 3
@@ -65,8 +81,8 @@ def test_query_global_inbox_stats_keeps_unknown_folder_counters_unknown():
     session = MagicMock()
     acc1, acc2 = uuid.uuid4(), uuid.uuid4()
     session.execute.return_value.all.return_value = [
-        (acc1, 2, 2, 3, 10, 2),
-        (acc2, 2, 2, 5, 20, 1),
+        _stats_row(acc1, 2, 2, 3, 10, 2, True, "idle"),
+        _stats_row(acc2, 2, 2, 5, 20, 1, True, "idle"),
     ]
     result = query_global_inbox_stats(session)
     assert result.total_unread is None
