@@ -165,9 +165,31 @@ def rewrap_all_blobs(
     root = Path(root or blob_root())
     scanned = rewritten = already = 0
     errors: list[str] = []
-    paths = sorted(root.rglob("*.blob"))
+    paths: list[Path] = []
+    current_paths: list[Path] = []
+    scan_errors = 0
+    for path in sorted(root.rglob("*.blob")):
+        try:
+            with path.open("rb") as fh:
+                version = read_key_version(fh)
+        except Exception as exc:  # noqa: BLE001
+            scan_errors += 1
+            error = f"{path}: {type(exc).__name__}: {exc}"
+            if error not in errors:
+                errors.append(error)
+            log.warning("could not inspect blob key version for %s: %s", path, exc)
+            continue
+        if version == target:
+            already += 1
+            current_paths.append(path)
+        else:
+            paths.append(path)
     if limit is not None:
         paths = paths[:limit]
+    scanned = already + scan_errors + len(paths)
+    # Current files bypass the rewrite limit but still repair DB metadata after a crash.
+    paths = current_paths + paths
+    current_path_set = set(current_paths)
 
     own_session = session is None
     db_sync = True
@@ -183,12 +205,11 @@ def rewrap_all_blobs(
                 db_sync = False
 
     for path in paths:
-        scanned += 1
         try:
             changed, ver = rewrap_blob_file(path, keyring=keyring, target_version=target)
             if changed:
                 rewritten += 1
-            else:
+            elif path not in current_path_set:
                 already += 1
             digest = path.stem
             if len(digest) != 64:

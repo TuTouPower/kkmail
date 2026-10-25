@@ -125,6 +125,44 @@ def test_partial_blob_rewrap_keeps_credentials_and_old_keys_unretirable(tmp_path
     assert result.safe_to_retire_old_keys is False
 
 
+def test_limited_blob_rewrap_skips_current_files_and_progresses(tmp_path, monkeypatch):
+    monkeypatch.delenv("MAIL_CORE_DATABASE_URL", raising=False)
+    keyring = Keyring(keys={1: os.urandom(32), 2: os.urandom(32)}, active_version=2)
+    versions = {"a": 2, "b": 2, "c": 1, "d": 1}
+    for name, version in versions.items():
+        path = tmp_path / (name * 64 + ".blob")
+        path.write_bytes(wrap(name.encode(), keyring=keyring, key_version=version))
+
+    first = rewrap_all_blobs(root=tmp_path, keyring=keyring, limit=1)
+    assert first.rewritten == 1
+    assert first.already_current == 2
+    assert first.remaining_old_version_blobs == 1
+
+    second = rewrap_all_blobs(root=tmp_path, keyring=keyring, limit=1)
+    assert second.rewritten == 1
+    assert second.remaining_old_version_blobs == 0
+
+    third = rewrap_all_blobs(root=tmp_path, keyring=keyring, limit=1)
+    assert third.rewritten == 0
+    assert third.already_current == 4
+    assert third.remaining_old_version_blobs == 0
+
+
+def test_limited_blob_rewrap_repairs_metadata_for_current_files(tmp_path, monkeypatch):
+    keyring = Keyring(keys={1: os.urandom(32), 2: os.urandom(32)}, active_version=2)
+    digest = "a" * 64
+    (tmp_path / f"{digest}.blob").write_bytes(wrap(b"already-current", keyring=keyring, key_version=2))
+    synced = []
+    monkeypatch.setattr(rotate, "_sync_key_version", lambda _session, key, version: synced.append((key, version)))
+    monkeypatch.setattr(rotate, "_rewrap_credential_secrets", lambda *_args: 0)
+    monkeypatch.setattr(rotate, "_count_old_credential_secrets", lambda *_args: 0)
+
+    result = rewrap_all_blobs(root=tmp_path, keyring=keyring, session=object(), limit=1)
+
+    assert result.already_current == 1
+    assert synced == [(digest, 2)]
+
+
 def test_run_rewrap_exposes_old_key_retirement_gate(monkeypatch):
     result = RewrapResult(
         scanned=1,
