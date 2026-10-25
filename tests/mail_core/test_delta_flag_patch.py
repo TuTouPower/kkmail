@@ -283,3 +283,78 @@ def test_delta_explicit_flag_patch_does_not_fall_back_to_unrelated_meta_read_sta
         loaded = session.get(Message, message.id)
         assert loaded.is_read is True
         assert loaded.is_flagged is True
+
+
+def test_multilocation_flag_update_refreshes_all_folder_stats():
+    """P2-02: updating is_read on a multi-location message refreshes all affected folders."""
+    from mail_core.mail.storage.models import FolderStats, MessageLocation
+
+    Session = get_session_factory()
+    with Session() as session:
+        account = Account(email=f"multi-loc-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        session.add(account)
+        session.flush()
+
+        folder_a = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")
+        folder_b = Folder(account_id=account.id, remote_id="ALL", name="All Mail", role="archive")
+        session.add_all([folder_a, folder_b])
+        session.flush()
+
+        msg = Message(
+            account_id=account.id,
+            remote_id="multi-msg-1",
+            subject="Multi-location test",
+            from_address="sender@example.com",
+            is_read=False,
+        )
+        session.add(msg)
+        session.flush()
+
+        loc_a = MessageLocation(message_id=msg.id, folder_id=folder_a.id, uid=10)
+        loc_b = MessageLocation(message_id=msg.id, folder_id=folder_b.id, uid=20)
+        session.add_all([loc_a, loc_b])
+        session.flush()
+
+        from mail_core.mail.storage.folder_stats import recompute_folder_stats
+
+        recompute_folder_stats(session, folder_a.id)
+        recompute_folder_stats(session, folder_b.id)
+        folder_a_id = folder_a.id
+        folder_b_id = folder_b.id
+        account_id = account.id
+        session.commit()
+
+    with Session() as session:
+        # Pre-check: both folders have 1 unread message
+        stats_a = session.get(FolderStats, folder_a_id)
+        stats_b = session.get(FolderStats, folder_b_id)
+        assert stats_a.unread_count == 1
+        assert stats_b.unread_count == 1
+
+        lease = acquire_lease(session, account_id=account_id, owner_id="multi-test", ttl=timedelta(minutes=5))
+        # Sync delta for folder_a with is_read=True
+        apply_delta_page(
+            session,
+            account_id=account_id,
+            folder_id=folder_a_id,
+            fencing_token=lease.fencing_token,
+            page=DeltaPage(
+                changes=[
+                    DeltaChange(
+                        kind="flag",
+                        remote_id="multi-msg-1",
+                        flags={"is_read": True},
+                    )
+                ],
+                next_cursor=None,
+                exhausted=True,
+            ),
+        )
+        session.commit()
+
+    with Session() as session:
+        # Verify: BOTH folder_a AND folder_b have unread_count updated to 0
+        stats_a = session.get(FolderStats, folder_a_id)
+        stats_b = session.get(FolderStats, folder_b_id)
+        assert stats_a.unread_count == 0
+        assert stats_b.unread_count == 0
