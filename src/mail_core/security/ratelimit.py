@@ -15,9 +15,13 @@ from collections import deque
 
 
 class LoginRateLimiter:
-    def __init__(self, *, max_failures: int, window_s: float) -> None:
+    def __init__(self, *, max_failures: int, window_s: float, max_keys: int = 10_000) -> None:
         self.max_failures = max_failures
         self.window_s = window_s
+        # Global bound on tracked keys (B5a): per-key pruning alone never
+        # shrinks the map for keys that are never touched again, so a
+        # spray of distinct source addresses grew it without limit.
+        self.max_keys = max(1, int(max_keys))
         self._fails: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
@@ -31,6 +35,16 @@ class LoginRateLimiter:
             self._fails.pop(key, None)
         return q
 
+    def _evict_to_capacity(self, now: float) -> None:
+        """Make room for one new key: expired entries first, then oldest."""
+        if len(self._fails) < self.max_keys:
+            return
+        for key in list(self._fails):
+            self._prune(key, now)
+        while len(self._fails) >= self.max_keys:
+            oldest = min(self._fails, key=lambda k: self._fails[k][-1])
+            self._fails.pop(oldest, None)
+
     def retry_after(self, key: str, now: float | None = None) -> int:
         """Seconds until another attempt is allowed (0 = allowed now)."""
         now = time.monotonic() if now is None else now
@@ -43,6 +57,8 @@ class LoginRateLimiter:
     def record_failure(self, key: str, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
         with self._lock:
+            if key not in self._fails:
+                self._evict_to_capacity(now)
             q = self._prune(key, now)
             q.append(now)
             self._fails[key] = q
@@ -58,4 +74,5 @@ class LoginRateLimiter:
 login_limiter = LoginRateLimiter(
     max_failures=int(os.environ.get("MAIL_CORE_LOGIN_MAX_FAILURES") or 10),
     window_s=float(os.environ.get("MAIL_CORE_LOGIN_WINDOW_S") or 300),
+    max_keys=int(os.environ.get("MAIL_CORE_LOGIN_MAX_KEYS") or 10_000),
 )
