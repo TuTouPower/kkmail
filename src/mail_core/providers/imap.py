@@ -79,6 +79,12 @@ _FOLDER_ROLE = {
     "Archive": "archive",
     "Archives": "archive",
     "归档": "archive",
+    "All Mail": "all",
+    "所有邮件": "all",
+    "Starred": "flagged",
+    "已加星标": "flagged",
+    "Important": "important",
+    "重要": "important",
 }
 
 
@@ -440,7 +446,7 @@ class ImapProvider:
     username: str
     password: str = field(repr=False)
     use_ssl: bool = True
-    timeout: float = 30.0
+    timeout: float = 60.0
     # Connection-budget wiring (design §7): the permit is acquired before
     # the real connection is established and held for exactly the
     # connection's lifetime — a reused session counts as one connection.
@@ -596,6 +602,10 @@ class ImapProvider:
                         role = "junk"
                     elif "\\archive" in flag_lower:
                         role = "archive"
+                    elif "\\all" in flag_lower:
+                        role = "all"
+                    elif "\\flagged" in flag_lower or "\\starred" in flag_lower:
+                        role = "flagged"
                     else:
                         # 3. Known names
                         role = None

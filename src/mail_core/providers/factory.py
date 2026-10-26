@@ -131,11 +131,11 @@ def build_provider(
             timeout = get_fetch_timeout_seconds(session)
         except Exception as exc:
             logger.warning(
-                "fetch timeout lookup failed for account id=%s; using default 30s: %s",
+                "fetch timeout lookup failed for account id=%s; using default 60s: %s",
                 account.id,
                 safe_error(exc),
             )
-            timeout = 30.0
+            timeout = 60.0
     elif timeout is None:
         try:
             from mail_core.accounts.settings_store import get_fetch_timeout_seconds
@@ -145,13 +145,13 @@ def build_provider(
                 timeout = get_fetch_timeout_seconds(s)
         except Exception as exc:
             logger.warning(
-                "fetch timeout lookup failed for account id=%s; using default 30s: %s",
+                "fetch timeout lookup failed for account id=%s; using default 60s: %s",
                 account.id,
                 safe_error(exc),
             )
-            timeout = 30.0
+            timeout = 60.0
 
-    effective_timeout = float(timeout) if timeout is not None else 30.0
+    effective_timeout = float(timeout) if timeout is not None else 60.0
 
     if provider == "stub" or provider == "memory":
         return MemoryProvider.from_config(cfg)

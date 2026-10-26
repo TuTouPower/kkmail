@@ -1,0 +1,30 @@
+{
+  "tid": "t056",
+  "attempt": 1,
+  "execution_id": "f854e5f9d649496c8d1d09236e4aba5a",
+  "status": "done",
+  "branch": "t056_gmail_sync_strategy_and_timeout",
+  "base_sha": "6105e02038c594ae5d185da55a6fe35c3b7adc8d",
+  "tests": "Backend targeted tests: 29 passed. Frontend tests: 446 passed; TypeScript, build, lint passed. Template contract suite: 150 passed.",
+  "blackbox": "Playwright UI E2E: 18 passed. Full-stack E2E: 8 passed.",
+  "review": "Code and test review PASS in Round 1; review scope e7c80477ce7bcb4d; zero findings.",
+  "ac_evidence": {
+    "AC-001": [
+      "tests/mail_core/test_gmail_sync_strategy_and_timeout.py::test_sync_account_folders_pauses_gmail_virtual_folders"
+    ],
+    "AC-002": [
+      "tests/mail_core/test_gmail_sync_strategy_and_timeout.py::test_imap_discover_folders_recognizes_all_and_flagged_roles"
+    ],
+    "AC-003": [
+      "tests/mail_core/test_gmail_sync_strategy_and_timeout.py::test_imap_provider_default_timeout_is_60s"
+    ],
+    "AC-004": [
+      "tests/mail_core/test_gmail_sync_strategy_and_timeout.py::test_sync_folder_metadata_default_max_pages_is_10"
+    ],
+    "AC-005": [
+      "tests/mail_core/test_gmail_sync_strategy_and_timeout.py::test_worker_transient_network_timeout_does_not_fail_account"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

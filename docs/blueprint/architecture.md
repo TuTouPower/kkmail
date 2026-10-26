@@ -36,8 +36,9 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
 
 - **同步引擎与协议适配 (`src/mail_core/sync/`, `src/mail_core/providers/`)**：
 
-    - 适配器：IMAP (带 TLS 校验与特殊文件夹转义；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放)。
-    - 并发保护：基于数据库的租约锁 (`AccountSyncLease`) 与递增 fencing token。
+    - 适配器：IMAP (带 TLS 校验与特殊文件夹转义；默认 Socket 超时放宽至 60s；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务；Gmail 账号下 `\All` 与 `\Important` 等虚拟全量标签默认置为 `paused`，避免收件箱与已发送邮件全量重复拉取；RFC 6154 支持 `\All` 映射为 `all` 与 `\Flagged` 映射为 `flagged`)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放)。
+    - 并发保护与容错：基于数据库的租约锁 (`AccountSyncLease`) 与递增 fencing token；Worker 捕获瞬态网络超时（`TimeoutError`、`SSLEOFError` 等）进行指数退避重试，未达重试上限时不污染账户为 `failed` 状态。
+    - 同步分批：`sync_folder_metadata` 默认单任务最大页数控制在 10 页（约 500 封），避免大目录单次长时间霸占连接与 Worker 队列。
     - 元数据保真：provider 通过 `RemoteMessageMeta.supplied_fields` 区分完整快照与部分返回字段，metadata upsert 按字段存在性应用；同页 partial/flag 按响应顺序合并，缺省字段不清空本地事实。Graph 内容字段显式空值仍可清空。
     - 未知状态：邮件 read/flag/attachment 使用 nullable 布尔契约贯穿 PostgreSQL、查询 DTO、API 与前端；新建邮件不补 false。文件夹存在未知读状态时未读统计为 null，账号/分组/全局聚合传播未知而保留可知总数。旧库仅迁移已有状态列，无 flag 来源时保留 null。
 
