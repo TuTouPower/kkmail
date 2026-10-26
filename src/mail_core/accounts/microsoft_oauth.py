@@ -112,7 +112,11 @@ def exchange_redirect_url_for_tokens(
         profile = get(MICROSOFT_ME_URI, access)
     except Exception as exc:
         raise ValueError("无法核实 Microsoft 账号邮箱，请确认授权后重试。") from exc
-    email = profile.get("mail") or profile.get("userPrincipalName") if isinstance(profile, dict) else None
+    # Only Graph ``mail`` is a verified deliverable mailbox (mirrors
+    # stage_verified_response). userPrincipalName is not, so it is never an
+    # email fallback here; there is no verified id_token claim source in
+    # this flow either, so a missing mail hard-fails below.
+    email = profile.get("mail") if isinstance(profile, dict) else None
     if not isinstance(email, str) or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email.strip()):
         raise ValueError("Graph /me 未返回已核实的邮箱地址；账号可能没有可用邮箱，请确认 Microsoft 邮箱服务已启用。")
     return {

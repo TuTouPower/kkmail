@@ -122,15 +122,34 @@ def test_exchange_pasted_url_without_valid_redirect_uri_fails_before_token_post(
     assert captured == {}
 
 
-def test_exchange_falls_back_to_user_principal_name():
+# REPLACED (defect 7): test_exchange_falls_back_to_user_principal_name was
+# removed as a whole, not edited in place. It asserted that a profile with
+# mail=None onboards with userPrincipalName as the email; userPrincipalName
+# is not a verified deliverable mailbox, so that behavior let mailbox-less
+# accounts onboard. The two tests below cover the replacement semantics,
+# mirroring stage_verified_response, which accepts only profile mail.
+
+
+def test_exchange_rejects_profile_without_mail_even_when_upn_present():
     captured = {}
     token_post, _ = _fake_transports(captured)
 
     def profile_get(_url, _at):
-        return {"id": "ms-user", "mail": None, "userPrincipalName": "UPN@Outlook.com"}
+        return {"id": "ms-user", "mail": None, "userPrincipalName": "someone@tenant.onmicrosoft.com"}
+
+    with pytest.raises(ValueError, match="未返回已核实的邮箱地址"):
+        exchange_redirect_url_for_tokens(REDIRECT, token_post=token_post, profile_get=profile_get)
+
+
+def test_exchange_uses_mail_not_user_principal_name():
+    captured = {}
+    token_post, _ = _fake_transports(captured)
+
+    def profile_get(_url, _at):
+        return {"id": "ms-user", "mail": "real@example.com", "userPrincipalName": "other@tenant.onmicrosoft.com"}
 
     result = exchange_redirect_url_for_tokens(REDIRECT, token_post=token_post, profile_get=profile_get)
-    assert result["email"] == "upn@outlook.com"
+    assert result["email"] == "real@example.com"
 
 
 def test_exchange_env_client_id_override(monkeypatch):
