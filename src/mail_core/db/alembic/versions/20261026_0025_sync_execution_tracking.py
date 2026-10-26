@@ -18,9 +18,12 @@ Implements repair design §5.1/§12 for R06/R08:
 Data migration (§12): requests still ``queued``/``running`` at upgrade time
 have no reliable execution binding, so they — and their still-open targets —
 are marked ``failed`` with error code ``execution_tracking_unavailable``.
-Their IDs and history are preserved (terminal requests are pruned by the
-existing 7-day cleanup, never deleted here), and the underlying background
-sync jobs are left untouched: shared periodic polling keeps running, only
+Their IDs and history are preserved (nothing is deleted here; note the
+only 7-day cleanup that exists today is ``prune_completed_jobs`` in
+sync/jobs.py, which deletes WorkerJob rows only -- terminal sync
+requests, targets and bindings have no cleanup yet), and the underlying
+background sync jobs are left untouched: shared periodic polling keeps
+running, only
 the dead request association is ended. This marking is not reversible; the
 downgrade restores the schema shape but not the pre-upgrade request states.
 """
