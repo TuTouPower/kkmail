@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Dependencies are installed separately; every full run owns a fresh database.
+# Gate policy (T5): the default run requires the dedicated test PostgreSQL
+# service (auto-start attempted once); without it the gate fails explicitly
+# (exit 2) instead of silently degrading. 'unit' is an explicit quick mode
+# only and never counts as a full pass. See docs/blueprint/testing.md.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="$ROOT/.venv/bin/python"

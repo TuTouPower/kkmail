@@ -33,7 +33,18 @@ class SafetyError(RuntimeError):
 
 
 def docker(*args):
-    result = subprocess.run(["docker", *args], capture_output=True, text=True)
+    try:
+        result = subprocess.run(["docker", *args], capture_output=True, text=True)
+    except FileNotFoundError:
+        # Gate policy (T5): the default gate requires the dedicated test
+        # PostgreSQL service. Fail explicitly with the way out instead of
+        # an obscure FileNotFoundError deep in the run.
+        raise SafetyError(
+            "docker executable not found: the default test gate requires the dedicated "
+            "PostgreSQL test service. Install/start Docker and re-run, or use the explicit "
+            "quick mode 'scripts/run-mail-core-tests.sh unit' (unit does NOT execute the "
+            "PostgreSQL suite and is not a full pass)"
+        ) from None
     if result.returncode:
         # Docker may include expanded environment values in diagnostics.
         raise SafetyError("Docker command failed; check daemon, port and test-only configuration")
@@ -283,6 +294,16 @@ def run(args):
     directory = None
     try:
         with stage("allocate"):
+            # Gate policy (T5): a default run must have the test
+            # PostgreSQL service. If it is not up, try to start it once
+            # (start is idempotent and reuses a running instance); if it
+            # cannot be brought up, fail explicitly — never degrade
+            # silently to unit mode.
+            try:
+                instance()
+            except SafetyError:
+                LOG.warning("test PostgreSQL service not running; attempting to start it")
+                start()
             directory, record = create_run()
             env = run_environment(directory)
             env.update(MAIL_CORE_DATABASE_URL=admin_url(record["port"]).set(database=record["database"]).render_as_string(hide_password=False),
