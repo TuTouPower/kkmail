@@ -28,17 +28,9 @@ from mail_core.sync.execution import bind_target, binding_generation_for
 from mail_core.sync.jobs import enqueue_job
 
 
-def _inflight_full_root_generation(session: Session, account_id: uuid.UUID) -> uuid.UUID | None:
-    """Root scan generation of an in-flight full scan for this account, if any."""
-    job = session.scalar(
-        select(WorkerJob)
-        .where(WorkerJob.dedupe_key == f"sync:{account_id}")
-        .where(WorkerJob.status.in_(["pending", "claimed"]))
-        .limit(1)
-    )
-    if job is None:
-        return None
-    payload = job.payload or {}
+def _payload_root_generation(payload: dict | None) -> uuid.UUID | None:
+    """Root scan generation carried by a job payload, if it is a full scan."""
+    payload = payload or {}
     if not payload.get("full"):
         # A claimed job may carry the full request only in its successor.
         queue_next = payload.get("_queue_next") or {}
@@ -52,6 +44,38 @@ def _inflight_full_root_generation(session: Session, account_id: uuid.UUID) -> u
         return uuid.UUID(str(raw))
     except (ValueError, TypeError):
         return None
+
+
+def _inflight_full_root_generation(session: Session, account_id: uuid.UUID) -> uuid.UUID | None:
+    """Root scan generation of an in-flight full scan for this account, if any.
+
+    The scan is in flight not only while its folder-discovery job
+    (``sync:{account_id}``) is active: after discovery completes, the
+    scan continues in per-folder metadata jobs
+    (``metadata:{account_id}:{folder_id}``) whose payloads carry the
+    same root generation. Both phases count -- otherwise a full request
+    issued during the metadata phase allocates a second root generation
+    and forces a redundant rescan with a cursor reset.
+    """
+    job = session.scalar(
+        select(WorkerJob)
+        .where(WorkerJob.dedupe_key == f"sync:{account_id}")
+        .where(WorkerJob.status.in_(["pending", "claimed"]))
+        .limit(1)
+    )
+    if job is not None:
+        return _payload_root_generation(job.payload)
+    metadata_jobs = session.scalars(
+        select(WorkerJob)
+        .where(WorkerJob.dedupe_key.like(f"metadata:{account_id}:%"))
+        .where(WorkerJob.status.in_(["pending", "claimed"]))
+        .order_by(WorkerJob.created_at)
+    ).all()
+    for metadata_job in metadata_jobs:
+        generation = _payload_root_generation(metadata_job.payload)
+        if generation is not None:
+            return generation
+    return None
 
 
 class SyncTargetErrorOut(BaseModel):
