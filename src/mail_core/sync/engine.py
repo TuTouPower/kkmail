@@ -328,7 +328,31 @@ def sync_account_folders(
                         payload={"folder_id": str(existing.id)},
                     )
                 )
+        is_gmail = (
+            account.email.lower().endswith(("@gmail.com", "@googlemail.com"))
+            or "gmail" in str((account.config or {}).get("imap_host", "")).lower()
+        )
         for rf in remote_folders:
+            is_gmail_virtual = is_gmail and (
+                rf.role in ("all", "important")
+                or rf.remote_id in (
+                    "[Gmail]/&YkBnCZCuTvY-",
+                    "[Gmail]/&kc2JgQ-",
+                    "[Gmail]/All Mail",
+                    "[Gmail]/Important",
+                    "[Gmail]/所有邮件",
+                    "[Gmail]/重要",
+                )
+                or (
+                    rf.remote_id.startswith("[Gmail]/")
+                    and any(k in rf.name for k in ("所有邮件", "All Mail", "重要", "Important"))
+                )
+            )
+            default_sync_status = (
+                SyncStatus.PAUSED.value
+                if (not rf.selectable or is_gmail_virtual)
+                else SyncStatus.IDLE.value
+            )
             existing = by_remote.get(rf.remote_id)
             if existing is None:
                 existing = Folder(
@@ -337,7 +361,7 @@ def sync_account_folders(
                     name=rf.name,
                     role=rf.role,
                     parent_remote_id=rf.parent_remote_id,
-                    sync_status=SyncStatus.IDLE.value if rf.selectable else SyncStatus.PAUSED.value,
+                    sync_status=default_sync_status,
                 )
                 session.add(existing)
                 session.flush()
@@ -346,9 +370,12 @@ def sync_account_folders(
                 existing.name = rf.name
                 existing.role = rf.role
                 existing.parent_remote_id = rf.parent_remote_id
-                existing.sync_status = SyncStatus.IDLE.value if rf.selectable else SyncStatus.PAUSED.value
+                if not rf.selectable or is_gmail_virtual:
+                    existing.sync_status = SyncStatus.PAUSED.value
+                elif existing.sync_status != SyncStatus.PAUSED.value:
+                    existing.sync_status = SyncStatus.IDLE.value
             folder_ids.append(existing.id)
-            if rf.selectable:
+            if rf.selectable and existing.sync_status != SyncStatus.PAUSED.value:
                 metadata_payload: dict = {"folder_id": str(existing.id)}
                 if full:
                     # The execution layer must see the full-scan lifecycle:
@@ -420,7 +447,7 @@ def sync_folder_metadata(
     worker_id: str,
     store: CredentialStore | None = None,
     lease_ttl: timedelta = timedelta(seconds=120),
-    max_pages: int = 20,
+    max_pages: int = 10,
     full: bool = False,
     scan_generation: uuid.UUID | None = None,
     request_id: uuid.UUID | None = None,

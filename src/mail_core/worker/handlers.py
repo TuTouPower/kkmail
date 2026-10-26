@@ -368,11 +368,23 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         log.error("job %s (%s) failed: %s", job.id, job.job_type, safe_error(exc))
         log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()
-        if account_id is not None and job.job_type in _ACCOUNT_SYNC_JOB_TYPES:
+
+        is_auth_error = isinstance(exc, PermanentAuthError)
+        is_transient_network = (
+            isinstance(exc, (TimeoutError, ConnectionError, OSError))
+            or "ssl" in type(exc).__name__.lower()
+            or "eof" in type(exc).__name__.lower()
+        )
+        from mail_core.sync.jobs import _max_attempts
+        curr_failure_attempts = int(getattr(job, "failure_attempts", 0) or 0)
+        is_terminal = (curr_failure_attempts + 1) >= _max_attempts()
+        should_mark_account_failed = is_auth_error or (is_terminal and not is_transient_network)
+
+        if account_id is not None and job.job_type in _ACCOUNT_SYNC_JOB_TYPES and should_mark_account_failed:
             try:
-                status_label = SyncStatus.AUTH_FAILED if isinstance(exc, PermanentAuthError) else SyncStatus.FAILED
+                status_label = SyncStatus.AUTH_FAILED if is_auth_error else SyncStatus.FAILED
                 update_account_sync_status(session, account_id, status_label, error=safe_error(exc))
-                if isinstance(exc, PermanentAuthError):
+                if is_auth_error:
                     acc = session.get(Account, account_id)
                     if acc:
                         acc.sync_enabled = False

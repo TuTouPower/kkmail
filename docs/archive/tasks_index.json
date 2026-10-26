@@ -882,6 +882,22 @@
             "conflicts_with": "",
             "note": "来源：用户明确增加设备码；Microsoft 支持跳转回调与设备码两条新增/重新授权路径，统一获取并加密保存令牌；复用 t054 会话绑定与最终保存；不做 Microsoft IMAP 或迁移; 2026-10-25T02:00:57+08:00 用户明确授权补归档；直接 main 执行提交 87d69ac75d781bc0337f2f746291868b799f8329；历史双路 Review 指纹 42658742333b6b92 已核实；无 attempt，不伪造 ledger/handoff",
             "dir": "docs/archive/tasks/t055_microsoft_oauth_callback"
+        },
+        {
+            "tid": "t056",
+            "slug": "gmail_sync_strategy_and_timeout",
+            "title": "优化 Gmail 虚拟文件夹同步策略与 IMAP 超时及角色映射",
+            "status": "done",
+            "branch": "t056_gmail_sync_strategy_and_timeout",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "6105e02038c594ae5d185da55a6fe35c3b7adc8d",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "排除 Gmail 虚拟文件夹重复拉取，放宽 IMAP 超时与分批粒度，完善 RFC 6154 标志映射，瞬时网络超时防抖",
+            "dir": "docs/archive/tasks/t056_gmail_sync_strategy_and_timeout"
         }
     ]
 }

@@ -6,7 +6,7 @@
 |---|---|---|
 |account_connection|t053, t054, t055, fix/review-20261026-commits|2026-10-26|
 |auth_and_session|-|2026-10-22|
-|mail_sync_and_storage|t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, fix/review-20261026-commits|2026-10-26|
+|mail_sync_and_storage|t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, fix/review-20261026-commits|2026-10-26|
 |inbox_ui_and_search|t002, t003, t024, t027, t032, t051, t052, fix/review-20261026-commits|2026-10-26|
 |mail_account_navigation_and_read_state|—|2026-10-25|
 |testing_quality|t013, t014|2026-10-22|

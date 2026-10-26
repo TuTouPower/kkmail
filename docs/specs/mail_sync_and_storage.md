@@ -101,3 +101,10 @@
 - 连接预算（R11）：全局 8 槽、后台 6 槽由每许可一张专用 psycopg 控制连接持有会话级 advisory lock 实现（槽位 0–7，后台仅 2–7）；流量类别由作业类型/消息上下文显式计算并传入 IMAP/HTTP/OAuth 刷新 I/O。容量不足走 `jobs.reschedule_job()` 改期，不计失败。
 - Outbox 保留（R13，迁移 `20261026_0026`）：按 `publication_seq` 连续已发布前缀清理，保留 7 天，单批 ≤ 5000，水位 `pruned_through_seq` 与删除同事务推进；`dispatched_at` 已删除。游标低于水位时回放返回 `client.resync_hint(reason=retention_gap)`；分发器先提交发布再广播。
 - 备份恢复（R12）：恢复先在目标 blob 根内同卷 staging，逐文件发布 blob（拒绝发布到目标根之外）后才执行 `pg_restore --single-transaction`；操作日志只含 operation_id、包摘要、目标路径、数据库身份、阶段五键，支持 resume/verify/cleanup 与 `needs_verification` 语义。
+
+## Gmail 虚拟标签同步策略与 IMAP 超时优化（t056，2026-10-26）
+
+- Gmail 虚拟文件夹排除（AC-001）：Gmail 账号（`@gmail.com` / `@googlemail.com`）下的 `\All`（所有邮件）与 `\Important`（重要）虚拟汇总标签，在文件夹发现时默认置为 `sync_status = "paused"`，常规同步不自动为其拉取邮件，消除收件箱与已发邮件被 2~3 倍重复拉取的存储与 IO 冗余。
+- RFC 6154 属性解析扩展（AC-002）：`ImapProvider.list_folder_catalog()` 增加对 `\All` 映射为 `role = "all"`，对 `\Flagged` / `\Starred` 映射为 `role = "flagged"`。
+- IMAP 连接与分批放宽（AC-003, AC-004）：`ImapProvider` 默认 Socket 读取超时提升至 60.0 秒；`sync_folder_metadata` 单任务默认最大批次 `max_pages` 调整为 10 页（约 500 封），减轻单任务长时间占用连接风险。
+- 瞬态网络错误容错（AC-005）：Worker 执行同步任务捕获 `TimeoutError`、`SSLEOFError` 等瞬时网络异常时，按指数退避重新排期，不立即将账号置为 `failed` 状态。
