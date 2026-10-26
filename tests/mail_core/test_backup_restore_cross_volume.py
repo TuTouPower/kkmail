@@ -20,6 +20,7 @@ The cross-filesystem boundary is exercised two ways:
 from __future__ import annotations
 
 import base64
+import contextlib
 import errno
 import hashlib
 import json
@@ -407,6 +408,91 @@ def test_cleanup_requires_matching_operation_id(tmp_path, monkeypatch):
     assert _published_files(target) == PAYLOADS  # nothing deleted
 
     removed = cleanup_restore_operation(target, operation_id=log["operation_id"])
+    assert removed >= len(PAYLOADS)
+    assert list(target.iterdir()) == []
+
+
+def _manual_operation_at_stage(target: Path, stage: str) -> dict:
+    """Build a target blob root whose operation log sits at ``stage``."""
+    resolved = backup_package._resolve_restore_target(target)
+    for rel, data in PAYLOADS.items():
+        path = resolved / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    payload = backup_package._operation_log_payload(
+        operation_id="c1eanup0peration000000000000001",
+        package_digest="manual-digest",
+        target_blobs=resolved,
+        target_database_url=TARGET_URL,
+        target_ident=None,
+        stage=stage,
+    )
+    return backup_package._write_restore_operation_log(
+        resolved, payload, stage=stage
+    )
+
+
+def test_cleanup_refuses_needs_verification_and_keeps_all_files(tmp_path):
+    target = tmp_path / "restored-blobs"
+    log = _manual_operation_at_stage(target, "needs_verification")
+
+    with pytest.raises(RuntimeError, match="needs_verification"):
+        cleanup_restore_operation(target, operation_id=log["operation_id"])
+
+    # Commit outcome is unknown: the blobs may be the live restored data.
+    assert _published_files(target) == PAYLOADS
+    assert _read_log(target)["stage"] == "needs_verification"
+
+
+def test_cleanup_refuses_blobs_published_and_keeps_all_files(tmp_path):
+    target = tmp_path / "restored-blobs"
+    log = _manual_operation_at_stage(target, "blobs_published")
+
+    with pytest.raises(RuntimeError, match="blobs_published"):
+        cleanup_restore_operation(target, operation_id=log["operation_id"])
+
+    # A log stuck at blobs_published is ambiguous (see the fresh-restore
+    # path, which upgrades it to needs_verification): nothing is deleted.
+    assert _published_files(target) == PAYLOADS
+    assert _read_log(target)["stage"] == "blobs_published"
+
+
+def test_cleanup_rechecks_stage_under_lock_when_operation_completes(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "restored-blobs"
+    log = _manual_operation_at_stage(target, "staging")
+
+    real_lock = backup_package._backup_destination_lock
+
+    @contextlib.contextmanager
+    def completing_lock(dest):
+        with real_lock(dest):
+            # The operation completes while cleanup is acquiring the lock:
+            # the log on disk at lock entry says ``complete`` even though
+            # the pre-lock read saw the eligible ``staging`` stage.
+            current = backup_package._read_restore_operation_log(dest)
+            backup_package._write_restore_operation_log(
+                dest, current, stage="complete"
+            )
+            yield
+
+    monkeypatch.setattr(backup_package, "_backup_destination_lock", completing_lock)
+
+    with pytest.raises(RuntimeError, match="complete"):
+        cleanup_restore_operation(target, operation_id=log["operation_id"])
+
+    assert _published_files(target) == PAYLOADS
+    assert _read_log(target)["stage"] == "complete"
+
+
+def test_cleanup_staging_operation_still_removes_files(tmp_path):
+    target = tmp_path / "restored-blobs"
+    log = _manual_operation_at_stage(target, "staging")
+
+    removed = cleanup_restore_operation(target, operation_id=log["operation_id"])
+
+    # ``staging`` provably precedes any DB commit, so cleanup stays allowed.
     assert removed >= len(PAYLOADS)
     assert list(target.iterdir()) == []
 

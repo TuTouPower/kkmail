@@ -1029,6 +1029,23 @@ _RESTORE_OPERATION_LOG_KEYS = (
     "database_identity",
     "stage",
 )
+# Restore operation stages, and what each proves about the DB commit:
+#   staging           written before blobs are published and before the DB
+#                     step runs at all — no commit can have happened.
+#   db_failed         written only after pg_restore returned a definitive
+#                     failure; pg_restore runs --single-transaction, so a
+#                     failed attempt rolled back — no commit happened.
+#   blobs_published   blobs are in the target but the DB step's outcome is
+#                     not recorded; a crash here leaves the commit outcome
+#                     unknown (the fresh-restore path upgrades a log stuck
+#                     at this stage to needs_verification for that reason).
+#   needs_verification  the commit outcome is explicitly unknown.
+#   complete          the DB committed and verification passed; the blobs
+#                     are the live restored data.
+# Cleanup may delete an operation's files only from a stage that proves
+# the commit did NOT happen, so only staging / db_failed are eligible.
+_CLEANUP_ELIGIBLE_RESTORE_STAGES = frozenset({"staging", "db_failed"})
+
 _RESTORE_REQUIRED_TABLES = frozenset(
     {"accounts", "messages", "message_bodies", "message_blobs", "message_blob_links", "attachments"}
 )
@@ -2169,9 +2186,11 @@ def cleanup_restore_operation(
     """Remove one unfinished operation's files from its target blob root.
 
     Requires the operation id and verifies ownership against the
-    operation log before deleting anything. Completed operations are
-    refused: their files are the restored data, not cleanup material.
-    Returns the number of files removed.
+    operation log before deleting anything. Only operations in a stage
+    that proves the database commit did not happen (see
+    ``_CLEANUP_ELIGIBLE_RESTORE_STAGES``) may be cleaned up; a completed
+    or commit-ambiguous operation's files may be the live restored data,
+    not cleanup material. Returns the number of files removed.
     """
     op_id = _validate_operation_id(operation_id)
     target_blobs = _resolve_restore_target(target_blobs_dir)
@@ -2183,16 +2202,33 @@ def cleanup_restore_operation(
             "restore cleanup refused: no restore operation log in target: "
             f"{target_blobs}"
         )
-    _assert_operation_log_matches(
-        op_log, operation_id=op_id, target_blobs=target_blobs
-    )
-    if str(op_log.get("stage") or "") == "complete":
-        raise RuntimeError(
-            f"restore cleanup refused: operation {op_id} is complete; its "
-            "files are the restored data"
-        )
     removed = 0
     with _backup_destination_lock(target_blobs):
+        # Re-read and re-verify the operation log under the destination
+        # lock: the stage that authorizes deletion must be the stage in
+        # effect while the lock is held, not a stale pre-lock snapshot —
+        # the operation may have completed (or entered
+        # needs_verification) while cleanup waited for the lock.
+        op_log = (
+            _read_restore_operation_log(target_blobs)
+            if target_blobs.is_dir()
+            else None
+        )
+        if op_log is None:
+            raise RuntimeError(
+                "restore cleanup refused: no restore operation log in "
+                f"target: {target_blobs}"
+            )
+        _assert_operation_log_matches(
+            op_log, operation_id=op_id, target_blobs=target_blobs
+        )
+        stage = str(op_log.get("stage") or "")
+        if stage not in _CLEANUP_ELIGIBLE_RESTORE_STAGES:
+            raise RuntimeError(
+                f"restore cleanup refused: operation {op_id} is in stage "
+                f"{stage!r}, which does not prove the database commit did "
+                "not happen; its files may be the restored data"
+            )
         for child in sorted(target_blobs.iterdir(), key=lambda p: p.name):
             if child.is_dir() and not child.is_symlink():
                 removed += sum(1 for p in child.rglob("*") if p.is_file())
