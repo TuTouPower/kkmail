@@ -179,6 +179,18 @@ def test_exchange_pasted_url_without_valid_redirect_uri_fails_before_token_post(
 # is not a verified deliverable mailbox, so that behavior let mailbox-less
 # accounts onboard. The two tests below cover the replacement semantics,
 # mirroring stage_verified_response, which accepts only profile mail.
+#
+# REPLACED AGAIN (UPN restricted fallback): the no-fallback rule also
+# blocked personal Microsoft accounts, for which Graph /me commonly
+# returns mail=null while the userPrincipalName IS the mailbox address.
+# The fallback is therefore restored ONLY for Microsoft consumer mail
+# domains (outlook.com / hotmail.com / live.com / msn.com and outlook.* /
+# hotmail.* country domains): on those domains the UPN is by construction
+# the account's mailbox. The defect-7 semantics are preserved for every
+# other domain -- a tenant UPN (onmicrosoft.com, company domains) is
+# still not a verified deliverable mailbox and is still rejected, which
+# is what test_exchange_rejects_profile_without_mail_even_when_upn_present
+# below continues to pin (its UPN is a tenant domain).
 
 
 def test_exchange_rejects_profile_without_mail_even_when_upn_present():
@@ -187,6 +199,43 @@ def test_exchange_rejects_profile_without_mail_even_when_upn_present():
 
     def profile_get(_url, _at):
         return {"id": "ms-user", "mail": None, "userPrincipalName": "someone@tenant.onmicrosoft.com"}
+
+    with pytest.raises(ValueError, match="未返回已核实的邮箱地址"):
+        exchange_redirect_url_for_tokens(REDIRECT, token_post=token_post, profile_get=profile_get)
+
+
+def test_exchange_falls_back_to_consumer_upn_when_mail_missing():
+    captured = {}
+    token_post, _ = _fake_transports(captured)
+
+    def profile_get(url, _at):
+        if url == microsoft_oauth.MAILBOX_URI:
+            return {"id": "inbox-folder-id"}
+        return {"id": "ms-user", "mail": None, "userPrincipalName": "Person@Outlook.com"}
+
+    result = exchange_redirect_url_for_tokens(REDIRECT, token_post=token_post, profile_get=profile_get)
+    assert result["email"] == "person@outlook.com"
+
+
+def test_exchange_falls_back_to_consumer_country_domain_upn():
+    captured = {}
+    token_post, _ = _fake_transports(captured)
+
+    def profile_get(url, _at):
+        if url == microsoft_oauth.MAILBOX_URI:
+            return {"id": "inbox-folder-id"}
+        return {"id": "ms-user", "mail": None, "userPrincipalName": "someone@hotmail.co.uk"}
+
+    result = exchange_redirect_url_for_tokens(REDIRECT, token_post=token_post, profile_get=profile_get)
+    assert result["email"] == "someone@hotmail.co.uk"
+
+
+def test_exchange_rejects_upn_on_non_consumer_domain_when_mail_missing():
+    captured = {}
+    token_post, _ = _fake_transports(captured)
+
+    def profile_get(_url, _at):
+        return {"id": "ms-user", "mail": None, "userPrincipalName": "someone@company.example"}
 
     with pytest.raises(ValueError, match="未返回已核实的邮箱地址"):
         exchange_redirect_url_for_tokens(REDIRECT, token_post=token_post, profile_get=profile_get)

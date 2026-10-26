@@ -24,6 +24,26 @@ MICROSOFT_ME_URI = "https://graph.microsoft.com/v1.0/me"
 TokenPostFn = Callable[[str, dict[str, str]], dict[str, Any]]
 ProfileGetFn = Callable[[str, str], dict[str, Any]]
 
+_CONSUMER_MAIL_DOMAINS = frozenset({"outlook.com", "hotmail.com", "live.com", "msn.com"})
+_CONSUMER_COUNTRY_SUFFIX = re.compile(r"(?:[a-z]{2}|com\.[a-z]{2}|co\.[a-z]{2})")
+
+
+def _is_microsoft_consumer_mail_domain(domain: str) -> bool:
+    """Whether ``domain`` is a Microsoft consumer mail domain.
+
+    On these domains a Microsoft account's userPrincipalName is by
+    construction the mailbox address (personal accounts). Country
+    variants are outlook.<ccTLD> / hotmail.<ccTLD> shapes only, so a
+    lookalike such as outlook.com.evil.example never qualifies.
+    """
+    normalized = domain.strip().lower().rstrip(".")
+    if normalized in _CONSUMER_MAIL_DOMAINS:
+        return True
+    for prefix in ("outlook.", "hotmail."):
+        if normalized.startswith(prefix):
+            return bool(_CONSUMER_COUNTRY_SUFFIX.fullmatch(normalized[len(prefix):]))
+    return False
+
 
 def default_microsoft_client_id() -> str:
     """Effective public Client ID: MICROSOFT_CLIENT_ID env overrides the built-in."""
@@ -135,12 +155,23 @@ def exchange_redirect_url_for_tokens(
     except Exception as exc:
         raise ValueError("无法核实 Microsoft 账号邮箱，请确认授权后重试。") from exc
     # Only Graph ``mail`` is a verified deliverable mailbox (mirrors
-    # stage_verified_response). userPrincipalName is not, so it is never an
-    # email fallback here; there is no verified id_token claim source in
-    # this flow either, so a missing mail hard-fails below.
+    # stage_verified_response), with ONE restricted exception: personal
+    # Microsoft accounts commonly return mail=null while their
+    # userPrincipalName IS the mailbox address -- but only on Microsoft
+    # consumer mail domains. A tenant userPrincipalName (onmicrosoft.com,
+    # company domains) is not a verified deliverable mailbox and never
+    # qualifies, so mailbox-less enterprise accounts stay rejected.
     email = profile.get("mail") if isinstance(profile, dict) else None
     if not isinstance(email, str) or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email.strip()):
-        raise ValueError("Graph /me 未返回已核实的邮箱地址；账号可能没有可用邮箱，请确认 Microsoft 邮箱服务已启用。")
+        upn = profile.get("userPrincipalName") if isinstance(profile, dict) else None
+        if (
+            isinstance(upn, str)
+            and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", upn.strip())
+            and _is_microsoft_consumer_mail_domain(upn.strip().rsplit("@", 1)[1])
+        ):
+            email = upn
+        else:
+            raise ValueError("Graph /me 未返回已核实的邮箱地址；账号可能没有可用邮箱，请确认 Microsoft 邮箱服务已启用。")
     try:
         mailbox = get(MAILBOX_URI, access)
     except Exception as exc:
