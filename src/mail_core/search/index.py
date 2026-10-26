@@ -12,6 +12,25 @@ from sqlalchemy.orm import Session
 from mail_core.mail.storage.models import Message, MessageBody, MessageSearch
 
 
+def _format_recipient_text(addresses: Sequence[Any] | None) -> str:
+    if not addresses:
+        return ""
+    parts = []
+    for item in addresses:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            name = item.get("name")
+            addr = item.get("address")
+            if name:
+                parts.append(str(name))
+            if addr:
+                parts.append(str(addr))
+        elif item:
+            parts.append(str(item))
+    return " ".join(parts)
+
+
 def upsert_message_search(
     session: Session,
     *,
@@ -25,6 +44,7 @@ def upsert_message_search(
         body = session.get(MessageBody, message_id)
         body_text = (body.text_plain if body else None) or msg.snippet or ""
     from_text = " ".join(x for x in [msg.from_name, msg.from_address] if x)
+    to_text = _format_recipient_text(getattr(msg, "to_addresses", None))
     row = session.get(MessageSearch, message_id)
     if row is None:
         row = MessageSearch(message_id=message_id, account_id=msg.account_id)
@@ -32,6 +52,7 @@ def upsert_message_search(
     row.account_id = msg.account_id
     row.subject = msg.subject or ""
     row.from_text = from_text
+    row.to_text = to_text
     row.body_text = body_text or ""
     row.updated_at = datetime.now(timezone.utc)
     session.flush()
@@ -75,6 +96,7 @@ def upsert_message_search_batch(session: Session, *, messages: Sequence[Message]
         row.account_id = message.account_id
         row.subject = message.subject or ""
         row.from_text = " ".join(x for x in [message.from_name, message.from_address] if x)
+        row.to_text = _format_recipient_text(getattr(message, "to_addresses", None))
         row.body_text = body_text
         row.updated_at = now
     session.flush()
@@ -84,8 +106,10 @@ _MATCH = """
     (
         document @@ plainto_tsquery('simple', :q)
         OR from_text ILIKE '%' || :like_q || '%' ESCAPE E'\\\\'
+        OR to_text ILIKE '%' || :like_q || '%' ESCAPE E'\\\\'
         OR subject ILIKE '%' || :like_q || '%' ESCAPE E'\\\\'
         OR from_text % :q
+        OR to_text % :q
     )
 """
 

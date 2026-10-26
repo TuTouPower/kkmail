@@ -41,9 +41,9 @@ def test_group_and_account_lifecycle():
     assert any(x["id"] == aid and x["group_id"] == gid for x in page["accounts"])
 
     sync = c.post(f"/api/accounts/{aid}/sync")
-    assert sync.status_code == 200 and uuid.UUID(sync.json()["job_id"])
-    all_ = c.post("/api/accounts/sync-all").json()
-    assert all_["count"] == len(all_["job_ids"]) >= 1
+    assert sync.status_code == 202 and uuid.UUID(sync.json()["id"])
+    all_ = c.post("/api/accounts/sync-all")
+    assert all_.status_code == 202 and uuid.UUID(all_.json()["id"])
 
     assert c.delete(f"/api/accounts/{aid}").status_code == 204
     assert c.delete(f"/api/accounts/{aid}").status_code == 404

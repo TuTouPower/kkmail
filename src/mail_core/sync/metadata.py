@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from mail_core.mail.domain.enums import ArchiveState, OutboxEventType
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import (
+    Account,
     FolderStats,
     Message,
     MessageArchiveState,
@@ -215,6 +216,24 @@ def apply_metadata_page(
         # body_text=None → prefer MessageBody.text_plain; never clobber FTS with snippet.
         upsert_message_search_batch(session, messages=list(touched_messages.values()))
         folder_stats_dirty = True
+
+    new_recipients: set[str] = set()
+    for o in outcomes:
+        if o.created or o.changed:
+            for item in (getattr(o.message, "to_addresses", None) or []):
+                if isinstance(item, str) and item.strip():
+                    new_recipients.add(item.strip())
+                elif isinstance(item, dict) and item.get("address"):
+                    new_recipients.add(str(item["address"]).strip())
+    if new_recipients:
+        account = session.get(Account, account_id)
+        if account is not None:
+            current_raw = list(getattr(account, "recipient_addresses", None) or [])
+            current_lowers = {a.lower() for a in current_raw}
+            added = [r for r in sorted(new_recipients) if r.lower() not in current_lowers]
+            if added:
+                account.recipient_addresses = current_raw + added
+
     if message_event_ids:
         session.add(messages_upserted_event(account_id, folder_id, list(dict.fromkeys(message_event_ids))))
 

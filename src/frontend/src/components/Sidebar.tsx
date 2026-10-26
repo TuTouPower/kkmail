@@ -162,7 +162,15 @@ function matchesAccountSearch(account: AccountSummary, value: string): boolean {
   if (!query) return true
   const email = account.email.toLowerCase()
   const domain = email.slice(email.lastIndexOf('@') + 1)
-  return email.includes(query) || domain.includes(query) || (account.display_name || '').toLowerCase().includes(query)
+  if (email.includes(query) || domain.includes(query) || (account.display_name || '').toLowerCase().includes(query)) {
+    return true
+  }
+  const recipients = account.recipient_addresses || []
+  return recipients.some((recipient) => {
+    const lower = recipient.toLowerCase()
+    const rDomain = lower.slice(lower.lastIndexOf('@') + 1)
+    return lower.includes(query) || rDomain.includes(query)
+  })
 }
 
 function orderedMembers(accounts: AccountSummary[], groupId: string) {

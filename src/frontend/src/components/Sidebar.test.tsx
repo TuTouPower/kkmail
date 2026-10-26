@@ -20,7 +20,7 @@ const accounts = [
   { id: 'acc-2', email: 'notes@a.example', status: 'active', account_type: 'imap', provider: 'imap', group_id: null },
 ]
 
-function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; disabledAcc1?: boolean; disabledAcc2?: boolean; displayNameAcc1?: string; additionalAccounts?: Array<{ id: string; email: string; group_id: string | null; display_name?: string }>; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
+function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; disabledAcc1?: boolean; disabledAcc2?: boolean; displayNameAcc1?: string; additionalAccounts?: Array<{ id: string; email: string; group_id: string | null; display_name?: string; recipient_addresses?: string[] }>; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
   const calls: Array<{ url: string; method: string; body?: string }> = []
   let acc1Unread = 2
   let acc2Unread = 1
@@ -33,6 +33,7 @@ function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failSta
     group_id: string | null
     group_name?: string
     display_name?: string
+    recipient_addresses?: string[]
   }> = [
     ...accounts.map((account) => ({ ...account, group_id: account.group_id ?? null })),
     ...(options.additionalAccounts || []).map((account) => ({
@@ -44,6 +45,7 @@ function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failSta
       group_id: account.group_id,
       group_name: account.group_id === 'group-2' ? '归档项目' : undefined,
       display_name: account.display_name,
+      recipient_addresses: account.recipient_addresses,
     })),
   ]
   let currentAccounts: Array<{
@@ -57,12 +59,14 @@ function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failSta
     group_name?: string
     display_name?: string
     sync_enabled?: boolean
+    recipient_addresses?: string[]
   }> = initialAccounts.map((account) => ({
     ...account,
     group_id: account.group_id ?? null,
     display_name: account.id === 'acc-1' ? options.displayNameAcc1 : account.display_name,
     sync_enabled: account.id === 'acc-1' ? !options.disabledAcc1 : !options.disabledAcc2,
     sync_status: account.id === 'acc-1' && options.syncStatusAcc1 ? options.syncStatusAcc1 : 'idle',
+    recipient_addresses: account.recipient_addresses,
   }))
   let currentGroups = groups.map((group) => ({ ...group }))
   let revision = 0
@@ -280,6 +284,31 @@ describe('<Sidebar />', () => {
     expect(groupOne.querySelector('.tree-count')?.textContent).toBe('1')
     expect(useMailStore.getState().view).toEqual({ type: 'allInbox' })
     expect(useMailStore.getState().search).toBe('')
+  })
+
+  it('filters accounts by recipient aliases in group and master searches', async () => {
+    mockApi({
+      additionalAccounts: [
+        {
+          id: 'acc-alias',
+          email: 'fengandelliot@gmail.com',
+          group_id: 'group-1',
+          recipient_addresses: ['f.eng@gmail.com', 'zzz001@zzzkkkccc.site'],
+        },
+      ],
+    })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('[aria-label="搜索分组 税务归档"]')).not.toBeNull())
+
+    await click(container.querySelector('[aria-label="搜索分组 税务归档"]'))
+    const groupSearch = container.querySelector('input[aria-label="搜索分组账号：税务归档"]') as HTMLInputElement
+    await typeInto(groupSearch, 'zzz001')
+
+    const groupOne = container.querySelector('[data-group-id="group-1"]')!
+    expect([...groupOne.querySelectorAll('.tree-account-block')].map((row) => row.getAttribute('data-account-id'))).toEqual(['acc-alias'])
+
+    await typeInto(groupSearch, 'f.eng')
+    expect([...groupOne.querySelectorAll('.tree-account-block')].map((row) => row.getAttribute('data-account-id'))).toEqual(['acc-alias'])
   })
 
   it('shows no matches for disabled accounts and restores local expansion and focus when search closes', async () => {

@@ -82,7 +82,7 @@ export default function SettingsPage({
   const query = search.trim().toLowerCase()
   const domains = [...new Set(accounts.map(account => accountDomain(account.email)).filter(Boolean))].sort((a, b) => a.localeCompare(b))
   const filtered = accounts.filter(a =>
-    (!query || `${a.email} ${providers[a.provider] || a.provider} ${a.group_name || '未分组'}`.toLowerCase().includes(query)) &&
+    (!query || `${a.email} ${providers[a.provider] || a.provider} ${a.group_name || '未分组'} ${(a.recipient_addresses || []).join(' ')}`.toLowerCase().includes(query)) &&
     (groupFilter === 'all' || (groupFilter === 'ungrouped' ? !a.group_id : a.group_id === groupFilter)) &&
     (stateFilter === 'all' || (stateFilter === 'enabled' ? a.sync_enabled !== false : stateFilter === 'disabled' ? a.sync_enabled === false : syncFailed(a))) &&
     (domainFilter === 'all' || accountDomain(a.email) === domainFilter),

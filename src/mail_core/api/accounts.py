@@ -69,6 +69,7 @@ class AccountOut(BaseModel):
     provider_profile: str | None = None
     oauth_client_type: str | None = None
     oauth_tenant: str | None = None
+    recipient_addresses: list[str] = Field(default_factory=list)
 
     @field_serializer("imap_config")
     def serialize_imap_config(self, value):

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -54,6 +54,7 @@ class AccountDTO:
     provider_profile: str | None = None
     oauth_client_type: str | None = None
     oauth_tenant: str | None = None
+    recipient_addresses: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +149,7 @@ def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDT
         provider_profile=(acc.config or {}).get("provider_profile"),
         oauth_client_type=(acc.config or {}).get("oauth_client_type"),
         oauth_tenant=(acc.config or {}).get("oauth_tenant"),
+        recipient_addresses=list(getattr(acc, "recipient_addresses", None) or []),
     )
 
 

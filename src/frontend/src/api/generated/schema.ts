@@ -844,6 +844,8 @@ export interface components {
             provider: string;
             /** Provider Profile */
             provider_profile?: string | null;
+            /** Recipient Addresses */
+            recipient_addresses?: string[];
             /** Remark */
             remark?: string | null;
             /** Status */

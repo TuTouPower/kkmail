@@ -109,6 +109,7 @@ class Account(Base):
         String(32), nullable=False, server_default=text(f"'{SyncStatus.IDLE.value}'")
     )
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    recipient_addresses: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
@@ -426,12 +427,14 @@ class MessageSearch(Base):
     __tablename__ = "message_search"
     __table_args__ = (
         Index("ix_message_search_from_text_trgm", "from_text", postgresql_using="gin", postgresql_ops={"from_text": "gin_trgm_ops"}),
+        Index("ix_message_search_to_text_trgm", "to_text", postgresql_using="gin", postgresql_ops={"to_text": "gin_trgm_ops"}),
     )
 
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     subject: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     from_text: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    to_text: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     body_text: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
