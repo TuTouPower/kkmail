@@ -586,3 +586,69 @@ def test_pg_two_session_claim_competition_old_worker_cannot_overwrite():
             assert st.last_error and "RuntimeError" in st.last_error
     finally:
         set_credential_store(None)
+
+
+# ---------------------------------------------------------------------------
+# B4: open_session (provider handshake) failures
+# ---------------------------------------------------------------------------
+
+
+def test_open_session_capacity_error_settles_whole_batch_as_capacity():
+    """B4: a CAPACITY_ERROR raised by open_session must not be swallowed by
+    the handshake's blanket except — it reaches the batch-level capacity
+    settlement (claims released, no retry counted, no error persisted),
+    and the unconnected provider is never used for a fetch."""
+    from mail_core.providers.connection_slots import ProviderCapacityUnavailable
+
+    db, claim, _msg, state, _acc = _make_rows()
+    fetch_calls: list = []
+
+    class CapacityProvider:
+        def open_session(self):
+            raise ProviderCapacityUnavailable("pool exhausted")
+
+        def fetch_mime(self, remote_id):
+            fetch_calls.append(remote_id)
+            return _SIMPLE_MIME
+
+    result, _res, _rel = _run_batch(db, claim, build_provider=lambda *a, **kw: CapacityProvider())
+    assert result["status"] == "capacity_unavailable"
+    assert result["deferred"] == 1
+    assert fetch_calls == []
+    assert state.state == ArchiveState.ARCHIVE_PENDING.value
+    assert state.retry_count == 0
+    assert state.last_error is None
+    assert state.claimed_by is None
+
+
+def test_open_session_failure_is_not_cached_and_settles_provider_error():
+    """B4: a non-capacity handshake failure must not cache the unconnected
+    provider; the account's claims converge through the unified
+    provider_error settlement (sanitized error persisted, retry counted),
+    exactly like a build_provider construction failure."""
+    db, claim, _msg, state, _acc = _make_rows()
+    fetch_calls: list = []
+    closed: list = []
+
+    class BrokenHandshakeProvider:
+        def open_session(self):
+            raise RuntimeError("login failed password=<redacted>")
+
+        def close_session(self):
+            closed.append(True)
+
+        def fetch_mime(self, remote_id):
+            fetch_calls.append(remote_id)
+            return _SIMPLE_MIME
+
+    result, _res, _rel = _run_batch(
+        db, claim, build_provider=lambda *a, **kw: BrokenHandshakeProvider()
+    )
+    assert result["status"] == "ok"
+    assert result["failed"] == 1
+    assert fetch_calls == [], "unhandshaked provider was used for a fetch"
+    assert closed == [True], "partial session was not closed on handshake failure"
+    assert state.state == ArchiveState.ARCHIVE_PENDING.value
+    assert state.retry_count == 1
+    assert state.last_error is not None and "RuntimeError" in state.last_error
+    assert "hunter2" not in state.last_error

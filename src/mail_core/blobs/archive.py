@@ -878,8 +878,18 @@ def run_archive_batch(
                 if hasattr(p, "open_session"):
                     try:
                         p.open_session()
-                    except Exception as open_exc:
-                        log.warning("open_session failed for %s: %s", msg_account_id, safe_error(open_exc))
+                    except Exception:
+                        # B4: a failed handshake must not poison the cache
+                        # (the unconnected provider would fail every fetch),
+                        # and CAPACITY_ERRORS must reach the outer handler's
+                        # batch capacity settlement instead of being
+                        # swallowed here. Close any partial session first.
+                        if hasattr(p, "close_session"):
+                            try:
+                                p.close_session()
+                            except Exception:
+                                pass
+                        raise
                 provider_cache[msg_account_id] = p
             except Exception as exc:
                 # Provider construction failure (R18): persist the sanitized
