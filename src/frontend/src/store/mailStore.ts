@@ -44,8 +44,6 @@ interface MailUiState {
   setListFilter: (f: 'all' | 'unread' | 'flagged') => void
   sortNewest: boolean
   toggleSort: () => void
-  collapsedGroups: string[]
-  toggleGroup: (group: string) => void
   sidebarSections: { allAccounts: boolean; accountList: boolean }
   toggleSidebarSection: (section: 'allAccounts' | 'accountList') => void
   expandedSidebarGroups: string[]
@@ -108,13 +106,6 @@ export const useMailStore = create<MailUiState>()(
       setListFilter: (f) => set({ listFilter: f }),
       sortNewest: true,
       toggleSort: () => set((s) => ({ sortNewest: !s.sortNewest })),
-      collapsedGroups: [],
-      toggleGroup: (group) =>
-        set((s) => ({
-          collapsedGroups: s.collapsedGroups.includes(group)
-            ? s.collapsedGroups.filter((g) => g !== group)
-            : [...s.collapsedGroups, group],
-        })),
       sidebarSections: { allAccounts: true, accountList: true },
       toggleSidebarSection: (section) => set((s) => ({
         sidebarSections: { ...s.sidebarSections, [section]: !s.sidebarSections[section] },
@@ -163,15 +154,6 @@ export const useMailStore = create<MailUiState>()(
     }) },
   ),
 )
-
-export function providerBadge(provider?: string, accountType?: string) {
-  const p = (provider || accountType || '').toLowerCase()
-  if (p.includes('163') || p.includes('netease')) return '163'
-  if (p.includes('outlook') || p.includes('hotmail') || p.includes('live')) return 'O'
-  if (p.includes('google')) return 'G'
-  if (p.includes('qq')) return 'Q'
-  return (p.slice(0, 1) || 'M').toUpperCase()
-}
 
 export function providerColor(provider?: string, accountType?: string) {
   const p = (provider || accountType || '').toLowerCase()

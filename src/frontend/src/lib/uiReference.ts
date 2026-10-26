@@ -60,14 +60,6 @@ export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
   ST09: { id: 'ST09', region: '设置', description: '修改密码表单' },
 }
 
-export function isUiReferenceShortcut(e: KeyboardEvent): boolean {
-  if (e.repeat) return false
-  const hasModifier = e.ctrlKey || e.metaKey
-  const hasShift = e.shiftKey
-  const isPeriod = e.key === '.' || e.key === '>' || e.code === 'Period'
-  return Boolean(hasModifier && hasShift && isPeriod && !e.altKey)
-}
-
 export function formatUiReferenceText(id: string): string {
   const meta = UI_ELEMENT_REGISTRY[id]
   if (meta) {

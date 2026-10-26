@@ -27,21 +27,3 @@ export function workspaceGridColumns(input: WorkspaceLayoutInput): string | unde
   return `${sidebarWidth}px ${resize} ${listWidth}px ${resize} minmax(0, 1fr)`
 }
 
-/** How many non-overlay children the workspace grid should place. */
-export function workspaceGridChildRoles(input: Omit<WorkspaceLayoutInput, 'sidebarWidth' | 'listWidth'>): string[] {
-  const { wide, sidebarCollapsed, settingsOpen } = input
-  const roles: string[] = []
-  if (!wide) {
-    roles.push('sidebar')
-  } else if (!sidebarCollapsed) {
-    roles.push('sidebar', 'resize-sidebar')
-  }
-  if (settingsOpen) {
-    roles.push('settings')
-    return roles
-  }
-  roles.push('list')
-  if (wide) roles.push('resize-list')
-  roles.push('reader')
-  return roles
-}

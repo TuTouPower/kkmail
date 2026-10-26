@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { RESIZE_TRACK_PX, workspaceGridChildRoles, workspaceGridColumns } from './workspaceLayout'
+import { RESIZE_TRACK_PX, workspaceGridColumns } from './workspaceLayout'
 
 /** Count CSS grid tracks without splitting inside minmax(...). */
 function trackCount(cols: string): number {
@@ -21,17 +21,14 @@ describe('workspaceGridColumns', () => {
     expect(cols).toContain('360px')
   })
 
-  it('matches child roles to column count for the default mail shell', () => {
+  it('lays out five tracks for the default mail shell', () => {
     const input = { wide: true, sidebarCollapsed: false, settingsOpen: false }
-    const roles = workspaceGridChildRoles(input)
     const cols = workspaceGridColumns({ ...input, sidebarWidth: 260, listWidth: 360 })!
-    expect(roles).toEqual(['sidebar', 'resize-sidebar', 'list', 'resize-list', 'reader'])
-    expect(trackCount(cols)).toBe(roles.length)
+    expect(trackCount(cols)).toBe(5)
   })
 
   it('keeps settings on one row with sidebar + one handle', () => {
     const input = { wide: true, sidebarCollapsed: false, settingsOpen: true }
-    expect(workspaceGridChildRoles(input)).toEqual(['sidebar', 'resize-sidebar', 'settings'])
     expect(workspaceGridColumns({ ...input, sidebarWidth: 260, listWidth: 360 })).toBe('260px 5px minmax(0, 1fr)')
   })
 
@@ -43,17 +40,13 @@ describe('workspaceGridColumns', () => {
 
   it('completely hides sidebar on desktop when collapsed (t009 AC-001, AC-003, AC-005)', () => {
     const input = { wide: true, sidebarCollapsed: true, settingsOpen: false }
-    const roles = workspaceGridChildRoles(input)
     const cols = workspaceGridColumns({ ...input, sidebarWidth: 260, listWidth: 360 })!
-    expect(roles).toEqual(['list', 'resize-list', 'reader'])
     expect(cols).toBe('360px 5px minmax(0, 1fr)')
-    expect(trackCount(cols)).toBe(roles.length)
+    expect(trackCount(cols)).toBe(3)
 
     const settingsInput = { wide: true, sidebarCollapsed: true, settingsOpen: true }
-    const settingsRoles = workspaceGridChildRoles(settingsInput)
     const settingsCols = workspaceGridColumns({ ...settingsInput, sidebarWidth: 260, listWidth: 360 })!
-    expect(settingsRoles).toEqual(['settings'])
     expect(settingsCols).toBe('minmax(0, 1fr)')
-    expect(trackCount(settingsCols)).toBe(settingsRoles.length)
+    expect(trackCount(settingsCols)).toBe(1)
   })
 })
