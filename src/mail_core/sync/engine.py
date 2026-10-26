@@ -476,13 +476,20 @@ def sync_folder_metadata(
             # acquired: first entry into this generation resets the scan
             # cursor state and stamps the checkpoint; same-generation
             # retries continue from the stored cursor.
-            begin_scan_generation(
-                session,
-                account_id=account_id,
-                folder_id=folder_id,
-                fencing_token=fencing,
-                scan_generation=scan_generation,
-            )
+            try:
+                begin_scan_generation(
+                    session,
+                    account_id=account_id,
+                    folder_id=folder_id,
+                    fencing_token=fencing,
+                    scan_generation=scan_generation,
+                )
+            except ScanGenerationMismatch:
+                # A newer full-scan generation supersedes this job's
+                # generation; the stale execution must not touch the
+                # checkpoint (same outcome as the commit-path mismatch).
+                session.rollback()
+                return {"status": "scan_generation_mismatch", "upserted": 0}
         cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
         cursor = dict(cp.cursor) if cp else {}
         if cp is not None and cp.uidvalidity is not None and "uidvalidity" not in cursor:
