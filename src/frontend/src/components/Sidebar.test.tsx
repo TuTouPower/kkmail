@@ -20,7 +20,7 @@ const accounts = [
   { id: 'acc-2', email: 'notes@a.example', status: 'active', account_type: 'imap', provider: 'imap', group_id: null },
 ]
 
-function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; disabledAcc1?: boolean; disabledAcc2?: boolean; displayNameAcc1?: string; additionalAccounts?: Array<{ id: string; email: string; group_id: string | null; display_name?: string }>; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
+function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; disabledAcc1?: boolean; disabledAcc2?: boolean; displayNameAcc1?: string; additionalAccounts?: Array<{ id: string; email: string; group_id: string | null; display_name?: string }>; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
   const calls: Array<{ url: string; method: string; body?: string }> = []
   let acc1Unread = 2
   let acc2Unread = 1
@@ -149,6 +149,7 @@ function mockApi(options: { failAccounts?: boolean; failStats?: boolean; partial
       return json({ id: messageId, is_read: true })
     }
     if (url.pathname === '/api/mail/accounts/acc-1/folder-stats') {
+      if (options.foldersAcc1) return json({ account_id: 'acc-1', folders: options.foldersAcc1 })
       if (options.failAcc1Stats) return json({ detail: 'folder stats unavailable' }, 500)
       if (options.emptyFoldersAcc1) return json({ account_id: 'acc-1', folders: [] })
       if (options.duplicateInboxFoldersAcc1) return json({ account_id: 'acc-1', folders: [
@@ -1116,5 +1117,48 @@ describe('<Sidebar />', () => {
     await click(account.querySelector('.tree-disclosure'))
     await waitFor(() => expect(account.textContent).toContain('暂无文件夹'))
     expect(account.textContent).not.toContain('未读邮件')
+  })
+
+  it('flattens Gmail [Gmail] namespace folders, strips prefixes and presents standard names (p058)', async () => {
+    const gmailFolders = [
+      { folder_id: 'g-inbox', remote_id: 'INBOX', name: 'INBOX', role: 'inbox', unread_count: 5, total_count: 10, parent_remote_id: null },
+      { folder_id: 'g-root', remote_id: '[Gmail]', name: '[Gmail]', role: 'other', sync_status: 'paused', unread_count: null, total_count: null, parent_remote_id: null },
+      { folder_id: 'g-sent', remote_id: '[Gmail]/已发邮件', name: '[Gmail]/已发邮件', role: 'sent', unread_count: 0, total_count: 5, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-drafts', remote_id: '[Gmail]/草稿', name: '[Gmail]/草稿', role: 'drafts', unread_count: 0, total_count: 2, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-all', remote_id: '[Gmail]/所有邮件', name: '[Gmail]/所有邮件', role: 'all', sync_status: 'paused', unread_count: 0, total_count: 100, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-starred', remote_id: '[Gmail]/已加星标', name: '[Gmail]/已加星标', role: 'flagged', unread_count: 0, total_count: 10, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-important', remote_id: '[Gmail]/重要', name: '[Gmail]/重要', role: 'important', sync_status: 'paused', unread_count: 0, total_count: 20, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-notes', remote_id: 'Notes', name: 'Notes', role: 'other', unread_count: 0, total_count: 1, parent_remote_id: null },
+    ]
+    mockApi({
+      foldersAcc1: gmailFolders,
+    })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
+    await click(account.querySelector('.tree-disclosure'))
+    await waitFor(() => expect(account.textContent).toContain('收件箱'))
+
+    const folderRows = [...account.querySelectorAll('.tree-folder-row')]
+    const labels = folderRows.map((row) => row.querySelector('.tree-label')?.textContent?.trim())
+
+    // 验证 [Gmail] 不在顶层或任何地方作为容器展示
+    expect(labels).not.toContain('[Gmail]')
+    // 验证前缀被剥离并显示为标准中文名
+    expect(labels).toContain('所有邮件')
+    expect(labels).toContain('已加星标')
+    expect(labels).toContain('重要邮件')
+    expect(labels).toContain('已发送')
+    expect(labels).toContain('草稿箱')
+    expect(labels).toContain('Notes')
+    expect(labels).not.toContain('[Gmail]/所有邮件')
+    expect(labels).not.toContain('[Gmail]/已加星标')
+    expect(labels).not.toContain('[Gmail]/重要')
+
+    // 验证所有邮件行非 disabled，且为平铺根层级 (padding-left: 48px)
+    const allMailRow = folderRows.find((r) => r.querySelector('.tree-label')?.textContent?.trim() === '所有邮件')
+    expect(allMailRow).not.toBeNull()
+    expect(allMailRow?.hasAttribute('disabled')).toBe(false)
+    expect(allMailRow?.getAttribute('style')).toContain('padding-left: 48px')
   })
 })

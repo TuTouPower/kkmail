@@ -15,6 +15,8 @@ import {
   ShieldAlert,
   Folder as FolderIcon,
   Archive,
+  Star,
+  Bookmark,
   FolderPlus,
   MoreHorizontal,
   Pencil,
@@ -34,15 +36,32 @@ import CopyAddress from './CopyAddress'
 
 const ROLE_PRIORITY: Record<string, number> = {
   inbox: 1,
-  sent: 2,
-  drafts: 3,
-  trash: 4,
-  junk: 5,
+  flagged: 2,
+  important: 3,
+  sent: 4,
+  drafts: 5,
   archive: 6,
+  all: 7,
+  junk: 8,
+  trash: 9,
 }
 
 function getRolePriority(role: string): number {
-  return ROLE_PRIORITY[role] ?? 7
+  return ROLE_PRIORITY[role] ?? 10
+}
+
+function inferEffectiveRole(role: string | null | undefined, remoteId: string, name: string): string {
+  const currentRole = role || 'other'
+  if (currentRole !== 'other') return currentRole
+  const raw = `${remoteId} ${name}`.toLowerCase()
+  if (raw.includes('所有邮件') || raw.includes('all mail') || raw.endsWith('/all')) return 'all'
+  if (raw.includes('已加星标') || raw.includes('starred') || raw.endsWith('/flagged')) return 'flagged'
+  if (raw.includes('重要') || raw.includes('important')) return 'important'
+  if (raw.includes('已发') || raw.includes('sent')) return 'sent'
+  if (raw.includes('草稿') || raw.includes('draft')) return 'drafts'
+  if (raw.includes('垃圾') || raw.includes('spam') || raw.includes('junk')) return 'junk'
+  if (raw.includes('删除') || raw.includes('trash') || raw.includes('bin') || raw.includes('废纸篓')) return 'trash'
+  return 'other'
 }
 
 function getStandardName(role: string, rawName: string): string {
@@ -59,8 +78,24 @@ function getStandardName(role: string, rawName: string): string {
       return '垃圾邮件'
     case 'archive':
       return '归档'
-    default:
-      return rawName
+    case 'all':
+      return '所有邮件'
+    case 'flagged':
+      return '已加星标'
+    case 'important':
+      return '重要邮件'
+    default: {
+      const stripped = rawName.startsWith('[Gmail]/') ? rawName.slice('[Gmail]/'.length) : rawName
+      const lower = stripped.toLowerCase()
+      if (lower === 'all mail' || stripped === '所有邮件') return '所有邮件'
+      if (lower === 'starred' || stripped === '已加星标') return '已加星标'
+      if (lower === 'important' || stripped === '重要') return '重要邮件'
+      if (lower === 'sent mail' || stripped === '已发邮件') return '已发送'
+      if (lower === 'drafts' || stripped === '草稿') return '草稿箱'
+      if (lower === 'trash' || stripped === '已删除邮件') return '废纸篓'
+      if (lower === 'spam' || stripped === '垃圾邮件') return '垃圾邮件'
+      return stripped
+    }
   }
 }
 
@@ -68,6 +103,10 @@ function getFolderIcon(role: string) {
   switch (role) {
     case 'inbox':
       return Inbox
+    case 'flagged':
+      return Star
+    case 'important':
+      return Bookmark
     case 'sent':
       return Send
     case 'drafts':
@@ -77,6 +116,7 @@ function getFolderIcon(role: string) {
     case 'junk':
       return ShieldAlert
     case 'archive':
+    case 'all':
       return Archive
     default:
       return FolderIcon
@@ -176,7 +216,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
   const folderDisplayNames = useMemo(() => {
     const groups = new Map<string, AccountFolderStatsItemOut[]>()
     for (const folder of folders) {
-      const role = folder.role || 'other'
+      const role = inferEffectiveRole(folder.role, folder.remote_id || '', folder.name || '')
       const rawName = folder.name || folder.remote_id || folder.folder_id || ''
       const displayBase = getStandardName(role, rawName)
       const groupKey = JSON.stringify([role, displayBase])
@@ -188,7 +228,7 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
     const names = new Map<string, string>()
     for (const group of groups.values()) {
       const first = group[0]
-      const role = first.role || 'other'
+      const role = inferEffectiveRole(first.role, first.remote_id || '', first.name || '')
       const displayBase = getStandardName(role, first.name || first.remote_id || first.folder_id || '')
       const sameNameGroups = new Map<string, AccountFolderStatsItemOut[]>()
       for (const folder of group) {
@@ -229,10 +269,19 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
   const childrenMap = new Map<string, AccountFolderStatsItemOut[]>()
   const roots: AccountFolderStatsItemOut[] = []
   for (const folder of foldersQuery.data) {
-    if (folder.parent_remote_id && folderMap.has(folder.parent_remote_id)) {
-      const children = childrenMap.get(folder.parent_remote_id) || []
+    const remoteIdLower = (folder.remote_id || '').toLowerCase()
+    // 忽略纯命名空间包装容器（如 Gmail 的 [Gmail] 且不可选容器节点）
+    if (remoteIdLower === '[gmail]' && (folder.sync_status === 'paused' || folder.role === 'other')) {
+      continue
+    }
+
+    const parentRemoteId = folder.parent_remote_id
+    const isDirectGmailChild = (parentRemoteId || '').toLowerCase() === '[gmail]'
+
+    if (parentRemoteId && folderMap.has(parentRemoteId) && !isDirectGmailChild) {
+      const children = childrenMap.get(parentRemoteId) || []
       children.push(folder)
-      childrenMap.set(folder.parent_remote_id, children)
+      childrenMap.set(parentRemoteId, children)
     } else {
       roots.push(folder)
     }
@@ -248,11 +297,13 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
   const otherRoots = roots.filter((folder) => !hasInbox(folder))
 
   const renderTree = (items: AccountFolderStatsItemOut[], level = 0): React.ReactNode => [...items].sort((a, b) => {
-    const priority = getRolePriority(a.role || 'other') - getRolePriority(b.role || 'other')
+    const roleA = inferEffectiveRole(a.role, a.remote_id || '', a.name || '')
+    const roleB = inferEffectiveRole(b.role, b.remote_id || '', b.name || '')
+    const priority = getRolePriority(roleA) - getRolePriority(roleB)
     return priority || (a.name || '').localeCompare(b.name || '', 'zh-CN')
   }).map((folder) => {
-    const role = folder.role || 'other'
-    const notSelectable = folder.sync_status === 'paused'
+    const role = inferEffectiveRole(folder.role, folder.remote_id || '', folder.name || '')
+    const notSelectable = folder.sync_status === 'paused' && role === 'other'
     const rawName = folder.name || folder.remote_id || folder.folder_id || ''
     const displayBase = getStandardName(role, rawName)
     const displayName = folderDisplayNames.get(folder.folder_id) || displayBase
