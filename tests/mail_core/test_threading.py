@@ -136,7 +136,7 @@ def test_provider_thread_key():
     Session = get_session_factory()
     now = datetime.now(timezone.utc)
     with Session() as session:
-        acc = create_account(session, email=f"th3-{uuid.uuid4().hex[:8]}@ex.com", provider="gmail")
+        acc = create_account(session, email=f"th3-{uuid.uuid4().hex[:8]}@ex.com", provider="graph")
         a = Message(account_id=acc.id, remote_id="1", subject="A", from_address="a@ex.com", sort_time=now)
         b = Message(account_id=acc.id, remote_id="2", subject="B", from_address="a@ex.com", sort_time=now)
         session.add_all([a, b])
@@ -155,7 +155,7 @@ def test_reassigning_message_removes_old_thread_membership():
     now = datetime.now(timezone.utc)
     with Session() as session:
         account = create_account(
-            session, email=f"th-reassign-{uuid.uuid4().hex[:8]}@ex.com", provider="gmail"
+            session, email=f"th-reassign-{uuid.uuid4().hex[:8]}@ex.com", provider="graph"
         )
         old_thread = Thread(account_id=account.id, subject_norm="old", sort_time=now)
         new_thread = Thread(
@@ -197,7 +197,7 @@ def test_unknown_received_time_joins_threads_without_erasing_known_time():
     Session = get_session_factory()
     known_time = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
     with Session() as session:
-        account = create_account(session, email=f"th-null-{uuid.uuid4().hex[:8]}@ex.com", provider="gmail")
+        account = create_account(session, email=f"th-null-{uuid.uuid4().hex[:8]}@ex.com", provider="graph")
         known = Message(
             account_id=account.id,
             remote_id="known",

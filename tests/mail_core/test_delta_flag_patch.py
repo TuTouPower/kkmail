@@ -232,7 +232,7 @@ def test_delta_explicit_flag_patch_does_not_fall_back_to_unrelated_meta_read_sta
     Session = get_session_factory()
     now = datetime.now(timezone.utc)
     with Session() as session:
-        acc = Account(email=f"partial-flags-{uuid.uuid4().hex[:8]}@example.com", provider="gmail")
+        acc = Account(email=f"partial-flags-{uuid.uuid4().hex[:8]}@example.com", provider="graph")
         session.add(acc)
         session.flush()
         folder = Folder(account_id=acc.id, remote_id="INBOX", name="INBOX", role="inbox")

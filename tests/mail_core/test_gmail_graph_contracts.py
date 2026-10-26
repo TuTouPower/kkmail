@@ -1,17 +1,13 @@
-"""Contract tests for Gmail History / Graph Delta (injectable transport + fixtures)."""
+"""Contract tests for Graph Delta (injectable transport + fixtures)."""
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
 
 import pytest
 
-from mail_core.providers.gmail import GmailNotConfiguredError, GmailProvider, _meta_from_gmail_message
 from mail_core.providers.graph import GraphNotConfiguredError, GraphPaginationError, GraphProvider
 from mail_core.providers.http import CursorInvalidError, FixtureTransport, ProviderHttpError, RateLimitedError
-from mail_core.providers.imap import _parse_message_meta_from_fetch
-from mail_core.providers.parsing.gmail_history import parse_gmail_history
 from mail_core.providers.parsing.graph_delta import parse_graph_delta
 
 
@@ -52,58 +48,6 @@ def test_parse_graph_delta_pagination_and_removed():
     assert page2.next_cursor["delta_link"].endswith("deltatoken=abc")
 
 
-def test_provider_metadata_marks_unknown_attachments_without_fabricating_false():
-    history = parse_gmail_history(
-        {
-            "history": [
-                {
-                    "messagesAdded": [
-                        {"message": {"id": "history-unknown", "labelIds": ["INBOX"]}},
-                        {
-                            "message": {
-                                "id": "history-true",
-                                "labelIds": ["INBOX"],
-                                "has_attachments": True,
-                            }
-                        },
-                        {
-                            "message": {
-                                "id": "history-false",
-                                "labelIds": ["INBOX"],
-                                "has_attachments": False,
-                            }
-                        },
-                    ]
-                }
-            ],
-            "historyId": "101",
-        },
-        folder_label="INBOX",
-    )
-    gmail_meta = _meta_from_gmail_message(
-        {"id": "gmail-unknown", "internalDate": "1000", "labelIds": [], "payload": {"headers": []}}
-    )
-    gmail_true = _meta_from_gmail_message(
-        {"id": "gmail-true", "internalDate": "1000", "has_attachments": True, "payload": {"headers": []}}
-    )
-    gmail_false = _meta_from_gmail_message(
-        {"id": "gmail-false", "internalDate": "1000", "has_attachments": False, "payload": {"headers": []}}
-    )
-    imap_meta = _parse_message_meta_from_fetch(
-        (b"1 (UID 1 FLAGS ())", b"Subject: IMAP\r\nDate: Wed, 21 Oct 2026 10:00:00 +0000\r\n\r\n"),
-        uid_fallback=1,
-        folder_remote_id="INBOX",
-        uidvalidity=1,
-    )
-
-    assert [change.meta.has_attachments for change in history.changes] == [None, True, False]
-    assert gmail_meta.has_attachments is None
-    assert gmail_true.has_attachments is True
-    assert gmail_false.has_attachments is False
-    assert imap_meta is not None
-    assert imap_meta.has_attachments is None
-
-
 def test_graph_explicit_attachment_state_keeps_true_and_false():
     page = parse_graph_delta(
         {
@@ -117,213 +61,7 @@ def test_graph_explicit_attachment_state_keeps_true_and_false():
     assert [change.meta.has_attachments for change in page.changes] == [True, False]
 
 
-def test_parse_gmail_history_pagination_add_delete_flag():
-    page = parse_gmail_history(
-        {
-            "history": [
-                {
-                    "id": "100",
-                    "messagesAdded": [
-                        {
-                            "message": {
-                                "id": "m1",
-                                "threadId": "t1",
-                                "labelIds": ["INBOX", "UNREAD"],
-                            }
-                        }
-                    ],
-                    "messagesDeleted": [{"message": {"id": "old"}}],
-                    "labelsRemoved": [
-                        {"message": {"id": "m2", "labelIds": ["INBOX"]}, "labelIds": ["UNREAD"]}
-                    ],
-                }
-            ],
-            "historyId": "150",
-            "nextPageToken": "page2",
-        },
-        folder_label="INBOX",
-    )
-    assert not page.exhausted
-    assert page.next_cursor == {"historyId": "150", "pageToken": "page2"}
-    by_id = {c.remote_id: c for c in page.changes}
-    assert by_id["old"].kind == "delete"
-    assert by_id["m1"].kind == "upsert"
-    assert by_id["m1"].remote_id == "m1"
-    assert by_id["m2"].kind == "flag"
-    assert by_id["m2"].flags.get("is_read") is True
-
-
 # --- provider + transport --------------------------------------------------
-
-def test_gmail_requires_history_id_and_uses_transport():
-    transport = FixtureTransport()
-    transport.add(
-        "GET",
-        "/gmail/v1/users/me/history",
-        {
-            "history": [
-                {"messagesAdded": [{"message": {"id": "m1", "labelIds": ["INBOX"]}}]}
-            ],
-            "historyId": "99",
-        },
-    )
-    transport.add(
-        "GET",
-        "/gmail/v1/users/me/messages/m1",
-        {
-            "id": "m1",
-            "labelIds": ["INBOX"],
-            "payload": {"headers": [{"name": "Subject", "value": "s"}]},
-        },
-    )
-
-    p = GmailProvider(credential_ref="x", transport=transport)
-    out = p.delta_changes("INBOX", {"historyId": "42"})
-    assert out.exhausted and out.changes[0].remote_id == "m1"
-    assert transport.calls[0][2]["startHistoryId"] == "42"
-
-    with pytest.raises(ValueError):
-        GmailProvider(credential_ref="x", transport=transport).delta_changes("INBOX", {})
-
-    with pytest.raises(GmailNotConfiguredError):
-        GmailProvider(credential_ref="x").fetch_metadata_page("INBOX", None)
-
-
-def test_gmail_raw_history_via_fixture_transport():
-    fx = FixtureTransport()
-    fx.add(
-        "GET",
-        "/gmail/v1/users/me/history",
-        {
-            "history": [
-                {
-                    "id": "1",
-                    "messagesAdded": [
-                        {"message": {"id": "n1", "threadId": "t1", "labelIds": ["INBOX"]}}
-                    ],
-                }
-            ],
-            "historyId": "9",
-        },
-    )
-    fx.add(
-        "GET",
-        "/gmail/v1/users/me/messages/n1",
-        {
-            "id": "n1",
-            "threadId": "t1",
-            "labelIds": ["INBOX", "UNREAD", "STARRED"],
-            "internalDate": "1710000000000",
-            "snippet": "hello world",
-            "payload": {
-                "headers": [
-                    {"name": "Subject", "value": "Hydrated Subject"},
-                    {"name": "From", "value": "Sender <sender@example.com>"},
-                    {"name": "To", "value": "User <user@example.com>"},
-                ]
-            },
-        },
-    )
-    page = GmailProvider(credential_ref="cred", transport=fx).delta_changes("INBOX", {"historyId": "1"})
-    assert page.exhausted
-    assert page.next_cursor["historyId"] == "9"
-    assert len(page.changes) == 1
-    c = page.changes[0]
-    assert c.kind == "upsert"
-    assert c.remote_id == "n1"
-    assert c.meta is not None
-    assert c.meta.subject == "Hydrated Subject"
-    assert c.meta.from_address == "sender@example.com"
-    assert c.meta.from_name == "Sender"
-    assert c.meta.to_addresses == ("user@example.com",)
-    assert c.meta.is_read is False
-    assert c.meta.is_flagged is True
-
-
-def test_gmail_429_and_invalid_history():
-    def boom_429(method, path, params):
-        raise RateLimitedError("quota", retry_after_seconds=12, headers={"Retry-After": "12"})
-
-    with pytest.raises(RateLimitedError) as ri:
-        GmailProvider(credential_ref="x", transport=boom_429).delta_changes("INBOX", {"historyId": "1"})
-    assert ri.value.retry_after_seconds == 12
-
-    def boom_404(method, path, params):
-        raise ProviderHttpError("historyId not found", status=404, body={"error": {"message": "historyId invalid"}})
-
-    with pytest.raises(CursorInvalidError):
-        GmailProvider(credential_ref="x", transport=boom_404).delta_changes("INBOX", {"historyId": "stale"})
-
-
-def test_gmail_history_404_maps_without_matching_error_text():
-    def missing_history(_method, path, params):
-        assert path.endswith("/history")
-        assert params["startHistoryId"] == "stale"
-        raise ProviderHttpError("resource not found", status=404, body={"error": {"message": "not found"}})
-
-    with pytest.raises(CursorInvalidError):
-        GmailProvider(credential_ref="x", transport=missing_history).delta_changes(
-            "INBOX", {"historyId": "stale"}
-        )
-
-
-def test_gmail_message_404_with_historyid_text_does_not_map_to_cursor_error():
-    def missing_message(_method, path, _params):
-        assert "/messages/" in path
-        raise ProviderHttpError(
-            "message lookup failed",
-            status=404,
-            body={"error": {"message": "message historyId metadata unavailable"}},
-        )
-
-    with pytest.raises(ProviderHttpError) as exc_info:
-        GmailProvider(credential_ref="x", transport=missing_message).fetch_mime("m-1")
-
-    assert not isinstance(exc_info.value, CursorInvalidError)
-
-
-def test_gmail_non_404_history_error_does_not_map_to_cursor_error():
-    def invalid_request(_method, path, _params):
-        assert path.endswith("/history")
-        raise ProviderHttpError(
-            "invalid request",
-            status=400,
-            body={"error": {"message": "historyId invalid"}},
-        )
-
-    with pytest.raises(ProviderHttpError) as exc_info:
-        GmailProvider(credential_ref="x", transport=invalid_request).delta_changes(
-            "INBOX", {"historyId": "stale"}
-        )
-
-    assert not isinstance(exc_info.value, CursorInvalidError)
-
-
-def test_gmail_list_folders_via_transport(caplog):
-    def transport(method, path, params):
-        return {
-            "labels": [
-                {"id": "INBOX", "name": "INBOX"},
-                {"id": "SENT", "name": "SENT"},
-                {"id": "TRASH", "name": "TRASH"},
-                {"id": "SPAM", "name": "SPAM"},
-                {"id": "Label_1", "name": "Work"},
-                {"name": "missing-id"},
-                None,
-            ]
-        }
-
-    with caplog.at_level(logging.DEBUG, logger="mail_core.providers.gmail"):
-        folders = GmailProvider(credential_ref="x", transport=transport).list_folders()
-    by_id = {f.remote_id: f for f in folders}
-    assert len(folders) == 5
-    assert caplog.text.count("skipping Gmail label payload without id") == 2
-    assert by_id["INBOX"].role == "inbox"
-    assert by_id["SENT"].role == "sent"
-    assert by_id["TRASH"].role == "trash"
-    assert by_id["SPAM"].role == "junk"
-    assert by_id["Label_1"].role == "other"
-
 
 def test_graph_delta_uses_delta_link_and_next_link():
     transport = FixtureTransport()
@@ -517,17 +255,13 @@ def test_graph_reconcile_caps_items_and_rejects_repeated_next_link(monkeypatch):
 
 
 def test_not_configured_without_credentials_transport():
-    with pytest.raises(GmailNotConfiguredError):
-        GmailProvider(credential_ref="").list_folders()
-    with pytest.raises(GmailNotConfiguredError):
-        GmailProvider(credential_ref="").delta_changes("INBOX", {"historyId": "1"})
     with pytest.raises(GraphNotConfiguredError):
         GraphProvider(credential_ref="").list_folders()
     with pytest.raises(GraphNotConfiguredError):
         GraphProvider(credential_ref="").fetch_mime("x")
 
 
-def test_graph_and_gmail_reconcile_use_standard_queries():
+def test_graph_reconcile_use_standard_queries():
     graph_calls = []
 
     def graph_transport(method, path, params):
@@ -545,22 +279,6 @@ def test_graph_and_gmail_reconcile_use_standard_queries():
     assert actions[0].remote_id == "m3"
     assert graph_calls[0][0] == "GET"
 
-    gmail_calls = []
-
-    def gmail_transport(method, path, params):
-        gmail_calls.append((method, path, params))
-        assert method == "GET"
-        assert "/messages" in path
-        return {
-            "messages": [{"id": "gm1"}],
-        }
-
-    gmp = GmailProvider(credential_ref="x", transport=gmail_transport)
-    g_actions = gmp.reconcile("INBOX", ["gm1", "gm_stale"])
-    assert len(g_actions) == 1
-    assert g_actions[0].kind == "delete"
-    assert g_actions[0].remote_id == "gm_stale"
-    assert gmail_calls[0][0] == "GET"
 
 
 def test_graph_trash_does_not_fall_back_to_delete_on_5xx_or_403():
@@ -610,48 +328,6 @@ def test_graph_trash_falls_back_to_delete_only_on_404():
     assert res.success is True
     assert res.remote_state == {"deleted": True}
     assert any(method == "DELETE" for method, _ in calls)
-
-
-def test_gmail_duplicate_page_token_and_cursor_immutability():
-    """Duplicate page tokens must terminate or reject, never advance endlessly."""
-    calls = 0
-
-    def looping_transport(method, path, params):
-        nonlocal calls
-        calls += 1
-        if path.endswith("/messages/n1"):
-            return {"id": "n1", "labelIds": ["INBOX"], "payload": {"headers": []}}
-        if params.get("pageToken") == "infinite_loop_token":
-            return {
-                "history": [],
-                "historyId": "100",
-            }
-        return {
-            "history": [
-                {
-                    "id": "1",
-                    "messagesAdded": [
-                        {"message": {"id": "n1", "threadId": "t1", "labelIds": ["INBOX"]}}
-                    ],
-                }
-            ],
-            "historyId": "100",
-            "nextPageToken": "infinite_loop_token",
-        }
-
-    p = GmailProvider(credential_ref="x", transport=looping_transport)
-    # First page: start_history_id preserved while paging
-    page1 = p.delta_changes("INBOX", {"historyId": "10"})
-    assert page1.next_cursor["pageToken"] == "infinite_loop_token"
-    assert page1.next_cursor["historyId"] == "10"
-    assert not page1.exhausted
-
-    # Final page: pageToken removed and historyId advanced to head
-    page2 = p.delta_changes("INBOX", page1.next_cursor)
-    assert page2.exhausted
-    assert page2.next_cursor["historyId"] == "100"
-    assert "pageToken" not in page2.next_cursor
-    assert calls == 3
 
 
 def test_graph_5xx_and_timeout_preserves_cursor():
@@ -728,67 +404,6 @@ def test_graph_delta_partial_status_field_presence_contract():
     assert c3.meta.is_flagged is None
     assert c3.meta.has_attachments is None
     assert c4.flags == {"is_flagged": False}
-
-
-@pytest.mark.parametrize("internal_date", [None, "invalid", str(10**100), True, 1.5])
-def test_gmail_missing_or_invalid_internal_date_remains_unknown(internal_date):
-    message = {"id": "gmail-time", "payload": {"headers": []}}
-    if internal_date is not None:
-        message["internalDate"] = internal_date
-
-    meta = _meta_from_gmail_message(message)
-    history = parse_gmail_history(
-        {"history": [{"messagesAdded": [{"message": message}]}]}
-    )
-
-    assert meta.sort_time is None
-    assert history.changes[0].meta.sort_time is None
-
-
-def test_gmail_history_stub_marks_only_present_fields_supplied():
-    stub = {
-        "id": "history-stub",
-        "threadId": "thread-1",
-        "labelIds": ["INBOX", "UNREAD"],
-    }
-    stub_page = parse_gmail_history(
-        {"history": [{"messagesAdded": [{"message": stub}]}]}
-    )
-    stub_meta = stub_page.changes[0].meta
-
-    assert stub_meta is not None
-    assert stub_meta.supplied_fields == frozenset({"provider_thread_key", "is_read", "is_flagged"})
-    assert stub_meta.supplied_fields == _meta_from_gmail_message(stub).supplied_fields
-
-    fuller = {
-        "id": "history-full",
-        "payload": {"headers": []},
-        "labelIds": [],
-        "internalDate": "1000",
-        "snippet": "preview",
-        "threadId": "thread-2",
-        "has_attachments": False,
-    }
-    full_page = parse_gmail_history(
-        {"history": [{"messagesAdded": [{"message": fuller}]}]}
-    )
-    full_meta = full_page.changes[0].meta
-
-    assert full_meta is not None
-    assert full_meta.supplied_fields == _meta_from_gmail_message(fuller).supplied_fields
-
-
-def test_gmail_valid_internal_date_is_preserved_in_both_parser_paths():
-    message = {"id": "gmail-valid-time", "internalDate": "1000", "payload": {"headers": []}}
-
-    meta = _meta_from_gmail_message(message)
-    history = parse_gmail_history(
-        {"history": [{"messagesAdded": [{"message": message}]}]}
-    )
-
-    expected = datetime(1970, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
-    assert meta.sort_time == expected
-    assert history.changes[0].meta.sort_time == expected
 
 
 @pytest.mark.parametrize(

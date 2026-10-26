@@ -1,7 +1,7 @@
 """Integration tests for the global provider connection budget (R11 / §7).
 
 These tests exercise the *real* provider / transport call paths — IMAP
-provider methods, Gmail parallel hydration, the OAuth Bearer transport,
+provider methods, Graph HTTP requests, the OAuth Bearer transport,
 and the stdlib urllib transport against a local HTTP server — with a
 counting permit factory at the boundary.  Helper-only tests live in
 ``test_provider_connection_slots.py`` and do not count as integration
@@ -32,7 +32,6 @@ from mail_core.providers.connection_slots import (
     TrafficClass,
     traffic_class_for_job,
 )
-from mail_core.providers.gmail import GmailProvider
 from mail_core.providers.graph import GraphProvider
 from mail_core.providers.imap import ImapProvider, format_imap_remote_id
 
@@ -189,63 +188,8 @@ def test_control_failure_stops_imap_before_any_io(factory, fake_imap):
 
 
 # ---------------------------------------------------------------------------
-# Gmail / Graph HTTP integration
+# Graph HTTP integration
 # ---------------------------------------------------------------------------
-
-
-def _gmail_detail(remote_id: str) -> dict:
-    return {
-        "id": remote_id,
-        "labelIds": ["INBOX"],
-        "internalDate": "1700000000000",
-        "snippet": "s",
-        "payload": {
-            "headers": [
-                {"name": "Subject", "value": f"subj {remote_id}"},
-                {"name": "From", "value": "a@example.com"},
-            ]
-        },
-    }
-
-
-def test_gmail_parallel_hydration_counts_each_request(factory):
-    ids = [f"m{i}" for i in range(5)]
-    barrier = threading.Barrier(len(ids))
-    inflight = {"now": 0, "peak": 0}
-    lock = threading.Lock()
-
-    def transport(method, path, params):
-        if path.endswith("/messages"):
-            return {"messages": [{"id": i} for i in ids]}
-        if "/messages/" in path:
-            remote_id = path.rsplit("/", 1)[-1]
-            with lock:
-                inflight["now"] += 1
-                inflight["peak"] = max(inflight["peak"], inflight["now"])
-            try:
-                # All five detail requests must be in flight together;
-                # a single outer-page permit would break the barrier
-                # accounting below (peak would still be 5 transports but
-                # only 1 permit — the factory snapshot is the evidence).
-                barrier.wait(timeout=10)
-            finally:
-                with lock:
-                    inflight["now"] -= 1
-            return _gmail_detail(remote_id)
-        raise AssertionError(f"unexpected path {path}")
-
-    provider = GmailProvider(
-        credential_ref="cred",
-        transport=transport,
-        traffic_class=TrafficClass.FOREGROUND,
-        permit_factory=factory,
-    )
-    page = provider.fetch_metadata_page("INBOX", {"historyId": "1"})
-    assert len(page.items) == 5
-    assert inflight["peak"] == 5
-    # Each parallel request held its own permit simultaneously.
-    assert factory.snapshot()["peak"] == 5
-    assert factory.snapshot()["current"] == 0
 
 
 def test_http_capacity_shortage_never_reaches_transport(factory):
@@ -253,10 +197,12 @@ def test_http_capacity_shortage_never_reaches_transport(factory):
     calls = []
 
     def transport(method, path, params):
-        calls.append(path)
-        return {"labels": []}
+        if path == "/me/mailFolders":
+            calls.append(path)
+            return {"value": []}
+        return {}
 
-    provider = GmailProvider(
+    provider = GraphProvider(
         credential_ref="cred",
         transport=transport,
         permit_factory=factory,
@@ -299,7 +245,7 @@ def test_concurrent_executions_never_exceed_eight(factory):
         return {"labels": []}
 
     providers = [
-        GmailProvider(credential_ref="c", transport=transport, permit_factory=factory)
+        GraphProvider(credential_ref="c", transport=transport, permit_factory=factory)
         for _ in range(8)
     ]
     threads = [threading.Thread(target=p.list_folders) for p in providers]
@@ -311,10 +257,10 @@ def test_concurrent_executions_never_exceed_eight(factory):
 
     # Ninth concurrent execution (either class) is deferred, not queued
     # past the limit.
-    ninth = GmailProvider(credential_ref="c", transport=transport, permit_factory=factory)
+    ninth = GraphProvider(credential_ref="c", transport=transport, permit_factory=factory)
     with pytest.raises(ProviderCapacityUnavailable):
         ninth.list_folders()
-    background = GmailProvider(
+    background = GraphProvider(
         credential_ref="c",
         transport=transport,
         traffic_class=TrafficClass.BACKGROUND,
@@ -346,7 +292,7 @@ def test_oauth_refresh_releases_permit_before_mail_api_call(factory):
                     "refresh_token": "rt",
                     "client_id": "cid",
                     "client_secret": "sec",
-                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "token_uri": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
                 }
             )
         }
@@ -361,7 +307,7 @@ def test_oauth_refresh_releases_permit_before_mail_api_call(factory):
     client = OAuthTokenClient(
         credential_ref="oauth:g",
         store=store,
-        provider="gmail",
+        provider="graph",
         http_post=token_post,
         permit_factory=factory,
         traffic_class=TrafficClass.FOREGROUND,
@@ -374,9 +320,9 @@ def test_oauth_refresh_releases_permit_before_mail_api_call(factory):
         return {"ok": True}
 
     transport = BearerTransport(
-        token_client=client, inner=api, base_url="https://gmail.googleapis.com"
+        token_client=client, inner=api, base_url="https://graph.microsoft.com"
     )
-    assert transport("GET", "/gmail/v1/users/me/profile", {}) == {"ok": True}
+    assert transport("GET", "/v1.0/me", {}) == {"ok": True}
     assert observed["during_refresh"] == 1
     assert observed["during_api"] == 0
     assert factory.snapshot()["peak"] == 1  # never 2: refresh and API never overlap
@@ -428,7 +374,7 @@ def test_urllib_request_releases_permit_during_retry_wait(factory):
     thread.start()
     sleep_observations = []
     try:
-        url = f"http://127.0.0.1:{server.server_address[1]}/gmail/v1/users/me/profile"
+        url = f"http://127.0.0.1:{server.server_address[1]}/v1.0/me/profile"
         result = urllib_json_request(
             "GET",
             url,
@@ -496,20 +442,20 @@ def test_build_provider_propagates_traffic_class_and_factory(factory):
     assert provider.traffic_class is TrafficClass.BACKGROUND
     assert provider.permit_factory is factory
 
-    gmail_store = DictCredentialStore(
+    graph_store = DictCredentialStore(
         {"g": json.dumps({"refresh_token": "r", "client_id": "c"})}
     )
-    gmail_account = Account(email="g@b.com", provider="gmail", credential_ref="g", config={})
-    gmail_provider = build_provider(
-        gmail_account,
-        gmail_store,
+    graph_account = Account(email="g@b.com", provider="graph", credential_ref="g", config={})
+    graph_provider = build_provider(
+        graph_account,
+        graph_store,
         token_http=lambda *a, **k: {},
         api_http=lambda *a, **k: {},
         traffic_class=TrafficClass.BACKGROUND,
         permit_factory=factory,
     )
-    assert gmail_provider.traffic_class is TrafficClass.BACKGROUND
-    token_client = gmail_provider.transport.token_client
+    assert graph_provider.traffic_class is TrafficClass.BACKGROUND
+    token_client = graph_provider.transport.token_client
     assert token_client.traffic_class is TrafficClass.BACKGROUND
     assert token_client.permit_factory is factory
 

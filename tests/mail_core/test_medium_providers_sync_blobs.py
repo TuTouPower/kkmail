@@ -1,4 +1,4 @@
-"""Medium findings: IMAP FETCH, Gmail/Graph MIME, jobs ownership, soft quota, scripts/compose."""
+"""Medium findings: IMAP FETCH, Graph MIME, jobs ownership, soft quota, scripts/compose."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from unittest.mock import patch
 import pytest
 
 from mail_core.mail.domain.enums import JobStatus
-from mail_core.providers.gmail import GmailProvider
 from mail_core.providers.graph import GraphProvider
 from mail_core.providers.http import CursorInvalidError
 from mail_core.providers.imap import ImapProvider
@@ -53,31 +52,6 @@ class _FakeSession:
 
     def scalars(self, *_args, **_kwargs):
         return _FakeScalars()
-
-
-def test_gmail_raw_mime_pads_only_as_needed():
-    raw = base64.urlsafe_b64encode(b"hello-mime").decode().rstrip("=")
-    assert len(raw) % 4 != 0
-
-    def transport(method, path, params):
-        return {"raw": raw}
-
-    assert GmailProvider(credential_ref="x", transport=transport).fetch_mime("m1") == b"hello-mime"
-
-    padded = raw + "=" * ((4 - len(raw) % 4) % 4)
-
-    def transport2(method, path, params):
-        return {"raw": padded}
-
-    assert GmailProvider(credential_ref="x", transport=transport2).fetch_mime("m1") == b"hello-mime"
-
-
-def test_gmail_raw_mime_missing_raises():
-    def transport(method, path, params):
-        return {}
-
-    with pytest.raises(RuntimeError, match="missing raw MIME"):
-        GmailProvider(credential_ref="x", transport=transport).fetch_mime("m1")
 
 
 def test_graph_fetch_mime_missing_raw_bytes_raises():

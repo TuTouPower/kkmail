@@ -114,15 +114,11 @@ def test_build_provider_wires_fetch_timeout_to_oauth_providers():
     store = MagicMock()
     store.get_secret.return_value = "{}"
 
-    gmail_acc = Account(email="g@example.com", provider="gmail", credential_ref="oauth:g")
-    gmail_p = build_provider(gmail_acc, store, session=session, token_http=lambda *a, **k: {}, api_http=lambda *a, **k: {})
-    assert gmail_p.timeout == 75.0
-
     graph_acc = Account(email="m@example.com", provider="graph", credential_ref="oauth:m")
     graph_p = build_provider(graph_acc, store, session=session, token_http=lambda *a, **k: {}, api_http=lambda *a, **k: {})
     assert graph_p.timeout == 75.0
 
-@pytest.mark.parametrize('provider_name', ['imap', 'gmail', 'graph'])
+@pytest.mark.parametrize('provider_name', ['imap', 'graph'])
 def test_runtime_timeout_uses_persisted_setting_without_injected_session(provider_name, monkeypatch):
     import os
     if not os.environ.get('MAIL_CORE_DATABASE_URL'):
@@ -141,7 +137,7 @@ def test_runtime_timeout_uses_persisted_setting_without_injected_session(provide
     store = DictCredentialStore({'test-timeout': '{"password":"test-only","client_id":"cid","refresh_token":"rt"}'})
     provider = build_provider(account, store)
     assert provider.timeout == 75.0
-    if provider_name in ('gmail', 'graph'):
+    if provider_name == 'graph':
         assert provider.transport.token_client.timeout == 75.0
 
 

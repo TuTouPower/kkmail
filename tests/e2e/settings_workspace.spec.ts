@@ -5,7 +5,7 @@ async function settingsFixture(page: Page) {
   const groups = [{ id: 'work', name: '工作邮箱', color: null, sort_order: 0 }]
   const accounts = Array.from({ length: 18 }, (_, index) => ({
     id: `settings-${index}`, email: index === 0 ? 'long-address-for-settings@gmail.com' : `account-${index}@example.com`,
-    provider: index === 0 ? 'gmail' : 'imap', account_type: 'imap', group_id: index % 2 ? undefined : 'work',
+    provider: 'imap', account_type: 'imap', group_id: index % 2 ? undefined : 'work',
     sync_enabled: index !== 1, sync_status: index === 0 ? 'auth_failed' : 'idle',
   }))
   await setupStubApi(page, { authedInitially: true, accounts, groups })

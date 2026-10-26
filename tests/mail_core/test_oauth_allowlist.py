@@ -25,7 +25,7 @@ def test_token_uri_rejects_ssrf_target():
             }
         ),
     )
-    client = OAuthTokenClient(credential_ref="ref", store=store, provider="gmail")
+    client = OAuthTokenClient(credential_ref="ref", store=store, provider="graph")
     with pytest.raises(OAuthError, match="allowlist"):
         client.token_uri()
 
@@ -36,30 +36,13 @@ def test_missing_expires_at_forces_refresh():
         "ref",
         json.dumps({"refresh_token": "r", "client_id": "c", "access_token": "cached"}),
     )
-    client = OAuthTokenClient(credential_ref="ref", store=store, provider="gmail")
+    client = OAuthTokenClient(credential_ref="ref", store=store, provider="graph")
     assert client._access_valid(client._load()) is False
-
-
-def test_allowlisted_google_uri_ok():
-    store = DictCredentialStore()
-    store.put_secret(
-        "ref",
-        json.dumps(
-            {
-                "refresh_token": "r",
-                "client_id": "c",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        ),
-    )
-    client = OAuthTokenClient(credential_ref="ref", store=store, provider="gmail")
-    assert client.token_uri().startswith("https://oauth2.googleapis.com/")
 
 
 @pytest.mark.parametrize(
     ("provider", "expected"),
     [
-        ("gmail", "https://oauth2.googleapis.com/token"),
         ("graph", "https://login.microsoftonline.com/common/oauth2/v2.0/token"),
     ],
 )

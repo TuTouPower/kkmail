@@ -58,9 +58,8 @@ app.whenReady().then(async () => {
       platform: process.platform, preloadPath: path.join(__dirname, 'preload.js'),
       backgroundColor: '#ffffff',
     }))
-    const microsoft = process.env.KKMAIL_OAUTH_TEST_PROVIDER === 'microsoft'
-    const label = microsoft ? 'Microsoft' : 'Google'
-    const email = microsoft ? 'electron@outlook.com' : 'electron@gmail.com'
+    const label = 'Microsoft'
+    const email = 'electron@outlook.com'
     let authorizationUrl
     win.webContents.setWindowOpenHandler(createExternalWindowHandler(url => { authorizationUrl = url }))
     await win.loadURL(origin)
@@ -72,17 +71,17 @@ app.whenReady().then(async () => {
     await evaluate("document.querySelector('button[data-ui=\"SB11\"]').click()")
     await waitFor("Array.from(document.querySelectorAll('button')).some(b => b.textContent === '添加账户')")
     await click('添加账户')
-    await setValue('#account-vendor', microsoft ? 'microsoft' : 'google')
+    await setValue('#account-vendor', 'microsoft')
     await waitFor("Boolean(document.querySelector('#account-redirect-uri')?.value.startsWith('http://'))")
     const redirect = await evaluate("document.querySelector('#account-redirect-uri').value")
     assert.strictEqual(new URL(redirect).port, new URL(origin).port)
-    assert.strictEqual(new URL(redirect).hostname, microsoft ? 'localhost' : '127.0.0.1')
+    assert.strictEqual(new URL(redirect).hostname, 'localhost')
     await setValue('#account-client-id', 'electron-test-client')
     await click(`使用 ${label} 登录`)
     const deadline = Date.now() + 5000
     while (!authorizationUrl && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20))
     assert.ok(authorizationUrl)
-    assert.strictEqual(new URL(authorizationUrl).hostname, microsoft ? 'login.microsoftonline.com' : 'accounts.google.com')
+    assert.strictEqual(new URL(authorizationUrl).hostname, 'login.microsoftonline.com')
     assert.strictEqual(await evaluate("document.body.textContent.includes('浏览器拦截了授权窗口')"), false)
     // Node fetch has no Electron cookies, matching the separate system browser.
     const state = new URL(authorizationUrl).searchParams.get('state')

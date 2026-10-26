@@ -1,4 +1,4 @@
-"""High-finding coverage: blobs GC/rotate, Gmail metadata, Graph trash, IMAP MODSEQ, reclaim."""
+"""High-finding coverage: blobs GC/rotate, Graph trash, IMAP MODSEQ, reclaim."""
 
 from __future__ import annotations
 
@@ -13,89 +13,11 @@ from mail_core.blobs.rotate import rewrap_blob_file
 from mail_core.blobs.store import BlobStore
 from mail_core.mail.application.remote_ops import reclaim_stale_in_progress
 from mail_core.mail.domain.enums import RemoteOperationStatus
-from mail_core.providers.gmail import GmailProvider, _meta_from_gmail_message
 from mail_core.providers.graph import GraphProvider
 from mail_core.providers.http import CursorInvalidError, ProviderHttpError, RateLimitedError
 from mail_core.providers.imap import ImapProvider, format_imap_remote_id
 from mail_core.sync.metadata import apply_metadata_page
 from mail_core.providers.base import MetadataPage, RemoteMessageMeta
-
-
-def test_gmail_fetch_metadata_page_batches_messages_get():
-    calls: list[tuple[str, str, dict]] = []
-
-    def transport(method, path, params=None):
-        params = params or {}
-        calls.append((method, path, params))
-        if path.endswith("/messages") and "messages/" not in path.rstrip("/").split("/")[-1]:
-            return {
-                "messages": [{"id": "m1", "threadId": "t1"}, {"id": "m2", "threadId": "t2"}],
-                "nextPageToken": None,
-            }
-        if "/messages/m1" in path:
-            return {
-                "id": "m1",
-                "threadId": "t1",
-                "labelIds": ["INBOX", "UNREAD"],
-                "internalDate": "1710000000000",
-                "snippet": "hi",
-                "payload": {
-                    "headers": [
-                        {"name": "Subject", "value": "Hello"},
-                        {"name": "From", "value": "Ann <ann@ex.com>"},
-                        {"name": "Message-ID", "value": "<m1@ex.com>"},
-                        {"name": "In-Reply-To", "value": "<root@ex.com>"},
-                        {"name": "References", "value": "<root@ex.com>"},
-                    ]
-                },
-            }
-        if "/messages/m2" in path:
-            return {
-                "id": "m2",
-                "threadId": "t2",
-                "labelIds": ["INBOX"],
-                "internalDate": "1710000001000",
-                "payload": {
-                    "headers": [
-                        {"name": "Subject", "value": "World"},
-                        {"name": "From", "value": "bob@ex.com"},
-                    ]
-                },
-            }
-        if path.endswith("/profile"):
-            return {"historyId": "999"}
-        raise AssertionError(f"unexpected {method} {path}")
-
-    p = GmailProvider(credential_ref="x", transport=transport)
-    page = p.fetch_metadata_page("INBOX", None)
-    assert page.exhausted
-    assert page.next_cursor and page.next_cursor.get("historyId") == "999"
-    assert len(page.items) == 2
-    assert page.items[0].subject == "Hello"
-    assert page.items[0].from_address == "ann@ex.com"
-    assert page.items[0].in_reply_to == "<root@ex.com>"
-    assert page.items[0].references == "<root@ex.com>"
-    assert page.items[1].subject == "World"
-    assert any("/messages/m1" in c[1] for c in calls)
-    assert any(c[2].get("format") == "metadata" for c in calls if "/messages/m" in c[1])
-
-
-def test_meta_from_gmail_message_headers():
-    meta = _meta_from_gmail_message(
-        {
-            "id": "x",
-            "threadId": "t",
-            "labelIds": ["UNREAD"],
-            "payload": {
-                "headers": [
-                    {"name": "Subject", "value": "S"},
-                    {"name": "From", "value": "a@b.c"},
-                    {"name": "In-Reply-To", "value": "<p@e>"},
-                ]
-            },
-        }
-    )
-    assert meta.subject == "S" and meta.in_reply_to == "<p@e>" and meta.is_read is False
 
 
 def test_graph_trash_does_not_swallow_rate_limit():
@@ -372,7 +294,7 @@ def test_reclaim_stale_in_progress_and_metadata_history_checkpoint():
 
     Session = get_session_factory()
     with Session() as session:
-        acc = Account(email=f"hi-{os.urandom(4).hex()}@example.com", provider="gmail")
+        acc = Account(email=f"hi-{os.urandom(4).hex()}@example.com", provider="graph")
         session.add(acc)
         session.flush()
         folder = Folder(account_id=acc.id, remote_id="INBOX", name="INBOX", role="inbox")

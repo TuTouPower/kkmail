@@ -450,7 +450,6 @@ def test_microsoft_callback_cross_provider_replay_and_missing_mailbox_fail_close
     flow = start(api_client)
     state = parse_qs(urlsplit(flow['auth_url']).query)['state'][0]
     assert browser.post(f"/api/accounts/oauth/flows/{flow['flow_id']}/poll").status_code == 401
-    assert browser.get(f'/api/accounts/oauth/callback/google?state={state}&code=wrong-provider').status_code == 400
     successful_hooks('cross-provider@outlook.com')
     assert authorize(flow).status_code == 200
     assert authorize(flow).status_code == 400
@@ -480,7 +479,7 @@ def test_verified_oauth_save_rejects_mixed_manual_credentials_without_consuming_
     assert api_client.patch('/api/accounts/' + saved.json()['id'], json={'oauth_flow_id': edit['flow_id']}).status_code == 200
 
 @pytest.mark.skipif(not os.environ.get('MAIL_CORE_DATABASE_URL'), reason='PG required')
-@pytest.mark.parametrize('provider', ['graph', 'gmail'])
+@pytest.mark.parametrize('provider', ['graph'])
 def test_legacy_oauth_ordinary_save_and_group_move_do_not_require_new_secret_pg(api_client, provider):
     created = api_client.post('/api/accounts', json={'provider': provider, 'email': f'legacy-{provider}@example.com',
         'credentials': {'client_id': 'original-client', 'refresh_token': 'original-refresh'}})

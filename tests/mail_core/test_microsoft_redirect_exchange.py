@@ -183,14 +183,6 @@ def test_validate_connection_graph_with_secret_keeps_prior_requirements():
         )
 
 
-def test_validate_connection_gmail_requirements_not_weakened():
-    with pytest.raises(ValueError, match="client_secret"):
-        validate_connection(
-            "x@gmail.com", "gmail", {"oauth_client_type": "confidential"},
-            {"client_id": DEFAULT_MICROSOFT_CLIENT_ID, "refresh_token": "r"},
-        )
-
-
 # --- exchange API (account service mocked; transports faked) ---------------
 
 def _dto(email, group_id=None):

@@ -16,7 +16,6 @@ from mail_core.mail.domain.enums import RemoteOperationStatus
 from mail_core.mail.storage import Folder, RemoteOperation
 from mail_core.mail.storage.models import AccountSyncLease
 from mail_core.providers.base import RemoteFolder, RemoteMessageMeta
-from mail_core.providers.gmail import gmail_label_role
 from mail_core.providers.graph import graph_folder_role
 from mail_core.providers.http import CursorInvalidError, ProviderHttpError
 from mail_core.providers.oauth import _url_is_sync_cursor_endpoint, urllib_json_request
@@ -34,11 +33,9 @@ _requires_db = pytest.mark.skipif(
 
 
 def test_url_is_sync_cursor_endpoint():
-    assert _url_is_sync_cursor_endpoint("https://gmail.googleapis.com/gmail/v1/users/me/history")
     assert _url_is_sync_cursor_endpoint(
         "https://graph.microsoft.com/v1.0/me/mailFolders/aa/messages/delta?$deltatoken=x"
     )
-    assert not _url_is_sync_cursor_endpoint("https://gmail.googleapis.com/gmail/v1/users/me/labels")
     assert not _url_is_sync_cursor_endpoint("https://graph.microsoft.com/v1.0/me/messages/abc/$value")
 
 
@@ -58,31 +55,25 @@ def test_urllib_json_request_404_mapping(monkeypatch):
             return b'{"error":"x"}'
 
     def boom_history(req, timeout=60):
-        raise FakeHTTPError(404, "https://gmail.googleapis.com/gmail/v1/users/me/history")
+        raise FakeHTTPError(404, "https://graph.microsoft.com/v1.0/me/mailFolders/aa/messages/delta")
 
     def boom_labels(req, timeout=60):
-        raise FakeHTTPError(404, "https://gmail.googleapis.com/gmail/v1/users/me/labels")
+        raise FakeHTTPError(404, "https://graph.microsoft.com/v1.0/me/messages/abc/$value")
 
     import urllib.request
 
     monkeypatch.setattr(urllib.request, "urlopen", boom_history)
     with pytest.raises(CursorInvalidError):
-        urllib_json_request("GET", "https://gmail.googleapis.com/gmail/v1/users/me/history")
+        urllib_json_request("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/aa/messages/delta")
 
     monkeypatch.setattr(urllib.request, "urlopen", boom_labels)
     with pytest.raises(ProviderHttpError) as ei:
-        urllib_json_request("GET", "https://gmail.googleapis.com/gmail/v1/users/me/labels")
+        urllib_json_request("GET", "https://graph.microsoft.com/v1.0/me/messages/abc/$value")
     assert not isinstance(ei.value, CursorInvalidError)
     assert ei.value.status == 404
 
 
-def test_gmail_and_graph_folder_roles():
-    assert gmail_label_role("INBOX", "INBOX") == "inbox"
-    assert gmail_label_role("SENT", "SENT") == "sent"
-    assert gmail_label_role("DRAFT", "DRAFT") == "drafts"
-    assert gmail_label_role("TRASH", "TRASH") == "trash"
-    assert gmail_label_role("SPAM", "SPAM") == "junk"
-    assert gmail_label_role("Label_1", "Work") == "other"
+def test_graph_folder_roles():
     assert graph_folder_role({"id": "1", "wellKnownName": "sentitems"}) == "sent"
     assert graph_folder_role({"id": "2", "wellKnownName": "junkemail"}) == "junk"
     assert graph_folder_role({"id": "3", "role": "archive"}) == "archive"

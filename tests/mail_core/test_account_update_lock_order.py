@@ -104,7 +104,7 @@ def _account(*, sync_enabled: bool = True) -> Account:
     return Account(
         id=uuid.uuid4(),
         email="lock-order@example.test",
-        provider="gmail",
+        provider="graph",
         display_name="Lock Order",
         credential_ref=None,
         group_id=None,
@@ -227,7 +227,7 @@ def test_combined_patch_vs_sidebar_first_transaction_no_deadlock_pg(monkeypatch)
 
     account = accounts_app.create_account_app(
         email=f"lock-order-{uuid.uuid4().hex[:8]}@example.test",
-        provider="gmail",
+        provider="graph",
         config={"oauth_client_type": "public"},
         credentials={"client_id": "cid", "refresh_token": "rt"},
     )

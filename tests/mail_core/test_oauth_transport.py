@@ -10,8 +10,7 @@ import pytest
 from mail_core.accounts import DictCredentialStore
 from mail_core.mail.storage.models import Account
 from mail_core.providers.factory import build_provider
-from mail_core.providers.gmail import GmailNotConfiguredError, GmailProvider
-from mail_core.providers.graph import GraphNotConfiguredError
+from mail_core.providers.graph import GraphNotConfiguredError, GraphProvider
 from mail_core.providers.http import AmbiguousOutcomeError, ProviderHttpError
 from mail_core.providers.oauth import (
     BearerTransport,
@@ -23,12 +22,12 @@ from mail_core.providers.oauth import (
 def test_refresh_token_grant_persists_access_token():
     store = DictCredentialStore(
         {
-            "oauth:gmail": json.dumps(
+            "oauth:graph": json.dumps(
                 {
                     "refresh_token": "rt-1",
                     "client_id": "cid",
                     "client_secret": "sec",
-                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "token_uri": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
                 }
             )
         }
@@ -42,9 +41,9 @@ def test_refresh_token_grant_persists_access_token():
         return {"access_token": "at-1", "expires_in": 3600, "token_type": "Bearer"}
 
     client = OAuthTokenClient(
-        credential_ref="oauth:gmail",
+        credential_ref="oauth:graph",
         store=store,
-        provider="gmail",
+        provider="graph",
         http_post=token_post,
     )
     assert client.get_access_token() == "at-1"
@@ -52,7 +51,7 @@ def test_refresh_token_grant_persists_access_token():
     # Second call uses cache
     assert client.get_access_token() == "at-1"
     assert len(calls) == 1
-    saved = json.loads(store.get_secret("oauth:gmail"))
+    saved = json.loads(store.get_secret("oauth:graph"))
     assert saved["access_token"] == "at-1"
     assert saved["expires_at"] > time.time()
 
@@ -65,7 +64,7 @@ def test_bearer_transport_attaches_header_and_retries_401():
                     "refresh_token": "rt",
                     "client_id": "c",
                     "client_secret": "s",
-                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "token_uri": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
                     "access_token": "stale",
                     "expires_at": time.time() + 9999,
                 }
@@ -78,7 +77,7 @@ def test_bearer_transport_attaches_header_and_retries_401():
         tokens["n"] += 1
         return {"access_token": f"fresh-{tokens['n']}", "expires_in": 3600}
 
-    client = OAuthTokenClient(credential_ref="oauth:g", store=store, provider="gmail", http_post=token_post)
+    client = OAuthTokenClient(credential_ref="oauth:g", store=store, provider="graph", http_post=token_post)
     seen = []
 
     def api(method, url, params, headers):
@@ -86,13 +85,13 @@ def test_bearer_transport_attaches_header_and_retries_401():
         if headers.get("Authorization") == "Bearer stale":
             raise ProviderHttpError("unauthorized", status=401)
         return {
-            "history": [],
-            "historyId": "9",
+            "@odata.deltaLink": "https://graph/delta?token=9",
+            "value": [],
         }
 
-    transport = BearerTransport(token_client=client, inner=api, base_url="https://gmail.googleapis.com")
-    p = GmailProvider(credential_ref="oauth:g", transport=transport)
-    page = p.delta_changes("INBOX", {"historyId": "1"})
+    transport = BearerTransport(token_client=client, inner=api, base_url="https://graph.microsoft.com")
+    p = GraphProvider(credential_ref="oauth:g", transport=transport)
+    page = p.delta_changes("inbox", {})
     assert page.exhausted
     assert seen[0] == "Bearer stale"
     assert seen[1].startswith("Bearer fresh-")
@@ -108,7 +107,7 @@ def test_bearer_transport_does_not_replay_writes_after_401(method):
                     "refresh_token": "rt",
                     "client_id": "c",
                     "client_secret": "s",
-                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "token_uri": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
                     "access_token": "stale",
                     "expires_at": time.time() + 9999,
                 }
@@ -121,14 +120,14 @@ def test_bearer_transport_does_not_replay_writes_after_401(method):
         refreshes.append(True)
         return {"access_token": "fresh", "expires_in": 3600}
 
-    client = OAuthTokenClient(credential_ref="oauth:g", store=store, provider="gmail", http_post=token_post)
+    client = OAuthTokenClient(credential_ref="oauth:g", store=store, provider="graph", http_post=token_post)
     requests = []
 
     def api(request_method, _url, _params, headers):
         requests.append((request_method, headers["Authorization"]))
         raise ProviderHttpError("unauthorized", status=401)
 
-    transport = BearerTransport(token_client=client, inner=api, base_url="https://gmail.googleapis.com")
+    transport = BearerTransport(token_client=client, inner=api, base_url="https://graph.microsoft.com")
 
     with pytest.raises(AmbiguousOutcomeError, match=f"{method} outcome ambiguous") as exc_info:
         transport(method, "/me/messages/m1", {"isRead": True})
@@ -136,57 +135,6 @@ def test_bearer_transport_does_not_replay_writes_after_401(method):
     assert exc_info.value.status is None
     assert requests == [(method, "Bearer stale")]
     assert len(refreshes) == 1
-
-
-def test_factory_wires_gmail_oauth_and_not_configured_without_ref():
-    store = DictCredentialStore(
-        {
-            "oauth:gmail": json.dumps(
-                {
-                    "refresh_token": "rt",
-                    "client_id": "c",
-                    "client_secret": "s",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                }
-            )
-        }
-    )
-
-    def token_post(method, url, form, headers):
-        return {"access_token": "tok", "expires_in": 3600}
-
-    api_calls = []
-
-    def api(method, url, params, headers):
-        api_calls.append((method, url, headers.get("Authorization")))
-        assert headers["Authorization"] == "Bearer tok"
-        assert "gmail.googleapis.com" in url
-        assert "/gmail/v1/users/me/history" in url
-        assert params.get("startHistoryId") == "1"
-        assert params.get("labelId") == "INBOX"
-        return {
-            "history": [
-                {
-                    "id": "1",
-                    "messagesDeleted": [{"message": {"id": "del-1"}}],
-                }
-            ],
-            "historyId": "100",
-        }
-
-    acc = Account(email="a@g.com", provider="gmail", credential_ref="oauth:gmail")
-    provider = build_provider(acc, store, token_http=token_post, api_http=api)
-    out = provider.delta_changes("INBOX", {"historyId": "1"})
-    assert out.exhausted
-    assert out.next_cursor == {"historyId": "100"}
-    assert len(out.changes) == 1
-    assert out.changes[0].kind == "delete"
-    assert out.changes[0].remote_id == "del-1"
-    assert api_calls and "Bearer tok" in api_calls[0][2]
-
-    bare = Account(email="b@g.com", provider="gmail", credential_ref="")
-    with pytest.raises(GmailNotConfiguredError, match="missing credential_ref"):
-        build_provider(bare, store, timeout=5.0)
 
 
 def test_oauth_factory_rejects_missing_graph_credential_ref():
@@ -231,7 +179,7 @@ def test_oauth_error_on_token_failure():
     def token_post(method, url, form, headers):
         return {"error": "invalid_grant", "error_description": "revoked"}
 
-    client = OAuthTokenClient(credential_ref="oauth:x", store=store, provider="gmail", http_post=token_post)
+    client = OAuthTokenClient(credential_ref="oauth:x", store=store, provider="graph", http_post=token_post)
     with pytest.raises(OAuthError):
         client.get_access_token()
 
@@ -243,7 +191,7 @@ def test_oauth_token_error_text_strips_controls_and_caps_length():
     client = OAuthTokenClient(
         credential_ref="oauth:x",
         store=store,
-        provider="gmail",
+        provider="graph",
         http_post=lambda *_args: {
             "error": "invalid_grant\nInjected-Header: value",
             "error_description": "provider detail\r" + "x" * 500,
@@ -296,15 +244,15 @@ def test_bearer_transport_blocks_cross_origin():
                     "refresh_token": "rt",
                     "client_id": "c",
                     "client_secret": "s",
-                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "token_uri": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
                     "access_token": "valid",
                     "expires_at": time.time() + 9999,
                 }
             )
         }
     )
-    client = OAuthTokenClient(credential_ref="oauth:g", store=store, provider="gmail")
-    transport = BearerTransport(token_client=client, inner=lambda *a, **k: {}, base_url="https://gmail.googleapis.com")
+    client = OAuthTokenClient(credential_ref="oauth:g", store=store, provider="graph")
+    transport = BearerTransport(token_client=client, inner=lambda *a, **k: {}, base_url="https://graph.microsoft.com")
     with pytest.raises(OAuthError, match="cross-origin Bearer request denied"):
         transport("GET", "https://attacker.com/steal")
 

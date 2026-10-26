@@ -190,7 +190,7 @@ def test_sync_paths_rethread_unchanged_outcome_when_parent_arrives(sync_path):
     Session = get_session_factory()
     now = datetime.now(timezone.utc)
     with Session() as session:
-        account = Account(email=f"thread-{uuid.uuid4().hex[:8]}@example.com", provider="gmail")
+        account = Account(email=f"thread-{uuid.uuid4().hex[:8]}@example.com", provider="graph")
         session.add(account)
         session.flush()
         folder = Folder(account_id=account.id, remote_id="INBOX", name="INBOX", role="inbox")

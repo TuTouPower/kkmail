@@ -249,9 +249,9 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
       const body = (req.postDataJSON() || {}) as Record<string, unknown>
       const newAcc: StubAccount = {
         id: `acc-${currentAccounts.length + 1}`,
-        email: String(body.email || 'oauth-new@gmail.com'),
-        provider: String(body.provider || 'gmail'),
-        account_type: String(body.provider || 'gmail'),
+        email: String(body.email || 'oauth-new@outlook.com'),
+        provider: String(body.provider || 'graph'),
+        account_type: String(body.provider || 'graph'),
         group_id: body.group_id ? String(body.group_id) : undefined,
         sync_state: 'idle',
         sync_enabled: true,
@@ -272,7 +272,7 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
     }
 
     if (path === '/api/accounts/oauth/metadata' && method === 'GET') {
-      const provider = url.searchParams.get('provider') || 'google'
+      const provider = url.searchParams.get('provider') || 'microsoft'
       return route.fulfill({
         status: 200,
         json: {
@@ -293,13 +293,13 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
 
     if (path === '/api/accounts/oauth/start' && method === 'POST') {
       const body = (req.postDataJSON() || {}) as Record<string, unknown>
-      const provider = String(body.provider || 'google')
+      const provider = String(body.provider || 'microsoft')
       const intent = String(body.intent || 'create')
       oauthDraft = {
         flow_id: 'stub-oauth-flow-1', provider, intent, account_id: body.account_id || null,
         group_id: body.group_id || null, client_type: body.client_type || 'public',
         client_id: body.client_id || 'stub-client-id', status: 'authorized',
-        verified_email: intent === 'reauthorize' ? currentAccounts.find(a => a.id === body.account_id)?.email : provider === 'microsoft' ? 'oauth-new@outlook.com' : 'oauth-new@gmail.com',
+        verified_email: intent === 'reauthorize' ? currentAccounts.find(a => a.id === body.account_id)?.email : 'oauth-new@outlook.com',
         method: body.method || 'authorization_code', tenant: body.tenant || null,
         user_code: body.method === 'device_code' ? 'ABCD-EFGH' : null,
         verification_uri: body.method === 'device_code' ? 'https://microsoft.com/devicelogin' : null,

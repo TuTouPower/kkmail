@@ -1,4 +1,4 @@
-"""Provider writeback: Memory + IMAP shapes + Gmail/Graph injectable transports."""
+"""Provider writeback: Memory + IMAP shapes + Graph injectable transports."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 from mail_core.providers.base import RemoteFolder, RemoteMessageMeta
-from mail_core.providers.gmail import GmailProvider
 from mail_core.providers.graph import GraphProvider
 from mail_core.providers.imap import ImapProvider, format_imap_remote_id
 from mail_core.providers.remote_writeback import normalize_op_type
@@ -168,39 +167,6 @@ def test_imap_move_trash_refuse_unsafe_expunge():
     assert "IMAP server does not support atomic MOVE/delete" in (r_trash.error or "")
     assert not any(c[0] == "expunge" for c in calls)
     assert not any(c[0] == "uid" and c[1] == "STORE" for c in calls)
-
-
-def test_gmail_writeback_via_transport_mocks():
-    seen: list[tuple] = []
-
-    def transport(method, path, params):
-        seen.append((method, path, dict(params or {})))
-        if path.endswith("/modify"):
-            return {"id": "m1", "labelIds": ["INBOX", "STARRED"]}
-        if path.endswith("/trash"):
-            return {"id": "m1", "labelIds": ["TRASH"]}
-        return {"success": True}
-
-    p = GmailProvider(credential_ref="x", transport=transport)
-    assert p.apply_remote_operation("set_read", {"remote_id": "m1", "is_read": True}).success
-    assert seen[0][0] == "POST" and seen[0][1].endswith("/messages/m1/modify")
-    assert seen[0][2].get("removeLabelIds") == ["UNREAD"]
-
-    seen.clear()
-    assert p.apply_remote_operation("flag", {"remote_id": "m1", "is_flagged": True}).success
-    assert seen[0][2].get("addLabelIds") == ["STARRED"]
-
-    seen.clear()
-    assert p.apply_remote_operation(
-        "move",
-        {"remote_id": "m1", "folder_remote_id": "INBOX", "dest_folder_remote_id": "Label_2"},
-    ).success
-    assert seen[0][2]["addLabelIds"] == ["Label_2"]
-    assert seen[0][2]["removeLabelIds"] == ["INBOX"]
-
-    seen.clear()
-    assert p.apply_remote_operation("trash", {"remote_id": "m1"}).success
-    assert seen[0][1].endswith("/messages/m1/trash")
 
 
 def test_graph_writeback_via_transport_mocks():

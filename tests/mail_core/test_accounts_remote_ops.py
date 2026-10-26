@@ -24,8 +24,8 @@ def test_create_account_stores_credential_ref_only():
         acc = create_account(
             session,
             email=f"acc-{uuid.uuid4().hex[:8]}@example.com",
-            provider=ProviderType.GMAIL,
-            credential_ref="keychain:gmail/user-1",
+            provider=ProviderType.GRAPH,
+            credential_ref="keychain:graph/user-1",
         )
         session.commit()
         assert acc.credential_ref.startswith("keychain:")
