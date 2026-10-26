@@ -470,11 +470,26 @@ def test_schema_constraints_indexes_and_fts_semantics():
         session.rollback()
 
         # 4. Keyset order and FTS trigram index availability
+        # Index this test's committed message ("Searchable Subject
+        # Keyword") and prove the FTS document actually matches it —
+        # COUNT(*) alone is >= 0 even on an empty/broken index, and
+        # `is not None` asserted nothing at all.
+        from mail_core.search.index import upsert_message_search
+
+        upsert_message_search(session, message_id=msg.id)
+        session.commit()
         engine = get_engine()
         with engine.connect() as conn:
-            # Query message_search FTS table with trigram similarity function
             res = conn.execute(text("SELECT count(*) FROM message_search")).scalar()
-            assert res is not None
+            assert res is not None and res >= 1
+            hit_ids = conn.execute(
+                text(
+                    "SELECT message_id FROM message_search "
+                    "WHERE document @@ plainto_tsquery('simple', :q)"
+                ),
+                {"q": "Searchable"},
+            ).scalars().all()
+            assert msg.id in hit_ids
 
             # Verify keyset index exists
             indexes = inspect(engine).get_indexes("messages")
