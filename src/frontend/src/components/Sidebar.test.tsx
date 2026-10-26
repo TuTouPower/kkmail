@@ -369,6 +369,75 @@ describe('<Sidebar />', () => {
     })
   })
 
+  it('navigates on the first click of a folder row found via master search (appendix)', async () => {
+    mockApi()
+    useMailStore.setState({ sidebarSections: { allAccounts: true, accountList: true } })
+    const { container } = await render(<Sidebar />)
+    // Expand the account first so its folders are loaded, then filter.
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"] .tree-disclosure')).not.toBeNull())
+    const masterAccount = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')
+    await click(masterAccount?.querySelector('.tree-disclosure') || null)
+    await waitFor(() => expect(masterAccount?.textContent).toContain('收件箱'))
+    await click(container.querySelector('[aria-label="搜索账号列表"]'))
+    const masterSearch = container.querySelector('input[aria-label="搜索账号列表"]') as HTMLInputElement
+    await typeInto(masterSearch, 'finance')
+
+    const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')
+    expect(account).not.toBeNull()
+    const row = [...account!.querySelectorAll('.tree-folder-row')]
+      .find((r) => r.querySelector('.tree-label')?.textContent === '收件箱') as HTMLButtonElement
+    expect(row).toBeTruthy()
+
+    // Real press gesture: pointerdown first. Pre-fix, the pointerdown
+    // dismiss closed the search immediately; the tree re-rendered from
+    // filtered results back to the full tree and the pressed row was
+    // unmounted before the click landed, so only the second click
+    // navigated. The close must therefore not happen at pointerdown.
+    await act(async () => {
+      row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
+    })
+    expect(container.querySelector('input[aria-label="搜索账号列表"]')).not.toBeNull()
+    await click(row)
+    expect(useMailStore.getState().view).toMatchObject({ type: 'folder', accountId: 'acc-1', folderId: 'inbox-1' })
+    await act(async () => { await new Promise((r) => requestAnimationFrame(r)) })
+    await waitFor(() => {
+      expect(container.querySelector('input[aria-label="搜索账号列表"]')).toBeNull()
+    })
+  })
+
+  it('navigates on the first click of a folder row found via group search (appendix)', async () => {
+    mockApi()
+    useMailStore.setState({ sidebarSections: { allAccounts: true, accountList: true }, expandedSidebarGroups: ['group-1'] })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('[aria-label="搜索分组 税务归档"]')).not.toBeNull())
+    // Expand the account inside the group first so its folders are loaded.
+    await waitFor(() => expect(container.querySelector('[data-group-id="group-1"] .tree-account-block[data-account-id="acc-1"] .tree-disclosure')).not.toBeNull())
+    const groupAccount0 = container.querySelector('[data-group-id="group-1"] .tree-account-block[data-account-id="acc-1"]')
+    await click(groupAccount0?.querySelector('.tree-disclosure') || null)
+    await waitFor(() => expect(groupAccount0?.textContent).toContain('收件箱'))
+    await click(container.querySelector('[aria-label="搜索分组 税务归档"]'))
+    const groupSearch = container.querySelector('input[aria-label="搜索分组账号：税务归档"]') as HTMLInputElement
+    await typeInto(groupSearch, 'finance')
+
+    const group = container.querySelector('[data-group-id="group-1"]')
+    const account = group?.querySelector('.tree-account-block[data-account-id="acc-1"]')
+    expect(account).not.toBeNull()
+    const row = [...account!.querySelectorAll('.tree-folder-row')]
+      .find((r) => r.querySelector('.tree-label')?.textContent === '收件箱') as HTMLButtonElement
+    expect(row).toBeTruthy()
+
+    await act(async () => {
+      row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
+    })
+    expect(container.querySelector('input[aria-label="搜索分组账号：税务归档"]')).not.toBeNull()
+    await click(row)
+    expect(useMailStore.getState().view).toMatchObject({ type: 'folder', accountId: 'acc-1', folderId: 'inbox-1' })
+    await act(async () => { await new Promise((r) => requestAnimationFrame(r)) })
+    await waitFor(() => {
+      expect(container.querySelector('input[aria-label="搜索分组账号：税务归档"]')).toBeNull()
+    })
+  })
+
   it('disables account dragging and drop targets inside filtered group and master lists', async () => {
     const calls = mockApi({ additionalAccounts: [{ id: 'acc-3', email: 'records@b.example', group_id: 'group-2' }] })
     const { container } = await render(<Sidebar />)

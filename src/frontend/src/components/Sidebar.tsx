@@ -324,6 +324,22 @@ function useScopedSearchDismiss({
       return false
     }
 
+    function handleDeferredNavClick(event: MouseEvent) {
+      document.removeEventListener('click', handleDeferredNavClick, true)
+      const target = event.target as HTMLElement | null
+      if (isInside(target)) return
+      if (
+        target?.closest?.('.tree-account-search') ||
+        target?.closest?.('[data-search-toggle-group-id]') ||
+        target?.closest?.('[aria-label="搜索账号列表"]')
+      ) {
+        return
+      }
+      // Close after the click has been fully delivered (the row's
+      // onClick navigation runs during this same event's dispatch).
+      requestAnimationFrame(() => onClose(false))
+    }
+
     function handlePointerDown(event: PointerEvent) {
       const target = event.target as HTMLElement | null
       const path = event.composedPath ? event.composedPath() : []
@@ -334,6 +350,15 @@ function useScopedSearchDismiss({
         target?.closest?.('[data-search-toggle-group-id]') ||
         target?.closest?.('[aria-label="搜索账号列表"]')
       ) {
+        return
+      }
+      if (target?.closest?.('.tree-nav-row')) {
+        // Appendix fix: closing the search here re-renders the tree from
+        // filtered results back to the full tree, unmounting the pressed
+        // folder button between pointerdown and click so its onClick
+        // (navigation) never fires — the first click only closed the
+        // search. Defer the close until the click has been delivered.
+        document.addEventListener('click', handleDeferredNavClick, true)
         return
       }
       onClose(false)
@@ -350,6 +375,10 @@ function useScopedSearchDismiss({
       ) {
         return
       }
+      // Focus moving to a tree navigation row is a navigation click in
+      // progress; the pointerdown path defers the close until after the
+      // click, so do not close from here either.
+      if (related?.closest?.('.tree-nav-row')) return
       if (related) {
         onClose(false)
         return
@@ -375,6 +404,7 @@ function useScopedSearchDismiss({
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown, true)
       document.removeEventListener('focusout', handleFocusOut, true)
+      document.removeEventListener('click', handleDeferredNavClick, true)
     }
   }, [open, containerRef, triggerRef, onClose])
 }
