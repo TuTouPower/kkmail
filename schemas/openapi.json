@@ -1783,6 +1783,17 @@
             "title": "Default Client Type",
             "type": "string"
           },
+          "microsoft_client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Microsoft Client Id"
+          },
           "notice": {
             "anyOf": [
               {

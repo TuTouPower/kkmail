@@ -1290,6 +1290,8 @@ export interface components {
              * @enum {string}
              */
             default_client_type: "public" | "confidential";
+            /** Microsoft Client Id */
+            microsoft_client_id?: string | null;
             /** Notice */
             notice?: string | null;
             /** Origin Configured */

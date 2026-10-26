@@ -50,6 +50,10 @@ class OAuthMetadataOut(BaseModel):
     callback_path: str
     origin_configured: bool
     notice: str | None = None
+    # Effective Microsoft public client id (MICROSOFT_CLIENT_ID env
+    # override applied); the simplified flow authorizes with this id so
+    # it always matches the backend exchange step.
+    microsoft_client_id: str | None = None
 
 
 class OAuthStartIn(BaseModel):

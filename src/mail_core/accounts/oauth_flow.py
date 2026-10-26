@@ -136,10 +136,19 @@ def _validate_public_origin(raw_origin: str) -> str | None:
 
 
 def get_oauth_metadata(provider: str = "microsoft") -> dict[str, Any]:
+    from mail_core.accounts.microsoft_oauth import default_microsoft_client_id
+
     norm = (provider or "").strip().lower()
     if norm != "microsoft":
         raise ValueError(f"不支持的 OAuth 供应商: {provider}")
     callback_path = f"/api/accounts/oauth/callback/{norm}"
+    # The simplified frontend flow authorizes with this id when the user
+    # leaves the Client ID field empty, so the authorize step uses the
+    # same effective id (MICROSOFT_CLIENT_ID env override included) that
+    # the backend exchange step resolves -- previously the frontend fell
+    # back to its hardcoded built-in id while the backend exchanged with
+    # the env override, guaranteeing a client mismatch.
+    microsoft_client_id = default_microsoft_client_id()
     if os.environ.get("KKMAIL_SIDECAR", "").strip() == "1":
         port_raw = (os.environ.get("MAIL_CORE_PORT") or "18765").strip()
         if not port_raw.isdigit() or not (1 <= int(port_raw) <= 65535):
@@ -152,6 +161,7 @@ def get_oauth_metadata(provider: str = "microsoft") -> dict[str, Any]:
             "callback_path": callback_path,
             "origin_configured": True,
             "notice": None,
+            "microsoft_client_id": microsoft_client_id,
         }
 
     raw_origin = (os.environ.get("MAIL_CORE_PUBLIC_ORIGIN") or "").strip()
@@ -164,6 +174,7 @@ def get_oauth_metadata(provider: str = "microsoft") -> dict[str, Any]:
             "callback_path": callback_path,
             "origin_configured": False,
             "notice": f"自托管网页部署需配置可信 HTTPS 公网 Origin（MAIL_CORE_PUBLIC_ORIGIN），固定回调路径为 {callback_path}",
+            "microsoft_client_id": microsoft_client_id,
         }
     clean_origin = _validate_public_origin(raw_origin)
     if not clean_origin:
@@ -175,6 +186,7 @@ def get_oauth_metadata(provider: str = "microsoft") -> dict[str, Any]:
             "callback_path": callback_path,
             "origin_configured": False,
             "notice": "MAIL_CORE_PUBLIC_ORIGIN 必须为可信 HTTPS 公网 Origin（不得包含路径或指向未授权 loopback）",
+            "microsoft_client_id": microsoft_client_id,
         }
     return {
         "provider": norm,
@@ -184,6 +196,7 @@ def get_oauth_metadata(provider: str = "microsoft") -> dict[str, Any]:
         "callback_path": callback_path,
         "origin_configured": True,
         "notice": None,
+        "microsoft_client_id": microsoft_client_id,
     }
 
 

@@ -233,6 +233,16 @@ it('clicking Microsoft auth opens the spec authorize URL and switches to the pas
   expect(container.querySelector('#account-ms-redirect-url')).toBeNull()
 })
 
+// REPLACED (client-id consistency): the original version of this test
+// asserted the exchange payload was exactly {redirected_url, email,
+// group_id} -- no client_id, because the form only sent one when the
+// user typed it. That omission was the bug: with the field empty, the
+// authorize step used the frontend's hardcoded id while the backend
+// exchanged with its own MICROSOFT_CLIENT_ID env override. The payload
+// now always carries the id the authorize step used, so the test is
+// replaced as a whole with the payload expectation extended by
+// client_id (the built-in id here, since this shell's metadata reports
+// no override).
 it('pasting a redirect URL calls the exchange API and reports success via onSaved', async () => {
   const exchanges = stubMicrosoftShell()
   vi.stubGlobal('open', vi.fn(() => ({ opener: {} })))
@@ -250,7 +260,38 @@ it('pasting a redirect URL calls the exchange API and reports success via onSave
     redirected_url: 'http://localhost:8080/?code=abc123&state=xyz',
     email: 'me@outlook.com',
     group_id: 'grp-1',
+    client_id: '9e5f94bc-e8a4-4e73-b8be-63364c29d753',
   })
+})
+
+it('authorize and exchange both use the client id reported by OAuth metadata', async () => {
+  const exchanges: Record<string, unknown>[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
+    const url = String(input)
+    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf-test' }), { headers: { 'content-type': 'application/json' } })
+    if (url.includes('/oauth/active')) return new Response(JSON.stringify({ flow: null }), { headers: { 'content-type': 'application/json' } })
+    if (url.includes('/oauth/metadata')) return new Response(JSON.stringify({ provider: 'microsoft', runtime_mode: 'web', default_client_type: 'confidential', redirect_uri: null, callback_path: '/api/accounts/oauth/callback/microsoft', origin_configured: false, notice: 'n/a', microsoft_client_id: 'server-effective-client' }), { headers: { 'content-type': 'application/json' } })
+    if (url.includes('/oauth/exchange-redirect-url')) {
+      exchanges.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+      return new Response(JSON.stringify({ id: 'new-ms', email: 'real@outlook.com', provider: 'graph', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'graph' }), { headers: { 'content-type': 'application/json' } })
+    }
+    return new Response(JSON.stringify({}), { headers: { 'content-type': 'application/json' } })
+  }))
+  const open = vi.fn((..._args: unknown[]) => ({ opener: {} }))
+  vi.stubGlobal('open', open)
+  const saved = vi.fn(async () => {})
+  const { container } = await render(<AccountDialog groups={msGroups} groupsAvailable onClose={vi.fn()} onSaved={saved} />)
+  await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
+  await typeInto(container.querySelector('#account-email'), 'me@outlook.com')
+  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '微软授权登录')!)
+  expect(open).toHaveBeenCalledTimes(1)
+  const url = new URL(String(open.mock.calls[0][0]))
+  expect(url.searchParams.get('client_id')).toBe('server-effective-client')
+  await typeInto(container.querySelector('#account-ms-redirect-url'), 'http://localhost:8080/?code=abc123&state=xyz')
+  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '换取 Token 并添加')!)
+  await waitFor(() => expect(saved).toHaveBeenCalled())
+  expect(exchanges).toHaveLength(1)
+  expect(exchanges[0].client_id).toBe('server-effective-client')
 })
 
 it('an exchange error renders the readable message inline under the input', async () => {

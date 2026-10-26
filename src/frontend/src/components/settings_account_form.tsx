@@ -263,12 +263,20 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
     }
   }
 
+  // The client id both steps of the simplified flow must agree on: the
+  // user's own id when typed, otherwise the effective id the backend
+  // reports via OAuth metadata (MICROSOFT_CLIENT_ID env override applied
+  // server-side), otherwise the built-in public client. Authorizing with
+  // the hardcoded id while the backend exchanged with its env override
+  // made the token exchange fail with a client mismatch.
+  const msEffectiveClientId = oauth.client_id.trim() || oauthMeta?.microsoft_client_id || MICROSOFT_PUBLIC_CLIENT_ID
+
   // p056 handlers: build the authorize URL per spec 4.2 and open it in a new
   // tab; there is deliberately no MAIL_CORE_PUBLIC_ORIGIN / Client Secret
   // gate on this path — the built-in public client needs neither.
   const openMicrosoftAuth = () => {
     const url = buildMicrosoftAuthorizeUrl({
-      clientId: oauth.client_id.trim() || MICROSOFT_PUBLIC_CLIENT_ID,
+      clientId: msEffectiveClientId,
       redirectUri: msRedirectUri.trim() || MICROSOFT_DEFAULT_REDIRECT_URI,
       email: email.trim(),
     })
@@ -297,7 +305,10 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
         redirected_url: msRedirectUrl.trim(),
         ...(email.trim() ? { email: email.trim() } : {}),
         ...(groupId && groupsAvailable ? { group_id: groupId } : {}),
-        ...(oauth.client_id.trim() ? { client_id: oauth.client_id.trim() } : {}),
+        // Always send the id the authorize step actually used (never
+        // omitted), so the backend exchanges with that same id instead
+        // of resolving its own default.
+        client_id: msEffectiveClientId,
       })
       saved = true
       await onSaved(groupId)

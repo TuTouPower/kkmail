@@ -50,6 +50,24 @@ def successful_hooks(email, user_id='ms-user-1', **token_extra):
     )
 
 
+def test_microsoft_metadata_reports_effective_client_id(api_client, monkeypatch):
+    # The simplified frontend flow authorizes with the client id the
+    # metadata reports, so the authorize step and the backend exchange
+    # step (which resolves MICROSOFT_CLIENT_ID env overrides) always use
+    # the same id.
+    from mail_core.accounts.microsoft_oauth import DEFAULT_MICROSOFT_CLIENT_ID
+
+    monkeypatch.delenv('MICROSOFT_CLIENT_ID', raising=False)
+    metadata = api_client.get('/api/accounts/oauth/metadata?provider=microsoft')
+    assert metadata.status_code == 200
+    assert metadata.json()['microsoft_client_id'] == DEFAULT_MICROSOFT_CLIENT_ID
+
+    monkeypatch.setenv('MICROSOFT_CLIENT_ID', 'env-override-client')
+    metadata = api_client.get('/api/accounts/oauth/metadata?provider=microsoft')
+    assert metadata.status_code == 200
+    assert metadata.json()['microsoft_client_id'] == 'env-override-client'
+
+
 def test_microsoft_metadata_code_request_and_device_without_callback(api_client, monkeypatch):
     monkeypatch.setenv('KKMAIL_SIDECAR', '1')
     monkeypatch.setenv('MAIL_CORE_PORT', '29654')
