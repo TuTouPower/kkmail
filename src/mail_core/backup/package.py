@@ -1923,6 +1923,33 @@ def resume_restore_backup_package(
 
     source_ident = _read_target_identity(source_database_url)
     with _backup_destination_lock(target_blobs):
+        # Re-read and re-verify the operation log under the destination
+        # lock: the stage that drives the resume must be the stage in
+        # effect while the lock is held, not a stale pre-lock snapshot —
+        # another restore may have completed this operation while resume
+        # waited for the lock, and replaying from the stale stage would
+        # regress it (complete -> staging -> db_failed) and expose the
+        # published blobs to cleanup. Mirrors cleanup_restore_operation.
+        op_log = _read_restore_operation_log(target_blobs)
+        if op_log is None:
+            raise RuntimeError(
+                "restore resume refused: no restore operation log in "
+                f"target: {target_blobs}"
+            )
+        _assert_operation_log_matches(
+            op_log,
+            operation_id=op_id,
+            target_blobs=target_blobs,
+            target_database_url=target_database_url,
+            target_ident=target_ident,
+        )
+        stage = str(op_log.get("stage") or "")
+        if stage == "needs_verification":
+            raise RuntimeError(
+                f"restore operation {op_id} is in needs_verification; "
+                "explicit verification is required before any replay, and "
+                "the database must not be auto-deleted or auto-restored"
+            )
         work_dir = pkg_dir.parent / f".restore_work_{uuid.uuid4().hex}"
         _make_private_dir(work_dir)
         try:

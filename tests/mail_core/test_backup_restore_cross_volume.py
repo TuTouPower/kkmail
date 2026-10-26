@@ -349,6 +349,43 @@ def test_db_failure_retains_published_blobs_and_log_then_resume_succeeds(
     assert len(fake.calls) == 2
 
 
+def test_resume_rechecks_stage_under_lock_when_operation_completes(
+    tmp_path, monkeypatch
+):
+    pkg_dir, target, fake = _db_failed_operation(tmp_path, monkeypatch)
+    log = _read_log(target)
+    assert log["stage"] == "db_failed"
+    assert len(fake.calls) == 1
+
+    real_lock = backup_package._backup_destination_lock
+
+    @contextlib.contextmanager
+    def completing_lock(dest):
+        with real_lock(dest):
+            # Another restore completes this operation while resume is
+            # acquiring the lock: the log on disk at lock entry says
+            # ``complete`` even though the pre-lock read saw ``db_failed``.
+            current = backup_package._read_restore_operation_log(dest)
+            backup_package._write_restore_operation_log(
+                dest, current, stage="complete"
+            )
+            yield
+
+    monkeypatch.setattr(backup_package, "_backup_destination_lock", completing_lock)
+    # If the stale stage drove the resume, pg_restore would be replayed
+    # against the already-restored database and fail, regressing the
+    # operation to ``db_failed`` and exposing its blobs to cleanup.
+    fake.returncode = 1
+
+    result = _resume(pkg_dir, target, log["operation_id"])
+
+    assert result.ok
+    assert result.stage == "complete"
+    assert len(fake.calls) == 1  # no second pg_restore was attempted
+    assert _published_files(target) == PAYLOADS
+    assert _read_log(target)["stage"] == "complete"
+
+
 def test_resume_rejects_wrong_operation_id_and_mismatched_package(
     tmp_path, monkeypatch
 ):
