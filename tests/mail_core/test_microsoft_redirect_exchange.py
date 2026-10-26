@@ -328,19 +328,47 @@ def test_exchange_missing_refresh_token_fails():
 # --- validate_connection public-client mode -------------------------------
 
 def test_validate_connection_graph_public_client_without_secret_passes():
-    validate_connection(
+    # Public clients never need a client_secret; client_id + refresh_token
+    # are the required credential fields and are really evaluated.
+    assert validate_connection(
         "x@outlook.com", "graph", {"oauth_client_type": "public"},
         {"client_id": "any-public-client", "refresh_token": "r"},
-    )
+    ) is None
+    with pytest.raises(ValueError) as missing_client_id:
+        validate_connection(
+            "x@outlook.com", "graph", {"oauth_client_type": "public"},
+            {"refresh_token": "r"},
+        )
+    assert str(missing_client_id.value) == "credentials.client_id: required"
+    with pytest.raises(ValueError) as missing_refresh:
+        validate_connection(
+            "x@outlook.com", "graph", {"oauth_client_type": "public"},
+            {"client_id": "any-public-client"},
+        )
+    assert str(missing_refresh.value) == "credentials.refresh_token: required"
+    with pytest.raises(ValueError) as bad_type:
+        validate_connection(
+            "x@outlook.com", "graph", {"oauth_client_type": "bogus"},
+            {"client_id": "any-public-client", "refresh_token": "r"},
+        )
+    assert str(bad_type.value) == "config.oauth_client_type: unsupported client type"
 
 
 def test_validate_connection_graph_builtin_public_client_needs_no_secret_even_when_confidential():
     # Web deployments default to "confidential"; the built-in public client
     # has no secret by registration, so it must still validate.
-    validate_connection(
+    assert validate_connection(
         "x@outlook.com", "graph", {"oauth_client_type": "confidential"},
         {"client_id": DEFAULT_MICROSOFT_CLIENT_ID, "refresh_token": "r"},
-    )
+    ) is None
+    # The exemption keys on the exact built-in client_id: any other id
+    # under the same "confidential" config still requires the secret.
+    with pytest.raises(ValueError) as other_client:
+        validate_connection(
+            "x@outlook.com", "graph", {"oauth_client_type": "confidential"},
+            {"client_id": DEFAULT_MICROSOFT_CLIENT_ID + "-other", "refresh_token": "r"},
+        )
+    assert str(other_client.value) == "credentials.client_secret: required"
 
 
 def test_validate_connection_graph_confidential_custom_client_still_requires_secret():
@@ -353,17 +381,25 @@ def test_validate_connection_graph_confidential_custom_client_still_requires_sec
 
 def test_validate_connection_graph_with_secret_keeps_prior_requirements():
     # With a secret present the confidential path validates as before…
-    validate_connection(
+    assert validate_connection(
         "x@example.test", "graph", {"oauth_client_type": "confidential"},
         {"client_id": "own-client", "refresh_token": "r", "client_secret": "s"},
-    )
+    ) is None
+    # …a blank secret does not count as present…
+    with pytest.raises(ValueError) as blank_secret:
+        validate_connection(
+            "x@example.test", "graph", {"oauth_client_type": "confidential"},
+            {"client_id": "own-client", "refresh_token": "r", "client_secret": "  "},
+        )
+    assert str(blank_secret.value) == "credentials.client_secret: required"
     # …including the token_uri allowlist.
-    with pytest.raises(ValueError, match="token_uri"):
+    with pytest.raises(ValueError) as bad_token_uri:
         validate_connection(
             "x@example.test", "graph", {"oauth_client_type": "confidential"},
             {"client_id": "own-client", "refresh_token": "r", "client_secret": "s",
              "token_uri": "https://evil.example/token"},
         )
+    assert str(bad_token_uri.value) == "credentials.token_uri: must use the provider HTTPS endpoint"
 
 
 # --- exchange API (account service mocked; transports faked) ---------------
