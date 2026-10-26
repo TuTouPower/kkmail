@@ -38,6 +38,10 @@ class OutboxDispatcher:
     # established dispatcher jump its cursor to head and silently skip the
     # first events another process published (R08).
     _baseline_established: bool = False
+    # Target count of the most recent _fanout call; dispatch_once uses it
+    # to tell "no local subscribers" (advance the cursor, B3) apart from
+    # "a live subscriber rejected the event" (cursor stays pinned).
+    _last_fanout_targets: int = 0
     _stop: bool = False
 
     def subscribe(
@@ -158,7 +162,9 @@ class OutboxDispatcher:
     def _fanout(self, event: dict[str, Any]) -> bool:
         """Deliver to local subscribers. Returns True if every target accepted the event.
 
-        No subscribers returns False so rows remain undispatched. A subscriber
+        No subscribers returns False (with ``_last_fanout_targets == 0`` so
+        dispatch_once can tell it apart from a rejection: a completed scan
+        with no local targets still advances the dispatch cursor, B3). A subscriber
         on another loop is considered scheduled as soon as
         ``call_soon_threadsafe`` succeeds. QueueFull is detected on that loop:
         the consumer is isolated and receives a resync hint from the durable
@@ -178,6 +184,7 @@ class OutboxDispatcher:
                         if id(q) not in seen_q_ids:
                             seen_q_ids.add(id(q))
                             targets.append((loop, q))
+        self._last_fanout_targets = len(targets)
         if not targets:
             return False
         ok = True
@@ -259,8 +266,17 @@ class OutboxDispatcher:
                     "data": item.payload,
                     "created_at": item.created_at.isoformat() if item.created_at else None,
                 }
-                if self._fanout(payload):
+                delivered = self._fanout(payload)
+                if delivered:
                     dispatched_count += 1
+                if delivered or self._last_fanout_targets == 0:
+                    # B3: with no local subscribers there is nothing to
+                    # redeliver to — reconnecting clients replay from the
+                    # durable outbox — so a completed scan advances the
+                    # cursor instead of re-reading the same rows on every
+                    # dispatch. A rejection by a live subscriber (queue
+                    # full) keeps the cursor pinned: that consumer is
+                    # isolated and resyncs from the outbox.
                     self._last_dispatched_seq = max(self._last_dispatched_seq, seq)
 
             return dispatched_count

@@ -486,3 +486,20 @@ def test_alembic_chain_head_is_0026():
     script = ScriptDirectory.from_config(cfg)
     assert script.get_heads() == ["20261026_0026"]
     assert script.get_revision("20261026_0026").down_revision == "20261026_0025"
+
+
+def test_dispatch_without_subscribers_advances_cursor_without_counting(monkeypatch):
+    """B3: with no local subscribers, a completed scan must advance the
+    dispatch cursor — otherwise every dispatch re-reads the same rows
+    forever — while dispatched_count still counts only real deliveries."""
+    rows = [_fake_row(4), _fake_row(5)]
+    _patch_dispatch(monkeypatch, head=5, pruned=0, rows=rows)
+    dispatcher = OutboxDispatcher()
+    dispatcher._last_dispatched_seq = 3
+    dispatcher._baseline_established = True  # R08: see above
+
+    assert dispatcher.dispatch_once() == 0
+    assert dispatcher._last_dispatched_seq == 5
+    # Next dispatch starts after seq 5: nothing is re-read or re-counted.
+    assert dispatcher.dispatch_once() == 0
+    assert dispatcher._last_dispatched_seq == 5
