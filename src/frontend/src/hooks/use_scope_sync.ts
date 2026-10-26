@@ -98,7 +98,7 @@ export function useScopeSync(enabled: boolean = true) {
   )
   const requestIdsRef = useRef<Record<string, string>>({})
   const pendingRef = useRef<Set<string>>(new Set())
-  const lastAutoTriggerRef = useRef<number>(0)
+  const lastAutoTriggerRef = useRef<Map<string, number>>(new Map())
 
   const rememberRequest = useCallback((forScopeKey: string, request: SyncRequestResponse) => {
     queryClient.setQueryData(syncRequestQueryKey(request.id), request)
@@ -239,12 +239,15 @@ export function useScopeSync(enabled: boolean = true) {
   useEffect(() => {
     if (!enabled || recoveryBlocking) return
     if (recoveredActive) return
+    // F2: the cooldown is per scope. A single shared timestamp let a
+    // sync for one folder swallow the navigation trigger of another
+    // folder opened within 12s — and no later effect re-ran to fire it.
     const now = Date.now()
-    if (now - lastAutoTriggerRef.current >= AUTO_TRIGGER_COOLDOWN_MS) {
-      lastAutoTriggerRef.current = now
+    if (now - (lastAutoTriggerRef.current.get(scopeKey) || 0) >= AUTO_TRIGGER_COOLDOWN_MS) {
+      lastAutoTriggerRef.current.set(scopeKey, now)
       void executeDeltaSync('navigation')
     }
-  }, [enabled, recoveryBlocking, recoveredActive, view, executeDeltaSync])
+  }, [enabled, recoveryBlocking, recoveredActive, view, scopeKey, executeDeltaSync])
 
   // Page visibility: hidden pauses polling (via refetchInterval); becoming
   // visible reads the authoritative request state first.
@@ -271,8 +274,8 @@ export function useScopeSync(enabled: boolean = true) {
     function onFocusOrVisible() {
       if (document.visibilityState !== 'visible') return
       const now = Date.now()
-      if (now - lastAutoTriggerRef.current >= AUTO_TRIGGER_COOLDOWN_MS) {
-        lastAutoTriggerRef.current = now
+      if (now - (lastAutoTriggerRef.current.get(scopeKey) || 0) >= AUTO_TRIGGER_COOLDOWN_MS) {
+        lastAutoTriggerRef.current.set(scopeKey, now)
         void executeDeltaSync('focus')
       }
     }
@@ -283,7 +286,7 @@ export function useScopeSync(enabled: boolean = true) {
       window.removeEventListener('focus', onFocusOrVisible)
       document.removeEventListener('visibilitychange', onFocusOrVisible)
     }
-  }, [enabled, executeDeltaSync])
+  }, [enabled, scopeKey, executeDeltaSync])
 
   // Periodic activity heartbeat: visible page + live session only. Failures
   // are background telemetry — they go to the sanitized diagnostics channel,

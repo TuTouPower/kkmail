@@ -134,6 +134,54 @@ describe('useScopeSync (p053/R01)', () => {
     expect(activityCalls()).toHaveLength(1)
     vi.useRealTimers()
   })
+
+  it('auto-trigger cooldown is per scope: switching folders within 12s still syncs the new folder (F2)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      calls.push({
+        url: u,
+        method: init.method || 'GET',
+        headers: new Headers(init.headers),
+        body: init.body ? JSON.parse(String(init.body)) : null,
+      })
+      if (u.endsWith('/api/auth/me')) return json({ csrf_token: 'tok-abc', via: 'session' })
+      if (u.endsWith('/api/mail/sync/delta')) return completeDelta()
+      return json({ detail: 'unexpected' }, 404)
+    }))
+    let now = 1_000_000
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      useMailStore.setState({
+        view: { type: 'folder', accountId: 'acc-1', email: 'a@x.test', folderId: 'f-inbox', folderName: '收件箱', folderRole: 'inbox' },
+      })
+      await render(createElement(Harness))
+      await waitFor(() => expect(deltaCalls()).toHaveLength(1))
+      expect(deltaCalls()[0].body).toMatchObject({ folder_id: 'f-inbox', trigger: 'navigation' })
+
+      // Five seconds later — inside the old shared 12s cooldown — open a
+      // different folder: its navigation sync must still fire.
+      now += 5_000
+      act(() => {
+        useMailStore.setState({
+          view: { type: 'folder', accountId: 'acc-1', email: 'a@x.test', folderId: 'f-sent', folderName: '已发送', folderRole: 'sent' },
+        })
+      })
+      await waitFor(() => expect(deltaCalls()).toHaveLength(2))
+      expect(deltaCalls()[1].body).toMatchObject({ folder_id: 'f-sent', trigger: 'navigation' })
+
+      // Switching straight back is still within the first folder's own
+      // cooldown, so no third trigger fires.
+      act(() => {
+        useMailStore.setState({
+          view: { type: 'folder', accountId: 'acc-1', email: 'a@x.test', folderId: 'f-inbox', folderName: '收件箱', folderRole: 'inbox' },
+        })
+      })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(deltaCalls()).toHaveLength(2)
+    } finally {
+      dateSpy.mockRestore()
+    }
+  })
 })
 
 describe('useScopeSync authoritative progress (R07)', () => {
