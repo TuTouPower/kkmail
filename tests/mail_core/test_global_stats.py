@@ -1,93 +1,142 @@
+"""Global/group inbox stats read model — real-DB version (T4).
+
+The query tests previously fed query_global_inbox_stats /
+query_group_inbox_stats a MagicMock session whose execute().all()
+returned hand-built _mapping rows, so the aggregate SQL (outer joins,
+sync_enabled filter, NULL-counter semantics) never ran. They now run
+against real PostgreSQL rows; per-test table truncation comes from
+the shared runtime_isolation fixture. The API test still patches the
+query function on purpose: it covers HTTP serialization only.
+"""
+
 from __future__ import annotations
 
+import os
 import uuid
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from mail_core.api.app import app
-from tests.mail_core.conftest import TEST_API_KEY
+from mail_core.db.session import get_session_factory
 from mail_core.mail.application.queries import GlobalStatsOut, query_global_inbox_stats, query_group_inbox_stats
-from mail_core.mail.storage.models import AccountGroup
+from mail_core.mail.storage.models import Account, AccountGroup, Folder, FolderStats
+from tests.mail_core.conftest import TEST_API_KEY
+
+requires_db = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set (PG-gated real-DB test)",
+)
 
 
-def _stats_row(account_id, folder_count, stats_count, unread, total, known_unread_count, sync_enabled, sync_status):
-    return SimpleNamespace(
-        _mapping={
-            "account_id": account_id,
-            "folder_count": folder_count,
-            "stats_count": stats_count,
-            "unread_count": unread,
-            "total_count": total,
-            "known_unread_count": known_unread_count,
-            "sync_enabled": sync_enabled,
-            "sync_status": sync_status,
-        }
+def _account(session, *, sync_enabled=True, sync_status="idle", group_id=None) -> Account:
+    acc = Account(
+        email=f"stats-{uuid.uuid4().hex[:10]}@example.com",
+        provider="imap",
+        sync_enabled=sync_enabled,
+        sync_status=sync_status,
+        group_id=group_id,
     )
+    session.add(acc)
+    session.flush()
+    return acc
 
 
+def _inbox(session, account: Account, *, unread, total) -> Folder:
+    folder = Folder(
+        account_id=account.id,
+        remote_id=f"INBOX-{uuid.uuid4().hex[:8]}",
+        name="INBOX",
+        role="inbox",
+    )
+    session.add(folder)
+    session.flush()
+    session.add(FolderStats(folder_id=folder.id, unread_count=unread, total_count=total))
+    session.flush()
+    return folder
+
+
+def _by_id(result) -> dict:
+    return {a.account_id: a for a in result.accounts}
+
+
+@requires_db
 def test_query_global_inbox_stats_excludes_disabled_accounts_and_keeps_enabled_sync_failures():
-    session = MagicMock()
-    acc1, acc2, acc3 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-    # Disabled accounts are outside aggregate output; enabled failed accounts remain visible.
-    session.execute.return_value.all.return_value = [
-        _stats_row(acc1, 1, 1, 5, 10, 1, True, "idle"),
-        _stats_row(acc2, 0, 0, None, None, 0, False, "auth_failed"),
-        _stats_row(acc3, 0, 0, None, None, 0, True, "failed"),
-    ]
-    result = query_global_inbox_stats(session)
-    assert result.total_unread == 5
-    assert [account.account_id for account in result.accounts] == [acc1, acc3]
-    assert result.accounts[0].unread_count == 5
-    assert result.accounts[1].unread_count is None
+    Session = get_session_factory()
+    with Session() as session:
+        acc1 = _account(session)
+        _inbox(session, acc1, unread=5, total=10)
+        acc2 = _account(session, sync_enabled=False, sync_status="auth_failed")
+        acc3 = _account(session, sync_status="failed")  # enabled, no folders yet
+        session.commit()
+
+        result = query_global_inbox_stats(session)
+        by_id = _by_id(result)
+        # Disabled accounts are filtered by the aggregate itself; the
+        # enabled-but-failed account stays listed with unknown counts.
+        assert set(by_id) == {acc1.id, acc3.id}
+        assert result.total_unread == 5
+        assert by_id[acc1.id].unread_count == 5
+        assert by_id[acc3.id].unread_count is None
 
 
+@requires_db
 def test_query_global_inbox_stats_normal_account_missing_folder_stats_propagates_null():
-    session = MagicMock()
-    acc1, acc2 = uuid.uuid4(), uuid.uuid4()
-    # acc1: normal active, unread=5
-    # acc2: normal active, but 0 inbox folders (sync in progress)
-    session.execute.return_value.all.return_value = [
-        _stats_row(acc1, 1, 1, 5, 10, 1, True, "idle"),
-        _stats_row(acc2, 0, 0, None, None, 0, True, "idle"),
-    ]
-    result = query_global_inbox_stats(session)
-    assert result.total_unread is None
-    assert result.accounts[0].unread_count == 5
-    assert result.accounts[1].unread_count is None
+    Session = get_session_factory()
+    with Session() as session:
+        acc1 = _account(session)
+        _inbox(session, acc1, unread=5, total=10)
+        acc2 = _account(session)  # normal active, 0 inbox folders (sync in progress)
+        session.commit()
+
+        result = query_global_inbox_stats(session)
+        by_id = _by_id(result)
+        assert result.total_unread is None
+        assert by_id[acc1.id].unread_count == 5
+        assert by_id[acc2.id].unread_count is None
 
 
+@requires_db
 def test_query_group_inbox_stats_excludes_disabled_accounts():
-    session = MagicMock()
-    group_id = uuid.uuid4()
-    session.get.return_value = MagicMock(spec=AccountGroup)
-    acc1, acc2 = uuid.uuid4(), uuid.uuid4()
-    session.execute.return_value.all.return_value = [
-        _stats_row(acc1, 1, 1, 3, 8, 1, True, "idle"),
-        _stats_row(acc2, 0, 0, None, None, 0, False, "auth_failed"),
-    ]
-    result = query_group_inbox_stats(session, group_id)
-    assert result.total_unread == 3
-    assert [account.account_id for account in result.accounts] == [acc1]
-    assert result.accounts[0].unread_count == 3
+    Session = get_session_factory()
+    with Session() as session:
+        group = AccountGroup(name=f"stats-group-{uuid.uuid4().hex[:8]}")
+        session.add(group)
+        session.flush()
+        acc1 = _account(session, group_id=group.id)
+        _inbox(session, acc1, unread=3, total=8)
+        _account(session, sync_enabled=False, sync_status="auth_failed", group_id=group.id)
+        session.commit()
+
+        result = query_group_inbox_stats(session, group.id)
+        by_id = _by_id(result)
+        assert result.total_unread == 3
+        assert set(by_id) == {acc1.id}
+        assert by_id[acc1.id].unread_count == 3
 
 
 # Replaces the complete-only aggregate fixture: nullable unread counters now require
 # both complete and incomplete folder sets to be exercised by the read model.
+@requires_db
 def test_query_global_inbox_stats_keeps_unknown_folder_counters_unknown():
-    session = MagicMock()
-    acc1, acc2 = uuid.uuid4(), uuid.uuid4()
-    session.execute.return_value.all.return_value = [
-        _stats_row(acc1, 2, 2, 3, 10, 2, True, "idle"),
-        _stats_row(acc2, 2, 2, 5, 20, 1, True, "idle"),
-    ]
-    result = query_global_inbox_stats(session)
-    assert result.total_unread is None
-    assert result.accounts[0].unread_count == 3
-    assert result.accounts[0].total_count == 10
-    assert result.accounts[1].unread_count is None
-    assert result.accounts[1].total_count == 20
+    Session = get_session_factory()
+    with Session() as session:
+        acc1 = _account(session)
+        _inbox(session, acc1, unread=1, total=4)
+        _inbox(session, acc1, unread=2, total=6)
+        acc2 = _account(session)
+        _inbox(session, acc2, unread=5, total=12)
+        _inbox(session, acc2, unread=None, total=8)  # unread unknown for one folder
+        session.commit()
+
+        result = query_global_inbox_stats(session)
+        by_id = _by_id(result)
+        assert result.total_unread is None
+        assert by_id[acc1.id].unread_count == 3
+        assert by_id[acc1.id].total_count == 10
+        assert by_id[acc2.id].unread_count is None
+        assert by_id[acc2.id].total_count == 20
 
 
 def test_api_mail_stats_endpoint():
