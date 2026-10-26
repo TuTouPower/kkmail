@@ -1115,6 +1115,14 @@ class ImapProvider:
                 m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
                 if m:
                     uidvalidity = int(m.group(1))
+            if uidvalidity <= 0:
+                # Without a verified UIDVALIDITY every remote key would be
+                # built with uv=0, the local-remote diff would cover the
+                # whole folder, and the caller would delete all local mail
+                # in it. Abort the reconcile instead (B1).
+                raise RuntimeError(
+                    f"unable to verify UIDVALIDITY for folder {folder_remote_id}; aborting reconcile"
+                )
             typ, data = c.uid("SEARCH", None, "ALL")
             if typ != "OK":
                 if typ == "NO" and _is_mailbox_noselect(c, folder_remote_id):
