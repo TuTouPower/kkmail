@@ -402,7 +402,7 @@ def sync_folder_delta(
                     invalidate_checkpoint_for_rebuild(
                         session, account_id=account_id, folder_id=folder_id, fencing_token=fencing
                     )
-                    enqueue_job(
+                    followup = enqueue_job(
                         session,
                         job_type=JobType.SYNC_FOLDER_METADATA.value,
                         account_id=account_id,
@@ -414,12 +414,27 @@ def sync_folder_delta(
                         priority=40,
                         dedupe_key=f"metadata:{account_id}:{folder_id}",
                     )
+                    followup_coalesced = followup.status == JobStatus.CLAIMED.value
                     release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
                     session.commit()
                 except FencingMismatch:
                     session.rollback()
                     return {"status": "fencing_mismatch", "pages": pages, **totals}
-            return {"status": "cursor_invalid", "followup_scheduled": True, "pages": pages, **totals}
+            # R04: mirror the engine's metadata branch — report whether the
+            # rebuild coalesced into a CLAIMED job, and mark the result
+            # await_initialization so settlement transfers this job's
+            # request bindings to the rebuild execution chain
+            # (_bind_initialization) instead of completing them now. The
+            # original request then settles only when the rebuild completes
+            # or terminally fails, and a rebuild failure fails the request.
+            return {
+                "status": "cursor_invalid",
+                "followup_scheduled": True,
+                "followup_coalesced": followup_coalesced,
+                "await_initialization": True,
+                "pages": pages,
+                **totals,
+            }
         except RateLimitedError as exc:
             delay = float(exc.retry_after_seconds or 60)
             delay = max(1.0, min(delay, 86400.0))
