@@ -303,11 +303,8 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 
 ### 2. CI 工作流映射
 
-- **PR 与 Push 门禁 (`.github/workflows/ci.yml`)**：
-    并行调度 `template-contract`、`frontend-quality`、`desktop-quality` 和 `backend-and-integration` 四大 Job，任何 Job 失败均在 `ci-status` 汇总阻断；在 Linux runner 自动构建前端并拉起测试数据库与 IMAP 服务，执行真实全栈端到端测试；
-- **定时与手动扩展套件 (`.github/workflows/scheduled.yml`)**：
-    每天定时或手动触发，完整执行真实备份跨库恢复、多版本历史数据平滑升级、多进程 Worker 故障恢复和大邮箱性能基准测试；
-- **权限与环境安全**：工作流配置最小 `contents: read` 权限，不申请发布权限；测试使用的数据库密码与环境变量严格隔离于专用测试环境。
+- **无远程 CI**：仓库不运行 GitHub Actions 远程 CI，测试门禁由开发者在本地直接执行上述矩阵命令进行自验证；
+- **权限与环境安全**：避免在远端依赖不透明环境，所有测试数据库与凭据均在本地受控环境中运行。
 
 ### 3. 当前验证基线（最近证据：2026-10-24 至 2026-10-25）
 
