@@ -16,13 +16,20 @@ one or more job *executions*, recorded relationally in
   failure, account/folder deletion, or a lost execution fails them with a
   stable ``error_code`` and a sanitized message.
 
-Settlement lock order (design §5.2) is fixed: WorkerJob row → generation
-coordination lock (advisory) → binding rows → ALL Targets of every
-affected request (UUID ascending, one pass, before any Target is held)
-→ Requests (UUID ascending). Request state and ``finished_at`` are derived
-from target aggregation and persisted here, in the write transaction; the
-report endpoint is read-only. Every persisted request state change emits a
-``sync.request_updated`` Outbox event.
+Settlement lock order (design §5.2, unified in R07) is fixed for every
+entry point that touches both relations: WorkerJob row → generation
+coordination lock (advisory) → ALL Targets of every affected request
+(UUID ascending, one pass, before any Binding is locked) → Binding rows
+(ordered by target) → Requests (UUID ascending). The previous order
+locked Bindings before Targets in the settlement path while the
+deletion path (``fail_open_targets``) locked Targets before Bindings;
+the two inverted orders deadlocked against each other (PostgreSQL
+40P01), so planning reads (column-only, non-locking) now determine the
+affected request set first and every path locks the full Target set
+before any Binding row. Request state and ``finished_at`` are derived
+from target aggregation and persisted here, in the write transaction;
+the report endpoint is read-only. Every persisted request state change
+emits a ``sync.request_updated`` Outbox event.
 """
 
 from __future__ import annotations
@@ -150,6 +157,48 @@ def bind_target(
     return binding
 
 
+def _request_ids_for_target_ids(
+    session: Session, target_ids: Iterable[uuid.UUID]
+) -> list[uuid.UUID]:
+    """Planning read (column-only, non-locking): requests owning the targets."""
+    ids = sorted({tid for tid in target_ids if tid is not None})
+    if not ids:
+        return []
+    return sorted(
+        {
+            rid
+            for rid in session.scalars(
+                select(SyncRequestTarget.request_id).where(SyncRequestTarget.id.in_(ids))
+            ).all()
+            if rid is not None
+        }
+    )
+
+
+def _lock_target_sets(
+    session: Session, request_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, SyncRequestTarget]:
+    """Lock ALL Targets of the given requests, UUID ascending (lock order).
+
+    Every entry point that will lock or mutate Binding rows — or call
+    :func:`refresh_requests` — must hold this full set first, so no
+    transaction ever waits on a Target while holding a Binding or a
+    subset of the same Target set (R07).
+    """
+    ids = sorted({rid for rid in request_ids if rid is not None})
+    if not ids:
+        return {}
+    return {
+        t.id: t
+        for t in session.scalars(
+            select(SyncRequestTarget)
+            .where(SyncRequestTarget.request_id.in_(ids))
+            .order_by(SyncRequestTarget.id)
+            .with_for_update()
+        ).all()
+    }
+
+
 def _aggregate_target(session: Session, target: SyncRequestTarget) -> None:
     """Derive one target's state from its bindings (bindings already locked)."""
     bindings = list(
@@ -187,18 +236,16 @@ def refresh_requests(session: Session, request_ids: Iterable[uuid.UUID]) -> None
     This is the only place request state moves after creation; the report
     endpoint never writes.
 
-    Lock acquisition follows the settlement lock order in two phases,
-    regardless of entry point: Phase 1 locks ALL involved
+    Lock acquisition follows the unified settlement lock order in two
+    phases, regardless of entry point: Phase 1 locks ALL involved
     ``SyncRequestTarget`` rows (UUID ascending), Phase 2 locks ALL involved
     ``SyncRequest`` rows (UUID ascending), and only then does Phase 3
-    aggregate and persist. Taking a Request lock before its Target locks
-    (the old per-request loop) inverts the order used by callers that
-    already hold Target locks (``settle_job_bindings``) and deadlocks
-    against them. Callers holding Target locks are only safe because
-    ``settle_job_bindings`` pre-locks this same full Target set before
-    holding any single Target: a caller holding merely a subset of a
-    request's Targets would wait on the remaining (possibly lower) rows
-    here while another settler holds them and waits back.
+    aggregate and persist. Callers must already hold the full Target set
+    of every request they pass in (see :func:`_lock_target_sets`) and must
+    have locked any Binding rows they mutate *after* those Targets:
+    under the R07 order a caller never holds a Binding — or a subset of
+    one request's Targets — while waiting on another Target, which is
+    what used to deadlock settlement against account/folder deletion.
     """
     ids = sorted({rid for rid in request_ids if rid is not None})
     if not ids:
@@ -306,13 +353,11 @@ def settle_job_bindings(
     ``outcome`` is one of ``"complete"``, ``"failed"`` (terminal) or
     ``"retriable"`` (targets stay open, progress retained, same generation).
     Callers must already hold the WorkerJob row lock (complete_job/fail_job
-    do); this function then takes the generation lock, the binding locks,
-    and — before mutating anything — locks ALL Targets of every affected
-    request in one UUID-ascending pass (the same set
-    :func:`refresh_requests` will lock). Locking only this job's target
-    subset first deadlocks two workers settling different jobs of the
-    same request: each would enter the refresh phase already holding a
-    set member and wait on a lower member the other holds.
+    do). Lock order (R07): generation advisory lock → planning reads →
+    ALL Targets of every affected request (UUID ascending) → this
+    generation's Binding rows. Locking the Bindings first inverted the
+    order against ``fail_open_targets`` (Targets → Bindings) and the two
+    paths deadlocked (PostgreSQL 40P01).
     Returns the affected request IDs; callers persist the aggregation via
     :func:`refresh_requests` in the same transaction (see jobs.py).
     """
@@ -320,42 +365,34 @@ def settle_job_bindings(
     if generation is None or not hasattr(session, "scalars"):
         return set()
     lock_generation(session, generation)
+    # Planning read (no lock): which targets does this generation observe?
+    planned_target_ids = sorted(
+        {
+            tid
+            for tid in session.scalars(
+                select(SyncRequestTargetJob.target_id).where(
+                    SyncRequestTargetJob.execution_generation == generation
+                )
+            ).all()
+            if tid is not None
+        }
+    )
+    if not planned_target_ids:
+        return set()
+    affected_request_ids = _request_ids_for_target_ids(session, planned_target_ids)
+    # Lock the full Target set of every affected request before any Binding.
+    targets = _lock_target_sets(session, affected_request_ids)
     bindings = list(
         session.scalars(
             select(SyncRequestTargetJob)
             .where(SyncRequestTargetJob.execution_generation == generation)
             .order_by(SyncRequestTargetJob.target_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         ).all()
     )
     if not bindings:
         return set()
-    target_ids = sorted({b.target_id for b in bindings})
-    # Planning read (no lock): which requests do these targets belong to?
-    affected_request_ids = sorted(
-        {
-            rid
-            for rid in session.scalars(
-                select(SyncRequestTarget.request_id).where(
-                    SyncRequestTarget.id.in_(target_ids)
-                )
-            ).all()
-            if rid is not None
-        }
-    )
-    # Pre-lock the full target set of every affected request, UUID
-    # ascending, before this transaction holds any single Target row:
-    # refresh_requests later re-locks the same rows (a no-op), so the
-    # settlement path never waits on a Target while holding another.
-    targets = {
-        t.id: t
-        for t in session.scalars(
-            select(SyncRequestTarget)
-            .where(SyncRequestTarget.request_id.in_(affected_request_ids))
-            .order_by(SyncRequestTarget.id)
-            .with_for_update()
-        ).all()
-    } if affected_request_ids else {}
     now = _now()
     periodic = _successor_is_periodic(job, successor, result)
     successor_generation = getattr(successor, "execution_generation", None) if successor is not None else None
@@ -408,53 +445,74 @@ def mark_bindings_running(session: Session, jobs: list[WorkerJob]) -> None:
     job_ids = [j.id for j in jobs if getattr(j, "id", None) is not None]
     if not job_ids or not hasattr(session, "scalars"):
         return
-    bindings = list(
-        session.scalars(
-            select(SyncRequestTargetJob).where(
+    # Planning read (no lock), then the unified order: full Target sets of
+    # the affected requests first, Binding rows after (R07).
+    planned = list(
+        session.execute(
+            select(SyncRequestTargetJob.id, SyncRequestTargetJob.target_id).where(
                 SyncRequestTargetJob.job_id.in_(job_ids),
                 SyncRequestTargetJob.status == "queued",
             )
         ).all()
     )
-    if not bindings:
+    if not planned:
         return
-    for binding in bindings:
-        binding.status = "running"
-    session.flush()
-    target_ids = {b.target_id for b in bindings}
-    request_ids = {
-        t.request_id
-        for t in session.scalars(
-            select(SyncRequestTarget).where(SyncRequestTarget.id.in_(list(target_ids)))
+    _lock_target_sets(
+        session, _request_ids_for_target_ids(session, [tid for _bid, tid in planned])
+    )
+    bindings = list(
+        session.scalars(
+            select(SyncRequestTargetJob)
+            .where(SyncRequestTargetJob.id.in_([bid for bid, _tid in planned]))
+            .with_for_update()
+            .execution_options(populate_existing=True)
         ).all()
-    }
-    refresh_requests(session, request_ids)
+    )
+    mutated_target_ids = set()
+    for binding in bindings:
+        if binding.status != "queued":
+            continue
+        binding.status = "running"
+        mutated_target_ids.add(binding.target_id)
+    session.flush()
+    refresh_requests(session, _request_ids_for_target_ids(session, mutated_target_ids))
 
 
 def reset_bindings_for_job(session: Session, job: WorkerJob) -> set[uuid.UUID]:
     """Reclaim hook: a reclaimed claim's running bindings return to queued."""
     if not hasattr(session, "scalars"):
         return set()
-    bindings = list(
-        session.scalars(
-            select(SyncRequestTargetJob).where(
+    # Planning read (no lock), then the unified order: full Target sets
+    # first, Binding rows after (R07).
+    planned = list(
+        session.execute(
+            select(SyncRequestTargetJob.id, SyncRequestTargetJob.target_id).where(
                 SyncRequestTargetJob.job_id == job.id,
                 SyncRequestTargetJob.status == "running",
             )
         ).all()
     )
-    if not bindings:
+    if not planned:
         return set()
-    for binding in bindings:
-        binding.status = "queued"
-    session.flush()
-    target_ids = {b.target_id for b in bindings}
-    return {
-        t.request_id
-        for t in session.scalars(
-            select(SyncRequestTarget).where(SyncRequestTarget.id.in_(list(target_ids)))
+    _lock_target_sets(
+        session, _request_ids_for_target_ids(session, [tid for _bid, tid in planned])
+    )
+    bindings = list(
+        session.scalars(
+            select(SyncRequestTargetJob)
+            .where(SyncRequestTargetJob.id.in_([bid for bid, _tid in planned]))
+            .with_for_update()
+            .execution_options(populate_existing=True)
         ).all()
-    }
+    )
+    mutated_target_ids = set()
+    for binding in bindings:
+        if binding.status != "running":
+            continue
+        binding.status = "queued"
+        mutated_target_ids.add(binding.target_id)
+    session.flush()
+    return set(_request_ids_for_target_ids(session, mutated_target_ids))
 
 
 def fail_open_targets(
@@ -470,25 +528,57 @@ def fail_open_targets(
     Deletion paths call this before removing the entity so associated sync
     requests converge to an explicit failure instead of pointing at a gone
     account/folder (design §5.2).
+
+    Lock order (R07): planning reads → ALL Targets of every affected
+    request (UUID ascending) → the open Binding rows of the filtered
+    targets. This matches the settlement path exactly; the previous
+    Target→Binding here vs Binding→Target there deadlocked (40P01).
     """
-    stmt = select(SyncRequestTarget).where(SyncRequestTarget.state.in_(["queued", "running"]))
+    # Planning read (no lock): the filtered open targets.
+    planned_stmt = select(SyncRequestTarget.id).where(
+        SyncRequestTarget.state.in_(["queued", "running"])
+    )
     if account_id is not None:
-        stmt = stmt.where(SyncRequestTarget.account_id == account_id)
+        planned_stmt = planned_stmt.where(SyncRequestTarget.account_id == account_id)
     if folder_id is not None:
-        stmt = stmt.where(SyncRequestTarget.folder_id == folder_id)
-    targets = list(session.scalars(stmt.order_by(SyncRequestTarget.id).with_for_update()).all())
+        planned_stmt = planned_stmt.where(SyncRequestTarget.folder_id == folder_id)
+    planned_ids = list(session.scalars(planned_stmt.order_by(SyncRequestTarget.id)).all())
+    if not planned_ids:
+        return set()
+    locked_targets = _lock_target_sets(
+        session, _request_ids_for_target_ids(session, planned_ids)
+    )
+    # State is re-checked on the locked rows: a target settled since the
+    # planning read must not be failed retroactively.
+    targets = [
+        locked_targets[tid]
+        for tid in planned_ids
+        if tid in locked_targets and locked_targets[tid].state in ("queued", "running")
+    ]
+    if not targets:
+        return set()
+    bindings_by_target: dict[uuid.UUID, list[SyncRequestTargetJob]] = {}
+    for binding in session.scalars(
+        select(SyncRequestTargetJob)
+        .where(
+            SyncRequestTargetJob.target_id.in_([t.id for t in targets]),
+            SyncRequestTargetJob.status.in_(OPEN_BINDING_STATES),
+        )
+        .order_by(
+            SyncRequestTargetJob.target_id,
+            SyncRequestTargetJob.created_at,
+            SyncRequestTargetJob.id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all():
+        bindings_by_target.setdefault(binding.target_id, []).append(binding)
     now = _now()
     request_ids: set[uuid.UUID] = set()
     for target in targets:
-        bindings = list(
-            session.scalars(
-                select(SyncRequestTargetJob).where(
-                    SyncRequestTargetJob.target_id == target.id,
-                    SyncRequestTargetJob.status.in_(OPEN_BINDING_STATES),
-                )
-            ).all()
-        )
-        for binding in bindings:
+        for binding in bindings_by_target.get(target.id, []):
+            if binding.status not in OPEN_BINDING_STATES:
+                continue
             binding.status = "failed"
             binding.error_code = error_code
             binding.safe_error = safe_error[:500]
@@ -541,18 +631,49 @@ def converge_orphaned_bindings(session: Session, *, limit: int = 200) -> int:
     live_generations = _live_execution_generations(session)
     refreshed_live_generations: set[uuid.UUID] | None = None
 
-    bindings = list(
-        session.scalars(
-            select(SyncRequestTargetJob)
+    # Planning reads (no locks): the candidate open bindings and the
+    # still-open requests the final aggregation sweep will refresh. The
+    # unified lock order (R07) then takes the full Target sets of BOTH
+    # groups before any Binding row is locked, so the sweep's
+    # refresh_requests calls below never wait on a Target while this
+    # transaction holds Bindings.
+    planned = list(
+        session.execute(
+            select(SyncRequestTargetJob.id, SyncRequestTargetJob.target_id)
             .where(SyncRequestTargetJob.status.in_(OPEN_BINDING_STATES))
             .order_by(SyncRequestTargetJob.created_at)
             .limit(max(1, int(limit)))
         ).all()
     )
+    open_request_ids = list(
+        session.scalars(
+            select(SyncRequest.id)
+            .where(SyncRequest.state.in_(["queued", "running"]))
+            .order_by(SyncRequest.created_at)
+            .limit(max(1, int(limit)))
+        ).all()
+    )
+    _lock_target_sets(
+        session,
+        set(_request_ids_for_target_ids(session, [tid for _bid, tid in planned]))
+        | set(open_request_ids),
+    )
+    planned_order = {bid: index for index, (bid, _tid) in enumerate(planned)}
+    bindings = list(
+        session.scalars(
+            select(SyncRequestTargetJob)
+            .where(SyncRequestTargetJob.id.in_([bid for bid, _tid in planned]))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).all()
+    ) if planned else []
+    bindings.sort(key=lambda b: planned_order.get(b.id, len(planned_order)))
     now = _now()
     changed = 0
     touched_target_ids: set[uuid.UUID] = set()
     for binding in bindings:
+        if binding.status not in OPEN_BINDING_STATES:
+            continue  # Settled between the planning scan and the lock.
         job = session.get(WorkerJob, binding.job_id) if binding.job_id is not None else None
         if job is not None:
             if job.status == JobStatus.FAILED.value:
@@ -591,22 +712,11 @@ def converge_orphaned_bindings(session: Session, *, limit: int = 200) -> int:
         changed += 1
         touched_target_ids.add(binding.target_id)
     if touched_target_ids:
-        request_ids = {
-            t.request_id
-            for t in session.scalars(
-                select(SyncRequestTarget).where(SyncRequestTarget.id.in_(list(touched_target_ids)))
-            ).all()
-        }
-        refresh_requests(session, request_ids)
-    # Persist aggregation for any request still marked open (bounded sweep).
-    open_request_ids = list(
-        session.scalars(
-            select(SyncRequest.id)
-            .where(SyncRequest.state.in_(["queued", "running"]))
-            .order_by(SyncRequest.created_at)
-            .limit(max(1, int(limit)))
-        ).all()
-    )
+        refresh_requests(
+            session, _request_ids_for_target_ids(session, touched_target_ids)
+        )
+    # Persist aggregation for any request still marked open (bounded sweep;
+    # its Target sets were locked in the planning phase above).
     if open_request_ids:
         refresh_requests(session, open_request_ids)
     return changed
