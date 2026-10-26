@@ -25,7 +25,14 @@ from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
 from mail_core.security.redact import safe_provider_summary
 from mail_core.sync.checkpoints import ScanGenerationMismatch, begin_scan_generation, invalidate_checkpoint_for_rebuild
-from mail_core.sync.execution import bind_target, binding_generation_for, fail_open_targets
+from mail_core.sync.execution import (
+    OPEN_BINDING_STATES,
+    TERMINAL_TARGET_STATES,
+    bind_target,
+    binding_generation_for,
+    fail_open_targets,
+    find_active_job,
+)
 from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import (
     FencingMismatch,
@@ -76,6 +83,57 @@ def _request_targets(session: Session, request_id: uuid.UUID | None, account_id:
     )
 
 
+def _sharing_targets(
+    session: Session,
+    *,
+    source_dedupe_key: str | None,
+    account_id: uuid.UUID,
+):
+    """Targets of other full requests sharing the executing deduplicated job.
+
+    A deduplicated job's payload carries a single ``request_id``, but every
+    request that deduped onto the job holds a binding at the executing
+    job's execution generation. Phase jobs created during this execution
+    are dependencies of all of those requests, not only the payload one:
+    binding only the payload request lets the others aggregate to
+    complete when the shared job settles, while the phase work they
+    depend on is still queued. Terminal requests/targets and bindings
+    that already settled are skipped, as are non-full requests (a delta
+    request sharing the discovery job does not depend on full-scan
+    phases).
+    """
+    if source_dedupe_key is None:
+        return []
+    job = find_active_job(session, source_dedupe_key)
+    if job is None:
+        return []
+    from mail_core.mail.storage.models import SyncRequest, SyncRequestTarget, SyncRequestTargetJob
+
+    target_ids = list(
+        session.scalars(
+            select(SyncRequestTargetJob.target_id).where(
+                SyncRequestTargetJob.execution_generation == job.execution_generation,
+                SyncRequestTargetJob.status.in_(OPEN_BINDING_STATES),
+            )
+        ).all()
+    )
+    if not target_ids:
+        return []
+    return list(
+        session.scalars(
+            select(SyncRequestTarget)
+            .join(SyncRequest, SyncRequest.id == SyncRequestTarget.request_id)
+            .where(
+                SyncRequestTarget.id.in_(sorted(set(target_ids))),
+                SyncRequestTarget.account_id == account_id,
+                SyncRequestTarget.state.notin_(TERMINAL_TARGET_STATES),
+                SyncRequest.mode == "full",
+                SyncRequest.state.notin_(TERMINAL_TARGET_STATES),
+            )
+        ).all()
+    )
+
+
 def _bind_phase_jobs(
     session: Session,
     *,
@@ -84,9 +142,19 @@ def _bind_phase_jobs(
     phase: str,
     folder_id: uuid.UUID,
     job,
+    source_dedupe_key: str | None = None,
 ) -> None:
-    """Bind the request's targets to a phase job created during execution."""
+    """Bind targets to a phase job created during execution.
+
+    Binds the payload request's targets plus the targets of every other
+    request sharing the executing job (see :func:`_sharing_targets`).
+    """
     targets = _request_targets(session, request_id, account_id)
+    seen = {t.id for t in targets}
+    for target in _sharing_targets(session, source_dedupe_key=source_dedupe_key, account_id=account_id):
+        if target.id not in seen:
+            seen.add(target.id)
+            targets.append(target)
     if not targets:
         return
     generation, bound_job = binding_generation_for(session, job)
@@ -306,6 +374,7 @@ def sync_account_folders(
                         phase="metadata",
                         folder_id=existing.id,
                         job=metadata_job,
+                        source_dedupe_key=f"sync:{account_id}",
                     )
         session.add(
             OutboxEvent(
@@ -583,6 +652,7 @@ def sync_folder_metadata(
                     phase="reconcile",
                     folder_id=folder_id,
                     job=reconcile_job,
+                    source_dedupe_key=f"metadata:{account_id}:{folder_id}",
                 )
             else:
                 enqueue_job(
