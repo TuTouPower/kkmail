@@ -35,7 +35,10 @@ pytestmark = pytest.mark.skipif(
 
 def _patch_push_provider(provider):
     orig = push_mod.build_provider
-    push_mod.build_provider = lambda account, store=None: provider
+    # Mirror the production build_provider signature: remote_push calls
+    # build_provider(account, store, traffic_class=...) — a stub without
+    # the traffic_class parameter TypeErrors on the real push path.
+    push_mod.build_provider = lambda account, store=None, traffic_class=None: provider
     return orig
 
 

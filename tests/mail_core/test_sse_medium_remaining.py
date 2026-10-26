@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -222,15 +223,26 @@ def test_cursor_ahead_of_head_emits_resync_hint():
         session.add(OutboxEvent(event_type="sync.progress", payload={}))
         session.commit()
         epoch, head_seq = publication_head(session)
+        # publication_head lazily creates the publication-state (epoch)
+        # row inside this session; commit it for real. Without this the
+        # row is rolled back when the block exits, the server then mints
+        # a different epoch, and the cursor below is answered with
+        # epoch_mismatch instead of cursor_ahead.
+        session.commit()
 
     ahead_cursor = f"v2:{epoch}:{head_seq + 1000}"
     with _client().stream("GET", "/api/events", headers={"Last-Event-ID": ahead_cursor}) as resp:
+        assert resp.status_code == 200
         buf = ""
+        # Bounded read: stop at the hint, at a hard deadline, or after a
+        # capped number of chunks — the previous loop could block on
+        # iter_text() forever when the hint never arrived.
+        deadline = time.monotonic() + 10
         for chunk in resp.iter_text():
             buf += chunk
             if "cursor_ahead" in buf:
                 break
-            if buf.count("event:") >= 3:
+            if time.monotonic() > deadline or buf.count("event:") >= 50:
                 break
         assert "client.resync_hint" in buf
         assert "cursor_ahead" in buf

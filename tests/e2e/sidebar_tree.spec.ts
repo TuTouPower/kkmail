@@ -312,7 +312,10 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
     await page.getByRole('button', { name: '深色', exact: true }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
-    await page.getByRole('button', { name: '关闭' }).click()
+    // 设置已是工作区页面、没有"关闭"按钮（SettingsModal.test 断言
+    // aria-label="关闭设置" 不存在）；退出设置走 Escape（closeSettings）。
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('button', { name: '通用' })).toHaveCount(0)
 
     await page.setViewportSize({ width: 761, height: 850 })
     await expect(sidebar).toBeVisible()
