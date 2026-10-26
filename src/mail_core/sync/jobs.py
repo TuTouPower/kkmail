@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import JobStatus
-from mail_core.mail.storage.models import WorkerJob
+from mail_core.mail.storage.models import SyncRequestTargetJob, WorkerJob
 
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RECLAIM_LIMIT = 100
@@ -316,6 +316,15 @@ def complete_job(
         )
         session.add(successor_job)
         session.flush()
+        if successor_generation is not None:
+            session.execute(
+                update(SyncRequestTargetJob)
+                .where(
+                    SyncRequestTargetJob.execution_generation == successor_generation,
+                    SyncRequestTargetJob.job_id.is_(None),
+                )
+                .values(job_id=successor_job.id)
+            )
     else:
         locked_job.status = JobStatus.DONE.value
         locked_job.locked_by = None
