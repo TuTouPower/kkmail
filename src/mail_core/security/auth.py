@@ -221,7 +221,11 @@ def _persist_db_password_hash(hash_str: str, increment_epoch: bool = False) -> b
 
         Session = get_session_factory()
         with Session() as session:
-            cred = session.get(AuthCredential, "default")
+            # Row lock: the epoch increment below is a read-modify-write and
+            # must serialize against invalidate_all_sessions(), otherwise a
+            # concurrent logout/login interleave loses one increment and a
+            # pre-change session stays valid after the password change (R02).
+            cred = session.get(AuthCredential, "default", with_for_update=True)
             if cred is None:
                 new_epoch = _session_epoch + (1 if increment_epoch else 0)
                 cred = AuthCredential(id="default", login_password_hash=hash_str, session_epoch=new_epoch)
@@ -383,7 +387,9 @@ def invalidate_all_sessions() -> None:
 
         Session = get_session_factory()
         with Session() as session:
-            cred = session.get(AuthCredential, "default")
+            # Row lock: serialize against _persist_db_password_hash()'s
+            # epoch increment so concurrent increments never lose one (R02).
+            cred = session.get(AuthCredential, "default", with_for_update=True)
             if cred is None:
                 cred = AuthCredential(
                     id="default",

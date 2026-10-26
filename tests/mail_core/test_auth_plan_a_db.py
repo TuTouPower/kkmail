@@ -46,7 +46,7 @@ def test_auth_plan_a_database_persistence():
         def __exit__(self, *args):
             return False
 
-        def get(self, model, key):
+        def get(self, model, key, **_kwargs):  # accept Session.get options (e.g. with_for_update)
             if stored_cred["hash"]:
                 return FakeCred("default", stored_cred["hash"])
             return None
@@ -118,7 +118,7 @@ def test_change_login_password_fails_closed_on_db_error():
         def __exit__(self, *args):
             return False
 
-        def get(self, model, key):
+        def get(self, model, key, **_kwargs):  # accept Session.get options (e.g. with_for_update)
             if stored_cred["hash"]:
                 return FakeCred("default", stored_cred["hash"], stored_cred["epoch"])
             return None
@@ -218,7 +218,7 @@ def test_change_password_atomic_commit_and_rollback_on_failure():
         def __exit__(self, exc_type, *args):
             return False
 
-        def get(self, model, key):
+        def get(self, model, key, **_kwargs):  # accept Session.get options (e.g. with_for_update)
             if stored_cred["hash"]:
                 return FakeCred("default", stored_cred["hash"], stored_cred["epoch"], session=self)
             return None
@@ -302,7 +302,7 @@ def test_cross_process_epoch_revocation_is_bounded_by_cache_ttl():
         def __exit__(self, *args):
             return False
 
-        def get(self, model, key):
+        def get(self, model, key, **_kwargs):  # accept Session.get options (e.g. with_for_update)
             nonlocal query_count
             query_count += 1
             return FakeCred("default", stored_cred["hash"], stored_cred["epoch"])
@@ -362,7 +362,7 @@ def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
         def __exit__(self, *args):
             return False
 
-        def get(self, model, key):
+        def get(self, model, key, **_kwargs):  # accept Session.get options (e.g. with_for_update)
             return FakeCred("default", stored_cred["hash"], stored_cred["epoch"])
 
         def add(self, obj):
