@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Mail, MailOpen, Trash2, Flag, ArrowLeft, RefreshCw } from 'lucide-react'
-import { findCachedMail, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail } from '../api/queries'
+import { findCachedMail, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash, postMailCoreSyncMessageBody } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
@@ -34,6 +34,38 @@ function RecipientList({ raw, addresses }: { raw?: string; addresses?: Recipient
   </>
 }
 
+/**
+ * F1: stable subscribe/getSnapshot for the selected-mail snapshot.
+ * Previously both were inline closures: React unsubscribed/resubscribed
+ * on every render, and findCachedMail (a full scan of every cached list)
+ * ran several times per frame — getSnapshot is called repeatedly by
+ * React and the render body scanned again for `selected`. Now the
+ * subscribe identity is stable, cache events only bump a version, and
+ * the scan result is memoized per (selectedKey, version) and shared by
+ * getSnapshot and the render body.
+ */
+function useSelectedMail(selectedKey: string | null): MailItem | undefined {
+  const versionRef = useRef(0)
+  const memoRef = useRef<{ key: string | null; version: number; snap: string; mail: MailItem | undefined } | null>(null)
+  const subscribe = useCallback((cb: () => void) => queryClient.getQueryCache().subscribe((event) => {
+    if (!isMailListQueryKey(event?.query?.queryKey)) return
+    versionRef.current += 1
+    cb()
+  }), [])
+  const getSnapshot = useCallback(() => {
+    const memo = memoRef.current
+    if (memo && memo.key === selectedKey && memo.version === versionRef.current) return memo.snap
+    const m = findCachedMail(selectedKey)
+    const snap = m ? `${m.id}\0${m.is_flagged}\0${m.is_read}\0${m.subject}` : ''
+    memoRef.current = { key: selectedKey, version: versionRef.current, snap, mail: m }
+    return snap
+  }, [selectedKey])
+  useSyncExternalStore(subscribe, getSnapshot)
+  const memo = memoRef.current
+  if (memo && memo.key === selectedKey && memo.version === versionRef.current) return memo.mail
+  return findCachedMail(selectedKey)
+}
+
 const MessageReader = memo(function MessageReader() {
   const themePref = useMailStore((s) => s.theme)
   const resolvedTheme = resolveTheme(themePref)
@@ -44,20 +76,9 @@ const MessageReader = memo(function MessageReader() {
   const [allowedRemoteImagesKey, setAllowedRemoteImagesKey] = useState<string | null>(null)
   const loadRemoteImages = Boolean(selectedKey && allowedRemoteImagesKey === selectedKey)
 
-  // Re-render when mail-core list caches change (optimistic flag/read/delete), not the whole query cache.
-  const selectedSnap = useSyncExternalStore(
-    (cb) =>
-      queryClient.getQueryCache().subscribe((event) => {
-        const qk = event?.query?.queryKey
-        if (isMailListQueryKey(qk)) cb()
-      }),
-    () => {
-      const m = findCachedMail(selectedKey)
-      return m ? `${m.id}\0${m.is_flagged}\0${m.is_read}\0${m.subject}` : ''
-    },
-  )
-  void selectedSnap
-  const selected = findCachedMail(selectedKey)
+  // Re-render when the selected mail's cached fields change (optimistic
+  // flag/read/delete), not on every query-cache event.
+  const selected = useSelectedMail(selectedKey)
 
   const detailQuery = useQuery({
     queryKey: selected

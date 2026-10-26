@@ -249,6 +249,35 @@ afterEach(() => {
 })
 
 describe('<MessageReader />', () => {
+  it('subscribes to the query cache once across re-renders and still tracks selected-mail changes (F1)', async () => {
+    const cache = queryClient.getQueryCache()
+    const originalSubscribe = cache.subscribe.bind(cache)
+    let subscribeCount = 0
+    cache.subscribe = ((listener: Parameters<typeof originalSubscribe>[0]) => {
+      subscribeCount += 1
+      return originalSubscribe(listener)
+    }) as typeof cache.subscribe
+    try {
+      const { container } = await render(<MessageReader />)
+      // Force several re-renders through unrelated store updates.
+      for (const theme of ['light', 'dark', 'light', 'dark'] as const) {
+        act(() => { useMailStore.setState({ theme }) })
+      }
+      expect(subscribeCount).toBe(1)
+      // Selected-mail cache changes still propagate to the reader: the
+      // read-state button renders the cached item's is_read.
+      expect(container.querySelector('[aria-label="标为未读"]')).not.toBeNull()
+      act(() => {
+        queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [{ ...item, is_read: false }])
+      })
+      await waitFor(() => {
+        expect(container.querySelector('[aria-label="标为已读"]')).not.toBeNull()
+      })
+    } finally {
+      cache.subscribe = originalSubscribe
+    }
+  })
+
   it('keeps an unknown detail date blank instead of falling back to the selected row date', async () => {
     useMailStore.setState({ selectedKey: 'm-null-date' })
     const { container } = await render(<MessageReader />)
