@@ -106,6 +106,14 @@ def exchange_redirect_url_for_tokens(
     refresh = result.get("refresh_token")
     if not isinstance(access, str) or not access.strip():
         raise ValueError("Microsoft 未返回有效 Access Token，请重新授权。")
+    # Same verification as stage_verified_response: the granted scope
+    # must actually include Mail.ReadWrite + User.Read (a token granted
+    # only User.Read cannot sync mail and must not onboard), and the
+    # mailbox must be reachable. The simplified flow previously skipped
+    # both checks.
+    scopes = {s.lower().removeprefix('https://graph.microsoft.com/') for s in str(result.get('scope') or '').split()}
+    if not {'mail.readwrite', 'user.read'} <= scopes:
+        raise ValueError('Microsoft 缺少 Mail.ReadWrite 或 User.Read 委托权限；请完成同意或联系管理员。')
     if not isinstance(refresh, str) or not refresh.strip():
         raise ValueError("Microsoft 未返回 Refresh Token，无法后台继续同步；请重新授权并允许持续访问。")
     try:
@@ -119,6 +127,12 @@ def exchange_redirect_url_for_tokens(
     email = profile.get("mail") if isinstance(profile, dict) else None
     if not isinstance(email, str) or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email.strip()):
         raise ValueError("Graph /me 未返回已核实的邮箱地址；账号可能没有可用邮箱，请确认 Microsoft 邮箱服务已启用。")
+    try:
+        mailbox = get(MAILBOX_URI, access)
+    except Exception as exc:
+        raise ValueError("无法核实 Microsoft 账号邮箱，请确认授权后重试。") from exc
+    if not isinstance(mailbox, dict) or not mailbox.get("id"):
+        raise ValueError("当前 Microsoft 用户没有可访问的邮箱，请确认邮箱许可及管理员策略。")
     return {
         "client_id": effective_client_id,
         "access_token": access,

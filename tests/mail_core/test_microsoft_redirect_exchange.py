@@ -59,16 +59,34 @@ def _fake_transports(captured, email="person@outlook.com"):
     def token_post(url, form):
         captured["token_url"] = url
         captured["form"] = dict(form)
-        return {"access_token": "ms-access", "refresh_token": "ms-refresh", "expires_in": 3600}
+        # The real token endpoint always returns the granted scope; the
+        # exchange verifies it, so the fake must carry it.
+        return {
+            "access_token": "ms-access",
+            "refresh_token": "ms-refresh",
+            "expires_in": 3600,
+            "scope": microsoft_oauth.MICROSOFT_SCOPE,
+        }
 
     def profile_get(url, access_token):
+        captured.setdefault("profile_urls", []).append(url)
         captured["profile_url"] = url
         captured["access_token"] = access_token
+        if url == microsoft_oauth.MAILBOX_URI:
+            return {"id": "inbox-folder-id"}
         return {"id": "ms-user", "mail": email, "userPrincipalName": "fallback@outlook.com"}
 
     return token_post, profile_get
 
 
+# REPLACED (simplified-flow verification): the original version of
+# test_exchange_uses_public_client_form_and_returns_tokens_and_email
+# asserted a single profile call (``profile_url == /me``). The exchange
+# now also verifies the granted scope and mailbox reachability (parity
+# with stage_verified_response), so it performs a second Graph call to
+# MAILBOX_URI and the single-URL expectation cannot hold. The test is
+# replaced as a whole below; the form/token/email expectations are kept
+# and extended to pin both Graph calls, not edited in place.
 def test_exchange_uses_public_client_form_and_returns_tokens_and_email():
     captured = {}
     token_post, profile_get = _fake_transports(captured)
@@ -82,7 +100,10 @@ def test_exchange_uses_public_client_form_and_returns_tokens_and_email():
         "scope": microsoft_oauth.MICROSOFT_SCOPE,
     }
     assert "client_secret" not in captured["form"]
-    assert captured["profile_url"] == "https://graph.microsoft.com/v1.0/me"
+    assert captured["profile_urls"] == [
+        "https://graph.microsoft.com/v1.0/me",
+        microsoft_oauth.MAILBOX_URI,
+    ]
     assert captured["access_token"] == "ms-access"
     assert result["refresh_token"] == "ms-refresh"
     assert result["access_token"] == "ms-access"
@@ -172,6 +193,36 @@ def test_exchange_explicit_client_id_beats_env(monkeypatch):
     assert result["client_id"] == "custom-client"
 
 
+def test_exchange_rejects_token_response_without_mail_readwrite_scope():
+    # A token granted only User.Read + offline_access (the stage flow
+    # rejects this too) must not onboard: sync needs Mail.ReadWrite.
+    def token_post(_url, _form):
+        return {
+            "access_token": "ms-access",
+            "refresh_token": "ms-refresh",
+            "scope": "https://graph.microsoft.com/User.Read offline_access",
+        }
+
+    def profile_get(_url, _at):
+        raise AssertionError("profile must not be fetched when scope is insufficient")
+
+    with pytest.raises(ValueError, match="缺少 Mail.ReadWrite 或 User.Read"):
+        exchange_redirect_url_for_tokens(REDIRECT, token_post=token_post, profile_get=profile_get)
+
+
+def test_exchange_rejects_when_mailbox_not_accessible():
+    captured = {}
+    token_post, _ = _fake_transports(captured)
+
+    def profile_get(url, _at):
+        if url == microsoft_oauth.MAILBOX_URI:
+            return {}  # inbox lookup yields no folder id
+        return {"id": "ms-user", "mail": "person@outlook.com"}
+
+    with pytest.raises(ValueError, match="没有可访问的邮箱"):
+        exchange_redirect_url_for_tokens(REDIRECT, token_post=token_post, profile_get=profile_get)
+
+
 def test_exchange_token_error_is_sanitized():
     def token_post(_url, _form):
         return {
@@ -187,7 +238,9 @@ def test_exchange_token_error_is_sanitized():
 
 def test_exchange_missing_refresh_token_fails():
     def token_post(_url, _form):
-        return {"access_token": "ms-access"}
+        # Scope is present (the real endpoint always returns it) so the
+        # refresh-token branch is what this test exercises.
+        return {"access_token": "ms-access", "scope": microsoft_oauth.MICROSOFT_SCOPE}
 
     with pytest.raises(ValueError, match="Refresh Token"):
         exchange_redirect_url_for_tokens(REDIRECT, token_post=token_post, profile_get=lambda *_a: {})
