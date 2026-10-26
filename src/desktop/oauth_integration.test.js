@@ -58,7 +58,6 @@ app.whenReady().then(async () => {
       platform: process.platform, preloadPath: path.join(__dirname, 'preload.js'),
       backgroundColor: '#ffffff',
     }))
-    const label = 'Microsoft'
     const email = 'electron@outlook.com'
     let authorizationUrl
     win.webContents.setWindowOpenHandler(createExternalWindowHandler(url => { authorizationUrl = url }))
@@ -72,28 +71,29 @@ app.whenReady().then(async () => {
     await waitFor("Array.from(document.querySelectorAll('button')).some(b => b.textContent === '添加账户')")
     await click('添加账户')
     await setValue('#account-vendor', 'microsoft')
-    await waitFor("Boolean(document.querySelector('#account-redirect-uri')?.value.startsWith('http://'))")
-    const redirect = await evaluate("document.querySelector('#account-redirect-uri').value")
-    assert.strictEqual(new URL(redirect).port, new URL(origin).port)
-    assert.strictEqual(new URL(redirect).hostname, 'localhost')
-    await setValue('#account-client-id', 'electron-test-client')
-    await click(`使用 ${label} 登录`)
+    // Simplified Microsoft flow (p056): the generic OAuth branch controls
+    // (#account-redirect-uri, #account-client-id, loopback callback) are
+    // gone for Microsoft; the branch renders an authorize button plus a
+    // paste-the-redirect-URL field and an exchange button that saves.
+    await waitFor("Boolean(document.querySelector('#account-ms-redirect-url'))")
+    assert.strictEqual(await evaluate("Boolean(document.querySelector('#account-redirect-uri'))"), false)
+    await setValue('#account-email', email)
+    await click('微软授权登录')
     const deadline = Date.now() + 5000
     while (!authorizationUrl && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20))
     assert.ok(authorizationUrl)
     assert.strictEqual(new URL(authorizationUrl).hostname, 'login.microsoftonline.com')
+    const redirectUri = new URL(authorizationUrl).searchParams.get('redirect_uri')
+    assert.ok(redirectUri)
+    assert.strictEqual(new URL(redirectUri).hostname, 'localhost')
     assert.strictEqual(await evaluate("document.body.textContent.includes('浏览器拦截了授权窗口')"), false)
-    // Node fetch has no Electron cookies, matching the separate system browser.
-    const state = new URL(authorizationUrl).searchParams.get('state')
-    const response = await fetch(`${redirect}?state=${encodeURIComponent(state)}&code=electron-code`)
-    assert.strictEqual(response.status, 200)
-    assert.match(await response.text(), /授权已完成/)
-    win.blur()
-    win.focus()
-    await waitFor(`document.body.textContent.includes(${JSON.stringify(`已完成 ${label} 授权：${email}`)})`)
-    await click('添加')
+    // The user authorizes in the external browser and pastes the final
+    // redirect URL back; the API exchanges its code against the
+    // suite-provided provider endpoints and saves the account directly.
+    await setValue('#account-ms-redirect-url', `${redirectUri}?code=electron-code&state=electron-state`)
+    await click('换取 Token 并添加')
     await waitFor(`!document.querySelector('#account-email') && document.body.textContent.includes(${JSON.stringify(email)})`)
-    process.stdout.write('Electron OAuth: real SPA, external handler, cookie-free callback, focus and save passed\n')
+    process.stdout.write('Electron OAuth: real SPA, simplified Microsoft paste-exchange flow and save passed\n')
     app.exit(0)
   } catch (error) {
     process.stderr.write(`${error.stack}\n`)

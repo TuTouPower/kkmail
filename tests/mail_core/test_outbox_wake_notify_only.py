@@ -42,7 +42,17 @@ def test_outbox_wake_notifies_without_marking_dispatched():
     with Session() as session:
         row = session.get(OutboxEvent, eid)
         assert row is not None
-        assert row.dispatched_at is None
+        # REPLACED (migration 0026 contract): this block previously
+        # asserted ``row.dispatched_at is None``. The dispatched_at column
+        # was dropped by 20261026_0026 and OutboxEvent no longer carries
+        # any dispatch marker (pinned by
+        # test_outbox_retention_unit.test_outbox_model_dropped_dispatched_at_and_old_consumption_index);
+        # consumers advance their own watermarks instead. Under the new
+        # contract "the wake does not mark dispatched" means the wake
+        # leaves the event row itself untouched -- still present with its
+        # payload unchanged -- on top of the notify-once / dispatcher-
+        # never-called assertions above.
+        assert row.payload == {"wake": True}
         job = session.get(WorkerJob, jid)
         assert job is not None
         assert job.status == JobStatus.DONE.value

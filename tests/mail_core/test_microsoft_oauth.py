@@ -290,7 +290,11 @@ def test_microsoft_electron_dynamic_localhost_and_cookie_free_callback_pg(monkey
         def do_POST(self):
             form = parse_qs(self.rfile.read(int(self.headers['Content-Length'])).decode())
             forms.append(form)
-            assert form['code_verifier'] and form['grant_type'] == ['authorization_code']
+            # Simplified paste flow contract: public-client exchange --
+            # no PKCE code_verifier (that belonged to the removed generic
+            # loopback flow) and no client_secret.
+            assert 'code_verifier' not in form
+            assert form['grant_type'] == ['authorization_code']
             assert urlsplit(form['redirect_uri'][0]).hostname == 'localhost'
             assert 'client_secret' not in form
             self.send_response(200)
