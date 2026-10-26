@@ -6,7 +6,7 @@ kkmail 的核心领域概念与数据实体术语表。各层代码、数据迁�
 
 |概念 (English)|对应模型 / 数据库表|业务定义与生命周期说明|
 |:---|:---|:---|
-|**Account**|`accounts`|邮件账户实体。包含邮箱、提供商 (`imap`/`gmail`/`graph`/`memory`)、关联凭据引用 (`credential_ref`)、配置项与同步状态。|
+|**Account**|`accounts`|邮件账户实体。包含邮箱、提供商 (`imap`/`graph`/`memory`)、关联凭据引用 (`credential_ref`)、配置项与同步状态。|
 |**AccountGroup**|`account_groups`|账户分组。允许用户将多个邮箱归类整理，支持颜色与聚合展示。|
 |**Folder**|`folders`|邮件文件夹/标签。映射远端 mailbox 或 label，维护 `role`（如 `inbox`, `trash`, `other`）。|
 |**FolderStats**|`folder_stats`|文件夹聚合统计。维护总邮件数 (`total_count`) 与未读邮件数 (`unread_count`)，由数据库事务/对账即时维护。|

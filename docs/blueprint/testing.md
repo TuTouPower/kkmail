@@ -176,7 +176,7 @@ scripts/run-mail-core-tests.sh run -k test_imap
 - **全链路同步验证**：覆盖中文多部分正文、二进制附件落库加密与流式解密校验、相同 Message-ID 邮件处理，以及多轮同步的严格幂等性；
 - **增量收敛与服务端可观察性**：测试远端 Flag 变更与删除在本地库的增量同步；验证本地读状态更新经 `push_remote_operations` 写回到真实服务端后能在 IMAP 协议（`\Seen`）上直接观测；
 - **安全废纸篓与 TLS 防护**：验证仅移动目标邮件至 Trash，在缺少 MOVE 能力时拒绝不安全的全目录 EXPUNGE；非 SSL 端口开启 TLS 时必须握手失败直接阻断；
-- **Gmail / Graph 服务商传输契约**：覆盖循环/重复 pageToken 检测、过期游标不前进、OAuth token 刷新失败脱敏、429 重试等待及 5xx/超时重试幂等性。普通 CI 不依赖外网真实 OAuth 凭据。
+- **Graph 服务商传输契约**：覆盖循环/重复 pageToken 检测、过期游标不前进、OAuth token 刷新失败脱敏、429 重试等待及 5xx/超时重试幂等性。普通 CI 不依赖外网真实 OAuth 凭据。
 
 ## 全栈端到端真实测试（t017）
 
@@ -339,10 +339,8 @@ python3 scripts/run_full_stack_e2e.py
 - 浏览器冒烟测试验证六类全局分类、分组分类、真实文件夹树和导航布局；真实全栈 Playwright 通过 HTML5 拖拽验证空组、跨组、移出、主列表内排序和分组排序，并刷新后读取服务端确认成员关系与顺序持久化。
 - 前端测试覆盖查询 key 按 scope 隔离、分组参数贯通、偏好持久化与设置入口；`schemas/openapi.json` 和生成 TypeScript 必须通过 codegen 漂移检查。
 
-## 供应商账户表单与 Google OAuth 回调（t053 / t054）
+## 供应商账户表单与 OAuth 回调（t053 / t054）
 
-后端：`scripts/run-mail-core-tests.sh run -k "provider_account or google_oauth_callback or accounts_api or oauth_transport or account_credentials" --no-cov`，覆盖真实加密凭据更新、回滚、Microsoft IMAP 拒绝、Google OAuth PKCE 换码与 `users.getProfile` 核验、跨会话/重放/并发回调拦截及多客户端令牌轮换。前端：`npm --prefix src/frontend test`；浏览器：`npm --prefix src/frontend run test:e2e -- provider_account_forms.spec.ts settings_workspace.spec.ts`，覆盖 Google OAuth 跳转登录、重新授权、帮助弹窗焦点与窄屏输入。
+后端：`scripts/run-mail-core-tests.sh run -k "provider_account or accounts_api or oauth_transport or account_credentials" --no-cov`，覆盖真实加密凭据更新、回滚、Microsoft IMAP 拒绝、跨会话/重放/并发回调拦截及多客户端令牌轮换。前端：`npm --prefix src/frontend test`；浏览器：`npm --prefix src/frontend run test:e2e -- provider_account_forms.spec.ts settings_workspace.spec.ts`，覆盖账户表单、帮助弹窗焦点与窄屏输入。
 
-OAuth Electron 集成门禁：先构建生产 SPA，再运行 `KKMAIL_TEST_ELECTRON=1 scripts/run-mail-core-tests.sh run -k google_oauth_callback --no-cov`。独立 Electron profile、真实 FastAPI/隔离 PG、假供应商 HTTP 服务覆盖动态 loopback、生产外链处理器、无 Cookie 回调、窗口焦点恢复及最终保存；不连接真实 Google 账号。
-
-Microsoft 回归：`KKMAIL_TEST_ELECTRON=1 scripts/run-mail-core-tests.sh run -k "microsoft_oauth or google_oauth_callback" --no-cov`，先构建生产 SPA。覆盖 Graph 身份/邮箱/许可、已有账户重新授权、租户与应用不匹配、设备码 interval/slow_down/429、取消/epoch/迟到成功、并发单次轮询、官方地址白名单及日志错误脱敏。微软独立 Electron 实例经真实 API/隔离 PG 与供应商 HTTP 夹具验证 localhost 动态端口、系统外链、无 Cookie 回调、恢复与最终保存。真实 Entra 注册/2FA/管理员同意不作为模拟通过，需另记真实账号冒烟结果。
+Microsoft 回归：`KKMAIL_TEST_ELECTRON=1 scripts/run-mail-core-tests.sh run -k "microsoft_oauth" --no-cov`，先构建生产 SPA。覆盖 Graph 身份/邮箱/许可、已有账户重新授权、租户与应用不匹配、设备码 interval/slow_down/429、取消/epoch/迟到成功、并发单次轮询、官方地址白名单及日志错误脱敏。微软独立 Electron 实例经真实 API/隔离 PG 与供应商 HTTP 夹具验证 localhost 动态端口、系统外链、无 Cookie 回调、恢复与最终保存。真实 Entra 注册/2FA/管理员同意不作为模拟通过，需另记真实账号冒烟结果。

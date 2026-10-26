@@ -74,7 +74,7 @@
 4. **账号图标偏好与域名匹配规则**：
 
     - 账号图标模式分为 `none` (不展示)、`brand` (品牌标识，默认)、`initials` (首字母) 三种模式，存入本地前端偏好（`mail-ui-storage`）；
-    - 品牌识别以邮箱域名精确匹配为准（Gmail、Outlook/Hotmail/Live、163/126、QQ），禁止子串误判；仅在域名未知且显式配置为 gmail/graph 时回退到 provider，其余显示通用邮箱图标；
+    - 品牌识别以邮箱域名精确匹配为准（Gmail、Outlook/Hotmail/Live、163/126、QQ），禁止子串误判；仅在域名未知且显式配置为 graph 时回退到 provider，其余显示通用邮箱图标；
     - 首字母模式取邮箱用户名首个 Unicode 字符并转为大写，空或异常值回退到通用图标；
     - 品牌图标与样式资源随前端包离线分发，严禁在运行时向外部第三方发起头像或网络资源请求。
 
@@ -110,7 +110,6 @@
     - 批量账户操作逐项执行，显示成功数与失败明细，仅保留失败账户供重试；筛选全选只影响当前筛选结果。
     - 添加账户按需打开原生 dialog，限制焦点范围并在关闭后恢复触发按钮焦点；凭据通过命名字段输入并经既有 API 加密存储，不要求用户编辑 JSON；供应商与认证方式旁提供帮助图标和独立说明弹窗。
     - 已有账户编辑通过 `PATCH /api/accounts/{account_id}` 更新连接配置、凭据与分组；账户摘要只返回白名单 IMAP 连接字段（含独立登录名）、供应商品牌与 OAuth 客户端类型，凭据不回显，编辑表单的空凭据输入保持已有凭据不变。
-    - Google OAuth 跳转登录与重新授权强制使用 PKCE `S256`、绑定当前登录会话与 `session_epoch`，回调仅暂存经 `users.getProfile` 核实的邮箱与加密凭据，必须由原会话确认保存才生效；取消或关闭弹窗立即清理未确认流程，令牌与 `code_verifier` 永不返回前端或写入浏览器持久存储與日志。
     - 外观与账号图标偏好即时保存在当前客户端；时区和拉信超时显式保存至服务端，后台刷新不得覆盖未保存草稿。操作反馈分别归属账户、分组、通用设置或登录安全区域。
 
 ## 六、 UI 稳定编号与引用规范
@@ -146,10 +145,9 @@
     - IMAP `\Noselect` 节点只用于呈现父子目录结构，不是可查询邮箱；不得为其排 metadata/delta/reconcile 任务，旧任务执行时以 skipped 完成；不得显示未知未读数 `-`，其子目录保持可同步、可独立导航；
     - 侧栏与邮件列表头部统计语义保持一致：单账号或多账号缺失目标文件夹角色时，严格展示未知（`—` / `-`），禁止回退为全目录合计或静默按零填充。
 5. **服务商字段缺省与显式清空**：
-    - `RemoteMessageMeta.supplied_fields` 为 `None` 时表示完整快照，为字段集合时表示部分 projection；Graph delta 与 Gmail metadata 必须标明实际返回字段。upsert 只更新集合内字段，不把缺省值当清空指令。
+    - `RemoteMessageMeta.supplied_fields` 为 `None` 时表示完整快照，为字段集合时表示部分 projection；Graph delta 必须标明实际返回字段。upsert 只更新集合内字段，不把缺省值当清空指令。
     - 明确返回的空主题、空摘要、空收件人数组按服务商原值应用；缺省字段保持已有值。日期与状态解析得到 `None` 表示未知，不能清除已知日期/状态。
     - 同页同封邮件的 partial upsert 与 flag patch 按响应顺序合并；后续显式字段覆盖先前同字段，未提供字段保留，delete 丢弃先前 patch。保持本地未收敛 read/flag 意图保护。
-    - Gmail metadata hydrate 必须返回相同 ID、列表类型 `labelIds` 和列表类型 `payload.headers`。不完整或 ID 不符的响应、GET 异常均中断该页，不把 History stub 当完整邮件成功应用；`metadata` projection 未返回 snippet 时保留已有摘要。
 6. **邮件状态未知值契约**：
     - IMAP FETCH 缺少 `FLAGS` 时读/旗标保持未知；只有显式 `FLAGS ()` 才表示 false。系统旗标按完整 token 忽略大小写匹配，扩展旗标不得因包含 Seen/Flagged 字样变成系统状态。
     - `Message.is_read`、`is_flagged`、`has_attachments` 为可空布尔值；服务商缺失时新记录存 `null`，不得由数据库 false 默认值补造事实。列表、详情、API 与前端类型保留 null。
@@ -196,7 +194,7 @@
 
 ## 账户供应商接入（t053）
 
-Google 提供 Gmail API OAuth 与 IMAP 应用专用密码；Microsoft 仅提供 Graph OAuth，创建、编辑、导入与 provider 构建均拒绝可识别 Microsoft IMAP。品牌按精确域名建议，显式选择优先，编辑以已有协议和连接配置为准。自定义域名允许手选托管商，Proton 仅提示 Bridge 限制。
+Google 仅提供 IMAP 应用专用密码（`imap.gmail.com`），不提供 Gmail API 或 Google OAuth；Microsoft 仅提供 Graph OAuth，创建、编辑、导入与 provider 构建均拒绝可识别 Microsoft IMAP。品牌按精确域名建议，显式选择优先，编辑以已有协议和连接配置为准。自定义域名允许手选托管商，Proton 仅提示 Bridge 限制。
 
 凭据 PATCH 按非空字段合并，保留未提交字段；OAuth 凭据或客户端类型变化清除 Access Token 缓存。加密凭据行锁串行化编辑与后台令牌轮换，禁止旧快照覆盖新 Refresh Token。
 

@@ -36,9 +36,9 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
 
 - **同步引擎与协议适配 (`src/mail_core/sync/`, `src/mail_core/providers/`)**：
 
-    - 适配器：IMAP (带 TLS 校验与特殊文件夹转义；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务)、Gmail REST (repeated historyTypes + History hydration)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放)。
+    - 适配器：IMAP (带 TLS 校验与特殊文件夹转义；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放)。
     - 并发保护：基于数据库的租约锁 (`AccountSyncLease`) 与递增 fencing token。
-    - 元数据保真：provider 通过 `RemoteMessageMeta.supplied_fields` 区分完整快照与部分返回字段，metadata upsert 按字段存在性应用；同页 partial/flag 按响应顺序合并，缺省字段不清空本地事实。Graph 内容字段显式空值仍可清空；Gmail metadata hydration 必须具备匹配 ID、labels 与 headers，失败时不返回成功页。
+    - 元数据保真：provider 通过 `RemoteMessageMeta.supplied_fields` 区分完整快照与部分返回字段，metadata upsert 按字段存在性应用；同页 partial/flag 按响应顺序合并，缺省字段不清空本地事实。Graph 内容字段显式空值仍可清空。
     - 未知状态：邮件 read/flag/attachment 使用 nullable 布尔契约贯穿 PostgreSQL、查询 DTO、API 与前端；新建邮件不补 false。文件夹存在未知读状态时未读统计为 null，账号/分组/全局聚合传播未知而保留可知总数。旧库仅迁移已有状态列，无 flag 来源时保留 null。
 
 - **存储与加密层 (`src/mail_core/blobs/`, `src/mail_core/mail/storage/`)**：
@@ -69,15 +69,15 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 针对文件夹定时空转轮询导致的归档饥饿，调整任务优先级分层：按需归档任务为 **10**，出站写回操作为 **40**，初次目录扫描为 **50**，后台批量正文归档续批为 **60**，文件夹定时空转增量轮询为 **75**，定期对账任务为 **80**；
     - 定时增量空转轮询增加去重键（`delta:{account_id}:{folder_id}`），防止单个文件夹在短时间内重复入队堆积，彻底解除增量轮询对后台批量正文归档的压制。
 
-## 供应商账户配置与 Google/Microsoft OAuth（t053 / t054 / t055）
+## 供应商账户配置与 Microsoft OAuth（t053 / t054 / t055）
 
-供应商品牌存于 `Account.config.provider_profile`，协议仍由 `imap`/`gmail`/`graph` 路由；设置页共享添加/编辑表单，品牌预设不覆盖用户连接参数。账户 DTO 只返回白名单连接信息，OAuth 秘密不回显。Microsoft IMAP 在账户入口及 provider factory 被拒绝。`DbCredentialStore` 的 `credential_edit` 在当前事务锁定加密行，账户局部更新与 OAuth 刷新共用该锁。
+供应商品牌存于 `Account.config.provider_profile`，协议仍由 `imap`/`graph` 路由；设置页共享添加/编辑表单，品牌预设不覆盖用户连接参数。账户 DTO 只返回白名单连接信息，OAuth 秘密不回显。Microsoft IMAP 在账户入口及 provider factory 被拒绝。`DbCredentialStore` 的 `credential_edit` 在当前事务锁定加密行，账户局部更新与 OAuth 刷新共用该锁。
 
-Google Gmail API 支持授权码 + PKCE `S256` 跳转回调与重新授权（`src/mail_core/accounts/oauth_flow.py`、`src/mail_core/api/oauth_routes.py`）：短期流程状态加密存于 `CredentialSecret`，绑定发起会话指纹、`session_epoch`、用途（新增/编辑）与目标账户，10 分钟过期。网页端从可信部署配置 `MAIL_CORE_PUBLIC_ORIGIN` 构造 HTTPS 回调；桌面端（`KKMAIL_SIDECAR=1`）使用 `127.0.0.1` 动态本地端口 loopback 回调。回调仅在换码并经 `users.getProfile` 核实真实邮箱后暂存加密凭据，最终由原认证会话提交 `oauth_flow_id` 原子落库并消费一次性结果。
+Google 账户仅通过标准 IMAP 接入：服务器 `imap.gmail.com`，凭据为 Google 账户的应用专用密码。不提供 Gmail API 或 Google OAuth 路径，不存在 `gmail` 协议。
 
 OAuth 最终保存统一按 sidebar 组织锁 → 账户（编辑）→ 流程 → 凭据/活跃指针顺序取锁，新增与重新授权均先取组织锁。活跃指针写入及条件清空共用引用 advisory lock；授权码以相同锁原子领取，避免缺行锁竞争。
 
-Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `oauth_flow` 会话绑定、加密状态与最终消费。供应商协议分别位于 `google_oauth.py` / `microsoft_oauth.py`，设备码步骤在 `device_oauth.py`；不新增第二套账户提交或令牌缓存。Microsoft 桌面回调使用 `localhost` 动态端口（仅该主机名享有微软忽略端口规则），Web 回调继续来自可信 HTTPS Origin。
+Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `oauth_flow` 会话绑定、加密状态与最终消费。供应商协议位于 `microsoft_oauth.py`，设备码步骤在 `device_oauth.py`；不新增第二套账户提交或令牌缓存。Microsoft 桌面回调使用 `localhost` 动态端口（仅该主机名享有微软忽略端口规则），Web 回调继续来自可信 HTTPS Origin。
 
 设备码仅通过原认证会话带 CSRF 的 `POST /api/accounts/oauth/flows/{id}/poll` 驱动；服务端在同一跨进程流程锁内判断 `next_poll_at` 并执行到期的一次请求，多次前端查询不会增加供应商轮询频率。等待、slow_down/429、拒绝、取消及期限均由后端收敛，有效期取供应商期限与 10 分钟较短值。长 device_code 只存在加密流程中，短 user_code 与官方验证 URI 返回原会话，所有 OAuth 响应禁止缓存。
 

@@ -37,7 +37,7 @@ When data-dir bootstrap must create a login credential, it writes a random initi
 |`MAIL_CORE_LOGIN_MAX_FAILURES`, `MAIL_CORE_LOGIN_WINDOW_S`|Failed-login rate limit; defaults to 10 failures per 300 seconds.|
 |`MAIL_CORE_SSE_MAX_CONNECTIONS`|Maximum concurrent SSE streams per process; defaults to 128.|
 |`MAIL_CORE_FORWARDED_ALLOW_IPS`|Trusted proxy IPs/CIDRs; unset disables forwarded-header middleware.|
-|`MAIL_CORE_PUBLIC_ORIGIN`, `MAIL_CORE_ALLOW_LOOPBACK_OAUTH_ORIGIN`|Web OAuth origin and opt-in loopback HTTP for local testing; loopback allowance defaults off.|
+|`MAIL_CORE_PUBLIC_ORIGIN`, `MAIL_CORE_ALLOW_LOOPBACK_OAUTH_ORIGIN`|Microsoft Web OAuth origin and opt-in loopback HTTP for local testing; loopback allowance defaults off.|
 |`MAIL_CORE_ALLOW_PRIVATE_HOSTS`|Allows IMAP connections to private/loopback hosts; defaults off.|
 |`KKMAIL_SIDECAR`, `KKMAIL_INSTANCE_TOKEN`|Desktop-only runtime marker and `/health` handshake token; do not configure for web deployments.|
 |`KKMAIL_FRONTEND_DIST`|Optional SPA directory served at `/`.|
@@ -60,7 +60,7 @@ When data-dir bootstrap must create a login credential, it writes a random initi
 |`mail/domain/`, `mail/storage/`|Enums, the archive FSM, ORM models, folder stats.|
 |`accounts/`|Accounts, groups, settings, and credential stores (DB-encrypted, `env:` read-only, `keyring:`).|
 |`sync/`|Leases and fencing, jobs, metadata and delta apply, the engine.|
-|`providers/`|IMAP, Gmail and Graph providers, OAuth, remote write-back.|
+|`providers/`|IMAP and Graph providers, Microsoft OAuth, remote write-back.|
 |`worker/`|Job loop and handlers.|
 |`blobs/`|KKMS streaming AEAD store, archive scheduler, GC, key rotation.|
 |`backup/`|KKBK backup packages.|
