@@ -32,6 +32,12 @@ class OutboxDispatcher:
     # fanned out twice (FOR UPDATE SKIP LOCKED covers other API workers).
     _dispatch_lock: threading.Lock = field(default_factory=threading.Lock)
     _last_dispatched_seq: int = 0
+    # Whether the startup baseline has been established. The cursor value 0
+    # alone cannot distinguish "fresh dispatcher, baseline not yet taken"
+    # from "baseline taken on an empty stream" — conflating them made an
+    # established dispatcher jump its cursor to head and silently skip the
+    # first events another process published (R08).
+    _baseline_established: bool = False
     _stop: bool = False
 
     def subscribe(
@@ -208,8 +214,14 @@ class OutboxDispatcher:
             if require_subscribers and not self.has_local_subscribers():
                 return 0
 
-            if self._last_dispatched_seq == 0 and head_seq > 0:
-                self._last_dispatched_seq = max(0, head_seq - batch.count)
+            if not self._baseline_established:
+                # First dispatch for this process: skip pre-existing history
+                # but keep the batch this call just published deliverable.
+                # Once established, a cursor of 0 is legitimate (empty-stream
+                # baseline) and phase 2 reads from sequence 1.
+                self._baseline_established = True
+                if head_seq > 0:
+                    self._last_dispatched_seq = max(0, head_seq - batch.count)
 
             # Retention gap: rows this dispatcher still needs to fan out
             # have been pruned. It must not silently skip them — emit the

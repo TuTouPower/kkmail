@@ -365,6 +365,7 @@ def test_two_dispatcher_instances_both_receive_published_events(monkeypatch):
             # Both instances are long-running: their baselines were
             # established before these rows were published.
             dispatcher._last_dispatched_seq = 3
+            dispatcher._baseline_established = True  # R08: a bare cursor no longer implies an established baseline
             queues.append(dispatcher.subscribe())
         counts = [dispatcher.dispatch_once() for dispatcher in dispatchers]
         received = [_drain(queue) for queue in queues]
@@ -383,6 +384,7 @@ def test_lagging_dispatcher_emits_retention_gap_hint_and_rebuilds_cursor(monkeyp
     _patch_dispatch(monkeypatch, head=12, pruned=9, rows=rows)
     dispatcher = OutboxDispatcher()
     dispatcher._last_dispatched_seq = 3
+    dispatcher._baseline_established = True  # R08: see above
 
     async def run():
         queue = dispatcher.subscribe()
@@ -406,6 +408,7 @@ def test_dispatcher_commits_publication_seq_before_broadcast(monkeypatch):
     _patch_dispatch(monkeypatch, head=4, pruned=0, rows=rows, recorder=recorder)
     dispatcher = OutboxDispatcher()
     dispatcher._last_dispatched_seq = 3
+    dispatcher._baseline_established = True  # R08: see above
 
     original_fanout = dispatcher._fanout
 
