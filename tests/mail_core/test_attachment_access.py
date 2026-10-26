@@ -116,5 +116,8 @@ DATABASE_URL = os.environ.get("MAIL_CORE_DATABASE_URL")
 def test_api_unknown_uuid_404():
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     r = client.get(f"/api/mail/attachments/{uuid.uuid4()}")
-    # May 404 (not found) or 500 if DB unavailable — accept 404/503/500 with care
-    assert r.status_code in (404, 500, 503)
+    # An unknown attachment UUID is a clean 404 (AttachmentAccessError ->
+    # HTTPException(404, "attachment not found")) — 500/503 would mean the
+    # error path itself is broken and must not be tolerated here.
+    assert r.status_code == 404
+    assert r.json()["detail"] == "attachment not found"
