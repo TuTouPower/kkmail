@@ -82,5 +82,33 @@ describe('ColumnResize', () => {
     })
     expect(onDragEnd).toHaveBeenCalledTimes(1)
   })
+
+  it('removes the drag listeners when unmounted mid-drag (F3)', async () => {
+    const onDrag = vi.fn()
+    const onDragEnd = vi.fn()
+    const { container, unmount } = await render(<ColumnResize ariaLabel="resize" value={300} min={180} max={420} onDrag={onDrag} onDragEnd={onDragEnd} />)
+    const handle = container.querySelector('[role="separator"]') as HTMLDivElement
+    Object.defineProperty(handle, 'setPointerCapture', { configurable: true, value: vi.fn() })
+    Object.defineProperty(handle, 'releasePointerCapture', { configurable: true, value: vi.fn() })
+    Object.defineProperty(handle, 'hasPointerCapture', { configurable: true, value: vi.fn(() => false) })
+
+    act(() => {
+      handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 100, pointerId: 3 }))
+    })
+    act(() => {
+      window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 110, pointerId: 3 }))
+    })
+    expect(onDrag).toHaveBeenCalledWith(10)
+
+    unmount()
+    expect(onDragEnd).toHaveBeenCalledTimes(1)
+    onDrag.mockClear()
+    act(() => {
+      window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 160, pointerId: 3 }))
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 3 }))
+    })
+    expect(onDrag).not.toHaveBeenCalled()
+    expect(onDragEnd).toHaveBeenCalledTimes(1)
+  })
 })
 
