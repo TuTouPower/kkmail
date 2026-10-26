@@ -407,6 +407,42 @@ def get_sync_request_report(session: Session, request_id: uuid.UUID) -> SyncRequ
     )
 
 
+#: Scope keys that identify *whose* mail a request syncs. They must match
+#: exactly, in both directions: a request carrying an identity key the
+#: query did not specify belongs to a narrower (different) scope and must
+#: never be returned for it — the pre-fix subset matcher did exactly that,
+#: leaking a single account's progress into the global view (DEFECT 5).
+_IDENTITY_SCOPE_KEYS = ("account_id", "group_id", "folder_id", "all")
+
+#: The canonical scope stored for a global (all-accounts) request, as
+#: created by POST /api/accounts/sync-all (``scope={"all": True}``).
+_GLOBAL_SCOPE: dict[str, Any] = {"all": True}
+
+
+def _scope_matches(canonical: dict[str, Any], wanted: dict[str, Any]) -> bool:
+    """Whether a stored canonical scope is the scope a list query asked for.
+
+    Matching is scope-exact on the identity keys (account/group/folder/all),
+    mirroring the exact canonical comparison used for idempotency in
+    ``_intent_matches``. ``folder_role`` is the one legitimate exception:
+    stored delta scopes always carry it (DeltaSyncIn defaults it to
+    "inbox" and the frontend pairs every identity with a role), while a
+    query may specify an identity without a role — an omitted role means
+    "any role within this identity scope", so a stored role does not
+    contradict it. When the query does specify a role, it must be equal.
+    A query with no filters at all is the global query: only requests
+    whose canonical scope is exactly the global scope match it.
+    """
+    if not wanted:
+        return canonical == _GLOBAL_SCOPE
+    for key in _IDENTITY_SCOPE_KEYS:
+        if canonical.get(key) != wanted.get(key):
+            return False
+    if "folder_role" in wanted and canonical.get("folder_role") != wanted["folder_role"]:
+        return False
+    return True
+
+
 def list_recent_sync_requests(
     session: Session,
     *,
@@ -421,9 +457,10 @@ def list_recent_sync_requests(
 
     The frontend progress hook uses this after a reload to re-adopt the
     current scope's in-flight request instead of POSTing a duplicate.
-    Scope filters compare against each request's canonical scope; a
-    filter that is not provided matches any request. Results are newest
-    first and capped at 50.
+    Matching is scope-exact (see ``_scope_matches``): a scoped request is
+    never returned for a different scope, and the unfiltered (global)
+    query returns only global requests. Results are newest first and
+    capped at 50.
     """
     wanted = _canonical_scope(
         None,
@@ -444,7 +481,7 @@ def list_recent_sync_requests(
     reports: list[SyncRequestOut] = []
     for req in rows:
         canonical = _canonical_scope(req.scope)
-        if any(canonical.get(key) != value for key, value in wanted.items()):
+        if not _scope_matches(canonical, wanted):
             continue
         report = get_sync_request_report(session, req.id)
         if report is not None:

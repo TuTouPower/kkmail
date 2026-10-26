@@ -176,31 +176,73 @@ def test_single_account_full_sync_succeeds_with_generated_id_within_column_limit
         assert len(stored.client_request_id) <= 64
 
 
-def test_list_recent_sync_requests_recovers_unfinished_scope_request():
+def test_list_recent_sync_requests_is_scope_exact():
+    """DEFECT 5 replacement for test_list_recent_sync_requests_recovers_
+    unfinished_scope_request (deleted, not edited in place): that test
+    asserted an unfiltered list returns a single account's unfinished
+    request — the exact cross-scope leak this fix removes. Matching is
+    now scope-exact; the application-level regression (SQLite, runs in
+    unit mode) is test_sync_requests_scope_exact.py."""
     group_id, acc1_id, acc2_id, f1_id = _seed_accounts()
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
 
-    body = {
-        "account_id": str(acc1_id),
-        "trigger": "manual",
-        "client_request_id": f"test-list-req-{uuid.uuid4().hex}",
-    }
-    r = client.post("/api/mail/sync/delta", json=body)
+    # Single-account delta request: stored scope
+    # {"account_id": acc1, "folder_role": "inbox"}.
+    r = client.post(
+        "/api/mail/sync/delta",
+        json={
+            "account_id": str(acc1_id),
+            "trigger": "manual",
+            "client_request_id": f"test-list-req-{uuid.uuid4().hex}",
+        },
+    )
     assert r.status_code == 202
-    created = r.json()
-    assert created["state"] == "queued"
+    account_req = r.json()
+    assert account_req["state"] == "queued"
 
-    # Unfiltered list contains the unfinished request.
+    # Global full request: stored scope {"all": True}.
+    r = client.post("/api/accounts/sync-all")
+    assert r.status_code == 202
+    global_req = r.json()
+
+    # Global delta request (frontend allInbox scope): stored scope
+    # {"folder_role": "inbox"}.
+    r = client.post(
+        "/api/mail/sync/delta",
+        json={"trigger": "manual", "client_request_id": f"test-list-global-{uuid.uuid4().hex}"},
+    )
+    assert r.status_code == 202
+    global_delta_req = r.json()
+
+    # Unfiltered (global) list returns ONLY the global request: neither
+    # the account request nor the role-only delta request leaks into it.
     r = client.get("/api/mail/sync/requests")
     assert r.status_code == 200
     ids = [item["id"] for item in r.json()]
-    assert created["id"] in ids
+    assert global_req["id"] in ids
+    assert account_req["id"] not in ids
+    assert global_delta_req["id"] not in ids
 
-    # Scope-filtered by the owning account finds it; another account does not.
+    # Scope-filtered by the owning account finds only the account request;
+    # another account finds none of them.
     r = client.get("/api/mail/sync/requests", params={"account_id": str(acc1_id)})
-    assert created["id"] in [item["id"] for item in r.json()]
+    ids = [item["id"] for item in r.json()]
+    assert account_req["id"] in ids
+    assert global_req["id"] not in ids
+    assert global_delta_req["id"] not in ids
     r = client.get("/api/mail/sync/requests", params={"account_id": str(acc2_id)})
-    assert created["id"] not in [item["id"] for item in r.json()]
+    ids = [item["id"] for item in r.json()]
+    assert account_req["id"] not in ids
+    assert global_req["id"] not in ids
+    assert global_delta_req["id"] not in ids
+
+    # The frontend global-inbox query (folder_role only) recovers only the
+    # global delta request, never the account request sharing that role.
+    r = client.get("/api/mail/sync/requests", params={"folder_role": "inbox"})
+    ids = [item["id"] for item in r.json()]
+    assert global_delta_req["id"] in ids
+    assert account_req["id"] not in ids
+    assert global_req["id"] not in ids
 
     # Limit is honoured and capped.
     r = client.get("/api/mail/sync/requests", params={"limit": 1})
