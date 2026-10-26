@@ -184,26 +184,46 @@ def refresh_requests(session: Session, request_ids: Iterable[uuid.UUID]) -> None
     """Re-aggregate targets and persist request state/finished_at + Outbox event.
 
     This is the only place request state moves after creation; the report
-    endpoint never writes. Locks Requests in UUID-ascending order, after
-    Targets (settlement lock order).
+    endpoint never writes.
+
+    Lock acquisition follows the settlement lock order in two phases,
+    regardless of entry point: Phase 1 locks ALL involved
+    ``SyncRequestTarget`` rows (UUID ascending), Phase 2 locks ALL involved
+    ``SyncRequest`` rows (UUID ascending), and only then does Phase 3
+    aggregate and persist. Taking a Request lock before its Target locks
+    (the old per-request loop) inverts the order used by callers that
+    already hold Target locks (``settle_job_bindings``) and deadlocks
+    against them; re-locking rows already locked by this transaction is
+    a no-op, so the two-phase order is safe for those callers too.
     """
     ids = sorted({rid for rid in request_ids if rid is not None})
     if not ids:
         return
+    # Phase 1: lock every involved Target first, UUID ascending.
+    targets_by_request: dict[uuid.UUID, list[SyncRequestTarget]] = {}
+    for target in session.scalars(
+        select(SyncRequestTarget)
+        .where(SyncRequestTarget.request_id.in_(ids))
+        .order_by(SyncRequestTarget.id)
+        .with_for_update()
+    ).all():
+        targets_by_request.setdefault(target.request_id, []).append(target)
+    # Phase 2: lock every involved Request, UUID ascending.
+    requests = {
+        req.id: req
+        for req in session.scalars(
+            select(SyncRequest)
+            .where(SyncRequest.id.in_(ids))
+            .order_by(SyncRequest.id)
+            .with_for_update()
+        ).all()
+    }
+    # Phase 3: aggregate and persist, reusing the already-locked rows.
     for request_id in ids:
-        req = session.scalar(
-            select(SyncRequest).where(SyncRequest.id == request_id).with_for_update()
-        )
+        req = requests.get(request_id)
         if req is None:
             continue
-        targets = list(
-            session.scalars(
-                select(SyncRequestTarget)
-                .where(SyncRequestTarget.request_id == request_id)
-                .order_by(SyncRequestTarget.id)
-                .with_for_update()
-            ).all()
-        )
+        targets = targets_by_request.get(request_id, [])
         for target in targets:
             _aggregate_target(session, target)
         if not targets:
