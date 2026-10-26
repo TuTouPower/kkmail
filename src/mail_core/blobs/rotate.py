@@ -41,13 +41,32 @@ def _cred_key(keyring: Keyring, version: int) -> bytes:
 
 
 def _rewrap_credential_secrets(session: Session, keyring: Keyring, target_version: int) -> int:
-    secrets = list(
+    from mail_core.accounts.credentials import credential_lock_key
+
+    candidate_refs = list(
         session.scalars(
-            select(CredentialSecret).where(CredentialSecret.key_version != target_version)
+            select(CredentialSecret.ref)
+            .where(CredentialSecret.key_version != target_version)
+            .order_by(CredentialSecret.ref)
         ).all()
     )
+    is_postgres = session.get_bind().dialect.name == "postgresql"
     rewrapped = 0
-    for secret in secrets:
+    for ref in candidate_refs:
+        # Join the credential_edit lock protocol (R03): take the per-ref
+        # advisory lock, then re-read the row FOR UPDATE so a refresh/edit
+        # that committed after the candidate scan is rewrapped from its
+        # latest ciphertext instead of being overwritten by a stale snapshot.
+        if is_postgres:
+            session.execute(select(func.pg_advisory_xact_lock(credential_lock_key(ref))))
+        secret = session.scalars(
+            select(CredentialSecret)
+            .where(CredentialSecret.ref == ref)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).first()
+        if secret is None or secret.key_version == target_version:
+            continue
         old_k = _cred_key(keyring, secret.key_version)
         pt = AESGCM(old_k).decrypt(secret.nonce, secret.ciphertext, secret.ref.encode())
         new_k = _cred_key(keyring, target_version)

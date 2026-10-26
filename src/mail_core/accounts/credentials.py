@@ -309,6 +309,15 @@ def set_credential_store(store: CredentialStore | None) -> None:
     _default_store = store
 
 
+def credential_lock_key(ref: str) -> int:
+    """Advisory-lock key serializing all writers of one credential row.
+
+    credential_edit() takes this lock (plus the row lock) before touching a
+    CredentialSecret; key rotation must take the same lock per ref (R03).
+    """
+    return int.from_bytes(hashlib.sha256(ref.encode()).digest()[:8], "big", signed=True)
+
+
 @contextmanager
 def credential_edit(store: CredentialStore, ref: str, *, session=None, allow_readonly: bool = False, readonly_cache: dict[str, Any] | None = None):
     """Serialize edits and token rotation on the same durable credential row."""
@@ -320,7 +329,7 @@ def credential_edit(store: CredentialStore, ref: str, *, session=None, allow_rea
         current = session if session is not None else target._sessions()()
         try:
             # A row lock alone cannot serialize creation of an absent OAuth code claim.
-            lock_key = int.from_bytes(hashlib.sha256(ref.encode()).digest()[:8], 'big', signed=True)
+            lock_key = credential_lock_key(ref)
             current.execute(select(func.pg_advisory_xact_lock(lock_key)))
             row = current.scalar(
                 select(CredentialSecret)
