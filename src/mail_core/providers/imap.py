@@ -848,11 +848,60 @@ class ImapProvider:
             raise _ImapFlagFetchError("IMAP flag FETCH returned an invalid response") from exc
         return changes
 
+    def _sweep_existing_flags(
+        self,
+        c: imaplib.IMAP4,
+        folder_remote_id: str,
+        uidvalidity: int,
+        cursor: dict[str, Any],
+    ) -> tuple[list[DeltaChange], bool, int]:
+        """One bounded FLAGS window over already-known UIDs (R06).
+
+        For servers without CONDSTORE: candidates are UIDs below the
+        cursor's ``uid_next`` (their metadata is already stored; only
+        flags can have changed on another client). Progress is the
+        ``flag_scan_after`` cursor key; a completed sweep wraps it to 0
+        so the next delta run re-checks from the start. A failed SEARCH
+        skips the sweep for this round without wedging the delta.
+        Returns (changes, sweep_complete, next_flag_scan_after).
+        """
+        existing_max = int(cursor.get("uid_next") or 1) - 1
+        after = int(cursor.get("flag_scan_after") or 0)
+        if existing_max <= 0:
+            return [], True, 0
+        try:
+            typ, data = c.uid("SEARCH", None, "ALL")
+        except Exception as exc:
+            log.warning(
+                "IMAP flag sweep SEARCH failed for %s; skipping this round: %s",
+                folder_remote_id,
+                safe_error(exc),
+            )
+            return [], True, after
+        if typ != "OK" or not data:
+            return [], True, after
+        try:
+            all_uids = sorted({int(x) for x in (data[0] or b"").split() if x})
+        except (TypeError, ValueError):
+            return [], True, after
+        candidates = [u for u in all_uids if after < u <= existing_max]
+        window = candidates[:200]
+        changes: list[DeltaChange] = []
+        if window:
+            changes = self._fetch_flags_for_uids(
+                c, folder_remote_id, uidvalidity, window, abort_on_missing_flags=True
+            )
+        complete = len(candidates) <= len(window)
+        return changes, complete, 0 if complete else window[-1]
+
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:
         """Incremental sync.
 
         Prefer CONDSTORE/MODSEQ when the server advertises it; emit explicit flag
-        changes for MODSEQ hits. Also page new UIDs since ``uid_next``. Deletions
+        changes for MODSEQ hits. Also page new UIDs since ``uid_next``. Without
+        MODSEQ, additionally sweep existing UIDs' FLAGS in bounded windows
+        (``flag_scan_after`` cursor progress, R06) so flag changes made by
+        other clients are observed. Deletions
         are *not* inferred here — use reconcile after a complete scan.
         """
         c, _permit = self._connect_with_permit()
@@ -985,15 +1034,35 @@ class ImapProvider:
                     )
 
             # UID-based incremental (always safe): fetch metadata since uid_next.
+            # Without MODSEQ, first sweep one bounded window of existing
+            # UIDs' FLAGS on this connection (R06).
+            flag_changes: list[DeltaChange] = []
+            sweep_complete = True
+            flag_scan_after = int(cursor.get("flag_scan_after") or 0)
+            if highest is None and uv > 0:
+                flag_changes, sweep_complete, flag_scan_after = self._sweep_existing_flags(
+                    c, folder_remote_id, uv, cursor
+                )
             close_connection()
             page = self.fetch_metadata_page(folder_remote_id, cursor)
-            changes = [DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items]
+            changes = flag_changes + [
+                DeltaChange(kind="upsert", remote_id=m.remote_id, meta=m) for m in page.items
+            ]
             next_cursor = dict(page.next_cursor or {})
             if cursor.get("modseq") is not None:
                 next_cursor["modseq"] = cursor["modseq"]
             if uidvalidity is not None:
                 next_cursor["uidvalidity"] = uidvalidity
-            return DeltaPage(changes=changes, next_cursor=next_cursor, exhausted=page.exhausted)
+            if highest is None:
+                if sweep_complete:
+                    next_cursor.pop("flag_scan_after", None)
+                else:
+                    next_cursor["flag_scan_after"] = flag_scan_after
+            return DeltaPage(
+                changes=changes,
+                next_cursor=next_cursor,
+                exhausted=page.exhausted and sweep_complete,
+            )
         finally:
             close_connection()
 
