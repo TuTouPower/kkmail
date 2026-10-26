@@ -674,18 +674,46 @@ export async function markReadOptimistic(items: MailItem[]) {
   return setReadOptimistic(items, true)
 }
 
+const flagOperationRevisions = new Map<string, number>()
+const pendingFlagRequests = new Map<string, Promise<void>>()
+
 /** Toggle the server-side flag with an optimistic cache update; restores the prior snapshot on failure. */
 export async function flagOptimistic(item: MailItem, nextFlagged: boolean): Promise<void> {
   const key = mailKey(item)
+  // R05: serialize flag intents per message and guard the rollback with
+  // a per-key revision, mirroring the read path. Previously each call
+  // captured its own prior snapshot and restored it unconditionally on
+  // failure, so in a true→false→true sequence a late failure of the
+  // first request clobbered the newest intent.
+  const revision = (flagOperationRevisions.get(key) || 0) + 1
+  flagOperationRevisions.set(key, revision)
   const cached = findCachedMail(key)
   const priorFlagged = cached ? cached.is_flagged : item.is_flagged
   patchCachedMail([key], { is_flagged: nextFlagged })
+  const previous = pendingFlagRequests.get(key) || Promise.resolve()
+  const run = previous.catch(() => {}).then(async () => {
+    try {
+      const result = await postMailCoreMessageFlag(item.id, nextFlagged)
+      if (result.success === false) throw new Error('服务器未接受旗标更新')
+    } catch (err) {
+      // Restore the captured prior value only when no newer intent has
+      // superseded this one — do not blind re-toggle (!nextFlagged).
+      if (flagOperationRevisions.get(key) === revision) {
+        patchCachedMail([key], { is_flagged: priorFlagged })
+      }
+      throw err
+    }
+  })
+  pendingFlagRequests.set(key, run)
   try {
-    const result = await postMailCoreMessageFlag(item.id, nextFlagged)
-    if (result.success === false) throw new Error('服务器未接受旗标更新')
-  } catch (err) {
-    // Restore the captured prior value — do not blind re-toggle (!nextFlagged).
-    patchCachedMail([key], { is_flagged: priorFlagged })
-    throw err
+    await run
+  } finally {
+    if (pendingFlagRequests.get(key) === run) {
+      // Chain tail: clean up and take one authoritative refresh so the
+      // cache converges to the server's final state for this message.
+      pendingFlagRequests.delete(key)
+      if (flagOperationRevisions.get(key) === revision) flagOperationRevisions.delete(key)
+      await invalidateMailListQueries().catch(() => {})
+    }
   }
 }

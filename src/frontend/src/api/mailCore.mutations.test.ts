@@ -512,4 +512,47 @@ describe('optimistic updates', () => {
     // Prior snapshot was true — must not become !nextFlagged (false).
     expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_flagged).toBe(true)
   })
+
+  it('flagOptimistic does not let a late failure clobber newer intents (R05)', async () => {
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item()])
+    type Pending = { body: unknown; resolve: (r: Response) => void }
+    const pending: Pending[] = []
+    const mock = stubFetch((url, init) => {
+      if (String(url).includes('/flag')) {
+        return new Promise<Response>((resolve) => {
+          pending.push({ body: JSON.parse(String(init.body)), resolve })
+        })
+      }
+      return json(200, {})
+    })
+
+    // Three rapid toggles: true → false → true. Requests are serialized
+    // per message, so only the first is in flight initially.
+    const pA = flagOptimistic(item(), true)
+    const aRejection = expect(pA).rejects.toMatchObject({ status: 503 })
+    const pB = flagOptimistic(item({ is_flagged: true }), false)
+    const pC = flagOptimistic(item({ is_flagged: false }), true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(pending).toHaveLength(1)
+    expect(pending[0].body).toEqual({ is_flagged: true })
+
+    // The first request fails *late* — after both newer intents were
+    // registered. Its rollback must not restore the stale snapshot.
+    pending[0].resolve(json(503, { detail: 'down' }))
+    await aRejection
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(pending).toHaveLength(2)
+    expect(pending[1].body).toEqual({ is_flagged: false })
+    pending[1].resolve(json(200, { id: 'uuid-1', is_flagged: false }))
+    await pB
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(pending).toHaveLength(3)
+    expect(pending[2].body).toEqual({ is_flagged: true })
+    pending[2].resolve(json(200, { id: 'uuid-1', is_flagged: true }))
+    await pC
+
+    const flagCalls = mock.mock.calls.filter(([url]) => String(url).includes('/flag'))
+    expect(flagCalls).toHaveLength(3)
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_flagged).toBe(true)
+  })
 })
