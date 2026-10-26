@@ -492,6 +492,7 @@ def test_multiprocess_global_budget_postgres():
     p2 = ctx.Process(target=_hold_permits, args=(4, "foreground", ready2, release))
     p1.start()
     p2.start()
+    holder_terminated = False
     try:
         assert ready1.wait(timeout=15) and ready2.wait(timeout=15)
         factory = DedicatedSlotPermitFactory()
@@ -503,6 +504,7 @@ def test_multiprocess_global_budget_postgres():
         # Killing a holder frees its slots once PostgreSQL sees the
         # control connections close.
         p1.terminate()
+        holder_terminated = True
         p1.join(timeout=10)
         deadline = time.monotonic() + 15
         acquired = None
@@ -515,8 +517,21 @@ def test_multiprocess_global_budget_postgres():
         assert acquired is not None, "slots of a killed holder were never released"
         acquired.release()
     finally:
-        release.set()
+        # Cleanup must never block forever. A terminated holder may have
+        # died while holding the shared Event's internal condition lock
+        # (multiprocessing locks have no owner-death recovery), so once
+        # any holder was terminated, release.set() itself could wait on
+        # that orphaned lock without a timeout -- the previous finally
+        # did exactly that and hung the full gate. Only signal release
+        # when no holder was killed; afterwards rely on terminate ->
+        # join(timeout) -> kill escalation and never touch the Event
+        # again. (Children also self-limit via release.wait(timeout=30).)
+        if not holder_terminated:
+            release.set()
         for proc in (p1, p2):
             if proc.is_alive():
                 proc.terminate()
             proc.join(timeout=10)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(timeout=10)
