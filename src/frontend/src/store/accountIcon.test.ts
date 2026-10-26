@@ -61,7 +61,6 @@ describe('accountIcon helpers (full 20 brand SVG suite)', () => {
   })
 
   it('falls back to provider or accountType when domain is unknown', () => {
-    expect(detectAccountBrand('corp@company.com', 'gmail')).toBe('gmail')
     expect(detectAccountBrand('corp@company.com', 'graph')).toBe('outlook')
     expect(detectAccountBrand('corp@company.com', 'exchange')).toBe('exchange')
     expect(detectAccountBrand('corp@company.com', 'imap', 'enterprise')).toBe('enterprise')

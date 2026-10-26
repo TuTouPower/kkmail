@@ -14,6 +14,6 @@ describe('canSendFrom', () => {
     expect(canSendFrom({ account_type: 'graph', status: 'authorized' })).toBe(true)
     expect(canSendFrom({ provider: 'graph', status: 'active' })).toBe(false)
     expect(canSendFrom({ provider: 'imap', status: 'authorized' })).toBe(false)
-    expect(canSendFrom({ provider: 'gmail', status: 'authorized' })).toBe(false)
+    expect(canSendFrom({ provider: 'google', status: 'authorized' })).toBe(false)
   })
 })

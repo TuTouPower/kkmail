@@ -125,9 +125,6 @@ export function detectAccountBrand(email?: string, provider?: string, accountTyp
   }
 
   // 2. Provider 回退
-  if (prov === 'gmail') {
-    return 'gmail'
-  }
   if (prov === 'graph') {
     return 'outlook'
   }

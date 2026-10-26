@@ -1,5 +1,5 @@
 export type Vendor = 'other' | 'google' | 'microsoft' | 'qq' | 'netease_163' | 'netease_126' | 'netease_yeah' | 'icloud' | 'yahoo' | 'zoho'
-export type Protocol = 'imap' | 'gmail' | 'graph'
+export type Protocol = 'imap' | 'graph'
 export const vendors: Record<Vendor, { label: string; host: string; credential: string; steps: string[]; url: string }> = {
   other: { label: '其他 / 自定义 IMAP', host: '', credential: '密码或授权码', steps: ['向邮箱管理员获取 IMAP 服务器、端口和登录名。', '使用管理员提供的密码或客户端授权码，默认采用 TLS 993。'], url: '' },
   google: { label: 'Google / Gmail', host: 'imap.gmail.com', credential: '应用专用密码', steps: ['在 Google 账号中开启两步验证（2-Step Verification）。', '打开应用专用密码页面：https://myaccount.google.com/apppasswords', '生成 16 位应用专用密码，并粘贴到 kkmail 的密码框中。普通 Google 登录密码不能使用。'], url: 'https://myaccount.google.com/apppasswords' },
@@ -18,9 +18,6 @@ export const vendors: Record<Vendor, { label: string; host: string; credential: 
 }
 const domains: Record<string, Vendor> = { 'gmail.com': 'google', 'googlemail.com': 'google', 'outlook.com': 'microsoft', 'outlook.cn': 'microsoft', 'hotmail.com': 'microsoft', 'live.com': 'microsoft', 'msn.com': 'microsoft', 'hotmail.co.uk': 'microsoft', 'live.co.uk': 'microsoft', 'hotmail.fr': 'microsoft', 'live.fr': 'microsoft', 'hotmail.de': 'microsoft', 'live.de': 'microsoft', 'outlook.de': 'microsoft', 'qq.com': 'qq', 'foxmail.com': 'qq', '163.com': 'netease_163', '126.com': 'netease_126', 'yeah.net': 'netease_yeah', 'icloud.com': 'icloud', 'me.com': 'icloud', 'mac.com': 'icloud', 'yahoo.com': 'yahoo', 'yahoo.co.uk': 'yahoo', 'zoho.com': 'zoho', 'zohomail.com': 'zoho' }
 export const inferVendor = (email: string): Vendor => domains[email.trim().toLowerCase().split('@')[1]] || 'other'
-// 'gmail' stays in the Protocol union so existing Gmail-API accounts still
-// render/edit, but it is never the default for a new account: Google
-// onboarding (p055) is IMAP app-password only.
 export const defaultProtocol = (vendor: Vendor): Protocol => vendor === 'microsoft' ? 'graph' : 'imap'
 
 // p056: Microsoft simplified onboarding uses the built-in public client

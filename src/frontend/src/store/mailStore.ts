@@ -168,7 +168,7 @@ export function providerBadge(provider?: string, accountType?: string) {
   const p = (provider || accountType || '').toLowerCase()
   if (p.includes('163') || p.includes('netease')) return '163'
   if (p.includes('outlook') || p.includes('hotmail') || p.includes('live')) return 'O'
-  if (p.includes('gmail') || p.includes('google')) return 'G'
+  if (p.includes('google')) return 'G'
   if (p.includes('qq')) return 'Q'
   return (p.slice(0, 1) || 'M').toUpperCase()
 }
@@ -177,7 +177,7 @@ export function providerColor(provider?: string, accountType?: string) {
   const p = (provider || accountType || '').toLowerCase()
   if (p.includes('163') || p.includes('netease')) return '#d94b47'
   if (p.includes('outlook') || p.includes('hotmail')) return '#0879d9'
-  if (p.includes('gmail') || p.includes('google')) return '#4285f4'
+  if (p.includes('google')) return '#4285f4'
   if (p.includes('qq')) return '#12b7f5'
   return '#6d8fd1'
 }

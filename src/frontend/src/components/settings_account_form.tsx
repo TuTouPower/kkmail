@@ -22,17 +22,13 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [email, setEmail] = useState(account?.email || '')
-  const initialProvider: 'imap' | 'gmail' | 'graph' = account?.provider === 'gmail'
-    ? 'gmail'
-    : account?.provider === 'graph'
-      ? 'graph'
-      : 'imap'
+  const initialProvider: 'imap' | 'graph' = account?.provider === 'graph' ? 'graph' : 'imap'
   const [provider, setProvider] = useState(initialProvider)
   const [host, setHost] = useState(account?.imap_config?.imap_host || '')
   const [port, setPort] = useState(String(account?.imap_config?.imap_port || (account?.imap_config?.use_ssl === false ? 143 : 993)))
   const [ssl, setSsl] = useState(account?.imap_config?.use_ssl !== false)
   const [password, setPassword] = useState('')
-  const initialVendor = account?.provider_profile && account.provider_profile in vendors ? account.provider_profile as Vendor : account?.provider === 'graph' ? 'microsoft' : account?.provider === 'gmail' ? 'google' : inferVendor(account?.email || '')
+  const initialVendor = account?.provider_profile && account.provider_profile in vendors ? account.provider_profile as Vendor : account?.provider === 'graph' ? 'microsoft' : inferVendor(account?.email || '')
   const [vendor, setVendor] = useState<Vendor>(initialVendor)
   const manualVendor = useRef(!!account)
   const connectionEdited = useRef(false)
@@ -53,8 +49,8 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
   const [oauthMethod, setOauthMethod] = useState<'authorization_code' | 'device_code'>('authorization_code')
   const [tenant, setTenant] = useState(account?.oauth_tenant || (account ? '' : 'common'))
   const [now, setNow] = useState(() => Date.now())
-  const oauthProvider = provider === 'graph' ? 'microsoft' : 'google'
-  const oauthLabel = provider === 'graph' ? 'Microsoft' : 'Google'
+  const oauthProvider = 'microsoft'
+  const oauthLabel = 'Microsoft'
   const [help, setHelp] = useState(false)
   const [oauthMeta, setOauthMeta] = useState<OAuthMetadataOut | null>(null)
   const [oauthFlow, setOauthFlow] = useState<(OAuthFlowStatusOut & { auth_url?: string }) | null>(null)
@@ -124,15 +120,11 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
         if (cancelled || !res?.flow || typeof res.flow.flow_id !== 'string') return
         const flow = res.flow
         const matches = account ? (flow.intent === 'reauthorize' && flow.account_id === account.id) : flow.intent === 'create'
-        if (!matches || !['google', 'microsoft'].includes(flow.provider)) return
-        // p055: Google OAuth is no longer offered when adding an account, so a
-        // stale Google "create" flow must not resurrect the OAuth form.
-        // Existing Gmail-API accounts (reauthorize, account present) still restore.
-        if (!account && flow.provider === 'google') return
+        if (!matches || flow.provider !== 'microsoft') return
         if (!account) {
           manualVendor.current = true
-          setVendor(flow.provider === 'microsoft' ? 'microsoft' : 'google')
-          setProvider(flow.provider === 'microsoft' ? 'graph' : 'gmail')
+          setVendor('microsoft')
+          setProvider('graph')
         }
         clientTypeEdited.current = true
         updateOauthFlow(flow)
@@ -404,7 +396,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
       <fieldset disabled={busy}>
         <label className="settings-field" htmlFor="account-email"><span>邮箱地址</span><input ref={emailRef} id="account-email" name="email" type="email" autoComplete="email" value={email} onChange={event => { setEmail(event.target.value); if (!manualVendor.current) changeVendor(inferVendor(event.target.value), false) }} readOnly={!!account || oauthAuthorized} required={!oauthAuthorized} placeholder="name@example.com" maxLength={320} /></label>
         <label className="settings-field" htmlFor="account-vendor"><span>邮箱供应商</span><select id="account-vendor" value={vendor} disabled={!!account} onChange={event => changeVendor(event.target.value as Vendor)}>{Object.entries(vendors).map(([key, info]) => <option key={key} value={key}>{info.label}</option>)}</select></label>
-        <div className="settings-fields"><label className="settings-field" htmlFor="account-provider"><span>连接方式</span><select id="account-provider" value={provider} disabled={!!account} onChange={event => { clearActiveFlow(true); setProvider(event.target.value as Protocol); setPassword(''); setOauth({ client_id: '', refresh_token: '', client_secret: '', token_uri: '', scope: '' }); setClearClientSecret(false) }}>{vendor === 'microsoft' ? <option value="graph">Microsoft OAuth / Graph</option> : vendor === 'google' && account && provider === 'gmail' ? <option value="gmail">Google OAuth / Gmail API</option> : vendor === 'google' ? <option value="imap">IMAP（应用专用密码）</option> : <option value="imap">IMAP</option>}</select></label><label className="settings-field" htmlFor="account-group"><span>所属分组</span><select id="account-group" value={groupId} onChange={event => setGroupId(event.target.value)} disabled={!groupsAvailable}><option value="">不加入分组</option>{groups.map(group => <option value={group.id} key={group.id}>{group.name}</option>)}</select></label></div>
+        <div className="settings-fields"><label className="settings-field" htmlFor="account-provider"><span>连接方式</span><select id="account-provider" value={provider} disabled={!!account} onChange={event => { clearActiveFlow(true); setProvider(event.target.value as Protocol); setPassword(''); setOauth({ client_id: '', refresh_token: '', client_secret: '', token_uri: '', scope: '' }); setClearClientSecret(false) }}>{vendor === 'microsoft' ? <option value="graph">Microsoft OAuth / Graph</option> : vendor === 'google' ? <option value="imap">IMAP（应用专用密码）</option> : <option value="imap">IMAP</option>}</select></label><label className="settings-field" htmlFor="account-group"><span>所属分组</span><select id="account-group" value={groupId} onChange={event => setGroupId(event.target.value)} disabled={!groupsAvailable}><option value="">不加入分组</option>{groups.map(group => <option value={group.id} key={group.id}>{group.name}</option>)}</select></label></div>
         <button type="button" className="settings-button" aria-label="如何获取账户凭据" onClick={() => setHelp(true)}><CircleHelp size={16} /> 如何获取凭据</button>
         {/@(proton\.me|protonmail\.com|pm\.me|protonmail\.ch)$/i.test(email.trim()) && <p className="settings-notice">Proton 不能使用登录密码直接连接公网 IMAP。需要付费 Proton Mail Bridge，本产品尚未集成；不会自动放开本机或私网连接。</p>}
         {vendor === 'zoho' && <p className="settings-notice">实际主机以账号内数据中心配置为准；付费企业通常使用 imappro.zoho.com，部分免费计划不支持 IMAP。启用两步验证或 SAML 时使用应用密码。</p>}
@@ -488,12 +480,12 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
             {oauthFlow?.status === 'pending' && <p className="settings-notice" role="status">正在等待 {oauthLabel} 授权完成…在浏览器完成同意后将自动同步状态。</p>}
             {oauthFlow?.status === 'authorized' && <p className="settings-feedback" role="status">已完成 {oauthLabel} 授权：{oauthFlow.verified_email}。请点击下方「{account ? '保存修改' : '添加'}」完成确认保存。</p>}
           </>}
-          {(['client_id', 'refresh_token', 'client_secret'] as const).filter(key => !(provider === 'graph' && oauthMethod === 'device_code') || key === 'client_id').map(key => <label className="settings-field" key={key} htmlFor={`account-${key.replaceAll('_', '-')}`}><span>{key === 'client_id' ? 'Client ID' : key === 'refresh_token' ? 'Refresh Token' : 'Client Secret'}</span><input id={`account-${key.replaceAll('_', '-')}`} type={key === 'client_id' ? 'text' : 'password'} autoComplete="off" value={oauth[key]} required={!account && !oauthAuthorized && (key !== 'client_secret' || clientType === 'confidential')} onChange={event => { if (key !== 'refresh_token') clearActiveFlow(true); if (key === 'client_secret' && event.target.value) setClearClientSecret(false); setOauth(old => ({ ...old, [key]: event.target.value })) }} placeholder={account ? '留空保持不变' : key === 'refresh_token' ? (provider === 'gmail' ? '使用上方 Google 登录可自动获取，或手动粘贴已有 Refresh Token' : '') : key === 'client_secret' ? '公共客户端通常不需要；机密客户端填写 secret value' : ''} /></label>)}
+          {(['client_id', 'refresh_token', 'client_secret'] as const).filter(key => !(provider === 'graph' && oauthMethod === 'device_code') || key === 'client_id').map(key => <label className="settings-field" key={key} htmlFor={`account-${key.replaceAll('_', '-')}`}><span>{key === 'client_id' ? 'Client ID' : key === 'refresh_token' ? 'Refresh Token' : 'Client Secret'}</span><input id={`account-${key.replaceAll('_', '-')}`} type={key === 'client_id' ? 'text' : 'password'} autoComplete="off" value={oauth[key]} required={!account && !oauthAuthorized && (key !== 'client_secret' || clientType === 'confidential')} onChange={event => { if (key !== 'refresh_token') clearActiveFlow(true); if (key === 'client_secret' && event.target.value) setClearClientSecret(false); setOauth(old => ({ ...old, [key]: event.target.value })) }} placeholder={account ? '留空保持不变' : key === 'client_secret' ? '公共客户端通常不需要；机密客户端填写 secret value' : ''} /></label>)}
           {account && <label className="settings-checkbox" htmlFor="account-clear-client-secret"><input id="account-clear-client-secret" type="checkbox" checked={clearClientSecret} disabled={!!oauthFlow} onChange={event => setClearClientSecret(event.target.checked)} />清除已保存的 Client Secret</label>}
           {clearClientSecret && <p className="settings-notice">清除操作会随“保存修改”生效；需要重新授权时，请先保存或取消清除。</p>}
           {clearClientSecret && clientType === 'confidential' && <p className="settings-notice">机密客户端必须保留 Client Secret；清除前请切换为公共客户端。</p>}
           <details className="settings-advanced"><summary>高级 OAuth 配置</summary>
-            <label className="settings-field" htmlFor="account-token-uri"><span>令牌端点（留空使用默认）</span><input id="account-token-uri" value={oauth.token_uri} onChange={event => setOauth(old => ({ ...old, token_uri: event.target.value }))} placeholder={provider === 'graph' ? 'https://login.microsoftonline.com/common/oauth2/v2.0/token' : 'https://oauth2.googleapis.com/token'} /></label>
+            <label className="settings-field" htmlFor="account-token-uri"><span>令牌端点（留空使用默认）</span><input id="account-token-uri" value={oauth.token_uri} onChange={event => setOauth(old => ({ ...old, token_uri: event.target.value }))} placeholder="https://login.microsoftonline.com/common/oauth2/v2.0/token" /></label>
             <label className="settings-field" htmlFor="account-scope"><span>已授权范围（不会扩大原授权）</span><input id="account-scope" value={oauth.scope} onChange={event => setOauth(old => ({ ...old, scope: event.target.value }))} /></label>
           </details>
         </>}

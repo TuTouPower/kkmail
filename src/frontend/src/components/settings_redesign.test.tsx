@@ -4,7 +4,7 @@ import { __resetCsrfForTests } from '../api/client'
 import { changeSelect, cleanup, click, render, typeInto, waitFor } from '../test/render'
 
 const initialAccounts = [
-  { id: 'one', email: 'one@gmail.com', provider: 'gmail', group_id: 'work', group_name: '工作', sync_enabled: true, sync_status: 'auth_failed', status: 'active', account_type: 'gmail' },
+  { id: 'one', email: 'one@gmail.com', provider: 'graph', group_id: 'work', group_name: '工作', sync_enabled: true, sync_status: 'auth_failed', status: 'active', account_type: 'graph' },
   { id: 'two', email: 'two@example.com', provider: 'imap', group_id: null, group_name: null, sync_enabled: false, sync_status: 'idle', status: 'disabled', account_type: 'imap' },
 ]
 let accounts = structuredClone(initialAccounts)

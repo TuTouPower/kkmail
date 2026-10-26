@@ -85,7 +85,7 @@ it('CredentialHelp for Google renders the 3 app-password steps and the apppasswo
   expect(steps[2].textContent).toContain('kkmail')
   const link = [...dialog.querySelectorAll('a')].find(a => a.getAttribute('href') === 'https://myaccount.google.com/apppasswords')
   expect(link).toBeTruthy()
-  for (const banned of ['Google Cloud', 'Cloud Console', 'CASA', 'OAuth', 'Gmail API']) {
+  for (const banned of ['Google Cloud', 'Cloud Console', 'CASA', 'OAuth', 'Gmail API', 'gmail.modify']) {
     expect(dialog.textContent).not.toContain(banned)
   }
 })
@@ -379,106 +379,6 @@ it('discards credentials when the dialog is closed and reopened', async () => {
   expect((container.querySelector('#account-password') as HTMLInputElement).value).toBe('')
   expect(Object.keys(localStorage).map(key => localStorage.getItem(key)).join('')).not.toContain('must-disappear')
   expect(Object.keys(sessionStorage).map(key => sessionStorage.getItem(key)).join('')).not.toContain('must-disappear')
-})
-
-it.each(['failed', 'expired'] as const)('supports Gmail API reauthorization retry after %s and PATCH save with oauth_flow_id', async initialStatus => {
-  const requests: Array<{ url: string; method: string; body?: Record<string, unknown> }> = []
-  let reauthStatus: 'failed' | 'expired' | 'authorized' = initialStatus
-  const openedWindow = { opener: {} as unknown }
-  vi.stubGlobal('open', vi.fn(() => openedWindow as unknown as Window))
-  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
-    const url = String(input)
-    const method = (init.method || 'GET').toUpperCase()
-    const body = init.body ? JSON.parse(String(init.body)) : undefined
-    requests.push({ url, method, body })
-    if (url.includes('/api/auth/me')) return new Response(JSON.stringify({ csrf_token: 'csrf' }), { headers: { 'content-type': 'application/json' } })
-    if (url.includes('/api/accounts/oauth/metadata')) {
-      return new Response(JSON.stringify({
-        provider: 'google',
-        runtime_mode: 'web',
-        default_client_type: 'confidential',
-        redirect_uri: 'https://mail.example.com/api/accounts/oauth/callback/google',
-        callback_path: '/api/accounts/oauth/callback/google',
-        origin_configured: true,
-      }), { headers: { 'content-type': 'application/json' } })
-    }
-    if (url.includes('/api/accounts/oauth/active')) {
-      return new Response(JSON.stringify({ flow: null }), { headers: { 'content-type': 'application/json' } })
-    }
-    if (url.includes('/api/accounts/oauth/start')) {
-      return new Response(JSON.stringify({
-        flow_id: 'flow-reauth-1',
-        provider: 'google',
-        intent: 'reauthorize',
-        status: 'pending',
-        auth_url: 'https://accounts.google.com/o/oauth2/v2/auth?state=reauth',
-        redirect_uri: 'https://mail.example.com/api/accounts/oauth/callback/google',
-        client_type: 'confidential',
-        expires_at: 9999999999,
-      }), { headers: { 'content-type': 'application/json' } })
-    }
-    if (url.includes('/api/accounts/oauth/flows/flow-reauth-1') && !url.endsWith('/cancel')) {
-      return new Response(JSON.stringify({
-        flow_id: 'flow-reauth-1',
-        provider: 'google',
-        intent: 'reauthorize',
-        account_id: 'acc-gmail-1',
-        client_type: 'confidential',
-        client_id: 'saved-cid',
-        status: reauthStatus,
-        verified_email: reauthStatus === 'authorized' ? 'existing@gmail.com' : null,
-        error: reauthStatus === 'authorized' ? null : initialStatus === 'expired' ? '授权流程已过期，请重新发起' : '回调地址不匹配（redirect_uri_mismatch）',
-        redirect_uri: 'https://mail.example.com/api/accounts/oauth/callback/google',
-        expires_at: 9999999999,
-      }), { headers: { 'content-type': 'application/json' } })
-    }
-    return new Response(JSON.stringify({ ok: true, id: 'acc-gmail-1' }), { headers: { 'content-type': 'application/json' } })
-  }))
-
-  const account = {
-    id: 'acc-gmail-1',
-    email: 'existing@gmail.com',
-    provider: 'gmail',
-    status: 'active',
-    sync_status: 'auth_failed',
-    sync_enabled: true,
-    account_type: 'gmail',
-    provider_profile: 'google',
-    oauth_client_type: 'confidential',
-  }
-  const onClose = vi.fn()
-  const onSaved = vi.fn(async () => {})
-  const { container } = await render(
-    <AccountDialog account={account} groups={[]} groupsAvailable onClose={onClose} onSaved={onSaved} />,
-  )
-
-  // Help dialog works in edit mode as well (AC-013). p055: Google help is the
-  // app-password guide everywhere — no OAuth/Gmail-API content remains.
-  await click(container.querySelector('button[aria-label="如何获取账户凭据"]'))
-  expect(container.querySelector('dialog[aria-labelledby="credential-help-title"]')?.textContent).toContain('https://myaccount.google.com/apppasswords')
-  expect(container.querySelector('dialog[aria-labelledby="credential-help-title"]')?.textContent).not.toContain('gmail.modify')
-  await click(container.querySelector('button[aria-label="关闭凭据帮助"]'))
-
-  // 1st attempt fails: displays redacted error alert, clears opener, allows cancel and retry
-  const reauthBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === '重新授权')!
-  await click(reauthBtn)
-  expect(openedWindow.opener).toBeNull()
-  window.dispatchEvent(new Event('focus'))
-  await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain(initialStatus === 'expired' ? '授权流程已过期' : 'redirect_uri_mismatch'))
-
-  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '取消授权')!)
-  await waitFor(() => expect(requests.some(r => r.url.endsWith('/api/accounts/oauth/flows/flow-reauth-1/cancel'))).toBe(true))
-
-  // 2nd attempt succeeds and clicking "保存修改" sends PATCH with oauth_flow_id
-  reauthStatus = 'authorized'
-  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '重新授权')!)
-  window.dispatchEvent(new Event('focus'))
-  await waitFor(() => expect(container.textContent).toContain('已完成 Google 授权：existing@gmail.com'))
-
-  await click(container.querySelector('button[type="submit"]'))
-  await waitFor(() => expect(onSaved).toHaveBeenCalled())
-  const patchCall = requests.find(r => r.url.includes('/api/accounts/acc-gmail-1') && r.method === 'PATCH')
-  expect(patchCall?.body).toMatchObject({ oauth_flow_id: 'flow-reauth-1' })
 })
 
 it('restores active Microsoft OAuth draft on #oauth-return in SettingsPage and AccountDialog', async () => {

@@ -120,10 +120,9 @@ it('device code reauthorization needs no callback or Secret, copies only the sho
 
 it.each([
   ['graph', false, false], ['graph', true, false], ['graph', false, true],
-  ['gmail', false, false], ['gmail', true, false], ['gmail', false, true],
 ] as const)('legacy %s web account saves only explicit client config (move=%s, editType=%s)', async (provider, move, editType) => {
   const patches: Record<string, unknown>[] = []
-  const oauthProvider = provider === 'graph' ? 'microsoft' : 'google'
+  const oauthProvider = 'microsoft'
   vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
     const url = String(input)
     let result: unknown = {}

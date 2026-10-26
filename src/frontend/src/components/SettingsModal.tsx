@@ -14,7 +14,7 @@ import AccountDialog from './settings_account_form'
 type Section = 'accounts' | 'groups' | 'general'
 type Scope = Section | 'password'
 type Feedback = { message: string; error?: boolean }
-const providers: Record<string, string> = { imap: 'IMAP', gmail: 'Gmail', graph: 'Microsoft Graph' }
+const providers: Record<string, string> = { imap: 'IMAP', graph: 'Microsoft Graph' }
 const syncStates: Record<string, string> = { idle: '空闲', running: '同步中', failed: '同步失败', auth_failed: '认证失败', pending: '等待同步' }
 const syncFailed = (account: AccountSummary) => ['failed', 'auth_failed'].includes(account.sync_status)
 const accountDomain = (email: string) => email.slice(email.lastIndexOf('@') + 1).trim().toLowerCase()

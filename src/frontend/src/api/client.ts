@@ -389,7 +389,7 @@ export const api = {
     return postJson<unknown>('/api/auth/password', body)
   },
 
-  getOAuthMetadata(provider = 'google') {
+  getOAuthMetadata(provider = 'microsoft') {
     const q = new URLSearchParams({ provider })
     return apiRequest<OAuthMetadataOut>(`/api/accounts/oauth/metadata?${q.toString()}`)
   },
