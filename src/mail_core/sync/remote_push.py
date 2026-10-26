@@ -475,7 +475,7 @@ def push_remote_operations(
                         error=None,
                         next_attempt_at=next_attempt,
                     )
-                enqueue_job(
+                followup = enqueue_job(
                     session,
                     job_type=JobType.REMOTE_OPERATION_PUSH.value,
                     account_id=account_id,
@@ -484,6 +484,16 @@ def push_remote_operations(
                     run_after=next_attempt,
                     dedupe_key=f"remote-op-push:{account_id}",
                 )
+                # The executing job carries this same dedupe key, so the
+                # enqueue normally coalesces into the running job's
+                # _queue_next instead of creating an independent job.
+                # Settlement (complete_job) must be told: with only
+                # followup_scheduled set it assumes an independent
+                # successor exists and strips the coalesced followup when
+                # marking this job DONE, leaving the op PENDING with no
+                # executable job. Mirrors the lease_busy branch in
+                # engine.sync_folder_metadata.
+                followup_coalesced = followup.status == JobStatus.CLAIMED.value
                 try:
                     release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
                 except FencingMismatch:
@@ -493,6 +503,7 @@ def push_remote_operations(
                 "status": "capacity_unavailable",
                 "retry_after": delay,
                 "followup_scheduled": True,
+                "followup_coalesced": followup_coalesced,
                 "pushed": pushed,
                 "failed": failed,
             }
