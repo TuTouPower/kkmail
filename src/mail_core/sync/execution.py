@@ -17,8 +17,9 @@ one or more job *executions*, recorded relationally in
   stable ``error_code`` and a sanitized message.
 
 Settlement lock order (design §5.2) is fixed: WorkerJob row → generation
-coordination lock (advisory) → binding rows / Targets (UUID ascending) →
-Requests (UUID ascending). Request state and ``finished_at`` are derived
+coordination lock (advisory) → binding rows → ALL Targets of every
+affected request (UUID ascending, one pass, before any Target is held)
+→ Requests (UUID ascending). Request state and ``finished_at`` are derived
 from target aggregation and persisted here, in the write transaction; the
 report endpoint is read-only. Every persisted request state change emits a
 ``sync.request_updated`` Outbox event.
@@ -193,8 +194,11 @@ def refresh_requests(session: Session, request_ids: Iterable[uuid.UUID]) -> None
     aggregate and persist. Taking a Request lock before its Target locks
     (the old per-request loop) inverts the order used by callers that
     already hold Target locks (``settle_job_bindings``) and deadlocks
-    against them; re-locking rows already locked by this transaction is
-    a no-op, so the two-phase order is safe for those callers too.
+    against them. Callers holding Target locks are only safe because
+    ``settle_job_bindings`` pre-locks this same full Target set before
+    holding any single Target: a caller holding merely a subset of a
+    request's Targets would wait on the remaining (possibly lower) rows
+    here while another settler holds them and waits back.
     """
     ids = sorted({rid for rid in request_ids if rid is not None})
     if not ids:
@@ -302,8 +306,13 @@ def settle_job_bindings(
     ``outcome`` is one of ``"complete"``, ``"failed"`` (terminal) or
     ``"retriable"`` (targets stay open, progress retained, same generation).
     Callers must already hold the WorkerJob row lock (complete_job/fail_job
-    do); this function then takes the generation lock, binding/Target locks
-    (UUID ascending) and — via :func:`refresh_requests` — Request locks.
+    do); this function then takes the generation lock, the binding locks,
+    and — before mutating anything — locks ALL Targets of every affected
+    request in one UUID-ascending pass (the same set
+    :func:`refresh_requests` will lock). Locking only this job's target
+    subset first deadlocks two workers settling different jobs of the
+    same request: each would enter the refresh phase already holding a
+    set member and wait on a lower member the other holds.
     Returns the affected request IDs; callers persist the aggregation via
     :func:`refresh_requests` in the same transaction (see jobs.py).
     """
@@ -322,15 +331,31 @@ def settle_job_bindings(
     if not bindings:
         return set()
     target_ids = sorted({b.target_id for b in bindings})
+    # Planning read (no lock): which requests do these targets belong to?
+    affected_request_ids = sorted(
+        {
+            rid
+            for rid in session.scalars(
+                select(SyncRequestTarget.request_id).where(
+                    SyncRequestTarget.id.in_(target_ids)
+                )
+            ).all()
+            if rid is not None
+        }
+    )
+    # Pre-lock the full target set of every affected request, UUID
+    # ascending, before this transaction holds any single Target row:
+    # refresh_requests later re-locks the same rows (a no-op), so the
+    # settlement path never waits on a Target while holding another.
     targets = {
         t.id: t
         for t in session.scalars(
             select(SyncRequestTarget)
-            .where(SyncRequestTarget.id.in_(target_ids))
+            .where(SyncRequestTarget.request_id.in_(affected_request_ids))
             .order_by(SyncRequestTarget.id)
             .with_for_update()
         ).all()
-    }
+    } if affected_request_ids else {}
     now = _now()
     periodic = _successor_is_periodic(job, successor, result)
     successor_generation = getattr(successor, "execution_generation", None) if successor is not None else None
