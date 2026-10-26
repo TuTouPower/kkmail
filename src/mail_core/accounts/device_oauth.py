@@ -1,6 +1,7 @@
 """Server-controlled Microsoft device polling, shared durable flow and final save."""
 from __future__ import annotations
 
+import copy
 import math
 from urllib.parse import urlsplit
 
@@ -55,7 +56,15 @@ def begin_device_authorization(flow: dict) -> None:
 def poll_device_flow(flow_id, principal):
     from mail_core.accounts import oauth_flow as lifecycle
     store = lifecycle._flow_store()
-    with credential_edit(store, f'oauth_flow:{flow_id}') as flow:
+    ref = f'oauth_flow:{flow_id}'
+    # Phase 1 (short locked section): validate + claim. Pushing
+    # next_poll_at forward before releasing the lock is the cross-process
+    # claim: a concurrent poller observes not-due and gets
+    # DevicePollTooSoon, so the token endpoint is still called at most
+    # once per interval — but the blocking HTTP no longer runs inside the
+    # credential_edit transaction/advisory/row lock (B2), which starved
+    # the connection pool (default 10) for the whole exchange.
+    with credential_edit(store, ref) as flow:
         if not flow:
             raise LookupError('OAuth 授权流程不存在或已取消')
         lifecycle._verify_flow_owner(flow, principal)
@@ -70,42 +79,63 @@ def poll_device_flow(flow_id, principal):
             return lifecycle._public_flow_view(flow)
         if now < flow['next_poll_at']:
             raise DevicePollTooSoon(max(1, math.ceil(flow['next_poll_at'] - now)))
-        # The durable flow lock covers due check + HTTP exchange, including across API processes.
         interval = float(flow['interval'])
         flow['next_poll_at'] = now + interval
-        retry_after = 0.0
-        try:
-            response = lifecycle._call_token_endpoint(authority(flow['tenant']) + '/token', {
-                'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
-                'client_id': flow['client_id'], 'device_code': flow['device_code'],
-            })
-        except ProviderHttpError as exc:
-            code, description = http_error(exc)
-            if exc.status == 429:
-                code = 'slow_down'
-                try:
-                    retry_after = float((exc.headers or {}).get('retry-after', 0))
-                except (TypeError, ValueError):
-                    pass
-            response = {'error': code or 'network_error', 'error_description': description}
-        except Exception:
-            response = {'error': 'network_error'}
-        lifecycle._verify_flow_owner(flow, principal)
-        now = lifecycle.time.time()
-        if now >= flow['expires_at']:
-            flow.update(status='expired', error=lifecycle.EXPIRED_FLOW_MESSAGE)
-            flow.pop('device_code', None)
+        claim = {
+            'tenant': flow['tenant'],
+            'client_id': flow['client_id'],
+            'device_code': flow['device_code'],
+            'interval': interval,
+            'expires_at': float(flow['expires_at']),
+        }
+        snapshot = copy.deepcopy(flow)
+    # Phase 2 (no lock held): the token exchange, plus — on the success
+    # path — the profile fetch inside stage_verified_response, applied
+    # to the detached snapshot.
+    retry_after = 0.0
+    try:
+        response = lifecycle._call_token_endpoint(authority(claim['tenant']) + '/token', {
+            'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
+            'client_id': claim['client_id'], 'device_code': claim['device_code'],
+        })
+    except ProviderHttpError as exc:
+        code, description = http_error(exc)
+        if exc.status == 429:
+            code = 'slow_down'
+            try:
+                retry_after = float((exc.headers or {}).get('retry-after', 0))
+            except (TypeError, ValueError):
+                pass
+        response = {'error': code or 'network_error', 'error_description': description}
+    except Exception:
+        response = {'error': 'network_error'}
+    now = lifecycle.time.time()
+    interval = claim['interval']
+    if now >= claim['expires_at']:
+        snapshot.update(status='expired', error=lifecycle.EXPIRED_FLOW_MESSAGE)
+        snapshot.pop('device_code', None)
+    else:
+        code, description = response_error(response)
+        if code == 'authorization_pending':
+            snapshot['next_poll_at'] = now + interval
+        elif code == 'slow_down':
+            interval = max(interval + 5, retry_after if math.isfinite(retry_after) else 0)
+            snapshot.update(interval=interval, next_poll_at=now + interval)
+        elif code:
+            message = ('微软设备码轮询网络异常，请取消后重试；原凭据未变。'
+                       if code == 'network_error' else friendly_error(code, description))
+            lifecycle._fail_flow(snapshot, message)
         else:
-            code, description = response_error(response)
-            if code == 'authorization_pending':
-                flow['next_poll_at'] = now + interval
-            elif code == 'slow_down':
-                interval = max(interval + 5, retry_after if math.isfinite(retry_after) else 0)
-                flow.update(interval=interval, next_poll_at=now + interval)
-            elif code:
-                message = ('微软设备码轮询网络异常，请取消后重试；原凭据未变。'
-                           if code == 'network_error' else friendly_error(code, description))
-                lifecycle._fail_flow(flow, message)
-            else:
-                stage_verified_response(flow, response, now)
+            stage_verified_response(snapshot, response, now)
+    # Phase 3 (short locked section): persist the outcome only if the
+    # flow is still the one we claimed — a cancel/replace in the meantime
+    # wins and our outcome is discarded.
+    with credential_edit(store, ref) as flow:
+        if not flow:
+            raise LookupError('OAuth 授权流程不存在或已取消')
+        lifecycle._verify_flow_owner(flow, principal)
+        if flow.get('status') != 'pending' or flow.get('device_code') != claim['device_code']:
+            return lifecycle._public_flow_view(flow)
+        flow.clear()
+        flow.update(snapshot)
         return lifecycle._public_flow_view(flow)
