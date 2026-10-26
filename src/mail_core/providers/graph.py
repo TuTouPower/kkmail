@@ -47,19 +47,31 @@ class GraphPaginationError(RuntimeError):
     """Raised when Graph paging cannot complete within its safety bounds."""
 
 
-def graph_folder_role(folder: dict[str, Any], inbox_id: str | None = None) -> str:
-    """Prefer explicit role, else inbox_id match, else Graph ``wellKnownName``, else ``other``."""
-    if folder.get("role"):
-        return str(folder["role"])
-    if inbox_id and folder.get("id") == inbox_id:
+def graph_folder_role(
+    folder: dict[str, Any],
+    inbox_id: str | None = None,
+    well_known_ids: dict[str, str] | None = None,
+) -> str:
+    """Classify by verified well-known endpoint ID, else ``other``.
+
+    Real Graph ``mailFolder`` resources carry no ``role``/``wellKnownName``
+    properties, so classification must come from IDs resolved through the
+    well-known endpoints (``/me/mailFolders/sentitems`` etc.) — that map is
+    ``well_known_ids`` (folder id -> role). The only name-based fallback is
+    the historical Inbox display-name heuristic, applied solely when the
+    canonical inbox ID is unknown so a user folder named "Inbox" can never
+    become a second inbox (R01).
+    """
+    fid = folder.get("id")
+    if well_known_ids and fid in well_known_ids:
+        return well_known_ids[fid]
+    if inbox_id and fid == inbox_id:
         return "inbox"
-    well = (folder.get("wellKnownName") or "").lower()
-    if well in _GRAPH_WELL_KNOWN_ROLES:
-        return _GRAPH_WELL_KNOWN_ROLES[well]
+    inbox_known = inbox_id is not None or (
+        well_known_ids is not None and "inbox" in well_known_ids.values()
+    )
     disp = (folder.get("displayName") or "").strip().lower()
-    # The well-known inbox ID is authoritative when available. A user folder
-    # named "Inbox" must not become a second inbox for that account.
-    if inbox_id is None and disp == "inbox":
+    if not inbox_known and disp == "inbox":
         return "inbox"
     return "other"
 
@@ -113,13 +125,20 @@ class GraphProvider:
         self._calls.append("list_folders")
         if self.transport is None:
             raise GraphNotConfiguredError("Graph HTTP transport not configured")
-        inbox_id: str | None = None
-        try:
-            inbox_data = self._call("GET", "/me/mailFolders/inbox", {})
-            if isinstance(inbox_data, dict) and inbox_data.get("id"):
-                inbox_id = str(inbox_data["id"])
-        except Exception:
-            pass
+        # Resolve every well-known folder's stable ID through its endpoint;
+        # list responses carry no role information (R01). A folder whose
+        # endpoint is missing/unreadable simply stays unmapped.
+        well_known_ids: dict[str, str] = {}
+        for well_known_name, role in _GRAPH_WELL_KNOWN_ROLES.items():
+            try:
+                data = self._call("GET", f"/me/mailFolders/{well_known_name}", {})
+                if isinstance(data, dict) and data.get("id"):
+                    well_known_ids[str(data["id"])] = role
+            except Exception:
+                pass
+        inbox_id: str | None = next(
+            (fid for fid, role in well_known_ids.items() if role == "inbox"), None
+        )
 
         page_count = 0
         item_count = 0
@@ -156,7 +175,7 @@ class GraphProvider:
                     RemoteFolder(
                         remote_id=fid,
                         name=f.get("displayName") or fid,
-                        role=graph_folder_role(f, inbox_id=inbox_id),
+                        role=graph_folder_role(f, inbox_id=inbox_id, well_known_ids=well_known_ids),
                         parent_remote_id=parent_id,
                     )
                 )

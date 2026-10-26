@@ -73,11 +73,21 @@ def test_urllib_json_request_404_mapping(monkeypatch):
     assert ei.value.status == 404
 
 
+# REPLACED (R01): the previous version of this test classified folders via
+# fictional ``wellKnownName``/``role`` response fields. Real Graph
+# mailFolder resources do not carry those properties, and the fiction hid
+# the production bug where every non-Inbox special folder fell to "other".
+# Classification now comes from IDs resolved through the well-known
+# endpoints; fixtures below use only real mailFolder fields.
 def test_graph_folder_roles():
-    assert graph_folder_role({"id": "1", "wellKnownName": "sentitems"}) == "sent"
-    assert graph_folder_role({"id": "2", "wellKnownName": "junkemail"}) == "junk"
-    assert graph_folder_role({"id": "3", "role": "archive"}) == "archive"
-    assert graph_folder_role({"id": "4", "displayName": "Custom"}) == "other"
+    well_known = {"id-sent": "sent", "id-junk": "junk", "id-archive": "archive"}
+    assert graph_folder_role({"id": "id-sent", "displayName": "已发送邮件"}, well_known_ids=well_known) == "sent"
+    assert graph_folder_role({"id": "id-junk", "displayName": "垃圾邮件"}, well_known_ids=well_known) == "junk"
+    assert graph_folder_role({"id": "id-archive", "displayName": "存档"}, well_known_ids=well_known) == "archive"
+    assert graph_folder_role({"id": "id-custom", "displayName": "Custom"}, well_known_ids=well_known) == "other"
+    # Without a verified ID map, non-Inbox special folders stay "other":
+    # display names are localized and are never guessed at.
+    assert graph_folder_role({"id": "id-sent", "displayName": "Sent Items"}) == "other"
 
 
 def test_graph_inbox_name_fallback_does_not_override_canonical_inbox_id():
