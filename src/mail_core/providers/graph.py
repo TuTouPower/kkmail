@@ -86,7 +86,7 @@ class GraphProvider:
     credential_ref: str
     transport: Any | None = None
     timeout: float = 30.0
-    # Connection-budget wiring (design §7): see GmailProvider.  The class
+    # Connection-budget wiring (design §7): the class
     # travels on the instance; build_provider wires the budget into the
     # urllib transport stack and leaves ``permit_factory`` None here.
     traffic_class: Any = "foreground"

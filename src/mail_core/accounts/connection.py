@@ -3,8 +3,8 @@ from urllib.parse import urlsplit
 
 MICROSOFT_DOMAINS = frozenset(('outlook.com', 'outlook.cn', 'hotmail.com', 'live.com', 'msn.com', 'hotmail.co.uk', 'live.co.uk', 'hotmail.fr', 'live.fr', 'hotmail.de', 'live.de', 'outlook.de'))
 MICROSOFT_IMAP_HOSTS = frozenset(('outlook.office365.com', 'imap-mail.outlook.com', 'imap.outlook.com', 'imap.hotmail.com', 'outlook.office.com'))
-PROFILES = {'other': {'imap'}, 'google': {'imap', 'gmail'}, 'microsoft': {'graph'}, 'qq': {'imap'}, 'netease_163': {'imap'}, 'netease_126': {'imap'}, 'netease_yeah': {'imap'}, 'icloud': {'imap'}, 'yahoo': {'imap'}, 'zoho': {'imap'}}
-CREDENTIAL_FIELDS = {'imap': {'password', 'secret'}, 'gmail': {'client_id', 'client_secret', 'refresh_token', 'token_uri', 'scope'}, 'graph': {'client_id', 'client_secret', 'refresh_token', 'token_uri', 'scope'}}
+PROFILES = {'other': {'imap'}, 'google': {'imap'}, 'microsoft': {'graph'}, 'qq': {'imap'}, 'netease_163': {'imap'}, 'netease_126': {'imap'}, 'netease_yeah': {'imap'}, 'icloud': {'imap'}, 'yahoo': {'imap'}, 'zoho': {'imap'}}
+CREDENTIAL_FIELDS = {'imap': {'password', 'secret'}, 'graph': {'client_id', 'client_secret', 'refresh_token', 'token_uri', 'scope'}}
 
 
 def reject_microsoft_imap(email: str, config: dict) -> None:
@@ -38,7 +38,7 @@ def merge_credentials(
             result[key] = value
     for key in clear_fields:
         result.pop(key, None)
-    if provider in ('gmail', 'graph') and result != old:
+    if provider == 'graph' and result != old:
         result.pop('access_token', None)
         result.pop('expires_at', None)
     return result
@@ -92,14 +92,14 @@ def validate_connection(email: str, provider: str, config: dict, credentials: di
     if provider == "imap" and "refresh_token" in values:
         raise ValueError("credentials.refresh_token: unsupported field")
     required = ['password'] if provider == 'imap' else ['client_id', 'refresh_token']
-    if provider in ('graph', 'gmail') and client_type == 'confidential':
+    if provider == 'graph' and client_type == 'confidential':
         # p056 public-client mode: the built-in Microsoft public client
         # (DEFAULT_MICROSOFT_CLIENT_ID, or its MICROSOFT_CLIENT_ID override)
         # is a public client by registration and never has a Client Secret,
         # so a graph credential set carrying that client_id is valid
         # without one even when the runtime defaulted to "confidential"
         # (Web deployments). Self-registered apps keep the existing
-        # confidential requirement, and Gmail is unchanged.
+        # confidential requirement.
         is_builtin_public_graph = False
         if provider == 'graph':
             from mail_core.accounts.microsoft_oauth import default_microsoft_client_id
@@ -113,6 +113,6 @@ def validate_connection(email: str, provider: str, config: dict, credentials: di
             raise ValueError(f'credentials.{key}: required')
     if values.get('token_uri'):
         uri = urlsplit(str(values['token_uri']))
-        hosts = {'oauth2.googleapis.com', 'www.googleapis.com'} if provider == 'gmail' else {'login.microsoftonline.com', 'login.live.com', 'login.microsoft.com'}
+        hosts = {'login.microsoftonline.com', 'login.live.com', 'login.microsoft.com'}
         if uri.scheme != 'https' or uri.hostname not in hosts or uri.username or uri.password or uri.port not in (None, 443):
             raise ValueError('credentials.token_uri: must use the provider HTTPS endpoint')

@@ -16,7 +16,7 @@ Implementation model (replaces the former session-advisory-lock helper):
   lock: one control connection == at most one slot.
 * :class:`TrafficClass` is propagated explicitly from the job type (and,
   for archive jobs, whether a ``message_id`` was specified) through
-  ``build_provider`` into the provider / transport instances.  Gmail's
+  ``build_provider`` into the provider / transport instances.  Provider
   hydration threads read the class from the provider instance — never
   from thread-local state.
 

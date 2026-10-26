@@ -1,4 +1,4 @@
-"""Injectable HTTP transport contract for Gmail / Graph providers."""
+"""Injectable HTTP transport contract for the Graph provider."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Mail providers (IMAP / Gmail / Graph / memory) and the provider contract.
+"""Mail providers (IMAP / Graph / memory) and the provider contract.
 
 Exports resolve lazily (PEP 562) so importing a submodule never drags in
 the whole package graph (avoids import cycles between accounts/sync/providers).
@@ -16,7 +16,6 @@ _EXPORTS: dict[str, str] = {
     "RateLimitedError": "mail_core.providers.http",
     "DeltaChange": "mail_core.providers.base",
     "DeltaPage": "mail_core.providers.base",
-    "GmailProvider": "mail_core.providers.gmail",
     "GraphProvider": "mail_core.providers.graph",
     "ImapProvider": "mail_core.providers.imap",
     "MailProvider": "mail_core.providers.base",

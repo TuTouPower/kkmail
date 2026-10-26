@@ -1,6 +1,6 @@
 """Unified provider adapter interface (architecture §6.1).
 
-Protocol details (Gmail History, Graph Delta, IMAP UID/MODSEQ) must stay
+Protocol details (Graph Delta, IMAP UID/MODSEQ) must stay
 inside providers/* implementations — never leak into mail/application.
 """
 
@@ -90,7 +90,7 @@ class ReconcileAction:
 
 
 class MailProvider(Protocol):
-    """Must-implement adapter surface. Concrete adapters: imap / gmail / graph."""
+    """Must-implement adapter surface. Concrete adapters: imap / graph."""
 
     def list_folders(self) -> Sequence[RemoteFolder]:
         ...

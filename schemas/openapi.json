@@ -72,7 +72,6 @@
           "provider": {
             "enum": [
               "imap",
-              "gmail",
               "graph",
               "memory",
               "stub"
@@ -1929,7 +1928,7 @@
             "type": "string"
           },
           "provider": {
-            "default": "google",
+            "default": "microsoft",
             "maxLength": 32,
             "title": "Provider",
             "type": "string"
@@ -3101,7 +3100,7 @@
             "name": "provider",
             "required": false,
             "schema": {
-              "default": "google",
+              "default": "microsoft",
               "maxLength": 32,
               "title": "Provider",
               "type": "string"

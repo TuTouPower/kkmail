@@ -16,7 +16,6 @@ class JobPriority(IntEnum):
 
 class ProviderType(StrEnum):
     IMAP = "imap"
-    GMAIL = "gmail"
     GRAPH = "graph"
 
 

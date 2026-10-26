@@ -772,7 +772,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "imap" | "gmail" | "graph" | "memory" | "stub";
+            provider: "imap" | "graph" | "memory" | "stub";
         };
         /** AccountFolderStatsItemOut */
         AccountFolderStatsItemOut: {
@@ -1332,7 +1332,7 @@ export interface components {
             method: "authorization_code" | "device_code";
             /**
              * Provider
-             * @default google
+             * @default microsoft
              */
             provider: string;
             /** Tenant */

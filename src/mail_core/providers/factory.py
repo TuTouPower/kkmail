@@ -14,7 +14,6 @@ from mail_core.providers.connection_slots import (
     TrafficClass,
     default_permit_factory,
 )
-from mail_core.providers.gmail import GmailNotConfiguredError, GmailProvider
 from mail_core.providers.graph import GraphNotConfiguredError, GraphProvider
 from mail_core.providers.host_security import is_restricted_ip, private_hosts_allowed
 from mail_core.providers.imap import ImapProvider
@@ -52,7 +51,7 @@ def _oauth_transport(
         permit_factory=permit_factory,
         traffic_class=traffic_class,
     )
-    base = "https://gmail.googleapis.com" if provider == "gmail" else "https://graph.microsoft.com/v1.0"
+    base = "https://graph.microsoft.com/v1.0"
     if api_http is not None:
         api = api_http
     else:
@@ -194,24 +193,6 @@ def build_provider(
                 raise ValueError("plaintext IMAP is only allowed for loopback hosts")
         validate_imap_host(host)
         return ImapProvider(host=host, port=port, username=user, password=password, use_ssl=use_ssl, timeout=effective_timeout, traffic_class=traffic_class, permit_factory=permit_factory)
-
-    if provider == "gmail":
-        ref = account.credential_ref or ""
-        if not ref:
-            raise GmailNotConfiguredError("Gmail account missing credential_ref")
-        transport = _oauth_transport(
-            credential_ref=ref,
-            store=store,
-            provider="gmail",
-            token_http=token_http,
-            api_http=api_http,
-            timeout=effective_timeout,
-            traffic_class=traffic_class,
-            permit_factory=permit_factory,
-        )
-        # Provider-level permit_factory stays None: the transport stack
-        # already acquires per-request permits (no double counting).
-        return GmailProvider(credential_ref=ref, transport=transport, timeout=effective_timeout, traffic_class=traffic_class)
 
     if provider == "graph":
         ref = account.credential_ref or ""

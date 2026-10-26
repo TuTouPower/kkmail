@@ -85,7 +85,7 @@ class AccountsPage(BaseModel):
     has_more: bool
 
 
-AllowedProvider = Literal["imap", "gmail", "graph", "memory", "stub"]
+AllowedProvider = Literal["imap", "graph", "memory", "stub"]
 
 
 def _has_basic_email_shape(email: str) -> bool:
@@ -241,7 +241,7 @@ def api_create_account(body: AccountCreateIn, principal: AuthPrincipal = Depends
             raise HTTPException(422, "email must have a valid address shape")
     try:
         from mail_core.accounts.connection import validate_connection, merge_credentials
-        if not body.oauth_flow_id and body.provider in ("imap", "gmail", "graph"):
+        if not body.oauth_flow_id and body.provider in ("imap", "graph"):
             cleaned = merge_credentials(body.provider, {}, body.credentials or {})
             validate_connection(email, body.provider, body.config or {}, cleaned)
         acc = create_account_app(

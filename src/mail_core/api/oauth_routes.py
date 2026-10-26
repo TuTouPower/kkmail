@@ -53,7 +53,7 @@ class OAuthMetadataOut(BaseModel):
 
 
 class OAuthStartIn(BaseModel):
-    provider: str = Field(default="google", max_length=32)
+    provider: str = Field(default="microsoft", max_length=32)
     intent: Literal["create", "reauthorize"] = "create"
     account_id: UUID | None = None
     email_hint: str | None = Field(default=None, max_length=320)
@@ -182,9 +182,9 @@ def _save_redirect_exchange_account(
     )
 
 
-def _callback_html(ok: bool, message: str, provider: str = "google") -> str:
+def _callback_html(ok: bool, message: str, provider: str = "microsoft") -> str:
     safe_msg = html.escape(message)
-    label = "Microsoft" if provider == "microsoft" else "Google"
+    label = "Microsoft"
     title = f"{label} 授权已完成" if ok else f"{label} 授权未完成"
     badge = "授权已核实并暂存" if ok else "授权未完成"
     color = "#10b981" if ok else "#ef4444"
@@ -223,7 +223,7 @@ def _callback_html(ok: bool, message: str, provider: str = "google") -> str:
 
 @router.get("/api/accounts/oauth/metadata", response_model=OAuthMetadataOut)
 def api_oauth_metadata(
-    provider: str = Query("google", max_length=32),
+    provider: str = Query("microsoft", max_length=32),
     _principal: AuthPrincipal = Depends(require_auth),
 ) -> OAuthMetadataOut:
     try:

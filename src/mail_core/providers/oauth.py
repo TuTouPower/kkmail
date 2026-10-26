@@ -1,4 +1,4 @@
-"""OAuth2 token refresh + Bearer HTTP transport for Gmail / Graph.
+"""OAuth2 token refresh + Bearer HTTP transport for Graph.
 
 credential_ref points at a JSON secret (via CredentialStore)::
 
@@ -6,7 +6,7 @@ credential_ref points at a JSON secret (via CredentialStore)::
       "refresh_token": "...",
       "client_id": "...",
       "client_secret": "...",
-      "token_uri": "https://oauth2.googleapis.com/token",
+      "token_uri": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
       "access_token": "...",          # optional cache
       "expires_at": 1710000000.0,    # unix seconds, optional
       "scope": "..."                 # optional
@@ -38,13 +38,10 @@ from mail_core.providers.http import AmbiguousOutcomeError, CursorInvalidError, 
 
 log = logging.getLogger("mail_core.providers.oauth")
 
-GMAIL_TOKEN_URI = "https://oauth2.googleapis.com/token"
 GRAPH_TOKEN_URI = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
 # Operator-supplied token_uri must match an allowlisted HTTPS host prefix (SSRF).
 ALLOWED_TOKEN_URI_PREFIXES = (
-    "https://oauth2.googleapis.com/",
-    "https://www.googleapis.com/oauth2/",
     "https://login.microsoftonline.com/",
     "https://login.live.com/",
     "https://login.microsoft.com/",
@@ -72,7 +69,7 @@ class OAuthTokenClient:
 
     credential_ref: str
     store: CredentialStore
-    provider: str = "gmail"  # gmail | graph
+    provider: str = "graph"
     http_post: TokenHttpFn | None = None
     skew_seconds: float = 60.0
     timeout: float = 30.0
@@ -96,7 +93,7 @@ class OAuthTokenClient:
         if data.get("token_uri"):
             uri = str(data["token_uri"]).strip()
         else:
-            uri = GMAIL_TOKEN_URI if self.provider == "gmail" else GRAPH_TOKEN_URI
+            uri = GRAPH_TOKEN_URI
         if not any(uri.startswith(p) for p in ALLOWED_TOKEN_URI_PREFIXES):
             raise OAuthError(
                 "token_uri is not on the HTTPS provider allowlist "
@@ -267,7 +264,7 @@ class BearerTransport:
 
 
 def _url_is_sync_cursor_endpoint(url: str) -> bool:
-    """True for Gmail History / Graph delta URLs where 404/410 mean cursor invalid.
+    """True for Graph delta URLs where 404/410 mean cursor invalid.
 
     Labels, message get, MIME ``$value``, send, etc. must *not* map to
     ``CursorInvalidError`` — those are ordinary resource misses.
@@ -293,7 +290,7 @@ def urllib_json_request(
     permit_factory: Any = None,
     traffic_class: Any = "foreground",
 ) -> Any:
-    """Generic JSON HTTP for Gmail/Graph API calls (stdlib).
+    """Generic JSON HTTP for Graph API calls (stdlib).
 
     Maps 404/410 → ``CursorInvalidError`` only for History / delta endpoints.
     Retries transient 503/504 errors and network/TLS dropouts for GET/HEAD only,
