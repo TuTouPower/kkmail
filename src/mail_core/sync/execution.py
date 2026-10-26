@@ -489,7 +489,11 @@ def converge_orphaned_bindings(session: Session, *, limit: int = 200) -> int:
     from mail_core.security.redact import safe_error
 
     live_generations: set[uuid.UUID] = set(
-        session.scalars(select(WorkerJob.execution_generation)).all()
+        session.scalars(
+            select(WorkerJob.execution_generation).where(
+                WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value])
+            )
+        ).all()
     )
     for payload in session.scalars(
         select(WorkerJob.payload).where(
