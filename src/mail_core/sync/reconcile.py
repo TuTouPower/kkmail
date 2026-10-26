@@ -27,6 +27,75 @@ log = logging.getLogger("mail_core.sync.reconcile")
 RECONCILE_DELETE_BATCH_SIZE = 200
 
 
+def _apply_delete_batch(session: Session, *, account_id: uuid.UUID, folder_id: uuid.UUID, batch) -> int:
+    """Apply one batch of delete actions; return how many messages were deleted.
+
+    Batched (B5b): the previous loop issued a Message lookup, a location
+    lookup, and a remaining-location lookup per action (~600-800 round
+    trips per 200-action batch). This prefetches the batch's messages and
+    folder locations with two IN queries, deletes the folder locations
+    in one flush, then determines orphans with one more IN query.
+    Semantics are unchanged: only this folder's location is removed, a
+    message is deleted (with its MESSAGE_REMOVED event) only when no
+    location remains, and events follow the original action order.
+    """
+    delete_ids: list[str] = []
+    seen: set[str] = set()
+    for action in batch:
+        if action.kind != "delete" or action.remote_id in seen:
+            continue
+        seen.add(action.remote_id)
+        delete_ids.append(action.remote_id)
+    if not delete_ids:
+        return 0
+    messages: dict[str, Message] = {}
+    for msg in session.scalars(
+        select(Message).where(
+            Message.account_id == account_id, Message.remote_id.in_(delete_ids)
+        )
+    ).all():
+        messages.setdefault(msg.remote_id, msg)
+    ordered = [messages[rid] for rid in delete_ids if rid in messages]
+    if not ordered:
+        return 0
+    message_ids = [msg.id for msg in ordered]
+    folder_locations = {
+        loc.message_id: loc
+        for loc in session.scalars(
+            select(MessageLocation).where(
+                MessageLocation.folder_id == folder_id,
+                MessageLocation.message_id.in_(message_ids),
+            )
+        ).all()
+    }
+    for loc in folder_locations.values():
+        session.delete(loc)
+    if folder_locations:
+        session.flush()
+    remaining = {
+        mid
+        for mid in session.scalars(
+            select(MessageLocation.message_id).where(
+                MessageLocation.message_id.in_(message_ids)
+            )
+        ).all()
+    }
+    batch_deleted = 0
+    for msg in ordered:
+        if msg.id in remaining:
+            continue
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.MESSAGE_REMOVED.value,
+                account_id=account_id,
+                payload={"message_id": str(msg.id), "remote_id": msg.remote_id},
+            )
+        )
+        session.delete(msg)
+        batch_deleted += 1
+    return batch_deleted
+
+
 def reconcile_folder(
     account_id: uuid.UUID,
     folder_id: uuid.UUID,
@@ -120,38 +189,9 @@ def reconcile_folder(
                     session.rollback()
                     return {"status": "fencing_mismatch", "deleted": deleted, "actions": len(actions)}
 
-                batch_deleted = 0
-                for action in batch:
-                    if action.kind != "delete":
-                        continue
-                    msg = session.scalar(
-                        select(Message).where(Message.account_id == account_id, Message.remote_id == action.remote_id)
-                    )
-                    if msg is None:
-                        continue
-                    # Remove only this folder location; delete message if orphaned.
-                    loc = session.scalar(
-                        select(MessageLocation).where(
-                            MessageLocation.message_id == msg.id,
-                            MessageLocation.folder_id == folder_id,
-                        )
-                    )
-                    if loc is not None:
-                        session.delete(loc)
-                        session.flush()
-                    remaining = session.scalar(
-                        select(MessageLocation).where(MessageLocation.message_id == msg.id)
-                    )
-                    if remaining is None:
-                        session.add(
-                            OutboxEvent(
-                                event_type=OutboxEventType.MESSAGE_REMOVED.value,
-                                account_id=account_id,
-                                payload={"message_id": str(msg.id), "remote_id": action.remote_id},
-                            )
-                        )
-                        session.delete(msg)
-                        batch_deleted += 1
+                batch_deleted = _apply_delete_batch(
+                    session, account_id=account_id, folder_id=folder_id, batch=batch
+                )
                 total_deleted = deleted + batch_deleted
                 if batch_deleted or is_last_batch:
                     recompute_folder_stats(session, folder_id)
