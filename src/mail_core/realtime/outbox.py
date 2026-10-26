@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from mail_core.mail.storage.models import OutboxEvent, OutboxPublicationState
@@ -25,11 +25,6 @@ class OutboxItem:
     account_id: str | None
     payload: dict[str, Any]
     created_at: datetime
-
-
-def head_event_id(session: Session) -> int:
-    """Highest outbox event id (0 when empty)."""
-    return int(session.scalar(select(func.max(OutboxEvent.id))) or 0)
 
 
 def publication_head(session: Session) -> tuple[str, int]:

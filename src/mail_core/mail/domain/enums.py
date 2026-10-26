@@ -2,16 +2,7 @@
 
 from __future__ import annotations
 
-from enum import IntEnum, StrEnum
-
-
-class JobPriority(IntEnum):
-    ON_DEMAND = 10
-    DELTA = 20
-    REMOTE_PUSH = 40
-    METADATA = 50
-    ARCHIVE_ROUTINE = 80
-    RECONCILE = 90
+from enum import StrEnum
 
 
 class ProviderType(StrEnum):

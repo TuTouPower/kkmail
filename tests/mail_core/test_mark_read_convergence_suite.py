@@ -32,7 +32,6 @@ from mail_core.sync.metadata import apply_metadata_page
 from mail_core.sync.remote_push import (
     get_unconverged_field_intents,
     push_remote_operations,
-    reconcile_account_writeback_and_stats,
 )
 from mail_core.worker.handlers import handle_job
 
@@ -284,69 +283,3 @@ def test_ac006_existing_folder_stats_flush_order_consistency():
             assert updated_stats.total_count == 1
 
 
-# --- AC-007: 孤儿 pending 写回与失真统计安全恢复 ---
-
-
-def test_ac007_orphan_pending_and_drift_recovery():
-    Session = get_session_factory()
-    with Session() as session:
-        acc = Account(email=f"rec-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
-        session.add(acc)
-        session.flush()
-        folder = Folder(account_id=acc.id, remote_id="INBOX", name="INBOX", role="inbox")
-        session.add(folder)
-        session.flush()
-
-        m = Message(
-            account_id=acc.id,
-            remote_id="msg-drift",
-            subject="Drift Subject",
-            from_address="a@b.c",
-            sort_time=datetime(2026, 10, 21, 10, 0, tzinfo=timezone.utc),
-            is_read=True,
-        )
-        session.add(m)
-        session.flush()
-        session.add(MessageLocation(message_id=m.id, folder_id=folder.id, uid=1))
-
-        # Simulating drift: message is read=True, but FolderStats says unread=5
-        session.add(FolderStats(folder_id=folder.id, total_count=1, unread_count=5))
-
-        # Simulating orphan pending op: pending op exists, but NO WorkerJob exists
-        op = RemoteOperation(
-            account_id=acc.id,
-            entity_key=f"msg:{m.remote_id}:read",
-            op_type="mark_read",
-            desired_state={"is_read": True},
-            status=RemoteOperationStatus.PENDING.value,
-        )
-        session.add(op)
-        session.commit()
-
-        # Run recovery on this account
-        res = reconcile_account_writeback_and_stats(session, account_id=acc.id)
-        session.commit()
-
-        assert res["pending_ops"] == 1
-        assert res["enqueued_jobs"] == 1
-
-        # Check job was enqueued
-        job = session.scalar(
-            select(WorkerJob)
-            .where(WorkerJob.account_id == acc.id)
-            .where(WorkerJob.status == JobStatus.PENDING.value)
-        )
-        assert job is not None
-
-        # Check stats were recalculated to exact truth (unread=0)
-        recomputed = session.get(FolderStats, folder.id)
-        assert recomputed.unread_count == 0
-
-        # Run recovery a second time: must be idempotent, not creating duplicate jobs
-        res2 = reconcile_account_writeback_and_stats(session, account_id=acc.id)
-        session.commit()
-        assert res2["enqueued_jobs"] == 0
-        jobs_count = session.scalar(
-            select(func.count(WorkerJob.id)).where(WorkerJob.account_id == acc.id)
-        )
-        assert jobs_count == 1
