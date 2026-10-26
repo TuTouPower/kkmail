@@ -124,6 +124,7 @@ def test_dispatch_queue_full_does_not_mark_and_sends_resync_hint():
 
     dispatcher = OutboxDispatcher()
     dispatcher._last_dispatched_seq = 41
+    dispatcher._baseline_established = True  # R08: a bare cursor no longer implies an established baseline
 
     async def _setup_and_dispatch():
         q = dispatcher.subscribe()
