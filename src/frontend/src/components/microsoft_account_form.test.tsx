@@ -233,16 +233,18 @@ it('clicking Microsoft auth opens the spec authorize URL and switches to the pas
   expect(container.querySelector('#account-ms-redirect-url')).toBeNull()
 })
 
-// REPLACED (client-id consistency): the original version of this test
-// asserted the exchange payload was exactly {redirected_url, email,
-// group_id} -- no client_id, because the form only sent one when the
-// user typed it. That omission was the bug: with the field empty, the
-// authorize step used the frontend's hardcoded id while the backend
-// exchanged with its own MICROSOFT_CLIENT_ID env override. The payload
-// now always carries the id the authorize step used, so the test is
-// replaced as a whole with the payload expectation extended by
-// client_id (the built-in id here, since this shell's metadata reports
-// no override).
+// REPLACED (client-id consistency + redirect_uri passthrough): the
+// original version of this test asserted the exchange payload was
+// exactly {redirected_url, email, group_id} -- no client_id, because
+// the form only sent one when the user typed it. That omission was the
+// bug: with the field empty, the authorize step used the frontend's
+// hardcoded id while the backend exchanged with its own
+// MICROSOFT_CLIENT_ID env override. The payload now always carries the
+// id the authorize step used, and likewise the redirect_uri it used
+// (backend derivation from the pasted URL cannot preserve a trailing
+// slash). The test is replaced as a whole with the payload expectation
+// extended by client_id and redirect_uri (the built-in id and default
+// URI here, since this shell's metadata reports no override).
 it('pasting a redirect URL calls the exchange API and reports success via onSaved', async () => {
   const exchanges = stubMicrosoftShell()
   vi.stubGlobal('open', vi.fn(() => ({ opener: {} })))
@@ -261,7 +263,28 @@ it('pasting a redirect URL calls the exchange API and reports success via onSave
     email: 'me@outlook.com',
     group_id: 'grp-1',
     client_id: '9e5f94bc-e8a4-4e73-b8be-63364c29d753',
+    redirect_uri: 'http://localhost:8080',
   })
+})
+
+it('a custom redirect URI with a trailing slash is authorized and exchanged verbatim', async () => {
+  const exchanges = stubMicrosoftShell()
+  const open = vi.fn((..._args: unknown[]) => ({ opener: {} }))
+  vi.stubGlobal('open', open)
+  const saved = vi.fn(async () => {})
+  const { container } = await render(<AccountDialog groups={msGroups} groupsAvailable onClose={vi.fn()} onSaved={saved} />)
+  await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
+  await typeInto(container.querySelector('#account-email'), 'me@outlook.com')
+  const advanced = container.querySelector('details.settings-advanced') as HTMLDetailsElement
+  await typeInto(advanced.querySelector('#account-ms-redirect-uri'), 'https://mail.example.com/')
+  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '微软授权登录')!)
+  const url = new URL(String(open.mock.calls[0][0]))
+  expect(url.searchParams.get('redirect_uri')).toBe('https://mail.example.com/')
+  await typeInto(container.querySelector('#account-ms-redirect-url'), 'https://mail.example.com/?code=abc123&state=xyz')
+  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '换取 Token 并添加')!)
+  await waitFor(() => expect(saved).toHaveBeenCalled())
+  expect(exchanges).toHaveLength(1)
+  expect(exchanges[0].redirect_uri).toBe('https://mail.example.com/')
 })
 
 it('authorize and exchange both use the client id reported by OAuth metadata', async () => {

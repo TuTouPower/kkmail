@@ -673,6 +673,18 @@
             ],
             "title": "Group Id"
           },
+          "redirect_uri": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redirect Uri"
+          },
           "redirected_url": {
             "maxLength": 8192,
             "title": "Redirected Url",

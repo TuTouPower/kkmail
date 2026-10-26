@@ -309,6 +309,10 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
         // omitted), so the backend exchanges with that same id instead
         // of resolving its own default.
         client_id: msEffectiveClientId,
+        // And the redirect_uri the authorize step actually used, so the
+        // backend sends it verbatim instead of deriving it from the
+        // pasted URL (derivation cannot preserve a trailing slash).
+        redirect_uri: msRedirectUri.trim() || MICROSOFT_DEFAULT_REDIRECT_URI,
       })
       saved = true
       await onSaved(groupId)

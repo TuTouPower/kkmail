@@ -119,6 +119,9 @@ class ExchangeRedirectUrlRequest(BaseModel):
     email: str | None = Field(default=None, max_length=320)
     group_id: str | None = Field(default=None, max_length=64)
     client_id: str | None = Field(default=None, max_length=512)
+    # The redirect_uri the authorize step actually used (form value);
+    # forwarded verbatim so the token exchange matches it byte-for-byte.
+    redirect_uri: str | None = Field(default=None, max_length=2048)
 
 
 def _find_graph_account_id(email: str) -> UUID | None:
@@ -287,8 +290,13 @@ def api_exchange_redirect_url(
             group_uuid = UUID(body.group_id.strip())
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="所属分组无效，请重新选择分组") from exc
+    exchange_kwargs: dict[str, str] = {}
+    if body.redirect_uri and body.redirect_uri.strip():
+        exchange_kwargs["redirect_uri"] = body.redirect_uri.strip()
     try:
-        tokens = exchange_redirect_url_for_tokens(body.redirected_url, body.client_id)
+        tokens = exchange_redirect_url_for_tokens(
+            body.redirected_url, body.client_id, **exchange_kwargs
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # transport failures: sanitized, never leak provider detail

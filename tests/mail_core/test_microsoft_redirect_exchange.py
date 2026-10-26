@@ -133,6 +133,36 @@ def test_exchange_default_paste_without_path_keeps_default_redirect_uri():
     assert captured["form"]["redirect_uri"] == DEFAULT_MICROSOFT_REDIRECT_URI
 
 
+def test_exchange_uses_explicit_redirect_uri_verbatim_with_trailing_slash():
+    # The authorize step used the form's redirect_uri exactly as typed;
+    # when the frontend passes it through, derivation (which strips a
+    # lone "/" path for the default) must not rewrite it -- Microsoft
+    # compares redirect_uri byte-for-byte (AADSTS50011).
+    captured = {}
+    token_post, profile_get = _fake_transports(captured)
+    result = exchange_redirect_url_for_tokens(
+        "https://mail.example.com/?code=X",
+        token_post=token_post,
+        profile_get=profile_get,
+        redirect_uri="https://mail.example.com/",
+    )
+    assert captured["form"]["redirect_uri"] == "https://mail.example.com/"
+    assert result["email"] == "person@outlook.com"
+
+
+def test_exchange_rejects_invalid_explicit_redirect_uri_before_token_post():
+    captured = {}
+    token_post, profile_get = _fake_transports(captured)
+    with pytest.raises(ValueError, match="重定向链接无效"):
+        exchange_redirect_url_for_tokens(
+            REDIRECT,
+            token_post=token_post,
+            profile_get=profile_get,
+            redirect_uri="ftp://example.com/callback",
+        )
+    assert captured == {}
+
+
 def test_exchange_pasted_url_without_valid_redirect_uri_fails_before_token_post():
     captured = {}
     token_post, profile_get = _fake_transports(captured)
@@ -389,6 +419,34 @@ def test_exchange_api_updates_existing_account(api_client, monkeypatch):
         "client_id": DEFAULT_MICROSOFT_CLIENT_ID, "refresh_token": "fresh-refresh",
     }
     assert updated["clear_credentials"] == ["client_secret"]
+
+
+def test_exchange_api_forwards_explicit_redirect_uri(api_client, monkeypatch):
+    import mail_core.api.oauth_routes as routes
+
+    seen = {}
+
+    def fake_exchange(url, client_id=None, redirect_uri=None):
+        seen.update(url=url, client_id=client_id, redirect_uri=redirect_uri)
+        return {
+            "client_id": DEFAULT_MICROSOFT_CLIENT_ID,
+            "access_token": "ms-access",
+            "refresh_token": "ms-refresh",
+            "email": "real@outlook.com",
+        }
+
+    monkeypatch.setattr(routes, "exchange_redirect_url_for_tokens", fake_exchange)
+    monkeypatch.setattr(
+        routes, "create_account_app", lambda **kwargs: _dto(kwargs["email"], kwargs.get("group_id"))
+    )
+    monkeypatch.setattr(routes, "_find_graph_account_id", lambda _email: None)
+    response = api_client.post(
+        "/api/accounts/oauth/exchange-redirect-url",
+        json={"redirected_url": "https://mail.example.com/?code=X",
+              "redirect_uri": "https://mail.example.com/"},
+    )
+    assert response.status_code == 200, response.text
+    assert seen["redirect_uri"] == "https://mail.example.com/"
 
 
 def test_exchange_api_parse_error_maps_to_readable_400(api_client):

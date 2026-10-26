@@ -47,6 +47,7 @@ def exchange_redirect_url_for_tokens(
     redirected_url: str,
     client_id: str | None = None,
     *,
+    redirect_uri: str | None = None,
     token_post: TokenPostFn | None = None,
     profile_get: ProfileGetFn | None = None,
 ) -> dict[str, Any]:
@@ -63,22 +64,35 @@ def exchange_redirect_url_for_tokens(
 
     code = parse_redirect_code(redirected_url)
     # The token exchange must send the same redirect_uri the authorize step
-    # used (AADSTS50011 on mismatch), and the user may have customized it in
-    # the form / Azure app, so derive it from the pasted redirect URL: that
-    # URL is the authorize-time redirect_uri plus the response query/fragment.
-    derived_parts = urlsplit((redirected_url or "").strip())
-    if derived_parts.path == "/":
-        # Browsers normalize an empty path to "/" in the address bar, so a
-        # pasted "http://localhost:8080/?code=..." is the authorize-time
-        # "http://localhost:8080" (the frontend default, sent verbatim).
-        derived_parts = derived_parts._replace(path="")
-    derived_redirect_uri = derived_parts._replace(query="", fragment="").geturl()
-    if (
-        not derived_redirect_uri
-        or derived_parts.scheme not in ("http", "https")
-        or not derived_parts.netloc
-    ):
-        raise ValueError("粘贴的重定向链接无效：无法确定回调地址 (redirect_uri)，请确保复制的是授权完成后的完整地址")
+    # used (AADSTS50011 on mismatch -- Microsoft compares it byte-for-byte).
+    # When the caller passes the authorize-time value explicitly (the
+    # frontend sends the form value it authorized with), use it verbatim:
+    # a pasted URL alone cannot distinguish an authorize-time
+    # "http://localhost:8080" from "http://localhost:8080/", because
+    # browsers normalize the empty path to "/" in the address bar.
+    explicit_redirect_uri = (redirect_uri or "").strip()
+    if explicit_redirect_uri:
+        explicit_parts = urlsplit(explicit_redirect_uri)
+        if explicit_parts.scheme not in ("http", "https") or not explicit_parts.netloc:
+            raise ValueError("粘贴的重定向链接无效：无法确定回调地址 (redirect_uri)，请确保复制的是授权完成后的完整地址")
+        derived_redirect_uri = explicit_redirect_uri
+    else:
+        # Fall back to deriving it from the pasted redirect URL: that URL
+        # is the authorize-time redirect_uri plus the response
+        # query/fragment.
+        derived_parts = urlsplit((redirected_url or "").strip())
+        if derived_parts.path == "/":
+            # Browsers normalize an empty path to "/" in the address bar, so a
+            # pasted "http://localhost:8080/?code=..." is the authorize-time
+            # "http://localhost:8080" (the frontend default, sent verbatim).
+            derived_parts = derived_parts._replace(path="")
+        derived_redirect_uri = derived_parts._replace(query="", fragment="").geturl()
+        if (
+            not derived_redirect_uri
+            or derived_parts.scheme not in ("http", "https")
+            or not derived_parts.netloc
+        ):
+            raise ValueError("粘贴的重定向链接无效：无法确定回调地址 (redirect_uri)，请确保复制的是授权完成后的完整地址")
     effective_client_id = (client_id or "").strip() or default_microsoft_client_id()
     post = token_post or lifecycle._call_token_endpoint
     get = profile_get or lifecycle._call_profile_endpoint

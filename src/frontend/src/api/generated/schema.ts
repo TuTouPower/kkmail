@@ -946,6 +946,8 @@ export interface components {
             email?: string | null;
             /** Group Id */
             group_id?: string | null;
+            /** Redirect Uri */
+            redirect_uri?: string | null;
             /** Redirected Url */
             redirected_url: string;
         };
