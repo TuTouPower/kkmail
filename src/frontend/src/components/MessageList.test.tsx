@@ -119,6 +119,46 @@ describe('<MessageList />', () => {
     expect(container.querySelectorAll('.message-row').length).toBeLessThan(40)
   })
 
+  it('coalesces rapid scroll events into a single rAF-throttled window update (F4)', async () => {
+    const originalFetch = vi.mocked(fetch)
+    const items = Array.from({ length: 2000 }, (_, index) => row(`many-${index}`))
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).startsWith('/api/mail/inbox')) {
+        return json({ items, next_cursor: null })
+      }
+      return originalFetch(url, init)
+    }))
+    let rafSeq = 0
+    const pendingFrames = new Map<number, (time: number) => void>()
+    vi.stubGlobal('requestAnimationFrame', (cb: (time: number) => void) => {
+      rafSeq += 1
+      pendingFrames.set(rafSeq, cb)
+      return rafSeq
+    })
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { pendingFrames.delete(id) })
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container).length).toBeGreaterThan(0))
+    expect(subjects(container)[0]).toBe('Subject many-0')
+
+    const list = container.querySelector('.message-list') as HTMLDivElement
+    Object.defineProperty(list, 'clientHeight', { configurable: true, value: 500 })
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 200_000 })
+    const { act } = await import('react')
+    for (const top of [40 * 40, 80 * 40, 100 * 40]) {
+      list.scrollTop = top
+      await act(async () => list.dispatchEvent(new Event('scroll', { bubbles: true })))
+    }
+    // No animation frame has run: the window must not have moved, and
+    // the three events coalesced into exactly one pending frame.
+    expect(subjects(container)[0]).toBe('Subject many-0')
+    expect(pendingFrames.size).toBe(1)
+
+    const [frame] = [...pendingFrames.values()]
+    await act(async () => frame(0))
+    await waitFor(() => expect(subjects(container)[0]).toBe('Subject many-32'))
+  })
+
   it('flagged filter uses the server-side is_flagged field', async () => {
     const { container } = await render(<MessageList />)
     await waitFor(() => expect(subjects(container)).toHaveLength(2))

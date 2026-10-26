@@ -332,12 +332,31 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     return () => observer.disconnect()
   }, [hasMore, loadingMore, handleLoadMore])
 
+  const scrollRafRef = useRef<number | null>(null)
+  const pendingScrollTopRef = useRef(0)
+
+  // Cancel a coalesced scroll update on unmount.
+  useEffect(() => () => {
+    if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current)
+    scrollRafRef.current = null
+  }, [])
+
   const handleScroll = useCallback(
     (e: React.UIEvent<HTMLDivElement>) => {
       const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
-      setMessageListScrollTop((previous) => (previous === scrollTop ? previous : scrollTop))
       if (scrollHeight - scrollTop - clientHeight < 150) {
         void handleLoadMore()
+      }
+      // F4: coalesce scroll bursts into one state update per animation
+      // frame. messageListScrollTop feeds the virtualWindow memo, so an
+      // unthrottled setState re-sliced the window on every scroll event.
+      pendingScrollTopRef.current = scrollTop
+      if (scrollRafRef.current === null) {
+        scrollRafRef.current = requestAnimationFrame(() => {
+          scrollRafRef.current = null
+          const next = pendingScrollTopRef.current
+          setMessageListScrollTop((previous) => (previous === next ? previous : next))
+        })
       }
     },
     [handleLoadMore],
