@@ -90,6 +90,38 @@ def test_exchange_uses_public_client_form_and_returns_tokens_and_email():
     assert result["client_id"] == DEFAULT_MICROSOFT_CLIENT_ID
 
 
+def test_exchange_derives_custom_redirect_uri_from_pasted_url():
+    captured = {}
+    token_post, profile_get = _fake_transports(captured)
+    result = exchange_redirect_url_for_tokens(
+        "http://localhost:53111/callback?code=X&session_state=Y#frag",
+        token_post=token_post, profile_get=profile_get,
+    )
+    assert captured["form"]["code"] == "X"
+    assert captured["form"]["redirect_uri"] == "http://localhost:53111/callback"
+    assert result["email"] == "person@outlook.com"
+
+
+def test_exchange_default_paste_without_path_keeps_default_redirect_uri():
+    captured = {}
+    token_post, profile_get = _fake_transports(captured)
+    exchange_redirect_url_for_tokens(
+        "http://localhost:8080?code=X", token_post=token_post, profile_get=profile_get,
+    )
+    assert captured["form"]["redirect_uri"] == "http://localhost:8080"
+    assert captured["form"]["redirect_uri"] == DEFAULT_MICROSOFT_REDIRECT_URI
+
+
+def test_exchange_pasted_url_without_valid_redirect_uri_fails_before_token_post():
+    captured = {}
+    token_post, profile_get = _fake_transports(captured)
+    with pytest.raises(ValueError, match="重定向链接无效"):
+        exchange_redirect_url_for_tokens(
+            "/callback?code=X", token_post=token_post, profile_get=profile_get,
+        )
+    assert captured == {}
+
+
 def test_exchange_falls_back_to_user_principal_name():
     captured = {}
     token_post, _ = _fake_transports(captured)

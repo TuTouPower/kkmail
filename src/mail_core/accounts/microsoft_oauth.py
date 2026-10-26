@@ -62,6 +62,23 @@ def exchange_redirect_url_for_tokens(
     from mail_core.accounts import oauth_flow as lifecycle
 
     code = parse_redirect_code(redirected_url)
+    # The token exchange must send the same redirect_uri the authorize step
+    # used (AADSTS50011 on mismatch), and the user may have customized it in
+    # the form / Azure app, so derive it from the pasted redirect URL: that
+    # URL is the authorize-time redirect_uri plus the response query/fragment.
+    derived_parts = urlsplit((redirected_url or "").strip())
+    if derived_parts.path == "/":
+        # Browsers normalize an empty path to "/" in the address bar, so a
+        # pasted "http://localhost:8080/?code=..." is the authorize-time
+        # "http://localhost:8080" (the frontend default, sent verbatim).
+        derived_parts = derived_parts._replace(path="")
+    derived_redirect_uri = derived_parts._replace(query="", fragment="").geturl()
+    if (
+        not derived_redirect_uri
+        or derived_parts.scheme not in ("http", "https")
+        or not derived_parts.netloc
+    ):
+        raise ValueError("粘贴的重定向链接无效：无法确定回调地址 (redirect_uri)，请确保复制的是授权完成后的完整地址")
     effective_client_id = (client_id or "").strip() or default_microsoft_client_id()
     post = token_post or lifecycle._call_token_endpoint
     get = profile_get or lifecycle._call_profile_endpoint
@@ -69,7 +86,7 @@ def exchange_redirect_url_for_tokens(
         "client_id": effective_client_id,
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": DEFAULT_MICROSOFT_REDIRECT_URI,
+        "redirect_uri": derived_redirect_uri,
         "scope": MICROSOFT_SCOPE,
     }
     try:
