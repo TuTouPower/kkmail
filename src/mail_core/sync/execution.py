@@ -503,17 +503,10 @@ def fail_open_targets(
     return request_ids
 
 
-def converge_orphaned_bindings(session: Session, *, limit: int = 200) -> int:
-    """Worker inspection/reaper path: converge bindings whose execution is gone.
-
-    Bindings pointing at a terminal job that somehow never settled, or whose
-    generation has no live job and no pre-allocated successor, become explicit
-    failures instead of leaving requests ``running`` forever. Also refreshes
-    any still-open requests so persisted state matches target aggregation.
-    """
-    from mail_core.security.redact import safe_error
-
-    live_generations: set[uuid.UUID] = set(
+def _live_execution_generations(session: Session) -> set[uuid.UUID]:
+    """Generations executable right now: live jobs' own generations plus
+    the successor generations pre-allocated in their ``_queue_next``."""
+    live: set[uuid.UUID] = set(
         session.scalars(
             select(WorkerJob.execution_generation).where(
                 WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value])
@@ -529,9 +522,24 @@ def converge_orphaned_bindings(session: Session, *, limit: int = 200) -> int:
         generation = queue_next.get("execution_generation")
         if generation:
             try:
-                live_generations.add(uuid.UUID(str(generation)))
+                live.add(uuid.UUID(str(generation)))
             except (ValueError, TypeError):
                 pass
+    return live
+
+
+def converge_orphaned_bindings(session: Session, *, limit: int = 200) -> int:
+    """Worker inspection/reaper path: converge bindings whose execution is gone.
+
+    Bindings pointing at a terminal job that somehow never settled, or whose
+    generation has no live job and no pre-allocated successor, become explicit
+    failures instead of leaving requests ``running`` forever. Also refreshes
+    any still-open requests so persisted state matches target aggregation.
+    """
+    from mail_core.security.redact import safe_error
+
+    live_generations = _live_execution_generations(session)
+    refreshed_live_generations: set[uuid.UUID] | None = None
 
     bindings = list(
         session.scalars(
@@ -565,6 +573,17 @@ def converge_orphaned_bindings(session: Session, *, limit: int = 200) -> int:
         elif binding.execution_generation in live_generations:
             continue  # Pending job or pre-allocated successor: still executable.
         else:
+            # Decision-time recheck: this binding was committed by a
+            # request that bound a CLAIMED job's pre-allocated successor
+            # (bind_target + ensure_successor_generation commit together),
+            # possibly AFTER the snapshot above was taken — the patrol can
+            # then see the binding but not its generation and would fail
+            # a healthy queued request as execution_lost. Recompute the
+            # live set once, now, before condemning any binding on it.
+            if refreshed_live_generations is None:
+                refreshed_live_generations = _live_execution_generations(session)
+            if binding.execution_generation in refreshed_live_generations:
+                continue
             binding.status = "failed"
             binding.error_code = "execution_lost"
             binding.safe_error = EXECUTION_LOST_MESSAGE
