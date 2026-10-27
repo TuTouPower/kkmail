@@ -37,11 +37,20 @@ def git_common_dir(repo_root: Path) -> Path:
     """返回所有 worktree 共享的 git 公共目录绝对路径。"""
     import subprocess
 
-    result = subprocess.run(
-        ["git", "-C", str(repo_root), "rev-parse", "--git-common-dir"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        # 与 git_ops._git 的统一包装口径对齐（F22）：TimeoutExpired 非
+        # OSError，裸穿透会绕过 cli.py 顶层捕获成 traceback；转 OSError。
+        raise OSError(
+            "无法解析 git 公共目录：git rev-parse --git-common-dir 超时（30s）"
+        ) from error
+    except FileNotFoundError as error:
+        raise OSError("无法解析 git 公共目录：git 不可用") from error
     if result.returncode != 0:
         raise OSError(f"无法解析 git 公共目录：{result.stderr.strip()}")
     text = result.stdout.strip()
