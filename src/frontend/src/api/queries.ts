@@ -447,7 +447,7 @@ function setReadStateCache(keys: Iterable<string>, isRead: ReadStatus, advanceRe
  * alone — the authoritative invalidation that follows a failed bulk call
  * reconciles them with the server instead of clobbering newer state (A149).
  */
-export function applyCachedReadStateWithRollback(keys: Iterable<string>, nextRead: boolean, previousRead: boolean): () => void {
+export function applyCachedReadStateWithRollback(keys: Iterable<string>, nextRead: boolean, previousRead: boolean): (() => void) & { commit: () => void } {
   const wanted = [...new Set(keys)]
   const revisions = new Map<string, number>()
   for (const key of wanted) {
