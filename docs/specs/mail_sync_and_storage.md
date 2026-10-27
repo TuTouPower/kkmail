@@ -24,6 +24,7 @@
 - [x] AC-001：IMAP 连接默认强制启用 TLS 证书与主机名验证，mailbox 文件夹名包含空格或特殊字符时自动带双引号转义。
 - [x] AC-002：IMAP 执行删除时优先调用 `UID MOVE`；若服务器不支持或移动失败，严禁调用全邮箱 `EXPUNGE`，不打 `\Deleted` 标记并直接向调用方报错。
 - [x] AC-003：Graph 提供商在 v1.0 下通过 `/me/mailFolders/inbox` 别名解析真实收件箱 ID，映射为 `role="inbox"`，并递归遍历子文件夹。
+- （编号说明，2026-10-27 补）AC-004：编号保留/已废弃，本编号未曾分配，不得复用；后续新增 AC 只增不复用。
 - [x] AC-005：元数据扫描完成后自动调度首个归档批次，归档成功后解析 MIME 生成 `MessageBody` 与 `Attachment`。
 - [x] AC-006：垃圾回收 (GC) 必须同时统计 `MessageBlobLink` 与 `Attachment.blob_id` 引用，删除文件前执行数据库二次校验，异常时 Fail-Closed 跳过删除。
 - [x] AC-007：IMAP Provider 对名为 `"已发送"`、`"已发送邮件"` 或带有 `\Sent` 标志的目录，解析出 `role="sent"`。
@@ -48,6 +49,7 @@
 - [x] AC-026：状态迁移不改写已有 true/false；旧 SQLite 无 flag 列时导入 null，已有 read/attachment 原值保留。降级遇到状态或未读统计 null 时拒绝，不补 false/0。
 - [x] AC-027：Graph 部分内容 delta 仅应用实际返回字段；明确空主题、空摘要、空收件人数组可清空旧值，缺省字段保留原值。
 - [x] AC-028：同页同封邮件的 partial upsert 与 flag patch 按响应顺序合并，后续提供字段覆盖先前同字段；delete 丢弃此前 patch，不破坏本地未收敛状态意图保护。
+- （编号说明，2026-10-27 补）AC-029、AC-030：编号保留/已废弃，本两号未曾分配，不得复用；后续新增 AC 只增不复用。
 - [x] AC-031：带 HTML body_preview 的邮件详情 body 为空时不将摘要渲染成正文；加载、详情错误、解析失败和空正文互斥渲染，已有正文按 html/text 分流。
 - [x] AC-032：Graph 收件箱 ID 可用时只凭 canonical ID 或 well-known 标记赋予 inbox 角色；仅在无法取得 ID 时才回退英文名称，避免同名自定义目录成为第二个收件箱。
 - [x] AC-033：IMAP `Deleted Messages` 名称映射为 `trash` 角色。
@@ -104,7 +106,7 @@
 
 ## Gmail 虚拟标签同步策略与 IMAP 超时优化（t056，2026-10-26）
 
-- Gmail 虚拟文件夹排除（AC-001）：Gmail 账号（`@gmail.com` / `@googlemail.com`）下的 `\All`（所有邮件）与 `\Important`（重要）虚拟汇总标签，在文件夹发现时默认置为 `sync_status = "paused"`，常规同步不自动为其拉取邮件，消除收件箱与已发邮件被 2~3 倍重复拉取的存储与 IO 冗余。
-- RFC 6154 属性解析扩展（AC-002）：`ImapProvider.list_folder_catalog()` 增加对 `\All` 映射为 `role = "all"`，对 `\Flagged` / `\Starred` 映射为 `role = "flagged"`。
-- IMAP 连接与分批放宽（AC-003, AC-004）：`ImapProvider` 默认 Socket 读取超时提升至 60.0 秒；`sync_folder_metadata` 单任务默认最大批次 `max_pages` 调整为 10 页（约 500 封），减轻单任务长时间占用连接风险。
-- 瞬态网络错误容错（AC-005）：Worker 执行同步任务捕获 `TimeoutError`、`SSLEOFError` 等瞬时网络异常时，按指数退避重新排期，不立即将账号置为 `failed` 状态。
+- Gmail 虚拟文件夹排除（AC-T56-001）：Gmail 账号（`@gmail.com` / `@googlemail.com`）下的 `\All`（所有邮件）与 `\Important`（重要）虚拟汇总标签，在文件夹发现时默认置为 `sync_status = "paused"`，常规同步不自动为其拉取邮件，消除收件箱与已发邮件被 2~3 倍重复拉取的存储与 IO 冗余。
+- RFC 6154 属性解析扩展（AC-T56-002）：`ImapProvider.list_folder_catalog()` 增加对 `\All` 映射为 `role = "all"`，对 `\Flagged` / `\Starred` 映射为 `role = "flagged"`。
+- IMAP 连接与分批放宽（AC-T56-003, AC-T56-004）：`ImapProvider` 默认 Socket 读取超时提升至 60.0 秒；`sync_folder_metadata` 单任务默认最大批次 `max_pages` 调整为 10 页（约 500 封），减轻单任务长时间占用连接风险。
+- 瞬态网络错误容错（AC-T56-005）：Worker 执行同步任务捕获 `TimeoutError`、`SSLEOFError` 等瞬时网络异常时，按指数退避重新排期，不立即将账号置为 `failed` 状态。
