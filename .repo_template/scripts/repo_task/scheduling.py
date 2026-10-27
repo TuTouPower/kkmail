@@ -8,31 +8,43 @@ from .store import discover_effective_tasks, scan_tasks
 
 
 def _dependency_cycle(dependencies: dict[str, list[str]]) -> list[str] | None:
+    # A97: explicit-stack iterative DFS. The previous recursive visit()
+    # raised a bare RecursionError on dependency chains deeper than the
+    # interpreter recursion limit; iteration keeps the same traversal
+    # order (roots sorted by tid_sort_key, dependencies in listed order)
+    # and the same cycle-path shape (stack slice + repeated entry node).
     state: dict[str, int] = {}
     stack: list[str] = []
 
-    def visit(tid: str) -> list[str] | None:
-        state[tid] = 1
-        stack.append(tid)
-        for dependency in dependencies.get(tid, []):
+    for root in sorted(dependencies, key=tid_sort_key):
+        if state.get(root, 0) != 0:
+            continue
+        state[root] = 1
+        stack.append(root)
+        frames: list[tuple[str, object]] = [
+            (root, iter(dependencies.get(root, [])))
+        ]
+        while frames:
+            tid, dep_iter = frames[-1]
+            try:
+                dependency = next(dep_iter)  # type: ignore[arg-type]
+            except StopIteration:
+                frames.pop()
+                stack.pop()
+                state[tid] = 2
+                continue
             if dependency not in dependencies:
                 continue
-            if state.get(dependency, 0) == 0:
-                cycle = visit(dependency)
-                if cycle:
-                    return cycle
-            elif state.get(dependency) == 1:
+            dep_state = state.get(dependency, 0)
+            if dep_state == 1:
                 start = stack.index(dependency)
                 return stack[start:] + [dependency]
-        stack.pop()
-        state[tid] = 2
-        return None
-
-    for tid in sorted(dependencies, key=tid_sort_key):
-        if state.get(tid, 0) == 0:
-            cycle = visit(tid)
-            if cycle:
-                return cycle
+            if dep_state == 0:
+                state[dependency] = 1
+                stack.append(dependency)
+                frames.append(
+                    (dependency, iter(dependencies.get(dependency, [])))
+                )
     return None
 
 def compute_schedule() -> dict:
