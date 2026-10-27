@@ -48,3 +48,30 @@ def test_a266_push_is_opt_out_and_announced():
     assert "push" in announce_chunk.lower(), (
         "the git push step must print what it is about to do before running"
     )
+
+
+# --- A13: backup dir stays 0700; package is verified, not just present ---
+
+
+def test_a13_backup_dir_is_never_world_accessible():
+    text = _deploy_text()
+    assert "0777" not in text, "backup dir must never be chmod 0777"
+    assert 'chmod 0700 "$backup_dir"' in text
+
+
+def test_a13_backup_container_runs_as_host_user():
+    text = _deploy_text()
+    # The backup container must write as the host user so the 0700 dir works
+    # without widening permissions.
+    backup_run = re.search(r"run [^\n]*backup", text)
+    assert backup_run, "deploy must run the backup service"
+    assert '--user "$(id -u):$(id -g)"' in backup_run.group(0)
+
+
+def test_a13_backup_package_is_verified_after_write():
+    text = _deploy_text()
+    assert "verify_backup_package" in text, (
+        "deploy must verify the sealed package (manifest + member checksums) "
+        "via mail_core.backup.verify_backup_package, not only [[ -s ]]"
+    )
+    assert "MANIFEST" in text

@@ -54,16 +54,37 @@ commit="$(git rev-parse --short=8 HEAD)"
 backup_dir="$repo_root/.scratch/deploy_backup_$stamp"
 mkdir -p "$repo_root/.scratch"
 mkdir "$backup_dir"
-chmod 0777 "$backup_dir"
-restore_backup_dir() {
-    chmod 0700 "$backup_dir" 2>/dev/null || true
-}
-trap restore_backup_dir EXIT
+# Keep the backup dir private (0700) for its whole lifetime: the backup
+# container below runs as the host user (--user), so it can write into a
+# 0700 directory owned by that user. Never widen this to world-writable —
+# during that window any local user could replace the sealed package
+# that a later rollback would trust.
+chmod 0700 "$backup_dir"
 export MAIL_CORE_DEPLOY_BACKUP_DIR="$backup_dir"
 
-docker compose -f docker-compose.mail-core.yml --profile maintenance run --build --rm backup
+docker compose -f docker-compose.mail-core.yml --profile maintenance run --user "$(id -u):$(id -g)" --build --rm backup
 [[ -s "$backup_dir/package/backup.kkbak" ]] || fail "sealed backup package is missing"
-chmod 0700 "$backup_dir"
+# Existence is not integrity: verify the sealed package (MANIFEST.json /
+# MANIFEST.sha256 and every member checksum, incl. backup.kkbak) with the
+# same verifier restores use before treating it as a rollback source.
+MAIL_CORE_DEPLOY_BACKUP_DIR="$backup_dir" python3 - <<'PY'
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path.cwd() / "src"))
+from mail_core.backup import verify_backup_package
+
+package_dir = Path(os.environ["MAIL_CORE_DEPLOY_BACKUP_DIR"]) / "package"
+result = verify_backup_package(package_dir)
+if not result.ok:
+    raise SystemExit(
+        "sealed backup package failed verification: " + "; ".join(result.errors)
+    )
+print(
+    f"verified sealed backup package: {result.members_checked} members checked"
+)
+PY
 
 if docker inspect kkmail-mail-core-api >/dev/null 2>&1; then
     api_image="$(docker inspect --format '{{.Image}}' kkmail-mail-core-api)"
