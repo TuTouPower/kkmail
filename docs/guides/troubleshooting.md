@@ -33,6 +33,12 @@
 
 系统以 PostgreSQL 数据库中的 `auth_credentials` 表为权威密码源。仅删除本地文件或修改环境变量不会覆盖数据库中已存在的密码记录。重置密码需操作数据库：
 
+前置条件（两法通用，缺一不可）：
+
+1. 停止 mail-core 服务，避免重置期间并发登录与写入。
+2. 确认当前数据库连接指向目标实例：核对连接所用的 `DATABASE_URL`（`MAIL_CORE_DATABASE_URL`）的 host 与库名，禁止在未确认的连接上执行下列 SQL。
+3. 备份原哈希：先执行 `SELECT login_password_hash, session_epoch FROM auth_credentials WHERE id = 'default';`，把结果保存在安全位置，作为失败恢复的还原源。
+
 ### 方法一：直接更新数据库密码哈希（推荐）
 
 1. 生成新密码的 bcrypt 哈希（在仓库根目录、使用项目环境执行，即依赖已安装且 `PYTHONPATH` 可用；命令以隐藏输入提示键入新密码，不把密码明文写进命令或 bytes 字面量）：
@@ -58,6 +64,20 @@
 3. 若使用了 `--data-dir`，同时删除 `<data-dir>/secrets/login-password.bcrypt`。
 4. 导出新密码环境变量 `MAIL_CORE_LOGIN_PASSWORD`（或 `MAIL_CORE_LOGIN_PASSWORD_HASH`）；若未设置环境变量且使用 `--data-dir`，重启时会在 `<data-dir>/initial-password.txt` 重新生成初始随机密码。
 5. 重启 mail-core 服务完成初次引导入库。
+
+### 执行后验证与失败恢复（两法通用）
+
+1. 验证新密码：重启服务后用新密码登录一次，确认可正常进入。
+2. 验证旧会话失效：重置前已登录的会话应被要求重新登录（方法一靠 `session_epoch + 1`，方法二靠凭据重建）；若旧会话仍可访问，立即停服排查，不得视为重置完成。
+3. 失败恢复：若新密码无法登录或上述验证不通过，停止服务，把前置备份的原哈希写回并重启，再用原密码验证恢复：
+    ```sql
+    UPDATE auth_credentials
+    SET login_password_hash = '<备份的原哈希>',
+        session_epoch = session_epoch + 1,
+        updated_at = NOW()
+    WHERE id = 'default';
+    ```
+    方法二已删除该行时，先按方法二流程重建该行再执行上述更新，或直接把备份的整行重新 `INSERT` 回 `auth_credentials`。
 
 ## 附件 / 原文读取报错
 
