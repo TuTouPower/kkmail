@@ -37,6 +37,7 @@ _api_keys: frozenset[str] | None = None
 _session_epoch: int = 1
 _SESSION_EPOCH_CACHE_TTL_SECONDS = 5.0
 _DEFAULT_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
+_MAX_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 365
 _session_max_age_seconds: int | None = None
 _session_epoch_cache: tuple[int, float] | None = None
 _session_epoch_generation = 0
@@ -117,9 +118,15 @@ def _serializer() -> URLSafeTimedSerializer:
 def _parse_session_max_age() -> int:
     raw = os.environ.get("MAIL_CORE_SESSION_MAX_AGE") or str(_DEFAULT_SESSION_MAX_AGE_SECONDS)
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError as exc:
         raise AuthConfigError("MAIL_CORE_SESSION_MAX_AGE must be an integer number of seconds") from exc
+    if not 0 < value <= _MAX_SESSION_MAX_AGE_SECONDS:
+        raise AuthConfigError(
+            "MAIL_CORE_SESSION_MAX_AGE must be between 1 and "
+            f"{_MAX_SESSION_MAX_AGE_SECONDS} seconds (365 days)"
+        )
+    return value
 
 
 def session_max_age() -> int:
