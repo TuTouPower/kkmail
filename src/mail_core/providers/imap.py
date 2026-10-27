@@ -480,7 +480,9 @@ class ImapProvider:
     _active_client: Any = field(default=None, init=False, repr=False)
     _session_permit: Any = field(default=None, init=False, repr=False)
     _current_folder: str | None = field(default=None, init=False, repr=False)
-    _metadata_uid_scan: tuple[str, int | None, list[int]] | None = field(
+    # (folder, uidvalidity, scan_start, uids) — scan_start is the lower
+    # bound the cached UID list was built from (A170).
+    _metadata_uid_scan: tuple[str, int | None, int, list[int]] | None = field(
         default=None, init=False, repr=False
     )
 
@@ -727,6 +729,7 @@ class ImapProvider:
                 cached_scan is None
                 or cached_scan[0] != folder_remote_id
                 or cached_scan[1] != scan_uidvalidity
+                or cached_scan[2] > start
             ):
                 self._metadata_uid_scan = None
                 typ, data = c.uid("SEARCH", None, f"UID {start}:*")
@@ -745,11 +748,11 @@ class ImapProvider:
                         if value >= start:
                             uids.append(value)
                 uids.sort()
-                self._metadata_uid_scan = (folder_remote_id, scan_uidvalidity, uids)
+                self._metadata_uid_scan = (folder_remote_id, scan_uidvalidity, start, uids)
                 cached_scan = self._metadata_uid_scan
 
             batch_size = int((cursor or {}).get("page_size") or 50)
-            uid_list = cached_scan[2]
+            uid_list = cached_scan[3]
             offset = bisect_left(uid_list, start)
             batch = uid_list[offset : offset + batch_size]
             has_more = offset + len(batch) < len(uid_list)
