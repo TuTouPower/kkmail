@@ -59,7 +59,12 @@ def _in_git_repo() -> bool:
 def _baseline_ok(baseline: str) -> bool:
     if not baseline or baseline == "no-git":
         return False
-    return _git(["rev-parse", "--verify", "--quiet", f"{baseline}^{{commit}}"]).returncode == 0
+    if baseline.startswith("-"):
+        # 形态校验先于一切 git 调用：以 '-' 开头会被 git 解析为选项（A338）。
+        return False
+    return _git(
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{baseline}^{{commit}}"]
+    ).returncode == 0
 
 
 def _warn_degraded(baseline: str) -> None:
@@ -67,6 +72,11 @@ def _warn_degraded(baseline: str) -> None:
         f"WARNING: baseline {baseline!r} 不可解析，退化为存在性/未跟踪判断，覆盖降级",
         file=sys.stderr,
     )
+    if baseline.startswith("-"):
+        print(
+            "WARNING: baseline 以 '-' 开头，按非法形态拒绝（防 git 选项注入）",
+            file=sys.stderr,
+        )
 
 
 def _untracked_files(excludes: list[str]) -> list[str]:
@@ -82,7 +92,7 @@ def _excluded(path: str, excludes: list[str]) -> bool:
 
 def _diff_name_only(baseline: str, excludes: list[str]) -> list[str]:
     # -z：NUL 分隔且从不引号化，非 ASCII 路径原样输出（core.quotePath 无效）。
-    result = _git(["diff", "--name-only", "-z", baseline], check=True)
+    result = _git(["diff", "--name-only", "-z", "--end-of-options", baseline], check=True)
     paths = [line for line in result.stdout.split("\0") if line]
     return [p for p in paths if not _excluded(p, excludes)]
 
@@ -100,7 +110,10 @@ def cmd_deliverable(args) -> int:
         if any(line for line in untracked):
             print("present — untracked new file")
             return 0
-        stat = _git(["diff", "--stat", args.baseline, "--", args.path], check=True).stdout.strip()
+        stat = _git(
+            ["diff", "--stat", "--end-of-options", args.baseline, "--", args.path],
+            check=True,
+        ).stdout.strip()
         if stat:
             print(f"present — changed vs baseline ({stat.splitlines()[-1].strip()})")
             return 0
@@ -142,7 +155,7 @@ def cmd_added_lines(args) -> int:
         result = _git(
             ["-c", "core.quotePath=false",
              "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false",
-             "diff", args.baseline],
+             "diff", "--end-of-options", args.baseline],
             check=True,
         )
         current_path = ""

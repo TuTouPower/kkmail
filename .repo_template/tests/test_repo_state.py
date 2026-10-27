@@ -181,6 +181,18 @@ def test_non_ascii_paths_raw_and_exclude_consistent(repo):
     assert "TODO untracked-cn" not in lines
 
 
+def test_baseline_option_like_rejected_without_side_effect(repo, tmp_path):
+    """A338：以 '-' 开头的 baseline 须先经形态校验拒绝，不得被 git 当选项执行
+    （如 diff 的 --output= 写文件）；拒绝后按既有降级口径只报未跟踪文件。"""
+    evil = tmp_path / "evil_output.txt"
+    (repo / "fresh.py").write_text("new line\n", encoding="utf-8")
+    result = _run(repo, "changed-files", "--", f"--output={evil}")
+    assert result.returncode == 0, result.stderr
+    assert "非法形态" in result.stderr
+    assert not evil.exists()
+    assert result.stdout.splitlines() == ["fresh.py"]
+
+
 def test_non_git_repo_errors(tmp_path):
     result = _run(tmp_path, "added-lines", "HEAD")
     assert result.returncode != 0
