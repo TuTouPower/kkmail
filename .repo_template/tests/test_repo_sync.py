@@ -430,6 +430,60 @@ def test_prep_idempotent_no_changes(env):
     assert (consumer / ".repo_template/skills/repo-template-sync-core/SKILL.md").read_text().endswith("same\n")
 
 
+def test_prep_failure_rolls_back_toolchain(env, monkeypatch):
+    """A389：prep 中途失败须回滚已覆盖的工具链（与 cmd_apply 同口径），不留半更新状态。"""
+    src, consumer = env["src"], env["consumer"]
+    core_src = src / ".repo_template/skills/repo-template-sync-core"
+    core_src.mkdir(parents=True)
+    (core_src / "SKILL.md").write_text(
+        "---\nname: repo-template-sync-core\ndescription: none\ndisable-model-invocation: true\n---\nnew core\n"
+    )
+    (src / ".repo_template/scripts/repo_sync.py").write_text("new tool\n")
+    (src / ".repo_template/scripts/brand_new.py").write_text("brand new\n")
+
+    dst_core = consumer / ".repo_template/skills/repo-template-sync-core"
+    dst_core.mkdir(parents=True)
+    (dst_core / "SKILL.md").write_text("---\nname: old\ndescription: old\n---\nold core\n")
+    (consumer / ".repo_template/scripts").mkdir(parents=True, exist_ok=True)
+    tool = consumer / ".repo_template/scripts/repo_sync.py"
+    tool.write_text("old tool\n")
+
+    def _boom(changed):
+        raise OSError("injected prep failure")
+
+    monkeypatch.setattr(rs, "sync_opencode_commands", _boom)
+    rs._ROLLBACK.clear()
+    rs._cleanup_rollback()
+    with pytest.raises(rs.SyncError, match="回滚"):
+        rs.cmd_prep(Namespace())
+
+    # 已覆盖文件恢复旧内容、prep 新建文件被删除
+    assert tool.read_text() == "old tool\n"
+    assert (dst_core / "SKILL.md").read_text().endswith("old core\n")
+    assert not (consumer / ".repo_template/scripts/brand_new.py").exists()
+    rs._ROLLBACK.clear()
+    rs._cleanup_rollback()
+
+
+def test_prep_success_cleans_rollback_staging(env):
+    """A389：prep 成功后须清理回滚暂存目录（与 cmd_apply 的 _cleanup_rollback 同口径）。"""
+    src, consumer = env["src"], env["consumer"]
+    core_src = src / ".repo_template/skills/repo-template-sync-core"
+    core_src.mkdir(parents=True)
+    (core_src / "SKILL.md").write_text(
+        "---\nname: repo-template-sync-core\ndescription: none\ndisable-model-invocation: true\n---\nnew core\n"
+    )
+    # 预置旧文件，确保 prep 覆盖时真的产生回滚暂存，成功后应被清理
+    dst_core = consumer / ".repo_template/skills/repo-template-sync-core"
+    dst_core.mkdir(parents=True)
+    (dst_core / "SKILL.md").write_text("---\nname: old\ndescription: old\n---\nold core\n")
+    rs._ROLLBACK.clear()
+    rs._cleanup_rollback()
+    assert rs.cmd_prep(Namespace()) == 0
+    assert not (consumer / ".scratch" / "repo_sync_rollback").exists()
+    rs._ROLLBACK.clear()
+
+
 
 # ---------------------------------------------------------------------------
 # .gitignore / .prettierignore / MCP 机械合并
@@ -792,6 +846,37 @@ def test_init_migrates_legacy_state_and_prompts(env, monkeypatch):
     assert state["last_synced_commit"] == "deadbeef"
     assert state["template_source"]["value"] == str(env["src"])
     assert not legacy.exists()
+
+
+def test_resolve_src_url_cache_origin_mismatch_rejected(env):
+    """A184: 缓存 .git 的 origin 与 state URL 不符时报错，不得静默 pull 旧仓。"""
+    src, consumer = env["src"], env["consumer"]
+    cache = consumer / ".scratch/repo_template_sync_src"
+    cache.parent.mkdir(parents=True)
+    _git(consumer / ".scratch", "clone", str(src), cache.name)
+    state = rs.read_state()
+    state["template_source"] = {"kind": "url", "value": "https://example.com/new-template.git"}
+    with pytest.raises(rs.SyncError, match="origin"):
+        rs.resolve_src(state)
+
+
+def test_resolve_src_url_disallowed_protocol_rejected(env):
+    """A184: URL 模板源只允许 https/ssh/file 等协议，其余在 clone 前拒绝。"""
+    state = rs.read_state()
+    state["template_source"] = {"kind": "url", "value": "http://127.0.0.1:9/x.git"}
+    with pytest.raises(rs.SyncError, match="协议不允许"):
+        rs.resolve_src(state)
+
+
+def test_resolve_src_url_file_scheme_clone_and_pull(env):
+    """A184: file:// 属 allowlist；二次调用时 origin 一致可正常 pull。"""
+    src, consumer = env["src"], env["consumer"]
+    state = rs.read_state()
+    state["template_source"] = {"kind": "url", "value": src.as_uri()}
+    first = rs.resolve_src(state)
+    assert (first / rs.PRODUCT_MARKER).is_file()
+    second = rs.resolve_src(state)
+    assert second == first
 
 
 def test_resolve_src_rejects_invalid(env):

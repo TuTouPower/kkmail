@@ -218,6 +218,24 @@ def prompt_substrings(state: dict | None) -> list[str]:
     return out
 
 
+def _validate_template_source_url(value: str) -> None:
+    """URL 模板源协议 allowlist（A184）：仅 https / ssh / file，余者在 clone/pull 前拒绝。
+
+    ssh 接受 ssh:// 与 scp 式 git@host:path；以 '-' 开头的值一律拒绝
+    （会被 git 解析为选项）。本地路径走 kind=path，不在此处放行。
+    """
+    if value.startswith("-"):
+        raise SyncError(f"模板源 URL 协议不允许：{value!r}（不得以 '-' 开头）")
+    if value.startswith(("https://", "ssh://", "file://")):
+        return
+    if re.match(r"^[^/@\s]+@[^/:\s]+:\S+$", value):
+        return
+    raise SyncError(
+        f"模板源 URL 协议不允许：{value!r}"
+        "（仅允许 https://、ssh://、scp 式 user@host:path 或 file://）"
+    )
+
+
 def resolve_src(state: dict | None) -> Path:
     if not state or not state.get("template_source", {}).get("value"):
         raise SyncError("未初始化：缺少 template_source。先运行 init --source <path|url>")
@@ -225,6 +243,7 @@ def resolve_src(state: dict | None) -> Path:
     kind = ts.get("kind", "path")
     value = ts["value"]
     if kind == "url":
+        _validate_template_source_url(value)
         cache = CONSUMER / ".scratch/repo_template_sync_src"
         if not (cache / ".git").exists():
             cache.parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +251,15 @@ def resolve_src(state: dict | None) -> Path:
             if r.returncode != 0:
                 raise SyncError(f"clone 模板源失败：{r.stderr.strip()}")
         else:
+            # 换源后缓存仍是旧仓：pull 前先比对 origin，不符则报错，
+            # 由用户删缓存重 clone，禁止静默 pull 旧仓（A184）。
+            origin = _git(cache, "remote", "get-url", "origin")
+            actual = origin.stdout.strip() if origin.returncode == 0 else ""
+            if actual != value:
+                raise SyncError(
+                    f"模板源缓存 origin 与 template_source 不符：缓存为 {actual!r}，"
+                    f"当前为 {value!r}；请删除 {cache} 后重新同步（重 clone）"
+                )
             r = _git(cache, "pull", "--ff-only")
             if r.returncode != 0:
                 raise SyncError(f"更新模板源失败：{r.stderr.strip()}")
