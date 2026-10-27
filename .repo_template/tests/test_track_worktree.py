@@ -81,3 +81,29 @@ def test_append_record_large_file_still_dedups(tmp_path, monkeypatch):
     path.write_text("\n".join(filler + [last]) + "\n", encoding="utf-8")
     tw.append_record(str(path), {"agent": "a", "tid": "t001"})
     assert path.read_text(encoding="utf-8").count('"tid": "t001"') == 1
+
+
+# --- A344: extract_tid 只在命令真的调用 track_worktree.py / task.py 时提取 ---
+
+def test_extract_tid_from_track_worktree_command():
+    cmd = "python3 .repo_template/scripts/track_worktree.py --tid t113"
+    assert tw.extract_tid(cmd, "") == "t113"
+    cmd2 = "python3 .repo_template/scripts/track_worktree.py --tid=t042"
+    assert tw.extract_tid(cmd2, "") == "t042"
+
+
+def test_extract_tid_from_task_py_start():
+    cmd = "python3 .repo_template/scripts/task.py start t007"
+    assert tw.extract_tid(cmd, "") == "t007"
+
+
+def test_extract_tid_ignores_unrelated_commands():
+    # 其它工具的 --tid 参数、字符串字面量里的 start tNNN 不得误命中
+    assert tw.extract_tid("some_tool --tid t999", "t001") == "t001"
+    assert tw.extract_tid("echo 'start t123'", "") == ""
+    assert tw.extract_tid("grep --tid t555 file.txt", "") == ""
+    assert tw.extract_tid("echo start t321", "t002") == "t002"
+
+
+def test_extract_tid_fallback_when_script_command_has_no_tid():
+    assert tw.extract_tid("python3 .repo_template/scripts/task.py view", "t009") == "t009"

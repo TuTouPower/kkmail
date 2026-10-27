@@ -121,12 +121,20 @@ def append_record(path, record):
         pass
 
 
+# 触发条件（与文件头注释对齐）：命令必须真的在调用 track_worktree.py 或
+# task.py；其它工具的 --tid 参数 / 字面量里的 `start tNNN` 不算（A344）。
+_TRIGGER_SCRIPT_RE = re.compile(r"(?:^|[/\s\"'])(?:track_worktree|task)\.py(?:\s|\"|'|$)")
+
+
 def extract_tid(command, fallback_tid):
     """Extract tid from the triggering command, or fall back.
 
     Accepts `--tid tNNN`, `--tid=tNNN`, and the positional form used by
-    task.py (`task.py start tNNN`).
+    task.py (`task.py start tNNN`). Commands that do not invoke
+    track_worktree.py / task.py never yield a tid.
     """
+    if not _TRIGGER_SCRIPT_RE.search(command):
+        return fallback_tid
     match = re.search(r"--tid[= ](\S+)", command)
     if match:
         return match.group(1)
