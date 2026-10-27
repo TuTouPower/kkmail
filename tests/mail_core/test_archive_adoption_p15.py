@@ -315,6 +315,33 @@ def test_a111_malformed_env_returns_config_error_not_valueerror(monkeypatch):
     assert result["status"] == "config_error"
 
 
+# ---------------------------------------------------------------------------
+# A140: account deleted after claim must not burn retries as provider_error
+# ---------------------------------------------------------------------------
+
+
+def test_a140_deleted_account_releases_claim_without_retry():
+    db, acc_id = _base_db()
+    claim, _msg, state = _make_claim(db, acc_id, uuid.uuid4(), "remote-gone")
+    # Account vanishes between claim and provider construction.
+    del db[(Account, acc_id)]
+    build_calls: list = []
+
+    def _build(*a, **kw):
+        build_calls.append(1)
+        raise AssertionError("provider must not be built for a deleted account")
+
+    result = _run_batch(db, [claim], build_provider=_build)
+    assert build_calls == []
+    assert result["status"] == "ok"
+    assert result["failed"] == 0
+    assert result["completed"] == 0
+    assert state.state == ArchiveState.ARCHIVE_PENDING.value
+    assert state.retry_count == 0
+    assert state.last_error is None
+    assert state.claimed_by is None
+
+
 def test_a27_normal_message_under_limits_still_parses(monkeypatch):
     from mail_core.blobs.archive import parse_mime_content
 

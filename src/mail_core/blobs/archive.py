@@ -84,6 +84,10 @@ class QuotaExceededError(RuntimeError):
     """Raised when blob write would exceed hard quota."""
 
 
+class _AccountGoneError(RuntimeError):
+    """The claimed message's account no longer exists at provider build time."""
+
+
 class MimeParseError(RuntimeError):
     """Raised when MIME body, header, or attachment filename parsing/decoding fails."""
 
@@ -952,6 +956,8 @@ def run_archive_batch(
             try:
                 with Session() as session:
                     acc = session.get(Account, msg_account_id)
+                    if acc is None:
+                        raise _AccountGoneError(msg_account_id)
                     snap = Account(
                         id=acc.id,
                         email=acc.email,
@@ -976,6 +982,18 @@ def run_archive_batch(
                                 pass
                         raise
                 provider_cache[msg_account_id] = p
+            except _AccountGoneError:
+                # The account was deleted after the claim: this is not a
+                # provider failure, so release the account's claims back
+                # to pending without counting a retry or persisting an
+                # error, and let other accounts in the batch continue.
+                log.info("archive account %s deleted after claim; releasing its claims", msg_account_id)
+                affected = [c for c in _active_claims() if account_by_message.get(c.message_id) == msg_account_id]
+                with Session() as session:
+                    settle_archive_claims(session, affected, "release", account_id=account_id)
+                    session.commit()
+                done_ids.update(c.message_id for c in affected)
+                continue
             except Exception as exc:
                 # Provider construction failure (R18): persist the sanitized
                 # error through the unified settlement for every still-active
