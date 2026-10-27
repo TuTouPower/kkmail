@@ -37,8 +37,9 @@ disable-model-invocation: true
 5. 收尾前检查新增调试输出、临时文件和未解释 TODO，运行项目定义的 lint/format/typecheck，并执行 `git diff --check`。检查方式按技术栈选择，不使用通用固定 grep。
 6. 对实际遇到且不属于本 task 的重要问题，登记 pending 或 finding；不要求为了收尾额外全仓扫描，也不得顺手混入旁支修复。已由本 task 闭环的来源 pending 用 `pending.py archive ... --fix-ref {tid} --write` 归档；可跨 task 复用的已验证事实用 `findings.py new` 抽取。
 7. 更新 task.md 的实施、验证、review 和结果摘要；遗留 finding 必须指向 `pNNN` 或 follow-up tid。再次运行 `task.py preflight {tid} --require-verified`（在 worktree 内直接运行，不带 `--ref`），防收尾重新引入未知契约。
-8. 写完整 `handoff.json`，其 identity、branch、base、测试、黑盒、review、AC evidence、pending 和 findings 与当前执行一致。
-9. `task.py finish {tid}`，用归档路径再次检查 review 状态，然后把本 task 全部改动提交为一个执行 commit。期间不创建正式中间 commit。
+8. 核对「Review 处置节与 review 文件一致性」：task.md「Review 处置」节的处置结论、finding 处置与最终 review 状态须与 review 报告一致，不得残留创建期或与报告矛盾的过期表述；不一致时先修正 task.md 再 finish。
+9. 写完整 `handoff.json`，其 identity、branch、base、测试、黑盒、review、AC evidence、pending 和 findings 与当前执行一致。
+10. `task.py finish {tid}`，用归档路径再次检查 review 状态，然后把本 task 全部改动提交为一个执行 commit。期间不创建正式中间 commit。
 
 ## 完成
 
