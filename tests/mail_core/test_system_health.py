@@ -139,6 +139,14 @@ def test_system_health_metrics_calculation(monkeypatch, tmp_path):
 
 
 def test_api_system_health_endpoint(monkeypatch):
+    # A385 semantic change (user decision, option A): the operational
+    # metrics endpoints require authentication; only the /health
+    # liveness probe (no sensitive fields) stays public. This replaces
+    # the previous assertions that unauthenticated requests got 200.
+    from mail_core.security.auth import reset_auth_caches
+    from tests.mail_core.conftest import TEST_API_KEY
+
+    reset_auth_caches()
     mock_session = MagicMock()
     monkeypatch.setattr("mail_core.db.session.get_session_factory", lambda: lambda: mock_session)
     mock_report = SystemHealthReport(
@@ -153,16 +161,25 @@ def test_api_system_health_endpoint(monkeypatch):
     monkeypatch.setattr("mail_core.system_metrics.get_system_health_metrics", lambda _session: mock_report)
 
     client = TestClient(app)
-    res = client.get("/api/system/health")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["status"] == "healthy"
-    assert data["worker"]["healthy"] is True
-    assert data["worker"]["active_workers"] == ["worker-1"]
+    try:
+        # Unauthenticated: metrics endpoints are closed, liveness is open.
+        assert client.get("/api/system/health").status_code == 401
+        assert client.get("/health/metrics").status_code == 401
+        assert client.get("/health").status_code == 200
 
-    res2 = client.get("/health/metrics")
-    assert res2.status_code == 200
-    assert res2.json()["status"] == "healthy"
+        headers = {"Authorization": f"Bearer {TEST_API_KEY}"}
+        res = client.get("/api/system/health", headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "healthy"
+        assert data["worker"]["healthy"] is True
+        assert data["worker"]["active_workers"] == ["worker-1"]
+
+        res2 = client.get("/health/metrics", headers=headers)
+        assert res2.status_code == 200
+        assert res2.json()["status"] == "healthy"
+    finally:
+        reset_auth_caches()
 
 
 def test_ready_endpoint_with_worker_flag(monkeypatch):

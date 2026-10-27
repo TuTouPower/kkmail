@@ -255,8 +255,11 @@ def ready():
     return ReadyOut(status="ready", schema_revision=rev, schema_head=head, listener=True, worker=worker_ok)
 
 
-@app.get("/api/system/health")
-@app.get("/health/metrics", include_in_schema=False)
+# A385 (user decision, option A): operational/business metrics require an
+# authenticated session or API key; only /health above stays public as a
+# liveness probe and exposes no sensitive fields.
+@app.get("/api/system/health", dependencies=[Depends(require_auth)])
+@app.get("/health/metrics", include_in_schema=False, dependencies=[Depends(require_auth)])
 def system_health():
     """Lightweight operational and business health metrics."""
     from mail_core.db.session import get_session_factory
