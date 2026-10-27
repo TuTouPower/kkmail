@@ -28,7 +28,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Migrate accounts, groups, credentials and emails from legacy SQLite to mail-core PostgreSQL."
     )
     parser.add_argument("--source", required=True, type=Path, help="legacy SQLite database path")
-    parser.add_argument("--target-url", required=True, help="PostgreSQL target URL")
+    parser.add_argument(
+        "--target-url",
+        default=None,
+        help="PostgreSQL target URL without a password; password-bearing URLs must be "
+        "passed via --target-url-env or MAIL_CORE_DATABASE_URL so the secret stays "
+        "out of the process list and shell history",
+    )
+    parser.add_argument(
+        "--target-url-env",
+        default=None,
+        metavar="VAR",
+        help="name of the environment variable holding the PostgreSQL target URL",
+    )
     parser.add_argument("--yes", action="store_true", help="confirm the displayed source and target")
     return parser.parse_args(argv)
 
@@ -333,6 +345,46 @@ def decrypt_legacy_field(
     return val
 
 
+def _resolve_target_url(args: argparse.Namespace, environ: dict | None = None) -> str:
+    """Resolve the target URL without ever requiring a password on argv.
+
+    Priority: --target-url-env VAR, then a passwordless --target-url, then
+    the MAIL_CORE_DATABASE_URL environment fallback.
+    """
+    if environ is None:
+        environ = os.environ
+    env_var = getattr(args, "target_url_env", None)
+    if env_var:
+        value = environ.get(env_var)
+        if not value:
+            raise ValueError(
+                f"environment variable {env_var} named by --target-url-env is not set or is empty"
+            )
+        return value
+    cli_url = getattr(args, "target_url", None)
+    if cli_url:
+        from sqlalchemy.engine import make_url
+
+        try:
+            parsed = make_url(cli_url)
+        except Exception as exc:
+            raise ValueError("invalid PostgreSQL target URL") from exc
+        if parsed.password:
+            raise ValueError(
+                "--target-url must not contain a password (it would be exposed in the "
+                "process list and shell history); pass the URL via --target-url-env VAR "
+                "or MAIL_CORE_DATABASE_URL instead"
+            )
+        return cli_url
+    fallback = environ.get("MAIL_CORE_DATABASE_URL")
+    if fallback:
+        return fallback
+    raise ValueError(
+        "a target URL is required: pass a passwordless --target-url, "
+        "--target-url-env VAR, or set MAIL_CORE_DATABASE_URL"
+    )
+
+
 def _target_url_details(raw_url: str) -> tuple[str, str]:
     from sqlalchemy.engine import make_url
 
@@ -351,7 +403,7 @@ def _target_url_details(raw_url: str) -> tuple[str, str]:
 def main(args: argparse.Namespace) -> int:
     sqlite_path = args.source.expanduser().resolve()
     try:
-        target_url, target_summary = _target_url_details(args.target_url)
+        target_url, target_summary = _target_url_details(_resolve_target_url(args))
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
