@@ -1299,9 +1299,16 @@ def run_archive_batch(
                                 # A38: 保护已有 UUID
                                 attachment = existing_atts[pid]
                                 if attachment.blob_id != att_blob.id:
+                                    old_blob_id = attachment.blob_id
                                     attachment.blob_id = att_blob.id
                                     att_blob.ref_count = int(att_blob.ref_count) + 1
                                     att_blob.gc_eligible_at = None
+                                    if old_blob_id is not None:
+                                        old_blob = session.get(MessageBlob, old_blob_id)
+                                        if old_blob is not None and old_blob.id != att_blob.id:
+                                            old_blob.ref_count = max(0, int(old_blob.ref_count) - 1)
+                                            if old_blob.ref_count == 0 and old_blob.gc_eligible_at is None:
+                                                old_blob.gc_eligible_at = datetime.now(timezone.utc)
                                 attachment.filename = att_info["filename"]
                                 attachment.content_type = att_info["content_type"]
                                 attachment.size_bytes = att_info["size_bytes"]

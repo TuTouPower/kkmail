@@ -190,10 +190,10 @@ class FakeBlobStore:
         )
 
 
-def _run_batch(db, claims, *, build_provider, blob_store=None, payload=None, quota_used=0):
+def _run_batch(db, claims, *, build_provider, blob_store=None, payload=None, quota_used=0, session_cls=StubSession):
     blob_store = blob_store or FakeBlobStore()
     fake_quota = SimpleNamespace(used_bytes=quota_used, soft_exceeded=False, hard_exceeded=False)
-    factory = lambda: StubSession(db)  # noqa: E731
+    factory = lambda: session_cls(db)  # noqa: E731
     account_id = db[(Message, claims[0].message_id)].account_id
     with (
         patch("mail_core.db.session.get_session_factory", return_value=factory),
@@ -386,6 +386,66 @@ def test_a141_header_backfill_failure_logs_warning_with_message_id(caplog):
         str(claim.message_id) in rec.getMessage() and "backfill" in rec.getMessage()
         for rec in caplog.records
     ), [r.getMessage() for r in caplog.records]
+
+
+# ---------------------------------------------------------------------------
+# A142: rebinding an attachment must decrement the old blob's ref_count
+# ---------------------------------------------------------------------------
+
+_MIME_WITH_ATT = (
+    b"From: a@b.c\r\nSubject: s\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n"
+    b"--b\r\nContent-Type: text/plain\r\n\r\nhello\r\n"
+    b"--b\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"att.pdf\"\r\n\r\nPDF_DATA\r\n--b--"
+)
+
+
+def test_a142_rebind_decrements_old_blob_ref_count_and_marks_gc_eligible():
+    from mail_core.mail.storage.models import Attachment, MessageBlob
+
+    db, acc_id = _base_db()
+    mid = uuid.uuid4()
+    claim, _msg, _state = _make_claim(db, acc_id, mid, "remote-att")
+    old_blob_id = uuid.uuid4()
+    old_blob = MessageBlob(
+        id=old_blob_id,
+        content_sha256="0" * 64,
+        key_version=1,
+        size_bytes=10,
+        storage_path="old/path.blob",
+        ref_count=1,
+        gc_eligible_at=None,
+    )
+    db[(MessageBlob, old_blob_id)] = old_blob
+    existing_att = Attachment(
+        id=uuid.uuid4(),
+        message_id=mid,
+        part_id="1",
+        blob_id=old_blob_id,
+        filename="att.pdf",
+        content_type="application/pdf",
+        size_bytes=8,
+        content_id=None,
+        is_inline=False,
+    )
+
+    class AttSession(StubSession):
+        def scalars(self, stmt):
+            try:
+                entity = stmt.column_descriptions[0].get("entity")
+            except Exception:
+                entity = None
+            if entity is Attachment:
+                return _Scalars([existing_att])
+            return super().scalars(stmt)
+
+    provider = SimpleNamespace(fetch_mime=lambda remote_id: _MIME_WITH_ATT)
+    result = _run_batch(
+        db, [claim], build_provider=lambda *a, **kw: provider, session_cls=AttSession
+    )
+    assert result["completed"] == 1
+    assert existing_att.blob_id != old_blob_id, "attachment should have been rebound to the new blob"
+    assert old_blob.ref_count == 0, "old blob ref_count must be decremented on rebind"
+    assert old_blob.gc_eligible_at is not None, "old blob at ref_count 0 must become GC-eligible"
 
 
 def test_a27_normal_message_under_limits_still_parses(monkeypatch):
