@@ -349,7 +349,10 @@ def test_create_account_hides_and_safely_logs_unexpected_errors(api_client, monk
     assert response.status_code == 500
     assert response.json() == {"detail": "internal server error"}
     assert "account creation failed" in caplog.text
-    assert "password=[REDACTED]" in caplog.text
+    # A325: safe_error converges non-provider exceptions to the type name
+    # only, so the log line carries "RuntimeError" and no message content
+    # (previously this asserted the redacted raw message "password=[REDACTED]").
+    assert "account creation failed: RuntimeError" in caplog.text
     assert "private-secret" not in caplog.text
 
 

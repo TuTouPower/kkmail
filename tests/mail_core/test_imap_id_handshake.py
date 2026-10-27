@@ -30,7 +30,10 @@ def test_initial_sync_enqueue_failure_is_safely_logged(monkeypatch, caplog):
 
     assert str(account_id) in caplog.text
     assert "initial sync enqueue failed" in caplog.text
-    assert "password=[REDACTED]" in caplog.text
+    # A325: safe_error converges non-provider exceptions to the type name
+    # only (previously this asserted the redacted raw message).
+    assert "initial sync enqueue failed for account" in caplog.text
+    assert "RuntimeError" in caplog.text
     assert "private-secret" not in caplog.text
 
 
