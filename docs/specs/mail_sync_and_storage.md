@@ -107,6 +107,7 @@
 ## Gmail 虚拟标签同步策略与 IMAP 超时优化（t056，2026-10-26）
 
 - Gmail 虚拟文件夹排除（AC-T56-001）：Gmail 账号（`@gmail.com` / `@googlemail.com`）下的 `\All`（所有邮件）与 `\Important`（重要）虚拟汇总标签，在文件夹发现时默认置为 `sync_status = "paused"`，常规同步不自动为其拉取邮件，消除收件箱与已发邮件被 2~3 倍重复拉取的存储与 IO 冗余。
+- 虚拟标签的显式同步请求（p060）：上述 `paused` 虚拟标签（及 `\Noselect` 结构节点、远程已消失文件夹）仍是可导航视图；以其 `folder_id` 显式提交的同步请求在目标解析时归零（请求以 0 目标完成、接口返回 200），与按角色解析的静默排除和执行层 `skipped` 语义一致，不返回 422 `folder_not_selectable`。文件夹不存在或不属请求作用域仍返回 404。
 - RFC 6154 属性解析扩展（AC-T56-002）：`ImapProvider.list_folder_catalog()` 增加对 `\All` 映射为 `role = "all"`，对 `\Flagged` / `\Starred` 映射为 `role = "flagged"`。
 - IMAP 连接与分批放宽（AC-T56-003, AC-T56-004）：`ImapProvider` 默认 Socket 读取超时提升至 60.0 秒；`sync_folder_metadata` 单任务默认最大批次 `max_pages` 调整为 10 页（约 500 封），减轻单任务长时间占用连接风险。
 - 瞬态网络错误容错（AC-T56-005）：Worker 执行同步任务捕获 `TimeoutError`、`SSLEOFError` 等瞬时网络异常时，按指数退避重新排期，不立即将账号置为 `failed` 状态。

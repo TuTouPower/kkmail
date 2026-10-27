@@ -711,8 +711,6 @@ def api_sync_delta(body: DeltaSyncIn, response: Response) -> SyncRequestOut:
                 raise HTTPException(409, "client_request_id_conflict") from exc
             if "account_disabled" in str(exc):
                 raise HTTPException(409, "account_disabled") from exc
-            if "folder_not_selectable" in str(exc):
-                raise HTTPException(422, "folder_not_selectable") from exc
             raise HTTPException(400, str(exc)) from exc
 
     with Session() as session:
