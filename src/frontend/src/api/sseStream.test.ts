@@ -354,6 +354,25 @@ describe('subscribeMailCoreStream', () => {
     unsubscribe()
   })
 
+  it('removes the external abort listener on unsubscribe (A276)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => mockSseResponse(':keepalive\n\n')))
+    const controller = new AbortController()
+    const addSpy = vi.spyOn(controller.signal, 'addEventListener')
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener')
+
+    const unsubscribe = subscribeMailCoreStream(vi.fn(), { signal: controller.signal })
+    await vi.advanceTimersByTimeAsync(10)
+
+    const added = addSpy.mock.calls.find(([type]) => type === 'abort')
+    expect(added).toBeDefined()
+
+    unsubscribe()
+
+    const removed = removeSpy.mock.calls.find(([type]) => type === 'abort')
+    expect(removed).toBeDefined()
+    expect(removed?.[1]).toBe(added?.[1])
+  })
+
   it('triggers visibility recovery callback on visibility change to visible', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       return mockSseResponse(':keepalive\n\n')

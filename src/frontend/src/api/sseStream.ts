@@ -263,8 +263,14 @@ export function subscribeMailCoreStream(
     document.addEventListener('visibilitychange', onVisibilityChange)
   }
 
+  let externalAbortHandler: (() => void) | undefined
+
   const unsubscribe = () => {
     closed = true
+    if (options.signal && externalAbortHandler) {
+      options.signal.removeEventListener('abort', externalAbortHandler)
+      externalAbortHandler = undefined
+    }
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
@@ -286,7 +292,10 @@ export function subscribeMailCoreStream(
     if (options.signal.aborted) {
       unsubscribe()
     } else {
-      options.signal.addEventListener('abort', () => unsubscribe(), { once: true })
+      // Named handler so unsubscribe can detach it: an anonymous listener
+      // would stay on a long-lived external signal forever (A276).
+      externalAbortHandler = () => unsubscribe()
+      options.signal.addEventListener('abort', externalAbortHandler, { once: true })
     }
   }
 
