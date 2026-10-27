@@ -16,6 +16,11 @@ from mail_core.mail.storage.models import Message, Thread, ThreadMessage
 _ANGLE_RE = re.compile(r"<([^<>@\s]+@[^<>\s]+)>")
 _BARE_RE = re.compile(r"([^\s<>]+@[^\s<>]+)")
 
+# Thread.subject_norm is String(998) while Message.subject is unbounded
+# Text; every Thread creation goes through normalize_subject, so the
+# column bound is enforced here (A12).
+SUBJECT_NORM_MAX_LENGTH = 998
+
 
 def normalize_subject(subject: str) -> str:
     s = subject or ""
@@ -29,7 +34,7 @@ def normalize_subject(subject: str) -> str:
                 break
         if not stripped:
             break
-    return s.strip().lower()
+    return s.strip().lower()[:SUBJECT_NORM_MAX_LENGTH]
 
 
 def normalize_message_id(value: str | None) -> str | None:
