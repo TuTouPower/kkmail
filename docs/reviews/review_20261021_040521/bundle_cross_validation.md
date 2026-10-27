@@ -18,7 +18,7 @@
 |---|---|---|---|
 |V1-01 SPA 文件逃逸|AGREE|Critical/98|`api/app.py:149-164` 的 catch-all 未使用认证依赖；`candidate = _DIST / full_path` 无 resolve/root 校验。AST 原函数以 `frontend` 为根，传入百分号解码后的 `../requirements-mail-core.txt`，确实选中根外文件。是否经特定代理/浏览器归一化仍需原始 HTTP 验证；编码路径在 ASGI 解码后进入 handler 的攻击链静态成立。不能将 `/proc/self/environ` 等特殊伪文件成功返回当已验证事实；普通可读文件泄露已成立。|
 |V1-02 IMAP 不校验证书|AGREE|High/100|`providers/imap.py:123-129` 不传 ssl_context；本机 stdlib `IMAP4_SSL.__init__` 明确调用 `_create_stdlib_context()`，独立上下文 `verify_mode=0/check_hostname=False`，然后 LOGIN。尚未搭建 MITM TLS 服务，不影响缺校验证据。修复需 `ssl.create_default_context()`。|
-|V1-03 历史凭据|AGREE|High/95|内存 `git show 34c8131069298bf14989f853decba8e3ee8c4dd2:outlook_mail_reader.py` + AST 确认四常量存在，EMAIL/PASSWORD/CLIENT_ID/REFRESH_TOKEN 长度分别 31/14/36/424，均非已知占位词。未输出值、未尝试登录；不能断言仍有效。文件已从当前树删除不构成历史清除反证。|
+|V1-03 历史凭据|AGREE|High/95|内存 `git show [REDACTED_HISTORICAL_LOCATOR]` + AST 确认四常量存在，EMAIL/PASSWORD/CLIENT_ID/REFRESH_TOKEN 长度分别 31/14/36/424，均非已知占位词。未输出值、未尝试登录；不能断言仍有效。文件已从当前树删除不构成历史清除反证。|
 
 ## V2 正确性（23/23）
 

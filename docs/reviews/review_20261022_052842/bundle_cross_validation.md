@@ -11,10 +11,10 @@ ______________________________________________________________________
 
 ## 核验结果清单
 
-### 1. [Critical] `outlook_mail_reader.py:20` 历史 Commit 泄露真实邮箱与 OAuth Token
+### 1. [Critical] `[REDACTED_HISTORICAL_LOCATOR]` 历史 Commit 泄露真实邮箱与 OAuth Token
 
 - **核验结论**：`CONFIRMED` (置信度 100)
-- **直接验证**：执行 `git show 34c8131069298bf14989f853decba8e3ee8c4dd2:outlook_mail_reader.py`，完整输出了真实 Outlook 邮箱、明文密码和长达数百字符的有效 OAuth Refresh Token。当前仓库已验证为公开开源仓（`gh repo view TuTouPower/kkmail --json isPrivate` 返回 false），任何人均可读取，严重泄露。
+- **直接验证**：执行 `git show [REDACTED_HISTORICAL_LOCATOR]`，完整输出了真实 Outlook 邮箱、明文密码和长达数百字符的有效 OAuth Refresh Token。当前仓库已验证为公开开源仓（`gh repo view TuTouPower/kkmail --json isPrivate` 返回 false），任何人均可读取，严重泄露。
 
 ### 2. [Critical] `src/desktop/main.js:189` 桌面端缺失单实例锁
 

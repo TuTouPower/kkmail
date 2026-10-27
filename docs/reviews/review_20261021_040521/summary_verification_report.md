@@ -48,7 +48,7 @@ ______________________________________________________________________
 
 针对核查中暴露的核心争议与架构分歧，经评审已确立以下基准决策：
 
-1. **Commit `34c81310` 历史泄露凭据处置（针对 V1-03）**：
+1. **Commit `[REDACTED_HISTORICAL_COMMIT]` 历史泄露凭据处置（针对 V1-03）**：
     - **溯源事实**：该 Commit 是上游原仓库 `assast/outlookEmail`（作者 `luekongbai`）在 2026-01-13 的首个初始化提交。文件由 fork 自动继承，泄露责任在上游，凭据为原作者历史测试资产。
     - **最终决策**：**不执行破坏性 Git 历史重写**。避免与上游分叉及破坏下游 clone，在安全审计基线中将其标记为“上游遗留已知资产”，保持 Git 树稳定。
 2. **Compose 部署登录密码持久化（针对 V3-14）**：
@@ -71,7 +71,7 @@ ______________________________________________________________________
 |:---|:---|:---|:---:|:---:|:---|
 |**V1-01**|`bundle_v1_security.md:13`|`mail_core/api/app.py:155-164`|**Critical**|**真实存在**|`candidate = _DIST / full_path` 未做路径 resolve 包含校验，且 catch-all 无认证保护。请求 `/%2e%2e/requirements-mail-core.txt` 可逃逸出 dist 目录读取任意系统及进程文件。|
 |**V1-02**|`bundle_v1_security.md:15`|`mail_core/providers/imap.py:123-129`|**High**|**真实存在**|`imaplib.IMAP4_SSL` 未传入 `ssl_context`，Python stdlib 默认 `verify_mode=0`、`check_hostname=False`，导致 IMAP 流量极易遭受中间人攻击窃取密码与邮件。|
-|**V1-03**|`bundle_v1_security.md:17`|Git Commit `34c81310:outlook_mail_reader.py:20`|**High**|**真实存在**|Git 历史中硬编码 Outlook 账号、密码及 424 位 OAuth Token。**已溯源确认系上游原作者初始提交**，按决策在安全基线中标记，不强推重写历史。|
+|**V1-03**|`bundle_v1_security.md:17`|Git Commit `[REDACTED_HISTORICAL_LOCATOR]`|**High**|**真实存在**|Git 历史中硬编码 Outlook 账号、密码及 424 位 OAuth Token。**已溯源确认系上游原作者初始提交**，按决策在安全基线中标记，不强推重写历史。|
 |**V1-04**|`bundle_v1_security.md:21`|`mail_core/security/auth.py:152-217`<br>`api/auth_routes.py:75-78`|**Medium**|**真实存在**|Session Cookie 仅验证签名与 30 天期限，改密和登出不更新服务端 session generation/epoch，被盗 Cookie 在改密后 30 天内依然完全可用。|
 |**V1-05**|`bundle_v1_security.md:23`|`mail_core/security/redact.py:46`<br>`sync/remote_push.py:122`|**Medium**|**真实存在**|`safe_error` 仅截断前 120 字符且仅能脱敏已知 key；多处使用 `log.exception` 打印整个未脱敏的异常调用栈，可能泄露包含个人信息的 provider 原始响应体。|
 |**V1-06**|`bundle_v1_security.md:25`|`mail_core/backup/package.py:244`|**Medium**|**真实存在**|未配置 `MAIL_CORE_BACKUP_KEY` 时，备份静默降级为明文 dump，且依然返回 status=ok，与文档宣称的“密封加密备份”相悖。|

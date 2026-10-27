@@ -12,13 +12,13 @@
 
 ## Critical / High (必修)
 
-- [Critical][100] outlook_mail_reader.py:20-25 — 历史 Commit 泄露真实有效 Outlook 邮箱、明文密码与 OAuth Refresh Token
+- [Critical][100] [REDACTED_HISTORICAL_LOCATOR] — 历史 Commit 泄露真实有效 Outlook 邮箱、明文密码与 OAuth Refresh Token
 - [Critical][99] Dockerfile.mail-core:25 — 生产容器启动模式未装配日志脱敏格式化器击穿安全基线
 - [Critical][98] src/desktop/main.js:189 — 桌面端缺失单实例锁导致多进程写同一数据库与共享服务被误杀
 - [Critical][95] src/mail_core/realtime/dispatcher.py:144-150 — 多 API 进程部署下无本地订阅者误标 dispatched 导致跨进程实时通知静默丢失
 - [Critical][95] src/mail_core/security/auth.py:206-288 — 会话认证每次 HTTP 请求无缓存直接建立 DB Session 查库消耗连接池
 - [Critical][90] src/mail_core/blobs/archive.py:158-216 — 核心状态表 message_archive_state 缺少二级索引导致 Worker 高频全表扫描
-- [High][100] src/frontend/src/App.tsx:18-21 — 历史 Commit 泄露真实手机号及个人真实邮箱 PII 隐私
+- [High][100] [REDACTED_HISTORICAL_LOCATOR] — 历史 Commit 泄露真实手机号及个人真实邮箱 PII 隐私
 - [High][100] scripts/migrate_from_legacy_db.py:68-69 — 数据库迁移脚本硬编码默认 Fallback 解密密钥
 - [High][98] src/mail_core/api/accounts.py:24 — 路由层直接导入并消费 ORM 存储模型击穿分层架构契约
 - [High][98] scripts/mail-core-chaos-lease.sh:16 — Chaos 破坏性脚本数据库前置检查通配符包含可穿透到生产库
@@ -69,7 +69,7 @@
 - [Medium][85] src/mail_core/sync/reconcile.py:84-114 — Reconcile 与 Delta 删除循环内执行 3 次单个查询与 Flush (N+1)
 - [Medium][80] src/mail_core/threading/rules.py:176-184 — 消息线索关联并发创建新 Thread 缺少冲突保护导致同步中断
 - [Medium][80] src/mail_core/mail/application/mutations.py:151 — set_message_flagged 冗余重算全部未读数与聚合计数
-- [Low][100] README.md:455-456 — 历史 Commit 包含开发者个人 Telegram 账号与私有邮箱
+- [Low][100] [REDACTED_HISTORICAL_LOCATOR] — 历史 Commit 包含开发者个人 Telegram 账号与私有邮箱
 - [Low][99] src/desktop/main.js:52 — 未使用的解构引用 rotateLogFile
 - [Low][98] docs/guides/desktop.md:46 — 桌面端使用指南相对链接失效
 - [Low][98] src/frontend/README.md:9 — 前端自述文件命令与链接失效

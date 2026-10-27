@@ -441,7 +441,7 @@ docs/reviews/review_20261022_052842
 ### A53. 彻底重写历史消除 Outlook 泄露凭据并在后台吊销
 
 - 来源：bundle_v1_security, bundle_cross_validation, review_intensive
-- 位置：outlook_mail_reader.py:20-25 (commit 34c8131069298bf14989f853decba8e3ee8c4dd2)
+- 位置：[REDACTED_HISTORICAL_LOCATOR] (commit [REDACTED_HISTORICAL_COMMIT])
 - 优先级：CRITICAL
 - 详细判断理由：用户决策选 B。历史提交中硬编码了真实 Outlook 账号凭据与 OAuth Refresh Token，使用 git-filter-repo 彻底消除该提交历史并 force push，同时在微软控制台吊销该凭据。
 - 修复说明：在微软后台注销 ClientID 及 Token；使用 git-filter-repo 重写历史清除凭据后 force push。
@@ -449,7 +449,7 @@ docs/reviews/review_20261022_052842
 ### A54. 彻底重写历史对手机号与个人隐私脱敏
 
 - 来源：bundle_v1_security, review_intensive
-- 位置：src/frontend/src/App.tsx:18-21 (commit 7931147f8722ff423e8f810aa7ef3bc7709bbf45), README.md:455-456 (commit d368f009f9ce80db31af91b26977b769dd7e0139)
+- 位置：[REDACTED_HISTORICAL_LOCATOR] (commit [REDACTED_HISTORICAL_COMMIT]), [REDACTED_HISTORICAL_LOCATOR] (commit [REDACTED_HISTORICAL_COMMIT])
 - 优先级：HIGH
 - 详细判断理由：用户决策选 A。与 A53 联动，统一使用 git-filter-repo 对历史提交中包含国内真实手机号邮箱（redacted_mobile@example.com）及 Telegram/个人邮箱的提交做脱敏重写。
 - 修复说明：使用 git-filter-repo 对历史涉及隐私提交进行内容脱敏重写。
