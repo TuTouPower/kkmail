@@ -75,7 +75,15 @@ function testPasswordOverridePersisted0600() {
   }
 }
 
-function testPasswordOverrideDoesNotReplaceAnExistingSecret() {
+// REPLACED (A21): the previous version of this test asserted that a
+// password override wins over an already-persisted password file. That
+// is the bug A21 fixes: the override was returned (and used to build
+// databaseUrl()/PGPASSWORD) without ever being persisted, while the
+// running cluster had been initialized with the persisted password, so
+// every connection silently used the wrong password. The override may
+// only take effect when it is persisted on first use; once a password
+// file exists, the persisted value is authoritative.
+function testPasswordOverrideReturnsPersistedValueWhenFileExists() {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-pw-existing-'))
   const file = path.join(dataRoot, 'secrets', 'pg-password')
   try {
@@ -86,8 +94,12 @@ function testPasswordOverrideDoesNotReplaceAnExistingSecret() {
       password: 'temporary-override',
     })
 
-    assert.strictEqual(override.password(), 'temporary-override')
+    assert.strictEqual(override.password(), existing, 'override must not shadow the persisted password')
     assert.strictEqual(fs.readFileSync(file, 'utf8').trim(), existing)
+    assert.ok(
+      override.databaseUrl().includes(`:${encodeURIComponent(existing)}@`),
+      'databaseUrl must be built from the persisted password, not the override',
+    )
     assert.strictEqual(
       new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') }).password(),
       existing,
@@ -386,7 +398,7 @@ testParsePgPort()
 testEnsureDirsWritesMarker()
 testPasswordPersisted0600()
 testPasswordOverridePersisted0600()
-testPasswordOverrideDoesNotReplaceAnExistingSecret()
+testPasswordOverrideReturnsPersistedValueWhenFileExists()
 testPasswordCreationRaceUsesFirstWriterValue()
 testHasBinariesCachesAndTimeout()
 testStopIdempotentNoThrowaway()

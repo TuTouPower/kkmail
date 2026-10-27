@@ -177,11 +177,17 @@ PostgresManager.prototype.password = function password() {
   }
   if (this._passwordOverride) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    // A21: the override only takes effect when it is the value persisted
+    // on first use. If a password file already exists, the cluster was
+    // initialized with the persisted password, so that value is
+    // authoritative — returning the unpersisted override here would make
+    // databaseUrl()/PGPASSWORD silently use the wrong password.
     try {
-      fs.accessSync(file, fs.constants.F_OK)
-      return this._passwordOverride
+      const persisted = fs.readFileSync(file, 'utf8').trim()
+      if (persisted) return persisted
     } catch (err) {
       if (err.code !== 'ENOENT') throw err
+      return persistPasswordOnce(this._passwordOverride)
     }
     return persistPasswordOnce(this._passwordOverride)
   }
