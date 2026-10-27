@@ -125,6 +125,10 @@ function catStyle(cat) {
   return state.dark ? meta.d : meta.l;
 }
 
+function catLabel(cat) {
+  return (CAT[cat] || CAT.backlog).label;
+}
+
 // ---------------------------------------------------------------------------
 // 关系索引与高亮（boardUtils.collectRelated / highlightRoleOf 的翻译）
 // ---------------------------------------------------------------------------
@@ -283,7 +287,7 @@ function renderPills() {
     if (cat === 'active' && count > 0) {
       pill.appendChild(el('span', { class: 'pulse-dot' }));
     }
-    pill.appendChild(el('span', null, [CAT[cat].label]));
+    pill.appendChild(el('span', null, [catLabel(cat)]));
     pill.appendChild(el('span', { class: 'count' }, [String(count)]));
     pills.appendChild(pill);
   });
@@ -516,7 +520,7 @@ function renderLegend() {
     var c = catStyle(cat);
     legend.appendChild(el('span', null, [
       el('span', { class: 'legend-swatch', style: 'background:' + c.fill + ';border-color:' + c.stroke }),
-      document.createTextNode(CAT[cat].label),
+      document.createTextNode(catLabel(cat)),
     ]));
   });
   canvasEl.appendChild(legend);
@@ -596,7 +600,7 @@ function renderChainPanel() {
         row.appendChild(el('span', {
           class: 'category-badge',
           style: badgeStyle(n.category),
-        }, [CAT[n.category] ? CAT[n.category].label : n.category]));
+        }, [catLabel(n.category)]));
       }
       row.addEventListener('click', function () { openSheet(tid); });
       uBox.appendChild(row);
@@ -802,7 +806,7 @@ function renderArchive() {
     if (state.selectedId === n.id) card.classList.add('selected');
     card.appendChild(el('span', { class: 'mono' }, [n.id]));
     card.appendChild(el('span', { class: 'title' }, [n.title]));
-    card.appendChild(el('span', { class: 'category-badge', style: badgeStyle(n.category) }, [CAT[n.category].label]));
+    card.appendChild(el('span', { class: 'category-badge', style: badgeStyle(n.category) }, [catLabel(n.category)]));
     card.addEventListener('click', function () { openSheet(n.id); });
     card.addEventListener('mouseenter', function () { state.hoveredId = n.id; renderDag(); renderArchive(); updateHoverLegend(); });
     card.addEventListener('mouseleave', function () { state.hoveredId = null; renderDag(); renderArchive(); updateHoverLegend(); });
@@ -861,7 +865,7 @@ function renderSheetDetail() {
   if (!n) return;
   $('sheet-id').textContent = n.id;
   var badge = $('sheet-badge');
-  badge.textContent = CAT[n.category].label;
+  badge.textContent = catLabel(n.category);
   badge.setAttribute('style', badgeStyle(n.category));
   $('sheet-title').textContent = n.title;
   $('sheet-meta').textContent = '';
@@ -894,7 +898,7 @@ function relationGroup(title, ids, tone, emptyText) {
     var chip = el('button', { type: 'button', class: 'relation-chip ' + tone });
     chip.appendChild(el('span', { class: 'mono' }, [id]));
     chip.appendChild(el('span', { class: 'title' }, [target.title]));
-    chip.appendChild(el('span', { class: 'category-badge', style: badgeStyle(target.category) }, [CAT[target.category].label]));
+    chip.appendChild(el('span', { class: 'category-badge', style: badgeStyle(target.category) }, [catLabel(target.category)]));
     chip.addEventListener('click', function () { openSheet(id); });
     list.appendChild(chip);
   });
