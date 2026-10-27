@@ -43,6 +43,14 @@ def project_attempts(events: list[dict]) -> dict[tuple[str, int, str], dict]:
         key = (tid, attempt, execution_id)
         kind = event.get("event")
         if kind == "attempt_reserved":
+            if key in records:
+                # 同 identity 重复 reserved 是账本损坏：静默整表覆盖会抹掉
+                # 已 terminal/report/integrated 的记录（A304）。拒绝投影，
+                # 要求人工修复账本，而不是保留被污染的新记录。
+                raise ctx.TaskDataError(
+                    f"{tid} attempt={attempt} execution_id={execution_id!r} "
+                    "重复 attempt_reserved；账本损坏，请人工修复"
+                )
             records[key] = {
                 "tid": tid,
                 "attempt": attempt,
