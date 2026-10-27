@@ -57,10 +57,36 @@ def _rel(path: Path) -> str:
 # archive-handoff
 # ---------------------------------------------------------------------------
 
+_FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+_FENCE_CLOSE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})[ \t]*$")
+
+
 def _split_handoff(text: str) -> tuple[list[str], list[list[str]]]:
-    """返回 (header, sections)。header=首个 H2 前的行；sections=各 H2 节（含标题行）。"""
+    """返回 (header, sections)。header=首个 H2 前的行；sections=各 H2 节（含标题行）。
+
+    章节边界只认 fenced code block 之外的 `## ` 行（A156）：fence 跟踪与
+    repo_task.review.visible_markdown_lines 同口径——开栏可带 info string，
+    闭栏须为裸围栏、同种字符且宽度 >= 开栏；fence 内的 `## ` 是代码内容。
+    """
     lines = text.splitlines()
-    h2 = [i for i, line in enumerate(lines) if line.startswith("## ")]
+    h2 = []
+    fence_marker = None
+    for i, line in enumerate(lines):
+        if fence_marker is not None:
+            close = _FENCE_CLOSE_RE.match(line)
+            if (
+                close
+                and close.group(1)[0] == fence_marker[0]
+                and len(close.group(1)) >= fence_marker[1]
+            ):
+                fence_marker = None
+            continue
+        fence = _FENCE_RE.match(line)
+        if fence:
+            fence_marker = (fence.group(1)[0], len(fence.group(1)))
+            continue
+        if line.startswith("## "):
+            h2.append(i)
     if not h2:
         return lines, []
     header = lines[: h2[0]]

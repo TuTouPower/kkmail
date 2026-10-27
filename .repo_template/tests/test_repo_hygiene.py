@@ -251,3 +251,45 @@ def test_archive_review_valid_name_still_moves(repo):
     _git(repo, "commit", "-m", "docs(review): add")
     rh.cmd_archive_review(argparse.Namespace(dir="review_2026-01_check-2", write=True))
     assert (repo / "docs/archive/reviews/review_2026-01_check-2/r.md").is_file()
+
+
+# --- A156: handoff 切分不把 fenced code 内的 ## 行当章节 ---
+
+def test_split_handoff_ignores_headings_inside_fences():
+    text = (
+        "# 交接\n\n说明。\n\n"
+        "## 第一节\n\n正文。\n\n```markdown\n## 代码里的假标题\n示例\n```\n\n续。\n\n"
+        "## 第二节\n\n正文二。\n"
+    )
+    header, sections = rh._split_handoff(text)
+    assert len(sections) == 2
+    assert sections[0][0] == "## 第一节"
+    assert any("## 代码里的假标题" in line for line in sections[0])
+    assert sections[1][0] == "## 第二节"
+
+
+def test_split_handoff_tilde_fence_and_longer_close():
+    text = (
+        "## 唯一节\n\n~~~\n## 假标题\n~~~\n\n正文。\n"
+    )
+    _, sections = rh._split_handoff(text)
+    assert len(sections) == 1
+
+
+def test_archive_handoff_keeps_fenced_section_intact(repo):
+    (repo / "docs/handoff.md").write_text(
+        "# 项目交接记录（最新）\n\n说明。\n\n"
+        "## 2026-08-01 旧节\n\n- head_commit：`aaa111`\n\n"
+        "## 2026-08-13 新节\n\n示例：\n\n```markdown\n## 不是新节\n内容\n```\n\n"
+        "- head_commit：`bbb222`\n",
+        encoding="utf-8",
+    )
+    rh.cmd_archive_handoff(argparse.Namespace(write=True))
+    handoff = (repo / "docs/handoff.md").read_text(encoding="utf-8")
+    archive = (repo / "docs/archive/handoff.md").read_text(encoding="utf-8")
+    # 最新节（含 fence 内的 ## 行）完整保留，未被劈成两节误归档后半
+    assert "## 2026-08-13 新节" in handoff
+    assert "## 不是新节" in handoff
+    assert "bbb222" in handoff
+    assert "2026-08-01 旧节" in archive
+    assert "不是新节" not in archive
