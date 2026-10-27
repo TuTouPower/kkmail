@@ -62,6 +62,87 @@ def _blob(blob_id: int, **overrides):
     return SimpleNamespace(**base)
 
 
+# --- A166: unlink_gc_paths committed-digests assertion + symlink reporting ---
+
+
+def _unlink_session(refs: int = 0):
+    return SimpleNamespace(
+        bind=SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
+        scalar=lambda *_args, **_kwargs: refs,
+    )
+
+
+def test_unlink_with_external_session_requires_committed_assertion(tmp_path):
+    from mail_core.blobs.gc import unlink_gc_paths
+    from mail_core.blobs.store import BlobStore
+
+    digest = "c" * 64
+    path = BlobStore(tmp_path).path_for(digest)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"data")
+    session = _unlink_session(refs=0)
+
+    # An external session cannot prove the caller already committed the row
+    # deletions, so unlinking must be refused outright.
+    assert unlink_gc_paths([path], session=session, root=tmp_path) == 0
+    assert path.is_file()
+
+
+def test_unlink_with_committed_digests_unlinks_only_asserted(tmp_path):
+    from mail_core.blobs.gc import unlink_gc_paths
+    from mail_core.blobs.store import BlobStore
+
+    store = BlobStore(tmp_path)
+    asserted = "d" * 64
+    unasserted = "e" * 64
+    paths = []
+    for digest in (asserted, unasserted):
+        path = store.path_for(digest)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"data")
+        paths.append(path)
+    session = _unlink_session(refs=0)
+
+    unlinked = unlink_gc_paths(
+        paths,
+        session=session,
+        committed_digests={asserted},
+        root=tmp_path,
+    )
+
+    assert unlinked == 1
+    assert not paths[0].exists()
+    assert paths[1].is_file()
+
+
+def test_unlink_counts_symlink_orphans_instead_of_silently_skipping(tmp_path, caplog):
+    import logging
+
+    from mail_core.blobs.gc import _unlink_gc_paths_detailed
+    from mail_core.blobs.store import BlobStore
+
+    digest = "f" * 64
+    target = tmp_path / "elsewhere.bin"
+    target.write_bytes(b"target")
+    link = BlobStore(tmp_path).path_for(digest)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target)
+    session = _unlink_session(refs=0)
+
+    with caplog.at_level(logging.WARNING, logger="mail_core.blobs.gc"):
+        unlinked, symlink_orphans = _unlink_gc_paths_detailed(
+            [link],
+            session=session,
+            committed_digests={digest},
+            root=tmp_path,
+        )
+
+    assert unlinked == 0
+    assert symlink_orphans == 1
+    assert link.is_symlink()  # reported, not silently removed
+    assert "symlink" in caplog.text
+
+
 # --- A109: sweep_expired_blobs keyset-pages, commits per batch, canonical paths ---
 
 

@@ -191,27 +191,62 @@ def unlink_gc_paths(
     paths: tuple[Path, ...] | list[Path],
     *,
     session: Session | None = None,
+    committed_digests: set[str] | frozenset[str] | None = None,
     root: Path | None = None,
 ) -> int:
-    """Phase 2: remove files after DB commit. Returns unlink count.
+    """Phase 2: remove files after DB commit. Returns unlink count."""
+    unlinked, _symlink_orphans = _unlink_gc_paths_detailed(
+        paths,
+        session=session,
+        committed_digests=committed_digests,
+        root=root,
+    )
+    return unlinked
+
+
+def _unlink_gc_paths_detailed(
+    paths: tuple[Path, ...] | list[Path],
+    *,
+    session: Session | None = None,
+    committed_digests: set[str] | frozenset[str] | None = None,
+    root: Path | None = None,
+) -> tuple[int, int]:
+    """Implementation of :func:`unlink_gc_paths`; also returns symlink orphans.
 
     Performs a second safety check against the DB before unlinking to prevent
     races where a concurrent archive re-referenced the same digest (V2-21 / R12).
     Coordinates via digest advisory lock to serialize with concurrent archive publishing.
+
+    ``committed_digests`` is the caller's assertion that the DB row deletions
+    for those digests have already been committed. When an external
+    ``session`` is supplied the assertion is mandatory: the function cannot
+    verify the caller's transaction state, and unlinking before that commit
+    could leave a live row pointing at a missing file, so unasserted digests
+    are refused. With no external session the function reads committed state
+    through its own session, which is itself the proof.
+
+    Symlink candidates are never unlinked (their canonical target cannot be
+    verified); they are counted and reported as orphans instead of being
+    silently skipped, so operators can clean them up deliberately.
     """
     root = Path(root or blob_root()).resolve()
     if not root.is_dir():
-        return 0
+        return 0, 0
     try:
         store = BlobStore(root)
     except Exception as exc:  # noqa: BLE001
         log.warning("gc unlink path validation unavailable: %s (skipping)", exc)
-        return 0
+        return 0, 0
 
     validated_paths: list[tuple[Path, str]] = []
+    symlink_orphans = 0
     for raw_path in paths:
         path = Path(raw_path)
-        if not path.is_file() or path.is_symlink():
+        if path.is_symlink():
+            symlink_orphans += 1
+            log.warning("gc unlink skipped symlink blob orphan (manual cleanup required): %s", path)
+            continue
+        if not path.is_file():
             continue
         digest = path.stem.lower()
         try:
@@ -225,8 +260,28 @@ def unlink_gc_paths(
             continue
         validated_paths.append((path, digest))
 
+    if symlink_orphans:
+        log.warning("gc unlink report: %d symlink blob orphan(s) require manual cleanup", symlink_orphans)
+
+    if session is not None and committed_digests is None:
+        if validated_paths:
+            log.warning(
+                "gc unlink refused %d path(s): external session supplied without "
+                "committed_digests assertion that the row deletions are committed",
+                len(validated_paths),
+            )
+        return 0, symlink_orphans
+
+    if committed_digests is not None:
+        asserted = {str(d).lower() for d in committed_digests}
+        eligible = [(p, d) for p, d in validated_paths if d in asserted]
+        refused = len(validated_paths) - len(eligible)
+        if refused:
+            log.warning("gc unlink refused %d path(s) not in committed_digests assertion", refused)
+        validated_paths = eligible
+
     if not validated_paths:
-        return 0
+        return 0, symlink_orphans
 
     n = 0
     own_session = None
@@ -281,7 +336,7 @@ def unlink_gc_paths(
         if own_session is not None:
             own_session.close()
 
-    return n
+    return n, symlink_orphans
 
 
 def run_gc_blobs(*, cool_off_hours: float = 24.0, dry_run: bool = False) -> dict:
@@ -293,7 +348,15 @@ def run_gc_blobs(*, cool_off_hours: float = 24.0, dry_run: bool = False) -> dict
             session.rollback()  # never persist side effects from a dry run
         else:
             session.commit()
-    unlinked = 0 if dry_run else unlink_gc_paths(paths)
+    if dry_run:
+        unlinked, symlink_orphans = 0, 0
+    else:
+        # The sweep deletions were committed above (per batch, and the final
+        # commit here), so the digests can be asserted as committed.
+        unlinked, symlink_orphans = _unlink_gc_paths_detailed(
+            paths,
+            committed_digests={Path(p).stem.lower() for p in paths},
+        )
     return {
         "status": "ok",
         "marked": result.marked,
@@ -302,5 +365,6 @@ def run_gc_blobs(*, cool_off_hours: float = 24.0, dry_run: bool = False) -> dict
         "skipped": result.skipped_cooloff,
         "skipped_invalid": result.skipped_invalid,
         "unlinked": unlinked,
+        "symlink_orphans": symlink_orphans,
         "dry_run": dry_run,
     }
