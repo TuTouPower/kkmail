@@ -17,26 +17,40 @@ SKIP_DIRS = {".git", "node_modules", ".scratch", "__pycache__", "venv", ".venv",
 def link_local_env(worktree: Path) -> list[str]:
     """把主仓未入库的 .env 软链进 worktree（同相对路径）。
 
-    用 rglob 覆盖任意层级嵌套；跳过 .git、node_modules、.scratch 等
-    噪声目录，避免递归进依赖/缓存树。先物化源列表再建链，防止 rglob
-    在遍历中把刚创建的软链当新源导致级联嵌套。
+    用 os.walk 覆盖任意层级嵌套并在遍历期原地剪枝 SKIP_DIRS（.git、
+    node_modules、.scratch 等噪声/大树），不再全树 rglob 后按结果过滤
+    （A260）。符号链接源须校验其 resolve 仍在 REPO_ROOT 内：指向仓外的
+    .env 链接跳过，不把仓外文件链进每个 worktree。先物化源列表再建链，
+    防止遍历中把刚创建的软链当新源导致级联嵌套。
     """
     linked = []
-    skip_dirs = SKIP_DIRS
     try:
         worktree_resolved = worktree.resolve()
     except OSError:
         worktree_resolved = None
-    sources = [
-        src for src in ctx.REPO_ROOT.rglob(".env")
-        if src.is_file()
-    ]
+    try:
+        repo_root_resolved = ctx.REPO_ROOT.resolve()
+    except OSError:
+        repo_root_resolved = ctx.REPO_ROOT
+    sources = []
+    for root, dirs, files in os.walk(ctx.REPO_ROOT, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        if ".env" not in files:
+            continue
+        src = Path(root) / ".env"
+        if not src.is_file():
+            continue
+        try:
+            src.resolve().relative_to(repo_root_resolved)
+        except ValueError:
+            continue  # 符号链接源解析出仓，跳过（A260）
+        except OSError:
+            continue
+        sources.append(src)
     for src in sources:
         try:
             rel = src.relative_to(ctx.REPO_ROOT)
         except ValueError:
-            continue
-        if any(part in skip_dirs for part in rel.parts[:-1]):
             continue
         if worktree_resolved is not None:
             try:

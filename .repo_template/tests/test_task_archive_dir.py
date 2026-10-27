@@ -227,6 +227,66 @@ def test_skip_dirs_is_shared_constant():
     assert ".venv" in worktrees.SKIP_DIRS
 
 
+def test_link_local_env_prunes_skip_dirs_during_walk(fake_repo, monkeypatch):
+    """A260: 收集源须在遍历期剪枝，而不是 rglob 全树后按结果过滤。"""
+    import os
+
+    (fake_repo / "app").mkdir()
+    (fake_repo / "app" / ".env").write_text("a", encoding="utf-8")
+    nm = fake_repo / "node_modules" / "pkg"
+    nm.mkdir(parents=True)
+    (nm / ".env").write_text("nm", encoding="utf-8")
+    worktree = fake_repo / "worktree"
+    worktree.mkdir()
+
+    visited_roots = []
+    real_walk = os.walk
+
+    def counting_walk(*args, **kwargs):
+        for root, dirs, files in real_walk(*args, **kwargs):
+            visited_roots.append(Path(root))
+            yield root, dirs, files
+
+    monkeypatch.setattr(os, "walk", counting_walk)
+    linked = worktrees.link_local_env(worktree)
+
+    assert linked == ["app/.env"]
+    assert visited_roots, "link_local_env 应经 os.walk 遍历以便遍历期剪枝"
+    assert not any("node_modules" in root.parts for root in visited_roots)
+
+
+def test_link_local_env_skips_symlink_source_resolving_outside_repo(fake_repo):
+    """A260: .env 符号链接源解析出仓时必须跳过，不得链入 worktree。"""
+    outside_dir = Path(str(fake_repo) + "_outside")
+    outside_dir.mkdir()
+    outside = outside_dir / "secret.env"
+    outside.write_text("outside", encoding="utf-8")
+    sub = fake_repo / "sub"
+    sub.mkdir()
+    (sub / ".env").symlink_to(outside)
+    worktree = fake_repo / "worktree"
+    worktree.mkdir()
+
+    assert worktrees.link_local_env(worktree) == []
+    assert not (worktree / "sub" / ".env").is_symlink()
+
+
+def test_link_local_env_allows_symlink_source_resolving_inside_repo(fake_repo):
+    """A260: 符号链接源解析仍在仓内时照常链入。"""
+    real = fake_repo / "real"
+    real.mkdir()
+    (real / ".env").write_text("in", encoding="utf-8")
+    alias = fake_repo / "alias"
+    alias.mkdir()
+    (alias / ".env").symlink_to(real / ".env")
+    worktree = fake_repo / "worktree"
+    worktree.mkdir()
+
+    linked = worktrees.link_local_env(worktree)
+    assert "alias/.env" in linked
+    assert "real/.env" in linked
+
+
 def test_close_task_rolls_back_when_move_fails(fake_repo, monkeypatch):
     """归档移动失败时 front matter 回滚，避免「已写 done、目录未归档」死锁。"""
     import argparse
