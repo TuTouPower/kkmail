@@ -29,6 +29,7 @@ from .git_ops import (
     worktree_paths,
 )
 from .ledger import _ledger_append_safely, ledger_read
+from .locks import lock_fh, unlock_fh
 from .monitoring import verify_integrate_ready
 from .store import (
     _local_task_branches,
@@ -432,16 +433,6 @@ def _integration_lock_path() -> Path:
     return Path(result.stdout.strip()) / "repo-task" / "integrate.lock"
 
 
-def _lock_fh(fh, *, unlock: bool) -> None:
-    fh.seek(0)
-    if os.name == "nt":
-        import msvcrt
-        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK if unlock else msvcrt.LK_LOCK, 1)
-    else:
-        import fcntl
-        fcntl.flock(fh, fcntl.LOCK_UN if unlock else fcntl.LOCK_EX)
-
-
 def _chain_locked(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -450,15 +441,15 @@ def _chain_locked(func):
         except ctx.TaskDataError as error:
             sys.exit(str(error))
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+", encoding="utf-8") as lock_fh:
-            if lock_fh.tell() == 0:
-                lock_fh.write("\0")
-                lock_fh.flush()
-            _lock_fh(lock_fh, unlock=False)
+        with lock_path.open("a+", encoding="utf-8") as fh:
+            if fh.tell() == 0:
+                fh.write("\0")
+                fh.flush()
+            lock_fh(fh)
             try:
                 return func(*args, **kwargs)
             finally:
-                _lock_fh(lock_fh, unlock=True)
+                unlock_fh(fh)
     return wrapper
 
 
