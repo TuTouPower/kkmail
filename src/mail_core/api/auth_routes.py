@@ -48,7 +48,7 @@ def _set_session_cookie(response: Response, value: str, request: Request | None 
         value=value,
         httponly=True,
         secure=cookie_secure(request),
-        samesite=cookie_samesite(),  # type: ignore[arg-type]
+        samesite=cookie_samesite(request),  # type: ignore[arg-type]
         path="/",
         max_age=session_max_age(),
     )

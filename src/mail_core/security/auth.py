@@ -152,9 +152,17 @@ def cookie_secure(request: Any = None) -> bool:
     return False
 
 
-def cookie_samesite() -> str:
+def cookie_samesite(request: Any = None) -> str:
     raw = (os.environ.get("MAIL_CORE_COOKIE_SAMESITE") or "lax").strip().lower()
     if raw not in ("lax", "strict", "none"):
+        return "lax"
+    if raw == "none" and not cookie_secure(request):
+        # Browsers reject SameSite=None cookies without the Secure attribute,
+        # and over plain HTTP it would also expose the session cross-site.
+        log.warning(
+            "MAIL_CORE_COOKIE_SAMESITE=none requires a secure cookie; "
+            "falling back to samesite=lax"
+        )
         return "lax"
     return raw
 
@@ -323,6 +331,7 @@ def validate_auth_config() -> None:
     """Fail-fast at process start."""
     require_secret_key()
     session_max_age()
+    cookie_samesite()  # surface the SameSite=None/Secure combination at startup
     get_login_password_hash()
     load_api_keys()  # validate JSON if present
 
