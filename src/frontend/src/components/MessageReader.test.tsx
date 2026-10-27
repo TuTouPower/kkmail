@@ -61,6 +61,30 @@ const htmlItemLightRich: MailItem = {
   folder: 'inbox',
 }
 
+const htmlItemUnquotedImg: MailItem = {
+  id: 'm-5',
+  subject: 'Html with unquoted remote image',
+  from: 'Dan <dan@x.test>',
+  is_read: true,
+  is_flagged: false,
+  has_attachments: false,
+  accountEmail: 'box@x.test',
+  accountId: 'acc-1',
+  folder: 'inbox',
+}
+
+const htmlItemScriptOnlyImg: MailItem = {
+  id: 'm-6',
+  subject: 'Html with image markup only inside a script',
+  from: 'Eve <eve@x.test>',
+  is_read: true,
+  is_flagged: false,
+  has_attachments: false,
+  accountEmail: 'box@x.test',
+  accountId: 'acc-1',
+  folder: 'inbox',
+}
+
 const failedItem: MailItem = {
   id: 'm-failed',
   subject: 'Corrupted MIME Email',
@@ -166,6 +190,24 @@ beforeEach(() => {
         parse_error: null, attachments: [],
       })
     }
+    if (u === '/api/mail/messages/m-5') {
+      return json({
+        id: 'm-5', account_id: 'acc-1', subject: 'Html with unquoted remote image', from_address: 'dan@x.test', from_name: 'Dan',
+        from: 'Dan <dan@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T11:30:00Z', is_read: true,
+        is_flagged: false, has_attachments: false, snippet: null,
+        body: '<p>Unquoted remote image</p><img src=https://tracker.test/unquoted.png>', body_type: 'html',
+        parse_error: null, attachments: [],
+      })
+    }
+    if (u === '/api/mail/messages/m-6') {
+      return json({
+        id: 'm-6', account_id: 'acc-1', subject: 'Html with image markup only inside a script', from_address: 'eve@x.test', from_name: 'Eve',
+        from: 'Eve <eve@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T11:45:00Z', is_read: true,
+        is_flagged: false, has_attachments: false, snippet: null,
+        body: '<p>No real image</p><script>var s = \'<img src="https://tracker.test/fake.png">\'</script>', body_type: 'html',
+        parse_error: null, attachments: [],
+      })
+    }
     if (u === '/api/mail/messages/m-4') {
       return json({
         id: 'm-4', account_id: 'acc-1', subject: 'Light rich newsletter', from_address: 'news@x.test', from_name: 'Daily',
@@ -238,7 +280,7 @@ beforeEach(() => {
     }
     return json({ detail: 'unexpected' }, 404)
   }))
-  queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item, nullDateItem, htmlItemWithImages, htmlItemOther, htmlItemLightRich, failedItem, failedItemWithSnippet, emptyNormalItem, unarchivedItem, syncFailedItem])
+  queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [item, nullDateItem, htmlItemWithImages, htmlItemOther, htmlItemLightRich, htmlItemUnquotedImg, htmlItemScriptOnlyImg, failedItem, failedItemWithSnippet, emptyNormalItem, unarchivedItem, syncFailedItem])
   useMailStore.setState({ selectedKey: 'm-1', theme: 'dark' })
 })
 
@@ -602,6 +644,25 @@ describe('<MessageReader />', () => {
     await waitFor(() => expect(container.textContent).toContain('远程图片已拦截（防追踪）'))
     iframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
     expect(iframe.srcdoc).not.toContain('img-src https:')
+  })
+
+  it('shows the remote-image banner for an unquoted img src, judged on the sanitized HTML (A277)', async () => {
+    useMailStore.setState({ selectedKey: 'm-5' })
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.textContent).toContain('远程图片已拦截（防追踪）'))
+    const iframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
+    expect(iframe.srcdoc).toContain('https://tracker.test/unquoted.png')
+    expect(iframe.srcdoc).not.toContain('img-src https:')
+  })
+
+  it('does not show the remote-image banner when img markup exists only inside a stripped script (A277)', async () => {
+    useMailStore.setState({ selectedKey: 'm-6' })
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.querySelector('iframe.email-body-frame')).not.toBeNull())
+    const iframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
+    expect(iframe.srcdoc).toContain('No real image')
+    expect(iframe.srcdoc).not.toContain('tracker.test')
+    expect(container.textContent).not.toContain('远程图片已拦截（防追踪）')
   })
 
   it('renders explicit fixed-light html inside an isolated white paper card in dark mode (AC-003)', async () => {

@@ -446,7 +446,11 @@ const MessageReader = memo(function MessageReader() {
             </div>
           ) : html ? (
             <>
-              {!loadRemoteImages && /<img\b[^>]+src\s*=\s*["']https?:/i.test(body) && (
+              {/* A277: judge remote images on the SANITIZED html, not the raw
+                  body — markup that sanitization strips (e.g. inside a
+                  script) must not trigger the banner, and an unquoted
+                  src= must still be recognised. */}
+              {!loadRemoteImages && preparedMailHtml && /<img\b[^>]*?\ssrc\s*=\s*["']?https?:\/\//i.test(preparedMailHtml.sanitizedHtml) && (
                 <div style={{ fontSize: 12, marginBottom: 10, padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--text)' }}>
                   远程图片已拦截（防追踪）。
                   <button
