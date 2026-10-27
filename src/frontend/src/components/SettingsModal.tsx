@@ -13,6 +13,7 @@ import AccountDialog from './settings_account_form'
 
 type Section = 'accounts' | 'groups' | 'general'
 type Scope = Section | 'password'
+const BATCH_CONCURRENCY = 4
 type Feedback = { message: string; error?: boolean }
 const providers: Record<string, string> = { imap: 'IMAP', graph: 'Microsoft Graph' }
 const syncStates: Record<string, string> = { idle: '空闲', running: '同步中', failed: '同步失败', auth_failed: '认证失败', pending: '等待同步' }
@@ -56,8 +57,14 @@ export default function SettingsPage({
   const groups = groupsQuery.data || []
   const [section, setSection] = useState<Section>('accounts')
   const [feedback, setFeedback] = useState<Partial<Record<Scope, Feedback>>>({})
-  const [pending, setPending] = useState(false)
-  const pendingRef = useRef(false)
+  // Pending is tracked per scope (A125): a slow operation in one section
+  // must not disable or silently swallow operations in the others.
+  const [pendingScopes, setPendingScopes] = useState<Partial<Record<Scope, boolean>>>({})
+  const pendingRef = useRef<Set<Scope>>(new Set())
+  const pendingAccounts = !!pendingScopes.accounts
+  const pendingGroups = !!pendingScopes.groups
+  const pendingGeneral = !!pendingScopes.general
+  const pendingPassword = !!pendingScopes.password
   const [addOpen, setAddOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<AccountSummary | null>(null)
   const [search, setSearch] = useState('')
@@ -136,10 +143,15 @@ export default function SettingsPage({
     setFeedback(current => ({ ...current, [scope]: { message, error } }))
   }
 
+  function setScopePending(scope: Scope, value: boolean) {
+    if (value) pendingRef.current.add(scope)
+    else pendingRef.current.delete(scope)
+    setPendingScopes(current => ({ ...current, [scope]: value }))
+  }
+
   async function run<T,>(scope: Scope, label: string, fn: () => Promise<T>, success: string | ((result: T) => string) = `${label}成功`) {
-    if (pendingRef.current) return { ok: false as const }
-    pendingRef.current = true
-    setPending(true)
+    if (pendingRef.current.has(scope)) return { ok: false as const }
+    setScopePending(scope, true)
     report(scope, `${label}…`)
     try {
       const data = await fn()
@@ -149,8 +161,7 @@ export default function SettingsPage({
       report(scope, errorMessage(error, `${label}失败`), true)
       return { ok: false as const }
     } finally {
-      pendingRef.current = false
-      setPending(false)
+      setScopePending(scope, false)
     }
   }
 
@@ -177,20 +188,34 @@ export default function SettingsPage({
 
   async function batch(action: 'move' | 'sync' | 'enable' | 'disable') {
     const labels = { move: '移动分组', sync: '同步账户', enable: '启用同步', disable: '暂停同步' }
+    const targets = selectedAccounts
     const result = await run('accounts', labels[action], async () => {
       const failed: Array<{ id: string; message: string }> = []
-      for (const account of selectedAccounts) {
-        try {
-          if (action === 'move') await moveAccount(account, bulkGroup)
-          else if (action === 'sync') await api.syncAccount(account.id)
-          else await api.updateAccount(account.id, { sync_enabled: action === 'enable' })
-        } catch (error) {
-          failed.push({ id: account.id, message: `${account.email}：${errorMessage(error)}` })
+      // Concurrency pool with per-item progress (A125): one slow account no
+      // longer serializes the whole batch, and progress is reported as items
+      // settle instead of only at the end.
+      let completed = 0
+      let nextIndex = 0
+      async function worker() {
+        while (nextIndex < targets.length) {
+          const account = targets[nextIndex]
+          nextIndex += 1
+          try {
+            if (action === 'move') await moveAccount(account, bulkGroup)
+            else if (action === 'sync') await api.syncAccount(account.id)
+            else await api.updateAccount(account.id, { sync_enabled: action === 'enable' })
+          } catch (error) {
+            failed.push({ id: account.id, message: `${account.email}：${errorMessage(error)}` })
+          } finally {
+            completed += 1
+            if (targets.length > 1) report('accounts', `${labels[action]}中 ${completed}/${targets.length}…`)
+          }
         }
       }
+      await Promise.all(Array.from({ length: Math.min(BATCH_CONCURRENCY, targets.length) }, () => worker()))
       setSelected(new Set(failed.map(item => item.id)))
       await refreshOrganization()
-      return { failed, count: selectedAccounts.length }
+      return { failed, count: targets.length }
     }, data => `${data.count - data.failed.length} 个成功，${data.failed.length} 个失败`)
     if (result.ok && result.data.failed.length) {
       report('accounts', `${result.data.count - result.data.failed.length} 个成功，${result.data.failed.length} 个失败\n${result.data.failed.map(item => item.message).join('\n')}`, true)
@@ -217,17 +242,15 @@ export default function SettingsPage({
 
   // Sync-preference toggles stay silent on success (p054); only failures surface feedback.
   async function toggleSyncPreference(account: AccountSummary) {
-    if (pendingRef.current) return
-    pendingRef.current = true
-    setPending(true)
+    if (pendingRef.current.has('accounts')) return
+    setScopePending('accounts', true)
     try {
       await api.updateAccount(account.id, { sync_enabled: account.sync_enabled === false })
       await refreshOrganization()
     } catch (error) {
       report('accounts', errorMessage(error, '更新同步偏好失败'), true)
     } finally {
-      pendingRef.current = false
-      setPending(false)
+      setScopePending('accounts', false)
     }
   }
 
@@ -274,8 +297,8 @@ export default function SettingsPage({
             <div className="settings-accounts-first-row">
               <div className="settings-summary"><span>账户总数 <strong>{accountsQuery.isPending ? '—' : accounts.length}</strong></span><span>已显示 <strong>{accountsQuery.isPending ? '—' : filtered.length}</strong></span><span>已同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled !== false).length}</strong></span><span>已暂停同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled === false).length}</strong></span></div>
               <div className="settings-accounts-actions">
-                <button type="button" className="settings-button is-primary" onClick={() => { setEditingAccount(null); setAddOpen(true) }} disabled={pending}><Plus size={15} />添加账户</button>
-                <button type="button" className="settings-button" disabled={pending || accountsQuery.isPending || accountsQuery.isError} onClick={() => void run('accounts', '全量同步', async () => { const result = await api.syncAll(); await qc.invalidateQueries({ queryKey: queryKeys.accounts }); return result }, result => `已排队 ${result.target_count ?? 0} 个全量同步任务`)}><RefreshCw size={14} />同步全部账户</button>
+                <button type="button" className="settings-button is-primary" onClick={() => { setEditingAccount(null); setAddOpen(true) }} disabled={pendingAccounts}><Plus size={15} />添加账户</button>
+                <button type="button" className="settings-button" disabled={pendingAccounts || accountsQuery.isPending || accountsQuery.isError} onClick={() => void run('accounts', '全量同步', async () => { const result = await api.syncAll(); await qc.invalidateQueries({ queryKey: queryKeys.accounts }); return result }, result => `已排队 ${result.target_count ?? 0} 个全量同步任务`)}><RefreshCw size={14} />同步全部账户</button>
               </div>
               <div className="settings-toolbar">
                 <label className="settings-search"><Search size={15} /><input type="search" aria-label="搜索账户" placeholder="搜索邮箱、域名、服务商或分组" value={search} onChange={event => setSearch(event.target.value)} /></label>
@@ -285,36 +308,36 @@ export default function SettingsPage({
               </div>
             </div>
             {selectedAccounts.length > 0 && <div className="settings-bulk-bar" aria-label="批量账户操作">
-              <strong>已选 {selectedAccounts.length} 个账户</strong><select aria-label="批量移动分组" value={bulkGroup} onChange={event => setBulkGroup(event.target.value)} disabled={pending || groupsQuery.isError}><option value="">移至未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
-              <button className="settings-button" type="button" disabled={pending || groupsQuery.isError} onClick={() => void batch('move')}>移动分组</button>
-              <button className="settings-button" type="button" disabled={pending} onClick={() => void batch('sync')}>同步</button>
-              <button className="settings-button" type="button" disabled={pending} onClick={() => void batch('enable')}>启用同步</button>
-              <button className="settings-button" type="button" disabled={pending} onClick={() => void batch('disable')}>暂停同步</button>
-              <button className="settings-text-button" type="button" disabled={pending} onClick={() => setSelected(new Set())}>取消选择</button>
+              <strong>已选 {selectedAccounts.length} 个账户</strong><select aria-label="批量移动分组" value={bulkGroup} onChange={event => setBulkGroup(event.target.value)} disabled={pendingAccounts || groupsQuery.isError}><option value="">移至未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
+              <button className="settings-button" type="button" disabled={pendingAccounts || groupsQuery.isError} onClick={() => void batch('move')}>移动分组</button>
+              <button className="settings-button" type="button" disabled={pendingAccounts} onClick={() => void batch('sync')}>同步</button>
+              <button className="settings-button" type="button" disabled={pendingAccounts} onClick={() => void batch('enable')}>启用同步</button>
+              <button className="settings-button" type="button" disabled={pendingAccounts} onClick={() => void batch('disable')}>暂停同步</button>
+              <button className="settings-text-button" type="button" disabled={pendingAccounts} onClick={() => setSelected(new Set())}>取消选择</button>
             </div>}
             <Status value={feedback.accounts} />
-            <div className="settings-account-table" role="region" aria-label="账户列表" aria-busy={accountsQuery.isPending || pending}>
-              <div className="settings-account-head"><input ref={selectAllRef} type="checkbox" aria-label="选择当前筛选的全部账户" checked={allSelected} disabled={pending || !filtered.length} onChange={event => setSelected(current => {
+            <div className="settings-account-table" role="region" aria-label="账户列表" aria-busy={accountsQuery.isPending || pendingAccounts}>
+              <div className="settings-account-head"><input ref={selectAllRef} type="checkbox" aria-label="选择当前筛选的全部账户" checked={allSelected} disabled={pendingAccounts || !filtered.length} onChange={event => setSelected(current => {
                 const next = new Set(current)
                 filtered.forEach(account => event.target.checked ? next.add(account.id) : next.delete(account.id))
                 return next
               })} /><span>账户 · {filtered.length}</span><span>所属分组</span><span>同步状态</span><span>同步开关</span><span>操作</span></div>
               <div className="settings-account-rows">
                 {accountsQuery.isPending ? <div className="settings-empty"><LoaderCircle size={20} className="settings-spin" />正在加载账户…</div> : filtered.map(account => <div className="settings-account-row" key={account.id}>
-                  <input type="checkbox" aria-label={`选择 ${account.email}`} checked={selected.has(account.id)} disabled={pending} onChange={event => setSelected(current => {
+                  <input type="checkbox" aria-label={`选择 ${account.email}`} checked={selected.has(account.id)} disabled={pendingAccounts} onChange={event => setSelected(current => {
                     const next = new Set(current)
                     if (event.target.checked) next.add(account.id)
                     else next.delete(account.id)
                     return next
                   })} />
                   <div className="settings-account-identity"><AccountIcon email={account.email} provider={account.provider} accountType={account.account_type} groupColor={account.group_color} /><div><strong title={account.email}><CopyAddress address={account.email} className="settings-copy-email">{account.email}</CopyAddress></strong><small>{providers[account.provider] || account.provider}{account.group_name ? ` · ${account.group_name}` : ''}</small></div></div>
-                  <select aria-label={`移动 ${account.email}`} value={account.group_id ?? ''} disabled={pending || !groupsQuery.isSuccess} onChange={event => {
+                  <select aria-label={`移动 ${account.email}`} value={account.group_id ?? ''} disabled={pendingAccounts || !groupsQuery.isSuccess} onChange={event => {
                     const groupId = event.target.value
                     void run('accounts', '移动账号', async () => { await moveAccount(account, groupId); await refreshOrganization() }, '账号分组已更新')
                   }}><option value="">不加入分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
                   <span className={`settings-sync-status${syncFailed(account) ? ' is-error' : ''}`}><i />{syncStates[account.sync_status] || account.sync_status || '状态未知'}</span>
-                  <button className="settings-switch" type="button" role="switch" aria-checked={account.sync_enabled !== false} aria-label={`${account.sync_enabled === false ? '启用' : '暂停'}同步 ${account.email}`} disabled={pending} onClick={() => void toggleSyncPreference(account)}><span /></button>
-                  <div className="settings-row-actions"><button type="button" className="settings-icon-button" title="编辑账户" aria-label={`编辑账户 ${account.email}`} disabled={pending} onClick={() => { setAddOpen(false); setEditingAccount(account) }}><Pencil size={14} /></button><button type="button" className="settings-icon-button" title="立即同步" aria-label={`同步 ${account.email}`} disabled={pending || account.sync_enabled === false} onClick={() => void run('accounts', '同步', async () => { await api.syncAccount(account.id); await qc.invalidateQueries({ queryKey: queryKeys.accounts }) }, '已排队同步')}><RefreshCw size={14} /></button><button type="button" className="settings-icon-button is-danger" aria-label={`删除账户 ${account.email}`} title="删除账户" disabled={pending} onClick={() => void deleteAccount(account)}><Trash2 size={14} /><span className="settings-sr-only">删除</span></button></div>
+                  <button className="settings-switch" type="button" role="switch" aria-checked={account.sync_enabled !== false} aria-label={`${account.sync_enabled === false ? '启用' : '暂停'}同步 ${account.email}`} disabled={pendingAccounts} onClick={() => void toggleSyncPreference(account)}><span /></button>
+                  <div className="settings-row-actions"><button type="button" className="settings-icon-button" title="编辑账户" aria-label={`编辑账户 ${account.email}`} disabled={pendingAccounts} onClick={() => { setAddOpen(false); setEditingAccount(account) }}><Pencil size={14} /></button><button type="button" className="settings-icon-button" title="立即同步" aria-label={`同步 ${account.email}`} disabled={pendingAccounts || account.sync_enabled === false} onClick={() => void run('accounts', '同步', async () => { await api.syncAccount(account.id); await qc.invalidateQueries({ queryKey: queryKeys.accounts }) }, '已排队同步')}><RefreshCw size={14} /></button><button type="button" className="settings-icon-button is-danger" aria-label={`删除账户 ${account.email}`} title="删除账户" disabled={pendingAccounts} onClick={() => void deleteAccount(account)}><Trash2 size={14} /><span className="settings-sr-only">删除</span></button></div>
                 </div>)}
                 {!accountsQuery.isPending && !accountsQuery.isError && !filtered.length && <div className="settings-empty"><Inbox size={26} /><strong>{accounts.length ? '没有匹配的账户' : '还没有添加账户'}</strong><span>{accounts.length ? '调整搜索词或筛选条件。' : '添加邮箱后，即可在此管理同步与分组。'}</span></div>}
               </div>
@@ -341,11 +364,11 @@ export default function SettingsPage({
                     await refreshOrganization()
                     setEditingGroup(null)
                   }, '分组名称已更新')
-                }}><input aria-label="分组名称" value={rename} onChange={event => setRename(event.target.value)} required maxLength={128} autoFocus disabled={pending} /><button className="settings-button" disabled={pending} type="submit">保存名称</button><button className="settings-text-button" type="button" disabled={pending} onClick={() => setEditingGroup(null)}>取消</button></form> : <>
+                }}><input aria-label="分组名称" value={rename} onChange={event => setRename(event.target.value)} required maxLength={128} autoFocus disabled={pendingGroups} /><button className="settings-button" disabled={pendingGroups} type="submit">保存名称</button><button className="settings-text-button" type="button" disabled={pendingGroups} onClick={() => setEditingGroup(null)}>取消</button></form> : <>
                   <span className="settings-group-copy"><strong>{group.name}（{group.account_count || 0}）</strong><small>{group.account_count ? '点击账户数量查看成员' : '空分组，可移入账户'}</small></span>
                   <button className="settings-count" type="button" onClick={() => showGroupAccounts(group.id)} aria-label={`查看 ${group.name} 的账户`}>{group.account_count || 0} 个账户</button>
-                  <button className="settings-icon-button" type="button" aria-label={`重命名 ${group.name}`} disabled={pending} onClick={() => { setEditingGroup(group.id); setRename(group.name) }}><Pencil size={15} /></button>
-                  <button className="settings-icon-button is-danger" type="button" aria-label={`删除分组 ${group.name}`} disabled={pending} onClick={() => {
+                  <button className="settings-icon-button" type="button" aria-label={`重命名 ${group.name}`} disabled={pendingGroups} onClick={() => { setEditingGroup(group.id); setRename(group.name) }}><Pencil size={15} /></button>
+                  <button className="settings-icon-button is-danger" type="button" aria-label={`删除分组 ${group.name}`} disabled={pendingGroups} onClick={() => {
                     if (!confirmAction(`删除分组 ${group.name}？账号和邮件会保留，并从该分组移出。`)) return
                     void run('groups', '删除分组', async () => {
                       await api.deleteGroup(group.id)
@@ -368,7 +391,7 @@ export default function SettingsPage({
               event.preventDefault()
               if (!groupName.trim()) return
               void run('groups', '创建分组', async () => { await api.createGroup({ name: groupName.trim() }); setGroupName(''); await refreshOrganization() }, '分组已创建')
-            }}><label className="settings-field"><span>新分组名称</span><input ref={groupInputRef} value={groupName} onChange={event => setGroupName(event.target.value)} placeholder="新分组名" maxLength={128} required disabled={pending} /></label><button type="submit" className="settings-button is-primary" disabled={pending}>创建</button></form>
+            }}><label className="settings-field"><span>新分组名称</span><input ref={groupInputRef} value={groupName} onChange={event => setGroupName(event.target.value)} placeholder="新分组名" maxLength={128} required disabled={pendingGroups} /></label><button type="submit" className="settings-button is-primary" disabled={pendingGroups}>创建</button></form>
           </>}
 
           {section === 'general' && <>
@@ -397,15 +420,15 @@ export default function SettingsPage({
                 const timeoutPatch = patch.mail_fetch_timeout_seconds
                 if (timeoutPatch !== undefined && (!Number.isFinite(Number(timeoutPatch)) || Number(timeoutPatch) <= 0)) { report('general', '拉信超时必须为正数', true); return }
                 void run('general', '保存设置', async () => { await api.updateSettings(patch); await qc.invalidateQueries({ queryKey: queryKeys.settings }); setDraft({}) }, '设置已保存')
-              }}><fieldset disabled={pending || !settingsQuery.isSuccess}><div className="settings-fields"><label className="settings-field" htmlFor="settings-timezone"><span>时区</span><input id="settings-timezone" list="settings-timezones" value={timezone} onChange={event => setDraft(current => ({ ...current, app_timezone: event.target.value }))} placeholder="Asia/Shanghai" /><small>使用 IANA 时区名称</small></label><datalist id="settings-timezones"><option value="Asia/Shanghai" /><option value="Asia/Tokyo" /><option value="America/New_York" /><option value="Europe/London" /><option value="UTC" /></datalist><label className="settings-field" htmlFor="settings-timeout"><span>拉信超时（秒）</span><input id="settings-timeout" type="number" step="any" value={timeoutSeconds} onChange={event => setDraft(current => ({ ...current, mail_fetch_timeout_seconds: event.target.value }))} placeholder="30" /><small>单次网络请求的等待上限（未设置时默认 30 秒）</small></label></div><button className="settings-button is-primary" type="submit">保存</button></fieldset></form><Status value={feedback.general} />
+              }}><fieldset disabled={pendingGeneral || !settingsQuery.isSuccess}><div className="settings-fields"><label className="settings-field" htmlFor="settings-timezone"><span>时区</span><input id="settings-timezone" list="settings-timezones" value={timezone} onChange={event => setDraft(current => ({ ...current, app_timezone: event.target.value }))} placeholder="Asia/Shanghai" /><small>使用 IANA 时区名称</small></label><datalist id="settings-timezones"><option value="Asia/Shanghai" /><option value="Asia/Tokyo" /><option value="America/New_York" /><option value="Europe/London" /><option value="UTC" /></datalist><label className="settings-field" htmlFor="settings-timeout"><span>拉信超时（秒）</span><input id="settings-timeout" type="number" step="any" value={timeoutSeconds} onChange={event => setDraft(current => ({ ...current, mail_fetch_timeout_seconds: event.target.value }))} placeholder="30" /><small>单次网络请求的等待上限（未设置时默认 30 秒）</small></label></div><button className="settings-button is-primary" type="submit">保存</button></fieldset></form><Status value={feedback.general} />
             </section>
             <section className="settings-card"><h2>登录安全</h2><p>修改应用登录密码，不会修改邮箱服务商密码。</p>
               <form data-ui="ST09" onSubmit={event => {
                 event.preventDefault()
                 if (newPassword !== confirmPassword) { report('password', '两次输入的新密码不一致', true); return }
                 void run('password', '修改密码', async () => { await api.changePassword(currentPassword, newPassword); setCurrentPassword(''); setNewPassword(''); setConfirmPassword('') }, '密码已更新')
-              }}><fieldset disabled={pending}><div className="settings-fields settings-password-fields"><label className="settings-field" htmlFor="current-password"><span>当前密码</span><input id="current-password" name="current-password" type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} required /></label><label className="settings-field" htmlFor="new-password"><span>新密码</span><input id="new-password" name="new-password" type="password" autoComplete="new-password" minLength={8} value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="至少 8 位" required /></label><label className="settings-field" htmlFor="confirm-password"><span>确认新密码</span><input id="confirm-password" name="confirm-password" type="password" autoComplete="new-password" minLength={8} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} required /></label></div><button className="settings-button is-primary" type="submit">更新密码</button></fieldset></form><Status value={feedback.password} />
-              <div className="settings-control-row"><div><strong>退出登录</strong><small>退出当前浏览器或桌面客户端会话</small></div><button id="logout-button" type="button" className="settings-button is-danger" disabled={pending} onClick={() => void run('password', '退出登录', async () => { await api.logout(); qc.clear() })}>退出登录</button></div>
+              }}><fieldset disabled={pendingPassword}><div className="settings-fields settings-password-fields"><label className="settings-field" htmlFor="current-password"><span>当前密码</span><input id="current-password" name="current-password" type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} required /></label><label className="settings-field" htmlFor="new-password"><span>新密码</span><input id="new-password" name="new-password" type="password" autoComplete="new-password" minLength={8} value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="至少 8 位" required /></label><label className="settings-field" htmlFor="confirm-password"><span>确认新密码</span><input id="confirm-password" name="confirm-password" type="password" autoComplete="new-password" minLength={8} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} required /></label></div><button className="settings-button is-primary" type="submit">更新密码</button></fieldset></form><Status value={feedback.password} />
+              <div className="settings-control-row"><div><strong>退出登录</strong><small>退出当前浏览器或桌面客户端会话</small></div><button id="logout-button" type="button" className="settings-button is-danger" disabled={pendingPassword} onClick={() => void run('password', '退出登录', async () => { await api.logout(); qc.clear() })}>退出登录</button></div>
             </section>
           </>}
         </div>

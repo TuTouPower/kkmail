@@ -900,3 +900,46 @@ describe('<SettingsModal />', () => {
     expect(container.querySelector('button[aria-label="关闭设置"]')).toBeNull()
   })
 })
+
+describe('<SettingsModal /> per-scope pending gate (A125)', () => {
+  it('a slow accounts operation does not disable or swallow operations in other sections', async () => {
+    let releaseSyncAll!: () => void
+    const syncAllGate = new Promise<void>((resolve) => { releaseSyncAll = resolve })
+    const groupCreates: unknown[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u === '/api/accounts/sync-all') { await syncAllGate; return json({ target_count: 1 }) }
+      if (u.startsWith('/api/accounts')) return json({ accounts: [{ id: 'acc-1', email: 'a@x.test', provider: 'imap', sync_enabled: true, sync_status: 'idle' }], total: 1, limit: 200, offset: 0, has_more: false })
+      if (u === '/api/groups') {
+        if (init.method === 'POST') { groupCreates.push(JSON.parse(String(init.body))); return json({ id: 'g-1', name: '新分组', account_count: 0 }) }
+        return json({ groups: [] })
+      }
+      if (u === '/api/settings') return json({ settings: settingsResponse })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    const syncAllBtn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('同步全部账户')) || null
+    await waitFor(() => expect((syncAllBtn as HTMLButtonElement).disabled).toBe(false))
+    await click(syncAllBtn)
+    await waitFor(() => expect(container.textContent).toContain('全量同步…'))
+
+    // Same section stays gated while its own operation runs…
+    expect((syncAllBtn as HTMLButtonElement).disabled).toBe(true)
+
+    // …but the groups section is neither disabled nor silently swallowed.
+    await click([...container.querySelectorAll('button')].find((b) => b.textContent?.includes('分组管理')) || null)
+    const nameInput = container.querySelector('input[placeholder="新分组名"]') as HTMLInputElement
+    await typeInto(nameInput, '新分组')
+    const createBtn = [...container.querySelectorAll('button')].find((b) => b.textContent === '创建') as HTMLButtonElement
+    expect(createBtn.disabled).toBe(false)
+    await click(createBtn)
+    await waitFor(() => expect(groupCreates).toEqual([{ name: '新分组' }]))
+    await waitFor(() => expect(container.textContent).toContain('分组已创建'))
+
+    releaseSyncAll()
+    await click([...container.querySelectorAll('button')].find((b) => b.textContent?.includes('账户管理')) || null)
+    await waitFor(() => expect(container.textContent).toContain('已排队 1 个全量同步任务'))
+  })
+})
