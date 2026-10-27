@@ -49,10 +49,11 @@ export function formatShortcut(shortcut: Shortcut): string {
 
 export function matchesShortcut(event: KeyboardEvent, shortcut: Shortcut): boolean {
   if (event.repeat) return false
-  const hasCmdOrCtrl = event.ctrlKey || event.metaKey
-  const shortcutCmdOrCtrl = shortcut.ctrl || shortcut.meta
-
-  if (Boolean(hasCmdOrCtrl) !== Boolean(shortcutCmdOrCtrl)) return false
+  // A332: Ctrl and Meta are recorded separately and must match exactly;
+  // treating them as interchangeable let a shortcut recorded on one
+  // platform fire with the other platform's primary modifier.
+  if (Boolean(event.ctrlKey) !== Boolean(shortcut.ctrl)) return false
+  if (Boolean(event.metaKey) !== Boolean(shortcut.meta)) return false
   if (Boolean(event.shiftKey) !== Boolean(shortcut.shift)) return false
   if (Boolean(event.altKey) !== Boolean(shortcut.alt)) return false
 

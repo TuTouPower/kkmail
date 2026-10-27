@@ -116,7 +116,7 @@ describe('<UiReferenceOverlay /> (t011 AC-001 ~ AC-006)', () => {
       new KeyboardEvent('keydown', {
         key: '.',
         code: 'Period',
-        metaKey: true,
+        ctrlKey: true,
         shiftKey: true,
         bubbles: true,
         cancelable: true,
@@ -199,7 +199,7 @@ describe('<UiReferenceOverlay /> (t011 AC-001 ~ AC-006)', () => {
       new KeyboardEvent('keydown', {
         key: '.',
         code: 'Period',
-        metaKey: true,
+        ctrlKey: true,
         shiftKey: true,
         bubbles: true,
         cancelable: true,
@@ -240,7 +240,7 @@ describe('<UiReferenceOverlay /> (t011 AC-001 ~ AC-006)', () => {
       new KeyboardEvent('keydown', {
         key: '.',
         code: 'Period',
-        metaKey: true,
+        ctrlKey: true,
         shiftKey: true,
         bubbles: true,
         cancelable: true,
