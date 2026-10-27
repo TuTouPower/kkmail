@@ -134,3 +134,31 @@ def test_a98_compose_comment_explains_local_http_opt_out():
         "the Secure default must be documented with the explicit local "
         "HTTP debugging opt-out (set MAIL_CORE_COOKIE_SECURE=0)"
     )
+
+
+# --- A154: bare `up` must not start an api that never runs migrations ---
+
+
+def test_a154_api_is_gated_behind_distributed_profile():
+    import yaml
+
+    doc = yaml.safe_load(_compose_text())
+    services = doc["services"]
+    assert services["api"].get("profiles") == ["distributed"], (
+        "api has no profile while migrate/worker sit behind `distributed` "
+        "and api defaults SKIP_MIGRATIONS=1 with a required:false migrate "
+        "dependency: a bare `up` starts an api against an unmigrated DB"
+    )
+    assert services["migrate"].get("profiles") == ["distributed"]
+    assert services["worker"].get("profiles") == ["distributed"]
+
+
+def test_a154_header_warns_bare_up_is_unsupported():
+    text = _compose_text()
+    header = text.split("services:")[0]
+    assert "distributed" in header
+    assert "up -d" in header or "bare" in header.lower()
+    assert "migrat" in header.lower(), (
+        "file header must warn that a bare up is not the supported path "
+        "and state what happens to migrations"
+    )

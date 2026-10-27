@@ -13,7 +13,7 @@ export MAIL_CORE_LOGIN_PASSWORD='<强密码>'            # 或 MAIL_CORE_LOGIN_P
 export MAIL_CORE_BLOB_KEY_V1="$(python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())')"
 export MAIL_CORE_BACKUP_KEY="$(python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())')"
 
-docker compose -f docker-compose.mail-core.yml up --build -d api worker   # 依赖会自动拉起 postgres 与 migrate
+docker compose -f docker-compose.mail-core.yml --profile distributed up --build -d api worker   # 依赖会自动拉起 postgres 与 migrate；api/worker/migrate 均在 distributed profile 后，无 profile 的裸 up 不是受支持路径
 ```
 
 - 默认访问：`http://127.0.0.1:37281`。默认只把 API（主机 **37281**→容器 8000）和 PostgreSQL（主机 **5433**→容器 5432）发布到 `127.0.0.1`。若需通过本机 `.local` 主机名从局域网访问 API，设置 `MAIL_CORE_HOST_BIND=0.0.0.0` 后再启动 Compose，并访问 `http://<hostname>.local:37281`；这会监听主机 IPv4 接口。不要将端口直接暴露到公网，远程访问应放在 TLS 反向代理之后。文件里的 `imap` 服务是测试用 Dovecot 夹具（`127.0.0.1:1143`），部署时不要启动它（上面的命令只启动 `api` / `worker` 及其依赖）。

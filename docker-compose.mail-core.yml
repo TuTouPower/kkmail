@@ -4,6 +4,14 @@
 #
 # Start the distributed stack (API, migrations, and worker):
 #   docker compose -f docker-compose.mail-core.yml --profile distributed up --build -d api worker
+# WARNING: a bare `docker compose -f docker-compose.mail-core.yml up -d`
+# (no --profile, no service names) is NOT a supported path. api, worker
+# and migrate all sit behind the `distributed` profile, so a bare up
+# starts only PostgreSQL; and starting api without the profile's migrate
+# service leaves it against an unmigrated database (api defaults to
+# MAIL_CORE_SKIP_MIGRATIONS=1 and its migrate dependency is not
+# required), which shows up as /ready staying 503 / schema-not-at-head
+# rather than an up-front error. Always use the profile command above.
 # Set these variables before running that command:
 #   export MAIL_CORE_BLOB_KEY_V1="$(python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())')"
 #   export POSTGRES_PASSWORD="$(openssl rand -hex 16)"
@@ -91,6 +99,9 @@ services:
             raise SystemExit(1)
 
   api:
+    # Gated like migrate/worker: without the profile a bare `up` would
+    # start this api with SKIP_MIGRATIONS=1 and no migrate run (A154).
+    profiles: ["distributed"]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     build:
