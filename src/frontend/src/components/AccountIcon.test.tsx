@@ -65,6 +65,30 @@ describe('<AccountIcon /> (full 20 brand SVG suite)', () => {
     expect(dot7?.getAttribute('title')).toBe('默认邮箱')
   })
 
+  it('sanitizes server-supplied groupColor before using it as background (A371)', async () => {
+    useMailStore.setState({ accountIconMode: 'initials' })
+
+    const { container: evil } = await render(
+      <AccountIcon email="alice@custom.org" provider="imap" groupColor="url(https://attacker.example/track.png)" />,
+    )
+    const evilBg = (evil.querySelector('.account-dot') as HTMLElement).style.background
+    expect(evilBg).not.toContain('url')
+    expect(evilBg).not.toContain('attacker')
+
+    const { container: evil2 } = await render(
+      <AccountIcon email="@custom.org" provider="imap" groupColor="red; background-image:url(https://attacker.example/x)" />,
+    )
+    const evil2Bg = (evil2.querySelector('.account-dot') as HTMLElement).style.background
+    expect(evil2Bg).not.toContain('url')
+    expect(evil2Bg).not.toContain('attacker')
+
+    const { container: ok } = await render(
+      <AccountIcon email="alice@custom.org" provider="imap" groupColor="#0a8f3c" />,
+    )
+    const okBg = (ok.querySelector('.account-dot') as HTMLElement).style.background
+    expect(okBg).toContain('rgb(10, 143, 60)')
+  })
+
   it('renders initials mode with username first character (AC-004)', async () => {
     useMailStore.setState({ accountIconMode: 'initials' })
 

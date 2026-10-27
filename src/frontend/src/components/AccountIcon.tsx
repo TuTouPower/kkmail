@@ -4,6 +4,16 @@ import { detectAccountBrand, getEmailInitial, BRAND_TITLES, type AccountIconMode
 import { providerColor, useMailStore } from '../store/mailStore'
 import { BRAND_ICON_COMPONENTS } from './brand-icons/brandIconMap'
 
+// groupColor comes from server-side group data and is attacker-influenceable,
+// so it must never reach style.background unchecked (url()/expression()
+// injection). Only plain hex colors are trusted; anything else falls back.
+const SAFE_HEX_COLOR = /^#[0-9a-f]{3,8}$/i
+
+export function safeCssBackground(color: string | null | undefined, fallback: string): string {
+  const value = (color ?? '').trim()
+  return SAFE_HEX_COLOR.test(value) ? value : fallback
+}
+
 export interface AccountIconProps {
   email?: string
   provider?: string
@@ -36,7 +46,7 @@ export const AccountIcon = memo(function AccountIcon({
       return (
         <span
           className={`${baseCls} account-initials`}
-          style={{ background: groupColor || providerColor(provider, accountType) }}
+          style={{ background: groupColor ? safeCssBackground(groupColor, 'var(--muted)') : providerColor(provider, accountType) }}
           aria-hidden="true"
         >
           {initial}
@@ -46,7 +56,7 @@ export const AccountIcon = memo(function AccountIcon({
     return (
       <span
         className={`${baseCls} account-generic`}
-        style={{ background: groupColor || 'var(--muted)' }}
+        style={{ background: safeCssBackground(groupColor, 'var(--muted)') }}
         aria-hidden="true"
       >
         <Mail size={11} />
