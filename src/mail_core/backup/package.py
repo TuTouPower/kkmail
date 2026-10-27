@@ -266,11 +266,26 @@ def _assert_target_database_is_empty(target_database_url: str) -> None:
     try:
         with psycopg.connect(dsn, **conn_kwargs) as conn:
             with conn.cursor() as cur:
+                # Counting tables alone is not enough: a database holding
+                # only views, sequences, functions or extensions (with zero
+                # tables, or only empty ones) is still not a fresh restore
+                # target. Require no user-schema objects at all.
                 cur.execute(
-                    "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')"
+                    "SELECT "
+                    "(SELECT count(*) FROM pg_catalog.pg_class c "
+                    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') "
+                    "AND n.nspname NOT LIKE 'pg_toast%' "
+                    "AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')), "
+                    "(SELECT count(*) FROM pg_catalog.pg_proc p "
+                    "JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+                    "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') "
+                    "AND n.nspname NOT LIKE 'pg_toast%'), "
+                    "(SELECT count(*) FROM pg_catalog.pg_extension "
+                    "WHERE extname <> 'plpgsql')"
                 )
                 row = cur.fetchone()
-                if row and row[0] > 0:
+                if row and any(int(count or 0) > 0 for count in row):
                     raise RuntimeError("refusing to restore into non-empty target database")
     except Exception as exc:
         if "refusing to restore into non-empty" in str(exc):
@@ -2190,6 +2205,49 @@ def verify_restore_operation(
 
     source_ident = _read_target_identity(source_database_url)
     with _backup_destination_lock(target_blobs):
+        # Re-read and re-verify the operation log under the destination
+        # lock: the stage that drives verification must be the stage in
+        # effect while the lock is held, not a stale pre-lock snapshot —
+        # another resume/verify may have completed this operation while
+        # this call waited for the lock, and writing state back from the
+        # stale stage would regress it (complete -> blobs_published).
+        # Mirrors resume_restore_backup_package / cleanup_restore_operation.
+        op_log = (
+            _read_restore_operation_log(target_blobs)
+            if target_blobs.is_dir()
+            else None
+        )
+        if op_log is None:
+            raise RuntimeError(
+                "restore verification refused: no restore operation log in "
+                f"target: {target_blobs}"
+            )
+        _assert_operation_log_matches(
+            op_log,
+            operation_id=op_id,
+            target_blobs=target_blobs,
+            target_database_url=target_database_url,
+            target_ident=target_ident,
+        )
+        stage = str(op_log.get("stage") or "")
+        if stage == "complete":
+            return RestoreResult(
+                ok=True,
+                database_restored=True,
+                blobs_restored=len(_target_blob_files(target_blobs)),
+                duration_seconds=(
+                    datetime.now(timezone.utc) - begun
+                ).total_seconds(),
+                package_size_bytes=0,
+                errors=[],
+                operation_id=op_id,
+                stage="complete",
+            )
+        if stage != "needs_verification":
+            raise RuntimeError(
+                f"restore operation {op_id} is in stage {stage!r}, not "
+                "needs_verification; use resume for that stage"
+            )
         work_dir = pkg_dir.parent / f".restore_work_{uuid.uuid4().hex}"
         _make_private_dir(work_dir)
         try:
