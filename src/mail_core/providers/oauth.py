@@ -285,7 +285,16 @@ def default_urllib_token_post(
         try:
             with permit_scope(permit_factory, traffic_class):
                 with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — operator-configured token URI
-                    return json.loads(_read_response_limited(resp, MAX_JSON_RESPONSE_BYTES).decode("utf-8"))
+                    raw_token_body = _read_response_limited(resp, MAX_JSON_RESPONSE_BYTES)
+                    try:
+                        return json.loads(raw_token_body.decode("utf-8"))
+                    except (json.JSONDecodeError, UnicodeDecodeError) as decode_exc:
+                        # A291 (same family): never leak a bare decode error
+                        # from a 2xx token response.
+                        raise ProviderHttpError(
+                            f"token endpoint returned invalid JSON: {decode_exc}",
+                            status=None,
+                        ) from decode_exc
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
             hdrs = dict(exc.headers or {})
@@ -467,7 +476,23 @@ def urllib_json_request(
                                 f"{MAX_JSON_RESPONSE_BYTES}-byte size limit",
                                 status=None,
                             )
-                        return json.loads(raw.decode("utf-8"))
+                        # A291: a 2xx with an undecodable body must not leak
+                        # a bare JSONDecodeError. For safe methods the call
+                        # simply failed; for non-idempotent methods the
+                        # write may already have been applied, so the
+                        # outcome is ambiguous and must not be replayed.
+                        try:
+                            return json.loads(raw.decode("utf-8"))
+                        except (json.JSONDecodeError, UnicodeDecodeError) as decode_exc:
+                            if retryable:
+                                raise ProviderHttpError(
+                                    f"provider returned invalid JSON for {method_upper}: {decode_exc}",
+                                    status=None,
+                                ) from decode_exc
+                            raise AmbiguousOutcomeError(
+                                f"{method_upper} outcome ambiguous: provider returned "
+                                f"invalid JSON ({decode_exc})"
+                            ) from decode_exc
                     return {"raw_bytes": raw}
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")

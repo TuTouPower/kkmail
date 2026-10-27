@@ -291,3 +291,46 @@ def test_a249_token_post_503_exhausts_retries_as_provider_error(monkeypatch):
     assert caught.value.status == 503
     assert len(calls) == 4  # initial + 3 retries, same as GET strategy
     assert sleeps == [1.0, 2.0, 3.0]
+
+
+# --- A291: invalid JSON on 2xx must not surface as bare JSONDecodeError ---
+
+
+def test_a291_get_invalid_json_raises_provider_http_error(monkeypatch):
+    import json as _json
+    import urllib.request
+
+    from mail_core.providers.http import AmbiguousOutcomeError, ProviderHttpError
+    from mail_core.providers.oauth import urllib_json_request
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=60: _FakeHttpResponse(b"this is not json{{{"),
+    )
+    with pytest.raises(ProviderHttpError) as caught:
+        urllib_json_request("GET", "https://graph.microsoft.com/v1.0/me", _sleep_fn=lambda _s: None)
+    assert not isinstance(caught.value, AmbiguousOutcomeError)
+    assert not isinstance(caught.value, _json.JSONDecodeError)
+    assert isinstance(caught.value.__cause__, _json.JSONDecodeError)
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH", "DELETE"])
+def test_a291_non_idempotent_invalid_json_raises_ambiguous_outcome(monkeypatch, method):
+    import urllib.request
+
+    from mail_core.providers.http import AmbiguousOutcomeError
+    from mail_core.providers.oauth import urllib_json_request
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=60: _FakeHttpResponse(b"<html>proxy page</html>"),
+    )
+    # First byte is not {/[ and content-type is JSON, so this still goes
+    # down the JSON branch in the current transport.
+    with pytest.raises(AmbiguousOutcomeError):
+        urllib_json_request(
+            method, "https://graph.microsoft.com/v1.0/me/messages/m1/move",
+            {"destinationId": "archive"}, _sleep_fn=lambda _s: None,
+        )
