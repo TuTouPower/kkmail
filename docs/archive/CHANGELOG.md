@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+> 归档注记：本文件已于 2026-10-22 随提交 `5846ea34` 迁入 `docs/archive/` 封存。本节内容为封存时点尚未发布的历史变更记录，不是待发布清单，不再更新；封存之后的变更以 git 历史、`VERSION` 与版本标签为准，发版流程见 `docs/guides/release.md`。
+
 ### Removed
 - Unused frontend deps `@radix-ui/*` and `clsx` (never imported).
 - Dead SPA CSS for compose/settings modal dialogs; duplicate ≤760px sidebar rules merged.
