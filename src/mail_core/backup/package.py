@@ -2401,12 +2401,70 @@ def cleanup_restore_operation(
                 f"{stage!r}, which does not prove the database commit did "
                 "not happen; its files may be the restored data"
             )
-        for child in sorted(target_blobs.iterdir(), key=lambda p: p.name):
-            if child.is_dir() and not child.is_symlink():
-                removed += sum(1 for p in child.rglob("*") if p.is_file())
-                shutil.rmtree(child)
-            elif child.is_symlink() or child.is_file():
-                child.unlink()
-                removed += 1
+        # Delete ONLY this operation's own artifacts: the operation log
+        # (and its atomic-write temp files), this operation's staging
+        # directory, and the *.blob files it published. Anything else in
+        # the target is foreign to this operation — the directory may be
+        # a live blob root or shared with another operation — so refuse
+        # and delete nothing instead of wiping every child.
+        staging_name = f"{_RESTORE_STAGING_PREFIX}{op_id}"
+        own_files: list[Path] = []
+        for path in sorted(target_blobs.rglob("*")):
+            rel = path.relative_to(target_blobs)
+            first = rel.parts[0]
+            if path.is_symlink():
+                raise RuntimeError(
+                    "restore cleanup refused: foreign entry in restore "
+                    f"target is not part of operation {op_id}: "
+                    f"{rel.as_posix()} (symlink)"
+                )
+            if path.is_dir():
+                if (
+                    first.startswith(".")
+                    and first != staging_name
+                    and first != _RESTORE_OPERATION_LOG_FILENAME
+                    and not first.startswith(
+                        _RESTORE_OPERATION_LOG_FILENAME + ".tmp-"
+                    )
+                ):
+                    raise RuntimeError(
+                        "restore cleanup refused: foreign entry in restore "
+                        f"target is not part of operation {op_id}: "
+                        f"{rel.as_posix()}"
+                    )
+                continue
+            if (
+                first == _RESTORE_OPERATION_LOG_FILENAME
+                or first.startswith(_RESTORE_OPERATION_LOG_FILENAME + ".tmp-")
+                or first == staging_name
+                or (
+                    path.name.endswith(".blob")
+                    and not any(part.startswith(".") for part in rel.parts)
+                )
+            ):
+                own_files.append(path)
+            else:
+                raise RuntimeError(
+                    "restore cleanup refused: foreign file in restore "
+                    f"target is not part of operation {op_id}: "
+                    f"{rel.as_posix()}"
+                )
+        for path in own_files:
+            path.unlink()
+            removed += 1
+        staging_dir = target_blobs / staging_name
+        if staging_dir.is_dir():
+            shutil.rmtree(staging_dir)
+        # Prune directories left empty by the deletions (deepest first);
+        # directories still holding anything are kept.
+        for dirpath in sorted(
+            (p for p in target_blobs.rglob("*") if p.is_dir()),
+            key=lambda p: len(p.parts),
+            reverse=True,
+        ):
+            try:
+                dirpath.rmdir()
+            except OSError:
+                pass
         _fsync_dir(target_blobs)
     return removed

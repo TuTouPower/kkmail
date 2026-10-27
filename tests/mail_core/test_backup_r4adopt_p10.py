@@ -273,3 +273,69 @@ def test_a26_resume_unknown_empty_state_enters_needs_verification(
     assert len(fake.calls) == 1  # pg_restore was NOT replayed
     assert _read_log(target)["stage"] == "needs_verification"
     assert _published_files(target) == PAYLOADS
+
+
+# --- A15: cleanup must only remove this operation's own files --------------
+
+
+def _manual_operation_at_stage(target: Path, stage: str) -> dict:
+    resolved = backup_package._resolve_restore_target(target)
+    for rel, data in PAYLOADS.items():
+        path = resolved / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    payload = backup_package._operation_log_payload(
+        operation_id="c1eanup0peration000000000000001",
+        package_digest="manual-digest",
+        target_blobs=resolved,
+        target_database_url=TARGET_URL,
+        target_ident=None,
+        stage=stage,
+    )
+    return backup_package._write_restore_operation_log(
+        resolved, payload, stage=stage
+    )
+
+
+def test_a15_cleanup_refuses_foreign_file_and_deletes_nothing(tmp_path):
+    target = tmp_path / "restored-blobs"
+    log = _manual_operation_at_stage(target, "staging")
+    foreign = target / "zz" / "keep.txt"
+    foreign.parent.mkdir(parents=True, exist_ok=True)
+    foreign.write_bytes(b"not part of the restore operation")
+
+    with pytest.raises(RuntimeError, match="foreign"):
+        cleanup_restore_operation(target, operation_id=log["operation_id"])
+
+    # Nothing at all was deleted: published blobs, log and foreign file.
+    assert _published_files(target) == {**PAYLOADS, "zz/keep.txt": b"not part of the restore operation"}
+    assert _read_log(target)["stage"] == "staging"
+
+
+def test_a15_cleanup_refuses_other_operations_staging_dir(tmp_path):
+    target = tmp_path / "restored-blobs"
+    log = _manual_operation_at_stage(target, "staging")
+    other_staging = target / ".restore_staging_otheroperation00000000001"
+    other_staging.mkdir(parents=True)
+    (other_staging / "partial.blob").write_bytes(b"someone else's staging")
+
+    with pytest.raises(RuntimeError, match="foreign"):
+        cleanup_restore_operation(target, operation_id=log["operation_id"])
+
+    assert _published_files(target) == PAYLOADS
+    assert (other_staging / "partial.blob").read_bytes() == b"someone else's staging"
+    assert _read_log(target)["stage"] == "staging"
+
+
+def test_a15_cleanup_removes_only_own_artifacts_including_staging(tmp_path):
+    target = tmp_path / "restored-blobs"
+    log = _manual_operation_at_stage(target, "staging")
+    own_staging = target / f".restore_staging_{log['operation_id']}"
+    own_staging.mkdir(parents=True)
+    (own_staging / "aa" / "bb").mkdir(parents=True)
+    (own_staging / "aa" / "bb" / "first.blob").write_bytes(PAYLOADS["aa/bb/first.blob"])
+
+    removed = cleanup_restore_operation(target, operation_id=log["operation_id"])
+
+    assert removed >= len(PAYLOADS)
+    assert list(target.iterdir()) == []
