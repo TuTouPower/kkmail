@@ -1,3 +1,7 @@
+> [!NOTE]
+> **SUPERSEDED / HISTORICAL REPORT**
+> 本报告属于历史审阅归档：记录日期 2026-10-22（Generated: 2026-10-22T05:49:17+08:00；本包入库提交 `eb7685eec6828c8398aecbeaeb0712bb6cbb0c2c`，原报告未标注被审基线 SHA）。文中结论只反映记录时点的代码状态，已被后续审阅替代，现行结论以 [review_20261027_021416](../review_20261027_021416/review_intensive.md) 为准；同日后续复审见 [review_20261022_071448](../review_20261022_071448/review_intensive.md)。请勿将本报告 finding 视为当前状态。
+
 # Intensive Review — Aggregate
 
 - Generated: 2026-10-22T05:49:17.204130+08:00
