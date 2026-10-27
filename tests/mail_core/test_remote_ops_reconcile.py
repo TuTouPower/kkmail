@@ -34,7 +34,7 @@ def _patch_provider(provider: MemoryProvider):
         "push": push_mod.build_provider,
     }
 
-    def _build(account, store=None):
+    def _build(account, store=None, *args, **kwargs):
         return provider
 
     engine_mod.build_provider = _build
@@ -240,7 +240,7 @@ def test_remote_push_never_passes_null_remote_id_to_provider(monkeypatch):
 
     provider = MagicMock()
     provider.apply_remote_operation.return_value.success = True
-    monkeypatch.setattr(push_mod, "build_provider", lambda account, store=None: provider)
+    monkeypatch.setattr(push_mod, "build_provider", lambda account, store=None, *args, **kwargs: provider)
 
     result = push_remote_operations(account_id, worker_id="null-remote-id", store=DictCredentialStore({"r": "x"}))
     assert result["status"] == "ok"
@@ -312,6 +312,70 @@ def test_push_flag_move_trash_memory():
         assert pushed["pushed"] == 2
         assert "1" in provider.flagged
         assert any(m.remote_id == "2" for m in provider.messages.get("Archive", []))
+    finally:
+        _restore(originals)
+        set_credential_store(None)
+
+
+def test_a391_reconcile_scan_heartbeat_renews_lease_during_scan(monkeypatch):
+    """A391: long-running full scan during provider.reconcile heartbeats lease periodically."""
+    import time
+    store = DictCredentialStore({"r": "x"})
+    set_credential_store(store)
+    now = datetime.now(timezone.utc)
+    provider = MemoryProvider(folders=[RemoteFolder("INBOX", "INBOX", "inbox")])
+    provider.seed(
+        "INBOX",
+        [
+            RemoteMessageMeta("1", "A", "a@b.c", "A", now, False, False, uid=1),
+        ],
+    )
+    originals = _patch_provider(provider)
+    Session = get_session_factory()
+    real_heartbeat = __import__("mail_core.sync.leases", fromlist=["heartbeat_lease"]).heartbeat_lease
+    heartbeat_count = []
+
+    def counting_heartbeat(session, **kwargs):
+        heartbeat_count.append(kwargs.get("fencing_token"))
+        return real_heartbeat(session, **kwargs)
+
+    monkeypatch.setattr(reconcile_mod, "heartbeat_lease", counting_heartbeat, raising=False)
+
+    orig_reconcile = provider.reconcile
+
+    def slow_reconcile(folder_remote_id, local_remote_ids):
+        # Simulate network / search delay during scan
+        time.sleep(0.6)
+        return orig_reconcile(folder_remote_id, local_remote_ids)
+
+    provider.reconcile = slow_reconcile
+
+    try:
+        with Session() as session:
+            acc = create_account(
+                session, email=f"a391-{uuid.uuid4().hex[:8]}@ex.com", provider="memory", credential_ref="r"
+            )
+            session.commit()
+            account_id = acc.id
+
+        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        with Session() as session:
+            folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"] is True
+
+        provider.messages["INBOX"] = []
+        result = reconcile_folder(
+            account_id,
+            folder_id,
+            worker_id="w",
+            store=store,
+            lease_ttl=timedelta(seconds=1),
+        )
+        assert result.get("status") == "ok", str(result)
+        assert result["deleted"] == 1
+        # At least one scan heartbeat happened during the 0.6s sleep (with interval ~0.33s),
+        # plus the delete batch heartbeat.
+        assert len(heartbeat_count) >= 2
     finally:
         _restore(originals)
         set_credential_store(None)

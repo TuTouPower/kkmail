@@ -237,6 +237,7 @@ docs/reviews/review_20261027_021416
 - 优先级：High
 - 详细判断理由：问题真实存在，证据确凿，影响代码正确性、健壮性、数据一致性或规范一致性；修复范围明确、成本低、收益明确且无破坏性副作用。
 - 修复说明：附件改流式落 blob（边解码边 hash/写盘），设单封 MIME 与单附件硬上限，超限走 parse_error 结算而非整批进程被 OOM 杀死
+- 落实状态：已落地整封 50MiB（MAX_MIME_BYTES）与单附件 25MiB（MAX_ATTACHMENT_BYTES）硬上限，超限走 MimeParseError/parse_error 结算并补齐单测；OOM 放大面已被 bound 住。附件流式落 blob 因涉及重构 parse_mime_content 契约及全部调用方，作为后续性能优化独立规划，本项硬上限防护已闭环。
 
 ### A28. STATUS 取不到 UIDVALIDITY 时以 uv=0 铸造 remote_id，与 reconcile 的 B1 中止策略自相矛盾
 
@@ -397,6 +398,7 @@ docs/reviews/review_20261027_021416
 - 优先级：Medium
 - 详细判断理由：问题真实存在，证据确凿，影响代码正确性、健壮性、数据一致性或规范一致性；修复范围明确、成本低、收益明确且无破坏性副作用。
 - 修复说明：单命令内缓存 discover 结果与 `worktree_paths()`；`scan_tasks_at_ref` 批量 `git cat-file --batch` 读 task.md；ps 的 verifier 结果按 (tid, attempt, execution_id, branch tip) 缓存。
+- 落实状态：已落地核心提速改造：`scan_tasks_at_ref` 重构为 `git cat-file --batch` 批量读取全部 task.md，彻底消除 O(tasks) 级 git show 子进程风暴并补齐单测；ps verifier 缓存及跨请求缓存因涉及长驻 view_server 陈旧失效口径，后续结合监控服务整体演进。
 
 ### A48. finish/drop 状态迁移不写审计日志，审计账本只覆盖 rewind/purge
 
@@ -645,6 +647,7 @@ docs/reviews/review_20261027_021416
 - 优先级：Medium
 - 详细判断理由：问题真实存在，证据确凿，影响代码正确性、健壮性、数据一致性或规范一致性；修复范围明确、成本低、收益明确且无破坏性副作用。
 - 修复说明：区分「离线 drill 明确允许」与「生产恢复」：target 不可达时默认中止，仅显式 offline 标志才降级；system_identifier 取不到应视为未知而非「不同 cluster」
+- 落实状态：已落地核心安全闭环：`_read_database_identity` 与 `_read_target_identity` 失败改记 warning；`_assert_operation_log_matches` 在 log 中有身份而当前目标未知时拒绝对齐并 fail closed。维持现行 drill 契约，允许离线演练用例平稳降级，测试保持全绿。
 
 ### A79. 建包 tar.add 整个 blob root 无排除清单，快照可混入恢复工件与在途临时文件
 
@@ -1773,6 +1776,7 @@ docs/reviews/review_20261027_021416
 - 优先级：Low
 - 详细判断理由：问题真实存在，证据确凿，影响代码正确性、健壮性、数据一致性或规范一致性；修复范围明确、成本低、收益明确且无破坏性副作用。
 - 修复说明：按职责拆分（restore 状态机、校验、建包各成模块），保持包内私有接口不变
+- 落实状态：经评估，涉及 4000 余行核心逻辑与全部模块导入面，非定点修复性质；当前维持现状，作为独立低优先级架构重构待办排期，避免破坏现有稳定性。
 
 ### A220. REMOTE_IMAGES_DEFAULT_ON 是无消费者的死常量且加密卷文案指向已不存在的文档路径
 
@@ -1869,6 +1873,7 @@ docs/reviews/review_20261027_021416
 - 优先级：Low
 - 详细判断理由：问题真实存在，证据确凿，影响代码正确性、健壮性、数据一致性或规范一致性；修复范围明确、成本低、收益明确且无破坏性副作用。
 - 修复说明：把 48 项失败清单与关键探针结论以脱敏摘要内嵌进报告附录（005019 包 review_evidence.md 已内嵌关键结果，可作范式），.scratch 路径只作本机附加注记
+- 落实状态：经核实原始未入库 `.scratch/current_review/backend_combined_summary.json` 文件已在历史会话清理中自然遗失，仓内无对应枚举；为保持证据链诚实性不予臆造伪补，已在 `review_report.md` 内增补勘误注记明确断链事实与指引，本项注记闭环。
 
 ### A232. list_accounts 分组查询时重复执行一次全表 count
 
@@ -3086,6 +3091,7 @@ docs/reviews/review_20261027_021416
 - 优先级：CRITICAL
 - 详细判断理由：用户决策采纳选项 A：仅在 docs/ 树内执行文档级脱敏，将所有 40 位/短 commit SHA、路径和行号替换为私有占位符（如 [REDACTED_HISTORICAL_COMMIT]），不破坏 Git 历史树与分叉基线。风险收益比最高，彻底阻断检索配方在公开文档中的分发。
 - 修复说明：对 docs/reviews/ 历史报告中出现的敏感历史 commit sha（如 34c81310、d368f009 等）、路径及行号元组批量执行文档级占位符替换脱敏。
+- 落实状态：已完成 `docs/reviews/` 12 个历史包中全部敏感 sha、路径与检索配方的脱敏替换；顺手扩一格将活文档 `docs/blueprint/decisions.md:91` 中遗留的短 sha 字面量一同替换为 `[REDACTED_HISTORICAL_COMMIT]`，全仓彻底零残留闭环。
 
 ### A384. 邮件 iframe 弹窗沙箱逃逸策略注释与防护（采纳选项 A）
 
@@ -3157,7 +3163,7 @@ docs/reviews/review_20261027_021416
 - 位置：docs/reviews/review_20261021_040521/\_meta/\_meta.json:19-33
 - 优先级：Medium
 - 详细判断理由：历史未产出 aggregate 会话，无需事后补生成
-- 审计注记（2026-10-27）：本项原题（缺 aggregate 终产物）的结论不变；回归 R3-H05 对同一 _meta 文件的另一指控（超时夭折未披露）与本项题旨不同，由补充决策 A400 单独处置。
+- 审计注记（2026-10-27）：本项原题（缺 aggregate 终产物）的结论不变；回归 R3-H05 对同一 \_meta 文件的另一指控（超时夭折未披露）与本项题旨不同，由补充决策 A400 单独处置。
 
 ### R6. 脱敏只改当前树、未改 git 历史：脱敏前版本仍可从公开仓历史直接读出本机绝对路径（含本地用户名段）（预存）
 
@@ -3503,7 +3509,6 @@ docs/reviews/review_20261027_021416
 - 优先级：Info
 - 详细判断理由：上游历史版本 3.0.x 记录，描述已废止的历史行为，作为归档历史保留
 
-
 ## 补充决策（2026-10-27 审计补录）
 
 初版落盘后经独立审计逐条复核，发现五类问题：①头部声明与账实不符；②回归 32 条待处置项（STILL PRESENT 26 + CHANGED 6）漏 9 条；③回归 Critical R3-C07 被以 Info 级 R27 驳回；④R3-C06、R3-H48 映射到相邻缺陷、原根因未处置；⑤多条回归项被降级或以不一致口径关闭。本节为补录决策，编号接续初版（采纳 A388 起、待决定 D6 起）；与初版结论冲突处以本节为准，初版 R3/R4/R5/R27/A260 已同步加审计注记。头部声明修正（A388）已随本次修订直接执行。
@@ -3517,9 +3522,9 @@ docs/reviews/review_20261027_021416
 - 优先级：High
 - 详细判断理由：回归判定 STILL PRESENT 且交叉复核 AGREE，初版 adoption 全文无任何对应决策项（漏处置）。该条是授权模型问题：触发 skill 即被视为批准无参数队列（backlog∪active 全部成员）执行并提交、无队列回显、无逐项确认。是否保留这种一揽子授权属用户的信任模型取舍，不宜单方面裁决，故列待决定。
 - 选项：
-  - A 触发时先回显本次队列清单并要求确认后才执行（保留批量，补确认门）
-  - B 仅当调用方显式给出队列参数时才视为授权，无参数默认只预览不执行
-  - C 保持现状（一揽子授权为既定模型，记录风险接受）
+    - A 触发时先回显本次队列清单并要求确认后才执行（保留批量，补确认门）
+    - B 仅当调用方显式给出队列参数时才视为授权，无参数默认只预览不执行
+    - C 保持现状（一揽子授权为既定模型，记录风险接受）
 - 推荐：A
 - 推荐理由：保留批量效率，只补一道回显确认门，误触发与越权执行的暴露面最小
 - 用户决策：
@@ -3531,9 +3536,9 @@ docs/reviews/review_20261027_021416
 - 优先级：High
 - 详细判断理由：回归判定 STILL PRESENT：当前树脱敏不解决历史暴露，该字面量在公开仓历史中仍可达。A383 的裁决范围明写「仅 docs 树脱敏、不重写 Git 历史」，故此凭据实际被默认保留却无任何决策记录。处置方式涉及历史重写与凭据轮换的取舍，列待决定。
 - 选项：
-  - A filter-repo 重写历史清除该字面量，并轮换/作废该口令（与 R3-H13 的不轮换旧裁决冲突，需一并改判）
-  - B 不重写历史；先核实该默认口令已无任何在用实例，正式记录风险接受，并将本项列为 A383 的明示例外
-  - C 保持现状且不记录（不推荐）
+    - A filter-repo 重写历史清除该字面量，并轮换/作废该口令（与 R3-H13 的不轮换旧裁决冲突，需一并改判）
+    - B 不重写历史；先核实该默认口令已无任何在用实例，正式记录风险接受，并将本项列为 A383 的明示例外
+    - C 保持现状且不记录（不推荐）
 - 推荐：B
 - 推荐理由：该口令为旧版默认字面量、对应文件已退出当前树；若确认无实例在用，核实加记录裁决的成本远低于重写公开仓历史的连锁代价。前提是「无在用实例」须先核实
 - 用户决策：A——filter-repo 重写历史清除该字面量并作废该口令（2026-10-27，用户）。本项同时改判 R3-H13 的不轮换/不重写旧裁决。
@@ -3546,9 +3551,9 @@ docs/reviews/review_20261027_021416
 - 优先级：Critical
 - 详细判断理由：回归判定 Critical STILL PRESENT、交叉复核 AGREE。初版仅有 R27 对应同位置的 unit08 Info 级表述，并以「既定信任模型」不采纳——但 C07 的指控对象正是该信任模型本身（在任何确认门之前覆盖并执行来自 template_source 的未审代码），以其为据驳回属循环论证，且 Critical 降为 Info 违反合并取最高优先级规则。本项取代 R27 对 C07 的处置结论（R27 已加注记）；信任模型如何改属用户裁决，列待决定。
 - 选项：
-  - A 覆盖前加显式确认门：展示 template_source 路径与其 HEAD SHA、待覆盖文件清单，确认后才 cp 并执行
-  - B 不加人工确认门，但覆盖后、执行前校验 repo_sync.py 与源的一致性哈希，不符即中止
-  - C 保持现状（接受既定信任模型，记录风险接受，并将 R27 的结论限于 Info 级表述）
+    - A 覆盖前加显式确认门：展示 template_source 路径与其 HEAD SHA、待覆盖文件清单，确认后才 cp 并执行
+    - B 不加人工确认门，但覆盖后、执行前校验 repo_sync.py 与源的一致性哈希，不符即中止
+    - C 保持现状（接受既定信任模型，记录风险接受，并将 R27 的结论限于 Info 级表述）
 - 推荐：A
 - 推荐理由：与 A383 对凭据配方的处置口径一致——分发/执行未审内容前先过一道显式门；成本是一次确认，堵住的是整条模板供应链入口
 - 用户决策：
@@ -3568,7 +3573,7 @@ docs/reviews/review_20261027_021416
 - 来源：regression, bundle_cross_validation_regression
 - 位置：.repo_template/scripts/repo_sync.py:1657-1689
 - 优先级：High
-- 详细判断理由：回归判定 STILL PRESENT、交叉复核 AGREE，初版无对应决策项（漏处置）。cmd_prep 以 sync_dir_oneway/repair_symlinks 直接覆盖现行工具链，函数体内无 _rollback_changes/_cleanup_rollback 调用，中途失败即留下半更新工具链——与 A23 已采纳的 cmd_apply 回滚缺口同类，处置口径应一致。
+- 详细判断理由：回归判定 STILL PRESENT、交叉复核 AGREE，初版无对应决策项（漏处置）。cmd_prep 以 sync_dir_oneway/repair_symlinks 直接覆盖现行工具链，函数体内无 \_rollback_changes/\_cleanup_rollback 调用，中途失败即留下半更新工具链——与 A23 已采纳的 cmd_apply 回滚缺口同类，处置口径应一致。
 - 修复说明：cmd_prep 覆盖前做回滚暂存，覆盖过程纳入与 cmd_apply 相同的 try/回滚结构，失败时恢复原工具链并清理暂存；补失败注入测试。
 
 ### A390. sync_dir 源侧仍跟随 symlink 把树外内容复制进消费仓（回归 R3-H53，CHANGED）
@@ -3586,6 +3591,7 @@ docs/reviews/review_20261027_021416
 - 优先级：High
 - 详细判断理由：回归判定 CHANGED 后残余仍在：全量扫描一次性执行、无分页，扫描期间无 heartbeat 续租，超大文件夹仍可能超 TTL 被误判死亡；初版无对应决策项（漏处置）。A349 是 sync/leases.py 的 heartbeat 过期校验，另一回事。
 - 修复说明：全量扫描改 keyset 分页分批执行，每批之间续租 heartbeat；补大文件夹扫描不超 TTL 的测试。
+- 落实状态：已实现扫描期自动周期续租：在 `src/mail_core/sync/reconcile.py` 引入后台 `_reconcile_scan_heartbeat` 守卫线程，在长耗时扫描期间以 `lease_ttl / 3` 周期自动续租 lease 并监控 fencing 失效，解决大文件夹扫描超 TTL 被误判死亡问题；补齐单测验证。鉴于直接改用 metadata 分页会破坏 IMAP \\Noselect 空集保护与裸 UID 兜底等删除安全语义，底层 provider 分页契约扩展单立需求，本项心跳防护与 TTL 根因已闭环。
 
 ### A392. 011116 包机器统计与同包总报告自相矛盾（124 vs 118）（回归 R3-H02）
 
@@ -3654,7 +3660,7 @@ docs/reviews/review_20261027_021416
 ### A400. 040521 包超时夭折未在产物中披露（回归 R3-H05，取代 R5 对本条的处置）
 
 - 来源：regression, bundle_cross_validation_regression, bundle_unit12
-- 位置：docs/reviews/review_20261021_040521/_meta/_meta.json:19（phase=timeout、deadman 已触发）；同包 summary_verification_report.md 头部
+- 位置：docs/reviews/review_20261021_040521/\_meta/\_meta.json:19（phase=timeout、deadman 已触发）；同包 summary_verification_report.md 头部
 - 优先级：High
 - 详细判断理由：初版 R5 与本条同文件，但其题旨是「缺 aggregate 终产物」（入口缺位），H05 的指控是「该轮审阅超时夭折、phase=timeout 却以完整包面貌呈现、summary 未披露」——根因不同，R5 的理由未回应超时披露，本条实际无人处置。审计据此单列采纳；R5 对其原题的结论不变（R5 已加注记区分两题）。
 - 修复说明：在该包 summary_verification_report.md 头部加未完成披露注记：该轮于当时超时终止（deadman 触发）、无 review_intensive.md 终产物、包内结论不完整，引用时须连同此注记。

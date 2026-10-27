@@ -149,6 +149,8 @@ npm --prefix src/desktop test
 
 完整门禁命令当前会遇到上述失败和 SSE 挂起，不是成功操作指南。分段选择表达式见 `.scratch/current_review/remaining_selection.txt`；48 项失败列表及各轮汇总见 `.scratch/current_review/backend_combined_summary.json`。测试运行时会清理独占测试库，不连接业务数据库。
 
+> **勘误注记（A231 闭环）**：上述引用的 `.scratch/current_review/backend_combined_summary.json` 及相关 `.scratch/` 日志系当时评审会话生成的未入库本机临时工件，现已随 scratch 目录清理而无法溯源，不捏造数据回填；真实基线与判定均以已入库测试套件及后续 review 报告为准。
+
 独立复现位于 `.scratch/current_review/`。探针中的 passed 表示缺陷被确认，不能解释为产品通过。
 
 - `test_review_current.py`：真实 PostgreSQL 复现 R02、R03、R04、R07、R08；provider 夹具复现 R01、R06。7 个 Python 探针与 1 个前端探针均确认预期缺陷。

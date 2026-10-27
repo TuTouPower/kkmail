@@ -1,8 +1,10 @@
 """Canonical store implementation for the task toolchain."""
 
+import io
 import json
 import os
 import re
+import subprocess
 import sys
 from collections import Counter
 from datetime import datetime
@@ -100,6 +102,45 @@ def git_text_at_ref(ref: str, path: str) -> str:
         raise ctx.TaskDataError(f"{ref}:{path} 不存在或无法读取")
     return r.stdout
 
+
+def git_batch_text_at_ref(ref: str, paths: list[str]) -> dict[str, str]:
+    """批量读取指定 ref 下的多个路径文本（A47：防子进程风暴）。返回 {path: text}。"""
+    if not paths:
+        return {}
+    input_bytes = "".join(f"{ref}:{p}\n" for p in paths).encode("utf-8")
+    try:
+        proc = subprocess.Popen(
+            ["git", "-C", str(ctx.REPO_ROOT), "cat-file", "--batch"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = proc.communicate(input=input_bytes, timeout=60)
+    except subprocess.TimeoutExpired as error:
+        proc.kill()
+        proc.communicate()
+        raise ctx.TaskDataError(f"git cat-file --batch 超时（60s）") from error
+
+    if proc.returncode != 0:
+        raise ctx.TaskDataError(f"无法读取 ref {ref!r}：{stderr.decode('utf-8', errors='replace').strip()}")
+
+    results: dict[str, str] = {}
+    stream = io.BytesIO(stdout)
+    for path in paths:
+        header = stream.readline()
+        if not header:
+            break
+        header_str = header.decode("utf-8", errors="replace").strip()
+        if header_str.endswith(" missing"):
+            continue
+        parts = header_str.split()
+        if len(parts) >= 3 and parts[1] == "blob":
+            size = int(parts[2])
+            content_bytes = stream.read(size)
+            stream.read(1)  # trailing newline after content
+            results[path] = content_bytes.decode("utf-8", errors="replace")
+    return results
+
 def scan_tasks_at_ref(ref: str) -> list[dict]:
     """扫描指定 commit/ref 中的 task，不签出、不写工作区。
 
@@ -134,7 +175,8 @@ def scan_tasks_at_ref(ref: str) -> list[dict]:
                 )
             seen_names[name] = archived
             dirs[(name, archived)] = None
-    tasks = []
+    target_items = []
+    task_paths = []
     for (name, archived) in sorted(dirs.keys()):
         if not archived and name == ctx.TEMPLATE_DIR.name:
             continue
@@ -142,10 +184,15 @@ def scan_tasks_at_ref(ref: str) -> list[dict]:
             f"docs/archive/tasks/{name}" if archived else f"docs/tasks/{name}"
         )
         path = f"{directory}/task.md"
-        try:
-            text = git_text_at_ref(ref, path)
-        except ctx.TaskDataError:
-            raise ctx.TaskDataError(f"{ref}:{directory}: 缺 task.md") from None
+        target_items.append((name, archived, directory, path))
+        task_paths.append(path)
+
+    batch_texts = git_batch_text_at_ref(ref, task_paths)
+    tasks = []
+    for (name, archived, directory, path) in target_items:
+        text = batch_texts.get(path)
+        if text is None:
+            raise ctx.TaskDataError(f"{ref}:{directory}: 缺 task.md")
         fm, _ = parse_front_matter_text(text, source=f"{ref}:{path}")
         tasks.append(_task_record(
             fm,

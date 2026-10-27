@@ -24,6 +24,8 @@ CONTRACT_MODULES = frozenset({
     "test_check_review_status.py",
     "test_repo_cleanup.py",
     "test_contract_suite.py",
+    "test_git_common_dir.py",
+    "test_lock_single_authority.py",
 })
 
 

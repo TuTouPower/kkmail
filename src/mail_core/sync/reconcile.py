@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -96,6 +98,54 @@ def _apply_delete_batch(session: Session, *, account_id: uuid.UUID, folder_id: u
     return batch_deleted
 
 
+@contextlib.contextmanager
+def _reconcile_scan_heartbeat(
+    session_factory,
+    *,
+    account_id: uuid.UUID,
+    worker_id: str,
+    fencing_token: int,
+    lease_ttl: timedelta,
+):
+    """Periodically renew lease during provider.reconcile full scan (A391)."""
+    stop_event = threading.Event()
+    fencing_lost = threading.Event()
+    interval = min(5.0, max(0.2, lease_ttl.total_seconds() / 3))
+
+    def _heartbeat_worker():
+        while not stop_event.wait(timeout=interval):
+            with session_factory() as s:
+                try:
+                    heartbeat_lease(
+                        s,
+                        account_id=account_id,
+                        owner_id=worker_id,
+                        fencing_token=fencing_token,
+                        ttl=lease_ttl,
+                    )
+                    s.commit()
+                except FencingMismatch:
+                    s.rollback()
+                    fencing_lost.set()
+                    log.warning("reconcile scan heartbeat lost fencing for account %s", account_id)
+                    break
+                except Exception as exc:
+                    s.rollback()
+                    log.warning("reconcile scan heartbeat failed for account %s: %s", account_id, exc)
+
+    thread = threading.Thread(
+        target=_heartbeat_worker,
+        name=f"reconcile-heartbeat-{account_id}",
+        daemon=True,
+    )
+    thread.start()
+    try:
+        yield fencing_lost
+    finally:
+        stop_event.set()
+        thread.join(timeout=2.0)
+
+
 def reconcile_folder(
     account_id: uuid.UUID,
     folder_id: uuid.UUID,
@@ -142,7 +192,16 @@ def reconcile_folder(
 
     try:
         provider = build_provider(account_snapshot, store or get_credential_store(), traffic_class=traffic_class)
-        actions = list(provider.reconcile(remote_folder, local_ids))  # network / full scan inside provider
+        with _reconcile_scan_heartbeat(
+            Session,
+            account_id=account_id,
+            worker_id=worker_id,
+            fencing_token=fencing,
+            lease_ttl=lease_ttl,
+        ) as fencing_lost:
+            actions = list(provider.reconcile(remote_folder, local_ids))  # network / full scan inside provider
+            if fencing_lost.is_set():
+                return {"status": "fencing_mismatch", "deleted": 0, "actions": len(actions)}
     except CAPACITY_ERRORS as exc:
         # Budget deferral: the worker reschedules this job without a
         # failure count; reconcile must not surface as provider_error.

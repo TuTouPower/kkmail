@@ -113,7 +113,7 @@ def _patch_all(provider):
         "push": push_mod.build_provider,
     }
 
-    def _build(account, store=None):
+    def _build(account, store=None, *args, **kwargs):
         return provider
 
     engine_mod.build_provider = _build
