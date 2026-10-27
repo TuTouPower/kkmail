@@ -241,20 +241,22 @@ def prompt_substrings(state: dict | None) -> list[str]:
 
 
 def _validate_template_source_url(value: str) -> None:
-    """URL 模板源协议 allowlist（A184）：仅 https / ssh / file，余者在 clone/pull 前拒绝。
+    """URL 模板源协议 allowlist（A184；A396 补 git://）：仅 https / ssh / git / file，
+    余者在 clone/pull 前拒绝。
 
     ssh 接受 ssh:// 与 scp 式 git@host:path；以 '-' 开头的值一律拒绝
     （会被 git 解析为选项）。本地路径走 kind=path，不在此处放行。
+    clone 调用处另加 --end-of-options 隔离（A396），与此处校验互补。
     """
     if value.startswith("-"):
         raise SyncError(f"模板源 URL 协议不允许：{value!r}（不得以 '-' 开头）")
-    if value.startswith(("https://", "ssh://", "file://")):
+    if value.startswith(("https://", "ssh://", "git://", "file://")):
         return
     if re.match(r"^[^/@\s]+@[^/:\s]+:\S+$", value):
         return
     raise SyncError(
         f"模板源 URL 协议不允许：{value!r}"
-        "（仅允许 https://、ssh://、scp 式 user@host:path 或 file://）"
+        "（仅允许 https://、ssh://、git://、scp 式 user@host:path 或 file://）"
     )
 
 
@@ -269,7 +271,9 @@ def resolve_src(state: dict | None) -> Path:
         cache = CONSUMER / ".scratch/repo_template_sync_src"
         if not (cache / ".git").exists():
             cache.parent.mkdir(parents=True, exist_ok=True)
-            r = _git(cache.parent, "clone", value, cache.name)
+            # --end-of-options 防 value 被当 git 选项注入（A396）；value 本身已过
+            # _validate_template_source_url 的 '-' 前缀拒绝与协议 allowlist。
+            r = _git(cache.parent, "clone", "--end-of-options", value, cache.name)
             if r.returncode != 0:
                 raise SyncError(f"clone 模板源失败：{r.stderr.strip()}")
         else:

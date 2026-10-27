@@ -143,6 +143,19 @@ def test_status_degrades_when_template_source_kind_missing(env, capsys):
     assert "template_source: path" in out
 
 
+def test_plan_degrades_when_template_source_kind_missing(env, capsys):
+    """A281: plan 同样对 template_source 缺 kind 降级，不裸 KeyError。
+
+    注：read_state 校验与 status/plan 降级的实现本体已随并行 fixer 的
+    A390 提交 3a24d722 落地（同文件 pathspec 快照），本例补 plan 路径守卫。
+    """
+    state = rs.read_state()
+    state["template_source"] = {"value": str(env["src"])}
+    env["state_file"].write_text(json.dumps(state))
+    assert rs.cmd_plan(Namespace()) == 0
+    assert "repo-template-sync 预览" in capsys.readouterr().out
+
+
 def test_prompt_add_supersede_revoke(env):
     _add_prompt(".env 不要 ignore", ".gitignore,.env")
     assert len(rs.read_state()["user_prompts"]) == 1
@@ -972,6 +985,62 @@ def test_resolve_src_rejects_invalid(env):
     state["template_source"]["value"] = "/nonexistent/not_a_template"
     with pytest.raises(rs.SyncError):
         rs.resolve_src(state)
+
+
+def _fake_clone_git(calls: list):
+    """伪造 _git：记录 clone 调用并造出含产物标记的缓存仓，避免真网络 clone。"""
+    def fake_git(repo, *args):
+        calls.append((repo, args))
+        if args and args[0] == "clone":
+            cache = Path(repo) / args[-1]
+            (cache / ".git").mkdir(parents=True, exist_ok=True)
+            marker = cache / rs.PRODUCT_MARKER
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("print('task')\n")
+        return subprocess.CompletedProcess(["git"], 0, "", "")
+    return fake_git
+
+
+def test_clone_call_uses_end_of_options(env, monkeypatch):
+    """A396（Critical）：clone 调用须在 value 前加 --end-of-options 隔离选项注入。"""
+    calls: list = []
+    monkeypatch.setattr(rs, "_git", _fake_clone_git(calls))
+    state = rs.read_state()
+    state["template_source"] = {"kind": "url", "value": "https://example.com/tpl.git"}
+    rs.resolve_src(state)
+    clone_calls = [args for _, args in calls if args and args[0] == "clone"]
+    assert len(clone_calls) == 1
+    args = clone_calls[0]
+    assert args[args.index("https://example.com/tpl.git") - 1] == "--end-of-options"
+
+
+def test_clone_allows_git_scheme(env, monkeypatch):
+    """A396：scheme 白名单含 git://（与 A184 的 https/ssh/file 互补）。"""
+    calls: list = []
+    monkeypatch.setattr(rs, "_git", _fake_clone_git(calls))
+    state = rs.read_state()
+    state["template_source"] = {"kind": "url", "value": "git://example.com/tpl.git"}
+    src = rs.resolve_src(state)
+    assert (src / rs.PRODUCT_MARKER).is_file()
+    assert any(args and args[0] == "clone" for _, args in calls)
+
+
+def test_clone_rejects_option_injection_values(env, monkeypatch):
+    """A396（Critical）：以 '-' 开头或 ext:: 等注入形态须在调 git 前拒绝。"""
+    def forbidden_git(repo, *args):
+        raise AssertionError(f"_git 不应被调用：{args}")
+    monkeypatch.setattr(rs, "_git", forbidden_git)
+    for bad in (
+        "--upload-pack=touch /tmp/pwn",
+        "--config=protocol.ext.allow=always",
+        "-e",
+        "ext::sh -c id",
+        "http://example.com/tpl.git",
+    ):
+        state = rs.read_state()
+        state["template_source"] = {"kind": "url", "value": bad}
+        with pytest.raises(rs.SyncError):
+            rs.resolve_src(state)
 
 
 # ---------------------------------------------------------------------------
