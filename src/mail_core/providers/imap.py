@@ -320,6 +320,11 @@ def _quote_mailbox(name: str) -> str:
     return name
 
 
+def _unescape_imap_quoted(text: str) -> str:
+    """Resolve backslash escapes inside an IMAP quoted string (A348)."""
+    return re.sub(r"\\(.)", r"\1", text)
+
+
 def _is_mailbox_noselect(c: imaplib.IMAP4, folder_remote_id: str) -> bool:
     """Check whether a mailbox has \\Noselect or \\NonExistent attribute."""
     if not hasattr(c, "list"):
@@ -603,7 +608,7 @@ class ImapProvider:
                 return [RemoteFolder("INBOX", "INBOX", "inbox")]
             folders: list[RemoteFolder] = []
             list_pattern = re.compile(
-                r"\((?P<flags>[^)]*)\)\s+(?:\"(?P<delim>[^\"]*)\"|(?P<delim_bare>\S+))\s+(?:\"(?P<name>[^\"]*)\"|(?P<name_bare>.+))\s*$"
+                r"\((?P<flags>[^)]*)\)\s+(?:\"(?P<delim>(?:[^\"\\]|\\.)*)\"|(?P<delim_bare>\S+))\s+(?:\"(?P<name>(?:[^\"\\]|\\.)*)\"|(?P<name_bare>.+))\s*$"
             )
             for raw in data:
                 if not raw:
@@ -613,10 +618,19 @@ class ImapProvider:
                 if m:
                     flags_raw = m.group("flags")
                     flags = [f.strip() for f in flags_raw.split() if f.strip()]
-                    delim = m.group("delim") or m.group("delim_bare")
+                    delim = m.group("delim")
+                    if delim is not None:
+                        delim = _unescape_imap_quoted(delim)
+                    else:
+                        delim = m.group("delim_bare")
                     if delim == "NIL":
                         delim = None
-                    remote_id = (m.group("name") or m.group("name_bare")).strip()
+                    if m.group("name") is not None:
+                        # A348: quoted name — resolve escapes and preserve
+                        # spaces inside the quotes exactly as sent.
+                        remote_id = _unescape_imap_quoted(m.group("name"))
+                    else:
+                        remote_id = (m.group("name_bare") or "").strip()
                 else:
                     flags_match = re.search(r"\(([^)]*)\)", line)
                     flags = flags_match.group(1).split() if flags_match else []
