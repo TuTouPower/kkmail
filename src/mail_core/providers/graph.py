@@ -76,18 +76,23 @@ def graph_folder_role(
     return "other"
 
 
-def _raise_mapped(exc: ProviderHttpError) -> None:
+def _raise_mapped(exc: ProviderHttpError, path: str = "") -> None:
     status = exc.status or 0
     body = exc.body
     text = str(body).lower() if body is not None else str(exc).lower()
     if status == 429:
         raise RateLimitedError(str(exc), body=body, headers=exc.headers) from exc
-    # Graph: 410 Gone / syncStateNotFound when delta token is stale — not every 404.
+    # Graph cursor invalidation (A367): only 410 Gone, an explicit error
+    # code (syncStateNotFound / resyncRequired), or a 404 from a delta /
+    # sync-cursor endpoint. An ordinary 404 whose body merely mentions
+    # "delta"/"sync" is a plain resource miss, not a stale cursor.
+    from mail_core.providers.oauth import _url_is_sync_cursor_endpoint
+
     if (
         status == 410
         or "syncstatenotfound" in text
         or "resyncrequired" in text
-        or (status == 404 and ("delta" in text or "sync" in text))
+        or (status == 404 and _url_is_sync_cursor_endpoint(path))
     ):
         raise CursorInvalidError(str(exc), status=status, body=body, headers=exc.headers) from exc
     raise exc
@@ -118,7 +123,7 @@ class GraphProvider:
         except CursorInvalidError:
             raise
         except ProviderHttpError as exc:
-            _raise_mapped(exc)
+            _raise_mapped(exc, path)
             raise  # pragma: no cover
 
     def list_folders(self) -> Sequence[RemoteFolder]:
