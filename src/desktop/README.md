@@ -18,6 +18,9 @@ Host Node ≥ 22.12 is recommended (Electron 44 engines range). See also `../../
 |---|---|---|
 |`KKMAIL_PG_BIN`|Electron / PostgresManager|Override path to `initdb`/`pg_ctl` bin dir|
 |`KKMAIL_PG_PORT`|PostgresManager|Loopback PG port (integer 1–65535)|
+|`KKMAIL_PG_PASSWORD`|PostgresManager|Override the per-install PG password (normally generated once and persisted under `secrets/`)|
+|`KKMAIL_DESKTOP_PORT`|Electron main|Loopback port for the mail-core API/UI (integer 1–65535, default 18765)|
+|`PYTHON`|Electron main (dev only)|Python executable used to spawn `mail_core` in development (default `python` on Windows, `python3` elsewhere)|
 |`KKMAIL_FRONTEND_DIST`|mail-core API|Optional path to built SPA (`src/frontend/dist`)|
 |`MAIL_CORE_*`|mail-core child|Set by `startup.js` (DB URL, blob keys, data dir, …) — not inherited from the parent shell|
 |`PGPORT`, `PGPASSWORD`|`pg_ctl` / `createdb`|Passed only as explicit per-call extras (`PGPORT` to `pg_ctl start`, `PGPASSWORD` to `createdb`); parent `PG*` variables are not inherited by `scrubEnv`|
@@ -43,10 +46,18 @@ External links open in the system browser only for `http(s):`/`mailto:`; other n
 
 |File|Coverage|
 |---|---|
-|`paths.test.js`|Sidecar path + `extraResources` filter matches `kkmail-backend`|
-|`hardening.test.js`|CSP / webview / permission deny helpers|
+|`paths.test.js`|Sidecar path + `extraResources` filter matches `kkmail-backend`; external-URL / window-open / navigation guards|
+|`hardening.test.js`|CSP / webview / permission boundary helpers|
 |`postgresManager.test.js`|Data root, pwfile 0600, port validation, stop idempotency, binary cache|
-|`startup.test.js`|`scrubEnv` allowlist, log redaction, process-tree kill helpers|
+|`startup.test.js`|`scrubEnv` allowlist, log redaction, process-tree kill helpers, backend-exit disposition|
+|`logRotation.test.js`|Rotating log stream: rotation, retention, async writes|
+|`desktopLog.test.js`|Desktop logger: redaction, levels, rotation integration|
+|`clipboard.test.js`|Clipboard sanitized-write helper (requires Electron)|
+|`windowOptions.test.js`|Main window options per platform|
+|`packLinux.test.js`|Linux packaging script (`pack-linux.js`) behavior|
+|`scripts/packaged_smoke_db.test.js`|Packaged-smoke marker write/persistence via `psql`|
+|`scripts/packaged_smoke.test.js`|Packaged-smoke port constant hygiene + failure-cleanup helper|
+|`oauth_integration.test.js`|Electron OAuth flow end-to-end (skips unless `KKMAIL_OAUTH_TEST_*` are set)|
 
 ## Child-process hardening (`startup.js` / `postgresManager.js`)
 
