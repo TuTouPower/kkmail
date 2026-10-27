@@ -21,6 +21,24 @@ const { assertSmokeMarkerPersisted, writeSmokeMarker } = require('./packaged_smo
 const desktopRoot = path.resolve(__dirname, '..')
 const repoRoot = path.resolve(desktopRoot, '../..')
 
+/** Best-effort stop for one smoke PG manager; never throws (A95 cleanup). */
+function stopSmokeManagerQuietly(manager) {
+  if (!manager) return
+  try { manager.stop() } catch (_) { /* best-effort cleanup */ }
+}
+
+/**
+ * finally-block cleanup for the PG lifecycle segment (A95): stop both
+ * managers and drop the temp data root, best-effort, so a failed assert
+ * never leaks a running PostgreSQL or a temp directory.
+ */
+function cleanupSmokeResources(managers, dataRoot) {
+  for (const manager of managers || []) stopSmokeManagerQuietly(manager)
+  if (dataRoot) {
+    try { fs.rmSync(dataRoot, { recursive: true, force: true }) } catch (_) { /* best-effort cleanup */ }
+  }
+}
+
 async function main() {
   console.log('[t021] Starting Packaged Desktop Smoke & PostgreSQL Lifecycle Test...')
 
@@ -92,82 +110,90 @@ async function main() {
   const testDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pkg-smoke-'))
   const port = await freePort(DEFAULT_PORT)
 
-  console.log(`[t021] Testing embedded PG lifecycle on port ${port} with dataRoot=${testDataRoot}`)
-  const mgr1 = new PostgresManager({
-    dataRoot: testDataRoot,
-    pgBinDir: packagedPgBin,
-    port: port,
-  })
+  let mgr1 = null
+  let mgr2 = null
+  try {
+    console.log(`[t021] Testing embedded PG lifecycle on port ${port} with dataRoot=${testDataRoot}`)
+    mgr1 = new PostgresManager({
+      dataRoot: testDataRoot,
+      pgBinDir: packagedPgBin,
+      port: port,
+    })
 
-  // First start: should run initdb and start successfully
-  const start1 = mgr1.start()
-  assert.strictEqual(start1.ok, true, `First PG start failed: ${start1.reason || JSON.stringify(start1)}`)
-  assert.strictEqual(start1.stub, false)
+    // First start: should run initdb and start successfully
+    const start1 = mgr1.start()
+    assert.strictEqual(start1.ok, true, `First PG start failed: ${start1.reason || JSON.stringify(start1)}`)
+    assert.strictEqual(start1.stub, false)
 
-  // Verify password file generated with mode 0600
-  const pwFile = path.join(testDataRoot, 'secrets', 'pg-password')
-  assert.ok(fs.existsSync(pwFile), 'Password file not created')
-  if (process.platform !== 'win32') {
-    assert.strictEqual(fs.statSync(pwFile).mode & 0o777, 0o600, 'Password file mode must be 0600')
-  }
-
-  // Write the marker as the actual application role in the application database.
-  const psqlName = process.platform === 'win32' ? 'psql.exe' : 'psql'
-  const psqlBin = path.join(packagedPgBin, psqlName)
-  assert.ok(fs.existsSync(psqlBin), `Packaged psql binary missing: ${psqlBin}`)
-  writeSmokeMarker({ psqlBin, manager: mgr1 })
-
-  console.log('✓ AC-002: Packaged PostgreSQL initialized and started successfully.')
-
-  // Stop the instance (AC-004)
-  const stop1 = mgr1.stop()
-  assert.ok(stop1.ok || stop1.stopped, 'Stopping PG failed')
-
-  // Port should be released
-  let portReleased = false
-  for (let i = 0; i < 20; i++) {
-    try {
-      const s = require('net').createServer()
-      await new Promise((resolve, reject) => {
-        s.once('error', reject)
-        s.listen(port, '127.0.0.1', () => {
-          s.close(() => resolve())
-        })
-      })
-      portReleased = true
-      break
-    } catch (_) {
-      await new Promise((r) => setTimeout(r, 200))
+    // Verify password file generated with mode 0600
+    const pwFile = path.join(testDataRoot, 'secrets', 'pg-password')
+    assert.ok(fs.existsSync(pwFile), 'Password file not created')
+    if (process.platform !== 'win32') {
+      assert.strictEqual(fs.statSync(pwFile).mode & 0o777, 0o600, 'Password file mode must be 0600')
     }
+
+    // Write the marker as the actual application role in the application database.
+    const psqlName = process.platform === 'win32' ? 'psql.exe' : 'psql'
+    const psqlBin = path.join(packagedPgBin, psqlName)
+    assert.ok(fs.existsSync(psqlBin), `Packaged psql binary missing: ${psqlBin}`)
+    writeSmokeMarker({ psqlBin, manager: mgr1 })
+
+    console.log('✓ AC-002: Packaged PostgreSQL initialized and started successfully.')
+
+    // Stop the instance (AC-004)
+    const stop1 = mgr1.stop()
+    assert.ok(stop1.ok || stop1.stopped, 'Stopping PG failed')
+
+    // Port should be released
+    let portReleased = false
+    for (let i = 0; i < 20; i++) {
+      try {
+        const s = require('net').createServer()
+        await new Promise((resolve, reject) => {
+          s.once('error', reject)
+          s.listen(port, '127.0.0.1', () => {
+            s.close(() => resolve())
+          })
+        })
+        portReleased = true
+        break
+      } catch (_) {
+        await new Promise((r) => setTimeout(r, 200))
+      }
+    }
+    assert.strictEqual(portReleased, true, 'Port not released after pg_ctl stop')
+    console.log('✓ AC-004: Clean stop released child process and listening port.')
+
+    // Restart instance on the same dataRoot (AC-003)
+    mgr2 = new PostgresManager({
+      dataRoot: testDataRoot,
+      pgBinDir: packagedPgBin,
+      port: port,
+    })
+
+    const start2 = mgr2.start()
+    assert.strictEqual(start2.ok, true, `Second PG start failed: ${start2.reason || JSON.stringify(start2)}`)
+
+    // Password must match previously persisted value
+    assert.strictEqual(mgr2.password(), mgr1.password(), 'Password regenerated unexpectedly')
+    assertSmokeMarkerPersisted({ psqlBin, manager: mgr2 })
+
+    // Clean stop for mgr2
+    const stop2 = mgr2.stop()
+    assert.ok(stop2.ok || stop2.stopped)
+    console.log('✓ AC-003: Re-started on existing dataRoot preserved password and state without re-initializing.')
+
+    console.log('[t021] Packaged Desktop Smoke Test PASSED cleanly.')
+  } finally {
+    cleanupSmokeResources([mgr1, mgr2], testDataRoot)
   }
-  assert.strictEqual(portReleased, true, 'Port not released after pg_ctl stop')
-  console.log('✓ AC-004: Clean stop released child process and listening port.')
-
-  // Restart instance on the same dataRoot (AC-003)
-  const mgr2 = new PostgresManager({
-    dataRoot: testDataRoot,
-    pgBinDir: packagedPgBin,
-    port: port,
-  })
-
-  const start2 = mgr2.start()
-  assert.strictEqual(start2.ok, true, `Second PG start failed: ${start2.reason || JSON.stringify(start2)}`)
-
-  // Password must match previously persisted value
-  assert.strictEqual(mgr2.password(), mgr1.password(), 'Password regenerated unexpectedly')
-  assertSmokeMarkerPersisted({ psqlBin, manager: mgr2 })
-
-  // Clean stop for mgr2
-  const stop2 = mgr2.stop()
-  assert.ok(stop2.ok || stop2.stopped)
-  console.log('✓ AC-003: Re-started on existing dataRoot preserved password and state without re-initializing.')
-
-  // Clean up temporary smoke directory
-  fs.rmSync(testDataRoot, { recursive: true, force: true })
-  console.log('[t021] Packaged Desktop Smoke Test PASSED cleanly.')
 }
 
-main().catch((err) => {
-  console.error('[t021] Packaged smoke failed:', err)
-  process.exit(1)
-})
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('[t021] Packaged smoke failed:', err)
+    process.exit(1)
+  })
+}
+
+module.exports = { cleanupSmokeResources, stopSmokeManagerQuietly }
