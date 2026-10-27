@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, Profiler } from 'react'
 import { cleanup, render, waitFor } from '../test/render'
-import UiReferenceOverlay from './UiReferenceOverlay'
+import UiReferenceOverlay, { resolveBadgePositions } from './UiReferenceOverlay'
 
 describe('<UiReferenceOverlay /> (t011 AC-001 ~ AC-006)', () => {
   let writeTextMock: ReturnType<typeof vi.fn>
@@ -259,5 +259,18 @@ describe('<UiReferenceOverlay /> (t011 AC-001 ~ AC-006)', () => {
       expect(execCommand).toHaveBeenCalledWith('copy')
       expect(document.body.textContent).toContain('已复制引用')
     })
+  })
+
+  it('p061: avoids badge overlap when parent and child start at identical coordinates', () => {
+    const raw = [
+      { id: 'ST04', top: 50, left: 100 },
+      { id: 'ST01', top: 50, left: 100 }, // same coordinate
+    ]
+    const resolved = resolveBadgePositions(raw, 1024)
+    expect(resolved).toHaveLength(2)
+    expect(resolved[0].top).toBe(50)
+    expect(resolved[0].left).toBe(100)
+    // The second badge must be offset to avoid collision
+    expect(resolved[1].left).toBeGreaterThan(100)
   })
 })

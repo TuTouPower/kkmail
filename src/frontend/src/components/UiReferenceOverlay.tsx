@@ -4,11 +4,51 @@ import { formatUiReferenceText } from '../lib/uiReference'
 import { matchesShortcut, getDefaultShortcut } from '../lib/ui_shortcut'
 import { useMailStore } from '../store/mailStore'
 
-interface ElementBadge {
+export interface ElementBadge {
   id: string
   key: string
   top: number
   left: number
+}
+
+const BADGE_WIDTH = 38
+const BADGE_HEIGHT = 18
+
+export function resolveBadgePositions(
+  rawList: Array<{ id: string; top: number; left: number }>,
+  viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1024,
+): ElementBadge[] {
+  const result: ElementBadge[] = []
+  const placed: Array<{ top: number; left: number }> = []
+
+  rawList.forEach((item, index) => {
+    let top = item.top
+    let left = item.left
+
+    let attempts = 0
+    while (attempts < 6) {
+      const collision = placed.find(
+        (p) => Math.abs(p.top - top) < BADGE_HEIGHT - 2 && Math.abs(p.left - left) < BADGE_WIDTH - 2,
+      )
+      if (!collision) break
+      if (left + BADGE_WIDTH + 4 < viewportWidth - 20) {
+        left = collision.left + BADGE_WIDTH + 4
+      } else {
+        top = collision.top + BADGE_HEIGHT + 2
+        left = item.left
+      }
+      attempts++
+    }
+
+    placed.push({ top, left })
+    result.push({
+      id: item.id,
+      key: `${item.id}-${index}`,
+      top,
+      left,
+    })
+  })
+  return result
 }
 
 function sameBadgePositions(current: ElementBadge[], next: ElementBadge[]): boolean {
@@ -28,8 +68,7 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
   const scanElements = useCallback(() => {
     if (!active) return
     const elements = document.querySelectorAll<HTMLElement>('[data-ui]')
-    const nextBadges: ElementBadge[] = []
-    let counter = 0
+    const rawList: Array<{ id: string; top: number; left: number }> = []
 
     elements.forEach((el) => {
       const id = el.getAttribute('data-ui')
@@ -45,13 +84,14 @@ export const UiReferenceOverlay = memo(function UiReferenceOverlay() {
         return
       }
 
-      nextBadges.push({
+      rawList.push({
         id,
-        key: `${id}-${counter++}`,
         top: Math.max(0, rect.top + 2),
         left: Math.max(0, rect.left + 2),
       })
     })
+
+    const nextBadges = resolveBadgePositions(rawList, window.innerWidth)
 
     if (!sameBadgePositions(badgesRef.current, nextBadges)) {
       badgesRef.current = nextBadges

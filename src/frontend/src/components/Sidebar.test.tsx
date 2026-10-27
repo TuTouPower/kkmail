@@ -281,7 +281,8 @@ describe('<Sidebar />', () => {
     expect(groupOne.querySelectorAll('.tree-category-account')).toHaveLength(1)
     expect(groupTwo.querySelectorAll('.tree-category-account')).toHaveLength(1)
     expect(container.querySelector('[data-ui="SB12"]')?.closest('.tree-section')?.querySelectorAll('.tree-category-account')).toHaveLength(3)
-    expect(groupOne.querySelector('.tree-count')?.textContent).toBe('1')
+    // p062: Group account count badge is removed
+    expect(groupOne.querySelector('.tree-count')).toBeNull()
     expect(useMailStore.getState().view).toEqual({ type: 'allInbox' })
     expect(useMailStore.getState().search).toBe('')
   })
@@ -568,7 +569,8 @@ describe('<Sidebar />', () => {
     expect(container.querySelector('.tree-category-account')?.textContent).not.toContain('finance@z.example')
     await click(container.querySelector('[aria-label="展开分组 税务归档"]'))
     expect(container.querySelector('[data-group-id="group-1"] .tree-account-block[data-account-id="acc-1"]')).toBeNull()
-    expect(container.querySelector('[data-group-id="group-1"] .tree-count')?.textContent).toBe('0')
+    // p062: Group account count badge is removed
+    expect(container.querySelector('[data-group-id="group-1"] .tree-count')).toBeNull()
     expect(calls.some((call) => call.url === '/api/sidebar/layout' && call.method === 'PUT')).toBe(false)
   })
 
@@ -1248,5 +1250,48 @@ describe('<Sidebar />', () => {
     expect(allMailRow).not.toBeNull()
     expect(allMailRow?.hasAttribute('disabled')).toBe(false)
     expect(allMailRow?.getAttribute('style')).toContain('padding-left: 48px')
+  })
+
+  it('p062: conforms to sidebar action bar ordering and toggles all folder trees with parent linkage', async () => {
+    const calls = mockApi({})
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('[data-group-id="group-1"]')).not.toBeNull())
+
+    // 1. Verify group actions ordering: search -> more -> toggle all -> sort
+    const groupHead = container.querySelector('[data-group-id="group-1"] .tree-group-heading')!
+    const groupButtons = [...groupHead.querySelectorAll<HTMLButtonElement>('button.tree-icon-action')]
+    expect(groupButtons).toHaveLength(4)
+    expect(groupButtons[0].getAttribute('aria-label')).toContain('搜索分组')
+    expect(groupButtons[1].getAttribute('aria-label')).toContain('分组操作')
+    expect(groupButtons[2].getAttribute('aria-label')).toContain('全部展开 税务归档 目录')
+    expect(groupButtons[3].getAttribute('aria-label')).toContain('恢复分组默认排序 税务归档')
+
+    // 2. Verify master list actions ordering: search -> new group -> toggle all -> sort
+    const masterHead = container.querySelector('.tree-section-heading.tree-drop-zone[data-drop-kind="master-list"]')!
+    const masterButtons = [...masterHead.querySelectorAll<HTMLButtonElement>('button.tree-icon-action')]
+    expect(masterButtons).toHaveLength(4)
+    expect(masterButtons[0].getAttribute('aria-label')).toContain('搜索账号列表')
+    expect(masterButtons[1].getAttribute('aria-label')).toBe('新建分组')
+    expect(masterButtons[2].getAttribute('aria-label')).toBe('全部展开账号列表目录')
+    expect(masterButtons[3].getAttribute('aria-label')).toBe('恢复默认排序')
+
+    // 3. Test toggle all folder trees on group: initially collapsed group
+    expect(useMailStore.getState().expandedSidebarAccounts).not.toContain('acc-1')
+    await click(groupButtons[2]) // Click "全部展开"
+    // Parent group should be auto-expanded and acc-1 folder tree expanded
+    expect(useMailStore.getState().expandedSidebarGroups).toContain('group-1')
+    expect(useMailStore.getState().expandedSidebarAccounts).toContain('acc-1')
+
+    // Button label switches to "全部折叠"
+    await waitFor(() => expect(groupHead.querySelector('button[aria-label="全部折叠 税务归档 目录"]')).not.toBeNull())
+    const groupCollapseBtn = groupHead.querySelector<HTMLButtonElement>('button[aria-label="全部折叠 税务归档 目录"]')!
+    await click(groupCollapseBtn) // Click "全部折叠"
+    // Account folder tree collapsed, but parent group stays expanded
+    expect(useMailStore.getState().expandedSidebarAccounts).not.toContain('acc-1')
+    expect(useMailStore.getState().expandedSidebarGroups).toContain('group-1')
+
+    // 4. Test group reset order calls saveSidebarLayout
+    await click(groupButtons[3])
+    expect(calls.some((c) => c.url === '/api/sidebar/layout' && c.method === 'PUT')).toBe(true)
   })
 })

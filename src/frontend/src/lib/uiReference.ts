@@ -19,6 +19,14 @@ export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
   SB13: { id: 'SB13', region: '侧栏', description: '所有账号邮件分类项' },
   SB15: { id: 'SB15', region: '侧栏', description: '分组邮件分类项' },
   SB16: { id: 'SB16', region: '侧栏', description: '账号列表标题' },
+  SB17: { id: 'SB17', region: '侧栏', description: '账号列表搜索按钮' },
+  SB18: { id: 'SB18', region: '侧栏', description: '账号列表新建分组按钮' },
+  SB19: { id: 'SB19', region: '侧栏', description: '账号列表全部展开/折叠目录树按钮' },
+  SB20: { id: 'SB20', region: '侧栏', description: '账号列表恢复默认排序按钮' },
+  SB21: { id: 'SB21', region: '侧栏', description: '分组搜索账号按钮' },
+  SB22: { id: 'SB22', region: '侧栏', description: '分组更多操作菜单按钮' },
+  SB23: { id: 'SB23', region: '侧栏', description: '分组全部展开/折叠目录树按钮' },
+  SB24: { id: 'SB24', region: '侧栏', description: '恢复分组默认排序按钮' },
 
   // Message List (ML)
   ML01: { id: 'ML01', region: '邮件列表', description: '侧栏展开按钮' },
@@ -34,6 +42,13 @@ export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
   ML11: { id: 'ML11', region: '邮件列表', description: '邮件接收日期' },
   ML12: { id: 'ML12', region: '邮件列表', description: '邮件正文摘要' },
   ML13: { id: 'ML13', region: '邮件列表', description: '列表空状态' },
+  ML14: { id: 'ML14', region: '邮件列表', description: '加载更多按钮（已废弃）', deprecated: true },
+  ML17: { id: 'ML17', region: '邮件列表', description: '批量移至废纸篓按钮' },
+  ML18: { id: 'ML18', region: '邮件列表', description: '取消批量选择按钮' },
+  ML19: { id: 'ML19', region: '邮件列表', description: '全选当前列表按钮' },
+  ML20: { id: 'ML20', region: '邮件列表', description: '全部邮件筛选标签' },
+  ML21: { id: 'ML21', region: '邮件列表', description: '未读邮件筛选标签' },
+  ML22: { id: 'ML22', region: '邮件列表', description: '已标记邮件筛选标签' },
 
   // Message Reader (MR)
   MR01: { id: 'MR01', region: '邮件详情', description: '阅读器顶部工具栏' },
@@ -58,6 +73,13 @@ export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
   ST07: { id: 'ST07', region: '设置', description: '账号图标展示选项' },
   ST08: { id: 'ST08', region: '设置', description: '通用设置时区与超时' },
   ST09: { id: 'ST09', region: '设置', description: '修改密码表单' },
+  ST10: { id: 'ST10', region: '设置', description: '账户管理导航项' },
+  ST11: { id: 'ST11', region: '设置', description: '分组管理导航项' },
+  ST12: { id: 'ST12', region: '设置', description: '通用设置导航项' },
+  ST13: { id: 'ST13', region: '设置', description: '分组管理新建分组按钮' },
+  ST14: { id: 'ST14', region: '设置', description: '账户管理添加账户按钮' },
+  ST15: { id: 'ST15', region: '设置', description: '账户管理同步全部账户按钮' },
+  ST16: { id: 'ST16', region: '设置', description: '退出登录按钮' },
 }
 
 export function formatUiReferenceText(id: string): string {

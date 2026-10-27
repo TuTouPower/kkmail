@@ -284,10 +284,10 @@ export default function SettingsPage({
             <span className="settings-nav-title">设置</span>
           </div>
           <span className="settings-nav-caption">邮箱管理</span>
-          <button type="button" className="settings-nav-item" aria-current={section === 'accounts' ? 'page' : undefined} onClick={() => setSection('accounts')}><Inbox size={16} />账户管理</button>
-          <button type="button" className="settings-nav-item" aria-current={section === 'groups' ? 'page' : undefined} onClick={() => setSection('groups')}><Folder size={16} />分组管理</button>
+          <button data-ui="ST10" type="button" className="settings-nav-item" aria-current={section === 'accounts' ? 'page' : undefined} onClick={() => setSection('accounts')}><Inbox size={16} />账户管理</button>
+          <button data-ui="ST11" type="button" className="settings-nav-item" aria-current={section === 'groups' ? 'page' : undefined} onClick={() => setSection('groups')}><Folder size={16} />分组管理</button>
           <span className="settings-nav-caption">应用</span>
-          <button type="button" className="settings-nav-item" aria-current={section === 'general' ? 'page' : undefined} onClick={() => setSection('general')}><SettingsIcon size={16} />通用</button>
+          <button data-ui="ST12" type="button" className="settings-nav-item" aria-current={section === 'general' ? 'page' : undefined} onClick={() => setSection('general')}><SettingsIcon size={16} />通用</button>
         </nav>
         <div className={`settings-content settings-content-${section}`}>
           {section === 'accounts' && <>
@@ -297,8 +297,8 @@ export default function SettingsPage({
             <div className="settings-accounts-first-row">
               <div className="settings-summary"><span>账户总数 <strong>{accountsQuery.isPending ? '—' : accounts.length}</strong></span><span>已显示 <strong>{accountsQuery.isPending ? '—' : filtered.length}</strong></span><span>已同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled !== false).length}</strong></span><span>已暂停同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled === false).length}</strong></span></div>
               <div className="settings-accounts-actions">
-                <button type="button" className="settings-button is-primary" onClick={() => { setEditingAccount(null); setAddOpen(true) }} disabled={pendingAccounts}><Plus size={15} />添加账户</button>
-                <button type="button" className="settings-button" disabled={pendingAccounts || accountsQuery.isPending || accountsQuery.isError} onClick={() => void run('accounts', '全量同步', async () => { const result = await api.syncAll(); await qc.invalidateQueries({ queryKey: queryKeys.accounts }); return result }, result => `已排队 ${result.target_count ?? 0} 个全量同步任务`)}><RefreshCw size={14} />同步全部账户</button>
+                <button data-ui="ST14" type="button" className="settings-button is-primary" onClick={() => { setEditingAccount(null); setAddOpen(true) }} disabled={pendingAccounts}><Plus size={15} />添加账户</button>
+                <button data-ui="ST15" type="button" className="settings-button" disabled={pendingAccounts || accountsQuery.isPending || accountsQuery.isError} onClick={() => void run('accounts', '全量同步', async () => { const result = await api.syncAll(); await qc.invalidateQueries({ queryKey: queryKeys.accounts }); return result }, result => `已排队 ${result.target_count ?? 0} 个全量同步任务`)}><RefreshCw size={14} />同步全部账户</button>
               </div>
               <div className="settings-toolbar">
                 <label className="settings-search"><Search size={15} /><input type="search" aria-label="搜索账户" placeholder="搜索邮箱、域名、服务商或分组" value={search} onChange={event => setSearch(event.target.value)} /></label>
@@ -345,7 +345,7 @@ export default function SettingsPage({
           </>}
 
           {section === 'groups' && <>
-            <div className="settings-section-head"><div><h1>分组管理</h1><p>按用途整理账户；删除分组会保留账户与邮件。</p></div><button className="settings-button is-primary" type="button" onClick={() => groupInputRef.current?.focus()}><Plus size={15} />新建分组</button></div>
+            <div className="settings-section-head"><div><h1>分组管理</h1><p>按用途整理账户；删除分组会保留账户与邮件。</p></div><button data-ui="ST13" className="settings-button is-primary" type="button" onClick={() => groupInputRef.current?.focus()}><Plus size={15} />新建分组</button></div>
             <button className="settings-ungrouped" type="button" onClick={() => showGroupAccounts('ungrouped')}><Folder size={21} /><span><strong>未分组账户</strong><small>查看账户并整理所属分组</small></span><b>{accountsQuery.isSuccess ? accounts.filter(a => !a.group_id).length : '—'} 个</b></button>
             <label className="settings-search"><Search size={15} /><input type="search" aria-label="搜索分组" placeholder="搜索分组名称" value={groupSearch} onChange={event => setGroupSearch(event.target.value)} /></label>
             <Status value={feedback.groups} />
@@ -428,7 +428,7 @@ export default function SettingsPage({
                 if (newPassword !== confirmPassword) { report('password', '两次输入的新密码不一致', true); return }
                 void run('password', '修改密码', async () => { await api.changePassword(currentPassword, newPassword); setCurrentPassword(''); setNewPassword(''); setConfirmPassword('') }, '密码已更新')
               }}><fieldset disabled={pendingPassword}><div className="settings-fields settings-password-fields"><label className="settings-field" htmlFor="current-password"><span>当前密码</span><input id="current-password" name="current-password" type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} required /></label><label className="settings-field" htmlFor="new-password"><span>新密码</span><input id="new-password" name="new-password" type="password" autoComplete="new-password" minLength={8} value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="至少 8 位" required /></label><label className="settings-field" htmlFor="confirm-password"><span>确认新密码</span><input id="confirm-password" name="confirm-password" type="password" autoComplete="new-password" minLength={8} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} required /></label></div><button className="settings-button is-primary" type="submit">更新密码</button></fieldset></form><Status value={feedback.password} />
-              <div className="settings-control-row"><div><strong>退出登录</strong><small>退出当前浏览器或桌面客户端会话</small></div><button id="logout-button" type="button" className="settings-button is-danger" disabled={pendingPassword} onClick={() => void run('password', '退出登录', async () => { await api.logout(); qc.clear() })}>退出登录</button></div>
+              <div className="settings-control-row"><div><strong>退出登录</strong><small>退出当前浏览器或桌面客户端会话</small></div><button data-ui="ST16" id="logout-button" type="button" className="settings-button is-danger" disabled={pendingPassword} onClick={() => void run('password', '退出登录', async () => { await api.logout(); qc.clear() })}>退出登录</button></div>
             </section>
           </>}
         </div>

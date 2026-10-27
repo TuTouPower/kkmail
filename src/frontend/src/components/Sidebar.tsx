@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import {
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   ArrowDownWideNarrow,
   Check as CheckIcon,
   Inbox,
@@ -702,6 +704,7 @@ function Sidebar() {
   // every render.
   const memberships = useMemo(() => buildSidebarMemberships(accounts, groups), [accounts, groups])
   const masterIds = useMemo(() => accounts.map((account) => account.id), [accounts])
+  const allMasterFoldersExpanded = masterIds.length > 0 && masterIds.every((id) => expandedAccounts.includes(id))
   const ungroupedIds = useMemo(
     () => accounts.filter((account) => !account.group_id || !memberships.has(account.group_id)).map((account) => account.id),
     [accounts, memberships],
@@ -869,6 +872,43 @@ function Sidebar() {
     } finally {
       layoutSaveInFlight.current = false
       setSavingLayout(false)
+    }
+  }
+
+  async function resetGroupOrder(groupId: string) {
+    if (layoutSaveInFlight.current) return
+    if (!layoutReady || !layoutSnapshot) {
+      setActionError('侧栏数据正在同步，请稍后重试')
+      return
+    }
+    const current = currentLayout()
+    const groupMembers = accounts.filter((account) => account.group_id === groupId)
+    const defaultSortedIds = [...groupMembers].sort(compareAccounts).map((account) => account.id)
+    const nextLayout: SidebarLayout = {
+      ...current,
+      groupAccountIds: {
+        ...current.groupAccountIds,
+        [groupId]: defaultSortedIds,
+      },
+    }
+    await saveLayout(nextLayout)
+  }
+
+  function toggleAccountFolderTrees(targetAccountIds: string[], expandParentContainer?: () => void) {
+    if (targetAccountIds.length === 0) return
+    const allTargetExpanded = targetAccountIds.every((id) => expandedAccounts.includes(id))
+    if (allTargetExpanded) {
+      const targetSet = new Set(targetAccountIds)
+      useMailStore.setState((s) => ({
+        expandedSidebarAccounts: s.expandedSidebarAccounts.filter((id) => !targetSet.has(id)),
+      }))
+    } else {
+      useMailStore.setState((s) => ({
+        expandedSidebarAccounts: Array.from(new Set([...s.expandedSidebarAccounts, ...targetAccountIds])),
+      }))
+    }
+    if (expandParentContainer) {
+      expandParentContainer()
     }
   }
 
@@ -1147,6 +1187,8 @@ function Sidebar() {
       if (total === null) return null
       return total + count
     }, 0)
+    const groupMemberIds = members.map((m) => m.id)
+    const allGroupFoldersExpanded = groupMemberIds.length > 0 && groupMemberIds.every((id) => expandedAccounts.includes(id))
     return (
       <SidebarGroupSection
         key={group.id}
@@ -1168,6 +1210,15 @@ function Sidebar() {
         editing={editingGroupId === group.id}
         editingName={editingGroupName}
         onToggle={() => toggleExpandedGroup(group.id)}
+        allFoldersExpanded={allGroupFoldersExpanded}
+        onToggleAllFolders={() => {
+          toggleAccountFolderTrees(groupMemberIds, () => {
+            if (!expandedGroups.includes(group.id)) {
+              toggleExpandedGroup(group.id)
+            }
+          })
+        }}
+        onResetOrder={() => void resetGroupOrder(group.id)}
         onOpenMenu={(button) => {
           groupMenuTrigger.current = button
           setOpenMenuGroupId(openMenuGroupId === group.id ? null : group.id)
@@ -1277,9 +1328,25 @@ function Sidebar() {
             <button type="button" className="tree-heading-main" aria-expanded={masterSectionExpanded} onClick={() => toggleSidebarSection('accountList')}>
               <FolderIcon size={16} aria-hidden="true" /><span className="tree-label">账号列表</span>
             </button>
-            <button ref={masterSearchTriggerRef} type="button" className="tree-icon-action" aria-label={masterSearchOpen ? '关闭账号列表搜索' : '搜索账号列表'} aria-expanded={masterSearchOpen} title={masterSearchOpen ? '关闭搜索' : '搜索账号'} onClick={toggleMasterSearch}><Search size={15} /></button>
-            <button ref={newGroupTrigger} type="button" className="tree-icon-action" aria-label="新建分组" title="新建分组" onClick={() => { setNewGroupOpen(true); setActionError('') }}><FolderPlus size={16} /></button>
-            <button type="button" className="tree-icon-action" aria-label="恢复默认排序" title="恢复默认排序" onClick={() => void resetOrder()}><ArrowDownWideNarrow size={16} /></button>
+            <button data-ui="SB17" ref={masterSearchTriggerRef} type="button" className="tree-icon-action" aria-label={masterSearchOpen ? '关闭账号列表搜索' : '搜索账号列表'} aria-expanded={masterSearchOpen} title={masterSearchOpen ? '关闭搜索' : '搜索账号'} onClick={toggleMasterSearch}><Search size={15} /></button>
+            <button data-ui="SB18" ref={newGroupTrigger} type="button" className="tree-icon-action" aria-label="新建分组" title="新建分组" onClick={() => { setNewGroupOpen(true); setActionError('') }}><FolderPlus size={16} /></button>
+            <button
+              data-ui="SB19"
+              type="button"
+              className="tree-icon-action"
+              aria-label={allMasterFoldersExpanded ? '全部折叠账号列表目录' : '全部展开账号列表目录'}
+              title={allMasterFoldersExpanded ? '全部折叠目录' : '全部展开目录'}
+              onClick={() => {
+                toggleAccountFolderTrees(masterIds, () => {
+                  if (!masterSectionExpanded) {
+                    toggleSidebarSection('accountList')
+                  }
+                })
+              }}
+            >
+              {allMasterFoldersExpanded ? <ChevronsDownUp size={15} /> : <ChevronsUpDown size={15} />}
+            </button>
+            <button data-ui="SB20" type="button" className="tree-icon-action" aria-label="恢复默认排序" title="恢复默认排序" onClick={() => void resetOrder()}><ArrowDownWideNarrow size={16} /></button>
           </div>
           {masterSectionExpanded && <div className="tree-account-list" data-search-active={masterSearchActive} onDragOver={(event) => masterSearchActive ? suppressDragDrop(event) : allowDrop(event)} onDrop={(event) => masterSearchActive ? suppressDragDrop(event) : void onDropListHeader(event)}>
             {masterSearchOpen && <div ref={masterSearchContainerRef} className="tree-account-search" data-no-drag="true">
@@ -1349,6 +1416,9 @@ interface SidebarGroupSectionProps {
   onDragOver: (event: DragEvent<HTMLDivElement>) => void
   onDrop: (event: DragEvent<HTMLDivElement>) => void
   renderAccount: (account: AccountSummary) => React.ReactNode
+  allFoldersExpanded: boolean
+  onToggleAllFolders: () => void
+  onResetOrder: () => void
 }
 
 function SidebarGroupSection(props: SidebarGroupSectionProps) {
@@ -1381,9 +1451,31 @@ function SidebarGroupSection(props: SidebarGroupSectionProps) {
     <div className="tree-group-block" data-group-id={props.group.id} onDragOver={(event) => props.searchActive ? suppressDragDrop(event) : props.onDragOver(event)} onDrop={(event) => props.searchActive ? suppressDragDrop(event) : props.onDrop(event)}>
       <div className={`tree-group-heading ${props.active ? 'active' : ''}`} draggable={!props.searchActive && !props.editing && !props.savingLayout && props.layoutReady} onDragStart={(event) => props.searchActive ? suppressDragDrop(event) : props.onDragStart(event)} onDragEnd={props.onDragEnd}>
         <button type="button" data-no-drag="true" className="tree-disclosure" aria-label={props.collapsed ? `展开分组 ${props.group.name}` : `折叠分组 ${props.group.name}`} aria-expanded={!props.collapsed} onClick={props.onToggle}>{props.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button>
-        <button type="button" className="tree-group-select" onClick={props.onToggle}><FolderIcon size={16} /><span className="tree-label">{props.group.name}</span><span className="tree-count">{props.members.length}</span>{unread === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}</button>
-        <button ref={groupSearchTriggerRef} type="button" data-search-toggle-group-id={props.group.id} data-no-drag="true" className="tree-icon-action" aria-label={props.searchOpen ? `关闭分组搜索 ${props.group.name}` : `搜索分组 ${props.group.name}`} aria-expanded={props.searchOpen} title={props.searchOpen ? '关闭搜索' : '搜索账号'} onClick={props.onToggleSearch}><Search size={15} /></button>
-        <button type="button" data-no-drag="true" className="tree-icon-action" aria-label={`分组操作 ${props.group.name}`} aria-expanded={props.menuOpen} onClick={(event) => props.onOpenMenu(event.currentTarget)}><MoreHorizontal size={16} /></button>
+        <button type="button" className="tree-group-select" onClick={props.onToggle}><FolderIcon size={16} /><span className="tree-label">{props.group.name}</span>{unread === null ? <span className="side-count unread-badge unread-badge-unknown">-</span> : unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}</button>
+        <button data-ui="SB21" ref={groupSearchTriggerRef} type="button" data-search-toggle-group-id={props.group.id} data-no-drag="true" className="tree-icon-action" aria-label={props.searchOpen ? `关闭分组搜索 ${props.group.name}` : `搜索分组 ${props.group.name}`} aria-expanded={props.searchOpen} title={props.searchOpen ? '关闭搜索' : '搜索账号'} onClick={props.onToggleSearch}><Search size={15} /></button>
+        <button data-ui="SB22" type="button" data-no-drag="true" className="tree-icon-action" aria-label={`分组操作 ${props.group.name}`} aria-expanded={props.menuOpen} onClick={(event) => props.onOpenMenu(event.currentTarget)}><MoreHorizontal size={16} /></button>
+        <button
+          data-ui="SB23"
+          type="button"
+          data-no-drag="true"
+          className="tree-icon-action"
+          aria-label={props.allFoldersExpanded ? `全部折叠 ${props.group.name} 目录` : `全部展开 ${props.group.name} 目录`}
+          title={props.allFoldersExpanded ? '全部折叠目录' : '全部展开目录'}
+          onClick={props.onToggleAllFolders}
+        >
+          {props.allFoldersExpanded ? <ChevronsDownUp size={15} /> : <ChevronsUpDown size={15} />}
+        </button>
+        <button
+          data-ui="SB24"
+          type="button"
+          data-no-drag="true"
+          className="tree-icon-action"
+          aria-label={`恢复分组默认排序 ${props.group.name}`}
+          title="恢复组内默认排序"
+          onClick={props.onResetOrder}
+        >
+          <ArrowDownWideNarrow size={16} />
+        </button>
         {menus}
       </div>
       {props.editing && <form className="tree-inline-form" onSubmit={props.onRenameSubmit}><input autoFocus aria-label="重命名分组" maxLength={128} value={props.editingName} disabled={props.savingRename} onChange={(event) => props.onRenameName(event.target.value)} /><button type="submit" aria-label="保存分组名称" disabled={props.savingRename}><CheckIcon size={15} /></button><button type="button" aria-label="取消重命名" disabled={props.savingRename} onClick={props.onRenameCancel}><X size={15} /></button></form>}

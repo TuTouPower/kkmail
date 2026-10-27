@@ -40,4 +40,4 @@
         3. 扩展 `UI_ELEMENT_REGISTRY` 注册表及对应的组件声明。
 - 线索：
     - `.scratch/audit_ui_elements.py`（交互元素 152 个中仅 16 个带 `data-ui`，缺口 136 个，覆盖率仅 10.5%）
-- 处理：未开
+- 处理：main

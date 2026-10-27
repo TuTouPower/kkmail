@@ -664,13 +664,14 @@ def migrate(sqlite_path: Path, target_url: str) -> None:
 
                 save_json_secret(cred_store, ref, creds)
 
-                # Ensure INBOX folder exists
-                inbox_folder = session.query(Folder).filter_by(account_id=acc_id, role="inbox").first()
-                if not inbox_folder:
-                    inbox_folder = Folder(account_id=acc_id, remote_id="INBOX", name="INBOX", role="inbox")
-                    session.add(inbox_folder)
-                    session.flush()
-                folder_id_map[acc_id] = inbox_folder.id
+                # Ensure INBOX folder exists (for non-Graph providers; Graph discovers real folders online)
+                if provider != "graph":
+                    inbox_folder = session.query(Folder).filter_by(account_id=acc_id, role="inbox").first()
+                    if not inbox_folder:
+                        inbox_folder = Folder(account_id=acc_id, remote_id="INBOX", name="INBOX", role="inbox")
+                        session.add(inbox_folder)
+                        session.flush()
+                    folder_id_map[acc_id] = inbox_folder.id
 
             session.commit()
         except Exception:

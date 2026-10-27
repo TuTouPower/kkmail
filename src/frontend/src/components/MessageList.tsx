@@ -624,19 +624,41 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
           <div className="list-controls selection-bar" role="toolbar" aria-label="多选操作">
             <span className="selection-count">已选 {selectedIds.length} 封</span>
             <div className="list-control-group">
-              <button className="sort-btn" onClick={() => selectAll(visible.map((m) => mailKey(m)))} title="选择当前列表全部邮件">全选</button>
-              <button className="sort-btn danger" onClick={deleteSelected} title="移到废纸篓（删除所选）" aria-label="移到废纸篓（删除所选）">移到废纸篓</button>
-              <button className="sort-btn" onClick={clearSelected} title="取消选择">取消</button>
+              <button data-ui="ML19" className="sort-btn" onClick={() => selectAll(visible.map((m) => mailKey(m)))} title="选择当前列表全部邮件">全选</button>
+              <button data-ui="ML17" className="sort-btn danger" onClick={deleteSelected} title="移到废纸篓（删除所选）" aria-label="移到废纸篓（删除所选）">移到废纸篓</button>
+              <button data-ui="ML18" className="sort-btn" onClick={clearSelected} title="取消选择">取消</button>
             </div>
           </div>
         ) : (
           <div className="list-controls">
             <div className="segmented" role="tablist" aria-label="筛选">
-              {(['all', 'unread', 'flagged'] as const).map((f) => (
-                <button key={f} role="tab" aria-selected={listFilter === f} className={`segment-btn ${listFilter === f ? 'active' : ''}`} onClick={() => setListFilter(f)}>
-                  {f === 'all' ? '全部' : f === 'unread' ? '未读' : '已标记'}
-                </button>
-              ))}
+              <button
+                data-ui="ML20"
+                role="tab"
+                aria-selected={listFilter === 'all'}
+                className={`segment-btn ${listFilter === 'all' ? 'active' : ''}`}
+                onClick={() => setListFilter('all')}
+              >
+                全部
+              </button>
+              <button
+                data-ui="ML21"
+                role="tab"
+                aria-selected={listFilter === 'unread'}
+                className={`segment-btn ${listFilter === 'unread' ? 'active' : ''}`}
+                onClick={() => setListFilter('unread')}
+              >
+                未读
+              </button>
+              <button
+                data-ui="ML22"
+                role="tab"
+                aria-selected={listFilter === 'flagged'}
+                className={`segment-btn ${listFilter === 'flagged' ? 'active' : ''}`}
+                onClick={() => setListFilter('flagged')}
+              >
+                已标记
+              </button>
             </div>
             <div className="list-control-group">
               <button data-ui="ML07" className="mark-all-btn" onClick={markAll} disabled={unreadCount === 0} title="将当前列表中的邮件全部标为已读" aria-label="全部标为已读">
