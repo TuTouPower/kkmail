@@ -25,6 +25,13 @@ describe('displayEmail', () => {
   it('returns plain address if no angle brackets', () => {
     expect(displayEmail('alice@kkmail.test')).toBe('alice@kkmail.test')
   })
+  it('extracts the address token from a bare "Name addr@x" string', () => {
+    expect(displayEmail('Alice Liddell alice@kkmail.test')).toBe('alice@kkmail.test')
+    expect(displayEmail('"Alice Liddell" alice@kkmail.test')).toBe('alice@kkmail.test')
+  })
+  it('returns empty string when no token contains @', () => {
+    expect(displayEmail('Alice Liddell')).toBe('')
+  })
   it('returns empty string for empty input', () => {
     expect(displayEmail('')).toBe('')
     expect(displayEmail(undefined)).toBe('')

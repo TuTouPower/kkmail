@@ -24,5 +24,6 @@ export function displayEmail(from?: string): string {
   if (angled) {
     return angled[1].trim()
   }
-  return raw
+  // Angle-less "Name addr@x": take the whitespace-separated token containing '@'.
+  return raw.split(/\s+/).find((token) => token.includes('@')) || ''
 }
