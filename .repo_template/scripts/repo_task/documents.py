@@ -8,9 +8,22 @@ from pathlib import Path
 import repo_task.context as ctx
 
 
+_DQ_ESCAPES = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\", '"': '"'}
+
+
 def _quote(value: str) -> str:
-    """YAML 双引号标量：转义反斜杠与双引号。"""
-    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    """YAML 双引号标量：转义反斜杠、双引号与换行/回车。
+
+    换行必须转义为 \\n 字面序列：front matter 是逐行解析的状态权威文件，
+    值中的真实换行会拆行并可注入伪造键（A22）。
+    """
+    escaped = (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
     return f'"{escaped}"'
 
 def _unquote(value: str) -> str:
@@ -23,7 +36,10 @@ def _unquote(value: str) -> str:
         out, i = [], 0
         while i < len(inner):
             if inner[i] == "\\" and i + 1 < len(inner):
-                out.append(inner[i + 1])
+                nxt = inner[i + 1]
+                # 已知转义按语义解码（\n -> 换行）；未知转义保留后一个字符，
+                # 与历史手写值的宽容解析保持一致。
+                out.append(_DQ_ESCAPES.get(nxt, nxt))
                 i += 2
             else:
                 out.append(inner[i])

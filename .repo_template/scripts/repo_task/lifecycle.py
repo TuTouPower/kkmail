@@ -15,12 +15,27 @@ from .scheduling import _dependency_cycle
 from .store import append_audit, append_note, git_text_at_ref, load_task, load_task_at_ref, rebuild_index, require_status, scan_tasks, scan_tasks_at_ref, task_effective_state, task_schedule_references
 from .worktrees import discard_worktree, remove_worktree
 
+def _reject_newlines(field: str, value: str) -> str | None:
+    """title/note 含换行/回车时返回拒绝原因，否则 None。
+
+    front matter 是逐行解析的状态权威文件；即便 _quote 已转义换行，
+    入口再拒绝一道，避免其他写入路径把多行值带进来（A22）。
+    """
+    if value and ("\n" in value or "\r" in value):
+        return f"{field} 不可含换行/回车（收到 {value!r}）"
+    return None
+
+
 def cmd_add(args):
     require_primary_worktree()
     if not ctx.SLUG_RE.match(args.slug):
         sys.exit(f"slug 须匹配 {ctx.SLUG_RE.pattern}（收到 {args.slug!r}）")
     if not args.title.strip():
         sys.exit("title 不能为空")
+    for field, value in (("title", args.title), ("note", args.note or "")):
+        problem = _reject_newlines(field, value)
+        if problem:
+            sys.exit(problem)
     if not ctx.TEMPLATE_DIR.is_dir():
         sys.exit(f"缺模板目录 {ctx._rel(ctx.TEMPLATE_DIR)}")
     template_spec = ctx.TEMPLATE_DIR / "spec.md"
@@ -88,6 +103,11 @@ def cmd_edit(args):
         )
     if values["note"] is not None and values["note_append"] is not None:
         sys.exit("--note 与 --note-append 互斥")
+    for field in ("title", "note", "note_append"):
+        if values[field] is not None:
+            problem = _reject_newlines(field, values[field])
+            if problem:
+                sys.exit(problem)
     dependency_actions = [
         values["depends_on"], values["depends_append"], values["depends_remove"]
     ]
