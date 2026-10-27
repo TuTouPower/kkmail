@@ -12,8 +12,10 @@ Frontend then regenerates TS with:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -22,10 +24,17 @@ OUT = ROOT / "schemas" / "openapi.json"
 
 
 def _ensure_minimal_env() -> None:
-    """Importing the app must not require a live DB; fill placeholders if unset."""
-    os.environ.setdefault("MAIL_CORE_SECRET_KEY", "openapi-export-placeholder-" + ("x" * 32))
-    # Valid-looking base64 32-byte key; never used for real crypto during schema dump.
-    os.environ.setdefault("MAIL_CORE_BLOB_KEY_V1", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+    """Importing the app must not require a live DB; fill placeholders if unset.
+
+    Values are one-time random per process (A226): never embed a constant
+    key — a published blob key / labelled placeholder could be mistaken
+    for, or reused as, real key material. The schema dump never uses
+    these values for real crypto.
+    """
+    os.environ.setdefault("MAIL_CORE_SECRET_KEY", secrets.token_hex(32))
+    os.environ.setdefault(
+        "MAIL_CORE_BLOB_KEY_V1", base64.b64encode(os.urandom(32)).decode("ascii")
+    )
     os.environ.setdefault("MAIL_CORE_BLOB_ACTIVE_VERSION", "1")
 
 
