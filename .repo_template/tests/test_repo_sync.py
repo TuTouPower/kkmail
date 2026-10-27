@@ -110,6 +110,39 @@ def test_sync_state_atomic_update_preserves_unknown_keys(env):
 # user_prompts 管理
 # ---------------------------------------------------------------------------
 
+def test_read_state_rejects_corrupt_json(env):
+    """A281: 损坏的 sync_state.json 须转 SyncError（可行动提示），不裸 JSONDecodeError。"""
+    env["state_file"].write_text("{not json", encoding="utf-8")
+    with pytest.raises(rs.SyncError, match="sync_state"):
+        rs.read_state()
+
+
+def test_read_state_rejects_non_dict_and_bad_field_types(env):
+    """A281: 顶层非 dict / template_source 非 dict / user_prompts 非 list 均须 SyncError。"""
+    env["state_file"].write_text(json.dumps(["not", "a", "dict"]))
+    with pytest.raises(rs.SyncError):
+        rs.read_state()
+    env["state_file"].write_text(json.dumps({"template_source": "oops", "user_prompts": []}))
+    with pytest.raises(rs.SyncError):
+        rs.read_state()
+    env["state_file"].write_text(json.dumps({"template_source": None, "user_prompts": "oops"}))
+    with pytest.raises(rs.SyncError):
+        rs.read_state()
+    env["state_file"].write_text(json.dumps({"template_source": None, "user_prompts": ["oops"]}))
+    with pytest.raises(rs.SyncError):
+        rs.read_state()
+
+
+def test_status_degrades_when_template_source_kind_missing(env, capsys):
+    """A281: template_source 缺 kind 键时 status 给降级输出（默认 path），不 KeyError。"""
+    state = rs.read_state()
+    state["template_source"] = {"value": str(env["src"])}
+    env["state_file"].write_text(json.dumps(state))
+    assert rs.cmd_status(Namespace()) == 0
+    out = capsys.readouterr().out
+    assert "template_source: path" in out
+
+
 def test_prompt_add_supersede_revoke(env):
     _add_prompt(".env 不要 ignore", ".gitignore,.env")
     assert len(rs.read_state()["user_prompts"]) == 1
@@ -177,6 +210,53 @@ def test_sync_file_delete_when_src_missing(env):
     rs.sync_file(src / ".claude/hooks/nonexistent_guard.py", orphan, changed)
     assert not orphan.exists()
     assert orphan in changed
+
+
+def test_sync_dir_skips_symlink_escaping_source_tree(env, tmp_path, capsys):
+    """A390：源侧 symlink 解析后逃出源树时跳过并记录，树外内容不得复制进消费仓。"""
+    src, consumer = env["src"], env["consumer"]
+    outside_file = tmp_path / "outside_secret.txt"
+    outside_file.write_text("SECRET\n")
+    outside_dir = tmp_path / "outside_dir"
+    outside_dir.mkdir()
+    (outside_dir / "leaked.py").write_text("leaked\n")
+
+    sroot = src / ".repo_template/scripts"
+    (sroot / "evil_file.py").symlink_to(outside_file)
+    (sroot / "evil_dir").symlink_to(outside_dir, target_is_directory=True)
+    # 树内 symlink（目标仍在源树内）照常同步内容
+    (sroot / "inner_link.py").symlink_to(sroot / "task.py")
+
+    dst = consumer / ".repo_template/scripts"
+    changed: set[Path] = set()
+    rs.sync_dir(sroot, dst, changed)
+
+    assert (dst / "task.py").read_text() == "print('task')\n"
+    assert (dst / "inner_link.py").read_text() == "print('task')\n"
+    assert not (dst / "evil_file.py").exists()
+    assert not (dst / "evil_dir").exists()
+    assert (dst / "evil_file.py") not in changed
+    assert (dst / "evil_dir") not in changed
+    err = capsys.readouterr().err
+    assert "evil_file.py" in err and "evil_dir" in err
+
+
+def test_sync_dir_oneway_skips_symlink_escaping_source_tree(env, tmp_path, capsys):
+    """A390：单向同步（prep 路径）同样不得跟随源侧 symlink 把树外内容带入。"""
+    src, consumer = env["src"], env["consumer"]
+    outside_file = tmp_path / "outside_secret.txt"
+    outside_file.write_text("SECRET\n")
+    sroot = src / ".repo_template/scripts"
+    (sroot / "evil_file.py").symlink_to(outside_file)
+
+    dst = consumer / ".repo_template/scripts"
+    changed: set[Path] = set()
+    rs.sync_dir_oneway(sroot, dst, changed)
+
+    assert (dst / "task.py").read_text() == "print('task')\n"
+    assert not (dst / "evil_file.py").exists()
+    assert (dst / "evil_file.py") not in changed
+    assert "evil_file.py" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

@@ -185,10 +185,32 @@ def _reject_dir_target(dst: Path, reason: str) -> None:
 # ---------------------------------------------------------------------------
 
 def read_state() -> dict | None:
+    """读 sync_state.json 并做结构校验（A281）。
+
+    文件不存在返回 None；内容损坏/结构不对转 SyncError 给可行动提示，
+    不让 JSONDecodeError/KeyError 裸 traceback 逃逸。template_source
+    允许为 None（init 未写源的中间态）；user_prompts 条目须为 dict。
+    """
     if not STATE_PATH.exists():
         return None
-    with open(STATE_PATH, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(STATE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SyncError(
+            f"sync_state.json 无法解析（{error}）；请修复该文件或删除后重新 init"
+        ) from error
+    if not isinstance(data, dict):
+        raise SyncError("sync_state.json 结构无效：顶层须为 JSON 对象")
+    template_source = data.get("template_source")
+    if template_source is not None and not isinstance(template_source, dict):
+        raise SyncError("sync_state.json 结构无效：template_source 须为对象或 null")
+    user_prompts = data.get("user_prompts", [])
+    if not isinstance(user_prompts, list) or any(
+        not isinstance(p, dict) for p in user_prompts
+    ):
+        raise SyncError("sync_state.json 结构无效：user_prompts 须为对象数组")
+    return data
 
 
 def write_state(data: dict) -> None:
@@ -602,8 +624,32 @@ def migrate_conventions(changed: set[Path]) -> list[str]:
 # 硬同步（树对树 / 单文件）
 # ---------------------------------------------------------------------------
 
-def sync_dir(src_dir: Path, dst_dir: Path, changed: set[Path]) -> None:
+def _symlink_escapes_tree(entry: Path, root: Path) -> bool:
+    """源侧条目是 symlink 且解析目标逃出源树 root 时返回 True（A390）。
+
+    跟随这类链接复制会把源树外内容带入消费仓；调用方应跳过并记录。
+    解析失败（循环链接等）按逃逸处理，宁可跳过不复制。
+    """
+    if not entry.is_symlink():
+        return False
+    try:
+        resolved = entry.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return True
+    return not resolved.is_relative_to(root)
+
+
+def _skip_escaping_symlink(entry: Path, root: Path) -> bool:
+    if _symlink_escapes_tree(entry, root):
+        print(f"WARNING: 模板源 {entry} 是指向源树外的 symlink，已跳过", file=sys.stderr)
+        return True
+    return False
+
+
+def sync_dir(src_dir: Path, dst_dir: Path, changed: set[Path], _root: Path | None = None) -> None:
     """树对树同步：src 全量复制（含覆盖），dst 中 src 没有的非噪声条目删除。"""
+    if _root is None:
+        _root = src_dir.resolve()
     if not dst_dir.exists():
         dst_dir.mkdir(parents=True)
     elif not dst_dir.is_dir():
@@ -614,9 +660,11 @@ def sync_dir(src_dir: Path, dst_dir: Path, changed: set[Path]) -> None:
     for entry in src_dir.iterdir():
         if _is_noise(entry.name):
             continue
+        if _skip_escaping_symlink(entry, _root):
+            continue
         target = dst_dir / entry.name
         if entry.is_dir():
-            sync_dir(entry, target, changed)
+            sync_dir(entry, target, changed, _root)
         else:
             _reject_dir_target(target, "模板源是文件，拒绝写入目录内部")
             if not target.exists() or _file_differs(entry, target):
@@ -635,10 +683,12 @@ def sync_dir(src_dir: Path, dst_dir: Path, changed: set[Path]) -> None:
             changed.add(entry)
 
 
-def sync_dir_oneway(src_dir: Path, dst_dir: Path, changed: set[Path]) -> None:
+def sync_dir_oneway(src_dir: Path, dst_dir: Path, changed: set[Path], _root: Path | None = None) -> None:
     """单向树同步：src 全量复制（含覆盖），不删 dst 中 src 没有的条目。"""
     if not src_dir.exists():
         return
+    if _root is None:
+        _root = src_dir.resolve()
     if not dst_dir.exists():
         dst_dir.mkdir(parents=True)
     elif not dst_dir.is_dir():
@@ -649,9 +699,11 @@ def sync_dir_oneway(src_dir: Path, dst_dir: Path, changed: set[Path]) -> None:
     for entry in src_dir.iterdir():
         if _is_noise(entry.name):
             continue
+        if _skip_escaping_symlink(entry, _root):
+            continue
         target = dst_dir / entry.name
         if entry.is_dir():
-            sync_dir_oneway(entry, target, changed)
+            sync_dir_oneway(entry, target, changed, _root)
         else:
             _reject_dir_target(target, "模板源是文件，拒绝写入目录内部")
             if not target.exists() or _file_differs(entry, target):
@@ -690,8 +742,11 @@ def sync_skill(src_skill: Path, dst_skill: Path, changed: set[Path]) -> None:
             f"{_rel(dst_skill)} 是文件/软链，模板源是目录；类型不符，停止。"
             "请人工处理该路径后重跑 apply"
         )
+    skill_root = src_skill.resolve()
     for entry in src_skill.iterdir():
         if entry.name == "sync_state.json":
+            continue
+        if _skip_escaping_symlink(entry, skill_root):
             continue
         target = dst_skill / entry.name
         if entry.is_dir():
@@ -1397,7 +1452,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     head = _git(src, "rev-parse", "--short", "HEAD").stdout.strip() or "?"
     dirty = src_dirty(src)
     prompts = active_prompts(state)
-    print(f"template_source: {state['template_source']['kind']} {state['template_source']['value']}")
+    _ts = state.get("template_source") or {}
+    print(f"template_source: {_ts.get('kind', 'path')} {_ts.get('value')}")
     print(f"SRC HEAD: {head}  dirty={dirty}")
     print(f"last_synced_commit: {state.get('last_synced_commit')}")
     print(f"last_synced_at: {state.get('last_synced_at')}")
@@ -1464,7 +1520,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     prompts = active_prompts(state)
 
     print("## repo-template-sync 预览")
-    print(f"\nSRC: {state['template_source']['value']} @ {head}  dirty={dirty}")
+    print(f"\nSRC: {(state.get('template_source') or {}).get('value')} @ {head}  dirty={dirty}")
     print("\n### 站立指令 user_prompts（裁定优先）")
     if prompts:
         rows = [[str(i), p.get("at", ""), p.get("text", "")] for i, p in enumerate(prompts)]
