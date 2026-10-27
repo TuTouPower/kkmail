@@ -711,6 +711,40 @@ def test_retired_template_warnings(env):
     assert ".github/workflows/repo-template-ci.yml" in warnings[0]
 
 
+def test_mcp_merge_rejects_non_dict_servers(env, capsys):
+    """A341: 两侧任一 mcpServers 非 dict 时跳过该文件，不裸 AttributeError/TypeError。"""
+    src, consumer = env["src"], env["consumer"]
+    dmcp = consumer / ".mcp.json"
+    # 模板侧非 dict
+    (src / ".mcp.json").write_text(json.dumps({"mcpServers": ["not-a-dict"]}))
+    dmcp.write_text(json.dumps({"mcpServers": {"consumer-server": {"command": "y"}}}))
+    changed: set[Path] = set()
+    assert rs.merge_mcp(src, changed) == []
+    assert json.loads(dmcp.read_text())["mcpServers"] == {"consumer-server": {"command": "y"}}
+    # 消费侧非 dict
+    (src / ".mcp.json").write_text(json.dumps({"mcpServers": {"tpl-server": {"command": "x"}}}))
+    dmcp.write_text(json.dumps({"mcpServers": "not-a-dict"}))
+    changed = set()
+    assert rs.merge_mcp(src, changed) == []
+    assert json.loads(dmcp.read_text())["mcpServers"] == "not-a-dict"
+    assert "mcpServers" in capsys.readouterr().err
+
+
+def test_mcp_full_copy_reports_each_server_as_executable(env, capsys):
+    """A341: 消费侧缺文件整表复制时，逐 server 列出并提示其为可执行配置。"""
+    src, consumer = env["src"], env["consumer"]
+    (src / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "tpl-alpha": {"command": "alpha-bin"},
+        "tpl-beta": {"command": "beta-bin"},
+    }}))
+    dmcp = consumer / ".mcp.json"
+    changed: set[Path] = set()
+    merged = rs.merge_mcp(src, changed)
+    assert dmcp.is_file() and dmcp in changed and merged == [".mcp.json"]
+    out = capsys.readouterr().out
+    assert "tpl-alpha" in out and "tpl-beta" in out and "可执行" in out
+
+
 def test_mcp_merge_keywise(env):
     src, consumer = env["src"], env["consumer"]
     (src / ".mcp.json").write_text(json.dumps({"mcpServers": {"tpl-server": {"command": "x"}}}))

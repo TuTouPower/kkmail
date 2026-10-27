@@ -1234,12 +1234,21 @@ def merge_mcp(src: Path, changed: set[Path]) -> list[str]:
         except (OSError, json.JSONDecodeError) as e:
             print(f"WARNING: 模板侧 {rel} 无法解析，跳过 MCP 合并（{e}）", file=sys.stderr)
             continue
+        # 合并前校验两侧结构（A341）：mcpServers 非 dict 时跳过，不裸崩。
+        if not isinstance(sdata, dict) or not isinstance(sdata.get("mcpServers", {}), dict):
+            print(f"WARNING: 模板侧 {rel} 的 mcpServers 不是对象，跳过 MCP 合并", file=sys.stderr)
+            continue
+        sservers = sdata.get("mcpServers", {})
         if not dp.exists():
             dp.parent.mkdir(parents=True, exist_ok=True)
             _stage_rollback(dp)
             shutil.copy2(sp, dp)
             changed.add(dp)
             merged.append(_rel(dp))
+            # 整表复制等于把模板的 server 命令定义原样落入消费仓：
+            # 逐 server 列出并提示其为可执行配置，须人工核对（A341）。
+            for name in sservers:
+                print(f"提示: {_rel(dp)} 整表复制自模板，server {name!r} 为可执行配置（command/args 来自模板），请核对后再启用")
             continue
         try:
             draw = dp.read_text(encoding="utf-8")
@@ -1247,9 +1256,12 @@ def merge_mcp(src: Path, changed: set[Path]) -> list[str]:
         except (OSError, json.JSONDecodeError) as e:
             print(f"WARNING: 消费侧 {rel} 无法解析，跳过 MCP 合并（{e}）", file=sys.stderr)
             continue
+        if not isinstance(ddata, dict) or not isinstance(ddata.get("mcpServers", {}), dict):
+            print(f"WARNING: 消费侧 {rel} 的 mcpServers 不是对象，跳过 MCP 合并", file=sys.stderr)
+            continue
         dservers = ddata.setdefault("mcpServers", {})
         touched = False
-        for key, val in sdata.get("mcpServers", {}).items():
+        for key, val in sservers.items():
             if key not in dservers:
                 dservers[key] = val
                 touched = True
