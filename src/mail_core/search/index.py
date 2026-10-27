@@ -132,7 +132,17 @@ def _clamp_search_limit(limit: int) -> int:
     return min(200, max(1, int(limit)))
 
 
+#: Same bound the API route enforces (q max_length=256); the search layer
+#: must not rely on that single call site (A353).
+MAX_SEARCH_QUERY_LENGTH = 256
+
+
+def _bounded_query(query: str) -> str:
+    return query[:MAX_SEARCH_QUERY_LENGTH]
+
+
 def _filters(query: str, account_ids: list[uuid.UUID] | None, folder_id: uuid.UUID | None) -> tuple[str, dict]:
+    query = _bounded_query(query)
     params: dict = {"q": query, "like_q": _escape_like_literal(query)}
     filters: list[str] = []
     if account_ids is not None:
