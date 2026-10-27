@@ -172,6 +172,11 @@ def cmd_attempt_report(args):
 
 
 def cmd_ledger_tail(args):
+    # A189: guard for direct/programmatic callers too (argparse enforces
+    # the same rule for CLI use): events[-0:] is the whole ledger and a
+    # negative n slices forward from the wrong end.
+    if args.n <= 0:
+        sys.exit(f"ledger tail: -n 必须为正整数（收到 {args.n}）")
     events = ledger_read()
     if args.tid:
         events = [event for event in events if event.get("tid") == args.tid]

@@ -44,6 +44,18 @@ def _validate_port(raw: str) -> int:
     return port
 
 
+def _validate_positive_count(raw: str) -> int:
+    """A189: argparse type for `ledger tail -n`; n<=0 previously sliced
+    the full ledger (n=0) or a misaligned forward slice (n<0)."""
+    try:
+        count = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"-n 必须是整数（收到 {raw!r}）") from None
+    if count <= 0:
+        raise argparse.ArgumentTypeError(f"-n 必须为正整数（收到 {count}）")
+    return count
+
+
 def _add_identity(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--attempt", type=int, required=True)
     parser.add_argument("--execution-id", required=True)
@@ -243,7 +255,7 @@ def main():
     ledger_sub = ledger.add_subparsers(dest="ledger_cmd", required=True)
     tail = ledger_sub.add_parser("tail", help="倒序读取账本")
     tail.add_argument("--tid")
-    tail.add_argument("-n", type=int, default=20)
+    tail.add_argument("-n", type=_validate_positive_count, default=20)
     tail.set_defaults(func=cmd_ledger_tail)
 
     args = parser.parse_args()
