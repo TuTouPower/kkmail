@@ -369,10 +369,16 @@ class OutboxDispatcher:
 
 
 _dispatcher: OutboxDispatcher | None = None
+_dispatcher_lock = threading.Lock()
 
 
 def get_dispatcher() -> OutboxDispatcher:
     global _dispatcher
+    # Double-checked locking: racing first callers (API startup vs the
+    # first SSE request) must not build two dispatchers and split
+    # subscriptions from fan-out across instances (A122).
     if _dispatcher is None:
-        _dispatcher = OutboxDispatcher()
+        with _dispatcher_lock:
+            if _dispatcher is None:
+                _dispatcher = OutboxDispatcher()
     return _dispatcher
