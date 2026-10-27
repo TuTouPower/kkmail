@@ -11,22 +11,16 @@ from mail_core.mail.domain.enums import (
     SyncRunStatus,
     SyncStatus,
 )
-from mail_core.mail.domain.models import AccountRef, FolderRef, MessageMetadata, SyncCheckpointView
-
 __all__ = [
     "ARCHIVE_TRANSITIONS",
-    "AccountRef",
     "ArchiveState",
-    "FolderRef",
     "FolderRole",
     "IllegalArchiveTransition",
     "JobStatus",
     "JobType",
-    "MessageMetadata",
     "OutboxEventType",
     "ProviderType",
     "RemoteOperationStatus",
-    "SyncCheckpointView",
     "SyncPhase",
     "SyncRunStatus",
     "SyncStatus",
