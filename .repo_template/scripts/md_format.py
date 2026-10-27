@@ -131,12 +131,36 @@ def format_paths(rel_paths: list[str], *, check: bool = False) -> list[str]:
                     [executable, "--check", str(path)], capture_output=True,
                     text=True, encoding="utf-8", errors="replace", timeout=30,
                 )
-                if result.returncode == 1:
-                    changed.append(rel)
-                elif result.returncode != 0:
+                if result.returncode == 0:
+                    continue
+                if result.returncode != 1:
                     raise MdFormatError(
                         f"md_kx --check 失败（{rel}）：{result.stderr.strip()}"
                     )
+                # exit 1 既可能是格式漂移，也可能是解析/内部错误（A339）：以
+                # 「试格式化后内容是否变化」校验输出形态。试跑在原文件上进行
+                # （保证 .md_kx.toml 发现路径与正式格式化一致），随后恢复原
+                # 字节，check 不写盘的语义不变；非漂移按 MdFormatError 抛出。
+                original = path.read_bytes()
+                probe = subprocess.run(
+                    [executable, str(path)], capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=30,
+                )
+                try:
+                    if probe.returncode != 0:
+                        raise MdFormatError(
+                            f"md_kx --check 失败（{rel}）："
+                            f"{result.stderr.strip() or probe.stderr.strip()}"
+                        )
+                    if path.read_bytes() == original:
+                        raise MdFormatError(
+                            f"md_kx --check 失败（{rel}）：退出码 1 但试格式化"
+                            f"无内容变化，非格式漂移：{result.stderr.strip()}"
+                        )
+                finally:
+                    if path.read_bytes() != original:
+                        path.write_bytes(original)
+                changed.append(rel)
                 continue
             before = snapshots[path]
             result = subprocess.run(

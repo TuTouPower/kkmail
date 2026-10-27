@@ -144,6 +144,54 @@ def test_main_mixed_paths_error_lists_only_rejected(repo, capsys):
     assert "a.md，" not in err and "a.md," not in err
 
 
+def _fake_md_kx_mode(tmp_path, name, script):
+    bin_dir = tmp_path / name
+    bin_dir.mkdir()
+    exe = bin_dir / "md_kx"
+    exe.write_text(script, encoding="utf-8")
+    exe.chmod(0o755)
+    return exe
+
+
+def test_check_exit1_with_failing_format_is_error_not_drift(repo, tmp_path, monkeypatch):
+    """A339：md_kx --check exit 1 且试格式化同样失败（解析错误）时，不得当漂移，
+    须按 MdFormatError 抛出并带出 stderr。"""
+    exe = _fake_md_kx_mode(tmp_path, "bin_err", (
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "print('parse error: broken table', file=sys.stderr)\n"
+        "sys.exit(1 if '--check' in sys.argv else 2)\n"
+    ))
+    monkeypatch.setattr(mdf, "find_md_kx", lambda: str(exe))
+    with pytest.raises(mdf.MdFormatError, match="parse error"):
+        mdf.format_paths(["a.md"], check=True)
+
+
+def test_check_exit1_without_content_change_is_error_not_drift(repo, tmp_path, monkeypatch):
+    """A339：--check exit 1 但试格式化成功且内容无变化 → 非漂移，按错误抛出。"""
+    exe = _fake_md_kx_mode(tmp_path, "bin_nochg", (
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "if '--check' in sys.argv:\n"
+        "    print('internal warning state', file=sys.stderr)\n"
+        "    sys.exit(1)\n"
+        "sys.exit(0)\n"
+    ))
+    monkeypatch.setattr(mdf, "find_md_kx", lambda: str(exe))
+    with pytest.raises(mdf.MdFormatError, match="非格式漂移"):
+        mdf.format_paths(["a.md"], check=True)
+
+
+def test_check_drift_probe_restores_file(repo, tmp_path, monkeypatch):
+    """A339：真漂移仍报漂移，且 check 的形态校验试跑不得把文件留在已格式化状态。"""
+    exe = _fake_md_kx(tmp_path)
+    monkeypatch.setattr(mdf, "find_md_kx", lambda: str(exe))
+    before = (repo / "a.md").read_bytes()
+    drift = mdf.format_paths(["a.md"], check=True)
+    assert drift == ["a.md"]
+    assert (repo / "a.md").read_bytes() == before  # check 不写盘
+
+
 def test_main_check_all_exits_nonzero_on_drift(repo, tmp_path, monkeypatch, capsys):
     exe = _fake_md_kx(tmp_path)
     monkeypatch.setattr(mdf, "find_md_kx", lambda: str(exe))
