@@ -477,7 +477,5 @@ def update_account_sync_status(
     elif status == SyncStatus.IDLE:
         cfg.pop("last_sync_error", None)
     acc.config = cfg
-    if hasattr(acc, "last_synced_at"):
-        setattr(acc, "last_synced_at", ts)
     session.flush()
     return acc
