@@ -171,10 +171,18 @@ def safe_provider_summary(exc: BaseException | str | None) -> str:
 
 
 class RedactingFilter:
-    """Standard logging.Filter that automatically redacts credentials from LogRecords."""
+    """Standard logging.Filter that automatically redacts credentials from LogRecords.
+
+    A326: the filter is self-sufficient — it also redacts exception
+    tracebacks. ``record.exc_text`` is pre-generated from ``exc_info``
+    (or redacted in place when already built) so that even a plain
+    ``logging.Formatter`` — without RedactingTraceFormatter — cannot emit
+    a plaintext traceback. Stack info is redacted the same way.
+    """
 
     def filter(self, record: object) -> bool:
         import logging
+        import traceback
 
         if not isinstance(record, logging.LogRecord):
             return True
@@ -191,5 +199,17 @@ class RedactingFilter:
                     redact(str(arg), limit=500) if isinstance(arg, (str, BaseException)) else arg
                     for arg in record.args
                 )
+        if isinstance(record.exc_text, str) and record.exc_text:
+            record.exc_text = redact(record.exc_text, limit=None)
+        elif record.exc_info and record.exc_info[0] is not None:
+            try:
+                record.exc_text = redact(
+                    "".join(traceback.format_exception(*record.exc_info)),
+                    limit=None,
+                )
+            except Exception:
+                record.exc_text = f"{record.exc_info[0].__name__}: [REDACTED]"
+        if isinstance(record.stack_info, str) and record.stack_info:
+            record.stack_info = redact(record.stack_info, limit=None)
         return True
 
