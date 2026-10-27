@@ -186,6 +186,47 @@ def test_managed_env_link_stays_identifiable_after_source_removed(fake_repo):
     assert not link.is_symlink()
 
 
+def _make_managed_link(fake_repo, worktree, rel):
+    import os
+
+    src = fake_repo / rel
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("x", encoding="utf-8")
+    dst = worktree / rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.symlink_to(os.path.relpath(src, dst.parent))
+    return dst
+
+
+def test_unlink_managed_env_links_prunes_skip_dirs(fake_repo):
+    """A208: unlink 走树须原地剪枝 skip 目录，不得全量走树。"""
+    worktree = fake_repo / "worktree"
+    worktree.mkdir()
+    top = _make_managed_link(fake_repo, worktree, ".env")
+    in_node_modules = _make_managed_link(
+        fake_repo, worktree, "node_modules/.env"
+    )
+    in_git = _make_managed_link(fake_repo, worktree, ".git/.env")
+    in_venv = _make_managed_link(fake_repo, worktree, ".venv/.env")
+    for link in (top, in_node_modules, in_git, in_venv):
+        assert worktrees.is_managed_env_link(worktree, link)
+
+    worktrees.unlink_managed_env_links(worktree)
+
+    assert not top.is_symlink()  # 正常目录仍清理
+    # 剪枝目录内的链接不被访问（保留原样），证明没有全量走树
+    assert in_node_modules.is_symlink()
+    assert in_git.is_symlink()
+    assert in_venv.is_symlink()
+
+
+def test_skip_dirs_is_shared_constant():
+    """A208: link/unlink 共用同一 skip 集合，且含 .git。"""
+    assert ".git" in worktrees.SKIP_DIRS
+    assert "node_modules" in worktrees.SKIP_DIRS
+    assert ".venv" in worktrees.SKIP_DIRS
+
+
 def test_close_task_rolls_back_when_move_fails(fake_repo, monkeypatch):
     """归档移动失败时 front matter 回滚，避免「已写 done、目录未归档」死锁。"""
     import argparse

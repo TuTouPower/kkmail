@@ -9,6 +9,11 @@ import repo_task.context as ctx
 from .git_ops import _get_head, _git, current_branch, default_branch, resolve_local_branch, worktree_paths
 from .store import discover_effective_sources, load_task_at_ref
 
+# link_local_env 收集源与 unlink_managed_env_links 清理走树共用的剪枝
+# 目录集合：依赖/缓存/元数据大树既不含需链的本地配置，也不该在每次
+# cleanup/rollback 时被全量遍历（A208）。
+SKIP_DIRS = {".git", "node_modules", ".scratch", "__pycache__", "venv", ".venv", "target"}
+
 def link_local_env(worktree: Path) -> list[str]:
     """把主仓未入库的 .env 软链进 worktree（同相对路径）。
 
@@ -17,7 +22,7 @@ def link_local_env(worktree: Path) -> list[str]:
     在遍历中把刚创建的软链当新源导致级联嵌套。
     """
     linked = []
-    skip_dirs = {".git", "node_modules", ".scratch", "__pycache__", "venv", ".venv", "target"}
+    skip_dirs = SKIP_DIRS
     try:
         worktree_resolved = worktree.resolve()
     except OSError:
@@ -71,7 +76,10 @@ def is_managed_env_link(worktree: Path, link: Path) -> bool:
 def unlink_managed_env_links(worktree: Path) -> None:
     # 用 os.walk 而非 Path.rglob：rglob 在 Python 3.10+ 会跳过 dangling
     # symlink（源已删的 .env 链接），清理时恰恰需要删除这类残留。
+    # 原地过滤 dirs 剪枝 skip 目录（含 .git），避免每次 cleanup/rollback
+    # 全量走 node_modules/.venv 等大树（A208；与 link_local_env 共用集合）。
     for root, dirs, files in os.walk(worktree, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         if ".env" in files:
             link = Path(root) / ".env"
             if is_managed_env_link(worktree, link):
