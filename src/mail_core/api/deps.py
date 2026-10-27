@@ -33,8 +33,12 @@ def authenticate_request(
         if isinstance(bearer_creds, HTTPAuthorizationCredentials)
         else extract_bearer(request.headers.get("Authorization"))
     )
-    if bearer is not None and api_key_matches(bearer):
-        return AuthPrincipal(via="api_key", api_key_digest=digest_api_key(bearer))
+    if bearer is not None:
+        if api_key_matches(bearer):
+            return AuthPrincipal(via="api_key", api_key_digest=digest_api_key(bearer))
+        # A181: a presented-but-invalid Bearer token fails outright; never
+        # fall back to cookie session auth for such a request.
+        raise HTTPException(status_code=401, detail="authentication required")
 
     raw = cookie_token if isinstance(cookie_token, str) else request.cookies.get(SESSION_COOKIE_NAME)
     if raw:

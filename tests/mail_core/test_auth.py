@@ -47,20 +47,40 @@ def test_invalid_api_key_401():
     assert client.get("/api/mail/inbox").status_code == 401
 
 
-def test_invalid_bearer_falls_back_to_valid_session_cookie(monkeypatch):
+def test_invalid_bearer_rejected_without_cookie_fallback(monkeypatch):
+    # A181: a request that presents an Authorization Bearer token whose key
+    # does not match must fail with 401 outright; it must NOT silently fall
+    # back to cookie session auth (that would let a stale/wrong key ride on
+    # an unrelated browser session). This replaces the previous test that
+    # asserted the fallback behaviour, whose semantics A181 reverses.
     import mail_core.api.deps as auth_deps
-    from mail_core.security.auth import AuthPrincipal
+    from fastapi import HTTPException
 
     monkeypatch.setattr(auth_deps, "api_key_matches", lambda _token: False)
     monkeypatch.setattr(auth_deps, "read_session", lambda _token: {"csrf": "session-csrf", "epoch": 1})
     request = SimpleNamespace(headers={})
     bearer = HTTPAuthorizationCredentials(scheme="Bearer", credentials="invalid-key")
 
-    principal = auth_deps.authenticate_request(
-        request,
-        bearer_creds=bearer,
-        cookie_token="valid-session",
-    )
+    with pytest.raises(HTTPException) as excinfo:
+        auth_deps.authenticate_request(
+            request,
+            bearer_creds=bearer,
+            cookie_token="valid-session",
+        )
+
+    assert excinfo.value.status_code == 401
+
+
+def test_no_bearer_still_uses_valid_session_cookie(monkeypatch):
+    # A181 guard: requests without any Bearer token keep cookie session auth.
+    import mail_core.api.deps as auth_deps
+    from mail_core.security.auth import AuthPrincipal
+
+    monkeypatch.setattr(auth_deps, "api_key_matches", lambda _token: False)
+    monkeypatch.setattr(auth_deps, "read_session", lambda _token: {"csrf": "session-csrf", "epoch": 1})
+    request = SimpleNamespace(headers={})
+
+    principal = auth_deps.authenticate_request(request, bearer_creds=None, cookie_token="valid-session")
 
     assert principal == AuthPrincipal(via="session", csrf_token="session-csrf", session_epoch=1)
 
