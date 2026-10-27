@@ -19,6 +19,7 @@ description: 接入并操控自托管邮件客户端 kkmail（基于 mail-core�
     unset KKMAIL_PASSWORD
     ```
 - `KKMAIL_API_KEY`：可选 Bearer Token（配置 `MAIL_CORE_API_KEYS` 后免 Session/CSRF，亦可通过环境变量 `KKMAIL_API_KEY` 提供）
+- 会话缓存：使用密码登录时，CLI 会把会话 Cookie 与 CSRF token 落盘缓存到 `~/.cache/kkmail/session.json`（目录权限 0700、文件权限 0600；可通过环境变量 `KKMAIL_SESSION_CACHE` 改路径）。删除该文件即注销本机缓存会话；使用 `KKMAIL_API_KEY` 时不写该缓存。
 
 ______________________________________________________________________
 
