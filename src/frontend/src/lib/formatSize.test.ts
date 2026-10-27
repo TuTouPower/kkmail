@@ -16,6 +16,14 @@ describe('formatFileSize', () => {
     expect(formatFileSize(1023)).toBe('1023 B')
   })
 
+  it('rejects non-finite sizes and floors fractional bytes (A334)', () => {
+    expect(formatFileSize(Infinity)).toBe('')
+    expect(formatFileSize(-Infinity)).toBe('')
+    expect(formatFileSize(1.5)).toBe('1 B')
+    expect(formatFileSize(512.9)).toBe('512 B')
+    expect(formatFileSize(0.5)).toBe('0 B')
+  })
+
   it('formats KB, MB, GB values with up to one decimal place without trailing zero', () => {
     expect(formatFileSize(1024)).toBe('1 KB')
     expect(formatFileSize(1536)).toBe('1.5 KB')
