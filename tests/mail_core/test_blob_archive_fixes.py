@@ -30,6 +30,7 @@ from mail_core.blobs.archive import (
 from mail_core.blobs.crypto import Keyring
 from mail_core.blobs.gc import unlink_gc_paths
 from mail_core.blobs.quota import (
+    QuotaExceededError,
     acquire_blob_digest_lock,
     check_quota,
     digest_to_lock_id,
@@ -406,15 +407,16 @@ def test_a36_strict_hard_quota_reservation_and_release(tmp_path, monkeypatch):
         active = get_active_reserved_bytes(session)
         assert active >= 1000
 
-        # Excess reservation fails (1000 reserved + 4500 needed > 5000 hard limit)
-        rid2 = reserve_quota(
-            session,
-            root=tmp_path,
-            needed_bytes=4500,
-            worker_id=worker_id,
-            hard_limit_bytes=5000,
-        )
-        assert rid2 is None, "Should reject reservation that exceeds hard limit"
+        # Excess reservation is rejected (A108: raises QuotaExceededError,
+        # no longer an ambiguous None shared with "nothing to reserve").
+        with pytest.raises(QuotaExceededError):
+            reserve_quota(
+                session,
+                root=tmp_path,
+                needed_bytes=4500,
+                worker_id=worker_id,
+                hard_limit_bytes=5000,
+            )
 
         # Release reservation
         release_quota_reservation(session, rid)
@@ -457,13 +459,19 @@ def test_a23_concurrent_hard_quota_reservations_cannot_oversubscribe(tmp_path, m
     def reserve(worker_id: str):
         with Session() as session:
             start.wait(timeout=5)
-            reservation_id = reserve_quota(
-                session,
-                root=tmp_path,
-                needed_bytes=60,
-                worker_id=worker_id,
-                hard_limit_bytes=baseline_reserved + 100,
-            )
+            try:
+                reservation_id = reserve_quota(
+                    session,
+                    root=tmp_path,
+                    needed_bytes=60,
+                    worker_id=worker_id,
+                    hard_limit_bytes=baseline_reserved + 100,
+                )
+            except QuotaExceededError:
+                # A108: the losing reservation raises instead of returning
+                # None; None here is this test's own "rejected" sentinel.
+                session.commit()
+                return None
             session.commit()
             return reservation_id
 
@@ -503,13 +511,14 @@ def test_a23_quota_advisory_lock_releases_on_commit_and_rollback(tmp_path):
         after_rollback.rollback()
 
     with Session() as rejected:
-        assert reserve_quota(
-            rejected,
-            root=tmp_path,
-            needed_bytes=200,
-            worker_id="quota-rejected",
-            hard_limit_bytes=baseline_reserved + 100,
-        ) is None
+        with pytest.raises(QuotaExceededError):
+            reserve_quota(
+                rejected,
+                root=tmp_path,
+                needed_bytes=200,
+                worker_id="quota-rejected",
+                hard_limit_bytes=baseline_reserved + 100,
+            )
         with Session() as second:
             assert second.scalar(try_lock, lock_params) is False
             second.rollback()

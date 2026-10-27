@@ -23,6 +23,7 @@ from sqlalchemy import select, update
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.blobs.quota import (
+    QuotaExceededError,
     acquire_blob_digest_lock,
     check_quota,
     estimate_encrypted_size,
@@ -79,10 +80,6 @@ def _size_limit_from_env(name: str, default: int) -> int:
         log.warning("invalid %s=%r; using default %d", name, raw, default)
         return default
     return value
-
-
-class QuotaExceededError(RuntimeError):
-    """Raised when blob write would exceed hard quota."""
 
 
 class _AccountGoneError(RuntimeError):
@@ -1133,14 +1130,20 @@ def run_archive_batch(
         res_id = None
         if needed_bytes > 0:
             with Session() as s_res:
-                res_id = reserve_quota(
-                    s_res,
-                    root=root,
-                    needed_bytes=needed_bytes,
-                    worker_id=worker_id,
-                    message_id=mid,
-                    hard_limit_bytes=hard_i,
-                )
+                try:
+                    res_id = reserve_quota(
+                        s_res,
+                        root=root,
+                        needed_bytes=needed_bytes,
+                        worker_id=worker_id,
+                        message_id=mid,
+                        hard_limit_bytes=hard_i,
+                    )
+                except QuotaExceededError:
+                    # A108: exceeded is an exception now, not None; the
+                    # pause branch below handles both (None remains as a
+                    # defensive fallback for anomalous returns).
+                    res_id = None
                 if res_id is None:
                     _pause_quota(s_res, _active_claims(), account_id)
                     s_res.commit()

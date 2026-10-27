@@ -19,6 +19,15 @@ QUOTA_RESERVATION_LOCK_NAMESPACE = 0x4B4B5154  # Dedicated two-key PostgreSQL ad
 QUOTA_RESERVATION_LOCK_RESOURCE = 0x52455356  # Singleton resource for global hard-quota reservations.
 
 
+class QuotaExceededError(RuntimeError):
+    """A quota reservation would exceed the hard limit (A108).
+
+    Distinct from "no reservation needed": reserve_quota returns None
+    only when there is nothing to reserve, and raises this error when the
+    hard limit would be exceeded, so callers cannot confuse the two.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class QuotaStatus:
     used_bytes: int
@@ -47,6 +56,30 @@ def dir_size_bytes(root: Path) -> int:
             except OSError:
                 continue
     return total
+
+
+# A108: the hard-quota path used to walk the whole blob directory on every
+# reservation. Reservations instead read a short-TTL cached snapshot; the
+# exact walk remains available via dir_size_bytes for reporting paths.
+_DIR_SIZE_CACHE_TTL_SECONDS = 5.0
+_dir_size_cache: dict[str, tuple[float, int]] = {}
+
+
+def dir_size_bytes_cached(root: Path, *, ttl_seconds: float = _DIR_SIZE_CACHE_TTL_SECONDS) -> int:
+    import time
+
+    key = str(root)
+    now_mono = time.monotonic()
+    entry = _dir_size_cache.get(key)
+    if entry is not None and entry[0] > now_mono:
+        return entry[1]
+    value = dir_size_bytes(root)
+    _dir_size_cache[key] = (now_mono + ttl_seconds, value)
+    return value
+
+
+def _clear_dir_size_cache() -> None:
+    _dir_size_cache.clear()
 
 
 def check_quota(
@@ -105,17 +138,27 @@ def reserve_quota(
 ) -> uuid.UUID | None:
     """Atomically reserve ciphertext quota before physical disk write.
 
-    Returns reservation_id if successfully reserved, or None if hard limit would be exceeded.
+    Returns the reservation_id on success, or None when no reservation
+    is needed (needed_bytes <= 0). Raises QuotaExceededError when the
+    hard limit would be exceeded (A108) — the two outcomes are no longer
+    conflated into one ambiguous None.
+
+    The directory size snapshot is taken (via the TTL cache) *before*
+    the advisory lock is acquired, so the lock's critical section covers
+    only reading active reservations, deciding, and inserting.
     """
     if needed_bytes <= 0:
         return None
     now = now or datetime.now(timezone.utc)
     if hard_limit_bytes is not None:
+        disk_used = dir_size_bytes_cached(root)
         _lock_hard_quota_reservations(session)
-        disk_used = dir_size_bytes(root)
         active_reserved = get_active_reserved_bytes(session, now=now)
         if disk_used + active_reserved + needed_bytes > hard_limit_bytes:
-            return None
+            raise QuotaExceededError(
+                f"hard quota exceeded: used={disk_used} reserved={active_reserved} "
+                f"needed={needed_bytes} hard_limit={hard_limit_bytes}"
+            )
     from mail_core.mail.storage.models import BlobQuotaReservation
 
     res_id = uuid.uuid4()
