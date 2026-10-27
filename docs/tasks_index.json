@@ -2,22 +2,5 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/tasks/{tid}_{slug}/task.md front matter",
     "workspace": ".",
-    "tasks": [
-        {
-            "tid": "t058",
-            "slug": "centralized_config_and_runtime_params",
-            "title": "重构集中式配置管理与抽离核心运行参数",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "t057",
-            "conflicts_with": "",
-            "note": "依据配置规范建立集中式配置模型并抽离硬编码参数，容纳 t057 收件箱轮询配置，补全 env 示例",
-            "dir": "docs/tasks/t058_centralized_config_and_runtime_params"
-        }
-    ]
+    "tasks": []
 }

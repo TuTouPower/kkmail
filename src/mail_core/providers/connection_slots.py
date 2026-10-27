@@ -39,15 +39,35 @@ from typing import Any, Callable, Iterator, Protocol
 
 log = logging.getLogger("mail_core.providers.connection_slots")
 
-# Fixed 8 advisory lock keys in distinct namespace (0x4B4D_0000 + slot)
-_SLOT_BASE_KEY = 0x4B4D_0000
-TOTAL_SLOTS = 8
-RESERVED_METADATA_SLOTS = 2  # slots 0 and 1 reserved for metadata/on-demand
-BACKGROUND_START_SLOT = 2  # background archive uses slots 2..7
+from mail_core.config import get_config
 
-# Short reschedule delay for capacity/control deferrals.  Kept small: a
-# slot frees as soon as any in-flight connection finishes.
-CAPACITY_RETRY_SECONDS = 5.0
+# Fixed advisory lock keys in distinct namespace (0x4B4D_0000 + slot)
+_SLOT_BASE_KEY = 0x4B4D_0000
+
+
+def get_total_slots() -> int:
+    return get_config().total_slots
+
+
+def get_background_start_slot() -> int:
+    return get_config().background_start_slot
+
+
+def get_capacity_retry_seconds() -> float:
+    return get_config().capacity_retry_seconds
+
+
+# Module-level legacy aliases for compatibility
+def __getattr__(name: str) -> Any:
+    if name == "TOTAL_SLOTS":
+        return get_total_slots()
+    if name == "BACKGROUND_START_SLOT":
+        return get_background_start_slot()
+    if name == "CAPACITY_RETRY_SECONDS":
+        return get_capacity_retry_seconds()
+    if name == "RESERVED_METADATA_SLOTS":
+        return get_background_start_slot()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class TrafficClass(StrEnum):
@@ -69,9 +89,10 @@ def _coerce_traffic_class(value: Any) -> TrafficClass:
 
 
 def candidate_slots(traffic_class: TrafficClass) -> range:
+    cfg = get_config()
     if traffic_class is TrafficClass.BACKGROUND:
-        return range(BACKGROUND_START_SLOT, TOTAL_SLOTS)
-    return range(0, TOTAL_SLOTS)
+        return range(cfg.background_start_slot, cfg.total_slots)
+    return range(0, cfg.total_slots)
 
 
 def traffic_class_for_job(
@@ -104,7 +125,9 @@ class ProviderCapacityUnavailable(RuntimeError):
     remote-operation terminal state.
     """
 
-    retry_after_seconds = CAPACITY_RETRY_SECONDS
+    @property
+    def retry_after_seconds(self) -> float:
+        return get_config().capacity_retry_seconds
 
 
 class ProviderControlError(RuntimeError):
@@ -115,7 +138,9 @@ class ProviderControlError(RuntimeError):
     resumable (same deferral semantics as capacity shortage).
     """
 
-    retry_after_seconds = CAPACITY_RETRY_SECONDS
+    @property
+    def retry_after_seconds(self) -> float:
+        return get_config().capacity_retry_seconds
 
 
 #: Errors that mean "delay and reschedule", never "fail".
