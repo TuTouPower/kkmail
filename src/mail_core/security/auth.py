@@ -81,9 +81,6 @@ class AuthPrincipal:
     session_epoch: int | None = None
 
 
-_session_epoch: int = 1
-
-
 def reset_auth_caches() -> None:
     """Test helper: clear cached password hash, API keys, session epoch, and max age."""
     global _password_hash, _api_keys, _session_epoch, _session_epoch_cache, _session_max_age_seconds
