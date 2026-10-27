@@ -195,32 +195,73 @@ export function useScopeSync(enabled: boolean = true) {
       // automatic): the known request — submitted, still being submitted, or
       // recovered from the backend list — is the one already running.
       if (pendingRef.current.has(requestScopeKey)) return
-      const knownId = requestIdsRef.current[requestScopeKey]
-      if (knownId) {
-        const known = queryClient.getQueryData<SyncRequestResponse>(syncRequestQueryKey(knownId))
-        if (!known || isActiveSyncState(known.state)) return
-      } else {
-        const recent = recentSyncRequests(
-          queryClient.getQueryData(syncRequestsQueryKey(requestScopeKey)),
-        )
-        const active = recent.find((r) => isActiveSyncState(r.state))
-        if (active) {
-          rememberRequest(requestScopeKey, active)
-          return
-        }
-      }
-
+      // Claim the scope before any await so a second trigger cannot slip
+      // past the in-flight check while the authoritative re-read below runs.
       pendingRef.current.add(requestScopeKey)
       setPendingByScope((prev) => ({ ...prev, [requestScopeKey]: true }))
-      setSubmitErrorsByScope((prev) => {
-        if (!(requestScopeKey in prev)) return prev
-        const next = { ...prev }
-        delete next[requestScopeKey]
-        return next
-      })
-
-      const clientRequestId = newClientRequestId()
       try {
+        // A176: a manual trigger must not be swallowed by a stale cache
+        // entry (e.g. the cache still shows "running" for a request the
+        // server already finished, so polling has stopped). Re-read the
+        // authoritative state first; the cache checks below then judge on
+        // fresh data. A 404 means the remembered request is gone entirely,
+        // so submission proceeds. Other re-read errors fall back to the
+        // cache, and the backend's client_request_id idempotency is the
+        // final guard against a duplicate.
+        let rememberedGone = false
+        if (trigger === 'manual') {
+          const knownId = requestIdsRef.current[requestScopeKey]
+          try {
+            if (knownId) {
+              await queryClient.fetchQuery({
+                queryKey: syncRequestQueryKey(knownId),
+                queryFn: ({ signal }) => apiRequest<SyncRequestResponse>(
+                  `/api/mail/sync/requests/${encodeURIComponent(knownId)}`,
+                  { signal },
+                ),
+                staleTime: 0,
+              })
+            } else {
+              await queryClient.fetchQuery({
+                queryKey: syncRequestsQueryKey(requestScopeKey),
+                queryFn: ({ signal }) => apiRequest<unknown>(syncRequestsListPath(requestScope), { signal }),
+                staleTime: 0,
+              })
+            }
+          } catch (err) {
+            if (knownId && err && typeof err === 'object' && (err as { status?: number }).status === 404) {
+              rememberedGone = true
+            }
+          }
+        }
+        if (!rememberedGone) {
+          const knownId = requestIdsRef.current[requestScopeKey]
+          if (knownId) {
+            const known = queryClient.getQueryData<SyncRequestResponse>(syncRequestQueryKey(knownId))
+            if (known && isActiveSyncState(known.state)) return
+            // A cache miss blocks automatic triggers (the request may still
+            // be running unseen), but never a manual one (A176).
+            if (!known && trigger !== 'manual') return
+          } else {
+            const recent = recentSyncRequests(
+              queryClient.getQueryData(syncRequestsQueryKey(requestScopeKey)),
+            )
+            const active = recent.find((r) => isActiveSyncState(r.state))
+            if (active) {
+              rememberRequest(requestScopeKey, active)
+              return
+            }
+          }
+        }
+
+        setSubmitErrorsByScope((prev) => {
+          if (!(requestScopeKey in prev)) return prev
+          const next = { ...prev }
+          delete next[requestScopeKey]
+          return next
+        })
+
+        const clientRequestId = newClientRequestId()
         // Unified client: CSRF token, token refresh, 401 handling, timeout
         // and ApiError parsing are shared with every other write.
         const data = await postJson<SyncRequestResponse>('/api/mail/sync/delta', {

@@ -406,6 +406,36 @@ describe('useScopeSync authoritative progress (R07)', () => {
     expect(postCount).toBe(1)
   })
 
+  it('manual sync is not swallowed by a stale cache entry: it re-reads the authoritative state first (A176)', async () => {
+    await render(createElement(Harness))
+    await flush(0)
+    await flush(0)
+    expect(postCount).toBe(1)
+    const id = [...server.keys()][0]
+    expect(hookApi?.isSyncing).toBe(true)
+
+    // The request finished on the server, but the frontend cache still holds
+    // the last polled non-terminal state (no poll has run since). A manual
+    // trigger must re-check authoritatively instead of trusting the cache.
+    server.get(id)!.state = 'complete'
+    await act(async () => { hookApi?.triggerManualSync() })
+    await flush(0)
+    await flush(0)
+    expect(postCount).toBe(2)
+  })
+
+  it('manual sync still blocks when the authoritative re-read says the request is active (A176)', async () => {
+    await render(createElement(Harness))
+    await flush(0)
+    await flush(0)
+    expect(postCount).toBe(1)
+    expect(hookApi?.isSyncing).toBe(true)
+
+    await act(async () => { hookApi?.triggerManualSync() })
+    await flush(0)
+    expect(postCount).toBe(1)
+  })
+
   it('scope switch: the old request completion does not clear the new scope spinner; switching back restores state', async () => {
     useMailStore.setState({ view: { type: 'account', accountId: 'acc-a', email: 'a@x.test' } })
     await render(createElement(Harness))
