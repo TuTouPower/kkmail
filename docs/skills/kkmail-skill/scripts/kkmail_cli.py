@@ -590,7 +590,7 @@ def main() -> None:
             if args.json:
                 print_json(msg)
             elif args.body_only:
-                print(msg.get("body") or msg.get("snippet") or "(Empty body)")
+                print(msg.get("body") or "正文未归档或为空")
             else:
                 print(f"Subject: {msg.get('subject')}")
                 print(f"From:    {msg.get('from_') or msg.get('from_address')}")
@@ -601,7 +601,7 @@ def main() -> None:
                 if attachments:
                     print(f"Attachments ({len(attachments)}): {', '.join(a.get('name', '') for a in attachments)}")
                 print("-" * 60)
-                body_text = msg.get("body") or msg.get("snippet") or "(Empty body)"
+                body_text = msg.get("body") or "正文未归档或为空"
                 print(body_text.strip())
 
         elif args.cmd == "mark":

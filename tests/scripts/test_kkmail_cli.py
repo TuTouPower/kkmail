@@ -453,6 +453,45 @@ def test_add_account_rejects_removed_gmail_provider(monkeypatch, capsys):
     assert "invalid choice" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("extra_argv", [[], ["--body-only"]])
+def test_cli_read_never_falls_back_to_snippet(extra_argv, monkeypatch, capsys):
+    """Detail body is the only body source; empty body must say so, never print snippet (A50)."""
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def get_message(self, _message_id):
+            return {"id": "m1", "subject": "s", "body": None, "snippet": "SNIPPET-TEXT", "attachments": []}
+
+    monkeypatch.setattr(kkmail_cli, "KKMailClient", FakeClient)
+    monkeypatch.setattr(kkmail_cli.sys, "argv", ["kkmail_cli.py", "--api-key", "test-key", "read", "m1", *extra_argv])
+
+    kkmail_cli.main()
+
+    out = capsys.readouterr().out
+    assert "正文未归档或为空" in out
+    assert "SNIPPET-TEXT" not in out
+
+
+def test_cli_read_prints_archived_body(monkeypatch, capsys):
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def get_message(self, _message_id):
+            return {"id": "m1", "subject": "s", "body": "REAL-BODY", "snippet": "SNIPPET-TEXT", "attachments": []}
+
+    monkeypatch.setattr(kkmail_cli, "KKMailClient", FakeClient)
+    monkeypatch.setattr(kkmail_cli.sys, "argv", ["kkmail_cli.py", "--api-key", "test-key", "read", "m1"])
+
+    kkmail_cli.main()
+
+    out = capsys.readouterr().out
+    assert "REAL-BODY" in out
+    assert "SNIPPET-TEXT" not in out
+
+
 def test_client_preserves_password_and_api_key_whitespace():
     """Credential values are opaque; surrounding spaces may be intentional."""
     client = kkmail_cli.KKMailClient(
