@@ -333,6 +333,9 @@ def sync_account_folders(
             or "gmail" in str((account.config or {}).get("imap_host", "")).lower()
         )
         for rf in remote_folders:
+            # A321: virtual folders are identified ONLY by role or the
+            # exact remote_id set. A name-substring heuristic would pause
+            # user labels such as "[Gmail]/重要客户" forever.
             is_gmail_virtual = is_gmail and (
                 rf.role in ("all", "important")
                 or rf.remote_id in (
@@ -342,10 +345,6 @@ def sync_account_folders(
                     "[Gmail]/Important",
                     "[Gmail]/所有邮件",
                     "[Gmail]/重要",
-                )
-                or (
-                    rf.remote_id.startswith("[Gmail]/")
-                    and any(k in rf.name for k in ("所有邮件", "All Mail", "重要", "Important"))
                 )
             )
             default_sync_status = (
