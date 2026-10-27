@@ -30,8 +30,30 @@ export const MICROSOFT_PUBLIC_CLIENT_ID = '9e5f94bc-e8a4-4e73-b8be-63364c29d753'
 export const MICROSOFT_DEFAULT_REDIRECT_URI = 'http://localhost:8080'
 export const MICROSOFT_GRAPH_SCOPES = 'https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read offline_access'
 
+/**
+ * Generate an unguessable OAuth state value. crypto.randomUUID requires a
+ * secure context, but crypto.getRandomValues does not, so the fallback
+ * builds a version-4 UUID from getRandomValues bytes. Math.random must
+ * never be used here: state is a CSRF token for the OAuth flow and a
+ * predictable value defeats it (A152). If Web Crypto is entirely
+ * unavailable we fail loudly instead of degrading to a weak value.
+ */
+function generateOAuthState(): string {
+  const cryptoObj = globalThis.crypto
+  if (cryptoObj?.randomUUID) return cryptoObj.randomUUID()
+  if (cryptoObj?.getRandomValues) {
+    const bytes = new Uint8Array(16)
+    cryptoObj.getRandomValues(bytes)
+    bytes[6] = (bytes[6] & 0x0f) | 0x40
+    bytes[8] = (bytes[8] & 0x3f) | 0x80
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  }
+  throw new Error('Web Crypto 不可用，无法生成安全的 OAuth state')
+}
+
 export function buildMicrosoftAuthorizeUrl(opts: { clientId?: string; redirectUri?: string; email?: string; state?: string } = {}): string {
-  const state = opts.state || (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const state = opts.state || generateOAuthState()
   const params = new URLSearchParams({
     client_id: opts.clientId?.trim() || MICROSOFT_PUBLIC_CLIENT_ID,
     response_type: 'code',

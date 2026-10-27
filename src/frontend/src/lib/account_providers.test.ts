@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   MICROSOFT_DEFAULT_REDIRECT_URI,
   MICROSOFT_GRAPH_SCOPES,
@@ -217,5 +217,39 @@ describe('vendor domain table vs brand domain table cross-consistency (A96)', ()
       if (!brand) continue
       expect(VENDOR_BRANDS[vendor], domain).toContain(brand)
     }
+  })
+})
+
+describe('OAuth state generation fallback (A152)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('prefers crypto.randomUUID when available and never calls getRandomValues', () => {
+    vi.stubGlobal('crypto', {
+      randomUUID: () => '11111111-2222-4333-8444-555555555555',
+      getRandomValues: () => { throw new Error('must not be called') },
+    })
+    const state = new URL(buildMicrosoftAuthorizeUrl()).searchParams.get('state')
+    expect(state).toBe('11111111-2222-4333-8444-555555555555')
+  })
+
+  it('falls back to crypto.getRandomValues UUID bytes in non-secure contexts, never Math.random', () => {
+    const mathRandom = vi.spyOn(Math, 'random').mockImplementation(() => {
+      throw new Error('Math.random must not be used for OAuth state')
+    })
+    vi.stubGlobal('crypto', {
+      randomUUID: undefined,
+      getRandomValues: (arr: Uint8Array) => {
+        for (let i = 0; i < arr.length; i++) arr[i] = i
+        return arr
+      },
+    })
+    const state = new URL(buildMicrosoftAuthorizeUrl()).searchParams.get('state')
+    // Bytes 0..15 with the version (4) and variant (10xx) bits fixed up.
+    expect(state).toBe('00010203-0405-4607-8809-0a0b0c0d0e0f')
+    expect(state).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(mathRandom).not.toHaveBeenCalled()
   })
 })
