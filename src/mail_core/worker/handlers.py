@@ -122,6 +122,27 @@ def _validate_job_payload(job: WorkerJob) -> tuple[dict[str, Any], str | None]:
                 int(poll_round)
             except ValueError:
                 return payload, "poll_round must be an integer"
+
+    if job.job_type == JobType.GC_BLOBS.value:
+        cool_off_hours = payload.get("cool_off_hours")
+        if cool_off_hours not in (None, ""):
+            # A253: the handler converts this with float(); reject
+            # non-numeric / non-finite / negative values here instead of
+            # letting the conversion raise (counted failure) or letting
+            # a negative cool-off make nearly every blob GC-eligible.
+            if isinstance(cool_off_hours, bool) or not isinstance(cool_off_hours, (int, float, str)):
+                return payload, "cool_off_hours must be a finite number >= 0"
+            try:
+                cool_off_value = float(cool_off_hours)
+            except ValueError:
+                return payload, "cool_off_hours must be a finite number >= 0"
+            if not math.isfinite(cool_off_value) or cool_off_value < 0:
+                return payload, "cool_off_hours must be a finite number >= 0"
+
+    if job.job_type == JobType.BACKUP_RUN.value:
+        output_dir = payload.get("output_dir")
+        if output_dir is not None and not isinstance(output_dir, str):
+            return payload, "output_dir must be a string"
     return payload, None
 
 
