@@ -1058,6 +1058,63 @@ def test_validate_restore_destination_matrix(tmp_path):
     assert _validate_restore_destination(valid_empty) == valid_empty.resolve()
 
 
+def _install_fake_psycopg(monkeypatch, row, executed: list[str]):
+    import sys
+    import types
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql):
+            executed.append(sql)
+
+        def fetchone(self):
+            return row
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    fake = types.ModuleType("psycopg")
+    fake.connect = lambda _dsn, **_kw: FakeConn()
+    monkeypatch.setitem(sys.modules, "psycopg", fake)
+
+
+def test_assert_target_database_is_empty_accepts_truly_empty_db(monkeypatch):
+    executed: list[str] = []
+    _install_fake_psycopg(monkeypatch, (0, 0, 0), executed)
+    backup_package._assert_target_database_is_empty(
+        "postgresql://u:p@127.0.0.1:5432/target"
+    )
+    # The check must look beyond tables: views/sequences live in pg_class,
+    # functions in pg_proc and extensions in pg_extension.
+    joined = " ".join(executed)
+    assert "pg_proc" in joined
+    assert "pg_extension" in joined
+
+
+@pytest.mark.parametrize("row", [(1, 0, 0), (0, 1, 0), (0, 0, 1), (3, 2, 1)])
+def test_assert_target_database_is_empty_rejects_any_user_objects(monkeypatch, row):
+    # A database with zero tables but e.g. only a function, a sequence or an
+    # extension installed is not an empty restore target.
+    executed: list[str] = []
+    _install_fake_psycopg(monkeypatch, row, executed)
+    with pytest.raises(RuntimeError, match="non-empty target database"):
+        backup_package._assert_target_database_is_empty(
+            "postgresql://u:p@127.0.0.1:5432/target"
+        )
+
+
 def _rewrite_manifest(package_dir: Path, manifest) -> None:
     import hashlib
 
