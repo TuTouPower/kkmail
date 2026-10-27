@@ -1,4 +1,5 @@
 import type { SVGProps } from 'react'
+import type { BrandType } from '../../store/accountIcon'
 import {
   Icon126,
   Icon139,
@@ -22,7 +23,7 @@ import {
   IconYeah,
 } from './BrandIcons'
 
-export const BRAND_ICON_COMPONENTS: Record<string, (props: SVGProps<SVGSVGElement>) => React.JSX.Element> = {
+export const BRAND_ICON_COMPONENTS: Record<BrandType, (props: SVGProps<SVGSVGElement>) => React.JSX.Element> = {
   '126': Icon126,
   '139': Icon139,
   '163': Icon163,
