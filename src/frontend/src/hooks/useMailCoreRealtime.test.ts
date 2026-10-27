@@ -191,6 +191,51 @@ describe('sync.request_updated handling (R07)', () => {
   })
 })
 
+describe('useMailCoreRealtime recovery signals (A129)', () => {
+  it('routes online/visibility/reconnect recovery through the throttler and coalesces same-tick signals', async () => {
+    let capturedHandler: ((type: string, data: unknown) => void) | undefined
+    let capturedOptions: sseModule.SseStreamOptions | undefined
+    vi.spyOn(sseModule, 'subscribeMailCoreStream').mockImplementation((handler, options) => {
+      capturedHandler = handler as (type: string, data: unknown) => void
+      capturedOptions = options
+      return () => {}
+    })
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    function TestComp() {
+      useMailCoreRealtime(true)
+      return null
+    }
+
+    await render(createElement(TestComp))
+    invalidateSpy.mockClear()
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    // Five recovery signals fire in the same tick: online, visibility,
+    // stream visibility-recovery, stream re-open, and a reconnect event.
+    window.dispatchEvent(new Event('online'))
+    document.dispatchEvent(new Event('visibilitychange'))
+    capturedOptions!.onVisibilityRecovery!()
+    capturedOptions!.onOpen!(new Response())
+    capturedOptions!.onOpen!(new Response())
+    capturedOptions!.onError!(new Error('drop'))
+    capturedHandler!('sync.progress', {})
+
+    // Nothing is invalidated synchronously: recovery goes through the
+    // 150ms throttler instead of bypassing it with a full invalidation.
+    expect(invalidateSpy).not.toHaveBeenCalled()
+
+    await new Promise((resolve) => { setTimeout(resolve, 300) })
+
+    const detailCalls = invalidateSpy.mock.calls.filter(([arg]) =>
+      JSON.stringify((arg as { queryKey?: unknown }).queryKey) === '["detail","mail-core"]')
+    expect(detailCalls).toHaveLength(1)
+
+    cleanup()
+    vi.restoreAllMocks()
+  })
+})
+
 describe('useMailCoreRealtime unauthorized handling', () => {
   it('dispatches UNAUTHORIZED_EVENT on 401/403 status', async () => {
     let capturedOptions: sseModule.SseStreamOptions | undefined

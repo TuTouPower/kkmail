@@ -55,12 +55,6 @@ export function extractMessageIds(data: unknown): string[] {
   return []
 }
 
-function refreshMailCoreCaches() {
-  void invalidateMailListQueries()
-  void invalidateMailStatsQueries()
-  void queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core'] })
-}
-
 export const REALTIME_THROTTLE_MS = 150
 
 export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REALTIME_THROTTLE_MS) {
@@ -191,8 +185,19 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
     invalidateAllDetails = false
   }
 
+  /**
+   * Recovery signals (online / visible / reconnect) must not bypass the
+   * throttler with an unthrottled full invalidation (A129): they are the
+   * same full resync a `client.resync_hint` asks for, so route them
+   * through handleEvent, where same-tick signals coalesce into one flush.
+   */
+  function handleRecovery() {
+    handleEvent('client.resync_hint', null)
+  }
+
   return {
     handleEvent,
+    handleRecovery,
     flush,
     cancel,
   }
@@ -209,11 +214,11 @@ export function useMailCoreRealtime(enabled: boolean): void {
     const throttler = createThrottledInvalidator(queryClient)
 
     const onOnline = () => {
-      refreshMailCoreCaches()
+      throttler.handleRecovery()
     }
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        refreshMailCoreCaches()
+        throttler.handleRecovery()
       }
     }
 
@@ -224,14 +229,14 @@ export function useMailCoreRealtime(enabled: boolean): void {
       (type, data) => {
         if (isReconnecting) {
           isReconnecting = false
-          refreshMailCoreCaches()
+          throttler.handleRecovery()
         }
         throttler.handleEvent(type, data)
       },
       {
         onOpen: () => {
           if (hasConnectedOnce || isReconnecting) {
-            refreshMailCoreCaches()
+            throttler.handleRecovery()
           }
           hasConnectedOnce = true
           isReconnecting = false
@@ -244,7 +249,7 @@ export function useMailCoreRealtime(enabled: boolean): void {
           window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
         },
         onVisibilityRecovery: () => {
-          refreshMailCoreCaches()
+          throttler.handleRecovery()
         },
       },
     )
