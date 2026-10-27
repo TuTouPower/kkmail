@@ -15,7 +15,7 @@ from .attempts import (
     current_attempt_record,
     require_exact_terminal,
 )
-from .documents import parse_front_matter, validate_task_documents, write_front_matter
+from .documents import parse_front_matter, parse_tid_list, validate_task_documents, write_front_matter
 from .git_ops import (
     _get_head,
     _get_head_short,
@@ -149,8 +149,12 @@ def cmd_start(args):
         sys.exit("start=FAIL：" + "；".join(problems))
 
     effective = discover_effective_tasks()
-    depends_on = [t for t in str(ref_fm.get("depends_on", "")).split(",") if t.strip()]
-    conflicts_with = [t for t in str(ref_fm.get("conflicts_with", "")).split(",") if t.strip()]
+    # 与 scheduling/store 同源走 parse_tid_list（A209）：strip 条目、校验
+    # tid 格式、去重排序；裸 split(",") 会把手写带空格的条目当缺失 task。
+    depends_on = parse_tid_list(ref_fm.get("depends_on", ""), field="depends_on")
+    conflicts_with = parse_tid_list(
+        ref_fm.get("conflicts_with", ""), field="conflicts_with"
+    )
 
     # 依赖硬拒（完成口径：done 即满足，不要求已合并主干；dropped 已归档不产出代码，
     # 引用 dropped 的边非法，start 对 dropped 依赖直接拒）。

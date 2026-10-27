@@ -1978,3 +1978,39 @@ def test_dependency_implementations_error_keeps_json_diagnostic(monkeypatch):
     message = str(excinfo.value)
     assert "缺依赖实现的可验证 SHA" in message
     assert "Expecting property name" in message or "JSON" in message or "json" in message.lower()
+
+
+# --------------------------------------------------------------------------
+# A209：cmd_start 用 parse_tid_list 解析 depends_on/conflicts_with
+# --------------------------------------------------------------------------
+
+def _set_fm_edges(repo, tid, slug, **edges):
+    path = repo / "docs/tasks" / f"{tid}_{slug}" / "task.md"
+    fm, body = parse_front_matter(path)
+    fm.update(edges)
+    write_front_matter(path, fm, body)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", f"set edges for {tid}")
+
+
+def test_start_parses_spaced_depends_on_list(git_repo):
+    """手写带空格的 `t001, t002` 应被正常解析为两个依赖（旧 split 口径把
+    ' t002' 当缺失 task 误拒）。"""
+    _set_fm_edges(git_repo, "t003", "gamma", depends_on="t001, t002")
+    with pytest.raises(SystemExit) as excinfo:
+        _start(git_repo, "t003")
+    message = str(excinfo.value)
+    assert "依赖未满足" in message
+    assert "t001(backlog)" in message
+    assert "t002(backlog)" in message
+    assert "缺失" not in message
+    assert not _worktree_path(git_repo, "t003").exists()
+
+
+def test_start_rejects_invalid_tid_in_depends_on(git_repo):
+    _set_fm_edges(git_repo, "t003", "gamma", depends_on="bogus")
+    with pytest.raises(ctx.TaskDataError) as excinfo:
+        _start(git_repo, "t003")
+    assert "depends_on" in str(excinfo.value)
+    assert "非法 tid" in str(excinfo.value)
+    assert not _worktree_path(git_repo, "t003").exists()
