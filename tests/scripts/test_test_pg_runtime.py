@@ -107,6 +107,53 @@ def test_child_does_not_signal_group_after_process_already_exited(monkeypatch):
     assert killed == []
 
 
+def _stub_run_pipeline(monkeypatch, tmp_path, *, test_code, cleanup_side_effect=None):
+    """把 run() 的外部依赖全部替身化，只保留 allocate/migrate/tests/cleanup 编排。"""
+    directory = tmp_path / "run"
+    record = {"port": 15433, "database": "kkmail_test_" + "a" * 32}
+    monkeypatch.setenv("KKMAIL_TEST_PG_PASSWORD", "pw")
+    monkeypatch.setattr(runtime, "instance", lambda: ("cid", 15433))
+    monkeypatch.setattr(runtime, "create_run", lambda: (directory, record))
+    monkeypatch.setattr(runtime, "guard_database", lambda: None)
+    calls = {"n": 0}
+
+    def fake_child(command, env):
+        calls["n"] += 1
+        return 0 if calls["n"] == 1 else test_code  # migrate 成功，tests 返回 test_code
+
+    monkeypatch.setattr(runtime, "child", fake_child)
+    if cleanup_side_effect is not None:
+        monkeypatch.setattr(runtime, "cleanup", cleanup_side_effect)
+    else:
+        monkeypatch.setattr(runtime, "cleanup", lambda d: None)
+    return directory
+
+
+def test_run_preserves_test_failure_code_when_cleanup_raises(monkeypatch, tmp_path):
+    def bad_cleanup(directory):
+        raise RuntimeError("cleanup boom")
+
+    _stub_run_pipeline(monkeypatch, tmp_path, test_code=7, cleanup_side_effect=bad_cleanup)
+    with pytest.raises(runtime.TestFailure) as excinfo:
+        runtime.run([])
+    # finally 中 cleanup 抛错不得掩盖测试失败退出码
+    assert excinfo.value.code == 7
+
+
+def test_run_surfaces_cleanup_error_when_tests_passed(monkeypatch, tmp_path):
+    def bad_cleanup(directory):
+        raise RuntimeError("cleanup boom")
+
+    _stub_run_pipeline(monkeypatch, tmp_path, test_code=0, cleanup_side_effect=bad_cleanup)
+    with pytest.raises(RuntimeError, match="cleanup boom"):
+        runtime.run([])
+
+
+def test_run_returns_zero_when_all_stages_pass(monkeypatch, tmp_path):
+    _stub_run_pipeline(monkeypatch, tmp_path, test_code=0)
+    assert runtime.run([]) == 0
+
+
 def test_required_pg_skip_is_failure_report_not_internal_error(tmp_path):
     probe = tmp_path / "test_skip_probe.py"
     probe.write_text("import pytest\ndef test_probe():\n    pytest.skip('PG required')\n")

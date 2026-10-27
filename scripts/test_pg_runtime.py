@@ -318,6 +318,7 @@ def run_environment(directory):
 
 def run(args):
     directory = None
+    outcome_error = None
     try:
         with stage("allocate"):
             # Gate policy (T5): a default run must have the test
@@ -356,10 +357,20 @@ def run(args):
             if code:
                 raise TestFailure(code)
         return 0
+    except BaseException as exc:
+        # 先记下在途结果，finally 的 cleanup 失败不得将其掩盖（A134）
+        outcome_error = exc
+        raise
     finally:
         if directory:
             with stage("cleanup"):
-                cleanup(directory)
+                try:
+                    cleanup(directory)
+                except Exception:
+                    if outcome_error is not None:
+                        LOG.exception("cleanup failed; preserving the original run outcome")
+                    else:
+                        raise
 
 
 class TestFailure(Exception):
