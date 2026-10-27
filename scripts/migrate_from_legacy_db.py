@@ -11,11 +11,27 @@ from pathlib import Path
 
 def legacy_account_connection(row) -> tuple[str, dict]:
     """Reject unsupported/missing IMAP configuration before any import writes."""
-    from mail_core.accounts.connection import reject_microsoft_imap
+    from mail_core.accounts.connection import MICROSOFT_DOMAINS, reject_microsoft_imap
+
     email = row["email"].strip().lower()
-    auth_type = (row["authorization_type"] or "").lower()
-    if auth_type == "graph" or (row["refresh_token"] and "outlook" in email):
+    auth_type = (row["authorization_type"] or "").strip().lower()
+    if auth_type == "graph":
         return "graph", {}
+    if auth_type not in ("", "imap"):
+        raise ValueError(
+            f"Unknown legacy authorization_type {auth_type!r} for legacy account record "
+            f"{row['id']}; set authorization_type to 'graph' or 'imap' explicitly "
+            "before migrating"
+        )
+    if auth_type == "" and row["refresh_token"]:
+        domain = email.rsplit("@", 1)[-1].rstrip(".") if "@" in email else ""
+        if domain in MICROSOFT_DOMAINS:
+            return "graph", {}
+        raise ValueError(
+            f"Legacy account record {row['id']} has a refresh_token but email domain "
+            f"{domain!r} is not a known Microsoft domain and authorization_type is not "
+            "'graph'; set authorization_type explicitly so the operator decides the provider"
+        )
     config = {"imap_host": row["imap_host"] or "", "imap_port": row["imap_port"] or 993, "use_ssl": True}
     reject_microsoft_imap(email, config)
     if not config["imap_host"]:
