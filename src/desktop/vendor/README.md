@@ -1,6 +1,6 @@
-# PostgreSQL vendor binaries (desktop)
+# 桌面端 PostgreSQL 二进制依赖 (Vendor Binaries)
 
-Place official PostgreSQL **16** binaries under `pgsql/bin/`:
+将官方 PostgreSQL **16** 二进制执行文件放置在 `pgsql/bin/` 目录下：
 
 ```
 desktop/vendor/pgsql/bin/initdb
@@ -8,26 +8,22 @@ desktop/vendor/pgsql/bin/pg_ctl
 desktop/vendor/pgsql/bin/postgres
 ```
 
-**Do not commit the binary tree** (see `.gitignore`).
+**严禁将二进制文件提交至 Git 仓库**（见 `.gitignore`）。
 
-## Linux (dev / CI)
+## Linux (开发 / CI 环境)
 
 ```bash
 ./scripts/fetch-pg-binaries.sh
-# uses theseus-rs portable builds; override with PG_VENDOR_URL=...
+# 使用 theseus-rs 便携打包版；可通过 PG_VENDOR_URL=... 覆盖下载源
 ```
 
-The default PostgreSQL 16.6.0 target archives use SHA-256 pins stored in the fetch script. Unpinned mirrors or versions are refused by default; a same-origin checksum fallback is only available with the explicit `--allow-unpinned` opt-in, and providing `PG_VENDOR_SHA256` to pin a custom archive explicitly is preferred.
+默认的 PostgreSQL 16.6.0 目标归档使用脚本内锁定的 SHA-256 校验和。未锁定的镜像源或版本默认拒绝下载；仅在显式传入 `--allow-unpinned` 时才允许同源校验和回退，推荐显式传入 `PG_VENDOR_SHA256` 锁定自定义归档。
 
-The desktop bundle version (16.6.0) is intentionally independent of the server/test image (postgres:16.15): desktop binaries are prebuilt portable tarballs from theseus-rs, while the server runs the official Docker image. Both stay on the PostgreSQL 16 major line; patch-level drift is expected, and desktop bumps are deliberate pin-refresh changes rather than automatic tracking of server patch releases (see the header of `scripts/fetch-pg-binaries.sh`).
+桌面端打包版本（16.6.0）与服务端/测试镜像（postgres:16.15）版本故意保持独立（**intentionally independent**）：桌面二进制文件来源于 theseus-rs 预编译的便携压缩包，而服务端运行官方 Docker 镜像。两者均保持在 PostgreSQL 16 主版本线上；小版本差异属于预期行为，桌面端版本的升级是经过审慎锁定刷新的人工决策，而非自动跟进服务端补丁（详见 `scripts/fetch-pg-binaries.sh` 脚本说明）。
 
-`PostgresManager` resolves: `KKMAIL_PG_BIN` → `desktop/vendor/pgsql/bin` → `PATH`.
+`PostgresManager` 解析优先级：`KKMAIL_PG_BIN` 环境变量 → `desktop/vendor/pgsql/bin` 本地目录 → 系统 `PATH`。
 
-## macOS / Windows (download-at-build)
+## macOS / Windows (构建期下载)
 
-The fetch script prints instructions and exits 0 for `--os macos|windows`.
-Packaging / CI for those platforms should download the matching official or
-EnterpriseDB / Postgres.app binaries at **build time** and unpack into
-`desktop/vendor/pgsql/bin/` (or set `KKMAIL_PG_BIN`) before `electron-builder`.
-
-Do not assume a single cross-platform tarball URL.
+获取脚本对 `--os macos|windows` 会输出指导说明并以状态码 0 退出。
+在这些平台上进行打包或 CI 时，应在**构建时**下载匹配的官方或 EnterpriseDB / Postgres.app 二进制包并解压至对应目录。

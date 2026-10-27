@@ -46,5 +46,5 @@ python3 -m mail_core --data-dir ./.kkmail-data
 |**安全配置指南**|[docs/guides/security.md](docs/guides/security.md)|会话吊销、反向代理受信与请求限速说明|
 |**版本发布说明**|[docs/guides/release.md](docs/guides/release.md)|标签发布与产物验证指南|
 |**接口数据契约**|[schemas/openapi.json](schemas/openapi.json)|统一 OpenAPI 3.1 机器可读接口契约|
-|**设计系统规范**|[assets/DESIGN.md](assets/DESIGN.md)|视觉 Design Tokens 与交互规范|
+|**设计系统规范**|[DESIGN.md](DESIGN.md)|视觉 Design Tokens 与交互规范|
 |**编码代理指南**|[AGENTS.md](AGENTS.md)|模板分区协议与规范开发原则|

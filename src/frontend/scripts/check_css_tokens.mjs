@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const tokensCssPath = resolve(root, 'src/design-system/tokens.css')
-const designDocPath = resolve(root, '../../assets/DESIGN.md')
+const designDocPath = resolve(root, '../../DESIGN.md')
 const srcDir = resolve(root, 'src')
 
 const TOKEN_DECL_REGEX = /(--[a-zA-Z0-9_-]+)\s*:/g
@@ -150,7 +150,7 @@ export function validateDesignDarkTokens(designMarkdown, tokensCss) {
   for (const [designColor, cssTokens] of Object.entries(DESIGN_DARK_TOKEN_MAP)) {
     const designValue = designColors.get(designColor)
     if (!designValue) {
-      errors.push({ designColor, message: 'missing color in assets/DESIGN.md' })
+      errors.push({ designColor, message: 'missing color in DESIGN.md' })
       continue
     }
 

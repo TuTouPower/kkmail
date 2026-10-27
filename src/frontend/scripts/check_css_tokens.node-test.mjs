@@ -13,7 +13,7 @@ import {
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url))
 const root = resolve(scriptsDir, '..')
-const designMarkdown = readFileSync(resolve(root, '../../assets/DESIGN.md'), 'utf8')
+const designMarkdown = readFileSync(resolve(root, '../../DESIGN.md'), 'utf8')
 const tokensCss = readFileSync(resolve(root, 'src/design-system/tokens.css'), 'utf8')
 
 test('extracts declared CSS variables from token CSS', () => {

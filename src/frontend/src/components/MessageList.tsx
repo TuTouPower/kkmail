@@ -602,7 +602,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
               setIsComposing(false)
               setSearchInput(e.currentTarget.value)
             }}
-            placeholder="搜索邮件（主题 / 发件人 / 正文）"
+            placeholder="搜索邮件（主题 / 发件人 / 收件人 / 正文）"
             aria-label="搜索邮件"
           />
           {searchInput && (
