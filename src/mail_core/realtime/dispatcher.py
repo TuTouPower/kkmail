@@ -60,10 +60,24 @@ class OutboxDispatcher:
             self._subs[key].append((loop, q))
         return q
 
+    def _set_subs_locked(self, key: str, entries: list) -> None:
+        """Store a subscription list under ``key``, deleting empty keys.
+
+        Keys are client-controlled account ids; keeping an emptied key
+        forever would let the table grow without bound over the life of
+        the process (A57). Callers must hold ``_lock``.
+        """
+        if entries:
+            self._subs[key] = entries
+        else:
+            self._subs.pop(key, None)
+
     def unsubscribe(self, q: asyncio.Queue, *, account_id: str | None = None) -> None:
         key = account_id or "*"
         with self._lock:
-            self._subs[key] = [(lp, qq) for (lp, qq) in self._subs.get(key, []) if qq is not q]
+            self._set_subs_locked(
+                key, [(lp, qq) for (lp, qq) in self._subs.get(key, []) if qq is not q]
+            )
 
     def _isolate(self, q: asyncio.Queue, *, signal_stream: bool = True) -> None:
         """Isolate and close a slow consumer so it reconnects and replays."""
@@ -73,7 +87,9 @@ class OutboxDispatcher:
                 return
             setattr(q, "_mail_core_isolated", True)
             for key in list(self._subs.keys()):
-                self._subs[key] = [(lp, qq) for (lp, qq) in self._subs[key] if qq is not q]
+                self._set_subs_locked(
+                    key, [(lp, qq) for (lp, qq) in self._subs[key] if qq is not q]
+                )
         if not signal_stream:
             return
         try:
@@ -299,10 +315,15 @@ class OutboxDispatcher:
                         seen.add(queue_id)
                         target_ids.add(queue_id)
                         targets.append((loop, queue))
-            for key, subscriptions in self._subs.items():
-                self._subs[key] = [
-                    (loop, queue) for loop, queue in subscriptions if id(queue) not in target_ids
-                ]
+            for key, subscriptions in list(self._subs.items()):
+                self._set_subs_locked(
+                    key,
+                    [
+                        (loop, queue)
+                        for loop, queue in subscriptions
+                        if id(queue) not in target_ids
+                    ],
+                )
 
         try:
             running_loop = asyncio.get_running_loop()
