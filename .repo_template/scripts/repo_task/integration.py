@@ -96,6 +96,7 @@ def _dependency_implementations(dep: str) -> list[str]:
     if refs:
         return refs
     main = default_branch()
+    last_error: Exception | None = None
     try:
         task, fm, _ = load_task_at_ref(dep, main)
         path = f"{task['dir']}/handoff.json"
@@ -114,11 +115,18 @@ def _dependency_implementations(dep: str) -> list[str]:
             if parent.returncode == 0 and parent.stdout.strip() == base_sha:
                 if json.loads(git_text_at_ref(sha, path)) == handoff:
                     return [sha]
-    except (ctx.TaskDataError, ValueError, KeyError, TypeError, AttributeError):
-        pass
+    except (ctx.TaskDataError, ValueError, KeyError, TypeError, AttributeError) as error:
+        # 仍 fail-closed 不放行，但保留根因供排障（A196），不再裸 pass 吞掉。
+        last_error = error
+    detail = (
+        f"；最后解析错误：{type(last_error).__name__}: {last_error}"
+        if last_error is not None
+        else ""
+    )
     raise ctx.TaskDataError(
         f"start=FAIL：{dep} 缺依赖实现的可验证 SHA；"
         "须恢复已归档 handoff/实现提交证据，不能仅凭 done 放行"
+        f"{detail}"
     )
 
 

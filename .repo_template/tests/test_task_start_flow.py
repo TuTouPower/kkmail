@@ -1938,3 +1938,43 @@ def test_effective_status_cli_output(git_repo, capsys):
     out = capsys.readouterr().out
     assert "worktree" in out
     assert str(_worktree_path(git_repo, "t001")) in out
+
+
+# --------------------------------------------------------------------------
+# A196：_dependency_implementations 保留解析失败诊断（仍 fail-closed）
+# --------------------------------------------------------------------------
+
+def test_dependency_implementations_error_keeps_parse_diagnostic(monkeypatch):
+    monkeypatch.setattr(integration, "_task_branch_names", lambda dep: [])
+    monkeypatch.setattr(integration, "default_branch", lambda: "main")
+
+    def _boom(tid, ref):
+        raise ctx.TaskDataError("handoff 损坏 markerXYZ")
+
+    monkeypatch.setattr(integration, "load_task_at_ref", _boom)
+    with pytest.raises(ctx.TaskDataError) as excinfo:
+        integration._dependency_implementations("t002")
+    message = str(excinfo.value)
+    assert "缺依赖实现的可验证 SHA" in message  # 仍 fail-closed 不放行
+    assert "markerXYZ" in message               # 根因诊断不丢失
+
+
+def test_dependency_implementations_error_keeps_json_diagnostic(monkeypatch):
+    monkeypatch.setattr(integration, "_task_branch_names", lambda dep: [])
+    monkeypatch.setattr(integration, "default_branch", lambda: "main")
+    monkeypatch.setattr(
+        integration, "load_task_at_ref",
+        lambda tid, ref: (
+            {"dir": "docs/tasks/t002_beta", "tid": tid},
+            {"status": "done"},
+            "",
+        ),
+    )
+    monkeypatch.setattr(
+        integration, "git_text_at_ref", lambda ref, path: "{not json"
+    )
+    with pytest.raises(ctx.TaskDataError) as excinfo:
+        integration._dependency_implementations("t002")
+    message = str(excinfo.value)
+    assert "缺依赖实现的可验证 SHA" in message
+    assert "Expecting property name" in message or "JSON" in message or "json" in message.lower()
