@@ -5,6 +5,15 @@ MICROSOFT_DOMAINS = frozenset(('outlook.com', 'outlook.cn', 'hotmail.com', 'live
 MICROSOFT_IMAP_HOSTS = frozenset(('outlook.office365.com', 'imap-mail.outlook.com', 'imap.outlook.com', 'imap.hotmail.com', 'outlook.office.com'))
 PROFILES = {'other': {'imap'}, 'google': {'imap'}, 'microsoft': {'graph'}, 'qq': {'imap'}, 'netease_163': {'imap'}, 'netease_126': {'imap'}, 'netease_yeah': {'imap'}, 'icloud': {'imap'}, 'yahoo': {'imap'}, 'zoho': {'imap'}}
 CREDENTIAL_FIELDS = {'imap': {'password', 'secret'}, 'graph': {'client_id', 'client_secret', 'refresh_token', 'token_uri', 'scope'}}
+# A165: providers validate_connection knows how to validate. Internal test
+# providers (memory/stub, see providers.factory) are explicitly allowed and
+# carry no credential contract; anything else is rejected up front instead
+# of falling through every check.
+SUPPORTED_PROVIDERS = frozenset({'imap', 'graph'})
+INTERNAL_TEST_PROVIDERS = frozenset({'memory', 'stub'})
+# Runtime cache keys the OAuth layer itself writes into stored credentials;
+# they are tolerated in a credential set but are not provider input fields.
+RUNTIME_CACHE_KEYS = frozenset({'access_token', 'expires_at'})
 
 
 def reject_microsoft_imap(email: str, config: dict) -> None:
@@ -47,6 +56,8 @@ def merge_credentials(
 def validate_connection(email: str, provider: str, config: dict, credentials: dict | None, *, require_credentials: bool = True) -> None:
     if not isinstance(config, dict):
         raise ValueError('config: must be an object')
+    if not isinstance(provider, str) or provider not in SUPPORTED_PROVIDERS | INTERNAL_TEST_PROVIDERS:
+        raise ValueError(f'provider: unsupported provider {provider!r}')
     profile = config.get('provider_profile')
     if profile is not None and (not isinstance(profile, str) or profile not in PROFILES or provider not in PROFILES[profile]):
         raise ValueError('config.provider_profile: incompatible provider')
@@ -81,16 +92,23 @@ def validate_connection(email: str, provider: str, config: dict, credentials: di
     values = credentials or {}
     if not isinstance(values, dict):
         raise ValueError('credentials: must be an object')
+    # A165: reject credential keys outside this provider's own field set
+    # (e.g. an imap set carrying graph's token_uri) instead of silently
+    # ignoring them. None-valued keys count as absent, as below.
+    allowed_keys = CREDENTIAL_FIELDS[provider] | RUNTIME_CACHE_KEYS
+    for key, val in values.items():
+        if val is None:
+            continue
+        if key not in allowed_keys:
+            raise ValueError(f'credentials.{key}: unsupported field')
     for key, val in values.items():
         if val is None:
             continue
         if key == 'expires_at':
             if isinstance(val, bool) or not isinstance(val, (int, float, str)):
                 raise ValueError('credentials.expires_at: must be a number')
-        elif key in CREDENTIAL_FIELDS.get(provider, set()) and not isinstance(val, str):
+        elif not isinstance(val, str):
             raise ValueError(f'credentials.{key}: must be a string')
-    if provider == "imap" and "refresh_token" in values:
-        raise ValueError("credentials.refresh_token: unsupported field")
     required = ['password'] if provider == 'imap' else ['client_id', 'refresh_token']
     if provider == 'graph' and client_type == 'confidential':
         # p056 public-client mode: the built-in Microsoft public client
