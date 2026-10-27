@@ -193,6 +193,9 @@ def write_front_matter_many(files: list[tuple[Path, dict, str]]) -> None:
 
     单个 write_front_matter 已原子，但多个文件顺序写中途崩溃仍可能只更新一部分；
     两阶段把 conflict 关系清理等批量写的「部分更新」窗口缩到 replace 循环（RT-008）。
+    replace 前先把各目标的原字节备份在内存中；replace 阶段中途失败时按备份
+    逐个写回已替换文件（写回本身失败则在异常信息中点名需人工核对的文件），
+    避免只更新一部分（A225）。进程崩溃（非异常）不在此保证内。
     """
     staged: list[tuple[Path, Path, int]] = []
     default_mode = _default_file_mode()
@@ -218,12 +221,38 @@ def write_front_matter_many(files: list[tuple[Path, dict, str]]) -> None:
                 temporary_file.write(dump_front_matter(fm) + "\n" + body)
                 temporary_file.flush()
                 os.fsync(temporary_file.fileno())
-        for path, temporary, mode in staged:
-            try:
-                os.chmod(temporary, mode)
-            except OSError:
-                pass
-            os.replace(temporary, path)
+        # replace 前备份各目标原字节（不存在记 None），供中途失败时回滚（A225）
+        backups: dict[Path, bytes | None] = {
+            path: (path.read_bytes() if path.exists() else None)
+            for path, _, _ in staged
+        }
+        replaced: list[Path] = []
+        try:
+            for path, temporary, mode in staged:
+                try:
+                    os.chmod(temporary, mode)
+                except OSError:
+                    pass
+                os.replace(temporary, path)
+                replaced.append(path)
+                _fsync_dir(path.parent)
+        except BaseException as replace_error:
+            unrestored = []
+            for done_path in replaced:
+                original = backups[done_path]
+                try:
+                    if original is None:
+                        done_path.unlink(missing_ok=True)
+                    else:
+                        atomic_write_text(done_path, original.decode("utf-8"))
+                except (OSError, UnicodeDecodeError):
+                    unrestored.append(str(done_path))
+            if unrestored:
+                raise ctx.TaskDataError(
+                    "write_front_matter_many 在 replace 阶段失败且以下文件回滚失败，"
+                    f"需人工核对：{', '.join(unrestored)}（原始错误：{replace_error}）"
+                ) from replace_error
+            raise
     except BaseException:
         for _, temporary, _ in staged:
             try:

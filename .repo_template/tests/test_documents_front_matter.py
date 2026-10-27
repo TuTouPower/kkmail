@@ -109,6 +109,55 @@ def test_atomic_write_docstring_no_longer_promises_power_loss_safety():
     assert "半写" in doc
 
 
+def test_write_front_matter_many_rolls_back_replaced_files_on_mid_failure(
+    tmp_path, monkeypatch
+):
+    import os
+
+    import repo_task.documents as documents
+
+    first = tmp_path / "a.md"
+    second = tmp_path / "b.md"
+    documents.write_front_matter(first, {"tid": "t001", "title": "A"}, "body-a")
+    documents.write_front_matter(second, {"tid": "t002", "title": "B"}, "body-b")
+    original_first = first.read_bytes()
+    original_second = second.read_bytes()
+
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def failing_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("simulated replace failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(documents.os, "replace", failing_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        documents.write_front_matter_many([
+            (first, {"tid": "t001", "title": "A2"}, "body-a2"),
+            (second, {"tid": "t002", "title": "B2"}, "body-b2"),
+        ])
+    # replace 阶段中途失败：已替换的第一个文件须按备份写回，未替换的保持原样
+    assert first.read_bytes() == original_first
+    assert second.read_bytes() == original_second
+    # 不留 .tmp / 备份残留
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []
+
+
+def test_write_front_matter_many_success_writes_all(tmp_path):
+    import repo_task.documents as documents
+
+    first = tmp_path / "a.md"
+    second = tmp_path / "b.md"
+    documents.write_front_matter_many([
+        (first, {"tid": "t001", "title": "A"}, "body-a"),
+        (second, {"tid": "t002", "title": "B"}, "body-b"),
+    ])
+    assert "body-a" in first.read_text(encoding="utf-8")
+    assert "body-b" in second.read_text(encoding="utf-8")
+
+
 def test_add_edit_entry_rejects_newlines_in_title_and_note():
     from repo_task import lifecycle
 
