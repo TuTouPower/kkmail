@@ -194,7 +194,16 @@ def resolve_sync_targets(
         if folder is None or folder.account_id not in acc_ids:
             raise LookupError("folder not found in account scope")
         if folder.sync_status == SyncStatus.PAUSED.value:
-            raise ValueError("folder_not_selectable")
+            # Non-selectable folders are excluded from synchronization
+            # everywhere else in the system: role resolution below filters
+            # them out, and the execution layer completes their jobs as
+            # "skipped" (folder_not_selectable). They are paused by design
+            # (Gmail virtual labels, \Noselect structure nodes, remotely
+            # vanished folders) yet remain navigable views, so an explicit
+            # id pointing at one resolves to an empty target set — the
+            # request completes with zero targets — instead of a 422 the
+            # UI's routine navigation sync cannot act on (p060).
+            return []
         key = f"account:{folder.account_id}:folder:{folder_id}:role:{folder.role or 'all'}"
         return [
             TargetCandidate(
