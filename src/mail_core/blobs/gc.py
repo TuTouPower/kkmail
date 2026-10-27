@@ -35,7 +35,11 @@ class GcResult:
 
 
 def mark_unreferenced_blobs(session: Session, *, now: datetime | None = None) -> int:
-    """Reconcile ref_count from links; stamp/clear ``gc_eligible_at``."""
+    """Reconcile ref_count from links; stamp/clear ``gc_eligible_at``.
+
+    Pages are committed one at a time (short transactions) and progress is
+    logged per page; ``marked`` counts each changed blob once.
+    """
     now = now or datetime.now(timezone.utc)
     marked = 0
     last_id = None
@@ -64,22 +68,38 @@ def mark_unreferenced_blobs(session: Session, *, now: datetime | None = None) ->
             ).all()
         )
 
+        page_marked = 0
         for blob in blobs:
             n = int(link_counts.get(blob.id, 0)) + int(att_counts.get(blob.id, 0))
             prev = int(blob.ref_count)
+            # A blob counts once in ``marked`` no matter how many of its
+            # fields changed (ref_count correction + gc_eligible_at stamp
+            # on the same row used to count twice).
+            changed = False
             if prev != n:
                 blob.ref_count = n
-                marked += 1
+                changed = True
             if n <= 0:
                 if blob.gc_eligible_at is None:
                     blob.gc_eligible_at = now
-                    marked += 1
+                    changed = True
             elif blob.gc_eligible_at is not None:
                 blob.gc_eligible_at = None
-                marked += 1
+                changed = True
+            if changed:
+                page_marked += 1
 
+        marked += page_marked
         last_id = blobs[-1].id
-        session.flush()
+        # Short per-page transactions: the reconcile scan must not hold one
+        # transaction open across the whole message_blobs table.
+        session.commit()
+        log.info(
+            "gc mark_unreferenced page done: last_id=%s page_marked=%d marked_total=%d",
+            last_id,
+            page_marked,
+            marked,
+        )
     return marked
 
 

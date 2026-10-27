@@ -179,7 +179,10 @@ def test_mark_unreferenced_blobs_reconciles_in_bounded_id_pages(monkeypatch):
             2 in (params.values() if isinstance(params, dict) else params)
             for _statement, params in select_statements
         )
-        assert marked == 8
+        # A139: each changed blob counts once in ``marked`` — all five blobs
+        # had ref_count corrected 3 -> 0; the three newly stamped
+        # gc_eligible_at values belong to already-counted blobs.
+        assert marked == 5
         assert all(blob.ref_count == 0 for blob in blobs)
         assert [blob.gc_eligible_at for blob in blobs] == [
             now,
