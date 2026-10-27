@@ -69,7 +69,16 @@ def sync_message_body(message_id: UUID) -> SyncBodyResult | None:
         if state is None:
             raise MessageArchiveStateUnavailable("message archive state is unavailable")
 
-        state_value = ArchiveState(state.state)
+        try:
+            state_value = ArchiveState(state.state)
+        except ValueError as exc:
+            # A286: unknown state strings in the DB (historical dirty
+            # data / values written by a newer version) must surface as
+            # the domain error the API maps to 409, not a bare ValueError
+            # that becomes a 500. Carry the raw value for diagnosis.
+            raise MessageArchiveStateUnavailable(
+                f"message archive state is unavailable: unknown state {state.state!r}"
+            ) from exc
         # Idempotent: if already complete, report complete without error
         if state_value == ArchiveState.ARCHIVE_COMPLETE:
             return SyncBodyResult(message_id=message_id, job_id=None, status="complete")
