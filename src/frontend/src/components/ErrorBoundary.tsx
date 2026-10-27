@@ -2,6 +2,22 @@ import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { exportDiagnosticsAsText, logDiagnostic } from '../lib/diagnostics'
 
+/**
+ * A354: diagnostic stacks are copied out of the app for troubleshooting,
+ * so strip directory structure (home dirs, project layout, drive paths,
+ * dev-server URLs) down to the bare file name before a stack is stored.
+ * Line/column suffixes stay attached to the file name segment.
+ */
+export function trimStackPaths(stack: string): string {
+  const keepFileName = (token: string): string => {
+    const parts = token.split(/[\\/]/).filter(Boolean)
+    return parts.length ? parts[parts.length - 1] : token
+  }
+  return stack
+    .replace(/https?:\/\/[^\s)]+/g, keepFileName)
+    .replace(/(?:[A-Za-z]:[\\/]|\/)[^\s()]+/g, keepFileName)
+}
+
 type Props = {
   children: ReactNode
   inline?: boolean
@@ -38,7 +54,7 @@ export default class ErrorBoundary extends Component<Props, State> {
       'ui',
       error.message || 'React 渲染异常',
       undefined,
-      `${error.stack || ''}\n${info.componentStack || ''}`,
+      trimStackPaths(`${error.stack || ''}\n${info.componentStack || ''}`),
     )
   }
 
@@ -165,6 +181,9 @@ export default class ErrorBoundary extends Component<Props, State> {
                   : '复制诊断日志'}
             </button>
           </div>
+          <p style={{ color: 'var(--muted)', margin: '12px 0 0', fontSize: 12 }}>
+            诊断日志包含错误堆栈等技术细节，请仅发送给可信的排查人员。
+          </p>
         </div>
       </div>
     )

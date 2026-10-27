@@ -3,6 +3,15 @@ import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ErrorBoundary from './ErrorBoundary'
 import { cleanup, click, render, waitFor } from '../test/render'
+import { clearDiagnosticLogs, getDiagnosticLogs } from '../lib/diagnostics'
+
+function PathStackBuggy(): never {
+  const err = new Error('crash with path')
+  err.stack = 'Error: crash with path\n'
+    + '    at Buggy (/home/alice/private-project/src/components/Buggy.tsx:12:34)\n'
+    + '    at render (C:\\Users\\alice\\project\\src\\main.tsx:3:5)'
+  throw err
+}
 
 function BuggyComponent({ shouldThrow }: { shouldThrow: boolean }) {
   if (shouldThrow) {
@@ -158,6 +167,25 @@ describe('<ErrorBoundary />', () => {
 
     cleanup()
     expect(clearTimeoutSpy).toHaveBeenCalledWith(timerId)
+  })
+
+  it('trims filesystem paths from the stored diagnostic stack and warns the log contains technical details (A354)', async () => {
+    clearDiagnosticLogs()
+    const { container } = await render(
+      <ErrorBoundary>
+        <PathStackBuggy />
+      </ErrorBoundary>,
+    )
+    expect(container.textContent).toContain('页面出错了')
+    const entry = getDiagnosticLogs().find((e) => e.message === 'crash with path')
+    expect(entry).toBeTruthy()
+    expect(entry!.stack).not.toContain('/home/alice')
+    expect(entry!.stack).not.toContain('private-project')
+    expect(entry!.stack).not.toContain('Users\\alice')
+    expect(entry!.stack).toContain('Buggy.tsx:12:34')
+    expect(entry!.stack).toContain('main.tsx:3:5')
+    // The copy affordance must warn that the log carries technical details.
+    expect(container.textContent).toContain('技术细节')
   })
 
   it('resets a caught error when resetKey changes', async () => {
