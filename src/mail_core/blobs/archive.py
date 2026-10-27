@@ -56,6 +56,29 @@ log = logging.getLogger("mail_core.blobs.archive")
 DEFAULT_RECENT_DAYS = 30
 DEFAULT_BATCH = 20
 
+# Hard caps so one poison-pill message cannot OOM the worker: the raw
+# MIME is already materialised by fetch, so parsing must not amplify it
+# without bound. Oversized input is rejected as a MimeParseError and the
+# caller settles it through the normal parse_error path instead of the
+# process being killed mid-batch.
+MAX_MIME_BYTES = 50 * 1024 * 1024
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+
+def _size_limit_from_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        log.warning("invalid %s=%r; using default %d", name, raw, default)
+        return default
+    if value <= 0:
+        log.warning("invalid %s=%r; using default %d", name, raw, default)
+        return default
+    return value
+
 
 class QuotaExceededError(RuntimeError):
     """Raised when blob write would exceed hard quota."""
@@ -272,6 +295,14 @@ def parse_mime_content(
     mime_bytes: bytes,
 ) -> tuple[str | None, str | None, list[dict[str, Any]]]:
     """Parse raw MIME bytes into (text_plain, text_html, attachments)."""
+    mime_limit = _size_limit_from_env("MAIL_CORE_MIME_MAX_BYTES", MAX_MIME_BYTES)
+    if len(mime_bytes) > mime_limit:
+        raise MimeParseError(
+            "mime", f"mime_size_exceeded: {len(mime_bytes)} bytes > limit {mime_limit}"
+        )
+    attachment_limit = _size_limit_from_env(
+        "MAIL_CORE_ATTACHMENT_MAX_BYTES", MAX_ATTACHMENT_BYTES
+    )
     first_error: MimeParseError | None = None
     try:
         msg = email.message_from_bytes(mime_bytes, policy=default_policy)
@@ -336,6 +367,17 @@ def parse_mime_content(
 
         if is_attachment or is_inline_asset:
             part_index += 1
+            # Reject oversized attachments before decoding them into yet
+            # another in-memory copy; the encoded length bounds the
+            # decoded size closely enough for a pre-check.
+            raw_probe = part.get_payload()
+            if isinstance(raw_probe, str) and len(raw_probe) * 3 // 4 > attachment_limit:
+                if first_error is None:
+                    first_error = MimeParseError(
+                        "attachment",
+                        f"attachment_size_exceeded: encoded {len(raw_probe)} chars > limit {attachment_limit} bytes",
+                    )
+                continue
             payload = part.get_payload(decode=True)
             if payload is None:
                 raw_p = part.get_payload()
@@ -345,6 +387,14 @@ def parse_mime_content(
                     payload = raw_p
                 else:
                     payload = b""
+
+            if len(payload) > attachment_limit:
+                if first_error is None:
+                    first_error = MimeParseError(
+                        "attachment",
+                        f"attachment_size_exceeded: {len(payload)} bytes > limit {attachment_limit} bytes",
+                    )
+                continue
 
             clean_filename = Path(filename).name if filename else ""
             if not clean_filename:

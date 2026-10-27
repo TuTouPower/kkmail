@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+
+import pytest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -244,3 +246,48 @@ def test_a16_dedup_hit_does_not_inflate_current_used_bytes():
     assert result["status"] == "ok"
     assert result["completed"] == 2
     assert all(s.state == ArchiveState.ARCHIVE_COMPLETE.value for s in states)
+
+
+# ---------------------------------------------------------------------------
+# A27: hard size caps so a poison-pill MIME cannot OOM the worker
+# ---------------------------------------------------------------------------
+
+
+def test_a27_oversized_mime_rejected_as_parse_error(monkeypatch):
+    from mail_core.blobs.archive import MimeParseError, parse_mime_content
+
+    monkeypatch.setenv("MAIL_CORE_MIME_MAX_BYTES", "64")
+    raw = b"From: a@b.c\r\nSubject: big\r\nContent-Type: text/plain\r\n\r\n" + b"x" * 200
+    with pytest.raises(MimeParseError) as exc_info:
+        parse_mime_content(raw)
+    assert "size" in str(exc_info.value).lower()
+
+
+def test_a27_oversized_attachment_skipped_with_partial_body(monkeypatch):
+    from mail_core.blobs.archive import MimeParseError, parse_mime_content
+
+    monkeypatch.setenv("MAIL_CORE_ATTACHMENT_MAX_BYTES", "16")
+    raw = (
+        b"From: a@b.c\r\nSubject: s\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n"
+        b"--b\r\nContent-Type: text/plain\r\n\r\nhello body\r\n"
+        b"--b\r\nContent-Type: application/octet-stream\r\n"
+        b"Content-Disposition: attachment; filename=\"big.bin\"\r\n\r\n"
+        + b"Z" * 200
+        + b"\r\n--b--"
+    )
+    with pytest.raises(MimeParseError) as exc_info:
+        parse_mime_content(raw)
+    err = exc_info.value
+    assert err.stage == "attachment"
+    assert err.partial_plain is not None and "hello body" in err.partial_plain
+    assert all(att["filename"] != "big.bin" for att in err.attachments)
+
+
+def test_a27_normal_message_under_limits_still_parses(monkeypatch):
+    from mail_core.blobs.archive import parse_mime_content
+
+    monkeypatch.setenv("MAIL_CORE_MIME_MAX_BYTES", "100000")
+    monkeypatch.setenv("MAIL_CORE_ATTACHMENT_MAX_BYTES", "100000")
+    plain, html, atts = parse_mime_content(_SIMPLE_MIME)
+    assert plain is not None and "hello" in plain
+    assert atts == []
