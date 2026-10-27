@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { MAIL_STALE_TIME_MS, fetchAccounts, findCachedMail, queryClient, queryKeys, resetGroupMailQueries, setCachedReadState, type MailItem } from './queries'
+import { MAIL_STALE_TIME_MS, applyCachedReadStateWithRollback, fetchAccounts, findCachedMail, queryClient, queryKeys, resetGroupMailQueries, setCachedReadState, type MailItem } from './queries'
 
 describe('mail list cache policy', () => {
   it('keeps lists fresh for several minutes', () => {
@@ -118,6 +118,55 @@ describe('mail list cache policy', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('applyCachedReadStateWithRollback (A149)', () => {
+  const bulkItem = (id: string): MailItem => ({
+    id, subject: `Bulk ${id}`, from: 'a@x.test', accountEmail: 'a@x.test',
+    is_read: false, is_flagged: false, has_attachments: false,
+  })
+
+  it('reverts keys that no other writer touched after the optimistic write', () => {
+    const key = queryKeys.inbox('bulk-rollback-clean')
+    queryClient.setQueryData(key, [bulkItem('bulk-clean-a'), bulkItem('bulk-clean-b')])
+
+    const rollback = applyCachedReadStateWithRollback(['bulk-clean-a', 'bulk-clean-b'], true, false)
+    expect(queryClient.getQueryData<MailItem[]>(key)?.map((m) => m.is_read)).toEqual([true, true])
+
+    rollback()
+    expect(queryClient.getQueryData<MailItem[]>(key)?.map((m) => m.is_read)).toEqual([false, false])
+  })
+
+  it('does not clobber a key whose revision advanced after the optimistic write', () => {
+    const key = queryKeys.inbox('bulk-rollback-touched')
+    queryClient.setQueryData(key, [bulkItem('bulk-touched-a')])
+
+    const rollback = applyCachedReadStateWithRollback(['bulk-touched-a'], true, false)
+    // Another writer re-asserts the read state through the shared cache
+    // helper; that advances the per-key revision, so the bulk rollback
+    // must leave the key alone even though the value matches its own
+    // optimistic write.
+    setCachedReadState(['bulk-touched-a'], true)
+
+    rollback()
+    expect(queryClient.getQueryData<MailItem[]>(key)?.[0].is_read).toBe(true)
+  })
+
+  it('does not clobber a key whose cached copies diverged after the optimistic write', () => {
+    const inboxKey = queryKeys.inbox('bulk-rollback-diverged')
+    const searchKey = queryKeys.search('bulk-needle', 'bulk-rollback-diverged')
+    const original = bulkItem('bulk-diverged-a')
+    queryClient.setQueryData(inboxKey, [original])
+    queryClient.setQueryData(searchKey, [original])
+
+    const rollback = applyCachedReadStateWithRollback(['bulk-diverged-a'], true, false)
+    // A newer list copy now disagrees with the optimistic value.
+    queryClient.setQueryData(searchKey, [{ ...original, is_read: false }])
+
+    rollback()
+    expect(queryClient.getQueryData<MailItem[]>(inboxKey)?.[0].is_read).toBe(true)
+    expect(queryClient.getQueryData<MailItem[]>(searchKey)?.[0].is_read).toBe(false)
   })
 })
 

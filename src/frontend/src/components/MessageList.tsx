@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type Ref } fro
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, ExternalLink, PanelLeft } from 'lucide-react'
 import { apiRequest } from '../api/client'
-import { accountScope, beginReadMutation, fetchAccounts, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, markReadOptimistic, setCachedReadState, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
+import { accountScope, applyCachedReadStateWithRollback, beginReadMutation, fetchAccounts, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, markReadOptimistic, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchGlobalStats, fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
 import { hasMailId, mailKey } from '../lib/mailKey'
@@ -479,10 +479,13 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
   async function markAll() {
     const unreadKeys = raw.filter((m) => m.is_read === false).map(mailKey)
     const finishReadMutation = await beginReadMutation()
+    // Revision-guarded rollback (A149): reverting unconditionally would
+    // clobber read states that a concurrent single-message operation or a
+    // sync update legitimately changed while mark-all was in flight.
+    const rollbackOptimisticRead = unreadKeys.length
+      ? applyCachedReadStateWithRollback(unreadKeys, true, false)
+      : null
     try {
-      if (unreadKeys.length) {
-        setCachedReadState(unreadKeys, true)
-      }
       await postMailCoreMarkAllRead({
         accountId,
         groupId,
@@ -490,12 +493,11 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         folder_id: folderId,
         is_flagged: is_flagged,
       })
+      rollbackOptimisticRead?.commit()
       await Promise.all([invalidateMailListQueries(), invalidateMailStatsQueries()])
       setActionStatus('')
     } catch (err) {
-      if (unreadKeys.length) {
-        setCachedReadState(unreadKeys, false)
-      }
+      rollbackOptimisticRead?.()
       await Promise.all([invalidateMailListQueries(), invalidateMailStatsQueries()])
       setActionStatus(`标记全部已读失败：${errorMessage(err)}`)
     } finally {
