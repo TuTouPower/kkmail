@@ -33,7 +33,11 @@ function isAllowedExternalUrl(target) {
 
 function isLocalAppUrl(target, origin) {
   try {
-    return new URL(target).origin === origin
+    const u = new URL(target)
+    // Embedded credentials must never count as the trusted local app,
+    // even when the host/port match the app origin.
+    if (u.username || u.password) return false
+    return u.origin === origin
   } catch {
     return false
   }

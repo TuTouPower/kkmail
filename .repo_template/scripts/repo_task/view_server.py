@@ -203,6 +203,10 @@ def _open_browser(url: str) -> None:
 
 
 class _Handler(BaseHTTPRequestHandler):
+    # A259: 单连接请求超时（秒）。ThreadingHTTPServer 无内建超时，慢/半截
+    # 请求会无限期占住线程；StreamRequestHandler.setup 依据此值 settimeout。
+    timeout = 30
+
     def _send_bytes(self, status: int, body: bytes, content_type: str):
         self.send_response(status)
         self.send_header("Content-Type", content_type)

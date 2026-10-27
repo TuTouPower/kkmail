@@ -373,6 +373,34 @@ def test_serve_uses_os_assigned_port_and_closes_server(monkeypatch):
     assert not hasattr(view_server, "_find_free_port")
 
 
+def test_handler_has_request_timeout():
+    # A259: ThreadingHTTPServer 本身无连接超时，慢连接可无限期占线程；
+    # handler 必须带有限 timeout（StreamRequestHandler.setup 会据此 settimeout）。
+    assert view_server._Handler.timeout == 30
+
+
+def test_handler_timeout_disconnects_slow_client():
+    """慢连接（只发半行请求就停住）应在 handler timeout 后被断开。"""
+    import threading
+
+    class FastTimeoutHandler(view_server._Handler):
+        timeout = 0.3
+
+    httpd = view_server.ThreadingHTTPServer(("127.0.0.1", 0), FastTimeoutHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = httpd.server_address[:2]
+        with socket.create_connection((host, port), timeout=5) as sock:
+            sock.sendall(b"GET / HTTP/1.1\r\n")  # 半截请求，之后不再发送
+            sock.settimeout(5)
+            assert sock.recv(1024) == b""  # 超时后服务端关闭连接
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
 def test_build_model_has_no_schedule_status(monkeypatch):
     schedule = {
         'tasks': {
