@@ -32,8 +32,22 @@ _STATIC_DIR = Path(__file__).resolve().parent / "view_static"
 _DOC_NAMES = {"spec": "spec.md", "task": "task.md"}
 
 
+class _ThreadingHTTPServerV6(ThreadingHTTPServer):
+    """IPv6 版 ThreadingHTTPServer：仅切换地址族，其余行为一致。"""
+
+    address_family = socket.AF_INET6
+
+
+def _server_class_for_host(host: str):
+    """按 host 字面选择服务器类：含 ``:`` 的 IPv6 字面量必须用 AF_INET6，
+    否则 _is_loopback_host 认可的 ::1 用 AF_INET 服务器必然绑定失败。"""
+    normalized = (host or "").strip().strip("[]")
+    return _ThreadingHTTPServerV6 if ":" in normalized else ThreadingHTTPServer
+
+
 def _find_free_port(host: str) -> int:
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+    family = socket.AF_INET6 if ":" in (host or "") else socket.AF_INET
+    with contextlib.closing(socket.socket(family, socket.SOCK_STREAM)) as s:
         s.bind((host, 0))
         return s.getsockname()[1]
 
@@ -294,8 +308,9 @@ def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
             "只读但会暴露 task spec/task 正文，确认网络边界后再用",
             file=sys.stderr,
         )
+    bind_host = host[1:-1] if host.startswith("[") and host.endswith("]") else host
     try:
-        httpd = ThreadingHTTPServer((host, port), _Handler)
+        httpd = _server_class_for_host(bind_host)((bind_host, port), _Handler)
     except OSError as error:
         sys.exit(f"看板端口 {port} 绑定失败（{error}）；改用 --port 0 自动选空闲端口")
     print(f"task 看板已启动：{url}")

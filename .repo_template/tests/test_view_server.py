@@ -1,4 +1,5 @@
 """task 看板 view_server 纯函数测试。"""
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -272,6 +273,33 @@ def test_is_loopback_host():
     assert view_server._is_loopback_host("::1")
     assert not view_server._is_loopback_host("0.0.0.0")
     assert not view_server._is_loopback_host("192.168.1.1")
+
+
+def test_server_class_for_host_matches_address_family():
+    # A207: _is_loopback_host 认可 ::1，服务器类必须同步支持 AF_INET6，
+    # 否则 serve(host="::1") 必然绑定失败。
+    assert view_server._server_class_for_host("127.0.0.1").address_family == socket.AF_INET
+    assert view_server._server_class_for_host("localhost").address_family == socket.AF_INET
+    assert view_server._server_class_for_host("::1").address_family == socket.AF_INET6
+    assert view_server._server_class_for_host("[::1]").address_family == socket.AF_INET6
+
+
+def test_find_free_port_ipv6_loopback():
+    port = view_server._find_free_port("::1")
+    assert isinstance(port, int) and 0 < port < 65536
+
+
+def test_ipv6_loopback_server_actually_binds():
+    server_cls = view_server._server_class_for_host("::1")
+    try:
+        httpd = server_cls(("::1", 0), view_server._Handler)
+    except OSError as error:  # 环境无 IPv6 时跳过不断言
+        pytest.skip(f"IPv6 不可用：{error}")
+    try:
+        assert httpd.server_address[0] == "::1"
+        assert httpd.server_address[1] > 0
+    finally:
+        httpd.server_close()
 
 
 def test_serve_warns_non_loopback(monkeypatch, capsys):
