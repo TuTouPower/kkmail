@@ -22,6 +22,9 @@ export async function copyTextToClipboard(text: string): Promise<void> {
   }
 }
 
+// document.execCommand is deprecated, but it is the only copy path in
+// non-secure (http) contexts where the async Clipboard API is unavailable,
+// so it stays strictly as this fallback.
 function fallbackCopy(text: string): boolean {
   if (typeof document === 'undefined') return false
 
@@ -46,7 +49,17 @@ function fallbackCopy(text: string): boolean {
   } catch {
     ok = false
   } finally {
-    container.removeChild(ta)
+    // Cleanup must never throw: the textarea may already be detached, and a
+    // throw here would mask the copy result.
+    try {
+      container.removeChild(ta)
+    } catch {
+      try {
+        ta.remove()
+      } catch {
+        /* ignore */
+      }
+    }
     if (prevActiveElement && typeof prevActiveElement.focus === 'function') {
       try {
         prevActiveElement.focus()

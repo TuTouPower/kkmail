@@ -65,6 +65,21 @@ describe('copyTextToClipboard', () => {
     expect(document.body.querySelectorAll('textarea').length).toBe(0)
   })
 
+  it('does not throw when removeChild fails during fallback cleanup (A360)', async () => {
+    const execCommand = vi.fn().mockReturnValue(true)
+    document.execCommand = execCommand
+    const removeChild = vi.spyOn(document.body, 'removeChild').mockImplementation(() => {
+      throw new Error('NotFoundError: node already detached')
+    })
+    try {
+      await expect(copyTextToClipboard('cleanup@test.com')).resolves.toBeUndefined()
+    } finally {
+      removeChild.mockRestore()
+    }
+    expect(execCommand).toHaveBeenCalledWith('copy')
+    expect(document.body.querySelectorAll('textarea').length).toBe(0)
+  })
+
   it('appends textarea inside active dialog and restores focus on fallback copy (P2-10)', async () => {
     const dialog = document.createElement('dialog')
     dialog.setAttribute('open', '')
