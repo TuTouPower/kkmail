@@ -48,11 +48,7 @@
     "review_intensive.md"
   ],
   "elapsed_sec": 14400,
-  "source": "deadman",
-  "deadman_pid": 65561,
-  "deadman_fired": true,
-  "updated_at": "2026-10-20T23:43:29Z",
+  "updated_at": "2026-10-21T07:43:29+08:00",
   "target": "full tree @ 608e284f75f1da1540138728b3bf328b194a9720",
-  "intent": "user confirmed 全库一次审完",
   "remaining_sec": 0
 }
