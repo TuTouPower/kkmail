@@ -29,7 +29,6 @@ function App() {
   const view = useMailStore((s) => s.view)
   const selectedKey = useMailStore((s) => s.selectedKey)
   const listFilter = useMailStore((s) => s.listFilter)
-  const search = useMailStore((s) => s.search)
   const toggleSidebar = useMailStore((s) => s.toggleSidebar)
   const toggleMobileSidebar = useMailStore((s) => s.toggleMobileSidebar)
   const sidebarWidth = useMailStore((s) => s.sidebarWidth)
@@ -184,7 +183,9 @@ function App() {
     listWidth,
   })
   const viewResetKey = JSON.stringify(view)
-  const listResetKey = JSON.stringify([view, listFilter, search, selectedKey])
+  // Search keystrokes must not reset the list boundary (A361): resetting on
+  // every character would silently retry a crashed list while typing.
+  const listResetKey = JSON.stringify([view, listFilter, selectedKey])
   const readerResetKey = JSON.stringify([view, selectedKey])
 
   return (
