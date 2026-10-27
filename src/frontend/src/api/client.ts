@@ -143,21 +143,35 @@ function withTimeout(signal: AbortSignal | null | undefined, timeoutMs: number) 
   }
 }
 
+/** Retry-After is either delta-seconds or an HTTP-date (RFC 9110 §10.2.3). */
+function parseRetryAfterSeconds(header: string | null | undefined): number | undefined {
+  const value = header?.trim()
+  if (!value) return undefined
+  if (/^\d+$/.test(value)) return Number(value)
+  const at = Date.parse(value)
+  if (Number.isNaN(at)) return undefined
+  return Math.max(0, Math.ceil((at - Date.now()) / 1000))
+}
+
 function errorFromBody(status: number, statusText: string, body: unknown, retryAfterHeader?: string | null): ApiError {
   let message = statusText || `HTTP ${status}`
+  let code: string | undefined
   if (body && typeof body === 'object') {
     const detail = (body as { detail?: unknown }).detail
     if (typeof detail === 'string') message = detail
-    else if (detail && typeof detail === 'object' && !Array.isArray(detail) && typeof (detail as { error?: unknown }).error === 'string') {
-      message = (detail as { error: string }).error
+    else if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+      const d = detail as { error?: unknown; code?: unknown; error_code?: unknown }
+      if (typeof d.error === 'string') message = d.error
+      // Preserve the backend's structured error code instead of dropping it.
+      const rawCode = typeof d.code === 'string' ? d.code : typeof d.error_code === 'string' ? d.error_code : undefined
+      if (rawCode) code = rawCode
     } else if (Array.isArray(detail) && detail.length) {
       // FastAPI validation errors: [{loc, msg, type}]
       message = detail.map((d) => (d && typeof d === 'object' && 'msg' in d ? String((d as { msg: unknown }).msg) : String(d))).join('; ')
     }
   }
-  const retryAfter = retryAfterHeader?.trim()
-  const retryAfterSeconds = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) : undefined
-  return { status, message, payload: body, ...(retryAfterSeconds ? { retryAfterSeconds } : {}) }
+  const retryAfterSeconds = parseRetryAfterSeconds(retryAfterHeader)
+  return { status, message, payload: body, ...(code ? { code } : {}), ...(retryAfterSeconds ? { retryAfterSeconds } : {}) }
 }
 
 function isApiError(error: unknown): error is ApiError {
