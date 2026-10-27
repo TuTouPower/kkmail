@@ -28,41 +28,41 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：添加账户可选择本 spec 供应商矩阵中所有直接支持项与“其他 / 自定义 IMAP”；仅显示当前供应商及接入方式所需连接和凭据字段，不要求填写凭据 JSON；编辑账户采用相同字段名、帮助和认证说明。
+- [x] AC-001：添加账户可选择本 spec 供应商矩阵中所有直接支持项与“其他 / 自定义 IMAP”；仅显示当前供应商及接入方式所需连接和凭据字段，不要求填写凭据 JSON；编辑账户采用相同字段名、帮助和认证说明。
 
-- [ ] AC-002：新增账户按完整域名、忽略大小写给出供应商建议；如 `qq.com.evil.example` 不得识别成 QQ。自定义域名可手选 Gmail / Microsoft 365 / 其他供应商，用户明确选择优先；切换邮箱或自动建议不得覆盖手动填写的服务器和连接配置。
+- [x] AC-002：新增账户按完整域名、忽略大小写给出供应商建议；如 `qq.com.evil.example` 不得识别成 QQ。自定义域名可手选 Gmail / Microsoft 365 / 其他供应商，用户明确选择优先；切换邮箱或自动建议不得覆盖手动填写的服务器和连接配置。
 
-- [ ] AC-003：选择 QQ/Foxmail、网易、iCloud、Yahoo 后按矩阵预填服务器、993 和 TLS，并展示准确凭据名称、客户端开通要求及官方帮助入口。IMAP 登录名默认完整邮箱且可修改，保存并重新编辑后保留；预设允许用户修改，编辑旧账户不得用预设覆盖已存服务器、端口、TLS 或用户名。
+- [x] AC-003：选择 QQ/Foxmail、网易、iCloud、Yahoo 后按矩阵预填服务器、993 和 TLS，并展示准确凭据名称、客户端开通要求及官方帮助入口。IMAP 登录名默认完整邮箱且可修改，保存并重新编辑后保留；预设允许用户修改，编辑旧账户不得用预设覆盖已存服务器、端口、TLS 或用户名。
 
-- [ ] AC-004：Outlook/Microsoft 365 仅支持 Microsoft Graph OAuth，新增和编辑均不提供 Microsoft IMAP，高级手动凭据路径分别展示 Application (Client) ID、Refresh Token；公共客户端无需 Client Secret，用户声明机密客户端后要求填写 Client Secret。高级项可选择 common / consumers / organizations / 指定租户，生成对应公共云令牌端点；说明 ID Token 和短期 Access Token 均不能替代 Refresh Token，Graph 令牌所需权限不能由仅有 IMAP 权限替代。
+- [x] AC-004：Outlook/Microsoft 365 仅支持 Microsoft Graph OAuth，新增和编辑均不提供 Microsoft IMAP，高级手动凭据路径分别展示 Application (Client) ID、Refresh Token；公共客户端无需 Client Secret，用户声明机密客户端后要求填写 Client Secret。高级项可选择 common / consumers / organizations / 指定租户，生成对应公共云令牌端点；说明 ID Token 和短期 Access Token 均不能替代 Refresh Token，Graph 令牌所需权限不能由仅有 IMAP 权限替代。
 
-- [ ] AC-005：Gmail 提供 Gmail API 和 IMAP 应用专用密码两种接入方式。API 高级手动凭据路径展示 Client ID、Refresh Token、Client Secret 独立字段；手动新建必填 Client ID 和 Refresh Token，Client Secret 按已有客户端注册要求提供，不对所有 Gmail 账户强制必填；IMAP 使用 `imap.gmail.com:993`、TLS 与应用专用密码，提示需启用两步验证且组织策略或高级保护可能禁止生成应用密码，不提示个人 Gmail 仍需开启 IMAP，不引导使用普通登录密码。
+- [x] AC-005：Gmail 提供 Gmail API 和 IMAP 应用专用密码两种接入方式。API 高级手动凭据路径展示 Client ID、Refresh Token、Client Secret 独立字段；手动新建必填 Client ID 和 Refresh Token，Client Secret 按已有客户端注册要求提供，不对所有 Gmail 账户强制必填；IMAP 使用 `imap.gmail.com:993`、TLS 与应用专用密码，提示需启用两步验证且组织策略或高级保护可能禁止生成应用密码，不提示个人 Gmail 仍需开启 IMAP，不引导使用普通登录密码。
 
-- [ ] AC-006：Microsoft Graph 帮助说明现有读信及状态写回需委托 `Mail.ReadWrite`，取得 Refresh Token 需 `offline_access`，组织账号可能受管理员策略限制；Gmail API 帮助说明需启用 Gmail API、匹配客户端和已授权的 `gmail.modify` 范围。不得额外要求 Graph `Mail.Send`、Gmail `gmail.send` 或 `https://mail.google.com/` 范围；不能宣称 `gmail.modify` 本身不含发送能力。
+- [x] AC-006：Microsoft Graph 帮助说明现有读信及状态写回需委托 `Mail.ReadWrite`，取得 Refresh Token 需 `offline_access`，组织账号可能受管理员策略限制；Gmail API 帮助说明需启用 Gmail API、匹配客户端和已授权的 `gmail.modify` 范围。不得额外要求 Graph `Mail.Send`、Gmail `gmail.send` 或 `https://mail.google.com/` 范围；不能宣称 `gmail.modify` 本身不含发送能力。
 
-- [ ] AC-007：Zoho 使用 IMAP，显示完整邮箱登录名及密码 / 应用专用密码，提示先启用 IMAP、账号计划和管理员限制；区分个人和付费企业配置，并提示数据中心决定实际主机，以账号内配置为准，不把 `.com` 主机强加给所有地区账户。
+- [x] AC-007：Zoho 使用 IMAP，显示完整邮箱登录名及密码 / 应用专用密码，提示先启用 IMAP、账号计划和管理员限制；区分个人和付费企业配置，并提示数据中心决定实际主机，以账号内配置为准，不把 `.com` 主机强加给所有地区账户。
 
-- [ ] AC-008：其他 / 自定义 IMAP 可填写主机、端口、TLS、独立登录名和密码；不因无法识别域名阻止保存。识别到 Proton 公共邮箱域名时明确提示不能用 Proton 登录密码直连、需付费 Bridge 且本产品未集成，不生成虚构公网 IMAP 主机，不为此关闭私网地址防护或 TLS 证书验证。
+- [x] AC-008：其他 / 自定义 IMAP 可填写主机、端口、TLS、独立登录名和密码；不因无法识别域名阻止保存。识别到 Proton 公共邮箱域名时明确提示不能用 Proton 登录密码直连、需付费 Bridge 且本产品未集成，不生成虚构公网 IMAP 主机，不为此关闭私网地址防护或 TLS 证书验证。
 
-- [ ] AC-009：编辑始终以已存实际协议为准；已有 Graph/Gmail API 账号不受域名猜测干扰，Microsoft IMAP 不提供编辑连接或重新启用入口；当前 DB 无此类账户，本 task 不新增其兼容编辑逻辑。不能在编辑中静默切换协议；缺少供应商标识的历史账户可以打开、保留连接配置并修改分组，旧 JSON 凭据无须先迁移或重新输入。
+- [x] AC-009：编辑始终以已存实际协议为准；已有 Graph/Gmail API 账号不受域名猜测干扰，Microsoft IMAP 不提供编辑连接或重新启用入口；当前 DB 无此类账户，本 task 不新增其兼容编辑逻辑。不能在编辑中静默切换协议；缺少供应商标识的历史账户可以打开、保留连接配置并修改分组，旧 JSON 凭据无须先迁移或重新输入。
 
-- [ ] AC-010：编辑响应只返回表单需要的白名单非敏感配置；密码、Refresh Token、Access Token、Client Secret 和原始凭据 JSON 永不回显。所有凭据输入初始为空，明确“留空保持不变”；仅修改分组或连接参数时原凭据完整保留。
+- [x] AC-010：编辑响应只返回表单需要的白名单非敏感配置；密码、Refresh Token、Access Token、Client Secret 和原始凭据 JSON 永不回显。所有凭据输入初始为空，明确“留空保持不变”；仅修改分组或连接参数时原凭据完整保留。
 
-- [ ] AC-011：仅更新某个非空凭据字段时，服务端基于已存加密凭据合并，保留其余字段及未由本表单管理的既有字段；空输入不清除原值。新建或凭据变更时校验有效组合，缺失字段返回字段级脱敏错误；校验失败不写入半份账户、分组、配置或凭据变更。现有账户只改无关字段时不因旧凭据格式而强制重填。
+- [x] AC-011：仅更新某个非空凭据字段时，服务端基于已存加密凭据合并，保留其余字段及未由本表单管理的既有字段；空输入不清除原值。新建或凭据变更时校验有效组合，缺失字段返回字段级脱敏错误；校验失败不写入半份账户、分组、配置或凭据变更。现有账户只改无关字段时不因旧凭据格式而强制重填。
 
-- [ ] AC-012：OAuth 客户端、Refresh Token、Client Secret、令牌端点或 scope 发生变更后，旧缓存 Access Token 和过期时间失效，后续刷新使用新有效组合；轮换后的 Refresh Token 继续经既有 CredentialStore 保存，不能被编辑请求中的旧快照覆盖。
+- [x] AC-012：OAuth 客户端、Refresh Token、Client Secret、令牌端点或 scope 发生变更后，旧缓存 Access Token 和过期时间失效，后续刷新使用新有效组合；轮换后的 Refresh Token 继续经既有 CredentialStore 保存，不能被编辑请求中的旧快照覆盖。
 
-- [ ] AC-013：切换供应商或认证方式立即清除不适用的凭据草稿；提交载荷只包含当前方式允许字段，不夹带前一供应商密码、令牌或主机。关闭再打开表单不残留凭据；凭据不进入 localStorage、sessionStorage、URL、客户端持久缓存或错误日志。
+- [x] AC-013：切换供应商或认证方式立即清除不适用的凭据草稿；提交载荷只包含当前方式允许字段，不夹带前一供应商密码、令牌或主机。关闭再打开表单不残留凭据；凭据不进入 localStorage、sessionStorage、URL、客户端持久缓存或错误日志。
 
-- [ ] AC-014：前端与 API 均拒绝当前方式所需字段缺失、非法端口、不支持的供应商与协议组合；保留 IMAP 主机 SSRF 限制及 OAuth HTTPS 令牌端点白名单，字段错误不包含提交秘密。编辑合法配置、分组变更及同步开关等既有行为继续可用。
+- [x] AC-014：前端与 API 均拒绝当前方式所需字段缺失、非法端口、不支持的供应商与协议组合；保留 IMAP 主机 SSRF 限制及 OAuth HTTPS 令牌端点白名单，字段错误不包含提交秘密。编辑合法配置、分组变更及同步开关等既有行为继续可用。
 
-- [ ] AC-015：桌面和 760px 以下移动布局中，IMAP 与 OAuth 表单内容及帮助可阅读、长令牌输入不撑破窗口，提交操作可达；所有输入有可访问标签，原生 dialog 焦点约束、Esc/取消和关闭后的触发点焦点恢复保持有效。
+- [x] AC-015：桌面和 760px 以下移动布局中，IMAP 与 OAuth 表单内容及帮助可阅读、长令牌输入不撑破窗口，提交操作可达；所有输入有可访问标签，原生 dialog 焦点约束、Esc/取消和关闭后的触发点焦点恢复保持有效。
 
-- [ ] AC-016：添加和编辑表单的当前认证方式旁均有带可访问名称的帮助图标；鼠标点击或键盘激活打开对应说明弹窗。内容随 Google IMAP、Google OAuth、Microsoft OAuth、QQ、网易、iCloud、Yahoo、Zoho 等切换，包含前置条件、分步操作和官方链接；关闭只恢复帮助图标焦点，不关闭账户表单、不清除草稿，Esc 先关闭最上层弹窗。
+- [x] AC-016：添加和编辑表单的当前认证方式旁均有带可访问名称的帮助图标；鼠标点击或键盘激活打开对应说明弹窗。内容随 Google IMAP、Google OAuth、Microsoft OAuth、QQ、网易、iCloud、Yahoo、Zoho 等切换，包含前置条件、分步操作和官方链接；关闭只恢复帮助图标焦点，不关闭账户表单、不清除草稿，Esc 先关闭最上层弹窗。
 
-- [ ] AC-017：Google IMAP 帮助明确指导“启用两步验证 → 生成应用专用密码 → 用于 IMAP 密码框”；Google OAuth 帮助说明“启用 Gmail API → 配置同意屏幕及测试用户 → 创建正确类型 OAuth 客户端 → 配置回调 → 登录授权”。Microsoft OAuth 帮助说明“Entra 应用注册 → 选择账号类型 → 复制 Application (client) ID → 按方式登记回调或启用设备码公共客户端 → 配置 Graph 委托权限 → 登录授权”，以用户语言说明登录完成后后台自动保存令牌，区分 Client ID、Client Secret value、secret ID、ID Token 和 Access Token；不要求普通用户抓包提取 Token，不指向第三方令牌获取站点。
+- [x] AC-017：Google IMAP 帮助明确指导“启用两步验证 → 生成应用专用密码 → 用于 IMAP 密码框”；Google OAuth 帮助说明“启用 Gmail API → 配置同意屏幕及测试用户 → 创建正确类型 OAuth 客户端 → 配置回调 → 登录授权”。Microsoft OAuth 帮助说明“Entra 应用注册 → 选择账号类型 → 复制 Application (client) ID → 按方式登记回调或启用设备码公共客户端 → 配置 Graph 委托权限 → 登录授权”，以用户语言说明登录完成后后台自动保存令牌，区分 Client ID、Client Secret value、secret ID、ID Token 和 Access Token；不要求普通用户抓包提取 Token，不指向第三方令牌获取站点。
 
-- [ ] AC-018：新增账户、连接配置更新、相关导入接入路径及 Worker/provider 构建均拒绝 Microsoft IMAP：包括明确 Microsoft 供应商品牌、已知 Microsoft 邮箱域名或 Microsoft IMAP 官方主机的组合；更换别名或通过“其他 IMAP”不能绕过既有可识别项。生产代码删除 Microsoft IMAP 预设、支持分支及旧“建议使用 Graph”软提示，不新增 XOAUTH2 回退。Google、QQ、网易和其他 IMAP 保持可用；此下线不删除账户或已存邮件。
+- [x] AC-018：新增账户、连接配置更新、相关导入接入路径及 Worker/provider 构建均拒绝 Microsoft IMAP：包括明确 Microsoft 供应商品牌、已知 Microsoft 邮箱域名或 Microsoft IMAP 官方主机的组合；更换别名或通过“其他 IMAP”不能绕过既有可识别项。生产代码删除 Microsoft IMAP 预设、支持分支及旧“建议使用 Graph”软提示，不新增 XOAUTH2 回退。Google、QQ、网易和其他 IMAP 保持可用；此下线不删除账户或已存邮件。
 
 ### 可测试性声明
 
