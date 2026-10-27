@@ -6,8 +6,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from mail_core.mail.storage.models import SyncCheckpoint, SyncRequest, SyncRequestTarget
 from mail_core.sync.leases import assert_fencing
@@ -37,30 +37,74 @@ def _assert_scan_generation_current(
     (:func:`begin_scan_generation` would reset the cursor back to it) nor
     commit. Generations with no request record (legacy rows, direct
     engine use) cannot be ordered and keep the previous behaviour.
+
+    The check is an existence query (A293): fetch this generation's
+    birth once, then ask whether any sibling target is newer-born while
+    its own generation has no target at or before that birth (i.e. the
+    sibling's birth is strictly later) -- ``LIMIT 1``, no GROUP BY over
+    every generation of the account on each checkpoint commit.
+
+    Birth order is the stable total order ``(created_at, target id)``
+    (A378): generations created in one transaction share a timestamp
+    (Postgres ``now()`` is the transaction timestamp), so ``created_at``
+    alone can tie and let an older generation pass as current. The
+    earliest target's id breaks the tie deterministically for every
+    observer.
     """
-    births: dict[uuid.UUID, datetime] = {}
-    for generation, birth in session.execute(
-        select(
-            SyncRequestTarget.requested_generation,
-            func.min(SyncRequestTarget.created_at),
-        )
+    own_key = session.execute(
+        select(SyncRequestTarget.created_at, SyncRequestTarget.id)
         .join(SyncRequest, SyncRequest.id == SyncRequestTarget.request_id)
         .where(
             SyncRequest.mode == "full",
             SyncRequestTarget.account_id == account_id,
+            SyncRequestTarget.requested_generation == scan_generation,
         )
-        .group_by(SyncRequestTarget.requested_generation)
-    ).all():
-        if generation is not None and birth is not None:
-            births[generation] = birth
-    own_birth = births.get(scan_generation)
-    if own_birth is None:
+        .order_by(SyncRequestTarget.created_at.asc(), SyncRequestTarget.id.asc())
+        .limit(1)
+    ).first()
+    if own_key is None:
         return
-    if any(
-        birth > own_birth
-        for generation, birth in births.items()
-        if generation != scan_generation
-    ):
+    own_birth, own_tiebreak = own_key
+    older_target = aliased(SyncRequestTarget)
+    older_request = aliased(SyncRequest)
+    sibling_has_no_older_birth = ~(
+        select(1)
+        .select_from(older_target)
+        .join(older_request, older_request.id == older_target.request_id)
+        .where(
+            older_target.requested_generation == SyncRequestTarget.requested_generation,
+            older_request.mode == "full",
+            older_target.account_id == account_id,
+            or_(
+                older_target.created_at < own_birth,
+                and_(
+                    older_target.created_at == own_birth,
+                    older_target.id <= own_tiebreak,
+                ),
+            ),
+        )
+        .exists()
+    )
+    newer_sibling = session.scalar(
+        select(1)
+        .select_from(SyncRequestTarget)
+        .join(SyncRequest, SyncRequest.id == SyncRequestTarget.request_id)
+        .where(
+            SyncRequest.mode == "full",
+            SyncRequestTarget.account_id == account_id,
+            SyncRequestTarget.requested_generation != scan_generation,
+            or_(
+                SyncRequestTarget.created_at > own_birth,
+                and_(
+                    SyncRequestTarget.created_at == own_birth,
+                    SyncRequestTarget.id > own_tiebreak,
+                ),
+            ),
+            sibling_has_no_older_birth,
+        )
+        .limit(1)
+    )
+    if newer_sibling is not None:
         raise ScanGenerationMismatch(
             f"scan generation {scan_generation} is superseded by a newer "
             "full-scan generation for this account"
