@@ -275,7 +275,10 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
       })
       if (device) return
       const isDesktop = getDesktopPlatform() !== null || oauthMeta?.runtime_mode === 'desktop'
-      const opened = typeof window.open === 'function' ? window.open(started.auth_url, '_blank') : null
+      // 'noopener' as a window feature is the primary guard (assigning
+      // opener=null afterwards silently fails in some browsers); the
+      // assignment below stays as a fallback for engines ignoring it.
+      const opened = typeof window.open === 'function' ? window.open(started.auth_url, '_blank', 'noopener') : null
       if (opened && typeof opened === 'object') {
         try { opened.opener = null } catch { /* ignore */ }
       } else if (!isDesktop) {
@@ -307,7 +310,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
       email: email.trim(),
     })
     setMsAuthUrl(url)
-    const opened = typeof window.open === 'function' ? window.open(url, '_blank') : null
+    const opened = typeof window.open === 'function' ? window.open(url, '_blank', 'noopener') : null
     if (opened && typeof opened === 'object') {
       try { opened.opener = null } catch { /* ignore */ }
     }

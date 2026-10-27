@@ -15,9 +15,16 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); __resetCsrfForTests() })
 // Microsoft account now uses the simplified redirect-URL exchange below, so
 // that case was replaced wholesale; the reauthorization (edit) case is kept
 // here because existing Graph accounts still use the flow system.
+// REPLACED (A355): window.open now passes the 'noopener' window feature
+// as the primary reverse-tabnabbing guard (assigning opener=null after
+// the fact silently fails in some browsers), with the opener assignment
+// kept as a fallback. The open stub therefore returns a shared window
+// handle and the assertions below cover the features argument and the
+// nulled opener; all other assertions are unchanged from the original.
 it('Microsoft browser login reauthorizes an existing Graph account (edit)', async () => {
   const requests: { url: string; method: string; body: Record<string, unknown> }[] = []
-  const open = vi.fn(() => ({ opener: {} }))
+  const openedWindow: { opener: unknown } = { opener: {} }
+  const open = vi.fn(() => openedWindow)
   vi.stubGlobal('open', open)
   const account = { id: 'graph-1', email: 'verified@outlook.com', provider: 'graph', account_type: 'graph',
     status: 'active', sync_status: 'auth_failed', sync_enabled: false, oauth_tenant: 'consumers' }
@@ -50,7 +57,8 @@ it('Microsoft browser login reauthorizes an existing Graph account (edit)', asyn
   expect(helpDialog.textContent).not.toContain('New registration')
   await click(container.querySelector('button[aria-label="关闭凭据帮助"]'))
   await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '重新授权')!)
-  expect(open).toHaveBeenCalledWith(expect.stringContaining('login.microsoftonline.com'), '_blank')
+  expect(open).toHaveBeenCalledWith(expect.stringContaining('login.microsoftonline.com'), '_blank', 'noopener')
+  expect(openedWindow.opener).toBeNull()
   window.dispatchEvent(new Event('focus'))
   await waitFor(() => expect(container.textContent).toContain('已完成 Microsoft 授权：verified@outlook.com'))
   await click(container.querySelector('button[type="submit"]'))
@@ -303,6 +311,20 @@ it('pasting a redirect URL calls the exchange API and reports success via onSave
     client_id: '9e5f94bc-e8a4-4e73-b8be-63364c29d753',
     redirect_uri: 'http://localhost:8080',
   })
+})
+
+it('A355: the simplified Microsoft authorize window opens with noopener and a nulled opener', async () => {
+  stubMicrosoftShell()
+  const openedWindow: { opener: unknown } = { opener: {} }
+  const open = vi.fn(() => openedWindow)
+  vi.stubGlobal('open', open)
+  const { container } = await render(<AccountDialog groups={msGroups} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
+  await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
+  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '微软授权登录')!)
+  expect(open).toHaveBeenCalledTimes(1)
+  expect(open.mock.calls[0][1]).toBe('_blank')
+  expect(open.mock.calls[0][2]).toBe('noopener')
+  expect(openedWindow.opener).toBeNull()
 })
 
 it('a custom redirect URI with a trailing slash is authorized and exchanged verbatim', async () => {
