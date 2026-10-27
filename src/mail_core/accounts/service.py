@@ -90,13 +90,17 @@ def list_accounts(
     limit: int = 200,
     offset: int = 0,
 ) -> tuple[list[Account], int]:
-    total = session.scalar(select(func.count()).select_from(Account)) or 0
     order_column = Account.group_order if group_id is not None else Account.master_order
-    manual_order_exists = session.scalar(select(func.count()).select_from(Account).where(order_column.is_not(None)))
+    # Compute each count exactly once for the requested scope (A232): the
+    # grouped branch previously ran unfiltered counts and discarded them.
     if group_id is not None:
+        total = session.scalar(select(func.count()).select_from(Account).where(Account.group_id == group_id)) or 0
         manual_order_exists = session.scalar(
             select(func.count()).select_from(Account).where(Account.group_id == group_id, Account.group_order.is_not(None))
         )
+    else:
+        total = session.scalar(select(func.count()).select_from(Account)) or 0
+        manual_order_exists = session.scalar(select(func.count()).select_from(Account).where(order_column.is_not(None)))
     if manual_order_exists:
         ordering = [order_column.asc(), func.split_part(func.lower(Account.email), "@", 2), func.lower(Account.email), Account.email]
     else:
@@ -104,7 +108,6 @@ def list_accounts(
     stmt = select(Account).order_by(*ordering).offset(max(0, offset)).limit(min(500, max(1, limit)))
     if group_id is not None:
         stmt = stmt.where(Account.group_id == group_id)
-        total = session.scalar(select(func.count()).select_from(Account).where(Account.group_id == group_id)) or 0
     return list(session.scalars(stmt).all()), int(total)
 
 
