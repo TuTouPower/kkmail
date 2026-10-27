@@ -217,3 +217,37 @@ def test_archive_review_rejects_bad_prefix(repo):
         rh.cmd_archive_review(argparse.Namespace(dir="prompts", write=True))
     with pytest.raises(rh.HygieneError):
         rh.cmd_archive_review(argparse.Namespace(dir="review_nonexistent", write=True))
+
+
+# --- A155: archive-review 目录名路径校验，拒绝 ../ 穿越 ---
+
+def test_archive_review_rejects_traversal_names(repo):
+    # 穿越目标真实存在（docs/spikes/s001_x）：旧实现会越过 reviews/ 把它迁走
+    spike = repo / "docs/spikes/s001_x"
+    spike.mkdir(parents=True)
+    # 中间目录须真实存在，否则 OS 路径解析先于校验就失败、测不到穿越
+    (repo / "docs/reviews/review_x").mkdir(parents=True)
+    (spike / "report.md").write_text("# r\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "feat(spike): add s001_x")
+    for bad in (
+        "review_x/../../spikes/s001_x",
+        "review_x/../review_y",
+        "review_x/sub",
+        "review_../escape",
+        "review_x\\..\\escape",
+    ):
+        with pytest.raises(rh.HygieneError):
+            rh.cmd_archive_review(argparse.Namespace(dir=bad, write=True))
+    assert (repo / "docs/spikes/s001_x/report.md").is_file()
+    assert not (repo / "docs/archive/reviews").exists()
+
+
+def test_archive_review_valid_name_still_moves(repo):
+    d = repo / "docs/reviews/review_2026-01_check-2"
+    d.mkdir(parents=True)
+    (d / "r.md").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "docs(review): add")
+    rh.cmd_archive_review(argparse.Namespace(dir="review_2026-01_check-2", write=True))
+    assert (repo / "docs/archive/reviews/review_2026-01_check-2/r.md").is_file()

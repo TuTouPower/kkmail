@@ -30,6 +30,7 @@ ARCHIVE_REVIEWS = REPO_ROOT / "docs/archive/reviews"
 HANDOFF = REPO_ROOT / "docs/handoff.md"
 ARCHIVE_HANDOFF = REPO_ROOT / "docs/archive/handoff.md"
 SPIKE_DIR_RE = re.compile(r"^s[0-9]+_[a-z0-9_]+$")
+REVIEW_DIR_RE = re.compile(r"review_[A-Za-z0-9_-]+")
 SPIKE_SID_RE = re.compile(r"^s[0-9]+$")
 ARCHIVE_HANDOFF_HEADER = (
     "# 历史交接\n\n"
@@ -174,11 +175,17 @@ def cmd_archive_spike(args: argparse.Namespace) -> None:
 
 def cmd_archive_review(args: argparse.Namespace) -> None:
     name = args.dir
-    if not name.startswith("review_"):
-        raise HygieneError(f"review 目录名应以 review_ 开头，收到 {name!r}")
+    # 目录名全匹配白名单（A155）：拒绝 ../ 等拼接穿越 reviews/ 之外，
+    # 与 archive-spike 的 SPIKE_DIR_RE 全匹配口径对齐。
+    if not REVIEW_DIR_RE.fullmatch(name):
+        raise HygieneError(
+            f"review 目录名非法（须 review_ + [A-Za-z0-9_-]+），收到 {name!r}"
+        )
     if not REVIEWS_DIR.is_dir():
         raise HygieneError(f"缺 {_rel(REVIEWS_DIR)}")
     src = REVIEWS_DIR / name
+    if src.resolve().parent != REVIEWS_DIR.resolve():
+        raise HygieneError(f"review 目录越出 {_rel(REVIEWS_DIR)}：{name!r}")
     if not src.is_dir():
         raise HygieneError(f"review 目录不存在：{_rel(src)}")
     _move_dir(src, ARCHIVE_REVIEWS / name, args.write)
