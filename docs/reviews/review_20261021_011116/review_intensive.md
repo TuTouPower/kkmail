@@ -1,6 +1,6 @@
 > [!NOTE]
 > **SUPERSEDED / HISTORICAL REPORT**
-> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+> 本报告属于历史审查归档，被审基线为 `b2956445574ebf171c1e73526421f0d46ccac3a3`（见标题行），结论只反映该时点状态。原横幅「报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环」为无逐项证据的绝对断言，现予更正：逐项处置与闭环状态以同批后续核验 [review_da57df7_findings_and_decisions.md](../review_20261021_064335/review_da57df7_findings_and_decisions.md)（该文件在 da57df7 时点仍列 38 项待修问题）及后续各轮审阅的 adoption/summary 文件为准，不以本横幅为准。
 
 # Intensive Review — TuTouPower/kkmail @ b2956445574ebf171c1e73526421f0d46ccac3a3 · 2026-10-21 (Asia/Shanghai)
 
