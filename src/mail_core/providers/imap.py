@@ -927,7 +927,8 @@ class ImapProvider:
         flags can have changed on another client). Progress is the
         ``flag_scan_after`` cursor key; a completed sweep wraps it to 0
         so the next delta run re-checks from the start. A failed SEARCH
-        skips the sweep for this round without wedging the delta.
+        or FLAGS FETCH skips the sweep for this round without wedging
+        the delta (A145).
         Returns (changes, sweep_complete, next_flag_scan_after).
         """
         existing_max = int(cursor.get("uid_next") or 1) - 1
@@ -950,9 +951,20 @@ class ImapProvider:
         window = candidates[:200]
         changes: list[DeltaChange] = []
         if window:
-            changes = self._fetch_flags_for_uids(
-                c, folder_remote_id, uidvalidity, window, abort_on_missing_flags=True
-            )
+            try:
+                changes = self._fetch_flags_for_uids(
+                    c, folder_remote_id, uidvalidity, window, abort_on_missing_flags=True
+                )
+            except _ImapFlagFetchError as exc:
+                # A145: one poisoned FETCH must not kill the whole delta —
+                # skip this sweep round like a SEARCH failure, keeping the
+                # flag_scan_after progress for the next round.
+                log.warning(
+                    "IMAP flag sweep FETCH failed for %s; skipping this round: %s",
+                    folder_remote_id,
+                    safe_error(exc),
+                )
+                return [], True, after
         complete = len(candidates) <= len(window)
         return changes, complete, 0 if complete else window[-1]
 
