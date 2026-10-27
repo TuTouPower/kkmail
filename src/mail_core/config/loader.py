@@ -100,6 +100,30 @@ def load_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
         schedule_interval_s=_parse_float(
             source.get("MAIL_CORE_SCHEDULE_INTERVAL_S"), 60.0, "schedule_interval_s"
         ),
+        idle_enabled=_parse_bool(source.get("MAIL_CORE_IDLE_ENABLED"), True),
+        idle_quota=_parse_int(source.get("MAIL_CORE_IDLE_QUOTA"), 32, "idle_quota"),
+        idle_max_duration_s=_parse_float(
+            source.get("MAIL_CORE_IDLE_MAX_DURATION_S"), 1680.0, "idle_max_duration_s"
+        ),
+        idle_backoff_base_s=_parse_float(
+            source.get("MAIL_CORE_IDLE_BACKOFF_BASE_S"), 5.0, "idle_backoff_base_s"
+        ),
+        idle_backoff_max_s=_parse_float(
+            source.get("MAIL_CORE_IDLE_BACKOFF_MAX_S"), 300.0, "idle_backoff_max_s"
+        ),
+        idle_hysteresis_s=_parse_float(
+            source.get("MAIL_CORE_IDLE_HYSTERESIS_S"), 300.0, "idle_hysteresis_s"
+        ),
+        folder_patrol_enabled=_parse_bool(source.get("MAIL_CORE_FOLDER_PATROL_ENABLED"), True),
+        folder_patrol_interval_s=_parse_float(
+            source.get("MAIL_CORE_FOLDER_PATROL_INTERVAL_S"), 1200.0, "folder_patrol_interval_s"
+        ),
+        folder_patrol_max_probes=_parse_int(
+            source.get("MAIL_CORE_FOLDER_PATROL_MAX_PROBES"), 200, "folder_patrol_max_probes"
+        ),
+        folder_patrol_max_unprobed_s=_parse_float(
+            source.get("MAIL_CORE_FOLDER_PATROL_MAX_UNPROBED_S"), 2400.0, "folder_patrol_max_unprobed_s"
+        ),
         secret_key=source.get("MAIL_CORE_SECRET_KEY") or "",
         session_max_age=_parse_int(source.get("MAIL_CORE_SESSION_MAX_AGE"), 30 * 86400, "session_max_age"),
         cookie_secure=_parse_optional_bool(source.get("MAIL_CORE_COOKIE_SECURE")),

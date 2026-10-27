@@ -52,6 +52,22 @@ class MailCoreConfig:
     inbox_poll_interval_s: float = 1200.0
     schedule_interval_s: float = 60.0
 
+    # IDLE inbox watcher (t061). The quota is an independent budget for
+    # long-lived IDLE connections only; it never consumes the
+    # connection_slots task budget above.
+    idle_enabled: bool = True
+    idle_quota: int = 32
+    idle_max_duration_s: float = 1680.0
+    idle_backoff_base_s: float = 5.0
+    idle_backoff_max_s: float = 300.0
+    idle_hysteresis_s: float = 300.0
+
+    # All-folder STATUS patrol (t061)
+    folder_patrol_enabled: bool = True
+    folder_patrol_interval_s: float = 1200.0
+    folder_patrol_max_probes: int = 200
+    folder_patrol_max_unprobed_s: float = 2400.0
+
     # Security & Rate Limiting
     secret_key: str = ""
     session_max_age: int = 30 * 86400
@@ -100,3 +116,37 @@ class MailCoreConfig:
 
         if not math.isfinite(self.schedule_interval_s) or self.schedule_interval_s <= 0:
             raise ConfigError(f"invalid schedule_interval_s: {self.schedule_interval_s} (must be finite > 0)")
+
+        if self.idle_quota <= 0:
+            raise ConfigError(f"invalid idle_quota: {self.idle_quota} (must be > 0)")
+
+        if not math.isfinite(self.idle_max_duration_s) or self.idle_max_duration_s <= 0:
+            raise ConfigError(f"invalid idle_max_duration_s: {self.idle_max_duration_s} (must be finite > 0)")
+
+        if not math.isfinite(self.idle_backoff_base_s) or self.idle_backoff_base_s <= 0:
+            raise ConfigError(f"invalid idle_backoff_base_s: {self.idle_backoff_base_s} (must be finite > 0)")
+
+        if not math.isfinite(self.idle_backoff_max_s) or self.idle_backoff_max_s < self.idle_backoff_base_s:
+            raise ConfigError(
+                f"invalid idle_backoff_max_s: {self.idle_backoff_max_s} (must be finite and >= idle_backoff_base_s)"
+            )
+
+        if not math.isfinite(self.idle_hysteresis_s) or self.idle_hysteresis_s < 0:
+            raise ConfigError(f"invalid idle_hysteresis_s: {self.idle_hysteresis_s} (must be finite >= 0)")
+
+        if not math.isfinite(self.folder_patrol_interval_s) or self.folder_patrol_interval_s <= 0:
+            raise ConfigError(
+                f"invalid folder_patrol_interval_s: {self.folder_patrol_interval_s} (must be finite > 0)"
+            )
+
+        if self.folder_patrol_max_probes <= 0:
+            raise ConfigError(f"invalid folder_patrol_max_probes: {self.folder_patrol_max_probes} (must be > 0)")
+
+        if (
+            not math.isfinite(self.folder_patrol_max_unprobed_s)
+            or self.folder_patrol_max_unprobed_s < self.folder_patrol_interval_s
+        ):
+            raise ConfigError(
+                f"invalid folder_patrol_max_unprobed_s: {self.folder_patrol_max_unprobed_s} "
+                "(must be finite and >= folder_patrol_interval_s)"
+            )

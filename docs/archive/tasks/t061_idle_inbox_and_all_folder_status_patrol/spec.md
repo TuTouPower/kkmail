@@ -93,10 +93,10 @@
 
 <!-- /规范 -->
 
-- 各服务商 IDLE 细节差异（163 需先发 IMAP ID 命令、单 IP 长连接总数的实际限流阈值、各家 IDLE 超时时长）：UNVERIFIED-SPIKE，实现期以 fake 服务器覆盖协议行为，真实服务商差异经 AC-016 实测与部署观测核实，不阻断 backlog。
-- 现行 ImapProvider 底层为标准库 `imaplib`，原生无 IDLE API 且其阻塞 I/O 非线程安全、跨线程发 DONE 有竞态：UNVERIFIED-SPIKE，实现期先行核查并按已确认方向验证——扩展 `imaplib.Commands` 注册 IDLE，利用底层 socket 的 select / poll 实现带超时（28 分钟内主动 DONE 重入）且可被外部事件打断的监听循环；补齐方式限于 provider 内部，不得改变 provider 对其他同步路径的契约。
-- 个别服务商 STATUS 字段缺失（如 Coremail 系不返回 UIDNEXT）：UNVERIFIED-SPIKE，实现期以 fake 响应验证回退判定（以 MESSAGES / UNSEEN 组合变化触发 delta），真实服务商差异经 AC-016 实测核实，不阻断 backlog。
-- Microsoft Graph 文件夹廉价探测的可用查询与配额成本：UNVERIFIED-SPIKE，实现期核查 Graph provider 的文件夹计数 / 元数据查询成本；若无廉价探测手段，Graph 账号按本 spec 范围维持现状（跳过探测），不阻断 IMAP 路落地。
+- 各服务商 IDLE 细节差异：已核实（2026-10-28，fake IMAP 服务器协议实验 + 代码核查）。IDLE 为 RFC 2177 标准扩展、经 CAPABILITY 宣告，协议行为由 fake 服务器覆盖（推送、超时、断线、BYE 均可复现）；163 的 IMAP ID（RFC 2971）要求已由现行 `_connect` 在登录后统一发送，IDLE 会话复用同一连接路径即满足；各家 IDLE 超时按 RFC 建议以 28 分钟为客户端主动 DONE 重入上限治理。单 IP 长连接总数的服务商限流阈值无公开数值、本地不可核实，其风险由独立配额（默认 32）与抖动退避封顶，真实表现经 AC-016 部署实测与上线观测核实。
+- ImapProvider 的 IDLE 原语：已实证可行（2026-10-28，Python 3.12.3 + fake IMAP 服务器原型实验，产物 `.scratch/idle_spike/`）。`imaplib` 原生无 IDLE API；实验确认两条否定结论——`sock.settimeout()` 切片轮询会毒化 makefile 缓冲读（首次超时后 `OSError: cannot read from timed out object`），IDLE 后主线程再发命令（含 LOGOUT）会与读线程争抢响应字节。可行设计为：扩展 `imaplib.Commands` 注册 IDLE；每条 IDLE 连接由专属读线程在连接生命周期内独占 socket 读、行入队；控制线程为唯一写者（IDLE / DONE），从队列带超时消费未标记响应并在片间检查停止事件与最长 IDLE 时限；会话拆除以关闭 socket 完成、不发 LOGOUT。补齐限于 provider 内部，不改变其他同步路径契约。
+- 个别服务商 STATUS 字段缺失：已核实（2026-10-28，fake 响应解析实验）。STATUS 应答条目按可选解析，缺失维度记为未知（None）；变化判定只比较基线与探测双方均有值的维度，Coremail 类缺 UIDNEXT 时以 MESSAGES / UNSEEN 组合变化触发 delta；探测应答无任何可解析条目时按探测失败处理（跳过并下轮重试），不得按「无变化」静默放行。
+- Microsoft Graph 文件夹廉价探测：已核实（2026-10-28，代码核查现行 GraphProvider 与 Graph API 事实）。`GET /me/mailFolders/{id}` 单请求即返回 `totalItemCount` / `unreadItemCount`，属廉价计数探测（无消息内容），故 Graph 账号纳入巡检：以总数 / 未读为变化维度（无 UIDNEXT / modseq 等价物），成本由巡检单轮上限与轮转统一治理；原「无廉价手段则维持现状」分支不触发。
 
 ### 风险与回退
 

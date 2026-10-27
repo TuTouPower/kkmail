@@ -172,8 +172,14 @@ def schedule_periodic_inbox_sync(
     *,
     poll_interval_s: float | None = None,
     now: Any = None,
+    idle_held_account_ids: Any = None,
 ) -> int:
-    """Schedule overdue inbox delta syncs staggered across poll_interval_s (t057 AC-001, AC-002, AC-006, AC-007)."""
+    """Schedule overdue inbox delta syncs staggered across poll_interval_s (t057 AC-001, AC-002, AC-006, AC-007).
+
+    Accounts currently holding an IDLE seat (t061 AC-005) are skipped:
+    IDLE is their discovery channel. They re-enter polling as soon as
+    they lose the seat.
+    """
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import select
     from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
@@ -201,8 +207,11 @@ def schedule_periodic_inbox_sync(
     if not inbox_rows:
         return 0
 
+    held = set(idle_held_account_ids or ())
     overdue: list[tuple[uuid.UUID, uuid.UUID]] = []
     for folder_id, account_id in inbox_rows:
+        if account_id in held:
+            continue
         dedupe_key = f"delta:{account_id}:{folder_id}"
         in_flight = session.scalar(
             select(WorkerJob.id).where(
@@ -261,17 +270,43 @@ def _schedule_periodic_sync_once() -> int:
     try:
         with Session() as session:
             try:
-                enqueued = schedule_periodic_inbox_sync(session)
+                from mail_core.sync.idle_watcher import held_idle_account_ids
+
+                enqueued = schedule_periodic_inbox_sync(
+                    session, idle_held_account_ids=held_idle_account_ids()
+                )
                 session.commit()
                 if enqueued:
                     log.info("scheduled %s periodic inbox delta sync job(s)", enqueued)
-                return enqueued
             except Exception:
                 session.rollback()
                 raise
     except Exception:
         log.exception("periodic inbox scheduler sweep failed")
-        return 0
+        enqueued = 0
+
+    # t061: all-folder STATUS patrol sweep (isolated failure domain —
+    # a patrol failure must not mask the inbox scheduling above).
+    try:
+        from mail_core.sync.patrol import schedule_folder_status_patrol
+
+        with Session() as session:
+            try:
+                patrol_result = schedule_folder_status_patrol(session)
+                session.commit()
+                if patrol_result.changed:
+                    log.info(
+                        "patrol probed %s folder(s), %s changed, %s failed",
+                        patrol_result.probed,
+                        patrol_result.changed,
+                        patrol_result.failed,
+                    )
+            except Exception:
+                session.rollback()
+                raise
+    except Exception:
+        log.exception("folder status patrol sweep failed")
+    return enqueued
 
 
 def _claim_heartbeat_interval_s() -> float:
@@ -476,6 +511,19 @@ def run(poll_interval_s: float | None = None) -> None:
     heartbeat_loop = WorkerHeartbeatLoop(worker_id, Session, interval_s=heartbeat_interval)
     heartbeat_loop.start()
 
+    # t061: IDLE watcher runs inside the worker process; a watcher
+    # failure must never take the worker down (polling remains the
+    # authoritative discovery path).
+    idle_manager = None
+    try:
+        from mail_core.sync.idle_watcher import get_idle_manager
+
+        idle_manager = get_idle_manager(Session)
+        idle_manager.start()
+        log.info("idle watcher started (quota from central config)")
+    except Exception:
+        log.exception("idle watcher failed to start; polling remains authoritative")
+
     try:
         while not _stop and not _stop_event.is_set():
             now = time.monotonic()
@@ -516,6 +564,11 @@ def run(poll_interval_s: float | None = None) -> None:
             if sleep_s:
                 _wait_for_next_poll(sleep_s)
     finally:
+        if idle_manager is not None:
+            try:
+                idle_manager.stop()
+            except Exception:
+                log.exception("idle watcher stop failed")
         heartbeat_loop.stop(timeout=5.0)
     log.info("worker loop stopped")
 

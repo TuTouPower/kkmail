@@ -94,6 +94,17 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
     - 增量同步（`sync_folder_delta`）拉取新邮件元数据并持久化入库后（`upserted > 0`），自动在同事务中入队 `ARCHIVE_MIME_BATCH`（`priority = 60`，去重键 `archive_mime_batch:{account_id}`）；
     - Worker 消费该归档任务拉取完整 RFC 822 MIME 数据流，加密落入 Blob 存储并解析正文，直接将提取出的 HTML/纯文本持久化写入 PostgreSQL `message_bodies` 表，彻底闭环自动收信并提取具体内容存库链路。
 
+## IDLE 收件箱实时监听与全文件夹 STATUS 周期巡检 (t061)
+
+1. **IDLE 唤醒通道（信号与拉取分离）**：
+    - Worker 进程内 `IdleWatcherManager` 为符合条件的 IMAP 账号维持至多一条收件箱 IDLE 长连接；IDLE 只作新邮件到达信号，唤醒后入队既有 `SYNC_FOLDER_DELTA`（去重键 `delta:{account_id}:{folder_id}`），实际拉取仍走 delta 流水线（基线门禁、账号租约、fencing 不变），watcher 不直接读写邮件数据；
+    - 长连接走独立配额（集中配置默认 32，与账号总数无关），不占用 `connection_slots` 的 8 个任务槽位；配额按最近活动优先分配并带滞回防抖，持有 IDLE 的账号跳过 t057 收件箱轮询、让位后恢复轮询；
+    - 无 IDLE 能力、永久认证失败、反复断线退避中的账号自动降级为纯轮询，watcher 异常不影响调度主循环，也不把账号标记为永久 failed；watcher 状态经 `AppSetting` 的 `worker:idle_state` 记录暴露。
+2. **全文件夹 STATUS 周期巡检**：
+    - Worker 调度周期内对全部非收件箱、非 paused 文件夹做短连接 STATUS 探测（IMAP STATUS 不 SELECT 不 FETCH；Graph 以文件夹计数接口探测），探测连接走任务槽位预算；
+    - 探测基线快照存 `SyncCheckpoint.cursor` 的 `last_status`（总数 / UIDNEXT / 未读 / modseq），不新增数据库迁移；仅双方均有值的维度参与变化判定，无变化零入队，变化才以 `priority = 75` 入队 delta；单轮上限与最久未探测轮转治理规模，单夹失败隔离不影响其余文件夹；
+    - 集中配置提供 IDLE 与巡检两个独立开关，两者都关即回到 t057 现状。
+
 ## 同步模式边界治理与新账号全量隔离
 
 1. **新账号全量基线约束**：新账户首次接入必须通过 `SYNC_ACCOUNT_FOLDERS` 识别目录，对无 `full_scan_complete` Checkpoint 的文件夹触发 `SYNC_FOLDER_METADATA` 全量历史拉取，建立完整基线。
