@@ -65,6 +65,29 @@ def test_direct_pytest_refuses_before_collection_without_leaking_secrets(raw_url
     assert "must-not-appear" not in result.stdout + result.stderr
 
 
+def test_docker_failure_surfaces_redacted_stderr(monkeypatch):
+    from types import SimpleNamespace
+
+    def fake_run(cmd, **kwargs):
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="daemon boom password=hunter2 token: abc123 "
+                   "KKMAIL_TEST_PG_PASSWORD=s3cret postgres://u:p4ss@127.0.0.1/db",
+        )
+
+    monkeypatch.setattr(runtime.subprocess, "run", fake_run)
+    with pytest.raises(runtime.SafetyError) as excinfo:
+        runtime.docker("ps")
+    message = str(excinfo.value)
+    # stderr 的诊断内容应回显，但凭据赋值与 URL 密码必须脱敏
+    assert "daemon boom" in message
+    assert "hunter2" not in message
+    assert "abc123" not in message
+    assert "s3cret" not in message
+    assert "p4ss" not in message
+
+
 def test_required_pg_skip_is_failure_report_not_internal_error(tmp_path):
     probe = tmp_path / "test_skip_probe.py"
     probe.write_text("import pytest\ndef test_probe():\n    pytest.skip('PG required')\n")

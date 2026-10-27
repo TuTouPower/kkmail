@@ -32,6 +32,26 @@ class SafetyError(RuntimeError):
     """A test target could not be proven safe; no destructive fallback."""
 
 
+_CREDENTIAL_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(password|passwd|pwd|token|secret|api[_-]?key)(\s*[:=]\s*)\S+"
+)
+_URL_PASSWORD_RE = re.compile(r"(://[^\s:/@]+:)[^\s@]+(@)")
+
+
+def _redacted_diagnostic(stderr, *, limit: int = 500) -> str:
+    """回显 stderr 诊断尾段，但先脱敏凭据赋值与 URL 密码（A307）。
+
+    旧实现整段丢弃 stderr，docker 故障（守护进程/端口/配置）不可诊断；
+    直接回显又可能带出展开的环境变量值，故只对凭据模式做替换后回显尾段。
+    """
+    text = (stderr or "").strip()
+    if not text:
+        return ""
+    text = _CREDENTIAL_ASSIGNMENT_RE.sub(r"\1\2***", text)
+    text = _URL_PASSWORD_RE.sub(r"\1***\2", text)
+    return text[-limit:]
+
+
 def docker(*args):
     try:
         result = subprocess.run(["docker", *args], capture_output=True, text=True)
@@ -46,8 +66,11 @@ def docker(*args):
             "PostgreSQL suite and is not a full pass)"
         ) from None
     if result.returncode:
-        # Docker may include expanded environment values in diagnostics.
-        raise SafetyError("Docker command failed; check daemon, port and test-only configuration")
+        detail = _redacted_diagnostic(result.stderr)
+        message = "Docker command failed; check daemon, port and test-only configuration"
+        if detail:
+            message += f": {detail}"
+        raise SafetyError(message)
     return result.stdout.strip()
 
 
