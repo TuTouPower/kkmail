@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import ipaddress
+import logging
 import os
 import re
 import secrets
@@ -32,6 +33,8 @@ from mail_core.mail.storage.models import Account, AccountGroup
 from mail_core.providers.oauth import default_urllib_token_post, urllib_json_request
 from mail_core.security.auth import AuthPrincipal, get_session_epoch
 
+log = logging.getLogger("mail_core.accounts.oauth_flow")
+
 FLOW_TTL_SECONDS = 600.0
 EXPIRED_FLOW_MESSAGE = "授权流程已超过 10 分钟有效期，请重新发起授权。"
 
@@ -43,6 +46,7 @@ ProfileGetFn = Callable[[str, str], dict[str, Any]]
 
 _token_http_post: TokenPostFn | None = None
 _profile_http_get: ProfileGetFn | None = None
+_memory_fallback_warned = False
 
 
 def set_oauth_http_hooks(*, token_post: TokenPostFn | None = None, profile_get: ProfileGetFn | None = None) -> None:
@@ -52,19 +56,31 @@ def set_oauth_http_hooks(*, token_post: TokenPostFn | None = None, profile_get: 
 
 
 def reset_oauth_flow_state() -> None:
-    global _token_http_post, _profile_http_get
+    global _token_http_post, _profile_http_get, _memory_fallback_warned
     _token_http_post = None
     _profile_http_get = None
+    _memory_fallback_warned = False
     _unit_memory_store._mapping.clear()
 
 
 def _flow_store() -> CredentialStore:
+    global _memory_fallback_warned
     store = get_credential_store()
     if (
         isinstance(store, CompositeCredentialStore)
         and isinstance(store.db, DbCredentialStore)
         and not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip()
     ):
+        if not _memory_fallback_warned:
+            _memory_fallback_warned = True
+            # OAuth flows carry client_secret and staged tokens: without a
+            # database they live in plaintext process memory only (A179).
+            log.warning(
+                "OAuth flow store falling back to in-process in-memory plaintext store "
+                "because MAIL_CORE_DATABASE_URL is not set: flow data (including "
+                "client_secret and staged tokens) is non-durable, held in plaintext, "
+                "and lost on restart; configure MAIL_CORE_DATABASE_URL for durable storage"
+            )
         return _unit_memory_store
     return store
 
