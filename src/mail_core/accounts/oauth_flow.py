@@ -90,6 +90,35 @@ def _clear_matching_active_pointer(
             active.clear()
 
 
+def _cancel_superseded_pending_flow(
+    store: CredentialStore, sess_key: str, *, keep_flow_id: str
+) -> None:
+    """Cancel the session's previous *pending* flow when a new one starts (A162).
+
+    The old flow and its ``oauth_state`` record are removed, so a stale
+    authorize link / callback state can no longer complete after the user
+    restarted the flow. Flows that already left ``pending`` (e.g.
+    ``authorized``, awaiting consume) are deliberately preserved.
+    """
+    try:
+        pointer = load_json_secret(store, f"oauth_active:{sess_key}")
+    except KeyError:
+        return
+    old_flow_id = str(pointer.get("flow_id") or "").strip()
+    if not old_flow_id or old_flow_id == keep_flow_id:
+        return
+    try:
+        old_flow = load_json_secret(store, f"oauth_flow:{old_flow_id}")
+    except KeyError:
+        return
+    if str(old_flow.get("status") or "pending") != "pending":
+        return
+    old_state = str(old_flow.get("state") or "").strip()
+    _delete_ref(store, f"oauth_flow:{old_flow_id}")
+    if old_state:
+        _delete_ref(store, f"oauth_state:{old_state}")
+
+
 def session_binding_key(principal: AuthPrincipal | None) -> str:
     if principal is None:
         raise PermissionError("authentication required")
@@ -315,6 +344,7 @@ def start_oauth_flow(
         save_json_secret(store, f"oauth_state:{flow['state']}", {
             "flow_id": flow_id, "provider": norm_provider, "expires_at": flow["expires_at"],
         })
+    _cancel_superseded_pending_flow(store, sess_key, keep_flow_id=flow_id)
     with credential_edit(store, f"oauth_active:{sess_key}") as active:
         active.clear()
         active.update({"flow_id": flow_id, "updated_at": now})
