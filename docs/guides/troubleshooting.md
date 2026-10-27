@@ -35,9 +35,9 @@
 
 ### 方法一：直接更新数据库密码哈希（推荐）
 
-1. 生成新密码的 bcrypt 哈希：
+1. 生成新密码的 bcrypt 哈希（在仓库根目录、使用项目环境执行，即依赖已安装且 `PYTHONPATH` 可用；命令以隐藏输入提示键入新密码，不把密码明文写进命令或 bytes 字面量）：
     ```bash
-    python3 -c "import bcrypt; print(bcrypt.hashpw(b'<新密码>', bcrypt.gensalt()).decode())"
+    python3 -c "import bcrypt,getpass;print(bcrypt.hashpw(getpass.getpass().encode(), bcrypt.gensalt()).decode())"
     ```
 2. 连接数据库并更新 `auth_credentials`：
     ```sql
