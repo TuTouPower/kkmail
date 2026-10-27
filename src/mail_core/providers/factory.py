@@ -120,6 +120,9 @@ def is_private_host(host: str) -> bool:
 
 
 def validate_imap_host(host: str) -> None:
+    # Build-time check only: a DNS TOCTOU window remains until the
+    # connect-time peer re-check in imap.py — see the residual-risk note
+    # in providers/host_security.py (A350).
     if private_hosts_allowed():
         return
     if is_private_host(host):

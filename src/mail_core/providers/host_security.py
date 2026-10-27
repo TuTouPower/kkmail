@@ -1,4 +1,21 @@
-"""Shared IP checks for outbound IMAP host validation."""
+"""Shared IP checks for outbound IMAP host validation.
+
+Known residual risk — DNS TOCTOU window (A350, accepted): the host is
+resolved and checked at build time in ``factory.validate_imap_host``, but
+``imaplib`` resolves the name again independently when connecting, and
+:func:`validate_imap_peer_address` re-checks the connected peer only
+after the TCP connection (and, for SSL, the TLS handshake) has already
+been established. A DNS rebinding attacker can therefore make the
+build-time check see a public address while the actual connection lands
+on a restricted address: the connection itself (port probing / protocol
+interaction with an internal service) can happen before the peer check
+aborts the session. Credentials are still protected — the peer check
+runs before login, so no password is ever sent to a restricted peer —
+but the connection-level exposure is a residual risk accepted in place
+of pinning the connection to the pre-resolved IP (which would require
+replacing imaplib's transport and re-validating the TLS certificate
+against the original hostname/SAN).
+"""
 
 from __future__ import annotations
 
