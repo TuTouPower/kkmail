@@ -261,6 +261,37 @@ assert.deepStrictEqual(backendExitDisposition({}), { quit: true, showDialog: fal
   assert.ok(failed, 'non-2xx health must fail')
   bad.close()
 
+  // Health (A356): once the timeout settles the promise, no further
+  // request may be issued — a retry tick scheduled before the deadline
+  // must be dropped, not fired against the backend after rejection.
+  {
+    const hitTimes = []
+    const t0 = Date.now()
+    const counting = http.createServer((_req, res) => {
+      hitTimes.push(Date.now() - t0)
+      res.statusCode = 500
+      res.end('no')
+    })
+    await new Promise((r) => counting.listen(0, '127.0.0.1', r))
+    const countingPort = counting.address().port
+    let rejected = false
+    try {
+      await waitForHealth(`http://127.0.0.1:${countingPort}/health`, 500, { requestTimeoutMs: 200 })
+    } catch (e) {
+      rejected = true
+      assert.match(String(e.message), /timeout|bad status/)
+    }
+    assert.ok(rejected, 'health probe must reject at the timeout')
+    const hitsAtReject = hitTimes.length
+    assert.ok(
+      hitTimes.every((t) => t < 560),
+      `no health request may be issued after the 500ms deadline, got hits at ${hitTimes.join(',')}`,
+    )
+    await new Promise((r) => setTimeout(r, 700))
+    assert.strictEqual(hitTimes.length, hitsAtReject, 'no retry may fire after the promise settled')
+    counting.close()
+  }
+
   // Health: accept 204
   const ok = http.createServer((_req, res) => { res.statusCode = 204; res.end() })
   await new Promise((r) => ok.listen(0, '127.0.0.1', r))

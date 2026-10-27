@@ -212,10 +212,40 @@ function waitForHealth(url, timeoutMs = 30000, opts = {}) {
   const shouldStop = opts.shouldStop || (() => null)
 
   return new Promise((resolve, reject) => {
+    // A356: once the promise settles (success, timeout, or shouldStop),
+    // no retry may fire again. A deadline timer settles the timeout at
+    // timeoutMs itself; every settle clears any pending retry tick, and
+    // tick/callbacks check `settled` before issuing another request.
+    let settled = false
+    let retryTimer = null
+    let deadlineTimer = null
+    const settle = (fn, value) => {
+      if (settled) return
+      settled = true
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
+      if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = null }
+      fn(value)
+    }
+    const succeed = () => settle(resolve, true)
+    const fail = (err) => settle(reject, err)
+    const scheduleRetry = () => {
+      if (settled) return
+      retryTimer = setTimeout(() => { retryTimer = null; tick() }, 300)
+    }
+    deadlineTimer = setTimeout(() => {
+      deadlineTimer = null
+      fail(new Error('backend timeout'))
+    }, Math.max(0, timeoutMs))
+
     const tick = () => {
+      if (settled) return
       const stopErr = shouldStop()
       if (stopErr) {
-        reject(stopErr)
+        fail(stopErr)
+        return
+      }
+      if (Date.now() - started > timeoutMs) {
+        fail(new Error('backend timeout'))
         return
       }
       // A386 (option B): the instance token travels only through the
@@ -226,22 +256,24 @@ function waitForHealth(url, timeoutMs = 30000, opts = {}) {
       // probe to the sidecar we spawned.
       const req = http.get(url, (res) => {
         res.resume()
+        if (settled) return
         if (isOkStatus(res.statusCode)) {
-          resolve(true)
+          succeed()
           return
         }
         if (Date.now() - started > timeoutMs) {
-          reject(new Error(`backend health bad status ${res.statusCode}`))
+          fail(new Error(`backend health bad status ${res.statusCode}`))
         } else {
-          setTimeout(tick, 300)
+          scheduleRetry()
         }
       })
       req.setTimeout(requestTimeoutMs, () => {
         req.destroy(new Error('health request timeout'))
       })
       req.on('error', () => {
-        if (Date.now() - started > timeoutMs) reject(new Error('backend timeout'))
-        else setTimeout(tick, 300)
+        if (settled) return
+        if (Date.now() - started > timeoutMs) fail(new Error('backend timeout'))
+        else scheduleRetry()
       })
     }
     tick()
