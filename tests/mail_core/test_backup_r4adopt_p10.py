@@ -426,3 +426,70 @@ def test_a67_verify_restored_state_accepts_in_root_storage_path(
     backup_package._verify_restored_state(
         TARGET_URL, target, inventory, db_reachable=True
     )
+
+
+# --- A44: create must write source_database_identity into the manifest -----
+
+
+def test_a44_manifest_records_source_database_identity(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        backup_package,
+        "_read_database_identity",
+        lambda url: backup_package.DatabaseIdentity("424242", 1234, "source"),
+    )
+    pkg_dir = _make_package(tmp_path / "case")
+
+    man = json.loads((pkg_dir / "MANIFEST.json").read_text())
+    assert man["source_database_identity"] == {
+        "system_identifier": "424242",
+        "database_oid": 1234,
+        "database_name": "source",
+    }
+
+
+def test_a44_manifest_identity_null_when_source_unreachable(tmp_path):
+    # No identity reader patched: the source DB is unreachable in unit
+    # mode, so the manifest records null and package creation still works.
+    pkg_dir = _make_package(tmp_path / "case")
+
+    man = json.loads((pkg_dir / "MANIFEST.json").read_text())
+    assert man["source_database_identity"] is None
+    assert (pkg_dir / "postgres.dump").is_file()
+
+
+def test_a44_restore_refuses_when_manifest_identity_matches_target(
+    tmp_path, monkeypatch
+):
+    shared = backup_package.DatabaseIdentity("777777", 42, "target")
+
+    def selective_identity(url):
+        if "target" in url:
+            return shared
+        if "source" in url:
+            # At backup-creation time the source identity is read and
+            # recorded; at restore time the source is offline, so the
+            # manifest copy is the only source identity available.
+            if selective_identity.phase == "create":
+                return shared
+            raise RuntimeError("source database unreachable at restore time")
+        raise RuntimeError("unexpected url")
+
+    selective_identity.phase = "create"
+    monkeypatch.setattr(
+        backup_package, "_read_database_identity", selective_identity
+    )
+    pkg_dir = _make_package(tmp_path / "case")
+    man = json.loads((pkg_dir / "MANIFEST.json").read_text())
+    assert man["source_database_identity"]["system_identifier"] == "777777"
+
+    selective_identity.phase = "restore"
+    # Target DB is reachable and empty (its identity reads fine above);
+    # only the source is offline at restore time.
+    monkeypatch.setattr(
+        backup_package, "_assert_target_database_is_empty", lambda _url: None
+    )
+    fake = _FakePgRestore(0).install(monkeypatch)
+    target = tmp_path / "restored-blobs"
+    with pytest.raises(RuntimeError, match="refusing to restore onto source database"):
+        _restore(pkg_dir, target)
+    assert fake.calls == []

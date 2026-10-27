@@ -56,6 +56,11 @@ class BackupManifest:
     encrypted: bool = False
     backup_key_version: int | None = None
     note: str = "Encrypt with MAIL_CORE_BACKUP_KEY (separate from blob keys) before offsite copy."
+    # Cluster identity of the source database at package-creation time.
+    # Restore uses it to refuse restoring onto the source cluster even
+    # when the source is unreachable at restore time; ``None`` when the
+    # identity could not be read while packaging (offline drills).
+    source_database_identity: dict[str, str | int | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -599,6 +604,24 @@ def _pg_dump_to(dest: Path, url: str, *, allow_stub: bool = False) -> str:
     return _SQL_STUB_METHOD
 
 
+def _source_identity_for_manifest(url: str) -> dict[str, str | int | None] | None:
+    """Best-effort source cluster identity for the manifest.
+
+    Returns ``None`` when the source database cannot be inspected while
+    packaging (e.g. offline drills); the restore-side same-cluster guard
+    then relies on the caller-supplied source URL alone.
+    """
+    try:
+        ident = _read_database_identity(url)
+    except Exception:
+        return None
+    return {
+        "system_identifier": ident.system_identifier,
+        "database_oid": ident.database_oid,
+        "database_name": ident.database_name,
+    }
+
+
 def _build_plain_dir(
     out: Path,
     *,
@@ -634,6 +657,7 @@ def _build_plain_dir(
         blob_root=_MANIFEST_BLOB_LOGICAL_NAME,
         members=members,
         encrypted=False,
+        source_database_identity=_source_identity_for_manifest(url),
     )
 
 
@@ -754,6 +778,7 @@ def create_backup_package(
             encrypted=True,
             backup_key_version=version,
             note=manifest.note,
+            source_database_identity=manifest.source_database_identity,
         )
         out_man = enc_stage / _MANIFEST_FILENAME
         out_man.write_text(
