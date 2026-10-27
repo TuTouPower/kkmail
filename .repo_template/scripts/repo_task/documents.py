@@ -2,6 +2,8 @@
 
 import os
 import re
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -100,20 +102,58 @@ def dump_front_matter(fm: dict) -> str:
     lines.append("---")
     return "\n".join(lines) + "\n"
 
-def atomic_write_text(path: Path | str, content: str, *, encoding: str = "utf-8") -> None:
-    """tmp 文件 + fsync + os.replace 原子写，防掉电/中断产生半写状态。
+_DEFAULT_MODE: int | None = None
 
-    使用同目录唯一临时文件，防止并发写入相互覆盖；保留已有目标权限或应用系统 umask，
-    写完后 os.replace 原子替换。
+
+def _default_file_mode() -> int:
+    """新文件默认权限：0o666 & ~umask，进程内只推导一次并缓存。
+
+    推导放在一次性子进程里读继承的 umask：os.umask 是进程级全局状态，
+    在本进程内读写它会与并发线程/其他调用方互相干扰（A71）。
+    子进程不可用时回退 0o644（umask 022 的常见结果）。
+    """
+    global _DEFAULT_MODE
+    if _DEFAULT_MODE is None:
+        try:
+            out = subprocess.run(
+                [sys.executable, "-c", "import os; print(oct(0o666 & ~os.umask(0)))"],
+                capture_output=True, text=True, timeout=10,
+            )
+            _DEFAULT_MODE = int(out.stdout.strip(), 0) if out.returncode == 0 else 0o644
+        except (OSError, ValueError, subprocess.SubprocessError):
+            _DEFAULT_MODE = 0o644
+    return _DEFAULT_MODE
+
+
+def _fsync_dir(directory: Path) -> None:
+    """POSIX 下对目录 fd 做 fsync，使刚 replace 的目录项落盘；失败静默忽略。"""
+    if os.name != "posix":
+        return
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def atomic_write_text(path: Path | str, content: str, *, encoding: str = "utf-8") -> None:
+    """tmp 文件 + fsync + os.replace + 目录 fsync 原子写，防中断产生半写状态。
+
+    使用同目录唯一临时文件，防止并发写入相互覆盖；保留已有目标权限，
+    新文件用 _default_file_mode() 的缓存推导值。replace 后对父目录 fsync，
+    目录项落盘才算完成；仍不承诺断电安全——介质/文件系统不兑现 fsync 时无效。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         mode = path.stat().st_mode & 0o7777
     else:
-        current_umask = os.umask(0)
-        os.umask(current_umask)
-        mode = 0o666 & ~current_umask
+        mode = _default_file_mode()
 
     temporary_file = tempfile.NamedTemporaryFile(
         mode="w",
@@ -135,6 +175,7 @@ def atomic_write_text(path: Path | str, content: str, *, encoding: str = "utf-8"
         except OSError:
             pass
         os.replace(temporary, path)
+        _fsync_dir(path.parent)
     except BaseException:
         try:
             temporary.unlink(missing_ok=True)
@@ -154,9 +195,7 @@ def write_front_matter_many(files: list[tuple[Path, dict, str]]) -> None:
     两阶段把 conflict 关系清理等批量写的「部分更新」窗口缩到 replace 循环（RT-008）。
     """
     staged: list[tuple[Path, Path, int]] = []
-    current_umask = os.umask(0)
-    os.umask(current_umask)
-    default_mode = 0o666 & ~current_umask
+    default_mode = _default_file_mode()
 
     try:
         for path, fm, body in files:

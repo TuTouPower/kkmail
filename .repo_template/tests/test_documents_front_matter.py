@@ -72,6 +72,43 @@ def test_unquoted_plain_value_still_strips_spaced_comment():
     assert fm["note"] == "plain value"
 
 
+def test_atomic_write_does_not_touch_process_umask_and_fsyncs_parent_dir(
+    tmp_path, monkeypatch
+):
+    import os
+
+    import repo_task.documents as documents
+
+    fsynced_dirs = []
+    real_fsync_dir = documents._fsync_dir
+    monkeypatch.setattr(
+        documents, "_fsync_dir",
+        lambda d: (fsynced_dirs.append(Path(d)), real_fsync_dir(d))[1],
+    )
+
+    def forbidden_umask(*args):
+        raise AssertionError("atomic_write_text 不得调用进程级 os.umask")
+
+    monkeypatch.setattr(os, "umask", forbidden_umask)
+    target = tmp_path / "task.md"
+    documents.atomic_write_text(target, "content")
+    assert target.read_text(encoding="utf-8") == "content"
+    assert fsynced_dirs == [tmp_path]
+    # 默认权限来自缓存的推导值（一次性子进程读取继承的 umask），新建文件应恰为该值
+    current = os.stat(target).st_mode & 0o777
+    assert current == documents._default_file_mode()
+
+
+def test_atomic_write_docstring_no_longer_promises_power_loss_safety():
+    import inspect
+
+    import repo_task.documents as documents
+
+    doc = inspect.getdoc(documents.atomic_write_text)
+    assert "防掉电" not in doc
+    assert "半写" in doc
+
+
 def test_add_edit_entry_rejects_newlines_in_title_and_note():
     from repo_task import lifecycle
 
