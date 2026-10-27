@@ -68,15 +68,37 @@ def _wait_for_api_ready(base_url: str, proc) -> bool:
     return False
 
 
+def _parse_env_test_value(raw: str) -> str:
+    """Parse one .env.test value (subset grammar; see load_env_test)."""
+    v = raw.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+        return v[1:-1]  # strip exactly one matching pair, never more
+    # Unquoted value: a trailing comment starts at the first " #".
+    idx = v.find(" #")
+    if idx != -1:
+        v = v[:idx].rstrip()
+    return v
+
+
 def load_env_test():
+    """Load ROOT/.env.test into os.environ without overriding existing keys.
+
+    Subset grammar (deliberately narrower than shell ``source``; A306):
+    one ``KEY=VALUE`` per line, optional ``export `` prefix, blank lines
+    and ``#`` comment lines are ignored, a value may be wrapped in one
+    pair of matching single/double quotes (stripped as a pair only), and
+    an unquoted value may carry a trailing `` # comment``. No variable
+    expansion, escape processing, or multiline values.
+    """
     env_file = ROOT / ".env.test"
     if env_file.is_file():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
+            if line.startswith("export "):
+                line = line[len("export "):].lstrip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
-                v = v.strip("'\"")
-                os.environ.setdefault(k.strip(), v)
+                os.environ.setdefault(k.strip(), _parse_env_test_value(v))
 
 
 def run_cmd(cmd: list[str], **kwargs) -> str:
