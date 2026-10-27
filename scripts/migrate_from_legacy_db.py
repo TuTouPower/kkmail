@@ -214,14 +214,41 @@ def _legacy_uid(id_mode: str | None, provider_message_id: str | None) -> int | N
     return uid if 0 < uid <= _MAX_POSTGRES_BIGINT else None
 
 
+_RETAINED_MESSAGE_BATCH_SIZE = 1000
+
+
+def _commit_message_batch(session) -> None:
+    """Commit one message batch and release its identity-map entries.
+
+    Duck-typed so lightweight session doubles without commit/expunge
+    (unit-test fakes) keep working; real sessions always take both calls.
+    """
+    commit = getattr(session, "commit", None)
+    if callable(commit):
+        commit()
+    expunge_all = getattr(session, "expunge_all", None)
+    if callable(expunge_all):
+        expunge_all()
+
+
 def migrate_retained_messages(
     session,
     sqlite_cursor: sqlite3.Cursor,
     *,
     account_id_map: dict[int, uuid.UUID],
     folder_id_map: dict[uuid.UUID, uuid.UUID],
+    batch_size: int = _RETAINED_MESSAGE_BATCH_SIZE,
 ) -> MessageMigrationReport:
-    """Import retained messages from a read-only legacy SQLite cursor."""
+    """Import retained messages from a read-only legacy SQLite cursor.
+
+    Commits and expunges every ``batch_size`` processed rows so a large
+    legacy database neither holds one transaction/lock for the whole run
+    nor keeps every migrated Message in the identity map; report counts
+    accumulate across batches. The caller still commits the final partial
+    batch (together with any follow-up work in the same session).
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
     migrated = 0
     skipped_existing = 0
     imported_without_remote_id = 0
@@ -245,6 +272,15 @@ def migrate_retained_messages(
     )
     legacy_msgs = sqlite_cursor.execute("SELECT * FROM retained_normal_mail_messages ORDER BY id DESC")
 
+    processed_in_batch = 0
+
+    def note_processed_row() -> None:
+        nonlocal processed_in_batch
+        processed_in_batch += 1
+        if processed_in_batch >= batch_size:
+            _commit_message_batch(session)
+            processed_in_batch = 0
+
     for legacy_msg in legacy_msgs:
         new_account_id = account_id_map.get(legacy_msg["account_id"])
         folder_id = folder_id_map.get(new_account_id) if new_account_id else None
@@ -267,6 +303,7 @@ def migrate_retained_messages(
             and session.query(Message).filter_by(account_id=new_account_id, remote_id=remote_id).first()
         ):
             skipped_existing += 1
+            note_processed_row()
             continue
 
         subject = legacy_msg["subject"] if legacy_msg["subject"] else ""
@@ -328,6 +365,7 @@ def migrate_retained_messages(
         migrated += 1
         if remote_id is None:
             imported_without_remote_id += 1
+        note_processed_row()
 
     return MessageMigrationReport(
         migrated=migrated,
