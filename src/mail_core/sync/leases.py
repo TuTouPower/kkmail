@@ -109,6 +109,15 @@ def heartbeat_lease(
     ).scalar_one_or_none()
     if row is None or row.owner_id != owner_id or int(row.fencing_token) != fencing_token:
         raise FencingMismatch("lease heartbeat rejected")
+    # A349: same expiry rule as assert_fencing — an expired lease must
+    # not be revived by its old holder's heartbeat (reconcile uses this
+    # heartbeat as the per-batch fencing gate). Naive timestamps are
+    # read as UTC, matching assert_fencing.
+    expires_at = row.lease_expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at is None or expires_at <= now:
+        raise FencingMismatch("lease heartbeat rejected: lease expired")
     row.heartbeat_at = now
     row.lease_expires_at = now + ttl
     session.flush()
