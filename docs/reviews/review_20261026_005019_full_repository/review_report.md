@@ -150,7 +150,7 @@ P1 表示优先处理的数据破坏风险、安全缺口、可靠性缺陷或�
 
 **代码入口**：
 
-- [.github/workflows/ci.yml](../../../.github/workflows/ci.yml)：desktop-quality，99–129 行。
+- `.github/workflows/ci.yml`（纯文本引用；该文件已于 49a6d024 移除）：desktop-quality，99–129 行。
 - [src/desktop/scripts/packaged-smoke.js](../../../src/desktop/scripts/packaged-smoke.js)：建包与真实 SPA 断言，44–77 行。
 - [src/desktop/package.json](../../../src/desktop/package.json)：build.extraResources。
 
