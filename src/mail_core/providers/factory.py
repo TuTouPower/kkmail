@@ -6,6 +6,7 @@ import ipaddress
 import json
 import logging
 import socket
+import time
 
 from mail_core.accounts.credentials import CredentialStore, get_credential_store
 from mail_core.mail.storage.models import Account
@@ -27,6 +28,43 @@ from mail_core.providers.stub_memory import MemoryProvider
 from mail_core.security.redact import safe_error
 
 logger = logging.getLogger(__name__)
+
+
+# Process-level short-TTL cache for the no-session fetch-timeout lookup:
+# build_provider runs per job, and opening a fresh DB session every call
+# just to read one settings row is wasteful. Only successful lookups are
+# cached; failures keep the per-call warning + 60s fallback (A274).
+_FETCH_TIMEOUT_CACHE_TTL_SECONDS = 30.0
+_fetch_timeout_cache: tuple[float, float] | None = None
+
+
+def _clear_fetch_timeout_cache() -> None:
+    global _fetch_timeout_cache
+    _fetch_timeout_cache = None
+
+
+def _fetch_timeout_seconds_cached(account_id: object) -> float:
+    global _fetch_timeout_cache
+    now = time.monotonic()
+    cached = _fetch_timeout_cache
+    if cached is not None and cached[1] > now:
+        return cached[0]
+    try:
+        from mail_core.accounts.settings_store import get_fetch_timeout_seconds
+        from mail_core.db.session import get_session_factory
+
+        SessionFactory = get_session_factory()
+        with SessionFactory() as s:
+            value = float(get_fetch_timeout_seconds(s))
+    except Exception as exc:
+        logger.warning(
+            "fetch timeout lookup failed for account id=%s; using default 60s: %s",
+            account_id,
+            safe_error(exc),
+        )
+        return 60.0
+    _fetch_timeout_cache = (value, now + _FETCH_TIMEOUT_CACHE_TTL_SECONDS)
+    return value
 
 
 def _oauth_transport(
@@ -157,19 +195,7 @@ def build_provider(
             )
             timeout = 60.0
     elif timeout is None:
-        try:
-            from mail_core.accounts.settings_store import get_fetch_timeout_seconds
-            from mail_core.db.session import get_session_factory
-            SessionFactory = get_session_factory()
-            with SessionFactory() as s:
-                timeout = get_fetch_timeout_seconds(s)
-        except Exception as exc:
-            logger.warning(
-                "fetch timeout lookup failed for account id=%s; using default 60s: %s",
-                account.id,
-                safe_error(exc),
-            )
-            timeout = 60.0
+        timeout = _fetch_timeout_seconds_cached(account.id)
 
     effective_timeout = float(timeout) if timeout is not None else 60.0
 
