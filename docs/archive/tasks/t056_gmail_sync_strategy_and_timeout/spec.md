@@ -79,3 +79,8 @@ Gmail IMAP 采用标签（Label）多重映射机制，其特有的虚拟全量�
 ### Finalization 时更新的 blueprint
 
 - `docs/blueprint/architecture.md`：记录 Gmail 虚拟标签文件夹默认 paused 策略与 IMAP 超时规范。
+
+## 归档勘误注记（2026-10-27 补）
+
+- 本 spec 范围与 AC-004 所述 `sync_folder_metadata` 的实现落点统一为 `src/mail_core/sync/engine.py` 同步阶段（该函数默认值 `max_pages=10`）；正文未逐处标注文件路径处，以本注记为准。
+- `src/mail_core/sync/delta.py` 的 delta 路径（`sync_folder_delta`）另有独立默认值 `max_pages=20`，不在本 task 范围内；背景中「单任务循环 20 页」指调整前的同步引擎行为，勿与 delta 路径的 20 页混同。
