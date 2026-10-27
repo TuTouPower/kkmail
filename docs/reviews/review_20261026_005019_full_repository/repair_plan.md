@@ -1,5 +1,7 @@
 # kkmail 审阅问题与 p045–p052 修复计划
 
+> 状态变更注记（2026-10-27）：本文所称「未实施」为计划制定时点的状态；本包计划已实施完毕，最终状态见同目录 [repair_results.md](repair_results.md)。历史正文不改写。
+
 - 制定时间：`2026-10-26T01:10:44+08:00`。
 - 初版核对基准：`55a54fb3fb37460671cb3b9bb07a69c08131390f`；技术方案补充核对基准：`60366915c5efe5b0eeb7c7303835f2c58883faaa`。相对审阅终点 `6f6605b6`，新增提交只调整 pending/review 文档，相关生产实现未变化。
 - 来源：[审阅报告](review_report.md)、[验证证据](review_evidence.md)、[p045](../../pending/todo/p045_sidebar_search_click_outside_auto_hide.md)、[p046](../../pending/todo/p046_sync_button_spin_and_remove_banner.md)、[p047](../../pending/todo/p047_incoming_mail_sync_latency.md)、[p048](../../pending/todo/p048_message_reader_already_archived_race.md)、[p049](../../pending/todo/p049_settings_header_cleanup_and_sidebar_toggle_relocate.md)、[p050](../../pending/todo/p050_sidebar_settings_button_background_style.md)、[p051](../../pending/todo/p051_sidebar_account_folder_order_and_indent.md)、[p052](../../pending/todo/p052_ui_reference_overlay_prod_and_shortcut_setting.md)。
