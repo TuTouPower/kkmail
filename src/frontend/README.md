@@ -21,7 +21,8 @@ Optional: set `VITE_API_BASE` (or runtime `__KKMAIL_CONFIG__.apiBase`) when the 
 |---|---|
 |`api/`|HTTP client, mail-core helpers, OpenAPI-generated types|
 |`components/`|Sidebar, MessageList, MessageReader, Settings, Login|
-|`hooks/`|SSE realtime|
+|`hooks/`|SSE realtime (`useMailCoreRealtime`), scope sync + authoritative polling (`use_scope_sync`)|
+|`public/theme_bootstrap.js`|Pre-render theme bootstrap loaded by `index.html` before the app mounts|
 |`store/`|Zustand UI state|
 |`design-system/`|CSS tokens|
 |`lib/`|mailKey, sanitize/srcdoc, viewport breakpoint, helpers|
