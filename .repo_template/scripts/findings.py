@@ -102,8 +102,9 @@ def cmd_list(_args: argparse.Namespace) -> None:
             if not ENTRY_FILE_RE.match(path.name):
                 continue
             # 摘要取 H1 标题（# dNNN 描述）——文件首行必有，字段名变体不影响检索
+            # A343（与 pending list 同病）：非 UTF-8 字节以替换字符继续列出。
             title = ""
-            for line in path.read_text(encoding="utf-8").splitlines():
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
                 if line.startswith("# "):
                     title = line[2:].strip()
                     break

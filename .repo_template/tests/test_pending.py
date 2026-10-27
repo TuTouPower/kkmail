@@ -416,6 +416,31 @@ def test_pending_list_shows_state(tmp_path, monkeypatch, capsys):
     assert "p001_demo" in out
 
 
+def test_pending_list_tolerates_non_utf8_entry(tmp_path, monkeypatch, capsys):
+    """A343：单个条目文件含非 UTF-8 字节时 list 不得整表崩溃，以替换字符继续列出。"""
+    repo = _init_repo(tmp_path)
+    _bind(monkeypatch, repo)
+    bad = repo / "docs/pending/todo/p001_bad.md"
+    bad.write_bytes(b"# p001 broken \xff\xfe title\n")
+    pending_mod.main(["list"])
+    out = capsys.readouterr().out
+    assert "p001_bad" in out
+    assert "\ufffd" in out
+
+
+def test_findings_list_tolerates_non_utf8_entry(tmp_path, monkeypatch, capsys):
+    """A343（findings 同病）：findings list 对非 UTF-8 条目文件同样容错。"""
+    repo = _init_repo(tmp_path)
+    _bind(monkeypatch, repo)
+    findings_dir = repo / "docs/findings"
+    findings_dir.mkdir(parents=True, exist_ok=True)
+    (findings_dir / "d001_bad.md").write_bytes(b"# d001 broken \xff\xfe title\n")
+    findings_mod.main(["list"])
+    out = capsys.readouterr().out
+    assert "d001_bad" in out
+    assert "\ufffd" in out
+
+
 def test_cli_rejects_missing_slug():
     with pytest.raises(SystemExit) as exc:
         pending_mod.main(["new"])
