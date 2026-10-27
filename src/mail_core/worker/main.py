@@ -53,7 +53,12 @@ def request_stop() -> None:
 
 
 def _reclaim_once() -> int:
-    """Periodically reclaim stuck claims and prune expired published outbox rows."""
+    """Periodically reclaim stuck claims and prune expired published outbox rows.
+
+    A68: each sweep runs in its own session/transaction. A failure in one
+    sweep is logged and counted as zero for that sweep only; it must not roll
+    back or skip the remaining sweeps for the next RECLAIM_INTERVAL_S.
+    """
     try:
         from datetime import timedelta
 
@@ -61,49 +66,85 @@ def _reclaim_once() -> int:
         from mail_core.blobs.quota import prune_expired_quota_reservations
         from mail_core.db.session import get_session_factory
         from mail_core.realtime.outbox import prune_published
+        from mail_core.sync.execution import converge_orphaned_bindings
         from mail_core.sync.jobs import prune_completed_jobs, reclaim_stale_claims
+        from mail_core.worker.heartbeat import cleanup_stale_heartbeats
     except Exception as exc:  # pragma: no cover
         log.error("worker degraded: reclaim imports failed (%s); skipping reclaim", exc)
         return 0
 
     Session = get_session_factory()
-    with Session() as session:
+    reclaim_sec = _positive_float_setting("MAIL_CORE_RECLAIM_STALE_SECONDS", 300.0)
+    # (name, sweep, log message, counted in the return total). The counted
+    # subset preserves the historical return-value composition.
+    sweeps = [
+        (
+            "reclaim_stale_claims",
+            lambda s: reclaim_stale_claims(s, older_than=timedelta(seconds=reclaim_sec), limit=100),
+            "reclaimed %s stale CLAIMED job(s)",
+            True,
+        ),
+        (
+            "reclaim_stale_archive_claims",
+            lambda s: reclaim_stale_archive_claims(s, older_than=timedelta(minutes=15), limit=100),
+            "reclaimed %s stale archive_in_progress claim(s)",
+            True,
+        ),
+        (
+            "prune_published",
+            lambda s: prune_published(s, older_than=timedelta(days=7), limit=5000),
+            "pruned %s published outbox row(s)",
+            True,
+        ),
+        (
+            "prune_completed_jobs",
+            lambda s: prune_completed_jobs(s, older_than=timedelta(days=7), limit=1000),
+            "pruned %s completed/failed worker job(s)",
+            True,
+        ),
+        (
+            "converge_orphaned_bindings",
+            lambda s: converge_orphaned_bindings(s, limit=200),
+            "converged %s orphaned sync-request binding(s)",
+            False,
+        ),
+        (
+            "prune_expired_quota_reservations",
+            lambda s: prune_expired_quota_reservations(s),
+            "pruned %s expired blob quota reservation(s)",
+            False,
+        ),
+        (
+            "maybe_resume_quota_paused_archives",
+            lambda s: maybe_resume_quota_paused_archives(s, limit=100),
+            "resumed %s quota paused archive(s)",
+            False,
+        ),
+        (
+            "cleanup_stale_heartbeats",
+            lambda s: cleanup_stale_heartbeats(s),
+            "cleaned %s expired worker heartbeat(s)",
+            True,
+        ),
+    ]
+    total = 0
+    for name, sweep, message, counted in sweeps:
         try:
-            reclaim_sec = _positive_float_setting("MAIL_CORE_RECLAIM_STALE_SECONDS", 300.0)
-            n = reclaim_stale_claims(session, older_than=timedelta(seconds=reclaim_sec), limit=100)
-            if n:
-                log.info("reclaimed %s stale CLAIMED job(s)", n)
-            a = reclaim_stale_archive_claims(session, older_than=timedelta(minutes=15), limit=100)
-            if a:
-                log.info("reclaimed %s stale archive_in_progress claim(s)", a)
-            pruned = prune_published(session, older_than=timedelta(days=7), limit=5000)
-            if pruned:
-                log.info("pruned %s published outbox row(s)", pruned)
-            pruned_jobs = prune_completed_jobs(session, older_than=timedelta(days=7), limit=1000)
-            if pruned_jobs:
-                log.info("pruned %s completed/failed worker job(s)", pruned_jobs)
-            from mail_core.sync.execution import converge_orphaned_bindings
-
-            converged = converge_orphaned_bindings(session, limit=200)
-            if converged:
-                log.info("converged %s orphaned sync-request binding(s)", converged)
-            pruned_reservations = prune_expired_quota_reservations(session)
-            if pruned_reservations:
-                log.info("pruned %s expired blob quota reservation(s)", pruned_reservations)
-            resumed = maybe_resume_quota_paused_archives(session, limit=100)
-            if resumed:
-                log.info("resumed %s quota paused archive(s)", resumed)
-            from mail_core.worker.heartbeat import cleanup_stale_heartbeats
-
-            cleaned_heartbeats = cleanup_stale_heartbeats(session)
-            if cleaned_heartbeats:
-                log.info("cleaned %s expired worker heartbeat(s)", cleaned_heartbeats)
-            session.commit()
-            return n + a + pruned + pruned_jobs + cleaned_heartbeats
+            with Session() as session:
+                try:
+                    value = sweep(session) or 0
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
         except Exception:
-            session.rollback()
-            log.exception("reclaim_stale_claims failed")
-            return 0
+            log.exception("reclaim sweep %s failed", name)
+            continue
+        if value:
+            log.info(message, value)
+        if counted:
+            total += value
+    return total
 
 
 def _claim_heartbeat_interval_s() -> float:
