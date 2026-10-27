@@ -182,19 +182,29 @@ class _PsycopgSlotBackend:
         import psycopg
 
         # A failure here is a control-plane failure, not a provider error.
+        # A375: never interpolate the raw exception — psycopg connection
+        # errors can embed the full DSN (host, user, password). Keep only
+        # the redacted summary (exception class name + controlled fields)
+        # via safe_error.
+        from mail_core.security.redact import safe_error
+
         try:
             self._conn = psycopg.connect(dsn, autocommit=True)
         except Exception as exc:
-            raise ProviderControlError(f"slot control connection failed: {exc}") from exc
+            raise ProviderControlError(f"slot control connection failed: {safe_error(exc)}") from exc
 
     def try_lock(self, slot: int) -> bool:
+        from mail_core.security.redact import safe_error
+
         try:
             with self._conn.cursor() as cur:
                 cur.execute("SELECT pg_try_advisory_lock(%s)", (_SLOT_BASE_KEY + slot,))
                 row = cur.fetchone()
             return bool(row and row[0])
         except Exception as exc:
-            raise ProviderControlError(f"slot control lock failed: {exc}") from exc
+            raise ProviderControlError(
+                f"slot control lock failed for slot {slot}: {safe_error(exc)}"
+            ) from exc
 
     def release(self, slot: int) -> None:
         try:

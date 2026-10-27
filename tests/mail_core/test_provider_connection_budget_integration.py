@@ -17,6 +17,7 @@ from __future__ import annotations
 import imaplib
 import json
 import os
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -458,6 +459,63 @@ def test_build_provider_propagates_traffic_class_and_factory(factory):
     token_client = graph_provider.transport.token_client
     assert token_client.traffic_class is TrafficClass.BACKGROUND
     assert token_client.permit_factory is factory
+
+
+# ---------------------------------------------------------------------------
+# A375: slot control-connection errors must never echo DSN content
+# ---------------------------------------------------------------------------
+
+_DSN_WITH_SECRET = "postgresql://mailuser:DSNSECRET@db.internal:5432/mail"
+
+
+def test_control_connection_error_does_not_echo_dsn(monkeypatch):
+    from mail_core.providers.connection_slots import _PsycopgSlotBackend
+
+    def _failing_connect(dsn, autocommit=True):
+        raise RuntimeError(f"could not connect to server using {_DSN_WITH_SECRET}")
+
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=_failing_connect))
+    with pytest.raises(ProviderControlError) as excinfo:
+        _PsycopgSlotBackend(_DSN_WITH_SECRET)
+    message = str(excinfo.value)
+    assert "DSNSECRET" not in message
+    assert "db.internal" not in message
+    assert "RuntimeError" in message
+
+
+def test_control_lock_error_keeps_only_class_name_and_slot(monkeypatch):
+    from mail_core.providers.connection_slots import _PsycopgSlotBackend
+
+    class _BadCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def execute(self, *args):
+            raise RuntimeError(f"advisory lock failed via {_DSN_WITH_SECRET}")
+
+    class _BadConnection:
+        def cursor(self):
+            return _BadCursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda dsn, autocommit=True: _BadConnection()),
+    )
+    backend = _PsycopgSlotBackend(_DSN_WITH_SECRET)
+    with pytest.raises(ProviderControlError) as excinfo:
+        backend.try_lock(3)
+    message = str(excinfo.value)
+    assert "DSNSECRET" not in message
+    assert "db.internal" not in message
+    assert "RuntimeError" in message
+    assert "3" in message
 
 
 # ---------------------------------------------------------------------------
