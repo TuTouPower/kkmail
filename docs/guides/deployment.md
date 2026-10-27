@@ -18,7 +18,7 @@ docker compose -f docker-compose.mail-core.yml up --build -d api worker   # 依�
 
 - 默认访问：`http://127.0.0.1:37281`。默认只把 API（主机 **37281**→容器 8000）和 PostgreSQL（主机 **5433**→容器 5432）发布到 `127.0.0.1`。若需通过本机 `.local` 主机名从局域网访问 API，设置 `MAIL_CORE_HOST_BIND=0.0.0.0` 后再启动 Compose，并访问 `http://<hostname>.local:37281`；这会监听主机 IPv4 接口。不要将端口直接暴露到公网，远程访问应放在 TLS 反向代理之后。文件里的 `imap` 服务是测试用 Dovecot 夹具（`127.0.0.1:1143`），部署时不要启动它（上面的命令只启动 `api` / `worker` 及其依赖）。
 - 仓库不提供任何默认值。`POSTGRES_PASSWORD`、`MAIL_CORE_SECRET_KEY`、`MAIL_CORE_BLOB_KEY_V1`、`MAIL_CORE_BACKUP_KEY` 缺失时 compose 直接报错；登录密码（`MAIL_CORE_LOGIN_PASSWORD_HASH` 或 `MAIL_CORE_LOGIN_PASSWORD`）缺失时 API 进程拒绝启动。
-- 可选：`MAIL_CORE_API_KEYS` 配置供脚本 / 集成使用的 Bearer Key（见 [docs/blueprint/conventions.md](../blueprint/conventions.md)）。
+- 可选：`MAIL_CORE_API_KEYS` 配置供脚本 / 集成使用的 Bearer Key（见 [docs/guides/security.md](security.md) 的「认证」与「授权模型」章节）。
 - `MAIL_CORE_BACKUP_KEY` 必须与 blob 密钥不同。密钥丢失 = 已归档邮件与凭据无法解密，请离线保存。
 - 局域网 HTTP 部署继续可用，Compose 默认 `MAIL_CORE_COOKIE_SECURE=0`。HTTP 不加密会话 Cookie；同一网络中能够监听流量的设备可能读取 Cookie。仅在可信局域网使用 HTTP。敏感远程访问应经过 TLS 反向代理，并设置 `MAIL_CORE_COOKIE_SECURE=1`；启用 Secure Cookie 后，浏览器不会通过明文 HTTP 发送会话 Cookie。
 - `migrate` 服务先执行 `alembic upgrade head`，`api` / `worker` 在其成功后启动（distributed API 已配置 `MAIL_CORE_SKIP_MIGRATIONS=1` 与 `MAIL_CORE_EMBEDDED_WORKER=0`，独立 worker 实例 ID 为 `distributed-worker-1`；若单进程运行可通过 `MAIL_CORE_SKIP_MIGRATIONS=0 MAIL_CORE_EMBEDDED_WORKER=1` 启动）；`/ready` 会在数据库不可达、schema 未到 head 或 LISTEN 未就绪时返回 503。
