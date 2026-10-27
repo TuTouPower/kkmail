@@ -1,4 +1,4 @@
-/* Global styles live in design-system/tokens.css. This file intentionally
+/* Global styles live in design-system/{tokens,base,components}.css. This file intentionally
    stays minimal: the old Vite starter rules (#root { text-align: center;
    width: 1126px }) centred plain-text mail bodies. */
 #root {
