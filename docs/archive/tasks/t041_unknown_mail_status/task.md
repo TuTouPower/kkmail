@@ -71,6 +71,7 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 
 ## 最终全量验证说明
 
+- 注记：本节所述全量运行（运行 `e9e0192dae624ce980a1ae3ee8fe66b3`）为 t041–t043 同批联合验证，三份 task 共用同一运行记录，非各 task 独立运行。
 - 真实 IMAP 与 PostgreSQL 全量串行运行：477 passed / 0 skipped，只有既有 Starlette 弃用警告；运行 `e9e0192dae624ce980a1ae3ee8fe66b3`，正常清理本轮测试库。
 - 首轮两个旧夹具失败已补明确输入并保持原预期。第二轮与 IMAP 定向并行共用测试邮箱，目标邮件被另一套件清理；停止并行后最终全量通过。未因环境失败修改生产行为。
 - 未部署生产，未改写运行容器数据。
