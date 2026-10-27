@@ -284,11 +284,6 @@ def test_server_class_for_host_matches_address_family():
     assert view_server._server_class_for_host("[::1]").address_family == socket.AF_INET6
 
 
-def test_find_free_port_ipv6_loopback():
-    port = view_server._find_free_port("::1")
-    assert isinstance(port, int) and 0 < port < 65536
-
-
 def test_ipv6_loopback_server_actually_binds():
     server_cls = view_server._server_class_for_host("::1")
     try:
@@ -306,6 +301,7 @@ def test_serve_warns_non_loopback(monkeypatch, capsys):
     class FakeServer:
         def __init__(self, addr, handler):
             self.addr = addr
+            self.server_address = addr
 
         def serve_forever(self):
             raise KeyboardInterrupt
@@ -313,8 +309,10 @@ def test_serve_warns_non_loopback(monkeypatch, capsys):
         def shutdown(self):
             pass
 
+        def server_close(self):
+            pass
+
     monkeypatch.setattr(view_server, "ThreadingHTTPServer", FakeServer)
-    monkeypatch.setattr(view_server, "_find_free_port", lambda host: 8765)
     monkeypatch.setattr(view_server, "_open_browser", lambda url: None)
     # RT-013 后非 loopback 须显式 allow_non_loopback 才绑定；绑定后仍打 WARNING
     view_server.serve(host="0.0.0.0", port=8765, allow_non_loopback=True)
@@ -328,6 +326,7 @@ def test_serve_rejects_non_loopback_without_allow(monkeypatch, capsys):
     class FakeServer:
         def __init__(self, addr, handler):
             self.addr = addr
+            self.server_address = addr
 
         def serve_forever(self):
             raise KeyboardInterrupt
@@ -335,11 +334,43 @@ def test_serve_rejects_non_loopback_without_allow(monkeypatch, capsys):
         def shutdown(self):
             pass
 
+        def server_close(self):
+            pass
+
     monkeypatch.setattr(view_server, "ThreadingHTTPServer", FakeServer)
-    monkeypatch.setattr(view_server, "_find_free_port", lambda host: 8766)
     monkeypatch.setattr(view_server, "_open_browser", lambda url: None)
     with pytest.raises(SystemExit, match="拒绝绑定非 loopback"):
         view_server.serve(host="0.0.0.0", port=8766)
+
+
+def test_serve_uses_os_assigned_port_and_closes_server(monkeypatch):
+    """A223: port=0 直接构造服务器、从 server_address 读实际端口拼 URL，
+    不再探活-释放-重绑（TOCTOU）；退出路径必须 server_close。"""
+    events = []
+
+    class FakeServer:
+        def __init__(self, addr, handler):
+            self.addr = addr
+            # 模拟 OS 分配端口：与请求端口不同，URL 必须以此为准
+            self.server_address = (addr[0], 49152)
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def shutdown(self):
+            events.append("shutdown")
+
+        def server_close(self):
+            events.append("server_close")
+
+    monkeypatch.setattr(view_server, "ThreadingHTTPServer", FakeServer)
+    opened = []
+    monkeypatch.setattr(view_server, "_open_browser", lambda url: opened.append(url))
+    view_server.serve(host="127.0.0.1", port=0)
+    assert opened == ["http://127.0.0.1:49152/"]
+    assert "server_close" in events
+    # 探活-释放-重绑的旧 helper 已移除，serve 不应再依赖它
+    assert not hasattr(view_server, "_find_free_port")
 
 
 def test_build_model_has_no_schedule_status(monkeypatch):

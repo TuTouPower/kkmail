@@ -5,7 +5,6 @@ schedule，页面通过注入 JSON 交给客户端 JS 渲染；静态资源（bo
 board.js）从同目录 view_static/ 读取，无构建、无 CDN 依赖。
 """
 
-import contextlib
 import json
 import os
 import platform
@@ -43,13 +42,6 @@ def _server_class_for_host(host: str):
     否则 _is_loopback_host 认可的 ::1 用 AF_INET 服务器必然绑定失败。"""
     normalized = (host or "").strip().strip("[]")
     return _ThreadingHTTPServerV6 if ":" in normalized else ThreadingHTTPServer
-
-
-def _find_free_port(host: str) -> int:
-    family = socket.AF_INET6 if ":" in (host or "") else socket.AF_INET
-    with contextlib.closing(socket.socket(family, socket.SOCK_STREAM)) as s:
-        s.bind((host, 0))
-        return s.getsockname()[1]
 
 
 def _build_model():
@@ -292,10 +284,6 @@ def _is_loopback_host(host: str) -> bool:
 
 
 def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
-    port = port or _find_free_port(host)
-    # ThreadingHTTPServer 对 IPv6 字面量需要方括号才能当 URL host
-    url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    url = f"http://{url_host}:{port}/"
     if not _is_loopback_host(host):
         if not allow_non_loopback:
             sys.exit(
@@ -310,9 +298,15 @@ def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
         )
     bind_host = host[1:-1] if host.startswith("[") and host.endswith("]") else host
     try:
+        # port=0 时由 OS 在构造时直接分配空闲端口，不做探活-释放-重绑，
+        # 消除 _find_free_port 式的 TOCTOU 窗口；实际端口从 server_address 读。
         httpd = _server_class_for_host(bind_host)((bind_host, port), _Handler)
     except OSError as error:
         sys.exit(f"看板端口 {port} 绑定失败（{error}）；改用 --port 0 自动选空闲端口")
+    actual_port = httpd.server_address[1]
+    # ThreadingHTTPServer 对 IPv6 字面量需要方括号才能当 URL host
+    url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    url = f"http://{url_host}:{actual_port}/"
     print(f"task 看板已启动：{url}")
     print("只读服务；Ctrl+C 退出。")
     _open_browser(url)
@@ -321,3 +315,5 @@ def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
     except KeyboardInterrupt:
         print("\n关闭。")
         httpd.shutdown()
+    finally:
+        httpd.server_close()
