@@ -57,6 +57,24 @@ class UpsertOutcome:
     read_changed: bool = False
 
 
+def _dedupe_metas(metas: list[RemoteMessageMeta]) -> list[RemoteMessageMeta]:
+    """First occurrence wins for a repeated remote_id within one page (A146).
+
+    Providers occasionally repeat a remote_id in a single page; feeding the
+    duplicate through the upsert would create a second MessageLocation for
+    the same (message, folder) and hit the unique constraint, poisoning
+    the whole page transaction.
+    """
+    seen: set[str] = set()
+    out: list[RemoteMessageMeta] = []
+    for meta in metas:
+        if meta.remote_id in seen:
+            continue
+        seen.add(meta.remote_id)
+        out.append(meta)
+    return out
+
+
 def upsert_messages(
     session: Session,
     *,
@@ -69,6 +87,7 @@ def upsert_messages(
     Rows whose metadata did not change are left untouched (no UPDATE), so callers can
     skip search/thread/outbox work for them.
     """
+    metas = _dedupe_metas(list(metas))
     if not metas:
         return []
     remote_ids = [m.remote_id for m in metas]
@@ -107,7 +126,11 @@ def upsert_messages(
             )
             session.add(msg)
             session.add(MessageArchiveState(message_id=msg.id, state=ArchiveState.METADATA_SYNCED.value))
-            session.add(MessageLocation(message_id=msg.id, folder_id=folder_id, uid=meta.uid))
+            new_loc = MessageLocation(message_id=msg.id, folder_id=folder_id, uid=meta.uid)
+            session.add(new_loc)
+            # Register the just-created location so any later reference to
+            # this message in the same page reuses it (A146).
+            locs[msg.id] = new_loc
             existing[meta.remote_id] = msg
             location_created = True
         else:
@@ -182,12 +205,13 @@ def apply_metadata_page(
 ) -> MetadataApplyResult:
     """Network I/O must happen *before* this call. Writes + cursor share one TX."""
     assert_fencing(session, account_id=account_id, fencing_token=fencing_token)
-    outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=list(page.items))
+    items = _dedupe_metas(list(page.items))
+    outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=items)
     touched: list[uuid.UUID] = []
     touched_messages: dict[uuid.UUID, Message] = {}
     message_event_ids: list[uuid.UUID] = []
     folder_stats_dirty = False
-    for o, meta in zip(outcomes, page.items):
+    for o, meta in zip(outcomes, items):
         if o.location_created:
             folder_stats_dirty = True
         if o.changed:
@@ -272,4 +296,4 @@ def apply_metadata_page(
     )
     try_notify_outbox(session)
     session.flush()
-    return MetadataApplyResult(upserted=len(page.items), exhausted=page.exhausted, cursor=cursor)
+    return MetadataApplyResult(upserted=len(items), exhausted=page.exhausted, cursor=cursor)
