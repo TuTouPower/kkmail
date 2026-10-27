@@ -354,6 +354,44 @@ describe('subscribeMailCoreStream', () => {
     unsubscribe()
   })
 
+  it('honours a server retry directive below the default 1000ms floor (A299)', async () => {
+    const fetchMock = vi.fn(async () => mockSseResponse('retry: 200\n\n'))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+
+    const unsubscribe = subscribeMailCoreStream(vi.fn())
+    await vi.advanceTimersByTimeAsync(10)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(189)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    unsubscribe()
+  })
+
+  it('flushes the TextDecoder when the stream ends (A299)', async () => {
+    let flushCalls = 0
+    class CountingDecoder extends TextDecoder {
+      override decode(input?: BufferSource, options?: TextDecodeOptions): string {
+        if (input === undefined) flushCalls += 1
+        return super.decode(input, options)
+      }
+    }
+    vi.stubGlobal('TextDecoder', CountingDecoder)
+    vi.stubGlobal('fetch', vi.fn(async () => mockSseResponse('event: test\ndata: {"ok":true}\n\n')))
+    const onEvent = vi.fn()
+
+    const unsubscribe = subscribeMailCoreStream(onEvent)
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(onEvent).toHaveBeenCalledWith('test', { ok: true }, null)
+    expect(flushCalls).toBeGreaterThan(0)
+
+    unsubscribe()
+  })
+
   it('removes the external abort listener on unsubscribe (A276)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => mockSseResponse(':keepalive\n\n')))
     const controller = new AbortController()

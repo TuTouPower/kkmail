@@ -126,7 +126,10 @@ export function subscribeMailCoreStream(
       return
     }
 
-    const baseRetryMs = Math.min(MAX_RETRY_MS, Math.max(nextRetryMs, serverRetryMs ?? 0))
+    // A server `retry:` directive wins over the local backoff, including
+    // values below the local initial delay (A299); it is only capped at
+    // MAX_RETRY_MS when recorded, never floored.
+    const baseRetryMs = Math.min(MAX_RETRY_MS, serverRetryMs ?? nextRetryMs)
     const jitteredRetryMs = Math.min(
       MAX_RETRY_MS,
       Math.round(baseRetryMs * (1 + Math.random() * RETRY_JITTER_RATIO)),
@@ -207,23 +210,43 @@ export function subscribeMailCoreStream(
         }, STALE_STREAM_TIMEOUT_MS)
       }
 
+      const applyParserSideEffects = () => {
+        if (parserState.retryMs !== null) {
+          // Only cap the server directive; do not floor it at the local
+          // initial delay, or a server asking for a fast retry is ignored.
+          serverRetryMs = Math.min(MAX_RETRY_MS, parserState.retryMs)
+        }
+      }
+      const dispatchParsed = (event: string, data: unknown, id: string | null) => {
+        if (id !== null) {
+          lastEventId = id
+        }
+        handler(event, data, id)
+      }
+
       try {
         armStaleTimer()
+        let streamEnded = false
         while (!closed && !ac.signal.aborted) {
           const { done, value } = await reader.read()
-          if (done) break
+          if (done) {
+            streamEnded = true
+            break
+          }
           if (value && value.byteLength > 0) {
             armStaleTimer()
             const chunk = decoder.decode(value, { stream: true })
-            parseSseChunk(chunk, parserState, (event, data, id) => {
-              if (id !== null) {
-                lastEventId = id
-              }
-              handler(event, data, id)
-            })
-            if (parserState.retryMs !== null) {
-              serverRetryMs = Math.min(MAX_RETRY_MS, Math.max(INITIAL_RETRY_MS, parserState.retryMs))
-            }
+            parseSseChunk(chunk, parserState, dispatchParsed)
+            applyParserSideEffects()
+          }
+        }
+        if (streamEnded) {
+          // Flush the streaming decoder so bytes of a trailing multi-byte
+          // character held by TextDecoder are not silently dropped (A299).
+          const tail = decoder.decode()
+          if (tail) {
+            parseSseChunk(tail, parserState, dispatchParsed)
+            applyParserSideEffects()
           }
         }
       } finally {
