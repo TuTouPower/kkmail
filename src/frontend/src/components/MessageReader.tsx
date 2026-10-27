@@ -212,7 +212,10 @@ const MessageReader = memo(function MessageReader() {
       }
     }
   }, [isPendingArchive, detailQuery.isLoading, syncingBody, syncQueued, syncError, archiveHasError, archivePaused, handleSyncBody, selected?.id])
-  const preparedMailHtml = useMemo(() => (body ? prepareMailHtml(body) : null), [body])
+  // A255: only HTML bodies need DOMPurify sanitization + colour
+  // classification (for the iframe path); a plain-text body is rendered
+  // as text and must not pay for — or be altered by — that pipeline.
+  const preparedMailHtml = useMemo(() => (body && html ? prepareMailHtml(body) : null), [body, html])
   const mailThemeClass = html ? preparedMailHtml?.classification ?? 'plain' : 'plain'
   const mailSrcdoc = useMemo(
     () => (body && preparedMailHtml

@@ -5,6 +5,7 @@ import MessageReader from './MessageReader'
 import { useMailStore } from '../store/mailStore'
 import { __resetCsrfForTests } from '../api/client'
 import { ALL_ACCOUNTS, queryClient, queryKeys, type MailItem } from '../api/queries'
+import DOMPurify from 'dompurify'
 import { cleanup, click, render, waitFor } from '../test/render'
 import { clearDiagnosticLogs, getDiagnosticLogs } from '../lib/diagnostics'
 
@@ -427,6 +428,19 @@ describe('<MessageReader />', () => {
     expect(link.getAttribute('download')).toBe('r.pdf')
     expect(link.getAttribute('target')).toBe('_blank')
     expect(link.querySelector('small')?.textContent).toBe('10 B')
+  })
+
+  it('does not run DOMPurify sanitization or classification for a plain-text body (A255)', async () => {
+    const sanitize = vi.spyOn(DOMPurify, 'sanitize')
+    try {
+      const { container } = await render(<MessageReader />)
+      await waitFor(() => expect(container.querySelector('.email-body-text')?.textContent).toBe('plain body text'))
+      // m-1 is body_type 'text': prepareMailHtml (sanitize + colour
+      // classification) is only meaningful for the HTML iframe path.
+      expect(sanitize).not.toHaveBeenCalled()
+    } finally {
+      sanitize.mockRestore()
+    }
   })
 
   it('renders sender email address between MR06 and MR07', async () => {
