@@ -164,22 +164,16 @@ def test_account_status_remains_active_when_sync_is_disabled():
     assert dto.sync_enabled is False
 
 
-def test_sync_all_commits_each_page_and_caps_returned_job_ids(monkeypatch):
+def _sync_all_fake_session(pages):
+    """Fake session serving keyset pages (lists of account UUIDs) in order."""
     import uuid
-    from types import SimpleNamespace
-
-    import mail_core.mail.application.accounts as accounts_app
-
-    accounts = [
-        SimpleNamespace(id=uuid.UUID(int=index + 1), sync_enabled=index != 3)
-        for index in range(106)
-    ]
-    offsets = []
-    enqueued = []
 
     class Session:
-        commits = 0
-        rollbacks = 0
+        def __init__(self):
+            self.commits = 0
+            self.rollbacks = 0
+            self.statements = []
+            self._pages = [list(page) for page in pages]
 
         def __enter__(self):
             return self
@@ -187,35 +181,92 @@ def test_sync_all_commits_each_page_and_caps_returned_job_ids(monkeypatch):
         def __exit__(self, *_args):
             return False
 
+        def scalars(self, stmt):
+            self.statements.append(stmt)
+            page = self._pages.pop(0) if self._pages else []
+
+            class _Scalars:
+                def __init__(self, rows):
+                    self._rows = rows
+
+                def all(self):
+                    return list(self._rows)
+
+                def __iter__(self):
+                    return iter(self._rows)
+
+            return _Scalars(page)
+
         def commit(self):
             self.commits += 1
 
         def rollback(self):
             self.rollbacks += 1
 
-    session = Session()
+    return Session()
 
-    def list_account_page(_session, *, limit, offset):
-        offsets.append(offset)
-        return accounts[offset : offset + limit], len(accounts)
+
+def test_sync_all_keyset_collects_then_enqueues_in_single_commit(monkeypatch):
+    # A114: replaces the former per-page-commit expectation overall — the old
+    # test asserted 3 commits for 3 offset pages, which is exactly the
+    # partial-enqueue bug being fixed. New contract: keyset (id cursor)
+    # collection of every sync-enabled account id first, then all enqueues
+    # in one transaction with a single commit (all-or-nothing).
+    import uuid
+
+    import mail_core.mail.application.accounts as accounts_app
+
+    ids = [uuid.UUID(int=index + 1) for index in range(105)]
+    pages = [ids[:50], ids[50:100], ids[100:]]
+    session = _sync_all_fake_session(pages)
+    enqueued = []
 
     def enqueue(_session, account_id):
-        job_id = uuid.UUID(int=account_id.int + 1_000)
-        enqueued.append(job_id)
-        return job_id
+        enqueued.append(account_id)
+        return uuid.UUID(int=account_id.int + 1_000)
 
     monkeypatch.setattr(accounts_app, "get_session_factory", lambda: lambda: session)
-    monkeypatch.setattr(accounts_app, "list_accounts", list_account_page)
     monkeypatch.setattr(accounts_app, "enqueue_account_sync", enqueue)
 
     result = accounts_app.sync_all_accounts_app(page_size=50)
 
-    assert offsets == [0, 50, 100]
-    assert session.commits == 3
-    assert session.rollbacks == 0
+    assert enqueued == ids
     assert result.count == 105
-    assert len(enqueued) == 105
-    assert result.job_ids == [str(job_id) for job_id in enqueued[:100]]
+    assert result.job_ids == [str(uuid.UUID(int=i + 1_000)) for i in range(1, 101)]
+    assert session.commits == 1
+    assert session.rollbacks == 0
+    # Keyset pagination: later pages filter on the id cursor, never OFFSET.
+    assert len(session.statements) == 3
+    rendered = [str(stmt) for stmt in session.statements]
+    assert all("OFFSET" not in sql.upper() for sql in rendered)
+    assert "sync_enabled" in rendered[0]
+    assert "accounts.id >" in rendered[1]
+    assert "accounts.id >" in rendered[2]
+
+
+def test_sync_all_enqueue_failure_rolls_back_without_any_commit(monkeypatch):
+    import uuid
+
+    import pytest
+
+    import mail_core.mail.application.accounts as accounts_app
+
+    ids = [uuid.UUID(int=index + 1) for index in range(3)]
+    session = _sync_all_fake_session([ids])
+
+    def enqueue(_session, account_id):
+        if account_id == ids[1]:
+            raise RuntimeError("enqueue boom")
+        return uuid.UUID(int=account_id.int + 1_000)
+
+    monkeypatch.setattr(accounts_app, "get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr(accounts_app, "enqueue_account_sync", enqueue)
+
+    with pytest.raises(RuntimeError, match="enqueue boom"):
+        accounts_app.sync_all_accounts_app(page_size=50)
+
+    assert session.commits == 0
+    assert session.rollbacks == 1
 
 
 def test_create_account_serializes_slotted_dto_mock(api_client):
@@ -258,6 +309,9 @@ def test_create_account_serializes_slotted_dto_mock(api_client):
 def test_create_account_maps_known_errors(api_client, monkeypatch, error, status_code):
     from unittest.mock import Mock
 
+    # "memory" is a test-only provider since A103; this test uses it as a
+    # neutral fixture provider, so opt in via the environment switch.
+    monkeypatch.setenv("MAIL_CORE_ALLOW_TEST_PROVIDERS", "1")
     monkeypatch.setattr("mail_core.api.accounts.create_account_app", Mock(side_effect=error))
     response = api_client.post(
         "/api/accounts",
@@ -271,6 +325,8 @@ def test_create_account_maps_known_errors(api_client, monkeypatch, error, status
 def test_create_account_hides_and_safely_logs_unexpected_errors(api_client, monkeypatch, caplog):
     from unittest.mock import Mock
 
+    # See test_create_account_maps_known_errors: test-provider opt-in (A103).
+    monkeypatch.setenv("MAIL_CORE_ALLOW_TEST_PROVIDERS", "1")
     monkeypatch.setattr(
         "mail_core.api.accounts.create_account_app",
         Mock(side_effect=RuntimeError("password=private-secret")),

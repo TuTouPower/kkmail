@@ -331,26 +331,46 @@ def sync_account_app(account_id: UUID) -> SyncJobDTO:
 
 
 def sync_all_accounts_app(page_size: int = 500) -> SyncAllDTO:
+    """Enqueue a sync job for every sync-enabled account, all-or-nothing.
+
+    A114: previously this paged with OFFSET and committed after every page,
+    so a mid-run failure left a prefix of accounts enqueued and concurrent
+    inserts/deletes shifted later pages. Now phase 1 collects every
+    sync-enabled account id with keyset pagination (``id`` cursor, immune
+    to offset drift) and phase 2 enqueues them all inside the same single
+    transaction — one commit on success, full rollback on any failure, so
+    callers never observe a partially enqueued sync-all.
+    """
     Session = get_session_factory()
+    page_size = max(1, page_size)
     job_ids: list[str] = []
-    count = 0
     with Session() as session:
         try:
-            offset = 0
+            account_ids: list[UUID] = []
+            cursor: UUID | None = None
             while True:
-                rows, total = list_accounts(session, limit=page_size, offset=offset)
-                for acc in rows:
-                    if acc.sync_enabled:
-                        job_id = enqueue_account_sync(session, acc.id)
-                        count += 1
-                        if len(job_ids) < SYNC_ALL_JOB_ID_SAMPLE_LIMIT:
-                            job_ids.append(str(job_id))
-                offset += len(rows)
-                session.commit()
-                log.info("sync-all enqueued %d jobs through %d accounts", count, offset)
-                if not rows or offset >= total:
+                stmt = (
+                    select(Account.id)
+                    .where(Account.sync_enabled.is_(True))
+                    .order_by(Account.id)
+                    .limit(page_size)
+                )
+                if cursor is not None:
+                    stmt = stmt.where(Account.id > cursor)
+                page = list(session.scalars(stmt).all())
+                if not page:
                     break
-            return SyncAllDTO(job_ids=job_ids, count=count)
+                account_ids.extend(page)
+                cursor = page[-1]
+                if len(page) < page_size:
+                    break
+            for account_id in account_ids:
+                job_id = enqueue_account_sync(session, account_id)
+                if len(job_ids) < SYNC_ALL_JOB_ID_SAMPLE_LIMIT:
+                    job_ids.append(str(job_id))
+            session.commit()
+            log.info("sync-all enqueued %d jobs", len(account_ids))
+            return SyncAllDTO(job_ids=job_ids, count=len(account_ids))
         except Exception:
             session.rollback()
             raise
