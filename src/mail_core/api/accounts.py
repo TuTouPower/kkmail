@@ -326,7 +326,7 @@ def api_sync_account(account_id: UUID) -> SyncRequestOut:
             req, _ = create_sync_request(
                 session,
                 client_request_id=client_req_id,
-                mode="full",
+                mode="delta",
                 trigger="manual",
                 scope={"account_id": str(account_id)},
                 account_id=account_id,
@@ -353,7 +353,7 @@ def api_sync_all_accounts() -> SyncRequestOut:
         req, _ = create_sync_request(
             session,
             client_request_id=client_req_id,
-            mode="full",
+            mode="delta",
             trigger="manual",
             scope={"all": True},
         )

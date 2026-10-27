@@ -67,7 +67,7 @@ def test_single_account_full_sync_succeeds_with_generated_id_within_column_limit
     resp = client.post(f"/api/accounts/{acc1_id}/sync")
     assert resp.status_code == 202, resp.text
     data = resp.json()
-    assert data["mode"] == "full"
+    assert data["mode"] == "delta"
     assert data["target_count"] >= 1
 
     Session = get_session_factory()

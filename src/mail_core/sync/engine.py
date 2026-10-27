@@ -127,7 +127,6 @@ def _sharing_targets(
                 SyncRequestTarget.id.in_(sorted(set(target_ids))),
                 SyncRequestTarget.account_id == account_id,
                 SyncRequestTarget.state.notin_(TERMINAL_TARGET_STATES),
-                SyncRequest.mode == "full",
                 SyncRequest.state.notin_(TERMINAL_TARGET_STATES),
             )
         ).all()
@@ -381,33 +380,58 @@ def sync_account_folders(
                     existing.sync_status = SyncStatus.IDLE.value
             folder_ids.append(existing.id)
             if rf.selectable and existing.sync_status != SyncStatus.PAUSED.value:
-                metadata_payload: dict = {"folder_id": str(existing.id)}
-                if full:
-                    # The execution layer must see the full-scan lifecycle:
-                    # root generation + owning request travel with the job.
-                    metadata_payload["full"] = True
-                    if scan_generation is not None:
-                        metadata_payload["scan_generation"] = str(scan_generation)
+                cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": existing.id})
+                baseline_ready = cp is not None and bool(cp.full_scan_complete)
+                if not full and baseline_ready:
+                    delta_payload: dict = {"folder_id": str(existing.id)}
+                    if request_id is not None:
+                        delta_payload["request_id"] = str(request_id)
+                    delta_job = enqueue_job(
+                        session,
+                        job_type=JobType.SYNC_FOLDER_DELTA.value,
+                        account_id=account_id,
+                        payload=delta_payload,
+                        priority=60,
+                        dedupe_key=f"delta:{account_id}:{existing.id}",
+                    )
+                    if request_id is not None:
+                        _bind_phase_jobs(
+                            session,
+                            request_id=request_id,
+                            account_id=account_id,
+                            phase="delta",
+                            folder_id=existing.id,
+                            job=delta_job,
+                            source_dedupe_key=f"sync:{account_id}",
+                        )
+                else:
+                    metadata_payload: dict = {"folder_id": str(existing.id)}
+                    if full:
+                        # The execution layer must see the full-scan lifecycle:
+                        # root generation + owning request travel with the job.
+                        metadata_payload["full"] = True
+                        if scan_generation is not None:
+                            metadata_payload["scan_generation"] = str(scan_generation)
                     if request_id is not None:
                         metadata_payload["request_id"] = str(request_id)
-                metadata_job = enqueue_job(
-                    session,
-                    job_type=JobType.SYNC_FOLDER_METADATA.value,
-                    account_id=account_id,
-                    payload=metadata_payload,
-                    priority=50,
-                    dedupe_key=f"metadata:{account_id}:{existing.id}",
-                )
-                if full and request_id is not None:
-                    _bind_phase_jobs(
+                    metadata_job = enqueue_job(
                         session,
-                        request_id=request_id,
+                        job_type=JobType.SYNC_FOLDER_METADATA.value,
                         account_id=account_id,
-                        phase="metadata",
-                        folder_id=existing.id,
-                        job=metadata_job,
-                        source_dedupe_key=f"sync:{account_id}",
+                        payload=metadata_payload,
+                        priority=50,
+                        dedupe_key=f"metadata:{account_id}:{existing.id}",
                     )
+                    if request_id is not None:
+                        _bind_phase_jobs(
+                            session,
+                            request_id=request_id,
+                            account_id=account_id,
+                            phase="metadata",
+                            folder_id=existing.id,
+                            job=metadata_job,
+                            source_dedupe_key=f"sync:{account_id}",
+                        )
         session.add(
             OutboxEvent(
                 event_type=OutboxEventType.SYNC_PROGRESS.value,
