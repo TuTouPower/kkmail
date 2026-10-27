@@ -16,7 +16,7 @@ Three-pane shell in `App.tsx`: `Sidebar` · `MessageList` · `MessageReader`, wi
 
 ## Realtime
 
-`useMailCoreRealtime` opens cookie-authenticated SSE at `/api/events` and invalidates Query caches on named events. Browser `EventSource` cannot send Bearer keys.
+`useMailCoreRealtime` opens cookie-authenticated SSE at `/api/events` and invalidates Query caches on named events. Browser `EventSource` cannot send Authorization headers, so the stream relies on the session cookie.
 
 ## Scripts
 
