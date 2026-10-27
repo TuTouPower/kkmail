@@ -735,13 +735,22 @@ def _check_plain_members(
     errors: list[str],
 ) -> int:
     """Verify allowlisted plain members under ``work``. Returns count checked."""
+    if not isinstance(members, dict):
+        errors.append(f"manifest members must be an object, got {type(members).__name__}")
+        return 0
     checked = 0
-    for name, meta in (members or {}).items():
+    for name, meta in members.items():
+        if not isinstance(name, str):
+            errors.append(f"invalid member name: {name!r}")
+            continue
         if name.startswith("plain/") or name == "backup.kkbak":
             # Outer sealed aliases — handled separately before decrypt.
             continue
         if _safe_member_relpath(name, allowlist=_PLAIN_MEMBER_ALLOWLIST) is None:
             errors.append(f"disallowed member name: {name!r}")
+            continue
+        if not isinstance(meta, dict):
+            errors.append(f"invalid member metadata for {name}: expected object")
             continue
         path = _resolve_member_file(work, name)
         if path is None or not path.is_file():
@@ -851,8 +860,26 @@ def verify_backup_package(
                 members_checked=0,
                 errors=[f"outer {_MANIFEST_FILENAME} invalid: {exc}"],
             )
+        if not isinstance(outer, dict):
+            return RestoreVerifyResult(
+                ok=False,
+                members_checked=0,
+                errors=errors + [f"outer {_MANIFEST_FILENAME} is not an object"],
+            )
         outer_members = outer.get("members") or {}
+        if not isinstance(outer_members, dict):
+            return RestoreVerifyResult(
+                ok=False,
+                members_checked=0,
+                errors=errors + ["outer manifest members must be an object"],
+            )
         meta = outer_members.get("backup.kkbak") or {}
+        if not isinstance(meta, dict):
+            return RestoreVerifyResult(
+                ok=False,
+                members_checked=0,
+                errors=errors + ["outer manifest backup.kkbak metadata must be an object"],
+            )
         expected_kk = str(meta.get("sha256") or "")
         actual_kk = _sha256_file(kkbak)
         if not expected_kk:
@@ -937,10 +964,25 @@ def _verify_plain_tree(
             errors=errors + [f"{_MANIFEST_FILENAME} invalid: {exc}"],
             backup_key_version=key_version,
         )
+    if not isinstance(manifest, dict):
+        return RestoreVerifyResult(
+            ok=False,
+            members_checked=checked,
+            errors=errors + [f"{_MANIFEST_FILENAME} is not an object"],
+            backup_key_version=key_version,
+        )
     _verify_manifest_file_checksum(
         man_path, work / _MANIFEST_CHECKSUM_FILENAME, errors
     )
     members = manifest.get("members") or {}
+    if not isinstance(members, dict):
+        errors.append("manifest members must be an object")
+        return RestoreVerifyResult(
+            ok=False,
+            members_checked=checked,
+            errors=errors,
+            backup_key_version=key_version,
+        )
     if "postgres.dump" not in members:
         errors.append("required member postgres.dump missing from manifest")
     checked += _check_plain_members(

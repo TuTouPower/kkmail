@@ -1058,6 +1058,83 @@ def test_validate_restore_destination_matrix(tmp_path):
     assert _validate_restore_destination(valid_empty) == valid_empty.resolve()
 
 
+def _rewrite_manifest(package_dir: Path, manifest) -> None:
+    import hashlib
+
+    man_path = package_dir / "MANIFEST.json"
+    man_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (package_dir / "MANIFEST.sha256").write_text(
+        f"{hashlib.sha256(man_path.read_bytes()).hexdigest()}  MANIFEST.json\n",
+        encoding="utf-8",
+    )
+
+
+def _make_plain_package(tmp_path: Path) -> Path:
+    out = tmp_path / "plain-pkg"
+    create_backup_package(
+        out,
+        include_blobs=False,
+        database_url_override="postgresql://u:p@127.0.0.1:1/db",
+        encrypt=False,
+        allow_dump_stub=True,
+    )
+    return out
+
+
+@pytest.mark.parametrize("bad_members", [["postgres.dump"], "postgres.dump", 42])
+def test_verify_rejects_non_dict_members_without_raising(tmp_path, bad_members):
+    out = _make_plain_package(tmp_path)
+    man = json.loads((out / "MANIFEST.json").read_text())
+    man["members"] = bad_members
+    _rewrite_manifest(out, man)
+
+    result = verify_backup_package(out, allow_stub=True)
+    assert result.ok is False
+    assert result.errors
+
+
+def test_verify_rejects_non_dict_member_metadata_without_raising(tmp_path):
+    out = _make_plain_package(tmp_path)
+    man = json.loads((out / "MANIFEST.json").read_text())
+    man["members"] = {"postgres.dump": "not-a-dict"}
+    _rewrite_manifest(out, man)
+
+    result = verify_backup_package(out, allow_stub=True)
+    assert result.ok is False
+    assert any("postgres.dump" in e for e in result.errors)
+
+
+def test_verify_rejects_non_dict_manifest_without_raising(tmp_path):
+    out = _make_plain_package(tmp_path)
+    _rewrite_manifest(out, ["not", "a", "manifest"])
+
+    result = verify_backup_package(out, allow_stub=True)
+    assert result.ok is False
+    assert result.errors
+
+
+def test_verify_sealed_rejects_non_dict_outer_members_without_raising(
+    tmp_path, monkeypatch
+):
+    key = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", key)
+    out = tmp_path / "sealed-pkg"
+    create_backup_package(
+        out,
+        include_blobs=False,
+        database_url_override="postgresql://u:p@127.0.0.1:1/db",
+        encrypt=True,
+        allow_dump_stub=True,
+    )
+    man = json.loads((out / "MANIFEST.json").read_text())
+    man["members"] = ["backup.kkbak"]
+    _rewrite_manifest(out, man)
+
+    result = verify_backup_package(out, allow_stub=True)
+    assert result.ok is False
+    assert result.errors
+
+
 @pytest.mark.parametrize(
     "url",
     [
