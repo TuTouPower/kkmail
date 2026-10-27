@@ -1203,6 +1203,34 @@ def test_dir_delete_rollback_restores_content(env):
     rs._cleanup_rollback()
 
 
+def test_dir_rollback_preserves_symlinks_inside_tree(env):
+    """A342: 目录回滚备份须保留内含 symlink（copytree symlinks=True），恢复后仍是链接而非实体副本。"""
+    import shutil
+
+    consumer = env["consumer"]
+    target_file = consumer / "real_target.txt"
+    target_file.write_text("linked content\n", encoding="utf-8")
+    tree = consumer / "docs" / "ext"
+    tree.mkdir(parents=True)
+    (tree / "keep.txt").write_text("keep\n", encoding="utf-8")
+    (tree / "link.txt").symlink_to(target_file)
+
+    rs._ROLLBACK.clear()
+    rs._cleanup_rollback()
+    rs._stage_rollback(tree)
+    backup_link = rs._rollback_dir() / "docs" / "ext" / "link.txt"
+    assert backup_link.is_symlink()
+
+    shutil.rmtree(tree)
+    rs._rollback_changes()
+    restored = tree / "link.txt"
+    assert restored.is_symlink()
+    assert restored.read_text(encoding="utf-8") == "linked content\n"
+    assert (tree / "keep.txt").read_text(encoding="utf-8") == "keep\n"
+    rs._ROLLBACK.clear()
+    rs._cleanup_rollback()
+
+
 def test_skill_overwrite_rollback_restores_old_file(env):
     """F16：sync_skill 覆盖 skill 文件须入回滚栈，回滚后旧内容恢复。"""
     consumer = env["consumer"]

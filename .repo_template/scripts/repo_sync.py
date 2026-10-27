@@ -130,7 +130,9 @@ def _stage_rollback(path: Path) -> None:
             backup.parent.mkdir(parents=True, exist_ok=True)
             if backup.exists():
                 shutil.rmtree(backup, ignore_errors=True)
-            shutil.copytree(path, backup)
+            # symlinks=True 与单文件分支 follow_symlinks=False 对齐（A342）：
+            # 目录内链接备份为链接本身，恢复后不变成实体副本。
+            shutil.copytree(path, backup, symlinks=True)
         else:
             backup.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, backup, follow_symlinks=False)
