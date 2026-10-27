@@ -78,7 +78,7 @@
 
 ## 规范、历史与测试追溯
 
-- 规范权威：[架构](../../mail-core-architecture.md) §7.5/7.6、§8.2/8.4、§9、§10.2、§13、§14.2；项目 AGENTS.md 的凭据脱敏、事务与可恢复原则；用户明确调用的 intensive-review SKILL.md §3 视角 6。
+- 规范权威：[架构](../../archive/legacy_architecture/mail-core-architecture.md) §7.5/7.6、§8.2/8.4、§9、§10.2、§13、§14.2（原文链接为 `../../mail-core-architecture.md`，目标已迁至 `docs/archive/legacy_architecture/mail-core-architecture.md`）；项目 AGENTS.md 的凭据脱敏、事务与可恢复原则；用户明确调用的 intensive-review SKILL.md §3 视角 6。
 - 原始代码固定版本：[remote_push](https://github.com/TuTouPower/kkmail/blob/daca631aec54c30ce02cdb5e6499ae196dc3a72d/mail_core/sync/remote_push.py)、[jobs](https://github.com/TuTouPower/kkmail/blob/daca631aec54c30ce02cdb5e6499ae196dc3a72d/mail_core/sync/jobs.py)、[archive](https://github.com/TuTouPower/kkmail/blob/daca631aec54c30ce02cdb5e6499ae196dc3a72d/mail_core/blobs/archive.py)、[backup](https://github.com/TuTouPower/kkmail/blob/daca631aec54c30ce02cdb5e6499ae196dc3a72d/mail_core/backup/package.py)、[desktop startup](https://github.com/TuTouPower/kkmail/blob/daca631aec54c30ce02cdb5e6499ae196dc3a72d/desktop/startup.js)。各 finding 的片段/明确交错亦构成定位证据。
 - 已核对 git log/blame：jobs dedupe 来自 21e10bda；remote push 从 f0f8a061/89d4e1ca 实现，898c5a0d 加 fencing；archive 自续调度源于 e4f9a1d3；desktop 停止逻辑来自 fcc1fcb6；GC commit→unlink 来自 1ce66644；backup validator 来自 e9003e93/7ff217ce。它们是当前 HEAD 的既存问题；本次是用户指定全库审阅，不主张为 HEAD 单次提交引入，也不做 diff 增量计分。
 - 关联测试已读：test_remote_ops_reconcile.py、test_sync_high_hardening.py、test_worker_loop.py、test_jobs_backoff.py、test_archive_scheduler.py、test_medium_hardening.py、test_high_blobs_providers_metadata.py、test_backup_package.py、test_backup_verify_drill.py、desktop/startup.test.js。它们验证单次成功、隔离、reclaim 单步、checksum 等；未覆盖报告所列端到端唤醒、时间窗口和并发交错。
