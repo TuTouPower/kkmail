@@ -128,13 +128,23 @@ def configure_logging(
     root = logging.getLogger()
     root.setLevel(resolved_level)
 
+    # A164: only remove handlers this function installed previously (they
+    # carry the marker attribute); foreign handlers owned by the host
+    # process or other libraries must survive reconfiguration. Removed
+    # handlers are closed so file/socket handler resources are released.
     for handler in list(root.handlers):
-        root.removeHandler(handler)
+        if getattr(handler, "_mail_core_installed", False):
+            root.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
 
     fmt = f"%(asctime)s %(levelname)s [{service_name}] [%(name)s] [trace:%(trace_id)s] %(message)s"
     formatter = RedactingTraceFormatter(fmt)
 
     handler = logging.StreamHandler(sys.stdout)
+    handler._mail_core_installed = True  # type: ignore[attr-defined]
     handler.setFormatter(formatter)
     root.addHandler(handler)
     access_logger = logging.getLogger("uvicorn.access")
