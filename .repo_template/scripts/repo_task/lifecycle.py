@@ -299,11 +299,17 @@ def _missing_testing_sections(text: str) -> list[str]:
     found = {name: False for name in sections}
     current = None
     current_level = 0
+    # 与 documents 的权威 fence 状态机一致（A262）：存 (char, len)，
+    # 闭合须同字符且长度 >= 开启长度，不再维护第二份判定。
     fence_marker = None
     for line in text.splitlines():
         if fence_marker is not None:
             fence = ctx.FENCE_CLOSE_RE.match(line)
-            if fence and fence.group(1)[0] == fence_marker:
+            if (
+                fence
+                and fence.group(1)[0] == fence_marker[0]
+                and len(fence.group(1)) >= fence_marker[1]
+            ):
                 fence_marker = None
                 if current:
                     found[current] = True
@@ -312,7 +318,7 @@ def _missing_testing_sections(text: str) -> list[str]:
         if fence:
             if current:
                 found[current] = True
-            fence_marker = fence.group(1)[0]
+            fence_marker = (fence.group(1)[0], len(fence.group(1)))
             continue
         heading = ctx.HEADING_RE.fullmatch(line)
         if heading:
