@@ -325,8 +325,12 @@ export const api = {
     }
     csrfToken = null
     csrfInflight = null
-    if (!unauthorizedEventDispatched) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
-    window.location.assign('/')
+    // Same typeof guard as handleUnauthorized: logout must not throw in
+    // non-DOM environments (tests, SSR) after the session is already gone.
+    if (typeof window !== 'undefined') {
+      if (!unauthorizedEventDispatched) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+      window.location.assign('/')
+    }
   },
 
   getGroups() {

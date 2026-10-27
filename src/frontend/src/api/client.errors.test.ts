@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { __resetCsrfForTests, apiRequest, isApiError, postJson } from './client'
+import { __resetCsrfForTests, api, apiRequest, isApiError, postJson } from './client'
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
@@ -72,5 +72,16 @@ describe('isApiError branding (A254)', () => {
       status: 0,
       code: 'network_error',
     })
+  })
+})
+
+describe('logout outside a DOM environment (A90)', () => {
+  it('completes logout without touching window when window is undefined', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/api/auth/me')) return json(200, { csrf_token: 'csrf' })
+      return json(200, {})
+    }))
+    vi.stubGlobal('window', undefined)
+    await expect(api.logout()).resolves.toBeUndefined()
   })
 })
