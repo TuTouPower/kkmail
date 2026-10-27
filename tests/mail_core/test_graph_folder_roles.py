@@ -59,9 +59,13 @@ def test_list_folders_classifies_special_folders_by_endpoint_id():
 
 
 def test_list_folders_survives_missing_well_known_endpoint():
+    # A289: a missing well-known endpoint surfaces as a 404
+    # ProviderHttpError from the real transport; only that is swallowed.
+    from mail_core.providers.http import ProviderHttpError
+
     def transport(method, path, params):
         if path == "/me/mailFolders/archive":
-            raise RuntimeError("archive not present")
+            raise ProviderHttpError("archive not present", status=404)
         return _transport(method, path, params)
 
     folders = GraphProvider(credential_ref="x", transport=transport).list_folders()

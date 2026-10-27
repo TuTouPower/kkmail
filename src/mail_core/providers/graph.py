@@ -137,10 +137,15 @@ class GraphProvider:
         for well_known_name, role in _GRAPH_WELL_KNOWN_ROLES.items():
             try:
                 data = self._call("GET", f"/me/mailFolders/{well_known_name}", {})
-                if isinstance(data, dict) and data.get("id"):
-                    well_known_ids[str(data["id"])] = role
-            except Exception:
-                pass
+            except ProviderHttpError as exc:
+                # A289: only a 404 means "endpoint does not exist" here.
+                # Capacity / rate-limit / server errors are real failures
+                # and must propagate instead of degrading role mapping.
+                if exc.status != 404:
+                    raise
+                continue
+            if isinstance(data, dict) and data.get("id"):
+                well_known_ids[str(data["id"])] = role
         inbox_id: str | None = next(
             (fid for fid, role in well_known_ids.items() if role == "inbox"), None
         )
