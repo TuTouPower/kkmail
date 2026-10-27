@@ -4144,7 +4144,7 @@
     },
     "/api/mail/mark-all-read": {
       "post": {
-        "description": "Batch mark messages read across the matching scope (folder/account/flag).",
+        "description": "Batch mark messages read across the matching scope (folder/account/flag).\n\nNon-atomic by design: batches commit independently, so a failure may\nleave partial progress applied. The request is idempotent — retry it\nto continue marking the remainder.",
         "operationId": "api_mark_all_read_api_mail_mark_all_read_post",
         "requestBody": {
           "content": {
