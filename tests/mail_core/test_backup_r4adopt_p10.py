@@ -184,3 +184,58 @@ def test_a6_verify_rechecks_stage_under_lock_when_operation_completes(
     assert _read_log(target)["stage"] == "complete"
     assert _published_files(target) == PAYLOADS
     assert len(fake.calls) == 1  # verify never replays pg_restore
+
+
+# --- A56: verify of a complete operation must still validate the package ---
+
+
+def _completed_operation(tmp_path, monkeypatch):
+    pkg_dir = _make_package(tmp_path / "case")
+    target = tmp_path / "restored-blobs"
+    fake = _FakePgRestore(0).install(monkeypatch)
+    result = _restore(pkg_dir, target)
+    assert result.ok
+    assert _read_log(target)["stage"] == "complete"
+    return pkg_dir, target, fake
+
+
+def test_a56_verify_complete_operation_validates_package(tmp_path, monkeypatch):
+    pkg_dir, target, fake = _completed_operation(tmp_path, monkeypatch)
+    operation_id = _read_log(target)["operation_id"]
+
+    result = _verify(pkg_dir, target, operation_id)
+
+    assert result.ok
+    assert result.stage == "complete"
+    # The package was actually validated: its size is reported, not 0.
+    assert result.package_size_bytes > 0
+    assert result.blobs_restored == len(PAYLOADS)
+    assert len(fake.calls) == 1
+
+
+def test_a56_verify_complete_operation_rejects_mismatched_package(
+    tmp_path, monkeypatch
+):
+    pkg_dir, target, fake = _completed_operation(tmp_path, monkeypatch)
+    operation_id = _read_log(target)["operation_id"]
+    other_pkg = _make_package(
+        tmp_path / "other", {"aa/bb/first.blob": b"different payload"}
+    )
+
+    with pytest.raises(RuntimeError, match="package digest"):
+        _verify(other_pkg, target, operation_id)
+    assert _read_log(target)["stage"] == "complete"
+    assert _published_files(target) == PAYLOADS
+
+
+def test_a56_verify_complete_operation_rejects_tampered_published_blob(
+    tmp_path, monkeypatch
+):
+    pkg_dir, target, fake = _completed_operation(tmp_path, monkeypatch)
+    operation_id = _read_log(target)["operation_id"]
+    victim = target / "aa" / "bb" / "first.blob"
+    victim.write_bytes(b"tampered after completion")
+
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        _verify(pkg_dir, target, operation_id)
+    assert _read_log(target)["stage"] == "complete"

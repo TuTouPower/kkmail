@@ -1074,8 +1074,8 @@ def run_backup(*, output_dir: str | None = None, encrypt: bool | None = None) ->
                     else:
                         row.value = val
                     session.commit()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("failed to record backup:last_success: %s", exc)
 
             return {
                 "status": "ok",
@@ -2153,7 +2153,9 @@ def verify_restore_operation(
 ) -> RestoreResult:
     """Explicitly verify a ``needs_verification`` restore operation.
 
-    If the database is verified still empty, the operation returns to
+    A ``complete`` operation is re-validated against the supplied package
+    (package digest plus the published file set and checksums) before it
+    is reported ok. If the database is verified still empty, the operation returns to
     ``blobs_published`` and a retry via resume is allowed (result
     ``ok=False``). If the database is non-empty, schema, business
     associations, published-file checksums and blob decryption samples
@@ -2186,18 +2188,7 @@ def verify_restore_operation(
         target_ident=target_ident,
     )
     stage = str(op_log.get("stage") or "")
-    if stage == "complete":
-        return RestoreResult(
-            ok=True,
-            database_restored=True,
-            blobs_restored=len(_target_blob_files(target_blobs)),
-            duration_seconds=(datetime.now(timezone.utc) - begun).total_seconds(),
-            package_size_bytes=0,
-            errors=[],
-            operation_id=op_id,
-            stage="complete",
-        )
-    if stage != "needs_verification":
+    if stage not in ("complete", "needs_verification"):
         raise RuntimeError(
             f"restore operation {op_id} is in stage {stage!r}, not "
             "needs_verification; use resume for that stage"
@@ -2230,20 +2221,7 @@ def verify_restore_operation(
             target_ident=target_ident,
         )
         stage = str(op_log.get("stage") or "")
-        if stage == "complete":
-            return RestoreResult(
-                ok=True,
-                database_restored=True,
-                blobs_restored=len(_target_blob_files(target_blobs)),
-                duration_seconds=(
-                    datetime.now(timezone.utc) - begun
-                ).total_seconds(),
-                package_size_bytes=0,
-                errors=[],
-                operation_id=op_id,
-                stage="complete",
-            )
-        if stage != "needs_verification":
+        if stage not in ("complete", "needs_verification"):
             raise RuntimeError(
                 f"restore operation {op_id} is in stage {stage!r}, not "
                 "needs_verification; use resume for that stage"
@@ -2269,6 +2247,25 @@ def verify_restore_operation(
             if prepared.blobs_tar is not None:
                 inventory, _dirs = _blob_tar_inventory(prepared.blobs_tar)
             _verify_published_blob_files(target_blobs, inventory)
+
+            if stage == "complete":
+                # A completed operation is only "verified" once the
+                # package digest and every published file's checksum have
+                # been re-checked against the supplied package (above);
+                # returning ok without that would let any package claim
+                # a completed restore it never produced.
+                return RestoreResult(
+                    ok=True,
+                    database_restored=True,
+                    blobs_restored=len(inventory),
+                    duration_seconds=(
+                        datetime.now(timezone.utc) - begun
+                    ).total_seconds(),
+                    package_size_bytes=prepared.package_size,
+                    errors=[],
+                    operation_id=op_id,
+                    stage="complete",
+                )
 
             if target_ident is None:
                 raise RuntimeError(
