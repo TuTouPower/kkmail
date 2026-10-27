@@ -169,17 +169,22 @@ def test_run_reclaims_on_a_separate_time_cadence(monkeypatch):
 
 
 def test_run_uses_base_poll_after_claimed_jobs_fail(monkeypatch):
+    # A275: the idle wait seam is _wait_for_next_poll (Event.wait), not
+    # time.sleep; this replaces the previous time.sleep-based version of
+    # this test while keeping the same assertion (base poll delay is used).
     _stub_run_infrastructure(monkeypatch)
     delays = []
 
-    def stop_after_sleep(delay):
+    def stop_after_wait(delay):
         delays.append(delay)
         worker_main.request_stop()
+        return True
 
+    monkeypatch.setattr(worker_main, "_wait_for_next_poll", stop_after_wait)
     monkeypatch.setattr(
         worker_main,
         "time",
-        SimpleNamespace(monotonic=lambda: 0.0, sleep=stop_after_sleep),
+        SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda _seconds: None),
     )
     monkeypatch.setattr("mail_core.blobs.crypto.load_keyring_from_env", lambda: {})
     monkeypatch.setattr(worker_main, "_reclaim_once", lambda: 0)

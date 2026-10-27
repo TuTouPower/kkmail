@@ -17,6 +17,7 @@ configure_logging(service_name="mail-core-worker")
 log = logging.getLogger("mail_core.worker")
 
 _stop = False
+_stop_event = threading.Event()
 CLAIM_BATCH = 5
 RECLAIM_INTERVAL_S = 60.0
 CLAIM_HEARTBEAT_MAX_INTERVAL_S = 60.0
@@ -45,11 +46,18 @@ def _handle_stop(signum: int, _frame: object) -> None:
     global _stop
     log.info("received signal %s; stopping", signum)
     _stop = True
+    _stop_event.set()
 
 
 def request_stop() -> None:
     global _stop
     _stop = True
+    _stop_event.set()
+
+
+def _wait_for_next_poll(timeout_s: float) -> bool:
+    """Interruptible idle wait (A275): returns True as soon as stop is set."""
+    return _stop_event.wait(timeout_s)
 
 
 def _reclaim_once() -> int:
@@ -317,6 +325,7 @@ def next_poll_delay(
 def run(poll_interval_s: float | None = None) -> None:
     global _stop
     _stop = False
+    _stop_event.clear()
     from mail_core.blobs.crypto import load_keyring_from_env
 
     # Fail fast: worker must not process jobs without blob keys.
@@ -345,7 +354,7 @@ def run(poll_interval_s: float | None = None) -> None:
     heartbeat_loop.start()
 
     try:
-        while not _stop:
+        while not _stop and not _stop_event.is_set():
             now = time.monotonic()
             if last_reclaim_at is None or now - last_reclaim_at >= RECLAIM_INTERVAL_S:
                 last_reclaim_at = now
@@ -373,7 +382,7 @@ def run(poll_interval_s: float | None = None) -> None:
                 claimed=tick_result.claimed,
             )
             if sleep_s:
-                time.sleep(sleep_s)
+                _wait_for_next_poll(sleep_s)
     finally:
         heartbeat_loop.stop(timeout=5.0)
     log.info("worker loop stopped")
