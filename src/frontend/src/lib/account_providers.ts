@@ -20,7 +20,14 @@ export const vendors: Record<Vendor, { label: string; host: string; credential: 
  * test (A96) can hold this table and the brand table in
  * store/accountIcon.ts to their adjudicated difference sets. */
 export const domains: Record<string, Vendor> = { 'gmail.com': 'google', 'googlemail.com': 'google', 'outlook.com': 'microsoft', 'outlook.cn': 'microsoft', 'hotmail.com': 'microsoft', 'live.com': 'microsoft', 'msn.com': 'microsoft', 'hotmail.co.uk': 'microsoft', 'live.co.uk': 'microsoft', 'hotmail.fr': 'microsoft', 'live.fr': 'microsoft', 'hotmail.de': 'microsoft', 'live.de': 'microsoft', 'outlook.de': 'microsoft', 'qq.com': 'qq', 'foxmail.com': 'qq', '163.com': 'netease_163', '126.com': 'netease_126', 'yeah.net': 'netease_yeah', 'icloud.com': 'icloud', 'me.com': 'icloud', 'mac.com': 'icloud', 'yahoo.com': 'yahoo', 'yahoo.co.uk': 'yahoo', 'zoho.com': 'zoho', 'zohomail.com': 'zoho' }
-export const inferVendor = (email: string): Vendor => domains[email.trim().toLowerCase().split('@')[1]] || 'other'
+export const inferVendor = (email: string): Vendor => {
+  // A333: the domain is what follows the LAST '@' (a quoted local part may
+  // itself contain '@'), and a trailing '.' (FQDN root dot) must not miss
+  // the table lookup.
+  const normalized = email.trim().toLowerCase()
+  const domain = normalized.slice(normalized.lastIndexOf('@') + 1).replace(/\.+$/, '')
+  return domains[domain] || 'other'
+}
 export const defaultProtocol = (vendor: Vendor): Protocol => vendor === 'microsoft' ? 'graph' : 'imap'
 
 // p056: Microsoft simplified onboarding uses the built-in public client

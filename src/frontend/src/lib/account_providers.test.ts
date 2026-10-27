@@ -253,3 +253,19 @@ describe('OAuth state generation fallback (A152)', () => {
     expect(mathRandom).not.toHaveBeenCalled()
   })
 })
+
+describe('inferVendor address-shape edge cases (A333)', () => {
+  it('uses the domain after the LAST @ when the local part contains @', () => {
+    expect(inferVendor('a@b@gmail.com')).toBe('google')
+    expect(inferVendor('user@@163.com')).toBe('netease_163')
+    expect(inferVendor('"a@b"@qq.com')).toBe('qq')
+    expect(inferVendor('a@b@unknown.org')).toBe('other')
+  })
+
+  it('strips a trailing dot (FQDN root dot) from the domain before lookup', () => {
+    expect(inferVendor('user@gmail.com.')).toBe('google')
+    expect(inferVendor('user@163.com.')).toBe('netease_163')
+    expect(inferVendor(' User@GMAIL.COM. ')).toBe('google')
+    expect(inferVendor('user@.')).toBe('other')
+  })
+})
