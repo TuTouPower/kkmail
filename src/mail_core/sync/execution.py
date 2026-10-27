@@ -603,13 +603,16 @@ def _live_execution_generations(session: Session) -> set[uuid.UUID]:
             )
         ).all()
     )
-    for payload in session.scalars(
-        select(WorkerJob.payload).where(
+    # A322: extract only the successor generation in SQL via a JSON
+    # path expression instead of reading every live job's full payload
+    # into memory (payloads can carry large detail text, and the orphan
+    # patrol pays this on every cycle).
+    successor_generation = WorkerJob.payload["_queue_next"]["execution_generation"].as_string()
+    for generation in session.scalars(
+        select(successor_generation).where(
             WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value])
         )
     ).all():
-        queue_next = (payload or {}).get("_queue_next") or {}
-        generation = queue_next.get("execution_generation")
         if generation:
             try:
                 live.add(uuid.UUID(str(generation)))
