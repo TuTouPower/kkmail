@@ -306,6 +306,56 @@ function testEnsureDatabaseMarkerWriteFailureOnlyWarns() {
   }
 }
 
+function testInitPwfileCreatedExclusivelyWith0600() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-pwfile-wx-'))
+  const pwFile = path.join(dataRoot, 'secrets', 'pg-pwfile-init')
+  let captured = null
+  const mgr = new PostgresManager({
+    dataRoot,
+    pgBinDir: path.join(dataRoot, 'bin'),
+    spawnSync: (_cmd, args) => {
+      const pwIdx = args.indexOf('--pwfile')
+      captured = {
+        mode: fs.statSync(args[pwIdx + 1]).mode & 0o777,
+        content: fs.readFileSync(args[pwIdx + 1], 'utf8'),
+      }
+      const dIdx = args.indexOf('-D')
+      fs.writeFileSync(path.join(args[dIdx + 1], 'postgresql.conf'), '# initdb conf\n')
+      return { error: null, status: 0, stdout: '', stderr: '' }
+    },
+  })
+  mgr._binsCache = {
+    initdb: '/fake/bin/initdb',
+    pg_ctl: '/fake/bin/pg_ctl',
+    postgres: '/fake/bin/postgres',
+    createdb: '/fake/bin/createdb',
+  }
+  // Simulate a file planted in the cleanup->write window (the stubbed
+  // password() runs as part of the pwfile write in initIfNeeded): a
+  // plain writeFileSync would overwrite it in place and keep its wide
+  // 0o644 permissions with the password inside.
+  const realPassword = mgr.password.bind(mgr)
+  mgr.password = () => {
+    fs.mkdirSync(path.dirname(pwFile), { recursive: true })
+    fs.writeFileSync(pwFile, 'planted', { mode: 0o644 })
+    if (process.platform !== 'win32') fs.chmodSync(pwFile, 0o644)
+    return realPassword()
+  }
+  try {
+    const result = mgr.initIfNeeded()
+    assert.strictEqual(result.ok, true, result.reason)
+    assert.strictEqual(result.initialized, true)
+    assert.ok(captured, 'initdb must have been invoked')
+    if (process.platform !== 'win32') {
+      assert.strictEqual(captured.mode, 0o600, 'pwfile must be created exclusively with 0600, not inherit a planted file mode')
+    }
+    assert.ok(captured.content.length >= 32 && !captured.content.includes('planted'))
+    assert.ok(!fs.existsSync(pwFile), 'pwfile must be removed after initdb')
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
 function testStopIdempotentNoThrowaway() {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-stop-'))
   const mgr = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
@@ -528,6 +578,7 @@ testHasBinariesProbesPathOncePerBinary()
 testStatusCachesPgCtlProbeWithinTtl()
 testStartAlreadyRunningProbesStatusOnce()
 testEnsureDatabaseMarkerWriteFailureOnlyWarns()
+testInitPwfileCreatedExclusivelyWith0600()
 testStopIdempotentNoThrowaway()
 testStopFailureAndRetry()
 testInitPwfileCleanupLegacy()

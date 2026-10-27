@@ -341,14 +341,29 @@ PostgresManager.prototype.initIfNeeded = function initIfNeeded() {
   try { fs.chmodSync(p.pgData, 0o700) } catch (_) {}
   const pwFile = path.join(p.secrets, 'pg-pwfile-init')
   let r
+  let pwFd = null
   try {
-    fs.writeFileSync(pwFile, this.password(), { encoding: 'utf8', mode: 0o600 })
+    // A372: create the pwfile exclusively with tight permissions (the
+    // same 'wx'/0600 pattern password() uses for its persisted file).
+    // A plain writeFileSync would overwrite a file planted after
+    // _cleanupInitPwfile() in place and keep its wider permissions with
+    // the password inside; unlink once more and let 'wx' fail closed
+    // if a file races in after that.
+    const pw = this.password()
+    try { fs.unlinkSync(pwFile) } catch (_) { /* absent */ }
+    pwFd = fs.openSync(pwFile, 'wx', 0o600)
+    fs.writeFileSync(pwFd, pw, { encoding: 'utf8' })
+    fs.closeSync(pwFd)
+    pwFd = null
     r = (this._spawnSync || cp.spawnSync)(
       bins.initdb,
       ['-D', p.pgData, '-U', this.user, '--pwfile', pwFile, '-A', 'scram-sha-256', '--locale=C', '--encoding=UTF8'],
       { encoding: 'utf8', env: scrubEnv(process.env), timeout: 120000 },
     )
   } finally {
+    if (pwFd !== null) {
+      try { fs.closeSync(pwFd) } catch (_) { /* ignore */ }
+    }
     try { fs.unlinkSync(pwFile) } catch (_) { /* ignore */ }
   }
   if (!r || r.error || r.status !== 0) {
