@@ -8,6 +8,9 @@
 > [!NOTE]
 > **状态注记（A34，泄露凭据处置口径）**：本文件 §二.1 对历史泄露凭据的「不执行破坏性 Git 历史重写」决策，已被次日 `docs/reviews/review_20261022_052842/adoption_decision.md` 的 A53/A54 决策（使用 git-filter-repo 重写历史并吊销凭据）取代，不再是现行口径；`docs/reviews/review_20261021_064335/review_da57df7_findings_and_decisions.md` 仅处置报告脱敏与状态横幅、未处置历史重写，其「唯一的修复基准」仅指该轮修复清单，不构成凭据处置口径；`docs/blueprint/decisions.md` 中 2026-10-21「历史泄露凭据资产处置」条目仍保留与本文件 §二.1 相同的「不重写」旧口径、未随 A53/A54 更新。凭据处置口径以日期较新的 A53/A54 为准；但第四轮审阅 `docs/reviews/review_20261027_021416/regression.md` 核实该重写截至其基线尚未执行、相关 commit 仍可达，执行状态以该文件为准。
 
+> [!NOTE]
+> **未完成披露注记（A400 / R3-H05）**：本包该轮审阅并未完整跑完——`_meta/_meta.json` 记录 phase=timeout、deadman 已触发，聚合终产物 `review_intensive.md` 始终未生成（pending 中仅余该文件、至今缺失）。本报告是超时终止时的阶段性核验产物，包内结论不完整；引用本包结论时须连同此注记，不得以完整审阅包面貌引用。
+
 # kkmail 全量审查问题真实性核验与源头溯源总报告
 
 - **审查基线**：最新审查目录 `docs/reviews/review_20261021_040521/`
