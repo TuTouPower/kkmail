@@ -33,7 +33,7 @@ class SafetyError(RuntimeError):
 
 
 _CREDENTIAL_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b(password|passwd|pwd|token|secret|api[_-]?key)(\s*[:=]\s*)\S+"
+    r"(?i)([a-z0-9_]*(?:password|passwd|pwd|token|secret|api[_-]?key)[a-z0-9_]*)(\s*[:=]\s*)\S+"
 )
 _URL_PASSWORD_RE = re.compile(r"(://[^\s:/@]+:)[^\s@]+(@)")
 
