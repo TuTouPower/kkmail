@@ -74,7 +74,12 @@ def safe_error(exc: BaseException | str | None) -> str:
         if is_raw_body or not first:
             return f"{type(exc).__name__}{status}"
         return redact(f"{type(exc).__name__}{status}: {first[:120]}")
-    return redact(f"{type(exc).__name__}: {exc}")
+    # A325: non-provider exceptions converge to type + controlled fields
+    # only. Their raw messages routinely embed SQL text, file paths and
+    # other internal details that must never be persisted (e.g. into
+    # worker_jobs.last_error); the full message remains available to
+    # debug logs through the redacting formatter, not through this value.
+    return safe_provider_summary(exc)
 
 
 def safe_provider_summary(exc: BaseException | str | None) -> str:

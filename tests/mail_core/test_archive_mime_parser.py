@@ -287,5 +287,8 @@ def test_archive_distinguishes_mime_parse_from_storage_failures():
     # Must NOT be ARCHIVE_COMPLETE; must be ARCHIVE_PENDING with retry_count incremented
     assert fake_state.state == ArchiveState.ARCHIVE_PENDING.value
     assert fake_state.retry_count == 1
-    assert "Disk full" in fake_state.last_error
+    # A325: persisted last_error converges to the exception type only; the
+    # raw OSError message ("Disk full / I/O error ...") is no longer stored.
+    assert fake_state.last_error == "OSError"
+    assert "Disk full" not in fake_state.last_error
     assert fake_state.claimed_by is None
