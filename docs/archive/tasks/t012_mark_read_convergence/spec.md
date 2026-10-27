@@ -49,7 +49,7 @@ p016 已确认“全部已读”出现反复未读与角标不一致：写回首
 
 ## 上下文区
 
-- 来源：p016（2026-10-22 核实；转办后见 docs/archive/pending/p016_mark_all_read_sync_convergence.md）。运行态只读证据：2504\*\*\*@qq.com 收件箱 1463 封、实际未读 66、缓存未读 40，66 条 mark_read pending 且 attempts=0，0 个活跃写回任务；3 个 done 批次各完成 20 条。前轮隔离复现六组场景通过，未操作真实邮件；本次再次核对生产代码，根因仍存在。effective status 无等价 task；t008 仅存在相关文件交叠。
+- 来源：p016（2026-10-22 核实；转办后见 docs/archive/pending/p016_mark_all_read_sync_convergence.md）。运行态只读证据：某 QQ 邮箱账号收件箱 1463 封、实际未读 66、缓存未读 40，66 条 mark_read pending 且 attempts=0，0 个活跃写回任务；3 个 done 批次各完成 20 条。前轮隔离复现六组场景通过，未操作真实邮件；本次再次核对生产代码，根因仍存在。effective status 无等价 task；t008 仅存在相关文件交叠。
 
 ### 有意不测
 
