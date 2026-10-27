@@ -46,6 +46,12 @@ def create_account(
         credentials,
         require_credentials=credentials is not None,
     )
+    if group_id is not None:
+        # Match the update path: a bad group is a LookupError, not an FK
+        # IntegrityError surfacing as a 500 at flush time (A77).
+        group = session.scalar(select(AccountGroup).where(AccountGroup.id == group_id))
+        if group is None:
+            raise LookupError("group not found")
     acc = Account(
         email=email_norm,
         provider=str(provider),
