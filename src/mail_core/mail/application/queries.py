@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -381,6 +382,24 @@ class MessageDetail:
     attachments: list[AttachmentItem]
 
 
+_PART_ID_TRAILING_NUMBER = re.compile(r"(\d+)$")
+
+
+def _attachment_part_order_key(att: Attachment) -> tuple[int, int, str]:
+    """Sort key for MIME part order (A317).
+
+    ``part_id`` is ``str(part_index)`` from the MIME walk; rows that
+    predate the column carry ``legacy_<n>`` from migration 0015. Both
+    end in the part's ordinal, so a trailing-number parse orders both
+    shapes numerically (a plain text sort would put "10" before "2").
+    Attachments without a trailing number sort last, by filename.
+    """
+    match = _PART_ID_TRAILING_NUMBER.search(att.part_id or "")
+    if match:
+        return (0, int(match.group(1)), att.filename or "")
+    return (1, 0, att.filename or "")
+
+
 def get_message_detail(session: Session, message_id: uuid.UUID) -> MessageDetail | None:
     """Return message metadata + parsed body (if archived/parsed) + attachment list."""
     msg = session.get(Message, message_id)
@@ -390,9 +409,10 @@ def get_message_detail(session: Session, message_id: uuid.UUID) -> MessageDetail
     text_html = body.text_html if body else None
     text_plain = body.text_plain if body else None
     display_body, body_type = select_display_body(text_html, text_plain)
-    atts = list(
-        session.scalars(select(Attachment).where(Attachment.message_id == message_id).order_by(Attachment.filename)).all()
-    )
+    atts = list(session.scalars(select(Attachment).where(Attachment.message_id == message_id)).all())
+    # MIME part order (A317), not filename order: sort by the numeric
+    # ordinal in part_id, filename only as tiebreak.
+    atts.sort(key=_attachment_part_order_key)
     return MessageDetail(
         id=msg.id,
         account_id=msg.account_id,
