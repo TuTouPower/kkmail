@@ -390,17 +390,7 @@ def create_sync_request(
     return req, True
 
 
-def get_sync_request_report(session: Session, request_id: uuid.UUID) -> SyncRequestOut | None:
-    req = session.get(SyncRequest, request_id)
-    if req is None:
-        return None
-
-    targets = list(
-        session.scalars(
-            select(SyncRequestTarget).where(SyncRequestTarget.request_id == request_id)
-        ).all()
-    )
-
+def _build_report(req: SyncRequest, targets: list[SyncRequestTarget]) -> SyncRequestOut:
     queued = sum(1 for t in targets if t.state == "queued")
     running = sum(1 for t in targets if t.state == "running")
     completed = sum(1 for t in targets if t.state == "complete")
@@ -434,6 +424,18 @@ def get_sync_request_report(session: Session, request_id: uuid.UUID) -> SyncRequ
         finished_at=req.finished_at.isoformat() if req.finished_at else None,
         errors=errors,
     )
+
+
+def get_sync_request_report(session: Session, request_id: uuid.UUID) -> SyncRequestOut | None:
+    req = session.get(SyncRequest, request_id)
+    if req is None:
+        return None
+    targets = list(
+        session.scalars(
+            select(SyncRequestTarget).where(SyncRequestTarget.request_id == request_id)
+        ).all()
+    )
+    return _build_report(req, targets)
 
 
 #: Scope keys that identify *whose* mail a request syncs. They must match
@@ -499,25 +501,65 @@ def list_recent_sync_requests(
         folder_role=folder_role,
     )
     capped = max(1, min(int(limit), 50))
-    rows = list(
-        session.scalars(
-            select(SyncRequest)
-            .where(SyncRequest.state.in_(states))
-            .order_by(SyncRequest.created_at.desc())
-            .limit(200)
-        ).all()
-    )
-    reports: list[SyncRequestOut] = []
-    for req in rows:
-        canonical = _canonical_scope(req.scope)
-        if not _scope_matches(canonical, wanted):
-            continue
-        report = get_sync_request_report(session, req.id)
-        if report is not None:
-            reports.append(report)
-        if len(reports) >= capped:
+
+    # Push the scope filter into SQL as far as it goes (A143): stored
+    # scopes are canonical (identity values stored as strings), and
+    # _scope_matches requires every identity key to be exactly equal --
+    # a key the query did not specify must be absent (NULL) in storage,
+    # and a specified folder_role must be equal. The Python matcher
+    # below re-checks every row, so the SQL conditions only narrow.
+    # The unfiltered (global) query has no pushable key; it is served
+    # by the batched scan below instead of the old fixed 200-row window,
+    # which starved older matching requests behind 200 newer unrelated
+    # ones.
+    conditions = [SyncRequest.state.in_(states)]
+    if wanted:
+        for key in _IDENTITY_SCOPE_KEYS:
+            element = SyncRequest.scope[key]
+            if key in wanted:
+                conditions.append(element.as_string() == str(wanted[key]))
+            else:
+                conditions.append(element.as_string().is_(None))
+        if "folder_role" in wanted:
+            conditions.append(SyncRequest.scope["folder_role"].as_string() == str(wanted["folder_role"]))
+
+    matched: list[SyncRequest] = []
+    batch_size = 200
+    offset = 0
+    while len(matched) < capped:
+        rows = list(
+            session.scalars(
+                select(SyncRequest)
+                .where(*conditions)
+                .order_by(SyncRequest.created_at.desc(), SyncRequest.id.desc())
+                .limit(batch_size)
+                .offset(offset)
+            ).all()
+        )
+        if not rows:
             break
-    return reports
+        for req in rows:
+            if _scope_matches(_canonical_scope(req.scope), wanted):
+                matched.append(req)
+                if len(matched) >= capped:
+                    break
+        if len(rows) < batch_size:
+            break
+        offset += batch_size
+
+    if not matched:
+        return []
+
+    # One batched target load for all matched requests (previously one
+    # report query per request -- N+1), assembled in memory (A143).
+    targets_by_request: dict[uuid.UUID, list[SyncRequestTarget]] = {}
+    for target in session.scalars(
+        select(SyncRequestTarget).where(
+            SyncRequestTarget.request_id.in_([req.id for req in matched])
+        )
+    ).all():
+        targets_by_request.setdefault(target.request_id, []).append(target)
+    return [_build_report(req, targets_by_request.get(req.id, [])) for req in matched]
 
 
 def record_account_activity(session: Session, account_ids: list[uuid.UUID], ttl_seconds: int = 45) -> None:
