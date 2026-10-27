@@ -2,6 +2,9 @@
 > **SUPERSEDED / HISTORICAL REPORT**
 > 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
 
+> [!NOTE]
+> **勘误注记（A399 / R3-H03）**：本包 `bundle.json` 的 `stats` 字段声称 files: 177 / bundles: 42，与该文件自身数组实数（files 168 / bundles 40，逐项复点）不符。`bundle.json` 为机器文件，其统计字段按处置口径不回写；引用本包范围统计以实数 168 / 40 为准，177 / 42 勿再引用。此注记即为勘误。
+
 # Bundle pkg_root
 
 ## Findings
