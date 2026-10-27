@@ -112,7 +112,12 @@ services:
       MAIL_CORE_LOGIN_PASSWORD: ${MAIL_CORE_LOGIN_PASSWORD:-}
       # Optional Bearer keys for integrations (comma-separated or JSON list)
       MAIL_CORE_API_KEYS: ${MAIL_CORE_API_KEYS:-}
-      MAIL_CORE_COOKIE_SECURE: "${MAIL_CORE_COOKIE_SECURE:-0}"
+      # Secure session cookie by default: browsers only send it over HTTPS,
+      # so it cannot leak in clear text — including when MAIL_CORE_HOST_BIND
+      # exposes the API on a LAN over plain HTTP. For local HTTP-only
+      # debugging on loopback, explicitly set MAIL_CORE_COOKIE_SECURE=0;
+      # with 1, login over plain http://127.0.0.1 will not persist a session.
+      MAIL_CORE_COOKIE_SECURE: "${MAIL_CORE_COOKIE_SECURE:-1}"
       # Required: 32-byte AES key, base64-encoded. Generate:
       #   python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())'
       MAIL_CORE_BLOB_KEY_V1: ${MAIL_CORE_BLOB_KEY_V1:?set MAIL_CORE_BLOB_KEY_V1 (base64 32-byte key)}
