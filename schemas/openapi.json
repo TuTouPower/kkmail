@@ -70,12 +70,6 @@
             "title": "Oauth Flow Id"
           },
           "provider": {
-            "enum": [
-              "imap",
-              "graph",
-              "memory",
-              "stub"
-            ],
             "title": "Provider",
             "type": "string"
           }
