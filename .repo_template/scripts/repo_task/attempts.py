@@ -29,7 +29,7 @@ def _require_identity_values(attempt: int, execution_id: str) -> None:
 def project_attempts(events: list[dict]) -> dict[tuple[str, int, str], dict]:
     """Project immutable ledger events into exact attempt records."""
     records: dict[tuple[str, int, str], dict] = {}
-    for event in events:
+    for seq, event in enumerate(events):
         tid = event.get("tid")
         attempt = event.get("attempt")
         execution_id = event.get("execution_id")
@@ -52,6 +52,7 @@ def project_attempts(events: list[dict]) -> dict[tuple[str, int, str], dict]:
                     "重复 attempt_reserved；账本损坏，请人工修复"
                 )
             records[key] = {
+                "_reserved_seq": seq,
                 "tid": tid,
                 "attempt": attempt,
                 "execution_id": execution_id,
@@ -81,8 +82,12 @@ def project_attempts(events: list[dict]) -> dict[tuple[str, int, str], dict]:
 
 
 def attempts_for_tid(tid: str, events: list[dict]) -> list[dict]:
+    # Current is the last attempt_reserved in ledger order (A130), not the
+    # lexicographic maximum of (attempt, execution_id): with two identities
+    # sharing one attempt number, hex ordering must not decide "current".
+    # execution_id is only an exact-identity discriminator, never a sort key.
     records = [record for record in project_attempts(events).values() if record["tid"] == tid]
-    return sorted(records, key=lambda record: (record["attempt"], record["execution_id"]))
+    return sorted(records, key=lambda record: record.get("_reserved_seq", 0))
 
 
 def current_attempt_record(tid: str, events: list[dict]) -> dict | None:
