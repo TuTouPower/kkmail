@@ -17,7 +17,6 @@ from mail_core.blobs.access import (
     assert_not_path_param,
     parse_attachment_id,
     resolve_attachment_bytes,
-    safe_blob_path,
     validate_content_digest,
 )
 from mail_core.blobs.store import BlobStore, InvalidBlobDigest
@@ -88,11 +87,14 @@ def test_attachment_with_invalid_blob_digest_is_unavailable_not_unhandled(tmp_pa
         resolve_attachment_bytes(Session(), attachment_id, store=BlobStore(tmp_path))
 
 
-def test_safe_blob_path_stays_under_root(tmp_path):
-    digest = "ab" + "cd" + ("e" * 60)
-    p = safe_blob_path(tmp_path, digest)
-    assert p.name == f"{digest}.blob"
-    assert tmp_path.resolve() in p.parents
+def test_safe_blob_path_removed():
+    # A217: safe_blob_path had no production caller (attachment resolution
+    # already derives paths via BlobStore.path_for) and merely duplicated
+    # path_for's traversal guard. It is deleted rather than kept as a
+    # second implementation; this replaces its old behaviour test.
+    import mail_core.blobs.access as access
+
+    assert not hasattr(access, "safe_blob_path")
 
 
 def test_api_rejects_path_shaped_attachment_id():

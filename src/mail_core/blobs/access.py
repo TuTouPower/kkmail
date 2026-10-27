@@ -9,7 +9,6 @@ import re
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from pathlib import Path
 
 from sqlalchemy.orm import Session
 
@@ -98,13 +97,3 @@ def resolve_attachment_bytes(
         open_stream=lambda: store.iter_plaintext_verified(digest),
     )
 
-
-def safe_blob_path(root: Path, digest: str) -> Path:
-    """Resolve on-disk path under root; reject traversal."""
-    digest = validate_content_digest(digest)
-    rel = Path(digest[:2]) / digest[2:4] / f"{digest}.blob"
-    full = (root / rel).resolve()
-    root_resolved = root.resolve()
-    if root_resolved not in full.parents:
-        raise PathTraversalRejected("resolved path escapes blob root")
-    return full
