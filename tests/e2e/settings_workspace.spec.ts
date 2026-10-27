@@ -90,6 +90,6 @@ test('settings workspace: narrow layouts preserve account controls and avoid ove
   expect(await settings.locator('.settings-content').evaluate(node =>
     node.scrollHeight <= node.clientHeight || ['auto', 'scroll'].includes(getComputedStyle(node).overflowY),
   )).toBe(true)
-  await settings.getByRole('button', { name: '同步全部账户', exact: true }).scrollIntoViewIfNeeded()
-  await expect(settings.getByRole('button', { name: '同步全部账户', exact: true })).toBeVisible()
+  await settings.getByRole('button', { name: '立即同步', exact: true }).scrollIntoViewIfNeeded()
+  await expect(settings.getByRole('button', { name: '立即同步', exact: true })).toBeVisible()
 })

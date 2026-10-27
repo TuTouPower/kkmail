@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Folder, Inbox, LoaderCircle, Monitor, Moon, PanelLeft, Pencil, Plus, RefreshCw, Search, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState, type Ref } from 'react'
-import { api, type AccountSummary } from '../api/client'
+import { api, type AccountSummary, type SyncRequestOut } from '../api/client'
+import { syncFailureDetail, waitForSyncRequests } from '../api/sync'
 import { fetchAccounts, fetchGroups, queryKeys, resetGroupMailQueries, resetMailListQueries } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
 import { formatShortcut, getDefaultShortcut } from '../lib/ui_shortcut'
@@ -240,6 +241,52 @@ export default function SettingsPage({
     }, '已删除')
   }
 
+  const [syncAllRunning, setSyncAllRunning] = useState(false)
+  const [syncingAccountIds, setSyncingAccountIds] = useState<ReadonlySet<string>>(new Set())
+
+  /**
+   * Submit immediate-sync requests and wait until they truly finish.
+   * Silent on success (same rule as the sync-preference toggles); a failed
+   * request or a transport error is the only thing that surfaces feedback.
+   */
+  async function awaitImmediateSync(submit: () => Promise<SyncRequestOut[]>): Promise<void> {
+    if (pendingRef.current.has('accounts')) return
+    setScopePending('accounts', true)
+    try {
+      const initial = await submit()
+      const { reports } = await waitForSyncRequests(initial)
+      const failure = syncFailureDetail(reports)
+      if (failure) throw new Error(failure)
+      await qc.invalidateQueries({ queryKey: queryKeys.accounts })
+    } catch (error) {
+      report('accounts', errorMessage(error, '立即同步失败'), true)
+    } finally {
+      setScopePending('accounts', false)
+    }
+  }
+
+  async function syncAllNow() {
+    setSyncAllRunning(true)
+    try {
+      await awaitImmediateSync(async () => [await api.syncAll()])
+    } finally {
+      setSyncAllRunning(false)
+    }
+  }
+
+  async function syncAccountNow(account: AccountSummary) {
+    setSyncingAccountIds((current) => new Set(current).add(account.id))
+    try {
+      await awaitImmediateSync(async () => [await api.syncAccount(account.id)])
+    } finally {
+      setSyncingAccountIds((current) => {
+        const next = new Set(current)
+        next.delete(account.id)
+        return next
+      })
+    }
+  }
+
   // Sync-preference toggles stay silent on success (p054); only failures surface feedback.
   async function toggleSyncPreference(account: AccountSummary) {
     if (pendingRef.current.has('accounts')) return
@@ -298,7 +345,7 @@ export default function SettingsPage({
               <div className="settings-summary"><span>账户总数 <strong>{accountsQuery.isPending ? '—' : accounts.length}</strong></span><span>已显示 <strong>{accountsQuery.isPending ? '—' : filtered.length}</strong></span><span>已同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled !== false).length}</strong></span><span>已暂停同步 <strong>{accountsQuery.isPending ? '—' : accounts.filter(a => a.sync_enabled === false).length}</strong></span></div>
               <div className="settings-accounts-actions">
                 <button data-ui="ST14" type="button" className="settings-button is-primary" onClick={() => { setEditingAccount(null); setAddOpen(true) }} disabled={pendingAccounts}><Plus size={15} />添加账户</button>
-                <button data-ui="ST15" type="button" className="settings-button" disabled={pendingAccounts || accountsQuery.isPending || accountsQuery.isError} onClick={() => void run('accounts', '全量同步', async () => { const result = await api.syncAll(); await qc.invalidateQueries({ queryKey: queryKeys.accounts }); return result }, result => `已排队 ${result.target_count ?? 0} 个全量同步任务`)}><RefreshCw size={14} />同步全部账户</button>
+                <button data-ui="ST15" type="button" className="settings-button" disabled={pendingAccounts || accountsQuery.isPending || accountsQuery.isError} onClick={() => void syncAllNow()}><RefreshCw size={14} className={syncAllRunning ? 'spin' : ''} />立即同步</button>
               </div>
               <div className="settings-toolbar">
                 <label className="settings-search"><Search size={15} /><input type="search" aria-label="搜索账户" placeholder="搜索邮箱、域名、服务商或分组" value={search} onChange={event => setSearch(event.target.value)} /></label>
@@ -337,7 +384,7 @@ export default function SettingsPage({
                   }}><option value="">不加入分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
                   <span className={`settings-sync-status${syncFailed(account) ? ' is-error' : ''}`}><i />{syncStates[account.sync_status] || account.sync_status || '状态未知'}</span>
                   <button className="settings-switch" type="button" role="switch" aria-checked={account.sync_enabled !== false} aria-label={`${account.sync_enabled === false ? '启用' : '暂停'}同步 ${account.email}`} disabled={pendingAccounts} onClick={() => void toggleSyncPreference(account)}><span /></button>
-                  <div className="settings-row-actions"><button type="button" className="settings-icon-button" title="编辑账户" aria-label={`编辑账户 ${account.email}`} disabled={pendingAccounts} onClick={() => { setAddOpen(false); setEditingAccount(account) }}><Pencil size={14} /></button><button type="button" className="settings-icon-button" title="立即同步" aria-label={`同步 ${account.email}`} disabled={pendingAccounts || account.sync_enabled === false} onClick={() => void run('accounts', '同步', async () => { await api.syncAccount(account.id); await qc.invalidateQueries({ queryKey: queryKeys.accounts }) }, '已排队同步')}><RefreshCw size={14} /></button><button type="button" className="settings-icon-button is-danger" aria-label={`删除账户 ${account.email}`} title="删除账户" disabled={pendingAccounts} onClick={() => void deleteAccount(account)}><Trash2 size={14} /><span className="settings-sr-only">删除</span></button></div>
+                  <div className="settings-row-actions"><button type="button" className="settings-icon-button" title="编辑账户" aria-label={`编辑账户 ${account.email}`} disabled={pendingAccounts} onClick={() => { setAddOpen(false); setEditingAccount(account) }}><Pencil size={14} /></button><button type="button" className="settings-icon-button" title="立即同步" aria-label={`同步 ${account.email}`} disabled={pendingAccounts || account.sync_enabled === false} onClick={() => void syncAccountNow(account)}><RefreshCw size={14} className={syncingAccountIds.has(account.id) ? 'spin' : ''} /></button><button type="button" className="settings-icon-button is-danger" aria-label={`删除账户 ${account.email}`} title="删除账户" disabled={pendingAccounts} onClick={() => void deleteAccount(account)}><Trash2 size={14} /><span className="settings-sr-only">删除</span></button></div>
                 </div>)}
                 {!accountsQuery.isPending && !accountsQuery.isError && !filtered.length && <div className="settings-empty"><Inbox size={26} /><strong>{accounts.length ? '没有匹配的账户' : '还没有添加账户'}</strong><span>{accounts.length ? '调整搜索词或筛选条件。' : '添加邮箱后，即可在此管理同步与分组。'}</span></div>}
               </div>

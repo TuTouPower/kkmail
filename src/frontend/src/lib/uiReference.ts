@@ -78,7 +78,7 @@ export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
   ST12: { id: 'ST12', region: '设置', description: '通用设置导航项' },
   ST13: { id: 'ST13', region: '设置', description: '分组管理新建分组按钮' },
   ST14: { id: 'ST14', region: '设置', description: '账户管理添加账户按钮' },
-  ST15: { id: 'ST15', region: '设置', description: '账户管理同步全部账户按钮' },
+  ST15: { id: 'ST15', region: '设置', description: '账户管理立即同步按钮' },
   ST16: { id: 'ST16', region: '设置', description: '退出登录按钮' },
 }
 

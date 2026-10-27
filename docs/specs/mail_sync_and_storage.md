@@ -124,7 +124,7 @@ ______________________________________________________________________
     - 新增账户成功后系统自动入队初始同步（`_enqueue_initial_sync` $\\rightarrow$ `SYNC_ACCOUNT_FOLDERS`）；
     - 文件夹发现阶段严格检查 Checkpoint 状态，对无基线或 `full_scan_complete != True` 的目录派发 `SYNC_FOLDER_METADATA` 全量扫描，确保历史邮件完整导入。
 2. **所有日常同步接口统一为增量模式**：
-    - 设置页「同步全部账户」（`POST /api/accounts/sync-all`）与单账号「立即同步」（`POST /api/accounts/{id}/sync`）创建的 `SyncRequest` 模式严格为 `mode="delta"`；
+    - 设置页「立即同步」（`POST /api/accounts/sync-all`）、单账号「立即同步」（`POST /api/accounts/{id}/sync`）与邮件列表头部「立即同步」（按当前视图范围调用前两类接口）创建的 `SyncRequest` 模式严格为 `mode="delta"`；三处按钮均等待请求真正完成（轮询 `GET /api/mail/sync/requests/{id}` 至终态），同步中图标旋转、成功无提示、失败才报错；
     - 发现或遍历目录时，对已有基线（`full_scan_complete == True`）的有效文件夹仅排入轻量增量任务 `SYNC_FOLDER_DELTA`，几秒内秒级完成，杜绝日常操作误触全量扫描导致历史重扫风暴及新邮件发现被长时间阻断。
 3. **全量重扫严格限定为异常自愈**：
     - 仅在增量同步遇到远端游标彻底失效（`CursorInvalidError`）时，系统才由保护机制清空 Checkpoint 并在隔离控制下启动全量重建，禁止日常常规入口发起非必要的全量历史扫描。

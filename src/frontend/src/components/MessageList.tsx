@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, ExternalLink, PanelLeft } from 'lucide-react'
-import { apiRequest } from '../api/client'
+import { api, apiRequest, type AccountSummary, type SyncRequestOut } from '../api/client'
+import { syncFailureDetail, waitForSyncRequests } from '../api/sync'
 import { accountScope, applyCachedReadStateWithRollback, beginReadMutation, fetchAccounts, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, markReadOptimistic, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchGlobalStats, fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
@@ -512,12 +513,56 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     }
   }
 
-  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const syncCancelledRef = useRef(false)
 
-  async function refreshView() {
-    if (isRefreshing) return
-    setIsRefreshing(true)
+  // Unmounting stops the wait (the backend sync itself keeps running).
+  useEffect(() => () => {
+    syncCancelledRef.current = true
+  }, [])
+
+  /**
+   * Immediate sync for the accounts in the current view scope: account and
+   * folder views sync their one account (all of its folders), a group view
+   * syncs the group's sync-enabled accounts, and the all-inbox view syncs
+   * every account. The icon spins until the sync requests truly finish —
+   * success is silent, only failures surface through the status note.
+   */
+  async function syncCurrentScope() {
+    if (isSyncing) return
+    setIsSyncing(true)
+    syncCancelledRef.current = false
     try {
+      let submitError: unknown = null
+      let initial: SyncRequestOut[]
+      if (accountId) {
+        initial = [await api.syncAccount(accountId)]
+      } else if (groupId) {
+        // The scope resolves from the account list: if it has not loaded
+        // yet, wait for it instead of silently syncing an empty scope.
+        // (Once loaded, an empty group legitimately syncs nothing.)
+        const scopeAccounts = accountsQuery.data ?? (await queryClient.fetchQuery<AccountSummary[], Error, AccountSummary[]>({ queryKey: queryKeys.accounts, queryFn: fetchAccounts }))
+        const targets = scopeAccounts.filter((account) => account.group_id === groupId && account.sync_enabled !== false)
+        // allSettled, not Promise.all: one rejected submission (e.g. the
+        // account vanished → 404) must not abandon the requests that were
+        // created — they are waited out below, and the submission failure
+        // is reported only once that wait has finished.
+        const settled = await Promise.allSettled(targets.map((account) => api.syncAccount(account.id)))
+        initial = []
+        for (const outcome of settled) {
+          if (outcome.status === 'fulfilled') initial.push(outcome.value)
+          else submitError ??= outcome.reason
+        }
+      } else {
+        initial = [await api.syncAll()]
+      }
+      const { reports, cancelled } = await waitForSyncRequests(initial, {
+        isCancelled: () => syncCancelledRef.current,
+      })
+      if (cancelled) return
+      const failure = syncFailureDetail(reports)
+      if (failure) setActionStatus(`立即同步失败：${failure}`)
+      else if (submitError) setActionStatus(`立即同步失败：${errorMessage(submitError)}`)
       await Promise.all([
         invalidateMailListQueries(),
         invalidateMailStatsQueries(),
@@ -525,9 +570,9 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         queryClient.invalidateQueries({ queryKey: queryKeys.stats }),
       ])
     } catch (err) {
-      setActionStatus(`刷新失败：${errorMessage(err)}`)
+      if (!syncCancelledRef.current) setActionStatus(`立即同步失败：${errorMessage(err)}`)
     } finally {
-      setIsRefreshing(false)
+      setIsSyncing(false)
     }
   }
 
@@ -579,13 +624,13 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
           <div className="list-primary-actions">
             <button
               data-ui="ML03"
-              className={`list-primary-btn ${isRefreshing ? 'loading' : ''}`}
-              title={isRefreshing ? '正在刷新…' : '刷新邮件列表'}
-              aria-label={isRefreshing ? '正在刷新…' : '刷新邮件列表'}
-              disabled={isRefreshing}
-              onClick={refreshView}
+              className={`list-primary-btn ${isSyncing ? 'loading' : ''}`}
+              title="立即同步"
+              aria-label="立即同步"
+              disabled={isSyncing}
+              onClick={syncCurrentScope}
             >
-              <RefreshCw size={16} className={isRefreshing ? 'spin' : ''} />
+              <RefreshCw size={16} className={isSyncing ? 'spin' : ''} />
             </button>
           </div>
         </div>

@@ -155,6 +155,21 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
     }
   }
 
+  const syncReport = (id: string, targetCount: number, state: string) => ({
+    id,
+    mode: 'delta',
+    trigger: 'manual',
+    state,
+    target_count: targetCount,
+    queued_count: 0,
+    running_count: state === 'complete' ? 0 : targetCount,
+    completed_count: state === 'complete' ? targetCount : 0,
+    failed_count: 0,
+    created_at: '2026-10-28T00:00:00Z',
+    finished_at: state === 'complete' ? '2026-10-28T00:00:05Z' : null,
+    errors: [] as unknown[],
+  })
+
   await page.route('**/api/**', async (route: Route) => {
     const req = route.request()
     const url = new URL(req.url())
@@ -259,6 +274,23 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
       currentAccounts = [...currentAccounts, newAcc]
       oauthDraft = null
       return route.fulfill({ status: 200, json: { ...newAcc, status: 'active', sync_status: 'idle' } })
+    }
+
+    // Manual immediate sync: the POSTs accept a sync request and the report
+    // endpoint immediately shows it complete, so the UI's wait-for-sync flow
+    // (spin until the request finishes) settles without extra stub state.
+    if (path === '/api/accounts/sync-all' && method === 'POST') {
+      return route.fulfill({ status: 202, json: syncReport('stub-sync-all', currentAccounts.length, 'complete') })
+    }
+
+    const accountSyncMatch = path.match(/^\/api\/accounts\/([^/]+)\/sync$/)
+    if (accountSyncMatch && method === 'POST') {
+      return route.fulfill({ status: 202, json: syncReport(`stub-sync-${decodeURIComponent(accountSyncMatch[1])}`, 1, 'complete') })
+    }
+
+    const syncRequestMatch = path.match(/^\/api\/mail\/sync\/requests\/([^/]+)$/)
+    if (syncRequestMatch && method === 'GET') {
+      return route.fulfill({ status: 200, json: syncReport(decodeURIComponent(syncRequestMatch[1]), 1, 'complete') })
     }
 
     const patchAccountMatch = path.match(/^\/api\/accounts\/([^/]+)$/)

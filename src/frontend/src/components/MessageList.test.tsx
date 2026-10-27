@@ -42,6 +42,22 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
+const syncReport = (over: Record<string, unknown> = {}) => ({
+  id: 'req-1',
+  mode: 'delta',
+  trigger: 'manual',
+  state: 'running',
+  target_count: 1,
+  queued_count: 0,
+  running_count: 1,
+  completed_count: 0,
+  failed_count: 0,
+  created_at: '2026-10-28T00:00:00Z',
+  finished_at: null,
+  errors: [],
+  ...over,
+})
+
 let calls: string[] = []
 
 beforeEach(() => {
@@ -856,30 +872,259 @@ describe('<MessageList />', () => {
     expect(container.querySelector('.message-row.unread')).toBeNull()
   })
 
-  it('clicking refresh invalidates cache and refetches inbox', async () => {
+  // Semantic replacement (2026-10-28): the list header button no longer just
+  // refreshes the local view — it is an immediate-sync button that starts a
+  // delta sync for the accounts in the current scope and waits for it.
+  it('immediate sync in the all-inbox view syncs all accounts, spins until complete, then refreshes silently', async () => {
     let inboxFetchCount = 0
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    let releasePoll!: () => void
+    const pollGate = new Promise<void>((resolve) => { releasePoll = resolve })
+    const posted: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (u === '/api/accounts/sync-all' && init?.method === 'POST') {
+        posted.push(u)
+        return json(syncReport({ id: 'req-all', state: 'running' }), 202)
+      }
+      if (u === '/api/mail/sync/requests/req-all') {
+        await pollGate
+        return json(syncReport({ id: 'req-all', state: 'complete', running_count: 0, completed_count: 1 }))
+      }
       if (u.startsWith('/api/accounts')) {
         return json({ accounts: [{ id: 'acc-1', email: 'u@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
       }
+      if (u.includes('/folder-stats')) return json({ folders: [{ folder_id: 'f1', role: 'inbox', total_count: 2, unread_count: 1 }] })
       if (u.startsWith('/api/mail/inbox')) {
         inboxFetchCount += 1
         return json({ items: [], next_cursor: null })
       }
-      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
       return json({ detail: 'unexpected' }, 404)
     }))
 
     useMailStore.setState({ view: { type: 'allInbox' } })
     const { container } = await render(<MessageList />)
 
-    const refreshBtn = container.querySelector('button[aria-label="刷新邮件列表"]') as HTMLButtonElement
-    expect(refreshBtn).not.toBeNull()
+    const syncBtn = container.querySelector('button[aria-label="立即同步"]') as HTMLButtonElement
+    expect(syncBtn).not.toBeNull()
+    expect(syncBtn.title).toBe('立即同步')
     const countBefore = inboxFetchCount
-    await click(refreshBtn)
+    await click(syncBtn)
 
+    // While the sync runs: button disabled, icon spinning, label unchanged.
+    await waitFor(() => expect(syncBtn.disabled).toBe(true))
+    expect(syncBtn.querySelector('svg')?.getAttribute('class')).toContain('spin')
+    expect(syncBtn.title).toBe('立即同步')
+
+    releasePoll()
+    await waitFor(() => expect(syncBtn.disabled).toBe(false))
+    expect(posted).toEqual(['/api/accounts/sync-all'])
+    expect(syncBtn.querySelector('svg')?.getAttribute('class')).not.toContain('spin')
+    // Completion invalidates the list queries so the view shows fresh data…
     await waitFor(() => expect(inboxFetchCount).toBeGreaterThan(countBefore))
+    // …and success is silent: no status note at all.
+    expect(container.querySelector('.list-note')).toBeNull()
+  })
+
+  it('immediate sync in an account view syncs only that account', async () => {
+    const posted: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (init?.method === 'POST' && u.startsWith('/api/accounts/')) {
+        posted.push(u)
+        const id = u.split('/')[3]
+        return json(syncReport({ id: `req-${id}`, state: 'complete', running_count: 0, completed_count: 1 }), 202)
+      }
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'u@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.includes('/folder-stats')) return json({ folders: [{ folder_id: 'f1', role: 'inbox', total_count: 2, unread_count: 1 }] })
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'account', accountId: 'acc-1', email: 'u@x.test' } })
+    const { container } = await render(<MessageList />)
+    const syncBtn = container.querySelector('button[aria-label="立即同步"]') as HTMLButtonElement
+    await click(syncBtn)
+    await waitFor(() => expect(posted).toEqual(['/api/accounts/acc-1/sync']))
+    await waitFor(() => expect(syncBtn.disabled).toBe(false))
+  })
+
+  it('immediate sync in a folder view still syncs the whole owning account', async () => {
+    const posted: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (init?.method === 'POST' && u.startsWith('/api/accounts/')) {
+        posted.push(u)
+        const id = u.split('/')[3]
+        return json(syncReport({ id: `req-${id}`, state: 'complete', running_count: 0, completed_count: 1 }), 202)
+      }
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'u@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.includes('/folder-stats')) return json({ folders: [{ folder_id: 'f1', role: 'inbox', total_count: 2, unread_count: 1 }] })
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'folder', accountId: 'acc-1', email: 'u@x.test', folderId: 'f1', folderName: '收件箱', folderRole: 'inbox' } })
+    const { container } = await render(<MessageList />)
+    const syncBtn = container.querySelector('button[aria-label="立即同步"]') as HTMLButtonElement
+    await click(syncBtn)
+    await waitFor(() => expect(posted).toEqual(['/api/accounts/acc-1/sync']))
+    await waitFor(() => expect(syncBtn.disabled).toBe(false))
+  })
+
+  it('immediate sync in a group view syncs only the enabled accounts of that group', async () => {
+    const posted: string[] = []
+    let accountsServed = false
+    const accounts = [
+      { id: 'acc-1', email: 'a@x.test', status: 'active', account_type: 'imap', provider: 'imap', group_id: 'g1', sync_enabled: true },
+      { id: 'acc-2', email: 'b@x.test', status: 'active', account_type: 'imap', provider: 'imap', group_id: 'g1', sync_enabled: false },
+      { id: 'acc-3', email: 'c@x.test', status: 'active', account_type: 'imap', provider: 'imap', group_id: 'g2', sync_enabled: true },
+    ]
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (init?.method === 'POST' && u.startsWith('/api/accounts/')) {
+        posted.push(u)
+        const id = u.split('/')[3]
+        return json(syncReport({ id: `req-${id}`, state: 'complete', running_count: 0, completed_count: 1 }), 202)
+      }
+      if (u.startsWith('/api/accounts')) {
+        accountsServed = true
+        return json({ accounts, total: accounts.length, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.includes('stats')) return json({ accounts: [], total: 0, total_unread: 0 })
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'group', groupId: 'g1', groupName: '分组一', category: 'inbox' } })
+    const { container } = await render(<MessageList />)
+    const syncBtn = container.querySelector('button[aria-label="立即同步"]') as HTMLButtonElement
+    // The group scope resolves from the loaded account list: the empty-state
+    // copy flips from "no accounts yet" to "no mail" once accounts arrive.
+    await waitFor(() => expect(container.textContent).toContain('没有邮件'))
+    expect(accountsServed).toBe(true)
+    await click(syncBtn)
+    await waitFor(() => expect(posted).toEqual(['/api/accounts/acc-1/sync']))
+    await waitFor(() => expect(syncBtn.disabled).toBe(false))
+  })
+
+  it('immediate sync in a group view waits out the created requests when another account submission fails, then reports the failure', async () => {
+    const posted: string[] = []
+    const polled: string[] = []
+    const accounts = [
+      { id: 'acc-1', email: 'a@x.test', status: 'active', account_type: 'imap', provider: 'imap', group_id: 'g1', sync_enabled: true },
+      { id: 'acc-2', email: 'b@x.test', status: 'active', account_type: 'imap', provider: 'imap', group_id: 'g1', sync_enabled: true },
+    ]
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (init?.method === 'POST' && u === '/api/accounts/acc-1/sync') {
+        posted.push(u)
+        return json(syncReport({ id: 'req-acc-1', state: 'running' }), 202)
+      }
+      if (init?.method === 'POST' && u === '/api/accounts/acc-2/sync') {
+        posted.push(u)
+        return json({ detail: 'account not found' }, 404)
+      }
+      if (u === '/api/mail/sync/requests/req-acc-1') {
+        polled.push(u)
+        return json(syncReport({ id: 'req-acc-1', state: 'complete', running_count: 0, completed_count: 1 }))
+      }
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts, total: accounts.length, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.includes('stats')) return json({ accounts: [], total: 0, total_unread: 0 })
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'group', groupId: 'g1', groupName: '分组一', category: 'inbox' } })
+    const { container } = await render(<MessageList />)
+    const syncBtn = container.querySelector('button[aria-label="立即同步"]') as HTMLButtonElement
+    await waitFor(() => expect(container.textContent).toContain('没有邮件'))
+    await click(syncBtn)
+    expect(posted).toEqual(['/api/accounts/acc-1/sync', '/api/accounts/acc-2/sync'])
+    // acc-2's 404 must not abandon the request created for acc-1: it is
+    // still polled all the way to completion…
+    await waitFor(() => expect(polled).toEqual(['/api/mail/sync/requests/req-acc-1']))
+    // …and only once that wait is over does the submission failure surface.
+    await waitFor(() => expect(container.querySelector('.list-note.error')?.textContent).toContain('立即同步失败'))
+    await waitFor(() => expect(syncBtn.disabled).toBe(false))
+  })
+
+  it('immediate sync in a group view clicked before accounts load waits for the list, then syncs the group', async () => {
+    const posted: string[] = []
+    let releaseAccounts!: () => void
+    const accountsGate = new Promise<void>((resolve) => { releaseAccounts = resolve })
+    const accounts = [
+      { id: 'acc-1', email: 'a@x.test', status: 'active', account_type: 'imap', provider: 'imap', group_id: 'g1', sync_enabled: true },
+    ]
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (init?.method === 'POST' && u.startsWith('/api/accounts/')) {
+        posted.push(u)
+        const id = u.split('/')[3]
+        return json(syncReport({ id: `req-${id}`, state: 'complete', running_count: 0, completed_count: 1 }), 202)
+      }
+      if (u.startsWith('/api/accounts')) {
+        await accountsGate
+        return json({ accounts, total: accounts.length, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.includes('stats')) return json({ accounts: [], total: 0, total_unread: 0 })
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'group', groupId: 'g1', groupName: '分组一', category: 'inbox' } })
+    const { container } = await render(<MessageList />)
+    const syncBtn = container.querySelector('button[aria-label="立即同步"]') as HTMLButtonElement
+    // The accounts query is still in flight, so the click cannot resolve
+    // the group scope yet — and must not silently sync nothing.
+    await click(syncBtn)
+    expect(posted).toEqual([])
+    releaseAccounts()
+    await waitFor(() => expect(posted).toEqual(['/api/accounts/acc-1/sync']))
+    await waitFor(() => expect(syncBtn.disabled).toBe(false))
+    expect(container.querySelector('.list-note.error')).toBeNull()
+  })
+
+  it('immediate sync reports the failure and stops spinning when a request fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (u === '/api/accounts/sync-all' && init?.method === 'POST') {
+        return json(syncReport({ id: 'req-all', state: 'running' }), 202)
+      }
+      if (u === '/api/mail/sync/requests/req-all') {
+        return json(syncReport({
+          id: 'req-all', state: 'failed', running_count: 0, failed_count: 1,
+          errors: [{ target_id: 't1', code: 'auth_failed', safe_message: '邮箱密码错误' }],
+        }))
+      }
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'u@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.includes('/folder-stats')) return json({ folders: [{ folder_id: 'f1', role: 'inbox', total_count: 2, unread_count: 1 }] })
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'allInbox' } })
+    const { container } = await render(<MessageList />)
+    const syncBtn = container.querySelector('button[aria-label="立即同步"]') as HTMLButtonElement
+    await click(syncBtn)
+    await waitFor(() => expect(container.querySelector('.list-note.error')?.textContent).toContain('立即同步失败'))
+    expect(container.querySelector('.list-note.error')?.textContent).toContain('邮箱密码错误')
+    await waitFor(() => expect(syncBtn.disabled).toBe(false))
+    expect(syncBtn.querySelector('svg')?.getAttribute('class')).not.toContain('spin')
   })
 })
 

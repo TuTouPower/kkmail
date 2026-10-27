@@ -27,6 +27,7 @@ import type {
   SettingsOut,
   SidebarLayoutSnapshotOut,
   SyncAllResponse,
+  SyncRequestOut,
 } from './schemaTypes'
 
 export type {
@@ -38,6 +39,7 @@ export type {
   OAuthStartIn,
   OAuthStartOut,
   SyncAllResponse,
+  SyncRequestOut,
 } from './schemaTypes'
 
 export interface ApiError {
@@ -366,7 +368,11 @@ export const api = {
   },
 
   syncAccount(id: string) {
-    return postJson<unknown>(`/api/accounts/${encodeURIComponent(id)}/sync`)
+    return postJson<SyncRequestOut>(`/api/accounts/${encodeURIComponent(id)}/sync`)
+  },
+
+  getSyncRequest(id: string) {
+    return apiRequest<SyncRequestOut>(`/api/mail/sync/requests/${encodeURIComponent(id)}`)
   },
 
   createGroup(payload: GroupCreateIn) {

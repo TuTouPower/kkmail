@@ -503,24 +503,95 @@ describe('<SettingsModal />', () => {
     expect(queryClient.getQueryData<{ totalUnread: number }>(queryKeys.statsForAccounts(['account-added']))?.totalUnread).toBe(2)
   })
 
-  it('displays queued count message for sync-all without overwriting with generic text', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+  // Semantic replacement (2026-10-28): the button is renamed to 立即同步 and
+  // now waits for the sync request to actually finish; success is silent.
+  it('sync-all button waits for the sync request to finish and stays silent on success', async () => {
+    const polled: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url)
       if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
-      if (u.startsWith('/api/accounts/sync-all')) return json({ target_count: 7, mode: 'full', trigger: 'manual', state: 'queued' })
+      if (u === '/api/accounts/sync-all' && init?.method === 'POST') {
+        return json({ id: 'req-all', mode: 'delta', trigger: 'manual', state: 'running', target_count: 7, queued_count: 0, running_count: 7, completed_count: 0, failed_count: 0, created_at: '2026-10-28T00:00:00Z', finished_at: null, errors: [] }, 202)
+      }
+      if (u === '/api/mail/sync/requests/req-all') {
+        polled.push(u)
+        return json({ id: 'req-all', mode: 'delta', trigger: 'manual', state: 'complete', target_count: 7, queued_count: 0, running_count: 0, completed_count: 7, failed_count: 0, created_at: '2026-10-28T00:00:00Z', finished_at: '2026-10-28T00:00:05Z', errors: [] })
+      }
       if (u.startsWith('/api/accounts')) return json({ accounts: [], total: 0, limit: 200, offset: 0, has_more: false })
       if (u === '/api/groups') return json({ groups: [] })
       return json({ detail: 'unexpected' }, 404)
     }))
 
     const { container } = await render(<SettingsPage />)
-    const syncBtn = [...container.querySelectorAll('button')].find((b) => b.textContent === '同步全部账户') || null
+    const syncBtn = [...container.querySelectorAll('button')].find((b) => b.textContent === '立即同步') || null
     await waitFor(() => expect(syncBtn?.disabled).toBe(false))
     await click(syncBtn)
 
-    await waitFor(() => {
-      expect(container.textContent).toContain('已排队 7 个全量同步任务')
-    })
+    await waitFor(() => expect(polled).toEqual(['/api/mail/sync/requests/req-all']))
+    await waitFor(() => expect(syncBtn?.disabled).toBe(false))
+    expect(container.textContent).not.toContain('已排队')
+    expect(container.textContent).not.toContain('全量同步')
+    expect(container.querySelector('.settings-feedback')).toBeNull()
+  })
+
+  it('sync-all button reports the failure when the sync request fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u === '/api/accounts/sync-all' && init?.method === 'POST') {
+        return json({ id: 'req-all', mode: 'delta', trigger: 'manual', state: 'running', target_count: 1, queued_count: 0, running_count: 1, completed_count: 0, failed_count: 0, created_at: '2026-10-28T00:00:00Z', finished_at: null, errors: [] }, 202)
+      }
+      if (u === '/api/mail/sync/requests/req-all') {
+        return json({ id: 'req-all', mode: 'delta', trigger: 'manual', state: 'failed', target_count: 1, queued_count: 0, running_count: 0, completed_count: 0, failed_count: 1, created_at: '2026-10-28T00:00:00Z', finished_at: '2026-10-28T00:00:05Z', errors: [{ target_id: 't1', code: 'auth_failed', safe_message: '邮箱密码错误' }] })
+      }
+      if (u.startsWith('/api/accounts')) return json({ accounts: [], total: 0, limit: 200, offset: 0, has_more: false })
+      if (u === '/api/groups') return json({ groups: [] })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    const syncBtn = [...container.querySelectorAll('button')].find((b) => b.textContent === '立即同步') || null
+    await waitFor(() => expect(syncBtn?.disabled).toBe(false))
+    await click(syncBtn)
+
+    await waitFor(() => expect(container.querySelector('.settings-feedback.is-error')?.textContent).toContain('邮箱密码错误'))
+    await waitFor(() => expect(syncBtn?.disabled).toBe(false))
+    expect(syncBtn?.querySelector('svg')?.getAttribute('class')).not.toContain('spin')
+  })
+
+  it('per-account sync button spins until that account sync finishes and stays silent on success', async () => {
+    let releasePoll!: () => void
+    const pollGate = new Promise<void>((resolve) => { releasePoll = resolve })
+    const account = { id: 'acc-1', email: 'a@x.test', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: null, group_name: null }
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u === '/api/accounts/acc-1/sync' && init?.method === 'POST') {
+        return json({ id: 'req-acc-1', mode: 'delta', trigger: 'manual', state: 'running', target_count: 1, queued_count: 0, running_count: 1, completed_count: 0, failed_count: 0, created_at: '2026-10-28T00:00:00Z', finished_at: null, errors: [] }, 202)
+      }
+      if (u === '/api/mail/sync/requests/req-acc-1') {
+        await pollGate
+        return json({ id: 'req-acc-1', mode: 'delta', trigger: 'manual', state: 'complete', target_count: 1, queued_count: 0, running_count: 0, completed_count: 1, failed_count: 0, created_at: '2026-10-28T00:00:00Z', finished_at: '2026-10-28T00:00:05Z', errors: [] })
+      }
+      if (u.startsWith('/api/accounts')) return json({ accounts: [account], total: 1, limit: 200, offset: 0, has_more: false })
+      if (u === '/api/groups') return json({ groups: [] })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelectorAll('.settings-account-row')).toHaveLength(1))
+    const syncBtn = container.querySelector('button[title="立即同步"]') as HTMLButtonElement
+    expect(syncBtn).not.toBeNull()
+    await click(syncBtn)
+
+    await waitFor(() => expect(syncBtn.querySelector('svg')?.getAttribute('class')).toContain('spin'))
+    expect(syncBtn.disabled).toBe(true)
+
+    releasePoll()
+    await waitFor(() => expect(syncBtn.disabled).toBe(false))
+    expect(syncBtn.querySelector('svg')?.getAttribute('class')).not.toContain('spin')
+    expect(container.textContent).not.toContain('已排队')
+    expect(container.querySelector('.settings-feedback')).toBeNull()
   })
 
   it('deleting the group currently in view returns to all inbox and clears stale selection', async () => {
@@ -800,7 +871,7 @@ describe('<SettingsModal />', () => {
     const summaryText = () => [...(firstRow?.querySelectorAll('.settings-summary > span') || [])].map(node => node.textContent)
     expect(summaryText()).toEqual(['账户总数 3', '已显示 3', '已同步 2', '已暂停同步 1'])
     expect([...(firstRow?.querySelectorAll('button') || [])].map(button => button.textContent)).toEqual(
-      expect.arrayContaining(['添加账户', '同步全部账户']),
+      expect.arrayContaining(['添加账户', '立即同步']),
     )
     expect(firstRow?.querySelector('input[aria-label="搜索账户"]')).not.toBeNull()
     expect(firstRow?.querySelector('select[aria-label="按分组筛选"]')).not.toBeNull()
@@ -910,7 +981,8 @@ describe('<SettingsModal /> per-scope pending gate (A125)', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
       const u = String(url)
       if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
-      if (u === '/api/accounts/sync-all') { await syncAllGate; return json({ target_count: 1 }) }
+      if (u === '/api/accounts/sync-all') { await syncAllGate; return json({ id: 'req-all', mode: 'delta', trigger: 'manual', state: 'running', target_count: 1, queued_count: 0, running_count: 1, completed_count: 0, failed_count: 0, created_at: '2026-10-28T00:00:00Z', finished_at: null, errors: [] }, 202) }
+      if (u === '/api/mail/sync/requests/req-all') return json({ id: 'req-all', mode: 'delta', trigger: 'manual', state: 'complete', target_count: 1, queued_count: 0, running_count: 0, completed_count: 1, failed_count: 0, created_at: '2026-10-28T00:00:00Z', finished_at: '2026-10-28T00:00:05Z', errors: [] })
       if (u.startsWith('/api/accounts')) return json({ accounts: [{ id: 'acc-1', email: 'a@x.test', provider: 'imap', sync_enabled: true, sync_status: 'idle' }], total: 1, limit: 200, offset: 0, has_more: false })
       if (u === '/api/groups') {
         if (init.method === 'POST') { groupCreates.push(JSON.parse(String(init.body))); return json({ id: 'g-1', name: '新分组', account_count: 0 }) }
@@ -921,13 +993,13 @@ describe('<SettingsModal /> per-scope pending gate (A125)', () => {
     }))
 
     const { container } = await render(<SettingsPage />)
-    const syncAllBtn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('同步全部账户')) || null
+    const syncAllBtn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('立即同步')) || null
     await waitFor(() => expect((syncAllBtn as HTMLButtonElement).disabled).toBe(false))
     await click(syncAllBtn)
-    await waitFor(() => expect(container.textContent).toContain('全量同步…'))
 
     // Same section stays gated while its own operation runs…
-    expect((syncAllBtn as HTMLButtonElement).disabled).toBe(true)
+    await waitFor(() => expect((syncAllBtn as HTMLButtonElement).disabled).toBe(true))
+    expect(syncAllBtn?.querySelector('svg')?.getAttribute('class')).toContain('spin')
 
     // …but the groups section is neither disabled nor silently swallowed.
     await click([...container.querySelectorAll('button')].find((b) => b.textContent?.includes('分组管理')) || null)
@@ -941,6 +1013,11 @@ describe('<SettingsModal /> per-scope pending gate (A125)', () => {
 
     releaseSyncAll()
     await click([...container.querySelectorAll('button')].find((b) => b.textContent?.includes('账户管理')) || null)
-    await waitFor(() => expect(container.textContent).toContain('已排队 1 个全量同步任务'))
+    // Success is silent now: the sync finishes without any queued/success note.
+    // (Re-query the button: switching sections remounts the accounts section.)
+    const syncAllBtnAfter = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('立即同步')) || null
+    await waitFor(() => expect((syncAllBtnAfter as HTMLButtonElement).disabled).toBe(false))
+    expect(container.textContent).not.toContain('已排队')
+    expect(container.textContent).not.toContain('全量同步')
   })
 })
