@@ -112,7 +112,8 @@ def scan_tasks_at_ref(ref: str) -> list[dict]:
     ])
     if r.returncode != 0:
         raise ctx.TaskDataError(f"无法读取 ref {ref!r}：{r.stderr.strip()}")
-    dirs: dict[str, bool] = {}
+    dirs: dict[tuple[str, bool], None] = {}
+    seen_names: dict[str, bool] = {}
     for path in sorted(r.stdout.splitlines()):
         if path.startswith("docs/tasks/"):
             archived = False
@@ -123,9 +124,18 @@ def scan_tasks_at_ref(ref: str) -> list[dict]:
         else:
             continue
         if "/" in rest:
-            dirs[rest.split("/", 1)[0]] = archived
+            name = rest.split("/", 1)[0]
+            # 同名目录同时出现在活跃与归档区是数据冲突：以目录名单键会
+            # 静默互相覆盖、只读一侧（A337）。明示冲突，要求人工处理。
+            if name in seen_names and seen_names[name] != archived:
+                raise ctx.TaskDataError(
+                    f"{ref}: task 目录 {name!r} 同名冲突"
+                    "（同时位于 docs/tasks 与 docs/archive/tasks）"
+                )
+            seen_names[name] = archived
+            dirs[(name, archived)] = None
     tasks = []
-    for name, archived in sorted(dirs.items()):
+    for (name, archived) in sorted(dirs.keys()):
         if not archived and name == ctx.TEMPLATE_DIR.name:
             continue
         directory = (
