@@ -27,7 +27,10 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    # Backfill accounts.recipient_addresses from messages.to_addresses
+    # Backfill accounts.recipient_addresses from messages.to_addresses.
+    # Elements may be plain strings or {"name": ..., "address": ...} dicts;
+    # dict elements must contribute only their address (A118) — expanding
+    # them as raw text would store whole JSON text instead.
     op.execute(
         """
         UPDATE accounts a
@@ -35,8 +38,12 @@ def upgrade() -> None:
             (
                 SELECT jsonb_agg(DISTINCT sub.addr)
                 FROM (
-                    SELECT trim(jsonb_array_elements_text(m.to_addresses)) AS addr
+                    SELECT CASE
+                        WHEN jsonb_typeof(e.elem) = 'object' THEN e.elem->>'address'
+                        WHEN jsonb_typeof(e.elem) = 'string' THEN e.elem #>> '{}'
+                    END AS addr
                     FROM messages m
+                    CROSS JOIN LATERAL jsonb_array_elements(m.to_addresses) AS e(elem)
                     WHERE m.account_id = a.id
                 ) sub
                 WHERE sub.addr IS NOT NULL AND sub.addr != ''
@@ -51,16 +58,27 @@ def upgrade() -> None:
         "message_search",
         sa.Column("to_text", sa.Text(), server_default=sa.text("''"), nullable=False),
     )
-    # Backfill message_search.to_text from messages.to_addresses
+    # Backfill message_search.to_text from messages.to_addresses, matching
+    # the runtime form in mail_core.search.index._format_recipient_text:
+    # dict elements contribute "name address", strings contribute themselves.
     op.execute(
         """
         UPDATE message_search ms
         SET to_text = COALESCE(
             (
-                SELECT string_agg(sub.addr, ' ')
-                FROM messages m
-                CROSS JOIN LATERAL jsonb_array_elements_text(m.to_addresses) AS sub(addr)
-                WHERE m.id = ms.message_id
+                SELECT string_agg(sub.txt, ' ')
+                FROM (
+                    SELECT CASE
+                        WHEN jsonb_typeof(e.elem) = 'object'
+                            THEN trim(concat_ws(' ', e.elem->>'name', e.elem->>'address'))
+                        WHEN jsonb_typeof(e.elem) = 'string' THEN e.elem #>> '{}'
+                        ELSE ''
+                    END AS txt
+                    FROM messages m
+                    CROSS JOIN LATERAL jsonb_array_elements(m.to_addresses) AS e(elem)
+                    WHERE m.id = ms.message_id
+                ) sub
+                WHERE sub.txt != ''
             ),
             ''
         )
