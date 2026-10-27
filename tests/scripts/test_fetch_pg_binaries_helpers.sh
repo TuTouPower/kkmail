@@ -84,8 +84,10 @@ if pinned_archive_sha256 16.7.0 linux-x64 https://github.com/theseus-rs/postgres
   exit 1
 fi
 
-# Verify fallback handling without network: unpinned same-origin sidecars warn,
-# explicit hashes bypass sidecars, and mismatched explicit hashes fail closed.
+# Verify fallback handling without network: unpinned same-origin sidecars are
+# refused by default (A99), only an explicit --allow-unpinned / ALLOW_UNPINNED=1
+# opt-in allows them, explicit hashes bypass sidecars, and mismatched explicit
+# hashes fail closed.
 printf 'test archive bytes\n' > "$TMP/fallback.archive"
 FALLBACK_SHA="$(calc_sha256 "$TMP/fallback.archive")"
 curl_calls=0
@@ -104,7 +106,17 @@ curl() {
   fi
   return 22
 }
-if ! verify_archive_sha256 "$TMP/fallback.archive" "https://get.enterprisedb.com/postgresql/fallback.tar.gz" "$TMP" "16.6.0" "linux-x64" > "$TMP/fallback.log" 2>&1; then
+# A99: no pin and no explicit opt-in -> refuse before fetching any checksum.
+if verify_archive_sha256 "$TMP/fallback.archive" "https://get.enterprisedb.com/postgresql/fallback.tar.gz" "$TMP" "16.6.0" "linux-x64" > "$TMP/unpinned.log" 2>&1; then
+  echo "unpinned same-origin fallback should be refused by default" >&2
+  exit 1
+fi
+grep -q "allow-unpinned" "$TMP/unpinned.log"
+[[ "$curl_calls" -eq 0 ]]
+"$ROOT/scripts/fetch-pg-binaries.sh" --help | grep -q -- "--allow-unpinned"
+# A99: explicit opt-in re-enables the (still warned) same-origin fallback.
+curl_calls=0
+if ! ALLOW_UNPINNED=1 verify_archive_sha256 "$TMP/fallback.archive" "https://get.enterprisedb.com/postgresql/fallback.tar.gz" "$TMP" "16.6.0" "linux-x64" > "$TMP/fallback.log" 2>&1; then
   cat "$TMP/fallback.log" >&2
   echo "sidecar fallback should accept matching archive hash" >&2
   exit 1
@@ -134,7 +146,7 @@ curl() {
   if [[ "$request_url" == *.sha256 ]]; then return 22; fi
   printf '%s  other.tar.gz\n%s  *fallback.tar.gz\n' "$BAD_SHA" "$FALLBACK_SHA" > "$output"
 }
-if ! verify_archive_sha256 "$TMP/fallback.archive" "https://get.enterprisedb.com/postgresql/fallback.tar.gz" "$TMP" "16.7.0" "linux-x64" > "$TMP/manifest.log" 2>&1; then
+if ! ALLOW_UNPINNED=1 verify_archive_sha256 "$TMP/fallback.archive" "https://get.enterprisedb.com/postgresql/fallback.tar.gz" "$TMP" "16.7.0" "linux-x64" > "$TMP/manifest.log" 2>&1; then
   cat "$TMP/manifest.log" >&2
   echo "SHA256SUMS fallback should select matching archive name" >&2
   exit 1

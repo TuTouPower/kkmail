@@ -17,7 +17,7 @@ desktop/vendor/pgsql/bin/postgres
 # uses theseus-rs portable builds; override with PG_VENDOR_URL=...
 ```
 
-The default PostgreSQL 16.6.0 target archives use SHA-256 pins stored in the fetch script. Unpinned mirrors or versions may use a same-origin checksum only as a warned fallback; provide `PG_VENDOR_SHA256` to pin a custom archive explicitly.
+The default PostgreSQL 16.6.0 target archives use SHA-256 pins stored in the fetch script. Unpinned mirrors or versions are refused by default; a same-origin checksum fallback is only available with the explicit `--allow-unpinned` opt-in, and providing `PG_VENDOR_SHA256` to pin a custom archive explicitly is preferred.
 
 `PostgresManager` resolves: `KKMAIL_PG_BIN` → `desktop/vendor/pgsql/bin` → `PATH`.
 

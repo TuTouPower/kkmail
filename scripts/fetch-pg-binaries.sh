@@ -51,7 +51,16 @@ verify_archive_sha256() {
       expected="$pinned"
       echo "Using repository-pinned SHA-256 for PostgreSQL $version ($target)"
     else
-      echo "WARNING: no repository-pinned SHA-256 for PostgreSQL $version ($target); falling back to same-origin checksum metadata." >&2
+      # A99: a checksum fetched from the same origin as the archive proves
+      # nothing about the archive (whoever tampers with one serves both), so
+      # the same-origin fallback is refused by default. It requires an explicit
+      # opt-in: --allow-unpinned (ALLOW_UNPINNED=1) or PG_ALLOW_UNPINNED=1.
+      if [[ "${ALLOW_UNPINNED:-}" != "1" && "${PG_ALLOW_UNPINNED:-}" != "1" ]]; then
+        echo "ERROR: no repository-pinned SHA-256 for PostgreSQL $version ($target) and no explicit PG_VENDOR_SHA256; refusing same-origin checksum fallback." >&2
+        echo "Pin explicitly with PG_VENDOR_SHA256=<64-hex>, or opt in to the weaker same-origin fallback with --allow-unpinned (PG_ALLOW_UNPINNED=1)." >&2
+        return 1
+      fi
+      echo "WARNING: no repository-pinned SHA-256 for PostgreSQL $version ($target); falling back to same-origin checksum metadata (--allow-unpinned opt-in)." >&2
       local side="$archive.sha256"
       if curl -fsSL --connect-timeout 15 --max-time 300 --retry 2 --retry-delay 2 --retry-max-time 60 -o "$side" "${url}.sha256" 2>/dev/null; then
         expected="$(extract_sha256_from_file "$side")"
@@ -256,12 +265,13 @@ main() {
       --os) OS="$2"; shift 2 ;;
       --arch) ARCH="$2"; shift 2 ;;
       --version) VERSION="$2"; shift 2 ;;
+      --allow-unpinned) ALLOW_UNPINNED=1; shift ;;
       -h|--help)
-        echo "Usage: $0 [--os darwin|linux|windows] [--arch arm64|x64|x86_64] [--version 16.6.0]"
+        echo "Usage: $0 [--os darwin|linux|windows] [--arch arm64|x64|x86_64] [--version 16.6.0] [--allow-unpinned]"
         echo "Supported targets: darwin-arm64, darwin-x64, linux-x64, linux-arm64, win-x64"
         echo "Override URL with PG_VENDOR_URL=... (must be an allowlisted HTTPS host)"
         echo "PostgreSQL 16.6.0 default target archives use repository-pinned SHA-256 values"
-        echo "Unpinned fallback archives use same-origin checksum metadata with a warning; set PG_VENDOR_SHA256 to pin explicitly"
+        echo "Unpinned archives are refused by default; pass --allow-unpinned (or PG_ALLOW_UNPINNED=1) to allow the weaker same-origin checksum fallback, or set PG_VENDOR_SHA256 to pin explicitly"
         exit 0
         ;;
       *) echo "Unknown arg: $1" >&2; exit 2 ;;
