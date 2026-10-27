@@ -72,6 +72,31 @@ describe('diagnostics telemetry', () => {
     expect(exported).not.toContain('stack-refresh-secret')
   })
 
+  it('redacts session, OAuth code and state values in context and text (A175)', () => {
+    logDiagnostic('warn', 'api', 'oauth callback https://app.example/callback?code=url-code-secret&state=url-state-secret&next=/inbox session_id=url-session-secret', {
+      sessionId: 'ctx-session-secret',
+      oauth_code: 'ctx-code-secret',
+      csrf_state: 'ctx-state-secret',
+      label: 'preserve',
+    })
+
+    const entry = getDiagnosticLogs()[0]
+    expect(entry.context).toEqual({
+      sessionId: '[REDACTED]',
+      oauth_code: '[REDACTED]',
+      csrf_state: '[REDACTED]',
+      label: 'preserve',
+    })
+    expect(entry.message).not.toContain('url-code-secret')
+    expect(entry.message).not.toContain('url-state-secret')
+    expect(entry.message).not.toContain('url-session-secret')
+    expect(entry.message).toContain('next=/inbox')
+    const exported = exportDiagnosticsAsText()
+    expect(exported).not.toContain('ctx-session-secret')
+    expect(exported).not.toContain('ctx-code-secret')
+    expect(exported).not.toContain('ctx-state-secret')
+  })
+
   it('caps buffer at max limit', () => {
     for (let i = 0; i < 120; i++) {
       logDiagnostic('info', 'runtime', `message-${i}`)

@@ -21,9 +21,12 @@ export interface DiagnosticEntry {
 const MAX_ENTRIES = 100
 let nextId = 1
 const buffer: DiagnosticEntry[] = []
-const SENSITIVE_KEY_PATTERN = /(?:password|secret|token|api[_-]?key|authorization|cookie)/i
+// Session ids and OAuth `code`/`state` values are credentials too (A175):
+// they must be redacted from context keys and from assignment / URL query
+// text (`?code=...&state=...`) before anything is stored or exported.
+const SENSITIVE_KEY_PATTERN = /(?:password|secret|token|api[_-]?key|authorization|cookie|session|code|state)/i
 const SENSITIVE_ASSIGNMENT_PATTERN =
-  /((?:["']?[a-z0-9_-]*(?:password|secret|token|api[_-]?key|authorization|cookie)[a-z0-9_-]*["']?)\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^&\s,}\]]+)/gi
+  /((?:["']?[a-z0-9_-]*(?:password|secret|token|api[_-]?key|authorization|cookie|session|code|state)[a-z0-9_-]*["']?)\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^&\s,}\]]+)/gi
 
 function redact(text: string): string {
   return text
