@@ -38,9 +38,11 @@ if not re.match(r"^kkmail-backup-drill([a-zA-Z0-9_-]+)?$", base_name):
     print(f"OUT directory basename must match '^kkmail-backup-drill([a-zA-Z0-9_-]+)?$' (got {base_name!r})", file=sys.stderr)
     sys.exit(2)
 
-# Allowed physical boundaries
+# Allowed physical boundaries (A160): only the repo scratch area and the
+# system temp dirs. The bare repo root is NOT an allowed root: a basename
+# match alone must never make an arbitrary in-repo directory deletable.
 allowed_roots = [
-    repo_root,
+    repo_root / ".scratch",
     Path("/tmp").resolve(),
     Path(tempfile.gettempdir()).resolve(),
 ]
@@ -58,7 +60,14 @@ if not curr.exists():
     sys.exit(2)
 
 curr_phys = curr.resolve()
-if not any(curr_phys == r or r in curr_phys.parents for r in allowed_roots):
+# Traversal clause: an existing ancestor may also be an ancestor OF an
+# allowed root (e.g. repo_root on the way to repo_root/.scratch when
+# .scratch does not exist yet); the strict gate is the parent check
+# after mkdir below, which requires containment in an allowed root.
+if not any(
+    curr_phys == r or r in curr_phys.parents or curr_phys in r.parents
+    for r in allowed_roots
+):
     print(f"Ancestor directory {curr} resolves outside allowed boundaries: {curr_phys}", file=sys.stderr)
     sys.exit(2)
 
