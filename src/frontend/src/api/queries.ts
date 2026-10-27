@@ -1,5 +1,6 @@
 import { QueryClient } from '@tanstack/react-query'
 import { api, type AccountSummary } from './client'
+import { logDiagnostic } from '../lib/diagnostics'
 import { mailKey } from '../lib/mailKey'
 import { postMailCoreMessageFlag, postMailCoreMessageRead } from './mailCore'
 import { useMailStore } from '../store/mailStore'
@@ -154,7 +155,8 @@ export async function fetchGroups(): Promise<GroupItem[]> {
 }
 
 const ACCOUNT_PAGE_SIZE = 200
-const ACCOUNT_MAX_PAGES = 10_000
+/** 50 pages × 200 = 10,000 accounts — a ceiling matched to the product scale (A91). */
+const ACCOUNT_MAX_PAGES = 50
 
 /** Load every account page (limit/offset/has_more). */
 export async function fetchAccounts(): Promise<AccountSummary[]> {
@@ -178,7 +180,14 @@ export async function fetchAccounts(): Promise<AccountSummary[]> {
     }
     offset = nextOffset
   }
-  throw new Error(`Account pagination exceeded ${ACCOUNT_MAX_PAGES} pages`)
+  // A backend that keeps claiming has_more must not amplify into a request
+  // storm: degrade to the accounts collected so far and leave a diagnostic
+  // trail instead of failing the whole accounts view (A91).
+  logDiagnostic('warn', 'api', 'Account pagination exceeded the page cap; returning the accounts collected so far', {
+    pages: ACCOUNT_MAX_PAGES,
+    collected: all.length,
+  })
+  return all
 }
 
 function extractItemsFromCache(data: unknown): MailItem[] {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { MAIL_STALE_TIME_MS, applyCachedReadStateWithRollback, fetchAccounts, findCachedMail, queryClient, queryKeys, resetGroupMailQueries, setCachedReadState, type MailItem } from './queries'
+import { clearDiagnosticLogs, getDiagnosticLogs } from '../lib/diagnostics'
 
 describe('mail list cache policy', () => {
   it('keeps lists fresh for several minutes', () => {
@@ -29,8 +30,8 @@ describe('mail list cache policy', () => {
     expect(queryClient.getQueryData(accountKey)).toEqual(['unaffected-account-mail'])
   })
 
-  it('loads all account pages beyond the former 20,000-account cap', async () => {
-    const total = 20_001
+  it('loads every account page when pagination stays under the page cap', async () => {
+    const total = 450
     const offsets: number[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
       const url = new URL(String(input), 'http://localhost')
@@ -47,8 +48,30 @@ describe('mail list cache policy', () => {
     try {
       const accounts = await fetchAccounts()
       expect(accounts).toHaveLength(total)
-      expect(offsets).toHaveLength(101)
-      expect(offsets.at(-1)).toBe(20_000)
+      expect(offsets).toEqual([0, 200, 400])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('degrades to the collected accounts with a diagnostic when pagination exceeds 50 pages (A91)', async () => {
+    clearDiagnosticLogs()
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      const offset = Number(url.searchParams.get('offset'))
+      const limit = Number(url.searchParams.get('limit'))
+      const accounts = Array.from({ length: limit }, (_, index) => ({ id: `account-${offset + index}` }))
+      return new Response(JSON.stringify({ accounts, total: 1_000_000, limit, offset, has_more: true }), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      const accounts = await fetchAccounts()
+      expect(accounts).toHaveLength(10_000)
+      expect(fetchMock).toHaveBeenCalledTimes(50)
+      expect(getDiagnosticLogs().some((entry) => entry.message.includes('Account pagination'))).toBe(true)
     } finally {
       vi.unstubAllGlobals()
     }
@@ -97,28 +120,6 @@ describe('mail list cache policy', () => {
     }
   })
 
-  it('caps pathological account pagination at 10,000 pages', async () => {
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      const url = new URL(String(input), 'http://localhost')
-      const offset = Number(url.searchParams.get('offset'))
-      const limit = Number(url.searchParams.get('limit'))
-      return new Response(JSON.stringify({
-        accounts: [{ id: `account-${offset}` }],
-        total: 10_001,
-        limit,
-        offset,
-        has_more: true,
-      }), { headers: { 'Content-Type': 'application/json' } })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    try {
-      await expect(fetchAccounts()).rejects.toThrow('exceeded 10000 pages')
-      expect(fetchMock).toHaveBeenCalledTimes(10_000)
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
 })
 
 describe('applyCachedReadStateWithRollback (A149)', () => {
