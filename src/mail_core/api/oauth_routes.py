@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from mail_core.accounts import enqueue_account_sync
 from mail_core.accounts.microsoft_oauth import exchange_redirect_url_for_tokens
@@ -167,26 +168,36 @@ def _save_redirect_exchange_account(
     if group_id is not None:
         _ensure_group_exists(group_id)
     existing_id = _find_graph_account_id(email)
-    if existing_id is not None:
-        dto = update_account_app(
-            existing_id,
-            group_id=group_id,
-            config=config,
-            credentials=credentials,
-            clear_credentials=["client_secret"],
-            principal=principal,
-        )
-        if dto.sync_enabled:
-            _enqueue_sync_best_effort(existing_id)
-        return dto
-    return create_account_app(
-        email=email,
-        provider="graph",
+    if existing_id is None:
+        try:
+            return create_account_app(
+                email=email,
+                provider="graph",
+                group_id=group_id,
+                config=config,
+                credentials=credentials,
+                principal=principal,
+            )
+        except IntegrityError:
+            # A137: the existence check above and the create run in
+            # different sessions/transactions, so a concurrent exchange
+            # for the same verified email can win the race and surface
+            # here as a unique-email IntegrityError. That is not a
+            # failure: re-read and update the account that now exists.
+            existing_id = _find_graph_account_id(email)
+            if existing_id is None:
+                raise
+    dto = update_account_app(
+        existing_id,
         group_id=group_id,
         config=config,
         credentials=credentials,
+        clear_credentials=["client_secret"],
         principal=principal,
     )
+    if dto.sync_enabled:
+        _enqueue_sync_best_effort(existing_id)
+    return dto
 
 
 def _callback_html(ok: bool, message: str, provider: str = "microsoft") -> str:

@@ -633,3 +633,47 @@ def test_exchange_redirect_url_api_creates_graph_account_pg(api_client, monkeypa
         row = db.scalar(select(Account).where(Account.email == email))
         creds = load_json_secret(get_credential_store(), row.credential_ref)
     assert creds["refresh_token"] == "rotated-refresh"
+
+
+def test_exchange_api_create_race_falls_back_to_update(api_client, monkeypatch):
+    """A137: a concurrent create winning the race between the existence
+    check and create_account_app surfaces as an IntegrityError on the
+    unique email; the exchange must re-read and update that account
+    instead of failing the whole onboarding with a 500."""
+    import mail_core.api.oauth_routes as routes
+    from sqlalchemy.exc import IntegrityError
+
+    existing_id = uuid.uuid4()
+    lookups = iter([None, existing_id])
+    updated = {}
+
+    def fake_create(**_kwargs):
+        raise IntegrityError("INSERT INTO accounts", {}, Exception("uq_accounts_email_lower"))
+
+    def fake_update(account_id, **kwargs):
+        updated["account_id"] = account_id
+        updated.update(kwargs)
+        return _dto("real@outlook.com", kwargs.get("group_id"))
+
+    monkeypatch.setattr(routes, "create_account_app", fake_create)
+    monkeypatch.setattr(routes, "update_account_app", fake_update)
+    monkeypatch.setattr(routes, "_find_graph_account_id", lambda _email: next(lookups))
+    monkeypatch.setattr(routes, "_enqueue_sync_best_effort", lambda _aid: None)
+    monkeypatch.setattr(
+        routes,
+        "exchange_redirect_url_for_tokens",
+        lambda url, client_id=None: {
+            "client_id": DEFAULT_MICROSOFT_CLIENT_ID,
+            "access_token": "ms-access",
+            "refresh_token": "raced-refresh",
+            "email": "real@outlook.com",
+        },
+    )
+    response = api_client.post(
+        "/api/accounts/oauth/exchange-redirect-url", json={"redirected_url": REDIRECT}
+    )
+    assert response.status_code == 200, response.text
+    assert updated["account_id"] == existing_id
+    assert updated["credentials"] == {
+        "client_id": DEFAULT_MICROSOFT_CLIENT_ID, "refresh_token": "raced-refresh",
+    }
