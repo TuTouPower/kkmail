@@ -8,7 +8,10 @@ PORT="${MAIL_CORE_IMAP_PORT:-1143}"
 export MAIL_CORE_IMAP_HOST="${MAIL_CORE_IMAP_HOST:-127.0.0.1}"
 export MAIL_CORE_IMAP_PORT="$PORT"
 export MAIL_CORE_IMAP_USER="${MAIL_CORE_IMAP_USER:-alice@kkmail.test}"
-export MAIL_CORE_IMAP_PASS="${MAIL_CORE_IMAP_PASS:-alice-imap-pass}"
+# No hardcoded fixture password (A227): the Dovecot images carry their own
+# seeded credential, so this value is only consumed by the pymap fallback
+# passfile below — and that path refuses to start when it is unset.
+export MAIL_CORE_IMAP_PASS="${MAIL_CORE_IMAP_PASS:-}"
 IMAP_PASSFILE=""
 
 cleanup_imap_passfile() {
@@ -72,6 +75,10 @@ if docker compose -f docker-compose.mail-core.yml --profile imap up -d imap; the
   exit 1
 fi
 if [[ -n "$PY" ]] && "$PY" -c "import pymap" 2>/dev/null; then
+  if [[ -z "$MAIL_CORE_IMAP_PASS" ]]; then
+    echo "Refusing to start the pymap fallback: MAIL_CORE_IMAP_PASS is not set and there is no default fixture password. Set MAIL_CORE_IMAP_PASS explicitly (e.g. in .env.test) and re-run." >&2
+    exit 1
+  fi
   echo "Starting pymap on :$PORT (fallback)"
   mkdir -p "$ROOT/.scratch"
   IMAP_PASSFILE="$(mktemp "$ROOT/.scratch/imap-pass.XXXXXX")"

@@ -154,3 +154,49 @@ exit 1
     assert data["mode"] == 0o600
     assert data["contents"] == f"alice@kkmail.test {secret}\n"
     assert not Path(data["passfile"]).exists()
+
+
+def test_pymap_fallback_refuses_without_explicit_password(tmp_path):
+    """A227: no hardcoded fixture password — pymap fallback needs an explicit env."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "docker", "#!/bin/sh\nexit 1\n")
+
+    capture = tmp_path / "pymap_capture.json"
+    stub = tmp_path / "pymap_stub.py"
+    stub.write_text("import pathlib; pathlib.Path(__file__).touch()\n", encoding="utf-8")
+    fake_python = """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "-c" ]]; then exit 0; fi
+if [[ "$1" == "-m" && "$2" == "pymap" ]]; then
+  touch "$KKMAIL_PYMAP_CAPTURE"
+  exit 0
+fi
+exit 1
+"""
+    _write_executable(fake_bin / "python3", fake_python)
+
+    env = os.environ.copy()
+    env.pop("MAIL_CORE_IMAP_PASS", None)
+    env.update(
+        PATH=f"{fake_bin}{os.pathsep}{env.get('PATH', '')}",
+        KKMAIL_TEST_PG_PASSWORD="test-only",
+        KKMAIL_PYMAP_CAPTURE=str(capture),
+        MAIL_CORE_IMAP_HOST="127.0.0.1",
+        MAIL_CORE_IMAP_PORT="1143",
+        MAIL_CORE_IMAP_USER="alice@kkmail.test",
+    )
+    result = subprocess.run(
+        ["bash", str(SCRIPT)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 1
+    assert "MAIL_CORE_IMAP_PASS" in result.stderr
+    assert "Starting pymap" not in result.stdout
+    assert not capture.exists(), "pymap must not start without an explicit password"
+    assert "alice-imap-pass" not in SCRIPT.read_text(encoding="utf-8")
