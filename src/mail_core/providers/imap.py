@@ -751,7 +751,17 @@ class ImapProvider:
                 self._metadata_uid_scan = (folder_remote_id, scan_uidvalidity, start, uids)
                 cached_scan = self._metadata_uid_scan
 
-            batch_size = int((cursor or {}).get("page_size") or 50)
+            # A323: page_size comes from the persisted cursor — bound it.
+            # Non-numeric or non-positive values fall back to 50; anything
+            # above 500 is clamped so one FETCH cannot pull a whole mailbox.
+            try:
+                batch_size = int((cursor or {}).get("page_size") or 50)
+            except (TypeError, ValueError):
+                batch_size = 50
+            if batch_size < 1:
+                batch_size = 50
+            elif batch_size > 500:
+                batch_size = 500
             uid_list = cached_scan[3]
             offset = bisect_left(uid_list, start)
             batch = uid_list[offset : offset + batch_size]
