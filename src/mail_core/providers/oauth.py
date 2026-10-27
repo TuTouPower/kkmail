@@ -115,20 +115,27 @@ class OAuthTokenClient:
             return False
 
     def get_access_token(self, *, force_refresh: bool = False) -> str:
-        # Serialize refresh so concurrent callers share one token grant.
-        with self._refresh_lock, credential_edit(
-            self.store,
-            self.credential_ref,
-            allow_readonly=True,
-            readonly_cache=self._cached,
-        ) as data:
-            # Reload under the durable row lock; another process may have rotated it.
-            self._cached = dict(data)
-            if not force_refresh and self._access_valid(data):
-                return str(data["access_token"])
-            refresh = data.get("refresh_token")
-            client_id = data.get("client_id")
-            client_secret = data.get("client_secret")
+        # Serialize refresh within this process so concurrent callers share
+        # one token grant. The durable credential lock (A116) is held only
+        # for the read/version-check and the final CAS persist — never
+        # across the network POST, which can take tens of seconds and would
+        # otherwise block every other process refreshing this credential.
+        with self._refresh_lock:
+            # Phase 1 (locked): reload + version check.
+            with credential_edit(
+                self.store,
+                self.credential_ref,
+                allow_readonly=True,
+                readonly_cache=self._cached,
+            ) as data:
+                # Another process may have rotated it since our cache.
+                self._cached = dict(data)
+                if not force_refresh and self._access_valid(data):
+                    return str(data["access_token"])
+                snapshot = dict(data)
+            refresh = snapshot.get("refresh_token")
+            client_id = snapshot.get("client_id")
+            client_secret = snapshot.get("client_secret")
             if not refresh or not client_id:
                 raise OAuthError("credential JSON missing refresh_token or client_id")
             form = {
@@ -138,13 +145,14 @@ class OAuthTokenClient:
             }
             if client_secret:
                 form["client_secret"] = str(client_secret)
-            if data.get("scope"):
-                form["scope"] = str(data["scope"])
+            if snapshot.get("scope"):
+                form["scope"] = str(snapshot["scope"])
             uri = self.token_uri()
             if self.http_post is not None:
                 post = self.http_post
             else:
                 post = lambda m, u, f, h=None: default_urllib_token_post(m, u, f, h, timeout=self.timeout)
+            # Phase 2 (unlocked): network refresh.
             try:
                 # Acquire + complete + release the refresh permit inside
                 # this scope; get_access_token returns before the caller
@@ -163,13 +171,32 @@ class OAuthTokenClient:
             access = resp.get("access_token")
             if not access:
                 raise OAuthError("token endpoint returned no access_token")
-            data["access_token"] = access
-            if resp.get("refresh_token"):
-                data["refresh_token"] = resp["refresh_token"]
-            expires_in = resp.get("expires_in")
-            if expires_in is not None:
-                data["expires_at"] = time.time() + float(expires_in)
-            self._cached = dict(data)
+            # Phase 3 (locked): CAS persist keyed on the refresh_token
+            # version we refreshed with. If another process rotated the
+            # refresh_token while our POST was in flight, adopt the
+            # already-persisted token instead of clobbering the rotation
+            # with a grant issued against the superseded refresh_token.
+            adopted: str | None = None
+            with credential_edit(
+                self.store,
+                self.credential_ref,
+                allow_readonly=True,
+                readonly_cache=self._cached,
+            ) as data:
+                if data.get("refresh_token") != snapshot.get("refresh_token"):
+                    if data.get("access_token"):
+                        adopted = str(data["access_token"])
+                        self._cached = dict(data)
+                if adopted is None:
+                    data["access_token"] = access
+                    if resp.get("refresh_token"):
+                        data["refresh_token"] = resp["refresh_token"]
+                    expires_in = resp.get("expires_in")
+                    if expires_in is not None:
+                        data["expires_at"] = time.time() + float(expires_in)
+                    self._cached = dict(data)
+            if adopted is not None:
+                return adopted
             return str(access)
 
 

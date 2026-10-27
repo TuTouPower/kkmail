@@ -1,0 +1,81 @@
+"""R4 adoption spec tests for src/mail_core/providers/oauth.py (A116+)."""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+
+from mail_core.accounts import DictCredentialStore
+from mail_core.accounts.credentials import credential_edit
+from mail_core.providers.oauth import OAuthTokenClient
+
+_TOKEN_URI = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+
+
+def _store(refresh="rt-1"):
+    return DictCredentialStore(
+        {
+            "oauth:graph": json.dumps(
+                {
+                    "refresh_token": refresh,
+                    "client_id": "cid",
+                    "client_secret": "sec",
+                    "token_uri": _TOKEN_URI,
+                }
+            )
+        }
+    )
+
+
+# --- A116: network refresh must not run under credential_edit -------------
+
+
+def test_a116_refresh_network_call_runs_outside_credential_edit_lock():
+    store = _store()
+    entered = []
+
+    def token_post(method, url, form, headers):
+        def probe():
+            with credential_edit(store, "oauth:graph") as _data:
+                entered.append(True)
+
+        thread = threading.Thread(target=probe, daemon=True)
+        thread.start()
+        thread.join(2.0)
+        return {"access_token": "at-1", "expires_in": 3600}
+
+    client = OAuthTokenClient(
+        credential_ref="oauth:graph", store=store, provider="graph", http_post=token_post
+    )
+    assert client.get_access_token() == "at-1"
+    assert entered == [True]
+
+
+def test_a116_refresh_cas_adopts_persisted_token_on_refresh_token_conflict():
+    store = _store()
+
+    def token_post(method, url, form, headers):
+        # Another process rotated the credential while our POST was in flight.
+        store.put_secret(
+            "oauth:graph",
+            json.dumps(
+                {
+                    "refresh_token": "rt-2",
+                    "client_id": "cid",
+                    "client_secret": "sec",
+                    "token_uri": _TOKEN_URI,
+                    "access_token": "at-persisted",
+                    "expires_at": time.time() + 3600,
+                }
+            ),
+        )
+        return {"access_token": "at-from-old-refresh", "refresh_token": "rt-3", "expires_in": 3600}
+
+    client = OAuthTokenClient(
+        credential_ref="oauth:graph", store=store, provider="graph", http_post=token_post
+    )
+    assert client.get_access_token() == "at-persisted"
+    saved = json.loads(store.get_secret("oauth:graph"))
+    assert saved["refresh_token"] == "rt-2"
+    assert saved["access_token"] == "at-persisted"
