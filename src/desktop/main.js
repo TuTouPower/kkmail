@@ -148,8 +148,10 @@ async function startBackend() {
       app.quit()
     }
   })
+  // A386: instanceToken reaches the sidecar only via the spawn
+  // environment above (private startup channel); /health is probed
+  // without any token header exchange.
   await waitForHealth(`http://${HOST}:${port}/health`, 60000, {
-    instanceToken,
     shouldStop: () => backendExit,
   })
   showInitialPasswordOnce(dataRoot)

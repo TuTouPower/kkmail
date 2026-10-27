@@ -15,14 +15,19 @@ def test_health_reports_schema_head():
     assert body["schema_head"]
 
 
-def test_health_returns_instance_token_only_in_header(monkeypatch):
+def test_health_never_returns_instance_token(monkeypatch):
+    # A386 semantic change (user decision, option B): the instance token
+    # is delivered to the sidecar only through the private startup
+    # channel (spawn environment); /health must never echo it in an HTTP
+    # response header, where any local network peer could read it. This
+    # replaces the previous test that asserted the header echo.
     token = "instance-token-for-health-test"
     client = TestClient(app)
     monkeypatch.setenv("KKMAIL_INSTANCE_TOKEN", token)
 
     res = client.get("/health")
     assert res.status_code == 200
-    assert res.headers["X-Instance-Token"] == token
+    assert "X-Instance-Token" not in res.headers
     assert token not in res.text
 
     monkeypatch.delenv("KKMAIL_INSTANCE_TOKEN")

@@ -188,7 +188,6 @@ function waitForHealth(url, timeoutMs = 30000, opts = {}) {
   const isOkStatus = (code) => typeof code === 'number' && code >= 200 && code < 400
   const started = Date.now()
   const shouldStop = opts.shouldStop || (() => null)
-  const expectedToken = opts.instanceToken
 
   return new Promise((resolve, reject) => {
     const tick = () => {
@@ -197,17 +196,20 @@ function waitForHealth(url, timeoutMs = 30000, opts = {}) {
         reject(stopErr)
         return
       }
-      const headers = expectedToken ? { 'X-Instance-Token': expectedToken } : {}
-      const req = http.get(url, { headers }, (res) => {
+      // A386 (option B): the instance token travels only through the
+      // private startup channel (the sidecar's spawn environment). It is
+      // never sent in an HTTP request header nor expected back in a
+      // response header; health is a plain status check, and the child
+      // process handle (shouldStop / exit events) is what binds this
+      // probe to the sidecar we spawned.
+      const req = http.get(url, (res) => {
         res.resume()
-        const tokenMatch = !expectedToken || res.headers['x-instance-token'] === expectedToken
-        if (isOkStatus(res.statusCode) && tokenMatch) {
+        if (isOkStatus(res.statusCode)) {
           resolve(true)
           return
         }
         if (Date.now() - started > timeoutMs) {
-          const detail = !tokenMatch ? 'instance token mismatch' : `bad status ${res.statusCode}`
-          reject(new Error(`backend health ${detail}`))
+          reject(new Error(`backend health bad status ${res.statusCode}`))
         } else {
           setTimeout(tick, 300)
         }
