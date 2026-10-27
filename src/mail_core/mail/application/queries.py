@@ -493,8 +493,8 @@ def _query_inbox_stats(
     active_accounts: list[AccountInboxStatsOut] = []
     for row in session.execute(stmt).all():
         values = row._mapping
-        if not values["sync_enabled"]:
-            continue
+        # The aggregate already filters sync_enabled in SQL, so every
+        # row here is an enabled account (A218: no恒假 per-row check).
         folder_count = values["folder_count"]
         stats_count = values["stats_count"]
         known_unread_count = values["known_unread_count"]
@@ -504,10 +504,12 @@ def _query_inbox_stats(
             account_id=values["account_id"], unread_count=unread, total_count=total
         )
         accounts.append(acc_out)
-        sync_enabled = bool(values["sync_enabled"])
         sync_status = str(values["sync_status"] or SyncStatus.IDLE.value)
-        is_faulty_without_target = folder_count == 0 and (
-            not sync_enabled or sync_status in (SyncStatus.FAILED.value, SyncStatus.AUTH_FAILED.value)
+        # sync_status is the only live判定 here: sync_enabled is恒真
+        # under the SQL filter above (A218).
+        is_faulty_without_target = folder_count == 0 and sync_status in (
+            SyncStatus.FAILED.value,
+            SyncStatus.AUTH_FAILED.value,
         )
         if not is_faulty_without_target:
             active_accounts.append(acc_out)
