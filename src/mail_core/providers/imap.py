@@ -403,6 +403,40 @@ def _uid_from_fetch_blob(flags_blob: tuple[Any, ...]) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _fetch_flags_for_uid(c: Any, uid_str: str) -> tuple[bool, bool | None, bool | None] | None:
+    """FETCH (FLAGS UID) for a single UID (A368).
+
+    Returns ``None`` when the FETCH itself fails, otherwise
+    ``(found, is_read, is_flagged)`` where ``found`` is False when the
+    server returns no FETCH entry for the UID — i.e. the message no
+    longer exists in the selected mailbox, however the server answered
+    other commands for it.
+    """
+    try:
+        target = int(uid_str)
+    except ValueError:
+        return None
+    try:
+        typ, data = c.uid("FETCH", uid_str, "(FLAGS UID)")
+    except Exception:
+        return None
+    if typ != "OK":
+        return None
+    for blob in data or ():
+        if blob is None:
+            continue
+        meta_bytes = blob[0] if isinstance(blob, tuple) else blob
+        if not isinstance(meta_bytes, (bytes, str)):
+            continue
+        meta = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
+        match = re.search(r"\bUID\s+(\d+)", meta, flags=re.IGNORECASE)
+        if match is None or int(match.group(1)) != target:
+            continue
+        is_read, is_flagged = _parse_fetch_flags(meta)
+        return True, is_read, is_flagged
+    return False, None, None
+
+
 def _parse_message_meta_from_fetch(
     flags_blob: tuple[Any, ...],
     uid_fallback: int,
@@ -1239,12 +1273,41 @@ class ImapProvider:
                             error=f"UIDVALIDITY mismatch for {folder}: expected {_uv}, got {srv_uv}",
                         )
 
+            # A368: many servers answer UID STORE/MOVE for an already
+            # expunged UID with OK and no effect. Confirm the UID still
+            # exists via FETCH before mutating anything; for STORE the
+            # FETCH read-back of the flags below is the success criterion.
+            try:
+                int(uid_str)
+                numeric_uid = True
+            except ValueError:
+                numeric_uid = False
+            if numeric_uid:
+                existence = _fetch_flags_for_uid(c, uid_str)
+                if existence is None:
+                    return RemoteOperationResult(
+                        success=False,
+                        error=f"unable to verify UID {uid_str} exists in {folder}: FETCH failed",
+                    )
+                if not existence[0]:
+                    return RemoteOperationResult(
+                        success=False,
+                        error=f"UID {uid_str} not found in {folder}",
+                    )
+
             if op == OP_MARK_READ:
                 want_read = bool(desired_state.get("is_read", True))
                 flag_op = "+FLAGS" if want_read else "-FLAGS"
                 typ, _ = c.uid("STORE", uid_str, flag_op, r"(\Seen)")
                 if typ != "OK":
                     return RemoteOperationResult(success=False, error="STORE Seen failed")
+                if numeric_uid:
+                    verified = _fetch_flags_for_uid(c, uid_str)
+                    if verified is None or not verified[0] or verified[1] is not want_read:
+                        return RemoteOperationResult(
+                            success=False,
+                            error=f"STORE Seen for UID {uid_str} could not be verified via FETCH",
+                        )
                 return RemoteOperationResult(success=True, remote_state={"is_read": want_read})
 
             if op == OP_SET_FLAG:
@@ -1253,6 +1316,13 @@ class ImapProvider:
                 typ, _ = c.uid("STORE", uid_str, flag_op, r"(\Flagged)")
                 if typ != "OK":
                     return RemoteOperationResult(success=False, error="STORE Flagged failed")
+                if numeric_uid:
+                    verified = _fetch_flags_for_uid(c, uid_str)
+                    if verified is None or not verified[0] or verified[2] is not want:
+                        return RemoteOperationResult(
+                            success=False,
+                            error=f"STORE Flagged for UID {uid_str} could not be verified via FETCH",
+                        )
                 return RemoteOperationResult(success=True, remote_state={"is_flagged": want})
 
             if op == OP_MOVE:

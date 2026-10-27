@@ -30,6 +30,10 @@ class _FakeClient:
 
     def uid(self, command, *args):
         if command == "FETCH":
+            # A368: apply_remote_operation verifies via FETCH (FLAGS UID);
+            # fetch_mime asks for BODY.PEEK[] and needs the mime payload.
+            if args and "FLAGS" in str(args[-1]):
+                return "OK", [b"7 (FLAGS (\\Seen) UID 7)"]
             return "OK", [(b"7 (UID 7)", b"mime-bytes")]
         if command == "STORE":
             return "OK", [b""]

@@ -129,3 +129,83 @@ def test_a186_missing_expires_in_defaults_expires_at_to_3600_and_caches():
     # With expires_at set, the next call is served from cache, not a refresh.
     assert client.get_access_token() == "at-no-expiry"
     assert len(calls) == 1
+
+
+# --- A187: provider / MIME responses must have an explicit size cap -------
+
+
+class _FakeHttpResponse:
+    def __init__(self, body: bytes, content_type="application/json"):
+        self._body = body
+        self.headers = {"Content-Type": content_type}
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            return self._body
+        return self._body[:size]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_a187_json_response_over_limit_raises_provider_error(monkeypatch):
+    import urllib.request
+
+    import mail_core.providers.oauth as oauth_mod
+    from mail_core.providers.http import ProviderHttpError
+    from mail_core.providers.oauth import urllib_json_request
+
+    monkeypatch.setattr(oauth_mod, "MAX_JSON_RESPONSE_BYTES", 8)
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=60: _FakeHttpResponse(b'{"value": "0123456789abcdef"}'),
+    )
+    with pytest.raises(ProviderHttpError):
+        urllib_json_request("GET", "https://graph.microsoft.com/v1.0/me", _sleep_fn=lambda _s: None)
+
+
+def test_a187_mime_value_response_over_limit_raises_provider_error(monkeypatch):
+    import urllib.request
+
+    import mail_core.providers.oauth as oauth_mod
+    from mail_core.providers.http import ProviderHttpError
+    from mail_core.providers.oauth import urllib_json_request
+
+    monkeypatch.setattr(oauth_mod, "MAX_MIME_RESPONSE_BYTES", 8)
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=60: _FakeHttpResponse(b"x" * 64, content_type="message/rfc822"),
+    )
+    with pytest.raises(ProviderHttpError):
+        urllib_json_request(
+            "GET", "https://graph.microsoft.com/v1.0/me/messages/m1/$value", _sleep_fn=lambda _s: None
+        )
+
+
+def test_a187_responses_under_limit_still_parse(monkeypatch):
+    import urllib.request
+
+    from mail_core.providers.oauth import urllib_json_request
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=60: _FakeHttpResponse(b'{"ok": true}'),
+    )
+    assert urllib_json_request("GET", "https://graph.microsoft.com/v1.0/me", _sleep_fn=lambda _s: None) == {
+        "ok": True
+    }
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=60: _FakeHttpResponse(b"mime-body", content_type="message/rfc822"),
+    )
+    result = urllib_json_request(
+        "GET", "https://graph.microsoft.com/v1.0/me/messages/m1/$value", _sleep_fn=lambda _s: None
+    )
+    assert result == {"raw_bytes": b"mime-body"}

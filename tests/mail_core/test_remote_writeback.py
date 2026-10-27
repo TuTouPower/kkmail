@@ -63,12 +63,27 @@ def test_imap_writeback_uses_uid_store_and_move():
     calls: list[tuple] = []
 
     class FakeIMAP:
+        # A368: the provider verifies UID existence and STORE results via
+        # FETCH (FLAGS UID), so the fake keeps real flag state for UID 10.
+        def __init__(self):
+            self._flags: set[str] = set()
+
         def select(self, folder, readonly=False):
             calls.append(("select", folder))
             return ("OK", [b"1"])
 
         def uid(self, cmd, *args):
             calls.append(("uid", cmd, args))
+            if cmd == "FETCH":
+                flags = " ".join(sorted(self._flags))
+                return ("OK", [f"1 (FLAGS ({flags}) UID 10)".encode()])
+            if cmd == "STORE":
+                flag = args[2].strip("()")
+                if args[1] == "+FLAGS":
+                    self._flags.add(flag)
+                else:
+                    self._flags.discard(flag)
+                return ("OK", [b""])
             if cmd == "MOVE":
                 return ("OK", [b""])
             return ("OK", [b""])
@@ -132,6 +147,9 @@ def test_imap_move_trash_refuse_unsafe_expunge():
 
         def uid(self, cmd, *args):
             calls.append(("uid", cmd, args))
+            if cmd == "FETCH":
+                # A368 existence check: UID 10 exists in this fake.
+                return ("OK", [b"1 (FLAGS () UID 10)"])
             if cmd == "MOVE":
                 return ("NO", [b"MOVE not supported"])
             return ("OK", [b""])

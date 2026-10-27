@@ -39,6 +39,32 @@ from mail_core.providers.http import AmbiguousOutcomeError, CursorInvalidError, 
 
 log = logging.getLogger("mail_core.providers.oauth")
 
+# A187: provider responses are read with an explicit cap instead of being
+# loaded into memory unbounded (MIME $value bodies vs JSON payloads).
+MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024
+MAX_MIME_RESPONSE_BYTES = 64 * 1024 * 1024
+
+
+def _read_response_limited(resp: Any, limit: int) -> bytes:
+    """Read at most ``limit + 1`` bytes; raise ProviderHttpError over the cap.
+
+    Falls back to an unbounded read only for response objects whose
+    ``read()`` takes no size argument (test doubles), still enforcing the cap.
+    """
+    try:
+        raw = resp.read(limit + 1)
+    except TypeError:
+        raw = resp.read()
+    if raw is None:
+        return b""
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8", errors="surrogateescape")
+    if len(raw) > limit:
+        raise ProviderHttpError(
+            f"provider response exceeds the {limit}-byte size limit", status=None
+        )
+    return bytes(raw)
+
 GRAPH_TOKEN_URI = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
 # Operator-supplied token_uri must match an allowlisted HTTPS host prefix (SSRF).
@@ -249,7 +275,7 @@ def default_urllib_token_post(
     try:
         with permit_scope(permit_factory, traffic_class):
             with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — operator-configured token URI
-                return json.loads(resp.read().decode("utf-8"))
+                return json.loads(_read_response_limited(resp, MAX_JSON_RESPONSE_BYTES).decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         raise ProviderHttpError(raw or str(exc), status=exc.code, body=raw, headers=dict(exc.headers or {})) from exc
@@ -395,11 +421,24 @@ def urllib_json_request(
         with permit_scope(permit_factory, traffic_class):
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-                    raw = resp.read()
+                    # A187: bounded read. The pre-read cap follows the
+                    # endpoint/content-type (MIME $value: 64MiB, JSON:
+                    # 16MiB); JSON-looking bodies are re-checked against
+                    # the JSON cap after the read as well.
+                    ctype = resp.headers.get("Content-Type", "") if resp.headers else ""
+                    is_mime = "$value" in url.lower() or "application/json" not in ctype
+                    raw = _read_response_limited(
+                        resp, MAX_MIME_RESPONSE_BYTES if is_mime else MAX_JSON_RESPONSE_BYTES
+                    )
                     if not raw:
                         return {}
-                    ctype = resp.headers.get("Content-Type", "")
                     if "application/json" in ctype or raw[:1] in (b"{", b"["):
+                        if len(raw) > MAX_JSON_RESPONSE_BYTES:
+                            raise ProviderHttpError(
+                                f"provider JSON response exceeds the "
+                                f"{MAX_JSON_RESPONSE_BYTES}-byte size limit",
+                                status=None,
+                            )
                         return json.loads(raw.decode("utf-8"))
                     return {"raw_bytes": raw}
             except urllib.error.HTTPError as exc:

@@ -54,7 +54,10 @@ def test_imap_provider_quotes_folder_in_commands():
     p = ImapProvider(host="127.0.0.1", port=1, username="u", password="p", use_ssl=False)
     mock_client = MagicMock()
     mock_client.select.return_value = ("OK", [b"1"])
-    mock_client.uid.return_value = ("OK", [b""])
+    # A368: apply verifies the UID exists via FETCH (FLAGS UID) first.
+    mock_client.uid.side_effect = lambda cmd, *args: (
+        ("OK", [b"1 (FLAGS () UID 1)"]) if cmd == "FETCH" else ("OK", [b""])
+    )
     mock_client.status.return_value = ("OK", [b"UIDVALIDITY 12345"])
     mock_client.response.return_value = ("OK", [b"COPYUID 12345 1 200"])
     p._connect = lambda: mock_client
@@ -77,7 +80,10 @@ def test_imap_provider_move_without_copyuid_graceful():
     p = ImapProvider(host="127.0.0.1", port=1, username="u", password="p", use_ssl=False)
     mock_client = MagicMock()
     mock_client.select.return_value = ("OK", [b"1"])
-    mock_client.uid.return_value = ("OK", [b""])
+    # A368: apply verifies the UID exists via FETCH (FLAGS UID) first.
+    mock_client.uid.side_effect = lambda cmd, *args: (
+        ("OK", [b"1 (FLAGS () UID 1)"]) if cmd == "FETCH" else ("OK", [b""])
+    )
     mock_client.status.return_value = ("OK", [b"UIDVALIDITY 12345"])
     mock_client.response.return_value = ("NO", [])
     p._connect = lambda: mock_client
