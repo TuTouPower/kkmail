@@ -163,7 +163,10 @@ def build_provider(
             raise ValueError("imap account missing credential_ref")
         secret = store.get_secret(account.credential_ref)
         if isinstance(secret, dict):
-            password = str(secret.get("password") or secret.get("secret") or "")
+            password_value = secret.get("password") or secret.get("secret")
+            if password_value is None or str(password_value) == "":
+                raise ValueError("credential JSON missing password")
+            password = str(password_value)
         elif isinstance(secret, str) and secret.strip().startswith("{"):
             try:
                 data = json.loads(secret)
