@@ -22,6 +22,17 @@ class SearchPage:
 
 
 MAX_SEARCH_OFFSET = 10_000
+#: Same page-size ceiling the API route enforces (limit Query le=200) and
+#: the search layer clamps to; enforced here so non-route callers cannot
+#: bypass it (A115).
+MAX_SEARCH_LIMIT = 200
+
+
+def _validate_search_pagination(*, limit: int, offset: int) -> None:
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_SEARCH_LIMIT:
+        raise ValueError(f"limit must be between 1 and {MAX_SEARCH_LIMIT}")
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= MAX_SEARCH_OFFSET:
+        raise ValueError(f"offset must be between 0 and {MAX_SEARCH_OFFSET}")
 
 
 def search_message_ids(
@@ -33,6 +44,7 @@ def search_message_ids(
     limit: int = 50,
     offset: int = 0,
 ) -> list[uuid.UUID]:
+    _validate_search_pagination(limit=limit, offset=offset)
     return _search_messages(session, account_ids=account_ids, query=query, folder_id=folder_id, limit=limit, offset=offset)
 
 
@@ -46,6 +58,7 @@ def search_messages_page(
     offset: int = 0,
 ) -> SearchPage:
     """Ranked search hydrated into list rows, with offset pagination + total."""
+    _validate_search_pagination(limit=limit, offset=offset)
     ids, total = _search_messages_with_total(
         session,
         account_ids=account_ids,
