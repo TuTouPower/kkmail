@@ -147,14 +147,23 @@ def cmd_added_lines(args) -> int:
         )
         current_path = ""
         skip_file = False
+        in_hunk = False
         for line in result.stdout.splitlines():
-            if line.startswith("+++ "):
+            if line.startswith("diff --git "):
+                in_hunk = False
+                continue
+            # +++ 只在 hunk 上下文之外才是文件头；hunk 内内容以 ++ 开头的新增行
+            # 呈 +++… 形态，是真实新增行不得漏报（A263）。
+            if not in_hunk and line.startswith("+++ "):
                 current_path = line[4:].removeprefix("b/")
                 skip_file = _excluded(current_path, args.exclude)
                 continue
+            if line.startswith("@@ "):
+                in_hunk = True
+                continue
             if skip_file:
                 continue
-            if line.startswith("+") and not line.startswith("+++"):
+            if line.startswith("+"):
                 print(line[1:])
     for path in _untracked_files(args.exclude):
         file_path = Path(path)

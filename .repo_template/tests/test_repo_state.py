@@ -119,6 +119,21 @@ def test_added_lines_includes_untracked_bodies_and_honours_exclude(repo):
     assert "TODO in docs" not in result.stdout.splitlines()
 
 
+def test_added_lines_reports_content_starting_with_plus_plus(repo):
+    """A263：新增行内容本身以 ++ 开头（++i、++ 标题）时，其 diff 行呈 +++…，
+    不得被误当 +++ 文件头漏报；仅 hunk 上下文之外的 +++ 才是文件头。"""
+    baseline = _baseline(repo)
+    (repo / "tracked.txt").write_text(
+        "base\n++i\n++ heading\nnormal after\n", encoding="utf-8"
+    )
+    result = _run(repo, "added-lines", baseline)
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert "++i" in lines
+    assert "++ heading" in lines
+    assert "normal after" in lines
+
+
 def test_added_lines_baseline_unavailable_only_untracked(repo):
     (repo / "fresh.py").write_text("new line\n", encoding="utf-8")
     result = _run(repo, "added-lines", "deadbeef" * 5)
