@@ -3,15 +3,15 @@ tid: "t019"
 slug: "backup_restore_drill"
 title: "建立真实加密备份与跨库恢复演练"
 status: "done"
-branch: ""
+branch: "main"
 worktree: ""
 review_level: "full"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "4ea0a6f17fb5dce8de4c15d869eaf879705ddcbb"
 depends_on: "t014"
 conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
+note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 1312431b"
 ---
 
 # Task 过程总账
@@ -65,3 +65,10 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 ### 结果摘要
 
 在生产备份模块补齐了真正的恢复逻辑 `restore_backup_package` 与安全防覆盖守卫；建立了基于真实 PostgreSQL 容器与原生 `pg_dump`/`pg_restore` 的跨库恢复演练测试，证明了数据库结构、业务数据及加密 Blob 可以完整、无损地还原到全新实例中。
+
+## 状态勘误（2026-10-27，A52）
+
+- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
+- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
+- commit 锚点：实现提交 `1312431b58ada455a994c0842e52947a28cc0422`；diff_anchor 补记为该实现提交的父提交 `4ea0a6f17fb5dce8de4c15d869eaf879705ddcbb`；本批归档提交 `161a6e10`。
+- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。

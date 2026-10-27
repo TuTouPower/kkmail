@@ -3,15 +3,15 @@ tid: "t017"
 slug: "full_stack_e2e"
 title: "建立浏览器到真实后端数据库与 Worker 的端到端测试"
 status: "done"
-branch: ""
+branch: "main"
 worktree: ""
 review_level: "full"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "082e203eafb2afceb955b75f78687d4cdba64b5e"
 depends_on: "t012,t015,t016"
 conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
+note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit de6f9b4c"
 ---
 
 # Task 过程总账
@@ -67,3 +67,10 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 ### 结果摘要
 
 建立了基于真实环境（FastAPI、Worker、PostgreSQL、Dovecot、生产 SPA）的端到端自动化测试流水线与用例套件，验证了真实 Cookie/CSRF 认证、多会话失效、添加账号后台自动同步、邮件详情阅读与 XSS 过滤、双页面并发 SSE 实时推送等关键链路，并在测试后自动销毁数据库与后台进程。
+
+## 状态勘误（2026-10-27，A52）
+
+- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
+- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
+- commit 锚点：实现提交 `de6f9b4c5b9e97cdf84af862060f74e8f08347e5`；diff_anchor 补记为该实现提交的父提交 `082e203eafb2afceb955b75f78687d4cdba64b5e`；本批归档提交 `161a6e10`。
+- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。

@@ -3,15 +3,15 @@ tid: "t018"
 slug: "migration_validation"
 title: "验证空库与旧数据升级及数据库结构一致性"
 status: "done"
-branch: ""
+branch: "main"
 worktree: ""
 review_level: "full"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "de6f9b4c5b9e97cdf84af862060f74e8f08347e5"
 depends_on: "t013"
 conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
+note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 4ea0a6f1"
 ---
 
 # Task 过程总账
@@ -60,3 +60,10 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 ### 结果摘要
 
 建立了完整的数据库迁移与结构一致性测试，涵盖单链单 head 校验、三版本历史数据跨版本升级无损保留、PostgreSQL 完整性约束与级联、ORM catalog drift 零差异检测以及可逆降级升级闭环。
+
+## 状态勘误（2026-10-27，A52）
+
+- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
+- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
+- commit 锚点：实现提交 `4ea0a6f17fb5dce8de4c15d869eaf879705ddcbb`；diff_anchor 补记为该实现提交的父提交 `de6f9b4c5b9e97cdf84af862060f74e8f08347e5`；本批归档提交 `161a6e10`。
+- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
