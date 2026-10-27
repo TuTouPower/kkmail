@@ -10,6 +10,7 @@ const fs = require('fs')
 const path = require('path')
 const util = require('util')
 const { RotatingLogStream } = require('./logRotation')
+const { redactSecrets } = require('./startup')
 
 function formatIsoTimestamp(d = new Date()) {
   const pad = (n, len = 2) => String(n).padStart(len, '0')
@@ -56,7 +57,17 @@ class DesktopLogger {
     this.stream = null
     this.origConsole = null
     this.hooked = false
+    // Known secrets to strip from the on-disk log in addition to the
+    // URL/userinfo and DB-URL patterns redactSecrets always applies.
+    this.secrets = Array.isArray(options.secrets)
+      ? options.secrets
+      : (Array.isArray(options.knownSecrets) ? options.knownSecrets : [])
     this._initStream(options)
+  }
+
+  /** Replace the known-secret set used for on-disk redaction. */
+  setSecrets(secrets) {
+    this.secrets = Array.isArray(secrets) ? secrets : []
   }
 
   _initStream(options) {
@@ -80,7 +91,10 @@ class DesktopLogger {
   write(level, args) {
     if (!this.stream) return
     try {
-      const line = formatMessage(level, args)
+      // A151: redact before anything reaches disk — the console side
+      // keeps the original args, only the persisted line is stripped
+      // (DB URLs, URL userinfo, and any configured known secrets).
+      const line = redactSecrets(formatMessage(level, args), this.secrets)
       this.stream.write(line)
     } catch (_) {
       // Fallback safe: never crash application due to logger failure

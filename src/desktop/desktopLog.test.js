@@ -97,6 +97,25 @@ async function runTests() {
     try { fs.rmSync(tempDir3, { recursive: true, force: true }) } catch (_) {}
   }
 
+  // 6. On-disk redaction (A151): URL userinfo / DB URLs and known secrets
+  // must never reach desktop.log in clear text.
+  const tempDir4 = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-log-redact-test-'))
+  const logFile4 = path.join(tempDir4, 'desktop.log')
+  try {
+    const logger = new DesktopLogger({ logPath: logFile4, secrets: ['known-secret-value-123'] })
+    logger.info('db=postgresql://kkmail:fake-db-password-123@127.0.0.1:5432/kkmail')
+    logger.info('remote=https://user:fake-url-password-456@example.test/path token=known-secret-value-123')
+    await logger.end()
+    const content4 = fs.readFileSync(logFile4, 'utf8')
+    assert.ok(!content4.includes('fake-db-password-123'), 'DB URL password must be redacted on disk')
+    assert.ok(!content4.includes('fake-url-password-456'), 'URL userinfo password must be redacted on disk')
+    assert.ok(!content4.includes('known-secret-value-123'), 'known secret must be redacted on disk')
+    assert.ok(content4.includes('[REDACTED]'), 'redacted lines must carry the [REDACTED] marker')
+    assert.ok(content4.includes('db='), 'non-secret context must be preserved')
+  } finally {
+    try { fs.rmSync(tempDir4, { recursive: true, force: true }) } catch (_) {}
+  }
+
   console.log('desktopLog.test.js: ok')
 }
 
