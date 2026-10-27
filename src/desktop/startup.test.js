@@ -1,4 +1,6 @@
 const assert = require('assert')
+const fs = require('fs')
+const path = require('path')
 const http = require('http')
 const { EventEmitter } = require('events')
 const {
@@ -57,6 +59,22 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
   assert.strictEqual(cleaned.RANDOM_JUNK, undefined)
   assert.ok(ENV_ALLOW_EXACT.has('PATH'))
   assert.deepStrictEqual(ENV_ALLOW_PREFIX, ['LC_'])
+}
+
+// freePort (A301): the TOCTOU race between probing a port free and the
+// backend actually binding it is an accepted residual risk (eliminating
+// it needs a backend bind-0/report-back protocol change). Guard that
+// the race, its window, and its failure shapes stay documented at
+// freePort so nobody mistakes the probe for a reservation.
+{
+  const src = fs.readFileSync(path.join(__dirname, 'startup.js'), 'utf8')
+  const fnIdx = src.indexOf('async function freePort')
+  assert.ok(fnIdx > 0)
+  const docBlock = src.slice(Math.max(0, fnIdx - 2500), fnIdx)
+  assert.match(docBlock, /TOCTOU/, 'freePort must carry a TOCTOU warning')
+  assert.match(docBlock, /后端已退出/, 'the doc must name the backend-exit failure shape')
+  assert.match(docBlock, /backend timeout/, 'the doc must name the health-timeout failure shape')
+  assert.match(docBlock, /bind.*0|port 0/, 'the doc must name the bind-0 report-back fix direction')
 }
 
 // scrubEnv (A128): code-execution / library-injection variables must not

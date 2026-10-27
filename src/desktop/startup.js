@@ -175,6 +175,25 @@ function tryListen(port, host = '127.0.0.1') {
   })
 }
 
+/**
+ * Pick a port that is free *right now*.
+ *
+ * A301 — TOCTOU warning: this is a probe, NOT a reservation. tryListen
+ * closes its server before returning, and the caller (main.js) only
+ * spawns the backend — which is what actually binds the port — after
+ * PostgreSQL has started. In that window any other local process can
+ * take the port. Accepted residual race; the failure shapes are:
+ *   - the backend cannot bind and exits: startBackend surfaces the
+ *     child's exit via waitForHealth's shouldStop (后端已退出), not a
+ *     freePort error;
+ *   - another service takes the port and accepts connections:
+ *     waitForHealth polls the wrong service until it rejects with
+ *     "backend timeout" / a bad-status error.
+ * Eliminating the race requires the backend to bind port 0 and report
+ * the assigned port back to the launcher (a backend protocol change);
+ * until that exists, treat the two failure shapes above as the
+ * port-raced signature and retry the launch.
+ */
 async function freePort(preferred, host = '127.0.0.1') {
   const exact = await tryListen(preferred, host)
   if (exact) return exact
