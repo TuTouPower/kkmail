@@ -25,11 +25,31 @@ if sys.executable != str(ROOT / ".venv/bin/python") and (ROOT / ".venv/bin/pytho
 
 LOG = logging.getLogger("full_stack_e2e")
 
+API_READY_TIMEOUT_SECONDS = 20
+API_READY_POLL_SECONDS = 0.3
+
 
 def find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _wait_for_api_ready(base_url: str, proc) -> bool:
+    """Poll /health until ready, process exit, or the ready deadline."""
+    import urllib.request
+
+    deadline = time.monotonic() + API_READY_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return False
+        try:
+            with urllib.request.urlopen(f"{base_url}/health", timeout=1) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            time.sleep(API_READY_POLL_SECONDS)
+    return False
 
 
 def load_env_test():
@@ -117,7 +137,6 @@ def main():
         artifacts_dir = ROOT / ".scratch" / "e2e_artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        app_port = find_free_port()
         secret_key = uuid.uuid4().hex * 2
         blob_key = base64.b64encode(os.urandom(32)).decode()
         e2e_password = "E2E_Test_Pass_123!"
@@ -144,51 +163,63 @@ def main():
         LOG.info("Running database migrations...")
         run_cmd([sys.executable, "-m", "alembic", "-c", "src/mail_core/db/alembic.ini", "upgrade", "head"], env=env)
 
-        # 4. Start API server
-        LOG.info("Starting real FastAPI server on port %d...", app_port)
-        api_proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "mail_core.api.app:app",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(app_port),
-                "--log-level",
-                "info",
-            ],
-            env=env,
-            stdout=api_log,
-            stderr=subprocess.STDOUT,
-            cwd=ROOT,
-        )
-
-        # 5. Start Worker process
-        LOG.info("Starting real Worker process...")
-        worker_proc = subprocess.Popen(
-            [sys.executable, "-m", "mail_core.worker.main"],
-            env=env,
-            stdout=worker_log,
-            stderr=subprocess.STDOUT,
-            cwd=ROOT,
-        )
-
-        # 6. Wait for healthcheck
-        base_url = f"http://127.0.0.1:{app_port}"
-        deadline = time.monotonic() + 20
+        # 4. Start API server. Port allocation is deferred to just before
+        # launch (after migrations): find_free_port releases the socket
+        # before uvicorn binds it, so a competing process can claim the
+        # port in between (classic TOCTOU, A264). On readiness failure,
+        # retry exactly once with a fresh port.
+        base_url = None
         ready = False
-        import urllib.request
+        for attempt in range(2):
+            app_port = find_free_port()
+            LOG.info("Starting real FastAPI server on port %d...", app_port)
+            api_proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "mail_core.api.app:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(app_port),
+                    "--log-level",
+                    "info",
+                ],
+                env=env,
+                stdout=api_log,
+                stderr=subprocess.STDOUT,
+                cwd=ROOT,
+            )
 
-        while time.monotonic() < deadline:
-            try:
-                with urllib.request.urlopen(f"{base_url}/health", timeout=1) as resp:
-                    if resp.status == 200:
-                        ready = True
-                        break
-            except Exception:
-                time.sleep(0.3)
+            # 5. Start Worker process (once; not restarted on API retry)
+            if attempt == 0:
+                LOG.info("Starting real Worker process...")
+                worker_proc = subprocess.Popen(
+                    [sys.executable, "-m", "mail_core.worker.main"],
+                    env=env,
+                    stdout=worker_log,
+                    stderr=subprocess.STDOUT,
+                    cwd=ROOT,
+                )
+
+            # 6. Wait for healthcheck
+            base_url = f"http://127.0.0.1:{app_port}"
+            ready = _wait_for_api_ready(base_url, api_proc)
+            if ready:
+                break
+            if attempt == 0:
+                LOG.warning(
+                    "API did not become ready on port %d; "
+                    "retrying once with a fresh port",
+                    app_port,
+                )
+                api_proc.terminate()
+                try:
+                    api_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    api_proc.kill()
+                api_proc = None
 
         if not ready:
             raise RuntimeError(f"API server failed to become ready on {base_url}")
