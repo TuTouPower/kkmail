@@ -49,6 +49,16 @@ class AuthConfigError(RuntimeError):
     pass
 
 
+class _NoLoginCredentialsConfigured(AuthConfigError):
+    """No login credential is configured at all.
+
+    Distinct from infrastructure failures (e.g. the credential database is
+    unreachable): verify_password maps only this case to ``False`` and lets
+    every other AuthConfigError propagate so callers can answer 500 instead
+    of disguising an outage as a wrong password.
+    """
+
+
 _BCRYPT_MAX_PASSWORD_BYTES = 72
 
 
@@ -307,7 +317,7 @@ def get_login_password_hash() -> bytes:
 
     plain = (os.environ.get("MAIL_CORE_LOGIN_PASSWORD") or "").strip()
     if not plain:
-        raise AuthConfigError("Set MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt) or MAIL_CORE_LOGIN_PASSWORD for mail-core login")
+        raise _NoLoginCredentialsConfigured("Set MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt) or MAIL_CORE_LOGIN_PASSWORD for mail-core login")
 
     _password_hash = bcrypt.hashpw(_bcrypt_password_bytes(plain), bcrypt.gensalt())
     if not _persist_db_password_hash(_password_hash.decode("utf-8")):
@@ -321,11 +331,18 @@ def get_login_password_hash() -> bytes:
 
 
 def verify_password(password: str) -> bool:
+    """Return True iff ``password`` matches the stored login credential.
+
+    Returns False when no credential is configured at all. Any other
+    AuthConfigError (e.g. the credential database query failed) propagates
+    so the login route can answer 500 rather than counting an outage as a
+    failed login attempt.
+    """
     if not password:
         return False
     try:
         stored = get_login_password_hash()
-    except AuthConfigError:
+    except _NoLoginCredentialsConfigured:
         return False
     try:
         return bcrypt.checkpw(password.encode("utf-8"), stored)

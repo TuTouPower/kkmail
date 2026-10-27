@@ -146,7 +146,13 @@ def test_change_login_password_fails_closed_on_db_error():
 
 
 def test_auth_db_query_failure_fails_closed_does_not_fallback_to_env():
-    """A37: If database is configured but query fails, fail closed (never fallback to env password)."""
+    """A37+A87: DB query failure fails closed and never falls back to the env password.
+
+    A87 supersedes the A37-era expectation that verify_password swallowed the
+    failure into False: a database failure is not a wrong password, so
+    verify_password now propagates AuthConfigError (the login route maps it
+    to 500 instead of recording a rate-limit failure).
+    """
     reset_auth_caches()
 
     class BrokenSession:
@@ -167,8 +173,9 @@ def test_auth_db_query_failure_fails_closed_does_not_fallback_to_env():
         with pytest.raises(AuthConfigError, match="failed to query authentication credentials"):
             get_login_password_hash()
 
-        # verify_password must return False, denying access
-        assert not verify_password("old_env_fallback_password")
+        # verify_password must propagate the DB failure, not disguise it as a wrong password
+        with pytest.raises(AuthConfigError, match="failed to query authentication credentials"):
+            verify_password("old_env_fallback_password")
 
 
 def test_change_password_atomic_commit_and_rollback_on_failure():

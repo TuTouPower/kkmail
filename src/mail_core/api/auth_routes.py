@@ -66,7 +66,11 @@ def login(body: LoginIn, request: Request, response: Response) -> LoginOut:
     wait = login_limiter.retry_after(client)
     if wait:
         raise HTTPException(status_code=429, detail="too many failed logins", headers={"Retry-After": str(wait)})
-    if not verify_password(body.password):
+    try:
+        password_ok = verify_password(body.password)
+    except AuthConfigError as exc:
+        raise HTTPException(status_code=500, detail="failed to verify login credentials") from exc
+    if not password_ok:
         login_limiter.record_failure(client)
         raise HTTPException(status_code=401, detail="invalid credentials")
     login_limiter.reset(client)

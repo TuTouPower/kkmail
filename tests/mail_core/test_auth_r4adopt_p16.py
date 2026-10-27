@@ -158,6 +158,55 @@ def test_a250_fetch_db_credentials_logs_only_type_and_fixed_error_message(monkey
     assert all("s3cr3t-pw" not in r.getMessage() for r in debug_records)
 
 
+def test_a87_verify_password_returns_false_only_when_no_credentials_configured(monkeypatch):
+    from mail_core.security.auth import verify_password
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "")
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD", raising=False)
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
+    reset_auth_caches()
+    assert verify_password("any-password") is False
+
+
+def test_a87_verify_password_propagates_db_failure(monkeypatch):
+    from unittest.mock import patch
+
+    from mail_core.security.auth import AuthConfigError, verify_password
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "postgresql://test/db")
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "fallback-password")
+    reset_auth_caches()
+    with patch("mail_core.db.session.get_session_factory", return_value=_a250_broken_factory()):
+        with pytest.raises(AuthConfigError, match="failed to query authentication credentials"):
+            verify_password("fallback-password")
+
+
+def test_a87_login_route_returns_500_without_recording_rate_limit_failure(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import mail_core.api.auth_routes as auth_routes
+    from mail_core.security.auth import AuthConfigError
+
+    recorded: list[str] = []
+
+    def _broken_verify(_password: str) -> bool:
+        raise AuthConfigError("failed to query authentication credentials from database")
+
+    monkeypatch.setattr(auth_routes, "verify_password", _broken_verify)
+    monkeypatch.setattr(auth_routes.login_limiter, "retry_after", lambda _client: 0)
+    monkeypatch.setattr(auth_routes.login_limiter, "record_failure", recorded.append)
+
+    test_app = FastAPI()
+    test_app.include_router(auth_routes.router)
+    response = TestClient(test_app, raise_server_exceptions=False).post(
+        "/api/auth/login", json={"password": "any-password"}
+    )
+    assert response.status_code == 500
+    assert recorded == []
+
+
 def test_a250_get_session_epoch_logs_only_type_and_fixed_error_message(monkeypatch, caplog):
     import logging
     from unittest.mock import patch
