@@ -1,3 +1,7 @@
+> [!NOTE]
+> **已关闭 / HISTORICAL — 后续状态注记（2026-10-27 补）**
+> 本报告的 BLOCK 结论为 2026-10-25 审阅时点（基线 29dcd3a4a080a23423a32b02cce37ee546d48c97）的结论，不代表当前状态。采纳处置见同目录 `adoption_decision.md`；后续状态见 `docs/reviews/review_20261026_*` 各包与 `docs/handoff.md`。
+
 # Intensive Review — https://github.com/TuTouPower/kkmail (all, round 3) @ 29dcd3a4a080a23423a32b02cce37ee546d48c97 2026-10-25
 
 ## Summary
