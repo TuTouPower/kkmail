@@ -11,7 +11,7 @@ describe.sequential('shared browser test isolation', () => {
   it.each([1, 2])('starts case %i with empty storage, cache and mounted roots', async () => {
     expect(localStorage.length).toBe(0)
     expect(sessionStorage.length).toBe(0)
-    expect(useMailStore.getState().theme).toBe('dark')
+    expect(useMailStore.getState().theme).toBe('system')
     expect(useMailStore.getState().sidebarWidth).toBe(260)
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0)
     expect(document.querySelector('.runtime-probe')).toBeNull()
