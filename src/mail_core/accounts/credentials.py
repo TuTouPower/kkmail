@@ -25,8 +25,18 @@ def _may_accept_keyword(method: Any, keyword: str) -> bool:
     try:
         parameters = inspect.signature(method).parameters.values()
     except (TypeError, ValueError):
-        # An unknown signature is not proof that omitting the session is safe.
-        return True
+        # Unknown signature: do NOT pass the keyword. Guessing "yes"
+        # would hand ``session=`` to callables that may not accept it
+        # (raw TypeError at call time); guessing is also unobservable,
+        # so the fallback is logged and callers proceed without the
+        # session for this store.
+        logging.getLogger(__name__).warning(
+            "credential store callable %r has an uninspectable signature; "
+            "calling it without the %r keyword",
+            method,
+            keyword,
+        )
+        return False
     return any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD
         or (
@@ -39,6 +49,17 @@ def _may_accept_keyword(method: Any, keyword: str) -> bool:
 
 class ReadOnlyCredentialRef(ValueError):
     """The ref points at operator-managed configuration that the app must not rewrite."""
+
+
+class CredentialCorruptError(KeyError):
+    """A stored credential row exists but cannot be decrypted/decoded.
+
+    A ``KeyError`` subclass so callers that treat a missing secret via
+    ``except KeyError`` also cover corruption explicitly, while callers
+    that care can catch this specific type. Raised instead of letting
+    cryptography's ``InvalidTag`` / ``UnicodeDecodeError`` escape
+    ``DbCredentialStore.get_secret``.
+    """
 
 
 class EnvCredentialStore:
@@ -102,6 +123,7 @@ class DbCredentialStore:
         )
 
     def get_secret(self, credential_ref: str) -> str:
+        from cryptography.exceptions import InvalidTag
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         from mail_core.mail.storage.models import CredentialSecret
@@ -110,8 +132,13 @@ class DbCredentialStore:
             row = session.get(CredentialSecret, credential_ref)
             if row is None:
                 raise KeyError(f"unknown credential_ref {credential_ref!r}")
-            pt = AESGCM(self._key(row.key_version)).decrypt(row.nonce, row.ciphertext, credential_ref.encode())
-            return pt.decode()
+            try:
+                pt = AESGCM(self._key(row.key_version)).decrypt(row.nonce, row.ciphertext, credential_ref.encode())
+                return pt.decode()
+            except (InvalidTag, UnicodeDecodeError) as exc:
+                raise CredentialCorruptError(
+                    f"stored credential for {credential_ref!r} is corrupt or undecryptable"
+                ) from exc
 
     def put_secret(self, credential_ref: str, secret: str, *, session: Any = None) -> None:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
