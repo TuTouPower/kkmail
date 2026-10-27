@@ -84,14 +84,25 @@ class LoginRateLimiter:
         return q
 
     def _evict_to_capacity(self, now: float) -> None:
-        """Make room for one new key: expired entries first, then oldest."""
+        """Make room for one new key without scanning the whole map (A89).
+
+        Approximate eviction by insertion order: prune expired entries
+        sitting at the front of the map (each key is pruned/removed at
+        most once overall, so this stays amortized O(1)), then evict
+        oldest-inserted live keys from the front until there is room.
+        The previous implementation pruned every key and ran ``min()``
+        over the full map inside the lock on each new key, so a spray
+        of distinct source addresses made the lock hold time O(n).
+        """
         if len(self._fails) < self.max_keys:
             return
-        for key in list(self._fails):
-            self._prune(key, now)
+        while self._fails:
+            front_key = next(iter(self._fails))
+            if self._prune(front_key, now):
+                break  # front key still has live failures
+            # _prune removed the emptied front key; check the next one.
         while len(self._fails) >= self.max_keys:
-            oldest = min(self._fails, key=lambda k: self._fails[k][-1])
-            self._fails.pop(oldest, None)
+            self._fails.pop(next(iter(self._fails)), None)
 
     def retry_after(self, key: str, now: float | None = None) -> int:
         """Seconds until another attempt is allowed (0 = allowed now)."""
