@@ -117,7 +117,9 @@ class ExchangeRedirectUrlRequest(BaseModel):
     """p056: pasted Microsoft redirect URL exchanged for a Graph account."""
 
     redirected_url: str = Field(max_length=8192)
-    email: str | None = Field(default=None, max_length=320)
+    # A245: no email field — it was never read. The account email always
+    # comes from the Microsoft-verified token exchange (spec 4.3 step 3);
+    # a form-supplied email would falsely imply it can choose the identity.
     group_id: str | None = Field(default=None, max_length=64)
     client_id: str | None = Field(default=None, max_length=512)
     # The redirect_uri the authorize step actually used (form value);

@@ -656,18 +656,6 @@
             ],
             "title": "Client Id"
           },
-          "email": {
-            "anyOf": [
-              {
-                "maxLength": 320,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Email"
-          },
           "group_id": {
             "anyOf": [
               {

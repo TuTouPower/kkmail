@@ -677,3 +677,14 @@ def test_exchange_api_create_race_falls_back_to_update(api_client, monkeypatch):
     assert updated["credentials"] == {
         "client_id": DEFAULT_MICROSOFT_CLIENT_ID, "refresh_token": "raced-refresh",
     }
+
+
+def test_exchange_request_model_has_no_dead_email_field():
+    """A245: ExchangeRedirectUrlRequest.email was never read — the account
+    email always comes from the Microsoft-verified token exchange — so the
+    field is removed instead of silently implying the form value matters."""
+    from mail_core.api.oauth_routes import ExchangeRedirectUrlRequest
+
+    assert "email" not in ExchangeRedirectUrlRequest.model_fields
+    req = ExchangeRedirectUrlRequest(redirected_url=REDIRECT, email="typed@outlook.com")
+    assert not hasattr(req, "email")
