@@ -88,6 +88,26 @@ def validate_imap_host(host: str) -> None:
         raise ValueError(f"imap host {host!r} is a private or loopback address (SSRF protection)")
 
 
+def _validated_imap_host(raw: object) -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"imap_host must be a non-empty string, got {raw!r}")
+    return raw.strip()
+
+
+def _validated_imap_port(raw: object, *, use_ssl: bool) -> int:
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return 993 if use_ssl else 143
+    if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
+        raise ValueError(f"imap_port must be an integer in 1..65535, got {raw!r}")
+    try:
+        port = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ValueError(f"imap_port must be an integer in 1..65535, got {raw!r}") from None
+    if not 1 <= port <= 65535:
+        raise ValueError(f"imap_port must be an integer in 1..65535, got {port}")
+    return port
+
+
 def _is_loopback_host(host: str) -> bool:
     normalized = host.strip().lower().strip("[]")
     if normalized == "localhost":
@@ -182,14 +202,15 @@ def build_provider(
                     password = secret
         else:
             password = str(secret or "")
-        host = cfg.get("imap_host") or cfg.get("host")
+        host = _validated_imap_host(cfg.get("imap_host") or cfg.get("host"))
         user = cfg.get("imap_user") or cfg.get("username") or account.email
         raw_ssl = cfg.get("use_ssl", True)
         # TLS by default; plaintext IMAP only when explicitly configured (e.g. loopback test fixture).
         use_ssl = raw_ssl if isinstance(raw_ssl, bool) else str(raw_ssl).strip().lower() not in ("0", "false", "no", "off")
-        port = int(cfg.get("imap_port") or cfg.get("port") or (993 if use_ssl else 143))
-        if not host:
-            raise ValueError("imap account config missing imap_host")
+        raw_port = cfg.get("imap_port")
+        if raw_port is None or (isinstance(raw_port, str) and not raw_port.strip()):
+            raw_port = cfg.get("port")
+        port = _validated_imap_port(raw_port, use_ssl=use_ssl)
         if not use_ssl:
             logger.warning("plaintext IMAP is configured; credentials and messages are unencrypted")
             if not _is_loopback_host(host):
