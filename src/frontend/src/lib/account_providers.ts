@@ -16,7 +16,10 @@ export const vendors: Record<Vendor, { label: string; host: string; credential: 
   yahoo: { label: 'Yahoo', host: 'imap.mail.yahoo.com', credential: '应用专用密码', steps: ['在 Yahoo 账号安全设置生成 App Password，使用完整邮箱登录名。', '应用密码可用性受账号安全策略限制。'], url: 'https://in.help.yahoo.com/kb/SLN4075.html' },
   zoho: { label: 'Zoho', host: 'imap.zoho.com', credential: '密码或应用专用密码', steps: ['先在 Zoho 邮箱账户设置启用 IMAP；部分免费计划或管理员策略禁止 IMAP。', '个人常用 imap.zoho.com，付费企业常用 imappro.zoho.com，实际服务器以账号内数据中心配置为准。', '启用两步验证或 SAML 登录时生成并使用应用专用密码。'], url: 'https://www.zoho.com/mail/help/imap-access.html' },
 }
-const domains: Record<string, Vendor> = { 'gmail.com': 'google', 'googlemail.com': 'google', 'outlook.com': 'microsoft', 'outlook.cn': 'microsoft', 'hotmail.com': 'microsoft', 'live.com': 'microsoft', 'msn.com': 'microsoft', 'hotmail.co.uk': 'microsoft', 'live.co.uk': 'microsoft', 'hotmail.fr': 'microsoft', 'live.fr': 'microsoft', 'hotmail.de': 'microsoft', 'live.de': 'microsoft', 'outlook.de': 'microsoft', 'qq.com': 'qq', 'foxmail.com': 'qq', '163.com': 'netease_163', '126.com': 'netease_126', 'yeah.net': 'netease_yeah', 'icloud.com': 'icloud', 'me.com': 'icloud', 'mac.com': 'icloud', 'yahoo.com': 'yahoo', 'yahoo.co.uk': 'yahoo', 'zoho.com': 'zoho', 'zohomail.com': 'zoho' }
+/** Vendor lookup by exact mail domain. Exported so the cross-consistency
+ * test (A96) can hold this table and the brand table in
+ * store/accountIcon.ts to their adjudicated difference sets. */
+export const domains: Record<string, Vendor> = { 'gmail.com': 'google', 'googlemail.com': 'google', 'outlook.com': 'microsoft', 'outlook.cn': 'microsoft', 'hotmail.com': 'microsoft', 'live.com': 'microsoft', 'msn.com': 'microsoft', 'hotmail.co.uk': 'microsoft', 'live.co.uk': 'microsoft', 'hotmail.fr': 'microsoft', 'live.fr': 'microsoft', 'hotmail.de': 'microsoft', 'live.de': 'microsoft', 'outlook.de': 'microsoft', 'qq.com': 'qq', 'foxmail.com': 'qq', '163.com': 'netease_163', '126.com': 'netease_126', 'yeah.net': 'netease_yeah', 'icloud.com': 'icloud', 'me.com': 'icloud', 'mac.com': 'icloud', 'yahoo.com': 'yahoo', 'yahoo.co.uk': 'yahoo', 'zoho.com': 'zoho', 'zohomail.com': 'zoho' }
 export const inferVendor = (email: string): Vendor => domains[email.trim().toLowerCase().split('@')[1]] || 'other'
 export const defaultProtocol = (vendor: Vendor): Protocol => vendor === 'microsoft' ? 'graph' : 'imap'
 

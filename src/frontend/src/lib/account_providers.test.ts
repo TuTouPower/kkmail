@@ -5,10 +5,12 @@ import {
   MICROSOFT_PUBLIC_CLIENT_ID,
   buildMicrosoftAuthorizeUrl,
   defaultProtocol,
+  domains,
   inferVendor,
   vendors,
   type Vendor,
 } from './account_providers'
+import { EMAIL_DOMAIN_BRAND_MAP, type BrandType } from '../store/accountIcon'
 
 // A93: the OAuth authorize-URL builder and vendor inference are
 // security-sensitive (a wrong client_id / redirect / unencoded hint sends
@@ -146,5 +148,74 @@ describe('backend contract alignment (A93)', () => {
     expect(MICROSOFT_GRAPH_SCOPES).toBe(
       'https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read offline_access',
     )
+  })
+})
+
+describe('vendor domain table vs brand domain table cross-consistency (A96)', () => {
+  // A96: account_providers' vendor table and accountIcon's brand table are
+  // two hand-maintained domain tables whose coverage had drifted apart.
+  // Instead of silently diverging further, every domain that exists in
+  // only one table is listed below with its adjudication; adding a domain
+  // to either table without adjudicating it here fails this test.
+  //
+  // Vendor-only (11): regional Microsoft/Yahoo domains still need a vendor
+  // for the correct sign-in flow and IMAP host, while the brand table
+  // intentionally has no region-specific icons (the base domains carry
+  // the brand); zoho.com / zohomail.com need the vendor's IMAP steps but
+  // no Zoho brand icon exists in the brand set.
+  const VENDOR_ONLY_ADJUDICATED = [
+    'hotmail.co.uk', 'hotmail.de', 'hotmail.fr', 'live.co.uk', 'live.de',
+    'live.fr', 'outlook.cn', 'outlook.de', 'yahoo.co.uk',
+    'zoho.com', 'zohomail.com',
+  ]
+  // Brand-only (24): brands for mailboxes the vendor table deliberately
+  // routes to 'other' (custom IMAP: Yandex, Proton, Sina, Sohu, Aliyun,
+  // 139/189 carrier mail, NetEase/Google/Microsoft alias and VIP domains),
+  // because they need no vendor-specific credential steps.
+  const BRAND_ONLY_ADJUDICATED = [
+    '139.com', '189.cn', 'aliyun.com', 'google.com', 'netease.com',
+    'office365.com', 'proton.me', 'protonmail.com', 'sina.cn', 'sina.com',
+    'sohu.com', 'vip.126.com', 'vip.163.com', 'vip.qq.com', 'vip.sina.com',
+    'ya.ru', 'yahoo.co.jp', 'yahoo.com.cn', 'yandex.by', 'yandex.com',
+    'yandex.kz', 'yandex.ru', 'yandex.ua', 'ymail.com',
+  ]
+  // For domains present in both tables, the brand must be the icon that
+  // belongs to the vendor (foxmail is the one adjudicated exception: it
+  // follows QQ's vendor flow but keeps its own brand icon).
+  const VENDOR_BRANDS: Record<Vendor, BrandType[]> = {
+    other: [],
+    google: ['gmail'],
+    microsoft: ['outlook'],
+    qq: ['qq', 'foxmail'],
+    netease_163: ['163'],
+    netease_126: ['126'],
+    netease_yeah: ['yeah'],
+    icloud: ['icloud'],
+    yahoo: ['yahoo'],
+    zoho: [],
+  }
+
+  it('exhaustively routes every vendor-table domain through inferVendor', () => {
+    for (const [domain, vendor] of Object.entries(domains)) {
+      expect(inferVendor(`user@${domain}`), domain).toBe(vendor)
+    }
+  })
+
+  it('has no unadjudicated vendor-only domains', () => {
+    const vendorOnly = Object.keys(domains).filter((d) => !(d in EMAIL_DOMAIN_BRAND_MAP)).sort()
+    expect(vendorOnly).toEqual([...VENDOR_ONLY_ADJUDICATED].sort())
+  })
+
+  it('has no unadjudicated brand-only domains', () => {
+    const brandOnly = Object.keys(EMAIL_DOMAIN_BRAND_MAP).filter((d) => !(d in domains)).sort()
+    expect(brandOnly).toEqual([...BRAND_ONLY_ADJUDICATED].sort())
+  })
+
+  it('keeps overlapping domains on the brand that belongs to their vendor', () => {
+    for (const [domain, vendor] of Object.entries(domains)) {
+      const brand = EMAIL_DOMAIN_BRAND_MAP[domain]
+      if (!brand) continue
+      expect(VENDOR_BRANDS[vendor], domain).toContain(brand)
+    }
   })
 })
