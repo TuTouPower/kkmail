@@ -4,9 +4,9 @@ mail-core 部署的升级路径（Flask / SQLite / OutlookEmail v2 镜像路径�
 
 仓库根目录可运行 `scripts/deploy_mail_core.sh` 串行执行部署：检查本地 `main` 与远端可快进、推送代码、创建并校验密封备份、标记旧镜像、重建 distributed Compose 服务、运行迁移，并检查 `/ready`、`/health`、worker 和 SPA 静态资源。脚本遇到分叉分支、未提交改动或门禁失败时停止，不执行 force-push。
 
-1. **备份**：用密封备份包，不要对运行中的 PostgreSQL 数据目录做 `cp`。执行备份需保证 `pg_dump` 可用并在完整环境变量下运行：
+1. **备份**：用密封备份包，不要对运行中的 PostgreSQL 数据目录做 `cp`。执行备份需保证 `pg_dump` 可用并在完整环境变量下运行。执行前提：须在仓库根目录下运行，并设置 `PYTHONPATH=src`（源码布局下 `mail_core` 包位于 `src/`，缺此前提直接运行会报 `ImportError`）。下述命令为静态核对，未在本轮实测：
     ```bash
-    python -c "from mail_core.backup import run_backup; print(run_backup(output_dir='/path/to/backups'))"
+    PYTHONPATH=src python -c "from mail_core.backup import run_backup; print(run_backup(output_dir='/path/to/backups'))"
     ```
     未传 `output_dir` 时用 `MAIL_CORE_BACKUP_DIR`；会写包并校验。密钥（`--data-dir/secrets/` 或环境变量中声明的密钥）需单独安全脱机备份。
 2. **更新代码 / 镜像**：
