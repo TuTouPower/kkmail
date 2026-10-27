@@ -1617,6 +1617,25 @@ def _database_is_empty(target_database_url: str) -> bool | None:
         return None
 
 
+def _resolve_restored_blob_path(target_blobs: Path, storage_path: str) -> Path:
+    """Resolve a DB-recorded ``storage_path`` inside the target blob root.
+
+    ``storage_path`` comes from the restored database — i.e. from backup
+    package content, which is untrusted input for the target machine.
+    Absolute paths, ``..`` segments and in-root symlinks pointing outside
+    must never be followed: resolve first, then assert the result stays
+    inside the root (the same discipline as ``blobs/access.py``).
+    """
+    root = target_blobs.resolve()
+    candidate = (root / storage_path).resolve()
+    if root not in candidate.parents:
+        raise RuntimeError(
+            "restored database verification failed: storage_path escapes "
+            f"the target blob root: {storage_path!r}"
+        )
+    return candidate
+
+
 def _verify_restored_state(
     target_database_url: str,
     target_blobs: Path,
@@ -1690,8 +1709,9 @@ def _verify_restored_state(
         raise RuntimeError(f"restored database verification failed: {exc}") from exc
 
     samples: list[Path] = []
+    root_resolved = target_blobs.resolve()
     for storage_path in storage_paths:
-        path = target_blobs / storage_path
+        path = _resolve_restored_blob_path(target_blobs, storage_path)
         if not path.is_file():
             raise RuntimeError(
                 f"restored blob referenced by the database is missing: {storage_path}"
@@ -1713,14 +1733,14 @@ def _verify_restored_state(
             except BlobCryptoError as exc:
                 raise RuntimeError(
                     f"blob decryption sample verification failed for "
-                    f"{path.relative_to(target_blobs)}: {exc}"
+                    f"{path.relative_to(root_resolved)}: {exc}"
                 ) from exc
             stem = path.name.removesuffix(".blob")
             if len(stem) == 64 and all(c in "0123456789abcdef" for c in stem):
                 if hashlib.sha256(plaintext).hexdigest() != stem:
                     raise RuntimeError(
                         "blob decryption sample verification failed: plaintext "
-                        f"digest mismatch for {path.relative_to(target_blobs)}"
+                        f"digest mismatch for {path.relative_to(root_resolved)}"
                     )
 
 

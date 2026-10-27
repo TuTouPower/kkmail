@@ -8,9 +8,12 @@ corresponding code in ``src/mail_core/backup/package.py``.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import subprocess
+import sys
 import tarfile
+import types
 from pathlib import Path
 
 import pytest
@@ -339,3 +342,87 @@ def test_a15_cleanup_removes_only_own_artifacts_including_staging(tmp_path):
 
     assert removed >= len(PAYLOADS)
     assert list(target.iterdir()) == []
+
+
+# --- A67: _verify_restored_state must not trust DB storage_path ------------
+
+
+class _FakeCursor:
+    def __init__(self, storage_paths):
+        self._storage_paths = storage_paths
+        self._sql = ""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql):
+        self._sql = sql
+
+    def fetchall(self):
+        if "information_schema.tables" in self._sql:
+            return [(t,) for t in sorted(backup_package._RESTORE_REQUIRED_TABLES)]
+        if "storage_path" in self._sql:
+            return [(p,) for p in self._storage_paths]
+        return []
+
+    def fetchone(self):
+        return (0,)
+
+
+class _FakeConn:
+    def __init__(self, storage_paths):
+        self._storage_paths = storage_paths
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def cursor(self):
+        return _FakeCursor(self._storage_paths)
+
+
+def _install_fake_psycopg(monkeypatch, storage_paths):
+    fake = types.SimpleNamespace(
+        connect=lambda dsn, **kwargs: _FakeConn(storage_paths)
+    )
+    monkeypatch.setitem(sys.modules, "psycopg", fake)
+
+
+@pytest.mark.parametrize(
+    "evil_path_kind", ["dotdot", "absolute"], ids=["dotdot", "absolute"]
+)
+def test_a67_verify_restored_state_rejects_escaping_storage_path(
+    tmp_path, monkeypatch, evil_path_kind
+):
+    target = tmp_path / "restored-blobs"
+    target.mkdir()
+    outside = tmp_path / "escape.blob"
+    outside.write_bytes(b"outside the blob root")
+    evil = "../escape.blob" if evil_path_kind == "dotdot" else str(outside)
+    _install_fake_psycopg(monkeypatch, [evil])
+
+    with pytest.raises(RuntimeError, match="storage_path|escapes"):
+        backup_package._verify_restored_state(
+            TARGET_URL, target, {}, db_reachable=True
+        )
+
+
+def test_a67_verify_restored_state_accepts_in_root_storage_path(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "restored-blobs"
+    blob = target / "aa" / "bb" / "first.blob"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"plain blob content")
+    inventory = {"aa/bb/first.blob": hashlib.sha256(b"plain blob content").hexdigest()}
+    _install_fake_psycopg(monkeypatch, ["aa/bb/first.blob"])
+
+    # In-root path: verification completes without raising.
+    backup_package._verify_restored_state(
+        TARGET_URL, target, inventory, db_reachable=True
+    )
