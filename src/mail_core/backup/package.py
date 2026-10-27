@@ -2111,15 +2111,28 @@ def resume_restore_backup_package(
                 _verify_published_blob_files(target_blobs, inventory)
                 if target_ident is not None:
                     empty = _database_is_empty(target_database_url)
-                    if empty is False:
+                    if empty is not True:
+                        # Fail closed on ANY non-proof of emptiness: a
+                        # provably non-empty DB may hold the earlier
+                        # commit, and an undeterminable state (None) is
+                        # just as unsafe to replay into — same treatment
+                        # as verify_restore_operation's None handling.
                         _write_restore_operation_log(
                             target_blobs, log_payload, stage="needs_verification"
                         )
+                        if empty is False:
+                            raise RuntimeError(
+                                f"restore operation {op_id} entered "
+                                "needs_verification: target database is not "
+                                "empty, so the earlier pg_restore may have "
+                                "committed; refusing to auto-replay the restore"
+                            )
                         raise RuntimeError(
                             f"restore operation {op_id} entered "
-                            "needs_verification: target database is not "
-                            "empty, so the earlier pg_restore may have "
-                            "committed; refusing to auto-replay the restore"
+                            "needs_verification: target database empty "
+                            "state could not be determined, so the earlier "
+                            "pg_restore outcome is unknown; refusing to "
+                            "auto-replay the restore"
                         )
             else:
                 raise RuntimeError(

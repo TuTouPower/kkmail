@@ -239,3 +239,37 @@ def test_a56_verify_complete_operation_rejects_tampered_published_blob(
     with pytest.raises(RuntimeError, match="checksum mismatch"):
         _verify(pkg_dir, target, operation_id)
     assert _read_log(target)["stage"] == "complete"
+
+
+# --- A26: resume must not replay pg_restore when DB emptiness is unknown ---
+
+
+def test_a26_resume_unknown_empty_state_enters_needs_verification(
+    tmp_path, monkeypatch
+):
+    pkg_dir = _make_package(tmp_path / "case")
+    target = tmp_path / "restored-blobs"
+    fake = _FakePgRestore(1).install(monkeypatch)
+    with pytest.raises(RuntimeError, match=r"pg_restore failed \(1\)"):
+        _restore(pkg_dir, target)
+    operation_id = _read_log(target)["operation_id"]
+    assert _read_log(target)["stage"] == "db_failed"
+    assert len(fake.calls) == 1
+
+    # Target DB is reachable (identity readable) but its empty state
+    # cannot be determined (None): resume must fail closed instead of
+    # replaying pg_restore on a maybe-committed database.
+    fake.returncode = 0
+    monkeypatch.setattr(
+        backup_package,
+        "_read_database_identity",
+        lambda url: backup_package.DatabaseIdentity("999999", 42, "target"),
+    )
+    monkeypatch.setattr(backup_package, "_database_is_empty", lambda _url: None)
+
+    with pytest.raises(RuntimeError, match="could not be determined"):
+        _resume(pkg_dir, target, operation_id)
+
+    assert len(fake.calls) == 1  # pg_restore was NOT replayed
+    assert _read_log(target)["stage"] == "needs_verification"
+    assert _published_files(target) == PAYLOADS
