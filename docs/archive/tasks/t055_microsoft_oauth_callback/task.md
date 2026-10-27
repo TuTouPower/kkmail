@@ -14,6 +14,8 @@ conflicts_with: ""
 note: "来源：用户明确增加设备码；Microsoft 支持跳转回调与设备码两条新增/重新授权路径，统一获取并加密保存令牌；复用 t054 会话绑定与最终保存；不做 Microsoft IMAP 或迁移; 2026-10-25T02:00:57+08:00 用户明确授权补归档；直接 main 执行提交 87d69ac75d781bc0337f2f746291868b799f8329；历史双路 Review 指纹 42658742333b6b92 已核实；无 attempt，不伪造 ledger/handoff"
 ---
 
+> **归档勘误（2026-10-27 补，不改写历史正文）**：本文复用 t054 的部分中，仅 Microsoft 侧仍有效；Google OAuth / Gmail API 已由 p055 于 2026-10-26 整体下线，当前唯一 Google 路径为 IMAP 应用专用密码，权威位置见 `docs/specs/account_connection.md` 的 2026-10-26 节。
+
 # Task 过程总账
 
 front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。

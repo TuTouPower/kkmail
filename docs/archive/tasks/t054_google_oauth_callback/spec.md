@@ -1,5 +1,7 @@
 # Task spec
 
+> **归档勘误（2026-10-27 补，不改写历史正文）**：本 task 交付的 Google OAuth / Gmail API 已由 p055 于 2026-10-26 整体下线，本 spec 的「全部满足」等表述为交付时点结论、不代表现行状态。当前唯一 Google 路径为 IMAP 应用专用密码，权威位置见 `docs/specs/account_connection.md` 的 2026-10-26 节。
+
 ## 背景
 
 用户明确要求增加 Google OAuth 跳转登录与回调；现有 OAuthTokenClient 仅刷新已有令牌，无授权码换取、短期流程存储或回调。交付网页与 Electron 均可新增 Google 账户、重新授权 Gmail API 账户的完整流程，并为 t055 复用已经验证的会话绑定和一次性结果。

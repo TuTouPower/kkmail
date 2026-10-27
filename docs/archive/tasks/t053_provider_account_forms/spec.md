@@ -1,5 +1,7 @@
 # Task spec
 
+> **归档勘误（2026-10-27 补，不改写历史正文）**：本 spec 中 Google OAuth / Gmail API 相关陈述已过时。Google OAuth / Gmail API 已由 p055 于 2026-10-26 整体下线，当前唯一 Google 路径为 IMAP 应用专用密码，权威位置见 `docs/specs/account_connection.md` 的 2026-10-26 节。
+
 ## 背景
 
 设置页添加和编辑账户目前只按 IMAP / Gmail API / Microsoft Graph 切换，OAuth 依赖手填凭据 JSON，IMAP 缺少供应商预设和独立登录名。用户要求按邮箱供应商定制两种界面，并核对各供应商接入要求。本 task 交付供应商表单、凭据帮助弹窗及 Microsoft IMAP 下线；完整 Google、Microsoft 跳转授权分别由 t054、t055 交付。

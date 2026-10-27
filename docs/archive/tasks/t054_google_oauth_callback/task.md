@@ -14,6 +14,8 @@ conflicts_with: ""
 note: "来源：用户补充；Google 保留 IMAP 应用密码并新增 OAuth 授权码跳转回调，覆盖网页与 Electron；依赖 t053; 2026-10-25T02:00:57+08:00 用户明确授权补归档；直接 main 执行提交 e1dee2549e35486fbb36172579bf0d6564f2dedc；历史双路 Review 指纹 82374890bf0a9881 已核实；无 attempt，不伪造 ledger/handoff"
 ---
 
+> **归档勘误（2026-10-27 补，不改写历史正文）**：本 task 交付的 Google OAuth / Gmail API 已由 p055 于 2026-10-26 整体下线，本文的「全部满足」等表述为交付时点结论、不代表现行状态。当前唯一 Google 路径为 IMAP 应用专用密码，权威位置见 `docs/specs/account_connection.md` 的 2026-10-26 节。
+
 # Task 过程总账
 
 front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。

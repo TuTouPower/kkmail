@@ -1,5 +1,7 @@
 # Task spec
 
+> **归档勘误（2026-10-27 补，不改写历史正文）**：本 spec 复用 t054 的部分中，仅 Microsoft 侧仍有效；Google OAuth / Gmail API 已由 p055 于 2026-10-26 整体下线，当前唯一 Google 路径为 IMAP 应用专用密码，权威位置见 `docs/specs/account_connection.md` 的 2026-10-26 节。
+
 ## 背景
 
 用户明确要求 Microsoft 同时增加跳转回调与设备码登录，并用熟悉的 Google 登录解释两者。官方确认两条路径均可获得 Access Token 与 Refresh Token；Client ID 来自应用注册。用户无需手工提取令牌，后台自动处理持续同步所需的 offline_access。当前运行 DB 25 Graph、9 IMAP，未发现 Microsoft IMAP，用户确认无须迁移。
