@@ -29,7 +29,7 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 - Round 1 finding 已修，等待 Round 2 复核：`t037_code_f001`、`t037_test_f001`、`t037_test_f002`；具体处置见下表和对应 fix_ref。
 - AC-005 回归测试保留真实 `run_archive_batch`，只 spy provider builder；确认 sync-body 返回 null、归档状态与 worker job 均未创建。
 - 实现：迁移器只读 SQLite，UUID5 仅作本地 `Message.id`，仅 Graph 原始 ID 作为 `remote_id`，其他 legacy 行保留内容且 `remote_id=null`；缺失来源不填展示文本或时间。加入 nullable `Message.remote_id` migration；local-only read/flag 本地生效，trash/sync-body 返回不可寻址结果。
-- 相关审计：远端 ID 消费点覆盖 archive fetch、reconcile、remote push、API sync-body、trash 与 ORM/唯一约束；无 null 值传给 provider。新邮件未知状态默认 false 是另一个已复现问题，登记 [`p024_unknown_mail_status_defaults.md`](../../pending/todo/p024_unknown_mail_status_defaults.md)，不扩入当前实现。
+- 相关审计：远端 ID 消费点覆盖 archive fetch、reconcile、remote push、API sync-body、trash 与 ORM/唯一约束；无 null 值传给 provider。新邮件未知状态默认 false 是另一个已复现问题，登记 [`p024_unknown_mail_status_defaults.md`](../../pending/p024_unknown_mail_status_defaults.md)，不扩入当前实现。
 - 门禁观察：strict preflight PASS；唯一警告为工具把 24 个与本 task 相关的 API/schema/generated/frontend/migration/shared-spec 路径分类为 unrelated，逐项核实均属于当前 AC 或收尾规范文档。
 - 测试环境：主仓 `.venv` 与 `src/frontend/node_modules` 依赖快照 15,264 项均未变化；t037 隔离 frontend copy 仅本轮 Vitest `.vite` 结果缓存改变。已移除 worktree `.venv` symlink、isolated `node_modules` copy 与依赖快照。测试 run ownership 均已清理；full-stack E2E 的 UUID 专属日志/blob/artifact 保留供核验。
 
