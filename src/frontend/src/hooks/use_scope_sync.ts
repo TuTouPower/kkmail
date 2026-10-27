@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiRequest, postJson, UNAUTHORIZED_EVENT } from '../api/client'
+import { queryKeys } from '../api/queries'
 import { errorMessage } from '../lib/actions'
 import { logDiagnostic } from '../lib/diagnostics'
 import { viewToSyncScope, type SyncScopePayload } from '../lib/sync_scope'
@@ -88,6 +89,27 @@ export function recentSyncRequests(data: unknown): SyncRequestResponse[] {
       && typeof (row as SyncRequestResponse).id === 'string'
       && typeof (row as SyncRequestResponse).state === 'string',
   )
+}
+
+/**
+ * Account set a foreground-activity heartbeat covers for a scope (A362).
+ * The backend contract is an explicit `account_ids` list (an empty list is
+ * a no-op), so global and group views resolve their accounts from the
+ * accounts cache instead of silently never sending a heartbeat. Accounts
+ * with sync disabled are excluded — they have no sync activity to keep
+ * alive. An unloaded cache yields an empty set for this tick only; the
+ * next tick re-reads the cache.
+ */
+export function heartbeatAccountIds(
+  scope: SyncScopePayload,
+  accounts: ReadonlyArray<{ id: string; group_id?: string | null; sync_enabled?: boolean | null }> | undefined,
+): string[] {
+  if (scope.account_id) return [scope.account_id]
+  if (!accounts) return []
+  return accounts
+    .filter((account) => account.sync_enabled !== false)
+    .filter((account) => !scope.group_id || account.group_id === scope.group_id)
+    .map((account) => account.id)
 }
 
 function failedRequestMessage(request: SyncRequestResponse): string {
@@ -356,7 +378,10 @@ export function useScopeSync(enabled: boolean = true) {
       if (!loggedIn) return
       if (document.visibilityState !== 'visible') return
       const heartbeatScope = viewToSyncScope(view)
-      const accountIds = heartbeatScope.account_id ? [heartbeatScope.account_id] : []
+      const accountIds = heartbeatAccountIds(
+        heartbeatScope,
+        queryClient.getQueryData(queryKeys.accounts),
+      )
       if (accountIds.length === 0) return
       void postJson('/api/mail/sync/activity', { account_ids: accountIds }).catch((err: unknown) => {
         logDiagnostic('warn', 'api', '活动心跳上报失败', {
@@ -368,7 +393,7 @@ export function useScopeSync(enabled: boolean = true) {
       window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
       clearInterval(interval)
     }
-  }, [enabled, view])
+  }, [enabled, view, queryClient])
 
   return {
     isSyncing,

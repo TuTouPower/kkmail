@@ -2,7 +2,8 @@
 import { createElement, useEffect } from 'react'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { newClientRequestId, useScopeSync } from './use_scope_sync'
+import { heartbeatAccountIds, newClientRequestId, useScopeSync } from './use_scope_sync'
+import { queryClient, queryKeys } from '../api/queries'
 import { useMailStore } from '../store/mailStore'
 import { cleanup, render, waitFor } from '../test/render'
 import { clearDiagnosticLogs, getDiagnosticLogs } from '../lib/diagnostics'
@@ -211,6 +212,66 @@ describe('newClientRequestId (A336)', () => {
     await waitFor(() => expect(deltaCalls()).toHaveLength(1))
     const body = deltaCalls()[0].body as { client_request_id?: string }
     expect(body.client_request_id).toMatch(/^req_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  })
+})
+
+describe('heartbeat account set (A362)', () => {
+  const accounts = [
+    { id: 'acc-1', group_id: 'g-1', sync_enabled: true },
+    { id: 'acc-2', group_id: 'g-1', sync_enabled: false },
+    { id: 'acc-3', group_id: null, sync_enabled: true },
+  ]
+
+  it('resolves the account set per scope from the accounts cache', () => {
+    expect(heartbeatAccountIds({ account_id: 'acc-9' }, accounts)).toEqual(['acc-9'])
+    expect(heartbeatAccountIds({}, accounts)).toEqual(['acc-1', 'acc-3'])
+    expect(heartbeatAccountIds({ group_id: 'g-1' }, accounts)).toEqual(['acc-1'])
+    expect(heartbeatAccountIds({}, undefined)).toEqual([])
+    expect(heartbeatAccountIds({ group_id: 'g-x' }, accounts)).toEqual([])
+  })
+
+  function stubHeartbeatFetch() {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      calls.push({
+        url: u,
+        method: init.method || 'GET',
+        headers: new Headers(init.headers),
+        body: init.body ? JSON.parse(String(init.body)) : null,
+      })
+      if (u.endsWith('/api/auth/me')) return json({ csrf_token: 'tok-abc', via: 'session' })
+      if (u.endsWith('/api/mail/sync/delta')) return completeDelta()
+      if (u.endsWith('/api/mail/sync/activity')) return new Response(null, { status: 204 })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+  }
+
+  it('global view heartbeat reports every enabled account instead of never sending', async () => {
+    vi.useFakeTimers()
+    useMailStore.setState({ view: { type: 'allInbox' } })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    queryClient.setQueryData(queryKeys.accounts, accounts)
+    stubHeartbeatFetch()
+
+    await render(createElement(Harness))
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+    expect(activityCalls()).toHaveLength(1)
+    expect(activityCalls()[0].body).toEqual({ account_ids: ['acc-1', 'acc-3'] })
+    vi.useRealTimers()
+  })
+
+  it('group view heartbeat reports the group\u2019s enabled accounts', async () => {
+    vi.useFakeTimers()
+    useMailStore.setState({ view: { type: 'group', groupId: 'g-1', groupName: 'G', category: 'inbox' } })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    queryClient.setQueryData(queryKeys.accounts, accounts)
+    stubHeartbeatFetch()
+
+    await render(createElement(Harness))
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+    expect(activityCalls()).toHaveLength(1)
+    expect(activityCalls()[0].body).toEqual({ account_ids: ['acc-1'] })
+    vi.useRealTimers()
   })
 })
 
