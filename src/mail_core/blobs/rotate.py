@@ -123,6 +123,8 @@ class RewrapResult:
     remaining_old_version_credentials: int | None = None
     credential_secrets_rewrapped: int = 0
     credential_secrets_committed: bool = False
+    truncated: int = 0
+    credential_secrets_pending_commit: bool = False
 
     @property
     def safe_to_retire_old_keys(self) -> bool:
@@ -131,6 +133,21 @@ class RewrapResult:
             and self.remaining_old_version_blobs == 0
             and self.remaining_old_version_credentials == 0
             and self.credential_secrets_committed
+        )
+
+    @property
+    def safe_to_retire_after_caller_commit(self) -> bool:
+        """Retirement gate for the external-session path (A82).
+
+        Credential rewraps were flushed into the caller's transaction but not
+        committed; once the caller commits, the same conditions that
+        ``safe_to_retire_old_keys`` checks will hold.
+        """
+        return (
+            not self.errors
+            and self.remaining_old_version_blobs == 0
+            and self.remaining_old_version_credentials == 0
+            and self.credential_secrets_pending_commit
         )
 
 
@@ -239,7 +256,9 @@ def rewrap_all_blobs(
     if limit is not None:
         truncated_paths = paths[limit:]
         paths = paths[:limit]
-    scanned = already + scan_errors + len(paths)
+    # A82: scanned reports the true number of files the scan discovered;
+    # files skipped because of ``limit`` are reported via ``truncated``.
+    scanned = already + scan_errors + len(paths) + len(truncated_paths)
     # Current files bypass the rewrite limit but still repair DB metadata after a crash.
     paths = current_paths + paths
     current_path_set = set(current_paths)
@@ -292,6 +311,7 @@ def rewrap_all_blobs(
     )
     credential_secrets_rewrapped = 0
     credential_secrets_committed = False
+    credential_secrets_pending_commit = False
     if db_sync and not errors and remaining_old_blobs == 0:
         try:
             if own_session:
@@ -302,6 +322,10 @@ def rewrap_all_blobs(
             else:
                 assert session is not None
                 credential_secrets_rewrapped = _rewrap_credential_secrets(session, keyring, target)
+                # A82: flushed into the caller's transaction only. Mark the
+                # pending state so the caller can apply the retirement gate
+                # after its own commit instead of reading a permanent False.
+                credential_secrets_pending_commit = True
         except Exception as exc:  # noqa: BLE001
             errors.append(f"credential_secrets: {type(exc).__name__}: {exc}")
             log.warning("rewrap credential secrets failed: %s", exc)
@@ -328,6 +352,8 @@ def rewrap_all_blobs(
         remaining_old_version_credentials=remaining_old_credentials,
         credential_secrets_rewrapped=credential_secrets_rewrapped,
         credential_secrets_committed=credential_secrets_committed,
+        truncated=len(truncated_paths),
+        credential_secrets_pending_commit=credential_secrets_pending_commit,
     )
 
 
@@ -341,5 +367,9 @@ def run_rewrap(*, target_version: int | None = None, limit: int | None = None) -
         "remaining_old_version_blobs": result.remaining_old_version_blobs,
         "remaining_old_version_credentials": result.remaining_old_version_credentials,
         "credential_secrets_rewrapped": result.credential_secrets_rewrapped,
+        "credential_secrets_committed": result.credential_secrets_committed,
+        "credential_secrets_pending_commit": result.credential_secrets_pending_commit,
+        "truncated": result.truncated,
         "safe_to_retire_old_keys": result.safe_to_retire_old_keys,
+        "safe_to_retire_after_caller_commit": result.safe_to_retire_after_caller_commit,
     }

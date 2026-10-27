@@ -157,7 +157,10 @@ def test_partial_blob_rewrap_keeps_credentials_and_old_keys_unretirable(tmp_path
 
     result = rewrap_all_blobs(root=tmp_path, keyring=keyring, limit=1)
 
-    assert result.scanned == 1
+    # A82 semantics: scanned is the true scan total (2 files discovered);
+    # the file skipped by limit=1 is reported via truncated instead.
+    assert result.scanned == 2
+    assert result.truncated == 1
     assert result.errors == []
     assert result.remaining_old_version_blobs == 1
     assert result.remaining_old_version_credentials == 0
