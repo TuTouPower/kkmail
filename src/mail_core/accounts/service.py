@@ -291,15 +291,13 @@ def save_sidebar_layout(
 
 
 def get_sidebar_layout(session: Session) -> dict[str, object]:
-    rows = session.execute(
-        select(AccountGroup, Account)
-        .select_from(AccountGroup)
-        .outerjoin(Account, Account.group_id == AccountGroup.id, full=True)
-    ).all()
-    groups_by_id = {group.id: group for group, _account in rows if group is not None}
-    accounts_by_id = {account.id: account for _group, account in rows if account is not None}
-    groups = sorted(groups_by_id.values(), key=lambda group: (group.sort_order, group.name, group.id))
-    accounts = list(accounts_by_id.values())
+    # Two simple queries assembled locally (A314); the previous FULL OUTER
+    # JOIN shipped every group x account row just to dedupe them in memory.
+    groups = sorted(
+        session.scalars(select(AccountGroup)).all(),
+        key=lambda group: (group.sort_order, group.name, group.id),
+    )
+    accounts = list(session.scalars(select(Account)).all())
     group_ids = [group.id for group in groups]
     ordered_master = _ordered_accounts(accounts, "master_order")
     members_by_group_id: dict[uuid.UUID, list[Account]] = {}
