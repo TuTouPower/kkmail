@@ -45,6 +45,10 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 
 尚未开始 review，无 finding。
 
+### 勘误（2026-10-27，A64）
+
+上文「尚未开始 review，无 finding。」为创建期残留文本，与已存在的 review 及收尾报告矛盾，保留原文不覆写。实际 Review 处置以 [`review_code.md`](review_code.md) 为准：独立代码审查提出 3 项 important，均已修复，末次复审未发现重要问题，未将完整 task 验收标为 PASS；后续完整套件与共享测试入口由 t014 收口，其复审结论见 `review_code.md`「后续验收补证」与本文件收尾报告。
+
 ## 收尾报告
 
 ### 验收与验证
