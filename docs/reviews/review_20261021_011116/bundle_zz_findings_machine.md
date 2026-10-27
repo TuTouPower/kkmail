@@ -2,6 +2,9 @@
 > **SUPERSEDED / HISTORICAL REPORT**
 > 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
 
+> [!NOTE]
+> **勘误注记（A392 / R3-H02）**：本文件实际收录 124 条 finding（Critical 4 / High 36 / Medium 49 / Low 24 / Info 11，逐行复点），与同包 `review_intensive.md` 自称的 118 条（其分布为 Medium 45 / Low 22）不一致；差异成因是该统计为旧会话残留、未按本文件最终清单重生成。本文件条目数引用以实数 124 为准，118 勿再引用。正文未改，此注记即为勘误。
+
 # Machine-readable findings (post cross-validation)
 
 - Target: TuTouPower/kkmail @ b2956445574ebf171c1e73526421f0d46ccac3a3
