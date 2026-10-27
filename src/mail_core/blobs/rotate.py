@@ -91,9 +91,14 @@ def _count_old_credential_secrets(session: Session, target_version: int) -> int:
     )
 
 
-def _count_old_blob_files(root: Path, target_version: int, errors: list[str]) -> int:
+def _count_old_blob_files(paths: list[Path], target_version: int, errors: list[str]) -> int:
+    """Count old-version files among an explicit candidate set.
+
+    Only failed or unreadable files are rechecked here; files the main scan
+    already classified are never reopened (A288).
+    """
     remaining = 0
-    for path in sorted(root.rglob("*.blob")):
+    for path in sorted(paths):
         try:
             with path.open("rb") as fh:
                 version = read_key_version(fh)
@@ -211,6 +216,7 @@ def rewrap_all_blobs(
     errors: list[str] = []
     paths: list[Path] = []
     current_paths: list[Path] = []
+    scan_error_paths: list[Path] = []
     scan_errors = 0
     for path in sorted(root.rglob("*.blob")):
         try:
@@ -218,6 +224,7 @@ def rewrap_all_blobs(
                 version = read_key_version(fh)
         except Exception as exc:  # noqa: BLE001
             scan_errors += 1
+            scan_error_paths.append(path)
             error = f"{path}: {type(exc).__name__}: {exc}"
             if error not in errors:
                 errors.append(error)
@@ -228,7 +235,9 @@ def rewrap_all_blobs(
             current_paths.append(path)
         else:
             paths.append(path)
+    truncated_paths: list[Path] = []
     if limit is not None:
+        truncated_paths = paths[limit:]
         paths = paths[:limit]
     scanned = already + scan_errors + len(paths)
     # Current files bypass the rewrite limit but still repair DB metadata after a crash.
@@ -248,6 +257,7 @@ def rewrap_all_blobs(
                 log.warning("rewrap DB sync disabled: %s", exc)
                 db_sync = False
 
+    failed_paths: list[Path] = []
     for path in paths:
         try:
             changed, ver = rewrap_blob_file(path, keyring=keyring, target_version=target)
@@ -269,10 +279,17 @@ def rewrap_all_blobs(
                 assert session is not None
                 _sync_key_version(session, digest, ver)
         except Exception as exc:  # noqa: BLE001
+            failed_paths.append(path)
             errors.append(f"{path}: {type(exc).__name__}: {exc}")
             log.warning("rewrap failed for %s: %s", path, exc)
 
-    remaining_old_blobs = _count_old_blob_files(root, target, errors)
+    # A288: derive the remaining count from the scan tallies instead of a
+    # second full-tree rglob + header read of every file. Old files skipped
+    # by ``limit`` are still old by construction; only failed rewrites and
+    # files the scan could not read need a targeted recheck.
+    remaining_old_blobs = len(truncated_paths) + _count_old_blob_files(
+        failed_paths + scan_error_paths, target, errors
+    )
     credential_secrets_rewrapped = 0
     credential_secrets_committed = False
     if db_sync and not errors and remaining_old_blobs == 0:
