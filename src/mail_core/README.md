@@ -55,7 +55,7 @@ When data-dir bootstrap must create a login credential, it writes a random initi
 
 |Path|Role|
 |---|---|
-|`api/`|FastAPI routers: `auth_routes`, `accounts`, `mail`, `sse`. Routes call the application layer only.|
+|`api/`|FastAPI routers: `auth_routes`, `accounts`, `mail`, `sse`, `oauth_routes`. `app.py` is the assembly entry point that builds the app and mounts the routers. Routes call the application layer only.|
 |`mail/application/`|Read models, search, mutations, remote operations, attachments.|
 |`mail/domain/`, `mail/storage/`|Enums, the archive FSM, ORM models, folder stats.|
 |`accounts/`|Accounts, groups, settings, and credential stores (DB-encrypted, `env:` read-only, `keyring:`).|
