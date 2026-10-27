@@ -49,6 +49,10 @@ function App() {
     const apply = () => { document.documentElement.dataset.theme = resolveTheme(theme) }
     apply()
     if (theme !== 'system') return
+    // 'system' is now the default theme (A94): environments without
+    // matchMedia (e.g. jsdom) must not crash on this listener setup;
+    // resolveTheme already falls back to 'dark' in that case.
+    if (typeof window.matchMedia !== 'function') return
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
     const onChange = () => apply()
     mq.addEventListener('change', onChange)
