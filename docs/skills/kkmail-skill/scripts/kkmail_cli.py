@@ -171,10 +171,15 @@ class KKMailClient:
                         self.cookie = data.get("cookie")
                         self.csrf_token = data.get("csrf_token")
                         self._save_session_cache()
-                    try:
-                        legacy_file.unlink()
-                    except OSError:
-                        pass
+                        try:
+                            legacy_file.unlink()
+                        except OSError:
+                            pass
+                    else:
+                        print(
+                            f"Warning: Legacy session cache {legacy_file} belongs to a different base_url; leaving it in place.",
+                            file=sys.stderr,
+                        )
                     return
                 except Exception:
                     pass

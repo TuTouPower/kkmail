@@ -492,6 +492,29 @@ def test_cli_read_prints_archived_body(monkeypatch, capsys):
     assert "SNIPPET-TEXT" not in out
 
 
+def test_legacy_cache_with_mismatched_base_url_is_preserved(tmp_path, monkeypatch):
+    """Legacy cache belonging to another instance (base_url mismatch) must not be deleted (A268)."""
+    fake_home = tmp_path / "home"
+    legacy_dir = fake_home / ".cache"
+    legacy_dir.mkdir(parents=True)
+    legacy_file = legacy_dir / "kkmail_agent_session.json"
+    legacy_file.write_text(
+        json.dumps({
+            "base_url": "http://127.0.0.1:9999",
+            "cookie": "other_instance_cookie",
+            "csrf_token": "other_instance_csrf",
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("KKMAIL_SESSION_CACHE", raising=False)
+
+    client = kkmail_cli.KKMailClient(base_url="http://127.0.0.1:37281", password="test")
+    assert client.cookie is None
+    assert legacy_file.exists()
+
+
 def test_client_preserves_password_and_api_key_whitespace():
     """Credential values are opaque; surrounding spaces may be intentional."""
     client = kkmail_cli.KKMailClient(
