@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Protocol
 
 
@@ -27,6 +29,27 @@ class AmbiguousOutcomeError(ProviderHttpError):
     """A non-idempotent request may have reached the provider; do not replay automatically."""
 
 
+def _parse_retry_after(value: str) -> float | None:
+    """Parse a Retry-After header: delay-seconds or HTTP-date (RFC 9110).
+
+    Returns remaining seconds (clamped at 0 for past dates), or None
+    when the value is neither form.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if retry_at is None:
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+
+
 class RateLimitedError(ProviderHttpError):
     """HTTP 429 — caller should back off using retry_after_seconds."""
 
@@ -41,10 +64,7 @@ class RateLimitedError(ProviderHttpError):
     ) -> None:
         super().__init__(message, status=status, body=body, headers=headers)
         if retry_after_seconds is None and self.headers.get("retry-after"):
-            try:
-                retry_after_seconds = float(self.headers["retry-after"])
-            except ValueError:
-                retry_after_seconds = None
+            retry_after_seconds = _parse_retry_after(self.headers["retry-after"])
         self.retry_after_seconds = retry_after_seconds
 
 
@@ -94,10 +114,14 @@ class FixtureTransport:
             resp = self.routes[key]
         else:
             resp = None
-            for (m, prefix), candidate in self.routes.items():
-                if m == method.upper() and (path == prefix or path.startswith(prefix)):
-                    resp = candidate
-                    break
+            # Longest matching prefix wins, regardless of insertion order.
+            candidates = [
+                (prefix, candidate)
+                for (m, prefix), candidate in self.routes.items()
+                if m == method.upper() and (path == prefix or path.startswith(prefix))
+            ]
+            if candidates:
+                resp = max(candidates, key=lambda item: len(item[0]))[1]
         if resp is None:
             raise ProviderHttpError(f"no fixture for {method} {path}", status=404)
         if callable(resp) and not isinstance(resp, type):
