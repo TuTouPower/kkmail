@@ -64,6 +64,26 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(buildMailSrcdoc('<img src="https://x/y.png">', { loadRemoteImages: true })).toContain('img-src https: http: data: cid:')
   })
 
+  it('locks the A384 popup-escape adjudication boundaries: exact sandbox, no opener, protocol filtering intact', () => {
+    // Option A keeps the escape flag — the constant is pinned exactly so
+    // nobody can silently add allow-scripts / allow-same-origin /
+    // allow-top-navigation, any of which would void the adjudication
+    // recorded above MAIL_IFRAME_SANDBOX in mailBody.ts.
+    expect(MAIL_IFRAME_SANDBOX).toBe('allow-popups allow-popups-to-escape-sandbox')
+    // The popup must not get an opener handle or a referrer.
+    const out = sanitizeMailHtml('<a href="https://example.com">link</a>')
+    expect(out).toContain('target="_blank"')
+    expect(out).toContain('rel="noopener noreferrer"')
+    const doc = buildMailSrcdoc('<a href="https://example.com">link</a>')
+    expect(doc).toContain('<base target="_blank" rel="noopener noreferrer">')
+    expect(doc).toContain('<meta name="referrer" content="no-referrer">')
+    expect(doc).toContain("default-src 'none'")
+    // Protocol filtering is part of the boundary: non-web schemes in
+    // links must never survive sanitization into a clickable popup.
+    expect(sanitizeMailHtml('<a href="javascript:alert(1)">x</a>')).not.toMatch(/javascript:/i)
+    expect(sanitizeMailHtml('<a href="data:text/html;base64,PHNjcmlwdD4=">x</a>')).not.toMatch(/data:text\/html/i)
+  })
+
   it('sandbox allows popups and escaping sandbox, but never scripts or same-origin', () => {
     expect(MAIL_IFRAME_SANDBOX).not.toContain('allow-scripts')
     expect(MAIL_IFRAME_SANDBOX).not.toContain('allow-same-origin')

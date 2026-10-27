@@ -159,5 +159,43 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>body{${bodyStyle}}${linkStyle}${imgStyle}</style></head><body>${sanitizedHtml}</body></html>`
 }
 
-/** iframe sandbox flags: allow-popups and allow-popups-to-escape-sandbox for opening links in new windows. */
+/**
+ * iframe sandbox flags for the mail reader — threat-model adjudication
+ * (A384, decision: option A, KEEP `allow-popups-to-escape-sandbox`).
+ *
+ * Why the escape flag stays: mail links are forced to target="_blank"
+ * (the DOMPurify hook in this module and the srcdoc <base> tag). A popup opened
+ * from a sandboxed iframe without the escape flag inherits the sandbox:
+ * the destination site would run with scripts disabled and an opaque
+ * origin, which breaks the normal web functionality of legitimate links
+ * in mail (the entire point of letting the user open them). With the
+ * escape flag, the popup is an ordinary new browsing context — exactly
+ * equivalent to the user opening that link in any other mail client.
+ *
+ * What the escaped popup does NOT get, i.e. the accepted-risk boundary:
+ * - No access to kkmail itself. The iframe deliberately has neither
+ *   `allow-scripts` nor `allow-same-origin`, so mail content runs no
+ *   script at all inside kkmail and the srcdoc document has an opaque
+ *   origin; there is no scriptable path from the mail body to the app,
+ *   its DOM, its storage, or its session.
+ * - No opener handle. Every sanitized anchor is forced to
+ *   rel="noopener noreferrer" (afterSanitizeAttributes hook), the
+ *   srcdoc repeats that on <base>, and referrerPolicy/meta no-referrer
+ *   suppresses referrer leakage, so the popup cannot reach
+ *   window.opener or learn the app URL.
+ * - No dangerous navigation created by content. DOMPurify strips
+ *   scripts, event handlers, forms and unknown protocols
+ *   (ALLOW_UNKNOWN_PROTOCOLS: false), so only a genuine user click on
+ *   a sanitized http(s)-style link can open a popup; mail content
+ *   cannot spawn popups by itself.
+ *
+ * Invariants that must NOT change without re-adjudicating this
+ * decision: never add `allow-scripts` or `allow-same-origin` to this
+ * sandbox (together they would let content remove its own sandbox and
+ * script the parent), never drop the noopener/noreferrer enforcement,
+ * and never weaken the sanitizer's protocol filtering. The residual
+ * risk consciously accepted is only this: a user who clicks a hostile
+ * link lands on a hostile *external* page — the same risk as any link
+ * click in a browser — with no kkmail privileges attached.
+ */
 export const MAIL_IFRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox'
