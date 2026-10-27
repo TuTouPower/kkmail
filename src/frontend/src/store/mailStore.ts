@@ -77,7 +77,10 @@ const navigationReset = () => ({
 export const useMailStore = create<MailUiState>()(
   persist(
     (set) => ({
-      theme: 'dark',
+      // Default must stay 'system': public/theme_bootstrap.js paints the
+      // first frame with the same default before React mounts (A94). If the
+      // two drift apart, the UI flashes from one theme to the other.
+      theme: 'system',
       setTheme: (theme) => set({ theme }),
       accountIconMode: 'brand',
       setAccountIconMode: (mode) => set({ accountIconMode: mode }),

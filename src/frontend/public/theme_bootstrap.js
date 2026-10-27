@@ -1,4 +1,8 @@
 (() => {
+  // The no-stored-preference default must stay 'system': the zustand store
+  // in src/frontend/src/store/mailStore.ts uses the same default (A94). If
+  // the two drift apart, the first paint and the mounted app disagree and
+  // the theme visibly flips.
   let preference = 'system'
   try {
     const stored = JSON.parse(localStorage.getItem('mail-ui-storage') || 'null')
