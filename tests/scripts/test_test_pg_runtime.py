@@ -154,6 +154,40 @@ def test_run_returns_zero_when_all_stages_pass(monkeypatch, tmp_path):
     assert runtime.run([]) == 0
 
 
+def _stub_unit_main(monkeypatch, tmp_path, *, child_code):
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    monkeypatch.setattr(runtime, "RUNS", runs_dir)
+    monkeypatch.setattr(runtime, "ROOT", tmp_path)
+    captured = {}
+
+    def fake_child(command, env):
+        directory = Path(env["KKMAIL_TEST_REPORT_DIR"])
+        captured["dir"] = directory
+        (directory / "coverage.xml").write_text("<coverage/>")
+        (directory / "coverage.json").write_text("{}")
+        return child_code
+
+    monkeypatch.setattr(runtime, "child", fake_child)
+    monkeypatch.setattr(sys, "argv", ["test_pg_runtime.py", "unit"])
+    return runs_dir, captured
+
+
+def test_unit_mode_removes_run_directory_and_keeps_coverage_summary(monkeypatch, tmp_path):
+    runs_dir, captured = _stub_unit_main(monkeypatch, tmp_path, child_code=0)
+    assert runtime.main() == 0
+    # unit 运行目录不得无限累积；coverage 汇总保留到固定位置
+    assert not captured["dir"].exists()
+    assert (runs_dir / "unit_coverage.xml").read_text() == "<coverage/>"
+    assert (runs_dir / "unit_coverage.json").read_text() == "{}"
+
+
+def test_unit_mode_removes_run_directory_even_on_failure(monkeypatch, tmp_path):
+    runs_dir, captured = _stub_unit_main(monkeypatch, tmp_path, child_code=3)
+    assert runtime.main() == 3
+    assert not captured["dir"].exists()
+
+
 def test_required_pg_skip_is_failure_report_not_internal_error(tmp_path):
     probe = tmp_path / "test_skip_probe.py"
     probe.write_text("import pytest\ndef test_probe():\n    pytest.skip('PG required')\n")

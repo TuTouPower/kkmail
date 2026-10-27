@@ -11,6 +11,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -412,11 +413,22 @@ def main():
             env.pop("KKMAIL_TEST_PG_PASSWORD", None)
             env.pop("KKMAIL_TEST_RUN_DIR", None)
             LOG.warning("quick mode: PostgreSQL suite NOT executed")
-            return child([sys.executable, "-m", "pytest", "tests", "-q", "-ra",
-                          "--cov=mail_core", "--cov-branch", "--cov-report=term:skip-covered",
-                          "--cov-report=xml:" + str(directory / "coverage.xml"),
-                          "--cov-report=json:" + str(directory / "coverage.json"), "--basetemp",
-                          str(directory / "tmp" / "pytest"), *args.arguments], env)
+            try:
+                return child([sys.executable, "-m", "pytest", "tests", "-q", "-ra",
+                              "--cov=mail_core", "--cov-branch", "--cov-report=term:skip-covered",
+                              "--cov-report=xml:" + str(directory / "coverage.xml"),
+                              "--cov-report=json:" + str(directory / "coverage.json"), "--basetemp",
+                              str(directory / "tmp" / "pytest"), *args.arguments], env)
+            finally:
+                # unit 运行目录不累积（A265）：coverage 汇总先抢救到固定位置
+                # （每次覆盖，只留最近一次），其余产物随目录一并删除。
+                for name, fixed in (("coverage.xml", "unit_coverage.xml"),
+                                    ("coverage.json", "unit_coverage.json")):
+                    try:
+                        shutil.copyfile(directory / name, RUNS / fixed)
+                    except OSError:
+                        pass
+                shutil.rmtree(directory, ignore_errors=True)
         else:
             return run(args.arguments)
         return 0
