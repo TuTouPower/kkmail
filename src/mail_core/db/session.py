@@ -25,13 +25,50 @@ def database_url() -> str:
     return url
 
 
+def _pool_int(name: str, default: int, *, minimum: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise DatabaseConfigError(
+            f"{name} must be an integer >= {minimum} (got {raw!r})"
+        ) from exc
+    if value < minimum:
+        raise DatabaseConfigError(
+            f"{name} must be an integer >= {minimum} (got {value})"
+        )
+    return value
+
+
+def _pool_timeout() -> float:
+    import math
+
+    name = "MAIL_CORE_DB_POOL_TIMEOUT"
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return 30.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise DatabaseConfigError(
+            f"{name} must be a finite number > 0 (got {raw!r})"
+        ) from exc
+    if not math.isfinite(value) or value <= 0:
+        raise DatabaseConfigError(
+            f"{name} must be a finite number > 0 (got {value})"
+        )
+    return value
+
+
 def _pool_kwargs() -> dict:
     return {
         "pool_pre_ping": True,
-        "pool_size": int(os.environ.get("MAIL_CORE_DB_POOL_SIZE") or 10),
-        "max_overflow": int(os.environ.get("MAIL_CORE_DB_MAX_OVERFLOW") or 10),
-        "pool_timeout": float(os.environ.get("MAIL_CORE_DB_POOL_TIMEOUT") or 30),
-        "pool_recycle": int(os.environ.get("MAIL_CORE_DB_POOL_RECYCLE") or 1800),
+        "pool_size": _pool_int("MAIL_CORE_DB_POOL_SIZE", 10, minimum=1),
+        "max_overflow": _pool_int("MAIL_CORE_DB_MAX_OVERFLOW", 10, minimum=0),
+        "pool_timeout": _pool_timeout(),
+        "pool_recycle": _pool_int("MAIL_CORE_DB_POOL_RECYCLE", 1800, minimum=0),
     }
 
 
