@@ -34,6 +34,34 @@ def read_payload():
 # Events that close a task's active window: the worktree is no longer valid.
 TERMINAL_EVENTS = {"report", "integrated", "attempt_terminal"}
 
+# Hook 每次 Bash 调用都跑，两个 jsonl 都是 append-only 无界增长：只读尾部
+# 窗口（A135）。ledger 只取该 tid 的尾部事件——start 已滑出尾窗的旧任务
+# 不再回溯整表，解析为无 worktree；去重只比最后一行，同样只读尾部。
+TAIL_READ_BYTES = 65536
+
+
+def _tail_lines(path):
+    """返回文件尾部窗口内的完整行（首行可能是半行时丢弃）。读失败返回 []。"""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            start = max(0, size - TAIL_READ_BYTES)
+            handle.seek(start)
+            raw = handle.read()
+    except OSError:
+        return []
+    text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if start > 0 and lines:
+        lines = lines[1:]  # 首行是被窗口截断的半行
+    return lines
+
+
+def _last_line(path):
+    lines = _tail_lines(path)
+    return lines[-1] if lines else ""
+
 
 def resolve_worktree(project, tid):
     """Worktree path (absolute) for a tid from the attempt ledger, or ''.
@@ -47,34 +75,31 @@ def resolve_worktree(project, tid):
         return ""
     worktree = ""
     active = False
-    try:
-        with open(ledger, encoding="utf-8") as handle:
-            for line_no, raw_line in enumerate(handle, 1):
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    # ledger 损坏行静默跳过会让该 tid 的 worktree 解析丢失；
-                    # 打 WARNING 带行号，与 ledger 的 fail-closed 语义对齐可见性（F35）
-                    print(
-                        f"WARNING: attempt 账本损坏行已跳过（{ledger} 第 {line_no} 行）",
-                        file=sys.stderr,
-                    )
-                    continue
-                if rec.get("tid") != tid:
-                    continue
-                event = rec.get("event")
-                if event == "start":
-                    worktree = str(rec.get("worktree") or "")
-                    active = True
-                elif event == "attempt_reserved" and rec.get("state") == "running":
-                    active = True
-                elif event in TERMINAL_EVENTS:
-                    active = False
-    except OSError:
-        return ""
+    for raw_line in _tail_lines(ledger):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            # ledger 损坏行静默跳过会让该 tid 的 worktree 解析丢失；
+            # 打 WARNING，与 ledger 的 fail-closed 语义对齐可见性（F35）。
+            # 尾窗内行号不再是全文件行号，只报损坏行内容摘要。
+            print(
+                f"WARNING: attempt 账本损坏行已跳过（{ledger} 尾部：{line[:80]!r}）",
+                file=sys.stderr,
+            )
+            continue
+        if not isinstance(rec, dict) or rec.get("tid") != tid:
+            continue
+        event = rec.get("event")
+        if event == "start":
+            worktree = str(rec.get("worktree") or "")
+            active = True
+        elif event == "attempt_reserved" and rec.get("state") == "running":
+            active = True
+        elif event in TERMINAL_EVENTS:
+            active = False
     if not active or not worktree:
         return ""
     return os.path.normpath(os.path.join(project, worktree))
@@ -86,16 +111,9 @@ def append_record(path, record):
     except OSError:
         return
     line = json.dumps(record, ensure_ascii=False)
-    # De-dup: skip when the last record is identical.
-    try:
-        with open(path, encoding="utf-8") as handle:
-            last_line = ""
-            for existing in handle:
-                last_line = existing
-        if last_line.strip() == line:
-            return
-    except OSError:
-        pass
+    # De-dup: skip when the last record is identical（只读尾部，A135）。
+    if _last_line(path).strip() == line:
+        return
     try:
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(line + "\n")
