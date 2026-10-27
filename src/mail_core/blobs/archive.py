@@ -15,6 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -293,6 +294,41 @@ def heartbeat_archive_claims(
 
 def blob_root() -> Path:
     return Path(os.environ.get("MAIL_CORE_BLOB_ROOT", "[REDACTED]mail-core-blobs"))
+
+
+class _PlainTextExtractor(HTMLParser):
+    """Collect visible text from HTML, skipping script/style/head content."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._hidden: list[str] = []
+
+    def handle_starttag(self, tag, attrs) -> None:
+        if tag in {"head", "script", "style"}:
+            self._hidden.append(tag)
+        elif not self._hidden:
+            self.parts.append(" ")
+
+    def handle_endtag(self, tag) -> None:
+        if self._hidden and self._hidden[-1] == tag:
+            self._hidden.pop()
+        elif not self._hidden:
+            self.parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if not self._hidden:
+            self.parts.append(data)
+
+
+def _html_to_text(html: str) -> str:
+    parser = _PlainTextExtractor()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        return ""
+    return " ".join("".join(parser.parts).split())
 
 
 def parse_mime_content(
@@ -1195,12 +1231,19 @@ def run_archive_batch(
                             msg_record.from_name = em_name or msg_record.from_name
                         if not msg_record.subject and raw_em.get("Subject"):
                             msg_record.subject = str(raw_em.get("Subject") or "").strip()
-                    except Exception:
-                        pass
+                    except Exception as backfill_exc:
+                        log.warning(
+                            "archive header backfill failed message=%s: %s",
+                            mid,
+                            safe_error(backfill_exc),
+                        )
 
-                if plain_text:
+                search_text = plain_text
+                if not search_text and html_text:
+                    search_text = _html_to_text(html_text)
+                if search_text:
                     from mail_core.search.index import upsert_message_search
-                    upsert_message_search(session, message_id=mid, body_text=plain_text)
+                    upsert_message_search(session, message_id=mid, body_text=search_text)
 
                 if parsed_attachments:
                     if msg_record is not None:

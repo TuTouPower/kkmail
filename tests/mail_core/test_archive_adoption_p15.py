@@ -342,6 +342,52 @@ def test_a140_deleted_account_releases_claim_without_retry():
     assert state.claimed_by is None
 
 
+# ---------------------------------------------------------------------------
+# A141: FTS must cover HTML-only mail; header backfill failure must log
+# ---------------------------------------------------------------------------
+
+_HTML_ONLY_MIME = (
+    b"From: a@b.c\r\nSubject: s\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
+    b"<html><body><p>htmlonlyword searchable</p>"
+    b"<script>scriptword must not index</script></body></html>\r\n"
+)
+
+
+def test_a141_html_only_message_is_indexed_with_stripped_text():
+    from mail_core.mail.storage.models import MessageSearch
+
+    db, acc_id = _base_db()
+    claim, _msg, state = _make_claim(db, acc_id, uuid.uuid4(), "remote-html")
+    provider = SimpleNamespace(fetch_mime=lambda remote_id: _HTML_ONLY_MIME)
+    result = _run_batch(db, [claim], build_provider=lambda *a, **kw: provider)
+    assert result["completed"] == 1
+    row = db.get((MessageSearch, claim.message_id))
+    assert row is not None, "HTML-only message produced no FTS row"
+    assert "htmlonlyword" in row.body_text
+    assert "<p>" not in row.body_text and "<html>" not in row.body_text
+    assert "scriptword" not in row.body_text
+
+
+def test_a141_header_backfill_failure_logs_warning_with_message_id(caplog):
+    import logging
+
+    db, acc_id = _base_db()
+    claim, msg, _state = _make_claim(db, acc_id, uuid.uuid4(), "remote-backfill")
+    msg.from_address = None
+    msg.subject = None
+    provider = SimpleNamespace(fetch_mime=lambda remote_id: _SIMPLE_MIME)
+    with (
+        patch("email.utils.parseaddr", side_effect=RuntimeError("addr parse boom")),
+        caplog.at_level(logging.WARNING, logger="mail_core.blobs.archive"),
+    ):
+        result = _run_batch(db, [claim], build_provider=lambda *a, **kw: provider)
+    assert result["completed"] == 1
+    assert any(
+        str(claim.message_id) in rec.getMessage() and "backfill" in rec.getMessage()
+        for rec in caplog.records
+    ), [r.getMessage() for r in caplog.records]
+
+
 def test_a27_normal_message_under_limits_still_parses(monkeypatch):
     from mail_core.blobs.archive import parse_mime_content
 
