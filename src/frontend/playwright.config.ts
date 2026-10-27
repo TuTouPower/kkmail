@@ -22,7 +22,12 @@ export default defineConfig({
     : {
         command: 'npm run build && npm run preview -- --port 4173 --host 127.0.0.1',
         port: 4173,
-        reuseExistingServer: !process.env.CI,
+        // A335: never reuse a server by default — whatever already listens
+        // on 4173 (stale build, someone else's service) would silently be
+        // tested instead of the fresh preview. Opt in explicitly with
+        // PLAYWRIGHT_REUSE_EXISTING_SERVER=1; CI never reuses.
+        reuseExistingServer:
+          !process.env.CI && process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === '1',
         timeout: 30000,
       },
   projects: [
