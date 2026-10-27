@@ -135,3 +135,25 @@ class BlobStore:
                 yield chunk
         if h.hexdigest() != digest:
             raise BlobIntegrityError("blob content does not match its digest")
+
+    def iter_plaintext_verified(self, digest: str) -> Iterator[bytes]:
+        """Yield plaintext only after the full digest check has passed (A81).
+
+        Decrypted chunks are spooled to an anonymous temp file while
+        ``iter_plaintext`` verifies the content SHA-256; nothing is
+        yielded until that verification completes, so callers that send
+        the chunks onward (attachment downloads) never emit unverified
+        bytes. Memory stays bounded regardless of blob size.
+        """
+        spool = tempfile.TemporaryFile()
+        try:
+            for chunk in self.iter_plaintext(digest):
+                spool.write(chunk)
+            spool.seek(0)
+            while True:
+                chunk = spool.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            spool.close()

@@ -93,7 +93,9 @@ def resolve_attachment_bytes(
         content_type=att.content_type,
         size_bytes=att.size_bytes,
         content_sha256=digest,
-        open_stream=lambda: store.iter_plaintext(digest),
+        # A81: downloads must not stream plaintext before its digest is
+        # verified — use the verify-first stream, not iter_plaintext.
+        open_stream=lambda: store.iter_plaintext_verified(digest),
     )
 
 
