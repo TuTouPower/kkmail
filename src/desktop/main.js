@@ -16,6 +16,7 @@ const {
   scrubEnv,
   redactSecrets,
   isChildDead,
+  backendExitDisposition,
   stopChildTree,
   forceKillChildTreeImmediately,
   collectSidecarExtras,
@@ -149,8 +150,14 @@ async function startBackend() {
   })
   backend.on('exit', (code, signal) => {
     if (!backendExit) backendExit = new Error(`后端已退出 (code=${code}, signal=${signal})`)
-    if (mainWindow && !app.isQuitting) {
+    // A153: quit on backend exit even with no window (macOS keeps the app
+    // alive after window-all-closed; otherwise it becomes a zombie whose
+    // reopened window can never reach the dead backend).
+    const disposition = backendExitDisposition({ isQuitting: Boolean(app.isQuitting), hasWindow: Boolean(mainWindow) })
+    if (disposition.showDialog) {
       dialog.showErrorBox('kkmail 后端已退出', String(backendExit.message))
+    }
+    if (disposition.quit) {
       app.quit()
     }
   })
