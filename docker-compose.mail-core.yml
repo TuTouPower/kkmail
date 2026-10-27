@@ -44,7 +44,8 @@ services:
       context: .
       dockerfile: Dockerfile.mail-core
     environment:
-      # POSTGRES_PASSWORD is embedded in this URL; use URL-safe hex/base64url characters.
+      # POSTGRES_PASSWORD is embedded unescaped in this URL: only [A-Za-z0-9_-] is allowed
+      # (the deploy script rejects anything else; a stray @ : / # % would corrupt the URL).
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
     depends_on:
       postgres:
@@ -61,6 +62,8 @@ services:
       context: .
       dockerfile: Dockerfile.mail-core-backup
     environment:
+      # POSTGRES_PASSWORD is embedded unescaped in this URL: only [A-Za-z0-9_-] is allowed
+      # (the deploy script rejects anything else; a stray @ : / # % would corrupt the URL).
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
       MAIL_CORE_BLOB_KEY_V1: ${MAIL_CORE_BLOB_KEY_V1:?set MAIL_CORE_BLOB_KEY_V1 (base64 32-byte key)}
       MAIL_CORE_BACKUP_KEY: ${MAIL_CORE_BACKUP_KEY:?set MAIL_CORE_BACKUP_KEY (must differ from blob key)}
@@ -96,7 +99,8 @@ services:
     container_name: kkmail-mail-core-api
     restart: unless-stopped
     environment:
-      # POSTGRES_PASSWORD is embedded in this URL; use URL-safe hex/base64url characters.
+      # POSTGRES_PASSWORD is embedded unescaped in this URL: only [A-Za-z0-9_-] is allowed
+      # (the deploy script rejects anything else; a stray @ : / # % would corrupt the URL).
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
       MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:37281"
       # Optional trusted HTTPS origin for provider OAuth callbacks.
@@ -147,7 +151,8 @@ services:
       dockerfile: Dockerfile.mail-core
     container_name: kkmail-mail-core-worker
     environment:
-      # POSTGRES_PASSWORD is embedded in this URL; use URL-safe hex/base64url characters.
+      # POSTGRES_PASSWORD is embedded unescaped in this URL: only [A-Za-z0-9_-] is allowed
+      # (the deploy script rejects anything else; a stray @ : / # % would corrupt the URL).
       MAIL_CORE_DATABASE_URL: postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@postgres:5432/kkmail_mail
       MAIL_CORE_BLOB_KEY_V1: ${MAIL_CORE_BLOB_KEY_V1:?set MAIL_CORE_BLOB_KEY_V1 (base64 32-byte key)}
       MAIL_CORE_BLOB_ACTIVE_VERSION: "1"

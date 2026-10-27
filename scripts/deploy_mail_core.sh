@@ -33,6 +33,12 @@ for command_name in git docker curl python3 rg; do
     command -v "$command_name" >/dev/null 2>&1 || fail "missing required command: $command_name"
 done
 
+# POSTGRES_PASSWORD is interpolated unescaped into DATABASE_URL in
+# docker-compose.mail-core.yml (four services). Characters such as
+# @ : / # % would corrupt the URL (wrong host/db or a truncated password),
+# so reject anything outside the URL-safe charset before doing any work.
+[[ "${POSTGRES_PASSWORD:-}" =~ ^[A-Za-z0-9_-]+$ ]] || fail "POSTGRES_PASSWORD must be set and match ^[A-Za-z0-9_-]+\$ (it is embedded unescaped in DATABASE_URL; regenerate it URL-safe, e.g. openssl rand -hex 24)"
+
 [[ "$(git branch --show-current)" == "main" ]] || fail "run from the main branch"
 [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || fail "worktree must be clean"
 expected_context="${EXPECTED_DOCKER_CONTEXT:-orbstack}"

@@ -95,3 +95,23 @@ def test_a161_no_hardcoded_kkmail_image_prefix():
     assert "kkmail-migrate:latest" not in text
     assert '"kkmail-api:' not in text
     assert '"kkmail-worker:' not in text
+
+
+# --- A72: POSTGRES_PASSWORD is embedded unescaped in DATABASE_URL (x4) ---
+
+
+def test_a72_deploy_validates_postgres_password_charset():
+    text = _deploy_text()
+    assert "POSTGRES_PASSWORD" in text
+    assert "^[A-Za-z0-9_-]+$" in text, (
+        "deploy must reject POSTGRES_PASSWORD values outside the URL-safe "
+        "charset before they are interpolated into DATABASE_URL"
+    )
+
+
+def test_a72_compose_sites_state_the_charset_restriction():
+    text = _compose_text()
+    assert text.count("postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@") == 4
+    # Every interpolation site must carry the restriction, not a vague hint.
+    assert text.count("[A-Za-z0-9_-]") >= 4
+    assert "use URL-safe hex/base64url characters" not in text
