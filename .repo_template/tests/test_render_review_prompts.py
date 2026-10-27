@@ -400,3 +400,19 @@ def test_real_templates_single_general_anchored(tmp_path, monkeypatch):
     assert f"输出到 `{root}/t001_foo/review_general.md`（仓库内相对路径 `t001_foo`）" in content
     assert "不带" in content and "`git rev-parse --show-toplevel`" in content
     assert f"git -C '{root}' diff abc1234" in content
+
+
+def test_a197_module_docstring_lists_all_four_templates():
+    """A197: docstring must list all four required templates and the
+    full/single grouping (implementation hard-requires general too)."""
+    doc = rrp.__doc__ or ""
+    for name in (
+        "code_prompt.txt",
+        "test_prompt.txt",
+        "general_prompt.txt",
+        "share_prompt.txt",
+    ):
+        assert name in doc, f"docstring must mention {name}"
+    assert "full" in doc and "single" in doc, (
+        "docstring must state which template group full vs single uses"
+    )

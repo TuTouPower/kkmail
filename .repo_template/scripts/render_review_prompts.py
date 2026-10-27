@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """render_review_prompts.py - 从 task.md front matter 渲染 code/test reviewer 完整 prompt。
 
-提示词正文存于 .repo_template/docs/review_prompts/ 下三个 txt（code_prompt.txt / test_prompt.txt / share_prompt.txt）。
+提示词正文存于 .repo_template/docs/review_prompts/ 下四个 txt（code_prompt.txt / test_prompt.txt / general_prompt.txt / share_prompt.txt）。full 级别用 code_prompt.txt + test_prompt.txt（各自拼 share_prompt.txt），single 级别用 general_prompt.txt（拼 share_prompt.txt）；四个模板缺一即报错退出。
 
 reviewer 不再自行去读 spec：契约区与上下文区正文直接注入 prompt，消除信息不对称。
 契约区自 diff_anchor 后有变更时，prompt 末尾附「契约区 drift 警告」与 diff 供 reviewer 核对。
@@ -13,7 +13,7 @@ reviewer 不再自行去读 spec：契约区与上下文区正文直接注入 pr
 
 必填 front matter：tid, slug, diff_anchor
 可选：spec_path（默认 <task_dir>/spec.md）、review_level
-默认 stdout；--out-dir 时写入 code_review_prompt.md 与 test_review_prompt.md
+默认 stdout；--out-dir 时 full 写入 code_review_prompt.md 与 test_review_prompt.md，single 写入 general_review_prompt.md
 """
 
 import argparse
