@@ -230,6 +230,7 @@ def reclaim_stale_in_progress(
             .where(RemoteOperation.updated_at < cutoff)
             .order_by(RemoteOperation.updated_at.asc())
             .limit(limit)
+            .with_for_update(skip_locked=True)
         ).all()
     )
     for op in rows:
