@@ -265,3 +265,48 @@ def test_cli_apply_skips_tracked_without_flag(tree):
     )
     assert r2.returncode == 0, r2.stderr
     assert not (tree / "scripts/debug.log").exists()
+
+
+# --- A159: bulk 类别不得经符号链接目录删到仓库外 ---
+
+def test_bulk_collect_does_not_descend_symlinked_dir(tree, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "victim.txt").write_text("keep me\n")
+    link = tree / ".scratch" / "extlink"
+    link.symlink_to(outside, target_is_directory=True)
+    hits, _ = _collect(tree, ["scratch"])
+    paths = {h["path"] for h in hits}
+    assert ".scratch/extlink/victim.txt" not in paths
+    assert ".scratch/extlink" in paths  # 链接本身作为命中（只删链接）
+    deleted = rc.apply_delete(tree, hits)
+    assert ".scratch/extlink" in deleted
+    assert not link.is_symlink()
+    assert (outside / "victim.txt").is_file()  # 仓库外文件完好
+
+
+def test_apply_delete_refuses_hit_escaping_repo_via_symlink(tree, tmp_path):
+    outside = tmp_path / "outside2"
+    outside.mkdir()
+    (outside / "victim2.txt").write_text("keep me\n")
+    link = tree / ".scratch" / "extlink2"
+    link.symlink_to(outside, target_is_directory=True)
+    # 调用方绕过 collect 直接传入链接内部路径：apply 须 containment 拒绝
+    hits = [{"path": ".scratch/extlink2/victim2.txt", "category": "scratch",
+             "kind": "file", "tracked": False}]
+    deleted = rc.apply_delete(tree, hits)
+    assert deleted == []
+    assert (outside / "victim2.txt").is_file()
+    assert link.is_symlink()
+
+
+def test_bulk_symlink_file_hit_unlinks_link_only(tree, tmp_path):
+    outside_file = tmp_path / "outside_file.txt"
+    outside_file.write_text("keep me\n")
+    link = tree / ".scratch" / "filelink"
+    link.symlink_to(outside_file)
+    hits, _ = _collect(tree, ["scratch"])
+    assert ".scratch/filelink" in {h["path"] for h in hits}
+    rc.apply_delete(tree, hits)
+    assert not link.is_symlink()
+    assert outside_file.is_file()

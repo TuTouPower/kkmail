@@ -153,7 +153,13 @@ def collect(repo: Path, categories: list[str], keeps: list[str]) -> tuple[list[d
         base = repo / rel_dir
         if not base.is_dir():
             continue
-        for p in sorted(base.rglob("*")):
+        # 不跟随符号链接目录（A159）：rglob/walk 跟随链接会把仓库外文件
+        # 枚举成仓库内路径；链接本身作为一条命中，只删链接不跟随。
+        bulk_entries: list[Path] = []
+        for root, dirs, files in os.walk(base, followlinks=False):
+            for name in dirs + files:
+                bulk_entries.append(Path(root) / name)
+        for p in sorted(bulk_entries):
             rel = p.relative_to(repo).as_posix()
             if _kept(rel, keeps):
                 skipped.append(rel)
@@ -246,6 +252,12 @@ def apply_delete(
             h["path"], h["kind"] == "dir", tracked
         ):
             continue
+        # A159 containment：非链接命中 resolve 后必须仍在仓库内；
+        # 经符号链接目录拼出的仓库外路径一律拒绝。链接本身只删链接。
+        if not target.is_symlink():
+            resolved = target.resolve()
+            if not resolved.is_relative_to(repo.resolve()):
+                continue
         if h["kind"] == "dir":
             if _dir_holds_keep(h["path"], keeps):
                 continue
