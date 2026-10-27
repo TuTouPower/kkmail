@@ -192,13 +192,13 @@
     - 详情响应以 `archive_state` 和 `archive_has_error` 提供权威状态；目标归档 SSE 事件刷新当前详情。阅读器分别呈现任务提交、排队/处理中、完成、后台失败与配额暂停状态，后台失败提供“立即重试同步”操作；
     - 网络请求本身失败时同样提供重试；合法空邮件（`is_archived === true` 且正文为空）展示空内容提示，与未同步状态严格隔离。
 
-## 账户供应商接入（t053）
+## 十、 账户供应商接入与协议路由
 
 Google 仅提供 IMAP 应用专用密码（`imap.gmail.com`），不提供 Gmail API 或 Google OAuth；Microsoft 仅提供 Graph OAuth，创建、编辑、导入与 provider 构建均拒绝可识别 Microsoft IMAP。品牌按精确域名建议，显式选择优先，编辑以已有协议和连接配置为准。自定义域名允许手选托管商，Proton 仅提示 Bridge 限制。
 
 凭据 PATCH 按非空字段合并，保留未提交字段；OAuth 凭据或客户端类型变化清除 Access Token 缓存。加密凭据行锁串行化编辑与后台令牌轮换，禁止旧快照覆盖新 Refresh Token。
 
-## Microsoft Graph 授权约定
+## 十一、 Microsoft Graph 授权与令牌约定
 
 - Microsoft 只提供 Graph OAuth。浏览器登录使用 PKCE、Web 机密客户端或 Electron 公共客户端；设备码只使用允许公共客户端流程的自有 Client ID，不要求 Secret/回调，自动申请后台持续访问。
 - 原会话最终保存前，`/me` 核实微软用户 ID 和真实邮箱，并确认邮箱可访问；重新授权不能用另一身份、客户端或租户覆盖原凭据。Access Token 保持不透明，不从 JWT 或未经核验的 UPN 猜身份。

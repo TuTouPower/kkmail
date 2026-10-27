@@ -1,26 +1,73 @@
-# 账户连接与供应商设置
+# 账户连接与供应商技术规范 (Account Connection Specification)
 
-## 生效行为（t053）
+本文档定义 kkmail 多账号连接管理、供应商协议适配、OAuth 授权流程与凭据安全技术规范。
 
-- 添加与编辑按供应商展示连接方式、独立命名凭据字段和帮助图标；帮助弹窗关闭后恢复触发点焦点并保留草稿。
-- Google 仅支持 IMAP 应用专用密码（`imap.gmail.com`），不提供 Gmail API 或 Google OAuth；Microsoft 仅 Graph OAuth，禁止可识别 Microsoft IMAP 接入。QQ/Foxmail、网易、iCloud、Yahoo、Zoho 提供 IMAP 预设与官方帮助，其他供应商保留自定义配置。
-- 编辑保留原服务器、端口、TLS、登录名和协议；不按域名猜测改写既有配置。凭据不回显，空字段保留原值，非空凭据按字段合并。OAuth 凭据变更清除旧 Access Token，编辑与刷新通过加密行锁防止令牌轮换丢失。
-- 当前实例不存在 Microsoft IMAP，未增加跨协议邮件身份迁移。成功保存不表示已经验证远端连接。
+______________________________________________________________________
 
-## Google 接入：仅 IMAP 应用专用密码
+## 一、 支持的供应商协议与接入边界
 
-- Google 账户只有一条接入路径：标准 IMAP（`imap.gmail.com`）加应用专用密码。无 Gmail API、无 Google OAuth 登录或重新授权、无 `gmail` 协议；表单与帮助见下方 2026-10-26 节（p055）。
+系统支持通过标准 **IMAP** 与 **Microsoft Graph API** 接入邮件服务（后端 `AllowedProvider = ["imap", "graph", "memory", "stub"]`）。
 
-## Microsoft Graph 浏览器与设备码登录（t055）
+|提供商类别|接入协议|认证机制|接入要求与限制|
+|---|---|---|---|
+|**Google (Gmail)**|`imap`|应用专用密码|强制经由标准 IMAP (`imap.gmail.com:993`) 接入；系统不提供 Gmail API 与 Google OAuth 链路，不接受 `provider=gmail`。|
+|**Microsoft 365 / Outlook**|`graph`|OAuth 2.0 / Device Code|统一通过 Microsoft Graph REST API 接入；系统拒绝可识别的 Microsoft IMAP 直连。|
+|**主流 IMAP 服务商**|`imap`|口令 / 授权码|QQ/Foxmail、网易 (163/126)、iCloud、Yahoo、Zoho 内置连接参数与帮助引导。|
+|**自定义邮箱**|`imap`|口令 / 应用密码|支持用户自定义主机名、端口与 SSL/TLS 模式。|
 
-- 新增与编辑 Graph 提供浏览器登录、设备码登录及已有命名凭据更新。帮助说明自有 Entra 应用、账号类型、Client ID、Secret value、公共客户端开关和管理员同意条件，不代办注册。
-- 浏览器方式使用 PKCE 与可信 Web/桌面回调；微软 Electron 使用 localhost 动态端口，不能套用到 127.0.0.1。设备码无需回调或 Secret，展示官方验证地址、短码、倒计时、复制/打开/取消操作，自动申请后台同步凭据。
-- 两种方式均经 Graph `/me` 与邮箱可访问性核实；不解析令牌或从 UPN 猜邮箱。重新授权匹配原邮箱、已存用户 ID、应用和租户，旧 Graph 无用户 ID 可凭精确邮箱建立身份。最终保存沿用共享事务与锁顺序，保留分组/同步偏好/历史邮件。
-- 设备码请求与到期轮询均在服务端，原会话带 CSRF 驱动，间隔/限流/取消/过期跨进程串行化；长码不返回前端，期限不超过供应商与本地 10 分钟上限。Microsoft IMAP 继续拒绝。
+______________________________________________________________________
 
-## 账户接入收敛与锁序（fix/review-20261026-commits，2026-10-26）
+## 二、 Google (Gmail) 接入规范
 
-- Google 新增账户仅保留 IMAP 应用专用密码路径（p055）：表单只展示邮箱与 16 位应用专用密码，Gmail 连接参数在「高级网络设置」中预置，帮助为开启两步验证、生成应用专用密码、填入表单三步；不再展示 Google Cloud Console / CASA 相关内容。此后 `gmail` 协议与 Gmail API 引擎已整体下线：Google 接入只剩 IMAP 应用专用密码一条路径（`imap.gmail.com`），前端与后端均不再接受 `provider=gmail`，不存在 Google OAuth 登录或重新授权。
-- Microsoft 新增账户采用内置公共客户端极简授权（p056，替代上文 t055 所述新增流程；编辑/重新授权仍沿用 t055 的浏览器与设备码流程）：内置公共 Client ID `9e5f94bc-e8a4-4e73-b8be-63364c29d753`（可用环境变量 `MICROSOFT_CLIENT_ID` 覆盖），重定向 URI 固定 `http://localhost:8080`。前端两态表单：发起态打开 Microsoft 授权页；换码态粘贴授权后地址栏完整重定向链接，经 `POST /api/accounts/oauth/exchange-redirect-url` 由服务端无 Secret 换取令牌并以 Graph `/me` 核实真实邮箱。表单邮箱与真实邮箱不一致时以真实邮箱为准建号或更新（refresh token 只属于该身份）。同邮箱已有账户走更新路径并清除旧 `client_secret` 转公共客户端。公共客户端 graph 凭据在连接校验中不再要求 `client_secret`；自备机密应用的既有校验不变。
-- IMAP 登录名渐进披露（p057）：「使用自定义登录名」默认未勾选且不渲染登录名输入框；未勾选时新建不发送 `imap_user`（后端回落邮箱），编辑已存 `imap_user` 的账户发送空串按既有约定清除。编辑 `imap_user` 与邮箱不同的账户自动勾选并回显。
-- 账户更新锁序（R16）：`update_account_app` 与 `accounts/service.update_account` 均先无条件获取侧栏组织级 advisory lock，再锁 Account 行，`prior_sync_enabled` 在锁内事务中读取；组织相关路径统一遵循 sidebar → Account → OAuth/凭据 的锁序。
+1. **协议路径**：
+    - 接入方式严格限定为标准 IMAP + 应用专用密码，连接主机固定为 `imap.gmail.com`，端口固定为 `993`（强制启用 SSL/TLS）。
+    - 前端表单仅要求用户输入邮箱地址与 16 位 Google 应用专用密码，连接参数置于高级网络配置并自动预填。
+2. **虚拟文件夹优化**：
+    - Gmail 账号下的虚拟全量标签（`\All` 与 `\Important`）在目录发现时默认标记为 `paused`，避免全量邮件重复拉取。
+
+______________________________________________________________________
+
+## 三、 Microsoft Graph 接入与认证规范
+
+系统提供极简授权（公共客户端）、浏览器 PKCE 授权与设备码登录三种接入模式：
+
+### 1. 新增账户极简授权（默认推荐模式）
+
+- **客户端凭据**：采用系统内置公共 Client ID（`9e5f94bc-e8a4-4e73-b8be-63364c29d753`，支持通过环境变量 `MICROSOFT_CLIENT_ID` 覆盖），固定重定向 URI 为 `http://localhost:8080`。
+- **两态交互流**：
+    - **发起态**：前端引导用户跳转至 Microsoft 官方授权端点；
+    - **换码态**：用户授权完成后，复制地址栏完整重定向 URL 粘贴回前端，由服务端 `POST /api/accounts/oauth/exchange-redirect-url` 接口无 Secret 安全换取令牌。
+- **身份核验**：服务端换码后调用 Graph `/me` 端点核查真实邮箱与 ID，以核验结果为准创建账户，杜绝凭据与邮箱身份错配。
+
+### 2. 浏览器 PKCE 与设备码接入（自备应用 / 编辑重新授权）
+
+- **浏览器 PKCE**：支持企业自备 Entra 机密/公共应用，通过标准 PKCE 握手并经受信任的回调地址完成交换。Electron 桌面端使用动态端口 localhost 回调。
+- **设备码登录 (Device Code)**：
+    - 用户无法访问回调或处于无浏览器环境时使用；
+    - 服务端向 Microsoft 端点申请设备码并下发官方验证 URI 及短 User Code；
+    - 轮询均在服务端受控执行并遵循单进程锁与指数退避，有效期不超过供应商上限与本地 10 分钟。长 Device Code 严禁返回前端。
+- **令牌与权限要求**：请求委托权限 `Mail.ReadWrite`、`User.Read`、`offline_access`；不信任未经核验的 UPN，必须校验真实邮箱与收件箱可达性。
+
+______________________________________________________________________
+
+## 四、 通用 IMAP 接入与配置规范
+
+1. **连接与安全配置**：
+    - 默认强制开启 TLS 证书与主机名验证；特殊私有部署支持显式禁用 SSL/TLS（端口 143）。
+    - 服务端与目录交互时，对包含空格及非 ASCII 字符的 mailbox 名称自动实施双引号转义。
+2. **登录名规范（渐进披露）**：
+    - 默认情况下登录名隐式回落至完整邮箱地址；
+    - 勾选“使用自定义登录名”后暴露独立输入框；未勾选时新建请求不传递 `imap_user`，编辑时传空串清除旧配置；当已存账户的登录名与邮箱不同时，表单自动勾选并回显。
+
+______________________________________________________________________
+
+## 五、 凭据安全与事务锁序
+
+1. **凭据安全存储与更新**：
+    - 所有明文密码与 OAuth Refresh Token 经 `CredentialStore` 由主密钥派生加密持久化于 `credential_secrets` 表；
+    - 账户信息读取时严格过滤凭据字段，DTO 永不回显明文密码或 Token；
+    - 账户编辑仅对非空提交字段进行合并，空字段保留原密文，避免误清空。
+2. **并发控制与死锁防护锁序**：
+    - 为避免账户编辑、侧栏排序调整与后台 Token 轮换并发死锁，涉及组织与账户状态的写事务统一遵循全局锁序：
+        $$\\text{Sidebar 组织级 Advisory Lock} \\longrightarrow \\text{Account 行级锁} \\longrightarrow \\text{Credential / OAuth 流程锁}$$
+    - 令牌轮换与编辑统一走加密行锁（`credential_edit` 协议），阻止旧内存快照覆写最新 Token。

@@ -18,7 +18,7 @@ description: 接入并操控自托管邮件客户端 kkmail（基于 mail-core�
     # 运行完成后清理
     unset KKMAIL_PASSWORD
     ```
-- `KKMAIL_API_KEY`：可选 Bearer Token（配置 `MAIL_CORE_API_KEYS` 后免 Session/CSRF，亦可通过环境变量 `KKMAIL_API_KEY` 提供）
+- `KKMAIL_API_KEY`：可选 Bearer Token。当服务端配置了 `MAIL_CORE_API_KEYS` 时，客户端可通过环境变量 `KKMAIL_API_KEY` 传入密钥，直接通过 Bearer 鉴权，豁免 Session Cookie 与 CSRF 校验。
 - 会话缓存：使用密码登录时，CLI 会把会话 Cookie 与 CSRF token 落盘缓存到 `~/.cache/kkmail/session.json`（目录权限 0700、文件权限 0600；可通过环境变量 `KKMAIL_SESSION_CACHE` 改路径）。删除该文件即注销本机缓存会话；使用 `KKMAIL_API_KEY` 时不写该缓存。
 
 ______________________________________________________________________
@@ -126,7 +126,7 @@ ______________________________________________________________________
 
 - `GET /health`：服务健康检查
 - `GET /api/mail/stats`：未读邮件聚合统计
-- `GET /api/mail/inbox?limit=50&is_read=false`：仅查询未读邮件
+- `GET /api/mail/inbox?limit=50&is_read=false`：仅查询未读邮件（支持 `cursor` 参数进行 Keyset 游标深分页）
 - `GET /api/mail/inbox?limit=50&is_flagged=true`：仅查询已加旗标邮件
 - `GET /api/mail/search?q={query}&limit=20`：全文检索
 - `GET /api/mail/messages/{id}`：获取邮件元数据、解析后的 HTML/Text 正文与附件清单

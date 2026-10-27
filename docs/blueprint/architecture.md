@@ -48,7 +48,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 附件与垃圾回收：严格追踪 `MessageBlobLink` 与 `Attachment.blob_id` 双重引用，Fail-Closed 二次校验防误删。
     - MIME 解析错误传递链路：Worker 归档期解析正文、报头或附件文件名失败时，保存 raw MIME 至 BlobStore 确保可恢复性，并持久记录脱敏 `MessageBody.parse_error`；详情 API (`/api/mail/messages/{id}`) 完整返回该字段；前端 `mailCoreToMailDetail` 转换透传至 `MailDetail.parse_error`，`MessageReader` 以可访问 alert 横幅明确提示解析失败及原因，即使存在摘要或部分内容亦不被静默吞掉或伪报为空正文。
 
-## 桌面主进程与安全复制边界 (t025)
+## 桌面主进程与安全复制边界
 
 1. **桌面主进程日志基础设施 (`desktop.log`)**：
     - 主进程启动时在 `userData` 目录下建立 `desktop.log` 文件日志并接入 `RotatingLogStream` 轮转；
@@ -60,7 +60,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 权限降级与防范：剪贴板读取（`clipboard-read`）、媒体设备（`media`）、定位及通知等无关系统权限无条件保持拒绝；
     - 前端显式入口调用：UI 编号浮标（`UiReferenceOverlay`）、错误边界（`ErrorBoundary`）与邮箱复制控件（`CopyAddress`）均由用户点击后通过标准 `navigator.clipboard.writeText` 写入；缺失或被拒时提供明确失败反馈，不新增 IPC，也不使错误边界二次崩溃。
 
-## 按需邮件正文同步与归档优先级治理 (t034)
+## 按需邮件正文同步与归档调度治理
 
 1. **按需即时正文归档链路**：
     - 当客户端显式触发（`POST /api/mail/messages/{id}/sync-body`）且正文未归档时，系统将该邮件在 `MessageArchiveState` 的优先级提升为最高（`priority = 0`），并向任务队列入队最高优先级即时归档任务（`priority = 10`，去重键 `archive_msg:{id}`）；`GET /api/mail/messages/{id}` 只读，不改变归档状态或创建任务；
@@ -70,7 +70,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 针对文件夹定时空转轮询导致的归档饥饿，调整任务优先级分层：按需归档任务为 **10**，出站写回操作为 **40**，初次目录扫描为 **50**，后台批量正文归档续批为 **60**，文件夹定时空转增量轮询为 **75**，定期对账任务为 **80**；
     - 定时增量空转轮询增加去重键（`delta:{account_id}:{folder_id}`），防止单个文件夹在短时间内重复入队堆积，彻底解除增量轮询对后台批量正文归档的压制。
 
-## 供应商账户配置与 Microsoft OAuth（t053 / t054 / t055）
+## 供应商账户配置与 Microsoft OAuth 授权
 
 供应商品牌存于 `Account.config.provider_profile`，协议仍由 `imap`/`graph` 路由；设置页共享添加/编辑表单，品牌预设不覆盖用户连接参数。账户 DTO 只返回白名单连接信息，OAuth 秘密不回显。Microsoft IMAP 在账户入口及 provider factory 被拒绝。`DbCredentialStore` 的 `credential_edit` 在当前事务锁定加密行，账户局部更新与 OAuth 刷新共用该锁。
 

@@ -34,7 +34,7 @@ npm --prefix src/frontend run test:e2e
 python3 scripts/run_full_stack_e2e.py
 ```
 
-### Electron 原生标题栏人工验证（t032）
+### Electron 原生标题栏人工验证
 
 `BrowserWindow` 参数单测不能证明 macOS 原生交通灯、真实拖动区或全屏行为。改动桌面标题栏后，使用隔离 `userData` 与测试服务启动独立 Electron 窗口，并以系统截图和操作记录验证：原生交通灯与侧栏按钮相邻、侧栏收起后按钮可用、空白区可拖动而按钮点击不拖窗、最小化/恢复、关闭/重新打开、全屏进出及窗口缩放后不重叠。不得用网页原型绘制的假交通灯代替证据。
 
@@ -54,26 +54,6 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
     (cd src/frontend && npm run openapi:check)
     ```
 
-## 邮件已读统计即时同步
-
-- 后端 PostgreSQL 用例覆盖 inbox/search 的多文件夹 `locations`、精确 folder 优先定位及同账户边界：`scripts/run-mail-core-tests.sh run -k "folder_role_inbox_api or fts_inbox_api" --no-cov`。
-- 前端缓存、组件与实时事件用例覆盖读/未读增减、多账号/分组/角色/folder scope、未知值、反向并发、SSE 延后、mark-all 与单封写排序及部分失败收敛：`cd src/frontend && npx vitest run src/api/mailCore.mutations.test.ts src/components/MessageList.test.tsx src/components/Sidebar.test.tsx src/hooks/useMailCoreRealtime.test.ts`。
-- API DTO 改动必须同步导出 OpenAPI 和 TypeScript 类型，执行 `python3 scripts/export_openapi.py --check` 与 `npm --prefix src/frontend run openapi:check`。
-- **合并后动作**：确认生成文件已暂存，无 schema drift。
-- **migration 窗口**：涉及数据库表变动时编写 Alembic 迁移脚本，版本号保持严格线性无分叉。
-
-## 侧栏账号局部搜索
-
-- `src/frontend/src/components/Sidebar.test.tsx` 覆盖分组与总列表独立过滤、邮箱/域名/名称匹配、禁用账号排除、空结果、清空/Esc/触发按钮关闭、焦点与展开状态恢复及过滤区拖放禁用。
-- `tests/e2e/sidebar_tree.spec.ts` 的 p043 用例覆盖 180px 窄侧栏、移动抽屉、全局分类不受过滤影响以及搜索状态不跨刷新保存；执行 `npm --prefix src/frontend run test:e2e`。
-
-## 邮箱地址复制
-
-- `src/frontend/src/components/CopyAddress.test.tsx` 覆盖写入纯地址、成功/拒绝/API 缺失反馈、连续点击计时重置与卸载清理。
-- `src/mail_core/api/mail.py` 的详情 DTO 变更同步 OpenAPI/TypeScript；PostgreSQL 详情测试验证标准解析、名称逗号、多收件人与不可复制原文保留。
-- `src/frontend/src/components/MessageReader.test.tsx`、`Sidebar.test.tsx` 与 `SettingsModal.test.tsx` 验证邮件归属/发件人/收件人/抄送、侧栏、设置地址以及复制不触发导航或选择；`tests/e2e/smoke.spec.ts` 的 p042 用例通过真实浏览器剪贴板检查纯地址写入。
-- `npm --prefix src/desktop test` 包含 Electron 剪贴板集成测试，验证顶层页面系统剪贴板写入及 frame 权限隔离；`test:packaged` 另外验证打包 PostgreSQL 生命周期。
-
 ## 门禁类别覆盖清单
 
 |类别|项目对应实现|命令或验证方式|
@@ -88,7 +68,7 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
 |**写回收敛与统计一致性**|批次自动续跑、意图保护与孤儿恢复|`scripts/run-mail-core-tests.sh run -k test_mark_read_convergence_suite`|
 |**MIME 解析错误与前端可见性**|正文/报头/附件名解析失败、API 传递与跨邮件状态隔离|`scripts/run-mail-core-tests.sh run -k test_archive_decode_failure` 及 `(cd src/frontend && npm test -t MessageReader)`|
 
-## PostgreSQL 测试运行时（t013）
+## PostgreSQL 测试运行时
 
 环境安装与测试执行分开，复用仓库 `.venv`：
 
@@ -120,7 +100,7 @@ scripts/run-mail-core-tests.sh cleanup <run_uuid>
 
 t013/t014 的测试数量、seed 与运行产物属于当时的 task 结果，以 [t013 task archive](../archive/tasks/t013_test_pg_runtime/task.md)、[t014 task archive](../archive/tasks/t014_backend_test_isolation/task.md) 及其 review 为准。本文件只在下方“当前验证基线”保留近期门禁计数。
 
-## 后端逐用例隔离与确定性验证（t014）
+## 后端逐用例隔离与确定性验证
 
 共享 fixture 在独占测试库中清理全部业务表，保留 Alembic 版本。测试仍使用真实 commit、多连接与生产锁；不通过外层 rollback 吞掉跨连接语义。每例停止 Worker/LISTEN、关闭实际 checkout 连接并 dispose Engine，恢复 provider、credential store、dispatcher、鉴权、限流、schema cache 与 SSE 计数。setup/teardown 清理失败立即停止套件，禁止污染后续用例。
 
@@ -137,9 +117,7 @@ KKMAIL_TEST_SEED=41 scripts/run-mail-core-tests.sh run
 
 每轮目录包含 `.coverage`、`coverage.xml`、`coverage.json`、`junit.xml` 和 `test_summary.json`。覆盖仅统计生产 `mail_core`，启用分支覆盖；汇总列出实际收集、执行、错误、跳过原因和未执行清单，不用统一覆盖率百分比代替行为验收。依赖安装单独执行，pytest-cov 缺失会失败，不在测试入口自动安装。
 
-t014 的快速/完整套件计数、seed 和覆盖报告是历史结果，以 [t014 task archive](../archive/tasks/t014_backend_test_isolation/task.md) 与 [t014 test review](../archive/tasks/t014_backend_test_isolation/review_test.md) 为准。IMAP 真实路径由 t016 接续；未启用协议服务时的跳过不计为协议验证通过。
-
-## 前端测试运行时与隔离（t015）
+## 前端测试运行时与隔离
 
 前端单测与组件测试采用 Vitest + jsdom 环境，要求 Node >= 20（本地推荐 Node 22/24）：
 
@@ -161,9 +139,9 @@ t014 的快速/完整套件计数、seed 和覆盖报告是历史结果，以 [t
 - 移除测试中绑定的全局 window 事件监听器；
 - 卸载已渲染 DOM 组件节点，恢复全局 fetch、timers 与 navigator 替身。
 
-覆盖率报告基于 `@vitest/coverage-v8` 输出至 `.scratch/frontend_coverage`，覆盖范围仅限 `src/**/*.{ts,tsx}` 生产代码，排除测试文件与生成代码。t015 实施期的文件数、用例数与覆盖率以 [t015 task archive](../archive/tasks/t015_frontend_test_runtime/task.md) 及其 review 为准。
+覆盖率报告基于 `@vitest/coverage-v8` 输出至 `.scratch/frontend_coverage`，覆盖范围仅限 `src/**/*.{ts,tsx}` 生产代码，排除测试文件与生成代码。
 
-## 真实 IMAP 与服务商协议契约验证（t016）
+## 真实 IMAP 与服务商协议契约验证
 
 真实 IMAP 服务由专用测试 Compose 提供（`config/test_pg_compose.yaml` 中的 `imap` 服务，基于 Dovecot，绑定 `127.0.0.1:1143`），由 `scripts/start-mail-core-imap.sh` 启动，与业务数据库及业务 Compose 完全隔离，不使用业务口令或生产卷：
 
@@ -174,13 +152,13 @@ scripts/run-mail-core-tests.sh run -k test_imap
 
 真实协议层门禁特性：
 
-- **无静默跳过**：完整验证必须确保测试 IMAP 服务处于监听与认证就绪状态；未启用服务时的 PostgreSQL-only 运行不视为真实协议验证。t016 历史运行结果以 [t016 task archive](../archive/tasks/t016_mail_protocol_integration/task.md) 及其 review 为准；
+- **无静默跳过**：完整验证必须确保测试 IMAP 服务处于监听与认证就绪状态；未启用服务时的 PostgreSQL-only 运行不视为真实协议验证；
 - **全链路同步验证**：覆盖中文多部分正文、二进制附件落库加密与流式解密校验、相同 Message-ID 邮件处理，以及多轮同步的严格幂等性；
 - **增量收敛与服务端可观察性**：测试远端 Flag 变更与删除在本地库的增量同步；验证本地读状态更新经 `push_remote_operations` 写回到真实服务端后能在 IMAP 协议（`\Seen`）上直接观测；
 - **安全废纸篓与 TLS 防护**：验证仅移动目标邮件至 Trash，在缺少 MOVE 能力时拒绝不安全的全目录 EXPUNGE；非 SSL 端口开启 TLS 时必须握手失败直接阻断；
 - **Graph 服务商传输契约**：覆盖循环/重复 pageToken 检测、过期游标不前进、OAuth token 刷新失败脱敏、429 重试等待及 5xx/超时重试幂等性。普通 CI 不依赖外网真实 OAuth 凭据。
 
-## 全栈端到端真实测试（t017）
+## 全栈端到端真实测试
 
 全栈端到端测试覆盖真实环境（FastAPI、Worker、PostgreSQL、Dovecot、生产 SPA 构建同源托管）：
 
@@ -197,7 +175,7 @@ python3 scripts/run_full_stack_e2e.py
 - Playwright 执行 `tests/e2e/full_stack.spec.ts` 验证真实登录认证、Cookie、CSRF 校验、多会话失效、添加 IMAP 账号后 Worker 自动同步与邮件详情展示、XSS 防护过滤、双页面 SSE 实时协同；
 - 运行后优雅终止进程，安全销毁测试库与 role，失败时保留截图、日志和 trace 于 `.scratch/`。同时保留 `npm --prefix src/frontend run test:e2e` 作为 4 秒快速 UI 冒烟入口。
 
-## 数据库迁移与结构一致性门禁（t018）
+## 数据库迁移与结构一致性门禁
 
 数据库迁移质量门禁验证真实 PostgreSQL 下历史版本数据跨版本平滑升级无损保留与结构一致性：
 
@@ -213,7 +191,7 @@ scripts/run-mail-core-tests.sh run -k test_migration_validation
 - **ORM Schema Drift 校验**：使用 Alembic autogenerate 比较 SQLAlchemy 模型与真实 PostgreSQL catalog 差异，结合显式 catalog 校验确保 0 未登记 drift；
 - **可逆降级再升级循环**：对最新版本执行 `downgrade -1` 与重新 `upgrade head`，验证 DDL 双向对称可逆。
 
-## 真实加密备份与跨库恢复演练（t019）
+## 真实加密备份与跨库恢复演练
 
 生产备份逻辑支持真实 PostgreSQL `pg_dump`、AES-GCM 封装加密与真实 `pg_restore` 还原到全新目标实例：
 
@@ -229,7 +207,7 @@ scripts/mail-core-backup-restore-drill.sh
 - **真实业务核验**：恢复后通过独立会话核验账号、邮件、正文、附件关联，并使用密钥解密读取 Blob 确保字节与原始附件完全一致；
 - **篡改与伪造拒绝**：校验错误密钥、篡改数据、缺失 Blob 抛出明确异常；声明禁止将 SQL stub 备份伪造为可恢复证据。
 
-## 多进程 Worker 竞争与故障恢复测试（t020）
+## 多进程 Worker 竞争与故障恢复测试
 
 多进程并发与混沌恢复门禁验证真实操作系统级 Worker 竞争与异常退出后的系统自我修复能力：
 
@@ -245,7 +223,7 @@ scripts/run-mail-core-tests.sh run -k test_worker_process_recovery
 - **跨进程事件通知与回滚隔离**：Worker 进程提交事务后通过真实 PostgreSQL `LISTEN/NOTIFY` 唤醒 API 进程的 SSE 分发，未提交或已 rollback 的事务严格不广播；
 - **进程组安全销毁**：测试中所有子进程使用独立的进程组（`start_new_session=True`），测试退出时通过 `os.killpg` 严格清理，绝无孤儿进程残留。
 
-## 桌面打包产物与嵌入式数据库生命周期门禁（t021）
+## 桌面打包产物与嵌入式数据库生命周期门禁
 
 桌面测试区分快速基础测试与严格实际打包产物冒烟：
 
@@ -264,7 +242,7 @@ npm --prefix src/desktop run test:packaged
 - **优雅停机与端口释放**：验证 `pg_ctl stop` 后子进程完全终止、监听端口完全释放，不残留孤儿服务；
 - **数据跨重启持久化保留**：在同一数据目录重新启动，验证不会被重新初始化覆盖，先前写入的状态完整继承。
 
-## 大邮箱查询同步与资源使用基准（t022）
+## 大邮箱查询同步与资源使用基准
 
 支持确定性规模大邮箱基准与系统资源用量测量：
 
@@ -285,7 +263,7 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 - **度量指标**：延迟分位数（p50、p95）、吞吐（QPS）、进程峰值 RSS 内存、数据库物理体积、Message 表大小、Blob 磁盘空间及 PostgreSQL EXPLAIN 查询计划（确认索引利用）；
 - **跨报告对比**：结构化输出各场景延迟百分比变化与资源变动，若运行平台不一致明确警示不可直接比对。
 
-## 本地分层门禁与 CI 流水线映射（t023）
+## 本地分层门禁与 CI 流水线映射
 
 统一本地开发重放命令与 GitHub Actions 流水线，消除数据库静默跳过并实现全自动化守护：
 
@@ -321,7 +299,7 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 
 task archive 中记录的其他数字均为各 task 当时的历史快照，不应用作当前基线。
 
-## 分组侧栏与分组邮件范围（t027）
+## 分组侧栏与分组邮件范围验证
 
 组织数据、邮件范围与浏览器交互必须组合验证，不能只测组件状态或仅检查 API 响应：
 
@@ -336,7 +314,7 @@ python3 scripts/run_full_stack_e2e.py
 - 浏览器冒烟测试验证六类全局分类、分组分类、真实文件夹树和导航布局；真实全栈 Playwright 通过 HTML5 拖拽验证空组、跨组、移出、主列表内排序和分组排序，并刷新后读取服务端确认成员关系与顺序持久化。
 - 前端测试覆盖查询 key 按 scope 隔离、分组参数贯通、偏好持久化与设置入口；`schemas/openapi.json` 和生成 TypeScript 必须通过 codegen 漂移检查。
 
-## 供应商账户表单与 OAuth 回调（t053 / t054）
+## 供应商账户表单与 OAuth 回调验证
 
 后端：`scripts/run-mail-core-tests.sh run -k "provider_account or accounts_api or oauth_transport or account_credentials" --no-cov`，覆盖真实加密凭据更新、回滚、Microsoft IMAP 拒绝、跨会话/重放/并发回调拦截及多客户端令牌轮换。前端：`npm --prefix src/frontend test`；浏览器：`npm --prefix src/frontend run test:e2e -- provider_account_forms.spec.ts settings_workspace.spec.ts`，覆盖账户表单、帮助弹窗焦点与窄屏输入。
 

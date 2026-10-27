@@ -1,113 +1,93 @@
-# 需求规格：邮件同步、归档解析与安全存储 (Mail Sync and Storage)
+# 邮件增量同步、MIME解析与分块加密存储技术规范 (Mail Sync, Parsing & Storage Specification)
 
-## 背景
+本文档定义 kkmail 多协议邮件同步引擎、Worker 任务调度、MIME 归档解析、安全删除阻断与分块内容寻址加密存储技术规范。
 
-支持从标准 IMAP 以及 Microsoft Graph API 持续同步邮件元数据（Google 邮件经 IMAP 接入），并在本地提供端到端内容寻址分块加密与离线归档能力。
+______________________________________________________________________
 
-## 契约区
+## 一、 协议同步引擎与状态流转
 
-### 范围
+系统支持从标准 IMAP 服务与 Microsoft Graph API 持续增量同步邮件元数据：
 
-- IMAP 与 Graph 提供商的元数据分页扫描与增量拉取。
-- 邮件原文的后台批次归档下载与 MIME 解析（提取正文和附件）。
-- 分块 AES-256-GCM 内容寻址加密存储与延迟引用计数垃圾回收 (GC)。
-- 标记状态异步出站写回与 IMAP 安全删除阻断。
-- 旧 SQLite 邮件迁移：字段保真、canonical provider identity 映射，以及不可寻址邮件的本地行为。
+### 1. IMAP 协议同步与异常容错
 
-### 非范围
+- **连接与安全性**：强制开启 TLS 证书与主机名校验，Socket 读取默认超时放宽至 60 秒；mailbox 文件夹包含空格或特殊字符时自动带双引号转义。
+- **目录发现与 RFC 6154 属性映射**：
+    - 标准角色映射：`\Sent` / 已发送 映射为 `sent`；`Deleted Messages` / `\Trash` 映射为 `trash`；`\Drafts` 映射为 `drafts`；`\All` 映射为 `all`；`\Flagged` / `\Starred` 映射为 `flagged`；
+    - 结构节点处理：带有 `\NoSelect` 属性的目录作为 `paused` 结构节点保留，用于树形层级展示，系统不为其排发邮件同步作业；
+    - Gmail 虚拟标签优化：针对 `@gmail.com` 及 `@googlemail.com` 账号，其 `\All`（所有邮件）与 `\Important`（重要）标签默认置为 `paused`，消除邮件 2~3 倍重复拉取的存储与 I/O 冗余；针对这些 `paused` 视图发起的显式同步请求在服务端自动归零并以 200 成功响应。
+- **分批拉取与瞬态网络重试**：
+    - 单次元数据同步任务最大拉取批次限制为 10 页（约 500 封），避免长时间霸占 Worker 队列；
+    - 遇到 `TimeoutError`、`SSLEOFError` 等网络瞬态故障时采用指数退避重试，未达重试上限不污染账号为 `failed` 状态。
 
-- 发送邮件（SMTP 或提供商 send API）。
-- 邮件垃圾箱彻底物理清除与邮件在文件夹间跨目录移动。
+### 2. Microsoft Graph 同步
 
-### 验收标准
+- 通过 `/me/mailFolders/inbox` 权威端点解析真实收件箱 ID；
+- Delta 增量拉取仅更新本次明确下发的变更字段；若响应中缺省 `isRead` 或 `flag`，数据库严格保留已有状态，不把缺省视为清空；
+- 内容字段（主题、摘要、收件人）若显式返回空值，允许清空本地字段。
 
-- [x] AC-001：IMAP 连接默认强制启用 TLS 证书与主机名验证，mailbox 文件夹名包含空格或特殊字符时自动带双引号转义。
-- [x] AC-002：IMAP 执行删除时优先调用 `UID MOVE`；若服务器不支持或移动失败，严禁调用全邮箱 `EXPUNGE`，不打 `\Deleted` 标记并直接向调用方报错。
-- [x] AC-003：Graph 提供商在 v1.0 下通过 `/me/mailFolders/inbox` 别名解析真实收件箱 ID，映射为 `role="inbox"`，并递归遍历子文件夹。
-- （编号说明，2026-10-27 补）AC-004：编号保留/已废弃，本编号未曾分配，不得复用；后续新增 AC 只增不复用。
-- [x] AC-005：元数据扫描完成后自动调度首个归档批次，归档成功后解析 MIME 生成 `MessageBody` 与 `Attachment`。
-- [x] AC-006：垃圾回收 (GC) 必须同时统计 `MessageBlobLink` 与 `Attachment.blob_id` 引用，删除文件前执行数据库二次校验，异常时 Fail-Closed 跳过删除。
-- [x] AC-007：IMAP Provider 对名为 `"已发送"`、`"已发送邮件"` 或带有 `\Sent` 标志的目录，解析出 `role="sent"`。
-- [x] AC-008：`/api/mail/inbox` 支持 `folder_role` 参数（默认 `inbox`，支持 `sent` 等），支持按角色检索全账号或指定账号邮件。
-- [x] AC-009：归档 MIME 正文、报头或附件文件名解析失败时持久化 `MessageBody.parse_error` 并跳过损坏派生物，保留原始 MIME，不阻塞同批合法邮件。
-- [x] AC-010：阅读器在检测到 `parse_error` 时明确展示“邮件解析失败”及脱敏原因，即使存在摘要或部分内容亦不被空占位掩盖，切换邮件即时隔离。
-- [x] AC-011：Graph Delta 只更新本次明确返回的 `isRead` 与 `flag.flagStatus`；字段缺失时，数据库保留已有 read/star 状态。
-- [x] AC-012：IMAP 元数据未提供附件状态时，不覆盖本地 MIME 解析得到的 `has_attachments`；元数据明确提供 `true` 或 `false` 时按返回值更新。
-- [x] AC-013：IMAP、Graph 缺少或非法 provider received time 时保持 null，不用当前时间或 Graph last-modified 代替；Graph `receivedDateTime` 需带时区。MIME Date 不覆盖已有 provider 收件时间。
-- [x] AC-014：缺失收件时间在 API 中为 null，不显示成当前日期；升序与降序列表都把 null 稳定排在末尾，keyset cursor 能跨页遍历已知与未知时间而不漏项、不重复。
-- [x] AC-015：旧库邮件缺少或为空的 subject/sender 按空事实值迁移；非空原值（包括旧占位词）原样保留，不按字符串推断并清理。
-- [x] AC-016：旧库 From、To、Cc 按标准地址解析器拆分；已存 body_type 为 text/html 时按存储值写入对应正文列，缺失或不支持时只写纯文本列，不 sniff HTML。
-- [x] AC-017：旧库日期仅在 `id_mode=graph` 且 received_at 是有效、带时区的 Graph `receivedDateTime` 时迁入 sort_time；日期缺失、非法、无时区及来源不明的 IMAP、sequence、空白或未知模式保持 null。UID 仅从 `id_mode=uid` 且 provider_message_id 可解析为 PostgreSQL signed BIGINT 范围内正整数（1 至 9223372036854775807）时迁入，SQLite 本地行号不作为日期或 UID。
-- [x] AC-018：旧库 importer 通过只读 SQLite 源和隔离 PostgreSQL 写入；合成 fixture 逐字段验证缺失值与有效来源值、重复运行幂等，并确认源文件未变。
-- [x] AC-019：没有 `MessageArchiveState` 的迁移邮件在详情与 sync-body API 中返回 `is_archived: null`；sync-body 调用真实归档 runner 后仍无 archive state、claim/job 或 provider 调用。前端保留 null/缺失语义，不默认成已归档。
-- [x] AC-020：只有 Graph 模式的原始非空白 provider_message_id 作为 `Message.remote_id`；其他旧模式或缺失/空白 ID 的邮件保留内容并使用 null remote_id。null remote_id 不传入 provider fetch、reconcile 或 remote push。
-- [x] AC-021：Message.remote_id 可为空，迁移不改写已有远端 ID；存在 null 值时数据库降级明确失败，不合成远端 ID。
-- [x] AC-022：null remote_id 邮件的 read/flag 可本地更新且不创建 remote operation；trash 与 sync-body 返回 409，不调用 provider。
-- [x] AC-023：服务商未提供 read/flag/attachment 时，新邮件状态持久化为 null，API/前端保留未知；未知更新不覆盖已知状态，用户显式操作仍可设置布尔值。
-- [x] AC-024：未知读状态不渲染未读标记，也不因打开邮件自动标已读；乐观更新失败恢复原状态，包括 null。
-- [x] AC-025：文件夹包含未知读状态时未读数为 null；账号、分组与全局聚合传播未知，不展示部分和；可知总数仍准确。
-- [x] AC-026：状态迁移不改写已有 true/false；旧 SQLite 无 flag 列时导入 null，已有 read/attachment 原值保留。降级遇到状态或未读统计 null 时拒绝，不补 false/0。
-- [x] AC-027：Graph 部分内容 delta 仅应用实际返回字段；明确空主题、空摘要、空收件人数组可清空旧值，缺省字段保留原值。
-- [x] AC-028：同页同封邮件的 partial upsert 与 flag patch 按响应顺序合并，后续提供字段覆盖先前同字段；delete 丢弃此前 patch，不破坏本地未收敛状态意图保护。
-- （编号说明，2026-10-27 补）AC-029、AC-030：编号保留/已废弃，本两号未曾分配，不得复用；后续新增 AC 只增不复用。
-- [x] AC-031：带 HTML body_preview 的邮件详情 body 为空时不将摘要渲染成正文；加载、详情错误、解析失败和空正文互斥渲染，已有正文按 html/text 分流。
-- [x] AC-032：Graph 收件箱 ID 可用时只凭 canonical ID 或 well-known 标记赋予 inbox 角色；仅在无法取得 ID 时才回退英文名称，避免同名自定义目录成为第二个收件箱。
-- [x] AC-033：IMAP `Deleted Messages` 名称映射为 `trash` 角色。
-- [x] AC-034：IMAP LIST 的 `\NoSelect` 目录保留为 `paused` 结构节点，不创建元数据任务；已有任务以 skipped 完成，`MessageLocation`、邮件及子目录关系保留。
+______________________________________________________________________
 
-### 可测试性声明
+## 二、 任务调度优先级与连接预算治理
 
-全部 AC 可自动测试。
+1. **Worker 任务调度优先级分层**：
+    为避免大目录同步压制即时交互，队列调度按严格优先级梯度运行（数值越小优先级越高）：
+    - **10（最高）**：用户按需触发的即时正文归档任务（去重键 `archive_msg:{id}`）；
+    - **40**：出站状态写回操作（已读、星标、移入废纸篓）；
+    - **50**：初次账号全量目录扫描；
+    - **60**：后台正文归档批次续跑；
+    - **75**：文件夹定时增量轮询（设去重键 `delta:{account_id}:{folder_id}`，防止任务堆积）；
+    - **80**：定期数据对账检查。
+2. **连接池预算控制**：
+    - 全局与后台网络连接设有硬性槽位控制，通过 PostgreSQL 会话级 Advisory Lock 协同持有；
+    - 容量不足时任务通过 `reschedule_job` 延后执行，不计入失败重试次数。
+3. **执行跟踪与孤儿清理**：
+    - 同步作业持有唯一的执行代际 UUID，请求通过关联表绑定具体代次；
+    - 孤儿任务由后台 Reaper 定期收敛，全量扫描通过 `scan_generation` 防止半扫描引发误删。
 
-## 上下文区
+______________________________________________________________________
 
-- 来源：`docs/blueprint/decisions.md` (IMAP 安全阻断删除决策)；task t037 对旧 SQLite 数据迁移来源、身份与未知归档状态的核实见 [`docs/archive/tasks/t037_legacy_migration_fidelity/spec.md`](../archive/tasks/t037_legacy_migration_fidelity/spec.md)。
+## 三、 出站状态写回与安全删除阻断
 
-- 本轮来源：t041/p024（未知状态）、t042/p025（部分字段）、t043/p022（正文摘要隔离闭环）、t051/p037（文件夹角色与显示）、t052/p038（QQ 不可选择父目录）；最终验证由各 task 总账补入。
+1. **写回状态机与未收敛意图保护**：
+    - 用户标记已读、星标或删除操作先写入本地数据库并入队 `remote_operations`；
+    - 入站同步在更新远端元数据前，检查 60 秒写回保护窗口；若本地存在未完成写回操作，入站同步禁止用远端陈旧快照覆盖本地用户的新状态；
+    - 写回任务遇到并发或并发限制时自动调度延迟唤醒任务，杜绝空转或遗漏调度。
+2. **IMAP 删除安全阻断契约**：
+    - IMAP 邮件删除优先调用 `UID MOVE` 移入废纸篓目录；
+    - 若服务器不支持 MOVE 或移动失败，**严禁调用全邮箱 `EXPUNGE`，严禁标记 `\Deleted`**，必须 Fail-Closed 向调用方报错，防止用户误清空整个远程邮箱。
 
-### 有意不测
+______________________________________________________________________
 
-- 真实外部三方邮箱的持续长时间在线同步（使用 Stub/Memory Provider 隔离断网与配额风险）。
+## 四、 MIME 归档解析与错误可见性
 
-### 测试策略
+1. **原文持久化与解析解耦**：
+    - 归档调度拉取邮件原始 MIME 数据后，立即写入加密存储；
+    - MIME 解析器从原文提取纯文本正文（`text_plain`）、富文本正文（`text_html`）与附件元数据；
+    - 若 MIME 解析因损坏、字符集或非标格式报错，系统将原始 MIME 完整保留在存储区，并在数据库记录脱敏的 `MessageBody.parse_error`，不中断同批次合法邮件归档。
+2. **前端错误渲染与正文并存**：
+    - 阅读器感知到 `parse_error` 时渲染醒目的解析错误横幅；
+    - 若解析器在报错的同时提取到了部分可读正文，阅读器在错误横幅下方继续渲染正文，保障用户阅读权益。
 
-- 未知状态与部分更新：`tests/mail_core/test_unknown_mail_status.py`、`test_partial_metadata_fidelity.py`；前端 `MessageList.test.tsx`、`MessageReader.test.tsx` 与查询缓存回归。
+______________________________________________________________________
 
-- 单元测试：`tests/mail_core/test_gmail_graph_contracts.py`、`test_delta_flag_patch.py`、`test_metadata_apply.py`、`test_archive_mime_parser.py`、`test_flag_convergence.py`。
+## 五、 分块内容寻址与 AES-256-GCM 加密存储
 
-- 契约测试：`test_blob_crypto_gc.py` 验证 GC 与附件引用计数。
+1. **流式分块加密 (`KKMS`)**：
+    - 原始邮件 MIME 与独立附件以二进制 Blob 存储；
+    - Payload 经分块 AES-256-GCM 加密，并由 SHA-256 计算唯一哈希实现内容寻址与重复数据删除；
+    - 支持多版本主密钥轮换。
+2. **延迟引用计数与垃圾回收 (GC)**：
+    - 存储层同时统计 `MessageBlobLink`（邮件原文）与 `Attachment.blob_id`（独立附件）的引用计数；
+    - 执行 GC 物理删除文件前，必须进行数据库事务二次校验；若存在校验异常，立即跳过删除，确保数据零丢失。
 
-- 旧库迁移：`tests/mail_core/test_legacy_migration.py`、`test_migration_validation.py`、Message detail/mutation/provider-boundary tests。
+______________________________________________________________________
 
-### 未知契约清单
+## 六、 遗留数据迁移保真契约
 
-无
-
-### 风险与回退
-
-- 风险：临时网络 I/O 错误导致附件写入失败。
-- 回退：严格区分 MIME 解析异常与写盘异常，写盘失败时保持 `ARCHIVE_PENDING` 调度退避重试，不标记完成。
-
-### 依赖与约束
-
-- 依赖磁盘存储挂载并配置 `MAIL_CORE_BLOB_ROOT` 与 `MAIL_CORE_BLOB_KEY_V1`。
-
-### Finalization 时更新的 blueprint
-
-- `docs/blueprint/architecture.md`：同步引擎与存储模块说明。
-- `docs/blueprint/decisions.md`：IMAP 删除安全阻断策略。
-
-## 同步执行跟踪、连接预算与保留策略（fix/review-20261026-commits，2026-10-26）
-
-- 同步请求执行跟踪（R06/R08，迁移 `20261026_0025`）：WorkerJob 持有 `execution_generation`（唯一 UUID）；新表 `sync_request_target_jobs` 把同步请求目标绑定到具体作业代次，请求结算按 WorkerJob → 代次 advisory → 绑定/Target（UUID 升序）→ Request（UUID 升序）的锁序执行，孤儿绑定由 reaper 收敛。全量扫描以 `scan_generation` 标识一轮完整扫描，半扫描不触发删除。无基线时 delta 同步返回 `baseline_required`。迁移将无法追踪的历史 queued/running 请求标为 failed（code=`execution_tracking_unavailable`），不伪造历史成功。新增只读接口 `GET /api/mail/sync/requests` 返回当前未终结请求（scope 过滤，limit ≤ 50），供前端重载恢复。
-- 连接预算（R11）：全局 8 槽、后台 6 槽由每许可一张专用 psycopg 控制连接持有会话级 advisory lock 实现（槽位 0–7，后台仅 2–7）；流量类别由作业类型/消息上下文显式计算并传入 IMAP/HTTP/OAuth 刷新 I/O。容量不足走 `jobs.reschedule_job()` 改期，不计失败。
-- Outbox 保留（R13，迁移 `20261026_0026`）：按 `publication_seq` 连续已发布前缀清理，保留 7 天，单批 ≤ 5000，水位 `pruned_through_seq` 与删除同事务推进；`dispatched_at` 已删除。游标低于水位时回放返回 `client.resync_hint(reason=retention_gap)`；分发器先提交发布再广播。
-- 备份恢复（R12）：恢复先在目标 blob 根内同卷 staging，逐文件发布 blob（拒绝发布到目标根之外）后才执行 `pg_restore --single-transaction`；操作日志只含 operation_id、包摘要、目标路径、数据库身份、阶段五键，支持 resume/verify/cleanup 与 `needs_verification` 语义。
-
-## Gmail 虚拟标签同步策略与 IMAP 超时优化（t056，2026-10-26）
-
-- Gmail 虚拟文件夹排除（AC-T56-001）：Gmail 账号（`@gmail.com` / `@googlemail.com`）下的 `\All`（所有邮件）与 `\Important`（重要）虚拟汇总标签，在文件夹发现时默认置为 `sync_status = "paused"`，常规同步不自动为其拉取邮件，消除收件箱与已发邮件被 2~3 倍重复拉取的存储与 IO 冗余。
-- 虚拟标签的显式同步请求（p060）：上述 `paused` 虚拟标签（及 `\Noselect` 结构节点、远程已消失文件夹）仍是可导航视图；以其 `folder_id` 显式提交的同步请求在目标解析时归零（请求以 0 目标完成、接口返回 200），与按角色解析的静默排除和执行层 `skipped` 语义一致，不返回 422 `folder_not_selectable`。文件夹不存在或不属请求作用域仍返回 404。
-- RFC 6154 属性解析扩展（AC-T56-002）：`ImapProvider.list_folder_catalog()` 增加对 `\All` 映射为 `role = "all"`，对 `\Flagged` / `\Starred` 映射为 `role = "flagged"`。
-- IMAP 连接与分批放宽（AC-T56-003, AC-T56-004）：`ImapProvider` 默认 Socket 读取超时提升至 60.0 秒；`sync_folder_metadata` 单任务默认最大批次 `max_pages` 调整为 10 页（约 500 封），减轻单任务长时间占用连接风险。
-- 瞬态网络错误容错（AC-T56-005）：Worker 执行同步任务捕获 `TimeoutError`、`SSLEOFError` 等瞬时网络异常时，按指数退避重新排期，不立即将账号置为 `failed` 状态。
+1. **历史数据保真导入**：
+    - 旧数据库邮件的主题、发件人等空白字段以真实空值导入，不以占位符覆盖；
+    - 邮件收发时间仅在提供商显式提供带时区有效时间时迁入，缺失时严格存为 `null`；
+    - 缺少远端不可寻址的迁移邮件，`remote_id` 与 `is_archived` 置为 `null`，禁止伪造生成远端 ID。
+2. **未知状态可空语义**：
+    - 邮件 `is_read`、`is_flagged`、`has_attachments` 采用 nullable 布尔类型贯穿数据库与前后端；
+    - 服务商未提供读状态时存为 `null`，不盲目填充 `false`，列表与统计界面保留未知状态展示。
