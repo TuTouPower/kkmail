@@ -6,14 +6,29 @@ import hashlib
 import os
 import re
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 from collections.abc import Iterator
 
-from mail_core.blobs.crypto import BlobIntegrityError, Keyring, iter_unwrap, load_keyring_from_env, read_key_version, wrap
+from mail_core.blobs.crypto import BlobCryptoError, BlobIntegrityError, Keyring, iter_unwrap, load_keyring_from_env, read_key_version, wrap
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _fsync_dir(path: Path) -> None:
+    """fsync a directory so a rename inside it is durable (A138)."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 class InvalidBlobDigest(ValueError):
@@ -46,6 +61,13 @@ class BlobStore:
         self.keyring = keyring or load_keyring_from_env()
         self.key_version = key_version if key_version is not None else self.keyring.active_version
         self.root.mkdir(parents=True, exist_ok=True)
+        # A138: per-digest put locks (registry guarded by its own lock).
+        self._put_locks: dict[str, threading.Lock] = {}
+        self._put_locks_guard = threading.Lock()
+
+    def _lock_for_digest(self, digest: str) -> threading.Lock:
+        with self._put_locks_guard:
+            return self._put_locks.setdefault(digest, threading.Lock())
 
     def hash_plaintext(self, data: bytes) -> str:
         return hashlib.sha256(data).hexdigest()
@@ -73,6 +95,13 @@ class BlobStore:
 
     def put(self, data: bytes) -> BlobWriteResult:
         digest = self.hash_plaintext(data)
+        # A138: serialise the verify-then-write sequence per digest so a
+        # concurrent put of the same content cannot interleave with the
+        # existence check / replacement below.
+        with self._lock_for_digest(digest):
+            return self._put_locked(data, digest)
+
+    def _put_locked(self, data: bytes, digest: str) -> BlobWriteResult:
         rel = self._rel_path(digest)
         dest = self.root / rel
         if dest.is_file():
@@ -87,7 +116,11 @@ class BlobStore:
                         raise BlobIntegrityError("existing blob hash mismatch")
                 disk_size = dest.stat().st_size
                 return BlobWriteResult(digest, disk_size, rel, disk_version)
-            except BlobIntegrityError:
+            except BlobCryptoError:
+                # A138: catch the whole crypto error family, not only the
+                # BlobIntegrityError subclass — an existing blob written
+                # under an unknown key version raises plain
+                # BlobCryptoError and must also fall through to a rewrite.
                 pass
         dest.parent.mkdir(parents=True, exist_ok=True)
         payload = wrap(data, keyring=self.keyring, key_version=self.key_version)
@@ -98,6 +131,7 @@ class BlobStore:
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp_name, dest)
+            _fsync_dir(dest.parent)
         except Exception:
             try:
                 os.unlink(tmp_name)
