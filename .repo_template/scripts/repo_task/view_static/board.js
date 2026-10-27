@@ -913,7 +913,7 @@ function renderSheetDoc(doc) {
     return;
   }
   body.appendChild(el('p', { class: 'doc-loading' }, ['加载 ' + doc + '.md …']));
-  fetch('/task-doc?tid=' + encodeURIComponent(n.id) + '&doc=' + encodeURIComponent(doc))
+  fetch('/task-doc?tid=' + encodeURIComponent(n.id) + '&doc=' + encodeURIComponent(doc) + '&token=' + encodeURIComponent(window.__DOC_TOKEN__ || ''))
     .then(function (resp) {
       if (!resp.ok) return resp.text().then(function (t) { throw new Error(t); });
       return resp.text();

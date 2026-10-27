@@ -256,7 +256,8 @@ def test_route_render_error_is_fixed_text_without_exception_detail(monkeypatch, 
 
 
 def test_route_task_doc_error_does_not_leak_absolute_path(monkeypatch, capsys):
-    handler = _route_fake("/task-doc?tid=t001&doc=spec")
+    monkeypatch.setattr(view_server, "_DOC_TOKEN", "tok-a61")
+    handler = _route_fake("/task-doc?tid=t001&doc=spec&token=tok-a61")
     monkeypatch.setattr(view_server, "compute_schedule", lambda: {"tasks": {}})
     monkeypatch.setattr(view_server, "discover_effective_sources", lambda: {})
 
@@ -453,6 +454,125 @@ def test_serve_uses_os_assigned_port_and_closes_server(monkeypatch):
     assert "server_close" in events
     # 探活-释放-重绑的旧 helper 已移除，serve 不应再依赖它
     assert not hasattr(view_server, "_find_free_port")
+
+
+def _headers_fake(host=None, origin=None, server_address=("127.0.0.1", 8765)):
+    """构造带 headers/server 的假 handler，供 A29 Host/Origin 校验测试。"""
+    from email.message import Message
+    from types import SimpleNamespace
+
+    headers = Message()
+    if host is not None:
+        headers["Host"] = host
+    if origin is not None:
+        headers["Origin"] = origin
+    return SimpleNamespace(
+        headers=headers,
+        server=SimpleNamespace(server_address=server_address),
+    )
+
+
+def test_request_host_must_be_loopback_with_actual_port():
+    # A29: DNS rebinding 用外部域名 Host 访问本机端口必须被拒
+    assert view_server._request_host_allowed(_headers_fake("127.0.0.1:8765"))
+    assert view_server._request_host_allowed(_headers_fake("localhost:8765"))
+    assert view_server._request_host_allowed(_headers_fake("[::1]:8765"))
+    assert not view_server._request_host_allowed(_headers_fake("evil.example.com:8765"))
+    assert not view_server._request_host_allowed(_headers_fake("127.0.0.1:9999"))  # 端口不符
+    assert not view_server._request_host_allowed(_headers_fake("127.0.0.1"))  # 缺端口
+    assert not view_server._request_host_allowed(_headers_fake(None))
+
+
+def test_request_origin_must_match_host_when_present():
+    assert view_server._request_origin_allowed(
+        _headers_fake("127.0.0.1:8765", "http://127.0.0.1:8765")
+    )
+    assert view_server._request_origin_allowed(_headers_fake("127.0.0.1:8765", None))
+    assert not view_server._request_origin_allowed(
+        _headers_fake("127.0.0.1:8765", "http://evil.example.com")
+    )
+    assert not view_server._request_origin_allowed(
+        _headers_fake("127.0.0.1:8765", "http://127.0.0.1:9999")
+    )
+
+
+def test_do_get_rejects_disallowed_host_before_routing():
+    routed = []
+
+    class FakeHandler:
+        headers = _headers_fake("evil.example.com:8765").headers
+        server = _headers_fake("evil.example.com:8765").server
+        path = "/"
+
+        def _route_get(self):
+            routed.append(True)
+
+        def _send_error_text(self, status, message):
+            self.result = (status, message)
+
+    handler = FakeHandler()
+    view_server._Handler.do_GET(handler)
+    assert handler.result[0] == 403
+    assert routed == []
+
+
+def test_task_doc_requires_valid_token(monkeypatch):
+    monkeypatch.setattr(view_server, "_DOC_TOKEN", "s3cret-token")
+    monkeypatch.setattr(view_server, "compute_schedule", lambda: {"tasks": {}})
+    monkeypatch.setattr(view_server, "discover_effective_sources", lambda: {})
+    monkeypatch.setattr(
+        view_server, "_read_task_doc", lambda *args: b"# doc body"
+    )
+
+    no_token = _route_fake("/task-doc?tid=t001&doc=spec")
+    view_server._Handler._route_get(no_token)
+    assert no_token.result[0] == 403
+
+    wrong = _route_fake("/task-doc?tid=t001&doc=spec&token=wrong")
+    view_server._Handler._route_get(wrong)
+    assert wrong.result[0] == 403
+
+    ok = _route_fake("/task-doc?tid=t001&doc=spec&token=s3cret-token")
+    view_server._Handler._route_get(ok)
+    assert ok.result == (200, b"# doc body")
+
+
+def test_render_html_injects_doc_token_and_board_js_sends_it(monkeypatch):
+    monkeypatch.setattr(view_server, "_DOC_TOKEN", "tok-abc")
+    model = {"project": "demo", "nodes": [], "edges": [], "summary": {}}
+    html = view_server._render_html(model)
+    assert 'window.__DOC_TOKEN__ = "tok-abc"' in html
+    assert "__DOC_TOKEN_JSON__" not in html  # 占位符已全部替换
+    board_js = (
+        Path(__file__).resolve().parents[1]
+        / "scripts" / "repo_task" / "view_static" / "board.js"
+    ).read_text(encoding="utf-8")
+    assert "__DOC_TOKEN__" in board_js and "token=" in board_js
+
+
+def test_serve_generates_doc_token(monkeypatch):
+    servers = []
+
+    class FakeServer:
+        def __init__(self, addr, handler):
+            self.server_address = addr
+            servers.append(self)
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def shutdown(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(view_server, "ThreadingHTTPServer", FakeServer)
+    monkeypatch.setattr(view_server, "_open_browser", lambda url: None)
+    monkeypatch.setattr(view_server, "_DOC_TOKEN", None)
+    view_server.serve(host="127.0.0.1", port=8765)
+    assert isinstance(view_server._DOC_TOKEN, str) and len(view_server._DOC_TOKEN) >= 16
+    assert servers[0].doc_token == view_server._DOC_TOKEN
 
 
 def test_handler_has_request_timeout():

@@ -8,6 +8,7 @@ board.js）从同目录 view_static/ 读取，无构建、无 CDN 依赖。
 import json
 import os
 import platform
+import secrets
 import socket
 import subprocess
 import sys
@@ -29,6 +30,11 @@ from .store import discover_effective_sources, git_text_at_ref
 
 _STATIC_DIR = Path(__file__).resolve().parent / "view_static"
 _DOC_NAMES = {"spec": "spec.md", "task": "task.md"}
+
+# A29: /task-doc 一次性访问 token。serve() 启动时生成，经看板页面注入
+# window.__DOC_TOKEN__，board.js 请求 /task-doc 时以查询参数携带；未启动
+# serve 的嵌入/测试场景为 None，此时不做 token 校验（Host/Origin 校验仍生效）。
+_DOC_TOKEN: str | None = None
 
 
 class _ThreadingHTTPServerV6(ThreadingHTTPServer):
@@ -55,10 +61,13 @@ def _build_model():
 
 
 def _render_html(model: dict) -> str:
-    """纯函数：读取模板，注入模型 JSON（转义 </script> 防闭合注入）。"""
+    """纯函数：读取模板，注入模型 JSON（转义 </script> 防闭合注入）
+    与 /task-doc 访问 token（A29）。"""
     template = (_STATIC_DIR / "board.html").read_text(encoding="utf-8")
     payload = json.dumps(model, ensure_ascii=False).replace("</", "<\\/")
-    return template.replace("__BOARD_JSON__", payload)
+    html = template.replace("__BOARD_JSON__", payload)
+    # 占位符须与标识符 window.__DOC_TOKEN__ 区分，否则 replace 会连标识符一起替换
+    return html.replace("__DOC_TOKEN_JSON__", json.dumps(_DOC_TOKEN or ""))
 
 
 def _allowed_doc_roots(base: Path) -> tuple[Path, ...]:
@@ -208,6 +217,84 @@ def _log_error_detail(context: str, error: BaseException):
     print(f"view_server: {context}：{error}", file=sys.stderr)
 
 
+_LOOPBACK_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
+
+
+def _split_host_port(value: str) -> tuple[str, int | None]:
+    """解析 Host/Origin 的 netloc → (hostname, port)；解析失败返回 ("", None)。"""
+    try:
+        parts = urlsplit(f"//{value.strip()}")
+        return (parts.hostname or "").lower(), parts.port
+    except ValueError:
+        return "", None
+
+
+def _server_address(handler) -> tuple | None:
+    server = getattr(handler, "server", None)
+    address = getattr(server, "server_address", None)
+    return address if isinstance(address, tuple) and len(address) >= 2 else None
+
+
+def _request_host_allowed(handler) -> bool:
+    """A29: Host 必须是 loopback 名 + 服务器实际端口，防 DNS rebinding
+    用外部域名把浏览器请求重绑到本机看板。显式 --allow-non-loopback
+    绑定（通配或指定 LAN 地址）是用户已确认的暴露面，按绑定地址放行。"""
+    headers = getattr(handler, "headers", None)
+    host = headers.get("Host") if headers is not None else None
+    if not host:
+        return False
+    hostname, port = _split_host_port(host)
+    if not hostname:
+        return False
+    address = _server_address(handler)
+    if address is not None and port != address[1]:
+        return False
+    if hostname in _LOOPBACK_HOSTNAMES:
+        return True
+    if address is not None:
+        bind = str(address[0]).lower()
+        if bind in ("0.0.0.0", "::") or hostname == bind:
+            return True
+    return False
+
+
+def _request_origin_allowed(handler) -> bool:
+    """A29: 带 Origin 的请求必须是同源（与 Host 完全一致），拒绝跨站发起。"""
+    headers = getattr(handler, "headers", None)
+    if headers is None:
+        return True
+    origin = headers.get("Origin")
+    if not origin:
+        return True
+    try:
+        parts = urlsplit(origin)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    host = headers.get("Host") or ""
+    host_name, host_port = _split_host_port(host)
+    try:
+        origin_port = parts.port
+    except ValueError:
+        return False
+    return parts.hostname.lower() == host_name and origin_port == host_port
+
+
+def _request_allowed(handler) -> bool:
+    """请求级门禁。headers 缺失只出现在直接构造假 handler 的单测里，
+    真实请求经 http.server 解析后必有 headers，此时严格校验。"""
+    if getattr(handler, "headers", None) is None:
+        return True
+    return _request_host_allowed(handler) and _request_origin_allowed(handler)
+
+
+def _expected_doc_token(handler) -> str | None:
+    server = getattr(handler, "server", None)
+    token = getattr(server, "doc_token", None)
+    return token if token else _DOC_TOKEN
+
+
 class _Handler(BaseHTTPRequestHandler):
     # A259: 单连接请求超时（秒）。ThreadingHTTPServer 无内建超时，慢/半截
     # 请求会无限期占住线程；StreamRequestHandler.setup 依据此值 settimeout。
@@ -235,6 +322,9 @@ class _Handler(BaseHTTPRequestHandler):
         http.server 对线程内未捕获异常只打 traceback 并关连接，客户端得到空响应。
         """
         try:
+            if not _request_allowed(self):
+                self._send_error_text(403, "请求被拒绝")
+                return
             self._route_get()
         except SystemExit as error:
             self._send_error_text(503, str(error) or "服务不可用（运行环境不满足）")
@@ -273,6 +363,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/task-doc":
             query = parse_qs(parts.query)
+            # A29: 正文接口须携带 serve 启动时生成的一次性 token
+            expected_token = _expected_doc_token(self)
+            provided_token = (query.get("token") or [""])[0]
+            if expected_token and not secrets.compare_digest(
+                provided_token, expected_token
+            ):
+                self._send_error_text(403, "请求被拒绝")
+                return
             tid = (query.get("tid") or [""])[0]
             doc = (query.get("doc") or [""])[0]
             try:
@@ -303,6 +401,9 @@ def _is_loopback_host(host: str) -> bool:
 
 
 def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
+    global _DOC_TOKEN
+    # A29: 每次启动生成一次性 token，经看板页面注入、/task-doc 校验
+    _DOC_TOKEN = secrets.token_urlsafe(32)
     if not _is_loopback_host(host):
         if not allow_non_loopback:
             sys.exit(
@@ -322,6 +423,7 @@ def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
         httpd = _server_class_for_host(bind_host)((bind_host, port), _Handler)
     except OSError as error:
         sys.exit(f"看板端口 {port} 绑定失败（{error}）；改用 --port 0 自动选空闲端口")
+    httpd.doc_token = _DOC_TOKEN
     actual_port = httpd.server_address[1]
     # ThreadingHTTPServer 对 IPv6 字面量需要方括号才能当 URL host
     url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
