@@ -235,8 +235,11 @@ def _apply(args: argparse.Namespace, actions: list[tuple[Path, Path, str]]) -> N
                         if add_result.returncode != 0:
                             raise IdScanError(f"git add 失败：{_rel(destination)}")
                     sys.stderr.write(f"已迁移：{_rel(destination)}\n")
-                except IdScanError as error:
+                except Exception as error:  # noqa: BLE001 - A397：回滚触发须覆盖全部迁移期异常
                     # 失败时回滚已成功的 git mv + 恢复被 set_field 改过的正文（F19/RT-010）
+                    # A397：触发条件不限于 IdScanError——move_entry/set_field/git add
+                    # 抛出的 OSError 等迁移期异常同样必须回滚已迁移条目（含本条），
+                    # 否则批量迁移会静默半途而废且条目留在错误状态目录。
                     # A100：按实际恢复数报告；未恢复条目逐条列出并给手工恢复方法。
                     restored, failures = _rollback_migrated(migrated)
                     if failures:
@@ -257,9 +260,16 @@ def _apply(args: argparse.Namespace, actions: list[tuple[Path, Path, str]]) -> N
                             f"迁移失败于第 {index} 条（{_rel(path)}）：{error}；"
                             f"已回滚 {restored} 条已迁移条目（含正文）\n"
                         )
-                    raise
+                    if isinstance(error, IdScanError):
+                        raise
+                    # 统一到 CLI 的 IdScanError 出口（main 转 SystemExit），
+                    # 不让裸 OSError 以 traceback 形式逃逸。
+                    raise IdScanError(str(error)) from error
     except IdScanError:
         raise
+    except OSError as error:
+        # id_lock 等回滚循环之外抛出的迁移期 OSError 同样统一出口（A397）。
+        raise IdScanError(str(error)) from error
 
 
 def cmd_archive(args: argparse.Namespace) -> None:
