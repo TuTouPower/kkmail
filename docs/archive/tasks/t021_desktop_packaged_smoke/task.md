@@ -3,15 +3,15 @@ tid: "t021"
 slug: "desktop_packaged_smoke"
 title: "验证桌面实际打包产物与内置 PostgreSQL 生命周期"
 status: "done"
-branch: ""
+branch: "main"
 worktree: ""
 review_level: "full"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "7868bfa0ebd60c08df98d68c9938bb9a224f2a82"
 depends_on: ""
 conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
+note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit c78a470b"
 ---
 
 # Task 过程总账
@@ -61,3 +61,10 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 ### 结果摘要
 
 建立了针对桌面实际打包产物的严格校验体系与独立冒烟入口，不仅验证了打包产物内部真实前端 SPA 和平台架构匹配的原生 PostgreSQL 二进制（坚决拒绝 stub），更在独立测试数据目录下完整实测了内置数据库的初始化、启停、端口释放与重启数据持久化。
+
+## 状态勘误（2026-10-27，A52）
+
+- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
+- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
+- commit 锚点：实现提交 `c78a470b5dab5b6bc29c6e6fcf16bcd2f3800fd9`；diff_anchor 补记为该实现提交的父提交 `7868bfa0ebd60c08df98d68c9938bb9a224f2a82`；本批归档提交 `161a6e10`。
+- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
