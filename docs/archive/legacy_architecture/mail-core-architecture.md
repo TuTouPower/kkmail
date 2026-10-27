@@ -1,3 +1,7 @@
+> [!NOTE]
+> **过时 / 已取代 — 状态注记（2026-10-27 补）**
+> 本文档定稿于 2026-10-21，原「已定稿，供实现」状态已失效：本文已被 [docs/blueprint/architecture.md](../../blueprint/architecture.md) 与 `docs/specs/` 各生效 spec 取代，仅作历史归档。文中 Gmail API / Google OAuth 相关章节已失效（该路径已于 2026-10-26 整体下线，现行 Google 接入见 [docs/specs/account_connection.md](../../specs/account_connection.md) 的 2026-10-26 节）；文中指向同目录下已不存在文件的相对链接为历史残留，不代表现行文档结构。
+
 # kkmail 邮件内核重构技术方案
 
 ## 文档信息（状态：已定稿供实现；范围：不含发送/联系人/通知）
