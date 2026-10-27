@@ -14,7 +14,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const cp = require('child_process')
-const { PostgresManager } = require('../postgresManager')
+const { PostgresManager, DEFAULT_PORT } = require('../postgresManager')
 const { freePort } = require('../startup')
 const { assertSmokeMarkerPersisted, writeSmokeMarker } = require('./packaged_smoke_db')
 
@@ -90,7 +90,7 @@ async function main() {
 
   // 4. AC-002, AC-003, AC-004: Life-cycle testing with packaged binaries in isolated directory
   const testDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pkg-smoke-'))
-  const port = await freePort(DEFAULT_PORT = 54329)
+  const port = await freePort(DEFAULT_PORT)
 
   console.log(`[t021] Testing embedded PG lifecycle on port ${port} with dataRoot=${testDataRoot}`)
   const mgr1 = new PostgresManager({
