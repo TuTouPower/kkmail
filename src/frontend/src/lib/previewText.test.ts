@@ -24,6 +24,19 @@ describe('provider preview display', () => {
   })
 })
 
+describe('previewText input bound (A359)', () => {
+  it('bounds the text fed into the strip/regex passes to 4×max', () => {
+    // Each entity is 5 raw chars decoding to 1 visible char. With max=180 the
+    // strip input is capped at 720 raw chars = 144 entities, so content past
+    // the cap is never processed even though the unbounded preview would
+    // have shown 180 chars plus an ellipsis.
+    expect(previewText('&#97;'.repeat(1000))).toBe('a'.repeat(144))
+  })
+  it('still truncates a bounded long plain preview to max', () => {
+    expect(previewText('b'.repeat(5000), 100)).toBe(`${'b'.repeat(100)}…`)
+  })
+})
+
 describe('HTML preview metadata', () => {
   it('removes doctype and comments without changing an email address', () => {
     expect(previewText('<!DOCTYPE html><!-- metadata --><p>Contact <support@openai.com></p>')).toBe('Contact <support@openai.com>')

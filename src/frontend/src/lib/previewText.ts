@@ -34,7 +34,13 @@ function looksLikeHtml(src: string): boolean {
 export function previewText(raw?: string, max = 180): string {
   const src = (raw || '').trim()
   if (!src) return ''
-  const plain = (looksLikeHtml(src) ? stripHtmlToText(src) : src).replace(/\s+/g, ' ').trim()
+  // Bound the input before the multi-pass regex strip: body text is
+  // attacker-controlled and can be arbitrarily long, while the preview only
+  // ever shows `max` chars. Capping at 4×max leaves headroom for tags and
+  // entities; the tradeoff is that markup/entity-dense heads may yield a
+  // shorter preview, which is acceptable for a list snippet.
+  const bounded = src.length > max * 4 ? src.slice(0, max * 4) : src
+  const plain = (looksLikeHtml(bounded) ? stripHtmlToText(bounded) : bounded).replace(/\s+/g, ' ').trim()
   if (plain.length <= max) return plain
   return `${plain.slice(0, max).trimEnd()}…`
 }
