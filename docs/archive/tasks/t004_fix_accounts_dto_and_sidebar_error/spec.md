@@ -27,11 +27,11 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：当存在一个或多个账户数据时，已鉴权请求 `GET /api/accounts` 返回 HTTP 200，并正确序列化各账户字段，不抛出 AttributeError 500。
-- [ ] AC-002：`POST /api/accounts` 与 `PATCH /api/accounts/{account_id}` 正常响应时，成功序列化并返回 `AccountOut`。
-- [ ] AC-003：当侧栏 `groupsQuery` 或 `accountsQuery` 失败时，侧栏“邮箱账户”区域显示真实错误提示信息（包含错误消息文本），不显示假定未登录的误导文案。
-- [ ] AC-004：点击侧栏错误区域中的“重试”按钮，触发账户与分组 query 的 refetch。
-- [ ] AC-005：`tests/mail_core/test_accounts_api_unit.py` 具备纯单测 Stub/Mock，脱离 `MAIL_CORE_DATABASE_URL` 环境变量即可常态化运行并通过 AC-001 与 AC-002 的序列化验证。
+- [x] AC-001：当存在一个或多个账户数据时，已鉴权请求 `GET /api/accounts` 返回 HTTP 200，并正确序列化各账户字段，不抛出 AttributeError 500。
+- [x] AC-002：`POST /api/accounts` 与 `PATCH /api/accounts/{account_id}` 正常响应时，成功序列化并返回 `AccountOut`。
+- [x] AC-003：当侧栏 `groupsQuery` 或 `accountsQuery` 失败时，侧栏“邮箱账户”区域显示真实错误提示信息（包含错误消息文本），不显示假定未登录的误导文案。
+- [x] AC-004：点击侧栏错误区域中的“重试”按钮，触发账户与分组 query 的 refetch。
+- [x] AC-005：`tests/mail_core/test_accounts_api_unit.py` 具备纯单测 Stub/Mock，脱离 `MAIL_CORE_DATABASE_URL` 环境变量即可常态化运行并通过 AC-001 与 AC-002 的序列化验证。
 
 ### 可测试性声明
 

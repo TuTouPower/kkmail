@@ -26,9 +26,9 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：调用 `/api/mail/inbox?folder_role=sent` 时，返回所有账号下 `role="sent"` 文件夹中的邮件列表，并支持 keyset 分页与 `account_id` 过滤。
-- [ ] AC-002：未传 `folder_role` 时，接口行为与原先一致，默认返回 `role="inbox"` 邮件。
-- [ ] AC-003：IMAP Provider 对名为 `"已发送"`、`"已发送邮件"` 或带有 `\Sent` 标志的目录，解析出 `role="sent"`。
+- [x] AC-001：调用 `/api/mail/inbox?folder_role=sent` 时，返回所有账号下 `role="sent"` 文件夹中的邮件列表，并支持 keyset 分页与 `account_id` 过滤。
+- [x] AC-002：未传 `folder_role` 时，接口行为与原先一致，默认返回 `role="inbox"` 邮件。
+- [x] AC-003：IMAP Provider 对名为 `"已发送"`、`"已发送邮件"` 或带有 `\Sent` 标志的目录，解析出 `role="sent"`。
 
 ### 可测试性声明
 

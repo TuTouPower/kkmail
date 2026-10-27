@@ -25,10 +25,10 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：前端邮件列表顶部点击刷新按钮时，若处于单账号视图则触发单账号同步 API，若处于全局收件箱或非单账号视图则触发全量同步 API，并展示排队状态。
-- [ ] AC-002：通过 `create_account_app` 创建新邮箱账号后，`worker_jobs` 表中必定存在该账号对应的 `SYNC_ACCOUNT_FOLDERS` 初始任务。
-- [ ] AC-003：后端 `ImapProvider._connect()` 在连接认证后发送 RFC 2971 `ID` 客户端标识命令，支持网易等需要 ID 握手的 IMAP 服务。
-- [ ] AC-004：当目标 IMAP 服务不支持或拒绝 RFC 2971 `ID` 命令时，`ImapProvider._connect()` 捕获并放行，连接和后续文件夹查询正常执行。
+- [x] AC-001：前端邮件列表顶部点击刷新按钮时，若处于单账号视图则触发单账号同步 API，若处于全局收件箱或非单账号视图则触发全量同步 API，并展示排队状态。
+- [x] AC-002：通过 `create_account_app` 创建新邮箱账号后，`worker_jobs` 表中必定存在该账号对应的 `SYNC_ACCOUNT_FOLDERS` 初始任务。
+- [x] AC-003：后端 `ImapProvider._connect()` 在连接认证后发送 RFC 2971 `ID` 客户端标识命令，支持网易等需要 ID 握手的 IMAP 服务。
+- [x] AC-004：当目标 IMAP 服务不支持或拒绝 RFC 2971 `ID` 命令时，`ImapProvider._connect()` 捕获并放行，连接和后续文件夹查询正常执行。
 
 ### 可测试性声明
 
