@@ -88,6 +88,24 @@ def _record_claimed_followup(
     job.payload = p
 
 
+def _backoff_floor(job: WorkerJob, payload: dict) -> datetime | None:
+    """Earliest time a backoff job may run again, if it is in backoff (A347).
+
+    ``fail_job`` stamps ``_backoff_until`` into the payload when it
+    requeues with backoff. Rows requeued before the stamp existed are
+    recognised by ``failure_attempts > 0`` with a future ``run_after``.
+    """
+    raw = payload.get("_backoff_until")
+    if raw:
+        try:
+            return datetime.fromisoformat(str(raw))
+        except (ValueError, TypeError):
+            pass
+    if int(getattr(job, "failure_attempts", 0) or 0) > 0:
+        return job.run_after
+    return None
+
+
 def _merge_into_pending_job(
     job: WorkerJob,
     *,
@@ -101,6 +119,13 @@ def _merge_into_pending_job(
             p[k] = v
     job.payload = p
     job.priority = min(job.priority, priority)
+    floor = _backoff_floor(job, p)
+    if floor is not None and run_after < floor:
+        # A dedupe merge must not wake a job out of its backoff window:
+        # payload/priority merge above still applies, timing does not.
+        if job.run_after is None or job.run_after < floor:
+            job.run_after = floor
+        return
     if job.run_after is None or run_after < job.run_after:
         job.run_after = run_after
 
@@ -437,6 +462,12 @@ def fail_job(
         job.run_after = now + timedelta(seconds=delay)
         job.locked_by = None
         job.locked_at = None
+        # Stamp the backoff window so a dedupe merge in enqueue_job
+        # cannot pull run_after earlier and defeat the backoff (A347).
+        if isinstance(getattr(job, "payload", None), dict):
+            stamped = dict(job.payload or {})
+            stamped["_backoff_until"] = job.run_after.isoformat()
+            job.payload = stamped
         session.flush()
         # Retriable failure: bound targets stay open on the same generation.
         from mail_core.sync.execution import refresh_requests, settle_job_bindings
