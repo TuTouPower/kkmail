@@ -16,6 +16,11 @@ set -Eeuo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+python_bin="$repo_root/.venv/bin/python"
+if [[ ! -x "$python_bin" ]]; then
+    python_bin="python3"
+fi
+
 fail() {
     printf 'deploy_mail_core: %s\n' "$1" >&2
     exit 1
@@ -73,7 +78,7 @@ docker compose -f docker-compose.mail-core.yml --profile maintenance run --user 
 # Existence is not integrity: verify the sealed package (MANIFEST.json /
 # MANIFEST.sha256 and every member checksum, incl. backup.kkbak) with the
 # same verifier restores use before treating it as a rollback source.
-MAIL_CORE_DEPLOY_BACKUP_DIR="$backup_dir" python3 - <<'PY'
+MAIL_CORE_DEPLOY_BACKUP_DIR="$backup_dir" "$python_bin" - <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -150,7 +155,7 @@ done
 curl --fail --silent http://127.0.0.1:37281/health >/dev/null || fail "API health check failed"
 docker inspect --format '{{.State.Running}}' kkmail-mail-core-worker | rg -q '^true$' || fail "worker is not running"
 
-python3 - <<'PY'
+"$python_bin" - <<'PY'
 from pathlib import PurePosixPath
 from subprocess import check_output
 from urllib.request import urlopen
