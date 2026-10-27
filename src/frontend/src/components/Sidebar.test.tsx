@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import Sidebar from './Sidebar'
+import Sidebar, { buildSidebarMemberships, isSidebarLayoutReady } from './Sidebar'
 import { useMailStore } from '../store/mailStore'
 import { queryClient, queryKeys, setReadOptimistic } from '../api/queries'
 import { __resetCsrfForTests, type AccountSummary } from '../api/client'
@@ -814,6 +814,42 @@ describe('<Sidebar />', () => {
     await waitFor(() => expect(container.querySelector('[data-group-id="group-1"] .unread-badge')?.textContent).toBe('3'))
     expect(calls.filter((call) => call.url === '/api/mail/stats').length).toBeGreaterThanOrEqual(2)
     expect(calls.some((call) => call.url.includes('group_id='))).toBe(false)
+  })
+
+  it('builds group memberships in display order, including empty groups (A92)', () => {
+    const memberAccounts = [
+      { id: 'm-2', email: 'b@x.test', group_id: 'group-1', group_order: 2 },
+      { id: 'm-1', email: 'a@x.test', group_id: 'group-1', group_order: 1 },
+      { id: 'm-3', email: 'c@x.test', group_id: null },
+    ] as unknown as AccountSummary[]
+    const memberships = buildSidebarMemberships(memberAccounts, groups as never)
+    expect(memberships.get('group-1')).toEqual(['m-1', 'm-2'])
+    expect(memberships.get('group-2')).toEqual([])
+    expect(memberships.has('group-1')).toBe(true)
+  })
+
+  it('reports layout readiness only when the snapshot mirrors the derived layout (A92)', () => {
+    const memberships = new Map([['group-1', ['acc-1']], ['group-2', []]])
+    const base = {
+      groupsReady: true,
+      accountsReady: true,
+      groups: groups as never,
+      masterIds: ['acc-1', 'acc-2'],
+      ungroupedIds: ['acc-2'],
+      memberships,
+    }
+    const snapshot = {
+      revision: 'r1',
+      group_ids: ['group-1', 'group-2'],
+      master_account_ids: ['acc-1', 'acc-2'],
+      ungrouped_account_ids: ['acc-2'],
+      group_account_ids: { 'group-1': ['acc-1'], 'group-2': [] },
+    }
+    expect(isSidebarLayoutReady({ ...base, layoutSnapshot: snapshot as never })).toBe(true)
+    expect(isSidebarLayoutReady({ ...base, layoutSnapshot: undefined })).toBe(false)
+    expect(isSidebarLayoutReady({ ...base, groupsReady: false, layoutSnapshot: snapshot as never })).toBe(false)
+    expect(isSidebarLayoutReady({ ...base, layoutSnapshot: { ...snapshot, master_account_ids: ['acc-2', 'acc-1'] } as never })).toBe(false)
+    expect(isSidebarLayoutReady({ ...base, layoutSnapshot: { ...snapshot, group_account_ids: { 'group-1': [], 'group-2': [] } } as never })).toBe(false)
   })
 
   it('recomputes stats against the new account set when the enabled accounts change (A19)', async () => {

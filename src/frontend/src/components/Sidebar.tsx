@@ -26,7 +26,7 @@ import {
 } from 'lucide-react'
 import { api, apiRequest, type AccountSummary } from '../api/client'
 import { fetchAccounts, fetchGroups, queryClient, queryKeys, resetGroupMailQueries, type GroupItem } from '../api/queries'
-import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
+import type { AccountFolderStatsItemOut, AccountFolderStatsOut, SidebarLayoutSnapshotOut } from '../api/schemaTypes'
 import { fetchGlobalStats } from '../api/mailCore'
 import { confirmAction, errorMessage } from '../lib/actions'
 import { useMailStore, type FavoriteCategory } from '../store/mailStore'
@@ -179,6 +179,40 @@ function orderedMembers(accounts: AccountSummary[], groupId: string) {
     return members.sort((a, b) => (a.group_order ?? Number.MAX_SAFE_INTEGER) - (b.group_order ?? Number.MAX_SAFE_INTEGER) || compareAccounts(a, b))
   }
   return members.sort(compareAccounts)
+}
+
+/** Group id -> ordered member account ids, for every known group (A92). */
+export function buildSidebarMemberships(accounts: AccountSummary[], groups: GroupItem[]): Map<string, string[]> {
+  const memberships = new Map<string, string[]>()
+  for (const group of groups) memberships.set(group.id, orderedMembers(accounts, group.id).map((account) => account.id))
+  return memberships
+}
+
+/**
+ * The persisted layout is only usable for saving once it mirrors the
+ * locally derived group/account layout exactly (A92).
+ */
+export function isSidebarLayoutReady(args: {
+  groupsReady: boolean
+  accountsReady: boolean
+  layoutSnapshot: SidebarLayoutSnapshotOut | undefined
+  groups: GroupItem[]
+  masterIds: string[]
+  ungroupedIds: string[]
+  memberships: Map<string, string[]>
+}): boolean {
+  const { groupsReady, accountsReady, layoutSnapshot, groups, masterIds, ungroupedIds, memberships } = args
+  return Boolean(
+    groupsReady && accountsReady && layoutSnapshot &&
+    layoutSnapshot.group_ids.length === groups.length && layoutSnapshot.group_ids.every((id, index) => id === groups[index].id) &&
+    layoutSnapshot.master_account_ids.length === masterIds.length && layoutSnapshot.master_account_ids.every((id, index) => id === masterIds[index]) &&
+    layoutSnapshot.ungrouped_account_ids.length === ungroupedIds.length && layoutSnapshot.ungrouped_account_ids.every((id, index) => id === ungroupedIds[index]) &&
+    Object.keys(layoutSnapshot.group_account_ids).length === memberships.size &&
+    [...memberships].every(([groupId, memberIds]) => {
+      const snapshotMembers = layoutSnapshot.group_account_ids[groupId]
+      return snapshotMembers?.length === memberIds.length && snapshotMembers.every((id, index) => id === memberIds[index])
+    }),
+  )
 }
 
 function moveBefore(ids: string[], movedId: string, targetId?: string): string[] {
@@ -663,21 +697,27 @@ function Sidebar() {
   }, [editingGroupId, newGroupOpen, openMenuGroupId])
   const unreadByAccount = statsQuery.data?.byAccount ?? new Map<string, number | null>()
   const allInboxUnread = statsQuery.data ? statsQuery.data.totalUnread : (statsQuery.isError ? null : 0)
-  const memberships = new Map<string, string[]>()
-  for (const group of groups) memberships.set(group.id, orderedMembers(accounts, group.id).map((account) => account.id))
-  const masterIds = accounts.map((account) => account.id)
-  const ungroupedIds = accounts.filter((account) => !account.group_id || !memberships.has(account.group_id)).map((account) => account.id)
+  // A92: these derivations walk (and sort) every group x account; memoize
+  // them so unrelated sidebar state changes do not repay that cost on
+  // every render.
+  const memberships = useMemo(() => buildSidebarMemberships(accounts, groups), [accounts, groups])
+  const masterIds = useMemo(() => accounts.map((account) => account.id), [accounts])
+  const ungroupedIds = useMemo(
+    () => accounts.filter((account) => !account.group_id || !memberships.has(account.group_id)).map((account) => account.id),
+    [accounts, memberships],
+  )
   const layoutSnapshot = layoutQuery.data
-  const layoutReady = Boolean(
-    groupsQuery.isSuccess && accountsQuery.isSuccess && layoutSnapshot &&
-    layoutSnapshot.group_ids.length === groups.length && layoutSnapshot.group_ids.every((id, index) => id === groups[index].id) &&
-    layoutSnapshot.master_account_ids.length === masterIds.length && layoutSnapshot.master_account_ids.every((id, index) => id === masterIds[index]) &&
-    layoutSnapshot.ungrouped_account_ids.length === ungroupedIds.length && layoutSnapshot.ungrouped_account_ids.every((id, index) => id === ungroupedIds[index]) &&
-    Object.keys(layoutSnapshot.group_account_ids).length === memberships.size &&
-    [...memberships].every(([groupId, memberIds]) => {
-      const snapshotMembers = layoutSnapshot.group_account_ids[groupId]
-      return snapshotMembers?.length === memberIds.length && snapshotMembers.every((id, index) => id === memberIds[index])
+  const layoutReady = useMemo(
+    () => isSidebarLayoutReady({
+      groupsReady: groupsQuery.isSuccess,
+      accountsReady: accountsQuery.isSuccess,
+      layoutSnapshot,
+      groups,
+      masterIds,
+      ungroupedIds,
+      memberships,
     }),
+    [groupsQuery.isSuccess, accountsQuery.isSuccess, layoutSnapshot, groups, masterIds, ungroupedIds, memberships],
   )
 
   async function invalidateOrganization() {
