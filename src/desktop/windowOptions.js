@@ -4,6 +4,18 @@ function windowBackgroundColor(shouldUseDarkColors) {
   return shouldUseDarkColors ? '#16191A' : '#E9EAED'
 }
 
+/**
+ * A278: Electron's default application menu must not ship in packaged
+ * (production) builds — it keeps user-facing DevTools / reload entries.
+ * The main process removes it via Menu.setApplicationMenu(null) when
+ * this returns true; unpackaged dev runs keep the default menu (and
+ * its DevTools access). Anything other than an explicit packaged flag
+ * is treated as dev, so a missing flag can never strip the menu.
+ */
+function shouldRemoveApplicationMenu({ isPackaged } = {}) {
+  return isPackaged === true
+}
+
 function createMainWindowOptions({ platform, preloadPath, iconPath, backgroundColor }) {
   const options = {
     show: false,
@@ -31,4 +43,4 @@ function createMainWindowOptions({ platform, preloadPath, iconPath, backgroundCo
   return options
 }
 
-module.exports = { createMainWindowOptions, windowBackgroundColor }
+module.exports = { createMainWindowOptions, windowBackgroundColor, shouldRemoveApplicationMenu }

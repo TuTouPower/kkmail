@@ -1,7 +1,7 @@
 'use strict'
 
 const assert = require('assert')
-const { createMainWindowOptions, windowBackgroundColor } = require('./windowOptions')
+const { createMainWindowOptions, windowBackgroundColor, shouldRemoveApplicationMenu } = require('./windowOptions')
 
 function options(platform) {
   return createMainWindowOptions({
@@ -30,4 +30,11 @@ for (const platform of ['win32', 'linux']) {
 
 assert.strictEqual(windowBackgroundColor(true), '#16191A')
 assert.strictEqual(windowBackgroundColor(false), '#E9EAED')
+
+// A278: packaged (production) builds must drop Electron's default
+// application menu (which keeps a DevTools entry); dev keeps it.
+assert.strictEqual(shouldRemoveApplicationMenu({ isPackaged: true }), true)
+assert.strictEqual(shouldRemoveApplicationMenu({ isPackaged: false }), false)
+assert.strictEqual(shouldRemoveApplicationMenu({}), false)
+assert.strictEqual(shouldRemoveApplicationMenu(), false)
 console.log('desktop window options: ok')
