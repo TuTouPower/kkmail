@@ -202,6 +202,12 @@ def _open_browser(url: str) -> None:
         pass
 
 
+def _log_error_detail(context: str, error: BaseException):
+    """A61: 异常详情只记内部 stderr，对外响应一律固定文案，
+    避免回显异常原文与绝对路径。"""
+    print(f"view_server: {context}：{error}", file=sys.stderr)
+
+
 class _Handler(BaseHTTPRequestHandler):
     # A259: 单连接请求超时（秒）。ThreadingHTTPServer 无内建超时，慢/半截
     # 请求会无限期占住线程；StreamRequestHandler.setup 依据此值 settimeout。
@@ -212,6 +218,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # A61: 全响应安全头，防 MIME 嗅探与外部资源加载
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'self'")
         self.end_headers()
         self.wfile.write(body)
 
@@ -230,7 +239,8 @@ class _Handler(BaseHTTPRequestHandler):
         except SystemExit as error:
             self._send_error_text(503, str(error) or "服务不可用（运行环境不满足）")
         except Exception as error:  # noqa: BLE001 - 请求级兜底，保证有明确错误响应
-            self._send_error_text(500, f"内部错误：{error}")
+            _log_error_detail("未捕获异常", error)
+            self._send_error_text(500, "内部错误")
 
     def _route_get(self):
         parts = urlsplit(self.path)
@@ -239,7 +249,8 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 html = _render_html(_build_model())
             except Exception as e:
-                self._send_error_text(500, f"渲染失败：{e}")
+                _log_error_detail("渲染失败", e)
+                self._send_error_text(500, "渲染失败")
                 return
             self._send_bytes(200, html.encode("utf-8"), "text/html; charset=utf-8")
             return
@@ -251,7 +262,8 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 body = (_STATIC_DIR / name).read_bytes()
             except OSError as e:
-                self._send_error_text(500, f"读取静态资源失败：{e}")
+                _log_error_detail("读取静态资源失败", e)
+                self._send_error_text(500, "读取静态资源失败")
                 return
             content_type = (
                 "text/css; charset=utf-8" if name.endswith(".css")
@@ -268,10 +280,13 @@ class _Handler(BaseHTTPRequestHandler):
                     compute_schedule(), discover_effective_sources(), tid, doc
                 )
             except ctx.TaskDataError as e:
-                self._send_error_text(404, str(e))
+                # TaskDataError 文案可能含越界文档的绝对路径，一律固定文案对外
+                _log_error_detail("任务文档不可用", e)
+                self._send_error_text(404, "任务文档不存在或不可用")
                 return
             except OSError as e:
-                self._send_error_text(500, f"读取文档失败：{e}")
+                _log_error_detail("读取文档失败", e)
+                self._send_error_text(500, "读取文档失败")
                 return
             self._send_bytes(200, body, "text/plain; charset=utf-8")
             return

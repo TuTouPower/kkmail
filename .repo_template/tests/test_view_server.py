@@ -184,7 +184,9 @@ def test_handler_maps_system_exit_to_error_response():
     assert handler.result == (503, "此命令只能在主工作区执行；请 cd 回主仓")
 
 
-def test_handler_maps_unexpected_exception_to_500():
+def test_handler_maps_unexpected_exception_to_500(capsys):
+    # REPLACED (A61): 旧预期 (500, "内部错误：boom") 把异常原文回显给客户端，
+    # 正是本条目要修的泄漏；新语义为对外固定文案、详情只记 stderr。
     class FakeHandler:
         path = "/task-doc?tid=t001&doc=task"
 
@@ -196,7 +198,87 @@ def test_handler_maps_unexpected_exception_to_500():
 
     handler = FakeHandler()
     view_server._Handler.do_GET(handler)
-    assert handler.result == (500, "内部错误：boom")
+    assert handler.result == (500, "内部错误")
+    assert "boom" in capsys.readouterr().err
+
+
+def test_send_bytes_adds_security_headers():
+    # A61: 全响应须带 nosniff 与 CSP 头。
+    import io
+
+    class FakeHandler:
+        def __init__(self):
+            self.headers = {}
+            self.wfile = io.BytesIO()
+
+        def send_response(self, status):
+            self.status = status
+
+        def send_header(self, key, value):
+            self.headers[key] = value
+
+        def end_headers(self):
+            pass
+
+    handler = FakeHandler()
+    view_server._Handler._send_bytes(handler, 200, b"hi", "text/plain")
+    assert handler.headers["X-Content-Type-Options"] == "nosniff"
+    assert handler.headers["Content-Security-Policy"] == "default-src 'self'"
+    assert handler.wfile.getvalue() == b"hi"
+
+
+def _route_fake(path):
+    class FakeHandler:
+        def __init__(self):
+            self.path = path
+
+        def _send_error_text(self, status, message):
+            self.result = (status, message)
+
+        def _send_bytes(self, status, body, content_type):
+            self.result = (status, body)
+
+    return FakeHandler()
+
+
+def test_route_render_error_is_fixed_text_without_exception_detail(monkeypatch, capsys):
+    handler = _route_fake("/")
+
+    def boom():
+        raise ValueError("/home/alice/secret 渲染炸了")
+
+    monkeypatch.setattr(view_server, "_build_model", boom)
+    view_server._Handler._route_get(handler)
+    status, message = handler.result
+    assert status == 500
+    assert "/home/alice" not in message and "渲染炸了" not in message
+    assert "/home/alice" in capsys.readouterr().err  # 详情只进内部日志
+
+
+def test_route_task_doc_error_does_not_leak_absolute_path(monkeypatch, capsys):
+    handler = _route_fake("/task-doc?tid=t001&doc=spec")
+    monkeypatch.setattr(view_server, "compute_schedule", lambda: {"tasks": {}})
+    monkeypatch.setattr(view_server, "discover_effective_sources", lambda: {})
+
+    def leak(*args):
+        raise ctx.TaskDataError("任务 t001 文档路径越界：/home/alice/secret/spec.md")
+
+    monkeypatch.setattr(view_server, "_read_task_doc", leak)
+    view_server._Handler._route_get(handler)
+    status, message = handler.result
+    assert status == 404
+    assert "/home/alice" not in message
+    assert "/home/alice" in capsys.readouterr().err
+
+
+def test_route_static_read_error_is_fixed_text(monkeypatch, capsys, tmp_path):
+    handler = _route_fake("/static/board.css")
+    monkeypatch.setattr(view_server, "_STATIC_DIR", tmp_path)  # 空目录 → OSError
+    view_server._Handler._route_get(handler)
+    status, message = handler.result
+    assert status == 500
+    assert str(tmp_path) not in message
+    assert str(tmp_path) in capsys.readouterr().err
 
 
 
