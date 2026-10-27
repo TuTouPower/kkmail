@@ -48,6 +48,15 @@ echo "Building kkmail-backend sidecar (Python $PY_VERSION, PyInstaller $PYINSTAL
   --add-data "src/mail_core/db/alembic${SEP}mail_core/db/alembic" \
   src/mail_core/__main__.py
 
+# Smoke check (A305): the frozen binary must at least start and answer
+# --help (argparse exits before any server side effects) before it is
+# copied into the desktop resources; a broken artifact aborts the build.
+echo "Smoke-checking built sidecar..."
+if ! "dist/kkmail-backend${EXE}" --help >/dev/null; then
+  echo "Built sidecar failed the smoke check (--help); refusing to copy it into desktop resources." >&2
+  exit 1
+fi
+
 mkdir -p src/desktop/resources
 cp "dist/kkmail-backend${EXE}" "src/desktop/resources/kkmail-backend${EXE}"
 

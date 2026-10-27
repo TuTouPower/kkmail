@@ -54,3 +54,12 @@ def test_build_sidecar_script_includes_gate():
     sidecar_script = (ROOT / "scripts" / "build-sidecar.sh").read_text(encoding="utf-8")
     assert "check_dep_locks.py --check" in sidecar_script
     assert "backend-build-info.json" in sidecar_script
+
+
+def test_build_sidecar_smoke_checks_binary_before_copy():
+    """A305: the built sidecar must pass a runnable smoke check before the
+    copy into desktop resources; a broken binary must abort the build."""
+    sidecar_script = (ROOT / "scripts" / "build-sidecar.sh").read_text(encoding="utf-8")
+    smoke = sidecar_script.index('"dist/kkmail-backend${EXE}" --help')
+    copy = sidecar_script.index('cp "dist/kkmail-backend${EXE}"')
+    assert smoke < copy, "smoke check must run before copying into desktop resources"
