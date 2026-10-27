@@ -812,7 +812,14 @@ class ImapProvider:
         parsed = parse_imap_remote_id(remote_id)
         if parsed is not None:
             _uv, folder_from_id, uid = parsed
-            folder = folder_remote_id or folder_from_id
+            if folder_remote_id is not None and folder_remote_id != folder_from_id:
+                # A185: the UID/UIDVALIDITY belong to the id-embedded folder;
+                # a contradicting explicit folder would fetch the wrong mail.
+                raise ValueError(
+                    f"IMAP fetch_mime folder_remote_id={folder_remote_id!r} does not match "
+                    f"remote_id folder {folder_from_id!r}"
+                )
+            folder = folder_from_id
             uid_str = str(uid)
         else:
             folder = folder_remote_id
@@ -1165,6 +1172,17 @@ class ImapProvider:
             return RemoteOperationResult(success=False, error=str(exc))
         parsed = parse_imap_remote_id(remote_id)
         folder = str(desired_state.get("folder_remote_id") or (parsed[1] if parsed else "") or "INBOX")
+        if parsed is not None and desired_state.get("folder_remote_id"):
+            if str(desired_state["folder_remote_id"]) != parsed[1]:
+                # A185: same guard as fetch_mime — never run the id's UID
+                # against a contradicting explicit folder.
+                return RemoteOperationResult(
+                    success=False,
+                    error=(
+                        f"folder_remote_id {desired_state['folder_remote_id']!r} does not match "
+                        f"remote_id folder {parsed[1]!r}"
+                    ),
+                )
         uid_str = imap_uid_for_command(remote_id)
         op = normalize_op_type(op_type)
         try:
