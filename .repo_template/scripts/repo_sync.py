@@ -1715,25 +1715,32 @@ def cmd_prep(args: argparse.Namespace) -> int:
     assert_not_self(src)
     changed: set[Path] = set()
 
-    src_tool = src / ".repo_template/scripts"
-    if src_tool.exists():
-        sync_dir_oneway(src_tool, CONSUMER / ".repo_template/scripts", changed)
+    # 与 cmd_apply 同口径（A389）：覆盖现行工具链前各写点已 _stage_rollback 暂存，
+    # 中途失败回滚恢复原工具链，不留半更新状态；成功后清理暂存。
+    try:
+        src_tool = src / ".repo_template/scripts"
+        if src_tool.exists():
+            sync_dir_oneway(src_tool, CONSUMER / ".repo_template/scripts", changed)
 
-    src_core = src / ".repo_template/skills/repo-template-sync-core"
-    if src_core.exists():
-        sync_skill(src_core, SKILLS_SRC / "repo-template-sync-core", changed)
+        src_core = src / ".repo_template/skills/repo-template-sync-core"
+        if src_core.exists():
+            sync_skill(src_core, SKILLS_SRC / "repo-template-sync-core", changed)
 
-    reports = repair_symlinks(changed)
-    for r in reports:
-        print(f"提示: {r}")
-    for r in sync_opencode_commands(changed):
-        print(f"提示: {r}")
+        reports = repair_symlinks(changed)
+        for r in reports:
+            print(f"提示: {r}")
+        for r in sync_opencode_commands(changed):
+            print(f"提示: {r}")
+    except (OSError, SyncError) as error:
+        _rollback_changes()
+        raise SyncError(f"prep 中途失败，已回滚已覆盖文件（{error}）") from error
 
     print("=== prep 改动路径清单（单向覆盖，未删除）===")
     for path in sorted(changed, key=str):
         print(_rel(path))
     if not changed:
         print("（工具已是最新，无改动）")
+    _cleanup_rollback()
     return 0
 
 
