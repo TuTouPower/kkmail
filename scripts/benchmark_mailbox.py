@@ -29,6 +29,7 @@ except ImportError:  # Windows does not provide the resource module.
     resource = None
 
 from sqlalchemy import create_engine, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -323,12 +324,47 @@ def compare_reports(base_report: dict, candidate_report: dict) -> str:
     return "\n".join(lines)
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def validate_benchmark_db_url(db_url: str, *, allow_non_test_db: bool = False) -> None:
+    """Refuse to seed benchmark data into anything that is not clearly a
+    disposable test database (A73).
+
+    The benchmark writes synthetic mail into the target database. A target
+    is accepted only when BOTH conditions hold: the host is loopback and
+    the database name carries a test/bench marker. Pointing the script at
+    a production database therefore fails before any connection is made,
+    unless the operator explicitly passes --allow-non-test-db.
+    """
+    if allow_non_test_db:
+        return
+    try:
+        url = make_url(db_url)
+    except Exception as error:
+        raise ValueError(f"无法解析数据库 URL：{error}") from error
+    host = (url.host or "").lower()
+    database = (url.database or "").lower()
+    if host not in _LOOPBACK_HOSTS:
+        raise ValueError(
+            f"benchmark 拒绝非 loopback 主机 {host!r}；"
+            "确需使用请显式传 --allow-non-test-db"
+        )
+    if "test" not in database and "bench" not in database:
+        raise ValueError(
+            f"benchmark 拒绝库名不含 test/bench 标记的目标 {database!r}；"
+            "确需使用请显式传 --allow-non-test-db"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Mailbox performance baseline runner")
     parser.add_argument("--scale", type=int, default=1000, help="Number of messages to seed")
     parser.add_argument("--runs", type=int, default=3, help="Measurement iterations")
     parser.add_argument("--out", type=str, default=".scratch/benchmark_report.json", help="Output report JSON path")
     parser.add_argument("--compare", nargs=2, metavar=("BASE", "CAND"), help="Compare two report JSON files")
+    parser.add_argument("--allow-non-test-db", action="store_true",
+                        help="Allow benchmarking against a non-loopback or non-test/bench database")
     args = parser.parse_args()
 
     if args.compare:
@@ -342,6 +378,11 @@ def main():
     db_url = os.environ.get("MAIL_CORE_DATABASE_URL")
     if not db_url:
         print("MAIL_CORE_DATABASE_URL required for benchmark", file=sys.stderr)
+        sys.exit(2)
+    try:
+        validate_benchmark_db_url(db_url, allow_non_test_db=args.allow_non_test_db)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
         sys.exit(2)
 
     blob_dir = ROOT / ".scratch" / f"bench_blobs_{uuid.uuid4().hex[:8]}"
