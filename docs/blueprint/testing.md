@@ -308,20 +308,18 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 - **无远程 CI**：仓库不运行 GitHub Actions 远程 CI，测试门禁由开发者在本地直接执行上述矩阵命令进行自验证；
 - **权限与环境安全**：避免在远端依赖不透明环境，所有测试数据库与凭据均在本地受控环境中运行。
 
-### 3. 当前验证基线（最近证据：2026-10-24 至 2026-10-25）
+### 3. 当前验证基线（最近证据：2026-10-27，基线 HEAD `11bfa52a`）
 
-本表集中记录近期完整门禁的结果。各行注明结果日期和证据；task 专项历史结果仍以对应归档 task 为准。
+本表集中记录近期完整门禁的结果。各行注明结果日期和证据；task 专项历史结果仍以对应归档 task 为准。此前 2026-10-24/25 的基线（后端完整 PostgreSQL 套件 569 passed 等）已被下表取代，不再用作当前基线；其原始记录见各 t055 归档文件与 [handoff](../handoff.md)。
 
 |证据时间|门禁|结果|可追溯证据|
 |---|---|---|---|
-|2026-10-25T01:53:04+08:00|后端完整 PostgreSQL 套件|569 passed，0 failed，0 skipped|运行 `1b1f4a8e4f114631b9a2c42a04ee01eb` 的 `test_summary.json` 与 `junit.xml`：`.scratch/test_runs/1b1f4a8e4f114631b9a2c42a04ee01eb/`|
-|2026-10-24T19:09:23+08:00|模板契约|149 passed，1 skipped|[t055 test review](../archive/tasks/t055_microsoft_oauth_callback/review_test.md)；对应 task 汇总见 [t055 task archive](../archive/tasks/t055_microsoft_oauth_callback/task.md)|
-|2026-10-24T23:47:17+08:00|前端全量测试、OpenAPI 与 CSS token 检查|302 passed；检查通过|[t055 test review](../archive/tasks/t055_microsoft_oauth_callback/review_test.md) 与 [t055 task archive](../archive/tasks/t055_microsoft_oauth_callback/task.md)|
-|2026-10-24T23:47:17+08:00|桌面单测与 packaged smoke|通过|[t055 task archive](../archive/tasks/t055_microsoft_oauth_callback/task.md)|
-|2026-10-24T23:47:17+08:00|快速浏览器 UI E2E|16 passed|[t055 test review](../archive/tasks/t055_microsoft_oauth_callback/review_test.md)|
-|2026-10-24T23:47:17+08:00|真实全栈 E2E|8 passed|[t055 test review](../archive/tasks/t055_microsoft_oauth_callback/review_test.md) 与 [t055 task archive](../archive/tasks/t055_microsoft_oauth_callback/task.md)|
+|2026-10-27|后端 unit 全量|807 passed，15 failed，280 skipped（收集 1102）；15 个失败中 2 个为基线既存环境失败、13 个为 t056/p059 引入的新失败（待修，明细与判定见证据文件）|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
+|2026-10-27|前端全量测试（vitest）|46 个测试文件、448 passed，0 failed|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
+|2026-10-27|TypeScript（`tsc -b`）|通过（无诊断输出）|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
+|2026-10-27|后端完整 PostgreSQL 套件|未执行：本机无 Docker，官方门禁在 allocate 阶段退出（码 2），无更新证据；不得以上一轮 569 passed 充作当前基线|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
 
-后端全量记录引用本地运行产物；task archive 中记录的其他数字均为各 task 当时的历史快照，不应用作当前基线。
+task archive 中记录的其他数字均为各 task 当时的历史快照，不应用作当前基线。
 
 ## 分组侧栏与分组邮件范围（t027）
 
