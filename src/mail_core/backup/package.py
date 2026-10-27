@@ -705,12 +705,22 @@ def create_backup_package(
 
     key, version = load_backup_key()
     _ensure_backup_key_separate_from_blobs(key)
-    _make_private_dir(out)
 
-    plain_stage = out / f".stage_plain_{uuid.uuid4().hex}"
+    # Atomic publication (same shape as the plaintext path above): assemble
+    # the whole sealed package in a sibling staging directory on the same
+    # volume, then rename-swap it into place. Building in place inside
+    # ``out`` would leave a partial package behind on any mid-build failure
+    # and mix new members into a previous package.
+    out.parent.mkdir(parents=True, exist_ok=True)
+    enc_stage = out.parent / f".staging_enc_{out.name}_{uuid.uuid4().hex}"
+    if enc_stage.is_symlink():
+        raise RuntimeError(f"refusing encrypted staging dir as symlink: {enc_stage}")
+    _make_private_dir(enc_stage)
+
+    plain_stage = enc_stage / f".stage_plain_{uuid.uuid4().hex}"
     _make_private_dir(plain_stage)
-    tar_tmp = out / f".archive_{uuid.uuid4().hex}.tar"
-    kkbak = out / "backup.kkbak"
+    tar_tmp = enc_stage / f".archive_{uuid.uuid4().hex}.tar"
+    kkbak = enc_stage / "backup.kkbak"
 
     try:
         manifest = _build_plain_dir(
@@ -745,21 +755,41 @@ def create_backup_package(
             backup_key_version=version,
             note=manifest.note,
         )
-        out_man = out / _MANIFEST_FILENAME
+        out_man = enc_stage / _MANIFEST_FILENAME
         out_man.write_text(
             json.dumps(asdict(sealed_manifest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
         _set_private_file(out_man)
-        out_sha = out / _MANIFEST_CHECKSUM_FILENAME
+        out_sha = enc_stage / _MANIFEST_CHECKSUM_FILENAME
         out_sha.write_text(
             f"{_sha256_file(out_man)}  {_MANIFEST_FILENAME}\n", encoding="utf-8"
         )
         _set_private_file(out_sha)
-        log.info("encrypted backup written to %s", kkbak)
+
+        # The scratch members live inside the staging dir; remove them
+        # before the swap so they are not published into ``out``.
+        _safe_rmtree(plain_stage)
+        _safe_rmtree(tar_tmp)
+
+        old_dir = out.parent / f".old_{out.name}_{uuid.uuid4().hex}"
+        if out.exists():
+            if out.is_symlink():
+                raise RuntimeError(f"refusing existing destination as symlink: {out}")
+            out.rename(old_dir)
+        try:
+            enc_stage.rename(out)
+            if old_dir.exists():
+                _safe_rmtree(old_dir)
+        except Exception:
+            if old_dir.exists():
+                old_dir.rename(out)
+            raise
+        log.info("encrypted backup written to %s", out / "backup.kkbak")
         return out
     finally:
         _safe_rmtree(plain_stage)
         _safe_rmtree(tar_tmp)
+        _safe_rmtree(enc_stage)
 
 
 _INNER_TAR_ALLOWLIST = _PLAIN_MEMBER_ALLOWLIST | {

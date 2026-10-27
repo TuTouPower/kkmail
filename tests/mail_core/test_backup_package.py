@@ -758,10 +758,21 @@ def test_backup_workspace_permissions_and_staging_cleanup(tmp_path, monkeypatch)
         assert (f.stat().st_mode & 0o777) == 0o600
 
 
-def test_backup_build_failure_cleans_plain_staging(tmp_path, monkeypatch):
+@pytest.mark.parametrize("existing_output", [False, True])
+def test_backup_build_failure_publishes_nothing(tmp_path, monkeypatch, existing_output):
+    # A80 (replaces test_backup_build_failure_cleans_plain_staging): the
+    # encrypted path used to assemble the package in place inside the target
+    # directory, so a mid-build failure left a partial package behind and the
+    # old test only asserted the staging subdirs were cleaned from it. With
+    # atomic staging+rename publication, a failed build must leave a
+    # pre-existing package untouched (or no package at all) and no staging
+    # remnants anywhere.
     key = base64.b64encode(os.urandom(32)).decode()
     monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", key)
     out = tmp_path / "fail_enc_pkg"
+    if existing_output:
+        out.mkdir()
+        (out / "keep.txt").write_text("previous package", encoding="utf-8")
 
     import mail_core.backup.package as pkg
 
@@ -779,9 +790,35 @@ def test_backup_build_failure_cleans_plain_staging(tmp_path, monkeypatch):
             allow_dump_stub=True,
         )
 
-    # Ensure no plain staging directory or archive tar remains
-    remnants = [p.name for p in out.iterdir()]
-    assert not remnants, f"Staging cleanup failed on exception: {remnants}"
+    if existing_output:
+        assert (out / "keep.txt").read_text(encoding="utf-8") == "previous package"
+        assert not (out / "backup.kkbak").exists()
+    else:
+        assert not out.exists()
+    assert not list(tmp_path.glob(".staging_enc_*"))
+    assert not list(tmp_path.glob(".old_*"))
+
+
+def test_encrypted_backup_replaces_existing_package_atomically(tmp_path, monkeypatch):
+    key = base64.b64encode(os.urandom(32)).decode()
+    monkeypatch.setenv("MAIL_CORE_BACKUP_KEY", key)
+    out = tmp_path / "enc_pkg"
+    out.mkdir()
+    (out / "stale.txt").write_text("previous package", encoding="utf-8")
+
+    create_backup_package(
+        out,
+        include_blobs=False,
+        database_url_override="postgresql://u:p@127.0.0.1:1/db",
+        encrypt=True,
+        allow_dump_stub=True,
+    )
+
+    assert (out / "backup.kkbak").is_file()
+    assert not (out / "stale.txt").exists()
+    assert verify_backup_package(out, allow_stub=True).ok
+    assert not list(tmp_path.glob(".staging_enc_*"))
+    assert not list(tmp_path.glob(".old_*"))
 
 
 def test_verify_failure_cleans_extract_dir(tmp_path, monkeypatch):
