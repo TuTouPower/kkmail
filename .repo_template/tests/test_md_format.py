@@ -124,6 +124,26 @@ def test_check_detects_drift(repo, tmp_path, monkeypatch):
     assert drift == []
 
 
+def test_main_named_blacklisted_path_errors(repo, capsys):
+    """A240：点名黑名单路径须显式报错列出被拒路径，与 format_paths 拒绝语义统一；
+    不得静默丢弃后报「无改动」误导用户以为已格式化。"""
+    with pytest.raises(SystemExit) as exc:
+        mdf.main(["docs/archive/keep.md"])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "docs/archive/keep.md" in err and "黑名单" in err
+
+
+def test_main_mixed_paths_error_lists_only_rejected(repo, capsys):
+    """A240：点名混合路径时报错只列黑名单命中者（合法路径不被误列）。"""
+    with pytest.raises(SystemExit) as exc:
+        mdf.main(["a.md", "docs/archive/keep.md"])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "docs/archive/keep.md" in err
+    assert "a.md，" not in err and "a.md," not in err
+
+
 def test_main_check_all_exits_nonzero_on_drift(repo, tmp_path, monkeypatch, capsys):
     exe = _fake_md_kx(tmp_path)
     monkeypatch.setattr(mdf, "find_md_kx", lambda: str(exe))

@@ -183,7 +183,14 @@ def main(argv: list[str] | None = None) -> None:
         if args.changed and args.all:
             raise MdFormatError("--changed 与 --all 互斥")
         if args.paths:
-            rels = [p for p in args.paths if not _is_blacklisted(p)]
+            # 点名模式下黑名单命中显式报错（与 format_paths 的拒绝语义统一），
+            # 不得静默丢弃后报「无改动」（A240）。
+            rejected = [p for p in args.paths if _is_blacklisted(p)]
+            if rejected:
+                raise MdFormatError(
+                    f"点名路径在黑名单，拒绝格式化：{', '.join(rejected)}"
+                )
+            rels = list(args.paths)
         elif args.changed:
             rels = collect_changed()
         elif args.all or args.check:
