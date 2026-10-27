@@ -115,14 +115,32 @@ class MemoryProvider:
         return self.fetch_metadata_page(folder_remote_id, cursor)
 
     def fetch_metadata_page(self, folder_remote_id: str, cursor: dict[str, Any] | None) -> MetadataPage:
+        # A370: page by remote_id anchor, not by offset. With offset
+        # paging, inserting/removing entries before the scan position
+        # mid-scan shifts the window and skips or repeats entries; an
+        # anchor on the last returned remote_id is immune to mutations
+        # before the scan position (matching real providers' cursor
+        # semantics). ``offset`` is still emitted for observability and
+        # used only as a degraded fallback when the anchor entry itself
+        # was deleted mid-scan, or for legacy offset-only cursors.
         items = list(self.messages.get(folder_remote_id, []))
-        offset = int((cursor or {}).get("offset") or 0)
-        batch = items[offset : offset + self.page_size]
-        next_offset = offset + len(batch)
+        cursor = cursor or {}
+        anchor = cursor.get("after_remote_id")
+        start: int | None = None
+        if anchor is not None:
+            for idx, meta in enumerate(items):
+                if meta.remote_id == anchor:
+                    start = idx + 1
+                    break
+        if start is None:
+            start = min(int(cursor.get("offset") or 0), len(items))
+        batch = items[start : start + self.page_size]
+        next_offset = start + len(batch)
         exhausted = next_offset >= len(items)
         return MetadataPage(
             items=batch,
             next_cursor={
+                "after_remote_id": batch[-1].remote_id if batch else anchor,
                 "offset": next_offset,
                 "page_size": self.page_size,
                 "modseq": self.modseq.get(folder_remote_id, 0),
