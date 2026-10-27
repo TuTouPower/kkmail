@@ -137,15 +137,26 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-log-test-'))
       await unavailableStream.end().catch(() => {})
     }
 
-    // Test 7: The queue is bounded and overflow is reported to drain waiters
+    // Test 7 (REPLACED for A177): a full queue rejects only the new chunk.
+    // The previous version asserted the buggy behaviour A177 removes —
+    // overflow cleared every already-queued chunk and reported at once.
+    // New contract: queued chunks survive and are written, each overflow
+    // chunk is counted in droppedCount, and the aggregated error is
+    // reported via onError (and to drain waiters) once, after the queue
+    // has drained.
     const boundedFile = path.join(tmpDir, 'bounded.log')
     let overflowError = null
+    let overflowErrorCalls = 0
     const boundedStream = new RotatingLogStream(boundedFile, {
       maxBytes: 1000,
       maxQueueLength: 1,
-      onError: (err) => { overflowError = err },
+      onError: (err) => { overflowErrorCalls++; overflowError = err },
     })
     let releaseWrite = null
+    let writeReleased = false
+    const releaseBlockedWrite = () => {
+      if (releaseWrite && !writeReleased) { writeReleased = true; releaseWrite() }
+    }
     const origWrite4 = fs.write
     fs.write = (fd, buf, offset, length, position, cb) => {
       if (!releaseWrite) {
@@ -158,16 +169,31 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-log-test-'))
       boundedStream.write('in-flight\n')
       await new Promise((resolve) => setImmediate(resolve))
       boundedStream.write('queued\n')
+      assert.strictEqual(boundedStream.write('overflow-1\n'), false)
+      assert.strictEqual(boundedStream.write('overflow-2\n'), false)
+      // Already-queued content must NOT be collateral-dropped, and the
+      // error must not fire per-chunk before aggregation.
+      assert.strictEqual(boundedStream.queue.length, 1, 'queued chunk must survive overflow')
+      assert.strictEqual(boundedStream.droppedCount, 2, 'each rejected chunk must be counted')
+      assert.strictEqual(overflowErrorCalls, 0, 'overflow error must be aggregated, not reported per chunk')
       const drainPromise = boundedStream.drain()
-      assert.strictEqual(boundedStream.write('overflow\n'), false)
-      assert.strictEqual(boundedStream.queue.length, 0)
-      assert.match(boundedStream.lastError.message, /queue limit exceeded/)
-      releaseWrite()
+      releaseBlockedWrite()
       await assert.rejects(drainPromise, /queue limit exceeded/)
-      assert.strictEqual(overflowError, boundedStream.lastError)
+      assert.strictEqual(overflowErrorCalls, 1, 'aggregated overflow must be reported exactly once')
+      assert.match(overflowError.message, /dropped 2 chunk/)
+      assert.strictEqual(boundedStream.lastError, overflowError)
+      assert.strictEqual(fs.readFileSync(boundedFile, 'utf8'), 'in-flight\nqueued\n')
     } finally {
       fs.write = origWrite4
-      await boundedStream.end().catch(() => {})
+      releaseBlockedWrite()
+      // Race end() against a timeout: on the pre-A177 implementation the
+      // failure path above can leave end() waiting on a queued chunk that
+      // a closed stream will never flush, and the assertion that actually
+      // failed must still surface instead of a silent event-loop exit.
+      await Promise.race([
+        boundedStream.end().catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, 500)),
+      ])
     }
 
     // Test 8: In-flight write serializes close (fd remains open until in-flight finishes)

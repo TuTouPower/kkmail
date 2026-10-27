@@ -70,6 +70,12 @@ class RotatingLogStream {
     this.lastError = null
     this.pendingDrainError = null
     this.drainWaiters = []
+    // A177: chunks rejected because the queue was full. droppedCount is
+    // cumulative for the stream's lifetime; the pending fields aggregate
+    // the not-yet-reported overflow so onError fires once per drain.
+    this.droppedCount = 0
+    this._pendingOverflowCount = 0
+    this._pendingOverflowError = null
     this.onError = typeof options.onError === 'function' ? options.onError : null
 
     this._init()
@@ -102,13 +108,40 @@ class RotatingLogStream {
       return false
     }
     if (this.queue.length >= this.maxQueueLength) {
-      this._failQueuedWrites(new Error(`Log write queue limit exceeded (${this.maxQueueLength})`))
+      // A177: reject only this chunk. Already-queued chunks must survive
+      // (the old code cleared the whole queue via _failQueuedWrites);
+      // the overflow is counted and reported in aggregate once the
+      // queue has drained (see _notifyDrain).
+      this._recordOverflow()
       return false
     }
 
     this.queue.push(buf)
     this._scheduleFlush()
     return true
+  }
+
+  _recordOverflow() {
+    this.droppedCount++
+    this._pendingOverflowCount++
+    this._pendingOverflowError = new Error(
+      `Log write queue limit exceeded (${this.maxQueueLength}): dropped ${this._pendingOverflowCount} chunk(s)`,
+    )
+  }
+
+  /** Report the aggregated overflow error exactly once; returns it (or null). */
+  _takeAggregatedOverflowError() {
+    if (!this._pendingOverflowError) return null
+    const err = this._pendingOverflowError
+    this._pendingOverflowError = null
+    this._pendingOverflowCount = 0
+    this.lastError = err
+    if (typeof this.onError === 'function') {
+      try { this.onError(err) } catch (_) {}
+    } else {
+      try { process.stderr.write(`[logRotation] write error: ${err.message}\n`) } catch (_) {}
+    }
+    return err
   }
 
   _scheduleFlush() {
@@ -239,6 +272,9 @@ class RotatingLogStream {
   }
 
   drain() {
+    if (!this.writing && this.queue.length === 0 && this._pendingOverflowError) {
+      this._notifyDrain()
+    }
     if (!this.writing && this.queue.length === 0) {
       if (this.pendingDrainError) {
         const err = this.pendingDrainError
@@ -254,6 +290,13 @@ class RotatingLogStream {
 
   _notifyDrain(err = null) {
     if (err && !this.pendingDrainError) this.pendingDrainError = err
+    // A177: once everything accepted has been written, surface the
+    // aggregated overflow (if any) as this drain's error so waiters
+    // learn chunks were dropped without losing the queued content.
+    if (!this.writing && this.queue.length === 0 && this._pendingOverflowError) {
+      const overflowErr = this._takeAggregatedOverflowError()
+      if (overflowErr && !this.pendingDrainError) this.pendingDrainError = overflowErr
+    }
     if (this.writing || (this.queue.length > 0 && !this.pendingDrainError && this.fd !== null)) return
     const waiters = this.drainWaiters.splice(0)
     if (waiters.length === 0) return
