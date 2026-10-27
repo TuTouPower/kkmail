@@ -500,10 +500,19 @@ def reclaim_stale_claims(
     older_than: timedelta = timedelta(minutes=5),
     now: datetime | None = None,
     limit: int = DEFAULT_RECLAIM_LIMIT,
+    max_attempts: int | None = None,
 ) -> int:
-    """Requeue claims whose ``locked_at`` heartbeat is older than ``older_than``."""
+    """Requeue claims whose ``locked_at`` heartbeat is older than ``older_than``.
+
+    Every reclaim counts as a failure (``failure_attempts``): a job whose
+    worker keeps dying mid-claim is a crash loop, not a fresh job each
+    time. Once the count reaches the cap the job follows ``fail_job``'s
+    terminal path (FAILED + bindings settled as failed) instead of being
+    reclaimed forever (A148).
+    """
     now = now or datetime.now(timezone.utc)
     cutoff = now - older_than
+    cap = max_attempts if max_attempts is not None else _max_attempts()
     stmt = (
         select(WorkerJob)
         .where(WorkerJob.status == JobStatus.CLAIMED.value)
@@ -514,23 +523,44 @@ def reclaim_stale_claims(
         .limit(max(1, int(limit)))
     )
     rows = list(session.scalars(stmt).all())
-    request_ids: set[uuid.UUID] = set()
+    requeued: list[WorkerJob] = []
+    terminal: list[WorkerJob] = []
     for job in rows:
-        job.status = JobStatus.PENDING.value
+        if hasattr(job, "failure_attempts"):
+            failure_attempts = int(job.failure_attempts or 0) + 1
+        else:  # Compatibility for minimal job test doubles (see fail_job).
+            failure_attempts = int(job.attempts) + 1
+        job.failure_attempts = failure_attempts
         job.locked_by = None
         job.locked_at = None
         suffix = "|reclaimed_stale_claim"
         prev = job.last_error or ""
         if suffix not in prev:
             job.last_error = (prev + suffix)[:2000]
+        if failure_attempts < cap:
+            job.status = JobStatus.PENDING.value
+            requeued.append(job)
+        else:
+            job.status = JobStatus.FAILED.value
+            terminal.append(job)
     session.flush()
     if rows:
+        from mail_core.sync.execution import refresh_requests, reset_bindings_for_job, settle_job_bindings
+
+        request_ids: set[uuid.UUID] = set()
         # Reclaim keeps the job's execution_generation; its bindings go back
         # to queued rather than failing (design §5.1).
-        from mail_core.sync.execution import refresh_requests, reset_bindings_for_job
-
-        for job in rows:
+        for job in requeued:
             request_ids |= reset_bindings_for_job(session, job)
+        # Terminal reclaims settle exactly like fail_job's cap path.
+        for job in terminal:
+            request_ids |= settle_job_bindings(
+                session,
+                job,
+                outcome="failed",
+                error_code="job_failed",
+                safe_error=job.last_error,
+            )
         refresh_requests(session, request_ids)
     return len(rows)
 
