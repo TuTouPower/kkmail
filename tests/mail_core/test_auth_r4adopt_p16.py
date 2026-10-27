@@ -118,3 +118,62 @@ def test_a324_other_samesite_values_unaffected_without_secure(monkeypatch, value
     monkeypatch.setenv("MAIL_CORE_COOKIE_SAMESITE", value)
     monkeypatch.delenv("MAIL_CORE_COOKIE_SECURE", raising=False)
     assert cookie_samesite() == value
+
+
+_A250_SECRET_DETAIL = "could not connect to postgres://operator:s3cr3t-pw@db-internal-host:5432/proddb"
+
+
+def _a250_broken_factory():
+    class BrokenSession:
+        def __enter__(self):
+            raise RuntimeError(_A250_SECRET_DETAIL)
+
+        def __exit__(self, *args):
+            return False
+
+    return lambda: BrokenSession()
+
+
+def test_a250_fetch_db_credentials_logs_only_type_and_fixed_error_message(monkeypatch, caplog):
+    import logging
+    from unittest.mock import patch
+
+    from mail_core.security.auth import AuthConfigError, get_login_password_hash
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "postgresql://test/db")
+    reset_auth_caches()
+    with patch("mail_core.db.session.get_session_factory", return_value=_a250_broken_factory()):
+        with caplog.at_level(logging.DEBUG, logger="mail_core.security.auth"):
+            with pytest.raises(AuthConfigError) as excinfo:
+                get_login_password_hash()
+    assert "s3cr3t-pw" not in str(excinfo.value)
+    assert "db-internal-host" not in str(excinfo.value)
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_records
+    assert all("RuntimeError" in r.getMessage() for r in error_records)
+    assert all("s3cr3t-pw" not in r.getMessage() for r in error_records)
+    assert all("db-internal-host" not in r.getMessage() for r in error_records)
+    debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+    assert debug_records
+    assert all("s3cr3t-pw" not in r.getMessage() for r in debug_records)
+
+
+def test_a250_get_session_epoch_logs_only_type_and_fixed_error_message(monkeypatch, caplog):
+    import logging
+    from unittest.mock import patch
+
+    from mail_core.security.auth import AuthConfigError, get_session_epoch
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "postgresql://test/db")
+    reset_auth_caches()
+    with patch("mail_core.db.session.get_session_factory", return_value=_a250_broken_factory()):
+        with caplog.at_level(logging.DEBUG, logger="mail_core.security.auth"):
+            with pytest.raises(AuthConfigError) as excinfo:
+                get_session_epoch()
+    assert "s3cr3t-pw" not in str(excinfo.value)
+    assert "db-internal-host" not in str(excinfo.value)
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_records
+    assert all("RuntimeError" in r.getMessage() for r in error_records)
+    assert all("s3cr3t-pw" not in r.getMessage() for r in error_records)
+    assert all("db-internal-host" not in r.getMessage() for r in error_records)

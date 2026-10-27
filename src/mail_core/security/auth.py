@@ -26,6 +26,8 @@ from typing import Any, Literal
 import bcrypt
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from mail_core.security.redact import safe_error
+
 log = logging.getLogger("mail_core.security.auth")
 
 SESSION_COOKIE_NAME = "kkmail_mc_session"
@@ -213,8 +215,12 @@ def _fetch_db_credentials() -> tuple[str | None, int | None]:
                 return cred.login_password_hash, getattr(cred, "session_epoch", None)
             return None, getattr(cred, "session_epoch", None) if cred is not None else None
     except Exception as exc:
-        log.error("database query for auth credentials failed: %s", exc)
-        raise AuthConfigError(f"failed to query authentication credentials from database: {exc}") from exc
+        log.error(
+            "database query for auth credentials failed (error type=%s)",
+            type(exc).__name__,
+        )
+        log.debug("database query for auth credentials failed: %s", safe_error(exc))
+        raise AuthConfigError("failed to query authentication credentials from database") from exc
 
 
 def _fetch_db_password_hash() -> str | None:
@@ -372,8 +378,12 @@ def get_session_epoch(*, force_refresh: bool = False) -> int:
             _session_epoch_cache = (epoch, time.monotonic())
             return epoch
     except Exception as exc:
-        log.error("could not fetch session epoch from database: %s", exc)
-        raise AuthConfigError(f"could not fetch session epoch from database: {exc}") from exc
+        log.error(
+            "could not fetch session epoch from database (error type=%s)",
+            type(exc).__name__,
+        )
+        log.debug("could not fetch session epoch from database: %s", safe_error(exc))
+        raise AuthConfigError("could not fetch session epoch from database") from exc
 
 
 def _close_local_session_streams(*, current_epoch: int | None = None) -> None:
