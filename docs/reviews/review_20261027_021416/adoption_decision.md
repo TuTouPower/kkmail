@@ -7,18 +7,18 @@ docs/reviews/review_20261027_021416
 ## 报告来源
 
 - 已读：bundle_cross_validation.md, bundle_cross_validation_regression.md, bundle_unit01.md, bundle_unit02.md, bundle_unit03.md, bundle_unit04.md, bundle_unit05.md, bundle_unit06.md, bundle_unit07.md, bundle_unit08.md, bundle_unit09.md, bundle_unit10.md, bundle_unit11.md, bundle_unit12.md, bundle_unit13.md, review_intensive.md
-- 缺失：无
-- 合并说明：review_intensive.md 原始去重后条目 441 项，覆盖全部 13 个 unit bundle 共 444 处原始 finding；其中 3 处位置在同一 bundle 内包含独立子项或疑点排除已分别处置并映射；bundle_cross_validation 与 bundle_cross_validation_regression 的全部 62 条交叉复核与回归结果均已完整溯源映射并纳入决策。CV-A04 经核验削弱前提后降为 Medium 采纳；CV-A24 经核验实测证伪后归为不采纳（R）。
+- 缺失：validation.md、regression.md 未纳入本文档初版决策范围。其中 regression 的待处置项已由文末「补充决策」节 A389–A401、D6–D8 补录；validation 的 13 个新失败（t056/p059 引入）仍未处置，另行跟踪。
+- 合并说明：review_intensive.md 原始去重后条目 441 项，覆盖全部 13 个 unit bundle 共 444 处原始 finding；其中 3 处位置在同一 bundle 内包含独立子项或疑点排除已分别处置并映射；交叉复核（bundle_cross_validation 与 bundle_cross_validation_regression）条目已逐条吸收。回归（regression.md）65 条中 FIXED 31 / MOOT 2 无需处置，STILL PRESENT 26 + CHANGED 6 共 32 条的映射经 2026-10-27 审计逐条复核：初版有 9 条漏处置、若干条映射结论被改判或取代，缺口与改判已由文末「补充决策」节补齐，与初版冲突处以补充决策为准。CV-A04 经核验削弱前提后降为 Medium 采纳；CV-A24 经核验实测证伪后归为不采纳（R）。
 
 ## 统计
 
-- 采纳：387 项
-- 不采纳：54 项
-- 待决定：0 项
+- 采纳：401 项（初版 387 + 补充决策 A388–A401 共 14 项）
+- 不采纳：54 项（其中 R3、R4、R5、R27 已被补充决策改判或取代，结论以补充决策为准）
+- 待决定：3 项（补充决策 D6–D8；初版 5 项已转 A383–A387）
 
 ## 待决定项（请先决策）
 
-无（全部 5 项已完成决策并转入采纳项 A383–A387）。
+初版 5 项已完成决策并转入采纳项 A383–A387；2026-10-27 审计补充待决定项 D6–D8 位于文末「补充决策」节，请先决策。
 
 ## 采纳项
 
@@ -2101,6 +2101,7 @@ docs/reviews/review_20261027_021416
 - 优先级：Low
 - 详细判断理由：问题真实存在，证据确凿，影响代码正确性、健壮性、数据一致性或规范一致性；修复范围明确、成本低、收益明确且无破坏性副作用。
 - 修复说明：遍历期剪枝 skip_dirs（os.walk + dirs 过滤）；对 `src.is_symlink()` 的源跳过或显式校验其 resolve 仍在 REPO_ROOT 内。
+- 审计注记（2026-10-27）：本项仅处置遍历边界与成本面；回归 R3-H55 的安全面（真实 .env 软链进每个 task worktree）由补充决策 A401 独立处置，优先级以 A401 的 High 为准。
 
 ### A261. goal 快照解析不校验 version 与队列重复 tid
 
@@ -3140,6 +3141,7 @@ docs/reviews/review_20261027_021416
 - 位置：docs/reviews/review_20261021_040521/summary_verification_report.md:9-26
 - 优先级：Medium
 - 详细判断理由：历史旧审阅文档统计口径差异，无需重写历史
+- 审计注记（2026-10-27）：本项对应回归 R3-H01，经审计改判为采纳（注记式勘误），以补充决策 A398 为准。
 
 ### R4. bundle.json 内部统计与自身清单不一致，疑为上一会话残留数字未更新
 
@@ -3147,6 +3149,7 @@ docs/reviews/review_20261027_021416
 - 位置：docs/reviews/review_20261021_034329/bundle.json:543-544
 - 优先级：Medium
 - 详细判断理由：历史中间数据统计差异，无需回写历史文件
+- 审计注记（2026-10-27）：本项对应回归 R3-H03，经审计改判为采纳（注记式勘误），以补充决策 A399 为准。
 
 ### R5. 040521 会话缺 aggregate 终产物 review_intensive.md，入口缺位导致核验文件被迫充当总报告
 
@@ -3154,6 +3157,7 @@ docs/reviews/review_20261027_021416
 - 位置：docs/reviews/review_20261021_040521/\_meta/\_meta.json:19-33
 - 优先级：Medium
 - 详细判断理由：历史未产出 aggregate 会话，无需事后补生成
+- 审计注记（2026-10-27）：本项原题（缺 aggregate 终产物）的结论不变；回归 R3-H05 对同一 _meta 文件的另一指控（超时夭折未披露）与本项题旨不同，由补充决策 A400 单独处置。
 
 ### R6. 脱敏只改当前树、未改 git 历史：脱敏前版本仍可从公开仓历史直接读出本机绝对路径（含本地用户名段）（预存）
 
@@ -3308,6 +3312,7 @@ docs/reviews/review_20261027_021416
 - 位置：.repo_template/skills/repo-template-sync/SKILL.md:13-23
 - 优先级：Info
 - 详细判断理由：属于用户主动触发模板同步的既定信任模型
+- 审计注记（2026-10-27）：本项仅对应 unit08 扫描的 Info 级表述；回归 R3-C07（Critical）对同一位置的处置以补充决策 D8 为准，本项结论不覆盖 C07。
 
 ### R28. t027 review 双文件 5 轮补丁式堆叠，首轮 FAIL verdict 易被摘引误读
 
@@ -3497,3 +3502,174 @@ docs/reviews/review_20261027_021416
 - 位置：docs/archive/CHANGELOG.md:360-361
 - 优先级：Info
 - 详细判断理由：上游历史版本 3.0.x 记录，描述已废止的历史行为，作为归档历史保留
+
+
+## 补充决策（2026-10-27 审计补录）
+
+初版落盘后经独立审计逐条复核，发现五类问题：①头部声明与账实不符；②回归 32 条待处置项（STILL PRESENT 26 + CHANGED 6）漏 9 条；③回归 Critical R3-C07 被以 Info 级 R27 驳回；④R3-C06、R3-H48 映射到相邻缺陷、原根因未处置；⑤多条回归项被降级或以不一致口径关闭。本节为补录决策，编号接续初版（采纳 A388 起、待决定 D6 起）；与初版结论冲突处以本节为准，初版 R3/R4/R5/R27/A260 已同步加审计注记。头部声明修正（A388）已随本次修订直接执行。
+
+### 待决定（补充）
+
+### D6. task-run 一次触发即空白授权整个队列执行到 commit（回归 R3-H45）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：.repo_template/skills/task-run/SKILL.md:13
+- 优先级：High
+- 详细判断理由：回归判定 STILL PRESENT 且交叉复核 AGREE，初版 adoption 全文无任何对应决策项（漏处置）。该条是授权模型问题：触发 skill 即被视为批准无参数队列（backlog∪active 全部成员）执行并提交、无队列回显、无逐项确认。是否保留这种一揽子授权属用户的信任模型取舍，不宜单方面裁决，故列待决定。
+- 选项：
+  - A 触发时先回显本次队列清单并要求确认后才执行（保留批量，补确认门）
+  - B 仅当调用方显式给出队列参数时才视为授权，无参数默认只预览不执行
+  - C 保持现状（一揽子授权为既定模型，记录风险接受）
+- 推荐：A
+- 推荐理由：保留批量效率，只补一道回显确认门，误触发与越权执行的暴露面最小
+- 用户决策：
+
+### D7. 公开 Git 历史根提交含弱默认 LOGIN_PASSWORD 字面量（回归 R3-H39）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：git 历史提交 e945533（web_outlook_app.py，当前树已删除该文件）
+- 优先级：High
+- 详细判断理由：回归判定 STILL PRESENT：当前树脱敏不解决历史暴露，该字面量在公开仓历史中仍可达。A383 的裁决范围明写「仅 docs 树脱敏、不重写 Git 历史」，故此凭据实际被默认保留却无任何决策记录。处置方式涉及历史重写与凭据轮换的取舍，列待决定。
+- 选项：
+  - A filter-repo 重写历史清除该字面量，并轮换/作废该口令（与 R3-H13 的不轮换旧裁决冲突，需一并改判）
+  - B 不重写历史；先核实该默认口令已无任何在用实例，正式记录风险接受，并将本项列为 A383 的明示例外
+  - C 保持现状且不记录（不推荐）
+- 推荐：B
+- 推荐理由：该口令为旧版默认字面量、对应文件已退出当前树；若确认无实例在用，核实加记录裁决的成本远低于重写公开仓历史的连锁代价。前提是「无在用实例」须先核实
+- 用户决策：
+
+### D8. Bootstrap 在批准门前 cp 覆盖并执行未审模板源代码（回归 R3-C07，Critical）
+
+- 来源：regression, bundle_cross_validation_regression, bundle_unit08
+- 位置：.repo_template/skills/repo-template-sync/SKILL.md:13-23
+- 优先级：Critical
+- 详细判断理由：回归判定 Critical STILL PRESENT、交叉复核 AGREE。初版仅有 R27 对应同位置的 unit08 Info 级表述，并以「既定信任模型」不采纳——但 C07 的指控对象正是该信任模型本身（在任何确认门之前覆盖并执行来自 template_source 的未审代码），以其为据驳回属循环论证，且 Critical 降为 Info 违反合并取最高优先级规则。本项取代 R27 对 C07 的处置结论（R27 已加注记）；信任模型如何改属用户裁决，列待决定。
+- 选项：
+  - A 覆盖前加显式确认门：展示 template_source 路径与其 HEAD SHA、待覆盖文件清单，确认后才 cp 并执行
+  - B 不加人工确认门，但覆盖后、执行前校验 repo_sync.py 与源的一致性哈希，不符即中止
+  - C 保持现状（接受既定信任模型，记录风险接受，并将 R27 的结论限于 Info 级表述）
+- 推荐：A
+- 推荐理由：与 A383 对凭据配方的处置口径一致——分发/执行未审内容前先过一道显式门；成本是一次确认，堵住的是整条模板供应链入口
+- 用户决策：
+
+### 采纳（补充）
+
+### A388. 本文档头部声明与账实不符（合并说明「62 条全部映射」、报告来源「缺失：无」）
+
+- 来源：审计复核（本文档）
+- 位置：docs/reviews/review_20261027_021416/adoption_decision.md 报告来源 / 统计 / 待决定节
+- 优先级：Medium
+- 详细判断理由：合并说明原称交叉复核与回归「全部 62 条已完整溯源映射并纳入决策」，经逐条复核不成立（回归待处置 32 条漏 9、若干改判/取代，详见本节其余各项）；报告来源「已读」未列 regression.md、validation.md 却称「缺失：无」。声明与账实不符会误导后续按图索骥的修复排期，必须先行纠正。
+- 修复说明：已随本次修订直接执行：合并说明改写为如实口径并指向本节；「缺失」改为明示 validation.md、regression.md 的纳入状态；统计与待决定节同步更新（采纳 401 项、不采纳 54 项、待决定 3 项）。
+
+### A389. cmd_prep 直接覆盖现行工具链，无回滚暂存与失败恢复（回归 R3-H47）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：.repo_template/scripts/repo_sync.py:1657-1689
+- 优先级：High
+- 详细判断理由：回归判定 STILL PRESENT、交叉复核 AGREE，初版无对应决策项（漏处置）。cmd_prep 以 sync_dir_oneway/repair_symlinks 直接覆盖现行工具链，函数体内无 _rollback_changes/_cleanup_rollback 调用，中途失败即留下半更新工具链——与 A23 已采纳的 cmd_apply 回滚缺口同类，处置口径应一致。
+- 修复说明：cmd_prep 覆盖前做回滚暂存，覆盖过程纳入与 cmd_apply 相同的 try/回滚结构，失败时恢复原工具链并清理暂存；补失败注入测试。
+
+### A390. sync_dir 源侧仍跟随 symlink 把树外内容复制进消费仓（回归 R3-H53，CHANGED）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：.repo_template/scripts/repo_sync.py:590,625
+- 优先级：High
+- 详细判断理由：回归判定 CHANGED：删除侧已修，源侧复制仍跟随符号链接，树外内容可被带入消费仓；初版无对应决策项（漏处置）。A342 处置的是回滚备份 copytree 的跟随链接，位置与机制均不同，不构成覆盖。
+- 修复说明：sync_dir 源侧复制改不跟随 symlink（或解析后校验目标仍在源树内，越界即跳过并记录），补树外链接测试用例。
+
+### A391. reconcile 全量扫描一次性无分页、扫描期无 heartbeat（回归 R3-H44，CHANGED）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：src/mail_core/sync/reconcile.py:145
+- 优先级：High
+- 详细判断理由：回归判定 CHANGED 后残余仍在：全量扫描一次性执行、无分页，扫描期间无 heartbeat 续租，超大文件夹仍可能超 TTL 被误判死亡；初版无对应决策项（漏处置）。A349 是 sync/leases.py 的 heartbeat 过期校验，另一回事。
+- 修复说明：全量扫描改 keyset 分页分批执行，每批之间续租 heartbeat；补大文件夹扫描不超 TTL 的测试。
+
+### A392. 011116 包机器统计与同包总报告自相矛盾（124 vs 118）（回归 R3-H02）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：docs/reviews/review_20261021_011116/bundle_zz_findings_machine.md:5；同包 review_intensive.md:11
+- 优先级：High
+- 详细判断理由：回归判定 STILL PRESENT，初版无对应决策项（漏处置）。初版 R15 讲的是同包 aggregate 完整度口径，题旨不同，不构成映射。处置形式与同类历史文档问题（A398–A400）统一为注记式勘误，不回写历史正文数字。
+- 修复说明：在 bundle_zz_findings_machine.md 头部加勘误注记：标明实数 124 条（C4/H36/M49/L24/I11）与 review_intensive.md 自称 118 条的差异及成因（旧会话残留未重生成），后续引用以实数为准。
+
+### A393. 核验报告基线混淆且「全部真实存在」无逐条状态（回归 R3-H15）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：docs/reviews/review_20261021_040521/summary_verification_report.md:9,22
+- 优先级：High
+- 详细判断理由：回归判定 STILL PRESENT，初版无专门决策项（与 R3 位置重叠但题旨未覆盖，属子项漏处置）。该文件把 Git HEAD 基线 c9b67a2 与 daca631 混用，又对全部条目给出「全部真实存在」的一揽子裁决、无逐条 open/fixed 状态，与第四轮 regression.md 的四态结论冲突时读者无从判据。
+- 修复说明：给该文件加勘误注记：澄清两处基线的对应关系；「全部真实存在」限定为当时点结论，并指向第四轮 regression.md 的逐条四态为现行口径。
+
+### A394. 核验报告 V3 与 V2 共享根因却全额计数、无去重总数（回归 R3-H23）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：docs/reviews/review_20261021_040521/summary_verification_report.md:22
+- 优先级：High
+- 详细判断理由：回归判定 STILL PRESENT，初版无对应决策项（子项漏处置）。V3 行自注「部分与 V2 共享根因」却仍全额计 23 项，全包无去重后根因总数，引用者会高估问题规模；A35 的去重处置针对 052842 包，不覆盖本文件。
+- 修复说明：在该文件 V3 行加注记，给出去重后的根因总数与共享条目清单，全包总数引用以去重口径为准。
+
+### A395. 核验报告横幅谎称所列缺陷已「彻底修复并闭环」（回归 R3-H20）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：docs/reviews/review_20261021_040521/summary_verification_report.md:3
+- 优先级：High
+- 详细判断理由：回归判定 STILL PRESENT，初版无对应决策项（漏处置）。A41 的横幅处置在 011116 包，A387 的横幅补齐名单含 20261022/20261025/20261026 三批、不含 20261021 包，此横幅无人处置；其无条件闭环宣称与第四轮回归实测（26 条 STILL PRESENT）直接矛盾，是误导性最强的一类历史文档问题。
+- 修复说明：给该横幅加限定注记：闭环宣称仅适用于当时已逐条验证的条目，例外清单指向第四轮 regression.md 的 STILL PRESENT 26 条。
+
+### A396. git clone 调用未防参数注入（回归 R3-C06，Critical）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：.repo_template/scripts/repo_sync.py:231
+- 优先级：Critical
+- 详细判断理由：回归判定 Critical STILL PRESENT、交叉复核 AGREE。初版仅有 A184（Medium）处置同段「缓存不校验 origin、换源静默 pull 旧仓」，其协议 allowlist 对 clone 入口只是附带效果，修复描述未含 clone 参数注入的针对性防御（--end-of-options、前导 - 拒绝），被指控的 clone 调用本身未被处置——属映射到相邻缺陷。对比本文档 A338 已为 repo_state.py 专门处置 --end-of-options 隔离，clone 处应同口径补齐。
+- 修复说明：在 repo_sync.py:231 的 clone 调用前对 value 做校验：拒绝以 - 开头的值、scheme 白名单（https/ssh/git 及 file 本地路径），并在 value 前加 --end-of-options；与 A184 的 origin 比对互补，补参数注入用例测试。
+
+### A397. pending 批量迁移回滚被非 IdScanError 失败绕过（回归 R3-H48）
+
+- 来源：regression, bundle_cross_validation_regression
+- 位置：.repo_template/scripts/pending.py:206,225
+- 优先级：High
+- 详细判断理由：回归判定 STILL PRESENT、交叉复核 AGREE。初版 A100（Medium）与本条同函数同行段，但题旨是「回滚吞自身错误且虚假宣称已回滚」（回滚执行后的诚实性），本条题旨是「异常类型覆盖不全使回滚根本不被触发」（触发条件）——根因不同，A100 的修复不包含补全 except 覆盖，属映射相邻未处置。
+- 修复说明：per-item 与外层回滚的 except 由仅 IdScanError 扩为覆盖 OSError 等迁移期异常（或统一异常基类），保证任一条目失败时已迁移条目必进回滚循环；补 OSError 注入测试。与 A100 分开落地、分开验证。
+
+### A398. 核验总报告总数与自身统计表自相矛盾（106 ≠ 139）（回归 R3-H01，改判 R3）
+
+- 来源：regression, bundle_cross_validation_regression, bundle_unit12
+- 位置：docs/reviews/review_20261021_040521/summary_verification_report.md:9-26
+- 优先级：High
+- 详细判断理由：初版 R3 以「历史旧审阅文档统计口径差异，无需重写历史」不采纳。审计改判：106 与 139 是同一文档内部的自相矛盾、非跨文档口径差异；且本文档对同类历史文档问题多用注记式采纳（A4/A5/A387），独对此条用 R 关闭口径不一致。改判采纳，R3 原结论以本项为准（R3 已加注记）。
+- 修复说明：不改正文数字；在该文件统计表处加勘误注记，说明 106 与逐行合计 139 的差异成因及何者为准。
+
+### A399. 034329 包 bundle.json 统计与自身清单不一致（177/42 vs 168/40）（回归 R3-H03，改判 R4）
+
+- 来源：regression, bundle_cross_validation_regression, bundle_unit12
+- 位置：docs/reviews/review_20261021_034329/bundle.json:543
+- 优先级：High
+- 详细判断理由：初版 R4 以「历史中间数据统计差异，无需回写历史文件」不采纳。审计改判理由同 A398：与同类历史数据错误的处置口径统一为注记式采纳，而非 R 关闭。R4 原结论以本项为准（R4 已加注记）。
+- 修复说明：不对机器文件回写统计字段；在该包现行说明中加勘误注记，标明 stats 字段（files:177/bundles:42）与实际数组（168/40）不符、引用以实数为准。
+
+### A400. 040521 包超时夭折未在产物中披露（回归 R3-H05，取代 R5 对本条的处置）
+
+- 来源：regression, bundle_cross_validation_regression, bundle_unit12
+- 位置：docs/reviews/review_20261021_040521/_meta/_meta.json:19（phase=timeout、deadman 已触发）；同包 summary_verification_report.md 头部
+- 优先级：High
+- 详细判断理由：初版 R5 与本条同文件，但其题旨是「缺 aggregate 终产物」（入口缺位），H05 的指控是「该轮审阅超时夭折、phase=timeout 却以完整包面貌呈现、summary 未披露」——根因不同，R5 的理由未回应超时披露，本条实际无人处置。审计据此单列采纳；R5 对其原题的结论不变（R5 已加注记区分两题）。
+- 修复说明：在该包 summary_verification_report.md 头部加未完成披露注记：该轮于当时超时终止（deadman 触发）、无 review_intensive.md 终产物、包内结论不完整，引用时须连同此注记。
+
+### A401. start 把主仓全部真实 .env 软链进每个 task worktree（回归 R3-H55，安全面）
+
+- 来源：regression, bundle_cross_validation_regression, bundle_unit07
+- 位置：.repo_template/scripts/repo_task/worktrees.py:12,26（link_local_env）
+- 优先级：High
+- 详细判断理由：回归定性为安全问题（真实密钥被无 allowlist 批量链入每个 task worktree），交叉复核 AGREE。初版 A260 沿用 unit 扫描的遍历成本定性定为 Low，其修复（剪枝、symlink 源校验）不回答「是否应链 .env、链哪些」这个核心安全决策——属定性偏移导致的变相降级。本项独立处置安全面，优先级按回归口径取 High；A260 的成本面结论保留（A260 已加注记）。
+- 修复说明：link_local_env 改显式 allowlist：默认不链 .env，仅链仓内明示登记的非敏感本地配置文件；确需链入时逐个记录审计日志（源、目标 worktree、时间），且拒绝源解析出仓的条目。补 allowlist 与出仓拒绝测试。
+
+### 补充项与初版关系一览
+
+- 漏处置补录：A389（H47）、A390（H53）、A391（H44）、A392（H02）、A393（H15）、A394（H23）、A395（H20）、D6（H45）、D7（H39）
+- 相邻映射补正：A396（C06）、A397（H48）
+- 改判/取代：A398 改判 R3（H01）、A399 改判 R4（H03）、A400 取代 R5 对 H05 的处置、D8 取代 R27 对 C07 的处置
+- 定性纠正：A401 纠正 A260 对 H55 的定性与优先级（安全面独立成项）
+- 声明修正：A388（已随本次修订执行）
