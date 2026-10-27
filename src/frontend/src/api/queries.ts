@@ -90,6 +90,7 @@ export const queryKeys = {
   groups: ['groups'] as const,
   accounts: ['accounts'] as const,
   sidebarLayout: ['sidebar-layout'] as const,
+  settings: ['settings'] as const,
   stats: ['mail-core', 'stats'] as const,
   inbox: (
     accountId: string = ALL_ACCOUNTS,
@@ -428,6 +429,52 @@ function setReadStateCache(keys: Iterable<string>, isRead: ReadStatus, advanceRe
     }
   }
   patchCachedMail(wanted, { is_read: isRead })
+}
+
+/**
+ * Apply a bulk optimistic read state (mark-all) and return its rollback.
+ *
+ * The rollback is revision-guarded like the single-message path in
+ * setReadOptimistic: a key is reverted only when no other writer advanced
+ * its read revision after this optimistic write and every cached copy
+ * still holds the optimistic value. Keys that fail either check are left
+ * alone — the authoritative invalidation that follows a failed bulk call
+ * reconciles them with the server instead of clobbering newer state (A149).
+ */
+export function applyCachedReadStateWithRollback(keys: Iterable<string>, nextRead: boolean, previousRead: boolean): () => void {
+  const wanted = [...new Set(keys)]
+  const revisions = new Map<string, number>()
+  for (const key of wanted) {
+    const revision = (readOperationRevisions.get(key) || 0) + 1
+    readOperationRevisions.set(key, revision)
+    revisions.set(key, revision)
+  }
+  if (wanted.length) setReadStateCache(wanted, nextRead, false)
+  let settled = false
+  const rollback = (() => {
+    if (settled) return
+    settled = true
+    for (const key of wanted) {
+      if (readOperationRevisions.get(key) !== revisions.get(key)) continue
+      const states = readStatesForKeys([key]).get(key) || []
+      if (!states.length || states.some((state) => state !== nextRead)) continue
+      setReadStateCache([key], previousRead, false)
+      if (!pendingReadRequests.has(key) && readOperationRevisions.get(key) === revisions.get(key)) {
+        readOperationRevisions.delete(key)
+      }
+    }
+  }) as (() => void) & { commit: () => void }
+  /** Success path: drop this write's revision entries so the map stays bounded. */
+  rollback.commit = () => {
+    if (settled) return
+    settled = true
+    for (const key of wanted) {
+      if (!pendingReadRequests.has(key) && readOperationRevisions.get(key) === revisions.get(key)) {
+        readOperationRevisions.delete(key)
+      }
+    }
+  }
+  return rollback
 }
 
 function invalidateMailListsNow(client: typeof queryClient = queryClient): Promise<void> {

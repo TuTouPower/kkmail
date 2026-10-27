@@ -51,7 +51,7 @@ export default function SettingsPage({
   const qc = useQueryClient()
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
-  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: async () => (await api.getSettings()).settings })
+  const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: async () => (await api.getSettings()).settings })
   const accounts = accountsQuery.data || []
   const groups = groupsQuery.data || []
   const [section, setSection] = useState<Section>('accounts')
@@ -396,7 +396,7 @@ export default function SettingsPage({
                 }
                 const timeoutPatch = patch.mail_fetch_timeout_seconds
                 if (timeoutPatch !== undefined && (!Number.isFinite(Number(timeoutPatch)) || Number(timeoutPatch) <= 0)) { report('general', '拉信超时必须为正数', true); return }
-                void run('general', '保存设置', async () => { await api.updateSettings(patch); await qc.invalidateQueries({ queryKey: ['settings'] }); setDraft({}) }, '设置已保存')
+                void run('general', '保存设置', async () => { await api.updateSettings(patch); await qc.invalidateQueries({ queryKey: queryKeys.settings }); setDraft({}) }, '设置已保存')
               }}><fieldset disabled={pending || !settingsQuery.isSuccess}><div className="settings-fields"><label className="settings-field" htmlFor="settings-timezone"><span>时区</span><input id="settings-timezone" list="settings-timezones" value={timezone} onChange={event => setDraft(current => ({ ...current, app_timezone: event.target.value }))} placeholder="Asia/Shanghai" /><small>使用 IANA 时区名称</small></label><datalist id="settings-timezones"><option value="Asia/Shanghai" /><option value="Asia/Tokyo" /><option value="America/New_York" /><option value="Europe/London" /><option value="UTC" /></datalist><label className="settings-field" htmlFor="settings-timeout"><span>拉信超时（秒）</span><input id="settings-timeout" type="number" step="any" value={timeoutSeconds} onChange={event => setDraft(current => ({ ...current, mail_fetch_timeout_seconds: event.target.value }))} placeholder="30" /><small>单次网络请求的等待上限（未设置时默认 30 秒）</small></label></div><button className="settings-button is-primary" type="submit">保存</button></fieldset></form><Status value={feedback.general} />
             </section>
             <section className="settings-card"><h2>登录安全</h2><p>修改应用登录密码，不会修改邮箱服务商密码。</p>
