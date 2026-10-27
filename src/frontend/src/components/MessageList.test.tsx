@@ -856,18 +856,15 @@ describe('<MessageList />', () => {
     expect(container.querySelector('.message-row.unread')).toBeNull()
   })
 
-  it('clicking refresh in unified view triggers syncAll and invalidates cache', async () => {
-    let deltaSyncCalled = false
+  it('clicking refresh invalidates cache and refetches inbox', async () => {
+    let inboxFetchCount = 0
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url)
-      if (u.includes('/api/mail/sync/delta')) {
-        deltaSyncCalled = true
-        return json({ id: 'req-1', mode: 'delta', trigger: 'manual', state: 'complete', target_count: 1, queued_count: 0, running_count: 0, completed_count: 1, failed_count: 0, created_at: '2026-10-26T00:00:00Z', errors: [] }, 200)
-      }
       if (u.startsWith('/api/accounts')) {
         return json({ accounts: [{ id: 'acc-1', email: 'u@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
       }
       if (u.startsWith('/api/mail/inbox')) {
+        inboxFetchCount += 1
         return json({ items: [], next_cursor: null })
       }
       if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
@@ -877,42 +874,12 @@ describe('<MessageList />', () => {
     useMailStore.setState({ view: { type: 'allInbox' } })
     const { container } = await render(<MessageList />)
 
-    const refreshBtn = container.querySelector('button[aria-label="增量同步（检查新邮件）"]') as HTMLButtonElement
+    const refreshBtn = container.querySelector('button[aria-label="刷新邮件列表"]') as HTMLButtonElement
     expect(refreshBtn).not.toBeNull()
+    const countBefore = inboxFetchCount
     await click(refreshBtn)
 
-    await waitFor(() => expect(deltaSyncCalled).toBe(true))
-  })
-
-  it('clicking refresh in single account view triggers scoped delta sync (p046)', async () => {
-    let syncedScope: unknown = null
-    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-      const u = String(url)
-      if (u.includes('/api/mail/sync/delta') && init?.method === 'POST') {
-        syncedScope = JSON.parse(String(init.body))
-        return json({ id: 'req-2', mode: 'delta', trigger: 'manual', state: 'complete', target_count: 1, queued_count: 0, running_count: 0, completed_count: 1, failed_count: 0, created_at: '2026-10-26T00:00:00Z', errors: [] }, 200)
-      }
-      if (u.startsWith('/api/accounts')) {
-        return json({ accounts: [{ id: 'acc-99', email: 'u@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
-      }
-      if (u.startsWith('/api/mail/inbox')) {
-        return json({ items: [], next_cursor: null })
-      }
-      if (u.includes('/folder-stats')) {
-        return json({ folders: [] })
-      }
-      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
-      return json({ detail: 'unexpected' }, 404)
-    }))
-
-    useMailStore.setState({ view: { type: 'account', accountId: 'acc-99', email: 'u@x.test' } })
-    const { container } = await render(<MessageList />)
-
-    const refreshBtn = container.querySelector('button[aria-label="增量同步（检查新邮件）"]') as HTMLButtonElement
-    expect(refreshBtn).not.toBeNull()
-    await click(refreshBtn)
-
-    await waitFor(() => expect(syncedScope).toMatchObject({ account_id: 'acc-99' }))
+    await waitFor(() => expect(inboxFetchCount).toBeGreaterThan(countBefore))
   })
 })
 

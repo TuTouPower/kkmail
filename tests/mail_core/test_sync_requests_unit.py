@@ -16,30 +16,9 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from mail_core.api.app import app
-from mail_core.api.mail import DeltaSyncIn
 from mail_core.mail.application.sync_requests import _canonical_scope, _intent_matches
 from mail_core.mail.storage.models import SyncRequest
 from tests.mail_core.conftest import TEST_LOGIN_PASSWORD
-
-
-def test_delta_sync_in_omitted_client_request_id_gets_server_default():
-    """R10: omitting client_request_id must construct (uuid default factory)."""
-    first = DeltaSyncIn()
-    second = DeltaSyncIn()
-    assert first.client_request_id
-    assert len(first.client_request_id) <= 64
-    assert first.client_request_id != second.client_request_id
-    assert first.folder_role == "inbox"
-    assert first.trigger == "manual"
-
-
-def test_delta_sync_in_rejects_out_of_range_client_request_id():
-    """R02/3.2: client_request_id input is bounded to the VARCHAR(64) column."""
-    with pytest.raises(ValidationError):
-        DeltaSyncIn(client_request_id="x" * 65)
-    with pytest.raises(ValidationError):
-        DeltaSyncIn(client_request_id="")
-    assert DeltaSyncIn(client_request_id="x" * 64).client_request_id == "x" * 64
 
 
 def test_canonical_scope_normalizes_uuid_spelling_and_ignores_non_scope_keys():
@@ -70,8 +49,8 @@ def test_intent_matches_only_for_same_mode_trigger_and_scope():
     assert not _intent_matches(existing, mode="delta", trigger="manual", canonical_scope=other)
 
 
-def test_sync_delta_cookie_session_requires_csrf_token():
-    """p053: Cookie-session POST /api/mail/sync/delta without a valid
+def test_sync_all_cookie_session_requires_csrf_token():
+    """p053: Cookie-session POST /api/accounts/sync-all without a valid
     X-CSRF-Token is rejected with the structured CSRF error, before any
     database work. (Bearer API-key auth is CSRF-exempt and does not cover
     this path, which is why the existing suite missed it.)"""
@@ -81,12 +60,10 @@ def test_sync_delta_cookie_session_requires_csrf_token():
     csrf = login.json()["csrf_token"]
     assert csrf
 
-    body = {"client_request_id": f"csrf-unit-{uuid.uuid4().hex}"}
-
-    missing = client.post("/api/mail/sync/delta", json=body)
+    missing = client.post("/api/accounts/sync-all")
     assert missing.status_code == 403
     assert missing.json()["detail"]["csrf_error"] is True
 
-    wrong = client.post("/api/mail/sync/delta", json=body, headers={"X-CSRF-Token": "not-the-token"})
+    wrong = client.post("/api/accounts/sync-all", headers={"X-CSRF-Token": "not-the-token"})
     assert wrong.status_code == 403
     assert wrong.json()["detail"]["csrf_error"] is True

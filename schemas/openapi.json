@@ -565,76 +565,6 @@
         "title": "AttachmentOut",
         "type": "object"
       },
-      "DeltaSyncIn": {
-        "properties": {
-          "account_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Account Id"
-          },
-          "client_request_id": {
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Client Request Id",
-            "type": "string"
-          },
-          "folder_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Folder Id"
-          },
-          "folder_role": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": "inbox",
-            "title": "Folder Role"
-          },
-          "group_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Group Id"
-          },
-          "trigger": {
-            "default": "manual",
-            "enum": [
-              "manual",
-              "focus",
-              "navigation"
-            ],
-            "title": "Trigger",
-            "type": "string"
-          }
-        },
-        "title": "DeltaSyncIn",
-        "type": "object"
-      },
       "ExchangeRedirectUrlRequest": {
         "description": "p056: pasted Microsoft redirect URL exchanged for a Graph account.",
         "properties": {
@@ -4734,55 +4664,6 @@
           }
         ],
         "summary": "Api Report Sync Activity",
-        "tags": [
-          "mail"
-        ]
-      }
-    },
-    "/api/mail/sync/delta": {
-      "post": {
-        "operationId": "api_sync_delta_api_mail_sync_delta_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DeltaSyncIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SyncRequestOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          },
-          {
-            "APIKeyCookie": []
-          }
-        ],
-        "summary": "Api Sync Delta",
         "tags": [
           "mail"
         ]

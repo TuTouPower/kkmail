@@ -583,23 +583,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/mail/sync/delta": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Api Sync Delta */
-        post: operations["api_sync_delta_api_mail_sync_delta_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/mail/sync/requests": {
         parameters: {
             query?: never;
@@ -915,28 +898,6 @@ export interface components {
             name: string;
             /** Size */
             size: number | null;
-        };
-        /** DeltaSyncIn */
-        DeltaSyncIn: {
-            /** Account Id */
-            account_id?: string | null;
-            /** Client Request Id */
-            client_request_id?: string;
-            /** Folder Id */
-            folder_id?: string | null;
-            /**
-             * Folder Role
-             * @default inbox
-             */
-            folder_role: string | null;
-            /** Group Id */
-            group_id?: string | null;
-            /**
-             * Trigger
-             * @default manual
-             * @enum {string}
-             */
-            trigger: "manual" | "focus" | "navigation";
         };
         /**
          * ExchangeRedirectUrlRequest
@@ -2712,39 +2673,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    api_sync_delta_api_mail_sync_delta_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DeltaSyncIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SyncRequestOut"];
-                };
             };
             /** @description Validation Error */
             422: {

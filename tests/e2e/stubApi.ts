@@ -556,27 +556,8 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
       return route.fulfill({ status: 200, json: { ok: true } })
     }
 
-    // 8.5 Sync delta / activity heartbeat (registered explicitly so these
+    // 8.5 Activity heartbeat (registered explicitly so these
     // POSTs never fall into the 404 string-detail fallback)
-    if (path === '/api/mail/sync/delta' && method === 'POST') {
-      return route.fulfill({
-        status: 202,
-        json: {
-          id: 'sync-req-stub-1',
-          mode: 'delta',
-          trigger: 'manual',
-          state: 'complete',
-          target_count: currentAccounts.length,
-          queued_count: 0,
-          running_count: 0,
-          completed_count: currentAccounts.length,
-          failed_count: 0,
-          created_at: '2026-10-21T08:00:00Z',
-          finished_at: '2026-10-21T08:00:01Z',
-          errors: [],
-        },
-      })
-    }
     if (path === '/api/mail/sync/activity' && method === 'POST') {
       return route.fulfill({ status: 204, body: '' })
     }

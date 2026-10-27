@@ -14,7 +14,6 @@ import { displayName } from '../lib/displayName'
 import { formatListDate } from '../lib/listDate'
 import { previewText } from '../lib/previewText'
 import { useMailStore } from '../store/mailStore'
-import { useScopeSync } from '../hooks/use_scope_sync'
 import { getDesktopPlatform } from '../lib/desktopShell'
 
 /** Server-side search kicks in from this many characters. */
@@ -513,22 +512,22 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     }
   }
 
-  const [isLocalSyncing, setIsLocalSyncing] = useState(false)
-  const { isSyncing: isScopeSyncing, lastError: scopeSyncError, triggerManualSync } = useScopeSync(accounts.length > 0)
-  const isSyncing = isLocalSyncing || isScopeSyncing
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   async function refreshView() {
-    setIsLocalSyncing(true)
+    if (isRefreshing) return
+    setIsRefreshing(true)
     try {
-      triggerManualSync()
+      await Promise.all([
+        invalidateMailListQueries(),
+        invalidateMailStatsQueries(),
+        queryClient.invalidateQueries({ queryKey: queryKeys.accounts }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.stats }),
+      ])
     } catch (err) {
-      setActionStatus(`同步触发失败：${errorMessage(err)}`)
+      setActionStatus(`刷新失败：${errorMessage(err)}`)
     } finally {
-      setIsLocalSyncing(false)
-      void invalidateMailListQueries()
-      void invalidateMailStatsQueries()
-      void queryClient.invalidateQueries({ queryKey: queryKeys.accounts })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.stats })
+      setIsRefreshing(false)
     }
   }
 
@@ -580,13 +579,13 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
           <div className="list-primary-actions">
             <button
               data-ui="ML03"
-              className={`list-primary-btn ${isSyncing ? 'loading' : ''}`}
-              title={isSyncing ? '正在检查新邮件…' : '增量同步（检查新邮件）'}
-              aria-label={isSyncing ? '正在检查新邮件…' : '增量同步（检查新邮件）'}
-              disabled={isSyncing}
+              className={`list-primary-btn ${isRefreshing ? 'loading' : ''}`}
+              title={isRefreshing ? '正在刷新…' : '刷新邮件列表'}
+              aria-label={isRefreshing ? '正在刷新…' : '刷新邮件列表'}
+              disabled={isRefreshing}
               onClick={refreshView}
             >
-              <RefreshCw size={16} className={isSyncing ? 'spin' : ''} />
+              <RefreshCw size={16} className={isRefreshing ? 'spin' : ''} />
             </button>
           </div>
         </div>
@@ -678,7 +677,6 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
       </div>
       <div ref={messageListRef} className={`message-list windowed ${selecting ? 'selecting' : ''}`} onScroll={handleScroll}>
         {actionStatus && actionStatus.includes('失败') && <div role="status" className="list-note error">{actionStatus}</div>}
-        {scopeSyncError && <div role="alert" className="list-note error">{scopeSyncError}</div>}
         {failure && <div role="alert" className="list-note error">{failure}</div>}
         {!loading && visible.length === 0 && (
           <div data-ui="ML13" style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>

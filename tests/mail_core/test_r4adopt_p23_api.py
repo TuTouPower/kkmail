@@ -88,18 +88,6 @@ def test_sync_all_report_none_is_404(monkeypatch):
     assert excinfo.value.status_code == 404
 
 
-def test_sync_delta_report_none_is_404(monkeypatch):
-    from fastapi import HTTPException, Response
-
-    import mail_core.api.mail as mail_api
-
-    _patch_sync_route(monkeypatch, mail_api, None)
-    body = mail_api.DeltaSyncIn(account_id=uuid.uuid4())
-    with pytest.raises(HTTPException) as excinfo:
-        mail_api.api_sync_delta(body, Response())
-    assert excinfo.value.status_code == 404
-
-
 # --- A103: production API must not create memory/stub test-provider accounts ---
 
 

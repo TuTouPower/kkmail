@@ -148,14 +148,14 @@ def test_explicit_folder_outside_account_scope_still_404():
             resolve_sync_targets(session, account_id=account_id, folder_id=uuid.uuid4())
 
 
-def test_delta_request_for_paused_virtual_folder_completes_with_zero_targets():
+def test_sync_request_for_paused_virtual_folder_completes_with_zero_targets():
     Session = _session_factory()
     account_id, _inbox_id, important_id = _seed(Session)
     with Session() as session:
         req, created = create_sync_request(
             session,
             client_request_id="p060-paused-virtual",
-            mode="delta",
+            mode="full",
             trigger="navigation",
             scope={"account_id": str(account_id), "folder_id": str(important_id)},
             account_id=account_id,

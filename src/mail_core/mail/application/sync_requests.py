@@ -465,8 +465,7 @@ def _scope_matches(canonical: dict[str, Any], wanted: dict[str, Any]) -> bool:
     Matching is scope-exact on the identity keys (account/group/folder/all),
     mirroring the exact canonical comparison used for idempotency in
     ``_intent_matches``. ``folder_role`` is the one legitimate exception:
-    stored delta scopes always carry it (DeltaSyncIn defaults it to
-    "inbox" and the frontend pairs every identity with a role), while a
+    stored scopes may carry it ("inbox" by default), while a
     query may specify an identity without a role — an omitted role means
     "any role within this identity scope", so a stored role does not
     contradict it. When the query does specify a role, it must be equal.
