@@ -48,6 +48,18 @@ export interface ApiError {
   retryAfterSeconds?: number
 }
 
+/**
+ * Brand for errors constructed by this client. Shape-only checks
+ * (status:number + message:string) also match arbitrary business
+ * payloads, so isApiError must require this non-enumerable symbol.
+ */
+const API_ERROR_BRAND: unique symbol = Symbol('kkmail.apiError')
+
+function markApiError<T extends ApiError>(error: T): T {
+  Object.defineProperty(error, API_ERROR_BRAND, { value: true })
+  return error
+}
+
 export const UNAUTHORIZED_EVENT = 'kkmail:unauthorized'
 export const DEFAULT_TIMEOUT_MS = 30_000
 
@@ -69,7 +81,7 @@ function handleUnauthorized(): ApiError {
   csrfToken = null
   csrfInflight = null
   if (typeof window !== 'undefined') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
-  return { status: 401, code: 'unauthorized', message: '登录已过期，请重新登录' }
+  return markApiError({ status: 401, code: 'unauthorized', message: '登录已过期，请重新登录' })
 }
 
 async function fetchCsrfToken(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<string | null> {
@@ -99,13 +111,13 @@ async function fetchCsrfToken(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<string | 
       return csrfToken
     } catch (err) {
       if (tmo.timedOut()) {
-        throw { status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` } as ApiError
+        throw markApiError({ status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` })
       }
       if (isApiError(err)) throw err
       if (err instanceof SyntaxError) {
-        throw { status: 0, code: 'invalid_response', message: 'CSRF 令牌响应无效' } as ApiError
+        throw markApiError({ status: 0, code: 'invalid_response', message: 'CSRF 令牌响应无效' })
       }
-      throw { status: 0, code: 'network_error', message: '网络请求失败，无法获取 CSRF 令牌' } as ApiError
+      throw markApiError({ status: 0, code: 'network_error', message: '网络请求失败，无法获取 CSRF 令牌' })
     } finally {
       tmo.done()
       csrfInflight = null
@@ -171,13 +183,12 @@ function errorFromBody(status: number, statusText: string, body: unknown, retryA
     }
   }
   const retryAfterSeconds = parseRetryAfterSeconds(retryAfterHeader)
-  return { status, message, payload: body, ...(code ? { code } : {}), ...(retryAfterSeconds ? { retryAfterSeconds } : {}) }
+  return markApiError({ status, message, payload: body, ...(code ? { code } : {}), ...(retryAfterSeconds ? { retryAfterSeconds } : {}) })
 }
 
-function isApiError(error: unknown): error is ApiError {
+export function isApiError(error: unknown): error is ApiError {
   return !!error && typeof error === 'object'
-    && typeof (error as ApiError).status === 'number'
-    && typeof (error as ApiError).message === 'string'
+    && (error as { [API_ERROR_BRAND]?: unknown })[API_ERROR_BRAND] === true
 }
 
 
@@ -185,7 +196,7 @@ function isApiError(error: unknown): error is ApiError {
 function underTimeout<T>(work: Promise<T>, signal: AbortSignal, timeoutMs: number, timedOut: () => boolean): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const fail = () => {
-      reject({ status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` } as ApiError)
+      reject(markApiError({ status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` }))
     }
     if (timedOut() || signal.aborted) {
       fail()
@@ -214,7 +225,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}, 
     const token = csrfToken || (await fetchCsrfToken(timeoutMs))
     if (!token) {
       // Never send a state-changing request without CSRF protection.
-      throw { status: 0, code: 'csrf_unavailable', message: '无法获取 CSRF 令牌，请稍后重试' } as ApiError
+      throw markApiError({ status: 0, code: 'csrf_unavailable', message: '无法获取 CSRF 令牌，请稍后重试' })
     }
     headers.set('X-CSRF-Token', token)
   }
@@ -244,7 +255,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}, 
     }
     return await underTimeout(res.text() as Promise<unknown>, tmo.signal, timeoutMs, tmo.timedOut) as T
   } catch (err) {
-    if (tmo.timedOut()) throw { status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` } as ApiError
+    if (tmo.timedOut()) throw markApiError({ status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` })
     throw err
   } finally {
     tmo.done()
@@ -293,7 +304,7 @@ export const api = {
       setCsrfToken((body as LoginOut | null)?.csrf_token)
     } catch (err) {
       if (tmo.timedOut()) {
-        throw { status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` } as ApiError
+        throw markApiError({ status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` })
       }
       throw err
     } finally {

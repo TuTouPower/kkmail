@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { __resetCsrfForTests, apiRequest } from './client'
+import { __resetCsrfForTests, apiRequest, isApiError, postJson } from './client'
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
@@ -48,5 +48,29 @@ describe('structured error codes and Retry-After parsing (A59)', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(503, { detail: 'unavailable' }, { 'Retry-After': 'not-a-date' })))
     const err = await apiRequest('/api/accounts').catch((e: unknown) => e) as { retryAfterSeconds?: number }
     expect(err.retryAfterSeconds).toBeUndefined()
+  })
+})
+
+describe('isApiError branding (A254)', () => {
+  it('does not mistake a plain business object for an ApiError', () => {
+    expect(isApiError({ status: 200, message: 'just a payload' })).toBe(false)
+    expect(isApiError({ status: 500, message: 'impostor', code: 'fake' })).toBe(false)
+    expect(isApiError(null)).toBe(false)
+    expect(isApiError('error')).toBe(false)
+  })
+
+  it('recognizes errors produced by the client itself', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(404, { detail: 'message not found' })))
+    const err = await apiRequest('/api/mail/messages/x').catch((e: unknown) => e)
+    expect(isApiError(err)).toBe(true)
+  })
+
+  it('does not pass a foreign ApiError-shaped rejection through the CSRF fetch', async () => {
+    const foreign = { status: 503, message: 'foreign object, not from this client' }
+    vi.stubGlobal('fetch', vi.fn(async () => { throw foreign }))
+    await expect(postJson('/api/mail/messages/1/trash')).rejects.toMatchObject({
+      status: 0,
+      code: 'network_error',
+    })
   })
 })
