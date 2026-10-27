@@ -375,6 +375,50 @@ describe('<MessageList />', () => {
     })
   })
 
+  it('bounds concurrent folder-stats requests in the all-accounts view (A69)', async () => {
+    const accountIds = Array.from({ length: 20 }, (_, i) => `acc-${i + 1}`)
+    let started = 0
+    let active = 0
+    let maxActive = 0
+    let releaseStats!: () => void
+    const statsGate = new Promise<void>((resolve) => { releaseStats = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      calls.push(u)
+      if (u.startsWith('/api/accounts')) {
+        return json({
+          accounts: accountIds.map((id) => ({ id, email: `${id}@x.test`, status: 'active', account_type: 'imap', provider: 'imap', sync_enabled: true })),
+          total: accountIds.length, limit: 200, offset: 0, has_more: false,
+        })
+      }
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [], next_cursor: null })
+      if (u.includes('/folder-stats')) {
+        started += 1
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        await statsGate
+        active -= 1
+        return json({ folders: [{ folder_id: 'f1', role: 'inbox', total_count: 1, unread_count: 1 }] })
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(started).toBeGreaterThan(0))
+    const { act } = await import('react')
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    // With a concurrency pool of 8, only the first wave may be in flight
+    // even though 20 enabled accounts need stats.
+    expect(started).toBe(8)
+    expect(maxActive).toBeLessThanOrEqual(8)
+
+    releaseStats()
+    await waitFor(() => {
+      expect(container.querySelector('.list-count')?.textContent).toBe('20 封邮件 · 20 封未读')
+    })
+    expect(maxActive).toBeLessThanOrEqual(8)
+  })
+
   it('sums all-account stats when every account request succeeds', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const u = String(url)

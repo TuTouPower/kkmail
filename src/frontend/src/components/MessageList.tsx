@@ -42,6 +42,24 @@ function isSearchTrigger(q: string): boolean {
   return trimmed.length >= SEARCH_MIN_CHARS
 }
 
+/** Max simultaneous per-account folder-stats requests in the all-accounts view (A69). */
+export const FOLDER_STATS_CONCURRENCY = 8
+
+/** Map with a bounded number of workers so a large account list cannot fan out into hundreds of simultaneous requests. */
+export async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length) as R[]
+  let nextIndex = 0
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      results[index] = await fn(items[index])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()))
+  return results
+}
+
 function sumKnownCounts(counts: Array<number | null>): number | null {
   if (!counts.length || counts.some((count) => count === null)) return null
   return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0)
@@ -211,12 +229,10 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         }
       }
       const enabledAccounts = accounts.filter((account) => account.sync_enabled !== false)
-      const statsList = await Promise.all(
-        enabledAccounts.map(async (a) => {
-          const res = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(a.id)}/folder-stats`, { signal }).catch(() => null)
-          return { account: a, stats: res }
-        }),
-      )
+      const statsList = await mapWithConcurrency(enabledAccounts, FOLDER_STATS_CONCURRENCY, async (a) => {
+        const res = await apiRequest<AccountFolderStatsOut>(`/api/mail/accounts/${encodeURIComponent(a.id)}/folder-stats`, { signal }).catch(() => null)
+        return { account: a, stats: res }
+      })
       if (statsList.some((item) => item.stats === null)) return null
       let total = 0
       let unread = 0
