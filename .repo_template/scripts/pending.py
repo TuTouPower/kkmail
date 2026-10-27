@@ -166,6 +166,37 @@ def cmd_list(args: argparse.Namespace) -> None:
         print(f"{state:<8} {stem:<40} {title}")
 
 
+def _rollback_migrated(
+    migrated: list[tuple[Path, Path, bytes]],
+) -> tuple[int, list[tuple[Path, Path, Exception]]]:
+    """逐条回滚已迁移条目，返回 (实际恢复数, 未恢复清单)。
+
+    每条独立记录成败（A100）：任一步（git mv / 普通改名 / 正文恢复 /
+    git add）失败即记入未恢复清单并继续其余条目，不再吞掉错误后
+    无条件宣称全部回滚成功。
+    """
+    restored = 0
+    failures: list[tuple[Path, Path, Exception]] = []
+    for src, dst, orig_bytes in reversed(migrated):
+        try:
+            if _git(["ls-files", "--error-unmatch", _rel(dst)]).returncode == 0:
+                result = _git(["mv", _rel(dst), _rel(src)])
+                if result.returncode != 0:
+                    raise IdScanError(f"git mv 失败：{result.stderr.strip()}")
+            else:
+                dst.rename(src)
+            # 恢复原正文；已跟踪文件 git add 使 index 回到原内容
+            src.write_bytes(orig_bytes)
+            if _git(["ls-files", "--error-unmatch", _rel(src)]).returncode == 0:
+                add_result = _git(["add", _rel(src)])
+                if add_result.returncode != 0:
+                    raise IdScanError(f"git add 失败：{add_result.stderr.strip()}")
+            restored += 1
+        except Exception as rollback_error:  # noqa: BLE001 - 逐条记录后继续其余回滚
+            failures.append((src, dst, rollback_error))
+    return restored, failures
+
+
 def _apply(args: argparse.Namespace, actions: list[tuple[Path, Path, str]]) -> None:
     """dry-run 打印或落盘执行迁移。actions 为 (源, 目标目录, 说明)。"""
     if not args.write:
@@ -205,22 +236,26 @@ def _apply(args: argparse.Namespace, actions: list[tuple[Path, Path, str]]) -> N
                     sys.stderr.write(f"已迁移：{_rel(destination)}\n")
                 except IdScanError as error:
                     # 失败时回滚已成功的 git mv + 恢复被 set_field 改过的正文（F19/RT-010）
-                    for src, dst, orig_bytes in reversed(migrated):
-                        try:
-                            if _git(["ls-files", "--error-unmatch", _rel(dst)]).returncode == 0:
-                                _git(["mv", _rel(dst), _rel(src)])
-                            else:
-                                dst.rename(src)
-                            # 恢复原正文；已跟踪文件 git add 使 index 回到原内容
-                            src.write_bytes(orig_bytes)
-                            if _git(["ls-files", "--error-unmatch", _rel(src)]).returncode == 0:
-                                _git(["add", _rel(src)])
-                        except Exception:
-                            pass
-                    sys.stderr.write(
-                        f"迁移失败于第 {index} 条（{_rel(path)}）：{error}；"
-                        f"已回滚 {len(migrated)} 条已迁移条目（含正文）\n"
-                    )
+                    # A100：按实际恢复数报告；未恢复条目逐条列出并给手工恢复方法。
+                    restored, failures = _rollback_migrated(migrated)
+                    if failures:
+                        sys.stderr.write(
+                            f"迁移失败于第 {index} 条（{_rel(path)}）：{error}；"
+                            f"回滚未完全成功：已实际恢复 {restored}/{len(migrated)} 条"
+                            f"已迁移条目，{len(failures)} 条未恢复\n"
+                        )
+                        for src, dst, rollback_error in failures:
+                            sys.stderr.write(
+                                f"  未恢复：{_rel(dst)}（原路径 {_rel(src)}）："
+                                f"{rollback_error}；手工恢复：确认该条目当前实际位置，"
+                                f"将其移回 {_rel(src)}、恢复迁移前正文，"
+                                f"并对原路径执行 git add 后重试\n"
+                            )
+                    else:
+                        sys.stderr.write(
+                            f"迁移失败于第 {index} 条（{_rel(path)}）：{error}；"
+                            f"已回滚 {restored} 条已迁移条目（含正文）\n"
+                        )
                     raise
     except IdScanError:
         raise

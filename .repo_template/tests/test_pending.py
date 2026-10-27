@@ -323,6 +323,55 @@ def test_archive_partial_failure_rolls_back_moved_and_content(tmp_path, monkeypa
     assert not (repo / "docs/archive/pending/p001_one.md").exists()
 
 
+def test_archive_rollback_failure_is_reported_not_claimed(tmp_path, monkeypatch, capsys):
+    """A100：回滚本身失败时不得宣称「已回滚 N 条」——须报告实际恢复数、
+    逐条列出未恢复路径与手工恢复方法。"""
+    repo = _init_repo(tmp_path)
+    _bind(monkeypatch, repo)
+    pending_mod.main(["new", "--slug", "one"])
+    pending_mod.main(["new", "--slug", "two"])
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "add entries")
+
+    real_git = pending_mod._git
+
+    def flaky_git(args):
+        # 回滚方向的 git mv（archive -> todo）模拟失败；其余 git 调用走真实实现。
+        if (
+            len(args) > 1
+            and args[0] == "mv"
+            and args[1] == "docs/archive/pending/p001_one.md"
+        ):
+            return subprocess.CompletedProcess(
+                ["git", *args], 1, "", "simulated rollback mv failure"
+            )
+        return real_git(args)
+
+    monkeypatch.setattr(pending_mod, "_git", flaky_git)
+
+    real_move = pending_mod.move_entry
+    calls = {"n": 0}
+
+    def flaky_move(path, target):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise IdScanError("模拟第二条迁移失败")
+        return real_move(path, target)
+
+    monkeypatch.setattr(pending_mod, "move_entry", flaky_move)
+    with pytest.raises(SystemExit, match="模拟第二条迁移失败"):
+        pending_mod.main(["archive", "p001", "p002", "--fix-ref", "t001", "--write"])
+    err = capsys.readouterr().err
+    assert "已实际恢复 0/1" in err
+    assert "未恢复" in err
+    assert "p001_one.md" in err
+    assert "手工恢复" in err
+    assert "已回滚 1 条" not in err
+    # 回滚确未发生：p001 仍留在 archive
+    assert (repo / "docs/archive/pending/p001_one.md").exists()
+    assert not (repo / "docs/pending/todo/p001_one.md").exists()
+
+
 # ---------- CLI ----------
 
 
