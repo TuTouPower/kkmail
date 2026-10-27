@@ -23,10 +23,28 @@ class PublicationBatch:
 def get_publication_state(session: Session) -> OutboxPublicationState:
     """Return singleton outbox publication state row, creating one if not present."""
     state = session.scalar(select(OutboxPublicationState).where(OutboxPublicationState.id == 1))
-    if state is None:
-        state = OutboxPublicationState(id=1, epoch=uuid.uuid4(), next_seq=1)
-        session.add(state)
-        session.flush()
+    if state is not None:
+        return state
+    # A352: a plain select-then-insert races on multi-process first
+    # start — both processes see "no row", both insert id=1, and one
+    # dies on the primary key. Insert with ON CONFLICT DO NOTHING and
+    # re-read: the winner's row is the singleton either way.
+    values = dict(id=1, epoch=uuid.uuid4(), next_seq=1, pruned_through_seq=0)
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        session.execute(pg_insert(OutboxPublicationState).values(**values).on_conflict_do_nothing())
+    elif dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        session.execute(sqlite_insert(OutboxPublicationState).values(**values).on_conflict_do_nothing())
+    else:  # pragma: no cover - production is PostgreSQL, tests SQLite
+        session.add(OutboxPublicationState(**values))
+    session.flush()
+    state = session.scalar(select(OutboxPublicationState).where(OutboxPublicationState.id == 1))
+    if state is None:  # pragma: no cover - insert above must have landed or conflicted
+        raise RuntimeError("outbox publication state row could not be created")
     return state
 
 
