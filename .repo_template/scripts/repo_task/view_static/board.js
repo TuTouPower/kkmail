@@ -720,8 +720,9 @@ function buildChainCard(chain) {
   });
   card.appendChild(tasks);
 
-  var stop = chain.stop_reason
-    || (window.ChainPlan ? window.ChainPlan.chainStopInfo(chain, plan, model) : '');
+  // 停因只认后端 stop_reason（plan.py 单一实现）；缺失时明示后端未提供，
+  // 不在前端复刻算法（A37）。
+  var stop = chain.stop_reason || '后端未提供';
   if (stop) {
     card.appendChild(el('footer', { class: 'chain-card-foot' }, [stop]));
   }

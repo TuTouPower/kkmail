@@ -36,43 +36,13 @@ var map = ChainPlan.chainOfMap(chains);
 check('chainOfMap t001', map.get('t001'), 'c1');
 check('chainOfMap t003', map.get('t003'), 'c2');
 
-// chainStopInfo：服务端 stop_reason 优先；客户端兜底语义
-var data = {
-  nodes: [
-    { id: 't001', category: 'runnable' },
-    { id: 't002', category: 'blocked_deps' },
-    { id: 't003', category: 'runnable' },
-  ],
-  edges: [
-    { type: 'dep', from: 't001', to: 't002' },
-    { type: 'dep', from: 't003', to: 't002' },
-  ],
-};
-var plan = {
-  chains: [
-    { id: 'c1', name: '链 A', taskIds: ['t001'] },
-    { id: 'c2', name: '链 B', taskIds: ['t003'] },
-  ],
-  deferred: [],
-};
+// A37：chainStopInfo 已整体删除（原用例随之整体替换）——停因算法只保留
+// 后端 plan.py 一份实现，JS 不再双实现；stop_reason 缺失时 board.js 显示
+// 「后端未提供」。后端语义由 test_plan.py 覆盖。
 check(
-  'chainStopInfo 汇合点',
-  ChainPlan.chainStopInfo(plan.chains[0], plan, data),
-  '停在汇合点 t002(还需 链 B的 t003)'
-);
-
-var leafPlan = {
-  chains: [{ id: 'c1', name: '链 A', taskIds: ['t001'] }],
-  deferred: [],
-};
-var leafData = {
-  nodes: [{ id: 't001', category: 'runnable' }],
-  edges: [],
-};
-check(
-  'chainStopInfo 末端',
-  ChainPlan.chainStopInfo(leafPlan.chains[0], leafPlan, leafData),
-  '已到 DAG 末端'
+  'chainStopInfo 已移除',
+  typeof ChainPlan.chainStopInfo,
+  'undefined'
 );
 
 // 确认批计划算法已迁出本文件
