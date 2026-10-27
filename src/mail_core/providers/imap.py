@@ -356,6 +356,31 @@ def _get_server_uidvalidity(c: imaplib.IMAP4, folder: str) -> int | None:
     return None
 
 
+def _search_uids(data: Any) -> list[int]:
+    """Parse UIDs from an IMAP SEARCH response, across *all* data chunks.
+
+    Servers may split the UID list over several chunks; reading only
+    ``data[0]`` drops UIDs, which makes reconcile treat the dropped UIDs
+    as remotely deleted (A31). Non-numeric tokens are ignored.
+    """
+    uids: list[int] = []
+    for chunk in data or ():
+        if not chunk:
+            continue
+        if isinstance(chunk, tuple):
+            chunk = chunk[0] if chunk else b""
+            if not chunk:
+                continue
+        tokens = chunk.split() if isinstance(chunk, (bytes, str)) else str(chunk).split()
+        for token in tokens:
+            text = token.decode("ascii", errors="ignore") if isinstance(token, bytes) else str(token)
+            try:
+                uids.append(int(text))
+            except ValueError:
+                continue
+    return uids
+
+
 def _parse_fetch_flags(meta: str) -> tuple[bool | None, bool | None]:
     match = re.search(r"\bFLAGS\s*\(([^)]*)\)", meta, flags=re.IGNORECASE)
     if match is None:
@@ -899,10 +924,7 @@ class ImapProvider:
             return [], True, after
         if typ != "OK" or not data:
             return [], True, after
-        try:
-            all_uids = sorted({int(x) for x in (data[0] or b"").split() if x})
-        except (TypeError, ValueError):
-            return [], True, after
+        all_uids = sorted(set(_search_uids(data)))
         candidates = [u for u in all_uids if after < u <= existing_max]
         window = candidates[:200]
         changes: list[DeltaChange] = []
@@ -977,7 +999,7 @@ class ImapProvider:
                 try:
                     typ, data = c.uid("SEARCH", None, "MODSEQ", str(int(since_modseq) + 1))
                     if typ == "OK":
-                        changed_uids = [int(x) for x in (data[0] or b"").split() if x]
+                        changed_uids = _search_uids(data)
                         if not changed_uids:
                             return DeltaPage(
                                 changes=(),
@@ -1222,13 +1244,7 @@ class ImapProvider:
                 if typ == "NO" and _is_mailbox_noselect(c, folder_remote_id):
                     return []
                 raise RuntimeError(f"UID SEARCH {folder_remote_id} failed during reconcile: {typ}")
-            remote_uids = []
-            for x in (data[0] or b"").split():
-                s = x.decode() if isinstance(x, bytes) else str(x)
-                try:
-                    remote_uids.append(int(s))
-                except ValueError:
-                    continue
+            remote_uids = _search_uids(data)
             remote = {format_imap_remote_id(folder_remote_id, uidvalidity, u) for u in remote_uids}
             # Also accept legacy bare-UID locals during transition.
             remote |= {str(u) for u in remote_uids}
