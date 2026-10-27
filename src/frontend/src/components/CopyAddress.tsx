@@ -10,6 +10,10 @@ interface CopyAddressProps {
   variant?: 'text' | 'icon'
 }
 
+/** Feedback overlay max width; positioning must use this same constant so
+ * the rendered width and the left clamp never drift apart (A328). */
+export const COPY_FEEDBACK_MAX_WIDTH_PX = 288
+
 interface CopyFeedback {
   message: string
   failed: boolean
@@ -61,7 +65,11 @@ export default function CopyAddress({ address, children, className = '', variant
     const top = bounds.bottom + tooltipHeight + 8 <= window.innerHeight
       ? bounds.bottom + 4
       : Math.max(8, bounds.top - tooltipHeight - 4)
-    const left = Math.max(8, Math.min(bounds.left, window.innerWidth - 288))
+    const effectiveWidth = Math.min(
+      COPY_FEEDBACK_MAX_WIDTH_PX,
+      Math.max(0, window.innerWidth - 16),
+    )
+    const left = Math.max(8, Math.min(bounds.left, window.innerWidth - effectiveWidth - 8))
     setFeedback({ message, failed, left, top })
     timerRef.current = setTimeout(() => {
       timerRef.current = null
@@ -86,7 +94,7 @@ export default function CopyAddress({ address, children, className = '', variant
         <span
           className="copy-address-feedback"
           data-failed={feedback.failed}
-          style={{ left: feedback.left, top: feedback.top }}
+          style={{ left: feedback.left, top: feedback.top, maxWidth: `min(${COPY_FEEDBACK_MAX_WIDTH_PX}px, calc(100vw - 16px))` }}
           role="status"
           aria-live="polite"
         >

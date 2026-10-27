@@ -63,6 +63,28 @@ describe('<CopyAddress />', () => {
     expect(document.body.querySelector('[role="status"]')?.textContent).toBe('已复制地址')
   })
 
+  it('constrains feedback width to the viewport and clamps left with the same width (A328)', async () => {
+    setClipboard(vi.fn().mockResolvedValue(undefined))
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 300 })
+    try {
+      const { container } = await render(<CopyAddress address="jane@example.test">jane@example.test</CopyAddress>)
+      const button = container.querySelector<HTMLButtonElement>('button')!
+      vi.spyOn(button, 'getBoundingClientRect').mockReturnValue({
+        left: 100, top: 10, bottom: 20, right: 180, width: 80, height: 10, x: 100, y: 10,
+        toJSON: () => ({}),
+      } as DOMRect)
+      await act(async () => { button.click(); await Promise.resolve() })
+      const feedback = document.body.querySelector('[role="status"]') as HTMLElement
+      expect(feedback).not.toBeNull()
+      // max-width must be viewport-constrained, not the bare 288px magic number.
+      expect(feedback.style.maxWidth).toBe('min(288px, calc(100vw - 16px))')
+      // Effective width on a 300px viewport is 284px, so left must clamp to 300-284-8=8.
+      expect(feedback.style.left).toBe('8px')
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
+    }
+  })
+
   it('clears its feedback timer when unmounted', async () => {
     vi.useFakeTimers()
     setClipboard(vi.fn().mockResolvedValue(undefined))
