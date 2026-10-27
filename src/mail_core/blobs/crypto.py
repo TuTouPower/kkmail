@@ -122,7 +122,13 @@ def _nonce(prefix: bytes, index: int) -> bytes:
 
 
 def iter_wrap(chunks: Iterable[bytes], *, keyring: Keyring, key_version: int | None = None) -> Iterator[bytes]:
-    """Encrypt an iterable of plaintext pieces into framed ciphertext pieces."""
+    """Encrypt an iterable of plaintext pieces into framed ciphertext pieces.
+
+    Input pieces are sliced with memoryview views (A110): each plaintext
+    byte is copied exactly once into the current chunk buffer, so a single
+    oversized piece no longer degrades to O(n^2) remainder copying, and at
+    most one chunk of plaintext is buffered at a time.
+    """
     version = key_version if key_version is not None else keyring.active_version
     aead = AESGCM(keyring.get(version))
     prefix = os.urandom(NONCE_PREFIX_LEN)
@@ -130,17 +136,32 @@ def iter_wrap(chunks: Iterable[bytes], *, keyring: Keyring, key_version: int | N
     yield header
     index = 0
     buf = bytearray()
+    pending: memoryview | None = None
     it = iter(chunks)
     exhausted = False
     while True:
-        while len(buf) <= CHUNK_SIZE and not exhausted:
-            try:
-                buf.extend(next(it))
-            except StopIteration:
-                exhausted = True
-        final = exhausted and len(buf) <= CHUNK_SIZE
-        piece = bytes(buf[:CHUNK_SIZE])
-        del buf[:CHUNK_SIZE]
+        # Fill buf to CHUNK_SIZE, slicing the pending piece by view so the
+        # unconsumed remainder is never copied.
+        while len(buf) < CHUNK_SIZE and not exhausted:
+            if pending is None:
+                try:
+                    pending = memoryview(next(it))
+                except StopIteration:
+                    exhausted = True
+                    break
+                if len(pending) == 0:
+                    pending = None
+                    continue
+            take = min(CHUNK_SIZE - len(buf), len(pending))
+            buf += pending[:take]
+            pending = pending[take:] if take < len(pending) else None
+        # A frame is final only once the input is known to be exhausted;
+        # a full buffer with input possibly remaining is emitted non-final
+        # (an exact-multiple input then gets a trailing empty final frame,
+        # matching the previous framing behaviour).
+        final = exhausted
+        piece = bytes(buf)
+        buf.clear()
         ct = aead.encrypt(_nonce(prefix, index), piece, _aad(header, index, final))
         yield struct.pack(">I", len(ct)) + ct
         index += 1

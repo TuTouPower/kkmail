@@ -12,7 +12,8 @@ from pathlib import Path
 
 from collections.abc import Iterator
 
-from mail_core.blobs.crypto import BlobCryptoError, BlobIntegrityError, Keyring, iter_unwrap, load_keyring_from_env, read_key_version, wrap
+from mail_core.blobs.crypto import CHUNK_SIZE as _CRYPTO_CHUNK_SIZE
+from mail_core.blobs.crypto import BlobCryptoError, BlobIntegrityError, Keyring, iter_unwrap, iter_wrap, load_keyring_from_env, read_key_version, wrap
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -139,6 +140,72 @@ class BlobStore:
                 pass
             raise
         return BlobWriteResult(digest, len(payload), rel, self.key_version)
+
+    def put_streaming(self, chunks) -> BlobWriteResult:
+        """Streaming counterpart of put() (A110).
+
+        Plaintext pieces are spooled to a temp file while the content
+        SHA-256 is computed incrementally, then encrypted frame-by-frame
+        into the destination temp file — neither the whole plaintext nor
+        the whole ciphertext is ever resident in memory.
+        """
+        if isinstance(chunks, (bytes, bytearray, memoryview)):
+            chunks = [chunks]
+        hasher = hashlib.sha256()
+        fd, spool_name = tempfile.mkstemp(dir=self.root, prefix=".spool-")
+        try:
+            with os.fdopen(fd, "wb") as spool:
+                for piece in chunks:  # type: ignore[union-attr]
+                    view = memoryview(piece)
+                    hasher.update(view)
+                    spool.write(view)
+                spool.flush()
+                os.fsync(spool.fileno())
+            digest = hasher.hexdigest()
+            with self._lock_for_digest(digest):
+                return self._put_streaming_locked(Path(spool_name), digest)
+        finally:
+            try:
+                os.unlink(spool_name)
+            except OSError:
+                pass
+
+    def _put_streaming_locked(self, spool_path: Path, digest: str) -> BlobWriteResult:
+        rel = self._rel_path(digest)
+        dest = self.root / rel
+        if dest.is_file():
+            try:
+                with dest.open("rb") as fh:
+                    disk_version = read_key_version(fh)
+                    fh.seek(0)
+                    h = hashlib.sha256()
+                    for chunk in iter_unwrap(fh, keyring=self.keyring):
+                        h.update(chunk)
+                    if h.hexdigest() != digest:
+                        raise BlobIntegrityError("existing blob hash mismatch")
+                return BlobWriteResult(digest, dest.stat().st_size, rel, disk_version)
+            except BlobCryptoError:
+                pass
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=".tmp-")
+        size = 0
+        try:
+            with os.fdopen(fd, "wb") as out, spool_path.open("rb") as fh:
+                pieces = iter(lambda: fh.read(_CRYPTO_CHUNK_SIZE), b"")
+                for piece in iter_wrap(pieces, keyring=self.keyring, key_version=self.key_version):
+                    out.write(piece)
+                    size += len(piece)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(tmp_name, dest)
+            _fsync_dir(dest.parent)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+        return BlobWriteResult(digest, size, rel, self.key_version)
 
     def get(self, digest: str) -> bytes:
         """Assemble plaintext via streaming decrypt (same path as attachment download)."""
