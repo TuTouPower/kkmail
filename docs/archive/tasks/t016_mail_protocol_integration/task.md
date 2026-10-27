@@ -3,15 +3,15 @@ tid: "t016"
 slug: "mail_protocol_integration"
 title: "增强真实 IMAP 集成与邮件服务商协议契约测试"
 status: "done"
-branch: ""
+branch: "main"
 worktree: ""
 review_level: "full"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "0598a1b9714ee4911d3668f6bb550e4edd50b338"
 depends_on: "t014"
 conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
+note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 082e203e"
 ---
 
 # Task 过程总账
@@ -62,3 +62,10 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 ### 结果摘要
 
 激活并增强了基于 Dovecot 容器的真实 IMAP 集成测试，覆盖中文多部分、加密附件解密校验、重复 Message-ID、本地写回与服务端可观察性、安全废纸篓移动与 TLS 阻断；完善了 Gmail/Graph 传输异常与敏感凭据脱敏断言，全量后端测试实现 0 跳过全通过。
+
+## 状态勘误（2026-10-27，A52）
+
+- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
+- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
+- commit 锚点：实现提交 `082e203eafb2afceb955b75f78687d4cdba64b5e`；diff_anchor 补记为该实现提交的父提交 `0598a1b9714ee4911d3668f6bb550e4edd50b338`；本批归档提交 `161a6e10`。
+- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。

@@ -3,15 +3,15 @@ tid: "t015"
 slug: "frontend_test_runtime"
 title: "恢复前端测试门禁并固定浏览器存储测试环境"
 status: "done"
-branch: ""
+branch: "main"
 worktree: ""
 review_level: "single"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "87d7cfcca3f638c399f45266a9a299ad6edc62be"
 depends_on: ""
 conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
+note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 0598a1b9"
 ---
 
 # Task 过程总账
@@ -55,3 +55,10 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 ### 结果摘要
 
 修复了 Node 24 下前端测试 jsdom 存储未注入导致 34 项测试失败的问题；固定了前置初始化与后置清理机制，实现各测试用例间严格的状态隔离与覆盖率收集能力。
+
+## 状态勘误（2026-10-27，A52）
+
+- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
+- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
+- commit 锚点：实现提交 `0598a1b9714ee4911d3668f6bb550e4edd50b338`；diff_anchor 补记为该实现提交的父提交 `87d7cfcca3f638c399f45266a9a299ad6edc62be`；本批归档提交 `161a6e10`。
+- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。

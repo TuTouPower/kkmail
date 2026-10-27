@@ -3,15 +3,15 @@ tid: "t014"
 slug: "backend_test_isolation"
 title: "隔离后端测试状态并建立确定性数据夹具"
 status: "done"
-branch: ""
+branch: "main"
 worktree: ""
 review_level: "full"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "07d178cbe369e52681a3b6533bb8164741112579"
 depends_on: "t013"
 conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
+note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 87d7cfcc"
 ---
 
 # Task 过程总账
@@ -64,3 +64,11 @@ note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立
 ### 结果摘要
 
 未修改生产逻辑；修复测试状态泄漏及旧测试缺失前置。两项真实 IMAP 跳过属于 t016 尚未启动的专用协议服务，不能计为真实 IMAP 通过。
+
+## 状态勘误（2026-10-27，A52）
+
+- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
+- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文开头「按用户要求直接在 main 实施，不调用 task.py、不建 worktree、不写 attempt」一致。
+- commit 锚点：实现提交 `87d7cfcca3f638c399f45266a9a299ad6edc62be`；diff_anchor 补记为该实现提交的父提交 `07d178cbe369e52681a3b6533bb8164741112579`；本批归档提交 `161a6e10`。
+- 正文实施笔记所记基线 `8f93e8e` 为历史重写前哈希，其同标题提交在现行历史中为 t013 实现提交 `07d178cbe369e52681a3b6533bb8164741112579`，即本 task 实现提交的父提交。
+- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
