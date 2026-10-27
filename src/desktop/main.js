@@ -25,8 +25,6 @@ const {
   mergeCspHeaders,
   createPermissionRequestHandler,
   createPermissionCheckHandler,
-  denyPermissionRequest,
-  denyPermissionCheck,
 } = require('./hardening')
 const { PostgresManager } = require('./postgresManager')
 const { getDesktopLogger } = require('./desktopLog')

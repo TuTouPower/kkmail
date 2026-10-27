@@ -82,22 +82,10 @@ function createPermissionCheckHandler(getTrustedOrigin) {
   }
 }
 
-/** Electron setPermissionRequestHandler: always deny. */
-function denyPermissionRequest(_webContents, _permission, callback) {
-  callback(false)
-}
-
-/** Electron setPermissionCheckHandler: always deny. */
-function denyPermissionCheck() {
-  return false
-}
-
 module.exports = {
   appContentSecurityPolicy,
   mergeCspHeaders,
   isAllowedPermission,
   createPermissionRequestHandler,
   createPermissionCheckHandler,
-  denyPermissionRequest,
-  denyPermissionCheck,
 }

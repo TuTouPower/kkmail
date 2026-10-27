@@ -1,13 +1,12 @@
 const assert = require('assert')
+const hardening = require('./hardening')
 const {
   appContentSecurityPolicy,
   mergeCspHeaders,
   isAllowedPermission,
   createPermissionRequestHandler,
   createPermissionCheckHandler,
-  denyPermissionRequest,
-  denyPermissionCheck,
-} = require('./hardening')
+} = hardening
 const pkg = require('./package.json')
 
 const csp = appContentSecurityPolicy()
@@ -25,10 +24,12 @@ assert.deepStrictEqual(merged['Content-Type'], ['text/html'])
 assert.deepStrictEqual(merged['Content-Security-Policy'], [csp])
 assert.strictEqual(merged['content-security-policy'], undefined)
 
-let allowed = true
-denyPermissionRequest(null, 'media', (ok) => { allowed = ok })
-assert.strictEqual(allowed, false)
-assert.strictEqual(denyPermissionCheck(), false)
+// A204: the always-deny baseline helpers denyPermissionRequest /
+// denyPermissionCheck had no production caller (main.js assembles the
+// create*Handler factories) and were removed as dead code, together with
+// their assertions above (replaced wholesale, not re-pointed).
+assert.strictEqual(hardening.denyPermissionRequest, undefined, 'denyPermissionRequest must be removed (dead code, A204)')
+assert.strictEqual(hardening.denyPermissionCheck, undefined, 'denyPermissionCheck must be removed (dead code, A204)')
 
 // t025 AC-003: Permission boundary tests
 const appOrigin = 'http://127.0.0.1:15433'
