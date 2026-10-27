@@ -88,6 +88,25 @@ def test_docker_failure_surfaces_redacted_stderr(monkeypatch):
     assert "p4ss" not in message
 
 
+def test_child_does_not_signal_group_after_process_already_exited(monkeypatch):
+    killed = []
+
+    class FakeProcess:
+        pid = 424242
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *a, **k: FakeProcess())
+    monkeypatch.setattr(runtime.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+    assert runtime.child(["true"], {}) == 0
+    # wait 已确认子进程退出后不得再 killpg：pgid 可能已被系统回收给无关进程组
+    assert killed == []
+
+
 def test_required_pg_skip_is_failure_report_not_internal_error(tmp_path):
     probe = tmp_path / "test_skip_probe.py"
     probe.write_text("import pytest\ndef test_probe():\n    pytest.skip('PG required')\n")

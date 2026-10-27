@@ -272,27 +272,30 @@ def child(command, env):
         return process.wait()
     finally:
         # Also stop descendants spawned by tests before dropping their database.
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
+        # 仅当子进程本体仍在运行时才向其进程组发信号：wait 已返回退出后
+        # pgid 可能被系统回收给无关进程组，无条件 killpg 有误伤时序窗（A363）。
+        # 子进程仍在运行则其 pgid 仍归它所有（组长未退出，pgid 不会被回收）。
+        if process.poll() is None:
             try:
-                os.killpg(process.pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.05)
-        else:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+            deadline = time.monotonic() + 10
+            while process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 def run_environment(directory):
