@@ -5,7 +5,15 @@ const { spawn, spawnSync } = require('child_process')
 
 const DEFAULT_PORT = 18765
 
-/** Exact env keys the mail-core / PG children may inherit from the parent. */
+/**
+ * Exact env keys the mail-core / PG children may inherit from the parent.
+ * A128: code-execution / library-injection keys (PYTHONPATH, PYTHONHOME,
+ * LD_*, DYLD_*) are deliberately NOT inherited — a polluted parent shell
+ * could otherwise inject code or libraries into both children. A
+ * launcher that genuinely needs one must pass it explicitly via
+ * scrubEnv's `extras` argument, where the choice is visible at the
+ * call site.
+ */
 const ENV_ALLOW_EXACT = new Set([
   'PATH',
   'PATHEXT',
@@ -34,8 +42,6 @@ const ENV_ALLOW_EXACT = new Set([
   'ProgramFiles(x86)',
   'PROGRAMFILES',
   'PROGRAMFILES(X86)',
-  'PYTHONPATH',
-  'PYTHONHOME',
   'PYTHONNOUSERSITE',
   'PYTHONUTF8',
   'PYTHONIOENCODING',
@@ -54,9 +60,6 @@ const ENV_ALLOW_EXACT = new Set([
   'XDG_CONFIG_HOME',
   'XDG_CACHE_HOME',
   'XDG_RUNTIME_DIR',
-  'LD_LIBRARY_PATH',
-  'DYLD_LIBRARY_PATH',
-  'DYLD_FALLBACK_LIBRARY_PATH',
 ])
 
 const ENV_ALLOW_PREFIX = ['LC_']
@@ -226,6 +229,18 @@ function waitForHealth(url, timeoutMs = 30000, opts = {}) {
   })
 }
 
+/**
+ * A153: what main.js should do when the backend child exits unexpectedly.
+ * The crash path must not be bound to a window existing: on macOS the app
+ * outlives its windows, and a dead backend with no quit leaves a zombie
+ * whose `activate` reopen can only show a window that never connects.
+ * The error dialog needs a live window to anchor to; quitting does not.
+ */
+function backendExitDisposition({ isQuitting = false, hasWindow = false } = {}) {
+  if (isQuitting) return { quit: false, showDialog: false }
+  return { quit: true, showDialog: Boolean(hasWindow) }
+}
+
 function isChildDead(child) {
   if (!child) return true
   if (child.exitCode !== null && child.exitCode !== undefined) return true
@@ -345,6 +360,7 @@ module.exports = {
   scrubEnv,
   redactSecrets,
   isChildDead,
+  backendExitDisposition,
   stopChildTree,
   forceKillChildTreeImmediately,
 }

@@ -13,6 +13,7 @@ const {
   ENV_ALLOW_PREFIX,
   SIDECAR_CONFIG_KEYS,
   collectSidecarExtras,
+  backendExitDisposition,
 } = require('./startup')
 
 assert.strictEqual(parsePort(undefined), 18765)
@@ -56,6 +57,42 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
   assert.strictEqual(cleaned.RANDOM_JUNK, undefined)
   assert.ok(ENV_ALLOW_EXACT.has('PATH'))
   assert.deepStrictEqual(ENV_ALLOW_PREFIX, ['LC_'])
+}
+
+// scrubEnv (A128): code-execution / library-injection variables must not
+// be inherited from the parent environment — they would let a polluted
+// parent shell inject code/libraries into the PG and mail-core children,
+// contradicting scrubEnv's stated purpose. A launcher that genuinely
+// needs one must pass it explicitly via extras.
+{
+  const cleaned = scrubEnv({
+    PATH: '/usr/bin',
+    PYTHONPATH: '/tmp/evil-python',
+    PYTHONHOME: '/tmp/evil-python-home',
+    LD_LIBRARY_PATH: '/tmp/evil-libs',
+    LD_PRELOAD: '/tmp/evil.so',
+    DYLD_LIBRARY_PATH: '/tmp/evil-dyld',
+    DYLD_FALLBACK_LIBRARY_PATH: '/tmp/evil-dyld-fallback',
+    DYLD_INSERT_LIBRARIES: '/tmp/evil.dylib',
+  })
+  assert.strictEqual(cleaned.PATH, '/usr/bin')
+  for (const key of [
+    'PYTHONPATH',
+    'PYTHONHOME',
+    'LD_LIBRARY_PATH',
+    'LD_PRELOAD',
+    'DYLD_LIBRARY_PATH',
+    'DYLD_FALLBACK_LIBRARY_PATH',
+    'DYLD_INSERT_LIBRARIES',
+  ]) {
+    assert.strictEqual(cleaned[key], undefined, `${key} must not be inherited via the allowlist`)
+    assert.ok(!ENV_ALLOW_EXACT.has(key), `${key} must not be in ENV_ALLOW_EXACT`)
+  }
+  const withExtras = scrubEnv(
+    { PATH: '/usr/bin', LD_LIBRARY_PATH: '/tmp/parent-libs' },
+    { LD_LIBRARY_PATH: '/bundled/pgsql/lib' },
+  )
+  assert.strictEqual(withExtras.LD_LIBRARY_PATH, '/bundled/pgsql/lib', 'explicit launcher extras remain the sanctioned injection path')
 }
 
 // collectSidecarExtras: only audited sidecar config keys pass through; launcher baseExtras win
@@ -176,6 +213,17 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
   const rDead = stopChildTree(child, { escalateAfterMs: 50 })
   assert.ok(rDead.alreadyDead, 'exitCode !== null must mean already dead')
 }
+
+// A153: a backend exit must quit the app even when no window exists
+// (macOS window-all-closed keeps the app alive; binding the crash path to
+// mainWindow turned it into a zombie with a dead backendUrl). The error
+// dialog is only shown when a window exists to anchor it.
+assert.strictEqual(typeof backendExitDisposition, 'function', 'startup.js must export backendExitDisposition')
+assert.deepStrictEqual(backendExitDisposition({ isQuitting: false, hasWindow: true }), { quit: true, showDialog: true })
+assert.deepStrictEqual(backendExitDisposition({ isQuitting: false, hasWindow: false }), { quit: true, showDialog: false })
+assert.deepStrictEqual(backendExitDisposition({ isQuitting: true, hasWindow: true }), { quit: false, showDialog: false })
+assert.deepStrictEqual(backendExitDisposition({ isQuitting: true, hasWindow: false }), { quit: false, showDialog: false })
+assert.deepStrictEqual(backendExitDisposition({}), { quit: true, showDialog: false })
 
 ;(async () => {
   const p = await freePort(0)
