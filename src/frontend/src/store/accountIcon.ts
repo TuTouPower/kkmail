@@ -143,8 +143,17 @@ export function getEmailInitial(email?: string): string | null {
   if (!email || !email.includes('@')) return null
   const username = email.split('@')[0].trim()
   if (!username) return null
-  // Spread operator safely decomposes unicode surrogate pairs / code points
-  const chars = [...username]
-  if (!chars.length || !chars[0].trim()) return null
-  return chars[0].toUpperCase()
+  // Spread operator safely decomposes unicode surrogate pairs / code points.
+  // A358: a code point is not a usable initial when its uppercase expands
+  // to more than one code point (e.g. 'ß' -> 'SS') or when it is a
+  // combining Mark (a stray diacritic); fall through to the next usable
+  // character, or null when none exists.
+  for (const ch of [...username]) {
+    if (!ch.trim()) continue
+    if (/\p{M}/u.test(ch)) continue
+    const upper = ch.toUpperCase()
+    if ([...upper].length !== 1) continue
+    return upper
+  }
+  return null
 }

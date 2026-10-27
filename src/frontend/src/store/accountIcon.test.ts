@@ -77,4 +77,13 @@ describe('accountIcon helpers (full 20 brand SVG suite)', () => {
     expect(getEmailInitial('')).toBeNull()
     expect(getEmailInitial(undefined)).toBeNull()
   })
+
+  it('skips characters whose uppercase expands or that are combining marks (A358)', () => {
+    // 'ß'.toUpperCase() is the two-character string 'SS', not an initial.
+    expect(getEmailInitial('ßabc@example.com')).toBe('A')
+    expect(getEmailInitial('ß@example.com')).toBeNull()
+    // A leading combining mark (U+0301) is not a standalone initial.
+    expect(getEmailInitial('\u0301abc@example.com')).toBe('A')
+    expect(getEmailInitial('\u0301@example.com')).toBeNull()
+  })
 })
