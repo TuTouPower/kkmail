@@ -10,4 +10,4 @@
     - 同类位点（已确认）：`role=all` 视图与 `role=important` 视图同一代码路径；`\Noselect` 父目录文件夹行同理。已扫无其他硬失败点：全仓 `folder_not_selectable` 抛出点仅 `sync_requests.py:197` 一处，其余均为 skipped 返回。
 - 测试缺口：现有测试无一条覆盖「显式 `folder_id` 指向 `paused` 文件夹」的解析行为（`tests/mail_core/` 全文无 `folder_not_selectable` 断言）；PG 门控的 `test_sync_requests.py` 只测正常文件夹。应在应用层单元测试补：显式 `folder_id=paused` 返回空目标集（与角色解析一致）、正常文件夹仍返回单目标、已删除/跨账号文件夹仍 404；API 层补一条 delta 请求对 `paused` 文件夹返回 200 且 `target_count=0` 的断言（或在应用层等价覆盖）。
 - 线索：`.scratch/repro_folder_not_selectable.py`（SQLite 最小复现：显式 `folder_id` 对 `paused` 的 important 文件夹抛 `ValueError(folder_not_selectable)`；角色范围静默 0 目标；账号范围正常）。
-- 处理：未开
+- 处理：已修复（分支 `fix/folder-not-selectable`，commit `98a1dcb9`）。修复：`resolve_sync_targets` 显式 `folder_id` 分支对 `paused` 文件夹改为返回空目标集（请求以 0 目标 `complete` 完成、API 返回 200），与角色解析的静默排除和执行层 skipped 语义对齐；`api/mail.py` 中已无触发源的 422 `folder_not_selectable` 映射一并移除；跨账号/不存在文件夹仍 404、正常文件夹仍返回单目标。回归测试 `tests/mail_core/test_sync_requests_paused_folder.py`（4 项，先红后绿）。`docs/specs/mail_sync_and_storage.md` t056 节已补该语义。
