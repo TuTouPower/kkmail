@@ -3,15 +3,15 @@ tid: "t023"
 slug: "test_quality_gates"
 title: "将完整测试分层接入本地门禁与 CI"
 status: "done"
-branch: ""
+branch: "main"
 worktree: ""
 review_level: "full"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "b42756edf47026392d08bf1b9a63f7283a0e3650"
 depends_on: "t017,t018,t019,t020,t021,t022"
 conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
+note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit cf5b881a"
 ---
 
 # Task 过程总账
@@ -59,3 +59,10 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 ### 结果摘要
 
 创建了 GitHub Actions CI 与定时扩展工作流，将模板契约、前端工程、桌面打包、真实数据库与协议集成、全栈端到端自动化、数据库迁移、备份恢复演练与性能基准完整统合入本地与远端分层门禁体系中。
+
+## 状态勘误（2026-10-27，A52）
+
+- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
+- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
+- commit 锚点：实现提交 `cf5b881a05fd3589394b32ba5ad5a0be947a4e7b`；diff_anchor 补记为该实现提交的父提交 `b42756edf47026392d08bf1b9a63f7283a0e3650`；本批归档提交 `161a6e10`。
+- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
