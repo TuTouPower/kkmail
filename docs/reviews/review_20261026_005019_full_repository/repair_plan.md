@@ -75,22 +75,22 @@ F00–F12 是本文内部工作包标签，**不是 task ID**。C01 等是各分
 
 ### 2.2 目录与分支
 
-所有未来 worktree 位于 `/Users/karson/kar/code/` 内，保持用户写入范围。主仓 `/Users/karson/kar/code/kkmail` 保留为 main 控制入口，其他会话已有修改不搬移、不 stash、不提交。
+路径占位（本节首次出现处定义）：`$REPO` 指主仓根目录，`$WORKTREES` 指存放各 worktree 的父目录（主仓同级目录）。所有未来 worktree 位于 `$WORKTREES/` 内，保持用户写入范围。主仓 `$REPO` 保留为 main 控制入口，其他会话已有修改不搬移、不 stash、不提交。
 
 |工作区|分支|用途|
 |---|---|---|
-|`/Users/karson/kar/code/kkmail_review_integration`|`review_fix/integration`|I 的组合验证分支，最后才进入 main|
-|`/Users/karson/kar/code/kkmail_review_f01_logging`|`review_fix/f01_logging`|日志安全|
-|`/Users/karson/kar/code/kkmail_review_f02_restore`|`review_fix/f02_restore`|恢复边界|
-|`/Users/karson/kar/code/kkmail_review_f03_jobs`|`review_fix/f03_jobs`|任务原子唤醒与续跑|
-|`/Users/karson/kar/code/kkmail_review_f04_sidebar`|`review_fix/f04_sidebar`|侧栏交互与几何|
-|`/Users/karson/kar/code/kkmail_review_f05_mail_state`|`review_fix/f05_mail_state`|统计、位置和废纸篓|
-|`/Users/karson/kar/code/kkmail_review_f06_health`|`review_fix/f06_health`|Worker 健康与同步指标|
-|`/Users/karson/kar/code/kkmail_review_f07_realtime`|`review_fix/f07_realtime`|Outbox 发布顺序与 SSE|
-|`/Users/karson/kar/code/kkmail_review_f08_reader`|`review_fix/f08_reader`|按需正文幂等与阅读器恢复|
-|`/Users/karson/kar/code/kkmail_review_f09_settings`|`review_fix/f09_settings`|设置布局、OAuth 返回、modal 复制|
-|`/Users/karson/kar/code/kkmail_review_f10_sync`|`review_fix/f10_sync`|增量/全量、前台触发与调度|
-|`/Users/karson/kar/code/kkmail_review_f11_overlay`|`review_fix/f11_overlay`|生产浮层与快捷键偏好|
+|`$WORKTREES/kkmail_review_integration`|`review_fix/integration`|I 的组合验证分支，最后才进入 main|
+|`$WORKTREES/kkmail_review_f01_logging`|`review_fix/f01_logging`|日志安全|
+|`$WORKTREES/kkmail_review_f02_restore`|`review_fix/f02_restore`|恢复边界|
+|`$WORKTREES/kkmail_review_f03_jobs`|`review_fix/f03_jobs`|任务原子唤醒与续跑|
+|`$WORKTREES/kkmail_review_f04_sidebar`|`review_fix/f04_sidebar`|侧栏交互与几何|
+|`$WORKTREES/kkmail_review_f05_mail_state`|`review_fix/f05_mail_state`|统计、位置和废纸篓|
+|`$WORKTREES/kkmail_review_f06_health`|`review_fix/f06_health`|Worker 健康与同步指标|
+|`$WORKTREES/kkmail_review_f07_realtime`|`review_fix/f07_realtime`|Outbox 发布顺序与 SSE|
+|`$WORKTREES/kkmail_review_f08_reader`|`review_fix/f08_reader`|按需正文幂等与阅读器恢复|
+|`$WORKTREES/kkmail_review_f09_settings`|`review_fix/f09_settings`|设置布局、OAuth 返回、modal 复制|
+|`$WORKTREES/kkmail_review_f10_sync`|`review_fix/f10_sync`|增量/全量、前台触发与调度|
+|`$WORKTREES/kkmail_review_f11_overlay`|`review_fix/f11_overlay`|生产浮层与快捷键偏好|
 
 F00、F12 由 I 在 integration 执行，不额外创建开发分支。每包完成后保留其分支和 worktree 到集成检查结束；同一物理 worktree 不同时 checkout 两条分支，不把一套 node_modules 通过可写软链共享给多个实施者。
 
@@ -102,7 +102,7 @@ I 在实际执行开始时记录 `main` 完整 SHA 为 B0。该 SHA 不必仍为
 
 ```bash
 review_base_sha="$(git rev-parse main)"
-git worktree add -b review_fix/integration /Users/karson/kar/code/kkmail_review_integration "$review_base_sha"
+git worktree add -b review_fix/integration $WORKTREES/kkmail_review_integration "$review_base_sha"
 ```
 
 F01 等分支从**所属波次已验证的 integration SHA** 创建，不统一从旧 B0 创建，不从别人的未审阅开发分支偷取依赖。已有目标路径或分支时先查询实际状态，不盲目重试创建或删除。
