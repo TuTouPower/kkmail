@@ -163,8 +163,15 @@ export function createThrottledInvalidator(qc: typeof queryClient, delayMs = REA
     }
     if (ARCHIVE_DETAIL_INVALIDATE_EVENTS.has(type)) {
       const ids = extractMessageIds(data)
-      for (const id of ids) detailIdsToInvalidate.add(id)
-      scheduled = ids.length > 0 || scheduled
+      if (ids.length) {
+        for (const id of ids) detailIdsToInvalidate.add(id)
+      } else {
+        // No message id in the payload: fall back to invalidating every
+        // detail, mirroring the message.* fallback above, instead of
+        // silently dropping the archive event (A373).
+        invalidateAllDetails = true
+      }
+      scheduled = true
     }
     if (scheduled) {
       schedule()
