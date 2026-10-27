@@ -144,6 +144,50 @@ pinned_archive_sha256() {
   esac
 }
 
+check_existing_binaries() {
+  local dest="$1"
+  local version="$2"
+  local target="${3:-}"
+  local ctl=""
+  if [[ "$target" == win-* ]]; then
+    if [[ ! -f "$dest/bin/pg_ctl.exe" || ! -f "$dest/bin/initdb.exe" || ! -f "$dest/bin/psql.exe" ]]; then
+      echo "Existing PostgreSQL binaries at $dest are incomplete (need pg_ctl.exe/initdb.exe/psql.exe); rm -rf $dest to refresh" >&2
+      return 1
+    fi
+    ctl="$dest/bin/pg_ctl.exe"
+  else
+    if [[ ! -x "$dest/bin/pg_ctl" || ! -x "$dest/bin/initdb" || ! -x "$dest/bin/psql" ]]; then
+      echo "Existing PostgreSQL binaries at $dest are incomplete (need executable pg_ctl/initdb/psql); rm -rf $dest to refresh" >&2
+      return 1
+    fi
+    ctl="$dest/bin/pg_ctl"
+  fi
+  # A131: mere file presence proves nothing about a stale or partial tree, so
+  # reuse requires pg_ctl to report exactly the expected VERSION.
+  local reported installed
+  reported="$("$ctl" --version 2>/dev/null)" || reported=""
+  installed="$(printf '%s\n' "$reported" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1 || true)"
+  if [[ -z "$installed" || "$installed" != "$version" ]]; then
+    echo "Existing PostgreSQL binaries at $dest report version '${installed:-unknown}' (pg_ctl --version: ${reported:-unavailable}), expected $version; rm -rf $dest to refresh" >&2
+    return 1
+  fi
+  # Best-effort architecture check: only fail when `file` positively reports
+  # the opposite architecture family (script/stripped outputs stay silent).
+  if command -v file >/dev/null 2>&1; then
+    local file_out
+    file_out="$(file "$ctl" 2>/dev/null || true)"
+    if [[ "$target" == *arm64* && "$file_out" == *"x86-64"* ]]; then
+      echo "Existing PostgreSQL binaries at $dest are x86-64 but target is $target; rm -rf $dest to refresh" >&2
+      return 1
+    fi
+    if [[ "$target" == *x64* && "$target" != *arm64* && ( "$file_out" == *"aarch64"* || "$file_out" == *"ARM"* ) ]]; then
+      echo "Existing PostgreSQL binaries at $dest are ARM but target is $target; rm -rf $dest to refresh" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
 assert_tar_safe() {
   local archive="$1"
   local listing line member
@@ -345,14 +389,22 @@ main() {
 
   if [[ "$OS_NORM" == "windows" ]]; then
     if [[ -f "$DEST/bin/pg_ctl.exe" && -f "$DEST/bin/initdb.exe" && -f "$DEST/bin/psql.exe" ]]; then
-      echo "Already present: $DEST/bin — skipping download (rm -rf $DEST to refresh)"
-      exit 0
+      if check_existing_binaries "$DEST" "$VERSION" "$TARGET"; then
+        echo "Already present: $DEST/bin — skipping download (rm -rf $DEST to refresh)"
+        exit 0
+      fi
+      echo "Refusing to reuse the existing binaries above; fix or remove them, then re-run." >&2
+      exit 1
     fi
   else
     if [[ -x "$DEST/bin/pg_ctl" && -x "$DEST/bin/initdb" && -x "$DEST/bin/psql" ]]; then
-      echo "Already present: $DEST/bin — skipping download (rm -rf $DEST to refresh)"
-      "$DEST/bin/pg_ctl" --version 2>/dev/null || true
-      exit 0
+      if check_existing_binaries "$DEST" "$VERSION" "$TARGET"; then
+        echo "Already present: $DEST/bin — skipping download (rm -rf $DEST to refresh)"
+        "$DEST/bin/pg_ctl" --version 2>/dev/null || true
+        exit 0
+      fi
+      echo "Refusing to reuse the existing binaries above; fix or remove them, then re-run." >&2
+      exit 1
     fi
   fi
 

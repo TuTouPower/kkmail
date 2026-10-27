@@ -153,6 +153,29 @@ if ! ALLOW_UNPINNED=1 verify_archive_sha256 "$TMP/fallback.archive" "https://get
 fi
 grep -q "SHA-256 OK ($FALLBACK_SHA)" "$TMP/manifest.log"
 
+# A131: reusing existing binaries requires a pg_ctl --version match (and no
+# obvious architecture mismatch); a stale tree must be refused, not skipped.
+mkdir -p "$TMP/existing/bin"
+for tool in pg_ctl initdb psql; do
+  printf '#!/bin/sh\necho "pg_ctl (PostgreSQL) 16.6.0"\n' > "$TMP/existing/bin/$tool"
+  chmod +x "$TMP/existing/bin/$tool"
+done
+check_existing_binaries "$TMP/existing" "16.6.0" "linux-x64"
+printf '#!/bin/sh\necho "pg_ctl (PostgreSQL) 15.4"\n' > "$TMP/existing/bin/pg_ctl"
+chmod +x "$TMP/existing/bin/pg_ctl"
+if check_existing_binaries "$TMP/existing" "16.6.0" "linux-x64" > "$TMP/ver.log" 2>&1; then
+  echo "stale 15.4 tree should be refused for expected 16.6.0" >&2
+  exit 1
+fi
+grep -q "rm -rf" "$TMP/ver.log"
+printf '#!/bin/sh\necho "pg_ctl (PostgreSQL) 16.6.0"\n' > "$TMP/existing/bin/pg_ctl"
+chmod +x "$TMP/existing/bin/pg_ctl"
+rm "$TMP/existing/bin/psql"
+if check_existing_binaries "$TMP/existing" "16.6.0" "linux-x64" >/dev/null 2>&1; then
+  echo "incomplete tree (missing psql) should be refused" >&2
+  exit 1
+fi
+
 # Also test zip helper with a safe zip if unzip and zip are available
 if command -v zip >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
   (cd "$TMP/safe" && zip -q "$TMP/safe.zip" bin/pg_ctl)
