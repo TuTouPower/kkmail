@@ -687,9 +687,11 @@ def api_sync_delta(body: DeltaSyncIn, response: Response) -> SyncRequestOut:
 
     with Session() as session:
         report = get_sync_request_report(session, req_id)
-        if report and report.target_count == 0:
-            response.status_code = 200
-        return report  # type: ignore[return-value]
+    if report is None:
+        raise HTTPException(404, "sync request not found")
+    if report.target_count == 0:
+        response.status_code = 200
+    return report
 
 
 @router.get("/sync/requests", response_model=list[SyncRequestOut])

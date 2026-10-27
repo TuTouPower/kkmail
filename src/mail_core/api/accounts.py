@@ -348,7 +348,10 @@ def api_sync_account(account_id: UUID) -> SyncRequestOut:
             raise HTTPException(409, str(exc)) from exc
 
     with Session() as session:
-        return get_sync_request_report(session, req_id)  # type: ignore[return-value]
+        report = get_sync_request_report(session, req_id)
+    if report is None:
+        raise HTTPException(404, "sync request not found")
+    return report
 
 
 @router.post("/api/accounts/sync-all", response_model=SyncRequestOut, status_code=202)
@@ -367,7 +370,10 @@ def api_sync_all_accounts() -> SyncRequestOut:
         session.commit()
 
     with Session() as session:
-        return get_sync_request_report(session, req_id)  # type: ignore[return-value]
+        report = get_sync_request_report(session, req_id)
+    if report is None:
+        raise HTTPException(404, "sync request not found")
+    return report
 
 
 @router.get("/api/groups", response_model=GroupsOut)

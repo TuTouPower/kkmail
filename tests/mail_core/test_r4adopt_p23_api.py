@@ -28,6 +28,63 @@ def _dto(email: str = "new@kkmail.test") -> AccountDTO:
     )
 
 
+# --- A163: sync endpoints must 404 (not 500) when the report is gone ---
+
+
+class _DummySession:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def commit(self):
+        return None
+
+
+def _patch_sync_route(monkeypatch, module, report):
+    req = Mock()
+    req.id = uuid.uuid4()
+    monkeypatch.setattr(module, "get_session_factory", lambda: lambda: _DummySession())
+    monkeypatch.setattr(module, "create_sync_request", Mock(return_value=(req, True)))
+    monkeypatch.setattr(module, "get_sync_request_report", Mock(return_value=report))
+    return req
+
+
+def test_sync_account_report_none_is_404(monkeypatch):
+    from fastapi import HTTPException
+
+    import mail_core.api.accounts as accounts_api
+
+    _patch_sync_route(monkeypatch, accounts_api, None)
+    with pytest.raises(HTTPException) as excinfo:
+        accounts_api.api_sync_account(uuid.uuid4())
+    assert excinfo.value.status_code == 404
+
+
+def test_sync_all_report_none_is_404(monkeypatch):
+    from fastapi import HTTPException
+
+    import mail_core.api.accounts as accounts_api
+
+    _patch_sync_route(monkeypatch, accounts_api, None)
+    with pytest.raises(HTTPException) as excinfo:
+        accounts_api.api_sync_all_accounts()
+    assert excinfo.value.status_code == 404
+
+
+def test_sync_delta_report_none_is_404(monkeypatch):
+    from fastapi import HTTPException, Response
+
+    import mail_core.api.mail as mail_api
+
+    _patch_sync_route(monkeypatch, mail_api, None)
+    body = mail_api.DeltaSyncIn(account_id=uuid.uuid4())
+    with pytest.raises(HTTPException) as excinfo:
+        mail_api.api_sync_delta(body, Response())
+    assert excinfo.value.status_code == 404
+
+
 # --- A103: production API must not create memory/stub test-provider accounts ---
 
 
