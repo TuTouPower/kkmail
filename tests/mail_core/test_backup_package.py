@@ -1058,6 +1058,15 @@ def test_validate_restore_destination_matrix(tmp_path):
     assert _validate_restore_destination(valid_empty) == valid_empty.resolve()
 
 
+def test_package_module_has_no_unused_crypto_or_fsync_helpers():
+    # A192: package.py imported encrypt_bytes/decrypt_bytes without using them
+    # and defined _fsync_file with zero callers; both mislead readers about
+    # which crypto/fsync paths the restore chain actually uses.
+    assert not hasattr(backup_package, "encrypt_bytes")
+    assert not hasattr(backup_package, "decrypt_bytes")
+    assert not hasattr(backup_package, "_fsync_file")
+
+
 def test_restore_database_identity_ignores_username_and_normalizes_aliases():
     from mail_core.backup.package import _restore_database_identity
 

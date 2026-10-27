@@ -25,9 +25,7 @@ from sqlalchemy.engine import make_url
 
 from mail_core.backup.crypto import (
     BackupCryptoError,
-    decrypt_bytes,
     decrypt_file,
-    encrypt_bytes,
     encrypt_file,
     load_backup_key,
     load_backup_keyring,
@@ -1085,11 +1083,6 @@ def _fsync_dir(path: Path) -> None:
         pass
     finally:
         os.close(fd)
-
-
-def _fsync_file(path: Path) -> None:
-    with path.open("rb") as fh:
-        os.fsync(fh.fileno())
 
 
 def _restore_operation_log_path(target_blobs: Path) -> Path:
