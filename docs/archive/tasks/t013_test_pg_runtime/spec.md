@@ -82,3 +82,7 @@
 
 - `docs/blueprint/testing.md`：测试容器管理、快速/完整入口、数据库保护和分阶段耗时。
 - `docs/blueprint/decisions.md`：本地固定测试容器、每轮独立测试库，CI 一次性容器；禁止业务实例作为测试目标。
+
+## 归档勘误注记
+
+- 2026-10-27 补：上下文区「来源」行含会话残留措辞，历史原文不覆写，按决策记录改读为「2026-10-22 用户批准：测试评估与固定容器方案；创建依据为同日核对 `run-mail-core-tests.sh`、`tests/mail_core/conftest.py` 与 `docker-compose.mail-core.yml`，未启动容器或连接业务 DB」。后续归档写作统一使用带日期的决策记录句，不再沿用会话残留措辞。
