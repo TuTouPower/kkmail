@@ -10,6 +10,11 @@ already ran 0027 keep that polluted data, so rebuild both columns here
 with the corrected extraction (dict -> name/address, string -> itself).
 message_search.to_text also picks up cc_addresses, matching the runtime
 index form (A58); the generated `document` tsvector follows automatically.
+
+A118-SUP: every ``jsonb_array_elements`` expansion below carries the
+same ``jsonb_typeof(...) = 'array'`` guard A25 added to 0027. Rows whose
+``to_addresses`` / ``cc_addresses`` is not a JSON array were skipped by
+0027; without the guard here they would abort this rebuild instead.
 """
 
 from typing import Sequence, Union
@@ -38,6 +43,7 @@ def upgrade() -> None:
                     FROM messages m
                     CROSS JOIN LATERAL jsonb_array_elements(m.to_addresses) AS e(elem)
                     WHERE m.account_id = a.id
+                      AND jsonb_typeof(m.to_addresses) = 'array'
                 ) sub
                 WHERE sub.addr IS NOT NULL AND sub.addr != ''
             ),
@@ -62,6 +68,7 @@ def upgrade() -> None:
                     CROSS JOIN LATERAL jsonb_array_elements(m.to_addresses)
                         WITH ORDINALITY AS e(elem, ord)
                     WHERE m.id = ms.message_id
+                      AND jsonb_typeof(m.to_addresses) = 'array'
                     UNION ALL
                     SELECT 1 AS grp, e.ord, CASE
                         WHEN jsonb_typeof(e.elem) = 'object'
@@ -73,6 +80,7 @@ def upgrade() -> None:
                     CROSS JOIN LATERAL jsonb_array_elements(m.cc_addresses)
                         WITH ORDINALITY AS e(elem, ord)
                     WHERE m.id = ms.message_id
+                      AND jsonb_typeof(m.cc_addresses) = 'array'
                 ) sub
                 WHERE sub.txt != ''
             ),
