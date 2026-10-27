@@ -189,7 +189,32 @@ def mark_remote_operation(
     status: RemoteOperationStatus,
     error: str | None = None,
     next_attempt_at: datetime | None = None,
-) -> None:
+    expected_revision: int | None = None,
+) -> bool:
+    """Transition an operation, optionally fencing DONE on its revision.
+
+    A worker executing revision N must pass ``expected_revision=N`` when
+    marking DONE. If a coalesce has since advanced the stored revision,
+    the DONE is stale: reject it (return ``False``) and keep the op
+    PENDING with no ``next_attempt_at`` so the newer desired_state is
+    re-pushed instead of being silently swallowed (A112). Callers that
+    pass no revision keep the legacy unconditional behaviour.
+    """
+    if status == RemoteOperationStatus.DONE and expected_revision is not None:
+        current_revision = int((op.desired_state or {}).get("revision") or 0)
+        if current_revision != int(expected_revision):
+            op.status = RemoteOperationStatus.PENDING.value
+            op.updated_at = datetime.now(timezone.utc)
+            op.next_attempt_at = None
+            session.add(
+                OutboxEvent(
+                    event_type=OutboxEventType.REMOTE_OPERATION_UPDATED.value,
+                    account_id=op.account_id,
+                    payload={"operation_id": str(op.id), "status": op.status, "revision": current_revision},
+                )
+            )
+            session.flush()
+            return False
     op.status = status.value
     op.updated_at = datetime.now(timezone.utc)
     op.next_attempt_at = next_attempt_at
@@ -207,6 +232,7 @@ def mark_remote_operation(
         )
     )
     session.flush()
+    return True
 
 
 def reclaim_stale_in_progress(

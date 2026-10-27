@@ -553,8 +553,26 @@ def push_remote_operations(
                     ok = False
                     err = safe_provider_summary(exc)
             if ok:
-                mark_remote_operation(session, op, status=RemoteOperationStatus.DONE, next_attempt_at=None)
-                pushed += 1
+                applied = mark_remote_operation(
+                    session,
+                    op,
+                    status=RemoteOperationStatus.DONE,
+                    next_attempt_at=None,
+                    expected_revision=int(claimed_desired.get("revision") or 0),
+                )
+                if applied:
+                    pushed += 1
+                else:
+                    # Revision advanced between CAS check and mark (A112):
+                    # op stays PENDING for re-push of the newer state.
+                    enqueue_job(
+                        session,
+                        job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                        account_id=account_id,
+                        payload={},
+                        priority=40,
+                        dedupe_key=f"remote-op-push:{account_id}",
+                    )
             else:
                 now_retry = datetime.now(timezone.utc)
                 if (
