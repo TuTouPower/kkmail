@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import subprocess
 import sys
 import tarfile
@@ -525,3 +526,59 @@ def test_a79_backup_tar_only_contains_blob_files(tmp_path):
     with tarfile.open(pkg_dir / "blobs.tar", "r") as tar:
         names = set(tar.getnames())
     assert names == {"blobs", "blobs/aa", "blobs/aa/bb", "blobs/aa/bb/real.blob"}
+
+
+# --- A78: unknown target identity must not silently pass safety gates ------
+
+
+def test_a78_read_target_identity_logs_warning_on_failure(monkeypatch, caplog):
+    def boom(_url):
+        raise RuntimeError("connection refused (simulated)")
+
+    monkeypatch.setattr(backup_package, "_read_database_identity", boom)
+    with caplog.at_level(logging.WARNING, logger="mail_core.backup"):
+        result = backup_package._read_target_identity(TARGET_URL)
+
+    assert result is None  # offline drills may still degrade...
+    # ...but never silently: the skipped safety gates must be visible.
+    assert any(
+        "identity" in record.getMessage() for record in caplog.records
+    ), "identity read failure was swallowed without a log record"
+
+
+def test_a78_log_match_rejects_unknown_current_cluster_identity(tmp_path):
+    target = tmp_path / "restored-blobs"
+    target.mkdir()
+    logged_ident = backup_package.DatabaseIdentity("111222", 7, "target")
+    payload = backup_package._operation_log_payload(
+        operation_id="a780peration0000000000000000001",
+        package_digest="digest",
+        target_blobs=target.resolve(),
+        target_database_url=TARGET_URL,
+        target_ident=logged_ident,
+        stage="db_failed",
+    )
+    op_log = backup_package._write_restore_operation_log(
+        target.resolve(), payload, stage="db_failed"
+    )
+
+    # Current target identity reads back with an UNKNOWN system_identifier:
+    # that must not be treated as "matches the logged cluster".
+    unknown_ident = backup_package.DatabaseIdentity(None, 7, "target")
+    with pytest.raises(RuntimeError, match="identity mismatch"):
+        backup_package._assert_operation_log_matches(
+            op_log,
+            operation_id="a780peration0000000000000000001",
+            target_blobs=target.resolve(),
+            target_database_url=TARGET_URL,
+            target_ident=unknown_ident,
+        )
+
+    # Same logged identity, fully known and equal: still accepted.
+    backup_package._assert_operation_log_matches(
+        op_log,
+        operation_id="a780peration0000000000000000001",
+        target_blobs=target.resolve(),
+        target_database_url=TARGET_URL,
+        target_ident=logged_ident,
+    )

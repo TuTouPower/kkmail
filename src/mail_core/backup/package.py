@@ -275,8 +275,14 @@ def _read_database_identity(url: str) -> DatabaseIdentity:
                     sys_row = cur.fetchone()
                     if sys_row:
                         sys_id = str(sys_row[0])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Unknown is NOT "a different cluster": same-cluster
+                    # guards must see this as unverifiable, not as a pass.
+                    log.warning(
+                        "could not read cluster system_identifier (%s); "
+                        "cluster identity is unknown for this database",
+                        exc,
+                    )
 
                 return DatabaseIdentity(
                     system_identifier=sys_id,
@@ -1393,6 +1399,16 @@ def _assert_operation_log_matches(
             ("database_oid", target_ident.database_oid),
         ):
             logged = identity.get(key)
+            if logged is not None and current is None:
+                # The log recorded a concrete cluster identity but the
+                # current target's value is unknown: unknown must not be
+                # treated as "matches" (fail closed, not fail open).
+                raise RuntimeError(
+                    "restore operation database identity mismatch: "
+                    f"cluster {key} is {logged!r} in the operation log, "
+                    "but the current target's value could not be "
+                    "determined; refusing to treat unknown as matching"
+                )
             if logged is not None and current is not None and logged != current:
                 raise RuntimeError(
                     "restore operation database identity mismatch: "
@@ -1928,7 +1944,16 @@ def _execute_db_step(
 def _read_target_identity(target_database_url: str) -> DatabaseIdentity | None:
     try:
         return _read_database_identity(target_database_url)
-    except Exception:
+    except Exception as exc:
+        # Returning None degrades several restore safety gates (empty
+        # target assertion, same-cluster refusal, DB-side verification).
+        # That degradation exists for explicit offline drills and must
+        # never happen silently.
+        log.warning(
+            "could not read database identity (%s); restore safety "
+            "checks that need the identity will be skipped or fail closed",
+            exc,
+        )
         return None
 
 
