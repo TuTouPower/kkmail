@@ -1,6 +1,5 @@
 /** Pure helpers shared by main.js and its tests. */
 const path = require('path')
-const net = require('net')
 
 const SIDECAR_NAME = 'kkmail-backend'
 
@@ -18,20 +17,15 @@ function frontendDistPath(resourcesPath) {
   return path.join(resourcesPath, 'frontend', 'dist')
 }
 
-function isLoopbackHostname(hostname) {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-  if (host === 'localhost' || host.endsWith('.localhost')) return true
-  if (net.isIP(host) === 4) return Number(host.split('.')[0]) === 127
-  return net.isIP(host) === 6 && host === '::1'
-}
-
 function isAllowedExternalUrl(target) {
   try {
     const u = new URL(target)
     // Reject embedded credentials (https://user:pass@host/…) — phishing / leak risk.
     if (u.username || u.password) return false
-    if (u.protocol === 'https:' || u.protocol === 'mailto:') return true
-    return u.protocol === 'http:' && isLoopbackHostname(u.hostname)
+    // A331: only https/mailto may leave the app. Loopback http is never an
+    // external URL (any local port could be a phishing/probing target);
+    // same-origin app http is handled in-app via isLocalAppUrl, not here.
+    return u.protocol === 'https:' || u.protocol === 'mailto:'
   } catch {
     return false
   }
@@ -47,8 +41,10 @@ function isLocalAppUrl(target, origin) {
 
 function createExternalWindowHandler(openExternal, appOrigin) {
   return ({ url }) => {
-    if (!isAllowedExternalUrl(url)) return { action: 'deny' }
+    // Local-app check first: the app origin is loopback http, which
+    // isAllowedExternalUrl (A331) no longer treats as external.
     if (isLocalAppUrl(url, appOrigin)) return { action: 'allow' }
+    if (!isAllowedExternalUrl(url)) return { action: 'deny' }
     openExternal(url)
     return { action: 'deny' }
   }
