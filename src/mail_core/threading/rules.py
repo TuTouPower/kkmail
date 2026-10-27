@@ -56,24 +56,33 @@ def normalize_message_id(value: str | None) -> str | None:
 
 
 def extract_message_ids(*parts: str | None) -> list[str]:
-    """Ordered unique Message-IDs; later headers override earlier duplicates."""
+    """Ordered unique Message-IDs; the first occurrence wins.
+
+    Angle-bracket and bare forms are both scanned in every part. A bare
+    token is skipped only when that same id already appeared in angle
+    form in this part (it is the same Message-ID, not a separate one);
+    the mere presence of "<" in a part must not suppress the other bare
+    ids it carries (A236).
+    """
     found: list[str] = []
     seen: set[str] = set()
     for part in parts:
         if not part:
             continue
+        angle_covered: set[str] = set()
         for m in _ANGLE_RE.findall(part):
             mid = f"<{m}>"
+            angle_covered.add(mid)
             if mid not in seen:
                 seen.add(mid)
                 found.append(mid)
-        # Only use bare match if no angle form in this segment
-        if "<" not in part:
-            for m in _BARE_RE.findall(part):
-                mid = f"<{m}>"
-                if mid not in seen:
-                    seen.add(mid)
-                    found.append(mid)
+        for m in _BARE_RE.findall(part):
+            mid = f"<{m}>"
+            if mid in angle_covered:
+                continue
+            if mid not in seen:
+                seen.add(mid)
+                found.append(mid)
     return found
 
 
