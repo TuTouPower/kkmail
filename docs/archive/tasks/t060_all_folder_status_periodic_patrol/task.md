@@ -1,8 +1,8 @@
 ---
-tid: "t059"
-slug: "imap_idle_inbox_realtime"
-title: "为 IMAP 账号接入 IDLE 收件箱实时监听"
-status: "backlog"
+tid: "t060"
+slug: "all_folder_status_periodic_patrol"
+title: "将周期巡检扩展为全部文件夹 STATUS 探测"
+status: "dropped"
 branch: ""
 worktree: ""
 review_level: "full"
@@ -11,7 +11,7 @@ verify_limit: "5"
 diff_anchor: ""
 depends_on: ""
 conflicts_with: ""
-note: "来源：用户确认的同步策略对比结论；仅 IMAP provider、仅收件箱，IDLE 只作唤醒信号，增量仍走既有 delta；与 t060 互为姊妹 task，无硬依赖"
+note: "来源：用户确认的同步策略对比结论；补 t057 只巡检收件箱留下的盲区，与 t059 互为姊妹 task，无硬依赖; dropped: 按用户指令与 t059 一并合并入 t061（task-merge），范围与 AC 已并入 t061 spec"
 ---
 
 # Task 过程总账

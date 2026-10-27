@@ -1,7 +1,7 @@
 ---
-tid: "t060"
-slug: "all_folder_status_periodic_patrol"
-title: "将周期巡检扩展为全部文件夹 STATUS 探测"
+tid: "t061"
+slug: "idle_inbox_and_all_folder_status_patrol"
+title: "IDLE 收件箱实时监听与全文件夹 STATUS 周期巡检"
 status: "backlog"
 branch: ""
 worktree: ""
@@ -11,7 +11,7 @@ verify_limit: "5"
 diff_anchor: ""
 depends_on: ""
 conflicts_with: ""
-note: "来源：用户确认的同步策略对比结论；补 t057 只巡检收件箱留下的盲区，与 t059 互为姊妹 task，无硬依赖"
+note: "由 t059 与 t060 按用户指令合并而来（task-merge）：IDLE 负责收件箱实时、全文件夹 STATUS 巡检负责其余文件夹的周期发现；t059/t060 已 drop 归档，编号不复用"
 ---
 
 # Task 过程总账

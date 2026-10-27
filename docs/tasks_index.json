@@ -4,9 +4,9 @@
     "workspace": ".",
     "tasks": [
         {
-            "tid": "t059",
-            "slug": "imap_idle_inbox_realtime",
-            "title": "为 IMAP 账号接入 IDLE 收件箱实时监听",
+            "tid": "t061",
+            "slug": "idle_inbox_and_all_folder_status_patrol",
+            "title": "IDLE 收件箱实时监听与全文件夹 STATUS 周期巡检",
             "status": "backlog",
             "branch": "",
             "worktree": "",
@@ -16,24 +16,8 @@
             "diff_anchor": "",
             "depends_on": "",
             "conflicts_with": "",
-            "note": "来源：用户确认的同步策略对比结论；仅 IMAP provider、仅收件箱，IDLE 只作唤醒信号，增量仍走既有 delta；与 t060 互为姊妹 task，无硬依赖",
-            "dir": "docs/tasks/t059_imap_idle_inbox_realtime"
-        },
-        {
-            "tid": "t060",
-            "slug": "all_folder_status_periodic_patrol",
-            "title": "将周期巡检扩展为全部文件夹 STATUS 探测",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "",
-            "conflicts_with": "",
-            "note": "来源：用户确认的同步策略对比结论；补 t057 只巡检收件箱留下的盲区，与 t059 互为姊妹 task，无硬依赖",
-            "dir": "docs/tasks/t060_all_folder_status_periodic_patrol"
+            "note": "由 t059 与 t060 按用户指令合并而来（task-merge）：IDLE 负责收件箱实时、全文件夹 STATUS 巡检负责其余文件夹的周期发现；t059/t060 已 drop 归档，编号不复用",
+            "dir": "docs/tasks/t061_idle_inbox_and_all_folder_status_patrol"
         }
     ]
 }
