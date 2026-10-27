@@ -15,6 +15,8 @@ agent 只保留裁定语义：scratch 活跃引用路径（--keep 传入）、�
 保护（永不删）：.git/、AGENTS.md、README.md、.gitignore、
 docs/archive/tasks_audit.log；docs/ 下仅 os/editor 类放行；src/tests/schemas/
 config/scripts/.agents/.claude 下的类别命中垃圾可清（文件本身不因「目录」被误删）。
+git tracked 命中默认降级为「需点名确认」：scan 单列、apply 跳过，
+须显式 --include-tracked 才删（测试夹具类 tracked 文件不被当垃圾）。
 
 用法：
   repo_cleanup.py scan [CATEGORIES...] [--keep REL...]      # 只列，不删
@@ -48,6 +50,26 @@ HARD_PROTECTED = {
 
 class CleanupError(Exception):
     pass
+
+
+def _tracked_paths(repo: Path) -> set[str]:
+    """git index 中已跟踪的相对路径集合；不在 git 仓/查询失败时为空集。"""
+    r = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "-z", "--cached"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if r.returncode != 0:
+        return set()
+    return {p for p in r.stdout.split("\0") if p}
+
+
+def _is_tracked(rel: str, is_dir: bool, tracked: set[str]) -> bool:
+    if rel in tracked:
+        return True
+    if is_dir:
+        prefix = rel.rstrip("/") + "/"
+        return any(t.startswith(prefix) for t in tracked)
+    return False
 
 
 def repo_root() -> Path:
@@ -116,10 +138,13 @@ def _prune(relroot: str, names: list[str], excluded: set[str]) -> list[str]:
 
 
 def collect(repo: Path, categories: list[str], keeps: list[str]) -> tuple[list[dict], list[str]]:
-    """返回 (hits, skipped)。hits 每项含 path / category / kind；skipped 为 keep 排除路径。"""
+    """返回 (hits, skipped)。hits 每项含 path / category / kind / tracked
+    （git 已跟踪命中，A136：apply 默认跳过、须 --include-tracked 点名）；
+    skipped 为 keep 排除路径。"""
     cats = set(categories)
     hits: list[dict] = []
     skipped: list[str] = []
+    tracked = _tracked_paths(repo)
 
     bulk_roots: set[str] = set(BULK_CATEGORY_DIRS.values())
     for cat, rel_dir in BULK_CATEGORY_DIRS.items():
@@ -133,7 +158,11 @@ def collect(repo: Path, categories: list[str], keeps: list[str]) -> tuple[list[d
             if _kept(rel, keeps):
                 skipped.append(rel)
                 continue
-            hits.append({"path": rel, "category": cat, "kind": "dir" if p.is_dir() else "file"})
+            kind = "dir" if p.is_dir() else "file"
+            hits.append({
+                "path": rel, "category": cat, "kind": kind,
+                "tracked": _is_tracked(rel, kind == "dir", tracked),
+            })
 
     # 未点名类别的目录整树不进普通 walk：bulk 三类（.scratch/artifacts/data）只由
     # 点名类别整树处理；node_modules 仅在点名 node 时接受 walk 分类。
@@ -163,7 +192,10 @@ def collect(repo: Path, categories: list[str], keeps: list[str]) -> tuple[list[d
             if _kept(rel, keeps):
                 skipped.append(rel)
                 continue
-            hits.append({"path": rel, "category": cat, "kind": "dir" if is_dir else "file"})
+            hits.append({
+                "path": rel, "category": cat, "kind": "dir" if is_dir else "file",
+                "tracked": _is_tracked(rel, is_dir, tracked),
+            })
 
     # glob keep 不会在 _kept 里挡住祖先目录；按已跳过路径再滤一遍，避免 rmtree 父目录。
     keep_refs = [s for s in skipped]
@@ -183,8 +215,14 @@ def collect(repo: Path, categories: list[str], keeps: list[str]) -> tuple[list[d
     return hits, skipped
 
 
-def apply_delete(repo: Path, hits: list[dict], keeps: list[str] | None = None) -> list[str]:
+def apply_delete(
+    repo: Path,
+    hits: list[dict],
+    keeps: list[str] | None = None,
+    include_tracked: bool = False,
+) -> list[str]:
     keeps = keeps or []
+    tracked = set() if include_tracked else _tracked_paths(repo)
     files = [h for h in hits if h["kind"] != "dir"]
     dirs = sorted(
         [h for h in hits if h["kind"] == "dir"],
@@ -201,6 +239,12 @@ def apply_delete(repo: Path, hits: list[dict], keeps: list[str] | None = None) -
         # 二次防线：apply 独立重查 keep（文件级与目录级），防止调用方
         # 传入未经 collect 过滤的 hits（或 scan/apply 之间 keep 变化）。
         if _kept(h["path"], keeps):
+            continue
+        # A136 二次防线：tracked 命中默认不删（独立重查 git index，
+        # 不只信 collect 的标记）；须 --include-tracked 点名才放行。
+        if not include_tracked and _is_tracked(
+            h["path"], h["kind"] == "dir", tracked
+        ):
             continue
         if h["kind"] == "dir":
             if _dir_holds_keep(h["path"], keeps):
@@ -227,8 +271,10 @@ def _print_scan(categories: list[str], hits: list[dict], skipped: list[str]) -> 
     print("模式：dry-run")
     print(f"类别：{', '.join(categories)}")
     print()
+    plain = [h for h in hits if not h.get("tracked")]
+    tracked_hits = [h for h in hits if h.get("tracked")]
     rows = [["路径", "类别", "说明"]]
-    for h in hits:
+    for h in plain:
         note = "目录" if h["kind"] == "dir" else "文件"
         if h["category"] in BULK_CATEGORY_DIRS:
             note = "目录内容"
@@ -238,6 +284,11 @@ def _print_scan(categories: list[str], hits: list[dict], skipped: list[str]) -> 
     else:
         for line in _table(rows):
             print(line)
+    if tracked_hits:
+        print()
+        print("需点名确认（git tracked，apply 默认跳过；加 --include-tracked 才删）：")
+        for h in tracked_hits:
+            print(f"- ./{h['path']}（{h['category']}）")
     print()
     print(f"合计：{len(hits)} 项")
     if skipped:
@@ -278,6 +329,8 @@ def main(argv: list[str] | None = None) -> None:
                        help=f"类别（默认 {DEFAULT_CATEGORIES}）；node/scratch/artifacts/data 须点名")
         p.add_argument("--keep", action="append", default=[], metavar="REL",
                        help="相对仓库根路径（glob 或前缀），排除不删（scratch 活跃引用）")
+        p.add_argument("--include-tracked", action="store_true",
+                       help="连 git tracked 命中一并处理（默认跳过，须点名确认）")
         p.set_defaults(_mode=cmd)
     args = parser.parse_args(argv)
     try:
@@ -287,7 +340,14 @@ def main(argv: list[str] | None = None) -> None:
         if args._mode == "scan":
             _print_scan(categories, hits, skipped)
         else:
-            deleted = apply_delete(repo, hits, args.keep)
+            deleted = apply_delete(
+                repo, hits, args.keep, include_tracked=args.include_tracked
+            )
+            if not args.include_tracked:
+                skipped = skipped + [
+                    h["path"] for h in hits
+                    if h.get("tracked") and h["path"] not in skipped
+                ]
             _print_apply(deleted, skipped)
     except CleanupError as error:
         sys.exit(f"repo_cleanup: {error}")

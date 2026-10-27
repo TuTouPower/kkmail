@@ -203,3 +203,65 @@ def test_cli_unknown_category_rejected(tree):
     )
     assert r.returncode != 0
     assert "未知类别" in r.stderr
+
+
+# --- A136: git tracked 命中默认降级为需点名确认，apply 默认跳过 ---
+
+def _git_add(repo, *paths):
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "--", *paths],
+        capture_output=True, check=True,
+    )
+
+
+def test_tracked_file_marked_and_skipped_by_default_apply(tree):
+    _git_add(tree, "scripts/debug.log")
+    hits, _ = _collect(tree, ["logs"])
+    hit = next(h for h in hits if h["path"] == "scripts/debug.log")
+    assert hit.get("tracked") is True
+    deleted = rc.apply_delete(tree, hits)
+    assert "scripts/debug.log" not in deleted
+    assert (tree / "scripts/debug.log").is_file()  # tracked 夹具未被当垃圾删
+
+
+def test_tracked_file_deleted_only_with_include_tracked(tree):
+    _git_add(tree, "scripts/debug.log")
+    hits, _ = _collect(tree, ["logs"])
+    deleted = rc.apply_delete(tree, hits, include_tracked=True)
+    assert "scripts/debug.log" in deleted
+    assert not (tree / "scripts/debug.log").exists()
+
+
+def test_untracked_hit_not_marked_tracked(tree):
+    hits, _ = _collect(tree, ["logs"])
+    hit = next(h for h in hits if h["path"] == "scripts/debug.log")
+    assert hit.get("tracked") is False
+    deleted = rc.apply_delete(tree, hits)
+    assert "scripts/debug.log" in deleted
+
+
+def test_tracked_dir_hit_protected_when_contents_tracked(tree):
+    _git_add(tree, "src/app/__pycache__/m.pyc")
+    hits, _ = _collect(tree, ["pycache"])
+    hit = next(h for h in hits if h["path"] == "src/app/__pycache__")
+    assert hit.get("tracked") is True
+    deleted = rc.apply_delete(tree, hits)
+    assert "src/app/__pycache__" not in deleted
+    assert (tree / "src/app/__pycache__/m.pyc").is_file()
+
+
+def test_cli_apply_skips_tracked_without_flag(tree):
+    _git_add(tree, "scripts/debug.log")
+    r = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "repo_cleanup.py"), "apply", "logs"],
+        cwd=tree, capture_output=True, text=True, encoding="utf-8",
+    )
+    assert r.returncode == 0, r.stderr
+    assert (tree / "scripts/debug.log").is_file()
+    r2 = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "repo_cleanup.py"),
+         "apply", "logs", "--include-tracked"],
+        cwd=tree, capture_output=True, text=True, encoding="utf-8",
+    )
+    assert r2.returncode == 0, r2.stderr
+    assert not (tree / "scripts/debug.log").exists()
