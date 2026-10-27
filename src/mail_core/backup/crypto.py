@@ -62,10 +62,12 @@ def load_backup_keyring(env: dict[str, str] | None = None) -> dict[int, bytes]:
                 raise BackupCryptoError("MAIL_CORE_BACKUP_KEYS must use integer key versions") from exc
             keys[version] = _b64key(encoded_key, variable="MAIL_CORE_BACKUP_KEYS")
     if env.get("MAIL_CORE_BACKUP_KEY"):
-        keys.setdefault(
-            1,
-            _b64key(env["MAIL_CORE_BACKUP_KEY"], variable="MAIL_CORE_BACKUP_KEY"),
-        )
+        single_key = _b64key(env["MAIL_CORE_BACKUP_KEY"], variable="MAIL_CORE_BACKUP_KEY")
+        if 1 in keys and keys[1] != single_key:
+            raise BackupCryptoError(
+                "MAIL_CORE_BACKUP_KEY conflicts with MAIL_CORE_BACKUP_KEYS version 1"
+            )
+        keys[1] = single_key
     if not keys:
         raise BackupCryptoError("MAIL_CORE_BACKUP_KEY or MAIL_CORE_BACKUP_KEYS required to encrypt backups")
     return keys
