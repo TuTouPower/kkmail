@@ -11,6 +11,8 @@ Without ``transport``, methods raise ``GraphNotConfiguredError``.
 
 from __future__ import annotations
 
+import inspect
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -128,6 +130,20 @@ class GraphProvider:
 
         try:
             with permit_scope(self.permit_factory, self.traffic_class):
+                # A274: self.timeout must not be a dead field — forward it
+                # to transports that accept a timeout keyword; legacy
+                # three-argument transports keep their existing contract
+                # (the factory's urllib transport binds its timeout at
+                # construction time).
+                try:
+                    parameters = inspect.signature(self.transport).parameters
+                    accepts_timeout = "timeout" in parameters or any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+                    )
+                except (TypeError, ValueError):
+                    accepts_timeout = False
+                if accepts_timeout:
+                    return self.transport(method, path, params or {}, timeout=self.timeout)
                 return self.transport(method, path, params or {})
         except RateLimitedError:
             raise
@@ -266,21 +282,36 @@ class GraphProvider:
         op = normalize_op_type(op_type)
         msg_path = f"/me/messages/{remote_id}"
 
+        def _call_dict(method: str, path: str, params: dict[str, Any]) -> dict[str, Any]:
+            # A369: a non-dict transport payload must not AttributeError
+            # out of the RemoteOperationResult channel; normalize to {}
+            # (branch fallbacks then apply) and leave a log trace.
+            data = self._call(method, path, params)
+            if isinstance(data, dict):
+                return data
+            logging.getLogger("mail_core.providers.graph").warning(
+                "graph %s %s returned a non-dict response (%s); treating as empty",
+                method,
+                path,
+                type(data).__name__,
+            )
+            return {}
+
         if op == OP_MARK_READ:
             want = bool(desired_state.get("is_read", True))
-            data = self._call("PATCH", msg_path, {"isRead": want})
+            data = _call_dict("PATCH", msg_path, {"isRead": want})
             return RemoteOperationResult(success=True, remote_state={"is_read": data.get("isRead", want)})
 
         if op == OP_SET_FLAG:
             want = bool(desired_state.get("is_flagged", True))
-            data = self._call("PATCH", msg_path, {"flag": {"flagStatus": "flagged" if want else "notFlagged"}})
+            data = _call_dict("PATCH", msg_path, {"flag": {"flagStatus": "flagged" if want else "notFlagged"}})
             return RemoteOperationResult(success=True, remote_state={"is_flagged": want, "flag": data.get("flag")})
 
         if op == OP_MOVE:
             dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
             if not dest:
                 return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
-            data = self._call("POST", f"{msg_path}/move", {"destinationId": dest})
+            data = _call_dict("POST", f"{msg_path}/move", {"destinationId": dest})
             return RemoteOperationResult(
                 success=True,
                 remote_state={"folder_remote_id": data.get("parentFolderId") or dest, "id": data.get("id") or remote_id},
@@ -291,7 +322,7 @@ class GraphProvider:
             # Never swallow RateLimitedError / CursorInvalidError into a hard DELETE.
             trash = str(desired_state.get("trash_folder_remote_id") or "deleteditems")
             try:
-                data = self._call("POST", f"{msg_path}/move", {"destinationId": trash})
+                data = _call_dict("POST", f"{msg_path}/move", {"destinationId": trash})
                 return RemoteOperationResult(
                     success=True,
                     remote_state={
