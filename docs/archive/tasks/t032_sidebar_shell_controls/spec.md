@@ -45,7 +45,7 @@ AC-001、AC-002、AC-005、AC-006、AC-007 的 DOM、配置与状态逻辑可自
 
 ## 上下文区
 
-- 来源：[设计聊天](https://chatgpt.com/c/[redacted]) 与 [v3 参考原型](../../archive/tasks/t027_account_group_ordering/reference_demo.html)；2026-10-23 经 ego lite 读取聊天正文、预览深浅主题和 desktop 模式，并实测账号拖回总列表。现状与取舍见 [评估记录](../../archive/tasks/t027_account_group_ordering/source_notes.md)。
+- 来源：[设计聊天](https://chatgpt.com/c/[redacted]) 与 [v3 参考原型](../t027_account_group_ordering/reference_demo.html)；2026-10-23 经 ego lite 读取聊天正文、预览深浅主题和 desktop 模式，并实测账号拖回总列表。现状与取舍见 [评估记录](../t027_account_group_ordering/source_notes.md)。
 
 ### 有意不测
 
