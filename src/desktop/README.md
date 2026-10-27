@@ -34,12 +34,12 @@ Packaging: macOS DMG/ZIP artifacts are named **`kkmail.dmg`** / **`kkmail.zip`**
 3. mail-core generates per-install secrets (session key, blob key, backup key) in `mail-core-data/secrets/` (0600), runs migrations, starts the API and an embedded worker on `127.0.0.1`.
 4. After `/health` answers, the window opens. On first run the generated initial login password is shown once; it disappears after you change it in Settings.
 
-External links open in the system browser only for `http(s):`/`mailto:`; other navigation away from the local origin is blocked. Never expose the local port beyond `127.0.0.1`.
+External links open in the system browser only for `https:`/`mailto:`. Loopback `http:` is never opened externally (any local port could be a probing target) — only same-origin app URLs stay in-app, and all other navigation away from the local origin is blocked. Never expose the local port beyond `127.0.0.1`.
 
 ## Session hardening (`hardening.js`)
 
 - `will-attach-webview` always prevented (`webviewTag: false`)
-- permission request/check handlers deny all prompts
+- permission request/check handlers deny everything by default, with a single exception: `clipboard-sanitized-write` from the top-level main frame of the app origin itself
 - restrictive Content-Security-Policy on every response (`default-src 'self'`, no `object`/`frame-ancestors`, connect only to self)
 
 ## Tests (`npm test`)
