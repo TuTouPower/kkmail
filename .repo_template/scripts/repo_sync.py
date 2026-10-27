@@ -1307,9 +1307,6 @@ def _apply_shared_unit(unit: str, decision: str | None, src: Path, changed: set[
     if not decision:
         print(f"裁定单元 {unit} 未提供决策，跳过（待 agent 处理）")
         return
-    if unit == "AGENTS.md":
-        if _apply_agents_sectioned(src, changed):
-            return
     if decision in ("merge", "merge_into_consumer"):
         print(f"裁定单元 {unit} 为 merge：由 agent 编辑消费文件完成语义合并，脚本不整文件覆盖")
         return

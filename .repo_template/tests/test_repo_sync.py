@@ -683,6 +683,14 @@ def test_markdown_section_skips_fenced_headings(env):
     assert merge[2].endswith("still merge body\n")
 
 
+def test_apply_shared_unit_has_single_agents_sectioned_entry(env):
+    """A210: _apply_shared_unit 内 AGENTS.md 分区处理只保留单一入口（删不可达重复判断）。"""
+    import inspect
+
+    source = inspect.getsource(rs._apply_shared_unit)
+    assert source.count("_apply_agents_sectioned") == 1
+
+
 def test_sectioned_agents_requires_headings(env):
     src, consumer = env["src"], env["consumer"]
     (src / "AGENTS.md").write_text("legacy")
