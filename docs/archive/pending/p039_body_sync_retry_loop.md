@@ -4,7 +4,7 @@
 - 影响：所有未归档且按需尝试后仍未完成的邮件，不限第一封或单一 provider；高频 API 请求、重复入队及租约竞争，无法阅读正文。并发打开同账号邮件或多窗口请求时，共用按需归档 owner 会使先前请求失效，可能连带阻碍同账号后台同步。既有工作区账号配置改动不属于本条范围，排查未修改。
 - 根因：产品缺陷，前后端状态契约与并发身份共同失配，详见下文。现场未发现该邮件 `parse_error` 或远端拉取错误，不能据此断言远端服务不可用。
 - 测试缺口：前端 mock 覆盖已归档成功、HTTP 500、永久 pending，没有覆盖带真实异步间隔的 HTTP 200 未归档响应；立即 resolve 的 mock 还会因 React 状态批处理掩盖循环。后端 `test_ac005_sync_body_captures_provider_or_parse_error` 明确断言远端错误返回 200、`is_archived=false`，却未验证失败反馈能传到客户端。租约测试覆盖不同 owner 抢占，未覆盖多个 API 调用共享 `api-on-demand`。需补组件、API/归档并发和跨层验证，详见下文。
-- 线索：`.scratch/body_sync_flicker/`；`browser_evidence.json` 为现场请求与 UI 证据（含本地邮件信息，不入库）；`reader_repro.test.tsx` 基于现有组件测试，模拟两次延迟 15ms 的未完成响应，第三次保持 pending 以有界证明重复 POST；`frontend_result.txt` 为复现通过结果；`lease_repro.py` 调用生产 lease 函数验证同 owner 重入使先前 fencing 失效，内存 session 替身、不写数据库；`lease_result.txt` 为结果。
+- 线索：`.scratch/body_sync_flicker/`（本地复现，未入库；本文件其余 `.scratch/…` 引用同，入库读者无法直接复核）；`browser_evidence.json` 为现场请求与 UI 证据（含本地邮件信息，不入库）；`reader_repro.test.tsx` 基于现有组件测试，模拟两次延迟 15ms 的未完成响应，第三次保持 pending 以有界证明重复 POST；`frontend_result.txt` 为复现通过结果；`lease_repro.py` 调用生产 lease 函数验证同 owner 重入使先前 fencing 失效，内存 session 替身、不写数据库；`lease_result.txt` 为结果。
 - 处理：fix-p039-p040
 
 ## 可验证机制
@@ -63,10 +63,12 @@
 
 ## 复现命令
 
+以下命令依赖上述本地复现材料（未入库）。
+
 ```sh
 src/frontend/node_modules/.bin/vitest run --config .scratch/body_sync_flicker/vitest.config.mjs -t 'reproduces repeated automatic'
 PYTHONPATH=src .venv/bin/python .scratch/body_sync_flicker/lease_repro.py
 PYTHONPATH=src .venv/bin/python .scratch/body_sync_flicker/no_work_repro.py
 ```
 
-仅在 `.scratch/` 保存复现材料；未修改生产代码或正式测试，未手工修改运行数据、重启服务或执行 commit。打开邮件按现有业务逻辑触发详情读取、归档提优先级与按需同步。
+仅在 `.scratch/` 保存复现材料（本地复现，未入库）；未修改生产代码或正式测试，未手工修改运行数据、重启服务或执行 commit。打开邮件按现有业务逻辑触发详情读取、归档提优先级与按需同步。
