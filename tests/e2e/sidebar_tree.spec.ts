@@ -583,6 +583,20 @@ test.describe('侧栏账号文件夹树布局与交互 (AC-001 ~ AC-004)', () =>
     const formPaddingLeft = await newGroupForm.evaluate((node) => getComputedStyle(node).paddingLeft)
     expect(formPaddingLeft).toBe('4px')
 
+    // 黑盒验证：点击外部区域后新建分组表单自动收起消失
+    await page.locator('.list-title').click()
+    await expect(newGroupForm).not.toBeVisible()
+
+    // 黑盒验证：点击 SB22 打开分组操作菜单，点击外部区域后菜单自动收起消失
+    const groupMoreBtn = sidebar.locator('button[aria-label*="分组操作"]').first()
+    if (await groupMoreBtn.isVisible()) {
+      await groupMoreBtn.click()
+      const groupMenu = sidebar.locator('.tree-group-menu')
+      await expect(groupMenu).toBeVisible()
+      await page.locator('.list-title').click()
+      await expect(groupMenu).not.toBeVisible()
+    }
+
     const loadingPaddingLeft = await page.evaluate(() => {
       const el = document.createElement('div')
       el.className = 'tree-loading'

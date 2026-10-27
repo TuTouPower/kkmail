@@ -1294,4 +1294,43 @@ describe('<Sidebar />', () => {
     await click(groupButtons[3])
     expect(calls.some((c) => c.url === '/api/sidebar/layout' && c.method === 'PUT')).toBe(true)
   })
+
+  it('dismisses new group form and group action menu on pointer down outside', async () => {
+    mockApi({})
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('[data-group-id="group-1"]')).not.toBeNull())
+
+    // 1. Click SB18 (新建分组)
+    const newGroupBtn = container.querySelector('[aria-label="新建分组"]') as HTMLButtonElement
+    await click(newGroupBtn)
+    expect(container.querySelector('.tree-inline-form input[aria-label="新分组名称"]')).not.toBeNull()
+
+    // Dispatch pointerdown outside the form
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await waitFor(() => {
+      expect(container.querySelector('.tree-inline-form input[aria-label="新分组名称"]')).toBeNull()
+    })
+
+    // 2. Click SB22 (分组操作菜单)
+    const moreBtn = container.querySelector('[aria-label="分组操作 税务归档"]') as HTMLButtonElement
+    await click(moreBtn)
+    expect(container.querySelector('.tree-group-menu')).not.toBeNull()
+
+    // Dispatch pointerdown outside the menu
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await waitFor(() => {
+      expect(container.querySelector('.tree-group-menu')).toBeNull()
+    })
+
+    // 3. Start rename and click outside to dismiss
+    await click(moreBtn)
+    const renameBtn = container.querySelector('.tree-group-menu button') as HTMLButtonElement
+    await click(renameBtn)
+    expect(container.querySelector('.tree-inline-form input[aria-label="重命名分组"]')).not.toBeNull()
+
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await waitFor(() => {
+      expect(container.querySelector('.tree-inline-form input[aria-label="重命名分组"]')).toBeNull()
+    })
+  })
 })

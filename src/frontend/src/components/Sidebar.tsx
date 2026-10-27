@@ -568,6 +568,7 @@ function Sidebar() {
   const renameSaveInFlight = useRef(false)
   const groupMenuTrigger = useRef<HTMLButtonElement | null>(null)
   const newGroupTrigger = useRef<HTMLButtonElement | null>(null)
+  const newGroupFormRef = useRef<HTMLFormElement | null>(null)
   const masterSearchInputRef = useRef<HTMLInputElement | null>(null)
   const masterSearchTriggerRef = useRef<HTMLButtonElement | null>(null)
   const masterSearchContainerRef = useRef<HTMLDivElement | null>(null)
@@ -683,6 +684,41 @@ function Sidebar() {
   })
   useEffect(() => {
     if (!openMenuGroupId && !editingGroupId && !newGroupOpen) return
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      const isNode = typeof Node !== 'undefined' && target instanceof Node
+      const nodeTarget = isNode ? (target as Node) : null
+
+      if (newGroupOpen) {
+        const formEl = newGroupFormRef.current
+        const triggerEl = newGroupTrigger.current
+        const insideForm = Boolean(nodeTarget && ((formEl && formEl.contains(nodeTarget)) || (triggerEl && triggerEl.contains(nodeTarget))))
+        if (!insideForm) {
+          setNewGroupOpen(false)
+          setNewGroupName('')
+        }
+      }
+
+      if (openMenuGroupId) {
+        const menuEl = document.querySelector('.tree-group-menu')
+        const triggerEl = groupMenuTrigger.current
+        const insideMenu = Boolean(nodeTarget && ((menuEl && menuEl.contains(nodeTarget)) || (triggerEl && triggerEl.contains(nodeTarget))))
+        if (!insideMenu) {
+          setOpenMenuGroupId(null)
+        }
+      }
+
+      if (editingGroupId) {
+        const editFormEl = document.querySelector('.tree-group-block .tree-inline-form')
+        const insideEdit = Boolean(nodeTarget && editFormEl && editFormEl.contains(nodeTarget))
+        if (!insideEdit) {
+          setEditingGroupId(null)
+          setEditingGroupName('')
+        }
+      }
+    }
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       event.preventDefault()
@@ -694,8 +730,12 @@ function Sidebar() {
         else newGroupTrigger.current?.focus()
       })
     }
+    window.addEventListener('pointerdown', onPointerDown)
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
   }, [editingGroupId, newGroupOpen, openMenuGroupId])
   const unreadByAccount = statsQuery.data?.byAccount ?? new Map<string, number | null>()
   const allInboxUnread = statsQuery.data ? statsQuery.data.totalUnread : (statsQuery.isError ? null : 0)
@@ -1301,7 +1341,7 @@ function Sidebar() {
 
         <section className="tree-section tree-groups-section" aria-label="邮箱分组">
           {groupSections}
-          {newGroupOpen && <form className="tree-inline-form" onSubmit={(event) => void createGroup(event)}>
+          {newGroupOpen && <form ref={newGroupFormRef} className="tree-inline-form" onSubmit={(event) => void createGroup(event)}>
             <input autoFocus aria-label="新分组名称" value={newGroupName} maxLength={128} onChange={(event) => setNewGroupName(event.target.value)} placeholder="新分组名称" />
             <button type="submit" aria-label="创建分组"><Plus size={16} /></button>
             <button type="button" aria-label="取消创建" onClick={cancelNewGroup}><X size={15} /></button>
