@@ -153,12 +153,14 @@ def apply_delta_page(
                 supplied = older.supplied_fields
                 older = replace(older, **flags, supplied_fields=None if supplied is None else supplied | flags.keys())
                 supplied = newer.supplied_fields if newer.supplied_fields is not None else meta_fields
-                # Unknown parsed values never erase earlier known facts.
+                # Unknown parsed values never erase earlier known facts:
+                # A172 — for EVERY field, a newer None means "not parsed /
+                # not returned", never an explicit clearing, so it must
+                # not overwrite the value the earlier change supplied.
                 values = {
                     name: getattr(newer, name)
                     for name in supplied
                     if getattr(newer, name) is not None
-                    or name not in {"sort_time", "is_read", "is_flagged", "has_attachments"}
                 }
                 newer = replace(
                     older, **values,
