@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import logging
 import os
+import secrets
 from dataclasses import asdict
 from typing import Literal
 from uuid import UUID
@@ -202,7 +203,10 @@ def _save_redirect_exchange_account(
     return dto
 
 
-def _callback_html(ok: bool, message: str, provider: str = "microsoft") -> str:
+def _callback_html(ok: bool, message: str, provider: str = "microsoft", *, nonce: str) -> str:
+    # A365: the inline style/script blocks below are authorized by this
+    # per-response CSP nonce, never by 'unsafe-inline'.
+    safe_nonce = html.escape(nonce, quote=True)
     safe_msg = html.escape(message)
     label = "Microsoft"
     title = f"{label} 授权已完成" if ok else f"{label} 授权未完成"
@@ -215,7 +219,7 @@ def _callback_html(ok: bool, message: str, provider: str = "microsoft") -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="referrer" content="no-referrer" />
   <title>{title} - kkmail</title>
-  <style>
+  <style nonce="{safe_nonce}">
     body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }}
     main {{ max-width: 460px; width: 100%; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 24px; box-sizing: border-box; }}
     .badge {{ display: inline-block; font-size: 12px; font-weight: 600; color: {color}; border: 1px solid {color}; border-radius: 999px; padding: 2px 10px; margin-bottom: 12px; }}
@@ -232,7 +236,7 @@ def _callback_html(ok: bool, message: str, provider: str = "microsoft") -> str:
     <p>若此窗口来自桌面端或弹窗，您可以直接关闭此标签页返回 kkmail 账户设置窗口点击「保存」完成确认。</p>
     <a class="btn" id="oauth-return-link" href="/#oauth-return">返回 kkmail</a>
   </main>
-  <script>
+  <script nonce="{safe_nonce}">
     if (window.history && window.history.replaceState) {{
       window.history.replaceState(null, "", window.location.pathname);
     }}
@@ -399,14 +403,15 @@ def api_oauth_callback(
         error=error,
         error_description=error_description,
     )
+    nonce = secrets.token_urlsafe(24)
     headers = {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         "Pragma": "no-cache",
         "Referrer-Policy": "no-referrer",
-        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        "Content-Security-Policy": f"default-src 'none'; style-src 'nonce-{nonce}'; script-src 'nonce-{nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
     }
     return HTMLResponse(
-        content=_callback_html(ok, message, provider),
+        content=_callback_html(ok, message, provider, nonce=nonce),
         status_code=status_code,
         headers=headers,
     )
