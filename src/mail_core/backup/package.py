@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import math
 import os
 import shutil
 import stat
@@ -67,6 +68,28 @@ class RestoreVerifyResult:
 
 class PgDumpError(RuntimeError):
     """Raised when pg_dump is unavailable or cannot create a database dump."""
+
+
+def _timeout_from_env(name: str, default: float = 300.0) -> float:
+    """Parse a timeout env var, falling back to ``default`` on bad input.
+
+    A malformed operator setting must not surface as a bare ``ValueError``
+    from ``float()`` (callers expect ``PgDumpError``/``RuntimeError``-family
+    failures or success), so unparsable, non-finite and non-positive values
+    fall back to the default with a warning.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        log.warning("invalid %s=%r; falling back to %ss timeout", name, raw, default)
+        return default
+    if not math.isfinite(value) or value <= 0:
+        log.warning("invalid %s=%r; falling back to %ss timeout", name, raw, default)
+        return default
+    return value
 
 
 def _redact_url(url: str) -> str:
@@ -497,7 +520,7 @@ def _pg_dump_to(dest: Path, url: str, *, allow_stub: bool = False) -> str:
             env["PGPASSWORD"] = password
         else:
             env.pop("PGPASSWORD", None)
-        dump_timeout = float(os.environ.get("MAIL_CORE_PG_DUMP_TIMEOUT", "300"))
+        dump_timeout = _timeout_from_env("MAIL_CORE_PG_DUMP_TIMEOUT")
         cmd = [
             pg_dump,
             "--format=custom",
@@ -1634,7 +1657,7 @@ def _run_pg_restore(dump_file: Path, target_database_url: str) -> None:
         env["PGPASSWORD"] = password
     else:
         env.pop("PGPASSWORD", None)
-    restore_timeout = float(os.environ.get("MAIL_CORE_PG_RESTORE_TIMEOUT", "300"))
+    restore_timeout = _timeout_from_env("MAIL_CORE_PG_RESTORE_TIMEOUT")
     cmd = [
         pg_restore,
         "--exit-on-error",
