@@ -7,12 +7,14 @@ import * as queryApi from '../api/queries'
 import { cleanup, click, render, typeInto, waitFor } from '../test/render'
 
 let intersectionCallback: IntersectionObserverCallback | null = null
+let intersectionObservers: MockIntersectionObserver[] = []
 
 class MockIntersectionObserver {
   callback: IntersectionObserverCallback
   constructor(cb: IntersectionObserverCallback) {
     this.callback = cb
     intersectionCallback = cb
+    intersectionObservers.push(this)
   }
   observe = vi.fn()
   unobserve = vi.fn()
@@ -45,6 +47,7 @@ let calls: string[] = []
 beforeEach(() => {
   calls = []
   intersectionCallback = null
+  intersectionObservers = []
   vi.stubGlobal('IntersectionObserver', MockIntersectionObserver)
   useMailStore.setState({ view: { type: 'allInbox' }, listFilter: 'all', search: '', selectedIds: [], selectedKey: null })
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -559,6 +562,39 @@ describe('<MessageList />', () => {
       expect(container.querySelector('.list-sentinel')).toBeNull()
       expect(container.textContent).toContain('已加载全部邮件')
     })
+  })
+
+  it('does not resubscribe the IntersectionObserver when only the query result identity changes (A126)', async () => {
+    const { container } = await render(<MessageList />)
+    await waitFor(() => expect(subjects(container)).toHaveLength(2))
+    const input = container.querySelector('input[name=search]') as HTMLInputElement
+    await typeInto(input, 'page-test')
+    await waitFor(() => expect(subjects(container)).toEqual(['Subject p1']))
+    await waitFor(() => expect(container.querySelector('.list-sentinel')).not.toBeNull())
+    const { act } = await import('react')
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    const observerCountBefore = intersectionObservers.length
+    expect(observerCountBefore).toBeGreaterThan(0)
+    const disconnectsBefore = intersectionObservers.map((o) => vi.mocked(o.disconnect).mock.calls.length)
+
+    // A refetch/settle produces a brand-new infinite-query result object
+    // while searching / hasMore / loadingMore and the stable fetchNextPage
+    // reference all stay the same. The observer must not churn.
+    const key = queryApi.queryKeys.search('page-test', queryApi.accountScope(undefined))
+    const data = queryApi.queryClient.getQueryData<{ pages: Array<{ items: Array<{ subject: string }> }>; pageParams: unknown[] }>(key)
+    expect(data).toBeDefined()
+    await act(async () => {
+      queryApi.queryClient.setQueryData(key, {
+        // Content genuinely changes (no structural-sharing shortcut) while
+        // searching / hasMore / loadingMore stay the same.
+        pages: data!.pages.map((p) => ({ ...p, items: p.items.map((it) => ({ ...it, subject: `${it.subject} v2` })) })),
+        pageParams: [...data!.pageParams],
+      })
+    })
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+
+    expect(intersectionObservers.length).toBe(observerCountBefore)
+    expect(intersectionObservers.map((o) => vi.mocked(o.disconnect).mock.calls.length)).toEqual(disconnectsBefore)
   })
 
   it('requests folder_role=sent when favorite category is sent', async () => {

@@ -318,18 +318,24 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     return () => observer.disconnect()
   }, [])
 
+  // fetchNextPage is a bound method on the persistent query observer, so it
+  // stays referentially stable across renders; depending on the whole query
+  // result objects would recreate this callback (and resubscribe the
+  // IntersectionObserver below) on every result identity change (A126).
+  const searchFetchNextPage = searchInfiniteQuery.fetchNextPage
+  const inboxFetchNextPage = inboxInfiniteQuery.fetchNextPage
   const handleLoadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return
     try {
       if (searching) {
-        await searchInfiniteQuery.fetchNextPage()
+        await searchFetchNextPage()
       } else {
-        await inboxInfiniteQuery.fetchNextPage()
+        await inboxFetchNextPage()
       }
     } catch (err) {
       setActionStatus(errorMessage(err, '加载更多失败'))
     }
-  }, [loadingMore, hasMore, searching, searchInfiniteQuery, inboxInfiniteQuery])
+  }, [loadingMore, hasMore, searching, searchFetchNextPage, inboxFetchNextPage])
 
   useEffect(() => {
     const sentinel = sentinelRef.current
