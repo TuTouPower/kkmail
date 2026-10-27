@@ -1,8 +1,10 @@
 > [!NOTE]
-> **SUPERSEDED / HISTORICAL REPORT**
-> 本报告属于历史审查归档，报告中所列缺陷已在后续版本（截至 da57df7）彻底修复并闭环。
+> **历史会话产物 / HISTORICAL SESSION ARTEFACT**
+> 本文件为审阅会话的指令/量规文件，不载缺陷结论，不作闭环断言；仅作历史会话产物归档。
 
 # intensive-review rubric — kkmail @ 608e284
+
+> 占位符图例：本文及本会话产物中的 `<local-path>` = 脱敏前的本机绝对路径，已不可复核（如下文 §8 文档视角的「参考 `<local-path>`」即指脱敏前的规范文件本机路径）。
 
 全库当前态审阅。工作区干净，HEAD = origin/main = `608e284f75f1da1540138728b3bf328b194a9720`。没有 diff 可当范围。当前代码里的问题全部计入。不要因为「以前就这样」丢弃。
 
