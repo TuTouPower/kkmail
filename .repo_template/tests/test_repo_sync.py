@@ -156,6 +156,19 @@ def test_plan_degrades_when_template_source_kind_missing(env, capsys):
     assert "repo-template-sync 预览" in capsys.readouterr().out
 
 
+def test_now_iso_uses_local_timezone_offset(env, monkeypatch):
+    """A308: _now_iso 须输出本地时区真实偏移，不得硬编码 +08:00。"""
+    import time
+
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    try:
+        assert rs._now_iso().endswith("+00:00")
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+
 def test_prompt_add_supersede_revoke(env):
     _add_prompt(".env 不要 ignore", ".gitignore,.env")
     assert len(rs.read_state()["user_prompts"]) == 1

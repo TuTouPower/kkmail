@@ -1862,7 +1862,8 @@ def cmd_link_skills(args: argparse.Namespace) -> int:
 
 def _now_iso() -> str:
     import datetime
-    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    # 用本地时区真实偏移（A308）：模板被其它时区消费时不得写死 +08:00
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _parse_decisions(items: list[str]) -> dict[str, str]:
