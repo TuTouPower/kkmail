@@ -3,15 +3,15 @@ tid: "t013"
 slug: "test_pg_runtime"
 title: "建立可复用 PostgreSQL 测试容器与每轮独立测试库"
 status: "done"
-branch: ""
+branch: "main"
 worktree: ""
 review_level: "full"
 review_limit: "5"
 verify_limit: "5"
-diff_anchor: ""
+diff_anchor: "f268461776e218f605ba859ad621a6410369a67b"
 depends_on: ""
 conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog"
+note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 07d178cb"
 ---
 
 # Task 过程总账
@@ -59,3 +59,10 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 ### 结果摘要
 
 - 专用容器与每轮数据库生命周期已验证，业务数据库与凭据未复用；两项真实 IMAP 跳过交由 t016 实施，不计为协议通过。
+
+## 状态勘误（2026-10-27，A52）
+
+- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
+- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
+- commit 锚点：实现提交 `07d178cbe369e52681a3b6533bb8164741112579`（正文收尾原记 `8f93e8e` 为历史重写前哈希，同标题提交）；diff_anchor 补记为该实现提交的父提交 `f268461776e218f605ba859ad621a6410369a67b`；本批归档提交 `161a6e10`。
+- `docs/archive/tasks_index.json` 已按勘误后的 front matter 重新生成（t013 条目）。

@@ -200,15 +200,15 @@
             "slug": "test_pg_runtime",
             "title": "建立可复用 PostgreSQL 测试容器与每轮独立测试库",
             "status": "done",
-            "branch": "",
+            "branch": "main",
             "worktree": "",
             "review_level": "full",
             "review_limit": "5",
             "verify_limit": "5",
-            "diff_anchor": "",
+            "diff_anchor": "f268461776e218f605ba859ad621a6410369a67b",
             "depends_on": "",
             "conflicts_with": "",
-            "note": "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；仅创建 backlog",
+            "note": "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 07d178cb",
             "dir": "docs/archive/tasks/t013_test_pg_runtime"
         },
         {
