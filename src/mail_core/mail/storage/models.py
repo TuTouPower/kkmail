@@ -25,7 +25,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mail_core.db.base import Base
-from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.domain.enums import ArchiveState, SyncStatus
 
 
 def _uuid() -> uuid.UUID:
@@ -209,7 +209,11 @@ class MessageBody(Base):
 
 class MessageBlob(Base):
     __tablename__ = "message_blobs"
-    __table_args__ = (UniqueConstraint("content_sha256", "key_version", name="uq_message_blobs_hash_key"),)
+    __table_args__ = (
+        UniqueConstraint("content_sha256", "key_version", name="uq_message_blobs_hash_key"),
+        # A168: ref_count must never go negative (see migration 0029).
+        CheckConstraint("ref_count >= 0", name="ck_message_blobs_ref_count_nonnegative"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -375,6 +379,11 @@ class MessageArchiveState(Base):
     __tablename__ = "message_archive_state"
     __table_args__ = (
         Index("ix_archive_claim", "state", "priority", postgresql_where=text("claimed_by IS NULL")),
+        # A168: state must stay within the ArchiveState enum (migration 0029).
+        CheckConstraint(
+            "state IN (" + ", ".join(f"'{state.value}'" for state in ArchiveState) + ")",
+            name="ck_message_archive_state_state_valid",
+        ),
     )
 
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
@@ -443,7 +452,11 @@ class BlobQuotaReservation(Base):
     """Temporary reservation of blob disk quota before physical write completes."""
 
     __tablename__ = "blob_quota_reservations"
-    __table_args__ = (Index("ix_blob_quota_reservations_expires_at", "expires_at"),)
+    __table_args__ = (
+        Index("ix_blob_quota_reservations_expires_at", "expires_at"),
+        # A168: a reservation of zero/negative bytes is meaningless (migration 0029).
+        CheckConstraint("reserved_bytes > 0", name="ck_blob_quota_reservations_reserved_bytes_positive"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     worker_id: Mapped[str] = mapped_column(String(128), nullable=False)
