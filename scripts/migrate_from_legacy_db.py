@@ -65,6 +65,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 _cli_args = parse_args() if __name__ == "__main__" else None
 
 import base64
+import binascii
 import email.utils
 import json
 import os
@@ -339,6 +340,23 @@ def migrate_retained_messages(
     )
 
 
+def _load_blob_keyring(blob_b64: str) -> Keyring:
+    """Validate MAIL_CORE_BLOB_KEY_V1 once, up front, with an operator-facing error."""
+    try:
+        blob_raw = base64.b64decode(blob_b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(
+            "MAIL_CORE_BLOB_KEY_V1 must contain valid base64 encoding a 32-byte key"
+        ) from exc
+    if len(blob_raw) != 32:
+        raise ValueError(
+            "MAIL_CORE_BLOB_KEY_V1 must encode exactly 32 bytes "
+            f"(decoded {len(blob_raw)} bytes); generate one with: "
+            "python3 -c 'import os,base64; print(base64.b64encode(os.urandom(32)).decode())'"
+        )
+    return Keyring({1: blob_raw}, active_version=1)
+
+
 def get_legacy_cipher(secret_key: str) -> Fernet:
     salt = b"outlook_email_encryption_salt_v1"
     kdf = PBKDF2HMAC(
@@ -462,8 +480,11 @@ def migrate(sqlite_path: Path, target_url: str) -> None:
         print("MAIL_CORE_BLOB_KEY_V1 required", file=sys.stderr)
         sys.exit(1)
 
-    blob_raw = base64.b64decode(blob_b64)
-    keyring = Keyring({1: blob_raw}, active_version=1)
+    try:
+        keyring = _load_blob_keyring(blob_b64)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
 
     Session = get_session_factory(target_url)
     sqlite_conn = sqlite3.connect(f"{sqlite_path.as_uri()}?mode=ro", uri=True)
