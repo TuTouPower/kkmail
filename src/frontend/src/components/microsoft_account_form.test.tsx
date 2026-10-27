@@ -245,6 +245,11 @@ it('clicking Microsoft auth opens the spec authorize URL and switches to the pas
 // slash). The test is replaced as a whole with the payload expectation
 // extended by client_id and redirect_uri (the built-in id and default
 // URI here, since this shell's metadata reports no override).
+// REPLACED AGAIN (A245): ExchangeRedirectUrlRequest.email was deleted
+// on the backend — it was never read; the account email always comes
+// from the Microsoft-verified token exchange. The form no longer sends
+// email in the exchange payload (it remains only as the authorize
+// step's login_hint), so the expectation below drops the email field.
 it('pasting a redirect URL calls the exchange API and reports success via onSaved', async () => {
   const exchanges = stubMicrosoftShell()
   vi.stubGlobal('open', vi.fn(() => ({ opener: {} })))
@@ -260,7 +265,6 @@ it('pasting a redirect URL calls the exchange API and reports success via onSave
   expect(exchanges).toHaveLength(1)
   expect(exchanges[0]).toEqual({
     redirected_url: 'http://localhost:8080/?code=abc123&state=xyz',
-    email: 'me@outlook.com',
     group_id: 'grp-1',
     client_id: '9e5f94bc-e8a4-4e73-b8be-63364c29d753',
     redirect_uri: 'http://localhost:8080',

@@ -417,6 +417,10 @@ export interface paths {
         /**
          * Api Mark All Read
          * @description Batch mark messages read across the matching scope (folder/account/flag).
+         *
+         *     Non-atomic by design: batches commit independently, so a failure may
+         *     leave partial progress applied. The request is idempotent — retry it
+         *     to continue marking the remainder.
          */
         post: operations["api_mark_all_read_api_mail_mark_all_read_post"];
         delete?: never;
@@ -941,8 +945,6 @@ export interface components {
         ExchangeRedirectUrlRequest: {
             /** Client Id */
             client_id?: string | null;
-            /** Email */
-            email?: string | null;
             /** Group Id */
             group_id?: string | null;
             /** Redirect Uri */
@@ -1410,6 +1412,11 @@ export interface components {
              * @default true
              */
             ok: boolean;
+            /**
+             * Requires Relogin
+             * @default true
+             */
+            requires_relogin: boolean;
             /**
              * Success
              * @default true

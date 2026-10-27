@@ -303,7 +303,6 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
     try {
       await api.exchangeMicrosoftRedirectUrl({
         redirected_url: msRedirectUrl.trim(),
-        ...(email.trim() ? { email: email.trim() } : {}),
         ...(groupId && groupsAvailable ? { group_id: groupId } : {}),
         // Always send the id the authorize step actually used (never
         // omitted), so the backend exchanges with that same id instead
