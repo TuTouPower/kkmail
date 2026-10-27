@@ -98,13 +98,21 @@ def _entry_number(prefix: str, name: str, *, kind: str) -> int | None:
 def _numbers_from_branch(
     repo_root: Path, branch: str, prefix: str, dirs: tuple[str, ...], kind: str
 ) -> dict[int, list[str]]:
+    # 单次 ls-tree 跨目录批量取数（A309）：legacy 总账文件清单并入同一次
+    # 调用，不再按目录逐个扇出子进程；正文仅对实际存在的文件发 show。
+    legacy_files = [f"{directory}.md" for directory in dirs] if kind == "file" else []
+    legacy_set = set(legacy_files)
     text = _run_git(
-        repo_root, ["ls-tree", "-r", "--name-only", branch, "--", *dirs]
+        repo_root, ["ls-tree", "-r", "--name-only", branch, "--", *dirs, *legacy_files]
     )
     found: dict[int, list[str]] = {}
+    present_legacy: set[str] = set()
     for rel in text.splitlines():
         rel = rel.strip()
         if not rel:
+            continue
+        if rel in legacy_set:
+            present_legacy.add(rel)
             continue
         parts = Path(rel).parts
         # 目录型条目在 ls-tree -r 下只出现为其内部文件路径；身份取条目目录的完整
@@ -122,7 +130,9 @@ def _numbers_from_branch(
                     paths.append(identity)
                 break
     if kind == "file":
-        _merge_legacy_body_numbers(repo_root, branch, prefix, dirs, found)
+        _merge_legacy_body_numbers(
+            repo_root, branch, prefix, legacy_files, present_legacy, found
+        )
     return found
 
 
@@ -130,19 +140,19 @@ def _merge_legacy_body_numbers(
     repo_root: Path,
     branch: str,
     prefix: str,
-    dirs: tuple[str, ...],
+    legacy_files: list[str],
+    present_legacy: set[str],
     found: dict[int, list[str]],
 ) -> None:
     """把 legacy 单文件正文小节标题中的编号并入扫描结果。
 
     旧格式一个目录对应一个总账文件（`docs/pending.md`、`docs/findings.md`），
-    条目是 `### pNNN …` / `## dNNN …` 小节；文件不存在时零成本跳过。
+    条目是 `### pNNN …` / `## dNNN …` 小节。存在性已由调用方的单次
+    ls-tree 判定（A309）；仅对实际存在的文件发 show 读正文。
     """
     heading_re = re.compile(rf"^#+[ \t]+{prefix}([0-9]{{3,}})(?![0-9])", re.MULTILINE)
-    for directory in dirs:
-        legacy = f"{directory}.md"
-        listed = _run_git(repo_root, ["ls-tree", "--name-only", branch, "--", legacy])
-        if not listed.strip():
+    for legacy in legacy_files:
+        if legacy not in present_legacy:
             continue
         body = _run_git(repo_root, ["show", f"{branch}:{legacy}"])
         for match in heading_re.finditer(body):

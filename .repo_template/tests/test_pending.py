@@ -14,6 +14,7 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+import _id_scan
 from _id_scan import IdScanError, allocate, allocate_dir, scan_max_id
 import pending as pending_mod
 import findings as findings_mod
@@ -165,6 +166,28 @@ def test_git_failure_wrapped(tmp_path):
     not_a_repo.mkdir()
     with pytest.raises(IdScanError):
         scan_max_id(not_a_repo, "p", PENDING_DIRS)
+
+
+def test_branch_scan_uses_one_ls_tree_per_branch(tmp_path, monkeypatch):
+    """A309: 每分支只发一次 ls-tree（legacy 总账清单并入同一次调用），
+    不再按目录逐个扇出；无 legacy 文件时不发 show。"""
+    repo = _init_repo(tmp_path)
+    _commit_entry(repo, "docs/pending/todo/p003_main.md")
+    _git(repo, "checkout", "-b", "feature")
+    _commit_entry(repo, "docs/pending/todo/p005_feature.md")
+    _git(repo, "checkout", "main")
+    calls = []
+    real_run_git = _id_scan._run_git
+
+    def counting(repo_root, args):
+        calls.append(list(args))
+        return real_run_git(repo_root, args)
+
+    monkeypatch.setattr(_id_scan, "_run_git", counting)
+    assert scan_max_id(repo, "p", PENDING_DIRS) == 5
+    ls_tree_calls = [c for c in calls if c[0] == "ls-tree"]
+    assert len(ls_tree_calls) == 2, f"期望每分支 1 次 ls-tree，实际 {len(ls_tree_calls)} 次"
+    assert not [c for c in calls if c[0] == "show"], "无 legacy 文件时不应发 show"
 
 
 # ---------- 互斥分配 ----------
@@ -370,6 +393,52 @@ def test_archive_rollback_failure_is_reported_not_claimed(tmp_path, monkeypatch,
     # 回滚确未发生：p001 仍留在 archive
     assert (repo / "docs/archive/pending/p001_one.md").exists()
     assert not (repo / "docs/pending/todo/p001_one.md").exists()
+
+
+def test_archive_partial_failure_oserror_rolls_back(tmp_path, monkeypatch):
+    """A397：第二条迁移抛 OSError（非 IdScanError）时已迁移条目同样必须回滚，
+    且错误以 SystemExit 呈现而非裸 OSError 逃逸。"""
+    repo = _init_repo(tmp_path)
+    _bind(monkeypatch, repo)
+    pending_mod.main(["new", "--slug", "one"])
+    pending_mod.main(["new", "--slug", "two"])
+    one = repo / "docs/pending/todo/p001_one.md"
+    orig_one = one.read_bytes()
+
+    real_move = pending_mod.move_entry
+    calls = {"n": 0}
+
+    def flaky(path, target):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("模拟磁盘写入失败")
+        return real_move(path, target)
+
+    monkeypatch.setattr(pending_mod, "move_entry", flaky)
+    with pytest.raises(SystemExit, match="模拟磁盘写入失败"):
+        pending_mod.main(["archive", "p001", "p002", "--fix-ref", "t001", "--write"])
+    assert one.exists()
+    assert one.read_bytes() == orig_one
+    assert not (repo / "docs/archive/pending/p001_one.md").exists()
+
+
+def test_archive_set_field_oserror_rolls_back_moved_entry(tmp_path, monkeypatch):
+    """A397：条目已移动后 set_field 抛 OSError 时，该条目本身也必须进回滚循环。"""
+    repo = _init_repo(tmp_path)
+    _bind(monkeypatch, repo)
+    pending_mod.main(["new", "--slug", "one"])
+    one = repo / "docs/pending/todo/p001_one.md"
+    orig_one = one.read_bytes()
+
+    def boom_set_field(path, pattern, line):
+        raise OSError("模拟正文写入失败")
+
+    monkeypatch.setattr(pending_mod, "set_field", boom_set_field)
+    with pytest.raises(SystemExit, match="模拟正文写入失败"):
+        pending_mod.main(["archive", "p001", "--fix-ref", "t001", "--write"])
+    assert one.exists()
+    assert one.read_bytes() == orig_one
+    assert not (repo / "docs/archive/pending/p001_one.md").exists()
 
 
 # ---------- CLI ----------
