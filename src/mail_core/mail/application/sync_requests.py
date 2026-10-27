@@ -64,7 +64,12 @@ def _inflight_full_root_generation(session: Session, account_id: uuid.UUID) -> u
         .limit(1)
     )
     if job is not None:
-        return _payload_root_generation(job.payload)
+        generation = _payload_root_generation(job.payload)
+        if generation is not None:
+            return generation
+        # Root job is not a full scan (e.g. a delta): the in-flight full
+        # scan, if any, may still be in its metadata phase -- fall through
+        # and check the metadata jobs instead of giving up (A84).
     metadata_jobs = session.scalars(
         select(WorkerJob)
         .where(WorkerJob.dedupe_key.like(f"metadata:{account_id}:%"))
