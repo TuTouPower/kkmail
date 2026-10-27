@@ -159,6 +159,16 @@ def generate_benchmark_data(session: Session, blob_root: Path, *, seed: int = 42
     }
 
 
+def _nearest_rank(sorted_values: list, percentile: int):
+    """Nearest-rank percentile: rank = ceil(p/100 * n), 1-based (A101)."""
+    if not sorted_values:
+        raise ValueError("percentile of empty samples")
+    import math
+
+    rank = max(1, math.ceil(percentile / 100.0 * len(sorted_values)))
+    return sorted_values[min(rank, len(sorted_values)) - 1]
+
+
 def measure_latencies(func, runs: int = 3, warmup: int = 1) -> dict:
     for _ in range(warmup):
         func()
@@ -168,17 +178,22 @@ def measure_latencies(func, runs: int = 3, warmup: int = 1) -> dict:
         func()
         latencies_ms.append((time.perf_counter() - t0) * 1000.0)
     latencies_ms.sort()
-    p50 = latencies_ms[len(latencies_ms) // 2]
-    p95 = latencies_ms[int(len(latencies_ms) * 0.95)]
+    p50 = _nearest_rank(latencies_ms, 50)
+    p95 = _nearest_rank(latencies_ms, 95)
     avg = sum(latencies_ms) / len(latencies_ms)
     throughput = (1000.0 / avg) if avg > 0 else 0
-    return {
+    metrics = {
         "samples": runs,
         "p50_ms": round(p50, 3),
         "p95_ms": round(p95, 3),
         "avg_ms": round(avg, 3),
         "throughput_qps": round(throughput, 1),
     }
+    if runs < 20:
+        # With <20 samples nearest-rank p95 is the maximum sample; say so in
+        # the report instead of presenting it as a real 95th percentile.
+        metrics["p95_is_max"] = True
+    return metrics
 
 
 def run_benchmark(engine, blob_root: Path, *, seed: int = 42, count: int = 1000, runs: int = 3) -> dict:
@@ -374,6 +389,16 @@ def main():
         c_data = json.loads(c_path.read_text(encoding="utf-8"))
         print(compare_reports(b_data, c_data))
         return
+
+    # Deep keyset pagination fetches 5 pages x 50 = 250 rows and asserts the
+    # total; smaller scales can never satisfy it and their percentiles are
+    # not comparable (A101).
+    if args.scale < 250:
+        print(f"--scale must be >= 250 (got {args.scale})", file=sys.stderr)
+        sys.exit(2)
+    if args.runs < 1:
+        print(f"--runs must be >= 1 (got {args.runs})", file=sys.stderr)
+        sys.exit(2)
 
     db_url = os.environ.get("MAIL_CORE_DATABASE_URL")
     if not db_url:
