@@ -22,6 +22,7 @@ No send/SMTP. Access tokens are never logged.
 from __future__ import annotations
 
 import logging
+import math as _math
 import re
 import threading
 import time
@@ -193,7 +194,22 @@ class OAuthTokenClient:
                         data["refresh_token"] = resp["refresh_token"]
                     expires_in = resp.get("expires_in")
                     if expires_in is not None:
-                        data["expires_at"] = time.time() + float(expires_in)
+                        # A169: expires_in is an optional field — a malformed
+                        # value must not roll back the whole refresh, or the
+                        # already-rotated refresh_token would be lost with it.
+                        # Treat an unparseable/non-finite value as missing
+                        # (no expires_at written) and persist the tokens.
+                        try:
+                            seconds = float(expires_in)
+                            if not _math.isfinite(seconds):
+                                raise ValueError("non-finite expires_in")
+                            data["expires_at"] = time.time() + seconds
+                        except (TypeError, ValueError, OverflowError):
+                            log.warning(
+                                "oauth token response has unusable expires_in %r; "
+                                "persisting tokens without expires_at",
+                                type(expires_in).__name__,
+                            )
                     self._cached = dict(data)
             if adopted is not None:
                 return adopted

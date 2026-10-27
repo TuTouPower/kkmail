@@ -6,6 +6,8 @@ import json
 import threading
 import time
 
+import pytest
+
 from mail_core.accounts import DictCredentialStore
 from mail_core.accounts.credentials import credential_edit
 from mail_core.providers.oauth import OAuthTokenClient
@@ -79,3 +81,26 @@ def test_a116_refresh_cas_adopts_persisted_token_on_refresh_token_conflict():
     saved = json.loads(store.get_secret("oauth:graph"))
     assert saved["refresh_token"] == "rt-2"
     assert saved["access_token"] == "at-persisted"
+
+
+# --- A169: malformed expires_in must not roll back the whole refresh ------
+
+
+@pytest.mark.parametrize("bad_expires_in", ["not-a-number", {"seconds": 3600}, ["3600"], float("nan")])
+def test_a169_bad_expires_in_still_persists_rotated_refresh_token(bad_expires_in):
+    store = _store()
+
+    def token_post(method, url, form, headers):
+        return {
+            "access_token": "at-new",
+            "refresh_token": "rt-rotated",
+            "expires_in": bad_expires_in,
+        }
+
+    client = OAuthTokenClient(
+        credential_ref="oauth:graph", store=store, provider="graph", http_post=token_post
+    )
+    assert client.get_access_token() == "at-new"
+    saved = json.loads(store.get_secret("oauth:graph"))
+    assert saved["access_token"] == "at-new"
+    assert saved["refresh_token"] == "rt-rotated"
