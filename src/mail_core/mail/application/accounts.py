@@ -140,7 +140,10 @@ def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDT
         group_color=g.color if g else None,
         master_order=acc.master_order,
         group_order=acc.group_order,
-        status="active",
+        # A234: status is derived from the account's real state, not a
+        # hard-coded constant — sync-disabled accounts report "disabled";
+        # the detailed sync state stays in sync_status.
+        status="active" if acc.sync_enabled else "disabled",
         sync_status=acc.sync_status,
         sync_enabled=acc.sync_enabled,
         account_type=acc.provider,

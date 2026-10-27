@@ -139,29 +139,38 @@ def test_account_dto_exposes_only_supported_imap_connection_fields():
     assert "password" not in dto.imap_config
 
 
-def test_account_status_remains_active_when_sync_is_disabled():
+def test_account_status_is_derived_from_sync_enabled():
+    # A234: replaces test_account_status_remains_active_when_sync_is_disabled
+    # overall — that test enshrined the hard-coded status="active" bug.
+    # New contract: status is derived from the account's real state —
+    # "disabled" when sync is disabled, "active" when sync is enabled —
+    # while sync_status keeps carrying the detailed sync state.
     from types import SimpleNamespace
     import uuid
 
     from mail_core.mail.application.accounts import _to_account_dto
 
-    account = SimpleNamespace(
-        id=uuid.uuid4(),
-        email="paused@kkmail.test",
-        provider="imap",
-        display_name=None,
-        group_id=None,
-        master_order=None,
-        group_order=None,
-        sync_enabled=False,
-        sync_status="idle",
-        config={},
-    )
+    def make_account(*, sync_enabled, sync_status="idle"):
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            email="derived@kkmail.test",
+            provider="imap",
+            display_name=None,
+            group_id=None,
+            master_order=None,
+            group_order=None,
+            sync_enabled=sync_enabled,
+            sync_status=sync_status,
+            config={},
+        )
 
-    dto = _to_account_dto(account, {})
+    disabled = _to_account_dto(make_account(sync_enabled=False), {})
+    assert disabled.status == "disabled"
+    assert disabled.sync_enabled is False
 
-    assert dto.status == "active"
-    assert dto.sync_enabled is False
+    enabled = _to_account_dto(make_account(sync_enabled=True, sync_status="failed"), {})
+    assert enabled.status == "active"
+    assert enabled.sync_status == "failed"
 
 
 def _sync_all_fake_session(pages):
