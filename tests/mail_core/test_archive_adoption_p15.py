@@ -283,6 +283,38 @@ def test_a27_oversized_attachment_skipped_with_partial_body(monkeypatch):
     assert all(att["filename"] != "big.bin" for att in err.attachments)
 
 
+# ---------------------------------------------------------------------------
+# A111: batch_size / quota env parsing must be validated and clamped
+# ---------------------------------------------------------------------------
+
+
+def test_a111_config_helper_clamps_batch_and_bytes():
+    from mail_core.blobs.archive import _resolve_archive_config
+
+    limit, _recent, soft, hard = _resolve_archive_config(
+        {"batch_size": 10000, "soft_limit_bytes": -5, "hard_limit_bytes": "4096"}
+    )
+    assert limit == 200
+    assert soft == 0
+    assert hard == 4096
+    limit2, _r2, _s2, _h2 = _resolve_archive_config({"batch_size": 0 - 3})
+    assert limit2 == 1
+
+
+def test_a111_malformed_batch_size_returns_config_error_not_valueerror(monkeypatch):
+    monkeypatch.delenv("MAIL_CORE_ARCHIVE_BATCH", raising=False)
+    result = run_archive_batch(
+        account_id=uuid.uuid4(), worker_id="w", payload={"batch_size": "not-a-number"}
+    )
+    assert result["status"] == "config_error"
+
+
+def test_a111_malformed_env_returns_config_error_not_valueerror(monkeypatch):
+    monkeypatch.setenv("MAIL_CORE_BLOB_HARD_BYTES", "12x34")
+    result = run_archive_batch(account_id=uuid.uuid4(), worker_id="w", payload={})
+    assert result["status"] == "config_error"
+
+
 def test_a27_normal_message_under_limits_still_parses(monkeypatch):
     from mail_core.blobs.archive import parse_mime_content
 

@@ -723,6 +723,46 @@ def maybe_resume_quota_paused_archives(
     return 0
 
 
+class _ArchiveConfigError(ValueError):
+    """A batch/quota configuration value cannot be parsed as an integer."""
+
+
+def _config_int(value: Any, *, name: str) -> int:
+    try:
+        if isinstance(value, str):
+            return int(value.strip())
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise _ArchiveConfigError(f"invalid archive config {name}={value!r}") from exc
+
+
+def _resolve_archive_config(payload: dict) -> tuple[int, int, int | None, int | None]:
+    """Centrally parse and clamp run_archive_batch configuration.
+
+    Batch size is clamped to 1..200 so a malformed or oversized value
+    cannot claim an unbounded batch; quota byte limits are clamped to
+    >= 0. Non-numeric values raise _ArchiveConfigError.
+    """
+    limit = _config_int(
+        payload.get("batch_size") or os.environ.get("MAIL_CORE_ARCHIVE_BATCH") or DEFAULT_BATCH,
+        name="batch_size",
+    )
+    limit = max(1, min(200, limit))
+    recent_days = _config_int(payload.get("recent_days") or DEFAULT_RECENT_DAYS, name="recent_days")
+
+    def _bytes(name: str, env_name: str) -> int | None:
+        raw = payload.get(name)
+        if raw is None:
+            raw = os.environ.get(env_name)
+        if raw is None or raw == "":
+            return None
+        return max(0, _config_int(raw, name=name))
+
+    soft_i = _bytes("soft_limit_bytes", "MAIL_CORE_BLOB_SOFT_BYTES")
+    hard_i = _bytes("hard_limit_bytes", "MAIL_CORE_BLOB_HARD_BYTES")
+    return limit, recent_days, soft_i, hard_i
+
+
 def run_archive_batch(
     *,
     account_id: uuid.UUID | None,
@@ -736,16 +776,11 @@ def run_archive_batch(
         # Routine batches are background; a batch targeted at one
         # message_id is an on-demand foreground fetch (design §7).
         traffic_class = traffic_class_for_job(JobType.ARCHIVE_MIME_BATCH.value, payload=payload)
-    limit = int(payload.get("batch_size") or os.environ.get("MAIL_CORE_ARCHIVE_BATCH") or DEFAULT_BATCH)
-    recent_days = int(payload.get("recent_days") or DEFAULT_RECENT_DAYS)
-    soft = payload.get("soft_limit_bytes")
-    hard = payload.get("hard_limit_bytes")
-    soft_i = int(soft) if soft is not None else (
-        int(os.environ["MAIL_CORE_BLOB_SOFT_BYTES"]) if os.environ.get("MAIL_CORE_BLOB_SOFT_BYTES") else None
-    )
-    hard_i = int(hard) if hard is not None else (
-        int(os.environ["MAIL_CORE_BLOB_HARD_BYTES"]) if os.environ.get("MAIL_CORE_BLOB_HARD_BYTES") else None
-    )
+    try:
+        limit, recent_days, soft_i, hard_i = _resolve_archive_config(payload)
+    except _ArchiveConfigError as exc:
+        log.error("archive batch aborted: %s", exc)
+        return {"status": "config_error", "error": str(exc)}
 
     root = blob_root()
     blob_store = BlobStore(root)
