@@ -182,8 +182,15 @@ def messages_by_ids(session: Session, ids: list[uuid.UUID]) -> list[MessageListI
     previews = _body_previews(session, list({m.id: m for m, _ in rows}.values()))
     locations = _folder_locations_by_message_ids(session, list(dict.fromkeys(ids)))
     by_id: dict[uuid.UUID, MessageListItem] = {}
-    for m, fid in rows:
-        by_id.setdefault(m.id, _list_item(m, fid, previews.get(m.id, ""), locations.get(m.id, [])))
+    for m, _fid in rows:
+        if m.id in by_id:
+            continue
+        # folder_id is the first location in the defined order
+        # (message_id, Folder.id) from _folder_locations_by_message_ids,
+        # not whichever outer-join row the database returned first (A287).
+        message_locations = locations.get(m.id, [])
+        primary_folder_id = message_locations[0].folder_id if message_locations else None
+        by_id[m.id] = _list_item(m, primary_folder_id, previews.get(m.id, ""), message_locations)
     return [by_id[i] for i in ids if i in by_id]
 
 
