@@ -118,13 +118,30 @@ app.add_middleware(
 )
 
 
+_SPA_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'self'"
+)
+
+
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # A284: HSTS only when the request actually arrived over HTTPS. When
+    # MAIL_CORE_FORWARDED_ALLOW_IPS is configured, ProxyHeadersMiddleware
+    # has already folded a trusted X-Forwarded-Proto into url.scheme;
+    # a raw forwarded header from an untrusted peer is never consulted.
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # A284: HTML responses (the SPA shell and its fallback pages) get a
+    # default-src 'self' CSP; responses that set their own stricter CSP
+    # (e.g. the OAuth callback page) keep it.
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers.setdefault("Content-Security-Policy", _SPA_CSP)
     return response
 
 

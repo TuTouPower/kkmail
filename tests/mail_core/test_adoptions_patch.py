@@ -39,7 +39,11 @@ def test_security_headers_middleware():
     assert resp.headers.get("X-Content-Type-Options") == "nosniff"
     assert resp.headers.get("X-Frame-Options") == "DENY"
     assert resp.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
-    assert "Strict-Transport-Security" in resp.headers
+    # A284 semantic change: HSTS is only sent on HTTPS requests, so the
+    # plain-HTTP default TestClient must not see it; the HTTPS client must.
+    assert "Strict-Transport-Security" not in resp.headers
+    https_resp = TestClient(app, base_url="https://testserver").get("/health")
+    assert "Strict-Transport-Security" in https_resp.headers
 
 
 def test_ssrf_imap_host_validation(monkeypatch):
