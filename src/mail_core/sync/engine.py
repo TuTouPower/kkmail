@@ -371,7 +371,13 @@ def sync_account_folders(
                 existing.parent_remote_id = rf.parent_remote_id
                 if not rf.selectable or is_gmail_virtual:
                     existing.sync_status = SyncStatus.PAUSED.value
-                elif existing.sync_status != SyncStatus.PAUSED.value:
+                else:
+                    # A320: every PAUSED assignment in this codebase is
+                    # system-driven (remote disappearance, \Noselect, or
+                    # Gmail virtual) — there is no manual folder pause to
+                    # preserve. A folder that is present and selectable
+                    # again revives to IDLE; the metadata enqueue below
+                    # then re-runs for it in this same discovery pass.
                     existing.sync_status = SyncStatus.IDLE.value
             folder_ids.append(existing.id)
             if rf.selectable and existing.sync_status != SyncStatus.PAUSED.value:
