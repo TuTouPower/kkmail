@@ -69,3 +69,9 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 - 真实 IMAP 与 PostgreSQL 全量串行运行：477 passed / 0 skipped，只有既有 Starlette 弃用警告；运行 `e9e0192dae624ce980a1ae3ee8fe66b3`，正常清理本轮测试库。
 - 首轮两个旧夹具失败已补明确输入并保持原预期。第二轮与 IMAP 定向并行共用测试邮箱，目标邮件被另一套件清理；停止并行后最终全量通过。未因环境失败修改生产行为。
 - 未部署生产，未改写运行容器数据。
+
+## 直接 main 执行归档补记（2026-10-23T21:29:04+08:00）
+
+- 状态修正时间：2026-10-23T21:29:04+08:00；归档提交 `8b826b2c` 将 front matter 状态由 backlog 修正为 done 并迁入 `docs/archive/tasks/`。正文实施笔记中「front matter 保持脚本登记的 backlog」为执行时流程限制记录，由本节更新。
+- 实际执行分支：main；执行 commit：`c755ebd`。
+- 依据：实现已提交且审查 PASS、最终 PostgreSQL 全量 477 passed / 0 skipped，见正文实施笔记与收尾报告；本任务直接在 main 完成，未创建登记 worktree/attempt，不补造 handoff。
