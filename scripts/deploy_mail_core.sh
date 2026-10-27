@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+# Deploy the mail-core distributed stack from this checkout.
+#
+# Prerequisites (single-operator machine):
+#   - Run from a clean `main` worktree.
+#   - Docker context: this script was written for OrbStack and expects the
+#     `orbstack` context by default. On a plain Docker / Docker Desktop
+#     machine set EXPECTED_DOCKER_CONTEXT to the context `docker context
+#     show` prints there (for example `desktop-linux` or `default`).
+#   - Unless --no-push is given, deploying first pushes `main` to
+#     `origin/main` (an explicit, announced step below, not a side effect).
+#
+# Usage: scripts/deploy_mail_core.sh [--no-push]
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,19 +21,33 @@ fail() {
     exit 1
 }
 
+no_push=0
+for arg in "$@"; do
+    case "$arg" in
+        --no-push) no_push=1 ;;
+        *) fail "unknown argument: $arg (usage: deploy_mail_core.sh [--no-push])" ;;
+    esac
+done
+
 for command_name in git docker curl python3 rg; do
     command -v "$command_name" >/dev/null 2>&1 || fail "missing required command: $command_name"
 done
 
 [[ "$(git branch --show-current)" == "main" ]] || fail "run from the main branch"
 [[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ]] || fail "worktree must be clean"
-[[ "$(docker context show)" == "orbstack" ]] || fail "expected the OrbStack Docker context"
+expected_context="${EXPECTED_DOCKER_CONTEXT:-orbstack}"
+[[ "$(docker context show)" == "$expected_context" ]] || fail "expected Docker context '$expected_context' (set EXPECTED_DOCKER_CONTEXT to override; see script header)"
 
 git fetch origin main
 git merge-base --is-ancestor origin/main main || fail "main diverges from origin/main; reconcile branches before deployment"
 docker compose version >/dev/null
 docker compose -f docker-compose.mail-core.yml --profile distributed config --quiet
-git push origin main
+if [[ "$no_push" == "1" ]]; then
+    printf 'deploy_mail_core: --no-push given; skipping git push of main to origin/main\n'
+else
+    printf 'deploy_mail_core: pushing main to origin/main (pass --no-push to skip this step)\n'
+    git push origin main
+fi
 
 stamp="$(date +%Y%m%d_%H%M%S)"
 commit="$(git rev-parse --short=8 HEAD)"
