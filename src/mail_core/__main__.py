@@ -17,7 +17,6 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any
 
 log = logging.getLogger("mail_core.main")
 
@@ -50,10 +49,22 @@ def run_migrations() -> None:
     command.upgrade(cfg, "head")
 
 
+def _port_value(raw: str) -> int:
+    """Shared validation for ``--port`` and the MAIL_CORE_PORT default."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"invalid port value: {raw!r}") from None
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="python -m mail_core")
+    try:
+        default_port = _port_value(os.environ.get("MAIL_CORE_PORT") or "8000")
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
     parser.add_argument("--host", default=os.environ.get("MAIL_CORE_HOST") or "127.0.0.1")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("MAIL_CORE_PORT") or 8000))
+    parser.add_argument("--port", type=_port_value, default=default_port)
     parser.add_argument("--data-dir", default=os.environ.get("MAIL_CORE_DATA_DIR") or "")
     parser.add_argument("--no-worker", action="store_true", default=os.environ.get("MAIL_CORE_EMBEDDED_WORKER") == "0")
     parser.add_argument("--skip-migrations", action="store_true", default=os.environ.get("MAIL_CORE_SKIP_MIGRATIONS") == "1")
