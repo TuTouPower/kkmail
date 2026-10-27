@@ -19,6 +19,15 @@ export default function ColumnResize({
   const onDragRef = useRef(onDrag)
   const onDragEndRef = useRef(onDragEnd)
   const activeDragEndRef = useRef<(() => void) | null>(null)
+  // A329: a keyboard resize sequence (initial keydown + auto-repeat
+  // keydowns) must fire onDragEnd only once, when the sequence ends.
+  const keyboardActiveRef = useRef(false)
+
+  const endKeyboardResize = useCallback(() => {
+    if (!keyboardActiveRef.current) return
+    keyboardActiveRef.current = false
+    onDragEndRef.current?.()
+  }, [])
 
   useEffect(() => {
     onDragRef.current = onDrag
@@ -76,15 +85,22 @@ export default function ColumnResize({
       tabIndex={0}
       onPointerDown={onPointerDown}
       onKeyDown={(e) => {
+        // A329: keyboard path goes through the same refs as the pointer
+        // path (no stale prop closures), and auto-repeat keydowns keep
+        // resizing without re-firing onDragEnd.
         if (e.key === 'ArrowLeft') {
-          onDrag(-8)
-          onDragEnd?.()
+          keyboardActiveRef.current = true
+          onDragRef.current(-8)
         }
         if (e.key === 'ArrowRight') {
-          onDrag(8)
-          onDragEnd?.()
+          keyboardActiveRef.current = true
+          onDragRef.current(8)
         }
       }}
+      onKeyUp={(e) => {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') endKeyboardResize()
+      }}
+      onBlur={endKeyboardResize}
     />
   )
 }

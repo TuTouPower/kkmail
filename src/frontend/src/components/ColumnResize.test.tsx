@@ -12,6 +12,12 @@ function key(el: Element, k: string) {
   })
 }
 
+function keyEvent(el: Element, type: 'keydown' | 'keyup', k: string, repeat = false) {
+  act(() => {
+    el.dispatchEvent(new KeyboardEvent(type, { key: k, bubbles: true, repeat }))
+  })
+}
+
 describe('ColumnResize', () => {
   it('renders an accessible, focusable vertical separator', async () => {
     const { container } = await render(<ColumnResize ariaLabel="调整列宽" value={300} min={180} max={420} onDrag={() => {}} />)
@@ -34,6 +40,23 @@ describe('ColumnResize', () => {
     key(handle, 'ArrowRight')
     key(handle, 'Enter')
     expect(onDrag.mock.calls).toEqual([[-8], [8], [8]])
+  })
+
+  it('keyboard long-press resizes on repeats but fires onDragEnd only once on keyup (A329)', async () => {
+    const onDrag = vi.fn()
+    const onDragEnd = vi.fn()
+    const { container } = await render(<ColumnResize ariaLabel="resize" value={300} min={180} max={420} onDrag={onDrag} onDragEnd={onDragEnd} />)
+    const handle = container.querySelector('[role="separator"]')!
+    keyEvent(handle, 'keydown', 'ArrowRight')
+    keyEvent(handle, 'keydown', 'ArrowRight', true)
+    keyEvent(handle, 'keydown', 'ArrowRight', true)
+    expect(onDrag.mock.calls).toEqual([[8], [8], [8]])
+    expect(onDragEnd).not.toHaveBeenCalled()
+    keyEvent(handle, 'keyup', 'ArrowRight')
+    expect(onDragEnd).toHaveBeenCalledTimes(1)
+    // A stray extra keyup must not fire a second end.
+    keyEvent(handle, 'keyup', 'ArrowRight')
+    expect(onDragEnd).toHaveBeenCalledTimes(1)
   })
 
   it('stops listening on pointercancel and releases capture', async () => {
