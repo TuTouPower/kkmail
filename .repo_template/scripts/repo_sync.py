@@ -1293,11 +1293,20 @@ def _apply_shared_unit(unit: str, decision: str | None, src: Path, changed: set[
 
 
 def _run_tests(consumer: Path) -> bool:
-    r = subprocess.run(
-        list(CONSUMER_TEST_COMMAND), cwd=str(consumer),
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=CONSUMER_TEST_TIMEOUT,
-    )
+    try:
+        r = subprocess.run(
+            list(CONSUMER_TEST_COMMAND), cwd=str(consumer),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=CONSUMER_TEST_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        # 超时与失败同等对待：返回 False 让 cmd_apply 走回滚路径，
+        # 不得让 TimeoutExpired（SubprocessError，非 OSError）裸逃逸跳过回滚。
+        print(
+            f"契约测试超时（>{CONSUMER_TEST_TIMEOUT}s），按失败处理",
+            file=sys.stderr,
+        )
+        return False
     if r.returncode != 0:
         print(r.stdout[-2000:] if r.stdout else "", file=sys.stderr)
         print(r.stderr[-2000:] if r.stderr else "", file=sys.stderr)

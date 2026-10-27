@@ -686,6 +686,15 @@ def test_apply_test_failure_rolls_back_keeps_backup_and_prints_changed(env, monk
     assert rs.read_state()["last_synced_commit"] is None
 
 
+def test_run_tests_timeout_returns_false_not_raise(env, monkeypatch):
+    """A23: 契约测试超时须返回 False（触发 cmd_apply 回滚），不得裸 TimeoutExpired 逃逸。"""
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="pytest", timeout=rs.CONSUMER_TEST_TIMEOUT)
+
+    monkeypatch.setattr(rs.subprocess, "run", _raise_timeout)
+    assert rs._run_tests(env["consumer"]) is False
+
+
 def test_sync_file_rejects_directory_target(env):
     """目标同名目录：拒绝写入目录内部，保持目录内容原样。"""
     src, consumer = env["src"], env["consumer"]
