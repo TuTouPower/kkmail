@@ -133,11 +133,37 @@ def _backup_destination_lock(dest: Path) -> Iterator[None]:
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise RuntimeError(f"refusing non-file backup lock: {lock_path}")
+        # Bounded wait: poll with LOCK_NB instead of blocking forever, log
+        # while contended, and raise a clear error once the timeout expires
+        # (MAIL_CORE_BACKUP_LOCK_TIMEOUT, default 300s).
+        timeout = _timeout_from_env("MAIL_CORE_BACKUP_LOCK_TIMEOUT")
+        deadline = time.monotonic() + timeout
+        next_log_at = 0.0
+
+        def _wait_or_raise() -> None:
+            nonlocal next_log_at
+            now = time.monotonic()
+            if now >= deadline:
+                raise RuntimeError(
+                    f"timed out after {timeout:g}s waiting for backup destination lock: {lock_path}"
+                )
+            if now >= next_log_at:
+                log.info("waiting for backup destination lock: %s", lock_path)
+                next_log_at = now + 10.0
+            time.sleep(min(0.05, max(0.0, deadline - now)))
+
         if os.name != "nt":
             os.fchmod(fd, 0o600)
             import fcntl
 
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                        raise
+                    _wait_or_raise()
             try:
                 yield
             finally:
@@ -155,7 +181,7 @@ def _backup_destination_lock(dest: Path) -> Iterator[None]:
                 except OSError as exc:
                     if exc.errno not in (errno.EACCES, errno.EDEADLK, errno.EAGAIN):
                         raise
-                    time.sleep(0.05)
+                    _wait_or_raise()
             try:
                 yield
             finally:

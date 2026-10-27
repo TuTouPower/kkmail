@@ -1058,6 +1058,64 @@ def test_validate_restore_destination_matrix(tmp_path):
     assert _validate_restore_destination(valid_empty) == valid_empty.resolve()
 
 
+def test_backup_destination_lock_times_out_when_held(tmp_path, monkeypatch, caplog):
+    import logging
+    import time
+
+    import mail_core.backup.package as pkg
+
+    monkeypatch.setenv("MAIL_CORE_BACKUP_LOCK_TIMEOUT", "0.3")
+    dest = tmp_path / "locked-backup"
+    held = pkg._backup_destination_lock(dest)
+    held.__enter__()
+    try:
+        started = time.monotonic()
+        with caplog.at_level(logging.INFO, logger="mail_core.backup"):
+            with pytest.raises(RuntimeError, match="timed out.*backup destination lock"):
+                with pkg._backup_destination_lock(dest):
+                    pass
+        assert time.monotonic() - started < 5
+        # While waiting, the contention must be observable in the log.
+        assert any(
+            "backup destination lock" in record.getMessage()
+            for record in caplog.records
+        )
+    finally:
+        held.__exit__(None, None, None)
+
+
+def test_backup_destination_lock_acquires_after_release_within_timeout(
+    tmp_path, monkeypatch
+):
+    import threading
+
+    import mail_core.backup.package as pkg
+
+    monkeypatch.setenv("MAIL_CORE_BACKUP_LOCK_TIMEOUT", "5")
+    dest = tmp_path / "contended-backup"
+    held = pkg._backup_destination_lock(dest)
+    held.__enter__()
+    acquired = threading.Event()
+    errors: list[BaseException] = []
+
+    def contender():
+        try:
+            with pkg._backup_destination_lock(dest):
+                acquired.set()
+        except BaseException as exc:  # noqa: BLE001 - recorded for assertion
+            errors.append(exc)
+
+    thread = threading.Thread(target=contender)
+    thread.start()
+    try:
+        assert not acquired.wait(timeout=0.2)
+    finally:
+        held.__exit__(None, None, None)
+    assert acquired.wait(timeout=3)
+    thread.join(timeout=3)
+    assert errors == []
+
+
 def test_run_backup_logs_warning_when_last_success_write_fails(
     tmp_path, monkeypatch, caplog
 ):
