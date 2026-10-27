@@ -129,12 +129,22 @@ class PasswordChangeIn(BaseModel):
 class PasswordChangeOut(BaseModel):
     ok: bool = True
     success: bool = True
+    # A105: changing the password invalidates *every* session (epoch bump),
+    # including the caller's own, so the client must log in again.
+    requires_relogin: bool = True
 
 
 @router.post("/password", response_model=PasswordChangeOut)
-def change_password(body: PasswordChangeIn, _principal: AuthPrincipal = Depends(require_auth)) -> PasswordChangeOut:
+def change_password(
+    body: PasswordChangeIn,
+    response: Response,
+    _principal: AuthPrincipal = Depends(require_auth),
+) -> PasswordChangeOut:
     try:
         change_login_password(current=body.current_login_password, new=body.login_password)
     except AuthConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # The session cookie the caller holds is already invalid; clear it so
+    # the client does not keep presenting a dead session.
+    _clear_session_cookie(response)
     return PasswordChangeOut()

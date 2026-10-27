@@ -2127,6 +2127,11 @@
             "title": "Ok",
             "type": "boolean"
           },
+          "requires_relogin": {
+            "default": true,
+            "title": "Requires Relogin",
+            "type": "boolean"
+          },
           "success": {
             "default": true,
             "title": "Success",
