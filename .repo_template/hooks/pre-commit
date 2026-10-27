@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""pre-commit hook：本次 commit 涉及的 .md 用 md_kx 格式化并重新暂存。
+"""pre-commit hook：本机绝对路径门禁 + 本次 commit 涉及的 .md 格式化。
 
-复用 md_format.py 库函数（选文件、黑名单、缺二进制）。staged 无 .md 时快速
-放行；有 .md 但格式化失败（含 md_kx 缺失）阻断提交并引导安装。工作区与
-index 不一致时拒绝（避免 git add 把未暂存 hunk 打进本次 commit）。
+路径门禁（A32）：暂存 diff 的新增行命中带具体用户名的本机用户目录绝对
+路径（macOS / Linux 用户目录前缀加真实用户名）时阻断提交，避免维护者
+本机路径随产物入库；仓库相对表述与占位写法不受影响。只查新增行，存量
+内容与未改动行不回溯。
+
+.md 格式化复用 md_format.py 库函数（选文件、黑名单、缺二进制）。staged
+无 .md 时快速放行；有 .md 但格式化失败（含 md_kx 缺失）阻断提交并引导
+安装。工作区与 index 不一致时拒绝（避免 git add 把未暂存 hunk 打进本次
+commit）。
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +26,64 @@ import md_format  # noqa: E402
 
 # git pre-commit 保证 cwd 为仓库根；用 cwd 而非 __file__ 推导，消费仓/测试仓也正确。
 md_format.REPO_ROOT = Path.cwd()
+
+# 路径门禁的匹配式用字符类拼写前缀，避免门禁自身源码被自检命中。
+_LOCAL_PATH_RE = re.compile(r"/(?:[U]sers|[h]ome)/([^/\s\"'`<>|;]+)")
+# 泛指 / 占位用户名：示例与测试夹具中的写法不视为真实本机路径。
+_PLACEHOLDER_NAMES = frozenset({
+    "u", "user", "username", "example", "someone", "test", "testuser",
+    "local-path", "name",
+})
+# 命中段含模板变量、正则元字符或省略号时是占位 / 模式表述，不是字面路径。
+_PLACEHOLDER_CHARS = frozenset("$%{}[]()\\^*+?…")
+
+
+def _is_placeholder_name(name: str) -> bool:
+    """用户名段是否为占位 / 泛指表述（而非具体本机用户名）。"""
+    if len(name) < 2 or name.lower() in _PLACEHOLDER_NAMES:
+        return True
+    if name.startswith("your-") or name.startswith("your_"):
+        return True
+    return any(char in _PLACEHOLDER_CHARS for char in name)
+
+
+def _local_path_hits_in_line(text: str) -> list[str]:
+    """一行新增内容中命中的本机绝对路径字面（去掉尾随标点后返回）。"""
+    hits: list[str] = []
+    for match in _LOCAL_PATH_RE.finditer(text):
+        name = match.group(1)
+        if _is_placeholder_name(name):
+            continue
+        hits.append(match.group(0).rstrip(".,:）)】]"))
+    return hits
+
+
+def staged_local_path_hits() -> list[str]:
+    """暂存 diff 新增行中的本机绝对路径命中，格式 `路径: 行内容`。
+
+    只看 `git diff --cached` 的 `+` 行（不含 `+++` 文件头），存量内容、
+    上下文行与删除行一律不查，避免对已入库内容误报。
+    """
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--unified=0", "--no-color",
+         "--diff-filter=ACMR"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=30,
+    )
+    if result.returncode != 0:
+        print(f"pre-commit: git diff --cached 失败：{result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    hits: list[str] = []
+    current = ""
+    for line in result.stdout.splitlines():
+        if line.startswith("+++ "):
+            current = line[4:].removeprefix("b/").strip()
+            continue
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+        for hit in _local_path_hits_in_line(line[1:]):
+            hits.append(f"{current}: {hit}（行：{line[1:].strip()[:120]}）")
+    return hits
 
 
 def staged_md() -> list[str]:
@@ -55,6 +120,18 @@ def dirty_vs_index(rels: list[str]) -> list[str]:
 
 
 def main() -> int:
+    path_hits = staged_local_path_hits()
+    if path_hits:
+        print(
+            "pre-commit: 以下暂存新增行含本机绝对路径（含具体用户名），拒绝提交：\n"
+            + "\n".join(path_hits),
+            file=sys.stderr,
+        )
+        print(
+            "提示：改用仓库相对路径，或 $REPO / $WORKTREES / <local-path> 等占位表述后重新暂存。",
+            file=sys.stderr,
+        )
+        return 1
     rels = staged_md()
     if not rels:
         return 0
