@@ -11,6 +11,14 @@ import re
 MAX_ERROR_CHARS = 500
 
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # A120: an Authorization header value is secret regardless of scheme
+    # (Bearer/Basic/Digest/Token/MAC/Negotiate/raw) — drop the whole value.
+    (re.compile(r"(?i)\b(authorization\s*:\s*).+"), r"\1[REDACTED]"),
+    # A120: Cookie / Set-Cookie header values are session material — drop
+    # the entire header value, not just the first pair.
+    (re.compile(r"(?i)\b((?:set-)?cookie\s*:\s*).+"), r"\1[REDACTED]"),
+    # A120: JWTs (header.payload.signature, header always base64url "eyJ…").
+    (re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), "[REDACTED]"),
     (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9\-._~+/]+=*"), r"\1 [REDACTED]"),
     (
         re.compile(
