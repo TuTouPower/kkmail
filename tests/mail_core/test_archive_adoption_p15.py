@@ -448,6 +448,22 @@ def test_a142_rebind_decrements_old_blob_ref_count_and_marks_gc_eligible():
     assert old_blob.gc_eligible_at is not None, "old blob at ref_count 0 must become GC-eligible"
 
 
+# ---------------------------------------------------------------------------
+# A235: production comments must be self-contained, not bare internal codes
+# ---------------------------------------------------------------------------
+
+
+def test_a235_archive_comments_have_no_undefined_internal_codes():
+    from pathlib import Path
+
+    src = Path(archive_mod.__file__).read_text(encoding="utf-8")
+    for token in (
+        "(A25)", "(A35)", "A35:", "A26:", "A38:", "B4:", "(R18)",
+        "V4-01", "V2-30", "R08", "repair design", "design §", "architecture §",
+    ):
+        assert token not in src, f"undefined internal reference {token!r} left in archive.py"
+
+
 def test_a27_normal_message_under_limits_still_parses(monkeypatch):
     from mail_core.blobs.archive import parse_mime_content
 

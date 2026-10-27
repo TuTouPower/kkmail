@@ -1,4 +1,4 @@
-"""Bounded MIME archive scheduler (architecture §8).
+"""Bounded MIME archive scheduler.
 
 Never pre-creates millions of job rows; selects a limited batch each run.
 """
@@ -111,7 +111,7 @@ class MimeParseError(RuntimeError):
 
 @dataclass(frozen=True)
 class ArchiveClaim:
-    """One archive execution's ownership token (repair design §4.1).
+    """One archive execution's ownership token.
 
     Every success / error / quota-pause / release / heartbeat write for an
     in-flight archive takes this object; ownership is never judged by
@@ -184,7 +184,7 @@ def settle_archive_claim(
     error: BaseException | str | None = None,
     account_id: uuid.UUID | None = None,
 ) -> bool:
-    """Unified failure / quota / release settlement for one claim (design §4.2).
+    """Unified failure / quota / release settlement for one claim.
 
     Locks the archive-state row, revalidates (state, owner, revision,
     remote_id) and only then writes. A claim that is no longer current is
@@ -814,7 +814,8 @@ def run_archive_batch(
     payload = payload or {}
     if traffic_class is None:
         # Routine batches are background; a batch targeted at one
-        # message_id is an on-demand foreground fetch (design §7).
+        # message_id is an on-demand foreground fetch, because a user
+        # is waiting on that specific message.
         traffic_class = traffic_class_for_job(JobType.ARCHIVE_MIME_BATCH.value, payload=payload)
     try:
         limit, recent_days, soft_i, hard_i = _resolve_archive_config(payload)
@@ -866,11 +867,12 @@ def run_archive_batch(
             session.commit()
         return {"status": "paused_quota", "used_bytes": quota.used_bytes}
 
-    # Capacity is below recovery threshold — automatically resume quota-paused archives (A25)
+    # Capacity is below the recovery threshold, so quota-paused
+    # archives can be resumed automatically.
     resume_quota_paused_archives(account_id=account_id, limit=limit)
 
     # Short claim transaction: revision is incremented and committed before
-    # any network I/O (design §4.1 step 1).
+    # any network I/O, so no row locks are held across the fetch.
     with Session() as session:
         raw_claims = claim_archive_batch(
             session,
@@ -968,7 +970,7 @@ def run_archive_batch(
             done_ids.add(mid)
             continue
 
-        # Incremental quota check: avoid per-message full disk walk (V4-01)
+        # Incremental quota check: avoid a per-message full disk walk.
         soft_exceeded = soft_i is not None and current_used_bytes >= soft_i
         hard_exceeded = hard_i is not None and current_used_bytes >= hard_i
         if soft_exceeded or hard_exceeded:
@@ -1006,7 +1008,7 @@ def run_archive_batch(
                     try:
                         p.open_session()
                     except Exception:
-                        # B4: a failed handshake must not poison the cache
+                        # A failed handshake must not poison the cache
                         # (the unconnected provider would fail every fetch),
                         # and CAPACITY_ERRORS must reach the outer handler's
                         # batch capacity settlement instead of being
@@ -1031,7 +1033,7 @@ def run_archive_batch(
                 done_ids.update(c.message_id for c in affected)
                 continue
             except Exception as exc:
-                # Provider construction failure (R18): persist the sanitized
+                # Provider construction failure: persist the sanitized
                 # error through the unified settlement for every still-active
                 # claim of this account instead of silently reverting to
                 # pending; other accounts in the batch continue.
@@ -1099,8 +1101,9 @@ def run_archive_batch(
             continue
 
         # MIME parsing and attachment digest computation happen OUTSIDE the
-        # publish transaction (design §4.1 step 2). A parse failure keeps the
-        # raw MIME plus whatever partial results the parser produced.
+        # publish transaction, so no row locks are held while parsing.
+        # A parse failure keeps the raw MIME plus whatever partial
+        # results the parser produced.
         try:
             plain_text, html_text, parsed_attachments = parse_mime_content(mime)
             parse_err = None
@@ -1150,7 +1153,7 @@ def run_archive_batch(
                     }
                 s_res.commit()
 
-        # Publish transaction (design §4.1 steps 3-4): lock Message ->
+        # Publish transaction: lock Message ->
         # MessageArchiveState FOR UPDATE, revalidate the claim, only then
         # take quota/digest locks (digests in stable order) and atomically
         # save blob refs, body, attachments, archive state and Outbox event.
@@ -1173,7 +1176,7 @@ def run_archive_batch(
                 if res_id is not None:
                     release_quota_reservation(session, res_id)
 
-                # A35: digest cross-process locks coordinate publish vs GC.
+                # Digest cross-process locks coordinate publish vs GC.
                 # All digests are locked in stable order, and never while
                 # waiting on message/archive-state rows (already held).
                 for digest in sorted({mime_digest, *attachment_digests}):
@@ -1219,8 +1222,9 @@ def run_archive_batch(
                     body.updated_at = datetime.now(timezone.utc)
                 session.flush()
 
-                # A26: 正文归档事务同步更新 FTS 索引
-                # 若因元数据增量缺陷导致发件人或主题缺失，自动从 MIME 报头回填
+                # The body archive transaction also updates the FTS index.
+                # If incremental metadata sync left the sender or subject
+                # missing, backfill them from the MIME headers here.
                 if msg_record is not None and (not msg_record.from_address or not msg_record.subject):
                     try:
                         import email.utils
@@ -1296,7 +1300,7 @@ def run_archive_batch(
                                 session.flush()
 
                             if pid in existing_atts:
-                                # A38: 保护已有 UUID
+                                # Preserve the existing attachment row (and its UUID).
                                 attachment = existing_atts[pid]
                                 if attachment.blob_id != att_blob.id:
                                     old_blob_id = attachment.blob_id
@@ -1315,7 +1319,7 @@ def run_archive_batch(
                                 attachment.content_id = att_info["content_id"]
                                 attachment.is_inline = att_info["is_inline"]
                             else:
-                                # A38: 稳定 MIME part 身份入库
+                                # Store the attachment under its stable MIME part identity.
                                 attachment = Attachment(
                                     message_id=mid,
                                     part_id=pid,
@@ -1363,7 +1367,7 @@ def run_archive_batch(
             except Exception as store_exc:
                 # Storage I/O failure: roll back the derived transaction,
                 # then record the archive error under the still-valid claim
-                # in a separate short transaction (design §4.2).
+                # in a separate short transaction.
                 session.rollback()
                 log.warning("archive storage error for message %s: %s", mid, safe_error(store_exc))
                 publish_outcome = "storage_error"
@@ -1432,7 +1436,7 @@ def run_archive_batch(
                     priority=60,
                 )
         elif failed > 0:
-            # Batch fully failed: continue scheduling retries with backoff (V2-30 / R08)
+            # Batch fully failed: continue scheduling retries with backoff.
             session.add(
                 OutboxEvent(
                     event_type=OutboxEventType.ARCHIVE_PROGRESS.value,
