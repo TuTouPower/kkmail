@@ -21,12 +21,23 @@ from mail_core.blobs.access import (
 )
 from mail_core.blobs.store import BlobStore, InvalidBlobDigest
 from mail_core.mail.storage.models import Attachment, MessageBlob
-from mail_core.security.defaults import REMOTE_IMAGES_DEFAULT_ON, require_encrypted_volume_docs
+from mail_core.security.defaults import require_encrypted_volume_docs
 
 
-def test_remote_images_default_off():
-    assert REMOTE_IMAGES_DEFAULT_ON is False
-    assert "encrypted" in require_encrypted_volume_docs().lower()
+def test_remote_images_dead_constant_removed_and_volume_doc_path_current():
+    # A220: REMOTE_IMAGES_DEFAULT_ON had no consumer anywhere (only a
+    # re-export and this test), so the constant is deleted — this replaces
+    # the old test that asserted its value. The encrypted-volume text must
+    # point at the living blueprint doc, not the archived architecture file.
+    import mail_core.security as security_pkg
+    import mail_core.security.defaults as defaults
+
+    assert not hasattr(defaults, "REMOTE_IMAGES_DEFAULT_ON")
+    assert not hasattr(security_pkg, "REMOTE_IMAGES_DEFAULT_ON")
+    text = require_encrypted_volume_docs()
+    assert "encrypted" in text.lower()
+    assert "docs/blueprint/architecture.md" in text
+    assert "docs/mail-core-architecture.md" not in text
 
 
 @pytest.mark.parametrize(
