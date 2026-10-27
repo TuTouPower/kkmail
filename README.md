@@ -23,7 +23,7 @@ export PYTHONPATH=src
 python3 -m mail_core --data-dir ./.kkmail-data
 ```
 
-`python3 -m mail_core --data-dir` 首次运行会在 `<data-dir>/secrets/` 自动生成所需密钥，并在 `<data-dir>/initial-password.txt` 写入一次性初始登录密码。
+`python3 -m mail_core --data-dir` 首次运行会在 `<data-dir>/secrets/` 自动生成所需密钥，并在 `<data-dir>/initial-password.txt` 写入一次性初始登录密码。首次登录后立即改密，改密会自动删除该文件；未改密前按密钥文件同等保护。详见 [docs/guides/security.md](docs/guides/security.md)。
 
 ## 核心安全基线
 
