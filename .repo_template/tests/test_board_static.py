@@ -35,3 +35,18 @@ def test_a224_cat_label_accessor_falls_back_to_backlog():
     assert "badge.textContent = catLabel(n.category)" in src
     assert "catLabel(target.category)" in src
     assert src.count("catLabel(n.category)") >= 2
+
+
+def test_a381_fallback_copy_toasts_on_failure():
+    """A381：execCommand 回退失败（返回 false/抛错）必须 showToast 提示手动复制，
+    不得静默吞掉（deprecated API 在非安全上下文下常静默失败）。"""
+    src = _src()
+    assert re.search(r"ok = document\.execCommand\('copy'\)", src)
+    assert "showToast('复制失败，请手动复制')" in src
+
+
+def test_a381_footer_documents_doc_cache_invalidation():
+    """A381：sheet 文档缓存会话内不失效，须在页脚写明失效方式
+    （chain-recalc/刷新为整页重载，缓存随之清空）。"""
+    src = _src()
+    assert "文档缓存随整页刷新失效" in src

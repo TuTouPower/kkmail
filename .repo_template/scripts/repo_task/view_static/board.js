@@ -108,8 +108,10 @@ function fallbackCopy(text) {
   ta.value = text;
   document.body.appendChild(ta);
   ta.select();
-  try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+  var ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
   document.body.removeChild(ta);
+  if (!ok) showToast('复制失败，请手动复制');
 }
 
 function showToast(msg) {
@@ -991,7 +993,7 @@ function renderFooter() {
     (plan ? ' · 推荐 ' + plan.chains.length + ' 条链' : ''),
   ]));
   var right = el('span', { class: 'right' }, [
-    '只读看板;链推荐后端计算;刷新或「重新计算」更新',
+    '只读看板;链推荐后端计算;刷新或「重新计算」更新(文档缓存随整页刷新失效)',
   ]);
   footer.appendChild(right);
 }
