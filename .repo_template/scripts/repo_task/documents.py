@@ -32,7 +32,8 @@ def _unquote(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("\"", "'"):
         inner = value[1:-1]
         if value[0] == "'":
-            return inner
+            # YAML 单引号标量以 '' 表示字面单引号，须还原（A239）
+            return inner.replace("''", "'")
         out, i = [], 0
         while i < len(inner):
             if inner[i] == "\\" and i + 1 < len(inner):
@@ -48,7 +49,15 @@ def _unquote(value: str) -> str:
     return value
 
 def parse_front_matter_text(text: str, *, source: str) -> tuple[dict, str]:
-    """从文本返回 (front matter dict, 正文)。"""
+    """从文本返回 (front matter dict, 正文)。
+
+    这是 YAML 的受限子集，不是完整 YAML 解析器（A239 子集语义）：
+    - 每行一个 `key: value`；重复键报错，不静默覆盖。
+    - 值支持双引号（转义见 _quote/_unquote）与单引号（'' 还原为 '）。
+    - 未引号值仅当 `#` 前为空格、且值不以引号或方括号开头时，才把
+      ` #...` 视为行内注释剥离；以 `[` 开头的值整体保留，避免把
+      列表式值中的 ` #` 误截断。
+    """
     if not text.startswith("---"):
         raise ctx.TaskDataError(f"{source}: task.md 必须以 YAML front matter (---) 开头")
     end = text.find("\n---", 3)
@@ -61,11 +70,15 @@ def parse_front_matter_text(text: str, *, source: str) -> tuple[dict, str]:
         if not line or line.startswith("#") or ":" not in line:
             continue
         key, _, val = line.partition(":")
+        key = key.strip()
+        if key in fm:
+            raise ctx.TaskDataError(f"{source}: front matter 重复键 {key!r}")
         val = val.strip()
-        # 未加引号的值剥掉行内注释（# 前须有空格），防照搬文档示例后值被污染
-        if val and val[0] not in ("\"", "'"):
+        # 未加引号的值剥掉行内注释（# 前须有空格），防照搬文档示例后值被污染；
+        # 以方括号开头的值不剥离（见 docstring 子集语义）。
+        if val and val[0] not in ("\"", "'", "["):
             val = val.split(" #", 1)[0].rstrip()
-        fm[key.strip()] = _unquote(val)
+        fm[key] = _unquote(val)
     return fm, body
 
 def parse_front_matter(path: Path) -> tuple[dict, str]:

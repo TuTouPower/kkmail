@@ -43,6 +43,35 @@ def test_dumped_front_matter_with_newline_title_stays_single_line_and_parses_bac
     assert "injected" not in parsed
 
 
+def test_single_quoted_value_restores_doubled_quote_escape():
+    fm, _ = parse_front_matter_text(
+        "---\ntitle: 'it''s fine'\n---\nbody", source="test"
+    )
+    assert fm["title"] == "it's fine"
+    assert _unquote("'a''b'") == "a'b"
+
+
+def test_duplicate_front_matter_key_is_an_error():
+    with pytest.raises(ctx.TaskDataError, match="重复键"):
+        parse_front_matter_text(
+            "---\ntitle: one\ntitle: two\n---\nbody", source="test"
+        )
+
+
+def test_unquoted_bracket_value_keeps_hash_content():
+    fm, _ = parse_front_matter_text(
+        "---\nnote: [a] # not a comment tail\n---\nbody", source="test"
+    )
+    assert fm["note"] == "[a] # not a comment tail"
+
+
+def test_unquoted_plain_value_still_strips_spaced_comment():
+    fm, _ = parse_front_matter_text(
+        "---\nnote: plain value # trailing comment\n---\nbody", source="test"
+    )
+    assert fm["note"] == "plain value"
+
+
 def test_add_edit_entry_rejects_newlines_in_title_and_note():
     from repo_task import lifecycle
 
