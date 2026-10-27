@@ -35,6 +35,22 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _read_log_tail(path: Path, lines: int = 20) -> str:
+    """Last `lines` lines of a log file, or a placeholder when unavailable."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "(unavailable)"
+    tail = text.splitlines()[-lines:]
+    return "\n".join(tail) if tail else "(empty)"
+
+
+def _report_log_tails(api_log_path: Path, worker_log_path: Path) -> None:
+    """Echo api/worker log tails on failure paths (A280)."""
+    for label, path in (("API", api_log_path), ("Worker", worker_log_path)):
+        LOG.error("%s log tail (%s):\n%s", label, path, _read_log_tail(path))
+
+
 def _wait_for_api_ready(base_url: str, proc) -> bool:
     """Poll /health until ready, process exit, or the ready deadline."""
     import urllib.request
@@ -156,8 +172,10 @@ def main():
             MAIL_CORE_LOG_LEVEL="INFO",
         )
 
-        api_log = (logs_dir / f"api_{run_id}.log").open("w", encoding="utf-8")
-        worker_log = (logs_dir / f"worker_{run_id}.log").open("w", encoding="utf-8")
+        api_log_path = logs_dir / f"api_{run_id}.log"
+        worker_log_path = logs_dir / f"worker_{run_id}.log"
+        api_log = api_log_path.open("w", encoding="utf-8")
+        worker_log = worker_log_path.open("w", encoding="utf-8")
 
         # 3. Alembic upgrade
         LOG.info("Running database migrations...")
@@ -222,7 +240,13 @@ def main():
                 api_proc = None
 
         if not ready:
-            raise RuntimeError(f"API server failed to become ready on {base_url}")
+            api_log.flush()
+            worker_log.flush()
+            _report_log_tails(api_log_path, worker_log_path)
+            raise RuntimeError(
+                f"API server failed to become ready on {base_url} "
+                f"(api log: {api_log_path}; worker log: {worker_log_path})"
+            )
         LOG.info("Real FastAPI server ready at %s", base_url)
 
         # 7. Run Playwright E2E
@@ -246,6 +270,9 @@ def main():
         res = subprocess.run(pw_cmd, cwd=ROOT / "src/frontend", env=test_env)
         if res.returncode != 0:
             LOG.error("Playwright E2E tests failed with code %d", res.returncode)
+            api_log.flush()
+            worker_log.flush()
+            _report_log_tails(api_log_path, worker_log_path)
             sys.exit(res.returncode)
         LOG.info("Playwright Full Stack E2E suite completed successfully.")
 
