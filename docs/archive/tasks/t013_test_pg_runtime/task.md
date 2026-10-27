@@ -70,3 +70,8 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
 - 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
 - commit 锚点：实现提交 `07d178cbe369e52681a3b6533bb8164741112579`（正文收尾原记 `8f93e8e` 为历史重写前哈希，同标题提交）；diff_anchor 补记为该实现提交的父提交 `f268461776e218f605ba859ad621a6410369a67b`；本批归档提交 `161a6e10`。
 - `docs/archive/tasks_index.json` 已按勘误后的 front matter 重新生成（t013 条目）。
+
+## 归档完整性补记（2026-10-27，A243）
+
+- 本目录无 `handoff.json`：按用户授权不生成工具链 handoff（与收尾报告 AC 证据行原述一致，此处提至显处重申）。
+- 本目录无独立 `review_test.md`：t013 未单独做 test review；t014 对当前共享测试入口与隔离再次完成 code/test review，覆盖本 task 的测试面，事实见 `review_code.md`「后续验收补证」与本文件收尾报告的 review 行，不另补造 review 文件。
