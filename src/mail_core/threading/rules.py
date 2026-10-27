@@ -21,10 +21,19 @@ _BARE_RE = re.compile(r"([^\s<>]+@[^\s<>]+)")
 # column bound is enforced here (A12).
 SUBJECT_NORM_MAX_LENGTH = 998
 
+# Counted reply/forward prefixes some clients emit, e.g. "Re[2]:" (A298).
+_COUNTED_PREFIX_RE = re.compile(r"(?:re|fw|fwd|aw|sv)\[\d+\]:", re.IGNORECASE)
+
 
 def normalize_subject(subject: str) -> str:
-    s = subject or ""
+    # A fullwidth colon (common from CJK mail clients) counts as a colon,
+    # so "Re：" / "回复：" strip exactly like their ASCII forms (A298).
+    s = (subject or "").replace("：", ":")
     while True:
+        counted = _COUNTED_PREFIX_RE.match(s)
+        if counted:
+            s = s[counted.end() :].lstrip()
+            continue
         low = s.lower()
         stripped = False
         for prefix in ("re:", "fw:", "fwd:", "回复:", "转发:", "aw:", "sv:"):
