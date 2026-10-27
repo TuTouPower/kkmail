@@ -209,3 +209,85 @@ def test_a187_responses_under_limit_still_parse(monkeypatch):
         "GET", "https://graph.microsoft.com/v1.0/me/messages/m1/$value", _sleep_fn=lambda _s: None
     )
     assert result == {"raw_bytes": b"mime-body"}
+
+
+# --- A249: token endpoint 429/503 must not be treated as plain failure ----
+
+
+def _http_error(code, body=b"{}", headers=None):
+    import io
+    import urllib.error
+
+    return urllib.error.HTTPError(
+        "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        code,
+        "err",
+        headers or {},
+        io.BytesIO(body),
+    )
+
+
+def test_a249_token_post_429_raises_rate_limited_with_retry_after(monkeypatch):
+    import urllib.request
+
+    from mail_core.providers.http import RateLimitedError
+    from mail_core.providers.oauth import default_urllib_token_post
+
+    calls = []
+
+    def limited(req, timeout=30):
+        calls.append(req)
+        raise _http_error(429, b'{"error":"slow_down"}', {"Retry-After": "30"})
+
+    monkeypatch.setattr(urllib.request, "urlopen", limited)
+    with pytest.raises(RateLimitedError) as caught:
+        default_urllib_token_post("POST", _TOKEN_URI, {"grant_type": "refresh_token"}, _sleep_fn=lambda _s: None)
+    assert caught.value.status == 429
+    assert caught.value.retry_after_seconds == 30.0
+    assert len(calls) == 1
+
+
+def test_a249_token_post_503_retries_then_succeeds(monkeypatch):
+    import urllib.request
+
+    from mail_core.providers.oauth import default_urllib_token_post
+
+    calls = []
+    sleeps = []
+
+    def flaky(req, timeout=30):
+        calls.append(req)
+        if len(calls) < 3:
+            raise _http_error(503, b'{"error":"unavailable"}', {"Retry-After": "2"})
+        return _FakeHttpResponse(b'{"access_token": "at-ok", "expires_in": 3600}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky)
+    result = default_urllib_token_post(
+        "POST", _TOKEN_URI, {"grant_type": "refresh_token"}, _sleep_fn=sleeps.append
+    )
+    assert result["access_token"] == "at-ok"
+    assert len(calls) == 3
+    assert sleeps == [2.0, 2.0]
+
+
+def test_a249_token_post_503_exhausts_retries_as_provider_error(monkeypatch):
+    import urllib.request
+
+    from mail_core.providers.http import ProviderHttpError
+    from mail_core.providers.oauth import default_urllib_token_post
+
+    calls = []
+    sleeps = []
+
+    def down(req, timeout=30):
+        calls.append(req)
+        raise _http_error(503, b'{"error":"unavailable"}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", down)
+    with pytest.raises(ProviderHttpError) as caught:
+        default_urllib_token_post(
+            "POST", _TOKEN_URI, {"grant_type": "refresh_token"}, _sleep_fn=sleeps.append
+        )
+    assert caught.value.status == 503
+    assert len(calls) == 4  # initial + 3 retries, same as GET strategy
+    assert sleeps == [1.0, 2.0, 3.0]

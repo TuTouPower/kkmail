@@ -254,6 +254,7 @@ def default_urllib_token_post(
     timeout: float = 30.0,
     permit_factory: Any = None,
     traffic_class: Any = "foreground",
+    _sleep_fn: Any = None,
 ) -> dict[str, Any]:
     """Stdlib token POST (used when no injectable http_post is given at runtime).
 
@@ -261,26 +262,53 @@ def default_urllib_token_post(
     connection permit.  Callers going through :class:`OAuthTokenClient`
     must not pass a factory here as well — the client already scopes the
     whole refresh call, and permits are never nested.
+
+    A249: 429 maps to :class:`RateLimitedError` (with Retry-After parsed),
+    and 503/504 are retried with the same bounded strategy as GET in
+    :func:`urllib_json_request` — a token refresh POST is an idempotent
+    grant, so limited replay is safe. Retry waits hold no permit.
     """
     import json
+    import time as _time
     import urllib.error
     import urllib.request
 
     from mail_core.providers.connection_slots import permit_scope
 
+    sleep = _sleep_fn or _time.sleep
+    max_retries = 3
     body = urlencode(form).encode("utf-8")
-    req = urllib.request.Request(url, data=body, method=method or "POST")
-    for k, v in (headers or {}).items():
-        req.add_header(k, v)
-    try:
-        with permit_scope(permit_factory, traffic_class):
-            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — operator-configured token URI
-                return json.loads(_read_response_limited(resp, MAX_JSON_RESPONSE_BYTES).decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        raise ProviderHttpError(raw or str(exc), status=exc.code, body=raw, headers=dict(exc.headers or {})) from exc
-    except urllib.error.URLError as exc:
-        raise ProviderHttpError(f"token transport error: {exc.reason}", status=None) from exc
+    for attempt in range(1, max_retries + 2):
+        req = urllib.request.Request(url, data=body, method=method or "POST")
+        for k, v in (headers or {}).items():
+            req.add_header(k, v)
+        try:
+            with permit_scope(permit_factory, traffic_class):
+                with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — operator-configured token URI
+                    return json.loads(_read_response_limited(resp, MAX_JSON_RESPONSE_BYTES).decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            hdrs = dict(exc.headers or {})
+            if exc.code == 429:
+                raise RateLimitedError(
+                    raw or str(exc), status=429, body=raw, headers=hdrs
+                ) from exc
+            if exc.code in (503, 504) and attempt <= max_retries:
+                delay = attempt * 1.0
+                retry_after = hdrs.get("Retry-After") or hdrs.get("retry-after")
+                if retry_after:
+                    try:
+                        ra = float(retry_after)
+                        if ra > 0:
+                            delay = min(ra, 10.0)
+                    except (ValueError, TypeError):
+                        pass
+                sleep(delay)
+                continue
+            raise ProviderHttpError(raw or str(exc), status=exc.code, body=raw, headers=hdrs) from exc
+        except urllib.error.URLError as exc:
+            raise ProviderHttpError(f"token transport error: {exc.reason}", status=None) from exc
+    raise AssertionError("unreachable: token POST retry loop fell through")  # pragma: no cover
 
 
 @dataclass
