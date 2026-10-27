@@ -32,6 +32,7 @@ class GcResult:
     skipped_cooloff: int
     paths_to_unlink: tuple[Path, ...] = ()
     would_delete: int = 0  # dry_run candidates; never counted in ``deleted``
+    skipped_invalid: int = 0  # rows whose digest/path failed canonical validation
 
 
 def mark_unreferenced_blobs(session: Session, *, now: datetime | None = None) -> int:
@@ -113,8 +114,10 @@ def sweep_expired_blobs(
 ) -> GcResult:
     """Delete DB rows for blobs past cool-off; return paths for post-commit unlink.
 
-    Does **not** unlink files. Callers must ``session.commit()`` then unlink
-    ``result.paths_to_unlink`` (see ``run_gc_blobs``).
+    Candidates are keyset-paged and each batch's deletions are committed
+    before the next page is read. Does **not** unlink files: unlinking
+    ``result.paths_to_unlink`` is still the caller's phase 2, after this
+    function returns (see ``run_gc_blobs``).
     """
     now = now or datetime.now(timezone.utc)
     root = root or blob_root()
@@ -123,29 +126,64 @@ def sweep_expired_blobs(
     deleted = 0
     would_delete = 0
     skipped = 0
+    skipped_invalid = 0
     paths: list[Path] = []
-    blobs = list(session.scalars(select(MessageBlob).where(MessageBlob.ref_count <= 0)).all())
-    for blob in blobs:
-        age_base = blob.gc_eligible_at or blob.created_at
-        if age_base.tzinfo is None:
-            age_base = age_base.replace(tzinfo=timezone.utc)
-        if now - age_base < cool_off:
-            skipped += 1
-            continue
-        path = root / blob.storage_path
-        if dry_run:
-            would_delete += 1
-            continue
-        paths.append(path)
-        session.delete(blob)
-        deleted += 1
-    session.flush()
+    # Paths are derived from the content digest via BlobStore.path_for —
+    # the DB ``storage_path`` field is never joined onto the root directly,
+    # so a polluted row cannot steer deletion outside the canonical layout.
+    try:
+        store: BlobStore | None = BlobStore(root)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("gc sweep path validation unavailable: %s", exc)
+        store = None
+    last_id = None
+    while True:
+        query = (
+            select(MessageBlob)
+            .where(MessageBlob.ref_count <= 0)
+            .order_by(MessageBlob.id)
+            .limit(_GC_RECONCILE_BATCH_SIZE)
+        )
+        if last_id is not None:
+            query = query.where(MessageBlob.id > last_id)
+        blobs = list(session.scalars(query).all())
+        if not blobs:
+            break
+        for blob in blobs:
+            age_base = blob.gc_eligible_at or blob.created_at
+            if age_base.tzinfo is None:
+                age_base = age_base.replace(tzinfo=timezone.utc)
+            if now - age_base < cool_off:
+                skipped += 1
+                continue
+            if store is None:
+                skipped_invalid += 1
+                continue
+            try:
+                path = store.path_for(blob.content_sha256)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("gc sweep skipped blob id=%s with non-canonical digest: %s", blob.id, exc)
+                skipped_invalid += 1
+                continue
+            if dry_run:
+                would_delete += 1
+                continue
+            paths.append(path)
+            session.delete(blob)
+            deleted += 1
+        last_id = blobs[-1].id
+        session.flush()
+        if not dry_run:
+            # Per-batch commit: the sweep must not load or hold the whole
+            # expired set in a single transaction.
+            session.commit()
     return GcResult(
         marked=marked,
         deleted=deleted,
         skipped_cooloff=skipped,
         paths_to_unlink=tuple(paths),
         would_delete=would_delete,
+        skipped_invalid=skipped_invalid,
     )
 
 
@@ -262,6 +300,7 @@ def run_gc_blobs(*, cool_off_hours: float = 24.0, dry_run: bool = False) -> dict
         "deleted": result.deleted,
         "would_delete": result.would_delete,
         "skipped": result.skipped_cooloff,
+        "skipped_invalid": result.skipped_invalid,
         "unlinked": unlinked,
         "dry_run": dry_run,
     }

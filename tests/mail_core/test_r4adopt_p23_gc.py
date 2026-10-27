@@ -62,6 +62,41 @@ def _blob(blob_id: int, **overrides):
     return SimpleNamespace(**base)
 
 
+# --- A109: sweep_expired_blobs keyset-pages, commits per batch, canonical paths ---
+
+
+def test_sweep_pages_and_uses_canonical_path_for_polluted_storage_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(gc_mod, "mark_unreferenced_blobs", lambda session, now=None: 0)
+    old = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    digest_a = "a" * 64
+    digest_b = "b" * 64
+    canonical_a = f"{digest_a[:2]}/{digest_a[2:4]}/{digest_a}.blob"
+    b1 = _blob(1, gc_eligible_at=old, content_sha256=digest_a, storage_path=canonical_a)
+    # storage_path polluted with traversal: sweep must derive the path from
+    # the digest via BlobStore.path_for, never by joining the DB field.
+    b2 = _blob(2, gc_eligible_at=old, content_sha256=digest_b, storage_path="../../evil.blob")
+    # Unusable digest: cannot canonicalize, so the row must be skipped, not
+    # deleted and not counted.
+    b3 = _blob(3, gc_eligible_at=old, content_sha256="not-a-digest", storage_path="x/y/z.blob")
+    session = FakeSession(pages=[[b1, b2], [b3], []])
+
+    result = gc_mod.sweep_expired_blobs(
+        session,
+        cool_off=timedelta(hours=24),
+        now=datetime(2026, 10, 25, tzinfo=timezone.utc),
+        root=tmp_path,
+    )
+
+    from mail_core.blobs.store import BlobStore
+
+    store = BlobStore(tmp_path)
+    assert result.deleted == 2
+    assert result.paths_to_unlink == (store.path_for(digest_a), store.path_for(digest_b))
+    assert result.skipped_invalid == 1
+    assert session.deleted == [b1, b2]
+    assert session.commits == 2  # one commit per processed batch
+
+
 # --- A139: mark_unreferenced_blobs dedupes marked and commits per page ---
 
 
