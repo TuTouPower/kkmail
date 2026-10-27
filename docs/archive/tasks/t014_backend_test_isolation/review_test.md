@@ -29,6 +29,8 @@ Test review PASS。已复核本次测试隔离实现与测试，初次发现的 
 
 最终两轮的两项跳过均因本地 IMAP 服务不可用：`test_live_imap_sync_via_worker_handler` 与 `test_imap_list_and_metadata_page`，不是 PostgreSQL skip。最终两轮均包含新增 NOTIFY 测试。主会话报告 no-op 变异仅在独立子进程临时替换生产 `notify_outbox`，断言确实失败，测试库清理完成，变异未写入实现；摘要已核对 exit 1。
 
+> 注记（2026-10-27 补）：上表及下文所引 `.scratch/test_runs/`、`.scratch/t014_*.log` 原始产物位于 gitignore 区、未入库，原始产物已销毁、以下数值以本文记录为准；关键数值与结论已固化于本文，不再以 `.scratch` 路径作为可复核证据。
+
 上述各完成运行的 coverage.json 均启用 branch coverage，文件范围均仅生产 `src/mail_core/`。最终两轮各包含 87 个生产文件，综合行/分支覆盖率分别为 78.63% 与 78.66%，不以统一门槛掩盖未覆盖分支。先前失败运行作为历史证据保留，不替代最终通过结果。
 
 ## 最终验证与边界
