@@ -212,6 +212,73 @@ function testHasBinariesProbesPathOncePerBinary() {
   }
 }
 
+function testStatusCachesPgCtlProbeWithinTtl() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-status-cache-'))
+  const pgData = path.join(dataRoot, 'pgdata')
+  fs.mkdirSync(pgData, { recursive: true })
+  let statusProbes = 0
+  const mgr = new PostgresManager({
+    dataRoot,
+    pgBinDir: path.join(dataRoot, 'bin'),
+    spawnSync: (_cmd, args) => {
+      if (args[0] === 'status') statusProbes++
+      return { error: null, status: 0, stdout: 'server is running', stderr: '' }
+    },
+  })
+  mgr._binsCache = {
+    initdb: '/fake/bin/initdb',
+    pg_ctl: '/fake/bin/pg_ctl',
+    postgres: '/fake/bin/postgres',
+    createdb: '/fake/bin/createdb',
+  }
+  try {
+    const a = mgr.status()
+    const b = mgr.status()
+    assert.strictEqual(a.running, true)
+    assert.strictEqual(b.running, true)
+    assert.strictEqual(statusProbes, 1, 'consecutive status() calls within the TTL must not re-spawn pg_ctl status')
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
+function testStartAlreadyRunningProbesStatusOnce() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-start-status-once-'))
+  const pgData = path.join(dataRoot, 'pgdata')
+  const secrets = path.join(dataRoot, 'secrets')
+  fs.mkdirSync(pgData, { recursive: true })
+  fs.mkdirSync(secrets, { recursive: true })
+  fs.writeFileSync(path.join(pgData, 'PG_VERSION'), '16\n')
+  fs.writeFileSync(path.join(pgData, 'postgresql.conf'), "listen_addresses = '127.0.0.1'\nport = 55445\n")
+  fs.writeFileSync(path.join(pgData, 'postmaster.pid'), `12345\n${pgData}\n0\n55445\n/tmp\n127.0.0.1\n`)
+  fs.writeFileSync(path.join(secrets, 'db-created'), 'created\n')
+
+  let statusProbes = 0
+  const mgr = new PostgresManager({
+    dataRoot,
+    pgBinDir: path.join(dataRoot, 'bin'),
+    port: 55445,
+    spawnSync: (_cmd, args) => {
+      if (args[0] === 'status') statusProbes++
+      return { error: null, status: 0, stdout: 'server is running', stderr: '' }
+    },
+  })
+  mgr._binsCache = {
+    initdb: '/fake/bin/initdb',
+    pg_ctl: '/fake/bin/pg_ctl',
+    postgres: '/fake/bin/postgres',
+    createdb: '/fake/bin/createdb',
+  }
+  try {
+    const result = mgr.start()
+    assert.strictEqual(result.ok, true, result.reason)
+    assert.strictEqual(result.alreadyRunning, true)
+    assert.strictEqual(statusProbes, 1, 'start() on an already-running cluster must reuse its entry status probe')
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
 function testStopIdempotentNoThrowaway() {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-stop-'))
   const mgr = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
@@ -431,6 +498,8 @@ testPasswordOverrideReturnsPersistedValueWhenFileExists()
 testPasswordCreationRaceUsesFirstWriterValue()
 testHasBinariesCachesAndTimeout()
 testHasBinariesProbesPathOncePerBinary()
+testStatusCachesPgCtlProbeWithinTtl()
+testStartAlreadyRunningProbesStatusOnce()
 testStopIdempotentNoThrowaway()
 testStopFailureAndRetry()
 testInitPwfileCleanupLegacy()

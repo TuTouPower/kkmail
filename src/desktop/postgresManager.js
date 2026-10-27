@@ -156,6 +156,9 @@ function PostgresManager(options = {}) {
   this._child = null
   this._log = options.log || console
   this._binsCache = null
+  this._statusCache = null
+  this._statusCacheAt = 0
+  this._statusCacheTtlMs = options.statusCacheTtlMs != null ? options.statusCacheTtlMs : 1000
   this._stopped = false
   this._binProbeTimeoutMs = options.binProbeTimeoutMs != null ? options.binProbeTimeoutMs : BIN_PROBE_TIMEOUT_MS
   this._spawnSync = options.spawnSync || cp.spawnSync
@@ -278,7 +281,19 @@ PostgresManager.prototype.hasBinaries = function hasBinaries() {
   return this._binsCache
 }
 
+PostgresManager.prototype._invalidateStatusCache = function _invalidateStatusCache() {
+  this._statusCache = null
+  this._statusCacheAt = 0
+}
+
 PostgresManager.prototype.status = function status() {
+  // A302: pg_ctl status is a synchronous spawn that blocks the Electron
+  // main process; start() alone probed it up to three times per launch.
+  // Cache the probe briefly (hasBinaries already caches its probes the
+  // same way) and invalidate on start/stop transitions that change it.
+  if (this._statusCache && Date.now() - this._statusCacheAt < this._statusCacheTtlMs) {
+    return { ...this._statusCache, binaries: { ...this._statusCache.binaries } }
+  }
   const p = this.paths()
   const bins = this.hasBinaries()
   const stub = !(bins.initdb && bins.pg_ctl)
@@ -293,7 +308,7 @@ PostgresManager.prototype.status = function status() {
   } else if (this._child && !this._child.killed) {
     running = true
   }
-  return {
+  const result = {
     ok: true,
     stub,
     running,
@@ -307,6 +322,9 @@ PostgresManager.prototype.status = function status() {
     },
     connectionUrl: `postgresql+psycopg://${this.user}:***@127.0.0.1:${this.port}/${this.database}`,
   }
+  this._statusCache = result
+  this._statusCacheAt = Date.now()
+  return { ...result, binaries: { ...result.binaries } }
 }
 
 PostgresManager.prototype.initIfNeeded = function initIfNeeded() {
@@ -368,7 +386,8 @@ PostgresManager.prototype.start = function start() {
     const bins = this.hasBinaries()
     const created = this.ensureDatabase(bins)
     if (!created.ok) return created
-    return { ok: true, alreadyRunning: true, ...this.status() }
+    // A302: reuse the entry probe — the cluster state has not changed.
+    return { ok: true, alreadyRunning: true, ...st }
   }
   const init = this.initIfNeeded()
   if (!init.ok) return init
@@ -390,6 +409,9 @@ PostgresManager.prototype.start = function start() {
   }
   const created = this.ensureDatabase(bins)
   if (!created.ok) return created
+  // The cluster just transitioned to running: drop the pre-start probe so
+  // the returned status is a fresh one (exactly one extra probe).
+  this._invalidateStatusCache()
   return { ok: true, started: true, ...this.status() }
 }
 
@@ -417,6 +439,7 @@ PostgresManager.prototype.ensureDatabase = function ensureDatabase(bins) {
  */
 PostgresManager.prototype.stop = function stop() {
   if (this._stopped) return { ok: true, stopped: true, alreadyStopped: true }
+  this._invalidateStatusCache()
   const bins = this.hasBinaries()
   const p = this.paths()
   if (!bins.pg_ctl || !fs.existsSync(p.pgData)) {
