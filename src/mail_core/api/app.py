@@ -111,8 +111,10 @@ app.add_middleware(
         "http://localhost:8000",
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # A313: credentialed CORS must not wildcard methods/headers; only the
+    # methods and headers the SPA actually uses are allowed.
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID"],
 )
 
 
