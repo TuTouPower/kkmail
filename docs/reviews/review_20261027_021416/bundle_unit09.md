@@ -1,0 +1,44 @@
+# Intensive Review — unit09（文档核心） @ 11bfa52a
+
+## Summary
+- Scope: 87 files / 6,869 lines — docs/handoff.md、docs/specs_index.md、docs/tasks_index.json、docs/archive 根（CHANGELOG/handoff/plan/tasks_index）、docs/archive/legacy_architecture、docs/archive/pending/p001–p059、docs/blueprint（5）、docs/findings/d001、docs/guides（6）、docs/skills/kkmail-skill（SKILL.md + kkmail_cli.py 按代码审）、docs/specs（6）。specs/guides 关键断言已抽查 src 对应实现（api/accounts.py、api/mail.py、frontend mailCore.ts、security/auth.py、db 表清单、AllowedProvider）核对。
+- Findings: C/H/M/L/Info = 1/5/7/7/1
+
+## Strengths
+- blueprint/conventions 与 specs 多数断言与实现高度同步：Gmail API/Google OAuth 已整体下线、Microsoft 极简公共客户端（p056）、锁序、未知状态 nullable 契约等在 architecture/conventions/specs 三处口径一致且经 src 抽查属实。
+- 安全指南质量高：security.md 的 UUID capability 模型、密钥无默认值、备份勿裸 cp、UUID-only 附件下载均与实现及 decisions 对齐；deployment.md 对 HTTP Cookie 风险与 OAuth Origin 的说明完整。
+- handoff 最新一节对 PG 门禁未跑的口径诚实（「PG 逻辑已实测、PG pytest 门禁未跑，不得表述为门禁通过」），符合证据分级要求。
+- findings/d001 结构规范：来源/结论/证据/影响/现状俱全，是本 unit 文档质量标杆。
+- archive/pending 每条均有「处理：<task/分支/commit>」闭环指向，59 条无一无着落。
+
+## Findings
+
+- [Critical][95] docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:3-11 — 已归档 pending 在公开仓嵌入真实实例数据（真实邮箱/账号 UUID/口令特征）未脱敏 — 证据：p027 正文多处直接写出用户真实 126/QQ 邮箱地址、账号 UUID 及「当前保存口令长 13 位」等可辅助攻击的凭据特征，公开仓任何人可读 — 修复：将全部真实邮箱替换为符号化示例（如 user@126.example）、删除账号 UUID 与口令长度描述；并全仓复扫同类实例数据后以勘误方式修订（archive 只准新增的约束与隐私修订冲突时以隐私优先、留勘误注记）
+  - 同根因其他位置：docs/archive/pending/p035_empty_archived_mail_body_placeholder.md:3 及文末「数据库事实」行 — 写出真实邮件 Message id、主题与 126/163 邮箱来源等实例数据；docs/archive/pending/p059_search_recipient_and_alias_support.md:5 — 以疑似真实别名邮箱（两个具体地址）作搜索示例，未用 example 域符号化。修复同上：pending/findings 写作规范应强制实例数据脱敏后才入库。
+- [High][90] docs/archive/legacy_architecture/mail-core-architecture.md:5-13 — 归档架构文档仍以「已定稿，供实现」身份描述已被删除的 Gmail API 架构且含多处死链，却被现行 blueprint 作为详尽规范引用 — 证据：文首状态表称「已定稿，供实现」「不放弃 Gmail」，§6.2/§7.3 以 Gmail History API 为现行增量机制（L253、L294），而现行 specs/blueprint 明确 Gmail API 引擎已整体下线、仅 IMAP 应用专用密码；docs/blueprint/architecture.md:5 又链接本文为「更详尽的历史架构规范」，读者会被导向已废止契约 — 修复：在文首加过时横幅（定稿日期、已被 blueprint/architecture.md + specs 取代、Gmail 相关章节失效），或将 Gmail 章节逐节标注 Superseded
+  - 死链同文件：L70、L587 引用同目录 known-limitations.md（不存在）；L172 引用 mail-core-desktop.md、mail-core-status.md（均不存在）；L667 引用 ./api.md（不存在）且称契约在 docs/openapi.json 入库（实际为 schemas/openapi.json）；L668-669 路径写作 frontend/src/... 与 scripts/export_openapi.py（实际 src/frontend/ 与仓库根 scripts/，后者恰巧存在但前者路径错误）。修复：逐一改指现行位置或删除引用。
+- [High][85] docs/blueprint/decisions.md:60-70 — decisions 仍把已删除的 GitHub Actions CI 写成现行决策，与 testing/release 的「无远程 CI」直接矛盾 — 证据：2026-10-22 条目称「创建只读权限的 GitHub Actions 工作流（ci.yml 和 scheduled.yml）」且未标 Superseded，但仓库已无 .github/workflows（提交 49a6d024 已删除并改为本地门禁），testing.md:308 与 release.md:8 均称不运行远程 CI — 修复：在该 decisions 条目追加状态变更注记（已被本地门禁决策取代 + 日期），不得静默保留为现行决策
+  - 同根因：docs/blueprint/testing.md:290 小节标题仍为「本地分层门禁与 CI 流水线映射／统一本地开发重放命令与 GitHub Actions 流水线」，正文 L308 却称无远程 CI，标题与正文自相矛盾。修复：标题改为「本地分层门禁矩阵」。
+- [High][80] docs/specs/auth_and_session.md:27 — 生效 spec 声称改密/登出后会话「立即失效」，与现行 epoch 5 秒进程内缓存决策矛盾且 spec 未标偏差 — 证据：AC-004 写「所有此前签发的活跃会话立即失效」，而 decisions.md「2026-10-25: 会话 epoch 使用短时进程内缓存」明确跨进程吊销最长延迟 5 秒，spec 作为契约权威未记录该偏差 — 修复：AC-004 修订为「本进程立即、跨进程最长 5 秒内失效」或在 spec 未知/偏差清单中显式登记与缓存决策的差异
+- [High][95] docs/guides/troubleshooting.md:38-46 — 忘记密码恢复命令不可执行：bcrypt 示例把中文占位符写进 bytes 字面量必然 SyntaxError — 证据：`bcrypt.hashpw(b'<新密码>', ...)` 中 bytes 字面量只能含 ASCII，已实测复现 `SyntaxError: bytes can only contain ASCII literal characters`；密码恢复是用户被锁在门外时的唯一路径，命令照抄即失败 — 修复：改为先以普通字符串变量读入再 `.encode()`，例如 `python3 -c "import bcrypt,getpass;print(bcrypt.hashpw(getpass.getpass().encode(), bcrypt.gensalt()).decode())"`，并注明在仓库根/PYTHONPATH 环境执行
+- [High][90] docs/skills/kkmail-skill/scripts/kkmail_cli.py:502 — CLI 仍接受已被后端删除的 gmail provider，add-account 必然被后端 422 拒绝 — 证据：`choices=["imap", "gmail", "graph"]` 含 gmail，但后端 `AllowedProvider = Literal["imap", "graph", "memory", "stub"]`（src/mail_core/api/accounts.py:89），且 specs/blueprint 明确前端与后端均不再接受 provider=gmail — 修复：choices 删除 gmail（或映射为 imap+gmail 预设并在 SKILL.md 说明），与 SKILL.md 的 add-account 示例同步
+- [Medium][85] docs/specs/inbox_ui_and_search.md:27 — 生效 spec 称列表按 100 封/页加载，实现实际默认 50 封/页 — 证据：AC-002 写「按 100 封/页加载」，而 src/frontend/src/api/mailCore.ts 的 fetchMailCoreInbox 默认 `limit ?? 50`、后端 /api/mail/inbox 默认 limit=50（ge=1, le=200） — 修复：将 AC-002 改为 50 封/页，或注明 100 为调用方上限而非默认页长
+- [Medium][90] docs/specs/mail_sync_and_storage.md:26-51 — 同文件 AC 编号既有缺号又有同号异义，破坏验收可追溯性 — 证据：契约区从 AC-003（L26）直接跳 AC-005（缺 AC-004）、AC-028（L50）直接跳 AC-031（L51，缺 AC-029/030）；文末 t056 节（L107-110）又复用 AC-001–AC-005 表示完全不同的 Gmail/超时验收，与契约区同号 AC 语义冲突 — 修复：t056 节改用带前缀编号（如 AC-T56-001）并在缺号处加注「编号保留/已废弃」说明，后续新增 AC 只增不复用
+- [Medium][85] docs/skills/kkmail-skill/scripts/kkmail_cli.py:593-604 — CLI 正文读取以 snippet 回退冒充正文，违反 blueprint 明定的正文数据源契约 — 证据：read 与 --body-only 均为 `msg.get("body") or msg.get("snippet") or "(Empty body)"`，而 conventions.md §九.3 明定「正文区域仅使用详情 body，禁止使用列表 body_preview/snippet 回退」（该规则正是 p022 闭环结论） — 修复：CLI 只输出 body，body 为空时明确输出「正文未归档或为空」状态提示，不回退 snippet
+- [Medium][75] docs/guides/troubleshooting.md:38-66 — 密码重置属高风险直改数据库操作，方法一缺停服/备份/验证等前置与恢复条件 — 证据：方法一直接给出 UPDATE auth_credentials 的 SQL，未要求先停止服务、备份该行、确认目标库身份，也无重置后登录验证与失败回滚步骤；方法二虽有停服步骤，两法均无「操作后 smoke test」收尾，不符合操作文档对破坏性操作的要求 — 修复：两法统一补前置（停服、确认 DATABASE_URL 指向目标实例、备份原 hash）、执行后验证（用新密码登录 + 旧会话失效）与失败恢复（还原备份 hash）
+- [Medium][85] docs/handoff.md:5-9 — 当前交接已过时：head_commit 停在 05d2cc84，其后 t056/p058/p059 三批已合入 HEAD 均未反映 — 证据：handoff 称「无进行中的实现工作／下一步无既定下一步」，但 `git log 05d2cc84..HEAD` 含 t056 合并与 p058、p059 两个 feat 提交（HEAD=11bfa52a），当前状态读者按 handoff 会误判最新进度 — 修复：按 AGENTS.md 约定在下一次收尾时以新一节替换（branch + head_commit 更新至当前），或在本节追加状态变更注记指向后续提交
+- [Medium][80] docs/blueprint/testing.md:311-325 — 「当前验证基线」停留在 2026-10-24/25 的 569 passed，已被更新的实测结果取代 — 证据：基线表自称「集中记录近期完整门禁的结果」，但 handoff（2026-10-26）已有后端 unit 812 passed / 前端 446 测试等更新证据，基线未同步，读者会引用过期数字 — 修复：更新基线表至最近一轮完整门禁证据，或删除计数仅保留指向各 task archive 与 handoff 的链接，避免双处维护漂移
+- [Medium][70] docs/archive/CHANGELOG.md:7 — 已归档 CHANGELOG 顶部仍保留 [Unreleased] 现行时态段落，与归档属性及 release 流程矛盾 — 证据：文件已迁入 archive 且 release.md 以其为「历史变更记录」，但 L7 起 [Unreleased] 段仍以未发布变更口吻记载 mail-core 替换等内容，无封存日期/版本归属 — 修复：将 [Unreleased] 内容归入对应版本节或加归档注记（封存于何时、后续变更记录位置），避免被误读为待发布清单
+- [Low][75] docs/blueprint/domain.md:9-22 — 领域术语表自称命名权威但漏列多张现行表且 provider 枚举不全 — 证据：表中无 Thread/ThreadMessage（实际有 threads/thread_messages 表）、SyncCheckpoint/SyncRun/WorkerJob/MessageArchiveState/CredentialSecret 等现行实体；Account 提供商写 imap/graph/memory，漏后端 AllowedProvider 的 stub — 修复：补齐现行实体行（或注明本表仅核心实体、完整清单见 db 模型），provider 枚举与 AllowedProvider 对齐
+- [Low][70] docs/archive/pending/p001_trash_action_ux_mismatch.md:1 — archive/pending 普遍缺时间/版本元数据，59 条中仅 8 条正文含日期 — 证据：各条仅有「处理：<task/分支>」一行闭环指向，无提出日期、闭环日期与所属版本， years 后无法判断问题年代与替代位置（抽查 p001–p059 文件头一致） — 修复：后续归档条目模板强制含提出/闭环日期；存量可在索引层（archive/tasks_index 或目录 README）补一张 pNNN→闭环日期对照表，不逐个改写历史正文
+- [Low][80] docs/archive/pending/p039_body_sync_retry_loop.md:22 — pending/handoff 的关键证据指向 gitignore 的 .scratch 本地文件，入库读者无法复核 — 证据：p039 引 `.scratch/body_sync_flicker/no_work_repro.py`、p027/p035 引 .scratch 复现脚本、docs/handoff.md 引 `.scratch/fix_progress.log`，.scratch 不入库，证据链断裂 — 修复：需长期保留的复现材料移入对应 task/spike 的 code/ 目录并更新引用，其余引用降级为「本地复现（未入库）」标注
+- [Low][85] docs/guides/deployment.md:21 — API Key 说明的权威链接指错：指向 conventions.md 但该文件无 API Key 定义 — 证据：deployment 称 MAIL_CORE_API_KEYS「见 docs/blueprint/conventions.md」，全文检索 conventions 无 API_KEYS/授权模型内容，实际权威在 guides/security.md「认证／授权模型」 — 修复：链接改指 security.md 对应章节
+- [Low][70] docs/skills/kkmail-skill/scripts/kkmail_cli.py:168-178 — CLI 旧会话缓存迁移在 base_url 不匹配时仍删除旧缓存文件 — 证据：_load_session_cache 中仅当 `data.get("base_url") == self.base_url` 才迁移 cookie，但其后的 legacy_file.unlink() 在 if 外无条件执行，另一实例的旧缓存会被静默删除 — 修复：unlink 移入 base_url 匹配分支内，或不匹配时保留文件并打印提示
+- [Low][50] docs/guides/upgrade.md:5-9 — 备份命令缺执行前提（工作目录/PYTHONPATH），照抄可能直接 ImportError — 证据：`python -c "from mail_core.backup import run_backup; ..."` 未注明须在仓库根且 PYTHONPATH=src（handoff 陷阱与 deployment 非 Docker 节均强调裸跑需 PYTHONPATH=src），且 run_backup 签名未实测 — 修复：补明工作目录与 PYTHONPATH 前置，并标注该命令为静态核对、未在本轮实测
+- [Low][65] docs/skills/kkmail-skill/SKILL.md:11-22 — SKILL 只讲密码注入与清理，未披露 CLI 会把会话 Cookie/CSRF 落盘缓存 — 证据：文档指导用后 unset KKMAIL_PASSWORD，但 kkmail_cli.py 会将 cookie+csrf_token 持久化到 ~/.cache/kkmail/session.json（0600），凭据实际留存与文档给读者的预期不一致 — 修复：在认证配置节补一行说明缓存路径、权限与清除方法（删除该文件即注销本机缓存会话）
+- [Info][0] docs/archive/CHANGELOG.md:360-361 — 上游时代「账号详情接口直接返回明文 password」等历史记载属上游遗留记录（预存） — 证据：该段位于 3.0.x 上游版本历史节，描述的是已被现行实现删除的旧行为（现行 security.md 与代码均不返回明文），仅作历史追溯保留不计违规 — 修复：无需处理；若未来做隐私修订轮次，可在该节首加「上游历史行为、现已移除」注记（预存）
+
+## Appendix — 核对说明
+- 死链核查：blueprint/guides/specs/handoff/skills/findings 的相对链接已逐一验存；除 legacy_architecture 内上列死链外，其余链接目标（archive/tasks 各 task、src/mail_core/README.md、src/desktop/vendor/README.md 等）均存在。
+- archive/plan.md 为已完成串行实施计划，含阶段状态与执行记录，按归档属性不计违规；archive/handoff.md 中段保留一份带「项目交接记录（最新）」标题的历史快照（L28），属只追加归档的既有形态，未单列（仅在 Low 时间元数据条目之外提示后续 repo-hygiene 可加分隔注记）。
+- 本轮未执行任何文档内命令（troubleshooting 的 SyntaxError 以等价最小片段实测复现）；CLI 与 API 契约均为静态核对源码。

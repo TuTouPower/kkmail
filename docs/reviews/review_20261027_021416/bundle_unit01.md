@@ -1,0 +1,69 @@
+# Intensive Review — unit01（后端核心A） @ 11bfa52a
+
+## Scope
+- 范围：mail_core 根（README/__init__/__main__/logging_config/system_metrics）+ accounts/（connection/credentials/device_oauth/microsoft_oauth/oauth_flow/service/settings_store）+ api/（accounts/app/auth_routes/deps/http_headers/mail/oauth_routes/sse）+ db/（base/session/alembic env + 迁移 0001–0027）
+- 文件数/行数：53 文件 / 6,757 行（`wc -l` 实测与 unit01_files.txt 一致）
+- 方法：8 视角全扫；独立读全部文件 + 上下游（mail/application/accounts.py、message_details.py、sync_requests.py、security/auth.py、storage/models.py）+ tests/mail_core 相关测试（test_system_health / test_api_health / test_microsoft_* / test_oauth_* / test_sse_* / test_settings_store / test_search_recipients 等）
+- 隐私探针（视角1，公开仓）：对本 unit 全部文件及 `git log -p -- <unit文件>` 扫真实邮箱、明文 token/key/cookie、.env、内部绝对路径——未发现真实凭据/私人邮箱/本机路径（`DEFAULT_MICROSOFT_CLIENT_ID` 为微软公共客户端公开 ID，非 secret）；无 `// @review-ok` 豁免处；无 TODO/FIXME 残留
+- Findings: C/H/M/L/Info = 0/2/13/19/4
+
+## Strengths
+- 凭据面整体扎实：DbCredentialStore AES-256-GCM + HKDF（info=kkmail/credential-store/v1、AAD=ref）、credential_edit 用 pg_advisory_xact_lock + 行锁串行化、env: 只读语义明确（ReadOnlyCredentialRef）、日志全链 RedactingTraceFormatter + safe_provider_summary，微软错误描述从不回显（friendly_error）
+- OAuth 校验纵深：state 格式/一次性 code claim（oauth_code:<sha256> 防重放）、PKCE S256、flow 绑定 session_key+session_epoch、stage_verified_response 校 scope/邮箱/邮箱可达性、device_code 轮询三段式（短锁 claim → 锁外 HTTP → 短锁落盘，B2 修复）、verification_uri 白名单
+- API 边界普遍有界：分页/设置/sidebar 布局均有 max_length 与上限校验、附件下载 UUID-only + 路径型接口显式 400、Content-Disposition RFC5987 防注入、媒体类型白名单正则
+- 迁移链单链完整（0001→0027 无分叉），危险迁移有前置检查与说明：0021 冲突预检中止、0013/0017/0018/0019 downgrade 有 NULL 守卫、0025 docstring 明示数据迁移不可逆
+- SSE replay 设计严谨：publication_seq 游标 + retention watermark + gap/resync 语义、槽位双重释放防护（幂等 release_slot）、会话 epoch 周期复查
+
+## Findings
+
+### High
+- [High][85] src/mail_core/api/app.py:239-248 — 系统健康端点未鉴权公开内部运营指标 — 证据：`@app.get("/api/system/health")` 与 `@app.get("/health/metrics")` 直接挂在 app 上、无 `Depends(require_auth)`（其余 router 在 app.py:147-150 均带 require_auth），未登录即可读 worker ID 列表、账号总数/活跃数、失败任务数、磁盘总量/剩余、备份状态与最近同步时间 — 修复：给两路由加 `dependencies=[Depends(require_auth)]`，或只保留无敏感字段的存活探针；同步修正 tests/mail_core/test_system_health.py 中断言未登录 200 的用例
+- [High][70] src/mail_core/db/alembic/versions/20261027_0027_search_recipient_and_account_recipients.py:19-81 — 0027 回填全表相关扫描且对 to_addresses 形态无防御，大库升级可超时/失败 — 证据：accounts 回填对每个账号相关子查询全量扫描 messages（`jsonb_array_elements_text(m.to_addresses)`），message_search 回填同型逐行相关子查询，无分批/无 CONCURRENTLY，整迁移单事务长锁；任一历史行 to_addresses 为非数组 JSON（标量/对象）即令 jsonb_array_elements_text 报错、升级整体回滚 — 修复：回填前加形态守卫（jsonb_typeof='array'）、按 id 区间分批回填并在迁移说明中标注大表预计时长，或回填降级为可重跑的后台任务、迁移只加列
+
+### Medium
+- [Medium][60] src/mail_core/api/app.py:182-187 — /health 未鉴权回吐 KKMAIL_INSTANCE_TOKEN — 证据：任何未登录请求 GET /health 即可从 `X-Instance-Token` 响应头读到桌面端握手 token（tests/mail_core/test_api_health.py 还把该行为写成断言）；README 称 web 部署勿配置，但一旦误配即公开泄漏实例身份凭据 — 修复：仅在请求来自回环且带桌面端预共享证明时回吐，或改由 sidecar 启动参数/本地文件传递，不经 HTTP 响应头广播
+- [Medium][65] src/mail_core/api/accounts.py:89-101 — 生产 API 允许创建 memory/stub 测试 provider 账户 — 证据：`AllowedProvider = Literal["imap","graph","memory","stub"]`，且 connection.validate_connection 对不在 CREDENTIAL_FIELDS 的 provider 在 credentials 校验前直接 return，create_account_app/service 不再拦截，登录用户可在生产库建 stub 账户并触发同步任务 — 修复：API 层 AllowedProvider 只留 imap/graph，memory/stub 仅测试夹具经环境开关启用
+- [Medium][60] src/mail_core/api/oauth_routes.py:127-183 — 简化兑换建号的存在性检查与建号分属不同会话/事务（TOCTOU） — 证据：_find_graph_account_id、_ensure_group_exists 各自开独立 session 检查，随后 _save_redirect_exchange_account 再开新事务创建/更新；并发同邮箱兑换或分组在检查后被删时，落到 FK/唯一索引 IntegrityError，api_exchange_redirect_url 只捕获 Permission/Lookup/Value → 500 而非更新既有账户/400 — 修复：把查存+建/更收进同一 session/事务，IntegrityError 映射为冲突后重读走 update 路径
+- [Medium][55] src/mail_core/accounts/oauth_flow.py:312-320 — 发起新 OAuth 流程不作废同会话旧 pending 流程 — 证据：start_oauth_flow 只覆写 `oauth_active:{sess_key}` 指针，旧 flow 与其 oauth_state 记录在 TTL（600s）内仍可被 complete_oauth_callback 完成并被 consume_* 消费（同 session_key/epoch 校验通过），用户以为已被新流程取代的授权仍可落号 — 修复：写新指针前先按旧指针 cancel 旧 flow（清 flow/state 记录），或在 complete/consume 时校验 flow_id 仍为 active 指针
+- [Medium][70] src/mail_core/accounts/service.py:27-66 — create_account 不校验 group_id 存在性，坏分组以 500 暴露 — 证据：create_account 直接以 group_id 建 Account 并 flush，不像 _update_account_group/consume_oauth_* 那样先查 AccountGroup；不存在的 group_id 触发 FK IntegrityError，api_create_account 的兜底 `except Exception` 映射为 500 internal server error，而非 404/400 — 修复：create_account 在 flush 前查 group 并 raise LookupError("group not found")，与 update 路径一致
+- [Medium][50] src/mail_core/accounts/oauth_flow.py:39-68 — 无 DATABASE_URL 时 OAuth 流程（含 client_secret/暂存 token）落进程级内存明文字典 — 证据：_flow_store 在 Composite+Db store 且 MAIL_CORE_DATABASE_URL 为空时返回全局 _unit_memory_store（DictCredentialStore 明文 dict），flow dict 含 client_secret 与 staged_credentials；该回退无任何日志警告，且 reset 只由 tests/runtime_isolation 调用 — 修复：回退时至少 log.warning 明示非 durable/明文，或在非测试运行模式直接拒绝启动 OAuth 流程
+- [Medium][55] src/mail_core/api/accounts.py:303-345 — 同步类端点在 report 为 None 时触发响应模型校验 500 — 证据：api_sync_account/api_sync_all_accounts 与 api/mail.py:667-690 的 api_sync_delta 均在创建后二次打开 session 调 get_sync_request_report 并以 `# type: ignore[return-value]` 直接返回；报告若已被清理/查不到（None），FastAPI response_model=SyncRequestOut 校验失败成 500 而非 404 — 修复：report 为 None 时 raise HTTPException(404)，去掉 type: ignore
+- [Medium][50] src/mail_core/api/mail.py:527-590 — mark-all-read 无迭代上限且分批独立提交，异常时部分生效无提示 — 证据：`while True` 仅靠 `batch.count < MARK_ALL_READ_BATCH_SIZE` 退出，若应用层 last_message_id 不前进将无限循环占住请求；每批单独 session.commit()，中途 LookupError/异常时前面批次已落库但接口只回错误，客户端无从知道已改数量 — 修复：加最大批次数/总时长上限并在游标不前进时报错退出；文档或响应中明示该接口非原子、失败可重试（幂等）
+- [Medium][55] src/mail_core/logging_config.py:124-144 — configure_logging 摘除全部 root handler 且不 close — 证据：每次调用 `for handler in list(root.handlers): root.removeHandler(handler)` 无条件清掉宿主（pytest/alembic/uvicorn）已有 handler 并直接丢弃不 close，lifespan 与 __main__ 都会调用，文件类 handler 有句柄泄漏与日志丢失风险 — 修复：只摘除自己安装的 handler（打标记），摘除时调用 handler.close()
+- [Medium][65] src/mail_core/db/session.py:28-36 — DB 池参数环境变量无解析容错与范围校验 — 证据：_pool_kwargs 对 MAIL_CORE_DB_POOL_SIZE 等直接 int()/float()，非法值抛裸 ValueError（非 DatabaseConfigError）、0/负数要到 SQLAlchemy 建池才报错，错误信息不指明哪个变量；对照 README 把这些列为正式配置项 — 修复：逐项解析并抛 DatabaseConfigError（含变量名与期望范围），pool_size>=1、timeout>0、recycle>=0
+- [Medium][50] src/mail_core/api/deps.py:29-44 — 无效 Bearer 自动回退到 Cookie 会话认证 — 证据：authenticate_request 仅当 `api_key_matches(bearer)` 为真才走 api_key，否则忽略已提供的 Bearer 继续尝试 cookie；调用方明确递交的错误凭据被静默降级，会掩盖集成方 key 配错，也使「带 Bearer 即 API 调用」的审计预期落空 — 修复：请求带 Authorization 头但 key 不匹配时直接 401，不回退 cookie
+- [Medium][65] src/mail_core/api/auth_routes.py:102-110 — 改密成功后当前会话即刻失效但接口不处理 — 证据：change_login_password 原子递增 session_epoch（security/auth.py docstring），当前请求的 session 随即过期，但 change_password 端点仍返回 200 且不清 cookie、不发新 csrf，前端若不特判会停留在「已登录但处处 401」状态 — 修复：响应中清 session cookie 并明示需重新登录，或为当前会话重签 cookie+csrf
+- [Medium][55] src/mail_core/accounts/connection.py:104-118 — validate_connection 对未知 provider 与 imap 的 token_uri 不设防 — 证据：provider 不在 CREDENTIAL_FIELDS/PROFILES 时（如直调 service 层的任意字符串）跳过全部凭据校验即可落库；imap credentials 含 token_uri 键不被拒绝（仅 refresh_token 被拒），末尾 token_uri 白名单校验对 imap 同样执行/或被存入凭据 JSON — 修复：provider 先做白名单（imap/graph，内部测试 provider 显式放行），并按 provider 拒绝其字段集之外的凭据键
+
+### Low
+- [Low][55] src/mail_core/api/app.py:105-115 — CORS 凭据模式下 methods/headers 全通配 — 证据：allow_credentials=True 同时 allow_methods=["*"]、allow_headers=["*"]，origins 虽限本地 5173/8000，但本机任意进程冒充该 origin 即可带凭据跨源调用 — 修复：收敛为实际用到的方法（GET/POST/PATCH/PUT/DELETE）与头（Authorization/Content-Type/X-CSRF-Token/X-Request-ID）
+- [Low][60] src/mail_core/api/app.py:121-128 — HSTS 无条件全量下发且主应用无 CSP — 证据：security_headers_middleware 对含纯 HTTP 回环/桌面 sidecar 的响应也发 `Strict-Transport-Security: max-age=31536000; includeSubDomains`，同域子域若有 HTTP 服务会被浏览器强制升级；除 oauth callback 外页面无 Content-Security-Policy — 修复：HSTS 仅在请求确为 HTTPS（或可信代理头确认）时下发；SPA 响应补 default-src 'self' 型 CSP
+- [Low][70] src/mail_core/api/sse.py:43-61 — SSE 连接上限缓存进程生命周期内永不失效 — 证据：_max_sse_connections 首次解析后写入 _sse_max_connections_cache，后续改 MAIL_CORE_SSE_MAX_CONNECTIONS（含改错后修正）必须重启进程才生效，且无任何提示 — 修复：缓存时记录原始 env 值、变化时重解析，或在启动日志打印生效值并注明需重启
+- [Low][65] src/mail_core/api/sse.py:262-267 — SSE 会话 epoch 已变的流以 200 空流结束 — 证据：gen() 内 epoch 不匹配时直接 return，客户端收到 200 + 立即关闭的空 event-stream，而非 401，EventSource 会按正常流结束语义重连并再次被空关，形成重连循环 — 修复：订阅前（返回 StreamingResponse 前）先做一次 epoch 校验，不匹配 raise HTTPException(401)
+- [Low][25] src/mail_core/api/sse.py:290-310 — SSE epoch 复查临界点可能产生 keepalive 忙循环 — 证据：timeout 被夹到 `max(0.0, next_epoch_recheck - now)`，超时后若尚未到复查点则 yield keepalive 并立刻再循环，timeout 接近 0 时单个周期内可高频空转/刷帧 — 修复：keepalive 分支给 timeout 设下限（如 >=1s）或超时后统一 sleep 到复查点
+- [Low][75] src/mail_core/accounts/service.py:87-95 — list_accounts 分组查询时重复执行一次全表 count — 证据：manual_order_exists 先按未过滤条件算一遍，group_id 非空时紧接着又按分组条件重算，前一结果被丢弃，每次分组列表多一次全表 COUNT — 修复：按 group_id 分支只算一次
+- [Low][55] src/mail_core/accounts/service.py:284-295 — get_sidebar_layout 全量 FULL OUTER JOIN 后内存去重 — 证据：每次读布局都把全部 group×account 行拉回进程用 dict 去重排序，无分页/物化，账户量大时单请求内存与延迟线性膨胀，且与写路径的全行 with_for_update 形成读写放大 — 修复：改两次简单查询（groups、accounts 各一）本地组装，去掉 full outer join
+- [Low][80] src/mail_core/accounts/service.py:471-474 — update_account_sync_status 中 last_synced_at 为死代码 — 证据：`if hasattr(acc, "last_synced_at"): setattr(...)`，但 Account 模型（storage/models.py）无 last_synced_at 列，该分支永假，真实落点只有 config["last_synced_at"]，读者易误以为有列级时间戳 — 修复：删 hasattr 分支，或给模型补列+迁移后去掉守卫
+- [Low][85] src/mail_core/api/accounts.py:186-193 — 死代码：SyncJobOut/SyncAllOut 与未用导入 — 证据：SyncJobOut、SyncAllOut 两模型全仓无引用（同步端点已改 SyncRequestOut）；api/mail.py:57 导入的 MessageBodyAlreadyArchived 在路由中从未捕获/使用（sync_message_body 对已归档返回 complete 而非抛此异常） — 修复：删除两模型与该导入，或在 sync-body 路由真正映射该异常为 409
+- [Low][80] src/mail_core/__main__.py:20-20 — __main__ 未用导入 Any — 证据：`from typing import Any` 全文件无引用，同文件还有 port 环境变量解析问题见下条 — 修复：删除该导入
+- [Low][80] src/mail_core/__main__.py:56-56 — MAIL_CORE_PORT 非法值在参数解析期裸崩 — 证据：`default=int(os.environ.get("MAIL_CORE_PORT") or 8000)`，非数字直接 ValueError 堆栈、越界端口（0/70000）要到 uvicorn 才失败；对照 oauth_flow.get_oauth_metadata 对同一变量做了 isdigit+范围校验并给中文错误 — 修复：复用同一校验逻辑，非法时 argparse 报错退出
+- [Low][50] src/mail_core/system_metrics.py:75-205 — 健康指标串行多查且语义与命名不符 — 证据：单次调用串行发 6+ 条聚合查询且端点无缓存（与未鉴权叠加放大 DB 压力）；SyncMetrics.max_sync_lag_seconds 实为「距最近一次全局成功同步」而非各账户最大滞后；SystemHealthReport.status 注释含 "unhealthy" 但代码永不产出 — 修复：加数秒进程内缓存、字段改名为 last_sync_lag_seconds 或按账户 max 计算、补 unhealthy 判定或删注释值
+- [Low][75] src/mail_core/README.md:58-58 — README Layout 与实现漂移（视角8） — 证据：Layout 表称 api/ 路由为 `auth_routes, accounts, mail, sse`，漏 oauth_routes（app.py 实际 include 五个 router，含独立 OAuth 路由文件），且未提 deps/http_headers/app 入口职责 — 修复：该行补 oauth_routes 并注明 app.py 为组装入口
+- [Low][55] src/mail_core/db/alembic/versions/20261027_0027_search_recipient_and_account_recipients.py:31-68 — 0027 回填逻辑无迁移级测试（视角7） — 证据：tests/mail_core/test_search_recipients.py 只覆盖「同步时自动填充 recipient_addresses」，未见以旧 schema 数据跑 0027 upgrade 后校验 accounts/message_search 回填结果与 to_addresses 异常形态的用例 — 修复：补 PG 迁移测试：预置 0026 数据（含空/多收件人）upgrade 后断言两处回填
+- [Low][70] src/mail_core/api/oauth_routes.py:115-121 — ExchangeRedirectUrlRequest.email 为死字段 — 证据：请求体声明 email，但 api_exchange_redirect_url 从不读 body.email（注释称以微软返回邮箱为准），前端传错邮箱也无任何反馈，契约表面与行为不一致 — 修复：删除该字段，或保留时在响应/日志中明示已被 verified email 覆盖
+- [Low][60] src/mail_core/accounts/credentials.py:24-36 — _may_accept_keyword 注释与行为矛盾 — 证据：注释称「签名未知不能证明省略 session 安全」，但 TypeError/ValueError 时 return True（即照样传 session=），未来自定义 store 若签名不可内省且不接受 session 会在运行时 TypeError，且 _delete_ref 等处的 TypeError 回退并不能覆盖 put 路径 — 修复：统一注释与策略：未知签名时不传 session 并记录，或明确写清「优先传、靠调用方 TypeError 回退」并给 put/delete 都加回退
+- [Low][40] src/mail_core/accounts/credentials.py:105-115 — DbCredentialStore.get_secret 解码错误逃逸为非 KeyError — 证据：密文损坏/错误 key 时 AESGCM 抛 InvalidTag、pt.decode() 可抛 UnicodeDecodeError，调用方多处只 except KeyError（如 _load_account_for_reauthorize、get_active_oauth_flow），会把凭据损坏放大为 500 而非「凭据缺失」降级 — 修复：在 get_secret 内把 InvalidTag/UnicodeDecodeError 归一为 KeyError 或专用 CredentialCorruptError 并让调用方显式处理
+- [Low][45] src/mail_core/api/oauth_routes.py:387-395 — OAuth 回调页 CSP 允许 unsafe-inline 脚本/样式 — 证据：回调 HTML 内联 replaceState 脚本与样式，CSP 相应放开 script-src/style-src 'unsafe-inline'；当前页面内容除 html.escape 后的 message 外无用户可控注入点，风险低，但放宽后未来往页面插值新字段即失去 CSP 兜底 — 修复：脚本/样式改 nonce 或哈希白名单，message 继续保持 escape
+- [Low][55] src/mail_core/accounts/oauth_flow.py:312-320 — OAuth 流程落盘非原子（flow/state/指针三写） — 证据：save flow、save state、credential_edit 写 active 指针为三次独立写，中途失败会留下无指针的孤儿 flow 或无 flow 的 state 记录，只能等 TTL/人工清理 — 修复：同一 credential_edit/事务内完成三写，或失败时补偿删除已写记录
+
+### Info
+- [Info][50] src/mail_core/__main__.py:84-99 — worker 线程先于 uvicorn 绑定启动 — 证据：run_migrations 后即 start daemon worker 线程，随后 uvicorn.run 若因端口占用失败退出，worker 已在该短窗口消费任务 — 修复：可接受现状（进程随即退出），或先探测端口可绑再启 worker
+- [Info][70] src/mail_core/db/alembic/versions/20261020_0002_mail_core_unified_schema.py:1-19 — 0002 revision ID 与文件命名约定不一致 — 证据：文件名为 20261020_0002_*，revision 却是 autogenerate 哈希 'f5f312751c77'，其余 26 个迁移均为日期序号 ID，排查链路时易误判缺失 0002 的 revision — 修复：不改 ID（已发布链），在文件头注释注明 revision 即该哈希
+- [Info][80] src/mail_core/db/alembic/versions/20261026_0025_sync_execution_tracking.py:120-134 — 0025 downgrade 只恢复 schema 形态不恢复数据 — 证据：upgrade 把 queued/running 请求标 failed（docstring 已明示不可逆），downgrade 重建的 current_job_id 列全为 NULL，与 upgrade 前状态不一致，运维若按「可回滚」预期操作会误判 — 修复：保持现状但在 downgrade docstring 首行补同一不可逆声明（当前仅在文件头 upgrade 说明处）
+- [Info][0] src/mail_core/__init__.py:6-6 — 版本号仍为上游分叉基线 3.0.20（预存） — 证据：`__version__ = "3.0.20"` 与 AGENTS.md 记载的分叉基线版本相同，重构后未再递增，/health 与 FastAPI version 对外仍报该值 — 修复：由项目治理决定新版本号方案后统一更新（预存问题，不计分）
+
+## Appendix — Traceability
+- 被审 HEAD：11bfa52a27018fe46f2ed03f784e19439cfd950d（`git rev-parse HEAD` 实测）
+- 隐私/历史探针：unit 文件全文 grep + `git log -p` 关键词扫（token/key/password/邮箱/绝对路径）均无真实泄漏命中
+- 测试对照：tests/mail_core/test_system_health.py（未鉴权断言）、test_api_health.py（token 头断言）、test_search_recipients.py（仅同步填充、无迁移回填）、test_microsoft_oauth.py / test_oauth_flow_locking.py / test_device_oauth_poll_locking.py / test_sse_*（正路径与锁/重放覆盖较全）
+- 未实跑 validation：本轮只读审查，未运行 pytest/typecheck（按任务约束只写本报告）
