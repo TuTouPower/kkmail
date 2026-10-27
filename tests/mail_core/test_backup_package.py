@@ -1058,6 +1058,40 @@ def test_validate_restore_destination_matrix(tmp_path):
     assert _validate_restore_destination(valid_empty) == valid_empty.resolve()
 
 
+def test_run_backup_logs_warning_when_last_success_write_fails(
+    tmp_path, monkeypatch, caplog
+):
+    import logging
+
+    import mail_core.db.session as db_session
+    import mail_core.backup.package as pkg
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "postgresql://u:p@127.0.0.1:1/db")
+
+    def fake_dump(dest, _url, allow_stub=False):
+        dest.write_bytes(b"valid pg dump data")
+        return "custom"
+
+    def failing_factory():
+        raise RuntimeError("session factory unavailable for test")
+
+    monkeypatch.setattr(pkg, "_pg_dump_to", fake_dump)
+    monkeypatch.setattr(db_session, "get_session_factory", failing_factory)
+
+    dest = tmp_path / "backup-out"
+    with caplog.at_level(logging.WARNING, logger="mail_core.backup"):
+        result = pkg.run_backup(output_dir=str(dest), encrypt=False)
+
+    # The backup itself succeeded; the bookkeeping failure must be visible
+    # in the log instead of being silently swallowed.
+    assert result["status"] == "ok"
+    assert any(
+        "backup:last_success" in record.getMessage()
+        and "session factory unavailable" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def _install_fake_psycopg(monkeypatch, row, executed: list[str]):
     import sys
     import types
