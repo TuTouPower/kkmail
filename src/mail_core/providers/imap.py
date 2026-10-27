@@ -11,9 +11,12 @@ import email.header
 import email.utils
 import imaplib
 import logging
+import queue
 import re
+import socket
 import ssl
 import threading
+import time
 from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -23,6 +26,8 @@ from typing import Any, Sequence
 from mail_core.providers.base import (
     DeltaChange,
     DeltaPage,
+    FolderStatus,
+    IdleNotSupportedError,
     MetadataPage,
     RateLimitHint,
     ReconcileAction,
@@ -41,6 +46,160 @@ _IMAP_ID_ARGUMENT = '("name" "kkmail" "version" "3.0.20" "vendor" "kkmail")'
 _IMAP_COMMANDS_LOCK = threading.Lock()
 with _IMAP_COMMANDS_LOCK:
     imaplib.Commands.setdefault("ID", ("AUTH", "SELECTED"))
+    # t061: IDLE (RFC 2177) is not in the stdlib command table; the watch
+    # session below drives it manually, registration documents the state
+    # requirement and keeps capability-driven command gating consistent.
+    imaplib.Commands.setdefault("IDLE", ("SELECTED",))
+
+_STATUS_ITEM_FIELDS = {
+    "MESSAGES": "messages",
+    "UIDNEXT": "uidnext",
+    "UNSEEN": "unseen",
+    "HIGHESTMODSEQ": "highestmodseq",
+}
+
+
+def _parse_status_items(data: Any) -> FolderStatus | None:
+    """Parse an imaplib STATUS response into a FolderStatus (t061).
+
+    Items are optional per-server (Coremail omits UIDNEXT): missing
+    items stay ``None``. Returns ``None`` when no item could be parsed
+    at all — callers must treat that as a failed probe, never as
+    "no change".
+    """
+    for raw in data or ():
+        if raw is None:
+            continue
+        text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        match = re.search(r"\(([^()]*)\)", text)
+        if not match:
+            continue
+        tokens = match.group(1).split()
+        pairs = dict(zip(tokens[0::2], tokens[1::2]))
+        values: dict[str, int | None] = {}
+        for item, field_name in _STATUS_ITEM_FIELDS.items():
+            raw_value = pairs.get(item)
+            try:
+                values[field_name] = int(raw_value) if raw_value is not None else None
+            except ValueError:
+                values[field_name] = None
+        if all(value is None for value in values.values()):
+            continue
+        return FolderStatus(**values)
+    return None
+
+
+class IdleSessionDisconnected(ConnectionError):
+    """The IDLE watch connection dropped or the server said BYE."""
+
+
+_IDLE_EOF = object()
+
+
+class ImapIdleSession:
+    """A dedicated IMAP connection idling on one selected mailbox (t061).
+
+    Design (validated by the t061 spike against a fake IMAP server):
+    a daemon reader thread owns the socket's read side for the whole
+    session lifetime and queues lines; the controlling thread is the
+    only writer (IDLE / DONE) and consumes untagged lines with
+    timeouts, so no cross-thread write race exists. The session never
+    acquires a connection-slot permit — long-lived IDLE connections
+    live under their own quota, not the task slot budget. Teardown is
+    a socket close (the reader exits on EOF); no LOGOUT is attempted.
+    """
+
+    def __init__(self, client: Any):
+        self._client = client
+        self._lines: "queue.Queue[Any]" = queue.Queue()
+        self._reader = threading.Thread(
+            target=self._pump, name="imap-idle-reader", daemon=True
+        )
+        self._reader.start()
+
+    def _pump(self) -> None:
+        try:
+            while True:
+                line = self._client.readline()
+                if not line:
+                    self._lines.put(_IDLE_EOF)
+                    return
+                self._lines.put(line)
+        except Exception:
+            self._lines.put(_IDLE_EOF)
+
+    def wait_for_change(
+        self,
+        *,
+        timeout_s: float,
+        stop_event: threading.Event,
+        slice_s: float = 0.25,
+    ) -> str:
+        """IDLE until the server reports a change; return the outcome.
+
+        Outcomes: ``"changed"`` (untagged EXISTS/EXPUNGE/FETCH seen),
+        ``"timeout"`` (``timeout_s`` elapsed — caller re-enters),
+        ``"stopped"`` (``stop_event`` set). Raises
+        :class:`IdleSessionDisconnected` on drop or server BYE.
+        """
+        client = self._client
+        tag = client._new_tag()
+        tag_b = tag.encode() if isinstance(tag, str) else tag
+        client.send(tag_b + b" IDLE\r\n")
+        try:
+            first = self._lines.get(timeout=10.0)
+        except queue.Empty:
+            raise IdleSessionDisconnected("no IDLE continuation response") from None
+        if first is _IDLE_EOF:
+            raise IdleSessionDisconnected("connection closed before IDLE continuation")
+        if not first.startswith(b"+"):
+            raise IdleSessionDisconnected(f"unexpected IDLE response: {first!r}")
+
+        deadline = time.monotonic() + timeout_s
+        outcome = "timeout"
+        while True:
+            if stop_event.is_set():
+                outcome = "stopped"
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                outcome = "timeout"
+                break
+            try:
+                line = self._lines.get(timeout=min(slice_s, remaining))
+            except queue.Empty:
+                continue
+            if line is _IDLE_EOF:
+                raise IdleSessionDisconnected("connection closed during IDLE")
+            stripped = line.strip()
+            if stripped.startswith(b"* BYE"):
+                raise IdleSessionDisconnected(f"server BYE during IDLE: {stripped!r}")
+            if stripped.startswith(b"*") and any(
+                token in stripped for token in (b" EXISTS", b" EXPUNGE", b" FETCH")
+            ):
+                outcome = "changed"
+                break
+        client.send(b"DONE\r\n")
+        while True:
+            line = self._lines.get(timeout=10.0)
+            if line is _IDLE_EOF:
+                raise IdleSessionDisconnected("connection closed while ending IDLE")
+            if line.strip().startswith(tag_b):
+                break
+        return outcome
+
+    def close(self) -> None:
+        sock = getattr(self._client, "sock", None)
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+        self._reader.join(timeout=2.0)
 
 
 def _send_imap_id(client: imaplib.IMAP4):
@@ -1400,6 +1559,59 @@ class ImapProvider:
             return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote)]
         finally:
             self._close_client(c, _permit)
+
+    def probe_folder_status(self, folder_remote_id: str) -> FolderStatus | None:
+        """Cheap STATUS probe (t061): one short connection, no SELECT."""
+        c, permit = self._connect_with_permit()
+        try:
+            typ, data = c.status(
+                _quote_mailbox(folder_remote_id),
+                "(MESSAGES UIDNEXT UNSEEN HIGHESTMODSEQ)",
+            )
+            if typ != "OK":
+                return None
+            return _parse_status_items(data)
+        finally:
+            self._close_client(c, permit)
+
+    def open_idle_session(self, folder_remote_id: str) -> ImapIdleSession:
+        """Open the dedicated IDLE watch connection (t061).
+
+        Deliberately bypasses the connection-slot permit: long-lived
+        IDLE connections are governed by the watcher's own quota, not
+        the task slot budget. Raises IdleNotSupportedError when the
+        server does not advertise IDLE.
+        """
+        client = self._connect()
+        try:
+            capabilities = {str(cap).upper() for cap in (client.capabilities or ())}
+            try:
+                typ, cap_data = client.capability()
+                if typ == "OK" and cap_data and cap_data[0]:
+                    raw = cap_data[0]
+                    text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                    capabilities |= {token.upper() for token in text.split()}
+            except Exception:
+                pass
+            if "IDLE" not in capabilities:
+                raise IdleNotSupportedError("server does not advertise IDLE")
+            typ, _ = client.select(_quote_mailbox(folder_remote_id), readonly=True)
+            if typ != "OK":
+                raise IdleNotSupportedError(f"SELECT {folder_remote_id} failed: {typ}")
+            sock = getattr(client, "sock", None)
+            if sock is not None:
+                # The reader thread blocks indefinitely; a finite socket
+                # timeout would poison the buffered reader (t061 spike).
+                sock.settimeout(None)
+        except BaseException:
+            sock = getattr(client, "sock", None)
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            raise
+        return ImapIdleSession(client)
 
     def rate_limit_hint(self) -> RateLimitHint:
         return RateLimitHint(max_requests_per_minute=120, reason="imap default")

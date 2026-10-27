@@ -8,6 +8,8 @@ from typing import Any, Sequence
 from mail_core.providers.base import (
     DeltaChange,
     DeltaPage,
+    FolderStatus,
+    IdleNotSupportedError,
     MetadataPage,
     RateLimitHint,
     ReconcileAction,
@@ -242,6 +244,21 @@ class MemoryProvider:
         remote = {m.remote_id for m in self.messages.get(folder_remote_id, [])}
         local = set(local_remote_ids)
         return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote)]
+
+    def probe_folder_status(self, folder_remote_id: str) -> FolderStatus | None:
+        items = self.messages.get(folder_remote_id)
+        if items is None:
+            return None
+        unseen = sum(1 for m in items if m.is_read is False)
+        return FolderStatus(
+            messages=len(items),
+            uidnext=None,
+            unseen=unseen,
+            highestmodseq=int(self.modseq.get(folder_remote_id, 0)) or None,
+        )
+
+    def open_idle_session(self, folder_remote_id: str) -> Any:
+        raise IdleNotSupportedError("memory provider does not support IDLE")
 
     def rate_limit_hint(self) -> RateLimitHint:
         return RateLimitHint(max_requests_per_minute=1000)

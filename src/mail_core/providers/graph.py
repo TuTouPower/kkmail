@@ -18,6 +18,8 @@ from typing import Any, Sequence
 
 from mail_core.providers.base import (
     DeltaPage,
+    FolderStatus,
+    IdleNotSupportedError,
     MetadataPage,
     RateLimitHint,
     ReconcileAction,
@@ -372,6 +374,31 @@ class GraphProvider:
             next_url = data.get("@odata.nextLink") or data.get("next_link")
         local = set(local_remote_ids)
         return [ReconcileAction(kind="delete", remote_id=rid) for rid in sorted(local - remote_ids)]
+
+    def probe_folder_status(self, folder_remote_id: str) -> FolderStatus | None:
+        """Cheap count probe (t061): one mailFolder GET returns totals.
+
+        Graph has no UIDNEXT/MODSEQ equivalent; change detection uses
+        total/unread counts only.
+        """
+        self._calls.append("probe_folder_status")
+        data = self._call("GET", f"/me/mailFolders/{folder_remote_id}", {})
+        if not isinstance(data, dict):
+            return None
+
+        def _count(key: str) -> int | None:
+            value = data.get(key)
+            return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+        return FolderStatus(
+            messages=_count("totalItemCount"),
+            uidnext=None,
+            unseen=_count("unreadItemCount"),
+            highestmodseq=None,
+        )
+
+    def open_idle_session(self, folder_remote_id: str) -> Any:
+        raise IdleNotSupportedError("graph provider does not support IMAP IDLE")
 
     def rate_limit_hint(self) -> RateLimitHint:
         return RateLimitHint(max_requests_per_minute=60, reason="graph default hint")

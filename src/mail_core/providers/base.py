@@ -78,6 +78,49 @@ class DeltaPage:
 
 
 @dataclass(frozen=True, slots=True)
+class FolderStatus:
+    """Cheap folder-level probe snapshot (t061 STATUS patrol).
+
+    Every dimension is optional: servers that omit an item (e.g.
+    Coremail omits UIDNEXT) report ``None`` for it, and change detection
+    only compares dimensions both snapshots actually carry.
+    """
+
+    messages: int | None = None
+    uidnext: int | None = None
+    unseen: int | None = None
+    highestmodseq: int | None = None
+
+    def to_dict(self) -> dict[str, int | None]:
+        return {
+            "messages": self.messages,
+            "uidnext": self.uidnext,
+            "unseen": self.unseen,
+            "highestmodseq": self.highestmodseq,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "FolderStatus | None":
+        if not isinstance(data, dict):
+            return None
+
+        def _int(key: str) -> int | None:
+            value = data.get(key)
+            return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+        return cls(
+            messages=_int("messages"),
+            uidnext=_int("uidnext"),
+            unseen=_int("unseen"),
+            highestmodseq=_int("highestmodseq"),
+        )
+
+
+class IdleNotSupportedError(RuntimeError):
+    """The provider/server cannot maintain an IDLE watch session."""
+
+
+@dataclass(frozen=True, slots=True)
 class RateLimitHint:
     max_requests_per_minute: int | None = None
     retry_after_seconds: float | None = None
@@ -126,6 +169,19 @@ class MailProvider(Protocol):
     def rate_limit_hint(self) -> RateLimitHint:
         ...
 
+    def probe_folder_status(self, folder_remote_id: str) -> FolderStatus | None:
+        """Cheap folder status probe (t061); ``None`` = unsupported."""
+        ...
+
+    def open_idle_session(self, folder_remote_id: str) -> Any:
+        """Open a dedicated IDLE watch session (t061, IMAP only).
+
+        Raises :class:`IdleNotSupportedError` when the provider or the
+        server cannot IDLE. The returned session owns its connection —
+        it never consumes a connection-slot permit.
+        """
+        ...
+
 
 class StubProvider:
     """Unit-test double only — never returned by ``build_provider``.
@@ -162,3 +218,9 @@ class StubProvider:
 
     def rate_limit_hint(self) -> RateLimitHint:
         return RateLimitHint(max_requests_per_minute=60)
+
+    def probe_folder_status(self, folder_remote_id: str) -> FolderStatus | None:
+        return None
+
+    def open_idle_session(self, folder_remote_id: str) -> Any:
+        raise IdleNotSupportedError("stub provider does not support IDLE")
