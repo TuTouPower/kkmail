@@ -129,6 +129,20 @@ class RewrapResult:
         )
 
 
+def _fsync_parent_dir(path: Path) -> None:
+    """fsync the directory holding ``path`` so a rename is durable."""
+    try:
+        fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def rewrap_blob_file(
     path: Path,
     *,
@@ -144,13 +158,21 @@ def rewrap_blob_file(
     tmp = path.with_name(f"{path.name}.rewrap-{uuid.uuid4().hex}")
     created = False
     try:
-        with path.open("rb") as src, tmp.open("xb") as dst:
-            created = True
+        # Temp file holds decrypted-then-rewrapped key material in flight:
+        # create it owner-only (0o600) instead of the umask default.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created = True
+        try:
+            os.fchmod(fd, 0o600)
+        except (AttributeError, OSError):
+            pass
+        with path.open("rb") as src, os.fdopen(fd, "wb") as dst:
             for piece in iter_wrap(iter_unwrap(src, keyring=keyring), keyring=keyring, key_version=target):
                 dst.write(piece)
             dst.flush()
             os.fsync(dst.fileno())
         tmp.replace(path)
+        _fsync_parent_dir(path)
     finally:
         if created:
             try:
