@@ -75,3 +75,23 @@ def test_a13_backup_package_is_verified_after_write():
         "via mail_core.backup.verify_backup_package, not only [[ -s ]]"
     )
     assert "MANIFEST" in text
+
+
+# --- A161: image names must be discovered, not assumed from a prefix ---
+
+
+def test_a161_image_names_come_from_compose_config():
+    text = _deploy_text()
+    assert "config --images" in text, (
+        "deploy must discover built image names via `docker compose config "
+        "--images` instead of assuming a <project>-<service> prefix"
+    )
+    assert "resolve_compose_image" in text
+
+
+def test_a161_no_hardcoded_kkmail_image_prefix():
+    text = _deploy_text()
+    assert "kkmail-$service" not in text
+    assert "kkmail-migrate:latest" not in text
+    assert '"kkmail-api:' not in text
+    assert '"kkmail-worker:' not in text

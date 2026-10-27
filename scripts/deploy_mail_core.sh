@@ -86,21 +86,49 @@ print(
 )
 PY
 
+# Image names are NOT "<clone-dir>-<service>": Compose derives the project
+# name from the checkout directory, so a renamed clone would break every
+# hard-coded image-prefix tag below mid-deploy (after push + backup).
+# Always resolve the actual image for a service from the Compose model,
+# and derive rollback/commit tags from that resolved repository name.
+resolve_compose_image() {
+    local service="$1"
+    docker compose -f docker-compose.mail-core.yml --profile distributed config --images \
+        | grep -E -- "-${service}(:|$)" | head -n 1
+}
+
+image_repo() {
+    local image="$1"
+    if [[ "$image" == *"@"* ]]; then
+        printf '%s' "${image%%@*}"
+    elif [[ "$image" == *:* && "${image##*/}" == *:* ]]; then
+        printf '%s' "${image%:*}"
+    else
+        printf '%s' "$image"
+    fi
+}
+
 if docker inspect kkmail-mail-core-api >/dev/null 2>&1; then
     api_image="$(docker inspect --format '{{.Image}}' kkmail-mail-core-api)"
-    docker image tag "$api_image" "kkmail-api:rollback-$stamp"
+    api_image_name="$(docker inspect --format '{{.Config.Image}}' kkmail-mail-core-api)"
+    docker image tag "$api_image" "$(image_repo "$api_image_name"):rollback-$stamp"
 fi
 if docker inspect kkmail-mail-core-worker >/dev/null 2>&1; then
     worker_image="$(docker inspect --format '{{.Image}}' kkmail-mail-core-worker)"
-    docker image tag "$worker_image" "kkmail-worker:rollback-$stamp"
+    worker_image_name="$(docker inspect --format '{{.Config.Image}}' kkmail-mail-core-worker)"
+    docker image tag "$worker_image" "$(image_repo "$worker_image_name"):rollback-$stamp"
 fi
-if docker image inspect kkmail-migrate:latest >/dev/null 2>&1; then
-    docker image tag kkmail-migrate:latest "kkmail-migrate:rollback-$stamp"
+
+migrate_image="$(resolve_compose_image migrate)"
+if [[ -n "$migrate_image" ]] && docker image inspect "$migrate_image" >/dev/null 2>&1; then
+    docker image tag "$migrate_image" "$(image_repo "$migrate_image"):rollback-$stamp"
 fi
 
 docker compose -f docker-compose.mail-core.yml --profile distributed build api worker migrate
 for service in api worker migrate; do
-    docker image tag "kkmail-$service:latest" "kkmail-$service:$commit"
+    service_image="$(resolve_compose_image "$service")"
+    [[ -n "$service_image" ]] || fail "could not resolve built image for service: $service"
+    docker image tag "$service_image" "$(image_repo "$service_image"):$commit"
 done
 docker compose -f docker-compose.mail-core.yml --profile distributed up -d api worker
 
