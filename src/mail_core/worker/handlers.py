@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from datetime import datetime
 from typing import Any
@@ -74,6 +75,27 @@ def _uuid_or_none(value: Any) -> uuid.UUID | None:
         return None
 
 
+def _coerce_retry_after(value: Any, *, fallback: float = CAPACITY_RETRY_SECONDS) -> float:
+    """Coerce a capacity ``retry_after`` hint to a usable delay (A18).
+
+    Handler results and provider exceptions carry this value across
+    loosely-typed boundaries, so it may be a non-numeric string, NaN or
+    infinity. Anything that is not a finite, non-negative number falls
+    back to the default capacity delay instead of raising — a bare
+    ``float(...)`` failure here would turn a no-attempt deferral into a
+    counted job failure.
+    """
+    if isinstance(value, bool):
+        return fallback
+    try:
+        delay = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(delay) or delay < 0:
+        return fallback
+    return delay
+
+
 def _validate_job_payload(job: WorkerJob) -> tuple[dict[str, Any], str | None]:
     if job.payload is None:
         payload: dict[str, Any] = {}
@@ -139,7 +161,7 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
             session,
             job,
             worker_id=worker_id,
-            delay_seconds=float(delay) if delay else CAPACITY_RETRY_SECONDS,
+            delay_seconds=_coerce_retry_after(delay),
         )
         return False
     if (
@@ -362,7 +384,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 session,
                 job,
                 worker_id=worker_id,
-                delay_seconds=float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS),
+                delay_seconds=_coerce_retry_after(getattr(exc, "retry_after_seconds", None)),
             )
             return False
         log.error("job %s (%s) failed: %s", job.id, job.job_type, safe_error(exc))
