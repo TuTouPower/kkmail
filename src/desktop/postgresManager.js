@@ -260,7 +260,11 @@ PostgresManager.prototype.hasBinaries = function hasBinaries() {
   }
   const pick = (name) => {
     const fromHint = resolveBin(name, this.pgBinDir)
-    if (check(fromHint) && (path.isAbsolute(fromHint) || fromHint.includes(path.sep))) return fromHint
+    // A258: resolveBin returns `name` itself when the hint dir has no such
+    // binary; probing it once IS the PATH probe, so skip straight to the
+    // PATH branch instead of spawning the same `--version` check twice.
+    if (fromHint === name) return check(name) ? name : null
+    if (check(fromHint)) return fromHint
     // Fall back to PATH (dev machines with system postgres)
     if (check(name)) return name
     return null

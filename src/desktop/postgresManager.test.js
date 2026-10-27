@@ -183,6 +183,35 @@ function testHasBinariesCachesAndTimeout() {
   fs.rmSync(dataRoot, { recursive: true, force: true })
 }
 
+function testHasBinariesProbesPathOncePerBinary() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-probe-once-'))
+  const counts = {}
+  const mgr = new PostgresManager({
+    dataRoot,
+    pgBinDir: path.join(dataRoot, 'missing-bin'),
+    spawnSync: (bin) => {
+      counts[bin] = (counts[bin] || 0) + 1
+      return { error: null, status: 0, stdout: '', stderr: '' }
+    },
+  })
+  try {
+    const bins = mgr.hasBinaries()
+    assert.deepStrictEqual(bins, {
+      initdb: 'initdb',
+      pg_ctl: 'pg_ctl',
+      postgres: 'postgres',
+      createdb: 'createdb',
+    })
+    assert.deepStrictEqual(
+      counts,
+      { initdb: 1, pg_ctl: 1, postgres: 1, createdb: 1 },
+      'each PATH binary must be probed exactly once, not once via the hint fallback and once via PATH',
+    )
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
 function testStopIdempotentNoThrowaway() {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-stop-'))
   const mgr = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
@@ -401,6 +430,7 @@ testPasswordOverridePersisted0600()
 testPasswordOverrideReturnsPersistedValueWhenFileExists()
 testPasswordCreationRaceUsesFirstWriterValue()
 testHasBinariesCachesAndTimeout()
+testHasBinariesProbesPathOncePerBinary()
 testStopIdempotentNoThrowaway()
 testStopFailureAndRetry()
 testInitPwfileCleanupLegacy()
