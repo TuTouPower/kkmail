@@ -104,3 +104,28 @@ def test_a169_bad_expires_in_still_persists_rotated_refresh_token(bad_expires_in
     saved = json.loads(store.get_secret("oauth:graph"))
     assert saved["access_token"] == "at-new"
     assert saved["refresh_token"] == "rt-rotated"
+
+
+# --- A186: missing expires_in must still set expires_at (default 3600s) ---
+
+
+def test_a186_missing_expires_in_defaults_expires_at_to_3600_and_caches():
+    store = _store()
+    calls = []
+
+    def token_post(method, url, form, headers):
+        calls.append(form)
+        return {"access_token": "at-no-expiry", "refresh_token": "rt-2"}  # no expires_in
+
+    client = OAuthTokenClient(
+        credential_ref="oauth:graph", store=store, provider="graph", http_post=token_post
+    )
+    before = time.time()
+    assert client.get_access_token() == "at-no-expiry"
+    after = time.time()
+    saved = json.loads(store.get_secret("oauth:graph"))
+    assert saved["expires_at"] >= before + 3600 - 5
+    assert saved["expires_at"] <= after + 3600 + 5
+    # With expires_at set, the next call is served from cache, not a refresh.
+    assert client.get_access_token() == "at-no-expiry"
+    assert len(calls) == 1

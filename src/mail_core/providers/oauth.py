@@ -192,24 +192,27 @@ class OAuthTokenClient:
                     data["access_token"] = access
                     if resp.get("refresh_token"):
                         data["refresh_token"] = resp["refresh_token"]
+                    # A169+A186: expires_in is optional, but expires_at must
+                    # always be written. A missing value falls back to the
+                    # IdP-conventional 3600s (otherwise _access_valid stays
+                    # False and every API call forces a refresh); a malformed
+                    # /non-finite value is treated as missing (A169) so it can
+                    # never roll back persistence of the rotated refresh_token.
+                    seconds = 3600.0
                     expires_in = resp.get("expires_in")
                     if expires_in is not None:
-                        # A169: expires_in is an optional field — a malformed
-                        # value must not roll back the whole refresh, or the
-                        # already-rotated refresh_token would be lost with it.
-                        # Treat an unparseable/non-finite value as missing
-                        # (no expires_at written) and persist the tokens.
                         try:
-                            seconds = float(expires_in)
-                            if not _math.isfinite(seconds):
+                            parsed = float(expires_in)
+                            if not _math.isfinite(parsed):
                                 raise ValueError("non-finite expires_in")
-                            data["expires_at"] = time.time() + seconds
+                            seconds = parsed
                         except (TypeError, ValueError, OverflowError):
                             log.warning(
-                                "oauth token response has unusable expires_in %r; "
-                                "persisting tokens without expires_at",
+                                "oauth token response has unusable expires_in (type %s); "
+                                "falling back to 3600s default",
                                 type(expires_in).__name__,
                             )
+                    data["expires_at"] = time.time() + seconds
                     self._cached = dict(data)
             if adopted is not None:
                 return adopted
