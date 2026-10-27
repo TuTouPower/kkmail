@@ -60,6 +60,40 @@ it('Microsoft browser login reauthorizes an existing Graph account (edit)', asyn
   expect(write?.body.credentials).toBeUndefined()
 })
 
+it('A20: overlapping OAuth status polls are suppressed while a check is in flight', async () => {
+  let statusCalls = 0
+  vi.stubGlobal('open', vi.fn(() => ({ opener: {} })))
+  const account = { id: 'graph-1', email: 'verified@outlook.com', provider: 'graph', account_type: 'graph',
+    status: 'active', sync_status: 'auth_failed', sync_enabled: false, oauth_tenant: 'consumers' }
+  vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+    const url = String(input)
+    let value: unknown = {}
+    if (url.includes('/api/auth/me')) value = { csrf_token: 'test-csrf' }
+    else if (url.includes('/oauth/metadata')) value = { provider: 'microsoft', runtime_mode: 'desktop',
+      default_client_type: 'public', redirect_uri: 'http://localhost:23456/api/accounts/oauth/callback/microsoft',
+      callback_path: '/api/accounts/oauth/callback/microsoft', origin_configured: true }
+    else if (url.includes('/oauth/active')) value = { flow: null }
+    else if (url.endsWith('/oauth/start')) value = { flow_id: 'ms-flow', provider: 'microsoft', intent: 'reauthorize',
+      method: 'authorization_code', status: 'pending', auth_url: 'https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize',
+      client_type: 'public', redirect_uri: 'http://localhost:23456/api/accounts/oauth/callback/microsoft', expires_at: Date.now() / 1000 + 600 }
+    else if (url.includes('/oauth/flows/ms-flow')) {
+      statusCalls += 1
+      // The status request hangs: no further poll may start until it settles.
+      return new Promise<Response>(() => {})
+    }
+    return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
+  }))
+  const { container } = await render(<AccountDialog account={account} groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
+  await waitFor(() => expect((container.querySelector('#account-redirect-uri') as HTMLInputElement).value).toContain('localhost:23456'))
+  await click(Array.from(container.querySelectorAll('button')).find(b => b.textContent === '重新授权')!)
+  await waitFor(() => expect(container.textContent).toContain('正在等待 Microsoft 授权完成'))
+  window.dispatchEvent(new Event('focus'))
+  window.dispatchEvent(new Event('focus'))
+  window.dispatchEvent(new Event('focus'))
+  await new Promise(resolve => setTimeout(resolve, 50))
+  expect(statusCalls).toBe(1)
+})
+
 // p056 replacement note: the previous device-code test drove the OLD flat
 // add-account form. Device-code login is no longer offered when adding an
 // account (simplified redirect exchange instead); it remains available for

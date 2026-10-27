@@ -58,6 +58,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
   const [copyTip, setCopyTip] = useState('')
   const flowRef = useRef<string | null>(null)
   const devicePollNotBeforeRef = useRef(0)
+  const pollInFlightRef = useRef(false)
   // p056: Microsoft simplified onboarding (add-account only) — two stages:
   // 'start' shows just email/group + the authorize button; 'paste' guides
   // the user to paste the full localhost redirect URL back for exchange.
@@ -155,15 +156,32 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
     return () => { cancelled = true }
   }, [provider, account, oauthProvider])
 
+  // Poll dependencies are narrowed to the flow's identity fields: keying
+  // the effect on the whole oauthFlow object rebuilt the 1s timer on every
+  // poll response. Polling is serial (recursive setTimeout, next check is
+  // scheduled only after the previous one settles) with an in-flight
+  // guard, so focus events and slow responses cannot stack concurrent
+  // status requests.
+  const flowId = oauthFlow?.flow_id
+  const flowStatus = oauthFlow?.status
+  const flowMethod = oauthFlow?.method
   useEffect(() => {
-    if (!oauthFlow || oauthFlow.status !== 'pending' || typeof api.getOAuthFlowStatus !== 'function') return
+    if (!flowId || flowStatus !== 'pending' || typeof api.getOAuthFlowStatus !== 'function') return
     let stopped = false
+    let timer: number | undefined
+    const schedule = () => {
+      if (stopped) return
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = window.setTimeout(() => { void check() }, 1000)
+    }
     const check = async () => {
-      if (oauthFlow.method === 'device_code' && Date.now() < devicePollNotBeforeRef.current) return
+      if (pollInFlightRef.current) { schedule(); return }
+      if (flowMethod === 'device_code' && Date.now() < devicePollNotBeforeRef.current) { schedule(); return }
+      pollInFlightRef.current = true
       try {
-        const next = await (oauthFlow.method === 'device_code' ? api.pollOAuthFlow(oauthFlow.flow_id) : api.getOAuthFlowStatus(oauthFlow.flow_id))
+        const next = await (flowMethod === 'device_code' ? api.pollOAuthFlow(flowId) : api.getOAuthFlowStatus(flowId))
         if (stopped) return
-        if (oauthFlow.method === 'device_code') devicePollNotBeforeRef.current = 0
+        if (flowMethod === 'device_code') devicePollNotBeforeRef.current = 0
         setOauthFlow(prev => prev && prev.flow_id === next.flow_id ? { ...prev, ...next } : prev)
         if (next.status === 'authorized') {
           if (!account && next.verified_email) setEmail(next.verified_email)
@@ -173,7 +191,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
           setStatus(next.error)
         }
       } catch (err) {
-        if (!stopped && oauthFlow.method === 'device_code' && err && typeof err === 'object') {
+        if (!stopped && flowMethod === 'device_code' && err && typeof err === 'object') {
           const apiError = err as ApiError
           if (apiError.status === 429) {
             devicePollNotBeforeRef.current = Date.now() + Math.max(1, apiError.retryAfterSeconds ?? 5) * 1000
@@ -181,17 +199,20 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
           }
         }
         if (!stopped) setStatus(errorMessage(err, `获取 ${oauthLabel} 授权状态失败`))
+      } finally {
+        pollInFlightRef.current = false
+        schedule()
       }
     }
-    const timer = window.setInterval(() => { void check() }, 1000)
+    schedule()
     const onFocus = () => { void check() }
     window.addEventListener('focus', onFocus)
     return () => {
       stopped = true
-      window.clearInterval(timer)
+      if (timer !== undefined) window.clearTimeout(timer)
       window.removeEventListener('focus', onFocus)
     }
-  }, [oauthFlow, account, oauthLabel])
+  }, [flowId, flowStatus, flowMethod, account, oauthLabel])
 
   useEffect(() => {
     if (oauthFlow?.method !== 'device_code' || oauthFlow.status !== 'pending') return
