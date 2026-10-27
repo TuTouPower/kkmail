@@ -603,6 +603,32 @@ def test_sectioned_agents_force_merge_intro_boundaries(env):
     assert consumer / "AGENTS.md" in changed
 
 
+def test_markdown_section_skips_fenced_headings(env):
+    """A157: fenced code block 内的 ## 行不得被当作章节边界/目标。"""
+    text = (
+        "intro\n"
+        "```md\n"
+        "## 开发原则\n"
+        "fenced fake force\n"
+        "```\n"
+        "## 目录与读写规则\n"
+        "merge body\n"
+        "```\n"
+        "## not a heading inside fence\n"
+        "```\n"
+        "still merge body\n"
+        "## 开发原则\n"
+        "real force body\n"
+    )
+    force = rs._markdown_section(text, "## 开发原则")
+    assert force is not None
+    assert force[2] == "## 开发原则\nreal force body\n"
+    merge = rs._markdown_section(text, "## 目录与读写规则")
+    assert merge is not None
+    assert "still merge body" in merge[2]
+    assert merge[2].endswith("still merge body\n")
+
+
 def test_sectioned_agents_requires_headings(env):
     src, consumer = env["src"], env["consumer"]
     (src / "AGENTS.md").write_text("legacy")

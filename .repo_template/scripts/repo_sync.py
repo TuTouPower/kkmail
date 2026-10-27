@@ -1184,8 +1184,19 @@ def _markdown_section(text: str, heading: str) -> tuple[int, int, str] | None:
     lines = text.splitlines(keepends=True)
     offsets: list[tuple[int, str]] = []
     offset = 0
+    fence_char: str | None = None
+    fence_len = 0
     for line in lines:
-        if line.startswith("## "):
+        stripped = line.lstrip()
+        fence = re.match(r"(`{3,}|~{3,})", stripped)
+        if fence:
+            marker = fence.group(1)
+            if fence_char is None:
+                fence_char, fence_len = marker[0], len(marker)
+            elif marker[0] == fence_char and len(marker) >= fence_len:
+                fence_char, fence_len = None, 0
+        elif fence_char is None and line.startswith("## "):
+            # fenced code block 内的 ## 示例行不是章节标题（A157）
             offsets.append((offset, line.strip()))
         offset += len(line)
     for index, (start, title) in enumerate(offsets):
