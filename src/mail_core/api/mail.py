@@ -6,6 +6,7 @@ Routes call the application layer only (queries / search / mutations / attachmen
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from datetime import datetime
 from email.utils import formataddr, getaddresses
@@ -522,9 +523,22 @@ def api_set_message_read(message_id: UUID, body: ReadBody) -> MutationOut:
         return _mutation_out(result)
 
 
+# A180: hard budgets for the mark-all-read batch loop. Each batch commits
+# independently, so the operation is NOT atomic: on error or budget
+# exhaustion, batches already committed stay applied. Retrying is safe —
+# the operation is idempotent and resumes from the remaining unread set.
+MARK_ALL_READ_MAX_BATCHES = 200
+MARK_ALL_READ_MAX_SECONDS = 120.0
+
+
 @router.post("/mark-all-read", response_model=MarkAllReadOut)
 def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
-    """Batch mark messages read across the matching scope (folder/account/flag)."""
+    """Batch mark messages read across the matching scope (folder/account/flag).
+
+    Non-atomic by design: batches commit independently, so a failure may
+    leave partial progress applied. The request is idempotent — retry it
+    to continue marking the remainder.
+    """
     Session = get_session_factory()
     if body.group_id is not None and (body.account_id is not None or body.folder_id is not None):
         raise HTTPException(400, "group_id cannot be combined with account_id or folder_id")
@@ -549,7 +563,17 @@ def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
 
     total_count = 0
     after_message_id = None
+    batches_done = 0
+    started_at = time.monotonic()
     while True:
+        if batches_done >= MARK_ALL_READ_MAX_BATCHES or (
+            time.monotonic() - started_at > MARK_ALL_READ_MAX_SECONDS
+        ):
+            raise HTTPException(
+                500,
+                "mark-all-read exceeded its batch/time budget; batches already "
+                "committed stay applied — retry to continue (idempotent)",
+            )
         with Session() as session:
             try:
                 batch = mark_all_messages_read(
@@ -566,11 +590,18 @@ def api_mark_all_read(body: MarkAllReadBody) -> MarkAllReadOut:
             except LookupError as exc:
                 raise HTTPException(404, str(exc)) from exc
             session.commit()
+        batches_done += 1
         total_count += batch.count
         if batch.count < MARK_ALL_READ_BATCH_SIZE:
             break
         if batch.last_message_id is None:
             raise RuntimeError("mark-all-read batch did not return its keyset cursor")
+        if after_message_id is not None and batch.last_message_id <= after_message_id:
+            raise HTTPException(
+                500,
+                "mark-all-read cursor did not advance; batches already committed "
+                "stay applied — retry to continue (idempotent)",
+            )
         after_message_id = batch.last_message_id
     return MarkAllReadOut(
         success=True,
