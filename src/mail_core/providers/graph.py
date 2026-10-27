@@ -47,6 +47,17 @@ class GraphPaginationError(RuntimeError):
     """Raised when Graph paging cannot complete within its safety bounds."""
 
 
+def _assert_single_page_within_item_limit(data: Any, context: str) -> None:
+    # A290: a single page is one call's worth of items, so the same
+    # MAX_GRAPH_ITEMS_PER_CALL bound list/reconcile enforce applies here.
+    if isinstance(data, dict):
+        value = data.get("value")
+        if isinstance(value, (list, tuple)) and len(value) > MAX_GRAPH_ITEMS_PER_CALL:
+            raise GraphPaginationError(
+                f"Graph {context} page exceeded the {MAX_GRAPH_ITEMS_PER_CALL} item limit"
+            )
+
+
 def graph_folder_role(
     folder: dict[str, Any],
     inbox_id: str | None = None,
@@ -205,6 +216,7 @@ class GraphProvider:
             raise GraphNotConfiguredError("Graph message list not wired yet")
         path = (cursor or {}).get("next_link") or f"/me/mailFolders/{folder_remote_id}/messages"
         data = self._call("GET", path, {})
+        _assert_single_page_within_item_limit(data, "metadata")
         return parse_graph_metadata_page(data)
 
     def fetch_mime(self, remote_id: str, *, folder_remote_id: str | None = None) -> bytes:
@@ -232,6 +244,7 @@ class GraphProvider:
         if self.transport is None:
             raise GraphNotConfiguredError("Graph delta query not wired yet")
         data = self._call("GET", link, {})
+        _assert_single_page_within_item_limit(data, "delta")
         return parse_graph_delta(data)
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
