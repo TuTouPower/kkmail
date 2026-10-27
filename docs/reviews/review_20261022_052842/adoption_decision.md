@@ -8,7 +8,7 @@ docs/reviews/review_20261022_052842
 
 - 已读：bundle_cross_validation.md, bundle_v1_security.md, bundle_v2_correctness.md, bundle_v3_contracts.md, bundle_v4_performance.md, bundle_v5_architecture.md, bundle_v6_robustness.md, bundle_v7_tests.md, bundle_v8_docs.md, review_intensive.md
 - 缺失：无
-- 合并说明：原始 86 项 finding（Critical=6, High=22, Medium=28, Low=27, Info=3）经交叉核验、去重与聚类合并为 67 项决策条目。原 4 项待决定项（D1-D4）经用户决策已全部转为采纳项（A53-A56），最终形成采纳 56 项、不采纳 11 项、待决定 0 项。其中死代码与死 import 统一收拢为 A46；文档断链与旧路径统一收拢为 A47；跨 bundle 交叉确认项（如单实例锁、会话无缓存查库、日志脱敏等）来源均已列全并吸收 bundle_cross_validation 验证结论。
+- 合并说明：原始 84 项 finding（Critical=6, High=20, Medium=28, Low=27, Info=3；aggregate 原稿曾重复计入两对同根 finding，合计虚增 2 项，现已按 file:line+根因合并勘误）经交叉核验、去重与聚类合并为 67 项决策条目。原 4 项待决定项（D1-D4）经用户决策已全部转为采纳项（A53-A56），最终形成采纳 56 项、不采纳 11 项、待决定 0 项。其中死代码与死 import 统一收拢为 A46；文档断链与旧路径统一收拢为 A47；跨 bundle 交叉确认项（如单实例锁、会话无缓存查库、日志脱敏等）来源均已列全并吸收 bundle_cross_validation 验证结论。
 
 ## 统计
 

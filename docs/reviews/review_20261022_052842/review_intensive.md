@@ -3,7 +3,7 @@
 - Generated: 2026-10-22T05:49:17.204130+08:00
 - OUTDIR: docs/reviews/review_20261022_052842
 - Bundles: 9 (bundle_cross_validation.md, bundle_v1_security.md, bundle_v2_correctness.md, bundle_v3_contracts.md, bundle_v4_performance.md, bundle_v5_architecture.md, bundle_v6_robustness.md, bundle_v7_tests.md, bundle_v8_docs.md)
-- Findings: Critical=6 High=22 Medium=28 Low=27 Info=3 (deduped 86)
+- Findings: Critical=6 High=20 Medium=28 Low=27 Info=3 (deduped 84)
 - Verdict: **BLOCK**
 
 ## Critical / High (必修)
@@ -16,9 +16,7 @@
 - [Critical][90] src/mail_core/blobs/archive.py:158-216 — 核心状态表 message_archive_state 缺少二级索引导致 Worker 高频全表扫描 — 在 Alembic 迁移中，`message_archive_state` 表仅建立了 `message_id` 主键，未建立任何二级索引。Worker 调度器高频轮询 `claim_archive_batch`（按 state、claimed_by、priority 过滤）、`reclaim_stale_archive_claims` 以及 `resume_quota_paused_archives`。随着邮件累积，每次轮询均对该表执行全表扫描，严重耗尽磁盘 I/O — 添加复合条件索引：`CREATE INDEX ix_archive_claim ON message_archive_state (state, priority) WHERE claimed_by IS NULL;`。
 - [High][100] src/frontend/src/App.tsx:18-21 — 历史 Commit 泄露真实手机号及个人真实邮箱 PII 隐私 — 历史提交 `7931147f8722ff423e8f810aa7ef3bc7709bbf45` 的 `demoAccounts` 中包含国内真实手机号邮箱 `redacted_mobile@example.com` 以及真实个人 Gmail/Outlook 账号。开源后造成直接的实名隐私关联泄露 — 使用 git-filter-repo 对历史提交执行脱敏打码。
 - [High][100] scripts/migrate_from_legacy_db.py:68-69 — 数据库迁移脚本硬编码默认 Fallback 解密密钥 — 脚本中使用 `legacy_secret = os.environ.get("LEGACY_SECRET_KEY", "[REDACTED_KEY]")`。任何旧版 SQLite 数据库若使用默认 key 或迁移未传参，其保存的所有账号密码、OAuth token 均可被该硬编码 256 位密钥批量解密 — 移除硬编码默认密钥，若环境变量未提供直接中断退出。
-- [High][100] scripts/migrate_from_legacy_db.py:68 — 数据库迁移脚本硬编码默认解密密钥 — 第 68 行 `legacy_secret = os.environ.get("LEGACY_SECRET_KEY", "[REDACTED_KEY]")`，自设硬编码默认 secret，严重违反全局规范与 conventions.md「不预设弱口令或示例密钥，缺失时拒绝启动」— 移除默认值，若环境变量未提供则直接报错退出。
 - [High][98] src/mail_core/api/accounts.py:24 — 路由层直接导入并消费 ORM 存储模型击穿分层架构契约 — `api/accounts.py` 第 24 行直接 `from mail_core.mail.storage.models import Account, AccountGroup`，且在 `_account_out` 中直接操作 ORM 实体字段并手动管理事务；违反了 `src/mail_core/README.md`「api: Routes call the application layer only」与分层架构契约 — 在 application 层定义标准数据传输对象（DTO），由 application 层统一完成 ORM 到 DTO 转换，路由层仅消费 application 层返回的数据。
-- [High][98] src/mail_core/api/accounts.py:24 — 路由层直接操作 ORM 实体击穿分层架构设计 — `api/accounts.py` 直接导入 ORM 实体 `Account, AccountGroup`，且在路由文件内直接读取数据库字段并手动控制事务，违反了 `src/mail_core/README.md`「api: Routes call the application layer only」与分层架构约定 — 业务逻辑与实体映射全部收拢至 application 层，路由层仅消费 DTO。
 - [High][98] scripts/mail-core-chaos-lease.sh:16 — Chaos 破坏性脚本数据库前置检查通配符包含可穿透到生产库 — 第 16 行判断逻辑为 `if [[ "$DB_NAME" != *test* && "$DB_NAME" != *chaos* ]]`。若生产环境数据库名称为 `production_latest`、`attest_db`、`contest` 等带有 `test` 子串的库名，前置检查将被完全绕过，随后直接对目标数据库执行 `alembic upgrade head` 与并发租约抢占注入破坏数据 — 将子串通配改为严格的精确匹配或前缀/后缀正则约束（如 `^.*_test$` / `^test_.*$`）。
 - [High][98] docs/guides/deployment.md:19 — 部署手册 API 发布端口与真实 Compose 配置严重冲突 — 文档声称 `访问：http://127.0.0.1:8000 ... compose 只把 API（8000）和 PostgreSQL（主机 5433）发布到 127.0.0.1`；然而 `docker-compose.mail-core.yml` 第 71 行配置为 `- "127.0.0.1:37281:8000"`，且第 53 行显式设置 `MAIL_CORE_PUBLIC_BASE: "http://127.0.0.1:37281"`。用户按照部署手册访问 8000 端口将无法访问服务 — 核实权威端口，保持 `deployment.md` 与 `docker-compose.mail-core.yml` 完全一致。
 - [High][96] tests/mail_core/conftest.py:83 — MAIL_CORE_REQUIRE_DB 门禁匹配漏洞导致 DB 测试静默跳过 — `pytest_collection_modifyitems` 仅根据 `if "MAIL_CORE_DATABASE_URL" in reason` 报错；但 `test_auth.py:36`、`test_attachment_access.py:95` 的 skip 原因写为 `reason="database required"`，`test_blob_crypto_gc.py:59` 写为 `reason="PG required"`，均未包含 `MAIL_CORE_DATABASE_URL` 子串。导致即便在强制 DB 的 CI 门禁环境下，上述测试跳过时依然不会触发报错，门禁失效 — 放宽正则或子串匹配检查，凡是检测缺少数据库的跳过一律统一拦截。
