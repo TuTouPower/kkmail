@@ -362,6 +362,38 @@ def test_goal_no_args_does_not_reset_corrupt_snapshot(git_repo):
     assert _snapshot(git_repo)["queue"] == ["t001", "t002"]
 
 
+def test_goal_snapshot_with_unknown_version_is_rejected(git_repo):
+    """A261: version != 1 的快照必须报错并提示 --reset，不得静默按 v1 解析。"""
+    assert _cli(git_repo, "goal").returncode == 0
+    path = git_repo / "docs" / "runtime" / "goal_queue.json"
+    data = _snapshot(git_repo)
+    data["version"] = 2
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    for args in (("goal-check",), ("goal",)):
+        result = _cli(git_repo, *args)
+        assert result.returncode != 0
+        assert "--reset" in result.stderr + result.stdout
+    # --reset 是恢复路径：覆盖坏版本快照后可正常冻结
+    rebuilt = _cli(git_repo, "goal", "--reset")
+    assert rebuilt.returncode == 0, rebuilt.stderr
+    assert _snapshot(git_repo)["queue"] == ["t001", "t002"]
+    assert _snapshot(git_repo)["version"] == 1
+
+
+def test_goal_snapshot_with_duplicate_tids_is_rejected(git_repo):
+    """A261: 队列含重复 tid 判损坏，不得进入 goal-check 判定。"""
+    assert _cli(git_repo, "goal").returncode == 0
+    path = git_repo / "docs" / "runtime" / "goal_queue.json"
+    data = _snapshot(git_repo)
+    data["queue"] = ["t001", "t001"]
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    result = _cli(git_repo, "goal-check")
+    assert result.returncode != 0
+    text = result.stderr + result.stdout
+    assert "重复" in text
+    assert "--reset" in text
+
+
 def test_goal_no_args_reports_binary_snapshot_as_corrupt(git_repo):
     assert _cli(git_repo, "goal").returncode == 0
     path = git_repo / "docs" / "runtime" / "goal_queue.json"

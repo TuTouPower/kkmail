@@ -213,6 +213,13 @@ def _parse_snapshot(data: object) -> dict:
         raise ctx.TaskDataError(
             f"队列快照 {ctx._rel(QUEUE_PATH)} 结构非法；重新运行 task.py goal --reset"
         )
+    # version 缺省按 1 兼容无版本字段的旧快照；显式非 1 一律拒绝（A261）。
+    version = data.get("version", 1)
+    if version != 1:
+        raise ctx.TaskDataError(
+            f"队列快照 {ctx._rel(QUEUE_PATH)} version 非法（{version!r}，仅支持 1）；"
+            "重新运行 task.py goal --reset"
+        )
     queue = data.get("queue")
     if (
         not isinstance(queue, list)
@@ -222,11 +229,15 @@ def _parse_snapshot(data: object) -> dict:
         raise ctx.TaskDataError(
             f"队列快照 {ctx._rel(QUEUE_PATH)} 结构非法；重新运行 task.py goal --reset"
         )
+    if len(set(queue)) != len(queue):
+        raise ctx.TaskDataError(
+            f"队列快照 {ctx._rel(QUEUE_PATH)} 含重复 tid；重新运行 task.py goal --reset"
+        )
     created_at = data.get("created_at")
     if created_at is not None and not isinstance(created_at, str):
         created_at = None
     return {
-        "version": data.get("version", 1),
+        "version": version,
         "created_at": created_at or "",
         "queue": queue,
     }
