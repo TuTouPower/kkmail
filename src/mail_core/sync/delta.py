@@ -41,7 +41,15 @@ log = logging.getLogger("mail_core.sync.delta")
 
 
 def _flag_patch_values(change: DeltaChange) -> dict[str, object]:
-    flags = dict(change.flags or {})
+    # A366: a flag patch may only carry is_read / is_flagged. Arbitrary
+    # keys must be dropped here — downstream they are merged into a
+    # RemoteMessageMeta via replace(**flags), where an unknown key would
+    # raise TypeError and kill the whole delta page.
+    flags = {
+        name: value
+        for name, value in dict(change.flags or {}).items()
+        if name in ("is_read", "is_flagged")
+    }
     if not flags and change.meta is not None:
         for field_name in ("is_read", "is_flagged"):
             value = getattr(change.meta, field_name)

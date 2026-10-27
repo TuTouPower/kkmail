@@ -50,6 +50,10 @@ class MetadataPage:
     exhausted: bool
 
 
+#: The only DeltaChange kinds apply_delta_page understands (A366).
+DELTA_CHANGE_KINDS = frozenset({"upsert", "delete", "flag"})
+
+
 @dataclass(frozen=True, slots=True)
 class DeltaChange:
     """Normalized incremental change; deletions are explicit — never inferred."""
@@ -58,6 +62,12 @@ class DeltaChange:
     remote_id: str
     meta: RemoteMessageMeta | None = None
     flags: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # A366: reject unknown kinds at construction instead of letting
+        # them be silently ignored when the page is applied.
+        if self.kind not in DELTA_CHANGE_KINDS:
+            raise ValueError(f"unknown DeltaChange kind: {self.kind!r}")
 
 
 @dataclass(frozen=True, slots=True)
