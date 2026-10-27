@@ -429,7 +429,19 @@ PostgresManager.prototype.ensureDatabase = function ensureDatabase(bins) {
   if ((r.error || r.status !== 0) && !/already exists/.test(out)) {
     return { ok: false, reason: out || (r.error && r.error.message) || 'createdb failed' }
   }
-  fs.writeFileSync(marker, new Date().toISOString() + '\n', { mode: 0o600 })
+  // A357: the marker is only a fast-path hint. createdb has already
+  // succeeded (or the database already existed) at this point, so a
+  // marker write failure must not fail the whole start as if database
+  // creation had failed — warn and continue; the next start simply
+  // re-runs createdb, which is harmless via the "already exists" path.
+  try {
+    fs.writeFileSync(marker, new Date().toISOString() + '\n', { mode: 0o600 })
+  } catch (err) {
+    const log = this._log
+    const message = `could not write db-created marker (${marker}): ${err && err.message ? err.message : err}`
+    if (log && typeof log.warn === 'function') log.warn(message)
+    else if (typeof log === 'function') log(message)
+  }
   return { ok: true }
 }
 

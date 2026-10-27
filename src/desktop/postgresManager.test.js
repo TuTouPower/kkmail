@@ -279,6 +279,33 @@ function testStartAlreadyRunningProbesStatusOnce() {
   }
 }
 
+function testEnsureDatabaseMarkerWriteFailureOnlyWarns() {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-marker-warn-'))
+  const warnings = []
+  const mgr = new PostgresManager({
+    dataRoot,
+    pgBinDir: path.join(dataRoot, 'missing-bin'),
+    log: { warn: (msg) => warnings.push(String(msg)) },
+    spawnSync: () => ({ error: null, status: 0, stdout: '', stderr: '' }),
+  })
+  mgr.ensureDirs()
+  const marker = path.join(dataRoot, 'secrets', 'db-created')
+  const originalWriteFileSync = fs.writeFileSync
+  try {
+    fs.writeFileSync = function failMarkerWrite(filePath, ...rest) {
+      if (filePath === marker) throw new Error('disk full (simulated)')
+      return originalWriteFileSync.call(this, filePath, ...rest)
+    }
+    const result = mgr.ensureDatabase({ createdb: '/fake/bin/createdb' })
+    assert.strictEqual(result.ok, true, 'createdb succeeded, so a marker write failure must not fail ensureDatabase')
+    assert.strictEqual(warnings.length, 1)
+    assert.match(warnings[0], /db-created/)
+  } finally {
+    fs.writeFileSync = originalWriteFileSync
+    fs.rmSync(dataRoot, { recursive: true, force: true })
+  }
+}
+
 function testStopIdempotentNoThrowaway() {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kkmail-pg-stop-'))
   const mgr = new PostgresManager({ dataRoot, pgBinDir: path.join(dataRoot, 'missing-bin') })
@@ -500,6 +527,7 @@ testHasBinariesCachesAndTimeout()
 testHasBinariesProbesPathOncePerBinary()
 testStatusCachesPgCtlProbeWithinTtl()
 testStartAlreadyRunningProbesStatusOnce()
+testEnsureDatabaseMarkerWriteFailureOnlyWarns()
 testStopIdempotentNoThrowaway()
 testStopFailureAndRetry()
 testInitPwfileCleanupLegacy()
