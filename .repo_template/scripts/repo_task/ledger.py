@@ -1,4 +1,20 @@
-"""Locked JSONL storage primitives for task execution events."""
+"""Locked JSONL storage primitives for task execution events.
+
+Growth / archiving strategy (A206): the ledger is append-only and every
+parse is O(n). Two mitigations keep long ledgers usable:
+
+- Within one process, ``ledger_read()`` reuses the snapshot taken under
+  the lock while the file is unchanged (size + mtime_ns), so a command
+  that consults the ledger repeatedly parses it once. Writes through
+  this module invalidate the snapshot.
+- Archiving: once the ledger passes ``LEDGER_ARCHIVE_THRESHOLD_EVENTS``
+  events and no attempt is still in flight (``task.py ps`` empty), the
+  operator may rotate it manually: move ``dispatch_ledger.jsonl`` to
+  ``dispatch_ledger.<YYYYMMDD>.jsonl`` in the same runtime directory
+  and let the next write start a fresh file. Attempt numbering restarts
+  from the fresh file, so rotation is only safe with no in-flight
+  attempts; archived files are evidence and are never rewritten.
+"""
 
 import json
 import os
@@ -47,6 +63,15 @@ def _read_unlocked() -> list[dict]:
     return events
 
 
+LEDGER_ARCHIVE_THRESHOLD_EVENTS = 10_000
+
+# A206: process-local ledger_read() snapshot:
+# (path, st_size, st_mtime_ns, events). Only ledger_read() uses it; the
+# write path always re-reads under the lock. The path is part of the key
+# so tests that repoint LEDGER_PATH never see another file's snapshot.
+_read_cache: tuple[str, int, int, tuple[dict, ...]] | None = None
+
+
 def _append_many_unlocked(events: list[dict]) -> list[dict]:
     finals = [_sanitize(event) for event in events]
     if not finals:
@@ -66,6 +91,8 @@ def _append_many_unlocked(events: list[dict]) -> list[dict]:
         stream.write(payload)
         stream.flush()
         os.fsync(stream.fileno())
+    global _read_cache
+    _read_cache = None
     return finals
 
 
@@ -89,9 +116,37 @@ def _with_lock(callback):
             unlock_fh(fh)
 
 
+def _read_cached_unlocked() -> list[dict]:
+    """_read_unlocked with the A206 process-local snapshot reuse.
+
+    Runs under the ledger lock, so the stat key and the parse are
+    consistent with respect to cooperating writers.
+    """
+    global _read_cache
+    path_key = str(ctx.LEDGER_PATH)
+    if ctx.LEDGER_PATH.is_file():
+        stat = ctx.LEDGER_PATH.stat()
+        key = (path_key, stat.st_size, stat.st_mtime_ns)
+    else:
+        key = (path_key, 0, 0)
+    if _read_cache is not None and _read_cache[:3] == key:
+        return [dict(event) for event in _read_cache[3]]
+    events = _read_unlocked()
+    if ctx.LEDGER_PATH.is_file():
+        stat = ctx.LEDGER_PATH.stat()
+        key = (path_key, stat.st_size, stat.st_mtime_ns)
+    _read_cache = (key[0], key[1], key[2], tuple(dict(event) for event in events))
+    return events
+
+
 def ledger_read() -> list[dict]:
-    """Read all valid JSON object events while holding the ledger lock."""
-    return _with_lock(_read_unlocked)
+    """Read all valid JSON object events while holding the ledger lock.
+
+    Repeated calls within one process reuse a single parse while the
+    file is unchanged (A206); see the module docstring for the ledger
+    archiving strategy once the file grows past the threshold.
+    """
+    return _with_lock(_read_cached_unlocked)
 
 
 def ledger_append(event: dict) -> dict:
