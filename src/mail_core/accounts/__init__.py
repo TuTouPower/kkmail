@@ -1,5 +1,6 @@
 from mail_core.accounts.credentials import (
     CompositeCredentialStore,
+    CredentialCorruptError,
     CredentialStore,
     DbCredentialStore,
     DictCredentialStore,
@@ -39,6 +40,7 @@ from mail_core.accounts.settings_store import (
 
 __all__ = [
     "CompositeCredentialStore",
+    "CredentialCorruptError",
     "CredentialStore",
     "DbCredentialStore",
     "DictCredentialStore",

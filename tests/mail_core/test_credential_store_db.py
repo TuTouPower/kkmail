@@ -7,9 +7,8 @@ import os
 import uuid
 
 import pytest
-from cryptography.exceptions import InvalidTag
 
-from mail_core.accounts import CompositeCredentialStore, DbCredentialStore
+from mail_core.accounts import CompositeCredentialStore, CredentialCorruptError, DbCredentialStore
 from mail_core.blobs.crypto import Keyring
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import CredentialSecret
@@ -54,7 +53,9 @@ def test_ciphertext_bound_to_ref():
         ra, rb = session.get(CredentialSecret, a), session.get(CredentialSecret, b)
         rb.nonce, rb.ciphertext = ra.nonce, ra.ciphertext  # swap a's ciphertext under b
         session.commit()
-    with pytest.raises(InvalidTag):
+    # A374: get_secret normalizes decryption failure to
+    # CredentialCorruptError (a KeyError), not a raw InvalidTag.
+    with pytest.raises(CredentialCorruptError):
         store.get_secret(b)
 
 
