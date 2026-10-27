@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -238,6 +238,14 @@ async def stream_events(
     session_epoch = principal.session_epoch if principal.via == "session" else None
     raw_cursor = last_event_id or after
 
+    if session_epoch is not None:
+        # A271: verify the session epoch before committing to a
+        # StreamingResponse; a stale epoch previously produced a 200
+        # with an empty body instead of an auth error.
+        current_epoch = await asyncio.to_thread(_get_session_epoch, True)
+        if current_epoch != session_epoch:
+            raise HTTPException(status_code=401, detail="session epoch changed")
+
     if not _acquire_sse_slot():
         return JSONResponse(
             {"detail": "too many sse connections", "max": _max_sse_connections()},
@@ -265,10 +273,9 @@ async def stream_events(
                 session_epoch=session_epoch,
             )
             seen = BoundedSet(maxsize=1000)
-            if session_epoch is not None:
-                current_epoch = await asyncio.to_thread(_get_session_epoch, True)
-                if current_epoch != session_epoch:
-                    return
+            # The initial epoch check happens in stream_events before
+            # the response is returned (A271); this loop only re-checks
+            # periodically while streaming.
             next_epoch_recheck = time.monotonic() + SESSION_EPOCH_RECHECK_INTERVAL_S
             plan = await asyncio.to_thread(_build_replay, raw_cursor, account_id)
             for eid, etype, data in plan.frames:
