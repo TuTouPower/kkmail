@@ -43,15 +43,43 @@ function isLocalAppUrl(target, origin) {
   }
 }
 
+/** appOrigin may be a string or a zero-arg getter resolved at event time. */
+function resolveAppOrigin(appOrigin) {
+  return typeof appOrigin === 'function' ? appOrigin() : appOrigin
+}
+
 function createExternalWindowHandler(openExternal, appOrigin) {
   return ({ url }) => {
     // Local-app check first: the app origin is loopback http, which
     // isAllowedExternalUrl (A331) no longer treats as external.
-    if (isLocalAppUrl(url, appOrigin)) return { action: 'allow' }
+    if (isLocalAppUrl(url, resolveAppOrigin(appOrigin))) return { action: 'allow' }
     if (!isAllowedExternalUrl(url)) return { action: 'deny' }
     openExternal(url)
     return { action: 'deny' }
   }
 }
 
-module.exports = { SIDECAR_NAME, sidecarFileName, sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl, createExternalWindowHandler }
+/** will-navigate / will-redirect guard: local app URLs pass, others are
+ *  prevented and only https/mailto are handed to the system browser. */
+function createNavigationGuardHandler(openExternal, appOrigin) {
+  return (event, target) => {
+    if (isLocalAppUrl(target, resolveAppOrigin(appOrigin))) return
+    event.preventDefault()
+    if (isAllowedExternalUrl(target)) openExternal(target)
+  }
+}
+
+/**
+ * A127: attach the full guard set (window-open handler + navigation guards)
+ * to any webContents — main window and window.open popups alike — so an
+ * allowed same-origin popup cannot navigate away unguarded.
+ */
+function attachContentGuards(contents, openExternal, appOrigin) {
+  contents.setWindowOpenHandler(createExternalWindowHandler(openExternal, appOrigin))
+  const navigationGuard = createNavigationGuardHandler(openExternal, appOrigin)
+  contents.on('will-navigate', navigationGuard)
+  contents.on('will-redirect', navigationGuard)
+  return navigationGuard
+}
+
+module.exports = { SIDECAR_NAME, sidecarFileName, sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl, createExternalWindowHandler, createNavigationGuardHandler, attachContentGuards }

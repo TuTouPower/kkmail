@@ -3,12 +3,12 @@
  * Starts local PostgreSQL + the mail-core sidecar on 127.0.0.1 and opens the React UI.
  * contextIsolation on, nodeIntegration off.
  */
-const { app, BrowserWindow, shell, dialog, session, nativeTheme } = require('electron')
+const { app, BrowserWindow, shell, dialog, session, nativeTheme, Menu } = require('electron')
 const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
-const { sidecarPath, frontendDistPath, isAllowedExternalUrl, isLocalAppUrl, createExternalWindowHandler } = require('./paths')
+const { sidecarPath, frontendDistPath, attachContentGuards } = require('./paths')
 const {
   parsePort,
   freePort,
@@ -29,7 +29,13 @@ const {
 } = require('./hardening')
 const { PostgresManager } = require('./postgresManager')
 const { getDesktopLogger } = require('./desktopLog')
-const { createMainWindowOptions, windowBackgroundColor } = require('./windowOptions')
+const { createMainWindowOptions, windowBackgroundColor, shouldRemoveApplicationMenu } = require('./windowOptions')
+
+// A278: packaged builds ship without Electron's default application
+// menu (it exposes DevTools to end users); dev keeps the default menu.
+if (shouldRemoveApplicationMenu({ isPackaged: app.isPackaged })) {
+  Menu.setApplicationMenu(null)
+}
 
 const desktopLogger = getDesktopLogger({ app })
 desktopLogger.hookConsoleAndProcess()
@@ -187,14 +193,8 @@ function createWindow(url) {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show()
   })
   mainWindow.loadURL(url)
-  mainWindow.webContents.setWindowOpenHandler(createExternalWindowHandler(target => shell.openExternal(target), appOrigin))
-  const handleExternalNavigation = (event, target) => {
-    if (isLocalAppUrl(target, appOrigin)) return
-    event.preventDefault()
-    if (isAllowedExternalUrl(target)) shell.openExternal(target)
-  }
-  mainWindow.webContents.on('will-navigate', handleExternalNavigation)
-  mainWindow.webContents.on('will-redirect', handleExternalNavigation)
+  // Window-open handler + navigation guards are attached centrally in
+  // app.on('web-contents-created') (A127) so popups get them too.
 }
 
 function applySessionHardening() {
@@ -207,10 +207,14 @@ function applySessionHardening() {
 }
 
 // Deny <webview> tags entirely (unused; attacker-injected tags must not attach).
+// A127: every contents — main window and window.open popups alike — gets the
+// window-open handler and navigation guards; the origin is read lazily so a
+// popup created before/after createWindow still resolves the live origin.
 app.on('web-contents-created', (_event, contents) => {
   contents.on('will-attach-webview', (event) => {
     event.preventDefault()
   })
+  attachContentGuards(contents, (target) => shell.openExternal(target), () => appOrigin)
 })
 
 const gotTheLock = app.requestSingleInstanceLock()
