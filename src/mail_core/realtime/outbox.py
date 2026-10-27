@@ -173,7 +173,11 @@ def prune_published(
 
     prefix: list[OutboxEvent] = []
     for row in rows:
-        if row.published_at is None or _as_utc(row.published_at) >= cutoff:
+        # A351: a published row (publication_seq set) whose published_at
+        # is NULL must not stall the whole prefix forever — fall back to
+        # created_at, which bounds how long the row has existed.
+        effective_at = row.published_at if row.published_at is not None else row.created_at
+        if effective_at is None or _as_utc(effective_at) >= cutoff:
             break
         prefix.append(row)
 
