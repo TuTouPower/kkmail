@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from mail_core.api.deps import require_auth
 from mail_core.security.ratelimit import login_limiter
 from mail_core.security.auth import (
+    MAX_PASSWORD_BYTES,
     SESSION_COOKIE_NAME,
     AuthConfigError,
     AuthPrincipal,
@@ -23,8 +24,28 @@ from mail_core.security.auth import (
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+def _enforce_password_byte_limit(value: str) -> str:
+    """Align the schema with the bcrypt byte contract (MAX_PASSWORD_BYTES).
+
+    Field max_length counts characters, so it is set to the same number as
+    an upper bound (a byte-valid password never exceeds that many
+    characters); this validator enforces the actual UTF-8 byte budget for
+    multi-byte characters.
+    """
+    if len(value.encode("utf-8")) > MAX_PASSWORD_BYTES:
+        raise ValueError(
+            f"password must not exceed {MAX_PASSWORD_BYTES} bytes when encoded as UTF-8"
+        )
+    return value
+
+
 class LoginIn(BaseModel):
-    password: str = Field(min_length=1, max_length=1024)
+    password: str = Field(min_length=1, max_length=MAX_PASSWORD_BYTES)
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password_bytes(cls, value: str) -> str:
+        return _enforce_password_byte_limit(value)
 
 
 class LoginOut(BaseModel):
@@ -96,8 +117,13 @@ def me(principal: AuthPrincipal = Depends(require_auth)) -> MeOut:
 
 
 class PasswordChangeIn(BaseModel):
-    current_login_password: str = Field(min_length=1, max_length=1024)
-    login_password: str = Field(min_length=8, max_length=1024)
+    current_login_password: str = Field(min_length=1, max_length=MAX_PASSWORD_BYTES)
+    login_password: str = Field(min_length=8, max_length=MAX_PASSWORD_BYTES)
+
+    @field_validator("current_login_password", "login_password")
+    @classmethod
+    def _validate_password_bytes(cls, value: str) -> str:
+        return _enforce_password_byte_limit(value)
 
 
 class PasswordChangeOut(BaseModel):

@@ -985,7 +985,7 @@
       "LoginIn": {
         "properties": {
           "password": {
-            "maxLength": 1024,
+            "maxLength": 72,
             "minLength": 1,
             "title": "Password",
             "type": "string"
@@ -2119,13 +2119,13 @@
       "PasswordChangeIn": {
         "properties": {
           "current_login_password": {
-            "maxLength": 1024,
+            "maxLength": 72,
             "minLength": 1,
             "title": "Current Login Password",
             "type": "string"
           },
           "login_password": {
-            "maxLength": 1024,
+            "maxLength": 72,
             "minLength": 8,
             "title": "Login Password",
             "type": "string"

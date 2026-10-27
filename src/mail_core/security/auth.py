@@ -59,7 +59,16 @@ class _NoLoginCredentialsConfigured(AuthConfigError):
     """
 
 
-_BCRYPT_MAX_PASSWORD_BYTES = 72
+# Single source of truth for the password size contract: bcrypt consumes at
+# most 72 bytes of input. How an over-long input behaves is bcrypt-version
+# dependent — bcrypt 5.0.0 raises ValueError from hashpw/checkpw, while
+# older/truncating builds silently used only the first 72 bytes (letting
+# distinct passwords sharing a 72-byte prefix verify against each other).
+# Nothing here may rely on either behaviour: producers reject over-long
+# passwords via _bcrypt_password_bytes, verify_password rejects them
+# explicitly, and the API schemas enforce the same byte budget.
+MAX_PASSWORD_BYTES = 72
+_BCRYPT_MAX_PASSWORD_BYTES = MAX_PASSWORD_BYTES
 
 
 def _bcrypt_password_bytes(password: str) -> bytes:
@@ -339,6 +348,10 @@ def verify_password(password: str) -> bool:
     failed login attempt.
     """
     if not password:
+        return False
+    if len(password.encode("utf-8")) > MAX_PASSWORD_BYTES:
+        # Explicit rejection: do not delegate this to bcrypt, whose
+        # over-long-input behaviour varies by version (see MAX_PASSWORD_BYTES).
         return False
     try:
         stored = get_login_password_hash()

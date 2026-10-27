@@ -207,6 +207,38 @@ def test_a87_login_route_returns_500_without_recording_rate_limit_failure(monkey
     assert recorded == []
 
 
+def test_a119_password_byte_limit_is_single_sourced():
+    from mail_core.security.auth import MAX_PASSWORD_BYTES, _BCRYPT_MAX_PASSWORD_BYTES
+
+    assert MAX_PASSWORD_BYTES == 72
+    assert _BCRYPT_MAX_PASSWORD_BYTES == MAX_PASSWORD_BYTES
+
+
+def test_a119_verify_rejects_overlong_password_without_relying_on_bcrypt(monkeypatch):
+    """Simulate a truncating bcrypt build: a >72-byte candidate sharing the
+    stored 72-byte prefix must still verify False via the explicit pre-check."""
+    from unittest.mock import patch
+
+    import bcrypt as bcrypt_module
+
+    from mail_core.security.auth import get_login_password_hash, verify_password
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", "")
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "p" * 72)
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
+    reset_auth_caches()
+    get_login_password_hash()
+    assert verify_password("p" * 72) is True
+
+    def _truncating_checkpw(password: bytes, hashed: bytes) -> bool:
+        return bcrypt_module.checkpw(password[:72], hashed)
+
+    with patch("mail_core.security.auth.bcrypt.checkpw", _truncating_checkpw):
+        assert verify_password("p" * 72 + "attacker-suffix") is False
+        assert verify_password("é" * 37) is False
+
+
 def test_a250_get_session_epoch_logs_only_type_and_fixed_error_message(monkeypatch, caplog):
     import logging
     from unittest.mock import patch
