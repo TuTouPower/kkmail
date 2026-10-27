@@ -50,9 +50,11 @@ def test_put_verifies_integrity_and_rewrites_corrupted_blob(tmp_path):
     assert store.get(res2.content_sha256) == data
 
 
-def test_put_propagates_unknown_key_version_without_replacing_blob(tmp_path):
-    import pytest
-    from mail_core.blobs.crypto import BlobCryptoError, Keyring
+def test_put_rewrites_blob_with_unknown_key_version(tmp_path):
+    # A138 采纳语义变更，替代旧 propagate 断言：put 统一捕获
+    # BlobCryptoError 全族（含未知 key 版本的 plain BlobCryptoError），
+    # 既存 blob 落入重写路径而非向上抛错、不替换。
+    from mail_core.blobs.crypto import Keyring
 
     data = b"blob encrypted with a key version unavailable to this store"
     writer = BlobStore(tmp_path, keyring=Keyring({1: b"1" * 32}, active_version=1))
@@ -61,10 +63,14 @@ def test_put_propagates_unknown_key_version_without_replacing_blob(tmp_path):
     original_blob = blob_path.read_bytes()
     reader = BlobStore(tmp_path, keyring=Keyring({2: b"2" * 32}, active_version=2))
 
-    with pytest.raises(BlobCryptoError, match="unknown blob key version 1"):
-        reader.put(data)
+    # Must not raise BlobCryptoError: the existing blob is rewritten
+    # under the reader's active key version.
+    rewritten = reader.put(data)
 
-    assert blob_path.read_bytes() == original_blob
+    assert rewritten.content_sha256 == result.content_sha256
+    assert rewritten.key_version == 2
+    assert blob_path.read_bytes() != original_blob
+    assert reader.get(rewritten.content_sha256) == data
 
 
 def test_put_propagates_existing_blob_read_errors(tmp_path, monkeypatch):
