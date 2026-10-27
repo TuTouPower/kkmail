@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import shutil
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -48,7 +50,15 @@ class SyncMetrics(BaseModel):
     total_accounts: int = 0
     active_accounts: int = 0
     last_sync_success_at: str | None = None
-    max_sync_lag_seconds: float | None = None
+    # A346: this is the lag since the most recent successful sync
+    # globally — it was previously named max_sync_lag_seconds, which
+    # falsely implied a per-account maximum.
+    last_sync_lag_seconds: float | None = None
+
+    @property
+    def max_sync_lag_seconds(self) -> float | None:
+        """Deprecated alias for :attr:`last_sync_lag_seconds` (A346 rename)."""
+        return self.last_sync_lag_seconds
 
 
 class StorageMetrics(BaseModel):
@@ -63,7 +73,7 @@ class BackupMetrics(BaseModel):
 
 
 class SystemHealthReport(BaseModel):
-    status: str  # "healthy" | "degraded" | "unhealthy"
+    status: str  # "healthy" | "degraded"
     worker: WorkerMetrics
     jobs: JobMetrics
     writeback: WritebackMetrics
@@ -72,7 +82,36 @@ class SystemHealthReport(BaseModel):
     backup: BackupMetrics
 
 
+# A346: a few-seconds in-process cache — one collection serially runs
+# 6+ aggregate queries, and the (now authenticated) health endpoints
+# can be polled frequently; serving a seconds-old snapshot is the
+# intended trade-off for operational metrics.
+_CACHE_TTL_S = 5.0
+_cache_lock = threading.Lock()
+_cached_report: SystemHealthReport | None = None
+_cached_at: float = 0.0
+
+
+def clear_system_health_cache() -> None:
+    global _cached_report, _cached_at
+    with _cache_lock:
+        _cached_report = None
+        _cached_at = 0.0
+
+
 def get_system_health_metrics(session: Session) -> SystemHealthReport:
+    global _cached_report, _cached_at
+    with _cache_lock:
+        if _cached_report is not None and time.monotonic() - _cached_at < _CACHE_TTL_S:
+            return _cached_report
+    report = _collect_system_health_metrics(session)
+    with _cache_lock:
+        _cached_report = report
+        _cached_at = time.monotonic()
+    return report
+
+
+def _collect_system_health_metrics(session: Session) -> SystemHealthReport:
     """Collect lightweight aggregated operational and business health metrics."""
     now = datetime.now(timezone.utc)
 
@@ -150,7 +189,7 @@ def get_system_health_metrics(session: Session) -> SystemHealthReport:
         total_accounts=int(total_accs or 0),
         active_accounts=int(active_accs or 0),
         last_sync_success_at=last_sync_iso,
-        max_sync_lag_seconds=sync_lag,
+        last_sync_lag_seconds=sync_lag,
     )
 
     # 5. Storage metrics

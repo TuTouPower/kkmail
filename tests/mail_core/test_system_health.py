@@ -253,10 +253,17 @@ def test_worker_healthcheck_cli(monkeypatch):
     reason="MAIL_CORE_DATABASE_URL not set",
 )
 def test_system_health_sync_metrics_with_real_sync_run_done_status():
+    # A346 overall replacement: get_system_health_metrics now serves a
+    # few-seconds in-process cache and the lag field is named
+    # last_sync_lag_seconds, so this two-phase test clears the cache
+    # between phases and asserts the renamed field (the old
+    # max_sync_lag_seconds assertions described the pre-A346 contract).
     import uuid
+
     from mail_core.db.session import get_session_factory
     from mail_core.mail.domain.enums import SyncPhase, SyncRunStatus
     from mail_core.mail.storage.models import Account, SyncRun
+    from mail_core.system_metrics import clear_system_health_cache
 
     Session = get_session_factory()
     with Session() as session:
@@ -281,6 +288,7 @@ def test_system_health_sync_metrics_with_real_sync_run_done_status():
         session.add(running_run)
         session.flush()
 
+        clear_system_health_cache()
         report_running = get_system_health_metrics(session)
         assert report_running.sync.last_sync_success_at is None
 
@@ -297,7 +305,8 @@ def test_system_health_sync_metrics_with_real_sync_run_done_status():
         session.add(done_run)
         session.flush()
 
+        clear_system_health_cache()
         report_done = get_system_health_metrics(session)
         assert report_done.sync.last_sync_success_at is not None
-        assert report_done.sync.max_sync_lag_seconds is not None
-        assert report_done.sync.max_sync_lag_seconds >= 25.0
+        assert report_done.sync.last_sync_lag_seconds is not None
+        assert report_done.sync.last_sync_lag_seconds >= 25.0
