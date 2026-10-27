@@ -493,3 +493,35 @@ def test_a44_restore_refuses_when_manifest_identity_matches_target(
     with pytest.raises(RuntimeError, match="refusing to restore onto source database"):
         _restore(pkg_dir, target)
     assert fake.calls == []
+
+
+# --- A79: blob snapshot tar must exclude restore artifacts / temp files ----
+
+
+def test_a79_backup_tar_only_contains_blob_files(tmp_path):
+    src_blobs = tmp_path / "src-blobs"
+    legit = src_blobs / "aa" / "bb" / "real.blob"
+    legit.parent.mkdir(parents=True)
+    legit.write_bytes(b"real blob")
+    # Restore artifacts and in-flight temp files sharing the blob root.
+    (src_blobs / backup_package._RESTORE_OPERATION_LOG_FILENAME).write_text("{}")
+    staging = src_blobs / ".restore_staging_deadbeefcafe"
+    (staging / "aa" / "bb").mkdir(parents=True)
+    (staging / "aa" / "bb" / "staged.blob").write_bytes(b"staged")
+    (src_blobs / ".tmp-inflight").write_bytes(b"temp")
+    (src_blobs / "aa" / "bb" / ".real.blob.restore-abc123").write_bytes(b"temp")
+    (src_blobs / "notes.txt").write_bytes(b"not a blob")
+
+    pkg_dir = tmp_path / "package"
+    create_backup_package(
+        pkg_dir,
+        include_blobs=True,
+        database_url_override=SOURCE_URL,
+        blobs_dir=src_blobs,
+        encrypt=False,
+        allow_dump_stub=True,
+    )
+
+    with tarfile.open(pkg_dir / "blobs.tar", "r") as tar:
+        names = set(tar.getnames())
+    assert names == {"blobs", "blobs/aa", "blobs/aa/bb", "blobs/aa/bb/real.blob"}

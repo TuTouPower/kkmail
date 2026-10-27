@@ -622,6 +622,35 @@ def _source_identity_for_manifest(url: str) -> dict[str, str | int | None] | Non
     }
 
 
+def _blob_snapshot_filter(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    """Include only canonical blob files in the ``blobs.tar`` snapshot.
+
+    The blob root is shared, live state: it can also hold restore
+    artifacts (``.restore_operation.json``, ``.restore_staging_*``),
+    in-flight temp files (dotfiles) and unrelated files. None of those
+    belong in a backup — only ``*.blob`` payload files and the
+    directories leading to them are archived. Excluding a directory
+    also excludes everything under it.
+    """
+    if tarinfo.issym() or tarinfo.islnk():
+        return None
+    if tarinfo.name == "blobs":
+        return tarinfo
+    rel = (
+        tarinfo.name[len("blobs/") :]
+        if tarinfo.name.startswith("blobs/")
+        else tarinfo.name
+    )
+    parts = [p for p in rel.split("/") if p]
+    if any(part.startswith(".") for part in parts):
+        return None
+    if tarinfo.isdir():
+        return tarinfo
+    if tarinfo.isfile() and tarinfo.name.endswith(".blob"):
+        return tarinfo
+    return None
+
+
 def _build_plain_dir(
     out: Path,
     *,
@@ -645,7 +674,7 @@ def _build_plain_dir(
         tar_path = out / "blobs.tar"
         with tarfile.open(tar_path, "w") as tar:
             if root.exists():
-                tar.add(root, arcname="blobs")
+                tar.add(root, arcname="blobs", filter=_blob_snapshot_filter)
         _set_private_file(tar_path)
         members["blobs.tar"] = {
             "sha256": _sha256_file(tar_path),
