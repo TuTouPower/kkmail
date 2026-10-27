@@ -207,7 +207,25 @@ def assign_thread_for_message(
             if thread is None:
                 raise
     elif provider_thread_key and not thread.provider_thread_key:
-        thread.provider_thread_key = provider_thread_key
+        # Backfilling the key can lose a race against a concurrent
+        # transaction that created a thread with the same key
+        # (uq_threads_account_provider_key). Flush inside a savepoint so
+        # the conflict rolls back only this assignment, then reuse the
+        # winning thread instead of failing the whole assignment (A174).
+        try:
+            with session.begin_nested():
+                thread.provider_thread_key = provider_thread_key
+                session.flush()
+        except IntegrityError:
+            winner = session.scalar(
+                select(Thread).where(
+                    Thread.account_id == account_id,
+                    Thread.provider_thread_key == provider_thread_key,
+                )
+            )
+            if winner is None:
+                raise
+            thread = winner
 
     previous_thread_id = message.thread_id
     message.thread_id = thread.id
