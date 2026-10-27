@@ -278,6 +278,20 @@ describe('<MessageReader />', () => {
     }
   })
 
+  it('re-renders when a cached field outside id/is_flagged/is_read/subject changes (A123)', async () => {
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test'))
+    // accountEmail is rendered by the reader (toolbar ownership) but was
+    // missing from the old snapshot, so this cache update never reached it.
+    act(() => {
+      queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [{ ...item, accountEmail: 'other@x.test' }])
+    })
+    // Assert synchronously: the snapshot change itself must drive the
+    // re-render. (A waitFor would mask the bug — any incidental later
+    // re-render picks up the fresh row from the cache scan.)
+    expect(container.querySelector('.reader-location')?.textContent).toBe('other@x.test')
+  })
+
   it('keeps an unknown detail date blank instead of falling back to the selected row date', async () => {
     useMailStore.setState({ selectedKey: 'm-null-date' })
     const { container } = await render(<MessageReader />)

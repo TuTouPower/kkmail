@@ -56,7 +56,11 @@ function useSelectedMail(selectedKey: string | null): MailItem | undefined {
     const memo = memoRef.current
     if (memo && memo.key === selectedKey && memo.version === versionRef.current) return memo.snap
     const m = findCachedMail(selectedKey)
-    const snap = m ? `${m.id}\0${m.is_flagged}\0${m.is_read}\0${m.subject}` : ''
+    // A123: the snapshot is the re-render signal, so it must cover every
+    // field the reader renders (from/date/accountEmail/has_attachments/…),
+    // not just id/is_flagged/is_read/subject. Serializing the whole row
+    // keeps any current or future cached field change visible to React.
+    const snap = m ? JSON.stringify(m) : ''
     memoRef.current = { key: selectedKey, version: versionRef.current, snap, mail: m }
     return snap
   }, [selectedKey])
