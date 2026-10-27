@@ -316,7 +316,7 @@ it('pasting a redirect URL calls the exchange API and reports success via onSave
 it('A355: the simplified Microsoft authorize window opens with noopener and a nulled opener', async () => {
   stubMicrosoftShell()
   const openedWindow: { opener: unknown } = { opener: {} }
-  const open = vi.fn(() => openedWindow)
+  const open = vi.fn((..._args: unknown[]) => openedWindow)
   vi.stubGlobal('open', open)
   const { container } = await render(<AccountDialog groups={msGroups} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
   await changeSelect(container.querySelector('#account-vendor'), 'microsoft')
