@@ -54,7 +54,6 @@ from mail_core.mail.application.queries import (
 )
 from mail_core.mail.application.message_details import (
     MessageArchiveStateUnavailable,
-    MessageBodyAlreadyArchived,
     MessageHasNoProviderRemoteId,
     get_message_detail_with_archive_status,
     sync_message_body,

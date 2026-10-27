@@ -209,15 +209,6 @@ class GroupsOut(BaseModel):
     groups: list[GroupOut]
 
 
-class SyncJobOut(BaseModel):
-    job_id: str
-
-
-class SyncAllOut(BaseModel):
-    job_ids: list[str]
-    count: int
-
-
 class SettingsOut(BaseModel):
     settings: dict[str, str]
 

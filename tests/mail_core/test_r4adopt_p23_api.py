@@ -28,6 +28,21 @@ def _dto(email: str = "new@kkmail.test") -> AccountDTO:
     )
 
 
+# --- A201: dead SyncJobOut/SyncAllOut models and unused import are gone ---
+
+
+def test_no_dead_sync_job_models_or_unused_import():
+    from pathlib import Path
+
+    import mail_core.api.accounts as accounts_api
+    import mail_core.api.mail as mail_api
+
+    assert not hasattr(accounts_api, "SyncJobOut")
+    assert not hasattr(accounts_api, "SyncAllOut")
+    mail_source = Path(mail_api.__file__).read_text(encoding="utf-8")
+    assert "MessageBodyAlreadyArchived" not in mail_source
+
+
 # --- A163: sync endpoints must 404 (not 500) when the report is gone ---
 
 
