@@ -700,6 +700,7 @@ def sync_folder_metadata(
                     account_id=account_id,
                     payload={"folder_id": str(folder_id)},
                     priority=80,
+                    dedupe_key=f"reconcile:{account_id}:{folder_id}",
                 )
             enqueue_job(
                 session,
@@ -715,6 +716,7 @@ def sync_folder_metadata(
                 job_type=JobType.ARCHIVE_MIME_BATCH.value,
                 account_id=account_id,
                 priority=40,
+                dedupe_key=f"archive_mime_batch:{account_id}",
             )
             session.add(
                 OutboxEvent(
