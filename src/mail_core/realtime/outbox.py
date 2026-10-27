@@ -89,10 +89,26 @@ def fetch_since(
 ) -> list[OutboxEvent]:
     """Replay rows after ``last_event_id``.
 
+    .. deprecated::
+        v1 legacy replay API (A380): it orders by row ``id`` and therefore
+        bypasses the v2 publication order (``publication_seq``) that SSE
+        cursors, retention watermarks, and resync hints are built on. Do
+        not use in new code — use :func:`fetch_published_since`. Retained
+        only for the legacy PG-gated replay tests; calling it emits a
+        ``DeprecationWarning``.
+
     When ``account_id`` is set, include that account's events **and** global
     rows (``account_id IS NULL``) so account-filtered SSE matches live fan-out,
     which already delivers NULL-account events to every subscriber.
     """
+    import warnings
+
+    warnings.warn(
+        "fetch_since is deprecated (v1 id-ordered replay bypasses the v2 "
+        "publication order); use fetch_published_since instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     stmt = (
         select(OutboxEvent)
         .where(OutboxEvent.id > last_event_id)
