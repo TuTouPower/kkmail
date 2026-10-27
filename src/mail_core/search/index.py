@@ -157,9 +157,14 @@ def search_messages(
     limit: int = 50,
     offset: int = 0,
 ) -> list[uuid.UUID]:
-    """Message ids ranked by FTS, with trigram/ILIKE fallback on subject + from_text.
+    """Message ids ranked by ts_rank over the FTS document, with fallbacks.
 
-    Subject/from ILIKE are served by GIN trigram indexes (migration 0006).
+    The generated document tsvector covers subject, from_text, to_text and
+    body_text (body_text is reachable only through this FTS branch). The
+    fallback branches in _MATCH are an escaped ILIKE substring match on
+    from_text, to_text and subject, plus trigram similarity (%) on
+    from_text and to_text; the ILIKE/trigram branches are served by GIN
+    trigram indexes.
     """
     from sqlalchemy import text as sql_text
 
