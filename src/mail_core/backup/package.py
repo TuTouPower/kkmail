@@ -72,13 +72,32 @@ class PgDumpError(RuntimeError):
 
 
 def _redact_url(url: str) -> str:
-    if "://" in url and "@" in url:
-        scheme, rest = url.split("://", 1)
-        if "@" in rest and ":" in rest.split("@", 1)[0]:
-            user = rest.split("@", 1)[0].split(":", 1)[0]
-            host = rest.split("@", 1)[1]
-            return f"{scheme}://{user}:***@{host}"
-    return url
+    """Return a package-safe database identifier: scheme, db name, fingerprint.
+
+    Backup packages are copied offsite, so the identifier must not reveal the
+    deployment topology (username, host, port or password). The fingerprint
+    is taken over the connection identity without the password, so distinct
+    databases remain distinguishable without disclosing where they live.
+    """
+    try:
+        parsed = make_url(url)
+    except Exception:
+        return "***"
+    database = parsed.database or ""
+    if not database and not parsed.host:
+        return "***"
+    scheme = parsed.drivername.split("+", 1)[0] if parsed.drivername else "postgresql"
+    identity = (
+        f"{parsed.drivername}://{parsed.username or ''}@"
+        f"{parsed.host or ''}:{parsed.port or ''}/{database}"
+    )
+    fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+    return f"{scheme}://***@***/{database}#sha256:{fingerprint}"
+
+
+# Logical name recorded in manifests instead of the absolute blob path;
+# the real path stays local (backup log lines / restore operation log).
+_MANIFEST_BLOB_LOGICAL_NAME = "blobs"
 
 
 @contextmanager
@@ -550,7 +569,7 @@ def _build_plain_dir(
     return BackupManifest(
         created_at=datetime.now(timezone.utc).isoformat(),
         database_url_redacted=_redact_url(url),
-        blob_root=str(root),
+        blob_root=_MANIFEST_BLOB_LOGICAL_NAME,
         members=members,
         encrypted=False,
     )
