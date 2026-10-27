@@ -85,6 +85,17 @@ def cmd_add(args):
         except (OSError, ctx.TaskDataError) as error:
             shutil.rmtree(task_dir, ignore_errors=True)
             sys.exit(f"add 失败（{error}）；已回滚新建目录 {ctx._rel(task_dir)}")
+    # add 在审计账本留一处可 grep 记录（A48；start 已有 ledger start 事件）。
+    try:
+        append_audit(
+            "add", tid=tid, fr="", to="backlog", reason="",
+            slug=fm.get("slug", ""), title=fm.get("title", ""),
+        )
+    except ctx.TaskDataError as e:
+        sys.exit(
+            f"added {tid} '{fm['title']}' status=backlog；"
+            f"审计写入失败（{e}）；task 已创建，审计待补（见 docs/archive/tasks_audit.log）"
+        )
     print(f"added {tid} '{fm['title']}' status=backlog review_level={fm['review_level']}")
     print(f"工作区：{ctx._rel(task_dir)}（已从模板复制 spec.md / task.md）")
 
@@ -266,6 +277,17 @@ def cmd_edit(args):
     else:
         write_front_matter(path, fm, body)
     rebuild_index()
+    # edit 在审计账本留一处可 grep 记录（A48）；失败时状态已生效，明示待补。
+    try:
+        append_audit(
+            "edit", tid=args.tid, fr=fm["status"], to=fm["status"],
+            reason=", ".join(changed), slug=fm.get("slug", ""), title=fm.get("title", ""),
+        )
+    except ctx.TaskDataError as e:
+        sys.exit(
+            f"{args.tid} updated: {', '.join(changed)}\n"
+            f"审计写入失败（{e}）；编辑已生效，审计待补（见 docs/archive/tasks_audit.log）"
+        )
     print(f"{args.tid} updated: {', '.join(changed)}")
 
 _TESTING_PENDING_RE = re.compile(
@@ -560,6 +582,22 @@ def _close_task(args, status: str, note: str | None) -> None:
         sys.exit(
             f"归档移动失败（{e}）{rollback_note}；"
             f"目录在 {ctx._rel(src) if src.exists() else ctx._rel(dst)}。排除原因后重试"
+        )
+    # 归档已成功；按 rewind 同口径写审计（A48）。审计失败不反向搬动状态
+    # 权威，按 F15 语义明示审计（及可能未及重建的索引）待补。
+    try:
+        append_audit(
+            "finish" if status == "done" else "drop",
+            tid=args.tid, fr=orig_status, to=status,
+            reason=(getattr(args, "reason", "") or note or ""),
+            slug=fm.get("slug", ""), title=fm.get("title", ""),
+        )
+    except ctx.TaskDataError as e:
+        sys.exit(
+            f"{args.tid} status={status}; 目录已归档 -> {ctx._rel(dst)}; {wt_msg}\n"
+            f"审计写入失败（{e}）；归档状态已生效，审计待补"
+            "（见 docs/archive/tasks_audit.log），派生索引可能待补，"
+            "运行 `task.py list --rebuild` 修复索引"
         )
     # 归档已成功；此后只派生索引重建，失败不反向搬动状态权威（目录/front matter
     # 保持归档终态），只提示索引待重建。
