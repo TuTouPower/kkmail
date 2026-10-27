@@ -2427,6 +2427,25 @@
         "title": "SidebarLayoutSnapshotOut",
         "type": "object"
       },
+      "SseCapacityError": {
+        "description": "A121: body of the 503 returned when the SSE connection cap is hit.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "max": {
+            "title": "Max",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "detail",
+          "max"
+        ],
+        "title": "SseCapacityError",
+        "type": "object"
+      },
       "SyncBodyAcceptedOut": {
         "properties": {
           "job_id": {
@@ -3613,6 +3632,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SseCapacityError"
+                }
+              }
+            },
+            "description": "Too many concurrent SSE connections"
           }
         },
         "security": [

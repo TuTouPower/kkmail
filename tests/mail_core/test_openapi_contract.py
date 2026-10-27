@@ -82,3 +82,18 @@ def test_unknown_message_date_fields_include_null_in_openapi():
     ):
         branches = schemas[schema_name]["properties"][field_name]["anyOf"]
         assert {"type": "null"} in branches, f"{schema_name}.{field_name} must allow null"
+
+
+def test_a121_events_declares_503_capacity_response():
+    """A121: /api/events returns 503 JSON when the SSE connection cap is
+    hit; the route must declare it so generated clients know the shape."""
+    from mail_core.api.app import app
+
+    live = app.openapi()
+    responses = live["paths"]["/api/events"]["get"]["responses"]
+    assert "503" in responses, "stream_events must declare its 503 response"
+    schema_ref = responses["503"]["content"]["application/json"]["schema"]["$ref"]
+    model = live["components"]["schemas"][schema_ref.rsplit("/", 1)[-1]]
+    assert set(model["properties"]) == {"detail", "max"}
+    committed = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    assert "503" in committed["paths"]["/api/events"]["get"]["responses"]

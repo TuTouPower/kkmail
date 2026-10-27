@@ -15,6 +15,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from mail_core.api.deps import require_auth
@@ -236,10 +237,20 @@ def _release_sse_slot() -> None:
         _sse_active = max(0, _sse_active - 1)
 
 
+class SseCapacityError(BaseModel):
+    """A121: body of the 503 returned when the SSE connection cap is hit."""
+
+    detail: str
+    max: int
+
+
 @router.get(
     "/events",
     response_class=StreamingResponse,
-    responses={200: {"content": {"text/event-stream": {}}, "description": "SSE event stream"}},
+    responses={
+        200: {"content": {"text/event-stream": {}}, "description": "SSE event stream"},
+        503: {"model": SseCapacityError, "description": "Too many concurrent SSE connections"},
+    },
 )
 async def stream_events(
     request: Request,

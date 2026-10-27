@@ -1508,6 +1508,16 @@ export interface components {
             /** Ungrouped Account Ids */
             ungrouped_account_ids: string[];
         };
+        /**
+         * SseCapacityError
+         * @description A121: body of the 503 returned when the SSE connection cap is hit.
+         */
+        SseCapacityError: {
+            /** Detail */
+            detail: string;
+            /** Max */
+            max: number;
+        };
         /** SyncBodyAcceptedOut */
         SyncBodyAcceptedOut: {
             /** Job Id */
@@ -2151,6 +2161,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too many concurrent SSE connections */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SseCapacityError"];
                 };
             };
         };
