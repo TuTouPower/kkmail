@@ -31,6 +31,15 @@ def _format_recipient_text(addresses: Sequence[Any] | None) -> str:
     return " ".join(parts)
 
 
+def _message_recipient_text(msg: object) -> str:
+    """Plain recipient text for search: to + cc (A58 — cc must be searchable)."""
+    parts = [
+        _format_recipient_text(getattr(msg, "to_addresses", None)),
+        _format_recipient_text(getattr(msg, "cc_addresses", None)),
+    ]
+    return " ".join(part for part in parts if part)
+
+
 def upsert_message_search(
     session: Session,
     *,
@@ -44,7 +53,7 @@ def upsert_message_search(
         body = session.get(MessageBody, message_id)
         body_text = (body.text_plain if body else None) or msg.snippet or ""
     from_text = " ".join(x for x in [msg.from_name, msg.from_address] if x)
-    to_text = _format_recipient_text(getattr(msg, "to_addresses", None))
+    to_text = _message_recipient_text(msg)
     row = session.get(MessageSearch, message_id)
     if row is None:
         row = MessageSearch(message_id=message_id, account_id=msg.account_id)
@@ -96,7 +105,7 @@ def upsert_message_search_batch(session: Session, *, messages: Sequence[Message]
         row.account_id = message.account_id
         row.subject = message.subject or ""
         row.from_text = " ".join(x for x in [message.from_name, message.from_address] if x)
-        row.to_text = _format_recipient_text(getattr(message, "to_addresses", None))
+        row.to_text = _message_recipient_text(message)
         row.body_text = body_text
         row.updated_at = now
     session.flush()
