@@ -550,7 +550,12 @@ def sync_folder_metadata(
                 except ScanGenerationMismatch:
                     # A newer full-scan generation owns this checkpoint now;
                     # this stale execution must not touch it (design §5.3).
+                    # A85: the lease is committed and still ours (unlike the
+                    # fencing-lost case) — release it quietly instead of
+                    # leaking it until the TTL expires.
                     session.rollback()
+                    _release_lease_quiet(session, account_id=account_id, worker_id=worker_id, fencing_token=fencing)
+                    session.commit()
                     return {"status": "scan_generation_mismatch", "upserted": total}
                 session.add(
                     OutboxEvent(

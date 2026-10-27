@@ -516,6 +516,14 @@ def sync_folder_delta(
                 )
             except FencingMismatch:
                 return {"status": "fencing_mismatch", **totals}
+            except Exception:
+                # A85: uncaught apply errors must not leak the lease until
+                # its TTL — release quietly (only while fencing is still
+                # ours) and let the error propagate.
+                session.rollback()
+                _release_quiet(session)
+                session.commit()
+                raise
             session.add(
                 OutboxEvent(
                     event_type=OutboxEventType.SYNC_PROGRESS.value,
