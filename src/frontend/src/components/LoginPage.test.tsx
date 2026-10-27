@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { act } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import LoginPage from './LoginPage'
 import { api } from '../api/client'
@@ -54,6 +55,25 @@ describe('<LoginPage />', () => {
     await typeInto(password, 'wrong password')
     await click(submit)
     await waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toBe('密码错误'))
+  })
+
+  it('ignores a second form submit while a login is in flight (Enter re-submit bypasses the disabled button)', async () => {
+    let resolveLogin!: () => void
+    const login = vi.spyOn(api, 'login').mockImplementation(
+      () => new Promise<void>((resolve) => { resolveLogin = resolve }),
+    )
+    const onSuccess = vi.fn()
+    const { container } = await render(<LoginPage onSuccess={onSuccess} />)
+    const password = container.querySelector<HTMLInputElement>('#login-password')
+    const form = container.querySelector('form')
+
+    await typeInto(password, 'correct horse battery staple')
+    await act(async () => { form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    await act(async () => { form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+
+    expect(login).toHaveBeenCalledTimes(1)
+    resolveLogin()
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1))
   })
 
   it('disables submit while loading and ignores a second click', async () => {

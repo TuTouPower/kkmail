@@ -1,13 +1,18 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api } from '../api/client'
 
 export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const submittingRef = useRef(false)
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
+    // In-flight guard: the disabled button does not stop Enter re-submits
+    // or a second submit dispatched before the loading state paints.
+    if (submittingRef.current) return
+    submittingRef.current = true
     setError('')
     setLoading(true)
     try {
@@ -17,6 +22,7 @@ export default function LoginPage({ onSuccess }: { onSuccess: () => void }) {
       const message = err && typeof err === 'object' && 'message' in err ? String((err as { message: string }).message) : '登录失败'
       setError(message)
     } finally {
+      submittingRef.current = false
       setLoading(false)
     }
   }
