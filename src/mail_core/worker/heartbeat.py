@@ -197,6 +197,8 @@ class WorkerHeartbeatLoop:
             log.warning("worker heartbeat write failed: %s", safe_error(exc))
 
     def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
         self._tick()
         self._stop_event.clear()
 
@@ -215,6 +217,8 @@ class WorkerHeartbeatLoop:
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop_event.set()
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=timeout)
-            self._thread = None
+        if self._thread is not None:
+            if self._thread.is_alive():
+                self._thread.join(timeout=timeout)
+            if not self._thread.is_alive():
+                self._thread = None
