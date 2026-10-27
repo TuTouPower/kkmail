@@ -122,6 +122,39 @@ def test_committed_scope_tracks_archived_spec_and_not_primary_dirt(git_repo):
     assert review_scope_fingerprint(anchor, archive, repo_root=repo, ref='HEAD') != before
 
 
+def test_large_worktree_file_uses_degraded_oid(git_repo):
+    """A46：>1MB 工作区文件不得全量 read_bytes 入内存——指纹走降级 oid
+    (size, mtime_ns, 前 8KB 前缀)，且 oid 带 degraded 标记位；前缀变化仍可感知。"""
+    from repo_task.monitoring import _review_worktree
+
+    repo, anchor = git_repo
+    big = repo / TASK_REL / "big.bin"
+    big.write_bytes(b"A" * (1024 * 1024 + 100))
+    tree = _review_worktree(repo, "t001_foo")
+    oid = tree[f"{TASK_REL}/big.bin"][1]
+    assert oid.startswith("degraded:"), oid
+    # 端到端：大文件进 review_scope_fingerprint 不崩、且改变指纹
+    assert _fingerprint(repo, anchor)
+    data = bytearray(big.read_bytes())
+    data[0] = ord("B")
+    big.write_bytes(bytes(data))
+    assert _review_worktree(repo, "t001_foo")[f"{TASK_REL}/big.bin"][1] != oid
+
+
+def test_small_worktree_file_oid_matches_git_blob(git_repo):
+    """A46 对照：阈值内文件流式分块哈希须与 git blob oid 逐字节一致，
+    否则 scope 跨 staging/commit 稳定性（既有测试的根基）会被破坏。"""
+    import hashlib
+
+    from repo_task.monitoring import _review_worktree
+
+    repo, _anchor = git_repo
+    content = (repo / TASK_REL / "spec.md").read_bytes()
+    expected = hashlib.sha1(b"blob %d\0" % len(content) + content).hexdigest()
+    tree = _review_worktree(repo, "t001_foo")
+    assert tree[f"{TASK_REL}/spec.md"][1] == expected
+
+
 def test_scope_tracks_mode_and_symlink_target(git_repo):
     repo, anchor = git_repo
     before = _fingerprint(repo, anchor)

@@ -88,6 +88,31 @@ def _review_tree(root: Path, ref: str, task_name: str) -> dict[str, tuple[str, s
     return tree
 
 
+def _worktree_file_oid(source: Path, info, algorithm: str) -> str:
+    """计算工作区常规文件的 blob oid，不把全量内容载入内存（A46）。
+
+    阈值内：按 git blob 形态（``blob <size>\\0`` + 内容）流式分块喂 hashlib，
+    结果与 git blob oid 逐字节一致。超阈值（与 repository_fingerprint 同一
+    1 MB 口径）：降级为 (size, mtime_ns, 前 8 KB 前缀) 哈希并以 ``degraded:``
+    前缀标记——指纹对该文件尾部内容变化不再敏感，换取 observe 不被大文件
+    拖垮；降级标记随 oid 进入指纹输入，不与真实 blob oid 混淆。
+    """
+    if info.st_size > _FINGERPRINT_LARGE_FILE_LIMIT:
+        digest = hashlib.new(algorithm)
+        digest.update(
+            f"degraded-blob:{info.st_size}:{info.st_mtime_ns}:".encode("ascii")
+        )
+        with source.open("rb") as fh:
+            digest.update(fh.read(_FINGERPRINT_LARGE_FILE_PREFIX))
+        return f"degraded:{digest.hexdigest()}"
+    digest = hashlib.new(algorithm)
+    digest.update(f"blob {info.st_size}\0".encode("ascii"))
+    with source.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _review_worktree(root: Path, task_name: str) -> dict[str, tuple[str, str]]:
     data = _required_git_bytes(["ls-files", "--cached", "--others", "--exclude-standard", "-z"], root)
     algorithm = _required_git_bytes(["rev-parse", "--show-object-format"], root).decode().strip()
@@ -99,16 +124,19 @@ def _review_worktree(root: Path, task_name: str) -> dict[str, tuple[str, str]]:
             continue
         source = root / physical
         try:
-            mode = source.lstat().st_mode
+            info = source.lstat()
+            mode = info.st_mode
         except FileNotFoundError:
             continue  # tracked deletion
         if path in tree:
             raise ctx.TaskDataError(f"review scope：active/archive 重复路径 {path}")
         if stat.S_ISLNK(mode):
             content, git_mode = os.fsencode(os.readlink(source)), "120000"
+            blob = f"blob {len(content)}\0".encode() + content
+            tree[path] = (git_mode, hashlib.new(algorithm, blob).hexdigest())
         elif stat.S_ISREG(mode):
-            content = source.read_bytes()
             git_mode = "100755" if mode & 0o111 else "100644"
+            tree[path] = (git_mode, _worktree_file_oid(source, info, algorithm))
         elif stat.S_ISDIR(mode):
             # Gitlinks are opaque dependencies. Bind their checked-out commit.
             git_mode = "160000"
@@ -117,8 +145,6 @@ def _review_worktree(root: Path, task_name: str) -> dict[str, tuple[str, str]]:
             continue
         else:
             raise ctx.TaskDataError(f"review scope 不支持文件类型：{physical}")
-        blob = f"blob {len(content)}\0".encode() + content
-        tree[path] = (git_mode, hashlib.new(algorithm, blob).hexdigest())
     return tree
 
 
