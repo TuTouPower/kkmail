@@ -1058,6 +1058,22 @@ def test_validate_restore_destination_matrix(tmp_path):
     assert _validate_restore_destination(valid_empty) == valid_empty.resolve()
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:userpw@127.0.0.1:5432/db?password=querypw&sslpassword=sslpw&sslmode=require",
+        "postgresql://u:userpw@127.0.0.1:5432/db?token=tok123&x=1",
+    ],
+)
+def test_redact_url_masks_query_credentials(url):
+    from mail_core.backup.package import _redact_url
+
+    redacted = _redact_url(url)
+    for secret in ("userpw", "querypw", "sslpw", "tok123"):
+        assert secret not in redacted
+    assert "***" in redacted
+
+
 def test_package_module_has_no_unused_crypto_or_fsync_helpers():
     # A192: package.py imported encrypt_bytes/decrypt_bytes without using them
     # and defined _fsync_file with zero callers; both mislead readers about
