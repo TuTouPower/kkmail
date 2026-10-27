@@ -289,6 +289,32 @@ def apply_delta_page(
     )
 
 
+def _reschedule_delta_after_fencing_mismatch(
+    session: Session,
+    *,
+    account_id: uuid.UUID,
+    folder_id: uuid.UUID,
+) -> bool:
+    """A147: keep the periodic poll chain alive after a fencing loss.
+
+    The successor delta is normally only enqueued on the success path, so
+    a fencing_mismatch exit used to end polling for the folder forever.
+    Re-enqueue one delayed delta under the usual dedupe key (coalescing
+    into any run the new lease owner already scheduled) and report
+    whether it coalesced into a CLAIMED job.
+    """
+    followup = enqueue_job(
+        session,
+        job_type=JobType.SYNC_FOLDER_DELTA.value,
+        account_id=account_id,
+        payload={"folder_id": str(folder_id)},
+        priority=60,
+        run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
+        dedupe_key=f"delta:{account_id}:{folder_id}",
+    )
+    return followup.status == JobStatus.CLAIMED.value
+
+
 def sync_folder_delta(
     account_id: uuid.UUID,
     folder_id: uuid.UUID,
@@ -419,7 +445,17 @@ def sync_folder_delta(
                     session.commit()
                 except FencingMismatch:
                     session.rollback()
-                    return {"status": "fencing_mismatch", "pages": pages, **totals}
+                    followup_coalesced = _reschedule_delta_after_fencing_mismatch(
+                        session, account_id=account_id, folder_id=folder_id
+                    )
+                    session.commit()
+                    return {
+                        "status": "fencing_mismatch",
+                        "pages": pages,
+                        "followup_scheduled": True,
+                        "followup_coalesced": followup_coalesced,
+                        **totals,
+                    }
             # R04: mirror the engine's metadata branch — report whether the
             # rebuild coalesced into a CLAIMED job, and mark the result
             # await_initialization so settlement transfers this job's
@@ -515,7 +551,17 @@ def sync_folder_delta(
                     page=page,
                 )
             except FencingMismatch:
-                return {"status": "fencing_mismatch", **totals}
+                session.rollback()
+                followup_coalesced = _reschedule_delta_after_fencing_mismatch(
+                    session, account_id=account_id, folder_id=folder_id
+                )
+                session.commit()
+                return {
+                    "status": "fencing_mismatch",
+                    "followup_scheduled": True,
+                    "followup_coalesced": followup_coalesced,
+                    **totals,
+                }
             except Exception:
                 # A85: uncaught apply errors must not leak the lease until
                 # its TTL — release quietly (only while fencing is still
@@ -546,7 +592,16 @@ def sync_folder_delta(
                 )
             except FencingMismatch:
                 session.rollback()
-                return {"status": "fencing_mismatch", **totals}
+                followup_coalesced = _reschedule_delta_after_fencing_mismatch(
+                    session, account_id=account_id, folder_id=folder_id
+                )
+                session.commit()
+                return {
+                    "status": "fencing_mismatch",
+                    "followup_scheduled": True,
+                    "followup_coalesced": followup_coalesced,
+                    **totals,
+                }
             session.commit()
             totals["upserted"] += result.upserted
             totals["deleted"] += result.deleted
@@ -561,7 +616,17 @@ def sync_folder_delta(
         try:
             assert_fencing(session, account_id=account_id, fencing_token=fencing)
         except FencingMismatch:
-            return {"status": "fencing_mismatch", **totals}
+            session.rollback()
+            followup_coalesced = _reschedule_delta_after_fencing_mismatch(
+                session, account_id=account_id, folder_id=folder_id
+            )
+            session.commit()
+            return {
+                "status": "fencing_mismatch",
+                "followup_scheduled": True,
+                "followup_coalesced": followup_coalesced,
+                **totals,
+            }
         if not exhausted:
             enqueue_job(
                 session,
