@@ -152,6 +152,8 @@ class MessageMigrationReport:
     imported_without_remote_id: int = 0
     legacy_total: int = 0
     flag_state_unavailable: int = 0
+    read_state_unavailable: int = 0
+    attachment_state_unavailable: int = 0
 
 
 def _legacy_flag_value(value: object) -> bool | None:
@@ -223,6 +225,8 @@ def migrate_retained_messages(
     skipped_existing = 0
     imported_without_remote_id = 0
     flag_state_unavailable = 0
+    read_state_unavailable = 0
+    attachment_state_unavailable = 0
     legacy_columns = {
         str(row[1]).lower(): str(row[1])
         for row in sqlite_cursor.execute("PRAGMA table_info(retained_normal_mail_messages)").fetchall()
@@ -273,6 +277,12 @@ def migrate_retained_messages(
         is_flagged = _legacy_flag_value(legacy_msg[flag_column]) if flag_column else None
         if is_flagged is None:
             flag_state_unavailable += 1
+        is_read_value = _legacy_flag_value(legacy_msg["is_read"])
+        if is_read_value is None:
+            read_state_unavailable += 1
+        has_attachments_value = _legacy_flag_value(legacy_msg["has_attachments"])
+        if has_attachments_value is None:
+            attachment_state_unavailable += 1
 
         msg = Message(
             id=msg_id,
@@ -284,9 +294,9 @@ def migrate_retained_messages(
             to_addresses=_legacy_addresses(legacy_msg["recipients"]),
             cc_addresses=_legacy_addresses(legacy_msg["cc"]),
             sort_time=_legacy_received_time(legacy_msg["id_mode"], legacy_msg["received_at"]),
-            is_read=bool(legacy_msg["is_read"]),
+            is_read=is_read_value or False,
             is_flagged=is_flagged,
-            has_attachments=bool(legacy_msg["has_attachments"]),
+            has_attachments=has_attachments_value or False,
             snippet=legacy_msg["body_preview"],
         )
         session.add(msg)
@@ -324,6 +334,8 @@ def migrate_retained_messages(
         imported_without_remote_id=imported_without_remote_id,
         legacy_total=legacy_total,
         flag_state_unavailable=flag_state_unavailable,
+        read_state_unavailable=read_state_unavailable,
+        attachment_state_unavailable=attachment_state_unavailable,
     )
 
 
@@ -646,6 +658,17 @@ def migrate(sqlite_path: Path, target_url: str) -> None:
         print(
             "Flagged state unavailable for "
             f"{message_report.flag_state_unavailable} migrated messages."
+        )
+    if message_report.read_state_unavailable:
+        print(
+            "Read state unavailable for "
+            f"{message_report.read_state_unavailable} migrated messages (defaulted to unread)."
+        )
+    if message_report.attachment_state_unavailable:
+        print(
+            "Attachment state unavailable for "
+            f"{message_report.attachment_state_unavailable} migrated messages "
+            "(defaulted to no attachments)."
         )
     print("MIGRATION COMPLETED SUCCESSFULLY.")
     sqlite_conn.close()
