@@ -83,3 +83,13 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 设备码仅通过原认证会话带 CSRF 的 `POST /api/accounts/oauth/flows/{id}/poll` 驱动；服务端在同一跨进程流程锁内判断 `next_poll_at` 并执行到期的一次请求，多次前端查询不会增加供应商轮询频率。等待、slow_down/429、拒绝、取消及期限均由后端收敛，有效期取供应商期限与 10 分钟较短值。长 device_code 只存在加密流程中，短 user_code 与官方验证 URI 返回原会话，所有 OAuth 响应禁止缓存。
 
 两种微软方式均申请 Graph 委托 Mail.ReadWrite、User.Read 和 offline_access；不解析 Access Token。通过 `/me` 的 `id` 与 `mail` 及 inbox 可访问性核实身份，不用 UPN 猜邮箱。成功暂存后必须显式保存；重新授权精确核对原邮箱、已存微软用户 ID、客户端及租户，旧 Graph 无用户 ID 时以真实邮箱建立身份，保留分组与同步偏好。远端身份与租户保存在账户 config，不改邮件身份或恢复 Microsoft IMAP。
+
+## 收件箱定时轮询调度与增量正文自动存库 (t057)
+
+1. **Worker 独立错峰巡检调度器**：
+    - 废除任务执行尾部的 30 秒自调度逻辑，由 Worker 主循环的 `_schedule_periodic_sync_once` 每 60 秒定期巡检；
+    - 对所有 `sync_enabled=True` 账号的有效收件箱（`role="inbox"` 且非 paused），若距离上次成功同步超过设定阈值（默认 1200 秒 / 20 分钟，环境变量 `MAIL_CORE_INBOX_POLL_INTERVAL_S` 可调），且无在途任务，自动入队 `SYNC_FOLDER_DELTA`（`priority = 75`）；
+    - 批量超期任务采用时间窗口错峰打散（Stagger），将各任务的 `run_after` 均匀分散在轮询周期内，避免多账号（如 300 邮箱）并发触发服务商连接风控与本地队列雷暴。
+2. **增量收信连带正文自动存库流水线**：
+    - 增量同步（`sync_folder_delta`）拉取新邮件元数据并持久化入库后（`upserted > 0`），自动在同事务中入队 `ARCHIVE_MIME_BATCH`（`priority = 60`，去重键 `archive_mime_batch:{account_id}`）；
+    - Worker 消费该归档任务拉取完整 RFC 822 MIME 数据流，加密落入 Blob 存储并解析正文，直接将提取出的 HTML/纯文本持久化写入 PostgreSQL `message_bodies` 表，彻底闭环自动收信并提取具体内容存库链路。

@@ -308,11 +308,11 @@ def _successor_is_periodic(job: WorkerJob, successor: WorkerJob | None, result: 
     """
     if successor is None:
         return False
+    if result and result.get("exhausted"):
+        return True
     successor_payload = successor.payload or {}
     if "poll_round" not in successor_payload:
         return False
-    if result and result.get("exhausted"):
-        return True
     try:
         return int(successor_payload.get("poll_round") or 0) > int((job.payload or {}).get("poll_round") or 0)
     except (TypeError, ValueError):

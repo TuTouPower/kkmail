@@ -20,7 +20,9 @@ _stop = False
 _stop_event = threading.Event()
 CLAIM_BATCH = 5
 RECLAIM_INTERVAL_S = 60.0
+SCHEDULE_INTERVAL_S = 60.0
 CLAIM_HEARTBEAT_MAX_INTERVAL_S = 60.0
+DEFAULT_INBOX_POLL_INTERVAL_S = 1200.0
 
 
 def _positive_float_setting(name: str, default: float) -> float:
@@ -153,6 +155,113 @@ def _reclaim_once() -> int:
         if counted:
             total += value
     return total
+
+
+def schedule_periodic_inbox_sync(
+    session: Any,
+    *,
+    poll_interval_s: float | None = None,
+    now: Any = None,
+) -> int:
+    """Schedule overdue inbox delta syncs staggered across poll_interval_s (t057 AC-001, AC-002, AC-006, AC-007)."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import select
+    from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
+    from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, WorkerJob
+    from mail_core.sync.jobs import enqueue_job
+
+    interval = (
+        poll_interval_s
+        if poll_interval_s is not None
+        else _positive_float_setting("MAIL_CORE_INBOX_POLL_INTERVAL_S", DEFAULT_INBOX_POLL_INTERVAL_S)
+    )
+    current_time = now or datetime.now(timezone.utc)
+
+    stmt = (
+        select(Folder.id, Folder.account_id)
+        .join(Account, Account.id == Folder.account_id)
+        .where(
+            Account.sync_enabled.is_(True),
+            Folder.role == "inbox",
+            Folder.sync_status != SyncStatus.PAUSED.value,
+        )
+        .order_by(Account.id, Folder.id)
+    )
+    inbox_rows = list(session.execute(stmt).all())
+    if not inbox_rows:
+        return 0
+
+    overdue: list[tuple[uuid.UUID, uuid.UUID]] = []
+    for folder_id, account_id in inbox_rows:
+        dedupe_key = f"delta:{account_id}:{folder_id}"
+        in_flight = session.scalar(
+            select(WorkerJob.id).where(
+                WorkerJob.dedupe_key == dedupe_key,
+                WorkerJob.status.in_((JobStatus.PENDING.value, JobStatus.CLAIMED.value)),
+            ).limit(1)
+        )
+        if in_flight is not None:
+            continue
+
+        last_synced_at: datetime | None = None
+        cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
+        if cp and cp.updated_at:
+            last_synced_at = cp.updated_at
+        latest_job_finished = session.scalar(
+            select(WorkerJob.updated_at)
+            .where(
+                WorkerJob.dedupe_key == dedupe_key,
+                WorkerJob.status.in_((JobStatus.DONE.value, JobStatus.FAILED.value)),
+                WorkerJob.updated_at.is_not(None),
+            )
+            .order_by(WorkerJob.updated_at.desc())
+            .limit(1)
+        )
+        if latest_job_finished and (last_synced_at is None or latest_job_finished > last_synced_at):
+            last_synced_at = latest_job_finished
+
+        if last_synced_at is None or (current_time - last_synced_at).total_seconds() >= interval:
+            overdue.append((folder_id, account_id))
+
+    if not overdue:
+        return 0
+
+    stagger_step = interval / max(len(overdue), 1)
+    for idx, (folder_id, account_id) in enumerate(overdue):
+        run_after = current_time + timedelta(seconds=idx * stagger_step)
+        enqueue_job(
+            session,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            account_id=account_id,
+            payload={"folder_id": str(folder_id)},
+            priority=75,
+            run_after=run_after,
+            dedupe_key=f"delta:{account_id}:{folder_id}",
+        )
+    return len(overdue)
+
+
+def _schedule_periodic_sync_once() -> int:
+    try:
+        from mail_core.db.session import get_session_factory
+    except Exception as exc:  # pragma: no cover
+        log.error("worker degraded: scheduler imports failed (%s); skipping schedule", exc)
+        return 0
+    Session = get_session_factory()
+    try:
+        with Session() as session:
+            try:
+                enqueued = schedule_periodic_inbox_sync(session)
+                session.commit()
+                if enqueued:
+                    log.info("scheduled %s periodic inbox delta sync job(s)", enqueued)
+                return enqueued
+            except Exception:
+                session.rollback()
+                raise
+    except Exception:
+        log.exception("periodic inbox scheduler sweep failed")
+        return 0
 
 
 def _claim_heartbeat_interval_s() -> float:
@@ -345,6 +454,7 @@ def run(poll_interval_s: float | None = None) -> None:
     log.info("worker %s starting (poll=%ss, max_idle=%ss)", worker_id, interval, max_idle)
     sleep_s = interval
     last_reclaim_at: float | None = None
+    last_schedule_at: float | None = None
 
     from mail_core.db.session import get_session_factory
     from mail_core.worker.heartbeat import WorkerHeartbeatLoop
@@ -364,6 +474,15 @@ def run(poll_interval_s: float | None = None) -> None:
                     from mail_core.security.redact import safe_error
 
                     log.error("reclaim sweep failed: %s", safe_error(exc))
+
+            if last_schedule_at is None or now - last_schedule_at >= SCHEDULE_INTERVAL_S:
+                last_schedule_at = now
+                try:
+                    _schedule_periodic_sync_once()
+                except Exception as exc:  # pragma: no cover
+                    from mail_core.security.redact import safe_error
+
+                    log.error("periodic schedule sweep failed: %s", safe_error(exc))
 
             tick_result = TickResult(claimed=0, handled=0)
             try:

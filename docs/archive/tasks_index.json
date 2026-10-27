@@ -898,6 +898,22 @@
             "conflicts_with": "",
             "note": "排除 Gmail 虚拟文件夹重复拉取，放宽 IMAP 超时与分批粒度，完善 RFC 6154 标志映射，瞬时网络超时防抖",
             "dir": "docs/archive/tasks/t056_gmail_sync_strategy_and_timeout"
+        },
+        {
+            "tid": "t057",
+            "slug": "periodic_inbox_sync_and_auto_archive",
+            "title": "收件箱定时轮询与增量正文自动存库",
+            "status": "done",
+            "branch": "t057_periodic_inbox_sync_and_auto_archive",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "1475b0aa137cf4587211ad0adc9164aaf7e57dac",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "实现20分钟收件箱独立错峰轮询，废除尾递归自调度，增量新邮件自动入库正文",
+            "dir": "docs/archive/tasks/t057_periodic_inbox_sync_and_auto_archive"
         }
     ]
 }
