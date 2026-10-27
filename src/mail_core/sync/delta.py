@@ -637,6 +637,14 @@ def sync_folder_delta(
                 "followup_coalesced": followup_coalesced,
                 **totals,
             }
+        if totals.get("upserted", 0) > 0:
+            enqueue_job(
+                session,
+                job_type=JobType.ARCHIVE_MIME_BATCH.value,
+                account_id=account_id,
+                priority=60,
+                dedupe_key=f"archive_mime_batch:{account_id}",
+            )
         if not exhausted:
             enqueue_job(
                 session,
@@ -645,28 +653,6 @@ def sync_folder_delta(
                 payload={"folder_id": str(folder_id)},
                 priority=60,
                 dedupe_key=f"delta:{account_id}:{folder_id}",
-            )
-        else:
-            # Schedule next poll and periodic reconcile
-            next_round = poll_round + 1
-            if next_round >= 20:
-                enqueue_job(
-                    session,
-                    job_type=JobType.RECONCILE_FOLDER.value,
-                    account_id=account_id,
-                    payload={"folder_id": str(folder_id)},
-                    priority=80,
-                    dedupe_key=f"reconcile:{account_id}:{folder_id}",
-                )
-                next_round = 0
-            enqueue_job(
-                session,
-                job_type=JobType.SYNC_FOLDER_DELTA.value,
-                account_id=account_id,
-                payload={"folder_id": str(folder_id), "poll_round": next_round},
-                priority=75,
-                dedupe_key=f"delta:{account_id}:{folder_id}",
-                run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
             )
         release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
         session.commit()

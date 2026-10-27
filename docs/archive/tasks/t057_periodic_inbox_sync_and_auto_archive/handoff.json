@@ -1,0 +1,37 @@
+{
+  "tid": "t057",
+  "attempt": 1,
+  "execution_id": "bf61517e26034bf79ec906300f02b4b9",
+  "status": "done",
+  "branch": "t057_periodic_inbox_sync_and_auto_archive",
+  "base_sha": "1475b0aa137cf4587211ad0adc9164aaf7e57dac",
+  "tests": "pytest .repo_template/tests -q -m contract: 189 passed. Backend targeted tests: 7 passed. Frontend vitest, TypeScript, Vite build passed.",
+  "blackbox": "Playwright UI E2E: 18 passed. Real Dovecot+Worker sync E2E passed.",
+  "review": "Code and test review PASS in Round 1; review scope 6c4351a0be90c36e; zero findings.",
+  "ac_evidence": {
+    "AC-001": [
+      "tests/mail_core/test_worker_scheduler.py::test_ac001_schedules_overdue_inbox",
+      "tests/mail_core/test_worker_scheduler.py::test_ac001_ignores_disabled_accounts_and_paused_or_non_inbox_folders"
+    ],
+    "AC-002": [
+      "tests/mail_core/test_worker_scheduler.py::test_ac002_staggers_multiple_accounts"
+    ],
+    "AC-003": [
+      "tests/mail_core/test_delta_archive_integration.py::test_ac003_delta_exhausted_no_longer_self_schedules"
+    ],
+    "AC-004": [
+      "tests/mail_core/test_delta_archive_integration.py::test_ac004_and_ac005_delta_upsert_enqueues_archive_and_persists_body"
+    ],
+    "AC-005": [
+      "tests/mail_core/test_delta_archive_integration.py::test_ac004_and_ac005_delta_upsert_enqueues_archive_and_persists_body"
+    ],
+    "AC-006": [
+      "tests/mail_core/test_worker_scheduler.py::test_ac006_deduplicates_in_flight_and_heals_after_terminal_failure"
+    ],
+    "AC-007": [
+      "tests/mail_core/test_worker_scheduler.py::test_ac007_poll_interval_env_override"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}
