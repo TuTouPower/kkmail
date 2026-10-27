@@ -62,8 +62,14 @@ def _wait_for_bcrypt_hash(path: Path) -> None:
     deadline = time.monotonic() + _SECRET_FILE_WRITE_TIMEOUT_S
     while time.monotonic() < deadline:
         try:
-            if path.is_file() and path.stat().st_size == _BCRYPT_HASH_BYTES:
-                return
+            if path.is_file():
+                # A252: validate the stripped content, not the raw file
+                # size — a hash written by external tooling may carry a
+                # trailing newline / surrounding whitespace (the auth
+                # side already reads this file with strip()).
+                content = path.read_text(encoding="utf-8", errors="ignore").strip()
+                if len(content) == _BCRYPT_HASH_BYTES and content.startswith("$2"):
+                    return
         except OSError:
             pass
         time.sleep(0.01)
