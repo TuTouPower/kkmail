@@ -499,7 +499,7 @@ def main() -> None:
     # add-account
     p_add = sub.add_parser("add-account", help="Add an email account")
     p_add.add_argument("--email", required=True, help="Email address")
-    p_add.add_argument("--provider", default="imap", choices=["imap", "gmail", "graph"], help="Provider")
+    p_add.add_argument("--provider", default="imap", choices=["imap", "graph"], help="Provider")
     p_add.add_argument("--host", help="IMAP server host")
     p_add.add_argument("--port", type=int, default=993, help="IMAP port")
     p_add.add_argument("--no-ssl", action="store_true", help="Disable SSL/TLS for IMAP")

@@ -438,6 +438,21 @@ def test_session_cache_refuses_symlink_directory(tmp_path, monkeypatch):
     assert list(real_dir.iterdir()) == []
 
 
+def test_add_account_rejects_removed_gmail_provider(monkeypatch, capsys):
+    """Backend AllowedProvider no longer includes gmail; CLI must reject it at parse time (A3)."""
+    monkeypatch.setattr(
+        kkmail_cli.sys,
+        "argv",
+        ["kkmail_cli.py", "add-account", "--email", "user@example.com", "--provider", "gmail"],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        kkmail_cli.main()
+
+    assert error.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
 def test_client_preserves_password_and_api_key_whitespace():
     """Credential values are opaque; surrounding spaces may be intentional."""
     client = kkmail_cli.KKMailClient(
