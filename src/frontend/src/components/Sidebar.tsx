@@ -595,7 +595,7 @@ function Sidebar() {
     return () => document.removeEventListener('keydown', trapTab, true)
   }, [drawerOpen])
   const statsQuery = useQuery({
-    queryKey: queryKeys.stats,
+    queryKey: queryKeys.statsForAccounts(enabledAccounts.map((account) => account.id)),
     queryFn: async ({ signal }) => {
       try {
         const response = await fetchGlobalStats(signal)

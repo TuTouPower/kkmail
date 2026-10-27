@@ -3,8 +3,8 @@ import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Sidebar from './Sidebar'
 import { useMailStore } from '../store/mailStore'
-import { setReadOptimistic } from '../api/queries'
-import { __resetCsrfForTests } from '../api/client'
+import { queryClient, queryKeys, setReadOptimistic } from '../api/queries'
+import { __resetCsrfForTests, type AccountSummary } from '../api/client'
 import { cleanup, render, waitFor, click, typeInto } from '../test/render'
 
 function json(body: unknown, status = 200) {
@@ -814,6 +814,29 @@ describe('<Sidebar />', () => {
     await waitFor(() => expect(container.querySelector('[data-group-id="group-1"] .unread-badge')?.textContent).toBe('3'))
     expect(calls.filter((call) => call.url === '/api/mail/stats').length).toBeGreaterThanOrEqual(2)
     expect(calls.some((call) => call.url.includes('group_id='))).toBe(false)
+  })
+
+  it('recomputes stats against the new account set when the enabled accounts change (A19)', async () => {
+    const calls = mockApi()
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-category-row[aria-label="所有收件箱"] .unread-badge')?.textContent).toBe('3'))
+    const statsCallsBefore = calls.filter((call) => call.url === '/api/mail/stats').length
+
+    // acc-2 leaves the account set (e.g. deleted in Settings): the stats
+    // query must run again for the remaining set instead of serving the
+    // numbers computed over the old membership.
+    const cachedAccounts = queryClient.getQueryData<AccountSummary[]>(queryKeys.accounts) || []
+    await act(async () => {
+      queryClient.setQueryData(queryKeys.accounts, cachedAccounts.filter((account) => account.id !== 'acc-2'))
+    })
+
+    await waitFor(() => expect(calls.filter((call) => call.url === '/api/mail/stats').length).toBeGreaterThan(statsCallsBefore))
+    const statsData = queryClient.getQueryCache().findAll()
+      .filter((query) => query.queryKey[0] === 'mail-core' && query.queryKey[1] === 'stats' && query.state.data)
+      .map((query) => query.state.data as { byAccount: Map<string, number | null> })
+    expect(statsData.length).toBeGreaterThan(0)
+    expect(statsData[statsData.length - 1].byAccount.has('acc-2')).toBe(false)
+    expect(statsData[statsData.length - 1].byAccount.get('acc-1')).toBe(2)
   })
 
   it('shows the backend account-load error and retries the account query', async () => {

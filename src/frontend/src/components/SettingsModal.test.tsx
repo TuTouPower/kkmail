@@ -499,7 +499,8 @@ describe('<SettingsModal />', () => {
 
     await waitFor(() => expect(settings.textContent).toContain('账户已添加'))
     await waitFor(() => expect(inbox.textContent).toContain('2'))
-    expect(queryClient.getQueryData<{ totalUnread: number }>(queryKeys.stats)?.totalUnread).toBe(2)
+    // A19: the live stats entry lives under the account-set digest key.
+    expect(queryClient.getQueryData<{ totalUnread: number }>(queryKeys.statsForAccounts(['account-added']))?.totalUnread).toBe(2)
   })
 
   it('displays queued count message for sync-all without overwriting with generic text', async () => {

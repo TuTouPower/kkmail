@@ -16,6 +16,13 @@ describe('accountScope / list query keys', () => {
     expect(queryKeys.settings).toEqual(['settings'])
   })
 
+  it('keys sidebar stats by a digest of the enabled account set (A19)', () => {
+    expect(queryKeys.statsForAccounts(['acc-2', 'acc-1'])).toEqual(['mail-core', 'stats', 'acc-1,acc-2'])
+    expect(queryKeys.statsForAccounts(['acc-1', 'acc-2'])).toEqual(queryKeys.statsForAccounts(['acc-2', 'acc-1']))
+    expect(queryKeys.statsForAccounts(['acc-1'])).not.toEqual(queryKeys.statsForAccounts(['acc-1', 'acc-2']))
+    expect(queryKeys.statsForAccounts([])).not.toEqual(queryKeys.statsForAccounts(['acc-1']))
+  })
+
   it('isolates a group scope from both global and single-account inbox caches', () => {
     expect(queryKeys.inbox(ALL_ACCOUNTS, 'all', 'inbox', 'desc', undefined, 'group-1')).not.toEqual(queryKeys.inbox())
     expect(queryKeys.inbox('account-1', 'all', 'inbox', 'desc', undefined, 'group-1')).not.toEqual(queryKeys.inbox('account-1'))

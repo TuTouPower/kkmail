@@ -90,6 +90,14 @@ export const queryKeys = {
   sidebarLayout: ['sidebar-layout'] as const,
   settings: ['settings'] as const,
   stats: ['mail-core', 'stats'] as const,
+  /**
+   * Sidebar stats are computed over the enabled-account set, so the key
+   * carries a digest of that set (A19): when membership changes, the stats
+   * query gets a fresh key and refetches instead of serving numbers computed
+   * over the old membership captured by the queryFn closure.
+   */
+  statsForAccounts: (accountIds: readonly string[]) =>
+    ['mail-core', 'stats', [...accountIds].sort().join(',')] as const,
   inbox: (
     accountId: string = ALL_ACCOUNTS,
     filter?: string,
@@ -374,7 +382,10 @@ function updateCachedReadStatistics(item: MailItem, previous: ReadStatus, next: 
   const locations = item.locations || []
   const inboxLocations = locations.filter((location) => location.role === 'inbox').length
   if (accountEnabled && inboxLocations) {
-    queryClient.setQueryData<SidebarStatsCache>(queryKeys.stats, (old) => {
+    // Prefix-matched update: the live stats entry lives under the
+    // account-set digest key (queryKeys.statsForAccounts, A19), not the
+    // bare stats key.
+    queryClient.setQueriesData<SidebarStatsCache>({ queryKey: queryKeys.stats }, (old) => {
       if (!old) return old
       const accountUnread = old.byAccount.get(item.accountId!)
       if (typeof accountUnread !== 'number') return old
