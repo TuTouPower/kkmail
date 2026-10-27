@@ -34,7 +34,13 @@ def private_hosts_allowed() -> bool:
 
 def is_restricted_ip(address: str) -> bool:
     ip = ipaddress.ip_address(address)
-    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified
+    # A171: anything that is not globally routable is restricted. The old
+    # OR of is_private/is_loopback/is_link_local/is_reserved/is_unspecified
+    # missed CGNAT 100.64.0.0/10 (is_private is False for it), multicast
+    # 224.0.0.0/4 and IPv6 site-local fec0::/10. `not is_global` covers
+    # CGNAT, but CPython reports multicast and fec0::/10 as is_global, so
+    # those two ranges are added explicitly.
+    return not ip.is_global or ip.is_multicast or getattr(ip, "is_site_local", False)
 
 
 def validate_imap_peer_address(address: str) -> None:
