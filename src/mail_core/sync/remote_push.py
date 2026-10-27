@@ -426,23 +426,30 @@ def push_remote_operations(
 
         caught_exc: Exception | None = None
         remote_state: dict = {}
-        if op_type == "trash" and getattr(provider, "name", "") == "imap":
-            if claimed_desired.get("trash_folder_remote_id") in (None, "", "Trash"):
+        # A17: real providers have no ``name`` attribute, so gate the IMAP
+        # trash fallback on the account's provider type instead. The
+        # resolved folder goes into a *separate* effective desired_state:
+        # ``claimed_desired`` is the settlement CAS snapshot, and mutating
+        # it would make every resolved push look "modified during push",
+        # requeueing the op after the remote MOVE already happened.
+        effective_desired = dict(claimed_desired)
+        if op_type == "trash" and str(account_snapshot.provider or "").lower() == "imap":
+            if effective_desired.get("trash_folder_remote_id") in (None, "", "Trash"):
                 try:
                     from mail_core.mail.application.mutations import _resolve_imap_trash_folder
 
                     with Session() as s:
                         real_trash = _resolve_imap_trash_folder(s, account_id)
-                        claimed_desired["trash_folder_remote_id"] = real_trash
+                        effective_desired["trash_folder_remote_id"] = real_trash
                 except Exception:
                     pass
-        remote_id = claimed_desired.get("remote_id")
+        remote_id = effective_desired.get("remote_id")
         if not isinstance(remote_id, str) or not remote_id.strip():
             ok = False
             err = "remote_id_missing"
         else:
             try:
-                result = provider.apply_remote_operation(op_type, claimed_desired)  # network
+                result = provider.apply_remote_operation(op_type, effective_desired)  # network
                 ok = bool(result.success)
                 err = safe_provider_summary(result.error) if result.error else None
                 candidate_state = getattr(result, "remote_state", {})
@@ -546,7 +553,7 @@ def push_remote_operations(
                         account_id=account_id,
                         provider_type=str(account_snapshot.provider or "").lower(),
                         op_type=op_type,
-                        desired_state=claimed_desired,
+                        desired_state=effective_desired,
                         remote_state=remote_state,
                     )
                 except RemoteIdentityConflict as exc:
