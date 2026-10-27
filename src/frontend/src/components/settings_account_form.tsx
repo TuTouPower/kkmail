@@ -8,6 +8,19 @@ import { copyTextToClipboard } from '../lib/clipboard'
 import { getDesktopPlatform } from '../lib/desktopShell'
 import CredentialHelp from './credential_help'
 
+/**
+ * Device-code expiry countdown. It owns its 1s ticker so each tick
+ * re-renders only this text node, not the whole account dialog (A124).
+ */
+export function DeviceCodeCountdown({ expiresAt }: { expiresAt: number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  return <>{Math.max(0, Math.ceil(expiresAt - now / 1000))}</>
+}
+
 /** Native modal traps focus; cleanup restores the control that opened it. */
 export default function AccountDialog({ account, groups, groupsAvailable, onClose, onSaved }: {
   account?: AccountSummary
@@ -48,7 +61,6 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
   const clientTypeEdited = useRef(!!account?.oauth_client_type)
   const [oauthMethod, setOauthMethod] = useState<'authorization_code' | 'device_code'>('authorization_code')
   const [tenant, setTenant] = useState(account?.oauth_tenant || (account ? '' : 'common'))
-  const [now, setNow] = useState(() => Date.now())
   const oauthProvider = 'microsoft'
   const oauthLabel = 'Microsoft'
   const [help, setHelp] = useState(false)
@@ -214,12 +226,6 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
     }
   }, [flowId, flowStatus, flowMethod, account, oauthLabel])
 
-  useEffect(() => {
-    if (oauthFlow?.method !== 'device_code' || oauthFlow.status !== 'pending') return
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [oauthFlow?.method, oauthFlow?.status])
-
   const startOAuth = async () => {
     if (busyRef.current) return
     setStatus('')
@@ -250,7 +256,6 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
         ...(oauth.client_id.trim() ? { client_id: oauth.client_id.trim() } : {}),
         ...(!device && oauth.client_secret.trim() ? { client_secret: oauth.client_secret.trim() } : {}),
       })
-      setNow(Date.now())
       updateOauthFlow({
         flow_id: started.flow_id,
         provider: started.provider,
@@ -497,7 +502,7 @@ export default function AccountDialog({ account, groups, groupsAvailable, onClos
             </div>
             {oauthFlow?.method === 'device_code' && oauthFlow.status === 'pending' && <div className="settings-notice" role="status">
               <p>复制短验证码 → 打开微软官方验证页 → 输入代码并登录 → 返回此处等待确认。</p>
-              <p>验证码：<strong>{oauthFlow.user_code}</strong> · 剩余 {Math.max(0, Math.ceil(oauthFlow.expires_at - now / 1000))} 秒</p>
+              <p>验证码：<strong>{oauthFlow.user_code}</strong> · 剩余 <DeviceCodeCountdown expiresAt={oauthFlow.expires_at} /> 秒</p>
               <p>{oauthFlow.verification_uri}</p>
               <button type="button" className="settings-button" onClick={async () => {
                 try {
