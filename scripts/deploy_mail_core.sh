@@ -73,7 +73,7 @@ mkdir "$backup_dir"
 chmod 0700 "$backup_dir"
 export MAIL_CORE_DEPLOY_BACKUP_DIR="$backup_dir"
 
-docker compose -f docker-compose.mail-core.yml --profile maintenance run --user "$(id -u):$(id -g)" --build --rm backup
+docker compose -f docker-compose.mail-core.yml --profile maintenance run --build --rm backup
 [[ -s "$backup_dir/package/backup.kkbak" ]] || fail "sealed backup package is missing"
 # Existence is not integrity: verify the sealed package (MANIFEST.json /
 # MANIFEST.sha256 and every member checksum, incl. backup.kkbak) with the
