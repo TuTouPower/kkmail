@@ -1044,8 +1044,10 @@ def run_archive_batch(
                 # publication and the MessageBlob/MessageBlobLink inserts
                 # below. GC uses the same locks while checking references
                 # and unlinking files.
+                mime_existed = blob_store.exists(mime_digest)
                 write = blob_store.put(mime)
-                current_used_bytes += write.size_bytes
+                if not mime_existed:
+                    current_used_bytes += write.size_bytes
 
                 blob = session.scalar(
                     select(MessageBlob).where(
@@ -1126,8 +1128,10 @@ def run_archive_batch(
                                 raise QuotaExceededError(f"attachment quota exceeded for message {mid}")
 
                         try:
+                            att_existed = blob_store.exists(att_digest)
                             att_write = blob_store.put(att_data)
-                            current_used_bytes += att_write.size_bytes
+                            if not att_existed:
+                                current_used_bytes += att_write.size_bytes
                             att_blob = session.scalar(
                                 select(MessageBlob).where(
                                     MessageBlob.content_sha256 == att_write.content_sha256,
