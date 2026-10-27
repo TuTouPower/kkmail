@@ -202,4 +202,11 @@ PYZIP
   fi
 fi
 
+# A241 guard: the desktop/server PostgreSQL version drift must stay explained
+# in both the script header and the vendor README (desktop 16.6.0 portable vs
+# server postgres:16.15 image), so the difference is not mistaken for a bug.
+grep -q "intentionally independent" "$ROOT/scripts/fetch-pg-binaries.sh"
+grep -q "postgres:16.15" "$ROOT/scripts/fetch-pg-binaries.sh"
+grep -q "intentionally independent" "$ROOT/src/desktop/vendor/README.md"
+
 echo "test_fetch_pg_binaries_helpers: ok"

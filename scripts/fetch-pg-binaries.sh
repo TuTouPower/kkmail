@@ -3,6 +3,20 @@
 # Supports cross-platform targets: darwin-arm64, darwin-x64, linux-x64, linux-arm64, win-x64.
 # Sources: theseus-rs portable builds (primary), EnterpriseDB (fallback).
 #
+# PostgreSQL version policy (A241): the desktop bundle version (default
+# 16.6.0, pinned per-asset by SHA-256 below) is intentionally independent of
+# the server/test image version (postgres:16.15, digest-pinned in
+# docker-compose.mail-core.yml and config/test_pg_compose.yaml). The two
+# come from different distribution channels — prebuilt portable tarballs
+# from theseus-rs for embedding in the desktop app, versus the official
+# Docker image for the server — and this repo's pin table only covers
+# theseus-rs releases for which pins were independently verified. The
+# shared invariant is the PostgreSQL 16 major line; patch-level drift is
+# expected and is not a bug. Desktop bumps are deliberate: pick a newer
+# theseus-rs 16.x release, refresh every pin in pinned_archive_sha256, and
+# re-run the desktop smoke checks — they do not auto-track server patch
+# releases.
+#
 # Security: URL allowlist, mandatory SHA-256 verification, path-traversal-safe extract.
 set -euo pipefail
 

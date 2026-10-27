@@ -19,6 +19,8 @@ desktop/vendor/pgsql/bin/postgres
 
 The default PostgreSQL 16.6.0 target archives use SHA-256 pins stored in the fetch script. Unpinned mirrors or versions are refused by default; a same-origin checksum fallback is only available with the explicit `--allow-unpinned` opt-in, and providing `PG_VENDOR_SHA256` to pin a custom archive explicitly is preferred.
 
+The desktop bundle version (16.6.0) is intentionally independent of the server/test image (postgres:16.15): desktop binaries are prebuilt portable tarballs from theseus-rs, while the server runs the official Docker image. Both stay on the PostgreSQL 16 major line; patch-level drift is expected, and desktop bumps are deliberate pin-refresh changes rather than automatic tracking of server patch releases (see the header of `scripts/fetch-pg-binaries.sh`).
+
 `PostgresManager` resolves: `KKMAIL_PG_BIN` → `desktop/vendor/pgsql/bin` → `PATH`.
 
 ## macOS / Windows (download-at-build)
