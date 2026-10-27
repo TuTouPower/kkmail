@@ -68,6 +68,21 @@ def _max_sse_connections() -> int:
         return value
 
 
+def _stream_wait_timeout_s(next_epoch_recheck: float | None, now: float) -> float:
+    """Queue wait timeout for the SSE live-tail loop.
+
+    Capped at 15s for the keepalive cadence. With a session epoch
+    recheck pending, the wait ends at the recheck point — but with a
+    1s floor (A379): an unfloored timeout shrinks toward 0 as the
+    recheck approaches and the timeout/keepalive branch spins in a
+    busy loop until the recheck fires. The recheck itself still runs
+    at the top of the next loop iteration, at most ~1s late.
+    """
+    if next_epoch_recheck is None:
+        return 15.0
+    return min(15.0, max(1.0, next_epoch_recheck - now))
+
+
 def _get_session_epoch(force_refresh: bool = False) -> int:
     from mail_core.security.auth import get_session_epoch
 
@@ -299,10 +314,9 @@ async def stream_events(
                     if current_epoch != session_epoch:
                         break
                     next_epoch_recheck = now + SESSION_EPOCH_RECHECK_INTERVAL_S
-                timeout = (
-                    min(15.0, max(0.0, next_epoch_recheck - time.monotonic()))
-                    if session_epoch is not None
-                    else 15.0
+                timeout = _stream_wait_timeout_s(
+                    next_epoch_recheck if session_epoch is not None else None,
+                    time.monotonic(),
                 )
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=timeout)
