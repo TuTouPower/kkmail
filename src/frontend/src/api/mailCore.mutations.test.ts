@@ -267,6 +267,70 @@ describe('optimistic updates', () => {
     expect(secondRequestStarted).toBe(true)
   })
 
+  it('frees the single-read slot before draining its deferred refresh so a bulk mutation can acquire (A183)', async () => {
+    const message = item({ locations: [{ folder_id: 'inbox-1', role: 'inbox' }] })
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [message])
+    queryClient.setQueryData(queryKeys.stats, { totalUnread: 1, byAccount: new Map([['acc-1', 1]]) })
+    stubFetch(() => json(200, { id: message.id, is_read: true }))
+
+    let releaseRefresh!: () => void
+    let refreshStarted!: () => void
+    const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve })
+    const startedRefresh = new Promise<void>((resolve) => { refreshStarted = resolve })
+    vi.spyOn(queryClient, 'invalidateQueries').mockImplementation(async () => {
+      refreshStarted()
+      await refreshGate
+    })
+
+    const firstRead = setReadOptimistic([message], true)
+    await startedRefresh
+
+    let bulkAcquired = false
+    const bulkPromise = beginReadMutation().then((finish) => {
+      bulkAcquired = true
+      return finish
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const acquiredDuringRefresh = bulkAcquired
+
+    releaseRefresh()
+    await firstRead
+    const finishBulk = await bulkPromise
+    await finishBulk()
+
+    // The single-read release is the single exit that returns both the
+    // active slot and the pending count, so the bulk gate must not have to
+    // wait for this read's own deferred refresh to settle first.
+    expect(acquiredDuringRefresh).toBe(true)
+  })
+
+  it('interleaves bulk, single-read, and flag mutations to a consistent final state (A183)', async () => {
+    const message = item({ locations: [{ folder_id: 'inbox-1', role: 'inbox' }] })
+    queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [message])
+    queryClient.setQueryData(queryKeys.stats, { totalUnread: 1, byAccount: new Map([['acc-1', 1]]) })
+    const mock = stubFetch(() => json(200, { id: message.id, is_read: true, is_flagged: true }))
+    const readCalls = () => mock.mock.calls.filter(([url]) => String(url).endsWith('/read')).length
+
+    const finishBulk = await beginReadMutation()
+    // The flag path is not part of the read gate and completes under bulk.
+    await flagOptimistic(message, true)
+    expect(queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0].is_flagged).toBe(true)
+
+    // A single read queues behind the bulk gate…
+    const queuedRead = setReadOptimistic([item({ is_flagged: true, locations: message.locations })], true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(readCalls()).toBe(0)
+
+    // …and runs to completion once the bulk mutation finishes.
+    await finishBulk()
+    await queuedRead
+    const cached = queryClient.getQueryData<MailItem[]>(queryKeys.inbox(ALL_ACCOUNTS))?.[0]
+    expect(cached?.is_read).toBe(true)
+    expect(cached?.is_flagged).toBe(true)
+    expect(readCalls()).toBe(1)
+  })
+
   it('holds the mark-all gate until its final stats refresh settles', async () => {
     const message = item({ locations: [{ folder_id: 'inbox-1', role: 'inbox' }] })
     queryClient.setQueryData(queryKeys.inbox(ALL_ACCOUNTS), [message])

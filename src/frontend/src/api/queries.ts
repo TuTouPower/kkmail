@@ -524,8 +524,7 @@ export function invalidateMailStatsQueries(client: typeof queryClient = queryCli
   return invalidateMailStatsNow(client)
 }
 
-async function finishReadMutation(): Promise<void> {
-  pendingReadMutationCount = Math.max(0, pendingReadMutationCount - 1)
+async function drainDeferredReadRefresh(): Promise<void> {
   while (true) {
     if (readRefreshPromise) {
       await readRefreshPromise
@@ -558,14 +557,27 @@ async function finishReadMutation(): Promise<void> {
   }
 }
 
-function acquireSingleReadMutation(): Promise<() => void> | (() => void) {
+async function finishReadMutation(): Promise<void> {
+  pendingReadMutationCount = Math.max(0, pendingReadMutationCount - 1)
+  await drainDeferredReadRefresh()
+}
+
+function acquireSingleReadMutation(): Promise<() => Promise<void>> | (() => Promise<void>) {
   if (bulkReadRequested || bulkReadInFlight) {
     return (bulkReadGate || Promise.resolve()).then(() => acquireSingleReadMutation())
   }
   activeSingleReadCount += 1
   pendingReadMutationCount += 1
   let released = false
-  return () => {
+  // Single exit for a single-read mutation (A183): the release returns the
+  // active slot AND this operation's pending count together, synchronously,
+  // before draining any deferred refresh. Previously setReadOptimistic
+  // awaited finishReadMutation() first — whose refresh decision read a
+  // pending count that still included this operation and an active count
+  // the release had not yet returned — so the drain was coupled to a
+  // self-decrement fallback inside finishReadMutation and any count drift
+  // could park the deferred refresh (and the bulk gate) indefinitely.
+  return async () => {
     if (released) return
     released = true
     activeSingleReadCount = Math.max(0, activeSingleReadCount - 1)
@@ -575,6 +587,8 @@ function acquireSingleReadMutation(): Promise<() => void> | (() => void) {
       resolveSingleReadDrain = null
       resolve?.()
     }
+    pendingReadMutationCount = Math.max(0, pendingReadMutationCount - 1)
+    await drainDeferredReadRefresh()
   }
 }
 
@@ -715,8 +729,9 @@ export async function setReadOptimistic(items: MailItem[], nextRead: boolean) {
     }
     await invalidateMailStatsQueries()
   } finally {
-    await finishReadMutation()
-    releaseSingleReadMutation()
+    // Single exit (A183): release returns the active slot and the pending
+    // count together, then drains any deferred refresh.
+    await releaseSingleReadMutation()
     for (const item of targets) {
       if (!pendingReadRequests.has(item.key) && readOperationRevisions.get(item.key) === revisions.get(item.key)) {
         readOperationRevisions.delete(item.key)
