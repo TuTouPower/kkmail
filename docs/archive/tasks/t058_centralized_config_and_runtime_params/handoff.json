@@ -1,0 +1,40 @@
+{
+  "tid": "t058",
+  "attempt": 1,
+  "execution_id": "2a1f0e54f320451eb9e475956954486e",
+  "status": "done",
+  "branch": "t058_centralized_config_and_runtime_params",
+  "base_sha": "5fb5f05dadc9da4605a54ab8bc6fc1dc689a3234",
+  "tests": "pytest .repo_template/tests -q -m contract: 189 passed. Backend targeted tests: 17 passed. Desktop npm test passed. Frontend tests and build passed.",
+  "blackbox": "Playwright UI E2E: 18 passed.",
+  "review": "Code and test review PASS in Round 1; review scope 470e3f905ef2b928; zero findings.",
+  "ac_evidence": {
+    "AC-001": [
+      "tests/mail_core/test_config.py::test_ac001_config_defaults"
+    ],
+    "AC-002": [
+      "tests/mail_core/test_config.py::test_ac002_connection_slots_override"
+    ],
+    "AC-003": [
+      "tests/mail_core/test_config.py::test_ac003_storage_limits_override"
+    ],
+    "AC-004": [
+      "tests/mail_core/test_config.py::test_ac004_and_ac005_worker_and_inbox_override"
+    ],
+    "AC-005": [
+      "tests/mail_core/test_config.py::test_ac004_and_ac005_worker_and_inbox_override"
+    ],
+    "AC-006": [
+      "tests/mail_core/test_config.py::test_ac006_config_validation_errors"
+    ],
+    "AC-007": [
+      "config/.env.example",
+      "src/mail_core/README.md"
+    ],
+    "AC-008": [
+      "src/desktop/startup.test.js"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

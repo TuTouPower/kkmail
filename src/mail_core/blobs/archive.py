@@ -55,6 +55,8 @@ from mail_core.sync.jobs import enqueue_job
 
 log = logging.getLogger("mail_core.blobs.archive")
 
+from mail_core.config import get_config
+
 DEFAULT_RECENT_DAYS = 30
 DEFAULT_BATCH = 20
 
@@ -332,14 +334,13 @@ def parse_mime_content(
     mime_bytes: bytes,
 ) -> tuple[str | None, str | None, list[dict[str, Any]]]:
     """Parse raw MIME bytes into (text_plain, text_html, attachments)."""
-    mime_limit = _size_limit_from_env("MAIL_CORE_MIME_MAX_BYTES", MAX_MIME_BYTES)
+    cfg = get_config()
+    mime_limit = cfg.max_mime_bytes
     if len(mime_bytes) > mime_limit:
         raise MimeParseError(
             "mime", f"mime_size_exceeded: {len(mime_bytes)} bytes > limit {mime_limit}"
         )
-    attachment_limit = _size_limit_from_env(
-        "MAIL_CORE_ATTACHMENT_MAX_BYTES", MAX_ATTACHMENT_BYTES
-    )
+    attachment_limit = cfg.max_attachment_bytes
     first_error: MimeParseError | None = None
     try:
         msg = email.message_from_bytes(mime_bytes, policy=default_policy)
@@ -780,12 +781,13 @@ def _resolve_archive_config(payload: dict) -> tuple[int, int, int | None, int | 
     cannot claim an unbounded batch; quota byte limits are clamped to
     >= 0. Non-numeric values raise _ArchiveConfigError.
     """
+    cfg = get_config()
     limit = _config_int(
-        payload.get("batch_size") or os.environ.get("MAIL_CORE_ARCHIVE_BATCH") or DEFAULT_BATCH,
+        payload.get("batch_size") or cfg.archive_batch_size,
         name="batch_size",
     )
     limit = max(1, min(200, limit))
-    recent_days = _config_int(payload.get("recent_days") or DEFAULT_RECENT_DAYS, name="recent_days")
+    recent_days = _config_int(payload.get("recent_days") or cfg.archive_recent_days, name="recent_days")
 
     def _bytes(name: str, env_name: str) -> int | None:
         raw = payload.get(name)

@@ -12,17 +12,27 @@ import uuid
 from typing import NamedTuple
 
 from mail_core.logging_config import configure_logging
+from mail_core.config import get_config
 
 configure_logging(service_name="mail-core-worker")
 log = logging.getLogger("mail_core.worker")
 
 _stop = False
 _stop_event = threading.Event()
-CLAIM_BATCH = 5
-RECLAIM_INTERVAL_S = 60.0
-SCHEDULE_INTERVAL_S = 60.0
 CLAIM_HEARTBEAT_MAX_INTERVAL_S = 60.0
-DEFAULT_INBOX_POLL_INTERVAL_S = 1200.0
+
+
+def __getattr__(name: str) -> Any:
+    cfg = get_config()
+    if name == "CLAIM_BATCH":
+        return cfg.worker_claim_batch
+    if name == "RECLAIM_INTERVAL_S":
+        return cfg.worker_reclaim_interval_s
+    if name == "SCHEDULE_INTERVAL_S":
+        return cfg.schedule_interval_s
+    if name == "DEFAULT_INBOX_POLL_INTERVAL_S":
+        return cfg.inbox_poll_interval_s
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _positive_float_setting(name: str, default: float) -> float:
@@ -173,7 +183,7 @@ def schedule_periodic_inbox_sync(
     interval = (
         poll_interval_s
         if poll_interval_s is not None
-        else _positive_float_setting("MAIL_CORE_INBOX_POLL_INTERVAL_S", DEFAULT_INBOX_POLL_INTERVAL_S)
+        else get_config().inbox_poll_interval_s
     )
     current_time = now or datetime.now(timezone.utc)
 
@@ -336,7 +346,7 @@ def _tick(worker_id: str) -> TickResult:
     Session = get_session_factory()
     claim_tokens: list[tuple] = []
     with Session() as session:
-        jobs = claim_jobs(session, worker_id=worker_id, limit=CLAIM_BATCH)
+        jobs = claim_jobs(session, worker_id=worker_id, limit=get_config().worker_claim_batch)
         claim_tokens = [(j.id, j.locked_by, j.locked_at) for j in jobs]
         session.commit()
 
@@ -440,17 +450,20 @@ def run(poll_interval_s: float | None = None) -> None:
     # Fail fast: worker must not process jobs without blob keys.
     load_keyring_from_env()
 
+    cfg = get_config()
     interval = (
         poll_interval_s
         if poll_interval_s is not None
-        else _positive_float_setting("MAIL_CORE_WORKER_POLL_S", 2.0)
+        else cfg.worker_poll_s
     )
-    worker_id = os.environ.get("MAIL_CORE_WORKER_ID") or f"worker-{uuid.uuid4().hex[:8]}"
+    worker_id = cfg.worker_id or f"worker-{uuid.uuid4().hex[:8]}"
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGINT, _handle_stop)
         signal.signal(signal.SIGTERM, _handle_stop)
-    max_idle = _positive_float_setting("MAIL_CORE_WORKER_MAX_IDLE_S", max(interval, 10.0))
-    heartbeat_interval = _positive_float_setting("MAIL_CORE_WORKER_HEARTBEAT_S", 15.0)
+    max_idle = cfg.worker_max_idle_s
+    heartbeat_interval = cfg.worker_heartbeat_s
+    reclaim_interval = cfg.worker_reclaim_interval_s
+    schedule_interval = cfg.schedule_interval_s
     log.info("worker %s starting (poll=%ss, max_idle=%ss)", worker_id, interval, max_idle)
     sleep_s = interval
     last_reclaim_at: float | None = None
@@ -466,7 +479,7 @@ def run(poll_interval_s: float | None = None) -> None:
     try:
         while not _stop and not _stop_event.is_set():
             now = time.monotonic()
-            if last_reclaim_at is None or now - last_reclaim_at >= RECLAIM_INTERVAL_S:
+            if last_reclaim_at is None or now - last_reclaim_at >= reclaim_interval:
                 last_reclaim_at = now
                 try:
                     _reclaim_once()
@@ -475,7 +488,7 @@ def run(poll_interval_s: float | None = None) -> None:
 
                     log.error("reclaim sweep failed: %s", safe_error(exc))
 
-            if last_schedule_at is None or now - last_schedule_at >= SCHEDULE_INTERVAL_S:
+            if last_schedule_at is None or now - last_schedule_at >= schedule_interval:
                 last_schedule_at = now
                 try:
                     _schedule_periodic_sync_once()
