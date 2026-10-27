@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 
@@ -10,10 +11,15 @@ from mail_core.worker.heartbeat import get_worker_heartbeats
 
 
 def main() -> int:
-    worker_id = os.environ.get("MAIL_CORE_WORKER_ID")
-    stale_threshold = float(os.environ.get("MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG", "60.0"))
-
     try:
+        worker_id = os.environ.get("MAIL_CORE_WORKER_ID")
+        # A294: parse inside the try and require a finite positive value;
+        # the old bare float() outside the try crashed with a traceback
+        # on an invalid env value.
+        stale_threshold = float(os.environ.get("MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG", "60.0"))
+        if not math.isfinite(stale_threshold) or stale_threshold <= 0:
+            raise ValueError("MAIL_CORE_WORKER_HEALTHCHECK_MAX_LAG must be a finite positive number")
+
         Session = get_session_factory()
         with Session() as session:
             is_healthy, lag, workers = get_worker_heartbeats(
@@ -34,7 +40,9 @@ def main() -> int:
             print(f"workers healthy (min_lag={lag}s, count={len(workers)})")
             return 0
     except Exception as exc:
-        print(f"worker healthcheck error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        # A294: type name only — exception text can embed DB connection
+        # details and must not reach the probe's stderr verbatim.
+        print(f"worker healthcheck error: {type(exc).__name__}", file=sys.stderr)
         return 1
 
 
