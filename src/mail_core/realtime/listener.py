@@ -46,11 +46,13 @@ class OutboxListenThread:
         dsn: str | None = None,
         idle_timeout_s: float = 30.0,
         reconnect_s: float = 2.0,
+        restart_join_timeout_s: float = 5.0,
     ) -> None:
         self.dispatcher = dispatcher
         self.dsn = dsn or _dsn_from_settings()
         self.idle_timeout_s = idle_timeout_s
         self.reconnect_s = reconnect_s
+        self.restart_join_timeout_s = restart_join_timeout_s
         self._stop = threading.Event()
         self._lifecycle_lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -71,7 +73,19 @@ class OutboxListenThread:
             if previous and previous.is_alive():
                 if not self._stop.is_set():
                     return
-                previous.join()
+                # A327: join with a timeout — a previous thread stuck in
+                # a DB call must not block start() (and, via
+                # _lifecycle_lock, every later stop()) forever. On
+                # timeout abandon this start attempt; the old thread is
+                # a daemon, so it cannot block process exit either.
+                previous.join(timeout=self.restart_join_timeout_s)
+                if previous.is_alive():
+                    log.error(
+                        "previous LISTEN thread did not exit within %ss; "
+                        "abandoning this start attempt",
+                        self.restart_join_timeout_s,
+                    )
+                    return
             self._stop.clear()
             self._started.clear()
             self._thread = threading.Thread(target=self._run, name="mail-core-outbox-listen", daemon=True)
