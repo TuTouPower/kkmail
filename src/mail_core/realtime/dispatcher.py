@@ -41,7 +41,57 @@ class OutboxDispatcher:
     # to tell "no local subscribers" (advance the cursor, B3) apart from
     # "a live subscriber rejected the event" (cursor stays pinned).
     _last_fanout_targets: int = 0
+    # Cross-loop deliveries scheduled via call_soon_threadsafe but not
+    # yet acknowledged by the callback actually running (A173). Keyed by
+    # id(queue); _unacked_queues pins the queue object so its id cannot
+    # be reused while deliveries are outstanding.
+    _unacked_cross_loop: dict[int, int] = field(default_factory=dict)
+    _unacked_queues: dict[int, asyncio.Queue] = field(default_factory=dict)
     _stop: bool = False
+
+    @property
+    def unacked_cross_loop_deliveries(self) -> int:
+        """Cross-loop callbacks scheduled but not yet executed."""
+        with self._lock:
+            return sum(self._unacked_cross_loop.values())
+
+    def _note_cross_loop_scheduled(self, q: asyncio.Queue) -> None:
+        with self._lock:
+            key = id(q)
+            self._unacked_cross_loop[key] = self._unacked_cross_loop.get(key, 0) + 1
+            self._unacked_queues[key] = q
+
+    def _ack_cross_loop(self, q: asyncio.Queue) -> None:
+        with self._lock:
+            key = id(q)
+            pending = self._unacked_cross_loop.get(key, 0)
+            if pending <= 1:
+                self._unacked_cross_loop.pop(key, None)
+                self._unacked_queues.pop(key, None)
+            else:
+                self._unacked_cross_loop[key] = pending - 1
+
+    def _report_unacked_loss(self, q: asyncio.Queue, *, reason: str) -> int:
+        """Forget a queue's unacked deliveries, warning about the loss.
+
+        Called when the subscriber loop is known to be closed, which
+        proves the queued callbacks can never run: events that were
+        counted as delivered when scheduled are in fact lost to that
+        subscriber, so the loss must at least be observable (A173).
+        """
+        with self._lock:
+            key = id(q)
+            lost = self._unacked_cross_loop.pop(key, 0)
+            self._unacked_queues.pop(key, None)
+        if lost:
+            log.warning(
+                "lost %d cross-loop SSE deliveries to queue %s that were never "
+                "acknowledged (%s); that subscriber must resync from the outbox",
+                lost,
+                key,
+                reason,
+            )
+        return lost
 
     def subscribe(
         self,
@@ -160,6 +210,9 @@ class OutboxDispatcher:
             return ok
 
         def _run() -> None:
+            # Execution of the callback is the delivery acknowledgement
+            # (A173): until this runs, the delivery stays unacked.
+            self._ack_cross_loop(q)
             try:
                 if not self._put(q, event):
                     self._isolate(q)
@@ -167,9 +220,14 @@ class OutboxDispatcher:
                 log.exception("failed to fan out SSE event id=%s", event.get("id"))
                 self._isolate(q)
 
+        self._note_cross_loop_scheduled(q)
         try:
             loop.call_soon_threadsafe(_run)
         except RuntimeError:
+            self._ack_cross_loop(q)  # this callback was never scheduled
+            # The loop is closed, so every earlier callback still queued
+            # on it is provably lost even though it counted as delivered.
+            self._report_unacked_loss(q, reason="subscriber loop closed")
             self._isolate(q, signal_stream=False)
             return False  # loop closed; subscriber is going away
         return True
@@ -181,7 +239,9 @@ class OutboxDispatcher:
         dispatch_once can tell it apart from a rejection: a completed scan
         with no local targets still advances the dispatch cursor, B3). A subscriber
         on another loop is considered scheduled as soon as
-        ``call_soon_threadsafe`` succeeds. QueueFull is detected on that loop:
+        ``call_soon_threadsafe`` succeeds; the delivery stays tracked as
+        unacknowledged until the callback runs, and if the loop is later
+        found closed the unacknowledged loss is reported (A173). QueueFull is detected on that loop:
         the consumer is isolated and receives a resync hint from the durable
         outbox. A closed loop or same-thread full queue returns False.
         """
@@ -362,6 +422,9 @@ class OutboxDispatcher:
                 loop.call_soon_threadsafe(close_queue)
             except RuntimeError:
                 # The subscriber loop has already closed and cannot keep a stream alive.
+                self._report_unacked_loss(
+                    queue, reason="subscriber loop closed during session revocation"
+                )
                 continue
 
     def request_stop(self) -> None:
