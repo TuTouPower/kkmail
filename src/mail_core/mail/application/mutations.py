@@ -234,17 +234,21 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
         raise UnaddressableMessageError("message has no verified provider remote id")
 
     account = session.get(Account, msg.account_id)
-    trash_dest = "Trash"
-    if account and account.provider == "imap":
-        trash_dest = _resolve_imap_trash_folder(session, msg.account_id)
 
     folder_ids = _all_location_folder_ids(session, message_id)
     folder, _loc = _primary_location(session, message_id)
     desired = {
         "remote_id": msg.remote_id,
         "folder_remote_id": folder.remote_id if folder else "INBOX",
-        "trash_folder_remote_id": trash_dest,
     }
+    # A11: only IMAP gets an explicit trash destination (the resolved
+    # role='trash' folder). Hardcoding "Trash" for every provider broke
+    # Graph accounts — Graph's trash folder is "deleteditems" — and the
+    # local row is deleted before the remote op runs, so the failure
+    # silently forked local and remote state. Non-IMAP providers apply
+    # their own default when the key is absent (Graph: "deleteditems").
+    if account and account.provider == "imap":
+        desired["trash_folder_remote_id"] = _resolve_imap_trash_folder(session, msg.account_id)
     op = enqueue_remote_operation(
         session,
         account_id=msg.account_id,
