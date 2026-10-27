@@ -166,22 +166,28 @@ def _heartbeat_claims(Session, claim_tokens, claim_times, claim_times_lock, stop
     while active and not stop_event.wait(_claim_heartbeat_interval_s()):
         refreshed: dict[object, datetime | None] = {}
         try:
+            # A297: snapshot claim_times under the lock, run the DB refresh
+            # (IO + commit) outside it, then write results back in a short
+            # critical section — the lock must not span IO or it blocks the
+            # main thread's per-job claim validation in _tick.
             with claim_times_lock:
-                with Session() as session:
-                    now = datetime.now(timezone.utc)
-                    for job_id, owner in list(active.items()):
-                        expected_locked_at = claim_times.get(job_id)
-                        if expected_locked_at is None:
-                            refreshed[job_id] = None
-                            continue
-                        refreshed[job_id] = heartbeat_job_claim(
-                            session,
-                            job_id=job_id,
-                            worker_id=owner,
-                            locked_at=expected_locked_at,
-                            now=now,
-                        )
-                    session.commit()
+                snapshot = {job_id: claim_times.get(job_id) for job_id in list(active)}
+            with Session() as session:
+                now = datetime.now(timezone.utc)
+                for job_id, owner in list(active.items()):
+                    expected_locked_at = snapshot.get(job_id)
+                    if expected_locked_at is None:
+                        refreshed[job_id] = None
+                        continue
+                    refreshed[job_id] = heartbeat_job_claim(
+                        session,
+                        job_id=job_id,
+                        worker_id=owner,
+                        locked_at=expected_locked_at,
+                        now=now,
+                    )
+                session.commit()
+            with claim_times_lock:
                 for job_id, locked_at in refreshed.items():
                     if locked_at is None:
                         active.pop(job_id, None)
