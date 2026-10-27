@@ -22,6 +22,21 @@ export interface SyncRequestResponse {
   errors?: Array<{ code?: string; safe_message?: string | null }>
 }
 
+/**
+ * Idempotency key for a sync submission. Must be unguessable and collision-
+ * resistant (A336): use the platform UUID generator, never Math.random.
+ */
+export function newClientRequestId(): string {
+  const cryptoObj = globalThis.crypto
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return `req_${cryptoObj.randomUUID()}`
+  }
+  const bytes = new Uint8Array(16)
+  cryptoObj.getRandomValues(bytes)
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+  return `req_${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 export function syncRequestQueryKey(requestId: string) {
   return ['sync-request', requestId] as const
 }
@@ -204,7 +219,7 @@ export function useScopeSync(enabled: boolean = true) {
         return next
       })
 
-      const clientRequestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+      const clientRequestId = newClientRequestId()
       try {
         // Unified client: CSRF token, token refresh, 401 handling, timeout
         // and ApiError parsing are shared with every other write.

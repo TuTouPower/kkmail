@@ -2,7 +2,7 @@
 import { createElement, useEffect } from 'react'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useScopeSync } from './use_scope_sync'
+import { newClientRequestId, useScopeSync } from './use_scope_sync'
 import { useMailStore } from '../store/mailStore'
 import { cleanup, render, waitFor } from '../test/render'
 import { clearDiagnosticLogs, getDiagnosticLogs } from '../lib/diagnostics'
@@ -181,6 +181,36 @@ describe('useScopeSync (p053/R01)', () => {
     } finally {
       dateSpy.mockRestore()
     }
+  })
+})
+
+describe('newClientRequestId (A336)', () => {
+  it('generates RFC 4122 UUID-shaped idempotency keys that do not repeat', () => {
+    const ids = new Set(Array.from({ length: 200 }, () => newClientRequestId()))
+    expect(ids.size).toBe(200)
+    for (const id of ids) {
+      expect(id).toMatch(/^req_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    }
+  })
+
+  it('sends the UUID-shaped key as client_request_id on the delta POST', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      const u = String(url)
+      calls.push({
+        url: u,
+        method: init.method || 'GET',
+        headers: new Headers(init.headers),
+        body: init.body ? JSON.parse(String(init.body)) : null,
+      })
+      if (u.endsWith('/api/auth/me')) return json({ csrf_token: 'tok-abc', via: 'session' })
+      if (u.endsWith('/api/mail/sync/delta')) return completeDelta()
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    await render(createElement(Harness))
+    await waitFor(() => expect(deltaCalls()).toHaveLength(1))
+    const body = deltaCalls()[0].body as { client_request_id?: string }
+    expect(body.client_request_id).toMatch(/^req_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
   })
 })
 
