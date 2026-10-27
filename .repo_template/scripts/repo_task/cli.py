@@ -32,6 +32,18 @@ from .lifecycle import (
 )
 
 
+def _validate_port(raw: str) -> int:
+    """A222: argparse type for `view --port`; reject out-of-range values at
+    parse time instead of letting serve() die with OverflowError."""
+    try:
+        port = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"端口必须是整数（收到 {raw!r}）") from None
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"端口必须在 0-65535 之间（收到 {port}）")
+    return port
+
+
 def _add_identity(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--attempt", type=int, required=True)
     parser.add_argument("--execution-id", required=True)
@@ -127,7 +139,7 @@ def main():
     view = sub.add_parser("view", help="task 调度全景")
     view.add_argument("--serve", action="store_true", help="启动本地只读看板服务并打开浏览器")
     view.add_argument("--host", default="127.0.0.1")
-    view.add_argument("--port", type=int, default=0)
+    view.add_argument("--port", type=_validate_port, default=0)
     view.add_argument("--allow-non-loopback", action="store_true",
                       help="允许绑定非 loopback 主机（默认拒绝，防暴露 task 文档）")
     view.set_defaults(func=cmd_view)
