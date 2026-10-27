@@ -660,6 +660,15 @@ class ImapProvider:
                 m = re.search(r"UIDVALIDITY\s+(\d+)", blob)
                 if m:
                     uidvalidity = int(m.group(1))
+            if uidvalidity is None:
+                # Never mint remote_ids under a uv=0 namespace (A28): like
+                # reconcile (B1), abort the round when UIDVALIDITY cannot be
+                # verified. \Noselect mailboxes keep their empty-page path.
+                if _is_mailbox_noselect(c, folder_remote_id):
+                    return MetadataPage(items=[], next_cursor=None, exhausted=True)
+                raise RuntimeError(
+                    f"unable to verify UIDVALIDITY for folder {folder_remote_id}; aborting metadata scan"
+                )
             try:
                 _check_uidvalidity(cursor, uidvalidity)
             except CursorInvalidError:
@@ -720,7 +729,7 @@ class ImapProvider:
                         continue
                     returned_uids.add(fetched_uid)
                     meta = _parse_message_meta_from_fetch(
-                        blob, fetched_uid, folder_remote_id, int(uidvalidity or 0)
+                        blob, fetched_uid, folder_remote_id, int(uidvalidity)
                     )
                     if meta is not None:
                         items.append(meta)
@@ -954,7 +963,13 @@ class ImapProvider:
                 highest = None
 
             _check_uidvalidity(cursor, uidvalidity if uidvalidity is not None else None)
-            uv = int(uidvalidity) if uidvalidity is not None else 0
+            if uidvalidity is None:
+                # A28: no verified UIDVALIDITY (server or cursor) — abort
+                # rather than minting flag/upsert remote_ids with uv=0.
+                raise RuntimeError(
+                    f"unable to verify UIDVALIDITY for folder {folder_remote_id}; aborting delta"
+                )
+            uv = int(uidvalidity)
 
             changes: list[DeltaChange] = []
             since_modseq = int(cursor.get("modseq") or 0)
