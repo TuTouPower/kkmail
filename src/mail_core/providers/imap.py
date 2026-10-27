@@ -507,7 +507,18 @@ class ImapProvider:
         try:
             client.logout()
         except Exception:
-            pass
+            # A117: logout failure must not leak the connection — fall back
+            # to close() and then the raw socket.
+            try:
+                client.close()
+            except Exception:
+                pass
+            sock = getattr(client, "sock", None)
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
         if permit is not None:
             permit.release()
 
@@ -552,21 +563,31 @@ class ImapProvider:
                     pass
             raise
         try:
-            client.login(self.username, self.password)
-            # RFC 2971: Client identification (required by NetEase 163/126 to prevent 'SELECT Unsafe Login')
             try:
-                _send_imap_id(client)
-            except Exception:
-                pass
-        except imaplib.IMAP4.error as exc:
-            msg = str(exc)
-            response_code = re.search(r"\[([A-Z0-9-]+)(?:\s|\])", msg, re.IGNORECASE)
-            # RFC 5530 defines EXPIRED as requiring a new passphrase. Other
-            # authentication failures may be temporary provider lockouts.
-            if response_code and response_code.group(1).upper() == "EXPIRED":
-                from mail_core.providers.http import PermanentAuthError
+                client.login(self.username, self.password)
+                # RFC 2971: Client identification (required by NetEase 163/126 to prevent 'SELECT Unsafe Login')
+                try:
+                    _send_imap_id(client)
+                except Exception:
+                    pass
+            except imaplib.IMAP4.error as exc:
+                msg = str(exc)
+                response_code = re.search(r"\[([A-Z0-9-]+)(?:\s|\])", msg, re.IGNORECASE)
+                # RFC 5530 defines EXPIRED as requiring a new passphrase. Other
+                # authentication failures may be temporary provider lockouts.
+                if response_code and response_code.group(1).upper() == "EXPIRED":
+                    from mail_core.providers.http import PermanentAuthError
 
-                raise PermanentAuthError(f"IMAP authentication rejected permanently: {msg}") from exc
+                    raise PermanentAuthError(f"IMAP authentication rejected permanently: {msg}") from exc
+                raise
+        except BaseException:
+            # A117: any login-phase failure (OSError/SSLError/timeout, not
+            # just IMAP4.error) must close the socket before propagating.
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
             raise
         return client
 
