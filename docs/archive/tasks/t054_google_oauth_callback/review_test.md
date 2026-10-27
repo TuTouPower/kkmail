@@ -73,7 +73,7 @@ reviewed_scope: 4d2e04d57e73ba5e
 - AC-002：`re_verified` — 独立运行后端与前端测试并核查 `test_google_oauth_callback.py:79-92,304-360` 与 `provider_account_form.test.tsx:53-109,193-200`，缺项提示、复用加密配置与非 Google IMAP 不受阻均已验证（复制按钮点击建议见 `t054_test_f004`）。
 - AC-003：`re_verified` — 独立运行 `test_google_oauth_callback.py:34-77` 验证 Web `MAIL_CORE_PUBLIC_ORIGIN`、拒绝未受信 Host/Forwarded/query `desktop=1` 与 `KKMAIL_SIDECAR=1` 动态端口，但缺少桌面 Electron 独立实例验证（见 `t054_test_f003`）。
 - AC-004：`re_verified` — 独立运行 `test_google_oauth_callback.py:93-171` 与 `provider_account_form.test.tsx:76`，确认 PKCE `S256`、`gmail.modify`、`access_type=offline`、缺 scope 或缺 Refresh Token 拒绝保存及 7 天说明。
-- AC-005：`re_verified` — 核查 `.scratch/t054_backend.log`（`.scratch/test_runs/b5f621ccab79419dbde2a6966f0df0e2/junit.xml` 25 passed）与 `test_google_oauth_callback.py:272-277,362-370,506-522`，跨会话、logout epoch 递增、取消与过期状态已验证；过期后调用 callback/save 阻断及未登录/缺 CSRF 断言需补齐（见 `t054_test_f001`、`t054_test_f004`）。
+- AC-005：`re_verified` — 核查 `.scratch/t054_backend.log`（`.scratch/test_runs/b5f621ccab79419dbde2a6966f0df0e2/junit.xml` 25 passed）与 `test_google_oauth_callback.py:272-277,362-370,506-522`，跨会话、logout epoch 递增、取消与过期状态已验证；过期后调用 callback/save 阻断及未登录/缺 CSRF 断言需补齐（见 `t054_test_f001`、`t054_test_f004`）。（注记 2026-10-27：此处 `.scratch/` 证据未入库、已随会话销毁，不可复核）
 - AC-006：`re_verified` — 独立运行 unit 并核查 PG 套件日志与 `test_google_oauth_callback.py:124-151,383-425`，错误 provider、篡改/缺 state、缺 code、重放、并发回调（`Barrier(2)`）与授权码复用均失败关闭。
 - AC-007：`re_verified` — 核查 `test_google_oauth_callback.py:217,262-276` 无 Cookie `system_browser` 换码暂存且不直接建号、跨会话 403；桌面独立实例集成验证缺失（见 `t054_test_f003`）。
 - AC-008：`re_verified` — 核查 `test_google_oauth_callback.py:285-295,312-322,431-440,489-504`，真实邮箱覆盖手填邮箱、重复邮箱拒绝、重新授权异邮拒绝、IMAP 转 Gmail API 拒绝已验证；但底层生产 HTTP 传输被 hook 绕过（见 `t054_test_f002`）。
@@ -107,7 +107,7 @@ reviewed_scope: 066ca8c4fdbd6b3a
 ### 验证与危险模式扫描
 
 - 独立执行 `npx vitest run src/components/provider_account_form.test.tsx`：18 passed。
-- 独立执行 `KKMAIL_TEST_ELECTRON=1 scripts/run-mail-core-tests.sh run -k google_oauth_callback --no-cov`：9 passed，证据 `.scratch/t054_test_reviewer_r2.log`；包含真实 PG、跨流程同码并发及独立 Electron 集成。
+- 独立执行 `KKMAIL_TEST_ELECTRON=1 scripts/run-mail-core-tests.sh run -k google_oauth_callback --no-cov`：9 passed，证据 `.scratch/t054_test_reviewer_r2.log`；包含真实 PG、跨流程同码并发及独立 Electron 集成。（注记 2026-10-27：此处 `.scratch/` 证据未入库、已随会话销毁，不可复核）
 - 核查已有门禁日志：前端全量与 OpenAPI/CSS 检查通过；UI E2E 16 passed；全栈串行重跑 8 passed；桌面测试与 packaged smoke 通过。完整后端大套件在本轮审阅时仍运行，最终收尾由实施侧核对。
 - 改测方向复核：无迁就实现的既有测试预期变更。相对 diff_anchor，既有帮助断言只增加内容，旧 E2E 行为保持；其余为新增 OAuth 用例与测试桩。新增 PG 用例的 `idle` 预期修正为 `running` 有生产调用 `update_account_app → enqueue_account_sync` 支持，并增加 WorkerJob 存储断言，未削弱行为覆盖。
 - 危险模式逐项核查：无恒真断言、删/反转断言、注释断言、独占测试、禁止类型抑制、放大超时掩盖失败或条件绕过关键断言。`toMatchObject` 用于检验新增请求载荷中的必需字段，未替代既有精确断言；`toBeVisible` 仅作交互前置/结果的一部分，后续有字段、请求、DB 与凭据断言。Electron 输入通过原生属性 setter 加 input/change 事件触达实际 React 表单，点击触发实际生产组件；未用赋值冒充拖拽、快捷键或焦点行为。
@@ -154,7 +154,7 @@ reviewed_scope: 899e4999950197e3
 - 严重度：important
 - 锚点：AC-012（账户编辑与后台并发安全）；新增针对 code f006 的回归无法执行，不具备验证修复的证据。
 - 位置：`tests/mail_core/test_google_oauth_callback.py:827-828,860`，`test_reauthorization_and_normal_group_move_share_lock_order_pg`。
-- 问题：函数使用 `Event`、`ThreadPoolExecutor`，但本函数和模块顶层均未导入这两个名字；其他函数内部的局部导入不对本函数可见。独立运行 `scripts/run-mail-core-tests.sh run -k reauthorization_and_normal_group_move_share_lock_order_pg --no-cov`，在 `account_locked = Event()` 处返回 `NameError`；补 Event 后仍会在执行器引用处失败。证据 `.scratch/t054_test_reviewer_r3.log` 为 1 failed；实施侧 `.scratch/t054_r3_backend.log` 同样失败。
+- 问题：函数使用 `Event`、`ThreadPoolExecutor`，但本函数和模块顶层均未导入这两个名字；其他函数内部的局部导入不对本函数可见。独立运行 `scripts/run-mail-core-tests.sh run -k reauthorization_and_normal_group_move_share_lock_order_pg --no-cov`，在 `account_locked = Event()` 处返回 `NameError`；补 Event 后仍会在执行器引用处失败。证据 `.scratch/t054_test_reviewer_r3.log` 为 1 failed；实施侧 `.scratch/t054_r3_backend.log` 同样失败。（注记 2026-10-27：此处 `.scratch/` 证据未入库、已随会话销毁，不可复核）
 - 建议：在该用例作用域显式导入 `threading.Event` 和 `concurrent.futures.ThreadPoolExecutor`，再重跑新增并发回归及相关后端门禁；不要把当前 NameError 当实现死锁复现。
 
 ### t054_test_f006 - 锁序回归只排除错误文本中的 deadlock，其他事务失败会假绿
@@ -216,14 +216,14 @@ reviewed_scope: 82374890bf0a9881
 - `t054_test_f005`：已消除。`test_google_oauth_callback.py:6-7` 已在模块顶层显式导入 `ThreadPoolExecutor` 与 `Event`；独立执行两个锁序、指针竞争及非对象响应回归，4 passed，未再出现 NameError。
 - `t054_test_f006`：已消除。`:864` 精确断言两事务均为 `ok`，`:865-868` 核对最终分组和重新授权 RT；异常虽然保留为诊断字符串，任何非 `ok` 值都会失败。新增 create/reauthorize 回归同样在 `:983-990` 断言两事务成功，并核对两个不同账户、原账户分组及两份新 RT，未沿用仅排除错误关键字的弱断言。
 - Round 1 `test_f001-f004`：当前完整 diff 中新增/编辑保存、回调恢复、生产 urllib、错误、Electron、复制、帮助与鉴权断言仍保留，未回退。
-- Code `f010` 对应验证：新增 `test_oauth_create_and_group_reauthorization_share_lock_order_pg` 调用实际账户 create/update 与 OAuth 消费生产路径，事件包装仍调用原函数。`.scratch/t054_r3_lock_red.log` 明确记录旧实现真实 PG `DeadlockDetected` 导致精确结果断言失败；当前独立回归通过，且有 DB 保存效果断言。不是复制实现或只检查未抛异常。
+- Code `f010` 对应验证：新增 `test_oauth_create_and_group_reauthorization_share_lock_order_pg` 调用实际账户 create/update 与 OAuth 消费生产路径，事件包装仍调用原函数。`.scratch/t054_r3_lock_red.log` 明确记录旧实现真实 PG `DeadlockDetected` 导致精确结果断言失败；当前独立回归通过，且有 DB 保存效果断言。不是复制实现或只检查未抛异常。（注记 2026-10-27：此处 `.scratch/` 证据未入库、已随会话销毁，不可复核）
 
 ### 验证与危险模式扫描
 
-- 独立执行 `scripts/run-mail-core-tests.sh run -k 'google_oauth_callback and (lock_order or concurrent_start or non_object)' --no-cov`：4 passed，证据 `.scratch/t054_test_reviewer_r4.log`。
+- 独立执行 `scripts/run-mail-core-tests.sh run -k 'google_oauth_callback and (lock_order or concurrent_start or non_object)' --no-cov`：4 passed，证据 `.scratch/t054_test_reviewer_r4.log`。（注记 2026-10-27：此处 `.scratch/` 证据未入库、已随会话销毁，不可复核）
 - 独立重算最终交付指纹：`82374890bf0a9881`，与本轮 prompt 相符。`git diff --check` 无错误；无 reviewer 看不到的未跟踪交付文件。
-- 核查最终相关后端日志 `.scratch/t054_r4_backend.log`：66 passed（包括明确启用的 Electron 与账户分组回归）；本轮全栈 `.scratch/t054_r4_full_stack.log`：8 passed。此前完整后端 532 passed / 1 显式 Electron skipped；前端本轮未变，保留已核查的 293 passed、UI E2E 16 passed、桌面与 packaged PASS 证据。未宣称最终全量后端又执行一次。
-- 改测方向复核：无旧测试迁就实现改预期；新测试修正缺导入并强化双方成功/存储效果断言，符合首轮红灯针对实现修复。`.scratch/t054_r3_lock_red.log` 的死锁红灯与修复后绿灯能够对应同一生产行为。
+- 核查最终相关后端日志 `.scratch/t054_r4_backend.log`：66 passed（包括明确启用的 Electron 与账户分组回归）；本轮全栈 `.scratch/t054_r4_full_stack.log`：8 passed。此前完整后端 532 passed / 1 显式 Electron skipped；前端本轮未变，保留已核查的 293 passed、UI E2E 16 passed、桌面与 packaged PASS 证据。未宣称最终全量后端又执行一次。（注记 2026-10-27：此处 `.scratch/` 证据未入库、已随会话销毁，不可复核）
+- 改测方向复核：无旧测试迁就实现改预期；新测试修正缺导入并强化双方成功/存储效果断言，符合首轮红灯针对实现修复。`.scratch/t054_r3_lock_red.log` 的死锁红灯与修复后绿灯能够对应同一生产行为。（注记 2026-10-27：此处 `.scratch/` 证据未入库、已随会话销毁，不可复核）
 - 危险模式扫描：无新增测试删除、反转断言、恒真断言、skip/only、类型抑制或超时阈值放大。两项并发测试的异常字符串现在由精确成功断言兜住，不再漏判非死锁错误；事件包装只固定线程交错，不替代真实 DB 或生产锁。既有 Electron 显式开关本轮实际开启并通过，未借跳过规避验收。
 - 七视角复核：安全确认会话/CSRF/PKCE/秘密测试未删；正确性和资源通过并发两事务完成及持久结果验证；契约确认 API/生成契约未在本轮变动；架构确认测试调用实际 application/credentials；健壮性确认非对象响应失败状态；测试/文档/规格确认部署 Origin 说明与新增门禁一致。没有扩大到未改领域。
 
