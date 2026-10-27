@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from dataclasses import asdict
 from typing import Any, Literal
@@ -86,7 +87,22 @@ class AccountsPage(BaseModel):
     has_more: bool
 
 
-AllowedProvider = Literal["imap", "graph", "memory", "stub"]
+AllowedProvider = Literal["imap", "graph"]
+
+#: Test-only providers backed by in-memory stubs. They must never be
+#: creatable through the production API; test fixtures opt in explicitly
+#: via the MAIL_CORE_ALLOW_TEST_PROVIDERS environment switch (A103).
+TestProvider = Literal["memory", "stub"]
+_TEST_PROVIDERS = ("memory", "stub")
+
+
+def test_providers_allowed() -> bool:
+    return os.environ.get("MAIL_CORE_ALLOW_TEST_PROVIDERS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def _has_basic_email_shape(email: str) -> bool:
@@ -98,7 +114,17 @@ def _has_basic_email_shape(email: str) -> bool:
 
 class AccountCreateIn(BaseModel):
     email: str = Field(default="", max_length=320)
-    provider: AllowedProvider
+    provider: str
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, value: str) -> str:
+        allowed: tuple[str, ...] = ("imap", "graph")
+        if test_providers_allowed():
+            allowed = allowed + _TEST_PROVIDERS
+        if value not in allowed:
+            raise ValueError(f"provider must be one of {sorted(allowed)}")
+        return value
     display_name: str | None = Field(default=None, max_length=255)
     group_id: UUID | None = None
     config: dict[str, Any] | None = None

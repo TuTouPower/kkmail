@@ -768,11 +768,8 @@ export interface components {
             group_id?: string | null;
             /** Oauth Flow Id */
             oauth_flow_id?: string | null;
-            /**
-             * Provider
-             * @enum {string}
-             */
-            provider: "imap" | "graph" | "memory" | "stub";
+            /** Provider */
+            provider: string;
         };
         /** AccountFolderStatsItemOut */
         AccountFolderStatsItemOut: {

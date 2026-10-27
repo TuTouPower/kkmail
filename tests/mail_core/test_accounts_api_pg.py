@@ -19,6 +19,11 @@ pytestmark = pytest.mark.skipif(
     reason="MAIL_CORE_DATABASE_URL not set",
 )
 
+# These PG fixtures create accounts through the API with the "memory" test
+# provider, which the production API rejects unless test fixtures opt in
+# via the environment switch (A103).
+os.environ.setdefault("MAIL_CORE_ALLOW_TEST_PROVIDERS", "1")
+
 
 def _client() -> TestClient:
     return TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
