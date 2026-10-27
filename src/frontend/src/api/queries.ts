@@ -67,9 +67,6 @@ export const queryClient = new QueryClient({
   },
 })
 
-/** Every cached message list lives under this prefix (inbox + search). */
-export const MAIL_LIST_PREFIX = ['mail-core'] as const
-
 /** Predicate matching only mail list and search query keys under mail-core. */
 export function isMailListQueryKey(key: unknown): boolean {
   return Array.isArray(key) && key.length >= 2 && key[0] === 'mail-core' && (key[1] === 'inbox' || key[1] === 'search')

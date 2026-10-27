@@ -27,7 +27,6 @@ export type SettingsOut = schemas['SettingsOut']
 export type SettingsUpdateIn = schemas['SettingsUpdateIn']
 export type SyncRequestOut = schemas['SyncRequestOut']
 export type SyncAllOut = SyncRequestOut
-export type SyncJobOut = SyncRequestOut
 export type HealthOut = schemas['HealthOut']
 export type ReadyOut = schemas['ReadyOut']
 export type ReadBody = schemas['ReadBody']
