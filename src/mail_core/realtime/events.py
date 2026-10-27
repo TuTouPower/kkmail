@@ -19,6 +19,7 @@ SSE_CORE_CLIENT_EVENTS: tuple[str, ...] = (
     OutboxEventType.MESSAGE_REMOVED.value,
     OutboxEventType.FOLDER_STATS_UPDATED.value,
     OutboxEventType.SYNC_PROGRESS.value,
+    OutboxEventType.SYNC_REQUEST_UPDATED.value,
     OutboxEventType.SYNC_COMPLETED.value,
     OutboxEventType.SYNC_ERROR.value,
     OutboxEventType.REMOTE_OPERATION_UPDATED.value,
