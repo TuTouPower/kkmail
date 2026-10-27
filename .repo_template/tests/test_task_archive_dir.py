@@ -149,7 +149,10 @@ def test_rebuild_index_uses_utf8_and_lf(fake_repo):
     assert '"tasks"' in text
 
 
-def test_unlink_managed_env_links_only_removes_script_links(fake_repo):
+def test_unlink_managed_env_links_only_removes_script_links(fake_repo, monkeypatch):
+    # REPLACED (A401): link_local_env 改显式 allowlist、默认不链 .env；
+    # 本测试改走显式登记 (".env",) 后断言不变（仅脚本所建链接被清理）。
+    monkeypatch.setattr(worktrees, "LOCAL_ENV_ALLOWLIST", (".env",))
     source = fake_repo / ".env"
     source.write_text("secret", encoding="utf-8")
     worktree = fake_repo / "worktree"
@@ -172,7 +175,9 @@ def test_unlink_managed_env_links_only_removes_script_links(fake_repo):
     assert unmanaged.is_symlink()
 
 
-def test_managed_env_link_stays_identifiable_after_source_removed(fake_repo):
+def test_managed_env_link_stays_identifiable_after_source_removed(fake_repo, monkeypatch):
+    # REPLACED (A401): 同上，改走显式 allowlist 登记后建链，断言不变。
+    monkeypatch.setattr(worktrees, "LOCAL_ENV_ALLOWLIST", (".env",))
     source = fake_repo / ".env"
     source.write_text("secret", encoding="utf-8")
     worktree = fake_repo / "worktree"
@@ -248,6 +253,8 @@ def test_link_local_env_prunes_skip_dirs_during_walk(fake_repo, monkeypatch):
             yield root, dirs, files
 
     monkeypatch.setattr(os, "walk", counting_walk)
+    # A401: 显式登记后遍历断言不变（剪枝语义与 allowlist 正交）。
+    monkeypatch.setattr(worktrees, "LOCAL_ENV_ALLOWLIST", ("app/.env",))
     linked = worktrees.link_local_env(worktree)
 
     assert linked == ["app/.env"]
@@ -255,8 +262,9 @@ def test_link_local_env_prunes_skip_dirs_during_walk(fake_repo, monkeypatch):
     assert not any("node_modules" in root.parts for root in visited_roots)
 
 
-def test_link_local_env_skips_symlink_source_resolving_outside_repo(fake_repo):
-    """A260: .env 符号链接源解析出仓时必须跳过，不得链入 worktree。"""
+def test_link_local_env_skips_symlink_source_resolving_outside_repo(fake_repo, monkeypatch):
+    """A260/A401: .env 符号链接源解析出仓时必须跳过（即使已登记 allowlist）。"""
+    monkeypatch.setattr(worktrees, "LOCAL_ENV_ALLOWLIST", ("sub/.env",))
     outside_dir = Path(str(fake_repo) + "_outside")
     outside_dir.mkdir()
     outside = outside_dir / "secret.env"
@@ -271,8 +279,11 @@ def test_link_local_env_skips_symlink_source_resolving_outside_repo(fake_repo):
     assert not (worktree / "sub" / ".env").is_symlink()
 
 
-def test_link_local_env_allows_symlink_source_resolving_inside_repo(fake_repo):
+def test_link_local_env_allows_symlink_source_resolving_inside_repo(fake_repo, monkeypatch):
     """A260: 符号链接源解析仍在仓内时照常链入。"""
+    monkeypatch.setattr(
+        worktrees, "LOCAL_ENV_ALLOWLIST", ("real/.env", "alias/.env")
+    )
     real = fake_repo / "real"
     real.mkdir()
     (real / ".env").write_text("in", encoding="utf-8")
@@ -285,6 +296,59 @@ def test_link_local_env_allows_symlink_source_resolving_inside_repo(fake_repo):
     linked = worktrees.link_local_env(worktree)
     assert "alias/.env" in linked
     assert "real/.env" in linked
+
+
+def test_link_local_env_default_links_nothing(fake_repo):
+    """A401: 无显式登记时默认不链任何 .env（含嵌套），且不写审计。"""
+    (fake_repo / ".env").write_text("secret", encoding="utf-8")
+    sub = fake_repo / "sub"
+    sub.mkdir()
+    (sub / ".env").write_text("secret2", encoding="utf-8")
+    worktree = fake_repo / "worktree"
+    worktree.mkdir()
+
+    assert worktrees.link_local_env(worktree) == []
+    assert not (worktree / ".env").is_symlink()
+    assert not (worktree / "sub" / ".env").is_symlink()
+    assert not (fake_repo / ".scratch" / "local_env_link_audit.log").exists()
+
+
+def test_link_local_env_allowlisted_file_links_and_audits(fake_repo, monkeypatch):
+    """A401: 仅 allowlist 登记的非敏感文件可链入，且逐个记审计日志。"""
+    monkeypatch.setattr(worktrees, "LOCAL_ENV_ALLOWLIST", ("config/local.toml",))
+    cfg = fake_repo / "config"
+    cfg.mkdir()
+    (cfg / "local.toml").write_text("x=1", encoding="utf-8")
+    (fake_repo / ".env").write_text("secret", encoding="utf-8")
+    worktree = fake_repo / "worktree"
+    worktree.mkdir()
+
+    assert worktrees.link_local_env(worktree) == ["config/local.toml"]
+    assert (worktree / "config" / "local.toml").is_symlink()
+    assert not (worktree / ".env").is_symlink()  # 未登记者不链
+
+    audit = (fake_repo / ".scratch" / "local_env_link_audit.log").read_text(
+        encoding="utf-8"
+    )
+    assert "config/local.toml" in audit  # 源
+    assert str(worktree) in audit  # 目标 worktree
+    assert "link_local_env" in audit
+
+
+def test_unlink_removes_allowlisted_link(fake_repo, monkeypatch):
+    """A401: unlink 须能清理 allowlist 文件的托管链接。"""
+    monkeypatch.setattr(worktrees, "LOCAL_ENV_ALLOWLIST", ("config/local.toml",))
+    cfg = fake_repo / "config"
+    cfg.mkdir()
+    (cfg / "local.toml").write_text("x=1", encoding="utf-8")
+    worktree = fake_repo / "worktree"
+    worktree.mkdir()
+    worktrees.link_local_env(worktree)
+    link = worktree / "config" / "local.toml"
+    assert worktrees.is_managed_env_link(worktree, link)
+
+    worktrees.unlink_managed_env_links(worktree)
+    assert not link.is_symlink()
 
 
 def test_close_task_rolls_back_when_move_fails(fake_repo, monkeypatch):

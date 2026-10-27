@@ -2,6 +2,7 @@
 
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 
 import repo_task.context as ctx
@@ -14,16 +15,43 @@ from .store import discover_effective_sources, load_task_at_ref
 # cleanup/rollback 时被全量遍历（A208）。
 SKIP_DIRS = {".git", "node_modules", ".scratch", "__pycache__", "venv", ".venv", "target"}
 
-def link_local_env(worktree: Path) -> list[str]:
-    """把主仓未入库的 .env 软链进 worktree（同相对路径）。
+# A401（回归 R3-H55 安全面）：可链入 task worktree 的本地文件显式
+# allowlist（仓内相对 POSIX 路径）。默认空——真实 .env 等未入库文件
+# 不再被全量软链进每个 worktree；确需链入某个非敏感本地配置文件时，
+# 在此逐个明示登记，且每次链入都逐个写审计日志（见 _audit_env_link）。
+LOCAL_ENV_ALLOWLIST: tuple[str, ...] = ()
 
-    用 os.walk 覆盖任意层级嵌套并在遍历期原地剪枝 SKIP_DIRS（.git、
-    node_modules、.scratch 等噪声/大树），不再全树 rglob 后按结果过滤
-    （A260）。符号链接源须校验其 resolve 仍在 REPO_ROOT 内：指向仓外的
-    .env 链接跳过，不把仓外文件链进每个 worktree。先物化源列表再建链，
-    防止遍历中把刚创建的软链当新源导致级联嵌套。
+
+def _audit_env_link(source: Path, dst: Path, worktree: Path) -> None:
+    """逐个记录链入审计（源、目标 worktree、时间）到 .scratch 审计日志。
+
+    审计写失败以 OSError 冒泡（fail-closed）：调用方 start 会据此回滚，
+    不出现「已链入、无审计」的不可追溯状态。
+    """
+    audit_path = ctx.REPO_ROOT / ".scratch" / "local_env_link_audit.log"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(ctx.TZ_CN).isoformat(timespec="seconds")
+    with audit_path.open("a", encoding="utf-8") as f:
+        f.write(
+            f"{ts} | link_local_env | source={source} "
+            f"| worktree={worktree} | dst={dst}\n"
+        )
+
+
+def link_local_env(worktree: Path) -> list[str]:
+    """把 allowlist 登记的本地文件软链进 worktree（同相对路径）。
+
+    仅 LOCAL_ENV_ALLOWLIST 明示登记的条目是候选（A401）；未登记者
+    （含全部真实 .env）默认不链。用 os.walk 遍历并在遍历期原地剪枝
+    SKIP_DIRS（A260）。符号链接源须校验其 resolve 仍在 REPO_ROOT 内：
+    解析出仓的条目拒绝链入（即使已登记）。先物化源列表再建链，防止
+    遍历中把刚创建的软链当新源导致级联嵌套；每链入一个文件逐个写
+    审计日志（_audit_env_link）。
     """
     linked = []
+    wanted = set(LOCAL_ENV_ALLOWLIST)
+    if not wanted:
+        return linked
     try:
         worktree_resolved = worktree.resolve()
     except OSError:
@@ -35,18 +63,23 @@ def link_local_env(worktree: Path) -> list[str]:
     sources = []
     for root, dirs, files in os.walk(ctx.REPO_ROOT, followlinks=False):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        if ".env" not in files:
-            continue
-        src = Path(root) / ".env"
-        if not src.is_file():
-            continue
-        try:
-            src.resolve().relative_to(repo_root_resolved)
-        except ValueError:
-            continue  # 符号链接源解析出仓，跳过（A260）
-        except OSError:
-            continue
-        sources.append(src)
+        for name in files:
+            src = Path(root) / name
+            try:
+                rel = src.relative_to(ctx.REPO_ROOT)
+            except ValueError:
+                continue
+            if rel.as_posix() not in wanted:
+                continue
+            if not src.is_file():
+                continue
+            try:
+                src.resolve().relative_to(repo_root_resolved)
+            except ValueError:
+                continue  # 登记条目解析出仓，拒绝链入（A401/A260）
+            except OSError:
+                continue
+            sources.append(src)
     for src in sources:
         try:
             rel = src.relative_to(ctx.REPO_ROOT)
@@ -55,7 +88,7 @@ def link_local_env(worktree: Path) -> list[str]:
         if worktree_resolved is not None:
             try:
                 src.resolve().relative_to(worktree_resolved)
-                continue  # 跳过目标 worktree 自身内的 .env
+                continue  # 跳过目标 worktree 自身内的登记文件
             except ValueError:
                 pass
         dst = worktree / rel
@@ -63,18 +96,24 @@ def link_local_env(worktree: Path) -> list[str]:
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.symlink_to(os.path.relpath(src, dst.parent))
+        _audit_env_link(src, dst, worktree)
         linked.append(str(rel))
     return linked
 
 def is_managed_env_link(worktree: Path, link: Path) -> bool:
-    """仅识别 link_local_env() 为主仓对应 .env 创建的软链。"""
+    """仅识别 link_local_env() 为主仓对应文件创建的软链。
+
+    候选为 allowlist 登记条目（A401）；相对路径名为 .env 的历史链接
+    （allowlist 之前由旧实现所建）同样认作托管，保证 cleanup 仍能
+    清理存量真实 .env 链接。
+    """
     if not link.is_symlink():
         return False
     try:
         rel = link.relative_to(worktree)
     except ValueError:
         return False
-    if rel.name != ".env":
+    if rel.name != ".env" and rel.as_posix() not in LOCAL_ENV_ALLOWLIST:
         return False
     source = ctx.REPO_ROOT / rel
     expected = os.path.relpath(source, link.parent)
@@ -89,13 +128,19 @@ def is_managed_env_link(worktree: Path, link: Path) -> bool:
 
 def unlink_managed_env_links(worktree: Path) -> None:
     # 用 os.walk 而非 Path.rglob：rglob 在 Python 3.10+ 会跳过 dangling
-    # symlink（源已删的 .env 链接），清理时恰恰需要删除这类残留。
+    # symlink（源已删的托管链接），清理时恰恰需要删除这类残留。
     # 原地过滤 dirs 剪枝 skip 目录（含 .git），避免每次 cleanup/rollback
     # 全量走 node_modules/.venv 等大树（A208；与 link_local_env 共用集合）。
+    # 候选文件名：历史 .env + allowlist 登记条目的文件名（A401）。
+    candidate_names = {".env"} | {
+        Path(entry).name for entry in LOCAL_ENV_ALLOWLIST
+    }
     for root, dirs, files in os.walk(worktree, followlinks=False):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        if ".env" in files:
-            link = Path(root) / ".env"
+        for name in files:
+            if name not in candidate_names:
+                continue
+            link = Path(root) / name
             if is_managed_env_link(worktree, link):
                 link.unlink()
 
