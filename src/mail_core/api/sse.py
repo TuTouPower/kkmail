@@ -34,7 +34,10 @@ SESSION_EPOCH_RECHECK_INTERVAL_S = 60.0
 
 # Soft cap on concurrent SSE streams per process (503 when exceeded).
 _DEFAULT_SSE_CONNECTIONS = 128
-_sse_max_connections_cache: int | None = None
+# Cache entry: (raw env value the cap was parsed from, parsed cap).
+# Recording the raw value lets an env change take effect without a
+# process restart (A244); an unchanged raw value keeps the cache hit.
+_sse_max_connections_cache: tuple[str, int] | None = None
 _sse_max_connections_lock = threading.Lock()
 _sse_active = 0
 _sse_active_lock = threading.Lock()
@@ -42,12 +45,14 @@ _sse_active_lock = threading.Lock()
 
 def _max_sse_connections() -> int:
     global _sse_max_connections_cache
-    if _sse_max_connections_cache is not None:
-        return _sse_max_connections_cache
+    raw = os.environ.get("MAIL_CORE_SSE_MAX_CONNECTIONS", "128")
+    cache = _sse_max_connections_cache
+    if cache is not None and cache[0] == raw:
+        return cache[1]
     with _sse_max_connections_lock:
-        if _sse_max_connections_cache is not None:
-            return _sse_max_connections_cache
-        raw = os.environ.get("MAIL_CORE_SSE_MAX_CONNECTIONS", "128")
+        cache = _sse_max_connections_cache
+        if cache is not None and cache[0] == raw:
+            return cache[1]
         try:
             value = int(raw)
         except ValueError:
@@ -59,7 +64,7 @@ def _max_sse_connections() -> int:
                 _DEFAULT_SSE_CONNECTIONS,
             )
             value = _DEFAULT_SSE_CONNECTIONS
-        _sse_max_connections_cache = value
+        _sse_max_connections_cache = (raw, value)
         return value
 
 

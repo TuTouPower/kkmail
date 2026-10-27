@@ -341,7 +341,10 @@ def test_sse_connection_cap_invalid_env_falls_back_and_warns(monkeypatch, caplog
 
 
 def test_sse_connection_cap_returns_503(monkeypatch):
-    monkeypatch.setattr(sse_mod, "_sse_max_connections_cache", 0)
+    # A244: the cache now stores (raw env value, parsed cap); the poke
+    # must carry the raw value currently in effect for the cap to apply.
+    raw = os.environ.get("MAIL_CORE_SSE_MAX_CONNECTIONS", "128")
+    monkeypatch.setattr(sse_mod, "_sse_max_connections_cache", (raw, 0))
     # Force counter path: acquire fails immediately.
     with _sse_slot_reset():
         resp = _client().get("/api/events")
@@ -350,7 +353,9 @@ def test_sse_connection_cap_returns_503(monkeypatch):
 
 
 def test_sse_slot_is_reserved_before_stream_response_is_created(monkeypatch):
-    monkeypatch.setattr(sse_mod, "_sse_max_connections_cache", 1)
+    # A244: see test_sse_connection_cap_returns_503 for the cache shape.
+    raw = os.environ.get("MAIL_CORE_SSE_MAX_CONNECTIONS", "128")
+    monkeypatch.setattr(sse_mod, "_sse_max_connections_cache", (raw, 1))
     scope = {"type": "http", "method": "GET", "path": "/api/events", "headers": [], "query_string": b""}
     with _sse_slot_reset():
         first = asyncio.run(
