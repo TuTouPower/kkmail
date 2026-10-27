@@ -105,7 +105,7 @@ def _make_session():
     return sessionmaker(bind=engine)
 
 
-def _seed_full_generation(session, generation: uuid.UUID, *, born_at: datetime) -> None:
+def _seed_full_generation(session, generation: uuid.UUID, *, born_at: datetime, target_id: uuid.UUID | None = None) -> None:
     """Record a full-scan root generation the way create_sync_request does."""
     request_id = uuid.uuid4()
     session.add(
@@ -121,7 +121,7 @@ def _seed_full_generation(session, generation: uuid.UUID, *, born_at: datetime) 
     )
     session.add(
         SyncRequestTarget(
-            id=uuid.uuid4(),
+            id=target_id or uuid.uuid4(),
             request_id=request_id,
             account_id=_ACCOUNT,
             folder_id=_FOLDER,
@@ -229,3 +229,37 @@ def test_unrecorded_generations_keep_legacy_behaviour():
         _commit(session, gen_b, {"uid_next": 2})
         session.commit()
         assert _checkpoint(session).cursor == {"uid_next": 2}
+
+
+def test_same_timestamp_generations_are_ordered_by_stable_total_order():
+    """A378: generations born in the same transaction share a
+    ``created_at`` (Postgres ``now()`` is the transaction timestamp).
+    With a strict ``birth > own_birth`` comparison neither generation
+    is stale and the older one can take the checkpoint over. The birth
+    key is therefore the stable total order ``(created_at, target id)``:
+    the generation whose earliest target id is larger is the newer one.
+    """
+    Session = _make_session()
+    gen_old, gen_new = uuid.uuid4(), uuid.uuid4()
+    older_target = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    newer_target = uuid.UUID("00000000-0000-0000-0000-000000000002")
+    with Session() as session:
+        _seed_full_generation(session, gen_old, born_at=_T0, target_id=older_target)
+        _seed_full_generation(session, gen_new, born_at=_T0, target_id=newer_target)
+        session.commit()
+
+        # Same birth timestamp, smaller target id: stale.
+        with pytest.raises(ScanGenerationMismatch):
+            _begin(session, gen_old)
+        session.rollback()
+        with pytest.raises(ScanGenerationMismatch):
+            _commit(session, gen_old, {"uid_next": 999})
+        session.rollback()
+
+        # Same birth timestamp, larger target id: current, works.
+        _begin(session, gen_new)
+        _commit(session, gen_new, {"uid_next": 20})
+        session.commit()
+        row = _checkpoint(session)
+        assert row.scan_generation == gen_new
+        assert row.cursor == {"uid_next": 20}
