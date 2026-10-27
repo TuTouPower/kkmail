@@ -594,6 +594,164 @@ describe('<SettingsModal />', () => {
     expect(container.querySelector('.settings-feedback')).toBeNull()
   })
 
+  // Semantic replacement (2026-10-28): the bulk-bar sync button is renamed
+  // to 立即同步 and follows the same immediate-sync rule as ST15 / the
+  // per-account button — it waits for every created request to truly
+  // finish instead of only queueing them through batch(), drops the
+  // progress/summary feedback, and only reports failures.
+  const bulkSyncReport = (id: string, state: string, errors: unknown[] = []) => ({
+    id, mode: 'delta', trigger: 'manual', state, target_count: 1, queued_count: 0,
+    running_count: state === 'running' ? 1 : 0, completed_count: state === 'complete' ? 1 : 0,
+    failed_count: state === 'failed' ? 1 : 0, created_at: '2026-10-28T00:00:00Z',
+    finished_at: state === 'running' ? null : '2026-10-28T00:00:05Z', errors,
+  })
+  const bulkAccount = (id: string, email: string, sync_enabled = true) => ({
+    id, email, status: 'active', sync_status: 'idle', sync_enabled,
+    account_type: 'imap', provider: 'imap', group_id: null, group_name: null,
+  })
+  const bulkSyncButton = (container: HTMLElement): HTMLButtonElement | null => {
+    const bar = container.querySelector('.settings-bulk-bar')
+    if (!bar) return null
+    return ([...bar.querySelectorAll('button')].find((b) => b.textContent === '立即同步') as HTMLButtonElement | undefined) ?? null
+  }
+
+  it('bulk-bar immediate sync waits for all selected account requests to finish, spins, and stays silent on success', async () => {
+    const accounts = [bulkAccount('bulk-1', 'bulk1@x.test'), bulkAccount('bulk-2', 'bulk2@x.test')]
+    let releaseFirst!: () => void
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const posts: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u === '/api/accounts/bulk-1/sync' && init?.method === 'POST') { posts.push(u); await firstGate; return json(bulkSyncReport('req-bulk-1', 'running'), 202) }
+      if (u === '/api/accounts/bulk-2/sync' && init?.method === 'POST') { posts.push(u); return json(bulkSyncReport('req-bulk-2', 'running'), 202) }
+      if (u === '/api/mail/sync/requests/req-bulk-1') return json(bulkSyncReport('req-bulk-1', 'complete'))
+      if (u === '/api/mail/sync/requests/req-bulk-2') return json(bulkSyncReport('req-bulk-2', 'complete'))
+      if (u.startsWith('/api/accounts')) return json({ accounts, total: accounts.length, limit: 200, offset: 0, has_more: false })
+      if (u === '/api/groups') return json({ groups: [] })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelectorAll('.settings-account-row')).toHaveLength(2))
+    await click(container.querySelector('input[aria-label="选择当前筛选的全部账户"]'))
+    const bulkSyncBtn = bulkSyncButton(container)
+    expect(bulkSyncBtn).not.toBeNull()
+    await click(bulkSyncBtn)
+
+    // bulk-2 was submitted while bulk-1 is still submitting: the wait has
+    // not ended, the icon spins, the button is disabled, nothing reported.
+    await waitFor(() => expect(posts).toContain('/api/accounts/bulk-2/sync'))
+    expect(bulkSyncBtn?.disabled).toBe(true)
+    expect(bulkSyncBtn?.querySelector('svg')?.getAttribute('class')).toContain('spin')
+    expect(container.querySelector('.settings-feedback')).toBeNull()
+    expect(container.querySelector('.settings-bulk-bar')).not.toBeNull()
+
+    releaseFirst()
+    // Success: the selection is cleared (bulk bar unmounts), still silent.
+    await waitFor(() => expect(container.querySelector('.settings-bulk-bar')).toBeNull())
+    expect(container.querySelector('.settings-feedback')).toBeNull()
+    expect(container.textContent).not.toContain('个成功')
+    expect(container.textContent).not.toContain('已排队')
+  })
+
+  it('bulk-bar immediate sync reports per-account failures only after every request settles and keeps the failed accounts selected', async () => {
+    const accounts = [bulkAccount('bf-1', 'bf1@x.test'), bulkAccount('bf-2', 'bf2@x.test'), bulkAccount('bf-3', 'bf3@x.test')]
+    let releaseThird!: () => void
+    const thirdGate = new Promise<void>((resolve) => { releaseThird = resolve })
+    const polled: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u === '/api/accounts/bf-1/sync' && init?.method === 'POST') return json(bulkSyncReport('req-bf-1', 'running'), 202)
+      if (u === '/api/accounts/bf-2/sync' && init?.method === 'POST') return json({ detail: '账户不存在' }, 500)
+      if (u === '/api/accounts/bf-3/sync' && init?.method === 'POST') return json(bulkSyncReport('req-bf-3', 'running'), 202)
+      if (u === '/api/mail/sync/requests/req-bf-1') { polled.push(u); return json(bulkSyncReport('req-bf-1', 'failed', [{ target_id: 't-1', code: 'auth_failed', safe_message: '密码错误' }])) }
+      if (u === '/api/mail/sync/requests/req-bf-3') { polled.push(u); await thirdGate; return json(bulkSyncReport('req-bf-3', 'complete')) }
+      if (u.startsWith('/api/accounts')) return json({ accounts, total: accounts.length, limit: 200, offset: 0, has_more: false })
+      if (u === '/api/groups') return json({ groups: [] })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelectorAll('.settings-account-row')).toHaveLength(3))
+    await click(container.querySelector('input[aria-label="选择当前筛选的全部账户"]'))
+    await click(bulkSyncButton(container))
+
+    // bf-1's request already failed and bf-2's submission already failed,
+    // but bf-3 is still running: no error is reported yet.
+    await waitFor(() => expect(polled).toContain('/api/mail/sync/requests/req-bf-1'))
+    expect(container.querySelector('.settings-feedback.is-error')).toBeNull()
+
+    releaseThird()
+    await waitFor(() => expect(container.querySelector('.settings-feedback.is-error')).not.toBeNull())
+    const feedback = container.querySelector('.settings-feedback.is-error')?.textContent || ''
+    expect(feedback).toContain('bf1@x.test：密码错误')
+    expect(feedback).toContain('bf2@x.test：账户不存在')
+    expect(feedback).not.toContain('bf3@x.test')
+    expect(container.textContent).not.toContain('个成功，')
+    // Failed accounts stay selected; the succeeded one is deselected, and
+    // the accounts area is usable again (gate released, icon stopped).
+    expect(container.textContent).toContain('已选 2 个账户')
+    expect((container.querySelector('input[aria-label="选择 bf1@x.test"]') as HTMLInputElement).checked).toBe(true)
+    expect((container.querySelector('input[aria-label="选择 bf2@x.test"]') as HTMLInputElement).checked).toBe(true)
+    expect((container.querySelector('input[aria-label="选择 bf3@x.test"]') as HTMLInputElement).checked).toBe(false)
+    const bulkSyncBtn = bulkSyncButton(container) as HTMLButtonElement
+    expect(bulkSyncBtn.disabled).toBe(false)
+    expect(bulkSyncBtn.querySelector('svg')?.getAttribute('class')).not.toContain('spin')
+  })
+
+  it('bulk-bar immediate sync skips sync-disabled accounts', async () => {
+    const accounts = [bulkAccount('dis-1', 'dis1@x.test', false), bulkAccount('ena-1', 'ena1@x.test')]
+    const posts: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u === '/api/accounts/ena-1/sync' && init?.method === 'POST') { posts.push(u); return json(bulkSyncReport('req-ena-1', 'running'), 202) }
+      if (u === '/api/mail/sync/requests/req-ena-1') return json(bulkSyncReport('req-ena-1', 'complete'))
+      if (u.startsWith('/api/accounts')) return json({ accounts, total: accounts.length, limit: 200, offset: 0, has_more: false })
+      if (u === '/api/groups') return json({ groups: [] })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelectorAll('.settings-account-row')).toHaveLength(2))
+    await click(container.querySelector('input[aria-label="选择当前筛选的全部账户"]'))
+    await click(bulkSyncButton(container))
+
+    await waitFor(() => expect(container.querySelector('.settings-bulk-bar')).toBeNull())
+    expect(posts).toEqual(['/api/accounts/ena-1/sync'])
+    expect(container.querySelector('.settings-feedback')).toBeNull()
+  })
+
+  it('bulk-bar immediate sync is a no-op when every selected account has sync disabled', async () => {
+    const accounts = [bulkAccount('dis-1', 'dis1@x.test', false), bulkAccount('dis-2', 'dis2@x.test', false)]
+    const posts: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u.endsWith('/sync') && init?.method === 'POST') { posts.push(u); return json(bulkSyncReport('req-x', 'complete'), 202) }
+      if (u.startsWith('/api/accounts')) return json({ accounts, total: accounts.length, limit: 200, offset: 0, has_more: false })
+      if (u === '/api/groups') return json({ groups: [] })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelectorAll('.settings-account-row')).toHaveLength(2))
+    await click(container.querySelector('input[aria-label="选择当前筛选的全部账户"]'))
+    const bulkSyncBtn = bulkSyncButton(container) as HTMLButtonElement
+    await click(bulkSyncBtn)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    expect(posts).toEqual([])
+    expect(container.querySelector('.settings-feedback')).toBeNull()
+    expect(container.textContent).toContain('已选 2 个账户')
+    expect((container.querySelector('input[aria-label="选择 dis1@x.test"]') as HTMLInputElement).checked).toBe(true)
+    expect((container.querySelector('input[aria-label="选择 dis2@x.test"]') as HTMLInputElement).checked).toBe(true)
+    expect(bulkSyncBtn.disabled).toBe(false)
+    expect(bulkSyncBtn.querySelector('svg')?.getAttribute('class')).not.toContain('spin')
+  })
+
   it('deleting the group currently in view returns to all inbox and clears stale selection', async () => {
     const groups = [{ id: 'group-current', name: '当前分组', color: null, account_count: 1, sort_order: 0 }]
     const accounts = [{

@@ -90,6 +90,10 @@ test('settings workspace: narrow layouts preserve account controls and avoid ove
   expect(await settings.locator('.settings-content').evaluate(node =>
     node.scrollHeight <= node.clientHeight || ['auto', 'scroll'].includes(getComputedStyle(node).overflowY),
   )).toBe(true)
-  await settings.getByRole('button', { name: '立即同步', exact: true }).scrollIntoViewIfNeeded()
-  await expect(settings.getByRole('button', { name: '立即同步', exact: true })).toBeVisible()
+  // Two buttons are named 立即同步 at this point (ST15 sync-all and the
+  // bulk-bar one, visible because every account is selected): target
+  // ST15 by its data-ui id and check the bulk-bar button separately.
+  await settings.locator('button[data-ui="ST15"]').scrollIntoViewIfNeeded()
+  await expect(settings.locator('button[data-ui="ST15"]')).toBeVisible()
+  await expect(settings.getByLabel('批量账户操作').getByRole('button', { name: '立即同步', exact: true })).toBeVisible()
 })

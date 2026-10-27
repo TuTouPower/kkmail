@@ -187,8 +187,8 @@ export default function SettingsPage({
     }
   }
 
-  async function batch(action: 'move' | 'sync' | 'enable' | 'disable') {
-    const labels = { move: '移动分组', sync: '同步账户', enable: '启用同步', disable: '暂停同步' }
+  async function batch(action: 'move' | 'enable' | 'disable') {
+    const labels = { move: '移动分组', enable: '启用同步', disable: '暂停同步' }
     const targets = selectedAccounts
     const result = await run('accounts', labels[action], async () => {
       const failed: Array<{ id: string; message: string }> = []
@@ -203,7 +203,6 @@ export default function SettingsPage({
           nextIndex += 1
           try {
             if (action === 'move') await moveAccount(account, bulkGroup)
-            else if (action === 'sync') await api.syncAccount(account.id)
             else await api.updateAccount(account.id, { sync_enabled: action === 'enable' })
           } catch (error) {
             failed.push({ id: account.id, message: `${account.email}：${errorMessage(error)}` })
@@ -287,6 +286,74 @@ export default function SettingsPage({
     }
   }
 
+  const [bulkSyncRunning, setBulkSyncRunning] = useState(false)
+
+  /**
+   * Bulk-bar immediate sync: one delta request per selected sync-enabled
+   * account, then wait until every created request truly finishes (the
+   * same rule as ST15 / the per-account button — no queue-only return, no
+   * progress or summary feedback). Success is silent and deselects the
+   * synced accounts; failures are reported once, after everything has
+   * settled, with one 邮箱：错误 line per failed account, and the failed
+   * accounts stay selected for retry. Sync-disabled accounts are skipped
+   * silently; when every selected account is disabled the click is a
+   * no-op (no gate, no spin, no selection change).
+   */
+  async function syncSelectedNow() {
+    const targets = selectedAccounts.filter((account) => account.sync_enabled !== false)
+    if (!targets.length) return
+    if (pendingRef.current.has('accounts')) return
+    setBulkSyncRunning(true)
+    setScopePending('accounts', true)
+    const submitted: Array<{ account: AccountSummary; report: SyncRequestOut }> = []
+    const failed: Array<{ id: string; message: string }> = []
+    try {
+      // Fan submissions out through the same bounded pool as batch(): one
+      // account's rejected POST is collected, never aborts the others
+      // (F1 semantics, same as the list-view scope sync).
+      let nextIndex = 0
+      async function worker() {
+        while (nextIndex < targets.length) {
+          const account = targets[nextIndex]
+          nextIndex += 1
+          try {
+            const report = await api.syncAccount(account.id)
+            submitted.push({ account, report })
+          } catch (error) {
+            failed.push({ id: account.id, message: `${account.email}：${errorMessage(error)}` })
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(BATCH_CONCURRENCY, targets.length) }, () => worker()))
+      if (submitted.length) {
+        const { reports } = await waitForSyncRequests(submitted.map((item) => item.report))
+        const finalById = new Map(reports.map((report) => [report.id, report]))
+        for (const item of submitted) {
+          const final = finalById.get(item.report.id) ?? item.report
+          if (final.state === 'failed') {
+            failed.push({ id: item.account.id, message: `${item.account.email}：${syncFailureDetail([final])}` })
+          }
+        }
+      }
+      setSelected(new Set(failed.map((item) => item.id)))
+      if (failed.length) {
+        report('accounts', failed.map((item) => item.message).join('\n'), true)
+      } else {
+        await qc.invalidateQueries({ queryKey: queryKeys.accounts })
+      }
+    } catch (error) {
+      // The wait itself gave up (poll-failure budget exhausted): the
+      // submitted accounts' outcomes are unknown, so they stay selected
+      // alongside the accounts already observed failed.
+      const unresolved = submitted.filter((item) => !failed.some((entry) => entry.id === item.account.id))
+      setSelected(new Set([...failed.map((item) => item.id), ...unresolved.map((item) => item.account.id)]))
+      report('accounts', errorMessage(error, '立即同步失败'), true)
+    } finally {
+      setScopePending('accounts', false)
+      setBulkSyncRunning(false)
+    }
+  }
+
   // Sync-preference toggles stay silent on success (p054); only failures surface feedback.
   async function toggleSyncPreference(account: AccountSummary) {
     if (pendingRef.current.has('accounts')) return
@@ -357,7 +424,7 @@ export default function SettingsPage({
             {selectedAccounts.length > 0 && <div className="settings-bulk-bar" aria-label="批量账户操作">
               <strong>已选 {selectedAccounts.length} 个账户</strong><select aria-label="批量移动分组" value={bulkGroup} onChange={event => setBulkGroup(event.target.value)} disabled={pendingAccounts || groupsQuery.isError}><option value="">移至未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
               <button className="settings-button" type="button" disabled={pendingAccounts || groupsQuery.isError} onClick={() => void batch('move')}>移动分组</button>
-              <button className="settings-button" type="button" disabled={pendingAccounts} onClick={() => void batch('sync')}>同步</button>
+              <button className="settings-button" type="button" disabled={pendingAccounts} onClick={() => void syncSelectedNow()}><RefreshCw size={14} className={bulkSyncRunning ? 'spin' : ''} />立即同步</button>
               <button className="settings-button" type="button" disabled={pendingAccounts} onClick={() => void batch('enable')}>启用同步</button>
               <button className="settings-button" type="button" disabled={pendingAccounts} onClick={() => void batch('disable')}>暂停同步</button>
               <button className="settings-text-button" type="button" disabled={pendingAccounts} onClick={() => setSelected(new Set())}>取消选择</button>
