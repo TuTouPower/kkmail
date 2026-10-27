@@ -45,3 +45,37 @@ def test_a88_session_max_age_boundaries_accepted(monkeypatch, raw, expected):
     monkeypatch.setenv("MAIL_CORE_SESSION_MAX_AGE", raw)
     reset_auth_caches()
     assert session_max_age() == expected
+
+
+@pytest.mark.parametrize("raw", ['[123]', '[null]', '[true]', '["valid-key", 123]', '[""]', '["   "]'])
+def test_a251_api_keys_json_rejects_non_string_or_empty_elements(monkeypatch, raw):
+    from mail_core.security.auth import AuthConfigError, load_api_keys
+
+    monkeypatch.setenv("MAIL_CORE_API_KEYS", raw)
+    reset_auth_caches()
+    with pytest.raises(AuthConfigError, match="MAIL_CORE_API_KEYS"):
+        load_api_keys()
+
+
+def test_a251_api_keys_json_syntax_error_wrapped_as_auth_config_error(monkeypatch):
+    import json as json_module
+
+    from mail_core.security.auth import AuthConfigError, load_api_keys
+
+    monkeypatch.setenv("MAIL_CORE_API_KEYS", "[not-json")
+    reset_auth_caches()
+    with pytest.raises(AuthConfigError, match="MAIL_CORE_API_KEYS") as excinfo:
+        load_api_keys()
+    assert isinstance(excinfo.value.__cause__, json_module.JSONDecodeError)
+
+
+def test_a251_api_keys_valid_forms_still_load(monkeypatch):
+    from mail_core.security.auth import load_api_keys
+
+    monkeypatch.setenv("MAIL_CORE_API_KEYS", '["key-one", "key-two"]')
+    reset_auth_caches()
+    assert load_api_keys() == frozenset({"key-one", "key-two"})
+
+    monkeypatch.setenv("MAIL_CORE_API_KEYS", "alpha, beta")
+    reset_auth_caches()
+    assert load_api_keys() == frozenset({"alpha", "beta"})

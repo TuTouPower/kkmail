@@ -168,10 +168,16 @@ def load_api_keys() -> frozenset[str]:
         _api_keys = frozenset()
         return _api_keys
     if raw.startswith("["):
-        data = json.loads(raw)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AuthConfigError("MAIL_CORE_API_KEYS must be valid JSON (a list of strings)") from exc
         if not isinstance(data, list):
             raise AuthConfigError("MAIL_CORE_API_KEYS JSON must be a list of strings")
-        _api_keys = frozenset(str(x) for x in data if str(x).strip())
+        for item in data:
+            if not isinstance(item, str) or not item.strip():
+                raise AuthConfigError("MAIL_CORE_API_KEYS JSON must be a list of non-empty strings")
+        _api_keys = frozenset(data)
     else:
         _api_keys = frozenset(k.strip() for k in raw.split(",") if k.strip())
     return _api_keys
