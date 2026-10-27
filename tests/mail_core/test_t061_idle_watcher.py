@@ -3,6 +3,18 @@
 Pure selection/backoff logic is tested without a database; manager
 behaviour (wake -> delta enqueue, quota, eligibility follow, failure
 degradation) uses the shared DB fixtures and fake IDLE sessions.
+
+Selection-semantics replacement (2026-10-28, user decision): the seat
+ranking tests below replace the original checkpoint-based ones
+wholesale. Seats used to be ranked by the inbox SyncCheckpoint's
+``updated_at`` — a timestamp the sync machinery writes itself, so the
+signal was self-confirming. The ranking signal is now the mail data
+itself: the newest server arrival time (IMAP INTERNALDATE, stored as
+``Message.sort_time``) among messages in the inbox; empty inboxes
+form a trailing group ordered by other-folder arrivals, then account
+creation time, then account id. The old expectations were removed
+rather than edited in place, per the repo rule against re-pointing
+old assertions at a new implementation's output.
 """
 
 from __future__ import annotations
@@ -17,10 +29,17 @@ import pytest
 from sqlalchemy import select
 
 from mail_core.mail.domain.enums import JobType, SyncStatus
-from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, WorkerJob
+from mail_core.mail.storage.models import (
+    Account,
+    Folder,
+    Message,
+    MessageLocation,
+    SyncCheckpoint,
+    WorkerJob,
+)
 from mail_core.providers.base import IdleNotSupportedError
 from mail_core.sync.idle_watcher import (
-    AccountActivity,
+    IdleCandidate,
     IdleWatcherConfig,
     IdleWatcherManager,
     backoff_delay,
@@ -30,36 +49,108 @@ from mail_core.sync.idle_watcher import (
 NOW = datetime(2026, 10, 28, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _activity(account_id: uuid.UUID, *, seconds_ago: float) -> AccountActivity:
-    return AccountActivity(
+def _candidate(
+    account_id: uuid.UUID,
+    *,
+    inbox_arrival_seconds_ago: float | None = None,
+    inbox_has_messages: bool | None = None,
+    other_arrival_seconds_ago: float | None = None,
+    created_seconds_ago: float = 0.0,
+) -> IdleCandidate:
+    """Build a seat candidate from mail-data keys (see module docstring).
+
+    ``inbox_arrival_seconds_ago`` is the newest server arrival time in
+    the inbox, relative to NOW; None means no located message carries
+    a timestamp. By default an arrival timestamp implies the inbox
+    holds mail; pass ``inbox_has_messages`` explicitly to model an
+    empty inbox (or one whose timestamps are all NULL).
+    """
+    if inbox_has_messages is None:
+        inbox_has_messages = inbox_arrival_seconds_ago is not None
+    return IdleCandidate(
         account_id=account_id,
         folder_id=uuid.uuid4(),
-        last_activity_at=NOW - timedelta(seconds=seconds_ago),
+        inbox_latest_arrival_at=(
+            NOW - timedelta(seconds=inbox_arrival_seconds_ago)
+            if inbox_arrival_seconds_ago is not None
+            else None
+        ),
+        inbox_has_messages=inbox_has_messages,
+        other_latest_arrival_at=(
+            NOW - timedelta(seconds=other_arrival_seconds_ago)
+            if other_arrival_seconds_ago is not None
+            else None
+        ),
+        account_created_at=NOW - timedelta(seconds=created_seconds_ago),
         credential_fingerprint=f"fp-{account_id}",
     )
 
 
 # ---------------------------------------------------------------------------
-# Holder selection (AC-005) — pure
+# Holder selection (AC-005) — pure; ranked by mail arrival data
 # ---------------------------------------------------------------------------
 
 
-def test_select_holders_top_quota_by_activity():
+def test_select_holders_top_quota_by_inbox_arrival():
     ids = [uuid.uuid4() for _ in range(5)]
-    candidates = [_activity(ids[i], seconds_ago=100 * (i + 1)) for i in range(5)]
+    candidates = [
+        _candidate(ids[i], inbox_arrival_seconds_ago=100 * (i + 1)) for i in range(5)
+    ]
     holders = select_idle_holders(candidates, current_holders=set(), quota=2, hysteresis_s=300, now=NOW)
     assert holders == {ids[0], ids[1]}
+
+
+def test_select_holders_empty_inbox_ranks_below_any_mail():
+    """An empty inbox loses even to an account whose newest inbox mail
+    is ancient, no matter how fresh its other folders are."""
+    ancient, empty = uuid.uuid4(), uuid.uuid4()
+    candidates = [
+        _candidate(empty, other_arrival_seconds_ago=10),
+        _candidate(ancient, inbox_arrival_seconds_ago=86400 * 365),
+    ]
+    holders = select_idle_holders(candidates, current_holders=set(), quota=1, hysteresis_s=300, now=NOW)
+    assert holders == {ancient}
+
+
+def test_select_holders_empty_group_ordering():
+    """Empty-inbox group: other-folder arrival first, then newest
+    account, then account id — checked via widening quotas."""
+    by_other, by_created, last = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    candidates = [
+        _candidate(last, created_seconds_ago=5),
+        _candidate(by_created, other_arrival_seconds_ago=200, created_seconds_ago=10),
+        _candidate(by_other, other_arrival_seconds_ago=100, created_seconds_ago=1000),
+    ]
+    assert select_idle_holders(candidates, current_holders=set(), quota=1, hysteresis_s=300, now=NOW) == {by_other}
+    assert select_idle_holders(candidates, current_holders=set(), quota=2, hysteresis_s=300, now=NOW) == {by_other, by_created}
+    assert select_idle_holders(candidates, current_holders=set(), quota=3, hysteresis_s=300, now=NOW) == {by_other, by_created, last}
+
+
+def test_select_holders_empty_group_created_then_id_tiebreak():
+    newer, older = uuid.UUID(int=7), uuid.UUID(int=9)
+    candidates = [
+        _candidate(older, created_seconds_ago=100),
+        _candidate(newer, created_seconds_ago=10),
+    ]
+    assert select_idle_holders(candidates, current_holders=set(), quota=1, hysteresis_s=300, now=NOW) == {newer}
+    low_id, high_id = uuid.UUID(int=1), uuid.UUID(int=2)
+    twins = [
+        _candidate(high_id, created_seconds_ago=50),
+        _candidate(low_id, created_seconds_ago=50),
+    ]
+    assert select_idle_holders(twins, current_holders=set(), quota=1, hysteresis_s=300, now=NOW) == {low_id}
 
 
 def test_select_holders_hysteresis_keeps_incumbent():
     hot, warm, cold = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     candidates = [
-        _activity(hot, seconds_ago=60),
-        _activity(warm, seconds_ago=200),
-        _activity(cold, seconds_ago=400),
+        _candidate(hot, inbox_arrival_seconds_ago=60),
+        _candidate(warm, inbox_arrival_seconds_ago=200),
+        _candidate(cold, inbox_arrival_seconds_ago=400),
     ]
-    # cold currently holds the seat; warm is newer but only by 200s,
-    # inside the 300s hysteresis margin, so cold keeps its seat.
+    # cold currently holds the seat; warm's newest inbox mail arrived
+    # only 200s later, inside the 300s hysteresis margin, so cold
+    # keeps its seat.
     holders = select_idle_holders(
         candidates, current_holders={cold}, quota=2, hysteresis_s=300, now=NOW
     )
@@ -69,9 +160,9 @@ def test_select_holders_hysteresis_keeps_incumbent():
 def test_select_holders_hysteresis_yields_when_challenger_clearly_hotter():
     hot, warm, cold = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     candidates = [
-        _activity(hot, seconds_ago=10),
-        _activity(warm, seconds_ago=20),
-        _activity(cold, seconds_ago=4000),
+        _candidate(hot, inbox_arrival_seconds_ago=10),
+        _candidate(warm, inbox_arrival_seconds_ago=20),
+        _candidate(cold, inbox_arrival_seconds_ago=4000),
     ]
     holders = select_idle_holders(
         candidates, current_holders={cold}, quota=2, hysteresis_s=300, now=NOW
@@ -79,9 +170,59 @@ def test_select_holders_hysteresis_yields_when_challenger_clearly_hotter():
     assert holders == {hot, warm}
 
 
+def test_select_holders_empty_group_hysteresis_uses_other_folder_arrival():
+    holder, challenger = uuid.uuid4(), uuid.uuid4()
+    candidates = [
+        _candidate(challenger, other_arrival_seconds_ago=200),
+        _candidate(holder, other_arrival_seconds_ago=400),
+    ]
+    # Both inboxes empty; the challenger's other-folder advantage is
+    # 200s, inside the margin, so the incumbent keeps the seat.
+    holders = select_idle_holders(
+        candidates, current_holders={holder}, quota=1, hysteresis_s=300, now=NOW
+    )
+    assert holders == {holder}
+    candidates = [
+        _candidate(challenger, other_arrival_seconds_ago=10),
+        _candidate(holder, other_arrival_seconds_ago=4000),
+    ]
+    holders = select_idle_holders(
+        candidates, current_holders={holder}, quota=1, hysteresis_s=300, now=NOW
+    )
+    assert holders == {challenger}
+
+
+def test_select_holders_hysteresis_stable_without_comparable_key():
+    """No comparable arrival key on either side (empty inboxes, no
+    other-folder mail): ranking alone must not churn the seat."""
+    holder, challenger = uuid.uuid4(), uuid.uuid4()
+    candidates = [
+        _candidate(challenger, created_seconds_ago=10),
+        _candidate(holder, created_seconds_ago=100),
+    ]
+    holders = select_idle_holders(
+        candidates, current_holders={holder}, quota=1, hysteresis_s=300, now=NOW
+    )
+    assert holders == {holder}
+
+
+def test_select_holders_cross_group_displacement_ignores_hysteresis():
+    """An account holding mail outranks an empty-inbox incumbent
+    categorically — hysteresis is a within-group time margin only."""
+    holder, with_mail = uuid.uuid4(), uuid.uuid4()
+    candidates = [
+        _candidate(with_mail, inbox_arrival_seconds_ago=250),
+        _candidate(holder, other_arrival_seconds_ago=60),
+    ]
+    holders = select_idle_holders(
+        candidates, current_holders={holder}, quota=1, hysteresis_s=300, now=NOW
+    )
+    assert holders == {with_mail}
+
+
 def test_select_holders_drops_ineligible_incumbent():
     a, b = uuid.uuid4(), uuid.uuid4()
-    candidates = [_activity(a, seconds_ago=10)]
+    candidates = [_candidate(a, inbox_arrival_seconds_ago=10)]
     holders = select_idle_holders(
         candidates, current_holders={b}, quota=4, hysteresis_s=300, now=NOW
     )
@@ -130,8 +271,13 @@ def _seed_idle_account(
     sync_enabled: bool = True,
     baseline: bool = True,
     paused: bool = False,
-    activity_seconds_ago: float = 60.0,
+    checkpoint_seconds_ago: float = 60.0,
 ) -> tuple[Account, Folder]:
+    """Seed an IDLE-eligible account. ``checkpoint_seconds_ago`` only
+    ages the SyncCheckpoint row (the t057 scheduler reads it); since
+    the 2026-10-28 signal replacement it has no effect on seat
+    ranking, which is driven by message arrival data (see
+    ``_seed_message``)."""
     acc = Account(
         id=uuid.uuid4(),
         email=f"idle-{uuid.uuid4().hex[:8]}@example.com",
@@ -156,11 +302,33 @@ def _seed_idle_account(
         account_id=acc.id,
         folder_id=folder.id,
         full_scan_complete=baseline,
-        updated_at=datetime.now(timezone.utc) - timedelta(seconds=activity_seconds_ago),
+        updated_at=datetime.now(timezone.utc) - timedelta(seconds=checkpoint_seconds_ago),
     )
     session.add(cp)
     session.flush()
     return acc, folder
+
+
+def _seed_message(
+    session,
+    account: Account,
+    folder: Folder,
+    *,
+    arrival_seconds_ago: float,
+) -> Message:
+    """Locate a message in ``folder`` whose server arrival time
+    (INTERNALDATE, stored as ``Message.sort_time``) is the given age."""
+    msg = Message(
+        id=uuid.uuid4(),
+        account_id=account.id,
+        remote_id=f"{folder.remote_id}:{uuid.uuid4().hex[:12]}",
+        sort_time=datetime.now(timezone.utc) - timedelta(seconds=arrival_seconds_ago),
+    )
+    session.add(msg)
+    session.flush()
+    session.add(MessageLocation(message_id=msg.id, folder_id=folder.id, uid=1))
+    session.flush()
+    return msg
 
 
 def _manager(session_factory, factory, **cfg_overrides) -> IdleWatcherManager:
@@ -258,7 +426,10 @@ def test_ac005_quota_limits_sessions():
     account_ids: list[uuid.UUID] = []
     with Session() as session:
         for i in range(3):
-            acc, _folder = _seed_idle_account(session, activity_seconds_ago=30.0 * (i + 1))
+            acc, folder = _seed_idle_account(session)
+            # Seat order follows the newest inbox arrival (30s, 60s,
+            # 90s old), not any sync bookkeeping timestamp.
+            _seed_message(session, acc, folder, arrival_seconds_ago=30.0 * (i + 1))
             account_ids.append(acc.id)
         session.commit()
 
@@ -273,10 +444,52 @@ def test_ac005_quota_limits_sessions():
     manager.start()
     try:
         assert _wait_until(lambda: len(manager.held_account_ids()) == 2)
-        # The two most recently active accounts hold the seats.
+        # The two accounts with the newest inbox arrivals hold the seats.
         assert manager.held_account_ids() == {account_ids[0], account_ids[1]}
     finally:
         manager.stop()
+
+
+@db_only
+def test_load_candidates_ranks_by_arrival_not_checkpoint():
+    """Discriminative case for the 2026-10-28 signal replacement: an
+    account whose checkpoint was touched just now but whose newest
+    inbox mail is a month old must lose the seat to an account with a
+    stale checkpoint and a fresh arrival. Under the old
+    checkpoint-based ranking this assertion inverts."""
+    from mail_core.db.session import get_session_factory
+
+    Session = get_session_factory()
+    with Session() as session:
+        fresh_cp, fresh_cp_folder = _seed_idle_account(
+            session, checkpoint_seconds_ago=0.0
+        )
+        _seed_message(session, fresh_cp, fresh_cp_folder, arrival_seconds_ago=86400 * 30)
+        fresh_mail, fresh_mail_folder = _seed_idle_account(
+            session, checkpoint_seconds_ago=86400 * 30
+        )
+        _seed_message(session, fresh_mail, fresh_mail_folder, arrival_seconds_ago=60.0)
+        session.commit()
+
+    manager = _manager(Session, lambda account, folder_row: _FakeSession())
+    candidates = {
+        c.account_id: c
+        for c in manager._load_candidates()  # noqa: SLF001 - white-box seam
+        if c.account_id in (fresh_cp.id, fresh_mail.id)
+    }
+    assert set(candidates) == {fresh_cp.id, fresh_mail.id}
+    assert (
+        candidates[fresh_mail.id].inbox_latest_arrival_at
+        > candidates[fresh_cp.id].inbox_latest_arrival_at
+    )
+    holders = select_idle_holders(
+        list(candidates.values()),
+        current_holders=set(),
+        quota=1,
+        hysteresis_s=300,
+        now=datetime.now(timezone.utc),
+    )
+    assert holders == {fresh_mail.id}
 
 
 @db_only
@@ -355,10 +568,13 @@ def test_blocked_watch_deregisters_and_retries_after_expiry():
         role="inbox",
         sync_status=SyncStatus.IDLE.value,
     )
-    candidate = AccountActivity(
+    candidate = IdleCandidate(
         account_id=acc_id,
         folder_id=folder_id,
-        last_activity_at=datetime.now(timezone.utc),
+        inbox_latest_arrival_at=datetime.now(timezone.utc),
+        inbox_has_messages=True,
+        other_latest_arrival_at=None,
+        account_created_at=datetime.now(timezone.utc),
         credential_fingerprint="fp-1",
     )
     calls: list[int] = []
@@ -611,7 +827,7 @@ def test_ac005_held_accounts_skip_inbox_polling():
 
     Session = get_session_factory()
     with Session() as session:
-        acc, folder = _seed_idle_account(session, activity_seconds_ago=99999.0)
+        acc, folder = _seed_idle_account(session, checkpoint_seconds_ago=99999.0)
         acc_id, folder_id = acc.id, folder.id
         session.commit()
 

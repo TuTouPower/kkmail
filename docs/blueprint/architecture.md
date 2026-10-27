@@ -98,7 +98,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 
 1. **IDLE 唤醒通道（信号与拉取分离）**：
     - Worker 进程内 `IdleWatcherManager` 为符合条件的 IMAP 账号维持至多一条收件箱 IDLE 长连接；IDLE 只作新邮件到达信号，唤醒后入队既有 `SYNC_FOLDER_DELTA`（去重键 `delta:{account_id}:{folder_id}`），实际拉取仍走 delta 流水线（基线门禁、账号租约、fencing 不变），watcher 不直接读写邮件数据；
-    - 长连接走独立配额（集中配置默认 32，与账号总数无关），不占用 `connection_slots` 的 8 个任务槽位；配额按最近活动优先分配并带滞回防抖，持有 IDLE 的账号跳过 t057 收件箱轮询、让位后恢复轮询；
+    - 长连接走独立配额（集中配置默认 32，与账号总数无关），不占用 `connection_slots` 的 8 个任务槽位；配额席位只按邮件数据分配：以收件箱内现存邮件的服务器到达时间（INTERNALDATE）最大值倒序为主序，空收件箱账号整体居后（组内按其他文件夹到达时间、账号创建时间、账号 id 定序），同组内带滞回防抖；持有 IDLE 的账号跳过 t057 收件箱轮询、让位后恢复轮询；
     - 无 IDLE 能力、永久认证失败、反复断线退避中的账号自动降级为纯轮询，watcher 异常不影响调度主循环，也不把账号标记为永久 failed；watcher 状态经 `AppSetting` 的 `worker:idle_state` 记录暴露。
 2. **全文件夹 STATUS 周期巡检**：
     - Worker 调度周期内对全部非收件箱、非 paused 文件夹做短连接 STATUS 探测（IMAP STATUS 不 SELECT 不 FETCH；Graph 以文件夹计数接口探测），探测连接走任务槽位预算；

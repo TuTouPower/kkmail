@@ -7,11 +7,18 @@ dedupe key; all fetching still flows through the delta pipeline
 (baseline gate, account lease, fencing untouched).
 
 Long-lived connections live under their own quota (independent of the
-``connection_slots`` task budget): quota seats go to the most recently
-active accounts, with hysteresis so borderline accounts do not churn
-connections. Accounts beyond the quota, accounts whose servers do not
-advertise IDLE, and accounts in failure backoff simply keep the t057
-polling behaviour — the watcher never marks an account failed.
+``connection_slots`` task budget): quota seats are ranked purely by
+mail data — the newest server arrival time (IMAP INTERNALDATE, stored
+as ``Message.sort_time``) in the account's inbox — with hysteresis so
+borderline accounts do not churn connections. Accounts whose inbox is
+empty rank below every account holding mail, ordered among themselves
+by their other folders' newest arrival, then by account creation time.
+The ranking signal deliberately comes from the messages themselves,
+never from sync bookkeeping timestamps (a checkpoint's ``updated_at``
+is written by the sync machinery itself and would be self-confirming).
+Accounts beyond the quota, accounts whose servers do not advertise
+IDLE, and accounts in failure backoff simply keep the t057 polling
+behaviour — the watcher never marks an account failed.
 """
 
 from __future__ import annotations
@@ -26,10 +33,17 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from mail_core.mail.domain.enums import JobType, SyncStatus
-from mail_core.mail.storage.models import Account, AppSetting, Folder, SyncCheckpoint
+from mail_core.mail.storage.models import (
+    Account,
+    AppSetting,
+    Folder,
+    Message,
+    MessageLocation,
+    SyncCheckpoint,
+)
 from mail_core.providers.base import IdleNotSupportedError
 from mail_core.sync.jobs import enqueue_job
 
@@ -67,10 +81,26 @@ class IdleWatcherConfig:
 
 
 @dataclass(frozen=True)
-class AccountActivity:
+class IdleCandidate:
+    """One eligible account plus the mail-data keys seats are ranked by.
+
+    All timestamps are server arrival times (IMAP INTERNALDATE as
+    stored on ``Message.sort_time``) — never sender ``Date`` headers
+    and never sync bookkeeping timestamps.
+    """
+
     account_id: uuid.UUID
     folder_id: uuid.UUID
-    last_activity_at: datetime
+    # Newest arrival among messages currently located in the inbox;
+    # None when no located message carries an arrival timestamp.
+    inbox_latest_arrival_at: datetime | None
+    # True when the inbox currently holds at least one message (even
+    # if every arrival timestamp is NULL): an account holding mail
+    # always outranks an account whose inbox is empty.
+    inbox_has_messages: bool
+    # Newest arrival among messages in the account's other folders.
+    other_latest_arrival_at: datetime | None
+    account_created_at: datetime
     credential_fingerprint: str
 
 
@@ -81,8 +111,62 @@ def backoff_delay(attempt: int, config: IdleWatcherConfig, *, jitter_fraction: f
     return base * (1.0 + fraction)
 
 
+def _epoch(value: datetime | None) -> float:
+    return value.timestamp() if value is not None else float("-inf")
+
+
+def _seat_group(candidate: IdleCandidate) -> int:
+    """0 = inbox holds mail (main group), 1 = inbox empty."""
+    return 0 if candidate.inbox_has_messages else 1
+
+
+def _primary_arrival(candidate: IdleCandidate) -> datetime | None:
+    """The comparable arrival key within a candidate's seat group."""
+    if candidate.inbox_has_messages:
+        return candidate.inbox_latest_arrival_at
+    return candidate.other_latest_arrival_at
+
+
+def _rank_key(candidate: IdleCandidate) -> tuple:
+    """Total seat order, hottest first:
+
+    1. accounts whose inbox holds mail, before empty-inbox accounts;
+    2. within a group, the group's primary arrival time, newest first
+       (inbox arrivals for the main group, other-folder arrivals for
+       the empty-inbox group; a missing timestamp sorts last);
+    3. other-folder newest arrival, newest first;
+    4. account creation time, newest first;
+    5. account id, ascending (stable final tie-break).
+    """
+    return (
+        _seat_group(candidate),
+        -_epoch(_primary_arrival(candidate)),
+        -_epoch(candidate.other_latest_arrival_at),
+        -candidate.account_created_at.timestamp(),
+        str(candidate.account_id),
+    )
+
+
+def _challenger_advantage_s(challenger: IdleCandidate, incumbent: IdleCandidate) -> float:
+    """How much hotter a challenger is than an incumbent, in seconds.
+
+    Only defined within one seat group on comparable primary keys:
+    a challenger from the hotter group wins categorically (infinite
+    advantage, hysteresis never rescues across groups); when either
+    primary key is missing there is nothing comparable, so the
+    advantage is 0 and the incumbent is kept (stable order, no churn).
+    """
+    if _seat_group(challenger) != _seat_group(incumbent):
+        return float("inf")
+    challenger_key = _primary_arrival(challenger)
+    incumbent_key = _primary_arrival(incumbent)
+    if challenger_key is None or incumbent_key is None:
+        return 0.0
+    return (challenger_key - incumbent_key).total_seconds()
+
+
 def select_idle_holders(
-    candidates: list[AccountActivity],
+    candidates: list[IdleCandidate],
     *,
     current_holders: set[uuid.UUID],
     quota: int,
@@ -91,16 +175,15 @@ def select_idle_holders(
 ) -> set[uuid.UUID]:
     """Choose which accounts hold IDLE seats (AC-005).
 
-    Top-``quota`` by recent activity wins; an incumbent outside the top
-    set keeps its seat unless the weakest challenger is hotter by more
-    than ``hysteresis_s`` — this prevents connection churn when two
-    accounts have near-identical activity.
+    Top-``quota`` by the seat order in ``_rank_key`` wins; an incumbent
+    outside the top set keeps its seat unless the weakest challenger's
+    advantage on the comparable arrival key exceeds ``hysteresis_s``
+    — this prevents connection churn when two accounts' newest mail
+    arrived at near-identical times.
     """
-    ranked = sorted(
-        candidates,
-        key=lambda c: (-c.last_activity_at.timestamp(), str(c.account_id)),
-    )
+    ranked = sorted(candidates, key=_rank_key)
     by_id = {c.account_id: c for c in ranked}
+    rank_pos = {c.account_id: pos for pos, c in enumerate(ranked)}
     selected: set[uuid.UUID] = {c.account_id for c in ranked[:quota]}
 
     for incumbent in ranked:
@@ -109,12 +192,8 @@ def select_idle_holders(
         challengers = [aid for aid in selected if aid not in current_holders]
         if not challengers:
             break
-        weakest = min(
-            challengers, key=lambda aid: by_id[aid].last_activity_at.timestamp()
-        )
-        advantage = (
-            by_id[weakest].last_activity_at - incumbent.last_activity_at
-        ).total_seconds()
+        weakest = max(challengers, key=lambda aid: rank_pos[aid])
+        advantage = _challenger_advantage_s(by_id[weakest], incumbent)
         if advantage <= hysteresis_s:
             selected.discard(weakest)
             selected.add(incumbent.account_id)
@@ -264,7 +343,7 @@ class IdleWatcherManager:
             self._open_watch(candidate)
         self._publish_state()
 
-    def _load_candidates(self) -> list[AccountActivity]:
+    def _load_candidates(self) -> list[IdleCandidate]:
         with self._session_factory() as session:
             rows = list(
                 session.execute(
@@ -284,25 +363,59 @@ class IdleWatcherManager:
                     )
                 ).all()
             )
-            candidates: list[AccountActivity] = []
-            for account, folder, cp in rows:
-                activity = cp.updated_at or account.updated_at or account.created_at
-                if activity is not None and activity.tzinfo is None:
-                    activity = activity.replace(tzinfo=timezone.utc)
-                fingerprint = _fingerprint(account, folder)
+            if not rows:
+                return []
+            inbox_folder_ids = [folder.id for _account, folder, _cp in rows]
+            account_ids = [account.id for account, _folder, _cp in rows]
+            # Seat keys come from the mail itself, aggregated in SQL:
+            # per inbox folder, the newest server arrival time
+            # (Message.sort_time, i.e. IMAP INTERNALDATE) over the
+            # messages currently located there. A folder whose located
+            # messages all lack an arrival timestamp still forms a
+            # GROUP BY group (max is NULL), which is how "inbox holds
+            # mail" is told apart from "inbox is empty".
+            inbox_latest: dict[uuid.UUID, datetime | None] = dict(
+                session.execute(
+                    select(MessageLocation.folder_id, func.max(Message.sort_time))
+                    .join(Message, Message.id == MessageLocation.message_id)
+                    .where(MessageLocation.folder_id.in_(inbox_folder_ids))
+                    .group_by(MessageLocation.folder_id)
+                ).all()
+            )
+            other_latest: dict[uuid.UUID, datetime | None] = dict(
+                session.execute(
+                    select(Folder.account_id, func.max(Message.sort_time))
+                    .select_from(Folder)
+                    .join(MessageLocation, MessageLocation.folder_id == Folder.id)
+                    .join(Message, Message.id == MessageLocation.message_id)
+                    .where(
+                        Folder.account_id.in_(account_ids),
+                        Folder.id.notin_(inbox_folder_ids),
+                    )
+                    .group_by(Folder.account_id)
+                ).all()
+            )
+            candidates: list[IdleCandidate] = []
+            for account, folder, _cp in rows:
+                created_at = _aware(account.created_at)
+                if created_at is None:  # created_at is server-defaulted; defensive only
+                    created_at = datetime.min.replace(tzinfo=timezone.utc)
                 candidates.append(
-                    AccountActivity(
+                    IdleCandidate(
                         account_id=account.id,
                         folder_id=folder.id,
-                        last_activity_at=activity,
-                        credential_fingerprint=fingerprint,
+                        inbox_latest_arrival_at=_aware(inbox_latest.get(folder.id)),
+                        inbox_has_messages=folder.id in inbox_latest,
+                        other_latest_arrival_at=_aware(other_latest.get(account.id)),
+                        account_created_at=created_at,
+                        credential_fingerprint=_fingerprint(account, folder),
                     )
                 )
             return candidates
 
     # -- per-account watch ---------------------------------------------------
 
-    def _open_watch(self, candidate: AccountActivity) -> None:
+    def _open_watch(self, candidate: IdleCandidate) -> None:
         with self._session_factory() as session:
             account = session.get(Account, candidate.account_id)
             folder = session.get(Folder, candidate.folder_id)
@@ -476,6 +589,13 @@ class IdleWatcherManager:
                 session.commit()
         except Exception:
             log.debug("idle watcher state publish failed", exc_info=True)
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    """Normalize a DB timestamp to tz-aware UTC (SQLite returns naive)."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def _fingerprint(account: Account, folder: Folder) -> str:
