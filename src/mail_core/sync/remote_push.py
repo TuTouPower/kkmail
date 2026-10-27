@@ -482,6 +482,12 @@ def push_remote_operations(
                         error=None,
                         next_attempt_at=next_attempt,
                     )
+                    # A30: the claim above incremented ``attempts`` when it
+                    # marked the op IN_PROGRESS; a capacity deferral is not
+                    # a delivery attempt, so give that increment back or
+                    # pure budget waiting would exhaust the retry budget.
+                    op.attempts = max(0, int(op.attempts) - 1)
+                    session.flush()
                 followup = enqueue_job(
                     session,
                     job_type=JobType.REMOTE_OPERATION_PUSH.value,
