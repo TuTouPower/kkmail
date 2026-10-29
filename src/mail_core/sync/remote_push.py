@@ -311,20 +311,22 @@ def push_remote_operations(
     *,
     worker_id: str,
     store: CredentialStore | None = None,
-    limit: int = 20,
+    limit: int = 500,
     lease_ttl: timedelta = timedelta(seconds=120),
     traffic_class: TrafficClass = TrafficClass.FOREGROUND,
 ) -> dict:
-    """Push pending remote ops with per-op isolation and fencing *before* side effects.
+    """Push pending remote ops in batches with per-op isolation and fencing *before* side effects.
 
-    For each operation:
-    1. assert fencing in a short TX and mark ``in_progress``
-    2. call the provider (network) inside try/except so one failure cannot abort the batch
-    3. assert fencing again before recording done/failed
+    Batch execution (t064):
+    1. assert fencing in a short TX and mark all batch operations ``in_progress``
+    2. call provider.apply_remote_operations with all items
+    3. assert fencing again before recording done/failed per operation with revision CAS
 
-    If fencing is lost after a network call, that op stays ``in_progress`` for
-    reconcile; later ops are not attempted.
+    If fencing is lost after the network call, operations stay ``in_progress`` for
+    reconcile; no operation is marked DONE.
     """
+    from mail_core.providers.base import RemoteOperationItem, RemoteOperationResult
+
     Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
     with Session() as session:
         account = session.get(Account, account_id)
@@ -375,103 +377,68 @@ def push_remote_operations(
                 pass
         return {"status": "ok", "pushed": 0, "failed": 0}
 
+    # Pre-network TX: Mark all batch operations IN_PROGRESS under fencing
+    claimed_desired = {}
+    claimed_updated_at = {}
+    with Session() as session:
+        try:
+            assert_fencing(session, account_id=account_id, fencing_token=fencing)
+        except FencingMismatch:
+            return {"status": "fencing_mismatch", "pushed": 0, "failed": 0}
+
+        for op_id, op_type, desired in work:
+            op = session.get(RemoteOperation, op_id, with_for_update=True)
+            if op is not None and op.status == RemoteOperationStatus.PENDING.value:
+                mark_remote_operation(session, op, status=RemoteOperationStatus.IN_PROGRESS)
+                claimed_desired[op_id] = dict(op.desired_state or {})
+                claimed_updated_at[op_id] = op.updated_at
+
+        try:
+            heartbeat_lease(
+                session,
+                account_id=account_id,
+                owner_id=worker_id,
+                fencing_token=fencing,
+                ttl=lease_ttl,
+            )
+        except FencingMismatch:
+            session.rollback()
+            return {"status": "fencing_mismatch", "pushed": 0, "failed": 0}
+        session.commit()
+
+    # Resolve IMAP trash folder once for the entire batch if needed
+    real_trash = None
+    if str(account_snapshot.provider or "").lower() == "imap":
+        if any(op_type == "trash" for _, op_type, _ in work):
+            try:
+                from mail_core.mail.application.mutations import _resolve_imap_trash_folder
+
+                with Session() as s:
+                    real_trash = _resolve_imap_trash_folder(s, account_id)
+            except Exception:
+                pass
+
+    items: list[RemoteOperationItem] = []
+    for op_id, op_type, desired in work:
+        if op_id not in claimed_desired:
+            continue
+        effective_desired = dict(claimed_desired[op_id])
+        if op_type == "trash" and real_trash:
+            if effective_desired.get("trash_folder_remote_id") in (None, "", "Trash"):
+                effective_desired["trash_folder_remote_id"] = real_trash
+        items.append(RemoteOperationItem(op_id=op_id, op_type=op_type, desired_state=effective_desired))
+
     try:
         provider = build_provider(account_snapshot, store or get_credential_store(), traffic_class=traffic_class)
-    except CAPACITY_ERRORS:
-        with Session() as session:
-            try:
-                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-                session.commit()
-            except FencingMismatch:
-                pass
-        return {"status": "capacity_unavailable", "retry_after": CAPACITY_RETRY_SECONDS, "pushed": 0, "failed": 0}
-    except Exception:
-        with Session() as session:
-            try:
-                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-                session.commit()
-            except FencingMismatch:
-                pass
-        raise
-
-    pushed = 0
-    failed = 0
-
-    for op_id, op_type, desired in work:
-        # Fencing gate *before* any provider side effect for this op.
+    except CAPACITY_ERRORS as exc:
+        delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+        next_attempt = datetime.now(timezone.utc) + timedelta(seconds=delay)
         with Session() as session:
             try:
                 assert_fencing(session, account_id=account_id, fencing_token=fencing)
             except FencingMismatch:
-                return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
-            op = session.get(RemoteOperation, op_id, with_for_update=True)
-            if op is None or op.status != RemoteOperationStatus.PENDING.value:
-                continue
-            mark_remote_operation(session, op, status=RemoteOperationStatus.IN_PROGRESS)
-            claimed_desired = dict(op.desired_state or {})
-            claimed_updated_at = op.updated_at
-            try:
-                heartbeat_lease(
-                    session,
-                    account_id=account_id,
-                    owner_id=worker_id,
-                    fencing_token=fencing,
-                    ttl=lease_ttl,
-                )
-            except FencingMismatch:
-                session.rollback()
-                return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
-            session.commit()
-
-        caught_exc: Exception | None = None
-        remote_state: dict = {}
-        # A17: real providers have no ``name`` attribute, so gate the IMAP
-        # trash fallback on the account's provider type instead. The
-        # resolved folder goes into a *separate* effective desired_state:
-        # ``claimed_desired`` is the settlement CAS snapshot, and mutating
-        # it would make every resolved push look "modified during push",
-        # requeueing the op after the remote MOVE already happened.
-        effective_desired = dict(claimed_desired)
-        if op_type == "trash" and str(account_snapshot.provider or "").lower() == "imap":
-            if effective_desired.get("trash_folder_remote_id") in (None, "", "Trash"):
-                try:
-                    from mail_core.mail.application.mutations import _resolve_imap_trash_folder
-
-                    with Session() as s:
-                        real_trash = _resolve_imap_trash_folder(s, account_id)
-                        effective_desired["trash_folder_remote_id"] = real_trash
-                except Exception:
-                    pass
-        remote_id = effective_desired.get("remote_id")
-        if not isinstance(remote_id, str) or not remote_id.strip():
-            ok = False
-            err = "remote_id_missing"
-        else:
-            try:
-                result = provider.apply_remote_operation(op_type, effective_desired)  # network
-                ok = bool(result.success)
-                err = safe_provider_summary(result.error) if result.error else None
-                candidate_state = getattr(result, "remote_state", {})
-                remote_state = candidate_state if isinstance(candidate_state, dict) else {}
-            except Exception as exc:  # noqa: BLE001 — isolate per-op provider failures
-                err_summary = safe_provider_summary(exc)
-                log.error("remote push op %s failed: %s", op_id, err_summary)
-                caught_exc = exc
-                ok = False
-                err = err_summary
-
-        if is_capacity_error(caught_exc):
-            # Budget deferral (design §7): the op must NOT advance to a
-            # terminal/failed state or consume an attempt.  Reset it to
-            # PENDING (fencing-checked), reschedule the push, release
-            # the lease, and let the worker reschedule this job.
-            delay = float(getattr(caught_exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
-            next_attempt = datetime.now(timezone.utc) + timedelta(seconds=delay)
-            with Session() as session:
-                try:
-                    assert_fencing(session, account_id=account_id, fencing_token=fencing)
-                except FencingMismatch:
-                    return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
+                return {"status": "fencing_mismatch", "pushed": 0, "failed": 0}
+            for op_id in claimed_desired:
                 op = session.get(RemoteOperation, op_id, with_for_update=True)
                 if op is not None and op.status == RemoteOperationStatus.IN_PROGRESS.value:
                     mark_remote_operation(
@@ -481,51 +448,106 @@ def push_remote_operations(
                         error=None,
                         next_attempt_at=next_attempt,
                     )
-                    # A30: the claim above incremented ``attempts`` when it
-                    # marked the op IN_PROGRESS; a capacity deferral is not
-                    # a delivery attempt, so give that increment back or
-                    # pure budget waiting would exhaust the retry budget.
                     op.attempts = max(0, int(op.attempts) - 1)
-                    session.flush()
-                followup = enqueue_job(
-                    session,
-                    job_type=JobType.REMOTE_OPERATION_PUSH.value,
-                    account_id=account_id,
-                    payload={},
-                    priority=40,
-                    run_after=next_attempt,
-                    dedupe_key=f"remote-op-push:{account_id}",
-                )
-                # The executing job carries this same dedupe key, so the
-                # enqueue normally coalesces into the running job's
-                # _queue_next instead of creating an independent job.
-                # Settlement (complete_job) must be told: with only
-                # followup_scheduled set it assumes an independent
-                # successor exists and strips the coalesced followup when
-                # marking this job DONE, leaving the op PENDING with no
-                # executable job. Mirrors the lease_busy branch in
-                # engine.sync_folder_metadata.
-                followup_coalesced = followup.status == JobStatus.CLAIMED.value
-                try:
-                    release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-                except FencingMismatch:
-                    pass
+            enqueue_job(
+                session,
+                job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                account_id=account_id,
+                payload={},
+                priority=40,
+                run_after=next_attempt,
+                dedupe_key=f"remote-op-push:{account_id}",
+            )
+            try:
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+            except FencingMismatch:
+                pass
+            session.commit()
+        return {"status": "capacity_unavailable", "retry_after": delay, "pushed": 0, "failed": 0}
+    except Exception:
+        with Session() as session:
+            try:
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
                 session.commit()
-            return {
-                "status": "capacity_unavailable",
-                "retry_after": delay,
-                "followup_scheduled": True,
-                "followup_coalesced": followup_coalesced,
-                "pushed": pushed,
-                "failed": failed,
-            }
+            except FencingMismatch:
+                pass
+        raise
 
+    valid_items: list[RemoteOperationItem] = []
+    pre_failed_results: dict[Any, RemoteOperationResult] = {}
+    for it in items:
+        rid = it.desired_state.get("remote_id")
+        if not isinstance(rid, str) or not rid.strip():
+            pre_failed_results[it.op_id] = RemoteOperationResult(success=False, error="remote_id_missing")
+        else:
+            valid_items.append(it)
+
+    # Execute network call in batch for valid items
+    results_map: dict[Any, RemoteOperationResult] = dict(pre_failed_results)
+    caught_batch_exc: Exception | None = None
+    if valid_items:
+        try:
+            if hasattr(provider, "apply_remote_operations"):
+                results_seq = provider.apply_remote_operations(valid_items)
+                results_map.update({res[0]: res[1] for res in results_seq})
+            else:
+                for it in valid_items:
+                    res = provider.apply_remote_operation(it.op_type, it.desired_state)
+                    results_map[it.op_id] = res
+        except Exception as exc:  # noqa: BLE001
+            caught_batch_exc = exc
+            err_summary = safe_provider_summary(exc)
+            log.error("remote push batch failed: %s", err_summary)
+
+    if is_capacity_error(caught_batch_exc):
+        delay = float(getattr(caught_batch_exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+        next_attempt = datetime.now(timezone.utc) + timedelta(seconds=delay)
         with Session() as session:
             try:
                 assert_fencing(session, account_id=account_id, fencing_token=fencing)
             except FencingMismatch:
-                # Side effect may have landed remotely; leave IN_PROGRESS for reconcile.
-                return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
+                return {"status": "fencing_mismatch", "pushed": 0, "failed": 0}
+            for op_id in claimed_desired:
+                op = session.get(RemoteOperation, op_id, with_for_update=True)
+                if op is not None and op.status == RemoteOperationStatus.IN_PROGRESS.value:
+                    mark_remote_operation(
+                        session,
+                        op,
+                        status=RemoteOperationStatus.PENDING,
+                        error=None,
+                        next_attempt_at=next_attempt,
+                    )
+                    op.attempts = max(0, int(op.attempts) - 1)
+            enqueue_job(
+                session,
+                job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                account_id=account_id,
+                payload={},
+                priority=40,
+                run_after=next_attempt,
+                dedupe_key=f"remote-op-push:{account_id}",
+            )
+            try:
+                release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+            except FencingMismatch:
+                pass
+            session.commit()
+        return {"status": "capacity_unavailable", "retry_after": delay, "pushed": 0, "failed": 0}
+
+    # Post-network settlement under fencing
+    pushed = 0
+    failed = 0
+    followup_needed = False
+
+    with Session() as session:
+        try:
+            assert_fencing(session, account_id=account_id, fencing_token=fencing)
+        except FencingMismatch:
+            # AC-009: Side effect may have landed remotely; leave IN_PROGRESS for reconcile.
+            return {"status": "fencing_mismatch", "pushed": 0, "failed": 0}
+
+        for item in items:
+            op_id = item.op_id
             op = session.get(RemoteOperation, op_id, with_for_update=True)
             if op is None:
                 continue
@@ -533,65 +555,63 @@ def push_remote_operations(
             # CAS check: must still be IN_PROGRESS and desired_state / revision must match what was claimed
             if (
                 op.status != RemoteOperationStatus.IN_PROGRESS.value
-                or dict(op.desired_state or {}) != claimed_desired
-                or op.updated_at != claimed_updated_at
+                or dict(op.desired_state or {}) != claimed_desired[op_id]
+                or op.updated_at != claimed_updated_at[op_id]
             ):
                 log.info(
                     "remote op %s modified during push; preserving PENDING and reenqueuing push",
                     op_id,
                 )
                 op.status = RemoteOperationStatus.PENDING.value
-                enqueue_job(
-                    session,
-                    job_type=JobType.REMOTE_OPERATION_PUSH.value,
-                    account_id=account_id,
-                    payload={},
-                    priority=40,
-                    dedupe_key=f"remote-op-push:{account_id}",
-                )
-                session.commit()
+                followup_needed = True
                 continue
+
+            if caught_batch_exc is not None:
+                result = RemoteOperationResult(success=False, error=safe_provider_summary(caught_batch_exc))
+            else:
+                result = results_map.get(op_id)
+                if result is None:
+                    result = RemoteOperationResult(success=False, error="operation unhandled in provider batch")
+
+            ok = bool(result.success)
+            err = safe_provider_summary(result.error) if result.error else None
+            remote_state = getattr(result, "remote_state", {}) or {}
+
             if ok:
                 try:
                     _persist_move_remote_state(
                         session,
                         account_id=account_id,
                         provider_type=str(account_snapshot.provider or "").lower(),
-                        op_type=op_type,
-                        desired_state=effective_desired,
+                        op_type=item.op_type,
+                        desired_state=item.desired_state,
                         remote_state=remote_state,
                     )
                 except RemoteIdentityConflict as exc:
                     ok = False
                     err = safe_provider_summary(exc)
+
             if ok:
                 applied = mark_remote_operation(
                     session,
                     op,
                     status=RemoteOperationStatus.DONE,
                     next_attempt_at=None,
-                    expected_revision=int(claimed_desired.get("revision") or 0),
+                    expected_revision=int(claimed_desired[op_id].get("revision") or 0),
                 )
                 if applied:
                     pushed += 1
                 else:
-                    # Revision advanced between CAS check and mark (A112):
-                    # op stays PENDING for re-push of the newer state.
-                    enqueue_job(
-                        session,
-                        job_type=JobType.REMOTE_OPERATION_PUSH.value,
-                        account_id=account_id,
-                        payload={},
-                        priority=40,
-                        dedupe_key=f"remote-op-push:{account_id}",
-                    )
+                    op.status = RemoteOperationStatus.PENDING.value
+                    followup_needed = True
             else:
+                failed += 1
                 now_retry = datetime.now(timezone.utc)
-                if (
-                    is_rate_limited_error(caught_exc, err)
-                    and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS
-                ):
-                    delay = get_retry_after_seconds(caught_exc, fallback=60.0)
+                retry_after_sec = remote_state.get("retry_after") if isinstance(remote_state, dict) else None
+                is_rate_limit = (retry_after_sec is not None) or is_rate_limited_error(caught_batch_exc, err)
+
+                if is_rate_limit and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS:
+                    delay = float(retry_after_sec or get_retry_after_seconds(caught_batch_exc, fallback=60.0))
                     next_attempt = now_retry + timedelta(seconds=delay)
                     mark_remote_operation(
                         session,
@@ -600,16 +620,8 @@ def push_remote_operations(
                         error=err or "rate limited",
                         next_attempt_at=next_attempt,
                     )
-                    enqueue_job(
-                        session,
-                        job_type=JobType.REMOTE_OPERATION_PUSH.value,
-                        account_id=account_id,
-                        payload={},
-                        priority=40,
-                        run_after=next_attempt,
-                        dedupe_key=f"remote-op-push:{account_id}",
-                    )
-                elif is_transient_error(caught_exc, err) and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS:
+                    followup_needed = True
+                elif is_transient_error(caught_batch_exc, err) and int(op.attempts) < DEFAULT_MAX_REMOTE_OP_ATTEMPTS:
                     delay = min(3600, 2 ** max(0, int(op.attempts) - 1))
                     next_attempt = now_retry + timedelta(seconds=delay)
                     mark_remote_operation(
@@ -619,15 +631,7 @@ def push_remote_operations(
                         error=err or "transient failure",
                         next_attempt_at=next_attempt,
                     )
-                    enqueue_job(
-                        session,
-                        job_type=JobType.REMOTE_OPERATION_PUSH.value,
-                        account_id=account_id,
-                        payload={},
-                        priority=40,
-                        run_after=next_attempt,
-                        dedupe_key=f"remote-op-push:{account_id}",
-                    )
+                    followup_needed = True
                 else:
                     mark_remote_operation(
                         session,
@@ -636,40 +640,14 @@ def push_remote_operations(
                         error=err or "push failed",
                         next_attempt_at=None,
                     )
-                    failed += 1
-            try:
-                heartbeat_lease(
-                    session,
-                    account_id=account_id,
-                    owner_id=worker_id,
-                    fencing_token=fencing,
-                    ttl=lease_ttl,
-                )
-            except FencingMismatch:
-                session.rollback()
-                return {"status": "fencing_mismatch", "pushed": pushed, "failed": failed}
-            session.commit()
 
-    with Session() as session:
-        try:
-            release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
-        except FencingMismatch:
-            pass
-        now_end = datetime.now(timezone.utc)
-        next_due = None
-        has_due_pending = session.scalar(
-            select(RemoteOperation.id)
+        # Re-check if remaining pending operations exist (AC-012)
+        remaining_pending = session.scalar(
+            select(func.count(RemoteOperation.id))
             .where(RemoteOperation.account_id == account_id)
             .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
-            .where(
-                or_(
-                    RemoteOperation.next_attempt_at.is_(None),
-                    RemoteOperation.next_attempt_at <= now_end,
-                )
-            )
-            .limit(1)
-        ) is not None
-        if has_due_pending:
+        )
+        if (remaining_pending and remaining_pending > 0) or followup_needed:
             enqueue_job(
                 session,
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
@@ -678,31 +656,14 @@ def push_remote_operations(
                 priority=40,
                 dedupe_key=f"remote-op-push:{account_id}",
             )
-        else:
-            next_due = session.scalar(
-                select(func.min(RemoteOperation.next_attempt_at))
-                .where(RemoteOperation.account_id == account_id)
-                .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
-                .where(RemoteOperation.next_attempt_at > now_end)
-            )
-            if next_due:
-                enqueue_job(
-                    session,
-                    job_type=JobType.REMOTE_OPERATION_PUSH.value,
-                    account_id=account_id,
-                    payload={},
-                    priority=40,
-                    run_after=next_due,
-                    dedupe_key=f"remote-op-push:{account_id}",
-                )
+
+        try:
+            release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
+        except FencingMismatch:
+            pass
         session.commit()
-    return {
-        "status": "ok",
-        "pushed": pushed,
-        "failed": failed,
-        "has_more": has_due_pending,
-        "next_run_after": next_due,
-    }
+
+    return {"status": "ok", "pushed": pushed, "failed": failed}
 
 
 def get_unconverged_field_intents(

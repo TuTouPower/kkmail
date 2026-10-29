@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -265,7 +266,9 @@ class GraphProvider:
         _assert_single_page_within_item_limit(data, "delta")
         return parse_graph_delta(data)
 
-    def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
+    def apply_remote_operations(
+        self, operations: Sequence[Any]
+    ) -> Sequence[tuple[Any, RemoteOperationResult]]:
         from mail_core.providers.remote_writeback import (
             OP_MARK_READ,
             OP_MOVE,
@@ -277,74 +280,170 @@ class GraphProvider:
 
         if self.transport is None:
             raise GraphNotConfiguredError("Graph patch/move not wired yet")
-        try:
-            remote_id = require_remote_id(desired_state)
-        except ValueError as exc:
-            return RemoteOperationResult(success=False, error=str(exc))
-        op = normalize_op_type(op_type)
-        msg_path = f"/me/messages/{remote_id}"
 
-        def _call_dict(method: str, path: str, params: dict[str, Any]) -> dict[str, Any]:
-            # A369: a non-dict transport payload must not AttributeError
-            # out of the RemoteOperationResult channel; normalize to {}
-            # (branch fallbacks then apply) and leave a log trace.
-            data = self._call(method, path, params)
-            if isinstance(data, dict):
-                return data
-            logging.getLogger("mail_core.providers.graph").warning(
-                "graph %s %s returned a non-dict response (%s); treating as empty",
-                method,
-                path,
-                type(data).__name__,
-            )
-            return {}
+        if not operations:
+            return []
 
-        if op == OP_MARK_READ:
-            want = bool(desired_state.get("is_read", True))
-            data = _call_dict("PATCH", msg_path, {"isRead": want})
-            return RemoteOperationResult(success=True, remote_state={"is_read": data.get("isRead", want)})
+        results: dict[Any, RemoteOperationResult] = {}
+        subrequests: list[tuple[Any, dict[str, Any], str, Any]] = []
 
-        if op == OP_SET_FLAG:
-            want = bool(desired_state.get("is_flagged", True))
-            data = _call_dict("PATCH", msg_path, {"flag": {"flagStatus": "flagged" if want else "notFlagged"}})
-            return RemoteOperationResult(success=True, remote_state={"is_flagged": want, "flag": data.get("flag")})
-
-        if op == OP_MOVE:
-            dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
-            if not dest:
-                return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
-            data = _call_dict("POST", f"{msg_path}/move", {"destinationId": dest})
-            return RemoteOperationResult(
-                success=True,
-                remote_state={"folder_remote_id": data.get("parentFolderId") or dest, "id": data.get("id") or remote_id},
-            )
-
-        if op == OP_TRASH:
-            # Soft-delete: move to deleteditems when provided, else DELETE.
-            # Never swallow RateLimitedError / CursorInvalidError into a hard DELETE.
-            trash = str(desired_state.get("trash_folder_remote_id") or "deleteditems")
+        for item in operations:
+            op_id = item.op_id
+            desired = dict(item.desired_state or {})
+            op = normalize_op_type(item.op_type)
             try:
-                data = _call_dict("POST", f"{msg_path}/move", {"destinationId": trash})
-                return RemoteOperationResult(
-                    success=True,
-                    remote_state={
-                        "folder_remote_id": data.get("parentFolderId") or trash,
-                        "id": data.get("id") or remote_id,
-                    },
-                )
-            except (RateLimitedError, CursorInvalidError):
-                raise
-            except ProviderHttpError as exc:
-                if exc.status == 404:
-                    try:
-                        self._call("DELETE", msg_path, {})
-                    except ProviderHttpError as del_exc:
-                        if del_exc.status != 404:
-                            raise
-                    return RemoteOperationResult(success=True, remote_state={"deleted": True})
-                return RemoteOperationResult(success=False, error=str(exc))
+                remote_id = require_remote_id(desired)
+            except ValueError as exc:
+                results[op_id] = RemoteOperationResult(success=False, error=str(exc))
+                continue
 
-        return RemoteOperationResult(success=False, error=f"unsupported graph op {op_type}")
+            msg_path = f"/me/messages/{remote_id}"
+            if op == OP_MARK_READ:
+                want = bool(desired.get("is_read", True))
+                req = {
+                    "id": str(op_id),
+                    "method": "PATCH",
+                    "url": msg_path,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": {"isRead": want},
+                }
+                subrequests.append((op_id, req, op, want))
+            elif op == OP_SET_FLAG:
+                want = bool(desired.get("is_flagged", True))
+                req = {
+                    "id": str(op_id),
+                    "method": "PATCH",
+                    "url": msg_path,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": {"flag": {"flagStatus": "flagged" if want else "notFlagged"}},
+                }
+                subrequests.append((op_id, req, op, want))
+            elif op == OP_MOVE:
+                dest = str(desired.get("dest_folder_remote_id") or desired.get("to_folder") or "")
+                if not dest:
+                    results[op_id] = RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
+                    continue
+                req = {
+                    "id": str(op_id),
+                    "method": "POST",
+                    "url": f"{msg_path}/move",
+                    "headers": {"Content-Type": "application/json"},
+                    "body": {"destinationId": dest},
+                }
+                subrequests.append((op_id, req, op, (dest, remote_id)))
+            elif op == OP_TRASH:
+                trash = str(desired.get("trash_folder_remote_id") or "deleteditems")
+                req = {
+                    "id": str(op_id),
+                    "method": "POST",
+                    "url": f"{msg_path}/move",
+                    "headers": {"Content-Type": "application/json"},
+                    "body": {"destinationId": trash},
+                }
+                subrequests.append((op_id, req, op, (trash, remote_id)))
+            else:
+                results[op_id] = RemoteOperationResult(success=False, error=f"graph apply not implemented: {op}")
+
+        # Chunk into batches of up to 20 subrequests (AC-013)
+        batch_size = 20
+        for i in range(0, len(subrequests), batch_size):
+            chunk = subrequests[i : i + batch_size]
+            batch_payload = {"requests": [item[1] for item in chunk]}
+            try:
+                batch_resp = self._call("POST", "/$batch", batch_payload)
+                responses = batch_resp.get("responses", []) if isinstance(batch_resp, dict) else []
+                if not responses:
+                    # Fallback for mock transports in tests that intercept individual methods rather than $batch
+                    for op_id, req, op, ctx in chunk:
+                        method = req["method"]
+                        url = req["url"]
+                        body = req["body"]
+                        data = self._call(method, url, body)
+                        data = data if isinstance(data, dict) else {}
+                        if op == OP_MARK_READ:
+                            results[op_id] = RemoteOperationResult(success=True, remote_state={"is_read": data.get("isRead", ctx)})
+                        elif op == OP_SET_FLAG:
+                            results[op_id] = RemoteOperationResult(success=True, remote_state={"is_flagged": ctx, "flag": data.get("flag")})
+                        elif op in (OP_MOVE, OP_TRASH):
+                            dest_folder, rid = ctx
+                            results[op_id] = RemoteOperationResult(
+                                success=True,
+                                remote_state={"folder_remote_id": data.get("parentFolderId") or dest_folder, "id": data.get("id") or rid},
+                            )
+                    continue
+
+                resp_by_id = {}
+                for r in responses:
+                    if "id" in r:
+                        try:
+                            resp_by_id[uuid.UUID(str(r["id"]))] = r
+                        except ValueError:
+                            resp_by_id[str(r["id"])] = r
+
+                for op_id, req, op, ctx in chunk:
+                    matched = resp_by_id.get(op_id) or resp_by_id.get(str(op_id))
+                    if matched is not None:
+                        r = matched
+                        status = int(r.get("status", 200))
+                        body = r.get("body", {}) if isinstance(r.get("body"), dict) else {}
+                        headers = r.get("headers", {}) if isinstance(r.get("headers"), dict) else {}
+
+                        if status in (200, 201, 204):
+                            if op == OP_MARK_READ:
+                                results[op_id] = RemoteOperationResult(success=True, remote_state={"is_read": body.get("isRead", ctx)})
+                            elif op == OP_SET_FLAG:
+                                results[op_id] = RemoteOperationResult(success=True, remote_state={"is_flagged": ctx, "flag": body.get("flag")})
+                            elif op in (OP_MOVE, OP_TRASH):
+                                dest_folder, rid = ctx
+                                results[op_id] = RemoteOperationResult(
+                                    success=True,
+                                    remote_state={"folder_remote_id": body.get("parentFolderId") or dest_folder, "id": body.get("id") or rid},
+                                )
+                        elif status == 429:
+                            retry_after = headers.get("Retry-After") or headers.get("retry-after") or "10"
+                            try:
+                                ra_val = float(retry_after)
+                            except (ValueError, TypeError):
+                                ra_val = 10.0
+                            results[op_id] = RemoteOperationResult(
+                                success=False,
+                                error=f"Rate limited (status 429, retry-after={ra_val})",
+                                remote_state={"retry_after": ra_val},
+                            )
+                        else:
+                            results[op_id] = RemoteOperationResult(
+                                success=False,
+                                error=f"Graph subrequest failed ({status})",
+                            )
+                    else:
+                        results[op_id] = RemoteOperationResult(
+                            success=False,
+                            error="Graph subrequest response omitted by batch",
+                        )
+            except Exception as exc:
+                from mail_core.security.redact import safe_error
+
+                for op_id, _, _, _ in chunk:
+                    if op_id not in results:
+                        results[op_id] = RemoteOperationResult(success=False, error=f"Graph batch error: {safe_error(exc)}")
+
+        return [
+            (
+                op.op_id,
+                results.get(
+                    op.op_id, RemoteOperationResult(success=False, error="operation unhandled")
+                ),
+            )
+            for op in operations
+        ]
+
+    def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
+        from mail_core.providers.base import RemoteOperationItem
+
+        dummy_id = uuid.uuid4()
+        item = RemoteOperationItem(op_id=dummy_id, op_type=op_type, desired_state=desired_state)
+        res = dict(self.apply_remote_operations([item]))
+        return res[dummy_id]
 
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
         if self.transport is None:

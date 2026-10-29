@@ -172,6 +172,11 @@ class MemoryProvider:
             exhausted=exhausted,
         )
 
+    def apply_remote_operations(
+        self, operations: Sequence[Any]
+    ) -> Sequence[tuple[Any, RemoteOperationResult]]:
+        return [(op.op_id, self.apply_remote_operation(op.op_type, op.desired_state)) for op in operations]
+
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
         from mail_core.providers.remote_writeback import (
             OP_MARK_READ,

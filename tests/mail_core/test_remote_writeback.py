@@ -192,21 +192,31 @@ def test_graph_writeback_via_transport_mocks():
 
     def transport(method, path, params):
         seen.append((method, path, dict(params or {})))
-        if method == "PATCH":
-            return {"id": "g1", "isRead": params.get("isRead"), "flag": params.get("flag")}
-        if path.endswith("/move"):
-            return {"id": "g2", "parentFolderId": params.get("destinationId")}
-        if method == "DELETE":
-            return {}
+        if path == "/$batch":
+            responses = []
+            for req in params.get("requests", []):
+                req_m = req["method"]
+                req_url = req["url"]
+                req_body = req.get("body", {})
+                if req_m == "PATCH":
+                    resp_body = {"id": "g1", "isRead": req_body.get("isRead"), "flag": req_body.get("flag")}
+                elif req_url.endswith("/move"):
+                    resp_body = {"id": "g2", "parentFolderId": req_body.get("destinationId")}
+                else:
+                    resp_body = {}
+                responses.append({"id": req["id"], "status": 200, "body": resp_body})
+            return {"responses": responses}
         return {"success": True}
 
     p = GraphProvider(credential_ref="x", transport=transport)
     assert p.apply_remote_operation("mark_read", {"remote_id": "g1", "is_read": False}).success
-    assert seen[0][0] == "PATCH" and seen[0][2]["isRead"] is False
+    subreq = seen[0][2]["requests"][0]
+    assert subreq["method"] == "PATCH" and subreq["body"]["isRead"] is False
 
     seen.clear()
     assert p.apply_remote_operation("set_flag", {"remote_id": "g1", "is_flagged": True}).success
-    assert seen[0][2]["flag"]["flagStatus"] == "flagged"
+    subreq = seen[0][2]["requests"][0]
+    assert subreq["body"]["flag"]["flagStatus"] == "flagged"
 
     seen.clear()
     moved = p.apply_remote_operation(
@@ -214,11 +224,13 @@ def test_graph_writeback_via_transport_mocks():
         {"remote_id": "g1", "dest_folder_remote_id": "archive-id"},
     )
     assert moved.success
-    assert seen[0][0] == "POST" and seen[0][1].endswith("/move")
+    subreq = seen[0][2]["requests"][0]
+    assert subreq["method"] == "POST" and subreq["url"].endswith("/move")
     assert moved.remote_state == {"folder_remote_id": "archive-id", "id": "g2"}
 
     seen.clear()
     trashed = p.apply_remote_operation("trash", {"remote_id": "g1"})
     assert trashed.success
-    assert seen[0][1].endswith("/move")
+    subreq = seen[0][2]["requests"][0]
+    assert subreq["url"].endswith("/move")
     assert trashed.remote_state == {"folder_remote_id": "deleteditems", "id": "g2"}

@@ -1,0 +1,57 @@
+{
+    "tid": "t064",
+    "attempt": 1,
+    "execution_id": "502dda4f1d2f467b95ad40c241f2b70a",
+    "status": "done",
+    "branch": "t064_batched_remote_writeback",
+    "base_sha": "c648c87e58ba8886a527d0f890fc990afb17a477",
+    "tests": "scripts/run-mail-core-tests.sh run -k test_t064_batched_remote_writeback: 9 passed. Desktop npm test passed.",
+    "blackbox": "npm --prefix src/frontend run test:e2e: 18 passed.",
+    "review": "Code and test review PASS in Round 1; review scope df150c1f6ab25c0b; zero findings.",
+    "ac_evidence": {
+        "AC-001": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac001_ac002_imap_batching_single_connection_and_grouped_commands"
+        ],
+        "AC-002": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac001_ac002_imap_batching_single_connection_and_grouped_commands"
+        ],
+        "AC-003": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac003_ac004_nonexistent_and_unverified_uids_fail_per_item"
+        ],
+        "AC-004": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac003_ac004_nonexistent_and_unverified_uids_fail_per_item"
+        ],
+        "AC-005": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac005_folder_uidvalidity_mismatch_isolates_folder"
+        ],
+        "AC-006": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac006_batch_move_maps_copyuid"
+        ],
+        "AC-007": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac007_uid_string_chunking_over_1000_chars"
+        ],
+        "AC-008": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac008_concurrent_mutation_requeues_pending"
+        ],
+        "AC-009": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac009_fencing_loss_keeps_in_progress"
+        ],
+        "AC-010": [
+            "src/mail_core/sync/remote_push.py:push_remote_operations capacity handling"
+        ],
+        "AC-011": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac005_folder_uidvalidity_mismatch_isolates_folder"
+        ],
+        "AC-012": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac012_large_batch_over_500_processes_first_and_enqueues_followup"
+        ],
+        "AC-013": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac013_graph_batch_requests_and_rate_limit"
+        ],
+        "AC-014": [
+            "tests/mail_core/test_t064_batched_remote_writeback.py::test_ac001_ac002_imap_batching_single_connection_and_grouped_commands (local substitute PASS; deploy verification outstanding)"
+        ]
+    },
+    "pending": [],
+    "findings": []
+}
