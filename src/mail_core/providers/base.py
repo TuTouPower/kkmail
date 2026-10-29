@@ -136,6 +136,13 @@ class RemoteOperationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RemoteOperationItem:
+    op_id: Any
+    op_type: str
+    desired_state: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class ReconcileAction:
     kind: str
     remote_id: str
@@ -158,6 +165,11 @@ class MailProvider(Protocol):
         ...
 
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:
+        ...
+
+    def apply_remote_operations(
+        self, operations: Sequence[RemoteOperationItem]
+    ) -> Sequence[tuple[Any, RemoteOperationResult]]:
         ...
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
@@ -209,6 +221,19 @@ class StubProvider:
 
     def delta_changes(self, folder_remote_id: str, cursor: dict[str, Any]) -> DeltaPage:
         return DeltaPage(changes=(), next_cursor=cursor, exhausted=True)
+
+    def apply_remote_operations(
+        self, operations: Sequence[RemoteOperationItem]
+    ) -> Sequence[tuple[Any, RemoteOperationResult]]:
+        return [
+            (
+                op.op_id,
+                self.apply_remote_operation(op.op_type, op.desired_state)
+                if hasattr(self, "apply_remote_operation")
+                else RemoteOperationResult(success=True, idempotent_noop=True),
+            )
+            for op in operations
+        ]
 
     def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
         return RemoteOperationResult(success=True, idempotent_noop=True)

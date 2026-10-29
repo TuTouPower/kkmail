@@ -9,6 +9,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from mail_core.db.events import install_session_wake_hooks
+
+install_session_wake_hooks(Session)
+
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
 _engine_lock = threading.Lock()

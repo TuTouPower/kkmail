@@ -142,7 +142,6 @@ def set_message_read(
     _recompute_stats_for_folders(session, account_id=msg.account_id, folder_ids=folder_ids)
     if operation_id is not None:
         _wake_push(session, msg.account_id)
-    try_notify_outbox(session)
     session.flush()
     return MutationResult(
         message_id=msg.id,
@@ -188,7 +187,6 @@ def set_message_flagged(
     )
     if operation_id is not None:
         _wake_push(session, msg.account_id)
-    try_notify_outbox(session)
     session.flush()
     return MutationResult(
         message_id=msg.id,
@@ -274,7 +272,6 @@ def trash_message(session: Session, message_id: uuid.UUID) -> MutationResult:
     session.flush()
     _recompute_stats_for_folders(session, account_id=account_id, folder_ids=folder_ids)
     _wake_push(session, account_id)
-    try_notify_outbox(session)
     session.flush()
     return MutationResult(
         message_id=message_id,
@@ -420,7 +417,6 @@ def mark_all_messages_read(
     for acc_id in remote_operation_accounts:
         _wake_push(session, acc_id)
 
-    try_notify_outbox(session)
     session.flush()
     return MarkAllReadBatchResult(count=len(messages), last_message_id=messages[-1].id)
 

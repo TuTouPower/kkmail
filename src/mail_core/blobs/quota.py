@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -63,6 +64,7 @@ def dir_size_bytes(root: Path) -> int:
 # exact walk remains available via dir_size_bytes for reporting paths.
 _DIR_SIZE_CACHE_TTL_SECONDS = 5.0
 _dir_size_cache: dict[str, tuple[float, int]] = {}
+_dir_size_cache_lock = threading.Lock()
 
 
 def dir_size_bytes_cached(root: Path, *, ttl_seconds: float = _DIR_SIZE_CACHE_TTL_SECONDS) -> int:
@@ -70,11 +72,13 @@ def dir_size_bytes_cached(root: Path, *, ttl_seconds: float = _DIR_SIZE_CACHE_TT
 
     key = str(root)
     now_mono = time.monotonic()
-    entry = _dir_size_cache.get(key)
-    if entry is not None and entry[0] > now_mono:
-        return entry[1]
+    with _dir_size_cache_lock:
+        entry = _dir_size_cache.get(key)
+        if entry is not None and entry[0] > now_mono:
+            return entry[1]
     value = dir_size_bytes(root)
-    _dir_size_cache[key] = (now_mono + ttl_seconds, value)
+    with _dir_size_cache_lock:
+        _dir_size_cache[key] = (now_mono + ttl_seconds, value)
     return value
 
 

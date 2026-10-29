@@ -17,6 +17,7 @@ import socket
 import ssl
 import threading
 import time
+import uuid
 from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -551,6 +552,23 @@ def _parse_fetch_flags(meta: str) -> tuple[bool | None, bool | None]:
         return None, None
     flags = set(match.group(1).casefold().split())
     return "\\seen" in flags, "\\flagged" in flags
+
+
+def _parse_uids_flags_from_response(data: Sequence[Any]) -> dict[int, tuple[bool | None, bool | None]]:
+    result: dict[int, tuple[bool | None, bool | None]] = {}
+    for blob in data or ():
+        if blob is None:
+            continue
+        meta_bytes = blob[0] if isinstance(blob, tuple) else blob
+        if not isinstance(meta_bytes, (bytes, str)):
+            continue
+        meta = meta_bytes.decode("utf-8", errors="replace") if isinstance(meta_bytes, bytes) else str(meta_bytes)
+        m = re.search(r"\bUID\s+(\d+)", meta, flags=re.IGNORECASE)
+        if m:
+            uid = int(m.group(1))
+            is_read, is_flagged = _parse_fetch_flags(meta)
+            result[uid] = (is_read, is_flagged)
+    return result
 
 
 def _uid_from_fetch_blob(flags_blob: tuple[Any, ...]) -> int | None:
@@ -1373,154 +1391,228 @@ class ImapProvider:
         finally:
             close_connection()
 
-    def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
+    def apply_remote_operations(
+        self, operations: Sequence[Any]
+    ) -> Sequence[tuple[Any, RemoteOperationResult]]:
         from mail_core.providers.remote_writeback import (
             OP_MARK_READ,
             OP_MOVE,
             OP_SET_FLAG,
             OP_TRASH,
+            compress_uids_chunked,
             normalize_op_type,
             require_remote_id,
         )
 
-        try:
-            remote_id = require_remote_id(desired_state)
-        except ValueError as exc:
-            return RemoteOperationResult(success=False, error=str(exc))
-        parsed = parse_imap_remote_id(remote_id)
-        folder = str(desired_state.get("folder_remote_id") or (parsed[1] if parsed else "") or "INBOX")
-        if parsed is not None and desired_state.get("folder_remote_id"):
-            if str(desired_state["folder_remote_id"]) != parsed[1]:
-                # A185: same guard as fetch_mime — never run the id's UID
-                # against a contradicting explicit folder.
-                return RemoteOperationResult(
-                    success=False,
-                    error=(
-                        f"folder_remote_id {desired_state['folder_remote_id']!r} does not match "
-                        f"remote_id folder {parsed[1]!r}"
-                    ),
-                )
-        uid_str = imap_uid_for_command(remote_id)
-        op = normalize_op_type(op_type)
-        try:
-            quoted_folder = _quote_mailbox(folder)
-            quoted_dest: str | None = None
-            if op == OP_MOVE:
-                dest = str(desired_state.get("dest_folder_remote_id") or desired_state.get("to_folder") or "")
+        if not operations:
+            return []
+
+        results: dict[Any, RemoteOperationResult] = {}
+        valid_ops: list[tuple[Any, str, dict[str, Any], int, str, int | None, str | None]] = []
+
+        for item in operations:
+            op_id = item.op_id
+            desired = dict(item.desired_state or {})
+            op_type = normalize_op_type(item.op_type)
+            try:
+                remote_id = require_remote_id(desired)
+            except ValueError as exc:
+                results[op_id] = RemoteOperationResult(success=False, error=str(exc))
+                continue
+
+            parsed = parse_imap_remote_id(remote_id)
+            folder = str(desired.get("folder_remote_id") or (parsed[1] if parsed else "") or "INBOX")
+            if parsed is not None and desired.get("folder_remote_id"):
+                if str(desired["folder_remote_id"]) != parsed[1]:
+                    results[op_id] = RemoteOperationResult(
+                        success=False,
+                        error=f"folder_remote_id {desired['folder_remote_id']!r} does not match remote_id folder {parsed[1]!r}",
+                    )
+                    continue
+
+            uid_str = imap_uid_for_command(remote_id)
+            try:
+                numeric_uid = int(uid_str)
+            except ValueError:
+                results[op_id] = RemoteOperationResult(success=False, error=f"invalid numeric UID {uid_str!r}")
+                continue
+
+            uv = parsed[0] if parsed is not None else None
+            dest_folder: str | None = None
+            if op_type == OP_MOVE:
+                dest = str(desired.get("dest_folder_remote_id") or desired.get("to_folder") or "")
                 if not dest:
-                    return RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
-                quoted_dest = _quote_mailbox(dest)
-            elif op == OP_TRASH:
-                trash = str(desired_state.get("trash_folder_remote_id") or "Trash")
-                quoted_dest = _quote_mailbox(trash)
-        except ValueError as exc:
-            return RemoteOperationResult(success=False, error=str(exc))
+                    results[op_id] = RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
+                    continue
+                dest_folder = dest
+            elif op_type == OP_TRASH:
+                dest_folder = str(desired.get("trash_folder_remote_id") or "Trash")
+
+            valid_ops.append((op_id, op_type, desired, numeric_uid, folder, uv, dest_folder))
+
+        if not valid_ops:
+            return [(op.op_id, results.get(op.op_id, RemoteOperationResult(success=False, error="unknown error"))) for op in operations]
+
+        folder_groups: dict[str, list[tuple[Any, str, dict[str, Any], int, str, int | None, str | None]]] = {}
+        for entry in valid_ops:
+            folder = entry[4]
+            folder_groups.setdefault(folder, []).append(entry)
 
         c, _permit = self._connect_with_permit()
         try:
-            typ, _ = c.select(quoted_folder)
-            if typ != "OK":
-                return RemoteOperationResult(success=False, error=f"select {folder} failed")
-
-            if parsed is not None:
-                _uv = parsed[0]
-                if _uv > 0:
-                    srv_uv = _get_server_uidvalidity(c, folder)
-                    if srv_uv is not None and srv_uv != _uv:
-                        return RemoteOperationResult(
-                            success=False,
-                            error=f"UIDVALIDITY mismatch for {folder}: expected {_uv}, got {srv_uv}",
-                        )
-
-            # A368: many servers answer UID STORE/MOVE for an already
-            # expunged UID with OK and no effect. Confirm the UID still
-            # exists via FETCH before mutating anything; for STORE the
-            # FETCH read-back of the flags below is the success criterion.
-            try:
-                int(uid_str)
-                numeric_uid = True
-            except ValueError:
-                numeric_uid = False
-            if numeric_uid:
-                existence = _fetch_flags_for_uid(c, uid_str)
-                if existence is None:
-                    return RemoteOperationResult(
-                        success=False,
-                        error=f"unable to verify UID {uid_str} exists in {folder}: FETCH failed",
-                    )
-                if not existence[0]:
-                    return RemoteOperationResult(
-                        success=False,
-                        error=f"UID {uid_str} not found in {folder}",
-                    )
-
-            if op == OP_MARK_READ:
-                want_read = bool(desired_state.get("is_read", True))
-                flag_op = "+FLAGS" if want_read else "-FLAGS"
-                typ, _ = c.uid("STORE", uid_str, flag_op, r"(\Seen)")
-                if typ != "OK":
-                    return RemoteOperationResult(success=False, error="STORE Seen failed")
-                if numeric_uid:
-                    verified = _fetch_flags_for_uid(c, uid_str)
-                    if verified is None or not verified[0] or verified[1] is not want_read:
-                        return RemoteOperationResult(
-                            success=False,
-                            error=f"STORE Seen for UID {uid_str} could not be verified via FETCH",
-                        )
-                return RemoteOperationResult(success=True, remote_state={"is_read": want_read})
-
-            if op == OP_SET_FLAG:
-                want = bool(desired_state.get("is_flagged", True))
-                flag_op = "+FLAGS" if want else "-FLAGS"
-                typ, _ = c.uid("STORE", uid_str, flag_op, r"(\Flagged)")
-                if typ != "OK":
-                    return RemoteOperationResult(success=False, error="STORE Flagged failed")
-                if numeric_uid:
-                    verified = _fetch_flags_for_uid(c, uid_str)
-                    if verified is None or not verified[0] or verified[2] is not want:
-                        return RemoteOperationResult(
-                            success=False,
-                            error=f"STORE Flagged for UID {uid_str} could not be verified via FETCH",
-                        )
-                return RemoteOperationResult(success=True, remote_state={"is_flagged": want})
-
-            if op == OP_MOVE:
-                # Prefer UID MOVE (RFC 6851); never STORE \Deleted or expunge entire mailbox
-                assert quoted_dest is not None
-                typ, response_data = c.uid("MOVE", uid_str, quoted_dest)
-                if typ != "OK":
-                    return RemoteOperationResult(
-                        success=False,
-                        error="IMAP server does not support atomic MOVE/delete",
-                    )
+            for folder, items in folder_groups.items():
                 try:
-                    source_uid = int(uid_str)
-                except ValueError:
-                    remote_state = {"folder_remote_id": dest}
-                else:
-                    remote_state = _copyuid_remote_state(c, response_data, source_uid, dest)
-                return RemoteOperationResult(success=True, remote_state=remote_state)
+                    typ, _ = c.select(_quote_mailbox(folder))
+                    if typ != "OK":
+                        for it in items:
+                            results[it[0]] = RemoteOperationResult(success=False, error=f"select {folder} failed")
+                        continue
 
-            if op == OP_TRASH:
-                # Try move into trash mailbox first; never STORE \Deleted or expunge entire mailbox
-                assert quoted_dest is not None
-                typ, response_data = c.uid("MOVE", uid_str, quoted_dest)
-                if typ != "OK":
-                    return RemoteOperationResult(
-                        success=False,
-                        error="IMAP server does not support atomic MOVE/delete",
-                    )
-                try:
-                    source_uid = int(uid_str)
-                except ValueError:
-                    remote_state = {"folder_remote_id": trash}
-                else:
-                    remote_state = _copyuid_remote_state(c, response_data, source_uid, trash)
-                return RemoteOperationResult(success=True, remote_state=remote_state)
+                    expected_uvs = {it[5] for it in items if it[5] is not None and it[5] > 0}
+                    if expected_uvs:
+                        srv_uv = _get_server_uidvalidity(c, folder)
+                        expected_uv = next(iter(expected_uvs))
+                        if srv_uv is not None and srv_uv != expected_uv:
+                            for it in items:
+                                results[it[0]] = RemoteOperationResult(
+                                    success=False,
+                                    error=f"UIDVALIDITY mismatch for {folder}: expected {expected_uv}, got {srv_uv}",
+                                )
+                            continue
 
-            return RemoteOperationResult(success=False, error=f"imap apply not implemented: {op_type}")
+                    subgroups: dict[tuple[str, Any], list[tuple[Any, str, dict[str, Any], int, str, int | None, str | None]]] = {}
+                    for it in items:
+                        op_id, op_type, desired, num_uid, fld, uv, dest_fld = it
+                        if op_type == OP_MARK_READ:
+                            target_val = bool(desired.get("is_read", True))
+                        elif op_type == OP_SET_FLAG:
+                            target_val = bool(desired.get("is_flagged", True))
+                        else:
+                            target_val = dest_fld
+                        subgroups.setdefault((op_type, target_val), []).append(it)
+
+                    for (op_type, target_val), sub_items in subgroups.items():
+                        uid_to_item = {it[3]: it for it in sub_items}
+                        uids = sorted(uid_to_item.keys())
+                        chunks = compress_uids_chunked(uids)
+
+                        for chunk_str, chunk_uids in chunks:
+                            if op_type == OP_MARK_READ:
+                                want_read = bool(target_val)
+                                flag_op = "+FLAGS" if want_read else "-FLAGS"
+                                typ, data = c.uid("STORE", chunk_str, flag_op, r"(\Seen)")
+                                if typ != "OK":
+                                    for u in chunk_uids:
+                                        results[uid_to_item[u][0]] = RemoteOperationResult(success=False, error="STORE Seen failed")
+                                    continue
+                                flags_by_uid = _parse_uids_flags_from_response(data)
+                                missing_uids = [u for u in chunk_uids if u not in flags_by_uid]
+                                if missing_uids:
+                                    f_chunks = compress_uids_chunked(missing_uids)
+                                    for fc, _ in f_chunks:
+                                        f_typ, f_data = c.uid("FETCH", fc, "(FLAGS UID)")
+                                        if f_typ == "OK":
+                                            flags_by_uid.update(_parse_uids_flags_from_response(f_data))
+                                for u in chunk_uids:
+                                    op_id = uid_to_item[u][0]
+                                    if u not in flags_by_uid:
+                                        results[op_id] = RemoteOperationResult(
+                                            success=False,
+                                            error=f"UID {u} not found in {folder}",
+                                        )
+                                    else:
+                                        is_read, _ = flags_by_uid[u]
+                                        if is_read is want_read:
+                                            results[op_id] = RemoteOperationResult(
+                                                success=True,
+                                                remote_state={"is_read": want_read},
+                                            )
+                                        else:
+                                            results[op_id] = RemoteOperationResult(
+                                                success=False,
+                                                error=f"STORE Seen for UID {u} could not be verified via FETCH",
+                                            )
+
+                            elif op_type == OP_SET_FLAG:
+                                want_flag = bool(target_val)
+                                flag_op = "+FLAGS" if want_flag else "-FLAGS"
+                                typ, data = c.uid("STORE", chunk_str, flag_op, r"(\Flagged)")
+                                if typ != "OK":
+                                    for u in chunk_uids:
+                                        results[uid_to_item[u][0]] = RemoteOperationResult(success=False, error="STORE Flagged failed")
+                                    continue
+                                flags_by_uid = _parse_uids_flags_from_response(data)
+                                missing_uids = [u for u in chunk_uids if u not in flags_by_uid]
+                                if missing_uids:
+                                    f_chunks = compress_uids_chunked(missing_uids)
+                                    for fc, _ in f_chunks:
+                                        f_typ, f_data = c.uid("FETCH", fc, "(FLAGS UID)")
+                                        if f_typ == "OK":
+                                            flags_by_uid.update(_parse_uids_flags_from_response(f_data))
+                                for u in chunk_uids:
+                                    op_id = uid_to_item[u][0]
+                                    if u not in flags_by_uid:
+                                        results[op_id] = RemoteOperationResult(
+                                            success=False,
+                                            error=f"UID {u} not found in {folder}",
+                                        )
+                                    else:
+                                        _, is_flagged = flags_by_uid[u]
+                                        if is_flagged is want_flag:
+                                            results[op_id] = RemoteOperationResult(
+                                                success=True,
+                                                remote_state={"is_flagged": want_flag},
+                                            )
+                                        else:
+                                            results[op_id] = RemoteOperationResult(
+                                                success=False,
+                                                error=f"STORE Flagged for UID {u} could not be verified via FETCH",
+                                            )
+
+                            elif op_type in (OP_MOVE, OP_TRASH):
+                                dest_target = str(target_val)
+                                typ, response_data = c.uid("MOVE", chunk_str, _quote_mailbox(dest_target))
+                                if typ != "OK":
+                                    for u in chunk_uids:
+                                        results[uid_to_item[u][0]] = RemoteOperationResult(
+                                            success=False,
+                                            error="IMAP server does not support atomic MOVE/delete",
+                                        )
+                                else:
+                                    for u in chunk_uids:
+                                        op_id = uid_to_item[u][0]
+                                        remote_state = _copyuid_remote_state(c, response_data, u, dest_target)
+                                        results[op_id] = RemoteOperationResult(
+                                            success=True,
+                                            remote_state=remote_state,
+                                        )
+                except Exception as exc:
+                    from mail_core.security.redact import safe_error
+
+                    err_msg = f"IMAP operation group error: {safe_error(exc)}"
+                    for it in items:
+                        if it[0] not in results:
+                            results[it[0]] = RemoteOperationResult(success=False, error=err_msg)
         finally:
             self._close_client(c, _permit)
+
+        return [
+            (
+                op.op_id,
+                results.get(
+                    op.op_id, RemoteOperationResult(success=False, error="operation unhandled")
+                ),
+            )
+            for op in operations
+        ]
+
+    def apply_remote_operation(self, op_type: str, desired_state: dict[str, Any]) -> RemoteOperationResult:
+        from mail_core.providers.base import RemoteOperationItem
+
+        dummy_id = uuid.uuid4()
+        item = RemoteOperationItem(op_id=dummy_id, op_type=op_type, desired_state=desired_state)
+        res = dict(self.apply_remote_operations([item]))
+        return res[dummy_id]
 
     def reconcile(self, folder_remote_id: str, local_remote_ids: Sequence[str]) -> Sequence[ReconcileAction]:
         """Return delete actions for local IDs missing remotely — caller must have completed a full scan."""

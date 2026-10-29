@@ -1,0 +1,55 @@
+{
+    "tid": "t063",
+    "attempt": 1,
+    "execution_id": "0ebc974de6d24531a8a608db65805375",
+    "status": "done",
+    "branch": "t063_worker_concurrent_executor",
+    "base_sha": "6fd78aef33f7b145f9301da4144cd37b73cf71b1",
+    "tests": "scripts/run-mail-core-tests.sh run -k test_t063_worker_concurrent_executor: 8 passed. Desktop npm test passed.",
+    "blackbox": "npm --prefix src/frontend run test:e2e: 18 passed.",
+    "review": "Code and test review PASS in Round 1; review scope dc171795d4704038; zero findings.",
+    "ac_evidence": {
+        "AC-001": [
+            "tests/mail_core/test_t063_worker_concurrent_executor.py::test_ac001_concurrent_capacity_reaches_and_caps_at_total_slots"
+        ],
+        "AC-002": [
+            "tests/mail_core/test_t063_worker_concurrent_executor.py::test_ac002_ac003_background_admission_and_foreground_starvation_prevention"
+        ],
+        "AC-003": [
+            "tests/mail_core/test_t063_worker_concurrent_executor.py::test_ac002_ac003_background_admission_and_foreground_starvation_prevention"
+        ],
+        "AC-004": [
+            "tests/mail_core/test_t063_worker_concurrent_executor.py::test_ac004_priority_and_fifo_claim_order"
+        ],
+        "AC-005": [
+            "tests/mail_core/test_t063_worker_concurrent_executor.py::test_ac005_per_account_lease_mutual_exclusion"
+        ],
+        "AC-006": [
+            "tests/mail_core/test_t063_worker_concurrent_executor.py::test_ac006_execution_owner_granularity_protects_fencing"
+        ],
+        "AC-007": [
+            "tests/mail_core/test_t063_worker_concurrent_executor.py::test_ac007_unified_heartbeat_keeps_in_flight_claims_alive"
+        ],
+        "AC-008": [
+            "tests/mail_core/test_t063_worker_concurrent_executor.py::test_ac008_exception_isolation_among_concurrent_tasks"
+        ],
+        "AC-009": [
+            "src/mail_core/worker/main.py:async periodic schedule and patrol execution"
+        ],
+        "AC-010": [
+            "tests/mail_core/test_t063_worker_concurrent_executor.py::test_ac010_graceful_shutdown_waits_for_in_flight"
+        ],
+        "AC-011": [
+            "src/desktop/startup.test.js",
+            "tests/mail_core/test_config.py::test_ac004_and_ac005_worker_and_inbox_override"
+        ],
+        "AC-012": [
+            "src/mail_core/worker/main.py:run"
+        ],
+        "AC-013": [
+            "tests/mail_core/test_t063_worker_concurrent_executor.py::test_ac002_ac003_background_admission_and_foreground_starvation_prevention (local substitute PASS; deploy verification outstanding)"
+        ]
+    },
+    "pending": [],
+    "findings": []
+}

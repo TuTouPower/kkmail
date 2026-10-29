@@ -9,23 +9,38 @@ import signal
 import threading
 import time
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import NamedTuple
 
-from mail_core.logging_config import configure_logging
 from mail_core.config import get_config
+from mail_core.logging_config import configure_logging
+from mail_core.providers.connection_slots import TrafficClass, traffic_class_for_job
 
 configure_logging(service_name="mail-core-worker")
 log = logging.getLogger("mail_core.worker")
 
 _stop = False
 _stop_event = threading.Event()
+_wake_event = threading.Event()
 CLAIM_HEARTBEAT_MAX_INTERVAL_S = 60.0
+
+
+@dataclass
+class InFlightJob:
+    job_id: uuid.UUID
+    worker_id: str
+    traffic_class: TrafficClass
+    locked_at: datetime
+    thread: threading.Thread | None = None
+
+
+_in_flight_jobs: dict[uuid.UUID, InFlightJob] = {}
+_in_flight_lock = threading.Lock()
 
 
 def __getattr__(name: str) -> Any:
     cfg = get_config()
-    if name == "CLAIM_BATCH":
-        return cfg.worker_claim_batch
     if name == "RECLAIM_INTERVAL_S":
         return cfg.worker_reclaim_interval_s
     if name == "SCHEDULE_INTERVAL_S":
@@ -59,17 +74,26 @@ def _handle_stop(signum: int, _frame: object) -> None:
     log.info("received signal %s; stopping", signum)
     _stop = True
     _stop_event.set()
+    _wake_event.set()
+
+
+def wake() -> None:
+    """Wake the worker loop immediately from idle sleep."""
+    _wake_event.set()
 
 
 def request_stop() -> None:
     global _stop
     _stop = True
     _stop_event.set()
+    _wake_event.set()
 
 
 def _wait_for_next_poll(timeout_s: float) -> bool:
-    """Interruptible idle wait (A275): returns True as soon as stop is set."""
-    return _stop_event.wait(timeout_s)
+    """Interruptible idle wait: returns True as soon as stop is set."""
+    _wake_event.wait(timeout_s)
+    _wake_event.clear()
+    return _stop or _stop_event.is_set()
 
 
 def _reclaim_once() -> int:
@@ -314,152 +338,192 @@ def _claim_heartbeat_interval_s() -> float:
     return max(0.1, min(CLAIM_HEARTBEAT_MAX_INTERVAL_S, stale_after_s / 3))
 
 
-def _heartbeat_claims(Session, claim_tokens, claim_times, claim_times_lock, stop_event) -> None:
-    """Refresh every outstanding claim, including jobs waiting in this tick's batch."""
-    from datetime import datetime, timezone
+class UnifiedClaimHeartbeatLoop:
+    """Refreshes claim locked_at for all in-flight jobs across all worker execution threads."""
 
-    from mail_core.sync.jobs import heartbeat_job_claim
+    def __init__(self, Session, worker_id: str, interval_s: float | None = None) -> None:
+        self.Session = Session
+        self.worker_id = worker_id
+        self.interval_s = interval_s or _claim_heartbeat_interval_s()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
 
-    active = {
-        job_id: owner
-        for job_id, owner, locked_at in claim_tokens
-        if owner is not None and locked_at is not None
-    }
-    while active and not stop_event.wait(_claim_heartbeat_interval_s()):
-        refreshed: dict[object, datetime | None] = {}
-        try:
-            # A297: snapshot claim_times under the lock, run the DB refresh
-            # (IO + commit) outside it, then write results back in a short
-            # critical section — the lock must not span IO or it blocks the
-            # main thread's per-job claim validation in _tick.
-            with claim_times_lock:
-                snapshot = {job_id: claim_times.get(job_id) for job_id in list(active)}
-            with Session() as session:
-                now = datetime.now(timezone.utc)
-                for job_id, owner in list(active.items()):
-                    expected_locked_at = snapshot.get(job_id)
-                    if expected_locked_at is None:
-                        refreshed[job_id] = None
-                        continue
-                    refreshed[job_id] = heartbeat_job_claim(
-                        session,
-                        job_id=job_id,
-                        worker_id=owner,
-                        locked_at=expected_locked_at,
-                        now=now,
-                    )
-                session.commit()
-            with claim_times_lock:
-                for job_id, locked_at in refreshed.items():
-                    if locked_at is None:
-                        active.pop(job_id, None)
-                        claim_times.pop(job_id, None)
-                    else:
-                        claim_times[job_id] = locked_at
-        except Exception as exc:
-            from mail_core.security.redact import safe_error
+    def start(self) -> None:
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="mail-core-unified-claim-heartbeat",
+            daemon=True,
+        )
+        self._thread.start()
 
-            log.warning("worker job claim heartbeat failed: %s", safe_error(exc))
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=timeout)
+
+    def _run(self) -> None:
+        from mail_core.sync.jobs import heartbeat_job_claim
+
+        while not self._stop_event.wait(self.interval_s):
+            with _in_flight_lock:
+                snapshot = {
+                    jid: t.locked_at for jid, t in _in_flight_jobs.items() if t.locked_at is not None
+                }
+            if not snapshot:
+                continue
+            refreshed: dict[uuid.UUID, datetime | None] = {}
+            try:
+                with self.Session() as session:
+                    now = datetime.now(timezone.utc)
+                    for jid, expected_locked_at in snapshot.items():
+                        refreshed[jid] = heartbeat_job_claim(
+                            session,
+                            job_id=jid,
+                            worker_id=self.worker_id,
+                            locked_at=expected_locked_at,
+                            now=now,
+                        )
+                    session.commit()
+                with _in_flight_lock:
+                    for jid, new_locked_at in refreshed.items():
+                        if jid in _in_flight_jobs:
+                            if new_locked_at is None:
+                                _in_flight_jobs.pop(jid, None)
+                            else:
+                                _in_flight_jobs[jid].locked_at = new_locked_at
+            except Exception as exc:
+                from mail_core.security.redact import safe_error
+
+                log.warning("unified claim heartbeat failed: %s", safe_error(exc))
 
 
-def _tick(worker_id: str) -> TickResult:
-    """Claim a batch, commit claims, then handle each job in its own session.
+def _execute_single_job(
+    Session,
+    job_id: uuid.UUID,
+    worker_id: str,
+    traffic_class: TrafficClass,
+) -> bool:
+    from mail_core.mail.domain.enums import JobStatus
+    from mail_core.mail.storage.models import WorkerJob
+    from mail_core.sync.jobs import fail_job
+    from mail_core.worker.handlers import handle_job
 
-    One job per session avoids a failed job rolling back siblings and keeps
-    network-heavy handlers from holding a multi-job transaction open.
-    """
+    ok = False
+    try:
+        with Session() as session:
+            job = session.get(WorkerJob, job_id)
+            if job is None or job.status != JobStatus.CLAIMED.value or job.locked_by != worker_id:
+                return False
+            try:
+                ok = handle_job(session, job, worker_id=worker_id, traffic_class=traffic_class)
+                if session.in_transaction():
+                    session.commit()
+            except Exception as exc:
+                from mail_core.security.redact import safe_error
+
+                log.error("job %s failed: %s", job_id, safe_error(exc))
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+                try:
+                    with Session() as fail_session:
+                        j = fail_session.get(WorkerJob, job_id)
+                        if j is not None and j.status == JobStatus.CLAIMED.value:
+                            fail_job(fail_session, j, exc, worker_id=worker_id)
+                            fail_session.commit()
+                except Exception:
+                    log.exception("fail_job after error also failed for %s", job_id)
+    finally:
+        with _in_flight_lock:
+            _in_flight_jobs.pop(job_id, None)
+        wake()
+    return ok
+
+
+def _tick(worker_id: str, *, block: bool = True, limit: int | None = None) -> TickResult:
+    """Claim and execute jobs concurrently respecting total_slots and traffic class limits."""
+    cfg = get_config()
+    total_slots = cfg.total_slots
+    background_start_slot = cfg.background_start_slot
+    background_limit = total_slots - background_start_slot
+
     try:
         from mail_core.db.session import get_session_factory
-        from mail_core.mail.domain.enums import JobStatus
-        from mail_core.mail.storage.models import WorkerJob
-        from mail_core.sync.jobs import claim_jobs, fail_job
-        from mail_core.worker.handlers import handle_job
+        from mail_core.sync.jobs import claim_jobs
     except Exception as exc:  # pragma: no cover
-        log.error("worker degraded: tick imports failed (%s); skipping claim batch", exc)
+        log.error("worker degraded: tick imports failed (%s); skipping claim", exc)
         return TickResult(claimed=0, handled=0)
 
     Session = get_session_factory()
-    claim_tokens: list[tuple] = []
-    with Session() as session:
-        jobs = claim_jobs(session, worker_id=worker_id, limit=get_config().worker_claim_batch)
-        claim_tokens = [(j.id, j.locked_by, j.locked_at) for j in jobs]
-        session.commit()
 
-    claim_times = {job_id: locked_at for job_id, _owner, locked_at in claim_tokens}
-    claim_times_lock = threading.Lock()
-    heartbeat_stop = threading.Event()
-    heartbeat_tokens = [token for token in claim_tokens if token[1] is not None and token[2] is not None]
-    heartbeat_thread = None
-    if heartbeat_tokens:
-        heartbeat_thread = threading.Thread(
-            target=_heartbeat_claims,
-            args=(Session, heartbeat_tokens, claim_times, claim_times_lock, heartbeat_stop),
-            name="mail-core-job-claim-heartbeat",
-            daemon=True,
+    with _in_flight_lock:
+        dead = [jid for jid, t in _in_flight_jobs.items() if t.thread and not t.thread.is_alive()]
+        for jid in dead:
+            _in_flight_jobs.pop(jid, None)
+        current_in_flight = len(_in_flight_jobs)
+        bg_in_flight = sum(
+            1 for t in _in_flight_jobs.values() if t.traffic_class == TrafficClass.BACKGROUND
         )
-        heartbeat_thread.start()
 
-    handled = 0
-    try:
-        for job_id, expected_owner, _claim_time in claim_tokens:
-            with Session() as session:
-                with claim_times_lock:
-                    claim_time = claim_times.get(job_id)
-                    claim_tracked = job_id in claim_times
-                    job = session.get(WorkerJob, job_id)
-                    if job is None:
-                        continue
-                    if expected_owner is not None:
-                        if not claim_tracked or job.status != JobStatus.CLAIMED.value or job.locked_by != expected_owner:
-                            log.warning(
-                                "job %s claim lost before execution (status=%s, locked_by=%s, expected=%s); skipping",
-                                job_id,
-                                job.status,
-                                job.locked_by,
-                                expected_owner,
-                            )
-                            continue
-                        if claim_time is not None and job.locked_at is not None and job.locked_at != claim_time:
-                            log.warning(
-                                "job %s claim lock timestamp mismatch (%s != %s); skipping",
-                                job_id,
-                                job.locked_at,
-                                claim_time,
-                            )
-                            continue
-                try:
-                    ok = handle_job(session, job, worker_id=worker_id)
-                    # Handlers may have committed already; commit any leftover work
-                    # (including fail_job flushes when ok is False).
-                    if session.in_transaction():
-                        session.commit()
-                    if ok:
-                        handled += 1
-                except Exception as exc:  # pragma: no cover
-                    from mail_core.security.redact import safe_error
+    free_slots = max(0, total_slots - current_in_flight)
+    if limit is not None:
+        free_slots = min(free_slots, limit)
 
-                    log.error("job %s failed: %s", job_id, safe_error(exc))
-                    try:
-                        session.rollback()
-                    except Exception:
-                        pass
-                    try:
-                        # Re-load after rollback so fail_job can persist.
-                        # Skip if handle_job already marked FAILED (avoid double-handle).
-                        from mail_core.mail.domain.enums import JobStatus
+    if free_slots <= 0:
+        return TickResult(claimed=0, handled=0)
 
-                        job = session.get(WorkerJob, job_id)
-                        if job is not None and job.status == JobStatus.CLAIMED.value:
-                            fail_job(session, job, exc, worker_id=worker_id)
-                            session.commit()
-                    except Exception:
-                        session.rollback()
-                        log.exception("fail_job after error also failed for %s", job_id)
-    finally:
-        heartbeat_stop.set()
-        if heartbeat_thread is not None:
-            heartbeat_thread.join(timeout=5.0)
-    return TickResult(claimed=len(claim_tokens), handled=handled)
+    claimed_jobs = []
+    while free_slots > 0:
+        bg_total = bg_in_flight + sum(1 for _, tc, _ in claimed_jobs if tc == TrafficClass.BACKGROUND)
+        allow_bg = bg_total < background_limit
+
+        with Session() as session:
+            jobs = claim_jobs(
+                session,
+                worker_id=worker_id,
+                limit=1,
+                exclude_background=not allow_bg,
+                exclude_busy_lease_accounts=True,
+            )
+            if not jobs:
+                break
+            job = jobs[0]
+            tc = traffic_class_for_job(job.job_type, payload=job.payload)
+            claimed_jobs.append((job.id, tc, job.locked_at))
+            session.commit()
+        free_slots -= 1
+
+    if not claimed_jobs:
+        return TickResult(claimed=0, handled=0)
+
+    threads = []
+    handled_count = 0
+    handled_lock = threading.Lock()
+
+    for jid, tc, locked_at in claimed_jobs:
+        token = InFlightJob(job_id=jid, worker_id=worker_id, traffic_class=tc, locked_at=locked_at)
+        with _in_flight_lock:
+            _in_flight_jobs[jid] = token
+
+        def _task(job_id=jid, t_class=tc):
+            nonlocal handled_count
+            ok = _execute_single_job(Session, job_id, worker_id, t_class)
+            if ok:
+                with handled_lock:
+                    handled_count += 1
+
+        t = threading.Thread(target=_task, name=f"worker-task-{jid.hex[:8]}", daemon=True)
+        token.thread = t
+        threads.append(t)
+        t.start()
+
+    if block:
+        for t in threads:
+            t.join()
+
+    return TickResult(claimed=len(claimed_jobs), handled=handled_count if block else len(claimed_jobs))
 
 
 def next_poll_delay(
@@ -480,6 +544,7 @@ def run(poll_interval_s: float | None = None) -> None:
     global _stop
     _stop = False
     _stop_event.clear()
+    _wake_event.clear()
     from mail_core.blobs.crypto import load_keyring_from_env
 
     # Fail fast: worker must not process jobs without blob keys.
@@ -511,6 +576,19 @@ def run(poll_interval_s: float | None = None) -> None:
     heartbeat_loop = WorkerHeartbeatLoop(worker_id, Session, interval_s=heartbeat_interval)
     heartbeat_loop.start()
 
+    claim_heartbeat = UnifiedClaimHeartbeatLoop(Session, worker_id)
+    claim_heartbeat.start()
+
+    job_listener = None
+    try:
+        from mail_core.worker.wake import JobWakeListener
+
+        job_listener = JobWakeListener(wake)
+        job_listener.start()
+        log.info("job wake listener started")
+    except Exception:
+        log.exception("job wake listener failed to start; polling remains authoritative")
+
     # t061: IDLE watcher runs inside the worker process; a watcher
     # failure must never take the worker down (polling remains the
     # authoritative discovery path).
@@ -539,7 +617,13 @@ def run(poll_interval_s: float | None = None) -> None:
             if last_schedule_at is None or now - last_schedule_at >= schedule_interval:
                 last_schedule_at = now
                 try:
-                    _schedule_periodic_sync_once()
+                    # AC-009: run periodic schedule / patrol sweeps asynchronously
+                    # so network probing never blocks task claiming.
+                    threading.Thread(
+                        target=_schedule_periodic_sync_once,
+                        name="worker-periodic-schedule",
+                        daemon=True,
+                    ).start()
                 except Exception as exc:  # pragma: no cover
                     from mail_core.security.redact import safe_error
 
@@ -547,9 +631,9 @@ def run(poll_interval_s: float | None = None) -> None:
 
             tick_result = TickResult(claimed=0, handled=0)
             try:
-                tick_result = _tick(worker_id)
-                if tick_result.handled:
-                    log.info("handled %s job(s)", tick_result.handled)
+                tick_result = _tick(worker_id, block=False)
+                if tick_result.claimed:
+                    log.info("claimed %s job(s)", tick_result.claimed)
             except Exception as exc:
                 from mail_core.security.redact import safe_error
 
@@ -564,6 +648,24 @@ def run(poll_interval_s: float | None = None) -> None:
             if sleep_s:
                 _wait_for_next_poll(sleep_s)
     finally:
+        # AC-010: Graceful shutdown: wait for in-flight tasks to complete within timeout
+        shutdown_deadline = time.monotonic() + 5.0
+        while time.monotonic() < shutdown_deadline:
+            with _in_flight_lock:
+                dead = [jid for jid, t in _in_flight_jobs.items() if t.thread and not t.thread.is_alive()]
+                for jid in dead:
+                    _in_flight_jobs.pop(jid, None)
+                if not _in_flight_jobs:
+                    break
+            time.sleep(0.05)
+
+        claim_heartbeat.stop(timeout=5.0)
+
+        if job_listener is not None:
+            try:
+                job_listener.stop(timeout=5.0)
+            except Exception:
+                log.exception("job wake listener stop failed")
         if idle_manager is not None:
             try:
                 idle_manager.stop()

@@ -2,54 +2,5 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/tasks/{tid}_{slug}/task.md front matter",
     "workspace": ".",
-    "tasks": [
-        {
-            "tid": "t062",
-            "slug": "outbox_and_job_notify_wake",
-            "title": "统一 Outbox 事件与任务入队的 PostgreSQL 即时唤醒",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "",
-            "conflicts_with": "",
-            "note": "来源 p063 根因 1 及核实新增的 Worker 空闲退避延迟；事务提交即唤醒 API 推送与 Worker 认领",
-            "dir": "docs/tasks/t062_outbox_and_job_notify_wake"
-        },
-        {
-            "tid": "t063",
-            "slug": "worker_concurrent_executor",
-            "title": "Worker 按连接预算并发执行任务",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "t062",
-            "conflicts_with": "",
-            "note": "来源 p063 根因 2；串行执行改为 total_slots 大小执行器，按 8/6 流量类别准入与同账号租约任务互斥",
-            "dir": "docs/tasks/t063_worker_concurrent_executor"
-        },
-        {
-            "tid": "t064",
-            "slug": "batched_remote_writeback",
-            "title": "远程写回按文件夹批量合并提交",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "",
-            "conflicts_with": "",
-            "note": "来源 p063 根因 3；单连接按文件夹/操作/目标分组发 UID 集合命令，Graph 用 $batch，逐条 revision CAS 结算",
-            "dir": "docs/tasks/t064_batched_remote_writeback"
-        }
-    ]
+    "tasks": []
 }

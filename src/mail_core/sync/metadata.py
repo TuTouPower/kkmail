@@ -294,6 +294,5 @@ def apply_metadata_page(
         full_scan_complete=page.exhausted,
         scan_generation=scan_generation,
     )
-    try_notify_outbox(session)
     session.flush()
     return MetadataApplyResult(upserted=len(items), exhausted=page.exhausted, cursor=cursor)

@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 CHANNEL = "mail_core_outbox"
 SESSION_REVOCATION_CHANNEL = "mail_core_session_revoked"
+JOB_CHANNEL = "mail_core_jobs"
+JOB_WAKE_CHANNEL = JOB_CHANNEL
 log = logging.getLogger("mail_core.realtime.notify")
 _monotonic = time.monotonic
 _NOTIFY_WARNING_INTERVAL_S = 3600.0
@@ -23,6 +25,11 @@ _notify_last_warning_at: float | None = None
 def notify_outbox(session: Session) -> None:
     """Emit NOTIFY after outbox inserts (delivered when the transaction commits)."""
     session.execute(text(f"SELECT pg_notify('{CHANNEL}', 'wake')"))
+
+
+def notify_jobs(session: Session) -> None:
+    """Emit NOTIFY after runnable job inserts or accelerated merges (delivered when transaction commits)."""
+    session.execute(text(f"SELECT pg_notify('{JOB_CHANNEL}', 'wake')"))
 
 
 def notify_session_revocation(session: Session, session_epoch: int) -> None:

@@ -54,15 +54,15 @@ def test_ac003_storage_limits_override():
 
 
 def test_ac004_and_ac005_worker_and_inbox_override():
+    # t063 AC-011: MAIL_CORE_CLAIM_BATCH / worker_claim_batch removed in favor of concurrent executor
     env = {
-        "MAIL_CORE_CLAIM_BATCH": "10",
         "MAIL_CORE_RECLAIM_INTERVAL_S": "120.0",
         "MAIL_CORE_WORKER_POLL_S": "5.0",
         "MAIL_CORE_INBOX_POLL_INTERVAL_S": "600.0",
         "MAIL_CORE_SCHEDULE_INTERVAL_S": "30.0",
     }
     cfg = load_config(env)
-    assert cfg.worker_claim_batch == 10
+    assert not hasattr(cfg, "worker_claim_batch")
     assert cfg.worker_reclaim_interval_s == 120.0
     assert cfg.worker_poll_s == 5.0
     assert cfg.inbox_poll_interval_s == 600.0

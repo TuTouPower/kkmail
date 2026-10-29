@@ -47,7 +47,6 @@ class MailCoreConfig:
     worker_poll_s: float = 2.0
     worker_max_idle_s: float = 10.0
     worker_heartbeat_s: float = 15.0
-    worker_claim_batch: int = 5
     worker_reclaim_interval_s: float = 60.0
     inbox_poll_interval_s: float = 1200.0
     schedule_interval_s: float = 60.0

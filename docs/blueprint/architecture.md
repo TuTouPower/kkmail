@@ -8,8 +8,8 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
 
 1. **后端核心 (`src/mail_core/`)**：
     - 框架：FastAPI + SQLAlchemy 2.0 (psycopg) + Alembic。
-    - 职责：提供统一 REST API、事务性 Outbox 事件分发、多协议邮件增量同步引擎与工作进程 (Worker)。
-    - 进程模型：支持单进程模式（API 嵌入 Worker 线程）或生产拆分模式（独立的 API 容器与 Worker 容器）。
+    - 职责：提供统一 REST API、事务性 Outbox 事件分发、多协议邮件增量同步引擎与工作进程 (Worker)。提交即 NOTIFY 由 SQLAlchemy Session 统一保证：任何写入 `OutboxEvent` 并提交的事务，由 session 事件在 `before_commit` 向 `mail_core_outbox` 发出单次 NOTIFY，避免分散手工调用遗漏。
+    - 进程模型：支持单进程模式（API 嵌入 Worker 线程）或生产拆分模式（独立的 API 容器与 Worker 容器）。Worker 采用按连接预算并发执行器（执行位数量等于 `total_slots`，后台批量归档限制在途数不超过 `total_slots - background_start_slot`，前台保留至少 `background_start_slot` 槽位即刻消费用户交互与元数据任务；同账号租约任务认领期互斥；单次执行持有唯一 execution_owner 避免租约 fencing 与归档认领冲突；统一全局心跳为在途任务续期；停机在超时内等待在途任务优雅结算）。Worker 内部启动 `JobWakeListener` 监听 `mail_core_jobs` 通道，任务入队事务提交即唤醒空闲等待（1 秒内抢占认领）；监听连接抖动或断开时自动重连，断连期间 Worker 退化为基于指数退避的定时轮询，保障调度连续性。
 2. **前端界面 (`src/frontend/`)**：
     - 技术栈：React 19 + TypeScript + Vite + TanStack React Query + Lucide Icons。
     - 特点：单页应用 (SPA)，由 `mail-core` 同源托管提供；基于 `useInfiniteQuery` 实现游标深翻页，原生集成 SSE 流式状态同步。侧栏按“所有账号／用户自定义分组／账号列表”组织导航，保留六类全局分类、分组分类、每账号分类与真实文件夹访问。邮件详情工具栏操作居中显示并支持已读/未读状态双向响应；邮件列表支持右键上下文菜单（Context Menu）。网页壳的侧栏按钮固定在邮件列表标题行；Electron macOS 使用原生标题栏交通灯，侧栏按钮放在其旁边，Windows/Linux 保留系统窗口框架。
@@ -32,7 +32,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 邮件详情保留原始 `to`/`cc` 展示文本，并通过标准邮件地址解析器返回结构化 `to_addresses`/`cc_addresses`；可靠地址单独提供邮箱，无法可靠解析的片段保留文本且不生成复制目标。
     - 批量标记已读在请求开始时固定分组成员集，按 `Message.id` 升序 keyset 每批最多 500 封独立事务提交；中途失败保留已完成批次，重试只处理余下未读邮件，每封远端操作仍经 `remote_operations` 与事务性 Outbox 收敛。
     - 远端文件夹身份由 `remote_id` 确定，`role` 只用于分类查询；同账号多个文件夹即使共享 role，也必须保持独立可访问并在侧栏显示可区分名称。Graph 已取得 well-known Inbox ID 时以该 ID 为准，不将同名自定义文件夹回退为第二个收件箱。
-    - 出站写回状态机：基于 `remote_operations` 队列与单调递增 `revision` 的乐观并发控制 (CAS)；支持多批次自动续跑、瞬时错误与限流退避延迟唤醒、跨同步边界的本地字段意图保护与孤儿任务安全对账恢复。
+    - 出站写回状态机：基于 `remote_operations` 队列与单调递增 `revision` 的乐观并发控制 (CAS)；支持多批次自动续跑、瞬时错误与限流退避延迟唤醒、跨同步边界的本地字段意图保护与孤儿任务安全对账恢复。推送采用批量管道（一次最多 500 条）：IMAP 单连接复用登录，按（源文件夹，操作类型，目标值）分组发送 UID 集合 STORE/MOVE 并做 1000 字符区间分块；Graph 使用 JSON batching（单批上限 20 个子请求）；执行期间不设人为时间合并窗口，推送完成后逐条按 revision CAS 独立结算，中途并发变更的操作回到 PENDING 重推。
 
 - **同步引擎与协议适配 (`src/mail_core/sync/`, `src/mail_core/providers/`)**：
 
@@ -66,8 +66,11 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 当客户端显式触发（`POST /api/mail/messages/{id}/sync-body`）且正文未归档时，系统将该邮件在 `MessageArchiveState` 的优先级提升为最高（`priority = 0`），并向任务队列入队最高优先级即时归档任务（`priority = 10`，去重键 `archive_msg:{id}`）；`GET /api/mail/messages/{id}` 只读，不改变归档状态或创建任务；
     - `POST /api/mail/messages/{id}/sync-body` 只负责入队并返回 HTTP 202、`message_id` 与 `job_id`；请求进程不执行 MIME 拉取。Worker 完成后更新 `MessageArchiveState` 并保存正文/附件，详情 API 返回 `archive_state` 与脱敏错误是否存在的布尔值；带目标 `message_id` 的 `archive.progress` / `archive.paused_quota` SSE 事件使阅读器刷新状态；
     - 网络拉取失败写入 `MessageArchiveState.last_error`，MIME 解析失败写入 `MessageBody.parse_error`，两类错误在详情与阅读器中保持区分。阅读器呈现排队、处理中、完成、失败或配额暂停状态，失败时允许重新提交任务。
-2. **Worker 任务调度优先级治理与防饥饿**：
+2. **Worker 任务调度优先级治理与并发执行器 (t063)**：
     - 针对文件夹定时空转轮询导致的归档饥饿，调整任务优先级分层：按需归档任务为 **10**，出站写回操作为 **40**，初次目录扫描为 **50**，后台批量正文归档续批为 **60**，文件夹定时空转增量轮询为 **75**，定期对账任务为 **80**；
+    - 执行器由原单线程串行执行改为大小等于 `total_slots` 的并发执行池，彻底消除单账号慢网络长任务堵死全队列的队头阻塞缺陷；
+    - 严格匹配连接槽 8/6 规则：后台批量归档任务（`archive_mime_batch` 无 `message_id`）最多同时占用 `total_slots - background_start_slot` 个执行位，剩余执行位永久为前台即时任务（按需即时归档、写回、元数据扫描）保留；
+    - 租约任务认领期排他：同账号在途执行租约类任务（`sync_account_folders`、`sync_folder_metadata`、`sync_folder_delta`、`reconcile_folder`、`remote_operation_push`）时，该账号其他租约任务跳过认领，绝不引发同账号内部 `lease_busy` 自锁或争抢；不同账号并行执行；同账号非租约归档任务可与租约任务安全并行。
     - 定时增量空转轮询增加去重键（`delta:{account_id}:{folder_id}`），防止单个文件夹在短时间内重复入队堆积，彻底解除增量轮询对后台批量正文归档的压制。
 
 ## 供应商账户配置与 Microsoft OAuth 授权

@@ -240,6 +240,10 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
     # archive jobs), propagated into provider construction (design §7).
     traffic_class = traffic_class_for_job(job.job_type, payload=payload)
 
+    # Derive execution_owner (t063 AC-006): unique per execution so concurrent tasks
+    # in the same worker process do not collide or invalidate each other's lease/claims.
+    execution_owner = f"{worker_id}:{job.id}"
+
     try:
         if job.job_type in (
             JobType.SYNC_ACCOUNT_FOLDERS.value,
@@ -267,7 +271,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             session.commit()
             result = sync_account_folders(
                 account_id,
-                worker_id=worker_id,
+                worker_id=execution_owner,
                 store=get_credential_store(),
                 traffic_class=traffic_class,
                 full=bool(payload.get("full")),
@@ -294,7 +298,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             result = sync_folder_metadata(
                 account_id,
                 folder_id,
-                worker_id=worker_id,
+                worker_id=execution_owner,
                 store=get_credential_store(),
                 traffic_class=traffic_class,
                 full=bool(payload.get("full")),
@@ -311,7 +315,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.reconcile import reconcile_folder
 
             session.commit()
-            result = reconcile_folder(account_id, folder_id, worker_id=worker_id, store=get_credential_store(), traffic_class=traffic_class)
+            result = reconcile_folder(account_id, folder_id, worker_id=execution_owner, store=get_credential_store(), traffic_class=traffic_class)
             log.info("reconcile_folder %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
@@ -321,7 +325,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             from mail_core.sync.remote_push import push_remote_operations
 
             session.commit()
-            result = push_remote_operations(account_id, worker_id=worker_id, store=get_credential_store(), traffic_class=traffic_class)
+            result = push_remote_operations(account_id, worker_id=execution_owner, store=get_credential_store(), traffic_class=traffic_class)
             log.info("remote_operation_push %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
 
@@ -331,7 +335,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             session.commit()
             result = run_archive_batch(
                 account_id=account_id,
-                worker_id=worker_id,
+                worker_id=execution_owner,
                 store=get_credential_store(),
                 payload=payload,
                 traffic_class=traffic_class,
@@ -359,7 +363,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
             result = sync_folder_delta(
                 account_id,
                 folder_id,
-                worker_id=worker_id,
+                worker_id=execution_owner,
                 store=get_credential_store(),
                 traffic_class=traffic_class,
                 poll_round=int(payload.get("poll_round") or 0),
