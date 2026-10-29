@@ -19,6 +19,7 @@ log = logging.getLogger("mail_core.worker")
 
 _stop = False
 _stop_event = threading.Event()
+_wake_event = threading.Event()
 CLAIM_HEARTBEAT_MAX_INTERVAL_S = 60.0
 
 
@@ -59,17 +60,26 @@ def _handle_stop(signum: int, _frame: object) -> None:
     log.info("received signal %s; stopping", signum)
     _stop = True
     _stop_event.set()
+    _wake_event.set()
+
+
+def wake() -> None:
+    """Wake the worker loop immediately from idle sleep."""
+    _wake_event.set()
 
 
 def request_stop() -> None:
     global _stop
     _stop = True
     _stop_event.set()
+    _wake_event.set()
 
 
 def _wait_for_next_poll(timeout_s: float) -> bool:
-    """Interruptible idle wait (A275): returns True as soon as stop is set."""
-    return _stop_event.wait(timeout_s)
+    """Interruptible idle wait: returns True as soon as stop is set."""
+    _wake_event.wait(timeout_s)
+    _wake_event.clear()
+    return _stop or _stop_event.is_set()
 
 
 def _reclaim_once() -> int:
@@ -480,6 +490,7 @@ def run(poll_interval_s: float | None = None) -> None:
     global _stop
     _stop = False
     _stop_event.clear()
+    _wake_event.clear()
     from mail_core.blobs.crypto import load_keyring_from_env
 
     # Fail fast: worker must not process jobs without blob keys.
@@ -510,6 +521,16 @@ def run(poll_interval_s: float | None = None) -> None:
     Session = get_session_factory()
     heartbeat_loop = WorkerHeartbeatLoop(worker_id, Session, interval_s=heartbeat_interval)
     heartbeat_loop.start()
+
+    job_listener = None
+    try:
+        from mail_core.worker.wake import JobWakeListener
+
+        job_listener = JobWakeListener(wake)
+        job_listener.start()
+        log.info("job wake listener started")
+    except Exception:
+        log.exception("job wake listener failed to start; polling remains authoritative")
 
     # t061: IDLE watcher runs inside the worker process; a watcher
     # failure must never take the worker down (polling remains the
@@ -564,6 +585,11 @@ def run(poll_interval_s: float | None = None) -> None:
             if sleep_s:
                 _wait_for_next_poll(sleep_s)
     finally:
+        if job_listener is not None:
+            try:
+                job_listener.stop(timeout=5.0)
+            except Exception:
+                log.exception("job wake listener stop failed")
         if idle_manager is not None:
             try:
                 idle_manager.stop()

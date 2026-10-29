@@ -149,12 +149,11 @@ def test_mark_read_recomputes_all_locations_and_is_idempotent():
         mid, fid1, fid2, aid = msg.id, f1.id, f2.id, acc.id
 
     with Session() as session:
-        with patch("mail_core.mail.application.mutations.try_notify_outbox") as notify:
-            r1 = set_message_read(session, mid, is_read=True)
-            r2 = set_message_read(session, mid, is_read=True)  # same idempotency key
-            session.commit()
-            assert r1.operation_id == r2.operation_id
-            notify.assert_called()
+        # t062: outbox NOTIFY is emitted universally on session commit; manual try_notify_outbox removed
+        r1 = set_message_read(session, mid, is_read=True)
+        r2 = set_message_read(session, mid, is_read=True)  # same idempotency key
+        session.commit()
+        assert r1.operation_id == r2.operation_id
 
         stats1 = session.get(FolderStats, fid1)
         stats2 = session.get(FolderStats, fid2)

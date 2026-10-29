@@ -1,0 +1,41 @@
+{
+    "tid": "t062",
+    "attempt": 1,
+    "execution_id": "c92590a1102744e3be3ddb58c2f2186c",
+    "status": "done",
+    "branch": "t062_outbox_and_job_notify_wake",
+    "base_sha": "9bbe0991a56575ce32645bfea41a4f8777c59f1a",
+    "tests": "pytest .repo_template/tests -q -m contract: 189 passed. Backend targeted tests: 9 passed. Desktop npm test passed. Frontend tests and build passed.",
+    "blackbox": "npm --prefix src/frontend run test:e2e: 18 passed.",
+    "review": "Code and test review PASS in Round 1; review scope 3e72bde6e8fdf0bf; zero findings.",
+    "ac_evidence": {
+        "AC-001": [
+            "tests/mail_core/test_t062_outbox_and_job_notify_wake.py::test_ac001_archive_progress_sse_latency_under_2_seconds"
+        ],
+        "AC-002": [
+            "tests/mail_core/test_t062_outbox_and_job_notify_wake.py::test_ac002_ac003_outbox_notify_commit_single_and_rollback",
+            "tests/mail_core/test_t062_outbox_and_job_notify_wake.py::test_ac002_all_seven_paths_emit_notify_without_manual_call"
+        ],
+        "AC-003": [
+            "tests/mail_core/test_t062_outbox_and_job_notify_wake.py::test_ac002_ac003_outbox_notify_commit_single_and_rollback"
+        ],
+        "AC-004": [
+            "tests/mail_core/test_t062_outbox_and_job_notify_wake.py::test_ac004_worker_idle_backoff_wake_within_1_second",
+            "tests/mail_core/test_t062_outbox_and_job_notify_wake.py::test_ac004_worker_claims_enqueued_job_within_1_second"
+        ],
+        "AC-005": [
+            "tests/mail_core/test_t062_outbox_and_job_notify_wake.py::test_ac004_ac005_job_notify_immediate_vs_future_and_dedupe"
+        ],
+        "AC-006": [
+            "tests/mail_core/test_t062_outbox_and_job_notify_wake.py::test_ac006_job_wake_listener_reconnect"
+        ],
+        "AC-007": [
+            "tests/mail_core/test_t062_outbox_and_job_notify_wake.py::test_ac007_notify_failure_does_not_abort_transaction"
+        ],
+        "AC-008": [
+            "tests/mail_core/test_t062_outbox_and_job_notify_wake.py::test_ac008_non_postgresql_dialect_noop"
+        ]
+    },
+    "pending": [],
+    "findings": []
+}

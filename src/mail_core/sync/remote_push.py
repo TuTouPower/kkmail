@@ -255,7 +255,6 @@ def _persist_move_remote_state(
                 payload={"folder_id": str(folder_id)},
             )
         )
-    try_notify_outbox(session)
     return True
 
 
