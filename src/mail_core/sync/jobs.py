@@ -11,11 +11,19 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from mail_core.mail.domain.enums import JobStatus
+from mail_core.mail.domain.enums import JobStatus, JobType
 from mail_core.mail.storage.models import SyncRequestTargetJob, WorkerJob
 
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RECLAIM_LIMIT = 100
+
+LEASE_JOB_TYPES: frozenset[str] = frozenset({
+    JobType.SYNC_ACCOUNT_FOLDERS.value,
+    JobType.SYNC_FOLDER_METADATA.value,
+    JobType.SYNC_FOLDER_DELTA.value,
+    JobType.RECONCILE_FOLDER.value,
+    JobType.REMOTE_OPERATION_PUSH.value,
+})
 
 
 class JobOwnershipError(RuntimeError):
@@ -214,34 +222,78 @@ def claim_jobs(
     job_types: Sequence[str] | None = None,
     account_id: uuid.UUID | None = None,
     now: datetime | None = None,
+    exclude_background: bool = False,
+    exclude_busy_lease_accounts: bool = True,
 ) -> list[WorkerJob]:
     """Claim up to `limit` pending jobs. Must be called inside a short transaction."""
+    from sqlalchemy import func, or_
+
     now = now or datetime.now(timezone.utc)
     stmt = (
         select(WorkerJob)
         .where(WorkerJob.status == JobStatus.PENDING.value)
         .where(WorkerJob.run_after <= now)
-        .order_by(WorkerJob.priority.asc(), WorkerJob.created_at.asc())
-        .with_for_update(skip_locked=True)
-        .limit(limit)
     )
     if job_types:
         stmt = stmt.where(WorkerJob.job_type.in_(list(job_types)))
     if account_id is not None:
         stmt = stmt.where(WorkerJob.account_id == account_id)
+
+    if exclude_background:
+        bind = session.get_bind()
+        if bind is not None and bind.dialect.name == "postgresql":
+            has_mid = WorkerJob.payload.has_key("message_id")
+        else:
+            has_mid = func.json_extract(WorkerJob.payload, "$.message_id").is_not(None)
+        stmt = stmt.where(
+            or_(
+                WorkerJob.job_type != JobType.ARCHIVE_MIME_BATCH.value,
+                has_mid,
+            )
+        )
+
+    if exclude_busy_lease_accounts:
+        active_lease_accounts = (
+            select(WorkerJob.account_id)
+            .where(WorkerJob.status == JobStatus.CLAIMED.value)
+            .where(WorkerJob.job_type.in_(list(LEASE_JOB_TYPES)))
+            .where(WorkerJob.account_id.is_not(None))
+        )
+        stmt = stmt.where(
+            or_(
+                WorkerJob.job_type.not_in(list(LEASE_JOB_TYPES)),
+                WorkerJob.account_id.is_(None),
+                WorkerJob.account_id.not_in(active_lease_accounts),
+            )
+        )
+
+    stmt = (
+        stmt.order_by(WorkerJob.priority.asc(), WorkerJob.created_at.asc())
+        .with_for_update(skip_locked=True)
+        .limit(limit)
+    )
     rows = list(session.scalars(stmt).all())
+    claimed_rows: list[WorkerJob] = []
+    seen_lease_accounts: set[uuid.UUID] = set()
+
     for job in rows:
+        if exclude_busy_lease_accounts and job.job_type in LEASE_JOB_TYPES and job.account_id is not None:
+            if job.account_id in seen_lease_accounts:
+                continue
+            seen_lease_accounts.add(job.account_id)
         job.status = JobStatus.CLAIMED.value
         job.locked_by = worker_id
         job.locked_at = now
         job.attempts = int(job.attempts) + 1
+        claimed_rows.append(job)
+
     session.flush()
-    if rows:
+    if claimed_rows:
         # Sync-request bindings observing these executions become running.
         from mail_core.sync.execution import mark_bindings_running
 
-        mark_bindings_running(session, rows)
-    return rows
+        mark_bindings_running(session, claimed_rows)
+    return claimed_rows
 
 
 def complete_job(

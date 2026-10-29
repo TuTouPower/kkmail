@@ -1,6 +1,6 @@
 from mail_core.providers.http import ProviderHttpError, RateLimitedError
 from mail_core.security.redact import redact, safe_error
-from mail_core.worker.main import CLAIM_BATCH, next_poll_delay
+from mail_core.worker.main import next_poll_delay
 
 
 def test_redacts_tokens_secrets_and_dsn():
@@ -36,7 +36,8 @@ def test_rate_limited_error_summary_and_truncation():
 
 
 def test_poll_delay_backoff():
-    assert next_poll_delay(CLAIM_BATCH, 2.0, base=2.0, max_idle=10.0, claimed=CLAIM_BATCH) == 2.0
+    # t063: claim_batch removed; poll delay is based on handled or claimed count
+    assert next_poll_delay(5, 2.0, base=2.0, max_idle=10.0, claimed=5) == 2.0
     assert next_poll_delay(1, 8.0, base=2.0, max_idle=10.0) == 2.0
     assert next_poll_delay(0, 8.0, base=2.0, max_idle=10.0, claimed=3) == 2.0
     d = 2.0

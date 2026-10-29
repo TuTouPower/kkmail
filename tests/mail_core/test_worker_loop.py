@@ -156,7 +156,7 @@ def test_run_reclaims_on_a_separate_time_cadence(monkeypatch):
         ticks += 1
         if ticks == 4:
             worker_main.request_stop()
-        return worker_main.TickResult(claimed=worker_main.CLAIM_BATCH, handled=worker_main.CLAIM_BATCH)
+        return worker_main.TickResult(claimed=1, handled=1)
 
     monkeypatch.setattr(worker_main, "_tick", tick)
     thread = threading.Thread(target=worker_main.run, kwargs={"poll_interval_s": 0.01}, daemon=True)

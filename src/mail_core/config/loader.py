@@ -88,7 +88,6 @@ def load_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
         worker_poll_s=_parse_float(source.get("MAIL_CORE_WORKER_POLL_S"), 2.0, "worker_poll_s"),
         worker_max_idle_s=_parse_float(source.get("MAIL_CORE_WORKER_MAX_IDLE_S"), 10.0, "worker_max_idle_s"),
         worker_heartbeat_s=_parse_float(source.get("MAIL_CORE_WORKER_HEARTBEAT_S"), 15.0, "worker_heartbeat_s"),
-        worker_claim_batch=_parse_int(source.get("MAIL_CORE_CLAIM_BATCH"), 5, "worker_claim_batch"),
         worker_reclaim_interval_s=_parse_float(
             source.get("MAIL_CORE_RECLAIM_INTERVAL_S") or source.get("MAIL_CORE_RECLAIM_STALE_SECONDS"),
             60.0,
