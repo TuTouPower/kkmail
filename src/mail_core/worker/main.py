@@ -416,7 +416,7 @@ def _execute_single_job(
             if job is None or job.status != JobStatus.CLAIMED.value or job.locked_by != worker_id:
                 return False
             try:
-                ok = handle_job(session, job, worker_id=worker_id, traffic_class=traffic_class)
+                ok = handle_job(session, job, worker_id=worker_id)
                 if session.in_transaction():
                     session.commit()
             except Exception as exc:
