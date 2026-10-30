@@ -28,6 +28,7 @@ from mail_core.providers.base import (
     RemoteMessageMeta,
     RemoteOperationResult,
 )
+from mail_core.providers.connection_slots import is_capacity_error
 from mail_core.providers.http import CursorInvalidError, ProviderHttpError, RateLimitedError
 from mail_core.providers.parsing.graph_delta import parse_graph_delta, parse_graph_metadata_page
 
@@ -413,7 +414,7 @@ class GraphProvider:
                         else:
                             results[op_id] = RemoteOperationResult(
                                 success=False,
-                                error=f"Graph subrequest failed ({status})",
+                                error=f"HTTP {status} Graph subrequest failed",
                             )
                     else:
                         results[op_id] = RemoteOperationResult(
@@ -421,6 +422,8 @@ class GraphProvider:
                             error="Graph subrequest response omitted by batch",
                         )
             except Exception as exc:
+                if isinstance(exc, (RateLimitedError, ProviderHttpError, TimeoutError, ConnectionError, OSError)) or is_capacity_error(exc):
+                    raise
                 from mail_core.security.redact import safe_error
 
                 for op_id, _, _, _ in chunk:

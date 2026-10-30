@@ -17,6 +17,7 @@ from mail_core.mail.storage.models import Account, RemoteOperation, WorkerJob
 from mail_core.providers.base import RemoteOperationItem, RemoteOperationResult
 from mail_core.providers.connection_slots import TrafficClass
 from mail_core.providers.graph import GraphProvider
+from mail_core.providers.http import ProviderHttpError
 from mail_core.providers.imap import ImapProvider, format_imap_remote_id
 from mail_core.providers.remote_writeback import compress_uids, compress_uids_chunked
 from mail_core.mail.application.remote_ops import enqueue_remote_operation
@@ -570,3 +571,43 @@ def test_rate_limit_and_transient_failure_schedules_delayed_followup_job():
         assert re_job is not None
         assert re_job.run_after is not None
         assert re_job.run_after >= now_utc + timedelta(seconds=40)
+
+
+def test_graph_batch_error_re_raises_transient_and_preserves_subrequest_5xx():
+    """A04: Graph batch re-raises transient errors and formats subrequest 5xx for classification."""
+    provider = GraphProvider("acc@graph.test", transport=MagicMock())
+
+    # 1. Batch level 503 re-raises ProviderHttpError
+    def fail_batch_503(method, path, body):
+        raise ProviderHttpError("Service Unavailable", status=503)
+
+    provider._call = fail_batch_503
+    ops = [
+        RemoteOperationItem(
+            op_id=uuid.uuid4(),
+            op_type="mark_read",
+            desired_state={"remote_id": "m1", "is_read": True},
+        )
+    ]
+    with pytest.raises(ProviderHttpError) as exc_info:
+        provider.apply_remote_operations(ops)
+    assert exc_info.value.status == 503
+
+    # 2. Subrequest 503 is formatted with "HTTP 503" prefix for classifier recognition
+    def subrequest_503(method, path, body):
+        return {
+            "responses": [
+                {
+                    "id": str(ops[0].op_id),
+                    "status": 503,
+                    "headers": {},
+                    "body": {"error": "Server error"},
+                }
+            ]
+        }
+
+    provider._call = subrequest_503
+    results = dict(provider.apply_remote_operations(ops))
+    assert results[ops[0].op_id].success is False
+    assert results[ops[0].op_id].error.startswith("HTTP 503")
+
