@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Mail, MailOpen, Trash2, Flag, ArrowLeft, RefreshCw } from 'lucide-react'
+import { Mail, MailOpen, Trash2, Flag, ArrowLeft, RefreshCw, Sun, Moon } from 'lucide-react'
 import { findCachedMail, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash, postMailCoreSyncMessageBody } from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
@@ -73,11 +73,13 @@ function useSelectedMail(selectedKey: string | null): MailItem | undefined {
 const MessageReader = memo(function MessageReader() {
   const themePref = useMailStore((s) => s.theme)
   const resolvedTheme = resolveTheme(themePref)
+  const mailBodyDarkModePref = useMailStore((s) => s.mailBodyDarkMode ?? 'smart')
   const selectedKey = useMailStore((s) => s.selectedKey)
   const setSelectedKey = useMailStore((s) => s.setSelectedKey)
   const setMobileView = useMailStore((s) => s.setMobileView)
   const [actionStatus, setActionStatus] = useState('')
   const [allowedRemoteImagesKey, setAllowedRemoteImagesKey] = useState<string | null>(null)
+  const [viewModeOverride, setViewModeOverride] = useState<{ key: string; mode: 'smart' | 'original' } | null>(null)
   const loadRemoteImages = Boolean(selectedKey && allowedRemoteImagesKey === selectedKey)
 
   // Re-render when the selected mail's cached fields change (optimistic
@@ -217,6 +219,15 @@ const MessageReader = memo(function MessageReader() {
   // as text and must not pay for — or be altered by — that pipeline.
   const preparedMailHtml = useMemo(() => (body && html ? prepareMailHtml(body) : null), [body, html])
   const mailThemeClass = html ? preparedMailHtml?.classification ?? 'plain' : 'plain'
+
+  const effectiveBodyDarkMode = (currentMailKey && viewModeOverride?.key === currentMailKey)
+    ? viewModeOverride.mode
+    : mailBodyDarkModePref
+
+  const isLightMail = mailThemeClass === 'light'
+  const isDarkInverted = resolvedTheme === 'dark' && isLightMail && effectiveBodyDarkMode === 'smart'
+  const showDarkToggle = resolvedTheme === 'dark' && Boolean(html) && isLightMail
+
   const mailSrcdoc = useMemo(
     () => (body && preparedMailHtml
       ? buildMailSrcdoc(body, {
@@ -224,9 +235,10 @@ const MessageReader = memo(function MessageReader() {
           theme: resolvedTheme,
           classification: preparedMailHtml.classification,
           preparedHtml: preparedMailHtml,
+          darkModeInvert: isDarkInverted,
         })
       : ''),
-    [body, loadRemoteImages, preparedMailHtml, resolvedTheme],
+    [body, loadRemoteImages, preparedMailHtml, resolvedTheme, isDarkInverted],
   )
 
   if (!selected) {
@@ -283,6 +295,21 @@ const MessageReader = memo(function MessageReader() {
         <button className="reader-action mobile-only" title="返回列表" aria-label="返回列表" onClick={() => setMobileView('list')}><ArrowLeft size={18} /></button>
         <div className="reader-location"><CopyAddress address={selected.accountEmail}>{selected.accountEmail}</CopyAddress></div>
         <div className="reader-toolbar-actions">
+          {showDarkToggle && (
+            <button
+              data-ui="MR11"
+              className="reader-action"
+              title={isDarkInverted ? '查看原样视图' : '切换至深色视图'}
+              aria-label="切换原样/深色视图"
+              onClick={() => {
+                if (!currentMailKey) return
+                const nextMode = isDarkInverted ? 'original' : 'smart'
+                setViewModeOverride({ key: currentMailKey, mode: nextMode })
+              }}
+            >
+              {isDarkInverted ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+          )}
           <button
             data-ui="MR02"
             className="reader-action"
@@ -471,7 +498,7 @@ const MessageReader = memo(function MessageReader() {
                   </button>
                 </div>
               )}
-              {resolvedTheme === 'dark' && mailThemeClass === 'light' ? (
+              {resolvedTheme === 'dark' && mailThemeClass === 'light' && !isDarkInverted ? (
                 <div
                   className="mail-paper-card"
                   style={{
@@ -483,7 +510,7 @@ const MessageReader = memo(function MessageReader() {
                   }}
                 >
                   <iframe
-                    key={`${currentMailKey}-${resolvedTheme}`}
+                    key={`${currentMailKey}-${resolvedTheme}-original`}
                     className="email-body email-body-frame"
                     title="邮件正文"
                     sandbox={MAIL_IFRAME_SANDBOX}
@@ -494,7 +521,7 @@ const MessageReader = memo(function MessageReader() {
                 </div>
               ) : (
                 <iframe
-                  key={`${currentMailKey}-${resolvedTheme}`}
+                  key={`${currentMailKey}-${resolvedTheme}-${isDarkInverted ? 'inverted' : 'normal'}`}
                   className="email-body email-body-frame"
                   title="邮件正文"
                   sandbox={MAIL_IFRAME_SANDBOX}

@@ -112,6 +112,31 @@ describe('<SettingsModal />', () => {
     await waitFor(() => expect(container.textContent).toContain('设置已保存'))
   })
 
+  it('configures mail body dark mode preference between smart dark and original paper (AC-006)', async () => {
+    useMailStore.setState({ theme: 'dark', mailBodyDarkMode: 'smart' })
+    const { container } = await render(<SettingsPage />)
+    const genBtn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('通用')) || null
+    await click(genBtn)
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('邮件正文深色渲染')
+    })
+    const smartBtn = [...container.querySelectorAll('button')].find((b) => b.textContent === '智能深色') as HTMLButtonElement
+    const originalBtn = [...container.querySelectorAll('button')].find((b) => b.textContent === '保留原色纸张') as HTMLButtonElement
+    expect(smartBtn).not.toBeNull()
+    expect(originalBtn).not.toBeNull()
+    expect(smartBtn.getAttribute('aria-pressed')).toBe('true')
+    expect(originalBtn.getAttribute('aria-pressed')).toBe('false')
+
+    await click(originalBtn)
+    expect(useMailStore.getState().mailBodyDarkMode).toBe('original')
+    expect(originalBtn.getAttribute('aria-pressed')).toBe('true')
+    expect(smartBtn.getAttribute('aria-pressed')).toBe('false')
+
+    await click(smartBtn)
+    expect(useMailStore.getState().mailBodyDarkMode).toBe('smart')
+  })
+
   it('saves a timezone when the fetch timeout is unset', async () => {
     settingsResponse = { app_timezone: 'Asia/Shanghai' }
     const { container } = await render(<SettingsPage />)

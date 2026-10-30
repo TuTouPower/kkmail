@@ -130,6 +130,39 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(darkDoc).toContain('background:#222729')
   })
 
+  it('applies smart inversion filter to light html in dark mode and restores media colors (AC-001, AC-002)', () => {
+    const lightHtml = '<div style="background-color: #ffffff; color: #333333;"><p>Newsletter</p><img src="test.png"></div>'
+    const darkDoc = buildMailSrcdoc(lightHtml, { theme: 'dark' })
+    expect(darkDoc).toContain('html{filter:invert(100%) hue-rotate(180deg);background:#ffffff}')
+    expect(darkDoc).toContain('img,video,canvas,picture{filter:invert(100%) hue-rotate(180deg) drop-shadow(0 0 1px rgba(255, 255, 255, 0.7))}')
+  })
+
+  it('does not apply inversion filter to plain or dark html in dark mode (AC-003)', () => {
+    const plainHtml = '<p>Simple text</p>'
+    const plainDoc = buildMailSrcdoc(plainHtml, { theme: 'dark' })
+    expect(plainDoc).not.toContain('filter:invert')
+    expect(plainDoc).toContain('background:#222729')
+
+    const darkHtml = '<table bgcolor="#111111" style="color: #eeeeee"><tr><td>Dark promo</td></tr></table>'
+    const darkDoc = buildMailSrcdoc(darkHtml, { theme: 'dark' })
+    expect(darkDoc).not.toContain('filter:invert')
+    expect(darkDoc).toContain('background:#222729')
+  })
+
+  it('respects darkModeInvert: false option to render un-inverted light html in dark mode (AC-004, AC-006)', () => {
+    const lightHtml = '<div style="background-color: #ffffff"><p>Newsletter</p></div>'
+    const doc = buildMailSrcdoc(lightHtml, { theme: 'dark', darkModeInvert: false })
+    expect(doc).not.toContain('filter:invert')
+    expect(doc).toContain('background:#ffffff')
+  })
+
+  it('never applies inversion filter in light mode regardless of classification (AC-005)', () => {
+    const lightHtml = '<div style="background-color: #ffffff"><p>Newsletter</p></div>'
+    const doc = buildMailSrcdoc(lightHtml, { theme: 'light' })
+    expect(doc).not.toContain('filter:invert')
+    expect(doc).toContain('background:#ffffff')
+  })
+
   it('reuses prepared sanitized html and classification when building srcdoc', () => {
     const sanitize = vi.spyOn(DOMPurify, 'sanitize')
     const prepared = prepareMailHtml('<div style="background:#fff"><script>bad()</script>safe</div>')

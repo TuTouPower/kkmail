@@ -38,6 +38,8 @@ export default function SettingsPage({
 } = {}) {
   const theme = useMailStore(s => s.theme)
   const setTheme = useMailStore(s => s.setTheme)
+  const mailBodyDarkMode = useMailStore(s => s.mailBodyDarkMode ?? 'smart')
+  const setMailBodyDarkMode = useMailStore(s => s.setMailBodyDarkMode)
   const accountIconMode = useMailStore(s => s.accountIconMode)
   const setAccountIconMode = useMailStore(s => s.setAccountIconMode)
   const uiReferenceEnabled = useMailStore(s => s.uiReferenceEnabled ?? true)
@@ -515,6 +517,7 @@ export default function SettingsPage({
                 ['light', '亮色', '清爽明亮', Sun], ['dark', '深色', '适合低光环境', Moon], ['system', '跟随系统', '匹配系统外观', Monitor],
               ] as const).map(([value, label, description, Icon]) => <button key={value} type="button" className={`settings-theme-card${theme === value ? ' is-active' : ''}`} aria-pressed={theme === value} aria-label={label} onClick={() => setTheme(value)}><span className={`settings-theme-preview theme-${value}`} aria-hidden="true"><i /><span><b /><b /><b /></span></span><span className="settings-theme-label"><Icon size={15} />{label}{theme === value && <Check size={15} />}</span><small>{description}</small></button>)}</div>
               <div className="settings-control-row"><div><strong>账号图标</strong><small>选择侧栏与账户列表中的标识方式</small></div><div className="settings-segmented" data-ui="ST07">{([['none', '不展示'], ['brand', '品牌图标'], ['initials', '首字母']] as const).map(([mode, label]) => <button type="button" key={mode} aria-pressed={accountIconMode === mode} onClick={() => setAccountIconMode(mode)}>{label}</button>)}</div></div>
+              <div className="settings-control-row"><div><strong>邮件正文深色渲染</strong><small>深色模式下浅色 HTML 邮件的正文展示偏好</small></div><div className="settings-segmented">{([['smart', '智能深色'], ['original', '保留原色纸张']] as const).map(([mode, label]) => <button type="button" key={mode} aria-pressed={mailBodyDarkMode === mode} onClick={() => setMailBodyDarkMode(mode)}>{label}</button>)}</div></div>
             </section>
             <section className="settings-card"><h2>元素序号浮层</h2><p>展示界面元素唯一编号，便于定位与反馈。</p>
               <div className="settings-control-row"><div><strong>启用元素序号浮层</strong><small>是否允许通过快捷键唤出元素序号覆盖层</small></div><button type="button" className={`settings-switch${uiReferenceEnabled ? ' is-active' : ''}`} aria-pressed={uiReferenceEnabled} aria-label="启用元素序号浮层" onClick={() => setUiReferenceEnabled(!uiReferenceEnabled)}><span /></button></div>

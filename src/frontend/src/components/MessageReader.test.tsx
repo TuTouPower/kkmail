@@ -665,8 +665,9 @@ describe('<MessageReader />', () => {
     expect(container.textContent).not.toContain('远程图片已拦截（防追踪）')
   })
 
-  it('renders explicit fixed-light html inside an isolated white paper card in dark mode (AC-003)', async () => {
-    useMailStore.setState({ selectedKey: 'm-4', theme: 'dark' })
+  // t065: 保持此测试覆盖“保留原色纸张”时的白底纸张卡片渲染（AC-004/AC-006）
+  it('renders explicit fixed-light html inside an isolated white paper card in dark mode when original view is selected (AC-004, AC-006)', async () => {
+    useMailStore.setState({ selectedKey: 'm-4', theme: 'dark', mailBodyDarkMode: 'original' })
     const { container } = await render(<MessageReader />)
 
     await waitFor(() => expect(container.querySelector('.mail-paper-card')).not.toBeNull())
@@ -675,12 +676,53 @@ describe('<MessageReader />', () => {
     const iframe = paperCard.querySelector('iframe.email-body-frame') as HTMLIFrameElement
     expect(iframe).not.toBeNull()
     expect(iframe.srcdoc).toContain('background:#ffffff')
+    expect(iframe.srcdoc).not.toContain('filter:invert')
 
     // Switch theme to light: paper card is not used in light mode, background updates
     useMailStore.setState({ theme: 'light' })
     await waitFor(() => expect(container.querySelector('.mail-paper-card')).toBeNull())
     const lightIframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
     expect(lightIframe.srcdoc).toContain('background:#ffffff')
+  })
+
+  it('renders explicit fixed-light html with smart dark inversion and no white paper card by default in dark mode (AC-001, AC-002)', async () => {
+    useMailStore.setState({ selectedKey: 'm-4', theme: 'dark', mailBodyDarkMode: 'smart' })
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => expect(container.querySelector('iframe.email-body-frame')).not.toBeNull())
+    expect(container.querySelector('.mail-paper-card')).toBeNull()
+    const iframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
+    expect(iframe.srcdoc).toContain('html{filter:invert(100%) hue-rotate(180deg);background:#ffffff}')
+  })
+
+  it('toggles between smart dark inversion and original paper card view in dark mode, and hides toggle in light mode (AC-004, AC-005)', async () => {
+    useMailStore.setState({ selectedKey: 'm-4', theme: 'dark', mailBodyDarkMode: 'smart' })
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => expect(container.querySelector('iframe.email-body-frame')).not.toBeNull())
+    // Toggle button should be visible in dark mode for light html mail
+    const toggleBtn = container.querySelector('button[aria-label="切换原样/深色视图"]') as HTMLButtonElement
+    expect(toggleBtn).not.toBeNull()
+    expect(toggleBtn.title).toBe('查看原样视图')
+    expect(container.querySelector('.mail-paper-card')).toBeNull()
+
+    // Click to switch to original paper view
+    await click(toggleBtn)
+    await waitFor(() => expect(container.querySelector('.mail-paper-card')).not.toBeNull())
+    expect(toggleBtn.title).toBe('切换至深色视图')
+    const originalIframe = container.querySelector('.mail-paper-card iframe.email-body-frame') as HTMLIFrameElement
+    expect(originalIframe.srcdoc).not.toContain('filter:invert')
+
+    // Click again to restore smart dark view
+    await click(toggleBtn)
+    await waitFor(() => expect(container.querySelector('.mail-paper-card')).toBeNull())
+    expect(toggleBtn.title).toBe('查看原样视图')
+    const invertedIframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
+    expect(invertedIframe.srcdoc).toContain('filter:invert')
+
+    // Switch to light mode: toggle button must be hidden
+    useMailStore.setState({ theme: 'light' })
+    await waitFor(() => expect(container.querySelector('button[aria-label="切换原样/深色视图"]')).toBeNull())
   })
 
   it('displays clear parse error banner with reason and hides empty placeholder on failed MIME (AC-006)', async () => {

@@ -15,6 +15,8 @@ export type ViewState =
 interface MailUiState {
   theme: 'dark' | 'light' | 'system'
   setTheme: (theme: 'dark' | 'light' | 'system') => void
+  mailBodyDarkMode: 'smart' | 'original'
+  setMailBodyDarkMode: (mode: 'smart' | 'original') => void
   accountIconMode: AccountIconMode
   setAccountIconMode: (mode: AccountIconMode) => void
   sidebarCollapsed: boolean
@@ -82,6 +84,8 @@ export const useMailStore = create<MailUiState>()(
       // two drift apart, the UI flashes from one theme to the other.
       theme: 'system',
       setTheme: (theme) => set({ theme }),
+      mailBodyDarkMode: 'smart',
+      setMailBodyDarkMode: (mode) => set({ mailBodyDarkMode: mode }),
       accountIconMode: 'brand',
       setAccountIconMode: (mode) => set({ accountIconMode: mode }),
       sidebarCollapsed: false,
@@ -145,6 +149,7 @@ export const useMailStore = create<MailUiState>()(
     }),
     { name: 'mail-ui-storage', partialize: (s) => ({
       theme: s.theme,
+      mailBodyDarkMode: s.mailBodyDarkMode,
       sidebarWidth: s.sidebarWidth,
       listWidth: s.listWidth,
       accountIconMode: s.accountIconMode,

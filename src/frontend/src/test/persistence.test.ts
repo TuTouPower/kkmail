@@ -22,6 +22,7 @@ describe('browser preference persistence', () => {
     useMailStore.getState().setSidebarWidth(320)
     useMailStore.getState().setListWidth(480)
     useMailStore.getState().setAccountIconMode('initials')
+    useMailStore.getState().setMailBodyDarkMode('original')
     useMailStore.getState().toggleSidebarSection('allAccounts')
     useMailStore.getState().toggleSidebarGroup('group-1')
     useMailStore.getState().toggleSidebarAccount('account-1')
@@ -29,6 +30,7 @@ describe('browser preference persistence', () => {
     expect(JSON.parse(localStorage.getItem('mail-ui-storage')!)).toEqual({
       state: {
         theme: 'light', sidebarWidth: 320, listWidth: 480, accountIconMode: 'initials',
+        mailBodyDarkMode: 'original',
         sidebarSections: { allAccounts: false, accountList: true },
         expandedSidebarCategories: [],
         expandedSidebarGroups: ['group-1'], expandedSidebarAccounts: ['account-1'],
@@ -41,7 +43,8 @@ describe('browser preference persistence', () => {
     const { useMailStore: reloaded } = await import('../store/mailStore')
     expect(reloaded).not.toBe(useMailStore)
     expect(reloaded.getState()).toMatchObject({
-      theme: 'light', sidebarWidth: 320, listWidth: 480, accountIconMode: 'initials', search: '',
+      theme: 'light', sidebarWidth: 320, listWidth: 480, accountIconMode: 'initials',
+      mailBodyDarkMode: 'original', search: '',
       sidebarSections: { allAccounts: false, accountList: true },
       expandedSidebarGroups: ['group-1'], expandedSidebarAccounts: ['account-1'],
       expandedSidebarCategories: [],

@@ -61,6 +61,7 @@ export const UI_ELEMENT_REGISTRY: Record<string, UiElementMeta> = {
   MR08: { id: 'MR08', region: '邮件详情', description: '正文沙箱容器' },
   MR09: { id: 'MR09', region: '邮件详情', description: '附件列表' },
   MR10: { id: 'MR10', region: '邮件详情', description: '详情空状态' },
+  MR11: { id: 'MR11', region: '邮件详情', description: '正文原样/深色视图切换按钮' },
   'MR-PARSE-ERROR': { id: 'MR-PARSE-ERROR', region: '邮件详情', description: '正文解析错误提示' },
 
   // Settings (ST)
