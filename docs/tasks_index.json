@@ -6,7 +6,7 @@
         {
             "tid": "t066",
             "slug": "remote_images_persist_and_reload",
-            "title": "远程图片按邮件与发件人持久放行并可靠重载",
+            "title": "远程图片放行入库重载、内联图映射与单信深色覆盖修复",
             "status": "backlog",
             "branch": "",
             "worktree": "",
@@ -16,7 +16,7 @@
             "diff_anchor": "",
             "depends_on": "",
             "conflicts_with": "",
-            "note": "来源 p066；单邮件与发件人两类放行均入库持久化，修复放行后 iframe 不重载与刷新丢失",
+            "note": "来源 p066、p067、p068；单邮件与发件人放行持久化入库、正文强制重建、cid 内联图映射及阅读器单信深色覆盖多信隔离",
             "dir": "docs/tasks/t066_remote_images_persist_and_reload"
         }
     ]
