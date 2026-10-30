@@ -1523,8 +1523,10 @@ class ImapProvider:
                         subgroups.setdefault((op_type, target_val), []).append(it)
 
                     for (op_type, target_val), sub_items in subgroups.items():
-                        uid_to_item = {it[3]: it for it in sub_items}
-                        uids = sorted(uid_to_item.keys())
+                        uid_to_items: dict[int, list[tuple[Any, str, dict[str, Any], int, str, int | None, str | None]]] = {}
+                        for it in sub_items:
+                            uid_to_items.setdefault(it[3], []).append(it)
+                        uids = sorted(uid_to_items.keys())
                         chunks = compress_uids_chunked(uids)
 
                         for chunk_str, chunk_uids in chunks:
@@ -1534,7 +1536,8 @@ class ImapProvider:
                                 typ, data = c.uid("STORE", chunk_str, flag_op, r"(\Seen)")
                                 if typ != "OK":
                                     for u in chunk_uids:
-                                        results[uid_to_item[u][0]] = RemoteOperationResult(success=False, error="STORE Seen failed")
+                                        for it in uid_to_items.get(u, []):
+                                            results[it[0]] = RemoteOperationResult(success=False, error="STORE Seen failed")
                                     continue
                                 flags_by_uid = _parse_uids_flags_from_response(data)
                                 missing_uids = [u for u in chunk_uids if u not in flags_by_uid]
@@ -1545,24 +1548,26 @@ class ImapProvider:
                                         if f_typ == "OK":
                                             flags_by_uid.update(_parse_uids_flags_from_response(f_data))
                                 for u in chunk_uids:
-                                    op_id = uid_to_item[u][0]
+                                    associated = uid_to_items.get(u, [])
                                     if u not in flags_by_uid:
-                                        results[op_id] = RemoteOperationResult(
+                                        res = RemoteOperationResult(
                                             success=False,
                                             error=f"UID {u} not found in {folder}",
                                         )
                                     else:
                                         is_read, _ = flags_by_uid[u]
                                         if is_read is want_read:
-                                            results[op_id] = RemoteOperationResult(
+                                            res = RemoteOperationResult(
                                                 success=True,
                                                 remote_state={"is_read": want_read},
                                             )
                                         else:
-                                            results[op_id] = RemoteOperationResult(
+                                            res = RemoteOperationResult(
                                                 success=False,
                                                 error=f"STORE Seen for UID {u} could not be verified via FETCH",
                                             )
+                                    for it in associated:
+                                        results[it[0]] = res
 
                             elif op_type == OP_SET_FLAG:
                                 want_flag = bool(target_val)
@@ -1570,7 +1575,8 @@ class ImapProvider:
                                 typ, data = c.uid("STORE", chunk_str, flag_op, r"(\Flagged)")
                                 if typ != "OK":
                                     for u in chunk_uids:
-                                        results[uid_to_item[u][0]] = RemoteOperationResult(success=False, error="STORE Flagged failed")
+                                        for it in uid_to_items.get(u, []):
+                                            results[it[0]] = RemoteOperationResult(success=False, error="STORE Flagged failed")
                                     continue
                                 flags_by_uid = _parse_uids_flags_from_response(data)
                                 missing_uids = [u for u in chunk_uids if u not in flags_by_uid]
@@ -1581,43 +1587,46 @@ class ImapProvider:
                                         if f_typ == "OK":
                                             flags_by_uid.update(_parse_uids_flags_from_response(f_data))
                                 for u in chunk_uids:
-                                    op_id = uid_to_item[u][0]
+                                    associated = uid_to_items.get(u, [])
                                     if u not in flags_by_uid:
-                                        results[op_id] = RemoteOperationResult(
+                                        res = RemoteOperationResult(
                                             success=False,
                                             error=f"UID {u} not found in {folder}",
                                         )
                                     else:
                                         _, is_flagged = flags_by_uid[u]
                                         if is_flagged is want_flag:
-                                            results[op_id] = RemoteOperationResult(
+                                            res = RemoteOperationResult(
                                                 success=True,
                                                 remote_state={"is_flagged": want_flag},
                                             )
                                         else:
-                                            results[op_id] = RemoteOperationResult(
+                                            res = RemoteOperationResult(
                                                 success=False,
                                                 error=f"STORE Flagged for UID {u} could not be verified via FETCH",
                                             )
+                                    for it in associated:
+                                        results[it[0]] = res
 
                             elif op_type in (OP_MOVE, OP_TRASH):
                                 dest_target = str(target_val)
                                 typ, response_data = c.uid("MOVE", chunk_str, _quote_mailbox(dest_target))
                                 if typ != "OK":
                                     for u in chunk_uids:
-                                        results[uid_to_item[u][0]] = RemoteOperationResult(
-                                            success=False,
-                                            error="IMAP server does not support atomic MOVE/delete",
-                                        )
+                                        for it in uid_to_items.get(u, []):
+                                            results[it[0]] = RemoteOperationResult(
+                                                success=False,
+                                                error="IMAP server does not support atomic MOVE/delete",
+                                            )
                                 else:
                                     copyuid_texts = _extract_copyuid_texts(c, response_data)
                                     states_by_uid = _copyuid_remote_states(copyuid_texts, chunk_uids, dest_target)
                                     for u in chunk_uids:
-                                        op_id = uid_to_item[u][0]
-                                        results[op_id] = RemoteOperationResult(
-                                            success=True,
-                                            remote_state=states_by_uid[u],
-                                        )
+                                        for it in uid_to_items.get(u, []):
+                                            results[it[0]] = RemoteOperationResult(
+                                                success=True,
+                                                remote_state=states_by_uid[u],
+                                            )
                 except Exception as exc:
                     from mail_core.security.redact import safe_error
 

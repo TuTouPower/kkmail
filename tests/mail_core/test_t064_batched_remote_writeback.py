@@ -635,3 +635,29 @@ def test_graph_batch_error_re_raises_transient_and_preserves_subrequest_5xx():
     assert results[ops[0].op_id].success is False
     assert results[ops[0].op_id].error.startswith("HTTP 503")
 
+
+def test_imap_duplicate_uid_in_same_subgroup_all_operations_receive_results():
+    """A06: Multiple operations for the same UID in a batch both receive results, neither unhandled."""
+    client = RecordingImapClient(uidvalidity=100)
+    client.existing_uids.update({42})
+
+    provider = ImapProvider("acc@test.com", "host", 993, "acc@test.com", "pass")
+    provider._connect_with_permit = lambda *a, **k: (client, None)
+    provider._close_client = lambda c, p: None
+
+    op1_id = uuid.uuid4()
+    op2_id = uuid.uuid4()
+    # Two separate operations for the same UID (42) and folder (INBOX), both mark_read True
+    ops = [
+        RemoteOperationItem(op_id=op1_id, op_type="mark_read", desired_state={"remote_id": format_imap_remote_id("INBOX", 100, 42), "is_read": True}),
+        RemoteOperationItem(op_id=op2_id, op_type="mark_read", desired_state={"remote_id": format_imap_remote_id("INBOX", 100, 42), "is_read": True}),
+    ]
+
+    results = dict(provider.apply_remote_operations(ops))
+    assert results[op1_id].success is True
+    assert results[op1_id].remote_state == {"is_read": True}
+
+    assert results[op2_id].success is True
+    assert results[op2_id].remote_state == {"is_read": True}
+
+
