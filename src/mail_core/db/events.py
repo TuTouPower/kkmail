@@ -45,30 +45,47 @@ def _on_tx_create(session: Session, transaction: SessionTransaction) -> None:
         _get_wake_stack(session).append({"outbox": False, "jobs": False})
 
 
+def _on_soft_rollback(session: Session, transaction: SessionTransaction) -> None:
+    if session.info.get("_in_commit_notify"):
+        return
+    rolled = session.info.setdefault("_rolled_back_txs", set())
+    rolled.add(id(transaction))
+    stack = session.info.get("_wake_stack")
+    if stack and len(stack) > 1:
+        stack.pop()
+
+
 def _on_rollback(session: Session) -> None:
     if session.info.get("_in_commit_notify"):
         return
-    stack = session.info.get("_wake_stack")
-    if stack:
-        if session.get_nested_transaction() is not None and len(stack) > 1:
+    if session.get_nested_transaction() is None:
+        session.info.pop("_wake_stack", None)
+        session.info.pop("_rolled_back_txs", None)
+    else:
+        stack = session.info.get("_wake_stack")
+        if stack and len(stack) > 1:
             stack.pop()
-        elif session.get_transaction() is None:
-            session.info.pop("_wake_stack", None)
 
 
 def _on_tx_end(session: Session, transaction: SessionTransaction) -> None:
     if session.info.get("_in_commit_notify"):
         return
+    rolled = session.info.get("_rolled_back_txs", set())
+    is_rolled_back = id(transaction) in rolled
+    if is_rolled_back:
+        rolled.discard(id(transaction))
     stack = session.info.get("_wake_stack")
     if not stack:
         return
     if transaction.nested:
         if len(stack) > 1:
             child = stack.pop()
-            stack[-1]["outbox"] |= child["outbox"]
-            stack[-1]["jobs"] |= child["jobs"]
+            if not is_rolled_back:
+                stack[-1]["outbox"] |= child["outbox"]
+                stack[-1]["jobs"] |= child["jobs"]
     elif transaction.parent is None:
         session.info.pop("_wake_stack", None)
+        session.info.pop("_rolled_back_txs", None)
 
 
 def _on_before_flush(session: Session, flush_context: Any, instances: Any) -> None:
@@ -139,6 +156,7 @@ def install_session_wake_hooks(session_cls_or_factory: Any = Session) -> None:
     if _installed:
         return
     event.listen(session_cls_or_factory, "after_transaction_create", _on_tx_create)
+    event.listen(session_cls_or_factory, "after_soft_rollback", _on_soft_rollback)
     event.listen(session_cls_or_factory, "after_rollback", _on_rollback)
     event.listen(session_cls_or_factory, "after_transaction_end", _on_tx_end)
     event.listen(session_cls_or_factory, "before_flush", _on_before_flush)

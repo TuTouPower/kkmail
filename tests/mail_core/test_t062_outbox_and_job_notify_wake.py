@@ -378,3 +378,21 @@ def test_job_wake_listener_exponential_backoff_on_failures():
     # Failures accumulated
     assert listener._consecutive_failures >= 1
     listener.stop()
+
+
+def test_nested_transaction_rollback_does_not_emit_notify():
+    """A12: Rolled-back nested savepoint does not leak wake flags to outer transaction."""
+    from mail_core.db.events import _get_wake_stack
+    Session = get_session_factory()
+    with Session() as session:
+        with patch("mail_core.db.events.notify_jobs") as mock_notify:
+            with session.begin():
+                try:
+                    with session.begin_nested():
+                        _get_wake_stack(session)[-1]["jobs"] = True
+                        raise ValueError("simulated savepoint error")
+                except ValueError:
+                    pass
+                # Outer commit happens now
+            mock_notify.assert_not_called()
+
