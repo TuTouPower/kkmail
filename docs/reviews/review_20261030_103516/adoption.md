@@ -307,3 +307,25 @@ ______________________________________________________________________
     - 根因 3（IMAP 批量合并）已由 t064 批量写回管道解决。
 - **修复方案**：
     更新 `p063` 正文标注对应 task 的解决记录，执行 `.repo_template/scripts/pending.py archive` 迁入 `docs/archive/pending/`。
+
+______________________________________________________________________
+
+## 实施落地总览与提交记录 (Execution Log)
+
+|条目编号|等级|修复说明|关联 Commit|
+|---|---|---|---|
+|**A03**|Blocker|移除 `test_config.py` 对已废弃属性 `cfg.worker_claim_batch` 的断言，CI 门禁恢复绿线|`78ef8935`|
+|**A01**|Blocker|`remote_push.py` 计算未到期任务的最早 `next_attempt_at`，并在空跑前补充调度 `run_after` 延迟重试任务|`23dc87a9`|
+|**A02**|Blocker|`imap.py` 在执行批量 MOVE 之后预先读取并解析全部 COPYUID 响应行映射为 UID 字典，防止后续 UID 取空|`db1180bb`|
+|**A04**|High|`graph.py` 将批次级瞬时错误与容量异常重新抛出，同时规范子请求 5xx 错误前缀供识别|`48c144c7`|
+|**A05**|High|`imap.py` 遍历检查每个操作的 expected UIDVALIDITY，仅隔离失效操作，避免混有新旧 UID 时全批误杀或错发|`18afef0d`|
+|**A06**|High|`imap.py` 将 `uid_to_item` 重构为一对多字典 `uid_to_items`，遍历同 UID 所有关联操作同步写入结果|`9f731fd4`|
+|**A07**|Medium|`worker/main.py` 维护 `schedule_thread` 并增加单飞保护，上轮巡检存活时跳过本次启动|`236e45c1`|
+|**A08**|Medium|`graph.py` 彻底剔除生产路径中的 mock 兼容重放回退，测试端统一支持标准 `$batch` 报文|`8a1e061e`|
+|**A09**|Medium|`remote_push.py` 在批量网络调用每 100 条分块之间调用 `heartbeat_lease` 续期租约|`14a1d1e8`|
+|**A10**|Medium|`mailBody.ts` 预补偿暗黑阴影为暗色并在滤镜选择器中剔除 `<picture>`，防止图片颜色三次反转|`2874492b`|
+|**A11**|Medium|`wake.py` JobWakeListener 引入指数退避状态机（1s~30s）并在成功时清零，校正架构文档表述|`81f6f338`|
+|**A12**|Low|`db/events.py` 监听 `after_soft_rollback` 并在嵌套事务回滚时丢弃唤醒标记，不合并至父事务|`ac91649f`|
+|**A13**|Hygiene|清理 `mutations.py`、`metadata.py`、`remote_push.py` 中 3 处未使用的死代码 import|`b4295c16`|
+|**A14**|Hygiene|淘汰旧单端点及原语义测试并附带详细废弃说明，新行为由对应规范用例权威覆盖|`53935be9`|
+|**A15**|Workflow|更新 `p063` 对应落地 Task（t062/t063/t064）并经 `pending.py archive` 正式迁入历史归档|`1b150068`|
