@@ -131,6 +131,11 @@ export type MailSrcdocOptions = {
   classification?: MailHtmlClassification
   /** Sanitized HTML and its classification prepared for reuse. */
   preparedHtml?: PreparedMailHtml
+  /**
+   * Whether to apply smart inversion in dark mode for light HTML mails.
+   * Defaults to true when theme === 'dark' and classification === 'light'.
+   */
+  darkModeInvert?: boolean
 }
 
 /**
@@ -147,7 +152,11 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
   const sanitizedHtml = opts.preparedHtml?.sanitizedHtml ?? sanitizeMailHtml(html)
   const classification = opts.classification ?? opts.preparedHtml?.classification ?? classifySanitizedMailHtml(sanitizedHtml)
 
-  const isDarkPlain = theme === 'dark' && classification !== 'light'
+  const isDark = theme === 'dark'
+  const isLightClass = classification === 'light'
+  const shouldInvert = isDark && isLightClass && opts.darkModeInvert !== false
+
+  const isDarkPlain = isDark && !shouldInvert && classification !== 'light'
   const bg = isDarkPlain ? '#222729' : '#ffffff'
   const text = isDarkPlain ? '#FFFFFF' : '#202124'
   const linkColor = isDarkPlain ? '#0A84FF' : '#0066CC'
@@ -155,8 +164,11 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
   const bodyStyle = `margin:0;font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;word-wrap:break-word;background:${bg};color:${text}`
   const linkStyle = `a{color:${linkColor}}`
   const imgStyle = `img{max-width:100%;height:auto}`
+  const invertStyle = shouldInvert
+    ? 'html{filter:invert(100%) hue-rotate(180deg);background:#ffffff}img,video,canvas,picture{filter:invert(100%) hue-rotate(180deg) drop-shadow(0 0 1px rgba(255, 255, 255, 0.7))}'
+    : ''
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>body{${bodyStyle}}${linkStyle}${imgStyle}</style></head><body>${sanitizedHtml}</body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>${invertStyle}body{${bodyStyle}}${linkStyle}${imgStyle}</style></head><body>${sanitizedHtml}</body></html>`
 }
 
 /**

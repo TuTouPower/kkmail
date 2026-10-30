@@ -141,4 +141,39 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
     await expect(page.getByRole('alert')).toBeVisible()
     await expect(page.getByText('邮件解析失败')).toBeVisible()
   })
+
+  test('深色模式下浅色邮件智能深色渲染与单信原色切换 (t065 AC-001 ~ AC-005)', async ({ page }) => {
+    await setupStubApi(page, { authedInitially: true })
+    await page.addInitScript(() => {
+      localStorage.setItem('mail-ui-storage', JSON.stringify({
+        state: { theme: 'dark', mailBodyDarkMode: 'smart' },
+        version: 0,
+      }))
+    })
+
+    await page.goto('/')
+
+    await expect(page.getByText('季度运营汇总报告')).toBeVisible({ timeout: 10000 })
+    await page.getByText('季度运营汇总报告').click()
+
+    const iframe = page.locator('iframe.email-body-frame')
+    await expect(iframe).toBeVisible({ timeout: 5000 })
+    await expect(page.locator('.mail-paper-card')).not.toBeVisible()
+    const srcDoc1 = await iframe.getAttribute('srcdoc')
+    expect(srcDoc1).toContain('filter:invert(100%) hue-rotate(180deg)')
+
+    const toggleButton = page.locator('button[aria-label="切换原样/深色视图"]')
+    await expect(toggleButton).toBeVisible()
+    expect(await toggleButton.getAttribute('title')).toBe('查看原样视图')
+
+    await toggleButton.click()
+    await expect(page.locator('.mail-paper-card')).toBeVisible()
+    expect(await toggleButton.getAttribute('title')).toBe('切换至深色视图')
+    const srcDoc2 = await page.locator('.mail-paper-card iframe.email-body-frame').getAttribute('srcdoc')
+    expect(srcDoc2).not.toContain('filter:invert')
+
+    await toggleButton.click()
+    await expect(page.locator('.mail-paper-card')).not.toBeVisible()
+    expect(await toggleButton.getAttribute('title')).toBe('查看原样视图')
+  })
 })

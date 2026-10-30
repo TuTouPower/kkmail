@@ -1,0 +1,46 @@
+{
+  "tid": "t065",
+  "attempt": 1,
+  "execution_id": "2c89cfedd2e34f6cb22091f230a46b31",
+  "status": "done",
+  "branch": "t065_dark_mode_mail_body_inversion",
+  "base_sha": "750d2d0537350b3d539661b035de7c354995b60a",
+  "tests": "frontend: 53 files, 562 passed; contract: 189 passed; desktop: 12 passed; build/types clean",
+  "blackbox": "stub UI E2E: 19 passed",
+  "review": "single review PASS (Round 1 PASS 0 finding; scope: db962c595a47beae)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/lib/mailBody.ts",
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/lib/mailBody.test.ts",
+      "src/frontend/src/components/MessageReader.test.tsx",
+      "tests/e2e/smoke.spec.ts"
+    ],
+    "AC-002": [
+      "src/frontend/src/lib/mailBody.ts",
+      "src/frontend/src/lib/mailBody.test.ts"
+    ],
+    "AC-003": [
+      "src/frontend/src/lib/mailBody.ts",
+      "src/frontend/src/lib/mailBody.test.ts"
+    ],
+    "AC-004": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx",
+      "tests/e2e/smoke.spec.ts"
+    ],
+    "AC-005": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx",
+      "tests/e2e/smoke.spec.ts"
+    ],
+    "AC-006": [
+      "src/frontend/src/store/mailStore.ts",
+      "src/frontend/src/components/SettingsModal.tsx",
+      "src/frontend/src/components/SettingsModal.test.tsx",
+      "src/frontend/src/test/persistence.test.ts"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

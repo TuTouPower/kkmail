@@ -12,7 +12,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 进程模型：支持单进程模式（API 嵌入 Worker 线程）或生产拆分模式（独立的 API 容器与 Worker 容器）。Worker 采用按连接预算并发执行器（执行位数量等于 `total_slots`，后台批量归档限制在途数不超过 `total_slots - background_start_slot`，前台保留至少 `background_start_slot` 槽位即刻消费用户交互与元数据任务；同账号租约任务认领期互斥；单次执行持有唯一 execution_owner 避免租约 fencing 与归档认领冲突；统一全局心跳为在途任务续期；停机在超时内等待在途任务优雅结算）。Worker 内部启动 `JobWakeListener` 监听 `mail_core_jobs` 通道，任务入队事务提交即唤醒空闲等待（1 秒内抢占认领）；监听连接抖动或断开时自动重连，断连期间 Worker 退化为基于指数退避的定时轮询，保障调度连续性。
 2. **前端界面 (`src/frontend/`)**：
     - 技术栈：React 19 + TypeScript + Vite + TanStack React Query + Lucide Icons。
-    - 特点：单页应用 (SPA)，由 `mail-core` 同源托管提供；基于 `useInfiniteQuery` 实现游标深翻页，原生集成 SSE 流式状态同步。侧栏按“所有账号／用户自定义分组／账号列表”组织导航，保留六类全局分类、分组分类、每账号分类与真实文件夹访问。邮件详情工具栏操作居中显示并支持已读/未读状态双向响应；邮件列表支持右键上下文菜单（Context Menu）。网页壳的侧栏按钮固定在邮件列表标题行；Electron macOS 使用原生标题栏交通灯，侧栏按钮放在其旁边，Windows/Linux 保留系统窗口框架。
+    - 特点：单页应用 (SPA)，由 `mail-core` 同源托管提供；基于 `useInfiniteQuery` 实现游标深翻页，原生集成 SSE 流式状态同步。侧栏按“所有账号／用户自定义分组／账号列表”组织导航，保留六类全局分类、分组分类、每账号分类与真实文件夹访问。邮件详情工具栏操作居中显示并支持已读/未读状态双向响应；邮件列表支持右键上下文菜单（Context Menu）。邮件正文在深色模式下支持智能反转（CSS 滤镜将浅色白底反转为深底，媒体元素二次反转还原色彩，微光轮廓保护透明暗色 Logo），工具栏提供单信原样/深色切换按钮（`MR11`），通用设置支持正文深色偏好持久化。网页壳的侧栏按钮固定在邮件列表标题行；Electron macOS 使用原生标题栏交通灯，侧栏按钮放在其旁边，Windows/Linux 保留系统窗口框架。
 3. **桌面集成 (`src/desktop/`)**：
     - 运行环境：Electron 主进程。
     - 职责：进程生命周期管理，启动内置 PostgreSQL 实例与 `mail_core` sidecar 进程，支持 macOS/Linux/Windows 跨平台运行；窗口选项按平台选择原生框架，macOS 自定义标题栏只覆盖网页内容区，不接管系统交通灯。

@@ -1026,6 +1026,22 @@
             "conflicts_with": "",
             "note": "来源 p063 根因 3；单连接按文件夹/操作/目标分组发 UID 集合命令，Graph 用 $batch，逐条 revision CAS 结算",
             "dir": "docs/archive/tasks/t064_batched_remote_writeback"
+        },
+        {
+            "tid": "t065",
+            "slug": "dark_mode_mail_body_inversion",
+            "title": "深色模式支持邮件正文智能深色渲染与原色切换",
+            "status": "done",
+            "branch": "t065_dark_mode_mail_body_inversion",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "750d2d0537350b3d539661b035de7c354995b60a",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "邮件正文在深色模式下智能反转浅色背景为深色底，保持图片原色并提供单信原色切换按钮",
+            "dir": "docs/archive/tasks/t065_dark_mode_mail_body_inversion"
         }
     ]
 }
