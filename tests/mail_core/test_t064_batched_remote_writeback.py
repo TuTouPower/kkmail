@@ -58,7 +58,9 @@ class RecordingImapClient:
 
     def response(self, name: str) -> tuple[str, list]:
         if name == "COPYUID" and self.copyuid_responses:
-            return "OK", [resp.encode() for resp in self.copyuid_responses]
+            resp = self.copyuid_responses
+            self.copyuid_responses = []  # real imaplib pops untagged responses on read
+            return "OK", [r.encode() for r in resp]
         return "NO", []
 
     def uid(self, command: str, *args: str) -> tuple[str, list]:
@@ -238,8 +240,8 @@ def test_ac005_folder_uidvalidity_mismatch_isolates_folder():
 def test_ac006_batch_move_maps_copyuid():
     """AC-006: Batch MOVE maps COPYUID destination UIDs to each operation's remote_state."""
     client = RecordingImapClient(uidvalidity=100)
-    client.existing_uids.update({10, 11})
-    client.copyuid_responses = ["[COPYUID 200 10:11 50:51]"]
+    client.existing_uids.update({10, 11, 12})
+    client.copyuid_responses = ["[COPYUID 200 10:12 50:52]"]
 
     provider = ImapProvider("acc@test.com", "host", 993, "acc@test.com", "pass")
     provider._connect_with_permit = lambda *a, **k: (client, None)
@@ -247,9 +249,11 @@ def test_ac006_batch_move_maps_copyuid():
 
     op1_id = uuid.uuid4()
     op2_id = uuid.uuid4()
+    op3_id = uuid.uuid4()
     ops = [
         RemoteOperationItem(op_id=op1_id, op_type="move", desired_state={"remote_id": format_imap_remote_id("INBOX", 100, 10), "dest_folder_remote_id": "Archive"}),
         RemoteOperationItem(op_id=op2_id, op_type="move", desired_state={"remote_id": format_imap_remote_id("INBOX", 100, 11), "dest_folder_remote_id": "Archive"}),
+        RemoteOperationItem(op_id=op3_id, op_type="move", desired_state={"remote_id": format_imap_remote_id("INBOX", 100, 12), "dest_folder_remote_id": "Archive"}),
     ]
 
     results = dict(provider.apply_remote_operations(ops))
@@ -260,6 +264,10 @@ def test_ac006_batch_move_maps_copyuid():
     assert results[op2_id].success is True
     assert results[op2_id].remote_state.get("uid") == 51
     assert results[op2_id].remote_state.get("remote_id") == format_imap_remote_id("Archive", 200, 51)
+
+    assert results[op3_id].success is True
+    assert results[op3_id].remote_state.get("uid") == 52
+    assert results[op3_id].remote_state.get("remote_id") == format_imap_remote_id("Archive", 200, 52)
 
 
 def test_ac007_uid_string_chunking_over_1000_chars():

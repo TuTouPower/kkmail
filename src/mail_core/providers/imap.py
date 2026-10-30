@@ -415,9 +415,8 @@ def _uid_sequence_value(sequence_set: str, index: int) -> int | None:
     return None
 
 
-def _copyuid_remote_state(c: imaplib.IMAP4, response_data: Any, source_uid: int, dest_folder: str) -> dict[str, Any]:
-    """Build destination identity from the UIDPLUS COPYUID response when present."""
-    remote_state: dict[str, Any] = {"folder_remote_id": dest_folder}
+def _extract_copyuid_texts(c: imaplib.IMAP4, response_data: Any) -> list[str]:
+    """Extract COPYUID response lines once before client.response() pops untagged responses."""
     values = list(response_data or [])
     try:
         resp = c.response("COPYUID")
@@ -426,8 +425,23 @@ def _copyuid_remote_state(c: imaplib.IMAP4, response_data: Any, source_uid: int,
             values.extend(response_values or [])
     except (AttributeError, ValueError, imaplib.IMAP4.error):
         pass
+    texts: list[str] = []
     for value in values:
         text = value.decode("ascii", errors="ignore") if isinstance(value, bytes) else str(value)
+        texts.append(text)
+    return texts
+
+
+def _copyuid_remote_states(
+    copyuid_texts: list[str],
+    source_uids: Sequence[int],
+    dest_folder: str,
+) -> dict[int, dict[str, Any]]:
+    """Build destination identities for multiple source UIDs from pre-extracted COPYUID texts."""
+    results: dict[int, dict[str, Any]] = {
+        u: {"folder_remote_id": dest_folder} for u in source_uids
+    }
+    for text in copyuid_texts:
         match = re.search(r"(?:\[\s*)?COPYUID\s+(\d+)\s+([0-9,:]+)\s+([0-9,:]+)", text, re.IGNORECASE)
         if match is None:
             match = re.fullmatch(r"\s*(\d+)\s+([0-9,:]+)\s+([0-9,:]+)\s*", text)
@@ -436,16 +450,25 @@ def _copyuid_remote_state(c: imaplib.IMAP4, response_data: Any, source_uid: int,
         uidvalidity = int(match.group(1))
         source_set = match.group(2)
         destination_set = match.group(3)
-        index = _uid_sequence_index(source_set, source_uid)
-        if index is None:
-            continue
-        destination_uid = _uid_sequence_value(destination_set, index)
-        if destination_uid is None:
-            continue
-        remote_state["remote_id"] = format_imap_remote_id(dest_folder, uidvalidity, destination_uid)
-        remote_state["uid"] = destination_uid
-        break
-    return remote_state
+        for u in source_uids:
+            if "remote_id" in results[u]:
+                continue
+            index = _uid_sequence_index(source_set, u)
+            if index is None:
+                continue
+            destination_uid = _uid_sequence_value(destination_set, index)
+            if destination_uid is None:
+                continue
+            results[u]["remote_id"] = format_imap_remote_id(dest_folder, uidvalidity, destination_uid)
+            results[u]["uid"] = destination_uid
+    return results
+
+
+def _copyuid_remote_state(c: imaplib.IMAP4, response_data: Any, source_uid: int, dest_folder: str) -> dict[str, Any]:
+    """Build destination identity from the UIDPLUS COPYUID response when present."""
+    copyuid_texts = _extract_copyuid_texts(c, response_data)
+    mapping = _copyuid_remote_states(copyuid_texts, [source_uid], dest_folder)
+    return mapping[source_uid]
 
 
 def _check_uidvalidity(cursor: dict[str, Any] | None, uidvalidity: int | None) -> None:
@@ -1579,12 +1602,13 @@ class ImapProvider:
                                             error="IMAP server does not support atomic MOVE/delete",
                                         )
                                 else:
+                                    copyuid_texts = _extract_copyuid_texts(c, response_data)
+                                    states_by_uid = _copyuid_remote_states(copyuid_texts, chunk_uids, dest_target)
                                     for u in chunk_uids:
                                         op_id = uid_to_item[u][0]
-                                        remote_state = _copyuid_remote_state(c, response_data, u, dest_target)
                                         results[op_id] = RemoteOperationResult(
                                             success=True,
-                                            remote_state=remote_state,
+                                            remote_state=states_by_uid[u],
                                         )
                 except Exception as exc:
                     from mail_core.security.redact import safe_error
