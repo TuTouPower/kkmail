@@ -412,3 +412,37 @@ def test_ac010_graceful_shutdown_waits_for_in_flight():
     with Session() as session:
         row = session.get(WorkerJob, jid)
         assert row.status == JobStatus.DONE.value
+
+
+def test_periodic_schedule_sweep_single_flight_protection():
+    """A07: Periodic schedule sweep has single-flight protection and does not spawn overlapping threads."""
+    started_count = 0
+    gate = threading.Event()
+    start_event = threading.Event()
+
+    def slow_schedule(*args, **kwargs):
+        nonlocal started_count
+        started_count += 1
+        start_event.set()
+        gate.wait(timeout=2.0)
+
+    with patch("mail_core.worker.main._schedule_periodic_sync_once", side_effect=slow_schedule):
+        # Run worker with very fast poll and schedule intervals
+        thread = threading.Thread(
+            target=lambda: worker_main.run(poll_interval_s=0.05, schedule_interval_s=0.05),
+            daemon=True,
+        )
+        thread.start()
+
+        # Wait until first schedule starts
+        assert start_event.wait(timeout=3.0)
+        # Sleep through multiple schedule intervals while first is still blocked
+        time.sleep(0.2)
+        # Verify no second overlapping thread was spawned
+        assert started_count == 1, "Must not spawn overlapping schedule thread"
+
+        # Release first thread and stop worker
+        gate.set()
+        worker_main.request_stop()
+        thread.join(timeout=3.0)
+

@@ -540,7 +540,7 @@ def next_poll_delay(
     return min(max_idle, max(base, previous * 2 if previous else base))
 
 
-def run(poll_interval_s: float | None = None) -> None:
+def run(poll_interval_s: float | None = None, schedule_interval_s: float | None = None) -> None:
     global _stop
     _stop = False
     _stop_event.clear()
@@ -563,11 +563,16 @@ def run(poll_interval_s: float | None = None) -> None:
     max_idle = cfg.worker_max_idle_s
     heartbeat_interval = cfg.worker_heartbeat_s
     reclaim_interval = cfg.worker_reclaim_interval_s
-    schedule_interval = cfg.schedule_interval_s
+    schedule_interval = (
+        schedule_interval_s
+        if schedule_interval_s is not None
+        else cfg.schedule_interval_s
+    )
     log.info("worker %s starting (poll=%ss, max_idle=%ss)", worker_id, interval, max_idle)
     sleep_s = interval
     last_reclaim_at: float | None = None
     last_schedule_at: float | None = None
+    schedule_thread: threading.Thread | None = None
 
     from mail_core.db.session import get_session_factory
     from mail_core.worker.heartbeat import WorkerHeartbeatLoop
@@ -615,19 +620,23 @@ def run(poll_interval_s: float | None = None) -> None:
                     log.error("reclaim sweep failed: %s", safe_error(exc))
 
             if last_schedule_at is None or now - last_schedule_at >= schedule_interval:
-                last_schedule_at = now
-                try:
-                    # AC-009: run periodic schedule / patrol sweeps asynchronously
-                    # so network probing never blocks task claiming.
-                    threading.Thread(
-                        target=_schedule_periodic_sync_once,
-                        name="worker-periodic-schedule",
-                        daemon=True,
-                    ).start()
-                except Exception as exc:  # pragma: no cover
-                    from mail_core.security.redact import safe_error
+                if schedule_thread is not None and schedule_thread.is_alive():
+                    log.debug("previous periodic schedule sweep still in-flight; skipping new spawn")
+                else:
+                    last_schedule_at = now
+                    try:
+                        # AC-009: run periodic schedule / patrol sweeps asynchronously
+                        # with single-flight protection so network probing never blocks task claiming.
+                        schedule_thread = threading.Thread(
+                            target=_schedule_periodic_sync_once,
+                            name="worker-periodic-schedule",
+                            daemon=True,
+                        )
+                        schedule_thread.start()
+                    except Exception as exc:  # pragma: no cover
+                        from mail_core.security.redact import safe_error
 
-                    log.error("periodic schedule sweep failed: %s", safe_error(exc))
+                        log.error("periodic schedule sweep failed: %s", safe_error(exc))
 
             tick_result = TickResult(claimed=0, handled=0)
             try:
@@ -672,6 +681,8 @@ def run(poll_interval_s: float | None = None) -> None:
             except Exception:
                 log.exception("idle watcher stop failed")
         heartbeat_loop.stop(timeout=5.0)
+        if schedule_thread is not None and schedule_thread.is_alive():
+            schedule_thread.join(timeout=2.0)
     log.info("worker loop stopped")
 
 
