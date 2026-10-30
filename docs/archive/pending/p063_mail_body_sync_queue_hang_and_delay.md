@@ -14,11 +14,10 @@
     1. 后端单测 `tests/mail_core/blobs/` 仅验证了 `OutboxEvent` 数据行写入，未断言是否触发了 `try_notify_outbox` / NOTIFY。
     2. 缺乏针对新邮件到达后正文抓取优先级高于远程操作同步的调度测试。
 - 修复方向：
-    1. 在 `src/mail_core/blobs/archive.py` 写入归档事件后补全 `try_notify_outbox(session)`，确保落库即推送。
-    2. 将新邮件正文归档任务优先级从 60 提升至 20（高于远程同步的 40）。
-    3. 将 Worker 每次取任务数量从 5 降为 1（或减少单次锁定），确保高优先级用户即时点击能被下一次 tick 立即调度。
-    4. （可选）对积攒的同类型远程操作合并为单条 IMAP 批量指令提交，减少多余网络往返。
+    1. 在 `src/mail_core/db/events.py` 建立 SQLAlchemy 会话提交统一 NOTIFY 机制，覆盖所有 OutboxEvent 落库与任务入队，确保落库即推送（已由 t062 落实）。
+    2. 将 Worker 串行执行池与 claim_batch 架构重构为基于 total_slots 的并发执行池，前台保留至少 2 个槽位即刻消费即时正文归档任务，彻底消除前台点击被后台批次压制（已由 t063 落实）。
+    3. 对积攒的同类型远程操作合并为单连接 IMAP 批量指令（UID STORE / MOVE 集合）与 Graph $batch 管道提交，消除网络往返（已由 t064 落实）。
 - 线索：
     - 最小复现脚本：`.scratch/repro_body_sync_queue_delay.py`
     - 真实追踪记录：邮件 ID `674aedee-30e9-42ce-9e16-dfc9c3a35985`（主题 `ご注文ありがとうございます W1535052453`），Outbox 事件 269415、269416 证实了 24 秒的 NOTIFY 缺失超时。
-- 处理：未开
+- 处理：t062,t063,t064
