@@ -134,7 +134,7 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     const lightHtml = '<div style="background-color: #ffffff; color: #333333;"><p>Newsletter</p><img src="test.png"></div>'
     const darkDoc = buildMailSrcdoc(lightHtml, { theme: 'dark' })
     expect(darkDoc).toContain('html{filter:invert(100%) hue-rotate(180deg);background:#ffffff}')
-    expect(darkDoc).toContain('img,video,canvas,picture{filter:invert(100%) hue-rotate(180deg) drop-shadow(0 0 1px rgba(255, 255, 255, 0.7))}')
+    expect(darkDoc).toContain('img,video,canvas{filter:invert(100%) hue-rotate(180deg) drop-shadow(0 0 1px rgba(0, 0, 0, 0.75))}')
   })
 
   it('does not apply inversion filter to plain or dark html in dark mode (AC-003)', () => {

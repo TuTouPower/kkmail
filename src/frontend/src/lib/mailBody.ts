@@ -165,7 +165,7 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
   const linkStyle = `a{color:${linkColor}}`
   const imgStyle = `img{max-width:100%;height:auto}`
   const invertStyle = shouldInvert
-    ? 'html{filter:invert(100%) hue-rotate(180deg);background:#ffffff}img,video,canvas,picture{filter:invert(100%) hue-rotate(180deg) drop-shadow(0 0 1px rgba(255, 255, 255, 0.7))}'
+    ? 'html{filter:invert(100%) hue-rotate(180deg);background:#ffffff}img,video,canvas{filter:invert(100%) hue-rotate(180deg) drop-shadow(0 0 1px rgba(0, 0, 0, 0.75))}'
     : ''
 
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>${invertStyle}body{${bodyStyle}}${linkStyle}${imgStyle}</style></head><body>${sanitizedHtml}</body></html>`
