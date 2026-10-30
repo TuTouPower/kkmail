@@ -1058,6 +1058,22 @@
             "conflicts_with": "",
             "note": "来源 p066、p067、p068；单邮件与发件人放行持久化入库、正文强制重建、cid 内联图映射及阅读器单信深色覆盖多信隔离",
             "dir": "docs/archive/tasks/t066_remote_images_persist_and_reload"
+        },
+        {
+            "tid": "t067",
+            "slug": "reader_isolated_html_endpoint",
+            "title": "邮件正文独立隔离渲染端点与切断父级CSP继承",
+            "status": "dropped",
+            "branch": "",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "消除 srcdoc 强制继承父页面 CSP 导致的放行图片被拦截问题；正文改为独立 URL 端点并独立设置 CSP，守住主站零出网基线，补齐真实全栈外链图片解码测试; dropped: 原独立正文端点方案存在XFO阻断、Electron强制覆盖及双重净化mXSS技术债，按Opus 5.5审查结论废弃，改走服务端图片代理路线",
+            "dir": "docs/archive/tasks/t067_reader_isolated_html_endpoint"
         }
     ]
 }

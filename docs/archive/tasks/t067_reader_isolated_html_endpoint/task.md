@@ -2,7 +2,7 @@
 tid: "t067"
 slug: "reader_isolated_html_endpoint"
 title: "邮件正文独立隔离渲染端点与切断父级CSP继承"
-status: "backlog"
+status: "dropped"
 branch: ""
 worktree: ""
 review_level: "full"
@@ -11,7 +11,7 @@ verify_limit: "5"
 diff_anchor: ""
 depends_on: ""
 conflicts_with: ""
-note: "消除 srcdoc 强制继承父页面 CSP 导致的放行图片被拦截问题；正文改为独立 URL 端点并独立设置 CSP，守住主站零出网基线，补齐真实全栈外链图片解码测试"
+note: "消除 srcdoc 强制继承父页面 CSP 导致的放行图片被拦截问题；正文改为独立 URL 端点并独立设置 CSP，守住主站零出网基线，补齐真实全栈外链图片解码测试; dropped: 原独立正文端点方案存在XFO阻断、Electron强制覆盖及双重净化mXSS技术债，按Opus 5.5审查结论废弃，改走服务端图片代理路线"
 ---
 
 # Task 过程总账
