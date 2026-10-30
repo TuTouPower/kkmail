@@ -2,5 +2,22 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/tasks/{tid}_{slug}/task.md front matter",
     "workspace": ".",
-    "tasks": []
+    "tasks": [
+        {
+            "tid": "t065",
+            "slug": "dark_mode_mail_body_inversion",
+            "title": "深色模式支持邮件正文智能深色渲染与原色切换",
+            "status": "backlog",
+            "branch": "",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "邮件正文在深色模式下智能反转浅色背景为深色底，保持图片原色并提供单信原色切换按钮",
+            "dir": "docs/tasks/t065_dark_mode_mail_body_inversion"
+        }
+    ]
 }
