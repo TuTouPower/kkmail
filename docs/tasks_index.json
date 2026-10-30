@@ -2,5 +2,22 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/tasks/{tid}_{slug}/task.md front matter",
     "workspace": ".",
-    "tasks": []
+    "tasks": [
+        {
+            "tid": "t066",
+            "slug": "remote_images_persist_and_reload",
+            "title": "远程图片按邮件与发件人持久放行并可靠重载",
+            "status": "backlog",
+            "branch": "",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p066；单邮件与发件人两类放行均入库持久化，修复放行后 iframe 不重载与刷新丢失",
+            "dir": "docs/tasks/t066_remote_images_persist_and_reload"
+        }
+    ]
 }
