@@ -168,7 +168,12 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
     ? 'html{filter:invert(100%) hue-rotate(180deg);background:#ffffff}img,video,canvas{filter:invert(100%) hue-rotate(180deg) drop-shadow(0 0 1px rgba(0, 0, 0, 0.75))}'
     : ''
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>${invertStyle}body{${bodyStyle}}${linkStyle}${imgStyle}</style></head><body>${sanitizedHtml}</body></html>`
+  const colorScheme = isDark ? 'dark' : 'light'
+  const scrollbarStyle = isDark
+    ? ':root{color-scheme:dark}html{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.28) transparent}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.28);border-radius:4px}::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.45)}'
+    : ':root{color-scheme:light}html{scrollbar-width:thin;scrollbar-color:rgba(0,0,0,0.28) transparent}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.28);border-radius:4px}::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,0.45)}'
+
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${colorScheme}"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>${scrollbarStyle}${invertStyle}body{${bodyStyle}}${linkStyle}${imgStyle}</style></head><body>${sanitizedHtml}</body></html>`
 }
 
 /**

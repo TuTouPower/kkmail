@@ -1444,16 +1444,25 @@
 
 .reader-scroll {
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   flex: 1;
-  padding: 28px clamp(20px, 4vw, 60px) 50px;
+  padding: 24px clamp(20px, 4vw, 60px) 40px;
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
 }
 
 .message-paper {
-  max-width: 900px;
+  width: 100%;
+  max-width: 1080px;
   margin: 0 auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
 }
 
 .detail-subject {

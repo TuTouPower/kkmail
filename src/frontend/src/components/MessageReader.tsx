@@ -507,6 +507,10 @@ const MessageReader = memo(function MessageReader() {
                     padding: '16px',
                     boxSizing: 'border-box',
                     boxShadow: '0 4px 16px rgba(0, 0, 0, 0.28)',
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    minHeight: 'calc(100vh - 240px)',
                   }}
                 >
                   <iframe
@@ -516,7 +520,7 @@ const MessageReader = memo(function MessageReader() {
                     sandbox={MAIL_IFRAME_SANDBOX}
                     referrerPolicy="no-referrer"
                     srcDoc={mailSrcdoc}
-                    style={{ width: '100%', minHeight: 420, border: 0, background: '#FFFFFF', borderRadius: 6, display: 'block' }}
+                    style={{ width: '100%', flex: 1, minHeight: 'calc(100vh - 272px)', border: 0, background: '#FFFFFF', borderRadius: 6, display: 'block' }}
                   />
                 </div>
               ) : (
@@ -529,7 +533,8 @@ const MessageReader = memo(function MessageReader() {
                   srcDoc={mailSrcdoc}
                   style={{
                     width: '100%',
-                    minHeight: 420,
+                    flex: 1,
+                    minHeight: 'calc(100vh - 240px)',
                     border: 0,
                     background: resolvedTheme === 'dark' ? '#222729' : '#FFFFFF',
                     borderRadius: 8,
@@ -539,7 +544,7 @@ const MessageReader = memo(function MessageReader() {
               )}
             </>
           ) : body ? (
-            <div className="email-body email-body-text">{body}</div>
+            <div className="email-body email-body-text" style={{ flex: 1, minHeight: 'calc(100vh - 240px)' }}>{body}</div>
           ) : null}
             </>
           )}

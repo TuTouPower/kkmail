@@ -163,6 +163,18 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(doc).toContain('background:#ffffff')
   })
 
+  it('adapts iframe color-scheme meta and scrollbar styling to current theme', () => {
+    const lightDoc = buildMailSrcdoc('<p>Hello</p>', { theme: 'light' })
+    expect(lightDoc).toContain('<meta name="color-scheme" content="light">')
+    expect(lightDoc).toContain(':root{color-scheme:light}')
+    expect(lightDoc).toContain('scrollbar-color:rgba(0,0,0,0.28) transparent')
+
+    const darkDoc = buildMailSrcdoc('<p>Hello</p>', { theme: 'dark' })
+    expect(darkDoc).toContain('<meta name="color-scheme" content="dark">')
+    expect(darkDoc).toContain(':root{color-scheme:dark}')
+    expect(darkDoc).toContain('scrollbar-color:rgba(255,255,255,0.28) transparent')
+  })
+
   it('reuses prepared sanitized html and classification when building srcdoc', () => {
     const sanitize = vi.spyOn(DOMPurify, 'sanitize')
     const prepared = prepareMailHtml('<div style="background:#fff"><script>bad()</script>safe</div>')
