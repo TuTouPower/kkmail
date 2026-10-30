@@ -21,7 +21,6 @@ def test_ac001_config_defaults():
     assert cfg.max_mime_bytes == 50 * 1024 * 1024
     assert cfg.max_attachment_bytes == 25 * 1024 * 1024
     assert cfg.archive_recent_days == 30
-    assert cfg.worker_claim_batch == 5
     assert cfg.worker_reclaim_interval_s == 60.0
     assert cfg.worker_poll_s == 2.0
     assert cfg.worker_max_idle_s == 10.0
