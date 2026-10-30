@@ -48,7 +48,17 @@ export interface MailDetail {
   is_archived?: boolean | null
   archive_state?: string | null
   archive_has_error?: boolean
-  attachments?: Array<{ id?: string; name?: string; size?: number; contentType?: string }>
+  remote_images_allowed?: boolean
+  can_allow_sender?: boolean
+  attachments?: Array<{
+    id?: string
+    name?: string
+    size?: number
+    contentType?: string
+    is_inline?: boolean
+    content_id?: string | null
+    preview_url?: string | null
+  }>
   has_attachments?: boolean | null
 }
 

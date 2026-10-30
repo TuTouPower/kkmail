@@ -12,6 +12,8 @@ import type {
   MailCoreMessageDetail,
   MailCoreSearchPage,
   MutationResult,
+  RemoteImagesAllowedOut,
+  SenderRemoteImageAllowOut,
   SyncBodyAcceptedOut,
 } from './schemaTypes'
 
@@ -24,6 +26,8 @@ export type {
   MailCoreMessageDetail,
   MailCoreSearchPage,
   MutationResult,
+  RemoteImagesAllowedOut,
+  SenderRemoteImageAllowOut,
   SyncBodyAcceptedOut,
 } from './schemaTypes'
 
@@ -185,12 +189,51 @@ export function mailCoreToMailDetail(d: MailCoreMessageDetail): MailDetail {
     is_archived: d.is_archived ?? null,
     archive_state: d.archive_state ?? null,
     archive_has_error: d.archive_has_error ?? false,
+    remote_images_allowed: d.remote_images_allowed ?? false,
+    can_allow_sender: d.can_allow_sender ?? false,
     has_attachments: d.has_attachments,
     attachments: d.attachments.map((a: MailCoreAttachment) => ({
       id: a.id,
       name: a.name,
       size: a.size ?? undefined,
       contentType: a.contentType ?? undefined,
+      is_inline: a.is_inline,
+      content_id: a.content_id ?? null,
+      preview_url: a.preview_url ?? null,
     })),
   }
+}
+
+/** Allow remote images for a single message permanently. */
+export async function allowMessageRemoteImages(messageId: string, signal?: AbortSignal): Promise<boolean> {
+  const res = await postJson<RemoteImagesAllowedOut>(
+    `/api/mail/messages/${encodeURIComponent(messageId)}/allow-remote-images`,
+    {},
+    signal ? { signal } : undefined,
+  )
+  return res.success && res.remote_images_allowed
+}
+
+/** Allow remote images for a sender address globally via message UUID (server extracts structured from_address). */
+export async function allowSenderRemoteImages(messageId: string, signal?: AbortSignal): Promise<boolean> {
+  const res = await postJson<RemoteImagesAllowedOut>(
+    '/api/mail/senders/allow-remote-images',
+    { message_id: messageId },
+    signal ? { signal } : undefined,
+  )
+  return res.success && res.remote_images_allowed
+}
+
+/** List all globally allowed senders. */
+export async function fetchAllowedSenders(signal?: AbortSignal): Promise<SenderRemoteImageAllowOut[]> {
+  return apiRequest<SenderRemoteImageAllowOut[]>('/api/mail/senders/allowed-remote-images', signal ? { signal } : undefined)
+}
+
+/** Remove a sender from the global remote images allowlist. */
+export async function removeAllowedSender(senderId: string, signal?: AbortSignal): Promise<boolean> {
+  const res = await apiRequest<MutationResult>(`/api/mail/senders/allowed-remote-images/${encodeURIComponent(senderId)}`, {
+    method: 'DELETE',
+    ...(signal ? { signal } : {}),
+  })
+  return res.success
 }

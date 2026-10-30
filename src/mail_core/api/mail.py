@@ -13,7 +13,7 @@ from email.utils import formataddr, getaddresses
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -58,10 +58,33 @@ from mail_core.mail.application.message_details import (
     get_message_detail_with_archive_status,
     sync_message_body,
 )
-from mail_core.mail.application.search import search_messages_page
-from mail_core.mail.storage.models import MessageArchiveState
+from mail_core.mail.application.search import (
+    SearchPage,
+    search_message_ids,
+    search_messages_page,
+)
+from mail_core.mail.application.remote_images import (
+    InvalidSenderEmailError,
+    allow_message_remote_images,
+    allow_sender_remote_images,
+    is_remote_images_allowed,
+    list_allowed_senders,
+    normalize_sender_email,
+    remove_allowed_sender,
+)
+from mail_core.mail.storage.models import (
+    Attachment,
+    Message,
+    MessageArchiveState,
+)
+from mail_core.security.inline_preview import (
+    build_inline_image_preview_url,
+    is_supported_inline_image_mime,
+    verify_inline_image_preview_token,
+)
 
 router = APIRouter(prefix="/api/mail", tags=["mail"])
+preview_router = APIRouter(prefix="/api/mail", tags=["preview"])
 _MEDIA_TYPE_TOKEN = r"[A-Za-z0-9!#$%&'*+.^_`|~-]+"
 _MEDIA_TYPE_PATTERN = re.compile(rf"{_MEDIA_TYPE_TOKEN}/{_MEDIA_TYPE_TOKEN}", re.ASCII)
 
@@ -136,6 +159,8 @@ class AttachmentOut(BaseModel):
     contentType: str | None
     size: int | None
     is_inline: bool
+    content_id: str | None = None
+    preview_url: str | None = None
 
 
 class MessageEmailAddressOut(BaseModel):
@@ -167,7 +192,24 @@ class MessageDetailOut(BaseModel):
     is_archived: bool | None
     archive_state: str | None = None
     archive_has_error: bool = False
+    remote_images_allowed: bool = False
+    can_allow_sender: bool = False
     attachments: list[AttachmentOut]
+
+
+class SenderAllowIn(BaseModel):
+    message_id: UUID
+
+
+class SenderRemoteImageAllowOut(BaseModel):
+    id: str
+    from_address: str
+    created_at: datetime
+
+
+class RemoteImagesAllowedOut(BaseModel):
+    success: bool = True
+    remote_images_allowed: bool = True
 
 
 def _is_reliable_email_address(value: str) -> bool:
@@ -227,12 +269,37 @@ def _recipient_addresses(values: list[object]) -> list[MessageEmailAddressOut]:
     return result
 
 
+MAX_INLINE_PREVIEWS_PER_MESSAGE = 50
+
+
 def _detail_out(
     detail: MessageDetail,
     is_archived: bool | None,
     archive_state: str | None = None,
     archive_has_error: bool = False,
+    remote_images_allowed: bool = False,
+    can_allow_sender: bool = False,
 ) -> MessageDetailOut:
+    signed_count = 0
+    att_outs: list[AttachmentOut] = []
+    for attachment in detail.attachments:
+        preview_url = None
+        if attachment.is_inline and is_supported_inline_image_mime(attachment.content_type):
+            if signed_count < MAX_INLINE_PREVIEWS_PER_MESSAGE:
+                preview_url = build_inline_image_preview_url(str(attachment.id))
+                signed_count += 1
+        att_outs.append(
+            AttachmentOut(
+                id=str(attachment.id),
+                name=attachment.filename,
+                contentType=attachment.content_type,
+                size=attachment.size_bytes,
+                is_inline=attachment.is_inline,
+                content_id=attachment.content_id,
+                preview_url=preview_url,
+            )
+        )
+
     return MessageDetailOut(
         id=str(detail.id),
         account_id=str(detail.account_id),
@@ -255,16 +322,9 @@ def _detail_out(
         is_archived=is_archived,
         archive_state=archive_state,
         archive_has_error=archive_has_error,
-        attachments=[
-            AttachmentOut(
-                id=str(attachment.id),
-                name=attachment.filename,
-                contentType=attachment.content_type,
-                size=attachment.size_bytes,
-                is_inline=attachment.is_inline,
-            )
-            for attachment in detail.attachments
-        ],
+        remote_images_allowed=remote_images_allowed,
+        can_allow_sender=can_allow_sender,
+        attachments=att_outs,
     )
 
 
@@ -474,11 +534,21 @@ def api_get_message(message_id: UUID) -> MessageDetailOut:
         result = get_message_detail_with_archive_status(session, message_id)
         if result is None:
             raise HTTPException(404, "message not found")
+        detail, is_archived = result
         state = session.get(MessageArchiveState, message_id)
+        allowed = is_remote_images_allowed(session, message_id, detail.from_address)
+        try:
+            normalize_sender_email(detail.from_address)
+            can_allow = True
+        except InvalidSenderEmailError:
+            can_allow = False
         return _detail_out(
-            *result,
+            detail,
+            is_archived,
             archive_state=state.state if state is not None else None,
             archive_has_error=bool(state and state.last_error),
+            remote_images_allowed=allowed,
+            can_allow_sender=can_allow,
         )
 
 
@@ -714,3 +784,150 @@ def api_report_sync_activity(body: ActivityIn) -> Response:
         record_account_activity(session, body.account_ids)
         session.commit()
     return Response(status_code=204)
+
+
+# --- Remote image allowlists and inline preview (t066) ---
+
+
+@router.post("/messages/{message_id}/allow-remote-images", response_model=RemoteImagesAllowedOut)
+def api_allow_message_remote_images(message_id: UUID) -> RemoteImagesAllowedOut:
+    """Allow remote images for a single message permanently in DB."""
+    Session = get_session_factory()
+    with Session() as session:
+        try:
+            allow_message_remote_images(session, message_id)
+            session.commit()
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+    return RemoteImagesAllowedOut(success=True, remote_images_allowed=True)
+
+
+def _is_valid_image_magic(first_chunk: bytes, mime: str | None) -> bool:
+    if not first_chunk or not mime:
+        return False
+    mime = mime.strip().lower()
+    if mime == "image/png":
+        return first_chunk.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime == "image/jpeg":
+        return first_chunk.startswith(b"\xff\xd8\xff")
+    if mime == "image/gif":
+        return first_chunk.startswith(b"GIF87a") or first_chunk.startswith(b"GIF89a")
+    if mime == "image/webp":
+        return len(first_chunk) >= 12 and first_chunk.startswith(b"RIFF") and first_chunk[8:12] == b"WEBP"
+    return False
+
+
+@router.post("/senders/allow-remote-images", response_model=RemoteImagesAllowedOut)
+def api_allow_sender_remote_images(body: SenderAllowIn) -> RemoteImagesAllowedOut:
+    """Allow remote images globally for a verified sender email."""
+    Session = get_session_factory()
+    with Session() as session:
+        msg = session.get(Message, body.message_id)
+        if msg is None:
+            raise HTTPException(404, "message not found")
+        addr = msg.from_address
+
+        try:
+            allow_sender_remote_images(session, addr)
+            session.commit()
+        except InvalidSenderEmailError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    return RemoteImagesAllowedOut(success=True, remote_images_allowed=True)
+
+
+@router.get("/senders/allowed-remote-images", response_model=list[SenderRemoteImageAllowOut])
+def api_list_allowed_senders() -> list[SenderRemoteImageAllowOut]:
+    """List all allowed senders for remote image rendering."""
+    Session = get_session_factory()
+    with Session() as session:
+        records = list_allowed_senders(session)
+        return [
+            SenderRemoteImageAllowOut(
+                id=str(r.id),
+                from_address=r.from_address,
+                created_at=r.created_at,
+            )
+            for r in records
+        ]
+
+
+@router.delete("/senders/allowed-remote-images/{sender_id}", response_model=MutationOut)
+def api_remove_allowed_sender(sender_id: UUID) -> MutationOut:
+    """Remove a sender from the global remote images allowlist."""
+    Session = get_session_factory()
+    with Session() as session:
+        removed = remove_allowed_sender(session, sender_id)
+        if not removed:
+            raise HTTPException(404, "Allowed sender not found")
+        session.commit()
+    return MutationOut(success=True)
+
+
+@preview_router.api_route(
+    "/attachments/{attachment_id}/preview",
+    methods=["GET", "HEAD"],
+    response_class=StreamingResponse,
+    responses={
+        200: {"content": {"image/*": {}}},
+        400: {"description": "Bad Request"},
+        401: {"description": "Invalid or expired preview token"},
+        403: {"description": "Forbidden attachment preview"},
+        404: {"description": "Attachment not found"},
+    },
+)
+def api_preview_inline_attachment(attachment_id: str, request: Request, token: str = Query(...)):
+    """Preview an inline image attachment with a short-lived signed URL token.
+
+    Operates without ambient session cookie to support strict sandbox iframe.
+    """
+    if not verify_inline_image_preview_token(attachment_id, token):
+        raise HTTPException(401, "Invalid or expired preview token")
+
+    Session = get_session_factory()
+    with Session() as session:
+        try:
+            att_uuid = uuid.UUID(attachment_id)
+        except (ValueError, TypeError):
+            raise HTTPException(400, "invalid attachment UUID")
+
+        att = session.get(Attachment, att_uuid)
+        if att is None:
+            raise HTTPException(404, "attachment not found")
+        if not att.is_inline:
+            raise HTTPException(403, "attachment is not inline")
+        if not is_supported_inline_image_mime(att.content_type):
+            raise HTTPException(403, "unsupported inline image format")
+
+        try:
+            payload = load_attachment(session, attachment_id)
+        except PathTraversalRejected as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except AttachmentAccessError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    stream = payload.open_stream()
+    first_chunk = next(stream, b"")
+    if not _is_valid_image_magic(first_chunk, att.content_type):
+        raise HTTPException(403, "attachment content magic does not match image format")
+
+    headers = {
+        "Content-Disposition": "inline",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store",
+    }
+    if payload.size_bytes is not None:
+        headers["X-Attachment-Size"] = str(payload.size_bytes)
+
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type=payload.content_type or "application/octet-stream", headers=headers)
+
+    def _safe_stream():
+        if first_chunk:
+            yield first_chunk
+        yield from stream
+
+    return StreamingResponse(
+        _safe_stream(),
+        media_type=payload.content_type or "application/octet-stream",
+        headers=headers,
+    )

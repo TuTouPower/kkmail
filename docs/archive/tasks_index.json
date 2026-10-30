@@ -1042,6 +1042,22 @@
             "conflicts_with": "",
             "note": "邮件正文在深色模式下智能反转浅色背景为深色底，保持图片原色并提供单信原色切换按钮",
             "dir": "docs/archive/tasks/t065_dark_mode_mail_body_inversion"
+        },
+        {
+            "tid": "t066",
+            "slug": "remote_images_persist_and_reload",
+            "title": "远程图片放行入库重载、内联图映射与单信深色覆盖修复",
+            "status": "done",
+            "branch": "t066_remote_images_persist_and_reload",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "b3ac8b962eeba3b86ff7397818d770720aa64443",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p066、p067、p068；单邮件与发件人放行持久化入库、正文强制重建、cid 内联图映射及阅读器单信深色覆盖多信隔离",
+            "dir": "docs/archive/tasks/t066_remote_images_persist_and_reload"
         }
     ]
 }

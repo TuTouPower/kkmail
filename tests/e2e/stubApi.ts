@@ -75,6 +75,20 @@ export function createMockMessages(): MockMessage[] {
       accountEmail: 'user@example.com',
       accountId: 'acc-00000000-0000-0000-0000-000000000001',
     },
+    {
+      id: 'msg-00000000-0000-0000-0000-000000000005',
+      subject: '远程图片与内联图片测试邮件',
+      from: 'newsletter@verified.org',
+      to: 'user@example.com',
+      date: '2026-10-17T10:00:00Z',
+      is_read: true,
+      is_flagged: false,
+      has_attachments: true,
+      body_preview: '内联图与远程图片共存',
+      body_html: '<p>测试正文</p><img src="cid:inline-logo.png" alt="inline"><img src="https://tracker.test/remote-pixel.png" alt="remote">',
+      accountEmail: 'user@example.com',
+      accountId: 'acc-00000000-0000-0000-0000-000000000001',
+    },
   ]
 }
 
@@ -133,6 +147,8 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
   ]
   let oauthDraft: Record<string, unknown> | null = null
   let sidebarRevision = 0
+  const allowedMessageIds = new Set<string>()
+  let allowedSendersList: Array<{ id: string; from_address: string; created_at: string }> = []
 
   const getSidebarLayout = () => {
     const groupIds = [...currentGroups]
@@ -554,10 +570,74 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
           body_html: hit.body_html,
           body_type: 'html',
           parse_error: hit.parse_error ?? null,
-          attachments: hit.has_attachments
-            ? [{ id: 'att-1', name: 'security_audit.pdf', size: 102400, contentType: 'application/pdf' }]
+          remote_images_allowed:
+            allowedMessageIds.has(hit.id) ||
+            allowedSendersList.some((s) => s.from_address === hit.from.trim().toLowerCase()),
+          can_allow_sender: Boolean(hit.from && hit.from.includes('@')),
+          attachments: hit.id === 'msg-00000000-0000-0000-0000-000000000005'
+            ? [
+                {
+                  id: 'att-inline-1',
+                  name: 'inline-logo.png',
+                  size: 1024,
+                  contentType: 'image/png',
+                  is_inline: true,
+                  content_id: 'inline-logo.png',
+                  preview_url: '/api/mail/attachments/att-inline-1/preview?token=stub-preview-token',
+                },
+              ]
+            : hit.has_attachments
+            ? [{ id: 'att-1', name: 'security_audit.pdf', size: 102400, contentType: 'application/pdf', is_inline: false }]
             : [],
         },
+      })
+    }
+
+    // 7.1 Remote images allowlist endpoints (t066)
+    const allowMsgMatch = path.match(/^\/api\/mail\/messages\/([^/]+)\/allow-remote-images$/)
+    if (allowMsgMatch && method === 'POST') {
+      const mid = allowMsgMatch[1]
+      allowedMessageIds.add(mid)
+      return route.fulfill({ status: 200, json: { success: true, remote_images_allowed: true } })
+    }
+
+    if (path === '/api/mail/senders/allow-remote-images' && method === 'POST') {
+      const body = (req.postDataJSON() || {}) as { message_id?: string }
+      if (body.message_id) {
+        const msg = messages.find((m) => m.id === body.message_id)
+        if (msg) {
+          allowedSendersList.push({
+            id: `sender-${allowedSendersList.length + 1}`,
+            from_address: msg.from.trim().toLowerCase(),
+            created_at: new Date().toISOString(),
+          })
+        }
+      }
+      return route.fulfill({ status: 200, json: { success: true, remote_images_allowed: true } })
+    }
+
+    if (path === '/api/mail/senders/allowed-remote-images' && method === 'GET') {
+      return route.fulfill({ status: 200, json: allowedSendersList })
+    }
+
+    const removeSenderMatch = path.match(/^\/api\/mail\/senders\/allowed-remote-images\/([^/]+)$/)
+    if (removeSenderMatch && method === 'DELETE') {
+      const sid = removeSenderMatch[1]
+      allowedSendersList = allowedSendersList.filter((s) => s.id !== sid)
+      return route.fulfill({ status: 200, json: { success: true } })
+    }
+
+    if (path.startsWith('/api/mail/attachments/') && path.endsWith('/preview') && method === 'GET') {
+      const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+      return route.fulfill({
+        status: 200,
+        contentType: 'image/png',
+        headers: {
+          'Content-Disposition': 'inline',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'private, no-store',
+        },
+        body: Buffer.from(pngBase64, 'base64'),
       })
     }
 

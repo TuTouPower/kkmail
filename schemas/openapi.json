@@ -531,6 +531,17 @@
             ],
             "title": "Contenttype"
           },
+          "content_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Id"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -542,6 +553,17 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Url"
           },
           "size": {
             "anyOf": [
@@ -1110,6 +1132,11 @@
             "title": "Body Type",
             "type": "string"
           },
+          "can_allow_sender": {
+            "default": false,
+            "title": "Can Allow Sender",
+            "type": "boolean"
+          },
           "cc": {
             "title": "Cc",
             "type": "string"
@@ -1210,6 +1237,11 @@
               }
             ],
             "title": "Parse Error"
+          },
+          "remote_images_allowed": {
+            "default": false,
+            "title": "Remote Images Allowed",
+            "type": "boolean"
           },
           "snippet": {
             "anyOf": [
@@ -2152,6 +2184,22 @@
         "title": "ReadyOut",
         "type": "object"
       },
+      "RemoteImagesAllowedOut": {
+        "properties": {
+          "remote_images_allowed": {
+            "default": true,
+            "title": "Remote Images Allowed",
+            "type": "boolean"
+          },
+          "success": {
+            "default": true,
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "title": "RemoteImagesAllowedOut",
+        "type": "object"
+      },
       "SearchPageOut": {
         "properties": {
           "items": {
@@ -2193,6 +2241,44 @@
           "next_offset"
         ],
         "title": "SearchPageOut",
+        "type": "object"
+      },
+      "SenderAllowIn": {
+        "properties": {
+          "message_id": {
+            "format": "uuid",
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "title": "SenderAllowIn",
+        "type": "object"
+      },
+      "SenderRemoteImageAllowOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "from_address": {
+            "title": "From Address",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "from_address",
+          "created_at"
+        ],
+        "title": "SenderRemoteImageAllowOut",
         "type": "object"
       },
       "SettingsOut": {
@@ -3865,6 +3951,66 @@
         ]
       }
     },
+    "/api/mail/attachments/{attachment_id}/preview": {
+      "get": {
+        "description": "Preview an inline image attachment with a short-lived signed URL token.\n\nOperates without ambient session cookie to support strict sandbox iframe.",
+        "operationId": "api_preview_inline_attachment_api_mail_attachments__attachment_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attachment_id",
+            "required": true,
+            "schema": {
+              "title": "Attachment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/*": {}
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Invalid or expired preview token"
+          },
+          "403": {
+            "description": "Forbidden attachment preview"
+          },
+          "404": {
+            "description": "Attachment not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Preview Inline Attachment",
+        "tags": [
+          "preview"
+        ]
+      }
+    },
     "/api/mail/folders/{folder_id}/stats": {
       "get": {
         "operationId": "api_one_folder_stats_api_mail_folders__folder_id__stats_get",
@@ -4198,6 +4344,58 @@
           }
         ],
         "summary": "Api Get Message",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/api/mail/messages/{message_id}/allow-remote-images": {
+      "post": {
+        "description": "Allow remote images for a single message permanently in DB.",
+        "operationId": "api_allow_message_remote_images_api_mail_messages__message_id__allow_remote_images_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteImagesAllowedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Allow Message Remote Images",
         "tags": [
           "mail"
         ]
@@ -4554,6 +4752,142 @@
           }
         ],
         "summary": "Api Search",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/api/mail/senders/allow-remote-images": {
+      "post": {
+        "description": "Allow remote images globally for a verified sender email.",
+        "operationId": "api_allow_sender_remote_images_api_mail_senders_allow_remote_images_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SenderAllowIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteImagesAllowedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Allow Sender Remote Images",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/api/mail/senders/allowed-remote-images": {
+      "get": {
+        "description": "List all allowed senders for remote image rendering.",
+        "operationId": "api_list_allowed_senders_api_mail_senders_allowed_remote_images_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SenderRemoteImageAllowOut"
+                  },
+                  "title": "Response Api List Allowed Senders Api Mail Senders Allowed Remote Images Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api List Allowed Senders",
+        "tags": [
+          "mail"
+        ]
+      }
+    },
+    "/api/mail/senders/allowed-remote-images/{sender_id}": {
+      "delete": {
+        "description": "Remove a sender from the global remote images allowlist.",
+        "operationId": "api_remove_allowed_sender_api_mail_senders_allowed_remote_images__sender_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sender_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Sender Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Api Remove Allowed Sender",
         "tags": [
           "mail"
         ]

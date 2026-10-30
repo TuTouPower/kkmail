@@ -358,6 +358,7 @@ class AttachmentItem:
     content_type: str | None
     size_bytes: int | None
     is_inline: bool
+    content_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,6 +439,7 @@ def get_message_detail(session: Session, message_id: uuid.UUID) -> MessageDetail
                 content_type=a.content_type,
                 size_bytes=a.size_bytes,
                 is_inline=a.is_inline,
+                content_id=a.content_id,
             )
             for a in atts
         ],

@@ -62,6 +62,8 @@ interface MailUiState {
   setUiReferenceEnabled: (enabled: boolean) => void
   uiReferenceShortcut: Shortcut | null
   setUiReferenceShortcut: (shortcut: Shortcut | null) => void
+  viewModeOverrides: Record<string, 'smart' | 'original'>
+  setViewModeOverride: (messageId: string, mode: 'smart' | 'original') => void
 }
 
 // State every view switch must reset, shared by setView/openSmartView so the
@@ -146,6 +148,11 @@ export const useMailStore = create<MailUiState>()(
       setUiReferenceEnabled: (enabled) => set({ uiReferenceEnabled: enabled }),
       uiReferenceShortcut: null,
       setUiReferenceShortcut: (shortcut) => set({ uiReferenceShortcut: shortcut }),
+      viewModeOverrides: {},
+      setViewModeOverride: (messageId, mode) =>
+        set((s) => ({
+          viewModeOverrides: { ...s.viewModeOverrides, [messageId]: mode },
+        })),
     }),
     { name: 'mail-ui-storage', partialize: (s) => ({
       theme: s.theme,

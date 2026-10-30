@@ -113,3 +113,14 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 1. **新账号全量基线约束**：新账户首次接入必须通过 `SYNC_ACCOUNT_FOLDERS` 识别目录，对无 `full_scan_complete` Checkpoint 的文件夹触发 `SYNC_FOLDER_METADATA` 全量历史拉取，建立完整基线。
 2. **日常同步接口 100% 增量化**：`/api/accounts/sync-all` 与 `/api/accounts/{account_id}/sync` 的 `mode` 严格收敛为 `"delta"`；文件夹发现层若检测到该目录已具备基线，自动流转为 `SYNC_FOLDER_DELTA`，几秒内秒级完成，彻底杜绝日常操作误触历史全量扫描而阻断新邮件发现。
 3. **全量重扫异常自愈隔离**：全量历史重新拉取仅限远端游标失效（`CursorInvalidError`）时触发自愈重建，禁止暴露为日常常规触发路径。
+
+## 远程图片放行存储与正文内联图片 Signed URL 预览 (t066)
+
+1. **远程图片放行模型**：
+    - `message_remote_image_allows`：主键 `message_id` 外键关联 `messages.id`（`ondelete="CASCADE"`），记录用户针对单封邮件的放行授权；
+    - `sender_remote_image_allows`：唯一索引 `from_address`，记录全局跨账号的发件人白名单；
+    - 邮件详情接口根据上述两表联合计算返回 `remote_images_allowed: bool` 与 `can_allow_sender: bool`。
+2. **正文内联附件 Signed URL 架构**：
+    - 后端通过 `sign_inline_image_preview_token` 为内联位图签发确定性 HMAC-SHA256 Token（绑定 `version`、`purpose`、`attachment_id`、时间戳，15 分钟失效）；
+    - 挂载独立无 Cookie 预览端点 `GET/HEAD /api/mail/attachments/{id}/preview`，仅凭有效 Token 鉴权放行流式响应；响应强制设置 `Content-Disposition: inline`、`X-Content-Type-Options: nosniff`，严格校验真实位图魔数（排除 SVG 及可执行文件）；
+    - 前端在离线 DOM 解析正文将 `<img src="cid:...">` 重写为此签名 URL，浏览器在严格沙箱 iframe（无 `allow-same-origin`）内原生流式拉取图片，彻底杜绝前端 Base64 内存膨胀。

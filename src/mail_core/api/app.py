@@ -19,7 +19,7 @@ from mail_core import __version__
 from mail_core.api.accounts import router as accounts_router
 from mail_core.api.auth_routes import router as auth_router
 from mail_core.api.deps import require_auth
-from mail_core.api.mail import router as mail_router
+from mail_core.api.mail import preview_router, router as mail_router
 from mail_core.api.oauth_routes import router as oauth_router
 from mail_core.api.sse import router as sse_router
 
@@ -167,6 +167,7 @@ app.include_router(oauth_router)
 app.include_router(accounts_router, dependencies=[Depends(require_auth)])
 app.include_router(sse_router, prefix="/api", tags=["realtime"], dependencies=[Depends(require_auth)])
 app.include_router(mail_router, dependencies=[Depends(require_auth)])
+app.include_router(preview_router)
 
 
 @lru_cache(maxsize=1)

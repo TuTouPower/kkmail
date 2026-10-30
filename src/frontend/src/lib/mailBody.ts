@@ -34,6 +34,139 @@ export type PreparedMailHtml = {
   classification: MailHtmlClassification
 }
 
+export type InlineAttachmentCandidate = {
+  content_id?: string | null
+  preview_url?: string | null
+  is_inline?: boolean
+}
+
+/**
+ * Normalize a MIME header Content-ID according to RFC 2392 / RFC 2045:
+ * Strips enclosing angle brackets and whitespace, converts to lowercase.
+ * Does NOT perform unconstrained percent-decoding (literal Content-ID semantics).
+ * Rejects IDs exceeding 255 characters or empty IDs.
+ */
+export function normalizeHeaderContentId(rawId: string | null | undefined): string | null {
+  if (!rawId) return null
+  let s = rawId.trim()
+  if (s.startsWith('<') && s.endsWith('>')) {
+    s = s.slice(1, -1).trim()
+  }
+  if (!s || s.length > 255) return null
+  return s.toLowerCase()
+}
+
+/**
+ * Normalize a CID URL reference from HTML (<img src="cid:...">):
+ * Strips 'cid:' scheme, decodes URI percent-encoding strictly once, strips angle brackets/whitespace, converts to lowercase.
+ * Rejects malformed percent-encoding, IDs exceeding 255 characters, or empty IDs.
+ */
+export function normalizeCidUrl(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl) return null
+  let s = rawUrl.trim()
+  if (!s.toLowerCase().startsWith('cid:')) return null
+  s = s.slice(4).trim()
+  if (s.startsWith('<') && s.endsWith('>')) {
+    s = s.slice(1, -1).trim()
+  }
+  try {
+    s = decodeURIComponent(s)
+  } catch {
+    // Malformed percent-encoding (e.g. cid:% or invalid escape) -> fail-safe fallback
+    return null
+  }
+  if (s.startsWith('<') && s.endsWith('>')) {
+    s = s.slice(1, -1).trim()
+  }
+  if (!s || s.length > 255) return null
+  return s.toLowerCase()
+}
+
+/** Compatibility helper maintaining normalizeCid signature for test suite. */
+export function normalizeCid(rawCid: string | null | undefined): string {
+  if (!rawCid) return ''
+  return (rawCid.trim().toLowerCase().startsWith('cid:') ? normalizeCidUrl(rawCid) : normalizeHeaderContentId(rawCid)) ?? ''
+}
+
+/**
+ * Rewrite <img src="cid:..."> in mail HTML to short-lived Signed URLs before sanitization.
+ * Operates in an offline DOM container using attribute APIs.
+ */
+export function rewriteCidImages(
+  html: string,
+  attachments?: InlineAttachmentCandidate[],
+): string {
+  if (!html || !attachments || attachments.length === 0) {
+    return html || ''
+  }
+
+  // 1. Identify all normalized CIDs across candidates and detect conflicts
+  const cidMap = new Map<string, string>()
+  const conflicted = new Set<string>()
+
+  for (const att of attachments) {
+    if (att.is_inline === false) continue
+    const norm = normalizeHeaderContentId(att.content_id)
+    if (!norm) continue
+    if (cidMap.has(norm)) {
+      // Conflict: multiple attachments share the same normalized Content-ID
+      conflicted.add(norm)
+    } else if (att.preview_url) {
+      cidMap.set(norm, att.preview_url)
+    } else {
+      // Attachment has a CID but no preview_url (e.g. non-image inline part)
+      cidMap.set(norm, '')
+    }
+  }
+
+  for (const conf of conflicted) {
+    cidMap.delete(conf)
+  }
+
+  if (cidMap.size === 0) {
+    return html
+  }
+
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const images = doc.querySelectorAll('img')
+  let modified = false
+
+  for (const img of Array.from(images)) {
+    const src = img.getAttribute('src') || ''
+    const norm = normalizeCidUrl(src)
+    if (norm) {
+      const previewUrl = cidMap.get(norm)
+      if (previewUrl) {
+        img.setAttribute('src', previewUrl)
+        modified = true
+      }
+    }
+  }
+
+  if (!modified) {
+    return html
+  }
+
+  return doc.body ? doc.body.innerHTML : html
+}
+
+/**
+ * Detect whether the sanitized HTML contains external remote images (http:, https:, //).
+ * Does not count data:, /api/mail/attachments/ preview URLs, or cid: placeholders.
+ */
+export function hasRemoteImages(sanitizedHtml: string): boolean {
+  if (!sanitizedHtml) return false
+  const doc = new DOMParser().parseFromString(sanitizedHtml, 'text/html')
+  const images = doc.querySelectorAll('img')
+  for (const img of Array.from(images)) {
+    const src = (img.getAttribute('src') || '').trim()
+    if (/^(?:https?:|\/\/)/i.test(src)) {
+      return true
+    }
+  }
+  return false
+}
+
 function parseColorBrightness(colorStr: string): 'light' | 'dark' | null {
   const s = colorStr.trim().toLowerCase()
   if (['white', '#fff', '#ffffff', '#fafafa', '#f8f9fa', '#f5f5f5', '#eeeeee', '#e0e0e0'].includes(s)) {
@@ -109,17 +242,24 @@ function classifySanitizedMailHtml(sanitized: string): MailHtmlClassification {
 }
 
 /** Sanitize HTML once and reuse it for classification and srcdoc generation. */
-export function prepareMailHtml(html: string): PreparedMailHtml {
-  const sanitizedHtml = sanitizeMailHtml(html)
+export function prepareMailHtml(
+  html: string,
+  attachments?: InlineAttachmentCandidate[],
+): PreparedMailHtml {
+  const rewritten = rewriteCidImages(html, attachments)
+  const sanitizedHtml = sanitizeMailHtml(rewritten)
   return {
     sanitizedHtml,
     classification: classifySanitizedMailHtml(sanitizedHtml),
   }
 }
 
-export function classifyMailHtml(html: string): MailHtmlClassification {
+export function classifyMailHtml(
+  html: string,
+  attachments?: InlineAttachmentCandidate[],
+): MailHtmlClassification {
   if (!html || typeof html !== 'string') return 'plain'
-  return prepareMailHtml(html).classification
+  return prepareMailHtml(html, attachments).classification
 }
 
 export type MailSrcdocOptions = {
@@ -145,7 +285,9 @@ export type MailSrcdocOptions = {
  */
 export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): string {
   const loadRemote = opts.loadRemoteImages === true
-  const imgSrc = loadRemote ? 'img-src https: http: data: cid:' : 'img-src data: cid:'
+  const imgSrc = loadRemote
+    ? "img-src 'self' https: http: data: cid:"
+    : "img-src 'self' data: cid:"
   const csp = `default-src 'none'; ${imgSrc}; style-src 'unsafe-inline'; font-src https: data:`
 
   const theme = opts.theme || 'light'

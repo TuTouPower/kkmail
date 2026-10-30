@@ -5,8 +5,12 @@ import {
   MAIL_IFRAME_SANDBOX,
   buildMailSrcdoc,
   classifyMailHtml,
+  hasRemoteImages,
   isHtmlBody,
+  normalizeCidUrl,
+  normalizeHeaderContentId,
   prepareMailHtml,
+  rewriteCidImages,
   sanitizeMailHtml,
 } from './mailBody'
 
@@ -33,10 +37,12 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(out).not.toMatch(/<svg|<math|<video|<audio|<source|<track|<details/i)
   })
 
-  it('wraps output in a CSP document with rel="noopener noreferrer" base and no-referrer meta', () => {
+  // t066: The CSP image source directive uses standard 'self' keyword to permit
+  // local signed preview endpoints and data: while blocking remote images.
+  it('wraps output in a CSP document with rel="noopener noreferrer" base, no-referrer meta, and preview endpoint', () => {
     const doc = buildMailSrcdoc('<img src=x onerror=alert(1)>')
     expect(doc).toContain("default-src 'none'")
-    expect(doc).toContain('img-src data: cid:')
+    expect(doc).toContain("img-src 'self' data: cid:")
     expect(doc).toContain('<meta name="referrer" content="no-referrer">')
     expect(doc).toContain('<base target="_blank" rel="noopener noreferrer">')
     expect(doc).not.toMatch(/onerror/i)
@@ -59,9 +65,11 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(out).toContain('rel="noopener noreferrer"')
   })
 
+  // t066: Verifies remote external images remain strictly blocked by default while
+  // preview endpoint is permitted. Explicit opt-in opens external http(s).
   it('blocks remote images by default and allows them only on explicit opt-in', () => {
     expect(buildMailSrcdoc('<img src="https://evil/x.png">')).not.toContain('img-src https:')
-    expect(buildMailSrcdoc('<img src="https://x/y.png">', { loadRemoteImages: true })).toContain('img-src https: http: data: cid:')
+    expect(buildMailSrcdoc('<img src="https://x/y.png">', { loadRemoteImages: true })).toContain("img-src 'self' https: http: data: cid:")
   })
 
   it('locks the A384 popup-escape adjudication boundaries: exact sandbox, no opener, protocol filtering intact', () => {
@@ -197,5 +205,78 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     const doc = buildMailSrcdoc(malicious, { theme: 'dark' })
     expect(doc).not.toMatch(/alert\(1\)/)
     expect(doc).toContain("default-src 'none'")
+  })
+})
+
+describe('t066: CID image rewriting and remote image detection', () => {
+  it('normalizes CID according to RFC 2392 (separating URL percent-decode and header literal retention)', () => {
+    // URL side: strictly decode percent-encoding once and lowercase
+    expect(normalizeCidUrl('cid:foo%40bar.com')).toBe('foo@bar.com')
+    expect(normalizeCidUrl('cid:<Foo%40Bar.com>')).toBe('foo@bar.com')
+    expect(normalizeCidUrl('cid:<IMAGE_01.PNG>')).toBe('image_01.png')
+
+    // Header side: strips angle brackets and lowercase, does not do unconstrained double percent-decode
+    expect(normalizeHeaderContentId('<Foo%40Bar.com>')).toBe('foo%40bar.com')
+    expect(normalizeHeaderContentId('simple-id@domain.com')).toBe('simple-id@domain.com')
+
+    // Empty or malformed inputs
+    expect(normalizeCidUrl('')).toBeNull()
+    expect(normalizeCidUrl('cid:%')).toBeNull() // Malformed percent escape
+    expect(normalizeCidUrl('cid:%E0%A4%A')).toBeNull() // Invalid UTF-8 sequence
+    expect(normalizeHeaderContentId('')).toBeNull()
+
+    // Length limit > 255 rejected
+    expect(normalizeCidUrl('cid:' + 'a'.repeat(256))).toBeNull()
+    expect(normalizeHeaderContentId('a'.repeat(256))).toBeNull()
+  })
+
+  it('rewrites matching CID images to signed preview URLs in offline DOM', () => {
+    const html = '<p>Hello</p><img src="cid:logo.png" alt="Logo"><img src="cid:banner%40ex.com">'
+    const attachments = [
+      { content_id: 'logo.png', preview_url: '/api/mail/attachments/111/preview?token=tok1', is_inline: true },
+      { content_id: '<banner@ex.com>', preview_url: '/api/mail/attachments/222/preview?token=tok2', is_inline: true },
+    ]
+    const rewritten = rewriteCidImages(html, attachments)
+    expect(rewritten).toContain('src="/api/mail/attachments/111/preview?token=tok1"')
+    expect(rewritten).toContain('src="/api/mail/attachments/222/preview?token=tok2"')
+  })
+
+  it('safely falls back to original when CID has no matching attachment, conflicts, or non-inline parts', () => {
+    const html = '<img src="cid:unmatched@test">'
+    const rewritten = rewriteCidImages(html, [])
+    expect(rewritten).toBe(html)
+
+    // Conflict case: two distinct attachments share the exact same normalized content_id
+    const conflictAttachments = [
+      { content_id: '<duplicate@test>', preview_url: '/api/mail/attachments/a1/preview', is_inline: true },
+      { content_id: 'duplicate@test', preview_url: '/api/mail/attachments/a2/preview', is_inline: true },
+    ]
+    const conflictHtml = '<img src="cid:duplicate@test">'
+    expect(rewriteCidImages(conflictHtml, conflictAttachments)).toBe(conflictHtml)
+
+    // Non-inline attachment (is_inline === false) is excluded from inline image rewriting
+    const regularAttachment = [
+      { content_id: 'report.pdf', preview_url: '/api/mail/attachments/pdf/preview', is_inline: false },
+    ]
+    const regularHtml = '<img src="cid:report.pdf">'
+    expect(rewriteCidImages(regularHtml, regularAttachment)).toBe(regularHtml)
+
+    // Malformed percent escape safely falls back
+    const malformedHtml = '<img src="cid:%">'
+    expect(rewriteCidImages(malformedHtml, conflictAttachments)).toBe(malformedHtml)
+  })
+
+  it('detects external remote images accurately and ignores inline/preview/data URLs', () => {
+    // External http / https / protocol-relative
+    expect(hasRemoteImages('<img src="https://tracker.com/pixel.gif">')).toBe(true)
+    expect(hasRemoteImages('<img src="http://example.com/logo.png">')).toBe(true)
+    expect(hasRemoteImages('<img src="//cdn.example.com/banner.jpg">')).toBe(true)
+
+    // Internal preview, data URI, or cid should NOT trigger remote image warning
+    expect(hasRemoteImages('<img src="/api/mail/attachments/123/preview?token=xyz">')).toBe(false)
+    expect(hasRemoteImages('<img src="data:image/png;base64,iVBORw0KGgo=">')).toBe(false)
+    expect(hasRemoteImages('<img src="cid:inline_logo">')).toBe(false)
+    expect(hasRemoteImages('<p>Plain text without images</p>')).toBe(false)
+    expect(hasRemoteImages('')).toBe(false)
   })
 })

@@ -2,11 +2,25 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExterna
 import { useQuery } from '@tanstack/react-query'
 import { Mail, MailOpen, Trash2, Flag, ArrowLeft, RefreshCw, Sun, Moon } from 'lucide-react'
 import { findCachedMail, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail, type MailItem } from '../api/queries'
-import { fetchMailCoreMessage, mailCoreAttachmentUrl, mailCoreToMailDetail, postMailCoreMessageTrash, postMailCoreSyncMessageBody } from '../api/mailCore'
+import {
+  allowMessageRemoteImages,
+  allowSenderRemoteImages,
+  fetchMailCoreMessage,
+  mailCoreAttachmentUrl,
+  mailCoreToMailDetail,
+  postMailCoreMessageTrash,
+  postMailCoreSyncMessageBody,
+} from '../api/mailCore'
 import { mailKey } from '../lib/mailKey'
 import { useMailStore } from '../store/mailStore'
 import { confirmAction, errorMessage } from '../lib/actions'
-import { MAIL_IFRAME_SANDBOX, buildMailSrcdoc, isHtmlBody, prepareMailHtml } from '../lib/mailBody'
+import {
+  MAIL_IFRAME_SANDBOX,
+  buildMailSrcdoc,
+  hasRemoteImages,
+  isHtmlBody,
+  prepareMailHtml,
+} from '../lib/mailBody'
 import { formatReaderDate } from '../lib/listDate'
 import { displayEmail, displayName } from '../lib/displayName'
 import { formatFileSize } from '../lib/formatSize'
@@ -78,9 +92,17 @@ const MessageReader = memo(function MessageReader() {
   const setSelectedKey = useMailStore((s) => s.setSelectedKey)
   const setMobileView = useMailStore((s) => s.setMobileView)
   const [actionStatus, setActionStatus] = useState('')
-  const [allowedRemoteImagesKey, setAllowedRemoteImagesKey] = useState<string | null>(null)
-  const [viewModeOverride, setViewModeOverride] = useState<{ key: string; mode: 'smart' | 'original' } | null>(null)
-  const loadRemoteImages = Boolean(selectedKey && allowedRemoteImagesKey === selectedKey)
+  const [allowingImages, setAllowingImages] = useState(false)
+  const [allowImagesError, setAllowImagesError] = useState('')
+  const allowImagesAbortRef = useRef<AbortController | null>(null)
+  const viewModeOverrides = useMailStore((s) => s.viewModeOverrides)
+  const setStoreViewModeOverride = useMailStore((s) => s.setViewModeOverride)
+
+  useEffect(() => {
+    allowImagesAbortRef.current?.abort()
+    setAllowingImages(false)
+    setAllowImagesError('')
+  }, [selectedKey])
 
   // Re-render when the selected mail's cached fields change (optimistic
   // flag/read/delete), not on every query-cache event.
@@ -114,6 +136,57 @@ const MessageReader = memo(function MessageReader() {
   const body = detail?.body || ''
   const html = Boolean(detail?.body && isHtmlBody(detail.body_type))
   const currentMailKey = selected ? mailKey(selected) : undefined
+  const loadRemoteImages = Boolean(detail?.remote_images_allowed)
+  const canAllowSender = Boolean(detail?.can_allow_sender)
+
+  const handleAllowMessageImages = async () => {
+    if (!selected?.id || !selectedKey) return
+    const targetKey = selectedKey
+    allowImagesAbortRef.current?.abort()
+    const controller = new AbortController()
+    allowImagesAbortRef.current = controller
+    setAllowingImages(true)
+    setAllowImagesError('')
+    try {
+      await allowMessageRemoteImages(selected.id, controller.signal)
+      if (useMailStore.getState().selectedKey !== targetKey) return
+      queryClient.setQueryData(
+        ['detail', 'mail-core', selected.id],
+        (old: any) => (old ? { ...old, remote_images_allowed: true } : old)
+      )
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return
+      if (useMailStore.getState().selectedKey !== targetKey) return
+      setAllowImagesError(errorMessage(err, '允许加载图片失败，请重试'))
+    } finally {
+      if (useMailStore.getState().selectedKey === targetKey) {
+        setAllowingImages(false)
+      }
+    }
+  }
+
+  const handleAllowSenderImages = async () => {
+    if (!selected?.id || !selectedKey) return
+    const targetKey = selectedKey
+    allowImagesAbortRef.current?.abort()
+    const controller = new AbortController()
+    allowImagesAbortRef.current = controller
+    setAllowingImages(true)
+    setAllowImagesError('')
+    try {
+      await allowSenderRemoteImages(selected.id, controller.signal)
+      if (useMailStore.getState().selectedKey !== targetKey) return
+      await queryClient.invalidateQueries({ queryKey: ['detail'] })
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return
+      if (useMailStore.getState().selectedKey !== targetKey) return
+      setAllowImagesError(errorMessage(err, '发件人白名单添加失败，请重试'))
+    } finally {
+      if (useMailStore.getState().selectedKey === targetKey) {
+        setAllowingImages(false)
+      }
+    }
+  }
 
   const isPendingArchive = Boolean(
     detail && !detail.parse_error && !detail.body && detail.is_archived === false,
@@ -217,12 +290,14 @@ const MessageReader = memo(function MessageReader() {
   // A255: only HTML bodies need DOMPurify sanitization + colour
   // classification (for the iframe path); a plain-text body is rendered
   // as text and must not pay for — or be altered by — that pipeline.
-  const preparedMailHtml = useMemo(() => (body && html ? prepareMailHtml(body) : null), [body, html])
+  const preparedMailHtml = useMemo(
+    () => (body && html ? prepareMailHtml(body, detail?.attachments) : null),
+    [body, html, detail?.attachments],
+  )
   const mailThemeClass = html ? preparedMailHtml?.classification ?? 'plain' : 'plain'
 
-  const effectiveBodyDarkMode = (currentMailKey && viewModeOverride?.key === currentMailKey)
-    ? viewModeOverride.mode
-    : mailBodyDarkModePref
+  const currentOverride = currentMailKey ? viewModeOverrides[currentMailKey] : undefined
+  const effectiveBodyDarkMode = currentOverride ?? mailBodyDarkModePref
 
   const isLightMail = mailThemeClass === 'light'
   const isDarkInverted = resolvedTheme === 'dark' && isLightMail && effectiveBodyDarkMode === 'smart'
@@ -304,7 +379,7 @@ const MessageReader = memo(function MessageReader() {
               onClick={() => {
                 if (!currentMailKey) return
                 const nextMode = isDarkInverted ? 'original' : 'smart'
-                setViewModeOverride({ key: currentMailKey, mode: nextMode })
+                setStoreViewModeOverride(currentMailKey, nextMode)
               }}
             >
               {isDarkInverted ? <Sun size={18} /> : <Moon size={18} />}
@@ -477,25 +552,46 @@ const MessageReader = memo(function MessageReader() {
                   body — markup that sanitization strips (e.g. inside a
                   script) must not trigger the banner, and an unquoted
                   src= must still be recognised. */}
-              {!loadRemoteImages && preparedMailHtml && /<img\b[^>]*?\ssrc\s*=\s*["']?https?:\/\//i.test(preparedMailHtml.sanitizedHtml) && (
-                <div style={{ fontSize: 12, marginBottom: 10, padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--text)' }}>
-                  远程图片已拦截（防追踪）。
+              {!loadRemoteImages && preparedMailHtml && hasRemoteImages(preparedMailHtml.sanitizedHtml) && (
+                <div style={{ fontSize: 12, marginBottom: 10, padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-2)', color: 'var(--text)', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                  <span>远程图片已拦截（防追踪）。</span>
                   <button
                     type="button"
                     style={{
-                      marginLeft: 8,
                       padding: '3px 8px',
                       borderRadius: 4,
                       border: '1px solid var(--line)',
                       background: 'var(--surface)',
                       color: 'var(--text)',
-                      cursor: 'pointer',
+                      cursor: allowingImages ? 'wait' : 'pointer',
                       fontSize: 12,
                     }}
-                    onClick={() => selectedKey && setAllowedRemoteImagesKey(selectedKey)}
+                    disabled={allowingImages}
+                    onClick={handleAllowMessageImages}
                   >
                     仅此邮件允许加载
                   </button>
+                  {canAllowSender && (
+                    <button
+                      type="button"
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: 4,
+                        border: '1px solid var(--line)',
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                        cursor: allowingImages ? 'wait' : 'pointer',
+                        fontSize: 12,
+                      }}
+                      disabled={allowingImages}
+                      onClick={handleAllowSenderImages}
+                    >
+                      总是允许来自此发件人的图片
+                    </button>
+                  )}
+                  {allowImagesError && (
+                    <span style={{ color: 'var(--red, #ff4d4f)', fontSize: 12 }}>{allowImagesError}</span>
+                  )}
                 </div>
               )}
               {resolvedTheme === 'dark' && mailThemeClass === 'light' && !isDarkInverted ? (
@@ -514,7 +610,7 @@ const MessageReader = memo(function MessageReader() {
                   }}
                 >
                   <iframe
-                    key={`${currentMailKey}-${resolvedTheme}-original`}
+                    key={`${currentMailKey}-${resolvedTheme}-original-${loadRemoteImages ? 'remote' : 'blocked'}`}
                     className="email-body email-body-frame"
                     title="邮件正文"
                     sandbox={MAIL_IFRAME_SANDBOX}
@@ -525,7 +621,7 @@ const MessageReader = memo(function MessageReader() {
                 </div>
               ) : (
                 <iframe
-                  key={`${currentMailKey}-${resolvedTheme}-${isDarkInverted ? 'inverted' : 'normal'}`}
+                  key={`${currentMailKey}-${resolvedTheme}-${isDarkInverted ? 'inverted' : 'normal'}-${loadRemoteImages ? 'remote' : 'blocked'}`}
                   className="email-body email-body-frame"
                   title="邮件正文"
                   sandbox={MAIL_IFRAME_SANDBOX}

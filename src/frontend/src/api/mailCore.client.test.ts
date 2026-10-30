@@ -203,11 +203,17 @@ describe('mail endpoints', () => {
       date: '2024-01-01T00:00:00Z', is_read: true, is_flagged: false, has_attachments: true, snippet: null, body: '',
       body_type: 'empty', parse_error: null, is_archived: true,
       archive_state: 'archive_complete', archive_has_error: false,
+      remote_images_allowed: false,
+      can_allow_sender: true,
       attachments: [{ id: 'att', name: 'a.pdf', contentType: null, size: null, is_inline: false }],
     }
     const out = mailCoreToMailDetail(d)
     expect(out.body_type).toBeUndefined()
     expect(out.cc).toBeUndefined()
-    expect(out.attachments).toEqual([{ id: 'att', name: 'a.pdf', size: undefined, contentType: undefined }])
+    expect(out.remote_images_allowed).toBe(false)
+    expect(out.can_allow_sender).toBe(true)
+    expect(out.attachments).toEqual([
+      { id: 'att', name: 'a.pdf', size: undefined, contentType: undefined, is_inline: false, content_id: null, preview_url: null },
+    ])
   })
 })

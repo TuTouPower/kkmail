@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type Ref } from 'react'
 import { api, type AccountSummary, type SyncRequestOut } from '../api/client'
 import { syncFailureDetail, waitForSyncRequests } from '../api/sync'
 import { fetchAccounts, fetchGroups, queryKeys, resetGroupMailQueries, resetMailListQueries } from '../api/queries'
+import { fetchAllowedSenders, removeAllowedSender } from '../api/mailCore'
 import { useMailStore } from '../store/mailStore'
 import { formatShortcut, getDefaultShortcut } from '../lib/ui_shortcut'
 import { confirmAction, errorMessage } from '../lib/actions'
@@ -68,6 +69,25 @@ export default function SettingsPage({
   const pendingGroups = !!pendingScopes.groups
   const pendingGeneral = !!pendingScopes.general
   const pendingPassword = !!pendingScopes.password
+  const allowedSendersQuery = useQuery({
+    queryKey: ['allowed-senders'],
+    queryFn: ({ signal }) => fetchAllowedSenders(signal),
+    enabled: section === 'general',
+  })
+  const allowedSenders = allowedSendersQuery.data || []
+
+  const handleRemoveSender = async (senderId: string, email: string) => {
+    if (!confirmAction(`移除发件人 ${email} 的自动放行？再次打开相关邮件将恢复拦截。`)) return
+    try {
+      await removeAllowedSender(senderId)
+      await qc.cancelQueries({ queryKey: ['detail'] })
+      qc.removeQueries({ queryKey: ['detail'] })
+      await qc.invalidateQueries({ queryKey: ['allowed-senders'] })
+    } catch (err) {
+      report('general', errorMessage(err, '移除失败'), true)
+    }
+  }
+
   const [addOpen, setAddOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<AccountSummary | null>(null)
   const [search, setSearch] = useState('')
@@ -518,6 +538,53 @@ export default function SettingsPage({
               ] as const).map(([value, label, description, Icon]) => <button key={value} type="button" className={`settings-theme-card${theme === value ? ' is-active' : ''}`} aria-pressed={theme === value} aria-label={label} onClick={() => setTheme(value)}><span className={`settings-theme-preview theme-${value}`} aria-hidden="true"><i /><span><b /><b /><b /></span></span><span className="settings-theme-label"><Icon size={15} />{label}{theme === value && <Check size={15} />}</span><small>{description}</small></button>)}</div>
               <div className="settings-control-row"><div><strong>账号图标</strong><small>选择侧栏与账户列表中的标识方式</small></div><div className="settings-segmented" data-ui="ST07">{([['none', '不展示'], ['brand', '品牌图标'], ['initials', '首字母']] as const).map(([mode, label]) => <button type="button" key={mode} aria-pressed={accountIconMode === mode} onClick={() => setAccountIconMode(mode)}>{label}</button>)}</div></div>
               <div className="settings-control-row"><div><strong>邮件正文深色渲染</strong><small>深色模式下浅色 HTML 邮件的正文展示偏好</small></div><div className="settings-segmented">{([['smart', '智能深色'], ['original', '保留原色纸张']] as const).map(([mode, label]) => <button type="button" key={mode} aria-pressed={mailBodyDarkMode === mode} onClick={() => setMailBodyDarkMode(mode)}>{label}</button>)}</div></div>
+            </section>
+            <section className="settings-card">
+              <h2>远程图片放行</h2>
+              <p>已允许自动加载远程图片的发件人白名单（跨全部收件账号生效）。</p>
+              {allowedSendersQuery.isPending ? (
+                <div className="settings-empty">正在加载发件人白名单…</div>
+              ) : allowedSendersQuery.isError ? (
+                <div className="settings-feedback is-error" role="alert">
+                  加载失败：{errorMessage(allowedSendersQuery.error)}{' '}
+                  <button className="settings-text-button" type="button" onClick={() => void allowedSendersQuery.refetch()}>重试</button>
+                </div>
+              ) : allowedSenders.length === 0 ? (
+                <div className="settings-empty">暂无已放行的发件人。可在阅读邮件时点击「总是允许来自此发件人的图片」添加。</div>
+              ) : (
+                <div className="settings-sender-allowlist" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {allowedSenders.map((s) => (
+                    <div
+                      key={s.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        border: '1px solid var(--line)',
+                        borderRadius: 6,
+                        background: 'var(--surface-2)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <strong style={{ fontSize: 13 }}>{s.from_address}</strong>
+                        <small style={{ color: 'var(--muted)', fontSize: 11 }}>
+                          已放行
+                        </small>
+                      </div>
+                      <button
+                        type="button"
+                        className="settings-button is-danger"
+                        style={{ fontSize: 12, padding: '4px 8px' }}
+                        aria-label={`移除 ${s.from_address} 放行`}
+                        onClick={() => void handleRemoveSender(s.id, s.from_address)}
+                      >
+                        移除
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
             <section className="settings-card"><h2>元素序号浮层</h2><p>展示界面元素唯一编号，便于定位与反馈。</p>
               <div className="settings-control-row"><div><strong>启用元素序号浮层</strong><small>是否允许通过快捷键唤出元素序号覆盖层</small></div><button type="button" className={`settings-switch${uiReferenceEnabled ? ' is-active' : ''}`} aria-pressed={uiReferenceEnabled} aria-label="启用元素序号浮层" onClick={() => setUiReferenceEnabled(!uiReferenceEnabled)}><span /></button></div>
