@@ -458,3 +458,107 @@ def test_ac013_graph_batch_requests_and_rate_limit():
 
     # Other subrequests succeeded
     assert results[ops[1].op_id].success is True
+
+
+def test_rate_limit_and_transient_failure_schedules_delayed_followup_job():
+    """A01: Rate limited or transient failed ops schedule delayed followup job with run_after."""
+    Session = get_session_factory()
+    acc_id = uuid.uuid4()
+    with Session() as s:
+        acc = Account(
+            id=acc_id,
+            email=f"push-retry-{acc_id.hex[:6]}@example.com",
+            provider="graph",
+            credential_ref="cred-graph",
+        )
+        s.add(acc)
+        s.commit()
+
+    store = DictCredentialStore()
+    store.put_secret("cred-graph", "tok")
+
+    # Seed one op that will get rate limited with retry_after=45
+    with Session() as s:
+        enqueue_remote_operation(
+            s,
+            account_id=acc_id,
+            entity_key="msg-rate-limit",
+            op_type="mark_read",
+            desired_state={"remote_id": "msg-rate-limit", "is_read": True},
+        )
+        s.commit()
+
+    fake_provider = MagicMock()
+    fake_provider.apply_remote_operations = MagicMock(
+        return_value=[
+            (
+                uuid.uuid4(),  # dummy, won't match, or let's match exact op_id
+                RemoteOperationResult(
+                    success=False,
+                    error="Rate limited",
+                    remote_state={"retry_after": 45.0},
+                ),
+            )
+        ]
+    )
+
+    with Session() as s:
+        op = s.scalar(select(RemoteOperation).where(RemoteOperation.account_id == acc_id))
+        assert op is not None
+        op_id = op.id
+
+    fake_provider.apply_remote_operations.return_value = [
+        (
+            op_id,
+            RemoteOperationResult(
+                success=False,
+                error="Rate limited",
+                remote_state={"retry_after": 45.0},
+            ),
+        )
+    ]
+
+    with patch("mail_core.sync.remote_push.build_provider", return_value=fake_provider):
+        res = push_remote_operations(acc_id, worker_id="worker-retry-test", store=store)
+        assert res["status"] == "ok"
+        assert res["failed"] == 1
+
+    with Session() as s:
+        op = s.get(RemoteOperation, op_id)
+        assert op is not None
+        assert op.status == RemoteOperationStatus.PENDING.value
+        assert op.next_attempt_at is not None
+
+        # Verify followup job was scheduled with run_after >= next_attempt_at
+        job = s.scalar(
+            select(WorkerJob)
+            .where(WorkerJob.account_id == acc_id)
+            .where(WorkerJob.job_type == JobType.REMOTE_OPERATION_PUSH.value)
+            .where(WorkerJob.status == JobStatus.PENDING.value)
+        )
+        assert job is not None
+        assert job.run_after is not None
+        now_utc = datetime.now(timezone.utc)
+        assert job.run_after >= now_utc + timedelta(seconds=40)
+
+        # Call again when work is empty (job.run_after in future), ensure next_due is re-scheduled
+        # First reset job to completed to simulate worker execution
+        job.status = JobStatus.DONE.value
+        s.commit()
+
+    with patch("mail_core.sync.remote_push.build_provider", return_value=fake_provider):
+        res = push_remote_operations(acc_id, worker_id="worker-retry-test", store=store)
+        assert res["status"] == "ok"
+        assert res["pushed"] == 0
+        assert res["failed"] == 0
+
+    with Session() as s:
+        re_job = s.scalar(
+            select(WorkerJob)
+            .where(WorkerJob.account_id == acc_id)
+            .where(WorkerJob.job_type == JobType.REMOTE_OPERATION_PUSH.value)
+            .where(WorkerJob.status == JobStatus.PENDING.value)
+        )
+        assert re_job is not None
+        assert re_job.run_after is not None
+        assert re_job.run_after >= now_utc + timedelta(seconds=40)

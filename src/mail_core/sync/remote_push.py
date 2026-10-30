@@ -370,6 +370,22 @@ def push_remote_operations(
 
     if not work:
         with Session() as session:
+            next_due = session.scalar(
+                select(func.min(RemoteOperation.next_attempt_at))
+                .where(RemoteOperation.account_id == account_id)
+                .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
+                .where(RemoteOperation.next_attempt_at.is_not(None))
+            )
+            if next_due is not None:
+                enqueue_job(
+                    session,
+                    job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                    account_id=account_id,
+                    payload={},
+                    priority=40,
+                    run_after=next_due,
+                    dedupe_key=f"remote-op-push:{account_id}",
+                )
             try:
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
                 session.commit()
@@ -642,12 +658,19 @@ def push_remote_operations(
                     )
 
         # Re-check if remaining pending operations exist (AC-012)
-        remaining_pending = session.scalar(
+        now_check = datetime.now(timezone.utc)
+        immediate_pending = session.scalar(
             select(func.count(RemoteOperation.id))
             .where(RemoteOperation.account_id == account_id)
             .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
+            .where(
+                or_(
+                    RemoteOperation.next_attempt_at.is_(None),
+                    RemoteOperation.next_attempt_at <= now_check,
+                )
+            )
         )
-        if (remaining_pending and remaining_pending > 0) or followup_needed:
+        if immediate_pending and immediate_pending > 0:
             enqueue_job(
                 session,
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
@@ -656,6 +679,23 @@ def push_remote_operations(
                 priority=40,
                 dedupe_key=f"remote-op-push:{account_id}",
             )
+        else:
+            next_due = session.scalar(
+                select(func.min(RemoteOperation.next_attempt_at))
+                .where(RemoteOperation.account_id == account_id)
+                .where(RemoteOperation.status == RemoteOperationStatus.PENDING.value)
+                .where(RemoteOperation.next_attempt_at.is_not(None))
+            )
+            if next_due is not None:
+                enqueue_job(
+                    session,
+                    job_type=JobType.REMOTE_OPERATION_PUSH.value,
+                    account_id=account_id,
+                    payload={},
+                    priority=40,
+                    run_after=next_due,
+                    dedupe_key=f"remote-op-push:{account_id}",
+                )
 
         try:
             release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
