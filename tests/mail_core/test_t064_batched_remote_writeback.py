@@ -661,3 +661,53 @@ def test_imap_duplicate_uid_in_same_subgroup_all_operations_receive_results():
     assert results[op2_id].remote_state == {"is_read": True}
 
 
+def test_remote_push_heartbeats_lease_between_large_chunks():
+    """A09: Batched push heartbeats lease between 100-item chunks during long network calls."""
+    Session = get_session_factory()
+    acc_id = uuid.uuid4()
+    with Session() as s:
+        acc = Account(
+            id=acc_id,
+            email=f"hb-chunk-{acc_id.hex[:6]}@example.com",
+            provider="stub_memory",
+            credential_ref="cred-mem",
+        )
+        s.add(acc)
+        s.commit()
+
+        for i in range(120):
+            enqueue_remote_operation(
+                s,
+                account_id=acc_id,
+                entity_key=f"msg-{i}",
+                op_type="mark_read",
+                desired_state={"remote_id": f"rid-{i}", "is_read": True},
+            )
+        s.commit()
+
+    store = DictCredentialStore()
+    store.put_secret("cred-mem", "tok")
+
+    fake_provider = MagicMock()
+    fake_provider.apply_remote_operations = MagicMock(
+        side_effect=lambda items: [(it.op_id, RemoteOperationResult(success=True)) for it in items]
+    )
+
+    hb_calls = []
+    from mail_core.sync import remote_push as rp_mod
+    original_hb = rp_mod.heartbeat_lease
+
+    def tracking_hb(session, *args, **kwargs):
+        hb_calls.append(kwargs)
+        return original_hb(session, *args, **kwargs)
+
+    with patch("mail_core.sync.remote_push.build_provider", return_value=fake_provider):
+        with patch("mail_core.sync.remote_push.heartbeat_lease", side_effect=tracking_hb):
+            res = push_remote_operations(acc_id, worker_id="worker-hb-test", store=store, limit=120)
+            assert res["status"] == "ok"
+            assert res["pushed"] == 120
+            # 1 initial pre-network HB + at least 1 between-chunks HB
+            assert len(hb_calls) >= 2
+
+
+

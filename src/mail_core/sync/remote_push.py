@@ -498,22 +498,44 @@ def push_remote_operations(
         else:
             valid_items.append(it)
 
-    # Execute network call in batch for valid items
+    # Execute network call in batch for valid items with lease heartbeats between chunks
     results_map: dict[Any, RemoteOperationResult] = dict(pre_failed_results)
     caught_batch_exc: Exception | None = None
     if valid_items:
-        try:
-            if hasattr(provider, "apply_remote_operations"):
-                results_seq = provider.apply_remote_operations(valid_items)
-                results_map.update({res[0]: res[1] for res in results_seq})
-            else:
-                for it in valid_items:
-                    res = provider.apply_remote_operation(it.op_type, it.desired_state)
-                    results_map[it.op_id] = res
-        except Exception as exc:  # noqa: BLE001
-            caught_batch_exc = exc
-            err_summary = safe_provider_summary(exc)
-            log.error("remote push batch failed: %s", err_summary)
+        chunk_size = 100
+        for i in range(0, len(valid_items), chunk_size):
+            chunk = valid_items[i : i + chunk_size]
+            try:
+                if hasattr(provider, "apply_remote_operations"):
+                    results_seq = provider.apply_remote_operations(chunk)
+                    results_map.update({res[0]: res[1] for res in results_seq})
+                else:
+                    for it in chunk:
+                        res = provider.apply_remote_operation(it.op_type, it.desired_state)
+                        results_map[it.op_id] = res
+            except Exception as exc:  # noqa: BLE001
+                caught_batch_exc = exc
+                err_summary = safe_provider_summary(exc)
+                log.error("remote push batch failed: %s", err_summary)
+                break
+
+            # Heartbeat lease between chunks to prevent TTL expiration on large batches
+            if i + chunk_size < len(valid_items):
+                with Session() as hb_session:
+                    try:
+                        heartbeat_lease(
+                            hb_session,
+                            account_id=account_id,
+                            owner_id=worker_id,
+                            fencing_token=fencing,
+                            ttl=lease_ttl,
+                        )
+                        hb_session.commit()
+                    except FencingMismatch:
+                        log.warning("fencing mismatch during batched remote push heartbeat for %s", account_id)
+                        break
+                    except Exception as hb_exc:
+                        log.warning("lease heartbeat between chunks failed: %s", hb_exc)
 
     if is_capacity_error(caught_batch_exc):
         delay = float(getattr(caught_batch_exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
