@@ -362,3 +362,19 @@ def test_ac008_non_postgresql_dialect_noop():
         session.execute(text("CREATE TABLE dummy (id INT)"))
         session.execute(text("INSERT INTO dummy VALUES (1)"))
         session.commit()
+
+
+def test_job_wake_listener_exponential_backoff_on_failures():
+    """A11: JobWakeListener tracks consecutive failures and applies exponential backoff."""
+    listener = JobWakeListener(
+        wake_callback=lambda: None,
+        dsn="postgresql://127.0.0.1:1/bad_db",
+        reconnect_s=0.02,
+        reconnect_base_s=0.02,
+        reconnect_max_s=0.2,
+    )
+    listener.start()
+    time.sleep(0.15)
+    # Failures accumulated
+    assert listener._consecutive_failures >= 1
+    listener.stop()

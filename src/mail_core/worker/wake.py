@@ -21,10 +21,15 @@ class JobWakeListener:
         *,
         dsn: str | None = None,
         reconnect_s: float = 2.0,
+        reconnect_base_s: float = 1.0,
+        reconnect_max_s: float = 30.0,
     ) -> None:
         self.wake_callback = wake_callback
         self.dsn = dsn
         self.reconnect_s = reconnect_s
+        self.reconnect_base_s = reconnect_base_s
+        self.reconnect_max_s = reconnect_max_s
+        self._consecutive_failures = 0
         self._stop = threading.Event()
         self._started = threading.Event()
         self._lifecycle_lock = threading.Lock()
@@ -85,6 +90,7 @@ class JobWakeListener:
                 conn.execute(f"LISTEN {JOB_CHANNEL}")
                 log.info("LISTEN %s started", JOB_CHANNEL)
                 self._started.set()
+                self._consecutive_failures = 0
 
                 while not self._stop.is_set():
                     for notify in conn.notifies(timeout=0.2, stop_after=50):
@@ -92,6 +98,7 @@ class JobWakeListener:
                             self.wake_callback()
             except Exception as exc:
                 if not self._stop.is_set():
+                    self._consecutive_failures += 1
                     log.warning("job wake listener connection lost: %s", safe_error(exc))
             finally:
                 self._active_conn = None
@@ -102,4 +109,9 @@ class JobWakeListener:
                         pass
             if not self._stop.is_set():
                 self._started.clear()
-                self._stop.wait(self.reconnect_s)
+                # Exponential backoff capped at reconnect_max_s
+                delay = min(
+                    self.reconnect_max_s,
+                    max(self.reconnect_s, self.reconnect_base_s * (2 ** max(0, self._consecutive_failures - 1))),
+                )
+                self._stop.wait(delay)
