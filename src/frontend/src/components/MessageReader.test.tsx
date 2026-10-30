@@ -770,7 +770,8 @@ describe('<MessageReader />', () => {
     })
   })
 
-  // p035 deletes the old false-positive contract that showed a sync warning for a completed empty message.
+  // 旧测试 "displays empty body placeholder and not parse error for legitimate empty email (AC-007)" 已整体淘汰（AGENTS.md）：
+  // p035 废除了原先将已完成归档的空邮件误判为未完成同步并展示占位提示的旧行为。新契约由下方独立用例测试。
   it('keeps a legitimately empty archived email body blank', async () => {
     useMailStore.setState({ selectedKey: 'm-empty' })
     const { container } = await render(<MessageReader />)

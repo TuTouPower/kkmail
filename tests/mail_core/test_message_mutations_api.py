@@ -149,7 +149,9 @@ def test_mark_read_recomputes_all_locations_and_is_idempotent():
         mid, fid1, fid2, aid = msg.id, f1.id, f2.id, acc.id
 
     with Session() as session:
-        # t062: outbox NOTIFY is emitted universally on session commit; manual try_notify_outbox removed
+        # 旧测试中对 try_notify_outbox mock 被调用的断言已整体淘汰（AGENTS.md）：
+        # t062 移除了业务层分散的手动 try_notify_outbox，下沉为 SQLAlchemy 会话提交统一事件机制。
+        # 会话级 NOTIFY 权威验证见 tests/mail_core/test_t062_outbox_and_job_notify_wake.py。
         r1 = set_message_read(session, mid, is_read=True)
         r2 = set_message_read(session, mid, is_read=True)  # same idempotency key
         session.commit()

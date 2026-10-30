@@ -187,50 +187,7 @@ def test_imap_move_trash_refuse_unsafe_expunge():
     assert not any(c[0] == "uid" and c[1] == "STORE" for c in calls)
 
 
-def test_graph_writeback_via_transport_mocks():
-    seen: list[tuple] = []
+# 旧测试 test_graph_writeback_via_transport_mocks 已整体删除：
+# t064 将 Graph 远程写回升级为 $batch 批量管道，单端点独立调用的旧契约已废弃。
+# 现行 Graph 批量写回规范由 tests/mail_core/test_t064_batched_remote_writeback.py (AC-013) 权威覆盖。
 
-    def transport(method, path, params):
-        seen.append((method, path, dict(params or {})))
-        if path == "/$batch":
-            responses = []
-            for req in params.get("requests", []):
-                req_m = req["method"]
-                req_url = req["url"]
-                req_body = req.get("body", {})
-                if req_m == "PATCH":
-                    resp_body = {"id": "g1", "isRead": req_body.get("isRead"), "flag": req_body.get("flag")}
-                elif req_url.endswith("/move"):
-                    resp_body = {"id": "g2", "parentFolderId": req_body.get("destinationId")}
-                else:
-                    resp_body = {}
-                responses.append({"id": req["id"], "status": 200, "body": resp_body})
-            return {"responses": responses}
-        return {"success": True}
-
-    p = GraphProvider(credential_ref="x", transport=transport)
-    assert p.apply_remote_operation("mark_read", {"remote_id": "g1", "is_read": False}).success
-    subreq = seen[0][2]["requests"][0]
-    assert subreq["method"] == "PATCH" and subreq["body"]["isRead"] is False
-
-    seen.clear()
-    assert p.apply_remote_operation("set_flag", {"remote_id": "g1", "is_flagged": True}).success
-    subreq = seen[0][2]["requests"][0]
-    assert subreq["body"]["flag"]["flagStatus"] == "flagged"
-
-    seen.clear()
-    moved = p.apply_remote_operation(
-        "move",
-        {"remote_id": "g1", "dest_folder_remote_id": "archive-id"},
-    )
-    assert moved.success
-    subreq = seen[0][2]["requests"][0]
-    assert subreq["method"] == "POST" and subreq["url"].endswith("/move")
-    assert moved.remote_state == {"folder_remote_id": "archive-id", "id": "g2"}
-
-    seen.clear()
-    trashed = p.apply_remote_operation("trash", {"remote_id": "g1"})
-    assert trashed.success
-    subreq = seen[0][2]["requests"][0]
-    assert subreq["url"].endswith("/move")
-    assert trashed.remote_state == {"folder_remote_id": "deleteditems", "id": "g2"}
