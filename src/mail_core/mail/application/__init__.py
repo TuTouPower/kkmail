@@ -48,6 +48,14 @@ _EXPORTS: dict[str, str] = {
     # message details
     "get_message_detail_with_archive_status": "message_details",
     "sync_message_body": "message_details",
+    # remote images allowlists (t066)
+    "InvalidSenderEmailError": "remote_images",
+    "normalize_sender_email": "remote_images",
+    "is_remote_images_allowed": "remote_images",
+    "allow_message_remote_images": "remote_images",
+    "allow_sender_remote_images": "remote_images",
+    "list_allowed_senders": "remote_images",
+    "remove_allowed_sender": "remote_images",
     # accounts
     "AccountDTO": "accounts",
     "AccountPageDTO": "accounts",

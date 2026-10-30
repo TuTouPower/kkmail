@@ -1,0 +1,97 @@
+{
+  "tid": "t066",
+  "attempt": 1,
+  "execution_id": "fc00382e9d924f028deab244f3275586",
+  "status": "done",
+  "branch": "t066_remote_images_persist_and_reload",
+  "base_sha": "b3ac8b962eeba3b86ff7397818d770720aa64443",
+  "tests": "frontend: 53 files, 571 passed; contract: 189 passed; backend unit: 9 passed, 6 skipped; desktop: 12 passed; build/types clean",
+  "blackbox": "Playwright E2E: 20 passed",
+  "review": "full review PASS (Round 2 code PASS, test PASS; scope: e8254d662a89c50b; 14 findings disposed as resolved)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/frontend/src/lib/mailBody.ts",
+      "src/frontend/src/components/MessageReader.tsx",
+      "tests/e2e/smoke.spec.ts"
+    ],
+    "AC-002": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "tests/e2e/smoke.spec.ts"
+    ],
+    "AC-003": [
+      "src/mail_core/api/mail.py",
+      "tests/e2e/smoke.spec.ts"
+    ],
+    "AC-004": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ],
+    "AC-005": [
+      "src/mail_core/api/mail.py",
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ],
+    "AC-006": [
+      "src/mail_core/mail/application/remote_images.py",
+      "src/frontend/src/components/MessageReader.tsx",
+      "tests/mail_core/test_remote_images_allowlists.py"
+    ],
+    "AC-007": [
+      "src/frontend/src/components/SettingsModal.tsx",
+      "src/mail_core/api/mail.py"
+    ],
+    "AC-008": [
+      "src/mail_core/mail/storage/models.py",
+      "src/mail_core/db/alembic/versions/20261031_0030_remote_image_allowlists.py",
+      "tests/mail_core/test_remote_images_allowlists.py"
+    ],
+    "AC-009": [
+      "src/frontend/src/lib/mailBody.ts",
+      "src/frontend/src/lib/mailBody.test.ts"
+    ],
+    "AC-010": [
+      "src/mail_core/mail/application/remote_images.py",
+      "tests/mail_core/test_remote_images_api.py"
+    ],
+    "AC-011": [
+      "src/mail_core/mail/application/remote_images.py",
+      "src/mail_core/api/mail.py",
+      "tests/mail_core/test_remote_images_allowlists.py"
+    ],
+    "AC-012": [
+      "src/mail_core/mail/application/remote_images.py",
+      "tests/mail_core/test_remote_images_allowlists.py"
+    ],
+    "AC-013": [
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ],
+    "AC-014": [
+      "src/mail_core/security/inline_preview.py",
+      "src/mail_core/api/mail.py",
+      "src/frontend/src/lib/mailBody.ts",
+      "tests/e2e/smoke.spec.ts"
+    ],
+    "AC-015": [
+      "src/frontend/src/lib/mailBody.ts",
+      "src/frontend/src/lib/mailBody.test.ts"
+    ],
+    "AC-016": [
+      "src/mail_core/api/mail.py",
+      "src/mail_core/security/inline_preview.py",
+      "src/mail_core/security/redact.py",
+      "tests/mail_core/test_remote_images_api.py"
+    ],
+    "AC-017": [
+      "src/frontend/src/store/mailStore.ts",
+      "src/frontend/src/components/MessageReader.tsx",
+      "src/frontend/src/components/MessageReader.test.tsx"
+    ],
+    "AC-018": [
+      "tests/e2e/smoke.spec.ts",
+      "tests/e2e/stubApi.ts"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

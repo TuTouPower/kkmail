@@ -156,6 +156,10 @@ beforeEach(() => {
     const u = String(url)
     if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
     if (u.startsWith('/api/accounts')) return json({ accounts: [], total: 0, limit: 200, offset: 0, has_more: false })
+    if (u.endsWith('/allow-remote-images')) {
+      posts.push({ url: u, body: init.body ? JSON.parse(String(init.body)) : {} })
+      return json({ success: true, remote_images_allowed: true })
+    }
     if (u === '/api/mail/messages/m-1') {
       return json({
         id: 'm-1', account_id: 'acc-1', subject: 'Quarterly report', from_address: 'ann@x.test', from_name: 'Ann',
@@ -178,7 +182,7 @@ beforeEach(() => {
         from: 'Bob <bob@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T09:00:00Z', is_read: true,
         is_flagged: false, has_attachments: false, snippet: null,
         body: '<p>Remote image mail</p><img src="https://tracker.test/pixel.png">', body_type: 'html',
-        parse_error: null, attachments: [],
+        parse_error: null, attachments: [], remote_images_allowed: false, can_allow_sender: true,
       })
     }
     if (u === '/api/mail/messages/m-3') {
@@ -187,7 +191,7 @@ beforeEach(() => {
         from: 'Carol <carol@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T10:00:00Z', is_read: true,
         is_flagged: false, has_attachments: false, snippet: null,
         body: '<p>Another remote image</p><img src="https://tracker.test/other.png">', body_type: 'html',
-        parse_error: null, attachments: [],
+        parse_error: null, attachments: [], remote_images_allowed: false, can_allow_sender: true,
       })
     }
     if (u === '/api/mail/messages/m-5') {
@@ -636,7 +640,7 @@ describe('<MessageReader />', () => {
 
     await waitFor(() => {
       const updatedIframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
-      expect(updatedIframe.srcdoc).toContain('img-src https:')
+      expect(updatedIframe.srcdoc).toContain("img-src 'self' https:")
     })
     expect(container.textContent).not.toContain('远程图片已拦截（防追踪）')
 
@@ -1059,5 +1063,126 @@ describe('<MessageReader />', () => {
     expect(container.textContent).toContain('正在提交正文同步任务…')
     expect(container.textContent).not.toContain('first A stale failure')
     expect(container.textContent).not.toContain('同步邮件正文失败')
+  })
+
+  it('allows sender remote images globally and triggers invalidation (t066 AC-005)', async () => {
+    useMailStore.setState({ selectedKey: 'm-2' })
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => expect(container.textContent).toContain('远程图片已拦截（防追踪）'))
+    const senderAllowBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('总是允许来自此发件人的图片'),
+    )
+    expect(senderAllowBtn).toBeDefined()
+    await click(senderAllowBtn!)
+
+    await waitFor(() => {
+      expect(posts.some((p) => p.url === '/api/mail/senders/allow-remote-images')).toBe(true)
+    })
+  })
+
+  it('preserves per-message dark mode view override across message switching and unmounts in mailStore (t066 AC-017)', async () => {
+    useMailStore.setState({ theme: 'dark', mailBodyDarkMode: 'smart', selectedKey: 'm-4' })
+    const { container, unmount } = await render(<MessageReader />)
+
+    // Initially smart inversion applied for m-4 (light rich)
+    await waitFor(() => {
+      const iframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
+      expect(iframe.srcdoc).toContain('filter:invert(100%)')
+    })
+
+    // Click toggle to switch to original mode
+    const toggleBtn = container.querySelector('[data-ui="MR11"]')
+    expect(toggleBtn).not.toBeNull()
+    await click(toggleBtn!)
+
+    // Now m-4 is in original mode (no invert)
+    await waitFor(() => {
+      const iframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
+      expect(iframe.srcdoc).not.toContain('filter:invert(100%)')
+    })
+
+    // Switch to m-2 (which has no override, should respect default)
+    await act(async () => {
+      useMailStore.setState({ selectedKey: 'm-2' })
+    })
+
+    // Switch back to m-4
+    await act(async () => {
+      useMailStore.setState({ selectedKey: 'm-4' })
+    })
+
+    // m-4 MUST still be in original mode (not wiped by switching to m-2)
+    await waitFor(() => {
+      const iframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
+      expect(iframe.srcdoc).not.toContain('filter:invert(100%)')
+    })
+
+    // Simulate navigating to Settings (unmount MessageReader) and returning
+    unmount()
+    const { container: remounted } = await render(<MessageReader />)
+
+    // m-4 override still preserved from mailStore
+    await waitFor(() => {
+      const iframe = remounted.querySelector('iframe.email-body-frame') as HTMLIFrameElement
+      expect(iframe.srcdoc).not.toContain('filter:invert(100%)')
+    })
+
+    // Assert viewModeOverrides is NOT persisted to localStorage (resets on page refresh, AC-017)
+    const stored = JSON.parse(localStorage.getItem('mail-ui-storage') || '{}')
+    expect(stored.state?.viewModeOverrides).toBeUndefined()
+  })
+
+  it('hides sender allow button when can_allow_sender is false (t066 AC-006)', async () => {
+    // m-5 has unquoted remote image but invalid/missing can_allow_sender
+    useMailStore.setState({ selectedKey: 'm-5' })
+    const { container } = await render(<MessageReader />)
+
+    await waitFor(() => expect(container.textContent).toContain('远程图片已拦截（防追踪）'))
+    const senderAllowBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('总是允许来自此发件人的图片'),
+    )
+    expect(senderAllowBtn).toBeUndefined()
+  })
+
+  it('shows error when allow request fails and allows retry (t066 AC-013)', async () => {
+    const originalFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
+      if (u.startsWith('/api/accounts')) return json({ accounts: [], total: 0, limit: 200, offset: 0, has_more: false })
+      if (u === '/api/mail/messages/m-2') {
+        return json({
+          id: 'm-2', account_id: 'acc-1', subject: 'Html with remote image', from_address: 'bob@x.test', from_name: 'Bob',
+          from: 'Bob <bob@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T09:00:00Z', is_read: true,
+          is_flagged: false, has_attachments: false, snippet: null,
+          body: '<p>Remote image mail</p><img src="https://tracker.test/pixel.png">', body_type: 'html',
+          parse_error: null, attachments: [], remote_images_allowed: false, can_allow_sender: true,
+        })
+      }
+      if (u.endsWith('/allow-remote-images')) {
+        return json({ detail: 'Database error' }, 500)
+      }
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    try {
+      useMailStore.setState({ selectedKey: 'm-2' })
+      const { container } = await render(<MessageReader />)
+
+      await waitFor(() => expect(container.textContent).toContain('远程图片已拦截（防追踪）'))
+      const allowBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('仅此邮件允许加载'),
+      )
+      expect(allowBtn).toBeDefined()
+      await click(allowBtn!)
+
+      // Error message appears
+      await waitFor(() => expect(container.textContent).toContain('Database error'))
+      // Banner remains visible so user can retry
+      expect(container.textContent).toContain('远程图片已拦截（防追踪）')
+    } finally {
+      vi.stubGlobal('fetch', originalFetch)
+    }
   })
 })

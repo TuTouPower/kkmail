@@ -544,3 +544,33 @@ class AccountSyncActivity(Base):
     last_foreground_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+
+class MessageRemoteImageAllow(Base):
+    """Single-message remote images allow record (t066)."""
+
+    __tablename__ = "message_remote_image_allows"
+
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SenderRemoteImageAllow(Base):
+    """Sender-level remote images allowlist (global scope across accounts, t066)."""
+
+    __tablename__ = "sender_remote_image_allows"
+    __table_args__ = (
+        UniqueConstraint("from_address", name="uq_sender_remote_image_allows_from_address"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    from_address: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+

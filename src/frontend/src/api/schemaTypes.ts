@@ -44,6 +44,8 @@ export type OAuthFlowStatusOut = schemas['OAuthFlowStatusOut']
 export type OAuthActiveOut = schemas['OAuthActiveOut']
 export type OAuthCancelOut = schemas['OAuthCancelOut']
 export type ExchangeRedirectUrlRequest = schemas['ExchangeRedirectUrlRequest']
+export type SenderRemoteImageAllowOut = schemas['SenderRemoteImageAllowOut']
+export type RemoteImagesAllowedOut = schemas['RemoteImagesAllowedOut']
 
 /** Previous hand-written names → OpenAPI schemas (API layer). */
 export type MailCoreMessage = MessageOut

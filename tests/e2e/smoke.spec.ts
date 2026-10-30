@@ -176,4 +176,39 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
     await expect(page.locator('.mail-paper-card')).not.toBeVisible()
     expect(await toggleButton.getAttribute('title')).toBe('查看原样视图')
   })
+
+  test('远程图片放行重载、发件人白名单与 CID 内联图片加载 (t066 AC-001 ~ AC-018)', async ({ page }) => {
+    await setupStubApi(page, { authedInitially: true })
+    await page.goto('/')
+
+    // Click the test mail containing both CID inline image and remote tracking image
+    await expect(page.getByText('远程图片与内联图片测试邮件')).toBeVisible({ timeout: 10000 })
+    await page.getByText('远程图片与内联图片测试邮件').click()
+
+    // 1. CID inline image is rewritten to signed preview URL in srcdoc
+    const iframe = page.locator('iframe.email-body-frame')
+    await expect(iframe).toBeVisible({ timeout: 5000 })
+    const initialSrcdoc = await iframe.getAttribute('srcdoc')
+    expect(initialSrcdoc).toContain('/api/mail/attachments/att-inline-1/preview?token=stub-preview-token')
+
+    // 2. Remote tracking image is blocked: banner is visible with two allow buttons
+    await expect(page.getByText('远程图片已拦截（防追踪）。')).toBeVisible()
+    const allowMessageBtn = page.getByRole('button', { name: '仅此邮件允许加载' })
+    const allowSenderBtn = page.getByRole('button', { name: '总是允许来自此发件人的图片' })
+    await expect(allowMessageBtn).toBeVisible()
+    await expect(allowSenderBtn).toBeVisible()
+
+    // 3. Click allow message -> banner disappears and iframe remounts with open remote CSP
+    await allowMessageBtn.click()
+    await expect(page.getByText('远程图片已拦截（防追踪）。')).not.toBeVisible()
+    const allowedSrcdoc = await iframe.getAttribute('srcdoc')
+    expect(allowedSrcdoc).toContain("img-src 'self' https: http: data: cid:")
+
+    // 4. Reload page -> state persisted in backend, still allowed without banner
+    await page.reload()
+    await expect(page.getByText('远程图片与内联图片测试邮件')).toBeVisible({ timeout: 10000 })
+    await page.getByText('远程图片与内联图片测试邮件').click()
+    await expect(page.locator('iframe.email-body-frame')).toBeVisible()
+    await expect(page.getByText('远程图片已拦截（防追踪）。')).not.toBeVisible()
+  })
 })

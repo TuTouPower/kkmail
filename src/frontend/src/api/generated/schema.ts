@@ -371,6 +371,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mail/attachments/{attachment_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Preview Inline Attachment
+         * @description Preview an inline image attachment with a short-lived signed URL token.
+         *
+         *     Operates without ambient session cookie to support strict sandbox iframe.
+         */
+        get: operations["api_preview_inline_attachment_api_mail_attachments__attachment_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/mail/folders/{folder_id}/stats": {
         parameters: {
             query?: never;
@@ -443,6 +465,26 @@ export interface paths {
         get: operations["api_get_message_api_mail_messages__message_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mail/messages/{message_id}/allow-remote-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Allow Message Remote Images
+         * @description Allow remote images for a single message permanently in DB.
+         */
+        post: operations["api_allow_message_remote_images_api_mail_messages__message_id__allow_remote_images_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -544,6 +586,66 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mail/senders/allow-remote-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Api Allow Sender Remote Images
+         * @description Allow remote images globally for a verified sender email.
+         */
+        post: operations["api_allow_sender_remote_images_api_mail_senders_allow_remote_images_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mail/senders/allowed-remote-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api List Allowed Senders
+         * @description List all allowed senders for remote image rendering.
+         */
+        get: operations["api_list_allowed_senders_api_mail_senders_allowed_remote_images_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mail/senders/allowed-remote-images/{sender_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Api Remove Allowed Sender
+         * @description Remove a sender from the global remote images allowlist.
+         */
+        delete: operations["api_remove_allowed_sender_api_mail_senders_allowed_remote_images__sender_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -890,12 +992,16 @@ export interface components {
         AttachmentOut: {
             /** Contenttype */
             contentType: string | null;
+            /** Content Id */
+            content_id?: string | null;
             /** Id */
             id: string;
             /** Is Inline */
             is_inline: boolean;
             /** Name */
             name: string;
+            /** Preview Url */
+            preview_url?: string | null;
             /** Size */
             size: number | null;
         };
@@ -1078,6 +1184,11 @@ export interface components {
             body: string;
             /** Body Type */
             body_type: string;
+            /**
+             * Can Allow Sender
+             * @default false
+             */
+            can_allow_sender: boolean;
             /** Cc */
             cc: string;
             /** Cc Addresses */
@@ -1102,6 +1213,11 @@ export interface components {
             is_read: boolean | null;
             /** Parse Error */
             parse_error: string | null;
+            /**
+             * Remote Images Allowed
+             * @default false
+             */
+            remote_images_allowed: boolean;
             /** Snippet */
             snippet: string | null;
             /** Subject */
@@ -1404,6 +1520,19 @@ export interface components {
             /** Worker */
             worker?: boolean | null;
         };
+        /** RemoteImagesAllowedOut */
+        RemoteImagesAllowedOut: {
+            /**
+             * Remote Images Allowed
+             * @default true
+             */
+            remote_images_allowed: boolean;
+            /**
+             * Success
+             * @default true
+             */
+            success: boolean;
+        };
         /** SearchPageOut */
         SearchPageOut: {
             /** Items */
@@ -1416,6 +1545,26 @@ export interface components {
             query: string;
             /** Total */
             total: number;
+        };
+        /** SenderAllowIn */
+        SenderAllowIn: {
+            /**
+             * Message Id
+             * Format: uuid
+             */
+            message_id: string;
+        };
+        /** SenderRemoteImageAllowOut */
+        SenderRemoteImageAllowOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** From Address */
+            from_address: string;
+            /** Id */
+            id: string;
         };
         /** SettingsOut */
         SettingsOut: {
@@ -2314,6 +2463,67 @@ export interface operations {
             };
         };
     };
+    api_preview_inline_attachment_api_mail_attachments__attachment_id__preview_get: {
+        parameters: {
+            query: {
+                token: string;
+            };
+            header?: never;
+            path: {
+                attachment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/*": unknown;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid or expired preview token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden attachment preview */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Attachment not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     api_one_folder_stats_api_mail_folders__folder_id__stats_get: {
         parameters: {
             query?: never;
@@ -2441,6 +2651,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MessageDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_allow_message_remote_images_api_mail_messages__message_id__allow_remote_images_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteImagesAllowedOut"];
                 };
             };
             /** @description Validation Error */
@@ -2609,6 +2850,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchPageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_allow_sender_remote_images_api_mail_senders_allow_remote_images_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SenderAllowIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteImagesAllowedOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    api_list_allowed_senders_api_mail_senders_allowed_remote_images_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SenderRemoteImageAllowOut"][];
+                };
+            };
+        };
+    };
+    api_remove_allowed_sender_api_mail_senders_allowed_remote_images__sender_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sender_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MutationOut"];
                 };
             };
             /** @description Validation Error */

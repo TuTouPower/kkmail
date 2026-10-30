@@ -203,3 +203,19 @@ Google 仅提供 IMAP 应用专用密码（`imap.gmail.com`），不提供 Gmail
 - Microsoft 只提供 Graph OAuth。浏览器登录使用 PKCE、Web 机密客户端或 Electron 公共客户端；设备码只使用允许公共客户端流程的自有 Client ID，不要求 Secret/回调，自动申请后台持续访问。
 - 原会话最终保存前，`/me` 核实微软用户 ID 和真实邮箱，并确认邮箱可访问；重新授权不能用另一身份、客户端或租户覆盖原凭据。Access Token 保持不透明，不从 JWT 或未经核验的 UPN 猜身份。
 - 设备长码不返回前端，短码仅供原会话显示及复制；验证地址限制微软官方 HTTPS 端点，不拼接含验证码的链接，不依赖 verification_uri_complete。后端持久化间隔、429/slow_down 退避与过期状态，不由浏览器控制供应商轮询。
+
+## 十二、 远程图片与内联图片安全渲染约定 (t066)
+
+1. **远程图片默认拦截与双轨放行持久化**：
+    - 邮件正文中的远程外链图片（`http:`, `https:`, `//`）默认由 CSP 严格拦截并展示防追踪提示条；纯文本或仅含内联图片邮件不显示提示；
+    - 单封放行记录与发件人白名单统一由服务端数据库持久化；单封放行在邮件删除时级联清理，发件人白名单跨账号全局生效；
+    - 发件人地址必须在服务端收敛进行标准校验与规范化（去首尾空白与全小写），前端仅提交邮件 UUID 由后端提取结构化地址，禁止客户端自报或从展示文本/Reply-To 自行截取；
+    - 放行成功后通过更新 iframe `key` 强制销毁并重新挂载正文节点（remount），使浏览器重新发起网络资源拉取。
+2. **内联图片 Signed URL 预览机制**：
+    - 维持正文 `iframe sandbox` 不变，严禁添加 `allow-same-origin` 和 `allow-scripts`；
+    - 独立挂载专用预览路由 `/api/mail/attachments/{id}/preview`，仅凭有效的短期 HMAC-SHA256 签名 Token 放行并流式返回二进制，不依赖也不回退到 Cookie 认证；
+    - 安全位图白名单：仅限 `image/png`, `image/jpeg`, `image/gif`, `image/webp`，明确排除 `image/svg+xml` 及一切可执行格式；根据文件头魔数真实核对 MIME；响应头强制附带 `X-Content-Type-Options: nosniff` 和 `Content-Disposition: inline`；
+    - 未放行远程图片时，正文 CSP 精准限制为 `img-src /api/mail/attachments/ data:;`，严禁放开全局 `http(s):`；带 Token 的正文不入库持久化；服务端日志对 `token` 参数自动脱敏。
+3. **单信深色视图覆盖会话级内存隔离**：
+    - 单信深色视图覆盖（`viewModeOverrides`）提升至应用全局内存 store（`mailStore`），按邮件 ID 字典管理，跨阅读器切信及设置页往返完整保留；
+    - 排除在 `localStorage` 持久化之外，页面刷新重置为全局偏好；未单独覆盖的邮件遵循全局深色偏好。
