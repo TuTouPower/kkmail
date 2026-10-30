@@ -12,6 +12,14 @@ from mail_core.providers.graph import GraphProvider
 
 def _provider_returning(payload) -> GraphProvider:
     def transport(method, path, params):
+        if path == "/$batch":
+            requests = (params or {}).get("requests", [])
+            return {
+                "responses": [
+                    {"id": r["id"], "status": 200, "body": payload}
+                    for r in requests
+                ]
+            }
         return payload
 
     return GraphProvider(credential_ref="x", transport=transport)

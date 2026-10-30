@@ -353,26 +353,6 @@ class GraphProvider:
             try:
                 batch_resp = self._call("POST", "/$batch", batch_payload)
                 responses = batch_resp.get("responses", []) if isinstance(batch_resp, dict) else []
-                if not responses:
-                    # Fallback for mock transports in tests that intercept individual methods rather than $batch
-                    for op_id, req, op, ctx in chunk:
-                        method = req["method"]
-                        url = req["url"]
-                        body = req["body"]
-                        data = self._call(method, url, body)
-                        data = data if isinstance(data, dict) else {}
-                        if op == OP_MARK_READ:
-                            results[op_id] = RemoteOperationResult(success=True, remote_state={"is_read": data.get("isRead", ctx)})
-                        elif op == OP_SET_FLAG:
-                            results[op_id] = RemoteOperationResult(success=True, remote_state={"is_flagged": ctx, "flag": data.get("flag")})
-                        elif op in (OP_MOVE, OP_TRASH):
-                            dest_folder, rid = ctx
-                            results[op_id] = RemoteOperationResult(
-                                success=True,
-                                remote_state={"folder_remote_id": data.get("parentFolderId") or dest_folder, "id": data.get("id") or rid},
-                            )
-                    continue
-
                 resp_by_id = {}
                 for r in responses:
                     if "id" in r:
