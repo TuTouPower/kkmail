@@ -42,9 +42,14 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
     3. SnappyMail：基于 Web 架构（PHP+JS），将 `cid:` 重写为带有时效性签名 Token 的只读 URL（`?_action=inline&_id=...&_token=...`），沙箱 iframe 无 Cookie 亦可通过 Token 鉴权直接流式拉取；
     4. Zero (Mail-0)：基于 Next.js + React，邮件解析阶段直接将附件转为 Base64 `data:` URL 替换 `cid:` 节点；
     5. Cypht：轻量 Webmail，因缺少完善的 CID 映射流水线，近期（2026-10-29）在 Issue #2134 中复现了内联图碎图缺陷。
-- 方案对比待决策：
-    - 方案 A（Base64 Data URL 注入，类似 Zero）：父页面有 Cookie，先拉取附件转 Base64 注入正文。优点：后端认证逻辑零改造；缺点：大图引起内存膨胀，必须引入配额与降级；
-    - 方案 B（短期签名 Token 链接，类似 SnappyMail）：后端签发仅对当前附件只读的 HMAC 签名 Token（如 30 分钟有效），正文重写为带有 Token 的 URL。优点：正文只存链接，浏览器原生按需流式拉取，完全无内存膨胀，无需对内联图加大小配额；代价：后端需增加 HMAC 签发与校验机制。
+- 方案决策（采纳方案 B：Signed URL 预览）：
+    - 经 Codex 深度评估与用户确认，正式采纳方案 B（短期无状态 HMAC 签名 Token 链接）：
+        1. 独立预览端点：`/api/mail/attachments/{id}/preview` 仅凭有效 Token 放行，不依赖也不回退到 Cookie 认证；常规附件下载接口保持 Cookie 认证不变；
+        2. 签名规范：确定性序列化绑定 `version`、`purpose=inline-image-preview`、`attachment_id`、`issued_at`、`expires_at`（15分钟），HMAC-SHA256 恒定时间比对；
+        3. 安全位图白名单：仅限 PNG、JPEG、GIF、WebP 4 种安全位图，明确排除 SVG；按文件头魔数校验真实二进制；强制附带 `X-Content-Type-Options: nosniff`；
+        4. 精准 CSP 限制：未放行远程图片时，正文 CSP 仅精准允许自身预览 API 路径及 `data:`，不放开全局 `http(s):`；
+        5. 凭据脱敏：带 Token 的正文不入库持久化；服务端日志、APM 与前端错误上报对 `token` 参数自动脱敏；
+        6. 取消前端 Base64 内存配额与异步拉取管道，浏览器原生流式拉取图片；保留后端流式传输超时与单信签发上限防滥用保护。
 
 ## Review 处置
 
