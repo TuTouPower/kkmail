@@ -36,6 +36,15 @@ front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
     08. I-08：测试矩阵补齐 Chromium + WebKit 双浏览器及真实 PostgreSQL / Cookie 全栈 E2E 验证；
     09. 明确承接 `p067` 与 `p068`，纠正原历史 pending 中“不扩大范围”的早期排他记录；
     10. 术语与边界消除歧义：严格区分普通文件附件（必须用户显式点击才下载，绝不自动静默拉取）与正文内联图片附件（打开邮件渲染正文时按需获取），明确配额限制仅针对正文内联图片转 Base64 注入，绝不作用于普通文件附件。
+- 开源邮件客户端实现调研（Cypht, Zero, SnappyMail, Thunderbird, Mailspring）：
+    1. Thunderbird：基于 Gecko 原生内核，底层注册 `cid:` / `mailbox:` / `imap:` 协议处理器，直接按 Content-ID 在 MIME 树解析数据流，无需 HTTP Cookie 鉴权；
+    2. Mailspring：基于 Electron + React，利用桌面主进程注册 `mailspring://` 私有协议或读本地缓存文件，绕开 Web 跨域 Cookie；
+    3. SnappyMail：基于 Web 架构（PHP+JS），将 `cid:` 重写为带有时效性签名 Token 的只读 URL（`?_action=inline&_id=...&_token=...`），沙箱 iframe 无 Cookie 亦可通过 Token 鉴权直接流式拉取；
+    4. Zero (Mail-0)：基于 Next.js + React，邮件解析阶段直接将附件转为 Base64 `data:` URL 替换 `cid:` 节点；
+    5. Cypht：轻量 Webmail，因缺少完善的 CID 映射流水线，近期（2026-10-29）在 Issue #2134 中复现了内联图碎图缺陷。
+- 方案对比待决策：
+    - 方案 A（Base64 Data URL 注入，类似 Zero）：父页面有 Cookie，先拉取附件转 Base64 注入正文。优点：后端认证逻辑零改造；缺点：大图引起内存膨胀，必须引入配额与降级；
+    - 方案 B（短期签名 Token 链接，类似 SnappyMail）：后端签发仅对当前附件只读的 HMAC 签名 Token（如 30 分钟有效），正文重写为带有 Token 的 URL。优点：正文只存链接，浏览器原生按需流式拉取，完全无内存膨胀，无需对内联图加大小配额；代价：后端需增加 HMAC 签发与校验机制。
 
 ## Review 处置
 

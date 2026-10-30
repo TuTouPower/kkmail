@@ -99,6 +99,10 @@
 
 - 来源：`p066`（2026-10-30 核实：`MessageReader` 使用组件局部单值 `useState`，iframe key 未含放行状态，后端无放行存储；用户确认两类放行均入库）；`p067`（`cid:` 内联图片未映射，已并入本 task 闭环）；`p068`（`viewModeOverride` 单值标量覆盖多邮件互相冲掉，已并入本 task 闭环）。
 - 技术发现：`docs/findings/d002_sandbox_iframe_omits_cookies_for_cid_attachments.md` 验证沙箱 iframe 不带同站 Cookie，确立内联图片由父页面认证获取转 data URL 注入的设计约束。
+- 开源客户端实现参考（Cypht, Zero, SnappyMail, Thunderbird, Mailspring）：
+    - 桌面原生/Electron 类（Thunderbird, Mailspring）：依赖私有协议栈（`cid:` / `mailspring://`）或直接读取磁盘文件流，绕开 Web 跨域 Cookie；
+    - 现代 Webmail 类（Zero / Mail-0, SnappyMail）：因沙箱隔离禁止 Cookie，业内形成两大派系——方案 A（Zero 采用的父页面/解析器转 Base64 Data URL 注入）与方案 B（SnappyMail 采用的后端生成短期签名 Token 链接流式拉取）；
+    - 传统 Webmail（Cypht）：因缺失有效 CID 映射链路导致 Issue #2134 碎图缺陷。
 - 架构与代码审查：Codex `gpt-6.1-sol` 结论 `CHANGES_REQUIRED`；已针对离线安全处理流水线、图片配额预算、缓存撤销与切信竞态、服务端唯一发件人验证及数据库唯一索引、识别范围包含协议相对路径、规范化算法分离与碰撞降级、单信深色覆盖提升至应用级 `mailStore` 解决跨路由卸载丢失、WebKit 与真实 PostgreSQL/Cookie 全栈验证完成全面修订。
 
 ### 有意不测
