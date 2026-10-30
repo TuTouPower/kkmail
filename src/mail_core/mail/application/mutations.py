@@ -12,7 +12,6 @@ from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import JobType, OutboxEventType
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, AccountGroup, Folder, Message, MessageLocation, OutboxEvent
-from mail_core.realtime.notify import try_notify_outbox
 from mail_core.sync.jobs import enqueue_job
 
 MARK_ALL_READ_BATCH_SIZE = 500

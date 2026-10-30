@@ -23,7 +23,6 @@ from mail_core.providers.connection_slots import (
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import ProviderHttpError, RateLimitedError
 from mail_core.providers.remote_writeback import OP_MOVE, OP_TRASH, normalize_op_type
-from mail_core.realtime.notify import try_notify_outbox
 from mail_core.security.redact import safe_provider_summary
 from mail_core.sync.jobs import enqueue_job
 from mail_core.sync.leases import (

@@ -24,7 +24,6 @@ from mail_core.sync.checkpoints import commit_checkpoint
 from mail_core.sync.leases import assert_fencing
 from mail_core.search.index import upsert_message_search_batch
 from mail_core.threading.rules import assign_thread_for_message
-from mail_core.realtime.notify import try_notify_outbox
 
 
 @dataclass(frozen=True, slots=True)
