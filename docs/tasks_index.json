@@ -2,5 +2,22 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/tasks/{tid}_{slug}/task.md front matter",
     "workspace": ".",
-    "tasks": []
+    "tasks": [
+        {
+            "tid": "t067",
+            "slug": "reader_isolated_html_endpoint",
+            "title": "邮件正文独立隔离渲染端点与切断父级CSP继承",
+            "status": "backlog",
+            "branch": "",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "消除 srcdoc 强制继承父页面 CSP 导致的放行图片被拦截问题；正文改为独立 URL 端点并独立设置 CSP，守住主站零出网基线，补齐真实全栈外链图片解码测试",
+            "dir": "docs/tasks/t067_reader_isolated_html_endpoint"
+        }
+    ]
 }
