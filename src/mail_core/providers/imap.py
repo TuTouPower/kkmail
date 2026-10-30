@@ -1491,20 +1491,28 @@ class ImapProvider:
                             results[it[0]] = RemoteOperationResult(success=False, error=f"select {folder} failed")
                         continue
 
-                    expected_uvs = {it[5] for it in items if it[5] is not None and it[5] > 0}
-                    if expected_uvs:
-                        srv_uv = _get_server_uidvalidity(c, folder)
-                        expected_uv = next(iter(expected_uvs))
-                        if srv_uv is not None and srv_uv != expected_uv:
-                            for it in items:
-                                results[it[0]] = RemoteOperationResult(
-                                    success=False,
-                                    error=f"UIDVALIDITY mismatch for {folder}: expected {expected_uv}, got {srv_uv}",
-                                )
-                            continue
+                    srv_uv = _get_server_uidvalidity(c, folder)
+                    valid_folder_items = []
+                    for it in items:
+                        expected_uv = it[5]
+                        if (
+                            expected_uv is not None
+                            and expected_uv > 0
+                            and srv_uv is not None
+                            and srv_uv != expected_uv
+                        ):
+                            results[it[0]] = RemoteOperationResult(
+                                success=False,
+                                error=f"UIDVALIDITY mismatch for {folder}: expected {expected_uv}, got {srv_uv}",
+                            )
+                        else:
+                            valid_folder_items.append(it)
+
+                    if not valid_folder_items:
+                        continue
 
                     subgroups: dict[tuple[str, Any], list[tuple[Any, str, dict[str, Any], int, str, int | None, str | None]]] = {}
-                    for it in items:
+                    for it in valid_folder_items:
                         op_id, op_type, desired, num_uid, fld, uv, dest_fld = it
                         if op_type == OP_MARK_READ:
                             target_val = bool(desired.get("is_read", True))

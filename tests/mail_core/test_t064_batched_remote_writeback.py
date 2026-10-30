@@ -238,6 +238,30 @@ def test_ac005_folder_uidvalidity_mismatch_isolates_folder():
     assert "UIDVALIDITY mismatch" in str(results[op2_id].error)
 
 
+def test_ac005_mixed_uidvalidity_in_same_folder_isolates_stale_operations():
+    """A05: Mixed UIDVALIDITY in the same folder isolates stale operations and processes valid ones."""
+    client = RecordingImapClient(uidvalidity=100)
+    client.existing_uids.update({1})
+
+    provider = ImapProvider("acc@test.com", "host", 993, "acc@test.com", "pass")
+    provider._connect_with_permit = lambda *a, **k: (client, None)
+    provider._close_client = lambda c, p: None
+
+    op1_id = uuid.uuid4()
+    op2_id = uuid.uuid4()
+    ops = [
+        # INBOX expects uv=100 (matches server)
+        RemoteOperationItem(op_id=op1_id, op_type="mark_read", desired_state={"remote_id": format_imap_remote_id("INBOX", 100, 1), "is_read": True}),
+        # INBOX expects uv=888 (stale mismatch)
+        RemoteOperationItem(op_id=op2_id, op_type="mark_read", desired_state={"remote_id": format_imap_remote_id("INBOX", 888, 2), "is_read": True}),
+    ]
+
+    results = dict(provider.apply_remote_operations(ops))
+    assert results[op1_id].success is True
+    assert results[op2_id].success is False
+    assert "UIDVALIDITY mismatch" in str(results[op2_id].error)
+
+
 def test_ac006_batch_move_maps_copyuid():
     """AC-006: Batch MOVE maps COPYUID destination UIDs to each operation's remote_state."""
     client = RecordingImapClient(uidvalidity=100)
