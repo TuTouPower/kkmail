@@ -332,17 +332,17 @@ def _seed_message(
 
 
 def _manager(session_factory, factory, **cfg_overrides) -> IdleWatcherManager:
-    cfg = IdleWatcherConfig(
-        enabled=True,
-        quota=32,
-        max_duration_s=30.0,
-        backoff_base_s=0.05,
-        backoff_max_s=0.2,
-        hysteresis_s=300.0,
-        reconcile_interval_s=0.05,
-    )
-    for key, value in cfg_overrides.items():
-        setattr(cfg, key, value)
+    options = {
+        "enabled": True,
+        "quota": 32,
+        "max_duration_s": 30.0,
+        "backoff_base_s": 0.05,
+        "backoff_max_s": 0.2,
+        "hysteresis_s": 300.0,
+        "reconcile_interval_s": 0.05,
+    }
+    options.update(cfg_overrides)
+    cfg = IdleWatcherConfig(**options)
     return IdleWatcherManager(session_factory, idle_session_factory=factory, config=cfg)
 
 
@@ -469,18 +469,20 @@ def test_load_candidates_ranks_by_arrival_not_checkpoint():
             session, checkpoint_seconds_ago=86400 * 30
         )
         _seed_message(session, fresh_mail, fresh_mail_folder, arrival_seconds_ago=60.0)
+        session.flush()
+        fresh_cp_id, fresh_mail_id = fresh_cp.id, fresh_mail.id
         session.commit()
 
     manager = _manager(Session, lambda account, folder_row: _FakeSession())
     candidates = {
         c.account_id: c
         for c in manager._load_candidates()  # noqa: SLF001 - white-box seam
-        if c.account_id in (fresh_cp.id, fresh_mail.id)
+        if c.account_id in (fresh_cp_id, fresh_mail_id)
     }
-    assert set(candidates) == {fresh_cp.id, fresh_mail.id}
+    assert set(candidates) == {fresh_cp_id, fresh_mail_id}
     assert (
-        candidates[fresh_mail.id].inbox_latest_arrival_at
-        > candidates[fresh_cp.id].inbox_latest_arrival_at
+        candidates[fresh_mail_id].inbox_latest_arrival_at
+        > candidates[fresh_cp_id].inbox_latest_arrival_at
     )
     holders = select_idle_holders(
         list(candidates.values()),
@@ -489,7 +491,7 @@ def test_load_candidates_ranks_by_arrival_not_checkpoint():
         hysteresis_s=300,
         now=datetime.now(timezone.utc),
     )
-    assert holders == {fresh_mail.id}
+    assert holders == {fresh_mail_id}
 
 
 @db_only
@@ -511,8 +513,8 @@ def test_ac006_disabled_account_session_closed():
             row = session.get(Account, acc_id)
             row.sync_enabled = False
             session.commit()
-        assert _wait_until(lambda: manager.held_account_ids() == set())
-        assert fake.closed is True
+        assert _wait_until(lambda: fake.closed is True)
+        assert manager.held_account_ids() == set()
     finally:
         manager.stop()
 
@@ -1199,8 +1201,8 @@ def test_ac006_paused_inbox_closes_session_and_disable_recovers():
             row = session.get(Folder, folder_id)
             row.sync_status = SyncStatus.PAUSED.value
             session.commit()
-        assert _wait_until(lambda: manager.held_account_ids() == set())
-        assert fake.closed is True
+        assert _wait_until(lambda: fake.closed is True)
+        assert manager.held_account_ids() == set()
 
         with Session() as session:
             row = session.get(Folder, folder_id)
