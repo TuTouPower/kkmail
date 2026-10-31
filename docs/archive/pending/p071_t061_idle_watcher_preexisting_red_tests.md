@@ -5,4 +5,4 @@
 - 根因：测试辅助代码与冻结/过期对象语义不匹配（`setattr` 到 frozen dataclass、commit 后使用 detached ORM 实例）；`test_ac006_disabled_account_session_closed` 同步点选在 watch 注册表变化而非会话关闭完成，`_close_watch` 的 pop-then-join 顺序使该窗口可观察。
 - 测试缺口：现有断言本身暴露了测试基础设施缺陷，但没有独立 task 覆盖修复；应修 `_manager()` 改用构造参数、避免 commit 后访问 ORM 实例、把禁用账号用例同步点改为等待 `fake.closed` 或线程退出，并在修复后重跑该文件全量。
 - 线索：`tests/mail_core/test_t061_idle_watcher.py:345`（`_manager` setattr）、`:478`（detached `Account.id`）、`:515`（`assert fake.closed is True`）；t071 Round 1/2 代码与测试 review 均已记录。
-- 处理：未开
+- 处理：t072
