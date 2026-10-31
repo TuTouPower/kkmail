@@ -124,3 +124,17 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
     - 后端通过 `sign_inline_image_preview_token` 为内联位图签发确定性 HMAC-SHA256 Token（绑定 `version`、`purpose`、`attachment_id`、时间戳，15 分钟失效）；
     - 挂载独立无 Cookie 预览端点 `GET/HEAD /api/mail/attachments/{id}/preview`，仅凭有效 Token 鉴权放行流式响应；响应强制设置 `Content-Disposition: inline`、`X-Content-Type-Options: nosniff`，严格校验真实位图魔数（排除 SVG 及可执行文件）；
     - 前端在离线 DOM 解析正文将 `<img src="cid:...">` 重写为此签名 URL，浏览器在严格沙箱 iframe（无 `allow-same-origin`）内原生流式拉取图片，彻底杜绝前端 Base64 内存膨胀。
+
+## 服务端安全图片代理与零外部出网架构 (t068)
+
+1. **零外部出网安全基线与彻底消解 CSP 继承死锁**：
+    - 根据 HTML Standard policy container 与 CSP3 规范（`d003`），沙箱 `srcdoc` 强制继承宿主应用 CSP，且 Electron 桌面端对全 session 响应强制下发 `img-src 'self' data: blob:`；
+    - 采用现代 Webmail 工业级标准架构（Gmail / ProtonMail / Fastmail 等）：宿主 SPA、桌面端及邮件沙箱 iframe 的 CSP 统一且永久定格为 `'self' data: cid:`，全站全程零浏览器直连外部出网，第三方追踪器无法探知用户真实 IP、浏览器指纹或网络环境。
+2. **服务端安全图片代理 (Image Proxy)**：
+    - 独立挂载无 Cookie 代理端点 `GET/HEAD /api/mail/messages/{id}/remote-images`，使用 `itsdangerous`（专用 salt）强绑定 `version=1`、`purpose="remote-image"`、`message_id`、`url` 与时间戳；
+    - 每次代理请求实时核验目标邮件在数据库中的放行状态（单封放行或发件人白名单），撤销白名单立即生效（403）；
+    - 严密 SSRF 防护门禁：严格排除私网、回环、链路本地、云元数据（169.254.169.254）、CGNAT、保留段与 IPv4-mapped IPv6；直连安全 IP 且保留 TLS SNI 证书核验，彻底免疫 DNS Rebinding；限制最多 3 跳重定向且逐跳重新安全核验；
+    - 资源边界与魔数核验：限制最大读取 10 MiB（超限立即断开）、5s 连接 / 15s 总读取超时；严格按真实文件头魔数校验受控安全位图（PNG/JPEG/GIF/WebP），拒绝 SVG、HTML、JS 及可执行格式。
+3. **正文外链 URL 代理重写**：
+    - 服务端详情接口在已放行状态下提取正文外链 URL，签发 `remote_images: [{ url, proxy_url }]`（上限 200 个）；
+    - 前端 `prepareMailHtml` 在放行后将正文中的 `img[src]` 及行内样式 `background-image: url(...)` 安全重写为本站代理 URL，在严格沙箱内流式加载解码。

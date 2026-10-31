@@ -50,6 +50,10 @@ export interface MailDetail {
   archive_has_error?: boolean
   remote_images_allowed?: boolean
   can_allow_sender?: boolean
+  remote_images?: Array<{
+    url: string
+    proxy_url: string
+  }>
   attachments?: Array<{
     id?: string
     name?: string

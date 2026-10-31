@@ -82,6 +82,16 @@ from mail_core.security.inline_preview import (
     is_supported_inline_image_mime,
     verify_inline_image_preview_token,
 )
+from mail_core.security.remote_image_proxy import (
+    RemoteImageFetchError,
+    RemoteImageSizeLimitError,
+    SSRFSecurityError,
+    UnsupportedImageFormatError,
+    build_remote_image_proxy_url,
+    extract_remote_image_urls,
+    fetch_safe_remote_image,
+    verify_remote_image_proxy_token,
+)
 
 router = APIRouter(prefix="/api/mail", tags=["mail"])
 preview_router = APIRouter(prefix="/api/mail", tags=["preview"])
@@ -169,6 +179,11 @@ class MessageEmailAddressOut(BaseModel):
     text: str | None = None
 
 
+class RemoteImageMappingOut(BaseModel):
+    url: str
+    proxy_url: str
+
+
 class MessageDetailOut(BaseModel):
     id: str
     account_id: str
@@ -194,6 +209,7 @@ class MessageDetailOut(BaseModel):
     archive_has_error: bool = False
     remote_images_allowed: bool = False
     can_allow_sender: bool = False
+    remote_images: list[RemoteImageMappingOut] = []
     attachments: list[AttachmentOut]
 
 
@@ -210,6 +226,10 @@ class SenderRemoteImageAllowOut(BaseModel):
 class RemoteImagesAllowedOut(BaseModel):
     success: bool = True
     remote_images_allowed: bool = True
+
+
+class SenderAllowDeleteOut(BaseModel):
+    success: bool = True
 
 
 def _is_reliable_email_address(value: str) -> bool:
@@ -300,6 +320,17 @@ def _detail_out(
             )
         )
 
+    remote_image_mappings: list[RemoteImageMappingOut] = []
+    if remote_images_allowed and detail.body:
+        extracted_urls = extract_remote_image_urls(detail.body)
+        for u in extracted_urls:
+            remote_image_mappings.append(
+                RemoteImageMappingOut(
+                    url=u,
+                    proxy_url=build_remote_image_proxy_url(str(detail.id), u),
+                )
+            )
+
     return MessageDetailOut(
         id=str(detail.id),
         account_id=str(detail.account_id),
@@ -324,6 +355,7 @@ def _detail_out(
         archive_has_error=archive_has_error,
         remote_images_allowed=remote_images_allowed,
         can_allow_sender=can_allow_sender,
+        remote_images=remote_image_mappings,
         attachments=att_outs,
     )
 
@@ -851,8 +883,8 @@ def api_list_allowed_senders() -> list[SenderRemoteImageAllowOut]:
         ]
 
 
-@router.delete("/senders/allowed-remote-images/{sender_id}", response_model=MutationOut)
-def api_remove_allowed_sender(sender_id: UUID) -> MutationOut:
+@router.delete("/senders/allowed-remote-images/{sender_id}", response_model=SenderAllowDeleteOut)
+def api_remove_allowed_sender(sender_id: UUID) -> SenderAllowDeleteOut:
     """Remove a sender from the global remote images allowlist."""
     Session = get_session_factory()
     with Session() as session:
@@ -860,12 +892,11 @@ def api_remove_allowed_sender(sender_id: UUID) -> MutationOut:
         if not removed:
             raise HTTPException(404, "Allowed sender not found")
         session.commit()
-    return MutationOut(success=True)
+    return SenderAllowDeleteOut(success=True)
 
 
-@preview_router.api_route(
+@preview_router.get(
     "/attachments/{attachment_id}/preview",
-    methods=["GET", "HEAD"],
     response_class=StreamingResponse,
     responses={
         200: {"content": {"image/*": {}}},
@@ -874,6 +905,10 @@ def api_remove_allowed_sender(sender_id: UUID) -> MutationOut:
         403: {"description": "Forbidden attachment preview"},
         404: {"description": "Attachment not found"},
     },
+)
+@preview_router.head(
+    "/attachments/{attachment_id}/preview",
+    include_in_schema=False,
 )
 def api_preview_inline_attachment(attachment_id: str, request: Request, token: str = Query(...)):
     """Preview an inline image attachment with a short-lived signed URL token.
@@ -929,5 +964,80 @@ def api_preview_inline_attachment(attachment_id: str, request: Request, token: s
     return StreamingResponse(
         _safe_stream(),
         media_type=payload.content_type or "application/octet-stream",
+        headers=headers,
+    )
+
+
+@preview_router.get(
+    "/messages/{message_id}/remote-images",
+    response_class=StreamingResponse,
+    responses={
+        200: {"content": {"image/*": {}}},
+        400: {"description": "Bad Request or SSRF check failed"},
+        401: {"description": "Invalid or expired remote image token"},
+        403: {"description": "Remote images are not allowed for this message"},
+        404: {"description": "Message not found"},
+        413: {"description": "Remote image exceeded size limit"},
+        415: {"description": "Unsupported or dangerous image format"},
+        502: {"description": "Bad Gateway fetching remote image"},
+    },
+)
+@preview_router.head(
+    "/messages/{message_id}/remote-images",
+    include_in_schema=False,
+)
+def api_proxy_remote_image(
+    message_id: str,
+    request: Request,
+    url: str = Query(...),
+    token: str = Query(...),
+):
+    """Stream a safe remote image through the server-side image proxy (t068).
+
+    Operates with stateless HMAC token and verifies real-time sender/message allowlist.
+    """
+    if not verify_remote_image_proxy_token(message_id, url, token):
+        raise HTTPException(401, "Invalid or expired remote image token")
+
+    Session = get_session_factory()
+    with Session() as session:
+        try:
+            msg_uuid = uuid.UUID(message_id)
+        except (ValueError, TypeError):
+            raise HTTPException(400, "Invalid message UUID")
+
+        msg = session.get(Message, msg_uuid)
+        if msg is None:
+            raise HTTPException(404, "Message not found")
+
+        allowed = is_remote_images_allowed(session, msg_uuid, msg.from_address)
+        if not allowed:
+            raise HTTPException(403, "Remote images are not allowed for this message")
+
+    try:
+        mime, stream = fetch_safe_remote_image(url)
+    except SSRFSecurityError as exc:
+        raise HTTPException(400, f"SSRF security check failed: {exc}")
+    except UnsupportedImageFormatError as exc:
+        raise HTTPException(415, f"Unsupported or dangerous image format: {exc}")
+    except RemoteImageSizeLimitError as exc:
+        raise HTTPException(413, f"Remote image exceeded maximum allowed size: {exc}")
+    except RemoteImageFetchError as exc:
+        raise HTTPException(502, f"Failed to fetch remote image from upstream: {exc}")
+    except Exception:
+        raise HTTPException(500, "Internal error proxying remote image")
+
+    headers = {
+        "Content-Disposition": "inline",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=86400",
+        "Content-Security-Policy": "default-src 'none'",
+    }
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type=mime, headers=headers)
+
+    return StreamingResponse(
+        stream,
+        media_type=mime,
         headers=headers,
     )

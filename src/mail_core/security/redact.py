@@ -36,6 +36,10 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1[REDACTED]",
     ),
     (
+        re.compile(r"(?i)(/api/mail/messages/[^/\s]+/remote-images\?[^#\s]*\burl=)[^&\s\"'#]+"),
+        r"\1[REDACTED]",
+    ),
+    (
         re.compile(r"(?i)((?:https?|socks[45]?h?|postgres(?:ql)?(?:\+\w+)?|ftp)://[^:/@\s]+:)[^@\s]+@"),
         r"\1[REDACTED]@",
     ),

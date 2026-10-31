@@ -1074,6 +1074,22 @@
             "conflicts_with": "",
             "note": "消除 srcdoc 强制继承父页面 CSP 导致的放行图片被拦截问题；正文改为独立 URL 端点并独立设置 CSP，守住主站零出网基线，补齐真实全栈外链图片解码测试; dropped: 原独立正文端点方案存在XFO阻断、Electron强制覆盖及双重净化mXSS技术债，按Opus 5.5审查结论废弃，改走服务端图片代理路线",
             "dir": "docs/archive/tasks/t067_reader_isolated_html_endpoint"
+        },
+        {
+            "tid": "t068",
+            "slug": "remote_image_proxy",
+            "title": "外链图片服务端安全代理与防追踪防护",
+            "status": "done",
+            "branch": "t068_remote_image_proxy",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "49ec1f27a2e262158b4b1aab2ecf752dde87b506",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "基于 d003 确立的架构决策，建立服务端安全图片代理（Image Proxy）彻底消解 CSP 继承死锁；主站与正文 CSP 统一定格为 'self' data: 零外部出网，实现工业级防追踪与真实外链图片解码渲染",
+            "dir": "docs/archive/tasks/t068_remote_image_proxy"
         }
     ]
 }

@@ -58,6 +58,7 @@ describe('mailCoreToMailDetail', () => {
       archive_has_error: false,
       remote_images_allowed: false,
       can_allow_sender: true,
+      remote_images: [],
       attachments: [],
     }
     const out = mailCoreToMailDetail(d)
@@ -95,6 +96,7 @@ describe('mailCoreToMailDetail', () => {
       archive_has_error: false,
       remote_images_allowed: false,
       can_allow_sender: true,
+      remote_images: [],
       attachments: [],
     }
     const out = mailCoreToMailDetail(d)
@@ -126,6 +128,7 @@ describe('mailCoreToMailDetail', () => {
       archive_has_error: false,
       remote_images_allowed: false,
       can_allow_sender: true,
+      remote_images: [],
       attachments: [],
     }
     expect(mailCoreToMailDetail(d).is_archived).toBeNull()

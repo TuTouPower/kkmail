@@ -40,6 +40,11 @@ export type InlineAttachmentCandidate = {
   is_inline?: boolean
 }
 
+export type RemoteImageMapping = {
+  url: string
+  proxy_url: string
+}
+
 /**
  * Normalize a MIME header Content-ID according to RFC 2392 / RFC 2045:
  * Strips enclosing angle brackets and whitespace, converts to lowercase.
@@ -151,8 +156,74 @@ export function rewriteCidImages(
 }
 
 /**
+ * Rewrite external remote image URLs (in <img src="..."> and inline style background-image)
+ * to internal safe proxy URLs.
+ */
+export function rewriteRemoteImages(
+  html: string,
+  remoteImages?: RemoteImageMapping[],
+): string {
+  if (!html || !remoteImages || remoteImages.length === 0) {
+    return html || ''
+  }
+
+  const mapping = new Map<string, string>()
+  for (const item of remoteImages) {
+    if (item.url && item.proxy_url) {
+      mapping.set(item.url.trim(), item.proxy_url)
+    }
+  }
+
+  if (mapping.size === 0) {
+    return html
+  }
+
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  let modified = false
+
+  // 1. Rewrite <img src="...">
+  const images = doc.querySelectorAll('img')
+  for (const img of Array.from(images)) {
+    const src = (img.getAttribute('src') || '').trim()
+    if (mapping.has(src)) {
+      img.setAttribute('src', mapping.get(src)!)
+      modified = true
+    }
+  }
+
+  // 2. Rewrite inline background-image styles
+  const bgUrlPattern = /url\(\s*(['"]?)(https?:\/\/[^'")>\s]+)\1\s*\)/gi
+  const styledEls = doc.querySelectorAll('*[style]')
+  for (const el of Array.from(styledEls)) {
+    const style = el.getAttribute('style') || ''
+    if (/url\(/i.test(style)) {
+      let changed = false
+      const newStyle = style.replace(bgUrlPattern, (match, _quote, url) => {
+        const trimmedUrl = url.trim()
+        if (mapping.has(trimmedUrl)) {
+          changed = true
+          return `url("${mapping.get(trimmedUrl)!}")`
+        }
+        return match
+      })
+      if (changed) {
+        el.setAttribute('style', newStyle)
+        modified = true
+      }
+    }
+  }
+
+  if (!modified) {
+    return html
+  }
+
+  return doc.body ? doc.body.innerHTML : html
+}
+
+/**
  * Detect whether the sanitized HTML contains external remote images (http:, https:, //).
- * Does not count data:, /api/mail/attachments/ preview URLs, or cid: placeholders.
+ * Checks both <img src="..."> and inline style background-image URLs.
+ * Does not count data:, /api/mail/... preview or proxy URLs, or cid: placeholders.
  */
 export function hasRemoteImages(sanitizedHtml: string): boolean {
   if (!sanitizedHtml) return false
@@ -161,6 +232,13 @@ export function hasRemoteImages(sanitizedHtml: string): boolean {
   for (const img of Array.from(images)) {
     const src = (img.getAttribute('src') || '').trim()
     if (/^(?:https?:|\/\/)/i.test(src)) {
+      return true
+    }
+  }
+  const styledEls = doc.querySelectorAll('*[style]')
+  for (const el of Array.from(styledEls)) {
+    const style = el.getAttribute('style') || ''
+    if (/url\(\s*['"]?(?:https?:|\/\/)/i.test(style)) {
       return true
     }
   }
@@ -245,8 +323,12 @@ function classifySanitizedMailHtml(sanitized: string): MailHtmlClassification {
 export function prepareMailHtml(
   html: string,
   attachments?: InlineAttachmentCandidate[],
+  remoteImages?: RemoteImageMapping[],
 ): PreparedMailHtml {
-  const rewritten = rewriteCidImages(html, attachments)
+  let rewritten = rewriteCidImages(html, attachments)
+  if (remoteImages && remoteImages.length > 0) {
+    rewritten = rewriteRemoteImages(rewritten, remoteImages)
+  }
   const sanitizedHtml = sanitizeMailHtml(rewritten)
   return {
     sanitizedHtml,
@@ -257,9 +339,10 @@ export function prepareMailHtml(
 export function classifyMailHtml(
   html: string,
   attachments?: InlineAttachmentCandidate[],
+  remoteImages?: RemoteImageMapping[],
 ): MailHtmlClassification {
   if (!html || typeof html !== 'string') return 'plain'
-  return prepareMailHtml(html, attachments).classification
+  return prepareMailHtml(html, attachments, remoteImages).classification
 }
 
 export type MailSrcdocOptions = {
@@ -281,14 +364,12 @@ export type MailSrcdocOptions = {
 /**
  * Build the srcdoc for the sandboxed reader iframe. A strict CSP blocks scripts
  * even if sanitization ever misses something; links open in a new tab.
- * Remote images are off by default.
+ *
+ * Remote images are securely proxied through the kkmail origin, so img-src permanently
+ * stays locked to 'self' data: cid: with zero external network leakage.
  */
 export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): string {
-  const loadRemote = opts.loadRemoteImages === true
-  const imgSrc = loadRemote
-    ? "img-src 'self' https: http: data: cid:"
-    : "img-src 'self' data: cid:"
-  const csp = `default-src 'none'; ${imgSrc}; style-src 'unsafe-inline'; font-src https: data:`
+  const csp = "default-src 'none'; img-src 'self' data: cid:; style-src 'unsafe-inline'; font-src data:"
 
   const theme = opts.theme || 'light'
   const sanitizedHtml = opts.preparedHtml?.sanitizedHtml ?? sanitizeMailHtml(html)

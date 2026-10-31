@@ -1238,6 +1238,14 @@
             ],
             "title": "Parse Error"
           },
+          "remote_images": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RemoteImageMappingOut"
+            },
+            "title": "Remote Images",
+            "type": "array"
+          },
           "remote_images_allowed": {
             "default": false,
             "title": "Remote Images Allowed",
@@ -2184,6 +2192,24 @@
         "title": "ReadyOut",
         "type": "object"
       },
+      "RemoteImageMappingOut": {
+        "properties": {
+          "proxy_url": {
+            "title": "Proxy Url",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "proxy_url"
+        ],
+        "title": "RemoteImageMappingOut",
+        "type": "object"
+      },
       "RemoteImagesAllowedOut": {
         "properties": {
           "remote_images_allowed": {
@@ -2241,6 +2267,17 @@
           "next_offset"
         ],
         "title": "SearchPageOut",
+        "type": "object"
+      },
+      "SenderAllowDeleteOut": {
+        "properties": {
+          "success": {
+            "default": true,
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "title": "SenderAllowDeleteOut",
         "type": "object"
       },
       "SenderAllowIn": {
@@ -4525,6 +4562,84 @@
         ]
       }
     },
+    "/api/mail/messages/{message_id}/remote-images": {
+      "get": {
+        "description": "Stream a safe remote image through the server-side image proxy (t068).\n\nOperates with stateless HMAC token and verifies real-time sender/message allowlist.",
+        "operationId": "api_proxy_remote_image_api_mail_messages__message_id__remote_images_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "title": "Message Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "url",
+            "required": true,
+            "schema": {
+              "title": "Url",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/*": {}
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Bad Request or SSRF check failed"
+          },
+          "401": {
+            "description": "Invalid or expired remote image token"
+          },
+          "403": {
+            "description": "Remote images are not allowed for this message"
+          },
+          "404": {
+            "description": "Message not found"
+          },
+          "413": {
+            "description": "Remote image exceeded size limit"
+          },
+          "415": {
+            "description": "Unsupported or dangerous image format"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "Bad Gateway fetching remote image"
+          }
+        },
+        "summary": "Api Proxy Remote Image",
+        "tags": [
+          "preview"
+        ]
+      }
+    },
     "/api/mail/messages/{message_id}/sync-body": {
       "post": {
         "description": "Queue an on-demand highest-priority body sync for a message.",
@@ -4862,7 +4977,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MutationOut"
+                  "$ref": "#/components/schemas/SenderAllowDeleteOut"
                 }
               }
             },
