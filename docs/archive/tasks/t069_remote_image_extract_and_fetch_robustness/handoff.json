@@ -1,0 +1,63 @@
+{
+  "tid": "t069",
+  "attempt": 1,
+  "execution_id": "c5e42feb837946aeac89130df9d5fdfd",
+  "status": "done",
+  "branch": "t069_remote_image_extract_and_fetch_robustness",
+  "base_sha": "7cbeb45e060ced1b683fe21664ed7c03ad801e1d",
+  "tests": "contract: 189 passed; backend unit: 28 passed (test_remote_image_proxy); proxy PG integration: 39 passed; frontend: 53 files / 571 passed; tsc -b, openapi:check, css:check and production build clean; known baseline failures unrelated to t069: microsoft_oauth concurrent poll 429 (also fails on main), Sidebar.tsx exhaustive-deps lint errors (pre-existing)",
+  "blackbox": "Playwright E2E smoke: 21 passed (new t069 unquoted/entity/protocol-relative decode case); Full Stack E2E: 8 passed",
+  "review": "full review PASS (Round 1 code PASS, test PASS)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/mail_core/security/remote_image_proxy.py",
+      "src/mail_core/api/mail.py",
+      "tests/e2e/smoke.spec.ts",
+      "tests/mail_core/test_remote_image_proxy.py"
+    ],
+    "AC-002": [
+      "src/mail_core/security/remote_image_proxy.py",
+      "src/frontend/src/lib/mailBody.ts",
+      "tests/mail_core/test_remote_image_proxy.py",
+      "src/frontend/src/lib/mailBody.test.ts"
+    ],
+    "AC-003": [
+      "src/mail_core/security/remote_image_proxy.py",
+      "src/frontend/src/lib/mailBody.ts",
+      "src/frontend/src/lib/mailBody.test.ts",
+      "tests/e2e/smoke.spec.ts"
+    ],
+    "AC-004": [
+      "src/mail_core/security/remote_image_proxy.py",
+      "src/frontend/src/lib/mailBody.ts",
+      "src/frontend/src/lib/mailBody.test.ts"
+    ],
+    "AC-005": [
+      "src/mail_core/api/mail.py",
+      "src/mail_core/security/remote_image_proxy.py",
+      "tests/mail_core/test_remote_image_proxy.py"
+    ],
+    "AC-006": [
+      "src/mail_core/security/remote_image_proxy.py",
+      "tests/mail_core/test_remote_image_proxy.py"
+    ],
+    "AC-007": [
+      "src/mail_core/security/remote_image_proxy.py",
+      "tests/mail_core/test_remote_image_proxy.py"
+    ],
+    "AC-008": [
+      "tests/mail_core/test_remote_image_proxy.py",
+      "tests/mail_core/test_remote_images_api.py",
+      "tests/mail_core/test_remote_images_allowlists.py"
+    ],
+    "AC-009": [
+      "tests/mail_core/test_remote_image_proxy.py",
+      "tests/e2e/stubApi.ts",
+      "tests/e2e/smoke.spec.ts"
+    ]
+  },
+  "pending": [
+    "p069 archived by this task"
+  ],
+  "findings": []
+}

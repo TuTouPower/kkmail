@@ -204,7 +204,7 @@ Google 仅提供 IMAP 应用专用密码（`imap.gmail.com`），不提供 Gmail
 - 原会话最终保存前，`/me` 核实微软用户 ID 和真实邮箱，并确认邮箱可访问；重新授权不能用另一身份、客户端或租户覆盖原凭据。Access Token 保持不透明，不从 JWT 或未经核验的 UPN 猜身份。
 - 设备长码不返回前端，短码仅供原会话显示及复制；验证地址限制微软官方 HTTPS 端点，不拼接含验证码的链接，不依赖 verification_uri_complete。后端持久化间隔、429/slow_down 退避与过期状态，不由浏览器控制供应商轮询。
 
-## 十二、 远程图片安全代理与内联图片渲染约定 (t066/t068)
+## 十二、 远程图片安全代理与内联图片渲染约定 (t066/t068/t069)
 
 1. **远程图片默认拦截与双轨放行持久化**：
     - 邮件正文中的远程外链图片（`http:`, `https:`, `//`）默认拦截并展示防追踪提示条；纯文本或仅含内联图片邮件不显示提示；
@@ -214,8 +214,10 @@ Google 仅提供 IMAP 应用专用密码（`imap.gmail.com`），不提供 Gmail
 2. **服务端安全图片代理 (Image Proxy)**：
     - 外部图片统一通过服务端安全端点 `/api/mail/messages/{id}/remote-images?url=...&token=...` 代为拉取；
     - 维持主应用 SPA、桌面端及正文沙箱统一的 `img-src 'self' data: cid:` 策略，全站零外部出网；
-    - 安全位图白名单：仅限 `image/png`, `image/jpeg`, `image/gif`, `image/webp`，严格按文件头真实魔数核对，排除 `image/svg+xml` 及一切非位图；
-    - 严格实施 SSRF 防护（排除私网、回环、链路本地、云元数据、保留段，直连校验安全 IP 防 DNS Rebinding，限 3 跳重定向，限 10 MiB 单图上限，限 5s/15s 超时）；
+    - 正文 URL 提取必须使用 HTML5 属性解析语义（标准库 `html.parser`），支持无引号/单双引号属性、字符引用解码与协议相对 URL 补全，禁止用手写正则匹配 `src=...`；前端重写必须使用同一规范化语义匹配映射 key；
+    - 安全图片白名单：`image/png`, `image/jpeg`, `image/gif`, `image/webp`，以及经静态安全扫描的 `image/svg+xml`；严格按文件头校验；SVG 含脚本、事件处理器、外部引用或嵌入对象时拒绝（415），且不超过 64 KiB；
+    - 严格实施 SSRF 防护（排除私网、回环、链路本地、云元数据、保留段，直连校验安全 IP 防 DNS Rebinding，限 3 跳重定向，限 10 MiB 单图上限，限 5s/15s 超时）；DNS 多 IP 时按 IPv4 优先逐个回退；
+    - 代理错误必须可区分：400 非法目标 / 401 Token / 403 未放行 / 404 消息缺失 / 502 上游或网络失败 / 504 超时 / 413 超限 / 415 格式；响应体不得回显内部 IP、异常栈或完整目标 URL；
     - 服务端访问日志对 `token` 与目标 `url` 自动脱敏。
 3. **内联图片 Signed URL 预览机制**：
     - 维持正文 `iframe sandbox` 不变，严禁添加 `allow-same-origin` 和 `allow-scripts`；

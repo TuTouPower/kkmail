@@ -156,6 +156,19 @@ export function rewriteCidImages(
 }
 
 /**
+ * Normalize a remote image URL exactly like the backend extractor:
+ * trim, resolve protocol-relative URLs to https, reject non-http(s).
+ */
+export function normalizeRemoteImageUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  let url = raw.trim()
+  if (!url) return null
+  if (url.startsWith('//')) url = `https:${url}`
+  if (!/^https?:\/\//i.test(url)) return null
+  return url
+}
+
+/**
  * Rewrite external remote image URLs (in <img src="..."> and inline style background-image)
  * to internal safe proxy URLs.
  */
@@ -169,8 +182,9 @@ export function rewriteRemoteImages(
 
   const mapping = new Map<string, string>()
   for (const item of remoteImages) {
-    if (item.url && item.proxy_url) {
-      mapping.set(item.url.trim(), item.proxy_url)
+    const key = normalizeRemoteImageUrl(item.url)
+    if (key && item.proxy_url) {
+      mapping.set(key, item.proxy_url)
     }
   }
 
@@ -184,25 +198,25 @@ export function rewriteRemoteImages(
   // 1. Rewrite <img src="...">
   const images = doc.querySelectorAll('img')
   for (const img of Array.from(images)) {
-    const src = (img.getAttribute('src') || '').trim()
-    if (mapping.has(src)) {
+    const src = normalizeRemoteImageUrl(img.getAttribute('src'))
+    if (src && mapping.has(src)) {
       img.setAttribute('src', mapping.get(src)!)
       modified = true
     }
   }
 
   // 2. Rewrite inline background-image styles
-  const bgUrlPattern = /url\(\s*(['"]?)(https?:\/\/[^'")>\s]+)\1\s*\)/gi
+  const bgUrlPattern = /url\(\s*(['"]?)([^'")>\s]+)\1\s*\)/gi
   const styledEls = doc.querySelectorAll('*[style]')
   for (const el of Array.from(styledEls)) {
     const style = el.getAttribute('style') || ''
     if (/url\(/i.test(style)) {
       let changed = false
       const newStyle = style.replace(bgUrlPattern, (match, _quote, url) => {
-        const trimmedUrl = url.trim()
-        if (mapping.has(trimmedUrl)) {
+        const normalized = normalizeRemoteImageUrl(url)
+        if (normalized && mapping.has(normalized)) {
           changed = true
-          return `url("${mapping.get(trimmedUrl)!}")`
+          return `url("${mapping.get(normalized)!}")`
         }
         return match
       })
