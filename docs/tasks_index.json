@@ -2,22 +2,5 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/tasks/{tid}_{slug}/task.md front matter",
     "workspace": ".",
-    "tasks": [
-        {
-            "tid": "t071",
-            "slug": "idle_connect_catchup_inbox_delta",
-            "title": "IMAP IDLE 建连与重连后补偿收件箱增量同步",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "",
-            "conflicts_with": "",
-            "note": "来源 p070；IDLE 断线/重启窗口内到达的邮件无事件也无轮询，需在建连后入队补偿 delta",
-            "dir": "docs/tasks/t071_idle_connect_catchup_inbox_delta"
-        }
-    ]
+    "tasks": []
 }

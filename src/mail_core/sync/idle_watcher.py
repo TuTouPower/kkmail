@@ -4,7 +4,12 @@ Maintains at most one long-lived IDLE connection per eligible IMAP
 account, on the inbox only. IDLE is a wake-up signal: a change notice
 enqueues the existing ``SYNC_FOLDER_DELTA`` job under its existing
 dedupe key; all fetching still flows through the delta pipeline
-(baseline gate, account lease, fencing untouched).
+(baseline gate, account lease, fencing untouched). Every successful
+session establishment (first connect, reconnect, credential or seat
+rebuild) also enqueues one catch-up delta under the same key, because
+IDLE only reports changes observed after subscription and the held
+account skips t057 polling; enqueue failures are isolated from the
+watch loop.
 
 Long-lived connections live under their own quota (independent of the
 ``connection_slots`` task budget): quota seats are ranked purely by
@@ -255,8 +260,22 @@ class IdleWatcherManager:
         with self._lock:
             watches = list(self._watches.values())
             self._watches.clear()
+        # Wake every watch before joining: a catch-up enqueue runs on
+        # these threads, so serial set+join would multiply the shutdown
+        # latency by the number of held seats.
         for watch in watches:
             watch.stop_event.set()
+        deadline = time.monotonic() + 5.0
+        for watch in watches:
+            # A watch registered by _open_watch just before start() returns
+            # has no OS thread yet; joining it raises RuntimeError. Its loop
+            # observes the stop flags as soon as it starts.
+            if watch.thread is None or watch.thread.ident is None:
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            watch.thread.join(timeout=remaining)
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._thread = None
@@ -492,6 +511,7 @@ class IdleWatcherManager:
 
             attempts = 0
             self._set_state(watch, "idling")
+            self._enqueue_catchup(watch)
             try:
                 while not self._stop.is_set() and not watch.stop_event.is_set():
                     outcome = session.wait_for_change(
@@ -547,6 +567,28 @@ class IdleWatcherManager:
             if current is watch:
                 self._watches.pop(watch.account_id, None)
             self._states[watch.account_id] = "fallback"
+
+    def _enqueue_catchup(self, watch: _Watch) -> None:
+        """Reconcile the gap before this IDLE session reports changes.
+
+        IDLE only signals changes observed after the subscription starts;
+        ``SELECT``'s current EXISTS snapshot is discarded by the provider.
+        Anything that arrived while no session was active is therefore
+        invisible unless a delta runs. Enqueue the same deduplicated
+        delta used by IDLE wake-ups and t057 so a reconnect always
+        converges without bypassing the baseline gate, lease or fencing.
+
+        An enqueue failure must not tear down the watch: the live
+        session still delivers future changes, and the next reconnect
+        retries the catch-up.
+        """
+        try:
+            self._enqueue_delta(watch)
+        except Exception:
+            log.exception(
+                "idle catch-up delta enqueue failed for account %s; watch continues",
+                watch.account_id,
+            )
 
     def _enqueue_delta(self, watch: _Watch) -> None:
         with self._session_factory() as session:

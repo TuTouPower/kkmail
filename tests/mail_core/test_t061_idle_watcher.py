@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from mail_core.mail.domain.enums import JobType, SyncStatus
+from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
 from mail_core.mail.storage.models import (
     Account,
     Folder,
@@ -537,6 +537,9 @@ class _FakeDbSession:
             return self._folder
         return None
 
+    def scalar(self, statement):  # noqa: ANN001, ANN202
+        return None
+
     def add(self, obj) -> None:
         pass
 
@@ -687,6 +690,36 @@ def test_reconcile_sweeps_blocked_state_for_departed_accounts():
     assert manager._blocked == {}  # noqa: SLF001
 
 
+def test_stop_tolerates_registered_but_unstarted_watch():
+    """Round 2 code finding f003: stop() must not join a watch whose
+    thread was registered but not started yet."""
+    from mail_core.sync.idle_watcher import _Watch
+
+    acc_id, folder_id = uuid.uuid4(), uuid.uuid4()
+    account = Account(
+        id=acc_id, email="unstarted@example.com", provider="imap",
+        credential_ref="ref", config={},
+    )
+    manager = IdleWatcherManager(
+        lambda: None,
+        idle_session_factory=lambda a, f: _FakeSession(),
+        config=IdleWatcherConfig(enabled=True),
+    )
+    watch = _Watch(
+        account_id=acc_id,
+        folder_id=folder_id,
+        fingerprint="fp",
+        account_snapshot=account,
+        folder_remote_id="INBOX",
+    )
+    watch.thread = threading.Thread(target=lambda: None)
+    manager._watches[acc_id] = watch  # noqa: SLF001 - white-box seam
+    manager._states[acc_id] = "connecting"  # noqa: SLF001
+    manager.stop()  # must not raise RuntimeError for the unstarted thread
+    assert manager._watches == {}  # noqa: SLF001
+    assert manager.held_account_ids() == set()
+
+
 def test_disabled_manager_is_noop():
     """AC-015: IDLE switch off -> start() builds nothing (test f005)."""
     calls: list = []
@@ -742,6 +775,373 @@ def test_ac003_manager_recovers_after_disconnect():
         assert manager.snapshot()[acc_id] == "idling"
     finally:
         manager.stop()
+
+
+class _BlockedDropSession:
+    """IDLE session that stays subscribed until the test releases a drop."""
+
+    def __init__(self, drop_event: threading.Event) -> None:
+        self._drop_event = drop_event
+        self.closed = False
+
+    def wait_for_change(self, *, timeout_s: float, stop_event: threading.Event) -> str:
+        from mail_core.providers.imap import IdleSessionDisconnected
+
+        while not self._drop_event.wait(0.01):
+            if stop_event.is_set():
+                return "stopped"
+        raise IdleSessionDisconnected("test-triggered disconnect")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _delta_jobs_snapshot(Session, account_id: uuid.UUID, folder_id: uuid.UUID) -> list[WorkerJob]:
+    with Session() as session:
+        return list(
+            session.scalars(
+                select(WorkerJob).where(
+                    WorkerJob.dedupe_key == f"delta:{account_id}:{folder_id}",
+                    WorkerJob.job_type == JobType.SYNC_FOLDER_DELTA.value,
+                )
+            )
+        )
+
+
+@db_only
+def test_ac001_first_connect_enqueues_catchup_delta():
+    """AC-001: the first successful IDLE session reconciles the inbox
+    once, then the held account skips t057 polling."""
+    from mail_core.db.session import get_session_factory
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc, folder = _seed_idle_account(session)
+        acc_id, folder_id = acc.id, folder.id
+        session.commit()
+
+    manager = _manager(Session, lambda account, folder_row: _FakeSession())
+    manager.start()
+    try:
+        assert _wait_until(lambda: manager.held_account_ids() == {acc_id})
+        assert _wait_until(
+            lambda: len(_delta_jobs_snapshot(Session, acc_id, folder_id)) == 1
+        ), "first IDLE connect did not enqueue exactly one catch-up delta"
+        job = _delta_jobs_snapshot(Session, acc_id, folder_id)[0]
+        assert job.status == JobStatus.PENDING.value
+        assert job.priority == 60
+        assert job.payload["folder_id"] == str(folder_id)
+        assert manager.snapshot()[acc_id] == "idling"
+    finally:
+        manager.stop()
+
+
+@db_only
+def test_ac002_reconnect_enqueues_catchup_delta():
+    """AC-002: a session drop followed by a reconnect reconciles again,
+    even when the first catch-up job already completed or was removed."""
+    from mail_core.db.session import get_session_factory
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc, folder = _seed_idle_account(session)
+        acc_id, folder_id = acc.id, folder.id
+        session.commit()
+
+    drop_event = threading.Event()
+    built: list[object] = []
+
+    def factory(account, folder_row):
+        session_fake = _BlockedDropSession(drop_event) if not built else _FakeSession()
+        built.append(session_fake)
+        return session_fake
+
+    manager = _manager(Session, factory)
+    manager.start()
+    try:
+        assert _wait_until(
+            lambda: len(_delta_jobs_snapshot(Session, acc_id, folder_id)) == 1
+        ), "first connect did not enqueue a catch-up delta"
+        with Session() as session:
+            job = session.scalar(
+                select(WorkerJob).where(
+                    WorkerJob.dedupe_key == f"delta:{acc_id}:{folder_id}"
+                )
+            )
+            assert job is not None
+            session.delete(job)
+            session.commit()
+        assert _delta_jobs_snapshot(Session, acc_id, folder_id) == []
+
+        drop_event.set()
+        assert _wait_until(lambda: len(built) >= 2), "manager never rebuilt the session"
+        assert _wait_until(
+            lambda: len(_delta_jobs_snapshot(Session, acc_id, folder_id)) == 1
+        ), "reconnect did not enqueue a catch-up delta"
+        assert manager.held_account_ids() == {acc_id}
+    finally:
+        manager.stop()
+
+
+@db_only
+def test_ac002_catchup_merges_with_pending_delta():
+    """AC-002: a pending same-key delta is merged, never duplicated."""
+    from mail_core.db.session import get_session_factory
+    from mail_core.sync.jobs import enqueue_job
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc, folder = _seed_idle_account(session)
+        acc_id, folder_id = acc.id, folder.id
+        session.commit()
+        enqueue_job(
+            session,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            account_id=acc_id,
+            payload={"folder_id": str(folder_id)},
+            priority=75,
+            run_after=datetime.now(timezone.utc) + timedelta(hours=1),
+            dedupe_key=f"delta:{acc_id}:{folder_id}",
+        )
+        session.commit()
+
+    manager = _manager(Session, lambda account, folder_row: _FakeSession())
+    manager.start()
+    try:
+        def _merged() -> bool:
+            jobs = _delta_jobs_snapshot(Session, acc_id, folder_id)
+            if len(jobs) != 1:
+                return False
+            job = jobs[0]
+            return job.priority == 60 and job.run_after <= datetime.now(
+                timezone.utc
+            ) + timedelta(seconds=1)
+
+        assert _wait_until(lambda: manager.held_account_ids() == {acc_id})
+        assert _wait_until(_merged), "catch-up did not merge into the pending job"
+        job = _delta_jobs_snapshot(Session, acc_id, folder_id)[0]
+        assert job.payload["folder_id"] == str(folder_id)
+    finally:
+        manager.stop()
+
+
+@db_only
+def test_ac002_catchup_merges_with_claimed_delta():
+    """AC-002: a CLAIMED same-key delta receives a follow-up record
+    instead of a second parallel job."""
+    from mail_core.db.session import get_session_factory
+    from mail_core.sync.jobs import claim_jobs, enqueue_job
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc, folder = _seed_idle_account(session)
+        acc_id, folder_id = acc.id, folder.id
+        session.commit()
+        enqueue_job(
+            session,
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            account_id=acc_id,
+            payload={"folder_id": str(folder_id)},
+            priority=60,
+            dedupe_key=f"delta:{acc_id}:{folder_id}",
+        )
+        session.commit()
+        claimed = claim_jobs(session, worker_id="claimed-worker", limit=1)
+        assert len(claimed) == 1
+        session.commit()
+
+    manager = _manager(Session, lambda account, folder_row: _FakeSession())
+    manager.start()
+    try:
+        def _merged_claimed() -> bool:
+            jobs = _delta_jobs_snapshot(Session, acc_id, folder_id)
+            return (
+                len(jobs) == 1
+                and jobs[0].status == JobStatus.CLAIMED.value
+                and bool(jobs[0].payload.get("_followup_needed"))
+            )
+
+        assert _wait_until(_merged_claimed), "catch-up did not record a claimed follow-up"
+        job = _delta_jobs_snapshot(Session, acc_id, folder_id)[0]
+        assert job.payload["_queue_next"]["payload"]["folder_id"] == str(folder_id)
+    finally:
+        manager.stop()
+
+
+@pytest.mark.parametrize("block_kind", ["no_idle", "permanent_auth"])
+@db_only
+def test_ac004_no_idle_capability_skips_catchup_and_keeps_polling(block_kind):
+    """AC-004: a capability- or auth-blocked account gets no catch-up
+    job and remains eligible for t057 inbox polling."""
+    from mail_core.providers.http import PermanentAuthError
+    from mail_core.worker.main import schedule_periodic_inbox_sync
+    from mail_core.db.session import get_session_factory
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc, folder = _seed_idle_account(session, checkpoint_seconds_ago=99999.0)
+        acc_id, folder_id = acc.id, folder.id
+        session.commit()
+
+    def factory(account, folder_row):
+        if block_kind == "permanent_auth":
+            raise PermanentAuthError("credentials rejected permanently")
+        raise IdleNotSupportedError("server does not advertise IDLE")
+
+    manager = _manager(Session, factory)
+    manager.start()
+    try:
+        assert _wait_until(lambda: manager.snapshot().get(acc_id) == "fallback")
+        assert manager.held_account_ids() == set()
+        assert _delta_jobs_snapshot(Session, acc_id, folder_id) == []
+        with Session() as session:
+            assert session.get(Account, acc_id).sync_status != "failed"
+            enqueued = schedule_periodic_inbox_sync(
+                session,
+                idle_held_account_ids=manager.held_account_ids(),
+                poll_interval_s=1200.0,
+            )
+            session.commit()
+        assert enqueued == 1
+        assert len(_delta_jobs_snapshot(Session, acc_id, folder_id)) == 1
+    finally:
+        manager.stop()
+
+
+@db_only
+def test_ac005_catchup_enqueue_failure_does_not_stop_watch():
+    """AC-005: a failing catch-up enqueue is isolated; a later IDLE
+    change still enqueues its delta and the account stays healthy."""
+    from mail_core.db.session import get_session_factory
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc, folder = _seed_idle_account(session)
+        acc_id, folder_id = acc.id, folder.id
+        session.commit()
+
+    manager = _manager(Session, lambda account, folder_row: _FakeSession(outcomes=["changed"]))
+    real_enqueue = manager._enqueue_delta  # noqa: SLF001 - test seam
+    calls: list[int] = []
+
+    def flaky_enqueue(watch):  # noqa: ANN001
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("database unavailable during catch-up")
+        return real_enqueue(watch)
+
+    manager._enqueue_delta = flaky_enqueue  # noqa: SLF001
+    manager.start()
+    try:
+        assert _wait_until(lambda: len(calls) >= 2), "watch stopped after catch-up enqueue failed"
+        assert _wait_until(
+            lambda: len(_delta_jobs_snapshot(Session, acc_id, folder_id)) == 1
+        ), "IDLE change after a failed catch-up did not enqueue a delta"
+        assert manager.held_account_ids() == {acc_id}
+        assert manager.snapshot()[acc_id] in ("idling", "changed")
+        with Session() as session:
+            assert session.get(Account, acc_id).sync_status != "failed"
+    finally:
+        manager.stop()
+
+
+@db_only
+def test_ac003_catchup_delta_persists_mail_arrived_without_idle_session():
+    """AC-003: mail appended while no IDLE session is active is stored
+    by the catch-up delta without a manual sync."""
+    import mail_core.sync.delta as delta_mod
+    import mail_core.sync.engine as engine_mod
+    from mail_core.db.session import get_session_factory
+    from mail_core.providers.base import RemoteFolder, RemoteMessageMeta
+    from mail_core.providers.stub_memory import MemoryProvider
+    from mail_core.sync import sync_account_folders, sync_folder_delta, sync_folder_metadata
+
+    Session = get_session_factory()
+    provider = MemoryProvider(
+        folders=[RemoteFolder("INBOX", "INBOX", "inbox")],
+        page_size=10,
+    )
+    baseline_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    provider.seed(
+        "INBOX",
+        [
+            RemoteMessageMeta(
+                "baseline-1",
+                "Baseline",
+                "a@example.com",
+                "A",
+                baseline_time,
+                False,
+                False,
+                uid=1,
+            )
+        ],
+    )
+    originals = (engine_mod.build_provider, delta_mod.build_provider)
+
+    def _build(account, store=None, traffic_class=None):
+        return provider
+
+    engine_mod.build_provider = _build
+    delta_mod.build_provider = _build
+    manager = None
+    try:
+        with Session() as session:
+            acc = Account(
+                id=uuid.uuid4(),
+                email=f"idle-catchup-{uuid.uuid4().hex[:8]}@example.com",
+                provider="imap",
+                credential_ref="ref",
+                sync_enabled=True,
+                config={},
+            )
+            session.add(acc)
+            session.commit()
+            account_id = acc.id
+
+        store = object()
+        assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
+        with Session() as session:
+            folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
+        assert folder_id is not None
+        assert sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)["exhausted"]
+
+        arrival = datetime.now(timezone.utc) - timedelta(seconds=1)
+        provider.append_message(
+            "INBOX",
+            RemoteMessageMeta(
+                "late-2",
+                "Arrived while disconnected",
+                "b@example.com",
+                "B",
+                arrival,
+                False,
+                False,
+                uid=2,
+            ),
+        )
+
+        manager = _manager(Session, lambda account, folder_row: _FakeSession())
+        manager.start()
+        assert _wait_until(
+            lambda: len(_delta_jobs_snapshot(Session, account_id, folder_id)) == 1
+        ), "catch-up delta was not enqueued after the idle account connected"
+
+        result = sync_folder_delta(account_id, folder_id, worker_id="w", store=store, max_pages=5)
+        assert result["status"] == "ok"
+        with Session() as session:
+            late = session.scalar(
+                select(Message).where(
+                    Message.account_id == account_id,
+                    Message.remote_id == "late-2",
+                )
+            )
+            assert late is not None, "mail arrived without an IDLE session was not ingested"
+            assert late.sort_time == arrival
+    finally:
+        if manager is not None:
+            manager.stop()
+        engine_mod.build_provider, delta_mod.build_provider = originals
 
 
 @db_only

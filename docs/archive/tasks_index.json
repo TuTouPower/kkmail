@@ -1122,6 +1122,22 @@
             "conflicts_with": "",
             "note": "t069 AC-006 实现补齐：多 IP 回退整次连接共享 15s 总预算，避免 N×5s 最坏等待",
             "dir": "docs/archive/tasks/t070_remote_image_connect_total_budget"
+        },
+        {
+            "tid": "t071",
+            "slug": "idle_connect_catchup_inbox_delta",
+            "title": "IMAP IDLE 建连与重连后补偿收件箱增量同步",
+            "status": "done",
+            "branch": "t071_idle_connect_catchup_inbox_delta",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "e4752c2415d34ac80ebb5ff1e76409a7351fb62d",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p070；IDLE 断线/重启窗口内到达的邮件无事件也无轮询，需在建连后入队补偿 delta",
+            "dir": "docs/archive/tasks/t071_idle_connect_catchup_inbox_delta"
         }
     ]
 }
