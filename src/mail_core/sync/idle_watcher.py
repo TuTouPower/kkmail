@@ -8,8 +8,9 @@ dedupe key; all fetching still flows through the delta pipeline
 session establishment (first connect, reconnect, credential or seat
 rebuild) also enqueues one catch-up delta under the same key, because
 IDLE only reports changes observed after subscription and the held
-account skips t057 polling; enqueue failures are isolated from the
-watch loop.
+account skips t057 polling; catch-up enqueue failures are retried with
+bounded backoff, and exhausting the budget releases the seat so t057
+polling covers the account until the next reconnect.
 
 Long-lived connections live under their own quota (independent of the
 ``connection_slots`` task budget): quota seats are ranked purely by
@@ -53,6 +54,13 @@ from mail_core.providers.base import IdleNotSupportedError
 from mail_core.sync.jobs import enqueue_job
 
 log = logging.getLogger("mail_core.sync.idle_watcher")
+
+# Bounded retry for the connect-time catch-up only. A transient DB error
+# must not strand a held account; after the budget, releasing the seat is
+# cheaper than keeping it without a successful reconciliation.
+_CATCHUP_RETRY_ATTEMPTS = 3
+_CATCHUP_RETRY_BASE_S = 0.2
+_CATCHUP_RETRY_MAX_S = 2.0
 
 _IDLE_STATE_KEY = "worker:idle_state"
 _LIVE_STATES = frozenset({"connecting", "idling", "changed"})
@@ -511,7 +519,19 @@ class IdleWatcherManager:
 
             attempts = 0
             self._set_state(watch, "idling")
-            self._enqueue_catchup(watch)
+            if not self._enqueue_catchup(watch):
+                # Persistent enqueue failure: stop holding the seat so
+                # t057 inbox polling can cover the account until the
+                # next reconnect retries the catch-up.
+                self._set_state(watch, "backoff")
+                try:
+                    session.close()
+                except Exception:
+                    pass
+                attempts += 1
+                if watch.stop_event.wait(backoff_delay(attempts, self._config)):
+                    return
+                continue
             try:
                 while not self._stop.is_set() and not watch.stop_event.is_set():
                     outcome = session.wait_for_change(
@@ -568,7 +588,7 @@ class IdleWatcherManager:
                 self._watches.pop(watch.account_id, None)
             self._states[watch.account_id] = "fallback"
 
-    def _enqueue_catchup(self, watch: _Watch) -> None:
+    def _enqueue_catchup(self, watch: _Watch) -> bool:
         """Reconcile the gap before this IDLE session reports changes.
 
         IDLE only signals changes observed after the subscription starts;
@@ -578,17 +598,38 @@ class IdleWatcherManager:
         delta used by IDLE wake-ups and t057 so a reconnect always
         converges without bypassing the baseline gate, lease or fencing.
 
-        An enqueue failure must not tear down the watch: the live
-        session still delivers future changes, and the next reconnect
-        retries the catch-up.
+        Retries a transient enqueue failure with bounded backoff. Returns
+        False when the budget is exhausted or the watch is stopping; the
+        caller must then release the seat so t057 polling covers the
+        account and the next reconnect retries the catch-up.
         """
-        try:
-            self._enqueue_delta(watch)
-        except Exception:
-            log.exception(
-                "idle catch-up delta enqueue failed for account %s; watch continues",
-                watch.account_id,
-            )
+        for attempt in range(1, _CATCHUP_RETRY_ATTEMPTS + 1):
+            try:
+                self._enqueue_delta(watch)
+                return True
+            except Exception:
+                if attempt == _CATCHUP_RETRY_ATTEMPTS:
+                    log.exception(
+                        "idle catch-up delta enqueue failed for account %s; "
+                        "releasing the IDLE seat for polling",
+                        watch.account_id,
+                    )
+                    return False
+                delay = min(
+                    _CATCHUP_RETRY_BASE_S * (2 ** (attempt - 1)),
+                    _CATCHUP_RETRY_MAX_S,
+                )
+                log.warning(
+                    "idle catch-up delta enqueue failed for account %s; "
+                    "retrying in %.2fs (%d/%d)",
+                    watch.account_id,
+                    delay,
+                    attempt,
+                    _CATCHUP_RETRY_ATTEMPTS,
+                )
+                if watch.stop_event.wait(delay) or self._stop.is_set():
+                    return False
+        return False
 
     def _enqueue_delta(self, watch: _Watch) -> None:
         with self._session_factory() as session:

@@ -1011,6 +1011,152 @@ def test_ac004_no_idle_capability_skips_catchup_and_keeps_polling(block_kind):
 
 
 @db_only
+def test_t073_ac001_catchup_retries_transient_enqueue_failure():
+    """t073 AC-001: a transient enqueue failure is retried and the
+    account keeps its held/idling seat without a new IDLE event."""
+    from mail_core.db.session import get_session_factory
+    from mail_core.sync.idle_watcher import _CATCHUP_RETRY_ATTEMPTS
+
+    assert _CATCHUP_RETRY_ATTEMPTS > 1
+    Session = get_session_factory()
+    with Session() as session:
+        acc, folder = _seed_idle_account(session)
+        acc_id, folder_id = acc.id, folder.id
+        session.commit()
+
+    manager = _manager(Session, lambda account, folder_row: _FakeSession())
+    real_enqueue = manager._enqueue_delta  # noqa: SLF001 - test seam
+    calls: list[int] = []
+
+    def flaky_enqueue(watch):  # noqa: ANN001
+        calls.append(1)
+        if len(calls) < _CATCHUP_RETRY_ATTEMPTS:
+            raise RuntimeError("transient database failure")
+        return real_enqueue(watch)
+
+    manager._enqueue_delta = flaky_enqueue  # noqa: SLF001
+    manager.start()
+    try:
+        assert _wait_until(
+            lambda: len(_delta_jobs_snapshot(Session, acc_id, folder_id)) == 1
+        ), "catch-up never succeeded after transient failures"
+        assert len(calls) == _CATCHUP_RETRY_ATTEMPTS
+        assert manager.held_account_ids() == {acc_id}
+        assert manager.snapshot()[acc_id] == "idling"
+        with Session() as session:
+            assert session.get(Account, acc_id).sync_status != "failed"
+    finally:
+        manager.stop()
+
+
+@db_only
+def test_t073_ac002_persistent_catchup_failure_releases_seat_for_polling():
+    """t073 AC-002: exhausting the retry budget closes the session,
+    releases the held seat, and leaves t057 polling able to cover."""
+    from mail_core.db.session import get_session_factory
+    from mail_core.sync.idle_watcher import _CATCHUP_RETRY_ATTEMPTS
+    from mail_core.worker.main import schedule_periodic_inbox_sync
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc, folder = _seed_idle_account(session, checkpoint_seconds_ago=99999.0)
+        acc_id, folder_id = acc.id, folder.id
+        session.commit()
+
+    built: list[_FakeSession] = []
+    calls: list[int] = []
+
+    def factory(account, folder_row):
+        fake = _FakeSession()
+        built.append(fake)
+        return fake
+
+    manager = _manager(Session, factory, backoff_base_s=5.0, backoff_max_s=5.0)
+
+    def always_fail(watch):  # noqa: ANN001
+        calls.append(1)
+        raise RuntimeError("persistent database failure")
+
+    manager._enqueue_delta = always_fail  # noqa: SLF001
+    manager.start()
+    try:
+        assert _wait_until(
+            lambda: len(calls) >= _CATCHUP_RETRY_ATTEMPTS
+            and manager.snapshot().get(acc_id) == "backoff"
+        ), "persistent catch-up failure did not enter backoff"
+        assert manager.held_account_ids() == set()
+        assert _wait_until(lambda: built and built[0].closed)
+        with Session() as session:
+            assert session.get(Account, acc_id).sync_status != "failed"
+            enqueued = schedule_periodic_inbox_sync(
+                session,
+                idle_held_account_ids=manager.held_account_ids(),
+                poll_interval_s=1200.0,
+            )
+            session.commit()
+        assert enqueued == 1
+        assert len(_delta_jobs_snapshot(Session, acc_id, folder_id)) == 1
+    finally:
+        manager.stop()
+
+
+@db_only
+def test_t073_ac003_stop_during_catchup_retry_returns_promptly():
+    """t073 AC-003: a per-watch stop during retry backoff ends the
+    retries, returns promptly, and leaves another watch unaffected."""
+    from mail_core.db.session import get_session_factory
+
+    Session = get_session_factory()
+    with Session() as session:
+        failing, _failing_folder = _seed_idle_account(session)
+        healthy, _healthy_folder = _seed_idle_account(session)
+        failing_id, healthy_id = failing.id, healthy.id
+        session.commit()
+
+    sessions: dict[uuid.UUID, _FakeSession] = {}
+
+    def factory(account, folder_row):
+        fake = _FakeSession()
+        sessions[account.id] = fake
+        return fake
+
+    manager = _manager(Session, factory)
+    real_enqueue = manager._enqueue_delta  # noqa: SLF001 - test seam
+    calls: list[int] = []
+
+    def flaky_enqueue(watch):  # noqa: ANN001
+        if watch.account_id == failing_id:
+            calls.append(1)
+            raise RuntimeError("database unavailable")
+        return real_enqueue(watch)
+
+    manager._enqueue_delta = flaky_enqueue  # noqa: SLF001
+    manager.start()
+    try:
+        # The second call proves a retry actually happened; the pre-fix
+        # single-attempt implementation never reaches this point.
+        assert _wait_until(lambda: len(calls) >= 2), "catch-up retry never ran"
+        failing_watch = manager._watches[failing_id]  # noqa: SLF001
+        healthy_watch = manager._watches[healthy_id]  # noqa: SLF001
+        assert failing_watch.thread is not None
+        started = time.monotonic()
+        failing_watch.stop_event.set()
+        assert _wait_until(
+            lambda: failing_watch.thread is not None and not failing_watch.thread.is_alive()
+        ), "stopped watch did not exit"
+        elapsed = time.monotonic() - started
+        assert elapsed < 2.0, f"stop took {elapsed:.2f}s during catch-up retry"
+        # Longer than the remaining retry budget: no third attempt.
+        time.sleep(0.8)
+        assert len(calls) == 2
+        assert healthy_id in manager.held_account_ids()
+        assert healthy_watch.thread is not None and healthy_watch.thread.is_alive()
+        assert sessions[healthy_id].closed is False
+    finally:
+        manager.stop()
+
+
+@db_only
 def test_ac005_catchup_enqueue_failure_does_not_stop_watch():
     """AC-005: a failing catch-up enqueue is isolated; a later IDLE
     change still enqueues its delta and the account stays healthy."""
