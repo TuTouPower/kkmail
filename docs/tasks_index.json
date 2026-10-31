@@ -2,22 +2,5 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/tasks/{tid}_{slug}/task.md front matter",
     "workspace": ".",
-    "tasks": [
-        {
-            "tid": "t070",
-            "slug": "remote_image_connect_total_budget",
-            "title": "远程图片代理多 IP 回退总超时预算",
-            "status": "backlog",
-            "branch": "",
-            "worktree": "",
-            "review_level": "full",
-            "review_limit": "5",
-            "verify_limit": "5",
-            "diff_anchor": "",
-            "depends_on": "",
-            "conflicts_with": "",
-            "note": "t069 AC-006 实现补齐：多 IP 回退整次连接共享 15s 总预算，避免 N×5s 最坏等待",
-            "dir": "docs/tasks/t070_remote_image_connect_total_budget"
-        }
-    ]
+    "tasks": []
 }

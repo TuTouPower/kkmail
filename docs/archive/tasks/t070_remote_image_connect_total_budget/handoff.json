@@ -1,0 +1,28 @@
+{
+  "tid": "t070",
+  "attempt": 1,
+  "execution_id": "e46eb30403014ad5a331677d3b2a00f2",
+  "status": "done",
+  "branch": "t070_remote_image_connect_total_budget",
+  "base_sha": "307b0dcc0a8c092a4bd9c3a82d9455390ede107c",
+  "tests": "backend unit: 31 passed (test_remote_image_proxy, incl. 3 new budget cases); proxy PG integration: 33 passed; frontend mailBody: 25 passed; contract: 189 passed",
+  "blackbox": "Playwright E2E smoke: 21 passed",
+  "review": "full review PASS (Round 1 code PASS, test PASS)",
+  "ac_evidence": {
+    "AC-001": [
+      "src/mail_core/security/remote_image_proxy.py",
+      "tests/mail_core/test_remote_image_proxy.py"
+    ],
+    "AC-002": [
+      "src/mail_core/security/remote_image_proxy.py",
+      "tests/mail_core/test_remote_image_proxy.py"
+    ],
+    "AC-003": [
+      "src/mail_core/security/remote_image_proxy.py",
+      "tests/mail_core/test_remote_image_proxy.py",
+      "tests/mail_core/test_remote_images_api.py"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

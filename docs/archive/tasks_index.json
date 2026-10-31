@@ -1106,6 +1106,22 @@
             "conflicts_with": "",
             "note": "来源 p069；修复无引号 src/实体/协议相对漏提取，统一服务端 HTML5 解析语义，区分 DNS/网络/上游/安全错误码，SVG 安全放行与多 IP 回退",
             "dir": "docs/archive/tasks/t069_remote_image_extract_and_fetch_robustness"
+        },
+        {
+            "tid": "t070",
+            "slug": "remote_image_connect_total_budget",
+            "title": "远程图片代理多 IP 回退总超时预算",
+            "status": "done",
+            "branch": "t070_remote_image_connect_total_budget",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "307b0dcc0a8c092a4bd9c3a82d9455390ede107c",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "t069 AC-006 实现补齐：多 IP 回退整次连接共享 15s 总预算，避免 N×5s 最坏等待",
+            "dir": "docs/archive/tasks/t070_remote_image_connect_total_budget"
         }
     ]
 }
