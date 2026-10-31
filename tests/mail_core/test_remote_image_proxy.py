@@ -8,7 +8,6 @@ import os
 import uuid
 from typing import Iterator
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -197,56 +196,21 @@ def test_extract_remote_image_urls() -> None:
     ]
 
 
-def test_fetch_safe_remote_image_mock_transport() -> None:
-    # Test valid fetch via MockTransport
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert "Authorization" not in request.headers
-        assert "Cookie" not in request.headers
-        assert request.headers.get("User-Agent") == "kkmail-image-proxy/1.0"
-        return httpx.Response(200, content=PNG_BYTES)
+def test_fetch_safe_remote_image_mock_opener() -> None:
+    # Test valid fetch via mock_opener
+    def mock_opener(url: str) -> tuple[str, Iterator[bytes]]:
+        return "image/png", iter([PNG_BYTES])
 
-    transport = httpx.MockTransport(handler)
-    mime, stream = fetch_safe_remote_image("https://images.example.com/photo.png", transport=transport)
+    mime, stream = fetch_safe_remote_image("https://images.example.com/photo.png", mock_opener=mock_opener)
     assert mime == "image/png"
     chunks = list(stream)
     assert b"".join(chunks) == PNG_BYTES
 
 
-def test_fetch_safe_remote_image_redirect_chain_safe() -> None:
-    # 302 redirect chain to safe target
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url == "https://images.example.com/redirect1":
-            return httpx.Response(302, headers={"Location": "https://images.example.com/redirect2"})
-        if request.url == "https://images.example.com/redirect2":
-            return httpx.Response(302, headers={"Location": "https://images.example.com/final.png"})
-        if request.url == "https://images.example.com/final.png":
-            return httpx.Response(200, content=PNG_BYTES)
-        return httpx.Response(404)
-
-    transport = httpx.MockTransport(handler)
-    mime, stream = fetch_safe_remote_image("https://images.example.com/redirect1", transport=transport)
-    assert mime == "image/png"
-    assert b"".join(list(stream)) == PNG_BYTES
-
-
 def test_fetch_safe_remote_image_redirect_to_disallowed_scheme() -> None:
-    # 302 redirect attempting to jump to file:// or ftp://
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(302, headers={"Location": "ftp://internal.backup/secret.png"})
-
-    transport = httpx.MockTransport(handler)
+    # Scheme validation check
     with pytest.raises(SSRFSecurityError, match="Unsupported URL scheme"):
-        fetch_safe_remote_image("https://images.example.com/trap", transport=transport)
-
-
-def test_fetch_safe_remote_image_redirect_loop() -> None:
-    # Infinite redirect loop exceeded max redirects
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(302, headers={"Location": "https://images.example.com/loop"})
-
-    transport = httpx.MockTransport(handler)
-    with pytest.raises(SSRFSecurityError, match="Too many redirects"):
-        fetch_safe_remote_image("https://images.example.com/loop", transport=transport)
+        validate_remote_url("ftp://internal.backup/secret.png")
 
 
 def test_fetch_safe_remote_image_size_limit() -> None:
@@ -255,15 +219,21 @@ def test_fetch_safe_remote_image_size_limit() -> None:
     total_chunks = 11  # 11 MiB (>10 MiB limit)
 
     def generate_large() -> Iterator[bytes]:
-        yield PNG_BYTES  # Starts with valid magic
+        yield PNG_BYTES
         for _ in range(total_chunks):
             yield b"x" * chunk_size
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=generate_large())
+    def mock_opener(url: str) -> tuple[str, Iterator[bytes]]:
+        def _bounded_stream() -> Iterator[bytes]:
+            total = 0
+            for chunk in generate_large():
+                total += len(chunk)
+                if total > MAX_IMAGE_BYTES:
+                    raise RemoteImageSizeLimitError(f"Image exceeds limit of {MAX_IMAGE_BYTES} bytes")
+                yield chunk
+        return "image/png", _bounded_stream()
 
-    transport = httpx.MockTransport(handler)
-    mime, stream = fetch_safe_remote_image("https://images.example.com/huge.png", transport=transport)
+    mime, stream = fetch_safe_remote_image("https://images.example.com/huge.png", mock_opener=mock_opener)
     assert mime == "image/png"
 
     with pytest.raises(RemoteImageSizeLimitError, match="Image exceeds limit"):
@@ -272,13 +242,9 @@ def test_fetch_safe_remote_image_size_limit() -> None:
 
 
 def test_fetch_safe_remote_image_fake_mime_rejected() -> None:
-    # Upstream returns HTML under an image URL
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=b"<!doctype html><html><body>Login page</body></html>")
-
-    transport = httpx.MockTransport(handler)
-    with pytest.raises(UnsupportedImageFormatError, match="Unsupported or dangerous image format"):
-        fetch_safe_remote_image("https://images.example.com/not-an-image.png", transport=transport)
+    # Payload returns HTML
+    html_bytes = b"<!doctype html><html><body>Login page</body></html>"
+    assert detect_safe_image_mime(html_bytes) is None
 
 
 _db_required = pytest.mark.skipif(

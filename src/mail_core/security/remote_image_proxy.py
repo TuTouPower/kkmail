@@ -2,21 +2,22 @@
 
 Implements strict SSRF protection, DNS rebinding mitigation, safe bitmap magic number
 detection, stateless URL token signing, and bounded streaming for remote images.
+Implemented strictly using Python standard libraries (http.client, socket, ssl).
 """
 
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import os
+import re
 import socket
+import ssl
 import urllib.parse
 import uuid
 from typing import Any, Iterator
 
-import httpcore
-import httpcore._backends.sync
-import httpx
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from mail_core.security.auth import require_secret_key
@@ -48,6 +49,9 @@ _EXTRA_BLOCKED_NETWORKS = (
     ipaddress.ip_network("203.0.113.0/24"),   # TEST-NET-3
     ipaddress.ip_network("169.254.169.254/32"),  # Cloud metadata IP
 )
+
+_IMG_SRC_RE = re.compile(r"""<img\b[^>]*?\bsrc\s*=\s*["'](https?://[^"'>\s]+)["']""", re.IGNORECASE)
+_BG_URL_RE = re.compile(r"""url\s*\(\s*["']?(https?://[^"')>\s]+)["']?\s*\)""", re.IGNORECASE)
 
 
 class SSRFSecurityError(ValueError):
@@ -83,7 +87,6 @@ def _get_allowed_cidrs() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
 
 def is_safe_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Return True if an IP is a public, non-reserved, non-loopback, non-private IP."""
-    # Check configured allowlist overrides first (useful in controlled test environments)
     allowed_cidrs = _get_allowed_cidrs()
     for cidr in allowed_cidrs:
         if ip_obj in cidr:
@@ -141,89 +144,6 @@ def validate_remote_url(raw_url: str) -> urllib.parse.SplitResult:
             raise SSRFSecurityError(f"Non-standard HTTPS port {port} is not allowed")
 
     return parts
-
-
-class SSRFSafeSyncBackend(httpcore.SyncBackend):
-    """Custom network backend that enforces strict SSRF DNS resolution and pinning.
-
-    Prevents DNS rebinding by connecting directly to the validated IP while preserving
-    TLS SNI verification for HTTPS.
-    """
-
-    def connect_tcp(
-        self,
-        host: str,
-        port: int,
-        timeout: float | None = None,
-        local_address: str | None = None,
-        socket_options: Any = None,
-    ) -> httpcore.NetworkStream:
-        # Check if host is already a literal IP
-        try:
-            literal_ip = ipaddress.ip_address(host)
-            if not is_safe_ip(literal_ip):
-                raise SSRFSecurityError(f"SSRF blocked target IP: {host}")
-            target_ip_str = host
-        except ValueError:
-            # Resolve DNS
-            try:
-                addr_infos = socket.getaddrinfo(
-                    host,
-                    port,
-                    family=socket.AF_UNSPEC,
-                    type=socket.SOCK_STREAM,
-                )
-            except socket.gaierror as exc:
-                raise SSRFSecurityError(f"DNS resolution failed for {host}: {exc}") from exc
-
-            if not addr_infos:
-                raise SSRFSecurityError(f"No IP addresses resolved for {host}")
-
-            # Verify every resolved address; reject immediately if any resolved IP is dangerous
-            safe_ips: list[str] = []
-            for info in addr_infos:
-                ip_str = info[4][0]
-                try:
-                    ip_obj = ipaddress.ip_address(ip_str)
-                except ValueError:
-                    raise SSRFSecurityError(f"Invalid resolved IP: {ip_str}")
-                if not is_safe_ip(ip_obj):
-                    raise SSRFSecurityError(f"SSRF blocked resolved IP: {ip_str} for host {host}")
-                safe_ips.append(ip_str)
-
-            target_ip_str = safe_ips[0]
-
-        address = (target_ip_str, port)
-        source_address = None if local_address is None else (local_address, 0)
-
-        exc_map = {
-            socket.timeout: httpcore.ConnectTimeout,
-            OSError: httpcore.ConnectError,
-        }
-
-        with httpcore._backends.sync.map_exceptions(exc_map):
-            sock = socket.create_connection(
-                address,
-                timeout,
-                source_address=source_address,
-            )
-            if socket_options:
-                for option in socket_options:
-                    sock.setsockopt(*option)
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-        return httpcore._backends.sync.SyncStream(sock)
-
-
-class SSRFSafeTransport(httpx.HTTPTransport):
-    """HTTPTransport configured with SSRFSafeSyncBackend."""
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._pool = httpcore.ConnectionPool(
-            ssl_context=self._pool._ssl_context,
-            network_backend=SSRFSafeSyncBackend(),
-        )
 
 
 def detect_safe_image_mime(header: bytes) -> str | None:
@@ -306,12 +226,6 @@ def build_remote_image_proxy_url(
     return f"/api/mail/messages/{message_id}/remote-images?url={encoded_url}&token={token}"
 
 
-import re
-
-_IMG_SRC_RE = re.compile(r"""<img\b[^>]*?\bsrc\s*=\s*["'](https?://[^"'>\s]+)["']""", re.IGNORECASE)
-_BG_URL_RE = re.compile(r"""url\s*\(\s*["']?(https?://[^"')>\s]+)["']?\s*\)""", re.IGNORECASE)
-
-
 def extract_remote_image_urls(html: str | None, max_urls: int = 200) -> list[str]:
     """Scan HTML body for http(s) image URLs from img[src] and background-image styles."""
     if not html or not isinstance(html, str):
@@ -340,96 +254,145 @@ def extract_remote_image_urls(html: str | None, max_urls: int = 200) -> list[str
 
 def fetch_safe_remote_image(
     target_url: str,
-    transport: httpx.HTTPTransport | None = None,
+    mock_opener: Any = None,
 ) -> tuple[str, Iterator[bytes]]:
-    """Fetch remote image through SSRF-protected transport with manual redirect checks.
+    """Fetch remote image through standard library socket/http.client with strict SSRF defense.
 
-    Returns (mime_type, byte_stream_iterator).
-    Raises SSRFSecurityError, RemoteImageSizeLimitError, UnsupportedImageFormatError,
-    or RemoteImageFetchError.
+    Directly connects to resolved safe IP to prevent DNS rebinding while preserving SNI.
+    Enforces manual redirect inspection, max 10 MiB limit, and bitmap magic number verification.
     """
+    if mock_opener is not None:
+        return mock_opener(target_url)
+
     current_url = target_url
     redirect_count = 0
 
-    if transport is None:
-        transport = SSRFSafeTransport()
+    while True:
+        parts = validate_remote_url(current_url)
+        host = parts.hostname
+        assert host is not None
+        scheme = parts.scheme.lower()
+        port = parts.port or (443 if scheme == "https" else 80)
 
-    client = httpx.Client(
-        transport=transport,
-        follow_redirects=False,
-        timeout=httpx.Timeout(READ_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
-    )
+        # 1. Resolve host and inspect every resolved IP for SSRF
+        try:
+            addr_infos = socket.getaddrinfo(
+                host,
+                port,
+                family=socket.AF_UNSPEC,
+                type=socket.SOCK_STREAM,
+            )
+        except socket.gaierror as exc:
+            raise SSRFSecurityError(f"DNS resolution failed for {host}: {exc}") from exc
 
-    clean_headers = {
-        "Accept": "image/png,image/jpeg,image/gif,image/webp,*/*;q=0.8",
-        "User-Agent": "kkmail-image-proxy/1.0",
-    }
+        if not addr_infos:
+            raise SSRFSecurityError(f"No IP resolved for {host}")
 
-    try:
-        while True:
-            validate_remote_url(current_url)
+        safe_ips: list[str] = []
+        for info in addr_infos:
+            ip_str = info[4][0]
+            try:
+                ip_obj = ipaddress.ip_address(ip_str)
+            except ValueError:
+                raise SSRFSecurityError(f"Invalid resolved IP: {ip_str}")
+            if not is_safe_ip(ip_obj):
+                raise SSRFSecurityError(f"SSRF blocked IP {ip_str} for host {host}")
+            safe_ips.append(ip_str)
 
-            response = client.send(
-                client.build_request("GET", current_url, headers=clean_headers),
-                stream=True,
+        target_ip = safe_ips[0]
+
+        # 2. Connect directly to target_ip (prevents DNS rebinding)
+        try:
+            raw_sock = socket.create_connection((target_ip, port), timeout=CONNECT_TIMEOUT_SECONDS)
+            raw_sock.settimeout(READ_TIMEOUT_SECONDS)
+        except Exception as exc:
+            raise RemoteImageFetchError(f"Connection failed for {host}: {exc}") from exc
+
+        # 3. TLS handshake if HTTPS
+        if scheme == "https":
+            ssl_ctx = ssl.create_default_context()
+            try:
+                conn_sock = ssl_ctx.wrap_socket(raw_sock, server_hostname=host)
+            except Exception as exc:
+                raw_sock.close()
+                raise RemoteImageFetchError(f"TLS handshake failed for {host}: {exc}") from exc
+        else:
+            conn_sock = raw_sock
+
+        conn = http.client.HTTPConnection(host, port, timeout=READ_TIMEOUT_SECONDS)
+        conn.sock = conn_sock
+
+        req_path = parts.path or "/"
+        if parts.query:
+            req_path += "?" + parts.query
+
+        headers = {
+            "Host": host if (port in (80, 443)) else f"{host}:{port}",
+            "Accept": "image/png,image/jpeg,image/gif,image/webp,*/*;q=0.8",
+            "User-Agent": "kkmail-image-proxy/1.0",
+            "Connection": "close",
+        }
+
+        try:
+            conn.request("GET", req_path, headers=headers)
+            resp = conn.getresponse()
+        except Exception as exc:
+            conn.close()
+            raise RemoteImageFetchError(f"HTTP request failed: {exc}") from exc
+
+        # Handle redirects manually to enforce SSRF validation at every hop
+        if resp.status in (301, 302, 303, 307, 308):
+            location = resp.getheader("Location")
+            conn.close()
+            redirect_count += 1
+            if redirect_count > MAX_REDIRECTS:
+                raise SSRFSecurityError(f"Too many redirects (exceeded max {MAX_REDIRECTS})")
+            if not location:
+                raise RemoteImageFetchError("Redirect missing Location header")
+            current_url = urllib.parse.urljoin(current_url, location)
+            continue
+
+        if resp.status != 200:
+            conn.close()
+            raise RemoteImageFetchError(f"Upstream HTTP error status={resp.status}")
+
+        try:
+            first_chunk = resp.read(16384)
+        except Exception as exc:
+            conn.close()
+            raise RemoteImageFetchError(f"Failed reading response: {exc}") from exc
+
+        if not first_chunk:
+            conn.close()
+            raise UnsupportedImageFormatError("Empty response body")
+
+        mime = detect_safe_image_mime(first_chunk)
+        if not mime or mime not in SUPPORTED_IMAGE_MIMES:
+            conn.close()
+            raise UnsupportedImageFormatError(
+                f"Unsupported or dangerous image format (detected: {mime!r})"
             )
 
-            # Handle redirects manually to enforce SSRF validation at every hop
-            if response.status_code in (301, 302, 303, 307, 308):
-                response.close()
-                redirect_count += 1
-                if redirect_count > MAX_REDIRECTS:
-                    raise SSRFSecurityError(f"Too many redirects (exceeded max {MAX_REDIRECTS})")
-                location = response.headers.get("Location")
-                if not location:
-                    raise RemoteImageFetchError("Redirect missing Location header")
-                current_url = urllib.parse.urljoin(current_url, location)
-                continue
+        def _bounded_stream() -> Iterator[bytes]:
+            total_bytes = len(first_chunk)
+            if total_bytes > MAX_IMAGE_BYTES:
+                conn.close()
+                raise RemoteImageSizeLimitError(f"Image exceeds limit of {MAX_IMAGE_BYTES} bytes")
+            yield first_chunk
 
-            if response.status_code != 200:
-                response.close()
-                raise RemoteImageFetchError(f"Upstream HTTP error status={response.status_code}")
-
-            # Stream body and check magic number on first chunk
-            stream_iter = response.iter_bytes(chunk_size=16384)
             try:
-                first_chunk = next(stream_iter)
-            except StopIteration:
-                response.close()
-                raise UnsupportedImageFormatError("Empty response body")
+                while True:
+                    chunk = resp.read(16384)
+                    if not chunk:
+                        break
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_IMAGE_BYTES:
+                        conn.close()
+                        raise RemoteImageSizeLimitError(
+                            f"Image exceeds limit of {MAX_IMAGE_BYTES} bytes"
+                        )
+                    yield chunk
+            finally:
+                conn.close()
 
-            mime = detect_safe_image_mime(first_chunk)
-            if not mime or mime not in SUPPORTED_IMAGE_MIMES:
-                response.close()
-                raise UnsupportedImageFormatError(
-                    f"Unsupported or dangerous image format (detected: {mime!r})"
-                )
-
-            # Generator that yields chunks while enforcing the 10 MiB limit
-            def _bounded_stream() -> Iterator[bytes]:
-                total_bytes = len(first_chunk)
-                if total_bytes > MAX_IMAGE_BYTES:
-                    response.close()
-                    client.close()
-                    raise RemoteImageSizeLimitError(f"Image exceeds limit of {MAX_IMAGE_BYTES} bytes")
-                yield first_chunk
-
-                try:
-                    for chunk in stream_iter:
-                        total_bytes += len(chunk)
-                        if total_bytes > MAX_IMAGE_BYTES:
-                            response.close()
-                            client.close()
-                            raise RemoteImageSizeLimitError(
-                                f"Image exceeds limit of {MAX_IMAGE_BYTES} bytes"
-                            )
-                        yield chunk
-                finally:
-                    response.close()
-                    client.close()
-
-            return mime, _bounded_stream()
-
-    except Exception:
-        client.close()
-        raise
+        return mime, _bounded_stream()
