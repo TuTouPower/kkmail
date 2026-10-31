@@ -65,11 +65,36 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(out).toContain('rel="noopener noreferrer"')
   })
 
-  // t066: Verifies remote external images remain strictly blocked by default while
-  // preview endpoint is permitted. Explicit opt-in opens external http(s).
-  it('blocks remote images by default and allows them only on explicit opt-in', () => {
-    expect(buildMailSrcdoc('<img src="https://evil/x.png">')).not.toContain('img-src https:')
-    expect(buildMailSrcdoc('<img src="https://x/y.png">', { loadRemoteImages: true })).toContain("img-src 'self' https: http: data: cid:")
+  // t068: In accordance with d003 and t068 specs, the iframe CSP permanently stays
+  // locked to 'self' data: cid: (zero external network leakage). External remote images
+  // are rewritten to the kkmail backend proxy endpoint (/api/mail/messages/.../remote-images).
+  it('permanently locks iframe CSP to self data cid and rewrites remote images to proxy endpoints', () => {
+    const rawHtml = '<p>Check photo</p><img src="https://tracker.test/pixel.png">'
+    // 1. By default, CSP is locked and no external origin is allowed
+    const defaultDoc = buildMailSrcdoc(rawHtml)
+    expect(defaultDoc).toContain("img-src 'self' data: cid:")
+    expect(defaultDoc).not.toContain('img-src https:')
+    expect(defaultDoc).not.toContain("img-src 'self' https:")
+
+    // 2. Even when loadRemoteImages is requested, CSP remains locked to self
+    const optInDoc = buildMailSrcdoc(rawHtml, { loadRemoteImages: true })
+    expect(optInDoc).toContain("img-src 'self' data: cid:")
+    expect(optInDoc).not.toContain('img-src https:')
+    expect(optInDoc).not.toContain("img-src 'self' https:")
+
+    // 3. rewriteRemoteImages replaces external img src and style background-image
+    const prepared = prepareMailHtml(
+      '<p>Body</p><img src="https://tracker.test/pixel.png"><div style="background-image: url(\'https://tracker.test/bg.jpg\')"></div>',
+      undefined,
+      [
+        { url: 'https://tracker.test/pixel.png', proxy_url: '/api/mail/messages/m-1/remote-images?url=pixel&token=123' },
+        { url: 'https://tracker.test/bg.jpg', proxy_url: '/api/mail/messages/m-1/remote-images?url=bg&token=456' },
+      ],
+    )
+    expect(prepared.sanitizedHtml).toContain('src="/api/mail/messages/m-1/remote-images?url=pixel&amp;token=123"')
+    expect(prepared.sanitizedHtml).toContain('/api/mail/messages/m-1/remote-images?url=bg&amp;token=456')
+    expect(prepared.sanitizedHtml).not.toContain('https://tracker.test/pixel.png')
+    expect(prepared.sanitizedHtml).not.toContain('https://tracker.test/bg.jpg')
   })
 
   it('locks the A384 popup-escape adjudication boundaries: exact sandbox, no opener, protocol filtering intact', () => {

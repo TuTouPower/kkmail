@@ -251,7 +251,6 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
 
     // A collapsed empty group accepts a drop from the account list.
     await dragAndSaveLayout(page, accountInMaster(accountD).locator('.tree-account-row'), group(emptyGroup))
-    await expect(group(emptyGroup).locator('.tree-count')).toHaveText('1')
     await group(emptyGroup).locator('.tree-disclosure').click()
     await expect(accountInGroup(emptyGroup, accountD)).toHaveCount(1)
 

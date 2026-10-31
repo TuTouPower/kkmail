@@ -190,6 +190,7 @@ def main():
             MAIL_CORE_LOGIN_PASSWORD=e2e_password,
             KKMAIL_AUTH_PASSWORD=e2e_password,
             MAIL_CORE_ALLOW_PRIVATE_HOSTS="1",
+            MAIL_CORE_ALLOW_TEST_PROVIDERS="1",
             KKMAIL_FRONTEND_DIST=str(ROOT / "src/frontend/dist"),
             MAIL_CORE_LOG_LEVEL="INFO",
         )

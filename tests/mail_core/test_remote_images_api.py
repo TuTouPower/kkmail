@@ -32,7 +32,7 @@ _db_required = pytest.mark.skipif(
 def test_allow_remote_images_endpoints(monkeypatch):
     monkeypatch.setenv("MAIL_CORE_SECRET_KEY", "test-secret-key-for-api-t066-random")
     client = TestClient(app)
-    headers = {"X-API-Key": TEST_API_KEY}
+    headers = {"Authorization": f"Bearer {TEST_API_KEY}"}
 
     Session = get_session_factory()
     with Session() as session:
@@ -129,10 +129,11 @@ def test_inline_attachment_preview_endpoint(monkeypatch, tmp_path):
         )
         session.add(msg)
         session.flush()
+        msg_id = msg.id
 
         # Seed an inline attachment
         att = Attachment(
-            message_id=msg.id,
+            message_id=msg_id,
             filename="logo.png",
             content_type="image/png",
             size_bytes=4,
@@ -166,7 +167,7 @@ def test_inline_attachment_preview_endpoint(monkeypatch, tmp_path):
     # 5. Non-inline attachment -> 403
     with Session() as session:
         non_inline = Attachment(
-            message_id=msg.id,
+            message_id=msg_id,
             filename="doc.pdf",
             content_type="application/pdf",
             size_bytes=10,
@@ -183,7 +184,7 @@ def test_inline_attachment_preview_endpoint(monkeypatch, tmp_path):
     # 6. SVG attachment -> 403
     with Session() as session:
         svg_att = Attachment(
-            message_id=msg.id,
+            message_id=msg_id,
             filename="vector.svg",
             content_type="image/svg+xml",
             size_bytes=20,
@@ -211,7 +212,7 @@ def test_allow_endpoints_auth_and_errors():
     assert res.status_code == 401
 
     # With auth but nonexistent IDs -> 404
-    headers = {"X-API-Key": TEST_API_KEY}
+    headers = {"Authorization": f"Bearer {TEST_API_KEY}"}
     res = client.post(f"/api/mail/messages/{fake_id}/allow-remote-images", headers=headers)
     assert res.status_code == 404
 

@@ -177,12 +177,16 @@ beforeEach(() => {
       })
     }
     if (u === '/api/mail/messages/m-2') {
+      const allowed = posts.some((p) => p.url.includes('/messages/m-2/allow-remote-images'))
       return json({
         id: 'm-2', account_id: 'acc-1', subject: 'Html with remote image', from_address: 'bob@x.test', from_name: 'Bob',
         from: 'Bob <bob@x.test>', to: 'box@x.test', cc: '', date: '2026-10-20T09:00:00Z', is_read: true,
         is_flagged: false, has_attachments: false, snippet: null,
         body: '<p>Remote image mail</p><img src="https://tracker.test/pixel.png">', body_type: 'html',
-        parse_error: null, attachments: [], remote_images_allowed: false, can_allow_sender: true,
+        parse_error: null, attachments: [], remote_images_allowed: allowed, can_allow_sender: true,
+        remote_images: allowed
+          ? [{ url: 'https://tracker.test/pixel.png', proxy_url: '/api/mail/messages/m-2/remote-images?url=https%3A%2F%2Ftracker.test%2Fpixel.png&token=tok' }]
+          : [],
       })
     }
     if (u === '/api/mail/messages/m-3') {
@@ -640,7 +644,9 @@ describe('<MessageReader />', () => {
 
     await waitFor(() => {
       const updatedIframe = container.querySelector('iframe.email-body-frame') as HTMLIFrameElement
-      expect(updatedIframe.srcdoc).toContain("img-src 'self' https:")
+      expect(updatedIframe.srcdoc).toContain("img-src 'self' data: cid:")
+      expect(updatedIframe.srcdoc).not.toContain("img-src 'self' https:")
+      expect(updatedIframe.srcdoc).toContain('/api/mail/messages/m-2/remote-images')
     })
     expect(container.textContent).not.toContain('远程图片已拦截（防追踪）')
 

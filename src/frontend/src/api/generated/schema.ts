@@ -531,6 +531,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mail/messages/{message_id}/remote-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Api Proxy Remote Image
+         * @description Stream a safe remote image through the server-side image proxy (t068).
+         *
+         *     Operates with stateless HMAC token and verifies real-time sender/message allowlist.
+         */
+        get: operations["api_proxy_remote_image_api_mail_messages__message_id__remote_images_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/mail/messages/{message_id}/sync-body": {
         parameters: {
             query?: never;
@@ -1214,6 +1236,11 @@ export interface components {
             /** Parse Error */
             parse_error: string | null;
             /**
+             * Remote Images
+             * @default []
+             */
+            remote_images: components["schemas"]["RemoteImageMappingOut"][];
+            /**
              * Remote Images Allowed
              * @default false
              */
@@ -1520,6 +1547,13 @@ export interface components {
             /** Worker */
             worker?: boolean | null;
         };
+        /** RemoteImageMappingOut */
+        RemoteImageMappingOut: {
+            /** Proxy Url */
+            proxy_url: string;
+            /** Url */
+            url: string;
+        };
         /** RemoteImagesAllowedOut */
         RemoteImagesAllowedOut: {
             /**
@@ -1545,6 +1579,14 @@ export interface components {
             query: string;
             /** Total */
             total: number;
+        };
+        /** SenderAllowDeleteOut */
+        SenderAllowDeleteOut: {
+            /**
+             * Success
+             * @default true
+             */
+            success: boolean;
         };
         /** SenderAllowIn */
         SenderAllowIn: {
@@ -2765,6 +2807,89 @@ export interface operations {
             };
         };
     };
+    api_proxy_remote_image_api_mail_messages__message_id__remote_images_get: {
+        parameters: {
+            query: {
+                url: string;
+                token: string;
+            };
+            header?: never;
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/*": unknown;
+                };
+            };
+            /** @description Bad Request or SSRF check failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid or expired remote image token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Remote images are not allowed for this message */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Message not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Remote image exceeded size limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported or dangerous image format */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Bad Gateway fetching remote image */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     api_sync_message_body_api_mail_messages__message_id__sync_body_post: {
         parameters: {
             query?: never;
@@ -2933,7 +3058,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MutationOut"];
+                    "application/json": components["schemas"]["SenderAllowDeleteOut"];
                 };
             };
             /** @description Validation Error */

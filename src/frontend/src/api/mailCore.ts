@@ -191,6 +191,10 @@ export function mailCoreToMailDetail(d: MailCoreMessageDetail): MailDetail {
     archive_has_error: d.archive_has_error ?? false,
     remote_images_allowed: d.remote_images_allowed ?? false,
     can_allow_sender: d.can_allow_sender ?? false,
+    remote_images: (d.remote_images || []).map((img) => ({
+      url: img.url,
+      proxy_url: img.proxy_url,
+    })),
     has_attachments: d.has_attachments,
     attachments: d.attachments.map((a: MailCoreAttachment) => ({
       id: a.id,

@@ -94,14 +94,18 @@ const MessageReader = memo(function MessageReader() {
   const [actionStatus, setActionStatus] = useState('')
   const [allowingImages, setAllowingImages] = useState(false)
   const [allowImagesError, setAllowImagesError] = useState('')
+  const [prevSelectedKey, setPrevSelectedKey] = useState(selectedKey)
+  if (selectedKey !== prevSelectedKey) {
+    setPrevSelectedKey(selectedKey)
+    setAllowingImages(false)
+    setAllowImagesError('')
+  }
   const allowImagesAbortRef = useRef<AbortController | null>(null)
   const viewModeOverrides = useMailStore((s) => s.viewModeOverrides)
   const setStoreViewModeOverride = useMailStore((s) => s.setViewModeOverride)
 
   useEffect(() => {
     allowImagesAbortRef.current?.abort()
-    setAllowingImages(false)
-    setAllowImagesError('')
   }, [selectedKey])
 
   // Re-render when the selected mail's cached fields change (optimistic
@@ -154,6 +158,7 @@ const MessageReader = memo(function MessageReader() {
         ['detail', 'mail-core', selected.id],
         (old: any) => (old ? { ...old, remote_images_allowed: true } : old)
       )
+      await queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core', selected.id] })
     } catch (err: any) {
       if (err?.name === 'AbortError') return
       if (useMailStore.getState().selectedKey !== targetKey) return
@@ -291,8 +296,8 @@ const MessageReader = memo(function MessageReader() {
   // classification (for the iframe path); a plain-text body is rendered
   // as text and must not pay for — or be altered by — that pipeline.
   const preparedMailHtml = useMemo(
-    () => (body && html ? prepareMailHtml(body, detail?.attachments) : null),
-    [body, html, detail?.attachments],
+    () => (body && html ? prepareMailHtml(body, detail?.attachments, detail?.remote_images) : null),
+    [body, html, detail?.attachments, detail?.remote_images],
   )
   const mailThemeClass = html ? preparedMailHtml?.classification ?? 'plain' : 'plain'
 

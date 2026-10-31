@@ -205,6 +205,7 @@ describe('mail endpoints', () => {
       archive_state: 'archive_complete', archive_has_error: false,
       remote_images_allowed: false,
       can_allow_sender: true,
+      remote_images: [],
       attachments: [{ id: 'att', name: 'a.pdf', contentType: null, size: null, is_inline: false }],
     }
     const out = mailCoreToMailDetail(d)

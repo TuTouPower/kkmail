@@ -177,7 +177,15 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
     expect(await toggleButton.getAttribute('title')).toBe('查看原样视图')
   })
 
-  test('远程图片放行重载、发件人白名单与 CID 内联图片加载 (t066 AC-001 ~ AC-018)', async ({ page }) => {
+  test('远程图片服务端安全代理与真实解码渲染 (t068 AC-001 ~ AC-008)', async ({ page }) => {
+    // 监听 console 确保零 CSP 拦截错误
+    const cspErrors: string[] = []
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && msg.text().includes('violates directive')) {
+        cspErrors.push(msg.text())
+      }
+    })
+
     await setupStubApi(page, { authedInitially: true })
     await page.goto('/')
 
@@ -198,13 +206,27 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
     await expect(allowMessageBtn).toBeVisible()
     await expect(allowSenderBtn).toBeVisible()
 
-    // 3. Click allow message -> banner disappears and iframe remounts with open remote CSP
+    // 3. Click allow message -> banner disappears, external images rewritten to proxy endpoints, CSP locked to self
     await allowMessageBtn.click()
     await expect(page.getByText('远程图片已拦截（防追踪）。')).not.toBeVisible()
-    const allowedSrcdoc = await iframe.getAttribute('srcdoc')
-    expect(allowedSrcdoc).toContain("img-src 'self' https: http: data: cid:")
 
-    // 4. Reload page -> state persisted in backend, still allowed without banner
+    const allowedSrcdoc = await iframe.getAttribute('srcdoc')
+    // CSP permanently stays locked to self data cid with zero external network leakage
+    expect(allowedSrcdoc).toContain("img-src 'self' data: cid:")
+    expect(allowedSrcdoc).not.toContain("img-src 'self' https:")
+    expect(allowedSrcdoc).toContain('/api/mail/messages/')
+    expect(allowedSrcdoc).toContain('/remote-images?url=')
+
+    // 4. Verify in real browser that the remote image is loaded and successfully decoded (naturalWidth > 0)
+    const remoteImg = iframe.contentFrame().locator('img[src*="/remote-images"]')
+    await expect(remoteImg).toBeVisible({ timeout: 5000 })
+    await expect.poll(async () => {
+      return remoteImg.evaluate((el: HTMLImageElement) => el.naturalWidth)
+    }).toBeGreaterThan(0)
+
+    expect(cspErrors).toHaveLength(0)
+
+    // 5. Reload page -> state persisted in backend, still allowed without banner
     await page.reload()
     await expect(page.getByText('远程图片与内联图片测试邮件')).toBeVisible({ timeout: 10000 })
     await page.getByText('远程图片与内联图片测试邮件').click()

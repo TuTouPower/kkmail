@@ -573,6 +573,17 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
           remote_images_allowed:
             allowedMessageIds.has(hit.id) ||
             allowedSendersList.some((s) => s.from_address === hit.from.trim().toLowerCase()),
+          remote_images: (
+            allowedMessageIds.has(hit.id) ||
+            allowedSendersList.some((s) => s.from_address === hit.from.trim().toLowerCase())
+          )
+            ? [
+                {
+                  url: 'https://tracker.test/remote-pixel.png',
+                  proxy_url: `/api/mail/messages/${hit.id}/remote-images?url=https%3A%2F%2Ftracker.test%2Fremote-pixel.png&token=stub-proxy-token`,
+                },
+              ]
+            : [],
           can_allow_sender: Boolean(hit.from && hit.from.includes('@')),
           attachments: hit.id === 'msg-00000000-0000-0000-0000-000000000005'
             ? [
@@ -636,6 +647,21 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
           'Content-Disposition': 'inline',
           'X-Content-Type-Options': 'nosniff',
           'Cache-Control': 'private, no-store',
+        },
+        body: Buffer.from(pngBase64, 'base64'),
+      })
+    }
+
+    if (path.includes('/remote-images') && method === 'GET') {
+      const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+      return route.fulfill({
+        status: 200,
+        contentType: 'image/png',
+        headers: {
+          'Content-Disposition': 'inline',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'private, max-age=86400',
+          'Content-Security-Policy': "default-src 'none'",
         },
         body: Buffer.from(pngBase64, 'base64'),
       })
