@@ -16,7 +16,8 @@ import socket
 import ssl
 import urllib.parse
 import uuid
-from typing import Any, Iterator
+from html.parser import HTMLParser
+from typing import Any, Callable, Iterator
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
@@ -25,18 +26,20 @@ from mail_core.security.auth import require_secret_key
 _REMOTE_IMAGE_SALT = "kkmail/remote-image-proxy/v1"
 REMOTE_IMAGE_TOKEN_MAX_AGE_SECONDS = 900  # 15 minutes
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MiB limit
+MAX_SVG_BYTES = 64 * 1024  # SVGs are scanned in full; larger ones are rejected
 CONNECT_TIMEOUT_SECONDS = 5.0
 READ_TIMEOUT_SECONDS = 15.0
 MAX_REDIRECTS = 3
 MAX_URL_LENGTH = 2048
 
-# Safe bitmap image MIME types allowed through the proxy.
-# SVG is strictly excluded for XSS defense-in-depth.
+# Safe image MIME types allowed through the proxy. SVG is allowed only after a
+# static safety scan (no scripts, event handlers or external references).
 SUPPORTED_IMAGE_MIMES = frozenset({
     "image/png",
     "image/jpeg",
     "image/gif",
     "image/webp",
+    "image/svg+xml",
 })
 
 # Extra reserved networks to block for SSRF defense
@@ -50,8 +53,27 @@ _EXTRA_BLOCKED_NETWORKS = (
     ipaddress.ip_network("169.254.169.254/32"),  # Cloud metadata IP
 )
 
-_IMG_SRC_RE = re.compile(r"""<img\b[^>]*?\bsrc\s*=\s*["'](https?://[^"'>\s]+)["']""", re.IGNORECASE)
-_BG_URL_RE = re.compile(r"""url\s*\(\s*["']?(https?://[^"')>\s]+)["']?\s*\)""", re.IGNORECASE)
+_CSS_URL_RE = re.compile(r"""url\(\s*['"]?([^'")]+)['"]?\s*\)""", re.IGNORECASE)
+
+# Defense-in-depth for proxied SVG: <img> context already disables scripts, but a
+# proxied URL can also be opened directly, so reject active or externally
+# referencing content instead of relying on the response CSP alone.
+_DANGEROUS_SVG_PATTERNS = (
+    b"<script",
+    b"<foreignobject",
+    b"<iframe",
+    b"<embed",
+    b"<object",
+    b"javascript:",
+    b"onload=",
+    b"onerror=",
+    b"onclick=",
+    b"onmouseover=",
+)
+_EXTERNAL_SVG_REF_RE = re.compile(
+    rb"""(?:href|src)\s*=\s*["']\s*(?:https?:)?//""",
+    re.IGNORECASE,
+)
 
 
 class SSRFSecurityError(ValueError):
@@ -62,12 +84,17 @@ class RemoteImageSizeLimitError(ValueError):
     """Raised when a remote image exceeds the maximum allowed size (10 MiB)."""
 
 
+class RemoteImageTimeoutError(TimeoutError):
+    """Raised when connecting to or reading from upstream times out."""
+
+
 class UnsupportedImageFormatError(ValueError):
-    """Raised when a remote payload is not a verified safe bitmap image format."""
+    """Raised when a remote payload is not a verified safe image format."""
 
 
 class RemoteImageFetchError(RuntimeError):
     """Raised when fetching a remote image encounters a transport or protocol error."""
+
 
 
 def _get_allowed_cidrs() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
@@ -147,10 +174,16 @@ def validate_remote_url(raw_url: str) -> urllib.parse.SplitResult:
 
 
 def detect_safe_image_mime(header: bytes) -> str | None:
-    """Inspect magic numbers of payload header and return safe MIME or None.
+    """Inspect payload header and return a safe image MIME or None.
 
-    Supports PNG, JPEG, GIF, WebP. Rejects SVG and non-bitmap formats.
+    Supports PNG, JPEG, GIF, WebP and statically safe SVG. SVG content itself is
+    validated separately by :func:`validate_svg_payload`.
     """
+    head = header.lstrip(b"\xef\xbb\xbf").lstrip()
+    lowered = head[:1024].lower()
+    if lowered.startswith(b"<svg") or (lowered.startswith(b"<?xml") and b"<svg" in lowered):
+        return "image/svg+xml"
+
     if len(header) < 12:
         return None
 
@@ -171,6 +204,94 @@ def detect_safe_image_mime(header: bytes) -> str | None:
         return "image/webp"
 
     return None
+
+
+def validate_svg_payload(payload: bytes) -> None:
+    """Reject SVG documents containing active content or external references."""
+    if len(payload) > MAX_SVG_BYTES:
+        raise UnsupportedImageFormatError(
+            f"SVG exceeds the static scan limit of {MAX_SVG_BYTES} bytes"
+        )
+    lowered = payload.lower()
+    for pattern in _DANGEROUS_SVG_PATTERNS:
+        if pattern in lowered:
+            raise UnsupportedImageFormatError("SVG contains active content")
+    if _EXTERNAL_SVG_REF_RE.search(payload):
+        raise UnsupportedImageFormatError("SVG references external resources")
+
+
+def normalize_remote_image_url(raw: str | None) -> str | None:
+    """Normalize an attribute value into a comparable absolute http(s) URL.
+
+    Applies the same semantics the browser DOM uses: attribute values are entity
+    decoded by the HTML parser; protocol-relative URLs get an explicit https scheme.
+    """
+    if not raw:
+        return None
+    url = raw.strip()
+    if not url:
+        return None
+    if url.startswith("//"):
+        url = "https:" + url
+    lowered = url.lower()
+    if not (lowered.startswith("http://") or lowered.startswith("https://")):
+        return None
+    if len(url) > MAX_URL_LENGTH:
+        return None
+    return url
+
+
+class _RemoteImageURLParser(HTMLParser):
+    """Extract remote image URLs with HTML5 attribute semantics."""
+
+    def __init__(self, max_urls: int) -> None:
+        super().__init__(convert_charrefs=True)
+        self.max_urls = max_urls
+        self.urls: list[str] = []
+        self._seen: set[str] = set()
+        self._done = False
+
+    def _add(self, raw: str | None) -> None:
+        if self._done:
+            return
+        url = normalize_remote_image_url(raw)
+        if not url or url in self._seen:
+            return
+        self._seen.add(url)
+        self.urls.append(url)
+        if len(self.urls) >= self.max_urls:
+            self._done = True
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._done:
+            return
+        is_img = tag.lower() == "img"
+        for name, value in attrs:
+            if name.lower() == "style" and value:
+                for match in _CSS_URL_RE.finditer(value):
+                    self._add(match.group(1))
+        if is_img:
+            for name, value in attrs:
+                if name.lower() == "src":
+                    self._add(value)
+                    break
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+
+def extract_remote_image_urls(html: str | None, max_urls: int = 200) -> list[str]:
+    """Scan HTML for remote image URLs from img[src] and inline style url(...)."""
+    if not html or not isinstance(html, str):
+        return []
+    parser = _RemoteImageURLParser(max_urls)
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        return parser.urls
+    return parser.urls
+
 
 
 def _serializer() -> URLSafeTimedSerializer:
@@ -226,30 +347,29 @@ def build_remote_image_proxy_url(
     return f"/api/mail/messages/{message_id}/remote-images?url={encoded_url}&token={token}"
 
 
-def extract_remote_image_urls(html: str | None, max_urls: int = 200) -> list[str]:
-    """Scan HTML body for http(s) image URLs from img[src] and background-image styles."""
-    if not html or not isinstance(html, str):
-        return []
-    found: set[str] = set()
-    order: list[str] = []
+def _connect_with_fallback(
+    safe_ips: list[str],
+    port: int,
+    timeout: float,
+    connector: Callable[[tuple[str, int], float], Any] | None = None,
+) -> Any:
+    """Connect to the first reachable safe IP, preferring IPv4 to avoid dead IPv6."""
+    connect = connector or (lambda address, seconds: socket.create_connection(address, timeout=seconds))
+    ordered = sorted(safe_ips, key=lambda ip: 1 if ":" in ip else 0)
+    saw_timeout = False
+    last_error: BaseException | None = None
+    for ip in ordered:
+        try:
+            return connect((ip, port), timeout)
+        except TimeoutError as exc:
+            saw_timeout = True
+            last_error = exc
+        except OSError as exc:
+            last_error = exc
+    if saw_timeout:
+        raise RemoteImageTimeoutError("Connection timed out for all resolved addresses") from last_error
+    raise RemoteImageFetchError("All resolved addresses are unreachable") from last_error
 
-    for match in _IMG_SRC_RE.finditer(html):
-        url = match.group(1).strip()
-        if url and url not in found and len(url) <= MAX_URL_LENGTH:
-            found.add(url)
-            order.append(url)
-            if len(order) >= max_urls:
-                return order
-
-    for match in _BG_URL_RE.finditer(html):
-        url = match.group(1).strip()
-        if url and url not in found and len(url) <= MAX_URL_LENGTH:
-            found.add(url)
-            order.append(url)
-            if len(order) >= max_urls:
-                return order
-
-    return order
 
 
 def fetch_safe_remote_image(
@@ -283,10 +403,10 @@ def fetch_safe_remote_image(
                 type=socket.SOCK_STREAM,
             )
         except socket.gaierror as exc:
-            raise SSRFSecurityError(f"DNS resolution failed for {host}: {exc}") from exc
+            raise RemoteImageFetchError("DNS resolution failed") from exc
 
         if not addr_infos:
-            raise SSRFSecurityError(f"No IP resolved for {host}")
+            raise RemoteImageFetchError("No IP resolved for host")
 
         safe_ips: list[str] = []
         for info in addr_infos:
@@ -299,23 +419,29 @@ def fetch_safe_remote_image(
                 raise SSRFSecurityError(f"SSRF blocked IP {ip_str} for host {host}")
             safe_ips.append(ip_str)
 
-        target_ip = safe_ips[0]
-
-        # 2. Connect directly to target_ip (prevents DNS rebinding)
+        # 2. Connect to a validated IP (prevents DNS rebinding); fall back across
+        #    all resolved addresses because IPv6 may be unreachable in containers.
         try:
-            raw_sock = socket.create_connection((target_ip, port), timeout=CONNECT_TIMEOUT_SECONDS)
+            raw_sock = _connect_with_fallback(safe_ips, port, CONNECT_TIMEOUT_SECONDS)
             raw_sock.settimeout(READ_TIMEOUT_SECONDS)
+        except RemoteImageTimeoutError:
+            raise
+        except RemoteImageFetchError:
+            raise
         except Exception as exc:
-            raise RemoteImageFetchError(f"Connection failed for {host}: {exc}") from exc
+            raise RemoteImageFetchError("Connection failed") from exc
 
         # 3. TLS handshake if HTTPS
         if scheme == "https":
             ssl_ctx = ssl.create_default_context()
             try:
                 conn_sock = ssl_ctx.wrap_socket(raw_sock, server_hostname=host)
+            except TimeoutError as exc:
+                raw_sock.close()
+                raise RemoteImageTimeoutError("TLS handshake timed out") from exc
             except Exception as exc:
                 raw_sock.close()
-                raise RemoteImageFetchError(f"TLS handshake failed for {host}: {exc}") from exc
+                raise RemoteImageFetchError("TLS handshake failed") from exc
         else:
             conn_sock = raw_sock
 
@@ -328,7 +454,7 @@ def fetch_safe_remote_image(
 
         headers = {
             "Host": host if (port in (80, 443)) else f"{host}:{port}",
-            "Accept": "image/png,image/jpeg,image/gif,image/webp,*/*;q=0.8",
+            "Accept": "image/png,image/jpeg,image/gif,image/webp,image/svg+xml,*/*;q=0.8",
             "User-Agent": "kkmail-image-proxy/1.0",
             "Connection": "close",
         }
@@ -336,9 +462,12 @@ def fetch_safe_remote_image(
         try:
             conn.request("GET", req_path, headers=headers)
             resp = conn.getresponse()
+        except TimeoutError as exc:
+            conn.close()
+            raise RemoteImageTimeoutError("Upstream request timed out") from exc
         except Exception as exc:
             conn.close()
-            raise RemoteImageFetchError(f"HTTP request failed: {exc}") from exc
+            raise RemoteImageFetchError("Upstream request failed") from exc
 
         # Handle redirects manually to enforce SSRF validation at every hop
         if resp.status in (301, 302, 303, 307, 308):
@@ -358,9 +487,12 @@ def fetch_safe_remote_image(
 
         try:
             first_chunk = resp.read(16384)
+        except TimeoutError as exc:
+            conn.close()
+            raise RemoteImageTimeoutError("Upstream response read timed out") from exc
         except Exception as exc:
             conn.close()
-            raise RemoteImageFetchError(f"Failed reading response: {exc}") from exc
+            raise RemoteImageFetchError("Upstream response read failed") from exc
 
         if not first_chunk:
             conn.close()
@@ -372,6 +504,30 @@ def fetch_safe_remote_image(
             raise UnsupportedImageFormatError(
                 f"Unsupported or dangerous image format (detected: {mime!r})"
             )
+
+        if mime == "image/svg+xml":
+            # SVGs are small; read the whole document so the static safety scan
+            # sees every element, then hand the verified bytes to the caller.
+            chunks = [first_chunk]
+            total = len(first_chunk)
+            try:
+                while total <= MAX_SVG_BYTES:
+                    chunk = resp.read(16384)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+            except TimeoutError as exc:
+                conn.close()
+                raise RemoteImageTimeoutError("Upstream response read timed out") from exc
+            except Exception as exc:
+                conn.close()
+                raise RemoteImageFetchError("Upstream response read failed") from exc
+            finally:
+                conn.close()
+            payload = b"".join(chunks)
+            validate_svg_payload(payload)
+            return mime, iter([payload])
 
         def _bounded_stream() -> Iterator[bytes]:
             total_bytes = len(first_chunk)
@@ -392,6 +548,8 @@ def fetch_safe_remote_image(
                             f"Image exceeds limit of {MAX_IMAGE_BYTES} bytes"
                         )
                     yield chunk
+            except TimeoutError as exc:
+                raise RemoteImageTimeoutError("Upstream response read timed out") from exc
             finally:
                 conn.close()
 

@@ -97,6 +97,31 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(prepared.sanitizedHtml).not.toContain('https://tracker.test/bg.jpg')
   })
 
+  it('rewrites unquoted, entity-decoded and protocol-relative images (t069 AC-001/002/003/004)', () => {
+    const prepared = prepareMailHtml(
+      '<p>Body</p>' +
+        '<img src=https://tracker.test/unquoted.png height=40>' +
+        '<img src="https://tracker.test/entity.png?a=1&amp;b=2">' +
+        '<img src="//tracker.test/relative.png">' +
+        '<div style="background-image:url(//tracker.test/bg-relative.png)"></div>',
+      undefined,
+      [
+        { url: 'https://tracker.test/unquoted.png', proxy_url: '/proxy/unquoted' },
+        { url: 'https://tracker.test/entity.png?a=1&b=2', proxy_url: '/proxy/entity' },
+        { url: 'https://tracker.test/relative.png', proxy_url: '/proxy/relative' },
+        { url: 'https://tracker.test/bg-relative.png', proxy_url: '/proxy/bg-relative' },
+      ],
+    )
+    expect(prepared.sanitizedHtml).toContain('src="/proxy/unquoted"')
+    expect(prepared.sanitizedHtml).toContain('src="/proxy/entity"')
+    expect(prepared.sanitizedHtml).toContain('src="/proxy/relative"')
+    expect(prepared.sanitizedHtml).toContain('/proxy/bg-relative')
+    expect(prepared.sanitizedHtml).not.toContain('tracker.test/unquoted.png')
+    expect(prepared.sanitizedHtml).not.toContain('tracker.test/entity.png')
+    expect(prepared.sanitizedHtml).not.toContain('tracker.test/relative.png')
+    expect(prepared.sanitizedHtml).not.toContain('tracker.test/bg-relative.png')
+  })
+
   it('locks the A384 popup-escape adjudication boundaries: exact sandbox, no opener, protocol filtering intact', () => {
     // Option A keeps the escape flag — the constant is pinned exactly so
     // nobody can silently add allow-scripts / allow-same-origin /

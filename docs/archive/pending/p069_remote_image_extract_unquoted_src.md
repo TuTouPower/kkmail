@@ -21,4 +21,4 @@
     - `p069_l1_scan.py`：全库量化（19897 封；558 / 2519 / 2874 / 2）。
     - `p069_l2_probe.py` + `p069_l2_deep.py` + `p069_l2_net.py`：800 URL 真实试拉与失败分类。
     - `p069_l3_probe.mjs` + `p069_l3_urls.txt`：生产 CSP 下真实解码验证（naturalWidth 160/512，0 CSP 违规）。
-- 处理：未开（用户已批准立项修复）
+- 处理：t069

@@ -134,7 +134,9 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
     - 独立挂载无 Cookie 代理端点 `GET/HEAD /api/mail/messages/{id}/remote-images`，使用 `itsdangerous`（专用 salt）强绑定 `version=1`、`purpose="remote-image"`、`message_id`、`url` 与时间戳；
     - 每次代理请求实时核验目标邮件在数据库中的放行状态（单封放行或发件人白名单），撤销白名单立即生效（403）；
     - 严密 SSRF 防护门禁：严格排除私网、回环、链路本地、云元数据（169.254.169.254）、CGNAT、保留段与 IPv4-mapped IPv6；直连安全 IP 且保留 TLS SNI 证书核验，彻底免疫 DNS Rebinding；限制最多 3 跳重定向且逐跳重新安全核验；
-    - 资源边界与魔数核验：限制最大读取 10 MiB（超限立即断开）、5s 连接 / 15s 总读取超时；严格按真实文件头魔数校验受控安全位图（PNG/JPEG/GIF/WebP），拒绝 SVG、HTML、JS 及可执行格式。
+    - 多 IP 回退：DNS 解析出的全部安全 IP 按 IPv4 优先逐个尝试连接，单个 IP 不可达（如容器无 IPv6 出口）不直接失败；
+    - 资源边界与魔数核验：限制最大读取 10 MiB（超限立即断开）、5s 连接 / 15s 总读取超时；按真实文件头校验 PNG/JPEG/GIF/WebP，SVG 仅在静态安全扫描通过后放行（拒绝脚本、事件处理器、外部引用与嵌入对象，上限 64 KiB），HTML/JS/可执行格式一律 415；
+    - 错误分类：非法目标 400、Token 无效 401、未放行 403、消息不存在 404、上游非 2xx/DNS/连接/TLS 失败 502、连接或读取超时 504、超限 413、格式拒绝 415；响应体不回显内部 IP 或异常栈。
 3. **正文外链 URL 代理重写**：
-    - 服务端详情接口在已放行状态下提取正文外链 URL，签发 `remote_images: [{ url, proxy_url }]`（上限 200 个）；
-    - 前端 `prepareMailHtml` 在放行后将正文中的 `img[src]` 及行内样式 `background-image: url(...)` 安全重写为本站代理 URL，在严格沙箱内流式加载解码。
+    - 服务端详情接口在已放行状态下按 HTML5 属性语义提取正文外链 URL（支持无引号/单双引号、字符引用解码、协议相对补全、大小写不敏感，覆盖 `img[src]` 与行内 style `url(...)`），签发 `remote_images: [{ url, proxy_url }]`（上限 200 个）；
+    - 前端 `prepareMailHtml` 在放行后以同一规范化语义匹配并重写 `img[src]` 及行内样式 `background-image: url(...)` 为本站代理 URL，在严格沙箱内流式加载解码。

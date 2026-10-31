@@ -23,11 +23,14 @@ from mail_core.security.remote_image_proxy import (
     CONNECT_TIMEOUT_SECONDS,
     MAX_IMAGE_BYTES,
     MAX_REDIRECTS,
+    MAX_SVG_BYTES,
     READ_TIMEOUT_SECONDS,
     RemoteImageFetchError,
     RemoteImageSizeLimitError,
+    RemoteImageTimeoutError,
     SSRFSecurityError,
     UnsupportedImageFormatError,
+    _connect_with_fallback,
     build_remote_image_proxy_url,
     detect_safe_image_mime,
     extract_remote_image_urls,
@@ -35,6 +38,7 @@ from mail_core.security.remote_image_proxy import (
     is_safe_ip,
     sign_remote_image_proxy_token,
     validate_remote_url,
+    validate_svg_payload,
     verify_remote_image_proxy_token,
 )
 
@@ -140,9 +144,10 @@ def test_detect_safe_image_mime() -> None:
     assert detect_safe_image_mime(GIF_BYTES) == "image/gif"
     assert detect_safe_image_mime(WEBP_BYTES) == "image/webp"
 
-    # Reject SVG (XSS vector defense-in-depth)
-    assert detect_safe_image_mime(b"<svg xmlns='http://www.w3.org/2000/svg'></svg>") is None
-    assert detect_safe_image_mime(b"<?xml version='1.0'?><svg>") is None
+    # t069 AC-007 supersedes the old "reject all SVG" expectation: static SVG is
+    # a valid bitmap-free image and is now classified, then safety-scanned by
+    # validate_svg_payload. The old two SVG rejection assertions are removed with
+    # the new semantics; SVG safety is covered by the dedicated tests below.
 
     # Reject HTML, scripts, executables
     assert detect_safe_image_mime(b"<!doctype html><html>") is None
@@ -196,6 +201,57 @@ def test_extract_remote_image_urls() -> None:
     ]
 
 
+def test_extract_unquoted_and_mixed_attribute_forms() -> None:
+    html = (
+        "<img src=https://cdn.example.com/a.png height=40>"
+        "<IMG SRC=https://cdn.example.com/b.png width=10>"
+        "<img src='https://cdn.example.com/c.png'>"
+        '<img alt="x" src="https://cdn.example.com/d.png">'
+    )
+    assert extract_remote_image_urls(html) == [
+        "https://cdn.example.com/a.png",
+        "https://cdn.example.com/b.png",
+        "https://cdn.example.com/c.png",
+        "https://cdn.example.com/d.png",
+    ]
+
+
+def test_extract_decodes_html_entities_like_dom() -> None:
+    html = '<img src="https://cdn.example.com/p.png?a=1&amp;b=2"><div style="background:url(https://cdn.example.com/bg.png?x=1&amp;y=2)"></div>'
+    assert extract_remote_image_urls(html) == [
+        "https://cdn.example.com/p.png?a=1&b=2",
+        "https://cdn.example.com/bg.png?x=1&y=2",
+    ]
+
+
+def test_extract_normalizes_protocol_relative_urls() -> None:
+    html = '<img src="//cdn.example.com/a.png"><div style="background-image:url(//cdn.example.com/b.png)"></div>'
+    assert extract_remote_image_urls(html) == [
+        "https://cdn.example.com/a.png",
+        "https://cdn.example.com/b.png",
+    ]
+
+
+def test_extract_skips_empty_and_oversized_urls() -> None:
+    long_url = "https://cdn.example.com/" + "a" * 2100
+    html = f'<img src=""><img src="{long_url}"><img>'
+    assert extract_remote_image_urls(html) == []
+
+
+def test_extract_google_notification_mail_shape() -> None:
+    html = (
+        "<img src=https://www.gstatic.com/identity/boq/notification/gradient_g.png height=40 "
+        "style=display:block>"
+        "<img src=https://lh3.googleusercontent.com/a/ACg8ocJOLPCxtQ8C9zu1QweK7sAy7t4_-AgYWsM6FiPTBAc-uh-LHgI=s512 "
+        'width=24 height=24 style="display: block; border-radius: 50%;">'
+    )
+    assert extract_remote_image_urls(html) == [
+        "https://www.gstatic.com/identity/boq/notification/gradient_g.png",
+        "https://lh3.googleusercontent.com/a/ACg8ocJOLPCxtQ8C9zu1QweK7sAy7t4_-AgYWsM6FiPTBAc-uh-LHgI=s512",
+    ]
+
+
+
 def test_fetch_safe_remote_image_mock_opener() -> None:
     # Test valid fetch via mock_opener
     def mock_opener(url: str) -> tuple[str, Iterator[bytes]]:
@@ -245,6 +301,79 @@ def test_fetch_safe_remote_image_fake_mime_rejected() -> None:
     # Payload returns HTML
     html_bytes = b"<!doctype html><html><body>Login page</body></html>"
     assert detect_safe_image_mime(html_bytes) is None
+
+
+def test_detect_svg_mime() -> None:
+    assert detect_safe_image_mime(b'<svg xmlns="http://www.w3.org/2000/svg"></svg>') == "image/svg+xml"
+    assert detect_safe_image_mime(b'<?xml version="1.0"?>\n<svg viewBox="0 0 1 1"></svg>') == "image/svg+xml"
+    assert detect_safe_image_mime(b'\xef\xbb\xbf  <svg xmlns="http://www.w3.org/2000/svg"/>') == "image/svg+xml"
+
+
+def test_validate_svg_payload_accepts_static_svg() -> None:
+    validate_svg_payload(b'<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>')
+    validate_svg_payload(
+        b'<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,AA=="/></svg>'
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+        b'<svg onload="alert(1)"></svg>',
+        b'<svg><foreignObject><body xmlns="http://www.w3.org/1999/xhtml"></body></foreignObject></svg>',
+        b'<svg><image href="https://evil.example/x.png"/></svg>',
+        b'<svg><use xlink:href="https://evil.example/x.svg#a"/></svg>',
+        b'<svg><iframe src="https://evil.example"></iframe></svg>',
+        b'<svg><a xlink:href="javascript:alert(1)"><text>x</text></a></svg>',
+    ],
+)
+def test_validate_svg_payload_rejects_dangerous_content(payload: bytes) -> None:
+    with pytest.raises(UnsupportedImageFormatError):
+        validate_svg_payload(payload)
+
+
+def test_validate_svg_payload_rejects_oversized_svg() -> None:
+    payload = b'<svg xmlns="http://www.w3.org/2000/svg">' + b" " * (MAX_SVG_BYTES + 1) + b"</svg>"
+    with pytest.raises(UnsupportedImageFormatError, match="SVG exceeds"):
+        validate_svg_payload(payload)
+
+
+def test_connect_falls_back_across_safe_ips_ipv4_first() -> None:
+    attempted: list[str] = []
+    sentinel = object()
+
+    def fake_connector(address: tuple[str, int], timeout: float) -> object:
+        attempted.append(address[0])
+        if address[0] != "93.184.216.34":
+            raise OSError("unreachable")
+        return sentinel
+
+    result = _connect_with_fallback(
+        ["2001:db8::1", "203.0.113.9", "93.184.216.34"],
+        443,
+        5.0,
+        connector=fake_connector,
+    )
+    assert result is sentinel
+    assert attempted == ["203.0.113.9", "93.184.216.34"]
+
+
+def test_connect_timeout_maps_to_timeout_error() -> None:
+    def fake_connector(address: tuple[str, int], timeout: float) -> object:
+        raise TimeoutError("timed out")
+
+    with pytest.raises(RemoteImageTimeoutError):
+        _connect_with_fallback(["93.184.216.34"], 443, 5.0, connector=fake_connector)
+
+
+def test_connect_all_ips_unreachable_maps_to_fetch_error() -> None:
+    def fake_connector(address: tuple[str, int], timeout: float) -> object:
+        raise OSError("network unreachable")
+
+    with pytest.raises(RemoteImageFetchError):
+        _connect_with_fallback(["93.184.216.34", "2001:db8::1"], 443, 5.0, connector=fake_connector)
+
 
 
 _db_required = pytest.mark.skipif(
@@ -320,6 +449,30 @@ def test_remote_image_proxy_api_endpoint_flow(monkeypatch: pytest.MonkeyPatch) -
     assert head_resp.status_code == 200
     assert head_resp.headers["Content-Type"] == "image/png"
     assert len(head_resp.content) == 0
+
+    # 6. Error classes are distinguishable and never leak internals
+    def mock_timeout(url: str, transport: Any = None):
+        raise RemoteImageTimeoutError("upstream read timed out")
+
+    monkeypatch.setattr("mail_core.api.mail.fetch_safe_remote_image", mock_timeout)
+    timeout_resp = client.get(f"/api/mail/messages/{msg_id}/remote-images?url={img_url}&token={token}")
+    assert timeout_resp.status_code == 504
+    assert "timed out" in timeout_resp.text
+    assert "crit" not in timeout_resp.text
+
+    def mock_dns_fail(url: str, transport: Any = None):
+        raise RemoteImageFetchError("Upstream unreachable")
+
+    monkeypatch.setattr("mail_core.api.mail.fetch_safe_remote_image", mock_dns_fail)
+    upstream_resp = client.get(f"/api/mail/messages/{msg_id}/remote-images?url={img_url}&token={token}")
+    assert upstream_resp.status_code == 502
+
+    def mock_bad_format(url: str, transport: Any = None):
+        raise UnsupportedImageFormatError("Unsupported or dangerous image format")
+
+    monkeypatch.setattr("mail_core.api.mail.fetch_safe_remote_image", mock_bad_format)
+    format_resp = client.get(f"/api/mail/messages/{msg_id}/remote-images?url={img_url}&token={token}")
+    assert format_resp.status_code == 415
 
 
 @_db_required

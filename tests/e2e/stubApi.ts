@@ -89,6 +89,25 @@ export function createMockMessages(): MockMessage[] {
       accountEmail: 'user@example.com',
       accountId: 'acc-00000000-0000-0000-0000-000000000001',
     },
+    {
+      id: 'msg-00000000-0000-0000-0000-000000000006',
+      subject: '无引号与实体远程图片邮件',
+      from: 'notices@google-like.test',
+      to: 'user@example.com',
+      date: '2026-10-16T10:00:00Z',
+      is_read: true,
+      is_flagged: false,
+      has_attachments: false,
+      body_preview: '无引号、实体与协议相对图片',
+      body_html:
+        '<p>Google 形态正文</p>' +
+        '<img src=https://tracker.test/unquoted.png height=40>' +
+        '<img src="https://tracker.test/entity.png?a=1&amp;b=2" width=24>' +
+        '<img src="//tracker.test/relative.png" width=24>' +
+        '<div style="background-image:url(//tracker.test/bg-relative.png)"></div>',
+      accountEmail: 'user@example.com',
+      accountId: 'acc-00000000-0000-0000-0000-000000000001',
+    },
   ]
 }
 
@@ -577,12 +596,18 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
             allowedMessageIds.has(hit.id) ||
             allowedSendersList.some((s) => s.from_address === hit.from.trim().toLowerCase())
           )
-            ? [
-                {
-                  url: 'https://tracker.test/remote-pixel.png',
-                  proxy_url: `/api/mail/messages/${hit.id}/remote-images?url=https%3A%2F%2Ftracker.test%2Fremote-pixel.png&token=stub-proxy-token`,
-                },
-              ]
+            ? (hit.id === 'msg-00000000-0000-0000-0000-000000000006'
+                ? [
+                    'https://tracker.test/unquoted.png',
+                    'https://tracker.test/entity.png?a=1&b=2',
+                    'https://tracker.test/relative.png',
+                    'https://tracker.test/bg-relative.png',
+                  ]
+                : ['https://tracker.test/remote-pixel.png']
+              ).map((url) => ({
+                url,
+                proxy_url: `/api/mail/messages/${hit.id}/remote-images?url=${encodeURIComponent(url)}&token=stub-proxy-token`,
+              }))
             : [],
           can_allow_sender: Boolean(hit.from && hit.from.includes('@')),
           attachments: hit.id === 'msg-00000000-0000-0000-0000-000000000005'

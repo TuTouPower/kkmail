@@ -85,6 +85,7 @@ from mail_core.security.inline_preview import (
 from mail_core.security.remote_image_proxy import (
     RemoteImageFetchError,
     RemoteImageSizeLimitError,
+    RemoteImageTimeoutError,
     SSRFSecurityError,
     UnsupportedImageFormatError,
     build_remote_image_proxy_url,
@@ -1016,14 +1017,16 @@ def api_proxy_remote_image(
 
     try:
         mime, stream = fetch_safe_remote_image(url)
-    except SSRFSecurityError as exc:
-        raise HTTPException(400, f"SSRF security check failed: {exc}")
-    except UnsupportedImageFormatError as exc:
-        raise HTTPException(415, f"Unsupported or dangerous image format: {exc}")
-    except RemoteImageSizeLimitError as exc:
-        raise HTTPException(413, f"Remote image exceeded maximum allowed size: {exc}")
-    except RemoteImageFetchError as exc:
-        raise HTTPException(502, f"Failed to fetch remote image from upstream: {exc}")
+    except SSRFSecurityError:
+        raise HTTPException(400, "Remote image target is not allowed")
+    except UnsupportedImageFormatError:
+        raise HTTPException(415, "Unsupported or dangerous image format")
+    except RemoteImageSizeLimitError:
+        raise HTTPException(413, "Remote image exceeded maximum allowed size")
+    except RemoteImageTimeoutError:
+        raise HTTPException(504, "Upstream image request timed out")
+    except RemoteImageFetchError:
+        raise HTTPException(502, "Failed to fetch remote image from upstream")
     except Exception:
         raise HTTPException(500, "Internal error proxying remote image")
 

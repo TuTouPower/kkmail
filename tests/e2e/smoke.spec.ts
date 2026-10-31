@@ -233,4 +233,36 @@ test.describe('kkmail 核心端到端冒烟测试链路 (E2E Smoke)', () => {
     await expect(page.locator('iframe.email-body-frame')).toBeVisible()
     await expect(page.getByText('远程图片已拦截（防追踪）。')).not.toBeVisible()
   })
+
+  test('无引号、实体与协议相对图片经代理真实解码 (t069 AC-001 ~ AC-004)', async ({ page }) => {
+    const cspErrors: string[] = []
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && msg.text().includes('violates directive')) cspErrors.push(msg.text())
+    })
+
+    await setupStubApi(page, { authedInitially: true })
+    await page.goto('/')
+
+    await expect(page.getByText('无引号与实体远程图片邮件')).toBeVisible({ timeout: 10000 })
+    await page.getByText('无引号与实体远程图片邮件').click()
+    await expect(page.getByText('远程图片已拦截（防追踪）。')).toBeVisible()
+
+    await page.getByRole('button', { name: '仅此邮件允许加载' }).click()
+    await expect(page.getByText('远程图片已拦截（防追踪）。')).not.toBeVisible()
+
+    const iframe = page.locator('iframe.email-body-frame')
+    const proxied = iframe.contentFrame().locator('img[src*="/remote-images"]')
+    await expect(proxied).toHaveCount(3)
+    await expect
+      .poll(async () =>
+        proxied.evaluateAll((els) => els.every((el) => (el as HTMLImageElement).naturalWidth > 0)),
+      )
+      .toBe(true)
+
+    const bgStyle = await iframe.contentFrame().locator('div[style*="bg-relative"]').getAttribute('style')
+    expect(bgStyle).toContain('/remote-images?url=')
+    expect(bgStyle).not.toContain('//tracker.test/bg-relative.png')
+
+    expect(cspErrors).toHaveLength(0)
+  })
 })
