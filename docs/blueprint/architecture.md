@@ -100,7 +100,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 ## IDLE 收件箱实时监听与全文件夹 STATUS 周期巡检 (t061)
 
 1. **IDLE 唤醒通道（信号与拉取分离）**：
-    - Worker 进程内 `IdleWatcherManager` 为符合条件的 IMAP 账号维持至多一条收件箱 IDLE 长连接；IDLE 只作新邮件到达信号，唤醒后入队既有 `SYNC_FOLDER_DELTA`（去重键 `delta:{account_id}:{folder_id}`），实际拉取仍走 delta 流水线（基线门禁、账号租约、fencing 不变），watcher 不直接读写邮件数据；每次会话成功建立（首连、断线重连、凭据或席位重建）后先入队一次同去重键的收件箱补偿 delta，覆盖无活动会话窗口内到达的邮件，入队失败不终止 watcher；
+    - Worker 进程内 `IdleWatcherManager` 为符合条件的 IMAP 账号维持至多一条收件箱 IDLE 长连接；IDLE 只作新邮件到达信号，唤醒后入队既有 `SYNC_FOLDER_DELTA`（去重键 `delta:{account_id}:{folder_id}`），实际拉取仍走 delta 流水线（基线门禁、账号租约、fencing 不变），watcher 不直接读写邮件数据；每次会话成功建立（首连、断线重连、凭据或席位重建）后先入队一次同去重键的收件箱补偿 delta，覆盖无活动会话窗口内到达的邮件；入队失败按有界退避重试，预算耗尽则释放 IDLE 席位让 t057 轮询兜底并在下次重连继续补偿，不终止 watcher；
     - 长连接走独立配额（集中配置默认 32，与账号总数无关），不占用 `connection_slots` 的 8 个任务槽位；配额席位只按邮件数据分配：以收件箱内现存邮件的服务器到达时间（INTERNALDATE）最大值倒序为主序，空收件箱账号整体居后（组内按其他文件夹到达时间、账号创建时间、账号 id 定序），同组内带滞回防抖；持有 IDLE 的账号跳过 t057 收件箱轮询、让位后恢复轮询；
     - 无 IDLE 能力、永久认证失败、反复断线退避中的账号自动降级为纯轮询，watcher 异常不影响调度主循环，也不把账号标记为永久 failed；watcher 状态经 `AppSetting` 的 `worker:idle_state` 记录暴露。
 2. **全文件夹 STATUS 周期巡检**：

@@ -1,0 +1,27 @@
+{
+  "tid": "t072",
+  "attempt": 1,
+  "execution_id": "baaa7b1a9ed246bd8c782fbca445baf5",
+  "status": "done",
+  "branch": "t072_t061_idle_watcher_red_test_repair",
+  "base_sha": "20e90ce6154e472239ad71d805f90aea759359a2",
+  "tests": "contract 189 passed; t061 targeted 34 passed; disabled-account test 10/10 passed",
+  "blackbox": "not applicable: test-only change with no user-observable behavior",
+  "review": "single review PASS (Round 1, 0 finding; review_scope=bd77230c16047d8c)",
+  "ac_evidence": {
+    "AC-001": [
+      "tests/mail_core/test_t061_idle_watcher.py::test_ac005_quota_limits_sessions"
+    ],
+    "AC-002": [
+      "tests/mail_core/test_t061_idle_watcher.py::test_load_candidates_ranks_by_arrival_not_checkpoint"
+    ],
+    "AC-003": [
+      "tests/mail_core/test_t061_idle_watcher.py::test_ac006_disabled_account_session_closed"
+    ],
+    "AC-004": [
+      "tests/mail_core/test_t061_idle_watcher.py"
+    ]
+  },
+  "pending": [],
+  "findings": []
+}

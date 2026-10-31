@@ -1138,6 +1138,38 @@
             "conflicts_with": "",
             "note": "来源 p070；IDLE 断线/重启窗口内到达的邮件无事件也无轮询，需在建连后入队补偿 delta",
             "dir": "docs/archive/tasks/t071_idle_connect_catchup_inbox_delta"
+        },
+        {
+            "tid": "t072",
+            "slug": "t061_idle_watcher_red_test_repair",
+            "title": "修复 t061 IDLE watcher 测试既有红与同步竞态",
+            "status": "done",
+            "branch": "t072_t061_idle_watcher_red_test_repair",
+            "worktree": "",
+            "review_level": "single",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "20e90ce6154e472239ad71d805f90aea759359a2",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p071；修复 frozen config setattr、detached ORM 与禁用账号用例同步点竞态",
+            "dir": "docs/archive/tasks/t072_t061_idle_watcher_red_test_repair"
+        },
+        {
+            "tid": "t073",
+            "slug": "idle_catchup_enqueue_failure_selfheal",
+            "title": "IDLE 补偿 delta 入队失败自愈",
+            "status": "done",
+            "branch": "t073_idle_catchup_enqueue_failure_selfheal",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "c7ce5875956c622498af62bd7397b3bc86b726a6",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p072；建连补偿入队失败后重试，持续失败释放 IDLE 席位让 t057 轮询兜底",
+            "dir": "docs/archive/tasks/t073_idle_catchup_enqueue_failure_selfheal"
         }
     ]
 }
