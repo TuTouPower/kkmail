@@ -375,6 +375,73 @@ def test_connect_all_ips_unreachable_maps_to_fetch_error() -> None:
         _connect_with_fallback(["93.184.216.34", "2001:db8::1"], 443, 5.0, connector=fake_connector)
 
 
+def test_connect_shares_total_budget_across_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = {"now": 0.0}
+    monkeypatch.setattr(
+        "mail_core.security.remote_image_proxy.time.monotonic", lambda: clock["now"]
+    )
+    attempted: list[float] = []
+
+    def fake_connector(address: tuple[str, int], timeout: float) -> object:
+        attempted.append(timeout)
+        clock["now"] += timeout
+        raise TimeoutError("timed out")
+
+    with pytest.raises(RemoteImageTimeoutError):
+        _connect_with_fallback(
+            ["1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"], 443, 15.0, connector=fake_connector
+        )
+
+    # Three 5s attempts exhaust the 15s budget; the fourth IP is never tried.
+    assert attempted == [5.0, 5.0, 5.0]
+    assert sum(attempted) == 15.0
+
+
+def test_connect_last_attempt_uses_remaining_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = {"now": 0.0}
+    monkeypatch.setattr(
+        "mail_core.security.remote_image_proxy.time.monotonic", lambda: clock["now"]
+    )
+    attempted: list[float] = []
+
+    def fake_connector(address: tuple[str, int], timeout: float) -> object:
+        attempted.append(timeout)
+        clock["now"] += 4.0
+        raise OSError("refused")
+
+    with pytest.raises(RemoteImageFetchError):
+        _connect_with_fallback(
+            ["1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"], 443, 15.0, connector=fake_connector
+        )
+
+    # Budget shrinks per attempt: 5, 5, 5, then only the remaining 3s.
+    assert attempted == [5.0, 5.0, 5.0, 3.0]
+
+
+def test_connect_success_short_circuits_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = {"now": 0.0}
+    monkeypatch.setattr(
+        "mail_core.security.remote_image_proxy.time.monotonic", lambda: clock["now"]
+    )
+    sentinel = object()
+    attempted: list[str] = []
+
+    def fake_connector(address: tuple[str, int], timeout: float) -> object:
+        attempted.append(address[0])
+        if address[0] == "2.2.2.2":
+            return sentinel
+        clock["now"] += 5.0
+        raise TimeoutError("timed out")
+
+    assert (
+        _connect_with_fallback(
+            ["2.2.2.2", "1.1.1.1", "3.3.3.3"], 443, 15.0, connector=fake_connector
+        )
+        is sentinel
+    )
+    assert attempted == ["2.2.2.2"]
+
+
 
 _db_required = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),

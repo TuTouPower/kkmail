@@ -14,6 +14,7 @@ import os
 import re
 import socket
 import ssl
+import time
 import urllib.parse
 import uuid
 from html.parser import HTMLParser
@@ -28,6 +29,7 @@ REMOTE_IMAGE_TOKEN_MAX_AGE_SECONDS = 900  # 15 minutes
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MiB limit
 MAX_SVG_BYTES = 64 * 1024  # SVGs are scanned in full; larger ones are rejected
 CONNECT_TIMEOUT_SECONDS = 5.0
+TOTAL_CONNECT_TIMEOUT_SECONDS = 15.0
 READ_TIMEOUT_SECONDS = 15.0
 MAX_REDIRECTS = 3
 MAX_URL_LENGTH = 2048
@@ -353,14 +355,26 @@ def _connect_with_fallback(
     timeout: float,
     connector: Callable[[tuple[str, int], float], Any] | None = None,
 ) -> Any:
-    """Connect to the first reachable safe IP, preferring IPv4 to avoid dead IPv6."""
+    """Connect to the first reachable safe IP within a shared total time budget.
+
+    IPv4 is preferred so a container without IPv6 egress does not waste the whole
+    budget on an unreachable address family. ``timeout`` is the total budget for
+    all attempts; each individual attempt is capped at CONNECT_TIMEOUT_SECONDS and
+    at the remaining budget.
+    """
     connect = connector or (lambda address, seconds: socket.create_connection(address, timeout=seconds))
     ordered = sorted(safe_ips, key=lambda ip: 1 if ":" in ip else 0)
+    deadline = time.monotonic() + timeout
     saw_timeout = False
     last_error: BaseException | None = None
     for ip in ordered:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            saw_timeout = True
+            break
+        attempt_timeout = min(CONNECT_TIMEOUT_SECONDS, remaining)
         try:
-            return connect((ip, port), timeout)
+            return connect((ip, port), attempt_timeout)
         except TimeoutError as exc:
             saw_timeout = True
             last_error = exc
@@ -422,7 +436,7 @@ def fetch_safe_remote_image(
         # 2. Connect to a validated IP (prevents DNS rebinding); fall back across
         #    all resolved addresses because IPv6 may be unreachable in containers.
         try:
-            raw_sock = _connect_with_fallback(safe_ips, port, CONNECT_TIMEOUT_SECONDS)
+            raw_sock = _connect_with_fallback(safe_ips, port, TOTAL_CONNECT_TIMEOUT_SECONDS)
             raw_sock.settimeout(READ_TIMEOUT_SECONDS)
         except RemoteImageTimeoutError:
             raise
