@@ -58,30 +58,42 @@ function RecipientList({ raw, addresses }: { raw?: string; addresses?: Recipient
  * the scan result is memoized per (selectedKey, version) and shared by
  * getSnapshot and the render body.
  */
+type SelectedMailSnapshot = {
+  key: string | null
+  version: number
+  snap: string
+  mail: MailItem | undefined
+}
+
 function useSelectedMail(selectedKey: string | null): MailItem | undefined {
   const versionRef = useRef(0)
-  const memoRef = useRef<{ key: string | null; version: number; snap: string; mail: MailItem | undefined } | null>(null)
+  const memoRef = useRef<SelectedMailSnapshot | null>(null)
   const subscribe = useCallback((cb: () => void) => queryClient.getQueryCache().subscribe((event) => {
     if (!isMailListQueryKey(event?.query?.queryKey)) return
     versionRef.current += 1
     cb()
   }), [])
-  const getSnapshot = useCallback(() => {
+  const getSnapshot = useCallback((): SelectedMailSnapshot => {
+    const version = versionRef.current
     const memo = memoRef.current
-    if (memo && memo.key === selectedKey && memo.version === versionRef.current) return memo.snap
-    const m = findCachedMail(selectedKey)
+    if (memo && memo.key === selectedKey && memo.version === version) return memo
+    const mail = findCachedMail(selectedKey)
     // A123: the snapshot is the re-render signal, so it must cover every
     // field the reader renders (from/date/accountEmail/has_attachments/…),
     // not just id/is_flagged/is_read/subject. Serializing the whole row
     // keeps any current or future cached field change visible to React.
-    const snap = m ? JSON.stringify(m) : ''
-    memoRef.current = { key: selectedKey, version: versionRef.current, snap, mail: m }
-    return snap
+    const snap = mail ? JSON.stringify(mail) : ''
+    if (memo && memo.key === selectedKey && memo.snap === snap) {
+      // Unrelated cache event: keep the previous object so React bails out.
+      memo.version = version
+      return memo
+    }
+    const next = { key: selectedKey, version, snap, mail }
+    memoRef.current = next
+    return next
   }, [selectedKey])
-  useSyncExternalStore(subscribe, getSnapshot)
-  const memo = memoRef.current
-  if (memo && memo.key === selectedKey && memo.version === versionRef.current) return memo.mail
-  return findCachedMail(selectedKey)
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot)
+  return snapshot.mail
 }
 
 const MessageReader = memo(function MessageReader() {

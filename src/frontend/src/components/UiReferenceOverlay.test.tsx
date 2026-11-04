@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, Profiler } from 'react'
 import { cleanup, render, waitFor } from '../test/render'
-import UiReferenceOverlay, { resolveBadgePositions } from './UiReferenceOverlay'
+import UiReferenceOverlay from './UiReferenceOverlay'
+import { resolveBadgePositions } from '../lib/ui_reference_overlay'
 
 describe('<UiReferenceOverlay /> (t011 AC-001 ~ AC-006)', () => {
   let writeTextMock: ReturnType<typeof vi.fn>

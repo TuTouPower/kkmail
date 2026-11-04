@@ -28,9 +28,10 @@ import {
 } from 'lucide-react'
 import { api, apiRequest, type AccountSummary } from '../api/client'
 import { fetchAccounts, fetchGroups, queryClient, queryKeys, resetGroupMailQueries, type GroupItem } from '../api/queries'
-import type { AccountFolderStatsItemOut, AccountFolderStatsOut, SidebarLayoutSnapshotOut } from '../api/schemaTypes'
+import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
 import { fetchGlobalStats } from '../api/mailCore'
 import { confirmAction, errorMessage } from '../lib/actions'
+import { buildSidebarMemberships, compareAccounts, isSidebarLayoutReady, orderedMembers } from '../lib/sidebar_layout'
 import { useMailStore, type FavoriteCategory } from '../store/mailStore'
 import { useIsWide } from '../lib/viewport'
 import AccountIcon from './AccountIcon'
@@ -151,14 +152,6 @@ type SidebarLayout = {
 
 type DragPayload = { type: 'account'; accountId: string; sourceGroupId: string | null; sourceList: 'master' | 'group' } | { type: 'group'; groupId: string }
 
-function compareAccounts(a: { email: string }, b: { email: string }): number {
-  const aEmail = a.email.toLowerCase()
-  const bEmail = b.email.toLowerCase()
-  const aDomain = aEmail.slice(aEmail.lastIndexOf('@') + 1)
-  const bDomain = bEmail.slice(bEmail.lastIndexOf('@') + 1)
-  return aDomain.localeCompare(bDomain, 'en', { sensitivity: 'base' }) || aEmail.localeCompare(bEmail, 'en', { sensitivity: 'base' })
-}
-
 function matchesAccountSearch(account: AccountSummary, value: string): boolean {
   const query = value.trim().toLowerCase()
   if (!query) return true
@@ -173,48 +166,6 @@ function matchesAccountSearch(account: AccountSummary, value: string): boolean {
     const rDomain = lower.slice(lower.lastIndexOf('@') + 1)
     return lower.includes(query) || rDomain.includes(query)
   })
-}
-
-function orderedMembers(accounts: AccountSummary[], groupId: string) {
-  const members = accounts.filter((account) => account.group_id === groupId)
-  if (members.some((account) => account.group_order != null)) {
-    return members.sort((a, b) => (a.group_order ?? Number.MAX_SAFE_INTEGER) - (b.group_order ?? Number.MAX_SAFE_INTEGER) || compareAccounts(a, b))
-  }
-  return members.sort(compareAccounts)
-}
-
-/** Group id -> ordered member account ids, for every known group (A92). */
-export function buildSidebarMemberships(accounts: AccountSummary[], groups: GroupItem[]): Map<string, string[]> {
-  const memberships = new Map<string, string[]>()
-  for (const group of groups) memberships.set(group.id, orderedMembers(accounts, group.id).map((account) => account.id))
-  return memberships
-}
-
-/**
- * The persisted layout is only usable for saving once it mirrors the
- * locally derived group/account layout exactly (A92).
- */
-export function isSidebarLayoutReady(args: {
-  groupsReady: boolean
-  accountsReady: boolean
-  layoutSnapshot: SidebarLayoutSnapshotOut | undefined
-  groups: GroupItem[]
-  masterIds: string[]
-  ungroupedIds: string[]
-  memberships: Map<string, string[]>
-}): boolean {
-  const { groupsReady, accountsReady, layoutSnapshot, groups, masterIds, ungroupedIds, memberships } = args
-  return Boolean(
-    groupsReady && accountsReady && layoutSnapshot &&
-    layoutSnapshot.group_ids.length === groups.length && layoutSnapshot.group_ids.every((id, index) => id === groups[index].id) &&
-    layoutSnapshot.master_account_ids.length === masterIds.length && layoutSnapshot.master_account_ids.every((id, index) => id === masterIds[index]) &&
-    layoutSnapshot.ungrouped_account_ids.length === ungroupedIds.length && layoutSnapshot.ungrouped_account_ids.every((id, index) => id === ungroupedIds[index]) &&
-    Object.keys(layoutSnapshot.group_account_ids).length === memberships.size &&
-    [...memberships].every(([groupId, memberIds]) => {
-      const snapshotMembers = layoutSnapshot.group_account_ids[groupId]
-      return snapshotMembers?.length === memberIds.length && snapshotMembers.every((id, index) => id === memberIds[index])
-    }),
-  )
 }
 
 function moveBefore(ids: string[], movedId: string, targetId?: string): string[] {
@@ -532,8 +483,8 @@ function Sidebar() {
   const groupsQuery = useQuery({ queryKey: queryKeys.groups, queryFn: fetchGroups })
   const accountsQuery = useQuery({ queryKey: queryKeys.accounts, queryFn: fetchAccounts })
   const layoutQuery = useQuery({ queryKey: queryKeys.sidebarLayout, queryFn: () => api.getSidebarLayout() })
-  const groups = groupsQuery.data || []
-  const accounts = accountsQuery.data || []
+  const groups = useMemo(() => groupsQuery.data || [], [groupsQuery.data])
+  const accounts = useMemo(() => accountsQuery.data || [], [accountsQuery.data])
   const enabledAccounts = useMemo(
     () => (accountsQuery.data || []).filter((account) => account.sync_enabled !== false),
     [accountsQuery.data],

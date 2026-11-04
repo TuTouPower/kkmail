@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import Sidebar, { buildSidebarMemberships, isSidebarLayoutReady } from './Sidebar'
+import Sidebar from './Sidebar'
+import { buildSidebarMemberships, isSidebarLayoutReady } from '../lib/sidebar_layout'
 import { useMailStore } from '../store/mailStore'
 import { queryClient, queryKeys, setReadOptimistic } from '../api/queries'
 import { __resetCsrfForTests, type AccountSummary } from '../api/client'

@@ -2,17 +2,8 @@ import { memo } from 'react'
 import { Mail } from 'lucide-react'
 import { detectAccountBrand, getEmailInitial, BRAND_TITLES, type AccountIconMode } from '../store/accountIcon'
 import { providerColor, useMailStore } from '../store/mailStore'
+import { safeCssBackground } from '../lib/account_icon_style'
 import { BRAND_ICON_COMPONENTS } from './brand-icons/brandIconMap'
-
-// groupColor comes from server-side group data and is attacker-influenceable,
-// so it must never reach style.background unchecked (url()/expression()
-// injection). Only plain hex colors are trusted; anything else falls back.
-const SAFE_HEX_COLOR = /^#[0-9a-f]{3,8}$/i
-
-export function safeCssBackground(color: string | null | undefined, fallback: string): string {
-  const value = (color ?? '').trim()
-  return SAFE_HEX_COLOR.test(value) ? value : fallback
-}
 
 export interface AccountIconProps {
   email?: string
