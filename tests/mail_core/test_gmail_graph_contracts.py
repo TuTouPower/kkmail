@@ -281,13 +281,22 @@ def test_graph_reconcile_use_standard_queries():
 
 
 
+def _batch_responses(requests, status, body):
+    return {
+        "responses": [
+            {"id": req["id"], "status": status, "headers": {}, "body": body}
+            for req in requests
+        ]
+    }
+
+
 def test_graph_trash_does_not_fall_back_to_delete_on_5xx_or_403():
     calls = []
 
     def transport_500(method, path, body):
         calls.append((method, path))
-        if method == "POST" and path.endswith("/move"):
-            raise ProviderHttpError("Server error", status=500)
+        if method == "POST" and path == "/$batch":
+            return _batch_responses(body["requests"], 500, {"error": {"message": "Server error"}})
         return {}
 
     gp = GraphProvider(credential_ref="x", transport=transport_500)
@@ -301,8 +310,8 @@ def test_graph_trash_does_not_fall_back_to_delete_on_5xx_or_403():
 
     def transport_403(method, path, body):
         calls.append((method, path))
-        if method == "POST" and path.endswith("/move"):
-            raise ProviderHttpError("Forbidden", status=403)
+        if method == "POST" and path == "/$batch":
+            return _batch_responses(body["requests"], 403, {"error": {"message": "Forbidden"}})
         return {}
 
     gp = GraphProvider(credential_ref="x", transport=transport_403)
@@ -317,8 +326,8 @@ def test_graph_trash_falls_back_to_delete_only_on_404():
 
     def transport_404(method, path, body):
         calls.append((method, path))
-        if method == "POST" and path.endswith("/move"):
-            raise ProviderHttpError("Not Found", status=404)
+        if method == "POST" and path == "/$batch":
+            return _batch_responses(body["requests"], 404, {})
         if method == "DELETE":
             return {}
         return {}

@@ -22,7 +22,7 @@ from mail_core.providers.base import MetadataPage, RemoteMessageMeta
 
 def test_graph_trash_does_not_swallow_rate_limit():
     def transport(method, path, params=None):
-        if method == "POST" and path.endswith("/move"):
+        if method == "POST" and path == "/$batch":
             raise RateLimitedError("slow down", retry_after_seconds=30)
         raise AssertionError("DELETE must not run after rate limit")
 
@@ -36,8 +36,13 @@ def test_graph_trash_falls_back_to_delete_on_other_http_error():
 
     def transport(method, path, params=None):
         seen.append(method)
-        if method == "POST" and path.endswith("/move"):
-            raise ProviderHttpError("no trash folder", status=404)
+        if method == "POST" and path == "/$batch":
+            return {
+                "responses": [
+                    {"id": req["id"], "status": 404, "headers": {}, "body": {}}
+                    for req in params["requests"]
+                ]
+            }
         if method == "DELETE":
             return {}
         raise AssertionError(path)

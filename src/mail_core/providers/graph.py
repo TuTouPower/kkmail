@@ -115,6 +115,22 @@ def _raise_mapped(exc: ProviderHttpError, path: str = "") -> None:
     raise exc
 
 
+def _subrequest_error_message(body: Any, status: int) -> str:
+    """Surface the Graph subrequest error text, keeping the HTTP status prefix."""
+    detail = None
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            detail = error.get("message") or error.get("code")
+        elif error:
+            detail = error
+        if not detail:
+            detail = body.get("message")
+    if detail:
+        return f"HTTP {status} Graph subrequest failed: {detail}"
+    return f"HTTP {status} Graph subrequest failed"
+
+
 @dataclass
 class GraphProvider:
     credential_ref: str
@@ -391,10 +407,23 @@ class GraphProvider:
                                 error=f"Rate limited (status 429, retry-after={ra_val})",
                                 remote_state={"retry_after": ra_val},
                             )
+                        elif status == 404 and op == OP_TRASH:
+                            # A289: a missing trash folder is the only case
+                            # where a hard DELETE fallback is allowed. Never
+                            # turn 5xx/403/429 into a destructive delete.
+                            _, rid = ctx
+                            try:
+                                self._call("DELETE", f"/me/messages/{rid}", {})
+                            except ProviderHttpError as del_exc:
+                                if del_exc.status != 404:
+                                    raise
+                            results[op_id] = RemoteOperationResult(
+                                success=True, remote_state={"deleted": True}
+                            )
                         else:
                             results[op_id] = RemoteOperationResult(
                                 success=False,
-                                error=f"HTTP {status} Graph subrequest failed",
+                                error=_subrequest_error_message(body, status),
                             )
                     else:
                         results[op_id] = RemoteOperationResult(

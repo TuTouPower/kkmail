@@ -67,24 +67,26 @@ def _provider(client: _SilentOkClient) -> ImapProvider:
     return provider
 
 
-def test_mark_read_missing_uid_fails_and_never_stores():
+def test_mark_read_missing_uid_fails():
     client = _SilentOkClient(existing={10: set()})
     result = _provider(client).apply_remote_operation(
         "mark_read", {"remote_id": "999", "folder_remote_id": "INBOX", "is_read": True}
     )
     assert result.success is False
     assert "999" in (result.error or "")
-    assert not any(cmd == "STORE" for cmd, _ in client.calls)
+    # t064 batches flag groups: the STORE response (or its FETCH read-back)
+    # is the existence/effectiveness check, so a silent-OK STORE may run.
 
 
-def test_set_flag_missing_uid_fails_and_never_stores():
+def test_set_flag_missing_uid_fails():
     client = _SilentOkClient(existing={10: set()})
     result = _provider(client).apply_remote_operation(
         "set_flag", {"remote_id": "999", "folder_remote_id": "INBOX", "is_flagged": True}
     )
     assert result.success is False
     assert "999" in (result.error or "")
-    assert not any(cmd == "STORE" for cmd, _ in client.calls)
+    # t064 batches flag groups: the STORE response (or its FETCH read-back)
+    # is the existence/effectiveness check, so a silent-OK STORE may run.
 
 
 def test_move_missing_uid_fails_and_never_moves():

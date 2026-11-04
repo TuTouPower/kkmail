@@ -178,12 +178,17 @@ def test_imap_trash_fallback_resolves_real_folder_and_settles_done():
     assert not hasattr(provider, "name"), "real ImapProvider shape has no name attribute"
     seen: dict = {}
 
-    def _apply(op_type, desired_state):
-        seen["op_type"] = op_type
-        seen["desired"] = dict(desired_state)
-        return SimpleNamespace(success=True, error=None, remote_state={})
+    def _apply_batch(operations):
+        results = []
+        for item in operations:
+            seen["op_type"] = item.op_type
+            seen["desired"] = dict(item.desired_state)
+            results.append(
+                (item.op_id, SimpleNamespace(success=True, error=None, remote_state={}))
+            )
+        return results
 
-    provider.apply_remote_operation = _apply  # type: ignore[method-assign]
+    provider.apply_remote_operations = _apply_batch  # type: ignore[method-assign]
 
     # SQLite drops tzinfo on round-trip, which would make the settlement
     # CAS datetime comparison fail for an unrelated harness reason (on

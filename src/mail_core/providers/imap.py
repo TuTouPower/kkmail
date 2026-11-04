@@ -1462,14 +1462,21 @@ class ImapProvider:
 
             uv = parsed[0] if parsed is not None else None
             dest_folder: str | None = None
-            if op_type == OP_MOVE:
-                dest = str(desired.get("dest_folder_remote_id") or desired.get("to_folder") or "")
-                if not dest:
-                    results[op_id] = RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
-                    continue
-                dest_folder = dest
-            elif op_type == OP_TRASH:
-                dest_folder = str(desired.get("trash_folder_remote_id") or "Trash")
+            try:
+                _quote_mailbox(folder)
+                if op_type == OP_MOVE:
+                    dest = str(desired.get("dest_folder_remote_id") or desired.get("to_folder") or "")
+                    if not dest:
+                        results[op_id] = RemoteOperationResult(success=False, error="missing dest_folder_remote_id")
+                        continue
+                    dest_folder = dest
+                elif op_type == OP_TRASH:
+                    dest_folder = str(desired.get("trash_folder_remote_id") or "Trash")
+                if dest_folder is not None:
+                    _quote_mailbox(dest_folder)
+            except ValueError as exc:
+                results[op_id] = RemoteOperationResult(success=False, error=str(exc))
+                continue
 
             valid_ops.append((op_id, op_type, desired, numeric_uid, folder, uv, dest_folder))
 
@@ -1610,23 +1617,45 @@ class ImapProvider:
 
                             elif op_type in (OP_MOVE, OP_TRASH):
                                 dest_target = str(target_val)
-                                typ, response_data = c.uid("MOVE", chunk_str, _quote_mailbox(dest_target))
-                                if typ != "OK":
-                                    for u in chunk_uids:
-                                        for it in uid_to_items.get(u, []):
-                                            results[it[0]] = RemoteOperationResult(
-                                                success=False,
-                                                error="IMAP server does not support atomic MOVE/delete",
-                                            )
-                                else:
-                                    copyuid_texts = _extract_copyuid_texts(c, response_data)
-                                    states_by_uid = _copyuid_remote_states(copyuid_texts, chunk_uids, dest_target)
-                                    for u in chunk_uids:
-                                        for it in uid_to_items.get(u, []):
-                                            results[it[0]] = RemoteOperationResult(
-                                                success=True,
-                                                remote_state=states_by_uid[u],
-                                            )
+                                # A368: MOVE has no per-UID response, so verify
+                                # existence first; a silent-OK server must not
+                                # let an already-expunged UID report success.
+                                f_typ, f_data = c.uid("FETCH", chunk_str, "(FLAGS UID)")
+                                existing_uids = (
+                                    set(_parse_uids_flags_from_response(f_data))
+                                    if f_typ == "OK"
+                                    else set()
+                                )
+                                missing_uids = [u for u in chunk_uids if u not in existing_uids]
+                                for u in missing_uids:
+                                    for it in uid_to_items.get(u, []):
+                                        results[it[0]] = RemoteOperationResult(
+                                            success=False,
+                                            error=f"UID {u} not found in {folder}",
+                                        )
+                                move_uids = [u for u in chunk_uids if u in existing_uids]
+                                for move_spec, move_chunk_uids in compress_uids_chunked(move_uids):
+                                    typ, response_data = c.uid(
+                                        "MOVE", move_spec, _quote_mailbox(dest_target)
+                                    )
+                                    if typ != "OK":
+                                        for u in move_chunk_uids:
+                                            for it in uid_to_items.get(u, []):
+                                                results[it[0]] = RemoteOperationResult(
+                                                    success=False,
+                                                    error="IMAP server does not support atomic MOVE/delete",
+                                                )
+                                    else:
+                                        copyuid_texts = _extract_copyuid_texts(c, response_data)
+                                        states_by_uid = _copyuid_remote_states(
+                                            copyuid_texts, move_chunk_uids, dest_target
+                                        )
+                                        for u in move_chunk_uids:
+                                            for it in uid_to_items.get(u, []):
+                                                results[it[0]] = RemoteOperationResult(
+                                                    success=True,
+                                                    remote_state=states_by_uid[u],
+                                                )
                 except Exception as exc:
                     from mail_core.security.redact import safe_error
 
