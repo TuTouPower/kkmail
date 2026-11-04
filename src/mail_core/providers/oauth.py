@@ -26,6 +26,7 @@ import math as _math
 import re
 import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import urlencode
@@ -84,6 +85,22 @@ class OAuthError(RuntimeError):
 
 _OAUTH_ERROR_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
+# One process-wide refresh lock per credential ref. Two OAuthTokenClient
+# instances for the same credential (separate jobs/transports) must share
+# the in-process single-flight guard; a per-instance lock would let both
+# callers refresh simultaneously and rely only on the cross-process CAS.
+_refresh_locks: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
+_refresh_locks_guard = threading.Lock()
+
+
+def _refresh_lock_for(credential_ref: str) -> threading.Lock:
+    with _refresh_locks_guard:
+        lock = _refresh_locks.get(credential_ref)
+        if lock is None:
+            lock = threading.Lock()
+            _refresh_locks[credential_ref] = lock
+        return lock
+
 
 def _sanitize_token_error_text(value: Any, *, limit: int) -> str:
     cleaned = _OAUTH_ERROR_CONTROL_CHARS.sub(" ", str(value or ""))
@@ -106,7 +123,6 @@ class OAuthTokenClient:
     permit_factory: Any = None
     traffic_class: Any = "foreground"
     _cached: dict[str, Any] = field(default_factory=dict, repr=False)
-    _refresh_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def _load(self) -> dict[str, Any]:
         if self._cached:
@@ -147,7 +163,7 @@ class OAuthTokenClient:
         # for the read/version-check and the final CAS persist — never
         # across the network POST, which can take tens of seconds and would
         # otherwise block every other process refreshing this credential.
-        with self._refresh_lock:
+        with _refresh_lock_for(self.credential_ref):
             # Phase 1 (locked): reload + version check.
             with credential_edit(
                 self.store,

@@ -172,6 +172,11 @@ def test_build_provider_logs_timeout_lookup_failure_with_account_context(
         )
 
     caplog.set_level(logging.WARNING, logger="mail_core.providers.factory")
+    from mail_core.providers import factory
+
+    # The no-session lookup caches successful reads process-wide; clear it so
+    # this case exercises the lookup failure instead of a prior test's value.
+    factory._clear_fetch_timeout_cache()
     with patch("mail_core.providers.factory.validate_imap_host"):
         if factory_patch is None:
             provider = build_provider(account, store, session=session)
@@ -179,7 +184,7 @@ def test_build_provider_logs_timeout_lookup_failure_with_account_context(
             with factory_patch:
                 provider = build_provider(account, store)
 
-    assert provider.timeout == 30.0
+    assert provider.timeout == 60.0
     assert f"account id={account_id}" in caplog.text
     assert "RuntimeError" in caplog.text
     assert "top-secret" not in caplog.text

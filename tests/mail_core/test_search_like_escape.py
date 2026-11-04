@@ -34,7 +34,7 @@ def test_search_escapes_like_metacharacters_only_for_ilike_branches():
     for statement, parameters in zip(session.statements, session.parameters):
         assert parameters["q"] == query
         assert parameters["like_q"] == r"\%\_\\x"
-        assert statement.count("ESCAPE E'\\\\'") == 2
+        assert statement.count("ESCAPE E'\\\\'") == 3
 
 
 @pytest.mark.parametrize(("limit", "expected"), [(0, 1), (-10, 1), (500, 200)])

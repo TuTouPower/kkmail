@@ -309,7 +309,9 @@ def test_ac004_worker_claims_enqueued_job_within_1_second():
 def test_ac006_job_wake_listener_reconnect():
     """AC-006: JobWakeListener reconnects on connection loss without failing."""
     woken = threading.Event()
-    listener = JobWakeListener(wake_callback=woken.set, reconnect_s=0.2)
+    listener = JobWakeListener(
+        wake_callback=woken.set, reconnect_s=0.2, reconnect_base_s=0.2
+    )
     listener.start()
     assert listener.wait_started(5.0)
 

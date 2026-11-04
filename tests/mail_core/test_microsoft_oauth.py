@@ -252,7 +252,19 @@ def test_device_concurrent_poll_and_save_use_same_identity_guards_pg(monkeypatch
         return sibling.post(f"/api/accounts/oauth/flows/{flow['flow_id']}/poll")
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(poll, range(2)))
-    assert all(r.status_code == 200 and r.json()['status'] == 'authorized' for r in results)
+    # B2: the locked claim advances next_poll_at before releasing the flow
+    # lock, so a poller that arrives while the exchange is in flight gets
+    # 429 DevicePollTooSoon instead of duplicating the token exchange. A
+    # poller that arrives after the first one persisted sees the
+    # authorized flow. The invariant is one exchange and no duplicate
+    # authorization work.
+    assert any(r.status_code == 200 and r.json()['status'] == 'authorized' for r in results)
+    for result in results:
+        if result.status_code == 200:
+            assert result.json()['status'] == 'authorized'
+        else:
+            assert result.status_code == 429
+            assert result.headers.get('Retry-After')
     assert len(exchanges) == 1
     saved = client.post('/api/accounts', json={'provider': 'graph', 'oauth_flow_id': flow['flow_id']})
     assert saved.status_code == 200, saved.text

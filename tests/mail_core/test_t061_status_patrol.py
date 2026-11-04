@@ -362,8 +362,9 @@ def test_ac014_probe_failure_isolated_per_folder():
     with Session() as session:
         acc_bad, f_bad = _seed_folder(session, last_status=status.to_dict(), last_probe_epoch=old)
         acc_good, f_good = _seed_folder(session, last_status=status.to_dict(), last_probe_epoch=old)
-        session.commit()
         bad_id, good_id = acc_bad.id, acc_good.id
+        bad_folder_id, good_folder_id = f_bad.id, f_good.id
+        session.commit()
 
     def factory(account):
         if account.id == bad_id:
@@ -380,11 +381,11 @@ def test_ac014_probe_failure_isolated_per_folder():
         # The failing account is not marked failed by the patrol.
         acc = session.get(Account, bad_id)
         assert acc.sync_status != "failed"
-        assert len(_delta_jobs(session, good_id, f_good.id)) == 1
+        assert len(_delta_jobs(session, good_id, good_folder_id)) == 1
         # The failed folder's attempt clock advanced (review f001):
         # it must not be retried on every scheduler sweep.
         cp_bad = session.get(
-            SyncCheckpoint, {"account_id": bad_id, "folder_id": f_bad.id}
+            SyncCheckpoint, {"account_id": bad_id, "folder_id": bad_folder_id}
         )
         assert cp_bad.cursor["last_probe_at"] == now.timestamp()
         assert cp_bad.cursor["last_probe_failures"] == 1
