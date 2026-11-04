@@ -353,7 +353,9 @@ def test_a28_remote_push_rate_limit_respects_retry_after_and_attempt_cap(
                 )
                 assert job is not None
                 assert job.run_after >= now + timedelta(seconds=70)
-                assert result["failed"] == 0
+                # t064 batch contract: "failed" counts operations that failed
+                # this push attempt, including ones requeued as PENDING.
+                assert result["failed"] == 1
             else:
                 assert op.next_attempt_at is None
                 assert result["failed"] == 1
