@@ -1,5 +1,7 @@
 """Canonical git_ops implementation for the task toolchain."""
 
+from __future__ import annotations
+
 import re
 import subprocess
 import sys
@@ -36,18 +38,18 @@ def _git_bytes(
     except subprocess.TimeoutExpired as error:
         raise ctx.TaskDataError(f"git {' '.join(args)} 超时（{timeout}s）") from error
 
-def default_branch() -> str:
+def default_branch(root: Path | None = None) -> str:
     """主干分支名：origin/HEAD → init.defaultBranch → 探测 main/master → main。"""
-    r = _git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+    r = _git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], root=root)
     if r.returncode == 0 and r.stdout.strip():
         return r.stdout.strip().removeprefix("origin/")
-    r = _git(["config", "--get", "init.defaultBranch"])
+    r = _git(["config", "--get", "init.defaultBranch"], root=root)
     if r.returncode == 0 and r.stdout.strip():
         name = r.stdout.strip()
-        if _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{name}"]).returncode == 0:
+        if _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{name}"], root=root).returncode == 0:
             return name
     for name in ("main", "master"):
-        if _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{name}"]).returncode == 0:
+        if _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{name}"], root=root).returncode == 0:
             return name
     return "main"
 
@@ -98,16 +100,9 @@ def tracked_anywhere(rel_path: str) -> bool:
     r = _git(["rev-list", "--all", "--max-count=1", "--", rel_path])
     return r.returncode == 0 and bool(r.stdout.strip())
 
-def porcelain_entries(root: Path | None = None) -> list[str]:
-    """`git status --porcelain -z` 的路径列表，避免引号与转义带来的解析错误。
-
-    git 失败时抛 TaskDataError（fail-closed）：调用方把空集合理解为「干净」，
-    若静默降级会在 merge/rewind 时带着未提交改动继续。
-    """
-    r = _git(["status", "--porcelain", "-z"], root=root)
-    if r.returncode != 0:
-        raise ctx.TaskDataError(f"git status --porcelain 失败：{r.stderr.strip()}")
-    out, fields, i = [], r.stdout.split("\0"), 0
+def _porcelain_paths(stdout: str) -> list[str]:
+    """解析 `git status --porcelain -z` 输出的路径列表。"""
+    out, fields, i = [], stdout.split("\0"), 0
     while i < len(fields):
         entry = fields[i]
         i += 1
@@ -119,6 +114,17 @@ def porcelain_entries(root: Path | None = None) -> list[str]:
         out.append(path)
     return out
 
+def porcelain_entries(root: Path | None = None) -> list[str]:
+    """`git status --porcelain -z` 的路径列表，避免引号与转义带来的解析错误。
+
+    git 失败时抛 TaskDataError（fail-closed）：调用方把空集合理解为「干净」，
+    若静默降级会在 merge/rewind 时带着未提交改动继续。
+    """
+    r = _git(["status", "--porcelain", "-z"], root=root)
+    if r.returncode != 0:
+        raise ctx.TaskDataError(f"git status --porcelain 失败：{r.stderr.strip()}")
+    return _porcelain_paths(r.stdout)
+
 def tracked_dirty_entries(root: Path | None = None) -> list[str]:
     """只含已跟踪文件的未提交改动；未跟踪文件不影响 merge 结果，不计入。"""
     r = _git(["status", "--porcelain", "-z", "--untracked-files=no"], root=root)
@@ -126,17 +132,7 @@ def tracked_dirty_entries(root: Path | None = None) -> list[str]:
         raise ctx.TaskDataError(
             f"git status --porcelain (tracked) 失败：{r.stderr.strip()}"
         )
-    out, fields, i = [], r.stdout.split("\0"), 0
-    while i < len(fields):
-        entry = fields[i]
-        i += 1
-        if not entry:
-            continue
-        code, path = entry[:2], entry[3:]
-        if code[0] in ("R", "C"):
-            i += 1
-        out.append(path)
-    return out
+    return _porcelain_paths(r.stdout)
 
 def worktree_paths() -> dict[str, str]:
     """`git worktree list --porcelain` → {绝对路径: 分支名}。

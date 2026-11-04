@@ -1,76 +1,84 @@
----
-tid: "t017"
-slug: "full_stack_e2e"
-title: "建立浏览器到真实后端数据库与 Worker 的端到端测试"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "082e203eafb2afceb955b75f78687d4cdba64b5e"
-depends_on: "t012,t015,t016"
-conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit de6f9b4c"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+当前 Playwright 只启动 Vite preview，三个 smoke 用例均 setupStubApi 拦截全部 /api/\*\*，不能验证 Cookie/CSRF、生产静态资源、PG、Worker、SSE 和远端写回联通。需要保留快速 UI 冒烟并新增真实全链路门禁。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- tests/e2e、Playwright 配置、启动入口及必要测试种子；真实生产 SPA 构建由 FastAPI 同源提供，使用独立测试库和本地 IMAP。
+- 覆盖登录登出/改密会话失效、创建测试账号、同步、读信与附件、搜索/分页、读状态与旗标、Trash、SSE 多页面更新、重启持久化。
+- 所有测试进程由入口登记和回收，失败保留脱敏 trace、截图、浏览器网络错误及 API/Worker 日志。
 
-2026-10-22 核实 tests/e2e/smoke.spec.ts、stubApi.ts、playwright.config.ts；当前 E2E 未在本轮执行，评估只确认其模拟边界。
+### 非范围
 
-### 2026-10-22 主分支执行
+- 不替换现有模拟 API 的快速 UI 测试，不在真实链路拦截应用 API 成功响应或直接写 DB 冒充用户操作。
+- 不新增 t008 尚未交付的文件夹产品行为，不将 p016 已登记的批量已读修复混入此 task；使用现有单封操作验收。
 
-- 用户明确要求直接在 main 分支按顺序执行 t013–t023，每完成一个 task 独立 commit。
-- 架构分层：
-    - 保留轻量快速 UI 冒烟测试（`tests/e2e/smoke.spec.ts`，基于 Playwright stubApi，运行仅 4 秒）；
-    - 新建真实全栈端到端测试（`tests/e2e/full_stack.spec.ts`，涵盖真实 FastAPI、PostgreSQL、Worker、Dovecot IMAP 与生产 SPA 静态托管）。
-- 编写生命周期控制器 `scripts/run_full_stack_e2e.py`：
-    - 启动前核对专用测试 IMAP 容器与测试 PostgreSQL 实例；
-    - 动态分配一次性测试库 `kkmail_e2e_<uuid>`，执行 Alembic head 迁移；
-    - 设置 `KKMAIL_FRONTEND_DIST`，FastAPI 生产同源挂载 SPA；
-    - 启动独立 API 进程与 Worker 进程，等待 `/health` 健康就绪；
-    - 动态分配未占用端口，启动 Playwright 并执行 `full_stack.spec.ts`；
-    - 运行后优雅终止进程并安全销毁测试库，失败保留截图与日志在 `.scratch/`。
-- 修复测试发现的根因问题：
-    - 数据库 URL 特殊字符（如包含 `%`）必须经由 `URL.create` 规范化渲染，消除 psycopg percent-decode 异常对 LISTEN 线程的影响；
-    - API 认证环境变量对齐 `MAIL_CORE_LOGIN_PASSWORD`，Session Cookie 对齐 `kkmail_mc_session`；
-    - 前端邮件项 class 对齐 `.message-row`。
-- 验收结果：`python3 scripts/run_full_stack_e2e.py` 3 项测试全通（15.8s）；`npm --prefix src/frontend run test:e2e` 快速冒烟 3 项全通。
+### 验收标准
 
-## Review 处置
+<!-- 规范（门禁必留，不得删除） -->
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- 已修：PostgreSQL DSN URL 编码修正，防止含有保留符号触发 ProgrammingError；
-- 已修：Playwright 快速冒烟与全栈脚本测试目标隔离；
-- 双人审查（code + test）结论均 PASS。
+<!-- /规范 -->
 
-## 收尾报告
+- [x] AC-001：单一命令启动干净数据库、真实 API、独立 Worker、本地 IMAP 与生产 SPA；就绪失败、端口被未知服务占用或 Worker 无法工作时明确失败，禁止复用用户业务服务。
+- [x] AC-002：浏览器错误密码登录被拒绝，正确密码登录获得真实 Cookie；缺失/错误 CSRF 的写请求被拒绝，合法请求成功；登出和改密后旧会话在另一浏览器会话失效。
+- [x] AC-003：通过现有账号界面创建本地测试账号并触发同步，无需测试脚本手动执行生产 handler 补步骤；浏览器看到预置多页邮件，搜索和分页无漏项/重复，附件下载字节与种子一致。
+- [x] AC-004：浏览器单封已读/未读、旗标与现有 Trash 操作完成后，另开 DB session 及 IMAP 连接确认持久状态与目标身份正确；测试不以等待固定时长替代结果断言。
+- [x] AC-005：两个已登录页面间真实 SSE 推动列表与计数更新；断开 SSE 后恢复，能补齐或触发重新同步，不能长期保留旧视图；API/Worker 重启后邮件、状态和已初始化登录凭据仍保留。
+- [x] AC-006：恶意邮件 HTML 在真实浏览器内不能执行脚本或逃逸 iframe，远程图片默认不发请求；失败产生脱敏 trace/截图/日志并非零退出，成功或取消后停止本轮进程。
 
-### 验收与验证
+### 可测试性声明
 
-- spec：[`spec.md`](spec.md)
-- 结果：全栈真实端到端自动化测试门禁建立完成，全行为 AC 均满足。
-- 测试：`python3 scripts/run_full_stack_e2e.py` 3 passed；`npm --prefix src/frontend run test:e2e` 3 passed。
-- 黑盒：浏览器中成功登录、获取 Cookie、CSRF 校验、添加账户后真实 Worker 自动同步落库并渲染邮件列表、XSS 防护过滤、双页面 SSE 实时协同。
-- review：`review_code.md` PASS，`review_test.md` PASS。
-- AC 证据：`scripts/run_full_stack_e2e.py` 与 `tests/e2e/full_stack.spec.ts` 终端实测输出。
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-建立了基于真实环境（FastAPI、Worker、PostgreSQL、Dovecot、生产 SPA）的端到端自动化测试流水线与用例套件，验证了真实 Cookie/CSRF 认证、多会话失效、添加账号后台自动同步、邮件详情阅读与 XSS 过滤、双页面并发 SSE 实时推送等关键链路，并在测试后自动销毁数据库与后台进程。
+<!-- /规范 -->
 
-## 状态勘误（2026-10-27，A52）
+全部 AC 可自动测试；执行阶段必须给出真实运行证据，外部环境不可用不得替代为模拟通过。
 
-- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
-- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
-- commit 锚点：实现提交 `de6f9b4c5b9e97cdf84af862060f74e8f08347e5`；diff_anchor 补记为该实现提交的父提交 `082e203eafb2afceb955b75f78687d4cdba64b5e`；本批归档提交 `161a6e10`。
-- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
+## 上下文区
+
+- 来源：无外部条目；本会话测试评估、固定容器方案与用户批准（2026-10-22）。2026-10-22 核实 tests/e2e/smoke.spec.ts、stubApi.ts、playwright.config.ts；当前 E2E 未在本轮执行，评估只确认其模拟边界。
+
+### 有意不测
+
+- 不在每个 PR 跑所有浏览器与操作系统排列；PR 使用 Chromium，桌面与平台差异交由打包冒烟。
+
+### 测试策略
+
+- 以等待请求、SSE事件、界面和持久状态为同步条件，保留超时上限与失败现场；禁止重试直到绿。
+- 分别验证 UI 操作、后端状态及独立远端观察，不仅断言 HTTP 200 或 DOM 存在。
+- 改密/登出测试在独立用例环境运行避免影响其他会话；复用 t006 的邮件沙箱规则，不重新定义主题设计。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无尚未裁定的外部产品契约；执行环境、工具可用性与权限按实施入口核对，缺少前提须失败并报告，不能用 skip 代替本 task 验收。
+
+### 风险与回退
+
+- 风险：全局会话失效污染其他用例、后台任务等待竞态、测试拦截掩盖真实 API 错误。测试环境所有权与用例隔离优先，不能借用开发服务器假通过。
+- 回退：回退本 task 单一执行 commit 恢复原入口与测试；仅回收本轮拥有测试资源，保留用户数据、其他 task 改动和失败证据。不更改生产 schema 或数据，迁移验证仅对一次性测试库操作。
+
+### 依赖与约束
+
+- 硬依赖 t012：真实读状态/旗标写回与后台同步交错必须先获得已登记收敛缺陷修复；不依赖手动补推或延长等待掩盖问题。
+- 硬依赖 t016：复用其已交付的增强真实 IMAP 集成与邮件服务商协议契约测试。
+- 硬依赖 t015：复用其已交付的恢复前端测试门禁并固定浏览器存储测试环境。
+- 本批 task 与 t012 的 finalization 都更新 docs/blueprint/testing.md，已登记 conflicts_with，建议串行交付；冲突不冒充硬依赖，不修改旧 task 和 active worktree。
+- 只按本 spec 修改生产代码/测试/脚本；发现超出范围产品缺陷按既有 bug-to-pending 流程记录，不放宽断言或静默扩大修复。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/testing.md`：模拟 UI/真实 E2E 两层命令、就绪条件、关键链路和失败产物。

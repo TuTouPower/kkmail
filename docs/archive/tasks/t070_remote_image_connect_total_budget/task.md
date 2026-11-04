@@ -1,55 +1,78 @@
----
-tid: "t070"
-slug: "remote_image_connect_total_budget"
-title: "远程图片代理多 IP 回退总超时预算"
-status: "done"
-branch: "t070_remote_image_connect_total_budget"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "307b0dcc0a8c092a4bd9c3a82d9455390ede107c"
-depends_on: ""
-conflicts_with: ""
-note: "t069 AC-006 实现补齐：多 IP 回退整次连接共享 15s 总预算，避免 N×5s 最坏等待"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+t069 实现了多 IP 回退（IPv4 优先逐个尝试），但每个 IP 各用 5s 连接超时，spec 中「受总超时预算约束」未落实。最坏情况 N 个 IP 全部黑洞时，单次图片请求要等 N×5s 才失败，拖慢阅读器且占用服务端连接。本 task 补齐整次连接共享总预算 15s。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- `_connect_with_fallback` 改为共享 deadline：整次多 IP 连接尝试最多 15s。
+- 每个 IP 的实际超时取 `min(单 IP 上限 5s, 剩余预算)`。
+- 预算耗尽时立即停止尝试并归入超时（504）。
+- 既有行为不变：IPv4 优先、逐个尝试、全部非超时失败归 502、只连已校验 IP、TLS SNI 保持原域名。
 
-- 实施决策：
-    1. 新增 `TOTAL_CONNECT_TIMEOUT_SECONDS = 15.0`；`_connect_with_fallback` 的 `timeout` 参数语义改为整次连接总预算，内部以 `time.monotonic()` 计算 deadline；
-    2. 每个 IP 尝试超时取 `min(CONNECT_TIMEOUT_SECONDS, remaining)`；`remaining <= 0` 时不再发起连接并归入超时（504）；
-    3. 成功即返回、IPv4 优先、全部非超时失败归 502、只连已校验 IP、TLS SNI 保持原域名的既有行为不变；
-    4. 新增三例假时钟单测：预算耗尽停止（5+5+5=15，不再试第 4 个 IP）、最后一次使用剩余预算（5/5/5/3）、成功短路。
-- 验证：后端单测 31 passed；代理 PG 集成 33 passed；前端 mailBody 25 passed；E2E 21 passed；契约 189 passed。
+### 非范围
 
-## Review 处置
+- 不改变单 IP 连接上限数值（仍 5s）。
+- 不改变 SSRF 校验、重定向、大小上限与格式策略。
+- 不改变前端行为。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-31T19:20:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零 finding。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [ ] AC-001：域名解析出多个安全 IP 且前几个连接失败时，整次连接尝试的总耗时不超过 15s；预算耗尽后不再发起新连接，并返回超时类错误（代理端点 504）。
+- [ ] AC-002：单个 IP 的实际连接超时取「单 IP 上限 5s」与「剩余预算」的较小值；首轮尝试预算充足时仍为 5s。
+- [ ] AC-003：IPv4 优先、成功即返回、全部非超时失败归 502 的既有行为不变；既有代理集成与安全用例不回归。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：后端单测 31 passed（含新增预算三例）；代理 PG 集成 33 passed；前端 mailBody 25 passed；契约 189 passed
-- 黑盒：`npm --prefix src/frontend run test:e2e` 21 passed
-- review：Round 1 code PASS + test PASS 零 finding
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-- 多 IP 回退改为整次连接共享 15s 总预算，单 IP 尝试上限 5s，预算耗尽立即停止并返回 504；避免 N×5s 最坏等待。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+- 全部 AC 可自动测试：通过注入 connector 与假时钟单测精确断言预算与每次超时值；API 504 由集成测试断言。
+
+## 上下文区
+
+- 来源：`t069`（2026-10-31 用户指出逐 IP 5s 无总预算约束）；`p069` 已验证多 IP 回退必要性。
+
+### 有意不测
+
+- 真实公网黑洞 IP 的端到端等待：由假时钟单测覆盖语义，不做真实长时间等待。
+
+### 测试策略
+
+- 单测：假时钟 + 注入 connector，覆盖预算耗尽停止、每次超时取值、成功短路、全不可达分类。
+- 集成：既有 504/502 断言保留并重跑。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无
+
+### 风险与回退
+
+- 风险：预算过小会误伤慢速但可用的 IPv6→IPv4 回退；15s 已覆盖单 IP 5s × 最多 3 次有效尝试。
+- 回退：纯逻辑改动，回退即恢复上一镜像。
+
+### 依赖与约束
+
+- 基于 t069 分支；不新增第三方依赖。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：补充「整次连接共享 15s 总预算」。

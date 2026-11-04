@@ -46,7 +46,8 @@ var state = {
 
 var view = { k: 1, x: 20, y: 20 };
 var layout = null;
-var canvasEl, dragState = null;
+var layoutSignature = null;
+var canvasEl, dragState = null, dagG = null, hoverFrame = null;
 
 // ---------------------------------------------------------------------------
 // 小工具
@@ -108,10 +109,8 @@ function fallbackCopy(text) {
   ta.value = text;
   document.body.appendChild(ta);
   ta.select();
-  var ok = false;
-  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  try { document.execCommand('copy'); } catch (e) { /* ignore */ }
   document.body.removeChild(ta);
-  if (!ok) showToast('复制失败，请手动复制');
 }
 
 function showToast(msg) {
@@ -127,12 +126,8 @@ function catStyle(cat) {
   return state.dark ? meta.d : meta.l;
 }
 
-function catLabel(cat) {
-  return (CAT[cat] || CAT.backlog).label;
-}
-
 // ---------------------------------------------------------------------------
-// 关系索引与高亮（boardUtils.collectRelated / highlightRoleOf 的翻译）
+// 关系索引与高亮（移植自早期 TS 原型；原型不随模板分发）
 // ---------------------------------------------------------------------------
 
 function buildIndex() {
@@ -187,7 +182,7 @@ function matchedIds() {
 }
 
 // ---------------------------------------------------------------------------
-// 分层布局（dagLayout.ts 的翻译：最长路径分层 + barycenter 层内排序）
+// 分层布局（移植自早期 TS 原型：最长路径分层 + barycenter 层内排序；权威实现为本文件）
 // ---------------------------------------------------------------------------
 
 function layoutDag(nodeIds, edges) {
@@ -289,7 +284,7 @@ function renderPills() {
     if (cat === 'active' && count > 0) {
       pill.appendChild(el('span', { class: 'pulse-dot' }));
     }
-    pill.appendChild(el('span', null, [catLabel(cat)]));
+    pill.appendChild(el('span', null, [CAT[cat].label]));
     pill.appendChild(el('span', { class: 'count' }, [String(count)]));
     pills.appendChild(pill);
   });
@@ -310,12 +305,25 @@ function visibleNodeIds() {
 
 function computeLayout() {
   var ids = visibleNodeIds();
+  var signature = ids.join(',');
+  if (layout && signature === layoutSignature) return ids;
   var idSet = new Set(ids);
   var depEdges = model.edges.filter(function (e) {
     return e.type === 'dep' && idSet.has(e.from) && idSet.has(e.to);
   });
   layout = layoutDag(ids, depEdges);
+  layoutSignature = signature;
   return ids;
+}
+
+function scheduleHoverRender() {
+  if (hoverFrame !== null) return;
+  hoverFrame = window.requestAnimationFrame(function () {
+    hoverFrame = null;
+    renderDag();
+    renderArchive();
+    updateHoverLegend();
+  });
 }
 
 function edgePath(from, to) {
@@ -355,6 +363,7 @@ function renderDag() {
 
   var svg = svgEl('svg');
   var g = svgEl('g', { transform: 'translate(' + view.x + ',' + view.y + ') scale(' + view.k + ')' });
+  dagG = g;
   svg.appendChild(g);
 
   var dimNode = function (id) {
@@ -446,17 +455,11 @@ function renderDag() {
     });
     nodeG.addEventListener('mouseenter', function () {
       state.hoveredId = id;
-      renderDag();
-      renderArchive();
-      renderChainPanel();
-      updateHoverLegend();
+      scheduleHoverRender();
     });
     nodeG.addEventListener('mouseleave', function () {
       state.hoveredId = null;
-      renderDag();
-      renderArchive();
-      renderChainPanel();
-      updateHoverLegend();
+      scheduleHoverRender();
     });
     nodeG.appendChild(svgEl('title', null, [document.createTextNode(tip)]));
 
@@ -522,7 +525,7 @@ function renderLegend() {
     var c = catStyle(cat);
     legend.appendChild(el('span', null, [
       el('span', { class: 'legend-swatch', style: 'background:' + c.fill + ';border-color:' + c.stroke }),
-      document.createTextNode(catLabel(cat)),
+      document.createTextNode(CAT[cat].label),
     ]));
   });
   canvasEl.appendChild(legend);
@@ -602,7 +605,7 @@ function renderChainPanel() {
         row.appendChild(el('span', {
           class: 'category-badge',
           style: badgeStyle(n.category),
-        }, [catLabel(n.category)]));
+        }, [CAT[n.category] ? CAT[n.category].label : n.category]));
       }
       row.addEventListener('click', function () { openSheet(tid); });
       uBox.appendChild(row);
@@ -720,9 +723,8 @@ function buildChainCard(chain) {
   });
   card.appendChild(tasks);
 
-  // 停因只认后端 stop_reason（plan.py 单一实现）；缺失时明示后端未提供，
-  // 不在前端复刻算法（A37）。
-  var stop = chain.stop_reason || '后端未提供';
+  var stop = chain.stop_reason
+    || (window.ChainPlan ? window.ChainPlan.chainStopInfo(chain, plan, model) : '');
   if (stop) {
     card.appendChild(el('footer', { class: 'chain-card-foot' }, [stop]));
   }
@@ -809,10 +811,10 @@ function renderArchive() {
     if (state.selectedId === n.id) card.classList.add('selected');
     card.appendChild(el('span', { class: 'mono' }, [n.id]));
     card.appendChild(el('span', { class: 'title' }, [n.title]));
-    card.appendChild(el('span', { class: 'category-badge', style: badgeStyle(n.category) }, [catLabel(n.category)]));
+    card.appendChild(el('span', { class: 'category-badge', style: badgeStyle(n.category) }, [CAT[n.category].label]));
     card.addEventListener('click', function () { openSheet(n.id); });
-    card.addEventListener('mouseenter', function () { state.hoveredId = n.id; renderDag(); renderArchive(); updateHoverLegend(); });
-    card.addEventListener('mouseleave', function () { state.hoveredId = null; renderDag(); renderArchive(); updateHoverLegend(); });
+    card.addEventListener('mouseenter', function () { state.hoveredId = n.id; scheduleHoverRender(); });
+    card.addEventListener('mouseleave', function () { state.hoveredId = null; scheduleHoverRender(); });
     grid.appendChild(card);
   });
 }
@@ -868,7 +870,7 @@ function renderSheetDetail() {
   if (!n) return;
   $('sheet-id').textContent = n.id;
   var badge = $('sheet-badge');
-  badge.textContent = catLabel(n.category);
+  badge.textContent = CAT[n.category].label;
   badge.setAttribute('style', badgeStyle(n.category));
   $('sheet-title').textContent = n.title;
   $('sheet-meta').textContent = '';
@@ -901,7 +903,7 @@ function relationGroup(title, ids, tone, emptyText) {
     var chip = el('button', { type: 'button', class: 'relation-chip ' + tone });
     chip.appendChild(el('span', { class: 'mono' }, [id]));
     chip.appendChild(el('span', { class: 'title' }, [target.title]));
-    chip.appendChild(el('span', { class: 'category-badge', style: badgeStyle(target.category) }, [catLabel(target.category)]));
+    chip.appendChild(el('span', { class: 'category-badge', style: badgeStyle(target.category) }, [CAT[target.category].label]));
     chip.addEventListener('click', function () { openSheet(id); });
     list.appendChild(chip);
   });
@@ -920,7 +922,8 @@ function renderSheetDoc(doc) {
     return;
   }
   body.appendChild(el('p', { class: 'doc-loading' }, ['加载 ' + doc + '.md …']));
-  fetch('/task-doc?tid=' + encodeURIComponent(n.id) + '&doc=' + encodeURIComponent(doc) + '&token=' + encodeURIComponent(window.__DOC_TOKEN__ || ''))
+  var docUrl = '/task-doc?tid=' + encodeURIComponent(n.id) + '&doc=' + encodeURIComponent(doc) + (model.token ? '&token=' + encodeURIComponent(model.token) : '');
+  fetch(docUrl)
     .then(function (resp) {
       if (!resp.ok) return resp.text().then(function (t) { throw new Error(t); });
       return resp.text();
@@ -994,7 +997,7 @@ function renderFooter() {
     (plan ? ' · 推荐 ' + plan.chains.length + ' 条链' : ''),
   ]));
   var right = el('span', { class: 'right' }, [
-    '只读看板;链推荐后端计算;刷新或「重新计算」更新(文档缓存随整页刷新失效)',
+    '只读看板;链推荐后端计算;刷新或「重新计算」更新',
   ]);
   footer.appendChild(right);
 }
@@ -1079,7 +1082,7 @@ function bindEvents() {
   canvasEl.addEventListener('pointermove', function (e) {
     if (!dragState) return;
     view = { k: view.k, x: dragState.ox + e.clientX - dragState.sx, y: dragState.oy + e.clientY - dragState.sy };
-    renderDag();
+    if (dagG) dagG.setAttribute('transform', 'translate(' + view.x + ',' + view.y + ') scale(' + view.k + ')');
   });
   canvasEl.addEventListener('pointerup', function () { dragState = null; canvasEl.classList.remove('dragging'); });
   canvasEl.addEventListener('pointerleave', function () { dragState = null; canvasEl.classList.remove('dragging'); });

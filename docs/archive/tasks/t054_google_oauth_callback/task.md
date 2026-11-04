@@ -1,113 +1,94 @@
----
-tid: "t054"
-slug: "google_oauth_callback"
-title: "支持 Google OAuth 跳转回调与账户重新授权"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "4ef9bf7ada1aaa9b67ea67dfccc1dfcd9b98d10a"
-depends_on: "t053"
-conflicts_with: ""
-note: "来源：用户补充；Google 保留 IMAP 应用密码并新增 OAuth 授权码跳转回调，覆盖网页与 Electron；依赖 t053; 2026-10-25T02:00:57+08:00 用户明确授权补归档；直接 main 执行提交 e1dee2549e35486fbb36172579bf0d6564f2dedc；历史双路 Review 指纹 82374890bf0a9881 已核实；无 attempt，不伪造 ledger/handoff"
----
+# Task spec
 
-> **归档勘误（2026-10-27 补，不改写历史正文）**：本 task 交付的 Google OAuth / Gmail API 已由 p055 于 2026-10-26 整体下线，本文的「全部满足」等表述为交付时点结论、不代表现行状态。当前唯一 Google 路径为 IMAP 应用专用密码，权威位置见 `docs/specs/account_connection.md` 的 2026-10-26 节。
+> **归档勘误（2026-10-27 补，不改写历史正文）**：本 task 交付的 Google OAuth / Gmail API 已由 p055 于 2026-10-26 整体下线，本 spec 的「全部满足」等表述为交付时点结论、不代表现行状态。当前唯一 Google 路径为 IMAP 应用专用密码，权威位置见 `docs/specs/account_connection.md` 的 2026-10-26 节。
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+用户明确要求增加 Google OAuth 跳转登录与回调；现有 OAuthTokenClient 仅刷新已有令牌，无授权码换取、短期流程存储或回调。交付网页与 Electron 均可新增 Google 账户、重新授权 Gmail API 账户的完整流程，并为 t055 复用已经验证的会话绑定和一次性结果。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- Google Gmail API 授权码跳转、回调、离线凭据获取、真实邮箱核对、最终保存与重新授权；Google IMAP 继续由 t053 的应用密码表单处理。
+- 必需的短期 OAuth 流程状态、PKCE、防重放、跨进程持久化、部署回调配置、系统浏览器返回及对应 UI/帮助。
 
-- `2026-10-24`：用户明确增加 Google 登录跳转与回调，独立交付网页/桌面新增及重新授权。依赖 t053，full review；官方协议已核实，尚未实施。
-- 创建期仅写本批 task 与派生索引；不 start、不改生产代码，创建 commit 待用户确认。
-- 2026-10-24：沿用用户此前明确授权，在 main 继续 t054 → t055。工具链仅支持 worktree，保留真实 front matter，不伪造 attempt。
-- 首轮代码 5 条、测试 4 条 finding 逐项修复；补生产 HTTP、恢复草稿、重新授权 PATCH、过期、取消与 Electron 真实 SPA 集成测试。
-- 新增跨流程同码并发复现：原实现两次回调均 200；使用凭据引用 advisory lock 原子领取授权码，阻止缺行锁竞争。
+### 非范围
 
-## Review 处置
+- 不实现 Microsoft 授权（由 t055 交付），不迁移 IMAP 邮件身份，不新增发信或 Gmail IMAP XOAUTH2。
+- 不创建外部 OAuth 应用、不发布应用或代办审核，不采用已弃用 OOB 手动复制授权码；不引入推测性插件式授权平台。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-24T15:20:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t054_code_f001|important|已修|修正 window.open 返回值判断，Electron 覆盖 deny 行为|`src/frontend/src/components/settings_account_form.tsx`|
-|t054_code_f002|important|已修|pending/authorized 均检查有效期并清理结果|`src/mail_core/accounts/oauth_flow.py`|
-|t054_code_f003|important|已修|公共客户端不继承旧 Secret，保存移除旧 Secret|`src/mail_core/accounts/oauth_flow.py`|
-|t054_code_f004|important|已修|显式检查剪贴板 API，失败提示手动复制|`src/frontend/src/components/settings_account_form.tsx`|
-|t054_code_f005|minor|已修|移除旧 expires_at，仅清理当前流程活跃指针|`src/mail_core/accounts/oauth_flow.py`|
-|t054_test_f001|important|已修|补重新授权 PATCH、活跃草稿恢复和隔离测试|`src/frontend/src/components/provider_account_form.test.tsx`|
-|t054_test_f002|important|已修|补生产 urllib、错误脱敏、客户端不匹配与重试|`tests/mail_core/test_google_oauth_callback.py`|
-|t054_test_f003|important|已修|补独立 Electron 真实 SPA/API/PG/HTTP 与配置测试|`src/desktop/oauth_integration.test.js`|
-|t054_test_f004|minor|已修|补复制、编辑帮助、鉴权/CSRF、同步恢复测试|`tests/mail_core/test_google_oauth_callback.py`|
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-### Round 2 (2026-10-24T18:40:00+08:00)
+<!-- /规范 -->
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t054_code_f006|important|已修|OAuth 移组先锁 sidebar 再锁账户，与普通移组同序；真实 PG 并发回归|`src/mail_core/mail/application/accounts.py`|
-|t054_code_f007|important|已修|active 指针读、比较、清空及 start 写入均使用相同引用锁|`src/mail_core/accounts/oauth_flow.py`|
-|t054_code_f008|minor|已修|非对象 token 响应返回固定脱敏失败，不调用其 get 方法|`src/mail_core/accounts/oauth_flow.py`|
-|t054_code_f009|important|已修|Compose API 传递可信 Origin，配置模板及部署指南说明登记步骤|`docker-compose.mail-core.yml`|
+- [ ] AC-001：Google 新增账户选择 OAuth 后可点击“使用 Google 登录”，已有 Gmail API 账户编辑时可点击“重新授权”；Google IMAP 的应用专用密码路径保持可用。登录入口创建真实授权请求并跳转 Google 官方页面，用户不必手工复制 Refresh Token。
+- [ ] AC-002：授权前可配置用户自有 Client ID、匹配客户端类型的 Client Secret，以及可复制的实际回调 URI；编辑可复用已有加密客户端配置，空秘密字段不清除原值。缺配置时明确列出所缺项并可打开帮助；Google API 未配置不得阻止其他 IMAP 使用，前端不打包共享 Secret。
+- [ ] AC-003：自托管网页使用后端处理授权码的 Web 客户端与已登记固定回调；HTTPS 公网 origin 来自可信部署配置，不从未受信 Host、Forwarded 或客户端 return URL 构造。桌面原生客户端采用系统浏览器及 127.0.0.1 loopback，正确处理动态端口；远程网页部署不把回调指向用户电脑 loopback，URL 查询参数不能伪造桌面模式。
+- [ ] AC-004：授权请求使用 code 流程及 PKCE S256，申请 gmail.modify 和离线访问；按需重做同意以取得 Refresh Token，不请求 gmail.send 或 mail.google.com 全量范围。缺少所需授权范围或新建未取得可刷新的凭据时不允许保存为已授权；不将 Google 测试模式令牌说明为永不过期。
+- [ ] AC-005：发起、查询状态、取消和最终保存只允许已登录的原始 kkmail 会话操作，写请求继续执行 CSRF。每次流程绑定会话身份、session_epoch、供应商、用途（新增/编辑）、目标账户和客户端配置，随机 state 与 code_verifier 仅服务端保存，有效期最长 10 分钟。跨会话、退出登录、epoch 失效、超时和取消后的流程不能领取或写入凭据。
+- [ ] AC-006：回调仅接受已发起且未消费的匹配 state 与授权码；错误 provider、篡改 state、缺 state、缺 code、重复/并发回调以及授权码复用均失败关闭。流程状态跨 API 进程可读取且原子消费；不能因负载均衡到另一进程而失效或重复换码。
+- [ ] AC-007：桌面系统浏览器不拥有 Electron 登录 Cookie 时，回调仍可通过有效 state/PKCE 完成后端换码并暂存结果；回调只暂存，不凭回调请求直接新增或改写账户。结果只能由发起流程的已认证应用领取和确认保存，不因 callback 路由无 Cookie 而放开整个 API 鉴权。
+- [ ] AC-008：后端调用 Google token 端点交换 code，并使用 Gmail users.getProfile 核实实际授权邮箱；新增使用服务商返回的真实地址，重复邮箱返回明确冲突且不覆盖既有账户。编辑已有 Gmail API 账号时只能重新授权同一邮箱，不因 login_hint 或用户手填地址而接受另一账号，也不把 IMAP 账户直接切为 Gmail API。
+- [ ] AC-009：成功回调在网页和 Electron 显示可恢复的授权成功状态，返回添加/编辑表单并保留所属分组与非敏感草稿；只有最终“添加/保存修改”才原子保存账户与加密凭据并使一次性授权结果失效。授权后取消表单不留下新账号或更换旧凭据；刷新/重复保存不产生重复账户。
+- [ ] AC-010：令牌、Client Secret 和 code_verifier 不返回前端、不进入 URL/浏览器持久存储、postMessage 或日志；状态 API 只返回流程状态、已核实邮箱等白名单字段。回调含 code/state 的查询字符串不写访问日志；处理后清理地址并使用 no-store、no-referrer，页面不加载第三方资源，固定返回地址防止开放重定向。
+- [ ] AC-011：用户拒绝、关闭授权窗口、弹窗被拦截、过期、网络错误、redirect_uri_mismatch、invalid_client、缺少权限或离线凭据时均展示脱敏可操作错误，可取消和重新发起；失败不覆盖已有账户、原凭据或其他尚有效流程。重新授权返回未带 Refresh Token 时仅允许对已确认相同客户端及邮箱保留旧有效 Refresh Token。
+- [ ] AC-012：重新授权保存后后续同步使用新凭据；令牌缓存与原凭据按有效组合更新，保存、编辑、后台刷新并发时不会用旧快照覆盖新 Refresh Token。多个账户或多个同时授权流程相互隔离，不能把 A 的凭据保存到 B。
+- [ ] AC-013：Google 帮助弹窗在新增和编辑均可打开，说明 Gmail IMAP 应用密码步骤、OAuth Web/桌面客户端区别、实际回调 URI 注册、Gmail API/同意屏幕/测试用户配置、测试模式常见 7 天有效期和组织策略；提供官方链接，明确个人部署也需自有应用配置，授权按钮本身不会代办注册或应用验证。
 
-### Round 3 (2026-10-24T18:45:00+08:00)
+### 可测试性声明
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t054_code_f010|important|已修|所有 OAuth 保存先锁 sidebar，再锁账户/流程/指针；新增与重新授权并发回归|`src/mail_core/mail/application/accounts.py`|
-|t054_test_f005|important|已修|补齐 Event 和 ThreadPoolExecutor 导入并实际执行 PG 回归|`tests/mail_core/test_google_oauth_callback.py`|
-|t054_test_f006|important|已修|并发两事务均须成功，检查账户分组和新凭据，任何异常均失败|`tests/mail_core/test_google_oauth_callback.py`|
+<!-- 规范（门禁必留，不得删除） -->
 
-### Round 4 (2026-10-24T18:50:00+08:00)
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-Round 4 零 finding，code/test 均 PASS。
+<!-- /规范 -->
 
-## 收尾报告
+- 全部 AC 可自动测试。生产授权请求、回调、身份核对和加密保存通过隔离假供应商与真实应用/DB验证；真实 Google/Microsoft 账号授权另作用户环境冒烟，未执行时必须明确说明，不把模拟成功报告为真实供应商已连通。
 
-### 验收与验证
+## 上下文区
 
-- spec：[`spec.md`](spec.md)
-- 结果：AC-001 至 AC-013 全部满足。真实 Google 账号授权未执行，使用真实应用/API/PG 与隔离供应商 HTTP 验证。
-- 测试：最终定向后端（OAuth、凭据、账户及分组，含独立 Electron）66 passed；此前完整后端 532 passed / 1 显式 Electron 模式 skipped；前端 41 文件 293 passed；TypeScript/build/lint/OpenAPI/CSS token 核验通过；桌面测试及 packaged PG 冒烟通过；模板契约 149 passed / 1 skipped。
-- 黑盒：UI E2E 16 passed；最终真实全栈 E2E 8 passed。首轮与 UI E2E 共用产物目录导致 trace ENOENT，串行重跑闭环。Electron 使用生产 SPA、外链处理器、真实 API/隔离 PG、供应商 HTTP 夹具，覆盖动态端口、无 Cookie 回调、焦点恢复及最终保存。
-- review：Round 4 code/test 均 PASS，0 未解决 finding；最终指纹 `82374890bf0a9881`。独立重算一致。
-- 流程：沿用用户“直接 main，模仿 task-run”授权；不创建虚假 worktree/attempt，front matter 仍 backlog，未调用要求登记 worktree 的 finish/cleanup。t053 执行 commit `4ef9bf7` 作为本 task diff anchor。preflight --allow-backlog --require-verified PASS，仅脏工作区警告。
-- 依赖评估：复用现有 stdlib OAuth HTTP、CredentialStore 与 SQLAlchemy 事务边界，避免额外 OAuth SDK 引入第二套秘密缓存/会话状态；PKCE、一次性消费、身份核验与并发均直接测试生产逻辑。
+- 来源：用户本轮要求“需要添加谷歌oauth跳转登录回调”，核实日期 `2026-10-24`；复用 t053 供应商表单与帮助。
+- 官方：[Google Web 授权码与 offline access](https://developers.google.com/identity/protocols/oauth2/web-server)、[Desktop PKCE 与 loopback](https://developers.google.com/identity/protocols/oauth2/native-app)、[Gmail profile 邮箱](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users/getProfile)、[scope](https://developers.google.com/workspace/gmail/api/auth/scopes)、[令牌期限与测试模式](https://developers.google.com/identity/protocols/oauth2/)。
+- 代码：`src/mail_core/providers/oauth.py` 仅提供 Refresh Token grant；`src/mail_core/api/deps.py`/`security/auth.py` 为会话与 CSRF 边界；`src/desktop/main.js` 已拦截外链并用系统浏览器，`startup.js` 支持动态本地端口。当前 requirements 无现成 OAuth 专用库，实现前评估成熟库与现有依赖，避免自行重造协议安全细节。
 
-|AC|实际证据|
-|---|---|
-|AC-001|`settings_account_form.tsx`、组件与浏览器新增/重新授权保存测试|
-|AC-002|metadata/start 配置校验、命名字段/复制组件测试、Compose 配置解析|
-|AC-003|受信 Origin/动态端口后端测试、真实 Electron 与部署指南|
-|AC-004|授权请求 PKCE/scope/offline 参数及缺权限/Refresh Token 拒绝测试|
-|AC-005|会话隔离、epoch、CSRF、过期/取消与最终保存拒绝测试|
-|AC-006|同 state 并发、跨流程同 code 竞争及重放真实 PG 回归|
-|AC-007|独立 Electron 外部无 Cookie HTTP 回调，账户最终确认保存|
-|AC-008|真实 token/profile HTTP 传输、重复邮箱/异邮箱/IMAP 切换拒绝测试|
-|AC-009|active 草稿与分组恢复、浏览器返回恢复、最终 POST/PATCH 与取消|
-|AC-010|白名单状态、日志/浏览器存储脱敏与 callback CSP/no-store/no-referrer|
-|AC-011|urllib 错误、异常 JSON、拒绝/过期、弹窗拦截、取消后重发|
-|AC-012|后台轮换保留、公共 Secret 清理、有效期清理、三类并发 PG 回归|
-|AC-013|新增/编辑帮助弹窗及官方步骤说明组件/浏览器测试|
+### 有意不测
 
-### 结果摘要
+- 外部账号登录、短信/2FA、同意屏幕审核及真实 Google 账号授权成功：依赖用户应用配置和第三方状态，不使用个人账号执行自动回归；需要另行记录真实环境结果。
 
-- Google OAuth 授权码、PKCE、身份核验、短期加密状态、跨进程原子消费与最终确认保存；保留 IMAP 与已有命名凭据。
-- 标准 Compose 可信 Origin 配置、Web/桌面回调区别、部署说明与生成接口契约。
-- 未创建外部 OAuth 应用，未执行真实第三方账号授权、部署或 push。
+### 测试策略
 
-## 直接 main 执行归档补记（2026-10-25T02:00:57+08:00）
+- 先红后绿覆盖真实 API/DB、假供应商 HTTP 端点及生产 code exchange/getProfile/save 路径；验证 state/PKCE、原子消费、多进程、取消、session_epoch 变化、身份不符、重复邮箱、缺 Refresh Token、令牌轮换和事务回滚。
+- 浏览器黑盒跑 OAuth 新增和重新授权、Google IMAP 帮助及移动端；桌面用独立实例确认系统浏览器无应用 Cookie 仍可回调、动态端口和焦点恢复，不以 BrowserWindow 参数单测代替桌面流程证据。
+- 按 blueprint testing 门禁运行后端、前端、涉及桌面测试和黑盒；接口从源导出 OpenAPI，新增 DB 模型须附 Alembic 迁移。
 
-- 用户本轮明确要求已完成任务归档。本次将状态由 backlog 修正为 done 并迁入 archive；正文此前“保留 backlog”均为执行时流程限制记录，由本节更新。
-- 实际执行分支：main；执行 commit：`e1dee2549e35486fbb36172579bf0d6564f2dedc`；diff anchor：`4ef9bf7ada1aaa9b67ea67dfccc1dfcd9b98d10a`。
-- 已在执行 commit 快照重算并核实 code/test 最终 PASS，历史 reviewed_scope：`82374890bf0a9881`；spec 与 Review 原件保持不变。
-- 本任务直接在 main 完成，未创建登记 worktree/attempt，不补造 execution_id、handoff 或 dispatch ledger。此为用户授权的一次性文档状态维护，不宣称正常 worktree lifecycle 已执行。
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无未核实外部协议。官方已确认 Web/桌面授权码、PKCE、offline access 和 loopback 支持。真实环境的用户 Client ID/Secret、发布 origin、供应商应用登记和测试用户名单由操作者提供；缺失时功能显示配置指引，不能捏造默认凭据或冒充完成真实授权。
+
+### 风险与回退
+
+- 风险：登录 CSRF、code/state 重放、未认证桌面回调绑定错误、开放重定向、跨邮箱覆盖、短期秘密泄漏和令牌轮换丢失。
+- 回退：禁用 Google 跳转入口并保留既有加密凭据与 Google IMAP；回退执行提交，数据库迁移按可回退方案处理，不清除既有邮件/账户。
+
+### 依赖与约束
+
+- 硬依赖 t053；t055 依赖本 task 的已实现授权流程，无须另建空泛基础设施 task。
+- 网页后端为机密客户端，桌面为公共客户端；仅在受信本地 loopback 回调上容许 HTTP，不影响远端 IMAP 私网/证书防护。
+- 短期流程最小化保存，过期可清理；新 DB 模型带迁移，秘密使用现有加密边界，用户自有客户端配置不入库到 Git。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：Google 授权码、短期流程与账户最终保存边界、网页/桌面回调。
+- `docs/blueprint/conventions.md`：state/PKCE、会话绑定、令牌不回显与帮助弹窗。
+- `docs/blueprint/testing.md`：OAuth 假供应商、重放/跨会话测试和桌面真实交互门禁。

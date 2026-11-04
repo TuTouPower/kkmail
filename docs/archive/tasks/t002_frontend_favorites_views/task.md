@@ -1,53 +1,77 @@
----
-tid: "t002"
-slug: "frontend_favorites_views"
-title: "重构个人收藏为收件箱未读与已发三折叠树"
-status: "done"
-branch: "t002_frontend_favorites_views"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "20819f0569606224f2e519c14c2f221bae4e2e4e"
-depends_on: "t001"
-conflicts_with: ""
-note: ""
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+用户需要在侧边栏「个人收藏」中通过折叠树快速浏览「所有收件箱」、「所有未读」和「所有已发邮件」，并支持按账号查看对应分类，同时在收件箱父子项上直观掌握未读数量。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- `src/frontend/src/store/mailStore.ts`：更新视图与过滤状态模型，支持收藏夹下的三类视图（收件箱、未读、已发）及其全局/单账号维度。
+- `src/frontend/src/components/Sidebar.tsx`：将「个人收藏」重构为三个顶级可折叠项（所有收件箱、所有未读、所有已发邮件）；展开后列出各个账号；在「所有收件箱」及其展开的账号项右侧显示未读数角标；「所有未读」与「所有已发邮件」及其账号子项不显示角标。
+- `src/frontend/src/components/MessageList.tsx` 与 API 调用：根据选中的视图类别与账号，向后端请求对应 `folder_role`（收件箱传 `inbox`，已发送传 `sent`，未读传 `inbox` + `is_read=false`）。
+- 编写并更新对应的前端组件单测（`Sidebar.test.tsx`, `MessageList.test.tsx`, `mailStore.test.ts`）。
 
-1. `mailStore.ts`：扩展 `FavoriteCategory` 与 `ViewState`（支持 `category: inbox | unread | sent` 及其账号维度），`setView` 保留重置行为。
-2. `Sidebar.tsx`：重构个人收藏为「所有收件箱」、「所有未读」、「所有已发邮件」三折叠树，各自独立展开折叠；收件箱父子项展示未读数角标，未读与已发不展示角标；点击父项与子项切换对应分类视图。
-3. `MessageList.tsx` 与 API：根据视图分类向 `/api/mail/inbox` 传入对应 `folder_role`（收件箱 `inbox`，已发 `sent`，未读 `inbox`+`is_read=false`）。
-4. 测试覆盖：更新 `Sidebar.test.tsx`、`MessageList.test.tsx`、`mailStore.test.ts`，并通过端到端冒烟测试。
+### 非范围
 
-## Review 处置
+- 后端接口实现（由前置任务 t001 提供）。
+- 发信功能（不在产品范围）。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-22T05:07:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零 finding。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [x] AC-001：侧边栏「个人收藏」展示「所有收件箱」、「所有未读」、「所有已发邮件」三个顶级条目，且每个条目均可独立折叠与展开。
+- [x] AC-002：「所有收件箱」展开后展示所有账号列表；父项右侧显示总未读数，每个账号右侧显示该账号各自的未读数（未读数为 0 则不显示）。
+- [x] AC-003：「所有未读」与「所有已发邮件」展开后展示账号列表，其父项及所有子账号项右侧均不显示任何数字角标。
+- [x] AC-004：点击顶级条目切换为对应全账号视图；点击展开后的某个账号子项，切换为该账号对应的具体分类邮件列表。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：`npm test && npx tsc -b && npm run build` (117 unit tests passed)、`(cd src/desktop && npm test)`、`pytest .repo_template/tests -q -m contract` (149 passed) 全绿。
-- 黑盒：`npm --prefix src/frontend run test:e2e` (2 passed)。
-- review：`review_general.md` verdict: PASS (Round 1)。
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-- 个人收藏成功重构为收件箱、未读、已发三折叠树，未读角标精准呈现，列表按分类请求对应 folder_role 与过滤条件。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：无
+
+### 有意不测
+
+- 无
+
+### 测试策略
+
+- 使用 vitest 配合 React Testing Library 验证 Sidebar 渲染、折叠展开行为、角标展示规则及点击切换视图状态；验证 MessageList 发起的 API 请求参数。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无
+
+### 风险与回退
+
+- 风险：折叠状态在本地持久化时与旧版分组配置冲突。
+- 回退：使用独立的状态字段管理收藏夹折叠状态。
+
+### 依赖与约束
+
+- 依赖 t001（后端需支持 `folder_role=sent` 查询）。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：记录前端侧边栏收藏夹导航模型与视图路由结构。

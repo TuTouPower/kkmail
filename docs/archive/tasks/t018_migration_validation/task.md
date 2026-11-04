@@ -1,69 +1,80 @@
----
-tid: "t018"
-slug: "migration_validation"
-title: "验证空库与旧数据升级及数据库结构一致性"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "de6f9b4c5b9e97cdf84af862060f74e8f08347e5"
-depends_on: "t013"
-conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 4ea0a6f1"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+现有 schema 测试主要检查表存在并插入数据，run-mail-core-tests.sh 只 upgrade head。缺少旧版本真实数据升级、关键索引约束和 ORM/schema drift 验证，不能证明升级保留邮件、凭据和 Blob 引用。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- src/mail_core/db/alembic 相关验证、tests/mail_core 迁移测试与独立入口；不修改历史迁移来适配测试，除非有直接失败证据且明确迁移修复边界。
+- 从空库和明确登记的升级窗口旧 revision 创建数据后升级当前 head；覆盖认证状态、凭据、附件/Blob 引用、FTS 及调度/分页关键索引。
+- 加入单 head、schema drift 以及可回退边界校验，升级验证不经 ORM create_all 绕过生产迁移。
 
-2026-10-22 核实生产迁移链共 15 个文件，test_schema_pg 仅 REQUIRED 表与基础插入；创建阶段不执行数据库迁移。
+### 非范围
 
-### 2026-10-22 主分支执行
+- 不重写迁移历史、不触碰生产库，不要求不可逆数据变换能够无损 downgrade。
+- 不把仅 alembic check 通过当作索引、触发器、FTS 或数据语义完整证明。
 
-- 用户明确要求直接在 main 分支按顺序执行 t013–t023，每完成一个 task 独立 commit。
-- 新增 `tests/mail_core/test_migration_validation.py`：
-    - AC-001：断言 15 个迁移版本线性单 head，无多分支与孤立 revision；
-    - AC-002：降级到三个实际历史窗口（`f5f312751c77` unified schema、`20261021_0011` 认证入库前、`20261022_0014` 最近版本前一版），使用当时合法 SQL 写入邮件、附件、凭证与重试任务，升级至当前 head 后逐项断言邮件正文、附件 backfilled `part_id`、登录哈希与 session_epoch 完整保留；
-    - AC-003：真实 PostgreSQL 关系约束生效，插入重复 `(account_id, remote_id)` 或非法外键抛出 IntegrityError；MessageBlob 受 links 引用 RESTRICT 阻止删除；验证 FTS 全文搜索表与 keyset 排序索引；
-    - AC-004：利用 `compare_metadata` 校验 SQLAlchemy ORM 与真实 PG catalog 0 结构差异；显式绑定 TSVECTOR 计算列与 GIN 专属索引；负向测试在内存模型增加未迁移列时准确检出 drift；
-    - AC-005：对当前 head (`20261022_0015`) 执行 `downgrade -1` 与重新 `upgrade head` 对称循环，验证可逆性与 DDL 正确性。
-- 修复 URL 转义：在动态加载 Alembic ConfigParser 时对密码中的 `%` 双写为 `%%`，防止 BasicInterpolation 语法错误。
-- 门禁通过：5 项测试全通过 (6.24s)。
+### 验收标准
 
-## Review 处置
+<!-- 规范（门禁必留，不得删除） -->
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- 已修：历史 SQL 字段对齐（`message_locations.id`, `remote_operations.entity_key`, `auth_credentials.login_password_hash`）；
-- 已修：ORM drift 比较逻辑中对 PostgreSQL generated tsvector 及 GIN 索引进行显式 catalog 校验；
-- 双人审查（code + test）结论均 PASS。
+<!-- /规范 -->
 
-## 收尾报告
+- [x] AC-001：空测试库仅通过生产 Alembic 命令到达唯一 head，生产模型/API 可读写；人为制造分叉或遗漏迁移时验证失败。
+- [x] AC-002：至少覆盖 unified schema、认证入库前和最近一个版本这三个实际存在的旧 revision 窗口；旧 revision 用当时合法 SQL 预置数据，升级后逐项核验邮件身份/内容、已有凭据、会话状态和附件引用，无无故丢失或重复。
+- [x] AC-003：关键唯一约束、外键、索引、FTS 查询及任务去重在真实 PG 生效；插入非法关联/重复实体被拒绝，搜索和 keyset 查询保留既有正确语义。
+- [x] AC-004：ORM 对可检测结构无未登记 drift；故意增加未迁移的列或删除关键索引时检查非零。数据库专属对象以显式 catalog/行为断言验证，不用 blanket ignore 消除差异。
+- [x] AC-005：升级前快照在另一个测试库可恢复；声明可逆的最近迁移可降级再升级，声明不可逆的迁移记录准确边界并用备份恢复验证回退，原始库不被覆盖。
 
-### 验收与验证
+### 可测试性声明
 
-- spec：[`spec.md`](spec.md)
-- 结果：数据库迁移验证与结构完整性门禁建立完成，全行为 AC 均满足。
-- 测试：`scripts/run-mail-core-tests.sh run -k test_migration_validation` 5 passed。
-- 黑盒：多版本数据跨版本平滑升级保留、约束阻断非法操作、降级再升级结构恢复验证。
-- review：`review_code.md` PASS，`review_test.md` PASS。
-- AC 证据：`test_migration_validation.py` 实测输出。
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-建立了完整的数据库迁移与结构一致性测试，涵盖单链单 head 校验、三版本历史数据跨版本升级无损保留、PostgreSQL 完整性约束与级联、ORM catalog drift 零差异检测以及可逆降级升级闭环。
+<!-- /规范 -->
 
-## 状态勘误（2026-10-27，A52）
+全部 AC 可自动测试；执行阶段必须给出真实运行证据，外部环境不可用不得替代为模拟通过。
 
-- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
-- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
-- commit 锚点：实现提交 `4ea0a6f17fb5dce8de4c15d869eaf879705ddcbb`；diff_anchor 补记为该实现提交的父提交 `de6f9b4c5b9e97cdf84af862060f74e8f08347e5`；本批归档提交 `161a6e10`。
-- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
+## 上下文区
+
+- 来源：无外部条目；本会话测试评估、固定容器方案与用户批准（2026-10-22）。2026-10-22 核实生产迁移链共 15 个文件，test_schema_pg 仅 REQUIRED 表与基础插入；创建阶段不执行数据库迁移。
+
+### 有意不测
+
+- 不自动测试所有历史 revision 的任意两两升级组合；覆盖明确登记的支持窗口与最近迁移边界。
+
+### 测试策略
+
+- revision 从生产迁移链读取并登记实际测试窗口，以旧版 SQL/夹具写旧 schema，不能用当前 ORM 凭空构建旧库。
+- alembic check 补充 catalog、真实违反约束与查询测试；新迁移进入当前 head 后同一门禁继续生效。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无尚未裁定的外部产品契约；执行环境、工具可用性与权限按实施入口核对，缺少前提须失败并报告，不能用 skip 代替本 task 验收。
+
+### 风险与回退
+
+- 风险：旧 schema 种子使用新模型误判、降级丢失业务数据、自动比较误删 PG 专属对象。所有操作只在本轮独立库，退路通过实际备份恢复证明。
+- 回退：回退本 task 单一执行 commit 恢复原入口与测试；仅回收本轮拥有测试资源，保留用户数据、其他 task 改动和失败证据。不更改生产 schema 或数据，迁移验证仅对一次性测试库操作。
+
+### 依赖与约束
+
+- 硬依赖 t013：复用其已交付的建立可复用 PostgreSQL 测试容器与每轮独立测试库。
+- 本批 task 与 t012 的 finalization 都更新 docs/blueprint/testing.md，已登记 conflicts_with，建议串行交付；冲突不冒充硬依赖，不修改旧 task 和 active worktree。
+- 只按本 spec 修改生产代码/测试/脚本；发现超出范围产品缺陷按既有 bug-to-pending 流程记录，不放宽断言或静默扩大修复。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/testing.md`：迁移验证入口、旧 revision 窗口、结构差异和回退检查。

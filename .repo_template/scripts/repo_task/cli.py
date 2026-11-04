@@ -9,13 +9,17 @@ from .control import (
     cmd_attempt_report,
     cmd_attempt_reserve,
     cmd_attempt_terminal,
+    cmd_attempt_claim,
     cmd_effective_status,
     cmd_ledger_tail,
     cmd_ps,
+    cmd_run_begin,
+    cmd_run_close,
     cmd_view,
 )
 from .goal import cmd_goal, cmd_goal_check
-from .recovery import cmd_recovery
+from .recovery import cmd_recovery, cmd_ledger_import
+from .graph import cmd_merge_backlog, cmd_graph_transaction
 from .plan import cmd_plan
 from .integration import cmd_cleanup_worktree, cmd_integrate, cmd_integrate_chain, cmd_start
 from .lifecycle import (
@@ -23,47 +27,25 @@ from .lifecycle import (
     cmd_drop,
     cmd_edit,
     cmd_finish,
+    cmd_finish_unwind,
     cmd_list,
     cmd_preflight,
     cmd_purge,
     cmd_rewind,
     cmd_limits,
     cmd_show,
+    cmd_review_upgrade,
 )
 
 
-def _validate_port(raw: str) -> int:
-    """A222: argparse type for `view --port`; reject out-of-range values at
-    parse time instead of letting serve() die with OverflowError."""
-    try:
-        port = int(raw)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"端口必须是整数（收到 {raw!r}）") from None
-    if not 0 <= port <= 65535:
-        raise argparse.ArgumentTypeError(f"端口必须在 0-65535 之间（收到 {port}）")
-    return port
-
-
-def _validate_positive_count(raw: str) -> int:
-    """A189: argparse type for `ledger tail -n`; n<=0 previously sliced
-    the full ledger (n=0) or a misaligned forward slice (n<0)."""
-    try:
-        count = int(raw)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"-n 必须是整数（收到 {raw!r}）") from None
-    if count <= 0:
-        raise argparse.ArgumentTypeError(f"-n 必须为正整数（收到 {count}）")
-    return count
-
-
 def _add_identity(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--attempt", type=int, required=True)
-    parser.add_argument("--execution-id", required=True)
+    parser.add_argument("--attempt", type=int, help="省略时自动解析；仅 recovery 指定 exact identity 时提供")
+    parser.add_argument("--execution-id", help="与 --attempt 同时提供或同时省略")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="task 状态入口（状态权威 = task.md；执行权威 = exact attempt identity）"
+        description=f"task 状态入口（状态权威 = {ctx.PROGRESS_FILE}；执行权威 = exact attempt identity）"
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
     recovery = sub.add_parser("recovery", help="只读判定 start/finish/commit/attempt 中断阶段（JSON）")
@@ -91,6 +73,21 @@ def main():
     edit.add_argument("--conflicts-remove")
     edit.set_defaults(func=cmd_edit)
 
+    merge_backlog = sub.add_parser("merge-backlog", help="原子合并 backlog 图并归档来源；保留硬依赖并拒绝环")
+    merge_backlog.add_argument("tid", help="保留或新建的目标 tid")
+    merge_backlog.add_argument("--sources", required=True, help="逗号分隔来源 tid")
+    merge_backlog.set_defaults(func=cmd_merge_backlog)
+
+    graph_recover = sub.add_parser("graph-transaction", help="查询或恢复中断的 backlog 图事务")
+    graph_recover.add_argument("action", choices=("status", "rollback"))
+    graph_recover.add_argument("--confirm-restore", action="store_true")
+    graph_recover.set_defaults(func=cmd_graph_transaction)
+
+    upgrade = sub.add_parser("review-upgrade", help="在自身 worktree 将 active single 单调升级为 full")
+    upgrade.add_argument("tid")
+    upgrade.add_argument("--reason", required=True)
+    upgrade.set_defaults(func=cmd_review_upgrade)
+
     start = sub.add_parser("start", help="backlog -> active：创建 task branch/worktree")
     start.add_argument("tid")
     start.add_argument("--base", help="可选上一已完成 task 分支")
@@ -102,6 +99,7 @@ def main():
     preflight.add_argument("--creation", action="store_true", help="只验 backlog 创建有效性；已分类 BLOCKING 不阻断创建")
     preflight.add_argument("--ref")
     preflight.add_argument("--require-verified", action="store_true")
+    preflight.add_argument("--owner-id", help="当前会话执行权，须与 ledger claim 一致")
     preflight.set_defaults(func=cmd_preflight)
 
     limits = sub.add_parser("limits", help="增加 active task 的 review/verify 绝对上限")
@@ -111,8 +109,13 @@ def main():
     limits.add_argument("--reason", required=True)
     limits.set_defaults(func=cmd_limits)
 
-    finish = sub.add_parser("finish", help="active -> done")
+    finish = sub.add_parser(
+        "finish",
+        help="active -> done：严格校验后原位写 done、生成 handoff.json 并提交实现 commit（归档由 integrate 完成）；提交失败整体回滚",
+    )
     finish.add_argument("tid")
+    finish.add_argument("--owner-id", required=True, help="当前会话执行权，须与 ledger claim 一致")
+    finish.add_argument("--message-file", required=True, help="实现 commit message 文件（仓外或 .scratch/）")
     finish.set_defaults(func=cmd_finish)
 
     drop = sub.add_parser("drop", help="活跃状态 -> dropped")
@@ -126,6 +129,15 @@ def main():
     rewind.add_argument("--yes", action="store_true")
     rewind.add_argument("--reason", required=True)
     rewind.set_defaults(func=cmd_rewind)
+
+    unwind = sub.add_parser(
+        "finish-unwind",
+        help="撤销与 review 内容不一致的实现 commit，回到 active（仅 recovery review_mismatch 现场）",
+    )
+    unwind.add_argument("tid")
+    unwind.add_argument("--reason", required=True)
+    _add_identity(unwind)
+    unwind.set_defaults(func=cmd_finish_unwind)
 
     purge = sub.add_parser("purge", help="删除误建 backlog task")
     purge.add_argument("tid")
@@ -151,7 +163,7 @@ def main():
     view = sub.add_parser("view", help="task 调度全景")
     view.add_argument("--serve", action="store_true", help="启动本地只读看板服务并打开浏览器")
     view.add_argument("--host", default="127.0.0.1")
-    view.add_argument("--port", type=_validate_port, default=0)
+    view.add_argument("--port", type=int, default=0)
     view.add_argument("--allow-non-loopback", action="store_true",
                       help="允许绑定非 loopback 主机（默认拒绝，防暴露 task 文档）")
     view.set_defaults(func=cmd_view)
@@ -168,7 +180,15 @@ def main():
     plan.add_argument(
         "--serial",
         action="store_true",
-        help="全串行一条链（依赖序 + 冲突对序号小者先）",
+        help=(
+            "全串行队列（依赖序 + 冲突对序号小者先）；按队列内 depends_on / conflicts_with "
+            "分链，输出每个成员的 chain 与 base"
+        ),
+    )
+    plan.add_argument(
+        "tids",
+        nargs="*",
+        help="显式 tid 队列（须配合 --serial；保持给定顺序，依赖须排在依赖者之前）",
     )
     plan.add_argument(
         "--copy",
@@ -182,14 +202,45 @@ def main():
     )
     plan.set_defaults(func=cmd_plan)
 
-    attempt = sub.add_parser("attempt", help="统一 exact attempt 生命周期")
+    run_begin = sub.add_parser(
+        "run-begin",
+        help="start → reserve → claim 一次完成，输出 JSON identity（已有现场时拒绝并提示 recovery）",
+    )
+    run_begin.add_argument("tid")
+    run_begin.add_argument("--owner-id", required=True, help="当前会话唯一标识，写入 ledger claim")
+    run_begin.add_argument("--base", help="可选上一已完成 task 分支")
+    run_begin.set_defaults(func=cmd_run_begin)
+
+    run_close = sub.add_parser(
+        "run-close",
+        help="按结果写 terminal + report（done 另 exact cleanup）；重入安全",
+    )
+    run_close.add_argument("tid")
+    run_close.add_argument("--owner-id", required=True, help="须与 ledger claim 一致")
+    run_close.add_argument("--result", required=True, choices=("done", "blocked", "failed"))
+    run_close.add_argument("--class", dest="fail_class", choices=ctx.LEDGER_FAIL_CLASSES,
+                           help="仅 --result failed")
+    run_close.add_argument("--reason", help="blocked/failed 的原因，写入 report")
+    run_close.set_defaults(func=cmd_run_close)
+
+    attempt = sub.add_parser(
+        "attempt",
+        help="exact attempt 低层原语（恢复用；主路径用 run-begin / run-close）",
+    )
     attempt_sub = attempt.add_subparsers(dest="attempt_cmd", required=True)
 
     reserve = attempt_sub.add_parser("reserve", help="原子分配 attempt/execution_id")
     reserve.add_argument("tid")
-    reserve.add_argument("--executor", required=True, choices=ctx.ATTEMPT_EXECUTORS)
     reserve.add_argument("--model")
     reserve.set_defaults(func=cmd_attempt_reserve)
+
+    claim = attempt_sub.add_parser("claim", help="原子领取执行权；接管须确认原会话已停止")
+    claim.add_argument("tid")
+    _add_identity(claim)
+    claim.add_argument("--owner-id", required=True)
+    claim.add_argument("--replace-owner")
+    claim.add_argument("--confirm-stopped", action="store_true")
+    claim.set_defaults(func=cmd_attempt_claim)
 
     terminal = attempt_sub.add_parser("terminal", help="标记 exact attempt 宿主终态")
     terminal.add_argument("tid")
@@ -206,7 +257,7 @@ def main():
     report.add_argument("--reason")
     report.set_defaults(func=cmd_attempt_report)
 
-    cleanup = sub.add_parser("cleanup-worktree", help="清理 exact terminal attempt worktree")
+    cleanup = sub.add_parser("cleanup-worktree", help="清理 exact terminal attempt worktree（恢复用；主路径由 run-close 完成）")
     cleanup.add_argument("tid")
     _add_identity(cleanup)
     cleanup.set_defaults(func=cmd_cleanup_worktree)
@@ -239,7 +290,7 @@ def main():
     goal.add_argument(
         "--reset",
         action="store_true",
-        help="按 backlog ∪ active 升序重建默认队列并直接覆盖已有快照（免确认）",
+        help="按依赖拓扑重建 backlog ∪ active 默认队列并覆盖已有快照",
     )
     goal.add_argument(
         "--yes",
@@ -255,8 +306,13 @@ def main():
     ledger_sub = ledger.add_subparsers(dest="ledger_cmd", required=True)
     tail = ledger_sub.add_parser("tail", help="倒序读取账本")
     tail.add_argument("--tid")
-    tail.add_argument("-n", type=_validate_positive_count, default=20)
+    tail.add_argument("-n", type=int, default=20)
     tail.set_defaults(func=cmd_ledger_tail)
+
+    restore = ledger_sub.add_parser("import", help="从严格验证的 done 分支/handoff 重建遗失 ledger")
+    restore.add_argument("tid")
+    restore.add_argument("--confirm-stopped", action="store_true")
+    restore.set_defaults(func=cmd_ledger_import)
 
     args = parser.parse_args()
     try:

@@ -1,74 +1,82 @@
----
-tid: "t014"
-slug: "backend_test_isolation"
-title: "隔离后端测试状态并建立确定性数据夹具"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "07d178cbe369e52681a3b6533bb8164741112579"
-depends_on: "t013"
-conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 87d7cfcc"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-按用户要求直接在 main 实施，不调用 task.py、不建 worktree、不写 attempt。front matter 保留工具链原值，本次执行结果以正文、review 报告及 Git commit 为准。
+现有共享 fixture 主要重置鉴权；多项业务测试真实 commit 后留下账号、任务、Outbox 和全局状态。随机 UUID 无法避免全局统计、后台任务或执行顺序污染；外层事务回滚不能覆盖多连接、线程与 Worker 的提交语义。
 
-## 实施笔记
+## 契约区
 
-- 基线 `8f93e8e`。先加真实提交哨兵：第二用例读到第一用例 Account，测试明确失败；修复后通过。
-- 全部用例采用最小一致策略：在独占本轮数据库内清理业务表，保留 Alembic 状态；不包裹外层 rollback，不改变生产 autoflush=False、commit、锁和 NOTIFY 语义。
-- Worker/LISTEN 先停止并 join，再关闭实际 checkout Connection、Session 与 Engine，恢复 credential store、provider、dispatcher、鉴权/登录限流/schema cache、SSE 计数。setup/teardown 清理失败均停止套件；子 pytest 验证后续测试体不执行。
-- 双连接哨兵保持 A 占用，同时申请 B，比对两个 pg_backend_pid，并验证 B 可见真实 commit。正常与断言失败路径均检查 Worker/LISTEN 停止、裸 Connection.closed 和旧 PG PID 消失。
-- factory 包含多账号、空目录、中文 multipart MIME、跨账号重复 Message-ID、相同排序时间、真实加密 MIME/附件 Blob；生产 keyset 查询校验所有邮件无重无漏。
-- 混合文件改逐项 PG 标记，释放此前被整文件跳过的纯单元用例，包含 SSE 连接上限测试。保留既有断言；SSE 派发仅补真实 subscriber，gap hint 仅补独立事件种子，不依赖前序自增值。
-- 新增直接 psycopg LISTEN：commit 前无通知、commit 后收到生产 NOTIFY。独立子进程临时禁用 NOTIFY 后对应测试确实失败并返回 1，未将变异写入实现。
-- `KKMAIL_TEST_SEED` 控制独立随机序列并输出重放入口；行/分支覆盖限定生产 mail_core。coverage 数据、XML/JSON、JUnit 和执行/跳过/未执行汇总均写本轮目录。
+### 范围
 
-## Review 处置
+- tests/mail_core 共享 fixture、数据库测试分类、受影响既有测试及测试依赖配置；沿用生产 schema 和 autoflush=False。
+- 为普通单连接与必须真实提交的 API/并发/SSE 测试建立最小隔离策略，重置凭据 store、provider 替换、缓存、dispatcher、线程和连接。
+- 提供可复用人工数据 factory：多账号、空目录、中文/MIME、相同排序时间、重复 Message-ID、附件/Blob 和分页数据；输出生产后端模块覆盖报告及未执行清单。
 
-- 已修 important：入口清理失败不能只报单例 ERROR；现设置 session.shouldstop 并记录失败，回归验证 exit 2 与后续用例不执行。
-- 已补：双物理连接、checkout 连接关闭、真实 Worker 失败后停止和 API lifespan 收尾证据。
-- 已补 important 测试缺口：旧 listener 测试有 idle polling 兜底；新增无轮询的 PG 通知测试，并实际验证禁用 NOTIFY 会失败。
-- 独立代码审查见 `review_code.md`；独立测试审查见 `review_test.md`。无未解决 important/critical；最终两轮、资源回收及报告范围已由主会话核实。
+### 非范围
 
-## 收尾报告
+- 不将数据库写入全部改为 Mock，不强行用一层 rollback 覆盖跨连接提交。
+- 不改变现有产品预期来迎合测试；p016 已转办 t012；写回调度、意图保护与统计缺陷仍由 t012 处理，不在此暗中修生产逻辑。
 
-### 验收与验证
+### 验收标准
 
-- 结果：实现、独立 code/test review 与最终两轮验证完成。
-- 红后绿：跨用例 committed Account 污染先失败、隔离后通过。
-- 定向：14 passed；新增 NOTIFY 正向 1 passed，禁用 NOTIFY 的隔离变异按预期失败。
-- 快速：252 passed / 102 skipped；纯单元 SSE cap 无 PG 执行通过。
-- 乱序：最终 seed 41、17 均为 354 collected / 352 passed / 2 skipped，JUnit testcase 集合完全相同；无失败、错误或未执行项。两轮约 260/273 秒，报告包含各阶段耗时。
-- 资源：两轮数据库名不同，容器 ID、PG system identifier、postmaster start time 保持复用；结束后无测试库或 owner role 残留。
-- 覆盖：87 个生产模块文件，行/分支综合覆盖 78.63% / 78.66%；仅作为缺口观测，不设统一硬阈值。
-- 黑盒：真实 PG 双连接提交、锁竞争、LISTEN/NOTIFY、API lifespan 与 Worker 清理，未依赖业务数据库或真实邮箱。
-- 覆盖：生产模块行/分支 XML 和 JSON，已核验范围仅 src/mail_core/，不设统一百分比掩盖缺口。
+<!-- 规范（门禁必留，不得删除） -->
 
-### AC 证据
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-|AC|证据|
-|---|---|
-|AC-001|最终 seed 41、17 各 352 passed / 2 IMAP skipped；失败输出包含 seed 与 nodeid|
-|AC-002|账号、设置、鉴权、邮件、WorkerJob、Outbox 提交哨兵；每例起始空表|
-|AC-003|同时占用两连接且 PID 不同、既有 SKIP LOCKED/fencing、直接事务性 NOTIFY 与禁用通知负向验证|
-|AC-004|正常/AssertionError 后 Worker/LISTEN 停、checkout 连接关闭和 PG PID 消失，API lifespan 正常退出|
-|AC-005|确定 UUID、固定时间/MIME boundary、重复 Message-ID 跨账号、空目录、真实附件解密与生产分页|
-|AC-006|纯单元 PG 标记拆分、快速模式显式边界、JUnit/执行汇总和生产行/分支覆盖|
+<!-- /规范 -->
 
-### 结果摘要
+- [x] AC-001：完整数据库测试连续两轮运行均通过；在同一套件中对至少两种固定种子打乱的顺序运行仍得到相同断言结果，失败输出种子及 nodeid 可重放。
+- [x] AC-002：用例 A 创建并提交的账号、邮件、设置、鉴权、WorkerJob 和 Outbox 不进入下一用例 B 的可见初态；B 的全局统计与任务 claim 不消费 A 残留数据。
+- [x] AC-003：隔离策略覆盖两连接真实 commit、API lifespan 和 LISTEN/NOTIFY 测试；跨连接提交及锁竞争仍能被观察，事务回滚、锁或通知失效时对应测试必须失败。
+- [x] AC-004：测试正常结束和断言失败后，测试启动的 listener、Worker、engine/session、模块级 provider 和 credential store 均恢复；下一用例不继承替身或后台活动。
+- [x] AC-005：同一固定 seed 的 factory 创建相同预期语义数据，跨账号相同 Message-ID 不串数据，相同 sort_time 的分页断言不靠墙钟或随机碰撞成立。
+- [x] AC-006：快速单测与数据库套件分类明确，独立于 PG 的测试不因整文件 skip 被遗漏；运行报告列明实际收集、执行、跳过及原因，并生成只覆盖生产模块的行/分支报告，不用删测试、降低断言或统一覆盖率百分比掩盖缺口。
 
-未修改生产逻辑；修复测试状态泄漏及旧测试缺失前置。两项真实 IMAP 跳过属于 t016 尚未启动的专用协议服务，不能计为真实 IMAP 通过。
+### 可测试性声明
 
-## 状态勘误（2026-10-27，A52）
+<!-- 规范（门禁必留，不得删除） -->
 
-- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
-- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文开头「按用户要求直接在 main 实施，不调用 task.py、不建 worktree、不写 attempt」一致。
-- commit 锚点：实现提交 `87d7cfcca3f638c399f45266a9a299ad6edc62be`；diff_anchor 补记为该实现提交的父提交 `07d178cbe369e52681a3b6533bb8164741112579`；本批归档提交 `161a6e10`。
-- 正文实施笔记所记基线 `8f93e8e` 为历史重写前哈希，其同标题提交在现行历史中为 t013 实现提交 `07d178cbe369e52681a3b6533bb8164741112579`，即本 task 实现提交的父提交。
-- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试；执行阶段必须给出真实运行证据，外部环境不可用不得替代为模拟通过。
+
+## 上下文区
+
+- 来源：无外部条目；本会话测试评估、固定容器方案与用户批准（2026-10-22）。2026-10-22 共享 fixture 仅见鉴权清理且吞异常；test_schema_pg、test_sync_leases_jobs 等用例真实提交。基线无 DB 为 217 passed / 98 skipped，不等于覆盖率。
+
+### 有意不测
+
+- 不在第一版启用 pytest-xdist；先保证串行、重复与乱序隔离，多运行并发由独立数据库覆盖。
+
+### 测试策略
+
+- 保留并运行真实 skip_locked、fencing、stats、auth 与 outbox 集成测试，先加入能暴露残留污染的哨兵用例。
+- 多连接用例在结束时停线程、关连接，再在独占本轮数据库内清理业务表；单连接可采用 SQLAlchemy 外层事务与 SAVEPOINT，不改变生产事务行为。
+- 为生产代码变更失效的旧测试保留原语义或整体删除并记录理由，禁止原地改预期为当前输出。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无尚未裁定的外部产品契约；执行环境、工具可用性与权限按实施入口核对，缺少前提须失败并报告，不能用 skip 代替本 task 验收。
+
+### 风险与回退
+
+- 风险：清理顺序破坏外键、全局替身泄漏、后台线程跨用例写入及错误吞噬。清理失败须显式失败，不能继续后续测试制造假绿。
+- 回退：回退本 task 单一执行 commit 恢复原入口与测试；仅回收本轮拥有测试资源，保留用户数据、其他 task 改动和失败证据。不更改生产 schema 或数据，迁移验证仅对一次性测试库操作。
+
+### 依赖与约束
+
+- 硬依赖 t013：复用其已交付的建立可复用 PostgreSQL 测试容器与每轮独立测试库。
+- 本批 task 与 t012 的 finalization 都更新 docs/blueprint/testing.md，已登记 conflicts_with，建议串行交付；冲突不冒充硬依赖，不修改旧 task 和 active worktree。
+- 只按本 spec 修改生产代码/测试/脚本；发现超出范围产品缺陷按既有 bug-to-pending 流程记录，不放宽断言或静默扩大修复。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/testing.md`：fixture 生命周期、测试分类、数据 factory、重复/乱序执行及覆盖报告。

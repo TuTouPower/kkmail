@@ -1,6 +1,7 @@
 """task.py front matter 读写与转义。"""
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
@@ -76,9 +77,9 @@ def test_dump_parse_roundtrip(tmp_path):
     fm = {
         "tid": "t042",
         "slug": "feature_x",
-        "title": '标题"含"引号',
+        "title": '标题"含"引号\n第二行标题\r\n第三行',
         "status": "active",
-        "note": "a; b",
+        "note": "第一行备注\n第二行备注",
     }
     body = "## 实施笔记\n\n无\n"
     p = tmp_path / "task.md"
@@ -100,6 +101,28 @@ def test_parse_raises_when_unclosed(tmp_path):
     p = tmp_path / "task.md"
     p.write_text("---\ntid: t001\n", encoding="utf-8")
     with pytest.raises(TaskDataError, match="未闭合"):
+        parse_front_matter(p)
+
+
+def test_parse_rejects_nonstandard_closing_fence_with_line(tmp_path):
+    for fence in ("--- ", "----"):
+        p = tmp_path / "task.md"
+        p.write_text(f"---\ntid: t001\n{fence}\nbody\n", encoding="utf-8")
+        with pytest.raises(TaskDataError, match=r"task\.md:3"):
+            parse_front_matter(p)
+
+
+def test_parse_rejects_key_without_colon(tmp_path):
+    p = tmp_path / "task.md"
+    p.write_text('---\ntid: t001\ndepends_on "t002"\n---\nbody\n', encoding="utf-8")
+    with pytest.raises(TaskDataError, match=r"task\.md:3.*缺冒号"):
+        parse_front_matter(p)
+
+
+def test_parse_rejects_duplicate_key(tmp_path):
+    p = tmp_path / "task.md"
+    p.write_text("---\ntid: t001\ntid: t002\n---\nbody\n", encoding="utf-8")
+    with pytest.raises(TaskDataError, match=r"task\.md:3.*重复键 'tid'.*第 2 行"):
         parse_front_matter(p)
 
 
@@ -158,7 +181,7 @@ def test_atomic_write_replace_failure_preserves_target_and_cleans_tmp(tmp_path, 
     def _failing_replace(src, dst):
         raise OSError("injected replace failure")
 
-    monkeypatch.setattr(os, "replace", _failing_replace)
+    monkeypatch.setattr("repo_task.documents.os", SimpleNamespace(**{**vars(os), "replace": _failing_replace}))
     with pytest.raises(OSError, match="injected replace failure"):
         atomic_write_text(target, "half baked state\n")
 
@@ -175,7 +198,7 @@ def test_atomic_write_fsync_failure_cleans_tmp(tmp_path, monkeypatch):
     def _failing_fsync(fd):
         raise OSError("injected fsync failure")
 
-    monkeypatch.setattr(os, "fsync", _failing_fsync)
+    monkeypatch.setattr("repo_task.documents.os", SimpleNamespace(**{**vars(os), "fsync": _failing_fsync}))
     with pytest.raises(OSError, match="injected fsync failure"):
         atomic_write_text(target, "never written\n")
 
@@ -221,7 +244,7 @@ def test_write_front_matter_many_fsync_failure_cleans_all_tmp(tmp_path, monkeypa
         if call_count >= 2:
             raise OSError("injected fsync failure on second file")
 
-    monkeypatch.setattr(os, "fsync", _fsync_fail_on_second)
+    monkeypatch.setattr("repo_task.documents.os", SimpleNamespace(**{**vars(os), "fsync": _fsync_fail_on_second}))
     with pytest.raises(OSError, match="injected fsync failure on second file"):
         write_front_matter_many(files)
 
@@ -264,5 +287,62 @@ def test_atomic_write_preserves_existing_permissions(tmp_path):
     os.chmod(batch_file, 0o644)
     write_front_matter_many([(batch_file, {"tid": "t001"}, "body")])
     assert stat.S_IMODE(batch_file.stat().st_mode) == 0o644
+
+
+def test_atomic_write_rejects_symlink(tmp_path):
+    """验证原子写和批量写显式拒绝软链目标（Issue #69 方案 A）。"""
+    from repo_task.documents import atomic_write_text, write_front_matter_many
+
+    target = tmp_path / "target.txt"
+    target.write_text("orig target\n", encoding="utf-8")
+    link = tmp_path / "link.txt"
+    link.symlink_to(target.name)
+
+    # 1. atomic_write_text 拒绝符号链接
+    with pytest.raises(ValueError, match="does not support writing to symlink"):
+        atomic_write_text(link, "new content\n")
+
+    # 验证软链依然存在，且目标文件内容未被修改
+    assert link.is_symlink()
+    assert target.read_text(encoding="utf-8") == "orig target\n"
+
+    # 2. 拒绝悬空符号链接
+    broken_link = tmp_path / "broken_link.txt"
+    broken_link.symlink_to("non_existent.txt")
+    with pytest.raises(ValueError, match="does not support writing to symlink"):
+        atomic_write_text(broken_link, "content\n")
+    assert broken_link.is_symlink()
+
+    # 3. write_front_matter_many 拒绝符号链接
+    with pytest.raises(ValueError, match="does not support writing to symlink"):
+        write_front_matter_many([(link, {"tid": "t001"}, "body")])
+    assert link.is_symlink()
+
+
+def test_atomic_write_does_not_mutate_or_query_umask(tmp_path, monkeypatch):
+    """验证写新文件时利用内核 O_CREAT 机制，绝不调用或修改全局 umask（Issue #68）。"""
+    import os
+    from repo_task.documents import atomic_write_text, write_front_matter_many
+
+    umask_called = []
+
+    def mock_umask(mask):
+        umask_called.append(mask)
+        return 0o022
+
+    monkeypatch.setattr("repo_task.documents.os", SimpleNamespace(**{**vars(os), "umask": mock_umask}))
+
+    # 1. atomic_write_text 写新文件
+    f1 = tmp_path / "f1.txt"
+    atomic_write_text(f1, "hello\n")
+    assert f1.read_text(encoding="utf-8") == "hello\n"
+    assert umask_called == []
+
+    # 2. write_front_matter_many 写新文件
+    f2 = tmp_path / "f2.txt"
+    write_front_matter_many([(f2, {"tid": "t002"}, "body")])
+    assert "t002" in f2.read_text(encoding="utf-8")
+    assert umask_called == []
+
 
 

@@ -1,4 +1,5 @@
-# 同步自模板（repo-template-sync）：模板自有路径不受消费仓 format 门禁约束
+# 同步自模板（repo-template-sync）：模板自有/本地生成路径不受消费仓 format 门禁约束；
+# 部分条目（sync_manifest.json / sync_policy.json / .opencode/package*.json）按需生成，不存在时仅为预留
 .repo_template/scripts/package.json
 .repo_template/tests/package.json
 .repo_template/scripts/repo_task/view_static/
@@ -9,3 +10,7 @@ docs/archive/tasks_index.json
 docs/**/handoff.json
 .opencode/package.json
 .opencode/package-lock.json
+
+.repo_template/sync_manifest.json
+.repo_template/sync_policy.json
+.repo_template/skills/registry.json

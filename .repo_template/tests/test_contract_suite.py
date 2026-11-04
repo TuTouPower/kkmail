@@ -1,7 +1,10 @@
 """消费仓契约套件边界：标记范围、默认门禁命令、同步验证命令。"""
+
+from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +13,8 @@ TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-import repo_sync as rs
+from template_sync import context as ctx
+from template_sync.gates import _run_tests
 
 pytestmark = pytest.mark.contract
 
@@ -24,8 +28,6 @@ CONTRACT_MODULES = frozenset({
     "test_check_review_status.py",
     "test_repo_cleanup.py",
     "test_contract_suite.py",
-    "test_git_common_dir.py",
-    "test_lock_single_authority.py",
 })
 
 
@@ -80,30 +82,46 @@ def test_contract_collection_matches_allowlist():
 
 
 def test_testing_md_default_commands_use_contract_marker():
-    if (REPO_ROOT / ".repo_template/sync_state.json").is_file() or (
-        REPO_ROOT / ".agents/skills/repo-template-sync/sync_state.json"
-    ).is_file():
-        pytest.skip("消费仓已按自身技术栈定制 testing.md，跳过模板默认命令检查")
     text = (REPO_ROOT / "docs/blueprint/testing.md").read_text(encoding="utf-8")
+    if _section(text, "verification_policy").strip() == "project_configured":
+        pytest.skip("项目已显式选择验证策略，跳过模板默认命令检查")
     doctor = _section(text, "doctor_cmd")
     test_cmd = _section(text, "test_cmd")
     assert _pytest_lines(doctor) == [
         "pytest .repo_template/tests -q --collect-only -m contract",
-    ]
+    ], "自定义 test_cmd 的消费仓须先把 verification_policy 改为 project_configured 并填写 verification_notes"
     assert "command -v md_kx" in doctor
     assert _pytest_lines(test_cmd) == [
         "pytest .repo_template/tests -q -m contract",
-    ]
+    ], "自定义 test_cmd 的消费仓须先把 verification_policy 改为 project_configured 并填写 verification_notes"
 
 
-def test_sync_apply_runs_contract_suite():
-    assert rs.CONSUMER_TEST_COMMAND == (
+def test_sync_apply_runs_contract_suite(monkeypatch):
+    monkeypatch.setattr("template_sync.gates.validation_environment", lambda _root: {})
+    assert ctx.CONSUMER_TEST_COMMAND == (
         "pytest", ".repo_template/tests/", "-q", "-m", "contract",
     )
-    assert rs.CONSUMER_TEST_TIMEOUT == 60
-    source = rs._run_tests.__code__.co_names
-    assert "CONSUMER_TEST_COMMAND" in source
-    assert "CONSUMER_TEST_TIMEOUT" in source
+    assert ctx.CONSUMER_TEST_TIMEOUT == 60
+    calls = {}
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    real_run = subprocess.run
+
+    def fake_run(command, **kwargs):
+        if command and command[0] == "git":
+            return real_run(command, **kwargs)
+        calls["command"] = command
+        calls["timeout"] = kwargs.get("timeout")
+        return Result()
+
+    monkeypatch.setattr("template_sync.gates.subprocess", SimpleNamespace(**{**vars(subprocess), "run": fake_run}))
+    assert _run_tests(REPO_ROOT) is True
+    assert calls["command"] == list(ctx.CONSUMER_TEST_COMMAND)
+    assert calls["timeout"] == ctx.CONSUMER_TEST_TIMEOUT
 
 
 def test_all_consumer_skills_disable_model_invocation():
@@ -119,3 +137,43 @@ def test_all_consumer_skills_disable_model_invocation():
         assert "disable-model-invocation: true" in fm_lines, (
             f"{skill_md.parent.name}/SKILL.md missing disable-model-invocation: true"
         )
+
+
+def _runtime_union_annotations(tree) -> list[int]:
+    """未启用延迟注解时，函数签名与模块/类级注解里的 `X | Y` 在导入期求值。"""
+    import ast
+    lines = []
+    for node in ast.walk(tree):
+        annotations = []
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = node.args
+            for arg in args.posonlyargs + args.args + args.kwonlyargs + [args.vararg, args.kwarg]:
+                if arg is not None and arg.annotation is not None:
+                    annotations.append(arg.annotation)
+            if node.returns is not None:
+                annotations.append(node.returns)
+        elif isinstance(node, ast.AnnAssign):
+            annotations.append(node.annotation)
+        for annotation in annotations:
+            if any(isinstance(n, ast.BinOp) and isinstance(n.op, ast.BitOr) for n in ast.walk(annotation)):
+                lines.append(annotation.lineno)
+    return lines
+
+
+def test_toolchain_annotations_importable_on_python39():
+    """模板脚本最低 Python 3.9：PEP 604 注解必须配 `from __future__ import annotations`。"""
+    import ast
+    problems = []
+    for path in sorted(SCRIPTS_DIR.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        has_future = any(
+            isinstance(node, ast.ImportFrom) and node.module == "__future__"
+            and any(alias.name == "annotations" for alias in node.names)
+            for node in tree.body
+        )
+        if has_future:
+            continue
+        for line in _runtime_union_annotations(tree):
+            problems.append(f"{path.relative_to(SCRIPTS_DIR)}:{line}")
+    assert not problems, "Python 3.9 导入期会求值 `X | Y` 注解：" + ", ".join(problems)

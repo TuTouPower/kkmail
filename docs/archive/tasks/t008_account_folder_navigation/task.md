@@ -1,51 +1,89 @@
----
-tid: "t008"
-slug: "account_folder_navigation"
-title: "支持真实账号文件夹与收藏分类导航"
-status: "done"
-branch: "t008_account_folder_navigation"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "06f714cfaf9d77157b1eb90cf4c289ff14982836"
-depends_on: ""
-conflicts_with: ""
-note: "来源 p013；复用 folder-stats 与角色检索，补齐精确文件夹范围"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+p013 要求收藏分类和单账号文件夹树。现有侧栏仅 inbox/unread/sent，账号点击固定收件箱；folder-stats 已返回真实入库文件夹与 ID，角色聚合 API 已泛化，但缺精确文件夹邮件检索，且 IMAP 只解析 SPECIAL-USE 的 Sent。当前 decisions.md 的“暂不开放文件夹浏览”与新需求冲突，须在交付时替换该暂缓决策。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 收藏入口术语更新与 drafts/trash/junk 跨账号、单账号入口。
+- 账号独立展开，按已入库且 provider 实际提供的文件夹展示，使用 folder-stats 作为列表来源；必要时补充已有 parent_remote_id，以真实父子关系呈现，无父信息则平铺，不虚构目录。
+- IMAP SPECIAL-USE 与中文名称角色映射（区分协议 mailbox ID 和可读展示名，覆盖 Modified UTF-7 LIST 名称）；文件夹 ID 精确检索、角色检索、分页、计数和前端查询缓存范围贯通。
+- 按需更新 OpenAPI 及生成客户端；完成时更新有效 spec 和旧暂缓决策。
 
-1. 后端实现：在 `src/mail_core/providers/imap.py` 中增加 RFC 3501 Modified UTF-7 解码器与 SPECIAL-USE（\Sent, \Drafts, \Trash, \Junk, \Archive）标志解析；支持中文目录名映射与分隔符提取 parent_remote_id；在 `queries.py` 与 `mail.py` 中贯通精确 `folder_id` 过滤、多位置邮件 keyset 去重，以及在 `mutations.py` 中限定单目录批量标已读范围。重新导出并生成 OpenAPI 契约。
-2. 前端实现：扩展 `mailStore`、`listTitle`、`Sidebar` 与 `MessageList`，支持六类个人收藏（收件、未读、已发、草稿、废纸篓、垃圾邮件）和账号独立展开入库文件夹树（支持真实父子层级与空目录）；导航切换时自动清空搜索与选择；缓存键追加 `folder:${folderId}` 隔离。
-3. 验证与门禁：编写 `test_account_folder_navigation.py`、扩展前端单元测试，并通过全量门禁命令（381 passed）、Playwright UI 冒烟测试与真实全栈端到端测试。更新 blueprint decisions.md、architecture.md 与 conventions.md。
+### 非范围
 
-## Review 处置
+- 不新增撰写/编辑草稿、发信、归档动作、垃圾邮件动作、跨文件夹移动或彻底删除。
+- 不扩大后台轮询频率或自动重扫全邮箱，不凭账号类型合成远端不存在的文件夹。
+- 不新增服务商，不改变现有全局全文搜索语义；切换导航先清空搜索与选择，避免旧搜索结果冒充当前目录。
 
-无 finding。
+### 验收标准
 
-## 收尾报告
+<!-- 规范（门禁必留，不得删除） -->
 
-### 验收与验证
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部通过
-- 测试：`scripts/run-mail-core-tests.sh run` (381 passed), 前端单元 (169 passed), 桌面打包冒烟 passed
-- 黑盒：`npm --prefix src/frontend run test:e2e` (3 passed), `python3 scripts/run_full_stack_e2e.py` (3 passed)
-- review：code PASS / test PASS / overall PASS
-- AC 证据：见 `handoff.json`
+<!-- /规范 -->
 
-### 结果摘要
+- [x] AC-001：收藏显示“所有收件”“所有未读”“已发邮件”“草稿箱”“废纸篓”“垃圾邮件”；六项均可独立展开账户，顶层按对应角色聚合、账户子项只展示该账户匹配邮件；仅收件入口保留现有未读角标约定。
+- [x] AC-002：每个账号可独立展开/折叠文件夹；列表只来源于该账号真实入库文件夹，空目录也显示。标准角色依次显示收件箱、已发送、草稿箱、废纸篓、垃圾邮件、归档，other 保留远端名称；有真实父子数据时按层级展示，无父信息时平铺，缺父节点不隐藏已有文件夹。
+- [x] AC-003：Gmail 系统标签不被合成为“归档”物理文件夹；Graph/IMAP 只有真实返回并映射 archive 的目录才显示“归档”。未知角色以原名展示，不伪装成标准目录。
+- [x] AC-004：点击账号具体文件夹后，列表、标题、计数和分页仅针对该 folder_id；同账号多个 other 文件夹互不混入，跨账号文件夹 ID 不越过所选账号范围；未知目录返回明确错误，空目录保持空列表，不回退至其他目录或收件箱。
+- [x] AC-005：drafts/trash/junk/archive 的角色查询支持跨账户和单账户 keyset 分页；单封邮件在多标签位置出现时，同一查询只返回一次，连续翻页不漏项、不重复，默认未传角色仍为 inbox。
+- [x] AC-006：IMAP 自定义名称目录携带 \\Sent、\\Drafts、\\Trash、\\Junk、\\Archive 时按标志映射；没有标志时识别已发送/已发送邮件、草稿箱、已删除/废纸篓、垃圾邮件、归档等已确认中文名称；标志优先于名称，INBOX 仍识别为 inbox，不匹配名称为 other；中文名称经 Modified UTF-7 传输时仍正确显示和映射，保留原 remote_id 供 SELECT/FETCH，不把展示名误当协议 ID。
+- [x] AC-007：从收藏或文件夹切换范围时，清除旧搜索、所选邮件与批量选择，并回到列表；缓存键区分账号、角色与具体文件夹，加载和错误状态不展示成另一目录结果，单目录“全部标为已读”仅作用于当前目录，原收藏角色行为保持正确。
 
-- 个人收藏扩充为“所有收件”“所有未读”“已发邮件”“草稿箱”“废纸篓”“垃圾邮件”六类独立展开类目；
-- 邮箱账户支持独立展开真实入库文件夹树，呈现真实层级，空目录正常呈现，保留远端名称；
-- 后端支持精确 `folder_id`keyst 翻页检索、多标签位置去重与单目录批量标已读；
-- IMAP 协议层支持 SPECIAL-USE 标志优先级映射与 Modified UTF-7 解码，分离可读名称与协议标识符。
+### 可测试性声明
+
+<!-- 规范（门禁必留，不得删除） -->
+
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试；视觉截图为补充复核，不替代计算样式及交互断言。
+
+## 上下文区
+
+- 来源：p013（2026-10-22 核实：Sidebar 只有三类收藏；mailStore 及 listTitle 无 folder 状态；MessageList 只把 sent 转为 sent，其余使用 inbox。mail.py 与 queries.py 已支持任意 folder_role，folder-stats 含 folder_id/name/remote_id/role，DB 已有 parent_remote_id 但响应未暴露。Stub LIST 四个 SPECIAL-USE 标志均复现 other；已有测试只覆盖 Sent 标志、中文已发送和默认/sent 查询。t003 已完成但未交付本范围，无等价 effective task。）
+
+### 有意不测
+
+- 不测试真实邮箱持续轮询配额与多标签远程写回；本 task 为已有同步数据浏览，不引入远端移动语义。
+
+### 测试策略
+
+- IMAP LIST 夹具参数化覆盖五个 SPECIAL-USE、自定义目录名、标志与名称冲突、UTF-8/Modified UTF-7 中文名、未知目录及现有带空格目录转义；断言可读名称与原协议 ID 分离。
+- API/数据库测试覆盖真实文件夹集合、精确 folder_id、账号不匹配、空目录、非法 ID、四角色跨/单账号分页及 Gmail 多位置去重。
+- 前端 Sidebar、MessageList、listTitle、store 与 query scope 测试覆盖六类收藏、独立展开、真实目录树、同角色多目录、范围切换清空状态、加载失败和重试。
+- 单目录批量已读走同一精确 scope；回归既有已读/旗标/删除乐观更新，不把 folder_role=other 当成具体目录。
+- 浏览器在 760px 断点两侧验证可滚动导航与长名称；OpenAPI 变更必须从源重新生成并执行一致性检查。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无需新增服务商外部协议；依据现有入库 folder 和 provider 返回值浏览。层级只使用可验证父子数据，不能按名称随意拆分制造节点。
+
+### 风险与回退
+
+- 风险：按角色代替目录 ID 会把多个自定义文件夹混在一起；Gmail 多标签会导致重复计数；缓存键遗漏目录会串视图，批量已读若复用角色会误改兄弟目录。
+- 回退：回退完整执行 commit（含契约与生成客户端）恢复原三分类；不删现有文件夹、邮件或位置数据。
+
+### 依赖与约束
+
+- 无硬依赖；跨前后端契约与协议适配，review_level=full。
+- 复用 folder-stats、现有分页查询与统一请求/CSRF 客户端；新目录范围须贯通受影响读写调用。
+- 本 task 替代 decisions.md 中文件夹浏览暂缓决策，仅开放浏览；保持发信与归档/移动操作排除项。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：收藏分类、真实文件夹导航、精确目录查询数据流。
+- `docs/blueprint/decisions.md`：替换“暂不开放多文件夹/多目录 API”，保留不实现归档/移动动作决策。
+- `docs/blueprint/conventions.md`：导航 scope 与缓存隔离规则。

@@ -1,63 +1,76 @@
----
-tid: "t035"
-slug: "partial_provider_metadata"
-title: "保留 Graph 局部状态与未知附件元数据语义"
-status: "done"
-branch: "t035_partial_provider_metadata"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "852c01372e17a4d858050eb2e9fed148870e5495"
-depends_on: ""
-conflicts_with: ""
-note: "来源：审查复现；Graph delta 缺字段生成 false，IMAP/Gmail 未提供附件标记却覆盖已归档值。"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+Graph delta 的局部更新把未返回状态解析成 false；IMAP 与 Gmail 元数据把附件状态未知表达成 false。后续同步会清除由真实邮件内容得到的本地状态。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- Graph delta 只更新服务商本次明确返回的 read/star 字段。
+- IMAP/Gmail 未提供附件标记时保留已有附件状态；能明确提供 true/false 的来源仍按返回值更新。
+- 更新 provider 类型、同步应用逻辑、契约与回归测试。
 
-- 复核确认 Graph Delta 将缺失的 `isRead` / `flag.flagStatus` 默认成 `false`；IMAP 与 Gmail 的 metadata parser 将未提供附件状态默认成 `false`，`upsert_messages` 会据此覆盖本地值。
-- 先新增 parser 与数据库行为测试。RED 阶段 `test_parse_graph_delta_preserves_field_presence_for_status_updates` 和 `test_provider_metadata_marks_unknown_attachments_without_fabricating_false` 均因缺失字段合成 `false` 失败；随后实现 Optional 状态与更新时跳过未知值。
-- 为移除旧断言 `test_parse_graph_delta_flag_only_without_content_metadata` 记录原因：该测试要求缺失状态合成为 false，正是本 task 修复的破坏性行为；新测试分别覆盖只读 read、只读 flag、带内容的部分状态、明确 false 与未提供附件状态。
-- Round 1 test review 指出 Graph parser 新测试曾在旧函数位置改名替换。已整体删除旧测试块，并在文件末尾新增独立 `test_graph_delta_partial_status_field_presence_contract`，保留新契约覆盖。
-- 未修改 `docs/blueprint/`；长期约定由 t040 统一更新。累计邮件同步规格已补充 AC-011/012。
+### 非范围
 
-## Review 处置
+- 不改变用户本地未收敛的 read/star 意图优先级。
+- 不推断附件状态，不改附件解析与归档行为。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-23T08:43:33+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t035_code_f001|minor|撤回|接受审查中的启发式复杂度提示，但不抽 helper；3 处字段存在性判断语义直观，增加间接层无行为收益|src/mail_core/providers/parsing/graph_delta.py:21|
-|t035_test_f001|minor|已修|整体删除旧测试块，并在文件尾新增独立 parser 契约测试；旧断言对应破坏性默认值，替换原因已记录|tests/mail_core/test_gmail_graph_contracts.py|
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-### Round 2 (2026-10-23T08:52:21+08:00)
+<!-- /规范 -->
 
-- 前轮 finding：`t035_code_f001` 按上述理由撤回；`t035_test_f001` 已修并经复核确认。
-- 本轮新增 finding：0；code/test verdict 均 PASS，scope `d007d7f37a900891`。
+- [ ] AC-001：Graph delta 仅返回 isRead 时 patch 不含 is_flagged；仅返回 flag 时不含 is_read，未返回字段在数据库保持原值。
+- [ ] AC-002：IMAP/Gmail 未提供附件状态的 metadata 重扫不覆盖已知 has_attachments；明确返回 true/false 时仍正确更新。
+- [ ] AC-003：Graph 局部状态及附件未知/明确状态均有触达 parser 与生产更新逻辑的自动化测试。
 
-## 收尾报告
+### 可测试性声明
 
-### 验收与验证
+<!-- 规范（门禁必留，不得删除） -->
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：模板契约 149 passed；定向后端 PostgreSQL 测试 31 passed；完整后端测试 402 passed / 0 skipped；parser TDD RED 2 failed（按预期）后修复；
-- 黑盒：前端浏览器 E2E 8 passed；全栈 E2E 3 passed。
-- review：Round 1 / Round 2 code/test 均 PASS；code 轴 minor 已评估撤回，test 轴 minor 已修。
-- AC 证据：见 `handoff.json`
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-### 结果摘要
+<!-- /规范 -->
 
-- Graph delta 与 metadata 仅更新明确返回的状态；IMAP/Gmail 附件状态未知时保留已归档结果。没有数据库 schema 变更或历史数据回写。
-- Full code/test review Round 1 与 Round 2 均 PASS；旧测试已整体删除并以独立契约测试覆盖；未解决 finding：无。
+全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：2026-10-23 代码审查与 `parse_graph_delta` 直接调用复现；`tests/mail_core/test_gmail_graph_contracts.py` 有仅 isRead 样例但未断言缺失 flag 保持不变。
+
+### 有意不测
+
+- 外部 Gmail/Graph live account：需用户凭据，不用于验证本地更新契约。
+
+### 测试策略
+
+- parser 单测断言 flags 仅含实际出现键；真实 PostgreSQL 更新测试先存已有值，再应用部分/未知字段，验证保留原值与明确返回时更新。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无。Graph delta 字段存在性与 IMAP/Gmail metadata 能力可由仓库解析器和请求内容核验。
+
+### 风险与回退
+
+- 风险：Optional 状态扩展遗漏 provider 调用点。
+- 回退：回退本 task 执行提交；不改数据库结构或历史邮件内容。
+
+### 依赖与约束
+
+- t036 修改相同 provider 时间解析文件，须本 task 合入后再 start，避免冲突。
+- 不将未返回字段合成为默认 false，不削弱写回意图保护。
+
+### Finalization 时更新的 blueprint
+
+- 由 t040 集中更新 `docs/blueprint/conventions.md`，本 task 不改共享 blueprint，避免并行 worktree 写冲突。

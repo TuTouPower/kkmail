@@ -1,88 +1,117 @@
----
-tid: "t061"
-slug: "idle_inbox_and_all_folder_status_patrol"
-title: "IDLE 收件箱实时监听与全文件夹 STATUS 周期巡检"
-status: "done"
-branch: "t061_idle_inbox_and_all_folder_status_patrol"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "327acc0250f26c71d7ad2b777e876b92ff79c484"
-depends_on: ""
-conflicts_with: ""
-note: "由 t059 与 t060 按用户指令合并而来（task-merge）：IDLE 负责收件箱实时、全文件夹 STATUS 巡检负责其余文件夹的周期发现；t059/t060 已 drop 归档，编号不复用; 2026-10-28 用户确认设计细化：IDLE 独立配额（默认 32、热账号优先、不占 8 个任务槽位）；STATUS 基线复用 SyncCheckpoint.cursor JSONB，不新增迁移；imaplib IDLE 按扩展 Commands + socket select/poll 可打断循环方向验证；账号量级现状约 100、规划近千"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+当前新邮件发现有两处结构性短板。其一，收件箱完全依赖 t057 的服务端周期轮询（默认 20 分钟），新邮件端到端延迟上限即一个轮询周期；19bc2b76 移除客户端即时同步后，不再有任何更快的发现通道。其二，非收件箱文件夹没有任何周期发现通道：t057 巡检只覆盖收件箱，其 spec 非范围把其余文件夹留给「用户导航按需触发」，而该触发已被 19bc2b76 整体移除——已发送、草稿、垃圾箱、自定义文件夹及他端客户端的归档目标里的新建、移动、删除，只能等账号级发现运行或设置页手动同步顺带 delta 才收敛，延迟不可预期。
 
-## 实施笔记
+2026-10-28 的同类产品拉取策略对比（Cypht / Zero / SnappyMail / Thunderbird / Mailspring）显示，IMAP 生态的通行组合是：收件箱走 IDLE（RFC 2177）实时——客户端在收件箱上维持一条长连接，服务器有变化时主动下发未标记响应，客户端随即做增量同步（Thunderbird、Mailspring 均如此，轮询兜底）；其余文件夹走廉价 STATUS 周期探测全覆盖（STATUS 一次短连接即可拿到总数 / 未读 / UIDNEXT，没变化就跳过，变化才做增量）。kkmail 的账号构成以 IMAP 为主（Gmail 走 IMAP 应用专用密码、163、QQ 等），IDLE 无需任何第三方云设施即可覆盖，且长连接常驻比周期性反复登录对服务商风控更友好。本 task 一并落地这两条通道：IDLE 把收件箱延迟从分钟级降到秒级，全文件夹 STATUS 巡检补上其余文件夹的发现盲区；t057 的收件箱轮询保留为 IDLE 不可用与断线间隙的兜底。
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+量级前提（2026-10-28 用户确认）：当前已添加约 100 个账号，后续可能增至近千个。IDLE 长连接按「永久占用」计，与按秒占用的瞬时同步任务不能共用既有 8 个连接槽位——否则少数 IDLE 连接即永久占满预算、饿死归档与巡检。因此 IDLE 采用独立配额、只覆盖热账号子集的设计（见契约区），其余账号维持轮询；近千个账号从同一出口 IP 全量 IDLE 也会被服务商按 IP 会话限流与账号风控拦截，不在可接受形态内。
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+本 task 由 t059（IDLE 收件箱实时监听）与 t060（全文件夹 STATUS 周期巡检）按用户指令合并而来，两者范围、AC 与上下文已并入本 spec，t059 / t060 已 drop 归档。
 
-- attempt 1 / execution_id 7d1ae864081c46179fd9b4b2f0b37ed5；base main@327acc02；分支 t061_idle_inbox_and_all_folder_status_patrol。
-- 实施前先解 4 项 UNVERIFIED-SPIKE 并回填 spec（结论见 spec 未知契约清单）：imaplib IDLE 原语经 fake IMAP 服务器原型实证（产物 .scratch/idle_spike/，收尾复跑 ALL SPIKE CHECKS PASSED）；`preflight t061 --require-verified` PASS 后进入实施。
-- 实现形态：新模块 src/mail_core/sync/idle_watcher.py（IDLE watcher：独立配额 32、热账号优先 + 滞回、抖动退避、状态经 AppSetting worker:idle_state 发布）与 src/mail_core/sync/patrol.py（全文件夹 STATUS 巡检：基线存 SyncCheckpoint.cursor 的 last_status/last_probe_at、不新增迁移）；providers/base.py 增 FolderStatus 与 probe/open_idle_session 契约，imap.py 实现 IDLE 会话（扩展 Commands 注册 IDLE + 专属读线程 + 控制线程唯一写者）与 STATUS 探测（走任务槽位 permit），graph.py 实现计数探测，stub_memory.py 实现内存探测；t058 集中配置新增 idle_* 与 folder_patrol_* 共 11 项（config/models.py、loader.py、config/.env.example）；worker/main.py 接入 watcher 启停、巡检 sweep 与 held 账号跳过收件箱轮询。blueprint 已同步：docs/blueprint/architecture.md 与 docs/specs/mail_sync_and_storage.md 新增 t061 章节。
-- 基线先测：实施前于 base 327acc02 跑后端 unit 全量为 1477 passed / 20 failed / 288 skipped；最终全量 1508 passed / 20 failed / 305 skipped，失败集与基线逐条一致、零新增（其中基线尾部 6 个失败名经纯净基线 worktree 定向复跑确认同为基线失败）。
-- 环境限制（如实记录）：本机 Docker 不可用，PG Docker 门禁与全栈 e2e 未跑；便携 PG 16.2 在本沙箱因 nobody 穿越权限、chown 禁止、userns initdb 失败三路均无法启动，直连 127.0.0.1:5432–5434 均 connection refused，故 17 个 DB 门控测试按仓库惯例在 unit 模式 skip（CI 以 MAIL_CORE_REQUIRE_DB=1 把守）；本机缺 md_kx 二进制，格式门禁以 git diff --check 兜底（clean）。前端 e2e 冒烟 18 failed 与未改动的主仓检出完全一致，属环境性既存问题；桌面 packaged 测试因缺 electron 未跑（本 task 零桌面改动）。
-- 黑盒：AC-016 为 [deploy] 项，本地替代验证 .scratch/blackbox_t061.py PASS（真实 ImapProvider + fake IMAP 服务器：IDLE 唤醒 0.20s、STATUS 变化维度判定正确、无变化零判定），部署实测待上线环境执行。
+## 契约区
 
-## Review 处置
+### 范围
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+- IDLE watcher：在 Worker 侧新增 IDLE 监听组件，对每个符合条件的 IMAP 账号维持至多一条长连接，SELECT 其收件箱（`role="inbox"`）后进入 IDLE；仅对已完成基线（`full_scan_complete`）的文件夹启用。
+- IDLE 只作唤醒信号：收到服务器未标记响应（EXISTS / EXPUNGE / FETCH 等表明收件箱有变化）后，结束本轮 IDLE 并为该文件夹入队既有 `SYNC_FOLDER_DELTA`（沿用既有去重键 `delta:{account}:{folder}`）；邮件内容拉取、落库、删除对账全部仍走既有 delta / reconcile 管线。
+- IDLE 连接生命周期管理：服务器侧 IDLE 超时（约 29 分钟）前主动 DONE 并重新进入 IDLE；连接断开后以带随机抖动的指数退避重连，多账号同时断线时重连时刻被打散，不形成集中登录风暴。
+- IDLE 能力门控：仅当服务器在 CAPABILITY 中宣告 IDLE 时启用；不宣告的账号不建立长连接，完全维持 t057 轮询行为。
+- 全文件夹 STATUS 巡检：扩展 Worker 周期巡检调度（t057 建立的调度器），巡检对象从收件箱扩展为全部启用账号（`sync_enabled=true`）的全部非 paused、可选择文件夹；收件箱仍由 t057 既有超期逻辑直接入队 delta，探测巡检覆盖其余文件夹（收件箱可同时被探测，但不得与 t057 入队产生重复任务，去重键保证合并）。
+- 探测方式：每轮对目标文件夹执行一次廉价探测——IMAP 用 `STATUS`（`MESSAGES` / `UIDNEXT` / `UNSEEN`，服务器支持时含 `HIGHESTMODSEQ`）经短连接完成，不 SELECT、不 FETCH 内容；探测经 provider 能力抽象接入，不支持廉价探测的 provider 维持现状行为（跳过探测，不强制改变）。
+- 变化判定与入队：探测结果与本地保存的文件夹状态基线（总数 / UIDNEXT / 未读 / modseq）比对；无变化的文件夹不产生任何任务与内容拉取；有变化的文件夹入队既有 `SYNC_FOLDER_DELTA` 走既有管线收敛，并更新本地状态基线。
+- 错峰与轮转：多账号多文件夹的探测在巡检周期内错峰平摊；单轮探测的文件夹数设上限，超出时按最久未探测优先轮转，保证任一文件夹的连续未探测时长不超过可配置上限。
+- 连接预算两池分离：既有全局连接槽位（`connection_slots`，上限 8、前台保留 0–1）只服务瞬时任务（同步、归档、巡检探测等以秒计占用的连接），口径不变；IDLE 长连接**不占用任务槽位**，另设独立配额上限（集中配置项，默认 32，与账号总数无关），同一时刻的 IDLE 长连接总数不得超过该配额。配额内按账号活跃度优先分配（热账号优先），冷账号让位或配额已满时对应账号维持 t057 轮询；持有 IDLE 的账号跳过其收件箱轮询（IDLE 即其发现通道），让位后自动恢复轮询。巡检探测连接仍走任务槽位，受其既有顺延规则治理。
+- 账号状态跟随与排除：账号 `sync_enabled=false`、凭据变更或失效、文件夹变为 paused 时，IDLE 连接被关闭且不再重连、巡检跳过该目标；paused 文件夹（`\Noselect` 结构节点、远端已消失、Gmail 虚拟标签等）在 IDLE 与巡检中一律排除，不产生连接与任务。
+- 配置纳入 t058 集中式配置：IDLE 全局开关与重连退避参数、巡检周期（默认 1200 秒）、单轮探测上限、未探测时长上限与探测巡检独立开关均可调；两个开关都关闭时行为与当前完全一致。
+- 可观测：watcher 状态（idling / backoff / fallback 等）经既有账号同步状态面可观测；watcher 与巡检自身的异常不得把账号误标为永久 failed。
 
-### Round 1 (2026-10-28T04:56:26+08:00)
+### 非范围
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t061_code_f001|important|已修|巡检失败路径统一经 _record_attempt 推进 last_probe_at 并累计失败计数，选择逻辑以 critical 优先组消费 max_unprobed_s，失败集不再饿死轮转|src/mail_core/sync/patrol.py|
-|t061_code_f002|minor|已修|巡检初始查询改为 Folder/Account/SyncCheckpoint 单次 join，消除逐文件夹 N+1|src/mail_core/sync/patrol.py|
-|t061_test_f001|minor|已修|AC-013 测试断言每轮 probed remote_id 精确集合与全覆盖无重复，另加失败集饿死回归与 AC-014 尝试时钟断言|tests/mail_core/test_t061_status_patrol.py|
-|t061_test_f002|minor|已修|新增管理器级断线恢复用例（首会话抛 IdleSessionDisconnected 后重建并回到 held/idling）|tests/mail_core/test_t061_idle_watcher.py|
-|t061_test_f003|minor|已修|新增 held 账号跳过收件箱轮询用例与 permit 计数用例（IDLE 会话 0 permit、STATUS 探测 1 permit）|tests/mail_core/test_t061_idle_watcher.py / tests/mail_core/test_t061_imap_idle_probe.py|
-|t061_test_f004|minor|已修|新增凭据指纹变更重建、paused 关闭、禁用再启用恢复三分支用例|tests/mail_core/test_t061_idle_watcher.py|
-|t061_test_f005|minor|已修|新增 IDLE 开关关闭的 manager noop 纯测试（session factory 被调用即失败）|tests/mail_core/test_t061_idle_watcher.py|
-|t061_test_f006|minor|已修|新增 Graph probe 字段映射 3 例，AC-008 用例参数化 sent/drafts/trash/custom 四种 role；MemoryProvider 与默认 factory 残留转 Round 2 的 t061_test_f007|tests/mail_core/test_t061_graph_probe.py / tests/mail_core/test_t061_status_patrol.py|
+- 不为非收件箱文件夹建立 IDLE 连接（每账号至多一条）；非收件箱只走周期探测，不追求实时。
+- 不接入 Microsoft Graph change notifications（Outlook 推送），不在本 task 范围。
+- 不接入 Gmail API `users.watch` / Pub/Sub（Gmail API 引擎已下线，不复活）。
+- 不移除、不弱化 t057 收件箱周期轮询：轮询继续作为 IDLE 不可用、断线间隙的兜底，其触发与错峰语义不变。
+- 不复活任何客户端触发同步（19bc2b76 的移除结论不变）。
+- IDLE 与巡检路径不直接读写邮件数据，不绕过基线门禁、账号租约与 fencing；巡检不触发全量 metadata 扫描，无基线文件夹的基线建立仍只归账号发现与手动同步路径。
+- 不改变 delta / reconcile 的既有语义、删除防误删门禁与写回保护窗。
 
-### Round 2 (2026-10-28T05:12:25+08:00)
+### 验收标准
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t061_code_f003|important|已修|blocked 退出路径经 _register_blocked 注销自身 _Watch 条目并记录 (指纹， 时刻），使指纹变化与 3600 秒过期重试真实可达|src/mail_core/sync/idle_watcher.py|
-|t061_test_f007|minor|已修|新增 MemoryProvider probe 3 例与 _default_provider_factory 对 stub 账号返回 MemoryProvider 1 例|tests/mail_core/test_t061_memory_probe.py|
+<!-- 规范（门禁必留，不得删除） -->
 
-### Round 3 (2026-10-28T05:17:58+08:00)
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t061_code_f004|minor|已修|_register_blocked 增加身份守卫：已被新 watch 替换的陈旧线程直接返回，不覆写 _blocked/_states/_watches|src/mail_core/sync/idle_watcher.py|
-|t061_code_f005|minor|已修|_reconcile_once 开头清扫不在候选集且不在 _watches 的账号残留 _states/_blocked 条目|src/mail_core/sync/idle_watcher.py|
+<!-- /规范 -->
 
-### Round 4 (2026-10-28T05:22:49+08:00)
+- [ ] AC-001：对启用（`sync_enabled=true`）、收件箱已完成基线、且服务器宣告 IDLE 能力的 IMAP 账号，Worker 建立并维持一条只 SELECT 收件箱的 IDLE 长连接；服务器不宣告 IDLE 时不建立连接，该账号行为与现行 t057 轮询完全一致。
+- [ ] AC-002：IDLE 期间收件箱有新邮件到达（服务器下发未标记响应）后 10 秒内，该文件夹的 `SYNC_FOLDER_DELTA` 被入队并执行，新邮件落库，不等待 20 分钟轮询到期。
+- [ ] AC-003：IDLE 连接被服务器超时关闭或网络中断后，watcher 以带随机抖动的退避自动重连并恢复 IDLE；多个账号同时断线时，各账号的重连时刻被打散，不在同一时刻集中发起登录。
+- [ ] AC-004：IDLE 与巡检路径只产生唤醒与入队动作：全部邮件拉取与落库仍经既有 delta / reconcile 管线（去重键、账号租约、fencing、基线门禁均不变），两条新路径的代码不直接写 `messages` / `message_bodies`。
+- [ ] AC-005：任意时刻，IDLE 长连接总数不超过独立配额上限（配置项，默认 32，与账号总数无关），且 IDLE 连接不占用 8 个任务槽位中的任何一个，归档、巡检、手动同步等瞬时任务的槽位可用性与本 task 落地前一致；配额内按账号活跃度优先分配，超配额或被让位的账号维持 t057 轮询，持有 IDLE 的账号不重复走收件箱轮询。
+- [ ] AC-006：账号被禁用、凭据变更或失效、收件箱变为 paused 时，对应 IDLE 连接被关闭且不再重连、巡检跳过该账号或文件夹；条件恢复后 IDLE 自动重新建立、巡检恢复覆盖。
+- [ ] AC-007：watcher 组件异常退出或单账号 IDLE 循环反复失败时，Worker 主任务循环与 t057 巡检调度不受影响，该账号自动退化为轮询发现且不被误标为永久 failed。
+- [ ] AC-008：Worker 周期巡检覆盖全部启用账号的全部非 paused 可选择文件夹（含已发送、草稿、垃圾箱与自定义文件夹），按配置周期（默认 1200 秒）对每个文件夹执行探测。
+- [ ] AC-009：探测结果（总数 / UIDNEXT / 未读 / modseq）与本地状态基线一致的文件夹，不产生任何 `SYNC_FOLDER_DELTA` 任务与内容拉取，仅消耗一次 STATUS 级探测。
+- [ ] AC-010：探测发现变化（新邮件到达、他端删除或移动、未读数变化）的文件夹被入队 `SYNC_FOLDER_DELTA`，并在该轮巡检后经既有管线完成增量收敛落库。
+- [ ] AC-011：paused 文件夹、`\Noselect` 结构节点、远端已消失文件夹在巡检中一律跳过，不产生外部连接与任务。
+- [ ] AC-012：无基线（`full_scan_complete` 不为真）的文件夹不被巡检探测触发全量 metadata 扫描；巡检对这类文件夹至多探测并记录状态，基线建立路径不变。
+- [ ] AC-013：多账号多文件夹的探测时刻在巡检周期内错峰分布；单轮探测文件夹数不超过配置上限，超出时按最久未探测优先轮转，任一文件夹连续未探测时长不超过配置上限（默认不超过 2 个巡检周期）。
+- [ ] AC-014：单个文件夹探测失败（超时 / 限流 / 服务器异常）不中断整轮巡检、不把所属账号误标 failed，该文件夹在后续周期自动重新探测。
+- [ ] AC-015：IDLE 开关、IDLE 配额上限、重连退避参数、巡检周期、单轮探测上限、未探测时长上限与探测巡检开关纳入集中式配置（t058 体系）可调；两个开关都关闭后，全部账号行为与 t057 落地后的现状完全一致，无残留长连接与探测流量。
+- [ ] [deploy] AC-016：在真实账号部署环境实测两项：（一）向被 IDLE 监听的账号发送一封新邮件，30 秒内该邮件在本地库可见；（二）用另一客户端向某非收件箱文件夹移动入一封邮件并删除另一封，一个巡检周期内本地库与远端收敛一致。
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t061_code_f006|minor|已修|_set_state 改为 (watch, state) 签名并加同一身份守卫，全部 5 个调用点改传 watch 本人，白盒用例扩展对应断言|src/mail_core/sync/idle_watcher.py / tests/mail_core/test_t061_idle_watcher.py|
+### 可测试性声明
 
-### Round 5 (2026-10-28T05:26:07+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 5 零 finding（code 与 test 两路均 PASS，f001–f006 / f001–f007 全部复核已消除）。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- AC-016：需真实外部邮件服务与第二客户端配合，无法在 CI 自动验证；以部署环境人工实测记录替代（操作与发送时间、落库与收敛时间、所用服务商）。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足（AC-016 为 [deploy] 项，本地替代验证已完成，部署实测待上线环境执行）
-- 测试：后端 unit 全量 1508 passed / 20 failed / 305 skipped，失败集与 base 327acc02 基线 20 条逐条一致、零新增；契约测试 189 passed；t061 专项 31 passed / 17 skipped（DB 门控，仓库惯例）；前端 531 passed + tsc + build 通过（本 task 零前端改动）；OpenAPI --check 无漂移；git diff --check clean。未跑：PG Docker 门禁与全栈 e2e（本机无 Docker、便携 PG 沙箱权限无法启动）、桌面 packaged（缺 electron）、md_kx 格式门禁（二进制缺失，以 diff --check 兜底）
-- 黑盒：`.scratch/blackbox_t061.py` PASS（AC-016 本地替代：IDLE 唤醒 0.20s、STATUS 变化判定正确）；前端 e2e 冒烟 18 failed 与主仓未改动检出一致（环境性既存）
-- review：full 级双路（code + test）共 5 轮，最终 verdict 均为 PASS；累计 finding 13 条（important 2、minor 11）全部已修并经独立复核消除
-- AC 证据：见 `handoff.json`
+## 上下文区
 
-### 结果摘要
+- 来源：用户确认的同步策略对比结论（2026-10-28，五家开源邮件应用拉取策略与 kkmail 对比）；本 task 由 t059 与 t060 按用户指令经 task-merge 合并（2026-10-28），两者原 spec 的范围、AC 与上下文已并入本 spec；相关历史条目 p047（新邮件收取时延，已归档，其客户端触发部分已被 19bc2b76 否决，本 task 只取其「降低外部服务器→后端段延迟」的问题定义）
 
-- IDLE 收件箱实时监听（独立配额、热账号优先 + 滞回、抖动退避、能力门控、状态可观测）与全文件夹 STATUS 周期巡检（基线存 cursor JSONB、无变化零入队、轮转与未探测上限、失败隔离）已落地，两开关关闭即回到 t057 现状；AC-016 部署实测与 17 个 DB 门控测试的 CI 实跑（MAIL_CORE_REQUIRE_DB=1）为仅剩的外部验证项。
+### 有意不测
+
+- 真实服务商的大规模长连接与文件夹规模压测（如 300 账号同时 IDLE、300 账号 × 数十文件夹长周期巡检的服务商侧限流表现）：本地以 fake IMAP 服务器、mock provider 与 DB 夹具模拟大账号集、时间推移与轮转验证逻辑正确性，真实规模表现经 AC-016 实测与上线后观测覆盖。
+
+### 测试策略
+
+- 单元测试：fake IMAP 连接对象模拟 CAPABILITY 宣告、IDLE 未标记响应、服务器超时关闭与断线，验证唤醒入队、退避打散、能力门控与状态跟随；fake provider 返回可控的 STATUS 探测结果，验证变化判定（总数 / UIDNEXT / 未读 / modseq 各维度）、无变化零入队、轮转与未探测上限、排除规则。
+- 集成测试：mock provider + 本地 DB 夹具，验证 IDLE 唤醒后 delta 落库全链路、探测发现变化后 delta 收敛全链路、预算不足降级、watcher 异常不影响巡检调度、单夹探测失败隔离、与 t057 收件箱入队的去重合并。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 各服务商 IDLE 细节差异：已核实（2026-10-28，fake IMAP 服务器协议实验 + 代码核查）。IDLE 为 RFC 2177 标准扩展、经 CAPABILITY 宣告，协议行为由 fake 服务器覆盖（推送、超时、断线、BYE 均可复现）；163 的 IMAP ID（RFC 2971）要求已由现行 `_connect` 在登录后统一发送，IDLE 会话复用同一连接路径即满足；各家 IDLE 超时按 RFC 建议以 28 分钟为客户端主动 DONE 重入上限治理。单 IP 长连接总数的服务商限流阈值无公开数值、本地不可核实，其风险由独立配额（默认 32）与抖动退避封顶，真实表现经 AC-016 部署实测与上线观测核实。
+- ImapProvider 的 IDLE 原语：已实证可行（2026-10-28，Python 3.12.3 + fake IMAP 服务器原型实验，产物 `.scratch/idle_spike/`）。`imaplib` 原生无 IDLE API；实验确认两条否定结论——`sock.settimeout()` 切片轮询会毒化 makefile 缓冲读（首次超时后 `OSError: cannot read from timed out object`），IDLE 后主线程再发命令（含 LOGOUT）会与读线程争抢响应字节。可行设计为：扩展 `imaplib.Commands` 注册 IDLE；每条 IDLE 连接由专属读线程在连接生命周期内独占 socket 读、行入队；控制线程为唯一写者（IDLE / DONE），从队列带超时消费未标记响应并在片间检查停止事件与最长 IDLE 时限；会话拆除以关闭 socket 完成、不发 LOGOUT。补齐限于 provider 内部，不改变其他同步路径契约。
+- 个别服务商 STATUS 字段缺失：已核实（2026-10-28，fake 响应解析实验）。STATUS 应答条目按可选解析，缺失维度记为未知（None）；变化判定只比较基线与探测双方均有值的维度，Coremail 类缺 UIDNEXT 时以 MESSAGES / UNSEEN 组合变化触发 delta；探测应答无任何可解析条目时按探测失败处理（跳过并下轮重试），不得按「无变化」静默放行。
+- Microsoft Graph 文件夹廉价探测：已核实（2026-10-28，代码核查现行 GraphProvider 与 Graph API 事实）。`GET /me/mailFolders/{id}` 单请求即返回 `totalItemCount` / `unreadItemCount`，属廉价计数探测（无消息内容），故 Graph 账号纳入巡检：以总数 / 未读为变化维度（无 UIDNEXT / modseq 等价物），成本由巡检单轮上限与轮转统一治理；原「无廉价手段则维持现状」分支不触发。
+
+### 风险与回退
+
+- 风险：IDLE 若误入任务槽位池将永久占满预算（两池分离即针对此点）；单一出口 IP 上长连接总数触发服务商隐形限流与账号风控；热账号集合换手过频造成连接 churn 与反复登录；watcher 生命周期管理不当导致连接泄漏或重连风暴；状态基线保存不当导致每轮误判变化、引发 delta 风暴；账号与文件夹规模放大后探测连接数上升。
+- 防御：AC-005 的独立配额与热账号优先（配额默认 32，远小于账号量级）、AC-003 的抖动退避、AC-009 的无变化零入队（稳态成本仅为短连接 STATUS 与长连接保活）、热账号选择须带滞回避免临界抖动、连接数与 watcher 状态可观测。
+- 回退：集中配置关闭 IDLE 与探测巡检两个开关即全量回到 t057 现状；或 git revert 对应 commit。
+
+### 依赖与约束
+
+- 依赖 t057（周期巡检调度，已完成）与 t058（集中式配置，已完成）。
+- 必须遵守既有约束：paused 文件夹跳过规则（p060 / A321）、checkpoint 写入 fencing、账号租约串行化、任务去重键合并。
+- STATUS 状态基线快照复用 `SyncCheckpoint.cursor`（JSONB）记录 `last_status`（总数 / UIDNEXT / 未读 / modseq），不新增数据库迁移（2026-10-28 用户确认的实现约束）。
+- IDLE 配额为独立配置项，不占用 `connection_slots` 的 8 个任务槽位（2026-10-28 用户确认）；账号量级按现状约 100、规划近千个设计，IDLE 只覆盖热账号子集。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：同步触发模型新增 IDLE 唤醒通道（信号与拉取分离、轮询兜底关系）与全文件夹 STATUS 探测巡检（触发、轮转与预算治理）。
+- `docs/specs/mail_sync_and_storage.md`：累积 spec 补记 IDLE 监听与全文件夹探测巡检的触发、预算、降级与变化判定契约。

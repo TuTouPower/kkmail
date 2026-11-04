@@ -1,127 +1,135 @@
----
-tid: "t027"
-slug: "account_group_ordering"
-title: "完整改造账号分组侧栏与邮件范围"
-status: "done"
-branch: "t027_account_group_ordering"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "c8cee92446f9c24e7a0a2a501d52d0bd49068041"
-depends_on: ""
-conflicts_with: "t026"
-note: "合并原 t027–t031，保留全部 40 条 AC；完整功能不减、无预置示例分组；t032 独立负责双端窗口适配"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+将原 t027–t031 合并为一次完整的分组侧栏交付：服务端组织与排序持久化、分组邮件范围，以及前端导航、管理和整行拖拽同时验收，避免按技术层拆成碎片任务。现有六类全局功能按钮及全部既有能力保留；demo 仅参考布局与交互，“工作”“个人”等示例分组不进入产品预置数据。网页与原生桌面标题栏控制由 t032 独立交付。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 服务端支持分组创建、重命名、删除、单组归属及原子移组；持久化分组顺序、总列表顺序和组内顺序，提供默认排序恢复；包括必要的 Alembic、OpenAPI 与生成类型。
+- 全部现有邮件分类、搜索、统计与全部已读贯通分组范围，保持服务端统一分页、去重、角色与精确文件夹查询。
+- 前端完整交付“所有账号／用户自定义分组／账号列表”导航、24px 固定缩进、折叠偏好、真实目录、缓存隔离与计数联动。
+- 侧栏及设置提供分组管理、账号归属选择；整行拖拽实现移入、跨组、移出及独立排序，覆盖目标反馈、错误恢复与非拖动替代入口。
+- 保留所有账号下收件、未读、已发、草稿、废纸篓、垃圾邮件六项独立功能按钮，以及当前其他全部可用功能；分组数据与名称完全由用户数据驱动。
 
-- 创建依据：2026-10-23 核对设计聊天、v3 本地原型与 main@26a8eee。仅登记 backlog，未 start、未实施。
+### 非范围
 
-- 用户要求合并为两个 task：本 task 接收原 t028–t031 全部范围与 AC，保留 t032 为后续双端窗口适配；合并前均为主仓 backlog，无执行分支、worktree 或 attempt 记录。
+- 网页折叠入口与 Electron 原生标题栏布局属于 t032；本 task 保持现有侧栏隐藏、恢复、列宽调整与移动抽屉可用。
+- 不引入多组归属、嵌套分组、多选账号拖动、邮件或远端文件夹拖动，不重设计整个设置页或新增账号删除快捷方式。
+- 不新增发信、回复、转发、联系人、归档写回或远端目录管理；不改变现有搜索算法、跨文件夹搜索语义、认证协议、同步协议与 MIME 解析。
+- 不强制手机触摸拖动，窄屏使用账号归属选择完成相同移动结果；不复制 demo 假账号、假邮件、示例分组或 600px 断点。
 
-- 已完成的实施：新增账号总列表/组内顺序字段与迁移，分组重命名及带 revision 的完整布局快照 API；旧 revision 返回 409，组织写事务共用 advisory lock。邮件列表、搜索（含精确文件夹搜索）、统计和批量已读接受分组范围，并对空组、未知统计与范围冲突作 fail-closed 处理。前端实现三段侧栏，保留六类全局分类及对应分组入口、账号真实文件夹与未读快捷项、用户自定义分组管理、移组和整行拖拽；展开状态存入本地偏好。成员变化清空旧详情选择并重置组列表/搜索至首屏，组角标复用全局统计。未预置示例分组。
+### 验收标准
 
-- attempt 1 因测试专用 PostgreSQL 门禁记录 stopped/blocked。随后确认主仓本地 `.env.test` 已有非空 `KKMAIL_TEST_PG_PASSWORD`，task-run 于 2026-10-23T04:38:05+08:00 登记 attempt 2 / `984c808877d347e8a6098ed0d3abafc6`；测试进程仅接收变量，不输出或复制密钥。
+<!-- 规范（门禁必留，不得删除） -->
 
-- Round 1 独立 code/test review 共报 21 项（代码 14、测试 7）；本轮处置表逐项登记修复，并新增真实 PostgreSQL API、组件和浏览器回归。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- Round 2 code/test review 共报 9 项（代码 6、测试 3）；新增 revision 冲突、未知统计、精确文件夹搜索及真实浏览器失败/无效拖放/连续拖动覆盖，处置表逐项登记。
+<!-- /规范 -->
 
-- Round 3 code review 新报 3 条 important、1 条 minor；test review 重开设置入口跨组件刷新覆盖（t027_test_f006）。实施方清理所有组列表缓存、移除 20,000 项硬截断、删除账号后重置统计/列表，并将布局成员汇总改为单次分桶；补设置页创建/删除与侧栏同步、删除末个账号统计清理及超 20,000 项分页测试。
+- [x] AC-001：分组支持创建、重命名和删除；名称 trim 后不能为空、沿用 128 字符上限与唯一名称约束；空白、重名和不存在目标均返回可识别错误且不产生部分写入。
+- [x] AC-002：删除含账号分组后，仅清空其账号归属；账号、凭据、邮件、附件与总列表顺序保持；从独立数据库会话读取可确认结果。
+- [x] AC-003：账号可从无组移入、从 A 组移到 B 组或清空归属；最多属于一个分组，目标不存在时整体失败。
+- [x] AC-004：默认账号排序按大小写不敏感邮箱域名升序，再按完整邮箱地址升序；总列表与各组独立切换至手动顺序，重新请求与服务重启后保留。
+- [x] AC-005：总列表排序不修改账号归属或任何组内顺序；组内排序不修改总列表顺序；跨组移动在一个事务内更新归属和目标位置，无重复、遗漏或中间状态。
+- [x] AC-006：自定义分组可调整顺序且重启后保留；新增分组追加末尾。恢复默认排序同时恢复总列表及所有组内账号的域名排序，不改分组先后与账号归属；手动列表新增/移入账号默认追加末尾，显式指定位置除外。
+- [x] AC-007：重复、遗漏、外组账号或不存在 ID 的排序载荷被整体拒绝；并发组织写入后每个已提交快照仍符合单组归属及排序完整性，冲突有明确处理且无半次写入。
+- [x] AC-008：空库升级、旧库升级及最新迁移降级再升级成功，已有账号与分组归属不变；旧库账号初始化为默认排序，旧分组相对顺序保留；API 经认证/CSRF 保护并与生成类型一致。
+- [x] AC-009：空库初始化及旧库升级不自动创建“工作”“个人”等 demo 分组；生产代码、迁移 seed 与默认配置不硬编码示例组名、组 ID 或对应逻辑分支，分组完全由已有数据及用户创建；已有任意合法组名与成员关系保持。
+- [x] AC-010：指定存在分组后，inbox/sent/drafts/trash/junk/archive 等现有支持角色列表和 inbox 未读筛选仅返回当前组员邮件；保留全局与分组的完整分类能力，不能按 demo 缩减角色；其他组与无组账号不混入；同封邮件多位置仍只返回一次。
+- [x] AC-011：组内两账号有相同排序时间且邮件超过一页时，升序与降序逐页遍历均不重复、不遗漏；空分组列表、搜索与统计为空或零，全部已读影响零封，绝不回退全账号。
+- [x] AC-012：搜索保留现有匹配与 offset 翻页语义，但结果与 total 严格限于组员；组内收件总数、未读数可由完整服务端数据准确获得，不依赖已加载邮件页。
+- [x] AC-013：分组全部已读仅影响组员中当前角色和旗标筛选匹配邮件，并沿用远端写回状态机；组外及不匹配邮件保持原状。
+- [x] AC-014：不存在或已删除分组返回明确不存在错误；分组参数与 account_id 或 folder_id 同时提交时拒绝歧义请求，不静默扩大范围；不传任何范围参数才表示全局。
+- [x] AC-015：账号移入/移出或分组删除后，下一次请求按最新已提交成员关系解析；不存在旧成员持久快照或因过时 cursor/offset 混入组外邮件；成员变化后前端应从首屏重查。
+- [x] AC-016：不带分组参数时，全局、单账号及精确 folder_id 的原有列表、搜索与已读范围行为继续通过已有测试；新增契约经认证/CSRF 与生成类型校验。
+- [x] AC-017：从上到下为“所有账号”、自定义分组、“账号列表”；三类顶层左缘一致，各区独立折叠；没有“未分组”虚拟组或原个人收藏的每类账号重复树。
+- [x] AC-018：所有账号展开保留所有收件箱、所有未读、已发邮件、草稿箱、废纸篓、垃圾邮件六个独立功能按钮及各自全局查询行为，不能按 demo 缩为四项或隐藏到账号目录；每个自定义分组提供对应六类组范围入口；账号列表始终列出全部账号，组内仅列当前成员；空组仍可导航至空结果。
+- [x] AC-019：每个账号展开可进入收件箱、inbox 未读、草稿与废纸篓；已同步的已发/junk/归档/自定义及嵌套真实文件夹仍可访问，不捏造远端不存在文件夹，不重复呈现同一个真实文件夹入口。账号标题与箭头均切换展开，选择邮件视图使用其子项。
+- [x] AC-020：所有相邻层级行首按固定 24px 增量缩进；箭头计入布局，无箭头项用同宽槽位，图标和文本按列对齐；展开树位于账号下方、后续行顺延，长邮箱不横溢或遮挡计数。
+- [x] AC-021：所有账号/组/账号/具体文件夹之间切换后，标题、列表、搜索、排序、计数及全部已读目标一致；重置选中邮件、批选与搜索，缓存按范围类型与 ID 隔离，旧请求与 placeholder 不展示其他范围邮件。
+- [x] AC-022：成员变化触发受影响组与账号的列表/搜索/统计从首屏重新查询；当前组删除后回到所有收件箱并清理选择；邮件 SSE 刷新后两处账号角标及组内计数一致，未知计数不冒充零。
+- [x] AC-023：所有账号、账号列表、自定义分组及账号展开状态在本地刷新后恢复；同一账号在总列表与组内展开状态共用，不影响分组各自折叠状态；分组或账号删除后残余偏好不形成失效导航。
+- [x] AC-024：深色、浅色、760px 两侧布局及鼠标/键盘导航可用；折叠控件 aria-expanded 与状态一致、焦点轮廓可见；稳定 UI 编号保持语义一致，消失编号废弃，新区域分配新编号。
+- [x] AC-025：改造前可用的邮件分类、真实目录、搜索、筛选、排序、分页、计数与邮件操作继续可用；以生产现有功能建立回归清单，demo 未展示不能作为删除或降级依据。
+- [x] AC-026：自定义分组仅来源于服务端已有数据及用户创建；无分组实例不出现“工作”“个人”等 demo 示例分组，也不出现对应空占位；任意合法用户组名均由数据驱动渲染，升级后原有组名与成员关系保留。
+- [x] AC-027：账号列表行右侧显示文件夹加号控件，具备“新建分组”可访问名称；不会被解释或执行为新增账号，提交后新组出现在顶层且列表更新。
+- [x] AC-028：分组菜单提供重命名及删除；重命名后导航标题和设置名称更新；名称校验与 t027 一致，取消不写入，错误保留输入并可重试，进行中不重复提交。
+- [x] AC-029：删除前明确提示只移除分组、保留账号和邮件；确认后组消失、账号仍在总列表、当前已删除组视图回到所有收件箱；取消保持原状。
+- [x] AC-030：账号管理下拉选择当前组、其他组或不加入分组；保存后总列表和组内列表、角标与当前组邮件范围更新，失败显示明确错误并恢复服务端事实，无需刷新页面。
+- [x] AC-031：已有设置创建/删除入口与侧栏采用同一服务端结果及失效规则，不遗留旧组名、旧账号归属或重复创建；真实账号添加与深浅/跟随系统主题仍可用。
+- [x] AC-032：菜单和对话框支持键盘进入、Escape/取消关闭、焦点返回触发点；普通 HTML 文本显示组名，特殊字符不变成 HTML；窄屏可完成账号移组，不依赖拖动。
+- [x] AC-033：分组名称与归属选项仅来自服务端已有数据及用户输入，支持任意合法组名；不预置“工作”“个人”等示例分组，不按示例名称设置专用行为；无分组时显示空列表和创建入口。
+- [x] AC-034：账号与分组从整行即可开始拖动，没有专门手柄图标；点击展开箭头、菜单或普通行点击不误触移动；可放置目标有反馈，结束/取消后反馈清除。
+- [x] AC-035：从总列表拖账号到空组、折叠组或有成员组可加入目标组；从 A 组拖至 B 组可移组；拖到目标账号行时插入该账号之前，放到组标题/空区时追加末尾；两处账号引用仍对应同一账号。
+- [x] AC-036：从组内拖到账号列表标题、空区或总列表账号行会移出原组，账号与邮件保留；放到总列表账号行前会同时定位总列表顺序。
+- [x] AC-037：从总列表拖到同一总列表只改变总列表顺序，即使该账号已有分组也保持归属；组内重排只改变该组账号顺序；拖动来源上下文参与判定，不能照搬 demo 通过 groupId 自动清组的逻辑。
+- [x] AC-038：分组整行可调整分组先后，所有账号与账号列表固定位置不可拖动；同一列表内账号调整后启用该列表手动排序，刷新及新会话读取仍保留，组与总列表相互独立。
+- [x] AC-039：恢复默认排序使总列表及所有组内账号重新按域名再完整邮箱升序；分组先后与成员关系不变；明确显示保存错误，失败后恢复服务端事实而非仅 toast 成功。
+- [x] AC-040：拖到自身、无效目标、取消、未知外部载荷均不改变状态；持久化失败不留下半移组/半排序；同一页面连拖不会让旧响应覆盖新结果，组成员变化触发组邮件范围从首屏重查。
 
-- Round 4 code review 确认 f021–f024 修复，新增 f025（添加账户后统计缓存未刷新）；test review 指出 t027_test_f006 首次跨组件测试缺少账号与布局快照断言。Round 5 前补添加账号统计刷新，并扩展设置页创建/移组/删除的共享账号与布局快照联动测试。
+### 可测试性声明
 
-- Round 4 后前端全量 217 passed，TypeScript、生产构建、lint、OpenAPI 与 CSS 检查通过；真实全栈 E2E 8/8；布局快照 PostgreSQL 定向测试 3/3；Markdown 与 diff 检查通过。全量 PostgreSQL 405 passed 为此前同一 attempt 的已记录基线，Round 3 后改动另由定向 DB 用例覆盖。
+<!-- 规范（门禁必留，不得删除） -->
 
-- Round 5 code/test review 均 PASS，review scope `18514639e6c252b7`；处置项全部关闭。最终黑盒复验：轻量 E2E 9/9，真实全栈 E2E 8/8；前端 217/217，布局快照 PostgreSQL 定向测试 3/3，preflight 与格式检查通过。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-- 最终验证基线：模板契约 149 passed；隔离 PostgreSQL 全量 405 passed；前端 38 个测试文件 / 213 passed；TypeScript、生产构建、lint、OpenAPI 与 CSS token 检查通过；快速浏览器 E2E 9 passed；真实全栈 E2E 8 passed（含组内/跨组排序、设置移组、保存失败回滚、自拖/取消/外部拖放与连续拖动）。Round 3 后增量验证见上文。
+<!-- /规范 -->
 
-- 桌面基础与真实打包 PostgreSQL 生命周期测试通过。此次 Round 1 收敛未改动桌面代码。
+全部 AC 可自动测试；浏览器布局通过 bounding box 与截图验证，原生拖拽必须通过浏览器 E2E 验证，不能只调用处理函数；人工审美检查作为补充。
 
-- 桌面测试所需 Electron 依赖按锁文件安装到隔离 worktree；测试打包所需 PostgreSQL 二进制通过本地 symlink 指向主仓现有构建资源，主仓资源未改动。完整门禁通过后执行独立代码与测试 review，再填写 handoff、finish 并建立唯一执行 commit。
+## 上下文区
 
-## Review 处置
+- 合并来源：原 t027（当前目标）、[t028 分组邮件范围](../t028_group_mail_scope/spec.md)、[t029 侧栏导航](../t029_sidebar_group_navigation/spec.md)、[t030 分组管理](../t030_sidebar_group_management/spec.md)、[t031 拖拽排序](../t031_sidebar_drag_ordering/spec.md)；用户明确要求本批收敛为两个 task，保留 t032 双端窗口适配。
+- 需求来源：[设计聊天](https://chatgpt.com/c/[redacted])、[参考原型](reference_demo.html) 与 [评估记录](source_notes.md)；2026-10-23 通过 ego lite 核实。
+- 后续用户约束优先：不减少当前软件功能；“工作”“个人”只为示例，不预置、不硬编码。
+- AC 保留映射：原 t027 AC-001–009 保持不变；原 t028 AC-001–007 → 本 task AC-010–016；原 t029 AC-001–010 → AC-017–026；原 t030 AC-001–007 → AC-027–033；原 t031 AC-001–007 → AC-034–040。全部 40 条行为保留，来源原编号不复用。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 有意不测
 
-### Round 1 (2026-10-23T05:15:00+08:00)
+- demo 的发信、回复、转发与归档动作：不属本次侧栏改造及项目当前产品范围。
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t027_code_f001|important|已修|分组删除与布局保存统一按组、账号顺序加锁。|src/mail_core/accounts/service.py|
-|t027_code_f002|important|已修|布局写入期间禁止再次拖动，并等待失效查询完成后解锁。|src/frontend/src/components/Sidebar.tsx|
-|t027_code_f003|important|已修|分组 dragend 清除载荷；drop 校验当前 DataTransfer 与本次拖动。|src/frontend/src/components/Sidebar.tsx|
-|t027_code_f004|important|已修|拖到来源账号自身时不构造布局、不写入。|src/frontend/src/components/Sidebar.tsx|
-|t027_code_f005|important|已修|设置页删除当前分组后回到所有收件箱并清选择。|src/frontend/src/components/SettingsModal.tsx|
-|t027_code_f006|important|已修|成员关系变化后清除邮件详情与批选状态。|src/frontend/src/components/Sidebar.tsx; src/frontend/src/components/SettingsModal.tsx|
-|t027_code_f007|important|已修|组角标汇总现有全局账号统计，成员列新增索引。|src/frontend/src/components/Sidebar.tsx; src/mail_core/mail/storage/models.py; src/mail_core/db/alembic/versions/20261023_0016_sidebar_account_order.py|
-|t027_code_f008|important|已修|账号标题与箭头均切换真实目录展开状态。|src/frontend/src/components/Sidebar.tsx|
-|t027_code_f009|important|已修|重命名请求期间禁用表单并以同步 ref 阻止重复提交。|src/frontend/src/components/Sidebar.tsx|
-|t027_code_f010|minor|已修|取消创建后焦点返回“新建分组”触发按钮。|src/frontend/src/components/Sidebar.tsx|
-|t027_code_f011|minor|已修|Pydantic 在长度检查前 trim 分组名称。|src/mail_core/api/accounts.py; tests/mail_core/test_accounts_api_unit.py|
-|t027_code_f012|minor|已修|拆分完整布局校验与已验证布局写入。|src/mail_core/accounts/service.py|
-|t027_code_f013|minor|已修|账号分组归属分支提取为局部函数。|src/mail_core/accounts/service.py|
-|t027_code_f014|minor|已修|全部已读范围解析提取为独立查询函数。|src/mail_core/mail/application/mutations.py|
-|t027_test_f001|important|已修|新增名称边界、失败重命名独立读取与非空组删除后凭据引用/账号/邮件/附件/顺序保留。|tests/mail_core/test_accounts_api_pg.py; tests/mail_core/test_accounts_api_unit.py|
-|t027_test_f002|important|已修|新增默认/手动顺序、恢复默认、两套完整布局并发仅一方成功、旧 revision 冲突、锁序与迁移保留测试。|tests/mail_core/test_sidebar_group_scope.py; tests/mail_core/test_migration_validation.py|
-|t027_test_f003|important|已修|覆盖 inbox/sent/drafts/trash/junk/archive、升降序同时间分页、唯一 offset 页、精确文件夹搜索/歧义、旗标已读、统计与移组后首屏重查。|tests/mail_core/test_sidebar_group_scope.py|
-|t027_test_f004|important|已修|恢复全局/账号/组角标及未知计数测试，并断言成员变化刷新组角标、复用全局统计。|src/frontend/src/components/Sidebar.test.tsx|
-|t027_test_f005|important|已修|真实浏览器断言 24px/48px 层级、三区独立折叠、760px 断点及双主题。|tests/e2e/sidebar_tree.spec.ts|
-|t027_test_f006|important|已修|覆盖成功创建/重命名重查、删除取消保留成员、Escape 焦点、特殊字面量及真实浏览器设置下拉跨组/清组；同会话测试创建组、移入真实账号并删除组，断言 Sidebar 账号与布局快照重查且拖动重新可用。|src/frontend/src/components/Sidebar.test.tsx; src/frontend/src/components/SettingsModal.test.tsx; tests/e2e/full_stack.spec.ts|
-|t027_test_f007|important|已修|真实浏览器覆盖排序、移组、自身/无效目标/外部拖动、保存失败回滚及连续拖动保护；组件断言首屏重置。|tests/e2e/full_stack.spec.ts; src/frontend/src/components/Sidebar.test.tsx; src/frontend/src/api/queries.cache.test.ts|
+### 测试策略
 
-### Round 2 (2026-10-23T05:53:49+08:00)
+- 真实 PostgreSQL API/服务集成测试覆盖非空分组删除、独立会话、失败事务与并发写入；排序夹具含同域/不同域及大小写邮箱。
+- 沿项目迁移门禁做旧数据升级与降级再升级；生成 OpenAPI 和 TypeScript 后检查漂移。执行 scripts/run-mail-core-tests.sh run 与相关前端类型/API 测试。
+- 真实 PG 构造两个组、无组账号、空组、相同时间和多位置邮件；逐项验证现有支持角色，明确覆盖 drafts 与 junk；通过 HTTP 验证列表/搜索/统计/全部已读，检查写回队列。
+- 重点测试空 account_ids 与 None 区分、非法组合、组删除及成员变更后的连续请求；执行 scripts/run-mail-core-tests.sh run 和前端 API 契约测试。
+- 组件与 store/query 测试覆盖全局与分组六类完整分类、现有功能回归清单、任意用户组名、无预置分组、导航矩阵、延迟响应、空组、错误计数、偏好恢复及删除回退；保留或整体替换旧导航测试并解释语义更替，禁止就地改预期迁就实现。
+- 浏览器 E2E 验证 24px 布局、长账号、多层目录和主题；真实全栈用例验证组搜索/分页/全部已读隔离。运行前端 test/type/lint/build 与 python3 scripts/run_full_stack_e2e.py。
+- 组件测试覆盖创建/重命名/删除与取消、重复提交、API 失败、输入转义、焦点恢复和设置联动。
+- 真实全栈验证创建组、账号分配、非空组删除保留账号邮件；运行前端完整门禁与对应全栈场景。
+- 组件/命令测试覆盖来源上下文与目标矩阵、失败回滚、顺序独立性和恢复默认。
+- 真实浏览器拖动空/折叠/有成员组、总列表标题及账号行，再刷新检查后端持久结果；覆盖有分组账号在总列表内部重排这一回归场景。运行前端门禁与全栈 E2E。
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t027_code_f015|important|已修|布局读取返回 revision；保存与恢复默认在事务锁下比较 expected_revision，旧版本返回 409 并刷新缓存；组织写共用 advisory lock。|src/mail_core/accounts/service.py; src/mail_core/api/accounts.py; src/frontend/src/components/Sidebar.tsx|
-|t027_code_f016|important|已修|移组先锁目标组；移组与删组共享组织事务锁，删除竞态返回 404 而非 500。|src/mail_core/accounts/service.py; tests/mail_core/test_sidebar_group_scope.py|
-|t027_code_f017|important|已修|成员集合比较改为 Set，复杂度降为线性。|src/frontend/src/components/Sidebar.tsx|
-|t027_code_f018|important|已修|统计补全缺失账号并以 null 标未知；部分总计返回 null，侧栏、文件夹树与邮件列表不再把未知显示为零。|src/mail_core/mail/application/queries.py; src/mail_core/api/mail.py; src/frontend/src/components/Sidebar.tsx; src/frontend/src/components/MessageList.tsx|
-|t027_code_f019|important|已修|设置页删除当前组时同时清除 search。|src/frontend/src/components/SettingsModal.tsx; src/frontend/src/components/SettingsModal.test.tsx|
-|t027_code_f020|minor|已修|账号标题按钮的 aria-expanded 与展开状态同步。|src/frontend/src/components/Sidebar.tsx; src/frontend/src/components/Sidebar.test.tsx|
-|t027_test_f008|important|已修|保存失败后断言账号仍在总列表且未进入目标组；真实浏览器另验 500 回滚。|src/frontend/src/components/Sidebar.test.tsx; tests/e2e/full_stack.spec.ts|
-|t027_test_f009|important|已修|搜索分页两页 ID 互斥，且并集严格等于夹具预期邮件。|tests/mail_core/test_sidebar_group_scope.py|
-|t027_test_f010|important|已修|组件覆盖切换其他组与清空；真实浏览器 selectOption 验证 PATCH 和服务端归属。|src/frontend/src/components/SettingsModal.test.tsx; tests/e2e/full_stack.spec.ts|
+### 未知契约清单
 
-### Round 3 (2026-10-23T06:34:22+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t027_code_f021|important|已修|成员关系改变后重置所有组 inbox/search 缓存，避免重访时先显示旧组员邮件。|src/frontend/src/api/queries.ts; src/frontend/src/components/Sidebar.tsx; src/frontend/src/components/SettingsModal.tsx; src/frontend/src/api/queries.cache.test.ts|
-|t027_code_f022|important|已修|账号分页持续读取至 has_more=false；若服务端声明仍有数据却返回空页则报错，不静默返回不完整清单。|src/frontend/src/api/queries.ts; src/frontend/src/api/queries.cache.test.ts|
-|t027_code_f023|important|已修|删除账号后更新组和侧栏快照、重置全局统计并清空邮件列表缓存；删除末个账号时全局统计明确归零。|src/frontend/src/components/SettingsModal.tsx; src/frontend/src/api/queries.ts; src/frontend/src/components/SettingsModal.test.tsx|
-|t027_code_f024|minor|已修|布局快照先单次按 group_id 分桶，再分别排序成员，避免每组扫描全部账号。|src/mail_core/accounts/service.py|
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
 
-### Round 4 (2026-10-23T06:44:51+08:00)
+<!-- /规范 -->
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t027_code_f025|important|已修|成功添加账号后等待账号列表刷新，再重置统计查询，避免旧全局 unread 总数与账号映射继续显示。|src/frontend/src/components/SettingsModal.tsx; src/frontend/src/components/SettingsModal.test.tsx|
+无。需求来源与当前内部契约已核实；具体接口命名和实现细节在执行期确定，不构成外部契约阻塞。
 
-无 finding 时写“Round N 零 finding”。
+### 风险与回退
 
-## 收尾报告
+- 风险：空分组被解释为全量、全部已读越界、跨组缓存混用；排序与归属半写入、旧拖动响应覆盖新状态；按 demo 缩减功能或丢失真实目录；迁移初始化改变旧组织数据。
+- 回退：回退本 task 执行提交；数据库迁移仅在隔离库演练降级与再升级，生产迁移前验证备份可恢复。保留业务账号、凭据、邮件、附件及用户已有分组；只清理本 task 新增的本地偏好字段，不清空全部 localStorage。
 
-### 验收与验证
+### 依赖与约束
 
-- spec：[`spec.md`](spec.md)
-- 结果：40 条 AC 全部满足
-- 测试：模板契约 149 passed；PostgreSQL 全量 405 passed（先前基线），Round 3 后布局快照定向 PostgreSQL 测试 3 passed；前端 38 files / 217 passed；TypeScript、生产构建、lint、OpenAPI 与 CSS token 检查通过；桌面基础与打包 PostgreSQL 生命周期测试通过且本 task 未改桌面文件。
-- 黑盒：轻量浏览器 E2E 9 passed；真实全栈 Playwright E2E 8 passed，覆盖账号添加/同步、设置移组、分组拖拽持久化、失败回滚和无效拖放。
-- review：Round 5 full code review PASS、test review PASS；scope `18514639e6c252b7`，无未处置 finding。
-- AC 证据：见 `handoff.json`
+- 无前置 backlog task；原 t027–t031 的内部依赖已合并，组织 API、查询与界面在同一交付内完成。
+- 排序和归属由服务端持久化；折叠、图标及主题保留本地偏好。继续单组归属、两套独立账号顺序，遵循既有分层与最小 API，不留过时路径兼容层。
+- 未读取 inbox 内未读；trash（废纸篓）与 junk（垃圾邮件）严格区分。复用领域查询、搜索、统计与远端写回，不在前端拼接多账号首屏。
+- 复用 TanStack Query、Zustand、folder-stats、SettingsModal 及 apiRequest 的认证/CSRF；保持 tokens、760px、完整隐藏侧栏、稳定 UI 编号及邮件正文沙箱约束，不在设置外暴露凭据。
+- 窄屏移组保留非拖动入口，拖放优先使用现有浏览器能力；收尾累积更新 docs/specs/inbox_ui_and_search.md，仅替代旧导航结构，完整保留功能。
 
-### 结果摘要
+### Finalization 时更新的 blueprint
 
-- 账号分组、顺序、侧栏导航和分组邮件范围完整交付；六类既有分类、账号真实文件夹和全部账号管理功能保留。没有写入“工作/个人”等 demo 分组。无遗留 pending/finding。
+- `docs/blueprint/architecture.md`：完整分组侧栏、组织数据及邮件范围流转。
+- `docs/blueprint/conventions.md`：24px 布局、范围缓存、空集合隔离、独立排序、拖放判定、无预置分组及功能保留约束。
+- `docs/blueprint/decisions.md`：导航替换、单组归属、服务端排序持久化与两套顺序裁决。
+- `docs/blueprint/testing.md`：组织事务、迁移、范围隔离、功能回归与浏览器原生拖拽验收。

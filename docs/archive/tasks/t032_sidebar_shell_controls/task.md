@@ -1,57 +1,84 @@
----
-tid: "t032"
-slug: "sidebar_shell_controls"
-title: "整合网页与桌面原生标题栏侧栏控制"
-status: "done"
-branch: "t032_sidebar_shell_controls"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "1b1407ae5e68ebd732dce46d5386355f9e9b0d56"
-depends_on: "t027"
-conflicts_with: "t025"
-note: "来源：侧栏设计聊天最终要求与 v3 demo；网页列表标题同行控制，macOS 原生红绿灯旁控制，保留移动端 760px 断点; 本批收敛为两个 task；依赖合并后的 t027，原 t028–t031 不再独立调度"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+当前 Sidebar 顶部为折叠按钮独占 sidebar-head，列表仅在侧栏隐藏时提供展开入口；Electron 使用普通原生标题栏，preload 已暴露 kkmailDesktop.platform。v3 要求网页按钮与列表标题同行，macOS 则靠原生红绿灯且不额外占一行。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 网页常驻列表标题同排侧栏控制，移除侧栏专属按钮空行；设置页可恢复导航。
+- macOS Electron 整合原生红绿灯与邻接侧栏控制；Windows/Linux 保留各自原生窗口控件并共用导航行为。
+- 保留完整隐藏侧栏、列宽调整及移动抽屉，区分真实 desktop 环境与普通网页。
 
-- 创建依据：2026-10-23 核对设计聊天、v3 本地原型与 main@26a8eee。
-- 实施：网页宽屏将常驻侧栏按钮放入列表标题行；macOS Electron 采用原生 `hidden` 标题栏与 traffic lights，按钮相邻且保留独立拖动区；Windows/Linux 保留原生窗口框架与受控 preload。增加登录/会话检查期间拖动区、主题首帧同步与系统背景色适配。保留全部账号功能与按钮，不实现 demo 的工作/个人分组。
-- 实施决策：首次 E2E 检出列表标题垂直对齐、移动遮罩被后置规则隐藏、测试采样时序问题；修正标题按钮对齐与遮罩 CSS，改用模块执行前的 HTML 采样。另补登录页/会话检查态拖动区。macOS 标题栏从 `hiddenInset` 调整为 Electron 官方自定义标题栏采用的 `hidden`；CUA 未验证实际窗口位移。用户于 2026-10-23 明确裁定按通过结束，AC-004 作为用户验收豁免处理，不将其写成实际位移实测。
-- 验证：模板契约 149 passed；PostgreSQL 全量 405 passed；前端 39 文件 / 220 passed、类型检查、生产构建、lint、OpenAPI、CSS token 全通过；前端 E2E 13 passed；桌面 `npm test` 通过。最终 `hidden` 样式下实测原生交通灯、侧栏切换、全屏进出、最小化/恢复、关闭/重开与 resize；AC-004 按用户裁定验收通过。Windows/Linux 未提供运行环境，按窗口参数单测核验，未宣称实际平台验证。
+### 非范围
 
-## Review 处置
+- 不复制 demo HTML 假红绿灯，不以 URL shell=desktop 启用生产特权。
+- 不实现新的 Electron 特权 IPC、签名、公证、发布或业务进程管理改造。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 3 (2026-10-23T08:39:41+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t032_gen_f001|important|撤回|用户明确裁定 AC-004 按通过结束；验收豁免已记档，CUA 未实测位移|docs/archive/tasks/t032_sidebar_shell_controls/macos_window_validation.md:20|
-|t032_gen_f002|minor|已修|Blueprint 已改为 `hidden`，与最终窗口选项一致|docs/blueprint/conventions.md:75|
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [ ] AC-001：网页宽屏在邮件列表标题同行常驻侧栏折叠/展开按钮，无侧栏专属空行，无模拟红绿灯；侧栏打开和关闭时均可操作，aria-expanded 与文字名称准确反映状态。
+- [ ] AC-002：宽屏关闭侧栏后完整释放侧栏网格轨及 DOM，保留列表/设置恢复入口；再次打开恢复原列宽及导航折叠状态，连续切换不会残留不可见焦点。
+- [ ] AC-003：macOS 实际 Electron 窗口显示系统原生红黄绿灯，侧栏按钮在其旁边同一标题栏区域；不另增按钮专属行，收起侧栏后控制仍可用且不遮挡标题/内容。
+- [ ] AC-004：macOS 可拖动标题栏空白移动窗口，按钮可点击且不触发窗口拖动；原生关闭、最小化、缩放/全屏及退出全屏后导航仍可操作；窗口 resize 不造成红绿灯重叠。
+- [ ] AC-005：Windows/Linux 保留平台原生关闭/最小化/最大化控件，侧栏按钮与列表标题同行；普通浏览器不读取桌面特权，Electron 的 contextIsolation、sandbox、nodeIntegration 现有安全设置保持。
+- [ ] AC-006：760px 及以下网页使用抽屉，按钮打开/关闭、遮罩/选中导航/Escape 关闭和焦点恢复可用；跨 760px 切换时抽屉状态与桌面隐藏状态独立，不残留遮罩。
+- [ ] AC-007：深色/浅色/跟随系统主题下，网页及桌面按钮与窗口区域可辨识且无硬编码主题闪白；设置页恢复入口与稳定 UI 引用保持可用。
 
-- spec：[`spec.md`](spec.md)
-- 结果：所有 AC 按用户裁定验收完成；AC-004 采用用户验收豁免，未声称 CUA 实测位移。Win/Linux 原生窗口仅通过窗口参数单测核验，本机无对应运行环境。
-- 测试：模板契约 149 passed；PostgreSQL 全量 405 passed；前端 39 文件 / 220 passed；TypeScript、生产构建、lint、OpenAPI、CSS token 检查通过；桌面 `npm test` 通过。
-- 黑盒：浏览器 E2E 13 passed；macOS Electron 最终 `hidden` 样式下的原生控件、全屏、最小化/恢复、关闭/重开与 resize 已观察；CUA 未测出窗口位移，AC-004 按用户明确裁定验收通过。详情见 [`macos_window_validation.md`](macos_window_validation.md)，截图留存于本次执行会话。
-- review：Round 4 PASS（scope `46c5463ca7cdfe70`）；f001 按用户验收豁免撤回，CUA 未观察到实际位移；f002 已修，本轮无新增 finding。
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-- 网页宽屏、移动抽屉、Mac 原生标题栏与主题行为已落地；未减少账号功能按钮，也未把 demo 的“工作/个人”分组写入产品。
-- 遗留：无。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+AC-001、AC-002、AC-005、AC-006、AC-007 的 DOM、配置与状态逻辑可自动测试。AC-003、AC-004 的系统红绿灯命中、真实窗口拖动和全屏行为不能仅由 jsdom/BrowserWindow mock 证明；在本机 macOS 实际 Electron 测试窗口验证并保存截图与操作记录，禁止用原型的假按钮代替证据。Windows/Linux 原生窗口行为需对应平台实际运行记录；缺平台证据时如实列出，不能宣称跨平台全部验证。
+
+## 上下文区
+
+- 来源：[v3 参考原型](../t027_account_group_ordering/reference_demo.html)；现状与取舍见 [评估记录](../t027_account_group_ordering/source_notes.md)。原始设计聊天未入库归档。
+
+### 有意不测
+
+- demo 的发信、回复、转发与归档动作：不属本次侧栏改造及项目当前产品范围。
+
+### 测试策略
+
+- 前端组件与浏览器 E2E 覆盖同行布局、恢复、主题、760px 边界及焦点；桌面测试约束窗口创建参数与 preload 最小暴露。
+- 运行前端完整门禁、npm --prefix src/desktop test 和实际 Electron 冒烟；使用隔离测试数据，记录 macOS 原生窗口点击、拖动、最小化与全屏。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无。需求来源与当前内部契约已核实；具体接口命名和实现细节在执行期确定，不构成外部契约阻塞。
+
+### 风险与回退
+
+- 风险：标题栏拖动区域吞掉点击，原生红绿灯与内容重叠，网页或移动恢复入口丢失。
+- 回退：回退本 task 执行提交，恢复旧 BrowserWindow 参数与既有侧栏入口；不触及账号与邮件数据。
+
+### 依赖与约束
+
+- 依赖合并后的 t027（完整分组侧栏改造）；原 t029/t030/t031 已并入 t027，不再单独调度。
+- 以受控 preload 的 kkmailDesktop.platform 识别真实桌面环境，浏览器安全边界不扩展。
+- 实际系统窗口验证属于执行期验收，不是生产部署；不因创建 task 而启动或修改用户正在运行的桌面实例。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：网页/桌面壳布局职责。
+- `docs/blueprint/conventions.md`：常驻折叠入口、原生标题栏与 760px 状态隔离。
+- `docs/blueprint/testing.md`：真实系统窗口验证边界。

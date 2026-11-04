@@ -1,69 +1,82 @@
----
-tid: "t020"
-slug: "worker_process_recovery"
-title: "验证多进程 Worker 竞争与故障后恢复"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "1312431b58ada455a994c0842e52947a28cc0422"
-depends_on: "t016"
-conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 7868bfa0"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+现有 skip_locked/fencing 已覆盖双事务，chaos_lease_recovery 通过修改时间字段模拟 Worker 死亡；尚不能证明实际进程终止、多 Worker 竞争、API 与 Worker 分离以及 LISTEN 重连后的恢复行为。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 以真实 PG 和本地协议服务启动至少两个独立 Worker 及独立 API 进程，复用现有生产启动方式；增加受控进程终止、连接中断和恢复测试。
+- 验证任务独占、租约接管、fencing 拒绝旧提交、checkpoint/Blob 一致性、可恢复任务和 Outbox/SSE 重放。
+- 恢复日志给出运行身份、任务/租约状态与有界等待结果；不把人工调用 handler 或重置状态作为恢复动作。
 
-2026-10-22 核实 test_sync_leases_jobs.py 为真实双事务，test_chaos_lease_recovery.py 为回写时间模拟死亡；本 task 增加进程层验证，不否定现有测试价值。
+### 非范围
 
-### 2026-10-22 主分支执行
+- 不重复实现队列或分布式锁，不做 Kubernetes、多节点集群或新 HA 架构。
+- 不在此扩展 p016 批量写回修复；若发现阻断缺陷，按 task-work 的 bug-to-pending 流程登记，禁止手动再次 push 掩盖调度问题。
 
-- 用户明确要求直接在 main 分支按顺序执行 t013–t023，每完成一个 task 独立 commit。
-- 生产优化：在 `src/mail_core/worker/main.py` 支持 `MAIL_CORE_RECLAIM_STALE_SECONDS` 配置回收陈旧任务的超时阈值，默认保持 300 秒（5分钟），使测试能够以自然时间（如 2 秒）演进真实过期，无需在数据库修改时间字段。
-- 新增 `tests/mail_core/test_worker_process_recovery.py`：
-    - AC-001：启动两个独立真实 Worker 进程，并发竞争一批跨账号任务，验证 SKIP LOCKED 独占认领、活动 claim 不重叠、租约互斥，全部 6 个任务顺利完成，无重复执行；
-    - AC-002：对正在处理任务的 Worker 1 真实发送 `SIGKILL` 强制终止，等待自然超时（2.2s）后由存活的 Worker 2 自动 reclaim 并在独立 session 中接管执行完成，任务标记 `reclaimed_stale_claim`；
-    - AC-003：模拟旧持有者携陈旧 token 恢复提交，调用 `assert_fencing` 触发 `FencingMismatch` 异常，阻止覆盖新数据；
-    - AC-004：API 与 Worker 分离进程模式下，Worker 提交事务后真实 LISTEN/NOTIFY 触发事件派发，显式 rollback 事务严格不广播；
-    - AC-006：`managed_subprocesses` fixture 使用独立 process group，测试收尾时以 `os.killpg(..., signal.SIGKILL)` 严格清理全部子进程，无僵尸进程。
-- 门禁通过：3 项测试全通过 (8.25s)。
+### 验收标准
 
-## Review 处置
+<!-- 规范（门禁必留，不得删除） -->
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- 已修：子进程环境变量显式补充 `PYTHONPATH`、`MAIL_CORE_BLOB_KEY_V1`、`MAIL_CORE_SECRET_KEY`；
-- 已修：更新已废弃的枚举 `JobStatus.DONE`；
-- 双人审查（code + test）结论均 PASS。
+<!-- /规范 -->
 
-## 收尾报告
+- [x] AC-001：两个真实 Worker 同时竞争同一组任务时，活动 claim 不重叠；同一账号租约互斥，已完成业务结果不因重复执行出现重复邮件或错误计数。
+- [x] AC-002：在明确记录 claim 后强制终止其中一个进程，存活 Worker 经实际过期/reclaim 自动继续处理；测试不手改 lease_expires_at/locked_at、不手动 complete 或重入 handler；在规定超时内任务退出失效 claim。
+- [x] AC-003：旧持有者在接管后恢复或提交时因 fencing 失效而被拒绝，新的 checkpoint、邮件与 Blob 引用不被旧提交覆盖；允许安全重试但不声称外部操作 exactly-once。
+- [x] AC-004：API 与 Worker 分开进程时，Worker 提交事务后真实 LISTEN/NOTIFY 与 SSE 能观察事件；事务回滚不广播未提交业务结果。
+- [x] AC-005：中断数据库连接或重启专用测试 PG 服务后，API readiness 正确降级并恢复，listener 重新订阅、Worker 重连，客户端补播或 resync 后与 DB 一致，等待有上限。
+- [x] AC-006：正常、超时、断言失败与取消均回收本轮进程和连接，只杀本轮拥有的 PID/进程组；留下脱敏进程日志与恢复时间，不影响其他 worktree 的运行。
 
-### 验收与验证
+### 可测试性声明
 
-- spec：[`spec.md`](spec.md)
-- 结果：多进程 Worker 并发竞争与故障后恢复验证完成，全行为 AC 均满足。
-- 测试：`scripts/run-mail-core-tests.sh run -k test_worker_process_recovery` 3 passed。
-- 黑盒：两个真实操作系统 Worker 进程并发争夺同一批任务、SIGKILL 强制终止后由存活进程自动 reclaim 继续执行、跨进程事务性 NOTIFY 广播与回滚隔离。
-- review：`review_code.md` PASS，`review_test.md` PASS。
-- AC 证据：`test_worker_process_recovery.py` 终端实测输出。
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-建立了基于真实操作系统多进程的 Worker 并发与故障恢复测试体系，验证了基于 SKIP LOCKED 的非重叠任务争夺、真实 SIGKILL 杀进程后存活 Worker 的自然超时回收与幂等完成、基于 fencing token 的陈旧提交防护，以及跨进程 PostgreSQL NOTIFY 事件广播与事务回滚隔离。
+<!-- /规范 -->
 
-## 状态勘误（2026-10-27，A52）
+全部 AC 可自动测试；执行阶段必须给出真实运行证据，外部环境不可用不得替代为模拟通过。
 
-- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
-- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
-- commit 锚点：实现提交 `7868bfa0ebd60c08df98d68c9938bb9a224f2a82`；diff_anchor 补记为该实现提交的父提交 `1312431b58ada455a994c0842e52947a28cc0422`；本批归档提交 `161a6e10`。
-- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
+## 上下文区
+
+- 来源：无外部条目；本会话测试评估、固定容器方案与用户批准（2026-10-22）。2026-10-22 核实 test_sync_leases_jobs.py 为真实双事务，test_chaos_lease_recovery.py 为回写时间模拟死亡；本 task 增加进程层验证，不否定现有测试价值。
+
+### 有意不测
+
+- 不模拟物理磁盘损坏或真实机房断电；以真实进程与连接故障验证当前部署模型。
+
+### 测试策略
+
+- 使用短且显式的测试租约/重连配置、barrier 或可观察 DB 状态控制杀进程时机，禁止纯 sleep 猜测。
+- 本地 PG 服务重启场景使用本轮专属一次性故障容器，不重启供其他运行复用的常驻 PG；共享容器复用规则仍保持。
+- 在同步提交、Blob 写入及 outbox 提交关键边界验证可恢复状态，不依赖生产邮箱。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无尚未裁定的外部产品契约；执行环境、工具可用性与权限按实施入口核对，缺少前提须失败并报告，不能用 skip 代替本 task 验收。
+
+### 风险与回退
+
+- 风险：故障注入误杀业务进程或影响其他测试、非确定性时序导致假失败。隔离故障容器与严格进程所有权为必需前提。
+- 回退：回退本 task 单一执行 commit 恢复原入口与测试；仅回收本轮拥有测试资源，保留用户数据、其他 task 改动和失败证据。不更改生产 schema 或数据，迁移验证仅对一次性测试库操作。
+
+### 依赖与约束
+
+- 硬依赖 t016：复用其已交付的增强真实 IMAP 集成与邮件服务商协议契约测试。
+- 本批 task 与 t012 的 finalization 都更新 docs/blueprint/testing.md，已登记 conflicts_with，建议串行交付；冲突不冒充硬依赖，不修改旧 task 和 active worktree。
+- 只按本 spec 修改生产代码/测试/脚本；发现超出范围产品缺陷按既有 bug-to-pending 流程记录，不放宽断言或静默扩大修复。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/testing.md`：多进程/故障套件、隔离故障服务、恢复上限与证据。

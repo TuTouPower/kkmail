@@ -1,54 +1,81 @@
----
-tid: "t004"
-slug: "fix_accounts_dto_and_sidebar_error"
-title: "修复AccountDTO序列化异常与侧栏错误状态处理"
-status: "done"
-branch: "t004_fix_accounts_dto_and_sidebar_error"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "f915e78bcfc81767386f86b5e9f2448235f44fa7"
-depends_on: ""
-conflicts_with: ""
-note: ""
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+`src/mail_core/mail/application/accounts.py` 中的 `AccountDTO` 声明了 `slots=True`，导致其在 `src/mail_core/api/accounts.py` 中被 `dict(a.__dict__)` 展开时抛出 `AttributeError`，使得包含邮箱账户的 `GET /api/accounts`、`POST /api/accounts`、`PATCH /api/accounts` 均发生 HTTP 500 异常。同时，由于此前 `test_accounts_api_unit.py` 完全未编写针对业务成功流的 Stub/Mock 单元测试，而 `test_accounts_api_pg.py` 又强依赖外部数据库环境变量导致日常被静默跳过（假绿），致使该缺陷长期漏网。前端 `Sidebar.tsx` 对账户加载失败硬编码了误导性的“请确认已登录且后端可用”文案，且未提供重试入口，造成用户体验与系统状态严重割裂。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 后端 `src/mail_core/api/accounts.py` 修复对 `AccountDTO` 的解构方式，改用标准 `dataclasses.asdict` 消除 `__dict__` 访问。
+- 后端 `tests/mail_core/test_accounts_api_unit.py` 引入完整的 Stub/Mock，增加已登录且存在账户数据时的 `GET /api/accounts`、`POST /api/accounts`、`PATCH /api/accounts` 200 序列化与异常映射单测，无需外部 PG 即可在日常门禁中无条件常态化运行。
+- 前端 `src/frontend/src/components/Sidebar.tsx` 改用 `errorMessage` 透传真实错误原因，并提供「重试」按钮触发 query 重新拉取。
+- 前端 `src/frontend/src/components/Sidebar.test.tsx` 补充针对接口 500/网络失败的 Mock 测试与重试交互断言。
+- 验证期显式配置测试数据库运行 `test_accounts_api_pg.py`，验证端到端真实集成测试从 SKIPPED 恢复为 PASSED。
 
-1. 后端修复：在 `src/mail_core/api/accounts.py` 中引入 `from dataclasses import asdict`，使用 `asdict(a)` 替换 3 处失效的 `dict(a.__dict__)`，彻底解决 `AccountDTO` 具有 `slots=True` 导致在序列化响应模型时触发 `AttributeError` 500 的问题。
-2. 后端单测补齐：在 `tests/mail_core/test_accounts_api_unit.py` 中增加基于 Mock `AccountDTO`、`AccountPageDTO` 的真实结构序列化单测，覆盖 GET、POST、PATCH 路由层，无需外部数据库即可常态化拦截此类 DTO 序列化回归。
-3. 前端错误态与重试：在 `src/frontend/src/components/Sidebar.tsx` 中使用 `errorMessage` 获取并透传真实错误信息（取代假定未登录的猜测文案），并在错误区块添加「重试」按钮触发 `accountsQuery.refetch()` 与 `groupsQuery.refetch()`。
-4. 前端测试补齐：在 `src/frontend/src/components/Sidebar.test.tsx` 中补充接口 500 异常时的错误文本渲染与点击重试重新拉取数据的交互测试。
-5. 集成测试真绿：显式注入测试数据库连接串，验证 `tests/mail_core/test_accounts_api_pg.py` 不再跳过且完整测试通过。
+### 非范围
 
-## Review 处置
+- 不修改底层数据模型与数据库迁移脚本。
+- 不修改其它业务路由与同步服务。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-22T07:37:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零 finding。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [x] AC-001：当存在一个或多个账户数据时，已鉴权请求 `GET /api/accounts` 返回 HTTP 200，并正确序列化各账户字段，不抛出 AttributeError 500。
+- [x] AC-002：`POST /api/accounts` 与 `PATCH /api/accounts/{account_id}` 正常响应时，成功序列化并返回 `AccountOut`。
+- [x] AC-003：当侧栏 `groupsQuery` 或 `accountsQuery` 失败时，侧栏“邮箱账户”区域显示真实错误提示信息（包含错误消息文本），不显示假定未登录的误导文案。
+- [x] AC-004：点击侧栏错误区域中的“重试”按钮，触发账户与分组 query 的 refetch。
+- [x] AC-005：`tests/mail_core/test_accounts_api_unit.py` 具备纯单测 Stub/Mock，脱离 `MAIL_CORE_DATABASE_URL` 环境变量即可常态化运行并通过 AC-001 与 AC-002 的序列化验证。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：`pytest .repo_template/tests -q -m contract` (148 passed)、`pytest tests/mail_core -q` (194 passed)、`(cd src/frontend && npm test && npx tsc -b && npm run build)` (128 passed)、`(cd src/desktop && npm test)` 全绿。
-- 黑盒：`npm --prefix src/frontend run test:e2e` (2 passed)。
-- review：`review_general.md` verdict: PASS (Round 1)。
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-- 修复了 `AccountDTO` 属性 `slots=True` 导致的 `GET /api/accounts` 500 异常，增加了无数据库依赖的标准路由层单测覆盖；优化了侧栏账户错误信息展示与一键重试交互。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：`p008_sidebar_accounts_failure_handling`
+
+### 有意不测
+
+- 无
+
+### 测试策略
+
+- 后端单测（门禁一）：在 `test_accounts_api_unit.py` 模拟 `list_accounts_app`、`create_account_app`、`update_account_app` 返回带 `slots=True` 的真实 `AccountDTO` 实例，断言 API 路由层返回 200 且 JSON 字段完整，不依赖外部数据库。
+- 后端集成（门禁二）：显式注入 `MAIL_CORE_DATABASE_URL` 执行 `test_accounts_api_pg.py`，验证真实数据库下全生命周期通过且不再跳过。
+- 前端测试：在 `Sidebar.test.tsx` 中 mock fetch 返回 500 错误，断言真实错误文本渲染，点击重试后断言 fetch 再次被调用。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无
+
+### 风险与回退
+
+- 风险：`asdict` 对扁平 `AccountDTO` 字段拷贝存在微小开销（数十微秒级别），无吞吐影响。
+- 回退：`git revert` 或恢复上一 commit。
+
+### 依赖与约束
+
+- 无
+
+### Finalization 时更新的 blueprint
+
+- 无

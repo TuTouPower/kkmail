@@ -10,18 +10,21 @@
 用法：
   python3 .repo_template/scripts/pending.py new --slug cli_exit_code [--kind bug]
   python3 .repo_template/scripts/pending.py list [--state todo|parked|archived|all]
-  python3 .repo_template/scripts/pending.py archive p047 p051 --fix-ref t012 [--write]
+  python3 .repo_template/scripts/pending.py archive p047 p051 --reason "已在 main 修复并验证" [--fix-ref main] [--write]
   python3 .repo_template/scripts/pending.py park p047 --reason "等外部依赖" [--write]
   python3 .repo_template/scripts/pending.py revive p047 [--write]
   python3 .repo_template/scripts/pending.py rename p047 --slug new_slug [--write]
 
 `new` 在 git 公共目录的排他锁内完成「扫描取号 → 建文件」，并发 worker 不会撞号。
-`archive` 要求 --fix-ref TID 作为闭环标识；parked 条目须先 revive 才能闭环。
+`archive` 必须以非空 --reason 说明闭环依据；--fix-ref 是可选引用，不要求 task ID。
+默认 resolution=resolved；转办时显式选择 transferred。parked 条目须先 revive 才能闭环。
 `rename` 改条目文件名（保留编号，仅换 slug）：已入库文件用 `git mv` 保留历史，
 未入库（新建尚未 git add）文件退化为普通改名；dry-run 默认，加 `--write` 落盘。
 rename 不自动改正文引用——slug 改动需人工核对 docs/ 与 src/ 内的 pNNN 引用。
 迁移用 git mv 保留历史；仓库无该文件记录时退化为普通移动。
 """
+
+from __future__ import annotations
 
 import argparse
 import re
@@ -153,9 +156,8 @@ def cmd_list(args: argparse.Namespace) -> None:
             if not ENTRY_FILE_RE.match(path.name):
                 continue
             # 摘要取 H1 标题（# pNNN 描述）——文件首行必有，字段名变体不影响检索
-            # A343：单个条目含非 UTF-8 字节时以替换字符继续列出，不得整表崩溃。
             title = ""
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            for line in path.read_text(encoding="utf-8").splitlines():
                 if line.startswith("# "):
                     title = line[2:].strip()
                     break
@@ -165,37 +167,6 @@ def cmd_list(args: argparse.Namespace) -> None:
         return
     for state, stem, title in sorted(rows, key=lambda row: row[1]):
         print(f"{state:<8} {stem:<40} {title}")
-
-
-def _rollback_migrated(
-    migrated: list[tuple[Path, Path, bytes]],
-) -> tuple[int, list[tuple[Path, Path, Exception]]]:
-    """逐条回滚已迁移条目，返回 (实际恢复数, 未恢复清单)。
-
-    每条独立记录成败（A100）：任一步（git mv / 普通改名 / 正文恢复 /
-    git add）失败即记入未恢复清单并继续其余条目，不再吞掉错误后
-    无条件宣称全部回滚成功。
-    """
-    restored = 0
-    failures: list[tuple[Path, Path, Exception]] = []
-    for src, dst, orig_bytes in reversed(migrated):
-        try:
-            if _git(["ls-files", "--error-unmatch", _rel(dst)]).returncode == 0:
-                result = _git(["mv", _rel(dst), _rel(src)])
-                if result.returncode != 0:
-                    raise IdScanError(f"git mv 失败：{result.stderr.strip()}")
-            else:
-                dst.rename(src)
-            # 恢复原正文；已跟踪文件 git add 使 index 回到原内容
-            src.write_bytes(orig_bytes)
-            if _git(["ls-files", "--error-unmatch", _rel(src)]).returncode == 0:
-                add_result = _git(["add", _rel(src)])
-                if add_result.returncode != 0:
-                    raise IdScanError(f"git add 失败：{add_result.stderr.strip()}")
-            restored += 1
-        except Exception as rollback_error:  # noqa: BLE001 - 逐条记录后继续其余回滚
-            failures.append((src, dst, rollback_error))
-    return restored, failures
 
 
 def _apply(args: argparse.Namespace, actions: list[tuple[Path, Path, str]]) -> None:
@@ -208,6 +179,16 @@ def _apply(args: argparse.Namespace, actions: list[tuple[Path, Path, str]]) -> N
     migrated: list[tuple[Path, Path, bytes]] = []
     try:
         with id_lock(REPO_ROOT):
+            for path, _target, _note in actions:
+                match = re.match(r"^p(\d{3,})_", path.name)
+                if not match:
+                    raise IdScanError(f"无法从文件名解析编号：{_rel(path)}")
+                _, current = find_entry(int(match.group(1)))
+                if current.resolve() != path.resolve():
+                    raise IdScanError(
+                        f"p{match.group(1)} 在加锁前已被迁移"
+                        f"（当前 {_rel(current)}）；请重试"
+                    )
             for index, (path, target, note) in enumerate(actions, 1):
                 try:
                     orig_bytes = path.read_bytes()
@@ -235,45 +216,59 @@ def _apply(args: argparse.Namespace, actions: list[tuple[Path, Path, str]]) -> N
                         if add_result.returncode != 0:
                             raise IdScanError(f"git add 失败：{_rel(destination)}")
                     sys.stderr.write(f"已迁移：{_rel(destination)}\n")
-                except Exception as error:  # noqa: BLE001 - A397：回滚触发须覆盖全部迁移期异常
-                    # 失败时回滚已成功的 git mv + 恢复被 set_field 改过的正文（F19/RT-010）
-                    # A397：触发条件不限于 IdScanError——move_entry/set_field/git add
-                    # 抛出的 OSError 等迁移期异常同样必须回滚已迁移条目（含本条），
-                    # 否则批量迁移会静默半途而废且条目留在错误状态目录。
-                    # A100：按实际恢复数报告；未恢复条目逐条列出并给手工恢复方法。
-                    restored, failures = _rollback_migrated(migrated)
+                except (IdScanError, OSError, subprocess.SubprocessError) as error:
+                    # 失败时回滚已成功的 git mv + 恢复被 set_field 改过的正文（F19/RT-010）。
+                    # 逐条记录失败，只有全部恢复成功才报告完整回滚（Issue #78）。
+                    failures: list[tuple[Path, str]] = []
+                    for src, dst, orig_bytes in reversed(migrated):
+                        try:
+                            if _git(["ls-files", "--error-unmatch", _rel(dst)]).returncode == 0:
+                                moved = _git(["mv", _rel(dst), _rel(src)])
+                                if moved.returncode != 0:
+                                    raise IdScanError(moved.stderr.strip() or "git mv 回滚失败")
+                            else:
+                                dst.rename(src)
+                            atomic_write_text(src, orig_bytes.decode("utf-8"))
+                            if _git(["ls-files", "--error-unmatch", _rel(src)]).returncode == 0:
+                                added = _git(["add", _rel(src)])
+                                if added.returncode != 0:
+                                    raise IdScanError(added.stderr.strip() or "git add 回滚失败")
+                        except Exception as rollback_error:
+                            failures.append((src, str(rollback_error)))
                     if failures:
+                        details = "；".join(
+                            f"{_rel(src)}: {reason}" for src, reason in failures
+                        )
                         sys.stderr.write(
                             f"迁移失败于第 {index} 条（{_rel(path)}）：{error}；"
-                            f"回滚未完全成功：已实际恢复 {restored}/{len(migrated)} 条"
-                            f"已迁移条目，{len(failures)} 条未恢复\n"
+                            f"成功回滚 {len(migrated) - len(failures)}/{len(migrated)} 条，"
+                            f"未恢复：{details}\n"
                         )
-                        for src, dst, rollback_error in failures:
-                            sys.stderr.write(
-                                f"  未恢复：{_rel(dst)}（原路径 {_rel(src)}）："
-                                f"{rollback_error}；手工恢复：确认该条目当前实际位置，"
-                                f"将其移回 {_rel(src)}、恢复迁移前正文，"
-                                f"并对原路径执行 git add 后重试\n"
-                            )
-                    else:
-                        sys.stderr.write(
-                            f"迁移失败于第 {index} 条（{_rel(path)}）：{error}；"
-                            f"已回滚 {restored} 条已迁移条目（含正文）\n"
-                        )
+                        raise IdScanError(
+                            "迁移失败且回滚不完整；请按上方未恢复条目人工处理"
+                        ) from error
+                    sys.stderr.write(
+                        f"迁移失败于第 {index} 条（{_rel(path)}）：{error}；"
+                        f"已回滚 {len(migrated)} 条已迁移条目（含正文）\n"
+                    )
                     if isinstance(error, IdScanError):
                         raise
-                    # 统一到 CLI 的 IdScanError 出口（main 转 SystemExit），
-                    # 不让裸 OSError 以 traceback 形式逃逸。
-                    raise IdScanError(str(error)) from error
+                    raise IdScanError(f"迁移 I/O 或 Git 操作异常：{error}") from error
     except IdScanError:
         raise
-    except OSError as error:
-        # id_lock 等回滚循环之外抛出的迁移期 OSError 同样统一出口（A397）。
-        raise IdScanError(str(error)) from error
 
 
 def cmd_archive(args: argparse.Namespace) -> None:
-    tid = args.fix_ref.strip()
+    reference = (args.fix_ref or "").strip()
+    resolution = getattr(args, "resolution", "resolved")
+    reason = (getattr(args, "reason", "") or "").strip()
+    if not reason:
+        raise IdScanError("归档必须提供非空 --reason，说明处理结果与闭环依据")
+    for name, val in (("fix_ref", reference), ("reason", reason), ("resolution", resolution)):
+        if "\n" in val or "\r" in val:
+            raise IdScanError(f"{name} 不能包含换行符（收到多行输入）")
+    note = f"处理：{reference}；resolution={resolution}" if reference else f"处理：resolution={resolution}"
+    note += f"；reason={reason}"
     actions: list[tuple[Path, Path, str]] = []
     for number in parse_ids(args.ids):
         state, path = find_entry(number)
@@ -283,17 +278,20 @@ def cmd_archive(args: argparse.Namespace) -> None:
             raise IdScanError(
                 f"p{number:03d} 在 parked（暂搁而非闭环）；如需闭环请先 revive"
             )
-        actions.append((path, ARCHIVE_DIR, f"处理：{tid}"))
+        actions.append((path, ARCHIVE_DIR, note))
     _apply(args, actions)
 
 
 def cmd_park(args: argparse.Namespace) -> None:
+    reason = (args.reason or "").strip()
+    if "\n" in reason or "\r" in reason:
+        raise IdScanError("reason 不能包含换行符（收到多行输入）")
     actions: list[tuple[Path, Path, str]] = []
     for number in parse_ids(args.ids):
         state, path = find_entry(number)
         if state != "todo":
             raise IdScanError(f"p{number:03d} 当前在 {state}；只有 todo 可暂搁")
-        actions.append((path, PARKED_DIR, f"暂搁：{args.reason.strip()}"))
+        actions.append((path, PARKED_DIR, f"暂搁：{reason}"))
     _apply(args, actions)
 
 
@@ -359,8 +357,10 @@ def main(argv: list[str] | None = None) -> None:
     archive_parser = sub.add_parser("archive", help="闭环：todo → archive")
     archive_parser.add_argument("ids", nargs="+", metavar="pNNN")
     archive_parser.add_argument(
-        "--fix-ref", required=True, metavar="TID", help="闭环 task id，写入 - 处理"
+        "--fix-ref", metavar="REF", help="可选引用，如 main、commit、PR、条目或 task；不要求 task ID"
     )
+    archive_parser.add_argument("--resolution", choices=("transferred", "resolved", "obsolete", "duplicate"), default="resolved")
+    archive_parser.add_argument("--reason", required=True, help="必填备注：处理结果与闭环依据，不能只填空白")
     archive_parser.add_argument("--write", action="store_true", help="落盘")
     archive_parser.set_defaults(func=cmd_archive)
 

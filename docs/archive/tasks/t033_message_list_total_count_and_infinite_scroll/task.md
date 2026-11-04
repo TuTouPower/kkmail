@@ -1,54 +1,83 @@
----
-tid: "t033"
-slug: "message_list_total_count_and_infinite_scroll"
-title: "修复邮件列表总数显示并支持触底自动加载"
-status: "done"
-branch: "t033_message_list_total_count_and_infinite_scroll"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "5b3f449ee1406d2f282be98f27571b05f90aa555"
-depends_on: ""
-conflicts_with: ""
-note: ""
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+当前邮件列表头部（`.list-count`）的邮件总数直接采用了当前分页已拉取并渲染的数组长度 `visible.length`（如 200 封），导致即使远端收件箱有 7706 封邮件，头部也错误显示为“200 封邮件”。此外，列表底部仍在使用陈旧的手动“已加载 X 封 / 共 Y 封”提示条与“加载更多”按钮，未提供现代邮件客户端沉浸平滑的触底自动无限滚动（Infinite Scroll）体验。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 邮件列表头部（`.list-count`）：全部邮件视图展示服务端权威邮件总数（来源于 folder-stats 的 `total`），搜索视图展示搜索匹配总数（来源于 search 的 `total`），未读视图展示未读总数；未获取到统计值前回退展示已渲染条数。
+- 列表底部操作区：移除原有“已加载 X 封 / 共 Y 封”文本以及“加载更多”按钮（废弃 `data-ui="ML14"`）。
+- 触底自动加载：引入基于 `IntersectionObserver`（附带滚动容错）的触底自动加载机制；当列表滚动至底部且仍有更多数据（`hasMore && !isFetchingNextPage`）时，自动触发请求下一页。
+- 列表加载反馈：加载下一页期间在底部呈现轻量加载提示，防止并发重复触发；无更多数据且列表非空时展示已加载全部提示。
+- 前端单元测试更新与补全，覆盖权威总数显示、底部按钮移除及触底自动加载行为。
 
-1. **头部总数计算**：普通视图取 `folderStatsQuery.data.total`（未读视图取 `unreadCount`，搜索视图取 `searchInfiniteQuery.data.pages[0].total`），未就绪前回退展示已渲染条数，杜绝单页条数误判为总数。
-2. **触底自动无限滚动**：移除旧版手动“加载更多”按钮与统计文本，废弃稳定编号 `data-ui="ML14"`。引入 `IntersectionObserver`（提前 200px 视口触发）结合 `onScroll` 容错触底加载，通过 `loadingMore` 互斥锁防止重复触发。
-3. **TDD 测试推进**：旧测试因依赖已废弃的手动加载按钮语义失效，予以完整删除；新建 4 组单元测试先红后绿覆盖 AC-001 ~ AC-005，全量单元测试、类型、生产构建、Lint 及 Playwright E2E 均全绿。
+### 非范围
 
-## Review 处置
+- 不修改后端分页与统计 API 协议（继续沿用已有的 cursor / offset 分页与 folder-stats）。
+- 不修改右键菜单、阅读器、快捷键等非列表分页组件。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-23T05:18:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零 finding。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [ ] AC-001：邮件列表头部（`.list-count`）在普通视图下展示服务端权威邮件总数（来源于 folder-stats 的 `total`，如 `7706 封邮件`），而非当前单页已拉取条数；处于未读视图时总数与未读数保持一致。
+- [ ] AC-002：邮件列表在搜索模式下，头部总数展示搜索结果权威匹配总数（来源于搜索接口返回的 `total`），而非当前已加载的搜索条数。
+- [ ] AC-003：邮件列表底部移除“已加载 X 封 / 共 Y 封”统计文本以及“加载更多”按钮（原有 `.load-more-btn` DOM 节点不再渲染）。
+- [ ] AC-004：当列表存在更多页数据（`hasNextPage === true`）且用户滚动到底部（底部哨兵元素触发进入视口）时，自动触发拉取下一页邮件。
+- [ ] AC-005：在自动拉取下一页期间，列表底部展示轻量加载状态，防止并发重复触发拉取；拉取完毕后新增邮件追加在列表末尾并保持当前滚动位置平稳。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：`src/frontend/src/components/MessageList.test.tsx`、全量前端测试 `npm test && npx tsc -b && npm run build && npm run lint`、后端 `pytest` 与 `run-mail-core-tests.sh` 全量通过
-- 黑盒：Playwright UI 冒烟测试（`tests/e2e/smoke.spec.ts`、`tests/e2e/sidebar_tree.spec.ts`）、真实全栈端到端测试（`scripts/run_full_stack_e2e.py`）及桌面端打包产物冒烟（`npm run test:packaged`）全部通过
-- review：`docs/tasks/t033_message_list_total_count_and_infinite_scroll/review_general.md` verdict: PASS (reviewed_scope: 1762bbdb6a83ffc4)
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-- 修复邮件列表头部总数展示，对接服务端权威统计数据；
-- 升级邮件列表为沉浸式触底自动无限滚动，废弃旧手动加载更多按钮并规范编号。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
+<!-- /规范 -->
+
+全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：无（用户实时反馈问题与截图：头部数量显示错误，底部需改为触底自动加载）
+
+### 有意不测
+
+- 浏览器真实高频惯性滚动的微秒级性能抖动（由虚拟 DOM 与现有分页节流机制保证）
+
+### 测试策略
+
+- Vitest + jsdom 组件单元测试：
+    - 验证 `MessageList` 头部总数取自 `folder-stats` / `search` 的权威总数；
+    - 验证移除 `.load-more-btn` 与旧版统计文本；
+    - 模拟底部哨兵元素触发并断言 `fetchNextPage` 自动调用与列表追加。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无
+
+### 风险与回退
+
+- 风险：jsdom 测试环境默认未实现 `IntersectionObserver`，导致测试未模拟时报错或不触发。
+- 回退：在测试入口与组件内部确保提供标准 `IntersectionObserver` mock 或垫片机制。
+
+### 依赖与约束
+
+- 前端 Vitest 测试通过；
+- 遵循 UI 稳定编号规范（废弃 `data-ui="ML14"`，不分配给新元素）。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/conventions.md`：记录 `ML14` 已废弃，邮件列表分页已升级为触底自动加载。

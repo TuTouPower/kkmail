@@ -16,17 +16,28 @@
   general_verdict=PASS|FAIL|MISSING    # single 才有
   overall=PASS|FAIL|INCOMPLETE
   round=N               # 回归轮次：上轮 FAIL、修完重审才计；首轮不计
-  max_review_round=N      # 来自 task.md review_limit；旧 task 默认 5
-  max_verify_round=N      # 来自 task.md verify_limit
-  next_action=finalize|fix_or_block|collect_reports|rerender_review|complete_disposition
+  max_review_round=N      # 来自 progress.md review_limit；旧 task 默认 5
+  max_verify_round=N      # 来自 progress.md verify_limit
+  next_action=finalize|fix_or_block|collect_reports|rerender_review|complete_ac_review|complete_disposition
   review_scope=ok|stale|missing|format_error  # 指纹比对状态；format_error=报告写了 reviewed_scope 但格式无法解析
+  ac_review=ok|void|incomplete|no_spec        # 每份报告最后一轮「AC 复验方式」小节的门禁状态
+  ac_review_detail=...                        # void / incomplete 的具体原因（逐份报告）
+
+AC 复验门禁：每份应有报告最后一轮须逐条列出 task.md 全部 AC（格式见 share_prompt.txt）。
+  - 全部 TICK-VALID、行集合与 task.md 的 AC 编号一致、task.md 全部已打勾 → 不影响 verdict
+  - 任一行 TICK-VOID → overall=FAIL（即使 verdict 写 PASS）
+  - 缺小节 / 缺行 / 多出未知 AC / 重复 / 格式无法解析 / task.md 有未打勾 AC 标了 TICK-VALID
+    → PASS 降为 INCOMPLETE，next_action=complete_ac_review（由 reviewer 补全 AC 复验方式）
+  - no_spec：目录里没有 task.md，无法比对 AC 集合，只拦 TICK-VOID、缺小节与格式错误
 """
+
+from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
 
-from repo_task.context import TaskDataError
+from repo_task.context import PROGRESS_FILE, TaskDataError
 from repo_task.monitoring import review_scope_fingerprint as monitoring_scope_fingerprint
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -71,8 +82,8 @@ def resolve_task_dir(value: str) -> Path:
         raise ReviewDataError(f"task directory must stay inside repository: {value}") from e
     if not candidate.is_dir():
         raise ReviewDataError(f"task directory does not exist: {value}")
-    if not (candidate / "task.md").is_file():
-        raise ReviewDataError(f"missing task.md in: {value}")
+    if not (candidate / PROGRESS_FILE).is_file():
+        raise ReviewDataError(f"missing {PROGRESS_FILE} in: {value}")
     return candidate
 
 
@@ -89,7 +100,7 @@ def main():
         if args.max_review_round is not None and args.max_review_round < 1:
             raise ReviewDataError("max-review-round must be at least 1")
         task_dir = resolve_task_dir(args.task_dir)
-        fm = parse_front_matter(task_dir / "task.md")
+        fm = parse_front_matter(task_dir / PROGRESS_FILE)
         if fm.get("review_level", "full") not in VALID_REVIEW_LEVELS:
             raise ReviewDataError(f"review_level must be one of {sorted(VALID_REVIEW_LEVELS)}")
         limits = review_limits(fm)

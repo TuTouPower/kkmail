@@ -1,6 +1,9 @@
 """Attempt lifecycle domain model and exact-identity commands."""
 
+from __future__ import annotations
+
 import uuid
+import json
 
 import repo_task.context as ctx
 
@@ -29,7 +32,7 @@ def _require_identity_values(attempt: int, execution_id: str) -> None:
 def project_attempts(events: list[dict]) -> dict[tuple[str, int, str], dict]:
     """Project immutable ledger events into exact attempt records."""
     records: dict[tuple[str, int, str], dict] = {}
-    for seq, event in enumerate(events):
+    for event in events:
         tid = event.get("tid")
         attempt = event.get("attempt")
         execution_id = event.get("execution_id")
@@ -43,16 +46,7 @@ def project_attempts(events: list[dict]) -> dict[tuple[str, int, str], dict]:
         key = (tid, attempt, execution_id)
         kind = event.get("event")
         if kind == "attempt_reserved":
-            if key in records:
-                # 同 identity 重复 reserved 是账本损坏：静默整表覆盖会抹掉
-                # 已 terminal/report/integrated 的记录（A304）。拒绝投影，
-                # 要求人工修复账本，而不是保留被污染的新记录。
-                raise ctx.TaskDataError(
-                    f"{tid} attempt={attempt} execution_id={execution_id!r} "
-                    "重复 attempt_reserved；账本损坏，请人工修复"
-                )
             records[key] = {
-                "_reserved_seq": seq,
                 "tid": tid,
                 "attempt": attempt,
                 "execution_id": execution_id,
@@ -64,6 +58,7 @@ def project_attempts(events: list[dict]) -> dict[tuple[str, int, str], dict]:
                 "terminal": None,
                 "report": None,
                 "integrated": None,
+                "owner_id": "",
             }
             continue
         record = records.get(key)
@@ -73,6 +68,8 @@ def project_attempts(events: list[dict]) -> dict[tuple[str, int, str], dict]:
             record["state"] = "terminal"
             record["terminal_status"] = event.get("status", "")
             record["terminal"] = event
+        elif kind == "execution_claimed":
+            record["owner_id"] = event["owner_id"]
         elif kind == "report":
             record["report"] = event
         elif kind == "integrated":
@@ -82,12 +79,8 @@ def project_attempts(events: list[dict]) -> dict[tuple[str, int, str], dict]:
 
 
 def attempts_for_tid(tid: str, events: list[dict]) -> list[dict]:
-    # Current is the last attempt_reserved in ledger order (A130), not the
-    # lexicographic maximum of (attempt, execution_id): with two identities
-    # sharing one attempt number, hex ordering must not decide "current".
-    # execution_id is only an exact-identity discriminator, never a sort key.
     records = [record for record in project_attempts(events).values() if record["tid"] == tid]
-    return sorted(records, key=lambda record: record.get("_reserved_seq", 0))
+    return sorted(records, key=lambda record: (record["attempt"], record["execution_id"]))
 
 
 def current_attempt_record(tid: str, events: list[dict]) -> dict | None:
@@ -192,11 +185,80 @@ def require_exact_terminal(
     return record
 
 
-def reserve_attempt(tid: str, executor: str, model: str | None = None) -> dict:
+def validate_execution_context(worktree, tid, current):
+    path = worktree / "docs/runtime/execution_context.json"
+    if not path.exists():
+        return
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ctx.TaskDataError(f"execution_context 无法读取，拒绝覆盖：{error}") from error
+    if not isinstance(receipt, dict) or receipt.get("tid") != tid:
+        raise ctx.TaskDataError("execution_context 的 tid 不匹配；拒绝覆盖执行历史")
+    _require_identity_values(receipt.get("attempt"), receipt.get("execution_id"))
+    if current is None:
+        raise ctx.TaskDataError("worktree 有执行 identity 但主仓 ledger 缺失；恢复 runtime 备份，禁止猜测 reserve")
+    if any(receipt[key] != current[key] for key in ("tid", "attempt", "execution_id")):
+        raise ctx.TaskDataError("execution_context 与当前 ledger identity 不一致，可能恢复了旧 ledger；停止并核对备份，拒绝分配或覆盖")
+
+
+def resolve_identity(
+    tid: str, attempt: int | None = None, execution_id: str | None = None,
+) -> tuple[int, str]:
+    """Resolve the exact ``(attempt, execution_id)`` of ``tid``.
+
+    主仓从 ledger 的当前 attempt 解析；task worktree 从
+    ``docs/runtime/execution_context.json`` 解析，并与主仓 ledger 当前 identity 交叉核对。
+    显式提供的值（recovery 指定 exact identity）必须与解析结果一致。
+    """
+    if (attempt is None) != (execution_id is None):
+        raise ctx.TaskDataError(
+            "--attempt 与 --execution-id 须同时提供（recovery 指定 exact identity）或同时省略"
+        )
+    from .git_ops import in_primary_worktree, primary_worktree_path
+    from .ledger import ledger_read
+
+    if in_primary_worktree():
+        resolved = current_identity(tid, ledger_read(tid=tid))
+        if resolved is None:
+            raise ctx.TaskDataError(
+                f"{tid} 尚无 attempt（ledger 无记录）；先 run-begin，或按 recovery 判定处理"
+            )
+    else:
+        resolved = _execution_context_identity(ctx.REPO_ROOT, tid)
+        ledger_path = primary_worktree_path() / "docs/runtime/dispatch_ledger.jsonl"
+        current = current_identity(tid, ledger_read(ledger_path, tid=tid))
+        if current != resolved:
+            raise ctx.TaskDataError(
+                f"execution_context identity={resolved!r} 与主仓 ledger 当前 identity={current!r} 不一致；"
+                "停止并运行 task.py recovery"
+            )
+    if attempt is not None and (attempt, execution_id) != resolved:
+        raise ctx.TaskDataError(
+            f"{tid} 当前 identity=({resolved[0]}, {resolved[1]!r})，"
+            f"收到旧或不匹配 identity=({attempt}, {execution_id!r})；显式值与解析结果不一致"
+        )
+    return resolved
+
+
+def _execution_context_identity(worktree, tid: str) -> tuple[int, str]:
+    path = worktree / "docs/runtime/execution_context.json"
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ctx.TaskDataError(
+            f"无法从 {ctx._rel(path)} 解析 identity（{error}）；确认已在 task worktree 内，"
+            "或运行 task.py recovery"
+        ) from error
+    if not isinstance(receipt, dict) or receipt.get("tid") != tid:
+        raise ctx.TaskDataError(f"{ctx._rel(path)} 的 tid 与 {tid} 不匹配")
+    _require_identity_values(receipt.get("attempt"), receipt.get("execution_id"))
+    return receipt["attempt"], receipt["execution_id"]
+
+
+def reserve_attempt(tid: str, model: str | None = None) -> dict:
     if not ctx.TID_RE.fullmatch(tid):
         raise ctx.TaskDataError(f"tid 非法：{tid!r}")
-    if executor not in ctx.ATTEMPT_EXECUTORS:
-        raise ctx.TaskDataError("executor 必须是 inline")
 
     # 领域层门禁：task 目录存在时校验 tid 存在、未归档，且必须已 start
     # （effective active + worktree 已登记）。防孤儿 running identity（RT-006）：
@@ -204,6 +266,7 @@ def reserve_attempt(tid: str, executor: str, model: str | None = None) -> dict:
     # 阻塞该 tid 后续执行。effective 状态（登记 worktree / 未合并分支 / main）为
     # active 即表示 start 已发生且 worktree 已登记——start 只写 worktree 副本，
     # main 视角恒为 backlog，不能用 scan_tasks()。
+    worktree = None
     if ctx.TASKS_DIR.is_dir():
         from .store import discover_effective_tasks
         task = discover_effective_tasks().get(tid)
@@ -212,8 +275,8 @@ def reserve_attempt(tid: str, executor: str, model: str | None = None) -> dict:
         status = task.get("status", "")
         if status in ctx.ARCHIVED_STATUSES:
             raise ctx.TaskDataError(
-                f"{tid} 已归档（{status}）；拒绝 reserve 新 attempt。"
-                "review 证据问题见 recovery 证据修复（amend 补审进同一执行 commit）；"
+                f"{tid} 已是终态（{status}）；拒绝 reserve 新 attempt。"
+                "review 失效的修复见 recovery（amend 补审进同一实现 commit）；"
                 "禁止 rewind/reserve 新 attempt。"
             )
         if status != "active":
@@ -221,6 +284,7 @@ def reserve_attempt(tid: str, executor: str, model: str | None = None) -> dict:
                 f"{tid} 有效状态为 {status}；reserve 须在 start 之后"
                 "（active + worktree 已登记）"
             )
+        worktree = (ctx.REPO_ROOT / ctx.worktree_rel_path(tid)).resolve()
         # worktree 必须真实登记：effective active 可能来自手改 main front matter
         # （无 worktree），那种情况 reserve 会产生孤儿 running identity，同样拒绝
         from .git_ops import worktree_paths
@@ -232,6 +296,8 @@ def reserve_attempt(tid: str, executor: str, model: str | None = None) -> dict:
 
     def build(attempt: int, events: list[dict]) -> dict:
         current = current_attempt_record(tid, events)
+        if worktree is not None:
+            validate_execution_context(worktree, tid, current)
         if current:
             report = current.get("report") or {}
             if current["state"] in OPEN_STATES:
@@ -260,14 +326,44 @@ def reserve_attempt(tid: str, executor: str, model: str | None = None) -> dict:
         event = {
             "event": "attempt_reserved",
             "execution_id": execution_id,
-            "executor": executor,
+            "executor": "inline",
             "state": "running",
         }
         if model:
             event["model"] = model
         return event
 
-    return ledger_allocate_attempt(tid, build)
+    event = ledger_allocate_attempt(tid, build)
+    if worktree is not None:
+        from .documents import atomic_write_text
+        atomic_write_text(worktree / "docs/runtime/execution_context.json",
+                          json.dumps(event, ensure_ascii=False, indent=2) + "\n")
+    return event
+
+
+def claim_execution(tid, attempt, execution_id, owner_id, *, replace_owner=None, confirm_stopped=False):
+    """Compare-and-swap ownership. No expiry: time cannot prove an agent stopped."""
+    if not isinstance(owner_id, str) or not owner_id.strip():
+        raise ctx.TaskDataError("owner_id 必须是非空会话标识")
+
+    def build(events):
+        record = _require_exact_current(tid, attempt, execution_id, events)
+        if record["state"] != "running":
+            raise ctx.TaskDataError("只可领取 running attempt 的执行权")
+        previous = record["owner_id"]
+        if previous and previous != owner_id:
+            if not confirm_stopped or replace_owner != previous:
+                raise ctx.TaskDataError(
+                    f"execution ownership conflict: owner_id={previous!r}；"
+                    "确认原会话已停止后，用 --replace-owner 原owner --confirm-stopped 显式接管"
+                )
+        elif replace_owner is not None and replace_owner != previous:
+            raise ctx.TaskDataError("ownership 已变化；拒绝过期接管")
+        return {"event": "execution_claimed", "tid": tid, "attempt": attempt,
+                "execution_id": execution_id, "owner_id": owner_id,
+                "previous_owner": previous, "confirmed_stopped": confirm_stopped}
+
+    return ledger_locked_append(build)
 
 def terminal_attempt(
     tid: str, attempt: int, execution_id: str, status: str

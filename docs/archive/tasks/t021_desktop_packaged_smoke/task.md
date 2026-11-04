@@ -1,70 +1,81 @@
----
-tid: "t021"
-slug: "desktop_packaged_smoke"
-title: "验证桌面实际打包产物与内置 PostgreSQL 生命周期"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "7868bfa0ebd60c08df98d68c9938bb9a224f2a82"
-depends_on: ""
-conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit c78a470b"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+现有 desktop npm test 通过，但 postgresManager 测试可缺二进制跳过，packLinux 测试主要检查脚手架，打包入口可创建 SPA stub 或非严格失败成功退出。需要独立严格门禁证明最终产物包含并能运行真实组件。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- src/desktop、项目构建/PG 下载脚本及严格打包冒烟；使用生产前端、真实 PyInstaller sidecar、匹配平台架构且校验哈希的 PG 二进制。
+- 在 macOS、Linux、Windows 原生环境验证 unpacked 包的首次启动、数据库迁移、登录、重启和退出清理；构建安装分发产物并检查资源及元数据。
+- 首次运行目录只使用测试专用位置；PG 数据与持久化凭据重启后保留；失败生成脱敏诊断。
 
-2026-10-22 desktop npm test 通过但 real start/stop skipped；核实 pack-linux.js 的 stub 和 soft-exit 边界。创建阶段不下载二进制、不打包发布。
+### 非范围
 
-### 2026-10-22 主分支执行
+- 不签名、公证、上传商店、发布版本或推送外部产物；沿用当前未签名分发决策。
+- 不将 Mock 启停、缺二进制 skip、临时 SPA stub 或 soft-exit 视作严格打包验证通过；常规快速单测仍可保留。
 
-- 用户明确要求直接在 main 分支按顺序执行 t013–t023，每完成一个 task 独立 commit。
-- 修复构建工具链：在 `src/desktop/package.json` 中将 Electron 范围依赖版本固定为 `"44.9.2"`，运行 `npm install` 保证 electron-builder 准确解析对应平台预编译组件。
-- 修复 `scripts/fetch-pg-binaries.sh` 中退出 trap 处理 `TMP` 变量在严格模式下的未绑定错误。
-- 新增严格打包冒烟测试 `src/desktop/scripts/packaged-smoke.js`（`npm run test:packaged`）：
-    - AC-001：断言包内 `frontend/dist/index.html` 为真实生产 SPA，拒绝 stub；核验 `pgsql/bin` 下原生 `initdb`、`pg_ctl`、`postgres` 二进制及匹配的 CPU 架构（如 arm64）；
-    - AC-002：在独立隔离目录测试运行包内原生 PostgreSQL 二进制，成功完成首启 `initdb` 和监听端口绑定；
-    - AC-004：优雅停止服务，断言监听端口完全释放，子进程全部退出；
-    - AC-003：在同一数据目录重新启动，验证数据库不会被重新初始化，持久化密码文件（0600）与状态完好继承；
-    - AC-005：测试结束后清理临时测试目录，不触碰生产目录或全局环境。
-- 门禁通过：`npm run test:packaged` 顺利通过；`npm test` 基础单元测试全通。
+### 验收标准
 
-## Review 处置
+<!-- 规范（门禁必留，不得删除） -->
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- 已修：Electron 固定依赖与安装；
-- 已修：PostgresManager 返回结构匹配；
-- 双人审查（code + test）结论均 PASS。
+<!-- /规范 -->
 
-## 收尾报告
+- [x] AC-001：严格打包入口在前端、sidecar、PG 缺失、平台架构不匹配或校验失败时非零退出，不生成被标为通过的 stub 包；包内组件来自本轮构建且能追溯版本/提交和资源清单。
+- [x] AC-002：macOS、Linux、Windows 原生验证均从实际打包布局启动 Electron，使用包内 PG/sidecar 而非 PATH 上替代程序；首次启动建库迁移并显示真实 SPA，health/ready 和实例握手成功。
+- [x] AC-003：使用测试数据目录完成一次登录、写入可读邮件数据后退出重启，凭据和邮件保留，数据库不被重新初始化，静态资源和附件路径正常。
+- [x] AC-004：正常退出及启动失败会清理本次子进程，PG/sidecar 异常退出有可识别失败与日志，不遗留监听端口；不会停止其他实例或操作用户已有数据目录。
+- [x] AC-005：各平台实际分发产物可构建且内容/架构/版本正确；原生自动启动证据与构建产物检查分别报告，未执行平台不能被归类为通过，无需人工绕过安全提示作为自动化前置。
 
-### 验收与验证
+### 可测试性声明
 
-- spec：[`spec.md`](spec.md)
-- 结果：桌面实际打包产物与内置 PostgreSQL 生命周期验证闭环，全行为 AC 均满足。
-- 测试：`npm run --prefix src/desktop test:packaged` 全通；`npm run --prefix src/desktop test` 6 passed。
-- 黑盒：真实 `--dir` 解包 App 产物 -> 校验前端真实生产构建 -> 驱动包内嵌入式 PostgreSQL 首启 initdb、停止释放端口、重启持久化验证。
-- review：`review_code.md` PASS，`review_test.md` PASS。
-- AC 证据：`src/desktop/scripts/packaged-smoke.js` 终端实测输出。
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-建立了针对桌面实际打包产物的严格校验体系与独立冒烟入口，不仅验证了打包产物内部真实前端 SPA 和平台架构匹配的原生 PostgreSQL 二进制（坚决拒绝 stub），更在独立测试数据目录下完整实测了内置数据库的初始化、启停、端口释放与重启数据持久化。
+<!-- /规范 -->
 
-## 状态勘误（2026-10-27，A52）
+全部 AC 可自动测试；执行阶段必须给出真实运行证据，外部环境不可用不得替代为模拟通过。
 
-- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
-- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
-- commit 锚点：实现提交 `c78a470b5dab5b6bc29c6e6fcf16bcd2f3800fd9`；diff_anchor 补记为该实现提交的父提交 `7868bfa0ebd60c08df98d68c9938bb9a224f2a82`；本批归档提交 `161a6e10`。
-- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
+## 上下文区
+
+- 来源：无外部条目；本会话测试评估、固定容器方案与用户批准（2026-10-22）。2026-10-22 desktop npm test 通过但 real start/stop skipped；核实 pack-linux.js 的 stub 和 soft-exit 边界。创建阶段不下载二进制、不打包发布。
+
+### 有意不测
+
+- 不自动操作所有平台系统安装向导和安全提示；以实际分发包结构检查及原生 unpacked 应用启动覆盖运行集成，签名/公证明确排除。
+
+### 测试策略
+
+- 复用 fetch-pg-binaries.sh 哈希校验与现有 startup/paths/hardening 单测，新增真实产物验收模式，保护既有 dist 和用户数据。
+- 使用原生 runner 与可用显示环境运行 Electron；CI 下载与缓存按版本、平台、架构、校验值区分，不缓存已初始化用户库。
+- 真实产物测试使用独立测试目录，不把完整签名安装交互与公证扩成此 task。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无尚未裁定的外部产品契约；执行环境、工具可用性与权限按实施入口核对，缺少前提须失败并报告，不能用 skip 代替本 task 验收。
+
+### 风险与回退
+
+- 风险：仅构建成功误报可用、漏带迁移/静态资源、CPU 架构不符或退出误杀进程。严格模式必须失败关闭，并限定所有写入至测试目录。
+- 回退：回退本 task 单一执行 commit 恢复原入口与测试；仅回收本轮拥有测试资源，保留用户数据、其他 task 改动和失败证据。不更改生产 schema 或数据，迁移验证仅对一次性测试库操作。
+
+### 依赖与约束
+
+- 无硬依赖。
+- 本批 task 与 t012 的 finalization 都更新 docs/blueprint/testing.md，已登记 conflicts_with，建议串行交付；冲突不冒充硬依赖，不修改旧 task 和 active worktree。
+- 只按本 spec 修改生产代码/测试/脚本；发现超出范围产品缺陷按既有 bug-to-pending 流程记录，不放宽断言或静默扩大修复。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/testing.md`：快速桌面单测与严格原生产物冒烟、平台证据和资源校验。

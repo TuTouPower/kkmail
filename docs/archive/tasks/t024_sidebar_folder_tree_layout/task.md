@@ -1,56 +1,80 @@
----
-tid: "t024"
-slug: "sidebar_folder_tree_layout"
-title: "修复侧栏账号文件夹树布局并保持导航可访问性"
-status: "done"
-branch: "t024_sidebar_folder_tree_layout"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "9454a1d2cc9412caf86c5381b427619fdb661a86"
-depends_on: ""
-conflicts_with: ""
-note: "来源 p018；固定高度横向 flex 容器导致文件夹树错位；鼠标焦点缺陷未复现，保留键盘焦点可见性"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+侧栏将 AccountFolderTree 与账号标题并列放入固定 33px 高、水平 flex 的 .account-row，展开后树排到账号右侧并覆盖后续账号。p018 混合了布局、焦点和历史文件夹显示三项；本 task 修复已验证布局缺陷，并守住导航与键盘交互。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 修复账号标题与文件夹树布局，使展开内容在标题下方参与正常纵向排版。
+- 覆盖独立展开、多级目录、长名称、滚动及移动端抽屉场景；保持原文件夹导航、计数和焦点行为。
 
-来源 p018。2026-10-23 使用现有 CSS 和真实 Electron 渲染核实布局重叠；普通鼠标点击焦点环未复现，保留键盘 focus-visible，不将原 autofocus 示例当作鼠标缺陷证据。创建期不执行代码修复。
+### 非范围
 
-2026-10-23 实施记录：
-1. 复现与几何红灯门禁：扩展 `tests/e2e/stubApi.ts` 支持多账号与自定义文件夹状态；新增 `tests/e2e/sidebar_tree.spec.ts` 进行真实 Chromium 视口几何测量（桌面 1200x800 与移动 375x667）。在未修改前实测证实：树被水平挤在 x=156px 侧边（AC-001 失败）、错误状态横向错位（AC-002 失败）、长名称撑出 561px 溢出侧栏（AC-003 失败）。
-2. 样式与布局修复：在 `src/frontend/src/design-system/tokens.css` 中将 `.account-row` 移除固定 `height: 33px` 与横向 flex 限制，转为自然块级纵向流；补充 `.side-item-group` `width: 100%; min-width: 0;`；为 `.account-folders`、`.folder-tree-row`、`.category-account-btn` 与 `.folder-item-btn` 声明 `width: 100%`，确保展开的子树与状态提示垂直排列于所属账号下方且后续账号顺延。
-3. 单元测试与端到端回归：在 `Sidebar.test.tsx` 补充多账号同时展开独立折叠、空目录、加载失败及键盘 aria-expanded 的交互测试；在 `run_e2e.mjs` 纳入 `sidebar_tree.spec.ts` 形成自动化黑盒回归。
-4. 规范同步：更新 `docs/blueprint/conventions.md` 固化账号标题与文件夹树纵向流排版及键盘焦点保护规则；更新 `docs/specs/inbox_ui_and_search.md` 与 `docs/specs_index.md`。
+- 不新增历史文件夹读时解码、自愈或数据修复脚本，不改变同步调度和协议映射。
+- 不全局去除按钮 focus-visible；不将未复现鼠标焦点环当作已确认缺陷。
+- 不改收藏分类、文件夹排序、API 或数据库结构。
 
-## Review 处置
+### 验收标准
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+<!-- 规范（门禁必留，不得删除） -->
 
-### Round 1 (2026-10-23T03:15:00+08:00)
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-Round 1 零 finding。
+<!-- /规范 -->
 
-## 收尾报告
+- [x] AC-001：展开任一账号时，全部文件夹位于该账号标题下方，后续账号位于整棵树下方；标题、目录与后续账号无横向错排或纵向遮挡。
+- [x] AC-002：两个账号同时展开与独立折叠时，另一账号展开状态保持；多级目录、空目录、加载及错误提示均在所属账号下方显示，未读数仍归属正确目录。
+- [x] AC-003：在桌面侧栏及 760px 断点以下抽屉中，长邮箱与长文件夹名不撑出导航容器，目录可滚动到达；点击具体目录后邮件范围及标题对应其 account_id/folder_id。
+- [x] AC-004：鼠标点击展开按钮可正常操作；Tab 导航时账号展开按钮及目录按钮可获得可见焦点，Enter/Space 可展开或选择，aria-expanded 与实际状态一致。
 
-### 验收与验证
+### 可测试性声明
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：`pytest .repo_template/tests -q -m contract`、`(cd src/frontend && npm test && npx tsc -b && npm run build && npm run lint)` 与 `(cd src/desktop && npm test)` 全通
-- 黑盒：`npm --prefix src/frontend run test:e2e` 全通（7 项 E2E 用例，7.8s）
-- review：Round 1 PASS（review_level=single, `review_general.md`）
-- AC 证据：见 `handoff.json`
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-- 修复侧栏账号文件夹树布局冲突，将 `.account-row` 改为正常块级排版并规整树项宽度，消除横向错排与纵向遮挡；完善端到端几何断言与组件单测，保持键盘焦点与 aria-expanded 可访问性。
+<!-- /规范 -->
+
+全部 AC 可自动测试；视觉截图仅作补充复核。
+
+## 上下文区
+
+- 来源：p018（2026-10-23 核实；无等价 effective task）。Sidebar.tsx 将树放在 .account-row 内；tokens.css 限定 height:33px/display:flex。.scratch/pending_candidate_audit.js 使用现有 CSS 与对应 DOM，在真实 Electron 测得树 x=156.23、y=-6.5，下一账号 y=59，树 bottom=89.5，确认错排与重叠。普通鼠标点击 outline=none，Tab 后 focus-visible=true；原 .scratch/repro_sidebar_issue.html 含 autofocus，不能证明鼠标焦点缺陷。历史名称原描述有误：设置页显式同步经 sync_account_app/enqueue_account_sync 触发完整文件夹发现，sync_account_folders 更新已有 name/role；优先复用 t008 已有解码及此显式操作，不另建隐式修复。生产数据未验证，不能声称历史记录已修好。
+
+### 有意不测
+
+- 真实公网账号持续同步：布局可用确定性 folder-stats 夹具验证，不访问业务库。
+- 历史脏数据恢复：另按 p018 核实结论处理，不用前端容错掩盖数据问题。
+
+### 测试策略
+
+- Sidebar 组件测试覆盖独立展开、真实父子目录、未读数、加载失败与导航；断言用户行为，不锁死某个 DOM 标签或 CSS 具体值。
+- 真实渲染器使用生产 SPA 和 CSS，在桌面及移动视口检查标题/树/下一账号包围盒、滚动可达性、长名称、鼠标及键盘焦点；不得只靠 JSDOM 文本存在性判断布局。
+- 运行受影响前端测试、CSS token 检查、类型检查与 UI 冒烟；补测前先让几何断言在当前实现失败。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无。
+
+### 风险与回退
+
+- 风险：更改 .account-row 可能影响标题高度、选择高亮、未读角标及 UI 稳定编号定位。
+- 回退：回退本 task 执行 commit；无数据迁移。
+
+### 依赖与约束
+
+- 无硬依赖；t008 已完成。review_level=single。
+- 复用语义 CSS token、原导航 store 和 API；保留 SB10 等既有稳定编号，不扩大改动范围。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/conventions.md`：补充账号标题与文件夹树正常纵向布局、键盘焦点保护规则。

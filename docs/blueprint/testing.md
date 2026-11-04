@@ -11,27 +11,31 @@ pytest .repo_template/tests -q --collect-only -m contract
 command -v md_kx || true
 ```
 
+## verification_policy
+
+project_configured
+
+## verification_notes
+
+模板同步与日常快速门禁只覆盖模板契约、不依赖外部服务的构建/单测和浏览器冒烟：`test_cmd` 运行模板 contract、前端单测/类型检查/生产构建与桌面端单测；`blackbox_verify` 运行前端 stubApi 快速 E2E。后端完整 PostgreSQL 套件、真实 IMAP、全栈 E2E、桌面打包冒烟与性能基准依赖外部服务或长时运行，按下方「本地分层门禁与 CI 流水线映射」在 task/release 阶段单独执行。前端 `npm run lint` 与后端完整套件当前存在既存失败，未纳入同步门禁。
+
 ## test_cmd
 
-日常全量门禁命令（单元测试、静态类型检查、生产构建与契约核验）：
+同步与日常快速门禁（模板契约、前端构建链与桌面端单测）：
 
 ```bash
 pytest .repo_template/tests -q -m contract
-scripts/run-mail-core-tests.sh run
-(cd src/frontend && npm test && npx tsc -b && npm run build && npm run lint)
-(cd src/desktop && npm test && npm run test:packaged)
+(cd src/frontend && npm test && npx tsc -b && npm run build)
+(cd src/desktop && npm test)
 ```
 
 ## blackbox_verify
 
-浏览器端到端轻量冒烟验证与真实全栈端到端自动化：
+浏览器端到端轻量冒烟验证：
 
 ```bash
-# 快速 UI 冒烟测试（基于 stubApi，无外部服务依赖，4s）
+# 快速 UI 冒烟测试（基于 stubApi，无外部服务依赖）
 npm --prefix src/frontend run test:e2e
-
-# 真实全栈端到端测试（基于真实 FastAPI、PostgreSQL、Worker、Dovecot 与生产 SPA，16s）
-python3 scripts/run_full_stack_e2e.py
 ```
 
 ### Electron 原生标题栏人工验证

@@ -1,54 +1,78 @@
----
-tid: "t044"
-slug: "sidebar_tree_alignment"
-title: "修复侧边栏顶层按钮与多层级树几何对齐"
-status: "done"
-branch: "t044_sidebar_tree_alignment"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "2fc7335da1d57ac980a59fc3b0acd4b32f659d81"
-depends_on: ""
-conflicts_with: ""
-note: "来源 p026；统一顶层标题与子层级缩进网格并补齐 Playwright 几何坐标断言。"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+侧边栏顶层标题（所有账号、分组、账号列表）因 DOM 嵌套层级与内边距/间距不一致，导致展开折叠箭头、标题图标与文字标签水平坐标错位最高达 12px；子层级（分类项、账号项、文件夹项、新建分组表单、加载与错误状态）同样缺乏统一的树状缩进基准，造成视觉跳动与层级混淆，且现有 E2E 仅检查内联样式字符串而未验证真实渲染几何坐标。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 统一侧边栏顶层标题（所有账号、自定义分组、账号列表）的展开箭头槽位、图标与文本标签水平对齐基准。
+- 统一侧边栏各子层级（分类项、账号项、各级文件夹项、分类下账号子项）的阶梯缩进与图标/文本列对齐。
+- 统一内联新建/重命名分组表单、文件夹加载/错误状态、账户加载/错误状态行的缩进基准，使其对齐所属父层级。
+- 在端到端测试中补充真实浏览器渲染的像素级几何坐标（`boundingBox.x`）断言。
 
-1. 诊断与复现：通过 Playwright 在真实 Chromium 视口测量发现，“所有账号”、“分组”、“账号列表”顶层标题因 DOM 结构嵌套（内部按钮叠加 padding 与 gap）导致展开箭头偏差 4px、图标偏差 8px、文本偏差 12px；Level 1 分类与账号兄弟行图标偏差 3px；Level 2 文件夹与分类下账号缺失折叠槽位占位，导致图标列与父级重合在 58px（0px 相对缩进）；表单与加载错误行未对齐所属父层级。
-2. 架构重构与对齐：
-   - 统一顶层标题 DOM 与样式结构：将“所有账号”改造为外层 div 包含 `tree-disclosure` 与 `tree-heading-main`，与各“分组”及“账号列表”完全一致；统一容器 `gap: 4px` 与主按钮 `padding: 0 4px 0 0; gap: 8px`，使三者的 chevron（14px）、icon（36px）、text（60px）完全像素级对齐（<= 1px 误差）。
-   - 统一子层级网格与阶梯缩进：在 Level 2 叶子行（`tree-folder-row`、`tree-category-account`）补充 `tree-disclosure-slot` 占位，统一 `AccountIcon`（`.account-dot`）在树节点中为 16px，使 Level 1 兄弟节点（分类与账号）完全水平对齐，Level 2 子节点相对父节点形成严格 24px 阶梯缩进，子级图标列严格位于父级图标列右侧。
-   - 统一辅助状态与表单缩进：新建/重命名分组内联表单调整为 `padding: 4px 4px` 对齐 Level 0；账号加载与错误提示设置 `padding-left: 24px` 对齐 Level 1；文件夹加载与错误状态设置 `padding-left: 48px` 对齐 Level 2。
-3. 测试验证：
-   - 在 `tests/e2e/sidebar_tree.spec.ts` 中新增真实浏览器渲染几何断言（`boundingBox.x`），逐条覆盖 AC-001 ~ AC-004，并重跑全量前端单测、类型检查、构建与全栈端到端测试。
+### 非范围
 
-## Review 处置
+- 不改变侧边栏分组拖拽、折叠展开状态持久化及导航路由行为。
+- 不改变侧边栏整体宽度、响应式抽屉断点及配色方案。
 
-### Round 1 (2026-10-23T21:55:00+08:00)
+### 验收标准
 
-Round 1 零 finding。
+<!-- 规范（门禁必留，不得删除） -->
 
-## 收尾报告
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-### 验收与验证
+<!-- /规范 -->
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：`(cd src/frontend && npm test && npx tsc -b && npm run build && npm run lint)` 全通；`(cd src/desktop && npm test && npm run test:packaged)` 全通；`pytest .repo_template/tests -q -m contract` 全通；`scripts/run-mail-core-tests.sh unit` 304 passed。
-- 黑盒：`npm --prefix src/frontend run test:e2e`（14 项全部通过，包含 t044 像素几何对齐与缩进新用例）；`python3 scripts/run_full_stack_e2e.py`（8 项全栈真实端到端测试全部通过）。
-- review：`docs/tasks/t044_sidebar_tree_alignment/review_general.md` 单轮 PASS，0 finding。
-- AC 证据：见 `handoff.json`
+- [ ] AC-001：侧边栏顶层“所有账号”、各“分组”标题与“账号列表”标题的展开折叠箭头、主图标、文本标签在真实浏览器渲染下的水平起始坐标（`boundingBox.x`）严格对齐（误差不超过 1px）。
+- [ ] AC-002：同一缩进层级的兄弟节点（如分组展开后的分类项与账号项）的展开箭头、图标与文本标签水平坐标对齐；展开后的子级文件夹项及分类下账号项相对于父级形成递增且步长一致的阶梯缩进，子级图标列严格位于父级图标列右侧。
+- [ ] AC-003：新建/重命名分组内联表单、账户加载/错误状态提示、文件夹加载/错误状态提示的左内边距与所属层级子项对齐，无突兀左贴边或错位。
+- [ ] AC-004：端到端测试包含对顶层标题及各子层级 chevron/icon/label 真实 `boundingBox.x` 的几何对齐断言并通过，同时保持键盘聚焦与 `aria-expanded` 可访问性契约不变。
 
-### 结果摘要
+### 可测试性声明
 
-- 修复侧边栏顶层三大标题及多级子树水平几何对齐与阶梯缩进，对齐误差控制在 1px 以内，完成端到端自动化几何坐标断言守护并更新架构规范。遗留：无。
+<!-- 规范（门禁必留，不得删除） -->
+
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+- 全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：`p026`（2026-10-23 核实：`src/frontend/src/components/Sidebar.tsx` 与 `src/frontend/src/design-system/tokens.css` 中 `.tree-section-heading`、`.tree-group-heading`、`.tree-heading-main`、`.tree-category-heading`、`.tree-account-row`、`.tree-folder-row` 等双重 padding/gap 导致错位仍存在，`tests/e2e/sidebar_tree.spec.ts` 仅断言内联 `paddingLeft` 字符串）
+
+### 有意不测
+
+- 极端超长邮箱地址截断省略号像素位置：已由 CSS `text-overflow: ellipsis` 保证，仅测起始对齐坐标。
+
+### 测试策略
+
+- 前端组件单测验证 DOM 结构、可访问性属性（`aria-expanded`、按钮语义）与交互不回归。
+- Playwright E2E 测试（`tests/e2e/sidebar_tree.spec.ts`）测量顶层三类标题及 Level 1 / Level 2 子项的 `boundingBox().x` 坐标，断言同级对齐与跨级正向缩进。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无
+
+### 风险与回退
+
+- 风险：调整标题内部按钮结构可能影响分组/账号拖拽热区或 `[data-no-drag="true"]` 判定。
+- 回退：保持现有拖拽事件绑定元素与 `data-no-drag` 属性不变，跑通 `sidebar_tree.spec.ts` 全量拖拽与分组操作用例。
+
+### 依赖与约束
+
+- 须遵守 `docs/blueprint/conventions.md` §五.5「侧栏账号标题与文件夹树布局规范」与 §六「UI 稳定编号与引用规范」（保留 `SB10`–`SB16` 标记）。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/conventions.md`：在 §五.5 补充侧栏顶层标题与多级树水平对齐基准约束。

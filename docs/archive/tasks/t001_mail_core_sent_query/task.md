@@ -1,52 +1,76 @@
----
-tid: "t001"
-slug: "mail_core_sent_query"
-title: "支持按角色查询已发邮件与映射IMAP已发目录"
-status: "done"
-branch: "t001_mail_core_sent_query"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "d7e829a4a81c9f9c0f9153d6bc57d86d0a188ad7"
-depends_on: ""
-conflicts_with: ""
-note: ""
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+前端需支持“所有已发邮件”及各账号已发邮件展示，当前 `mail_core` 的 `/api/mail/inbox` 仅查询 `role=inbox`，且 IMAP 缺少常见中文已发文件夹名称映射，导致已发邮件无法按角色或按账号检索。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- `src/mail_core/providers/imap.py`：在 `_FOLDER_ROLE` 映射中增加中文名称映射（如 `"已发送"`、`"已发送邮件"`），并支持识别 IMAP 特殊用途标记 `\Sent`。
+- `src/mail_core/mail/application/queries.py`：扩展邮件查询逻辑，支持按 `folder_role: str = "inbox"`（支持 `inbox`、`sent` 等有效角色）和可选的 `account_ids` 检索分页邮件列表。
+- `src/mail_core/api/mail.py`：在 `/api/mail/inbox` 增加可选参数 `folder_role: str = Query("inbox")`，保持默认 `inbox` 向后兼容。
+- 编写对应的单元/集成测试。
 
-1. `imap.py`：`_FOLDER_ROLE` 映射新增 `"已发送"` 与 `"已发送邮件"`，并在 `list_folders` 中支持匹配 `\Sent` 标志解析出 `role="sent"`。
-2. `queries.py` 与 `api/mail.py`：`unified_inbox` 与 `/api/mail/inbox` 增加 `folder_role: str = "inbox"` 参数，支持查询指定角色文件夹（如 sent），并兼容默认 inbox。
-3. 测试驱动：新增 `tests/mail_core/test_folder_role_inbox_api.py`，扩展 `tests/mail_core/test_imap_remote_id.py`，全量测试与构建验证通过。
+### 非范围
 
-## Review 处置
+- 前端 UI 与视图修改（由 t002 负责）。
+- 发信功能（不在产品范围）。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-22T04:55:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零 finding。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [x] AC-001：调用 `/api/mail/inbox?folder_role=sent` 时，返回所有账号下 `role="sent"` 文件夹中的邮件列表，并支持 keyset 分页与 `account_id` 过滤。
+- [x] AC-002：未传 `folder_role` 时，接口行为与原先一致，默认返回 `role="inbox"` 邮件。
+- [x] AC-003：IMAP Provider 对名为 `"已发送"`、`"已发送邮件"` 或带有 `\Sent` 标志的目录，解析出 `role="sent"`。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：`pytest .repo_template/tests -q -m contract`、`(cd src/frontend && npm test && npx tsc -b && npm run build)`、`(cd src/desktop && npm test)`、`pytest tests/mail_core/test_folder_role_inbox_api.py tests/mail_core/test_imap_remote_id.py` 全绿通过。
-- 黑盒：`npm --prefix src/frontend run test:e2e` 冒烟通过（2 passed）。
-- review：`review_general.md` verdict: PASS (Round 1)。
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-- 成功支持 `/api/mail/inbox?folder_role=sent` 跨账号/单账号已发送邮件查询与 keyset 分页，并补齐 IMAP 中文目录与 `\Sent` 标志映射。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：无
+
+### 有意不测
+
+- 无
+
+### 测试策略
+
+- 使用 pytest 编写 API 端点测试验证 `folder_role=sent` 与 `account_id` 联合过滤及默认值行为；编写 IMAP provider 单元测试验证目录角色解析。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无
+
+### 风险与回退
+
+- 风险：默认参数不当影响现有收件箱列表调用。
+- 回退：默认值保持 `inbox`，若发现兼容问题回退新增参数。
+
+### 依赖与约束
+
+- 无
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：记录 `/api/mail/inbox` 支持 `folder_role` 查询已发邮件的契约说明。

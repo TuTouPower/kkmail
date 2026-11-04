@@ -1,53 +1,80 @@
----
-tid: "t003"
-slug: "reader_toolbar_and_context_menu"
-title: "重构邮件详情居中工具栏与支持邮件列表右键菜单"
-status: "done"
-branch: "t003_reader_toolbar_and_context_menu"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "ca9a9309f40c856e550b103ed6b69a5ea62445c0"
-depends_on: ""
-conflicts_with: ""
-note: ""
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+提升邮件阅读与列表操作效率：邮件详情顶部操作栏需要居中放置以优化视觉对称与操作动线；已读状态按钮需要支持反向标记未读；在邮件列表中需要支持右键快捷菜单，复用并对齐详情操作，并对发信等未支持功能明确置灰禁用。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- `src/frontend/src/components/MessageReader.tsx`：重构顶部工具栏布局，将操作按钮组居中显示；将「标为已读」升级为根据邮件 `is_read` 状态动态切换的「标为已读/未读」双向按钮；加入「回复」、「回复所有人」、「转发」占位按钮并设为禁用状态（`disabled`）。
+- `src/frontend/src/components/MessageList.tsx`：为邮件卡片增加右键上下文菜单（Context Menu）；菜单提供「打开」、「标为已读/未读」、「标记旗标/取消标记」、「移到废纸篓（删除）」以及禁用的发信操作（「回复」、「回复所有人」、「转发」）；处理点击外部与 ESC 关闭交互。
+- `src/frontend/src/api/queries.ts`：扩展乐观更新支持设置未读状态（支持指定目标已读状态）。
+- 样式与交互（CSS/Tokens）：详情工具栏居中样式调整；右键菜单样式与定位。
+- 对应前端测试：`MessageReader.test.tsx`、`MessageList.test.tsx`、`queries.ts` 相关测试。
 
-1. `queries.ts`：导出 `setReadOptimistic(items, nextRead)`，统一支持正向标已读与反向标未读。
-2. `MessageReader.tsx`：工具栏操作按钮组居中放置；已读/未读按钮动态根据状态双向切换；增加回复、回复所有人、转发占位按钮并设为 disabled 禁用状态。
-3. `MessageList.tsx`：在邮件卡片上实现原生风格右键上下文菜单（Context Menu），包含打开、动态标为已读/未读、标记旗标、移到废纸篓及禁用的发信项，支持 ESC 和点击外部关闭。
-4. 测试覆盖：更新 `MessageReader.test.tsx` 与 `MessageList.test.tsx` 覆盖居中、状态动态切换、disabled 发信项及右键菜单各项交互。
+### 非范围
 
-## Review 处置
+- 后端接口变动（当前后端接口已支持 `is_read` 布尔值切换与废纸篓/旗标操作）。
+- 发信逻辑实现（回复、转发功能保持禁用置灰，不在产品范围）。
+- 多选批量右键菜单（右键聚焦当前被右键的单封邮件）。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-22T05:16:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零 finding。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [x] AC-001：邮件详情页顶部工具栏操作按钮组（已读未读、删除、旗标及发信占位等）在视觉上居中显示（水平居中对齐）。
+- [x] AC-002：邮件详情工具栏中的已读状态按钮根据邮件状态动态显示：当邮件未读时显示「标为已读」，点击后调用接口标记为已读并更新为已读状态；当邮件已读时显示「标为未读」，点击后调用接口标记为未读并更新为未读状态。
+- [x] AC-003：邮件详情工具栏及列表右键菜单中的「回复」、「回复所有人」、「转发」操作处于禁用状态（`disabled`），无法触发点击事件。
+- [x] AC-004：在邮件列表项上右击能弹出自定义上下文菜单（Context Menu）；右键菜单包含「打开」、「标为已读/未读」、「标记旗标/取消标记」、「移到废纸篓」及禁用的发信选项；点击菜单外部区域或按下 ESC 键能够关闭菜单。
+- [x] AC-005：在邮件列表右键菜单中点击「打开」能选中并打开该邮件；点击「标为已读/未读」能正确切换已读状态；点击「标记旗标/取消标记」能正确切换旗标状态；点击「移到废纸篓」能弹出确认并执行删除。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：`npm test && npx tsc -b && npm run build` (119 passed)、`(cd src/desktop && npm test)`、`pytest .repo_template/tests -q -m contract` (149 passed) 全绿。
-- 黑盒：`npm --prefix src/frontend run test:e2e` (2 passed)。
-- review：`review_general.md` verdict: PASS (Round 1)。
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-- 成功实现邮件详情工具栏居中与已读/未读动态双向切换，邮件列表完整支持原生风格右键快捷菜单并禁用未支持发信项。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：无
+
+### 有意不测
+
+- 浏览器底层右键事件的像素级坐标计算边界不作端到端精确像素校验，仅测试菜单的唤起、关闭与功能交互。
+
+### 测试策略
+
+- 使用 vitest + React Testing Library 模拟点击与右键上下文菜单事件，断言 DOM 结构、disabled 属性、图标文案切换以及 API mock 触发情况。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无
+
+### 风险与回退
+
+- 风险：右键菜单可能超出视口边界或与浏览器默认右键行为冲突。
+- 回退：严格 `preventDefault()`，在视口边缘做安全定位边界计算。
+
+### 依赖与约束
+
+- 依赖当前已有 `postMailCoreMessageRead`、`postMailCoreMessageTrash`、`flagOptimistic` 等前端 API 基础设施。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：记录前端邮件详情工具栏布局规范与右键菜单交互组件结构。

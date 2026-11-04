@@ -1,56 +1,87 @@
----
-tid: "t057"
-slug: "periodic_inbox_sync_and_auto_archive"
-title: "收件箱定时轮询与增量正文自动存库"
-status: "done"
-branch: "t057_periodic_inbox_sync_and_auto_archive"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "1475b0aa137cf4587211ad0adc9164aaf7e57dac"
-depends_on: ""
-conflicts_with: ""
-note: "实现20分钟收件箱独立错峰轮询，废除尾递归自调度，增量新邮件自动入库正文"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+当前系统缺乏独立的全局定时轮询调度器，依赖 `sync_folder_delta` 成功退出时尾递归调度下一轮自身任务（30 秒自调度）。当遭遇偶发网络超时、服务商 429 限流、Worker 重启或重试耗尽时，该自调度链条永久中断，导致系统陷入静默，必须依赖用户手动点击或切换目录才能重新触发同步。
+此外，当前增量拉取（`sync_folder_delta`）在拉取到新邮件元数据并存入 `messages` 表后，未连带触发正文归档任务（`ARCHIVE_MIME_BATCH`），导致新邮件的正文内容为空（状态停留在 `METADATA_SYNCED`），用户在未点击阅读前数据库 `message_bodies` 表无正文数据。
+多账号场景下（如 300 个邮箱），高频同时发起检查极易触发邮件服务商（如 Outlook/Gmail）的 IP 级限流封禁。系统需要建立 20 分钟（1200 秒）周期的独立 Worker 错峰巡检调度，并实现增量收信连带正文自动存库。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 在 Worker 主循环中增加独立周期巡检调度器，基于配置周期（默认 20 分钟 / 1200 秒）巡检所有启用账号的收件箱（`role = "inbox"`），超时未同步且无在途任务时自动入队 `SYNC_FOLDER_DELTA`。
+- 多账号收件箱检查任务入队时执行错峰打散（Stagger），将任务的 `run_after` 均匀分散在轮询周期内，避免瞬时并发冲击。
+- 移除 `sync_folder_delta` 执行完毕后的尾递归自调度代码，实现调度与执行解耦。
+- 在 `sync_folder_delta` 发现新邮件入库（`upserted > 0`）时，自动在同事务中入队 `ARCHIVE_MIME_BATCH` 正文归档任务。
+- 支持环境变量 `MAIL_CORE_INBOX_POLL_INTERVAL_S` 配置轮询周期（默认 1200 秒）。
+- 更新相关配置契约文件与文档。
 
-1. TDD 编写 `tests/mail_core/test_worker_scheduler.py` 与 `tests/mail_core/test_delta_archive_integration.py`，完整覆盖 AC-001 ~ AC-007。
-2. 在 `src/mail_core/worker/main.py` 中实现 1200 秒收件箱巡检调度器 `schedule_periodic_inbox_sync` 与错峰平摊算法，并在 `run()` 循环挂载独立异常隔离的巡检周期。
-3. 改造 `src/mail_core/sync/delta.py`：彻底移除第 650–670 行的尾递归 30 秒自调度；在 `totals["upserted"] > 0` 时自动在同事务中入队 `ARCHIVE_MIME_BATCH`（优先级 60）。
-4. 修复 `src/mail_core/sync/execution.py`：在 `_successor_is_periodic` 中正确识别 `exhausted=True` 的独立后继，避免已完成请求误绑定后继。
-5. 配置契约与架构文档累积更新至 `config/.env.example`、`src/mail_core/README.md`、`docs/blueprint/architecture.md` 与 `docs/specs/mail_sync_and_storage.md`。
+### 非范围
 
-## Review 处置
+- 不修改非收件箱文件夹（如垃圾箱、草稿箱、自定义目录）的自动定期扫描（仍由用户导航按需触发）。
+- 不引入前端定时轮询器（保持调度权 100% 归属于后端 Worker，前端仅通过 SSE 被动更新）。
+- 不调整既有 8 个全局并发外联连接槽位约束。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-27T19:38:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零 finding。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [ ] AC-001：Worker 主循环定期执行收件箱巡检调度，对所有启用（`sync_enabled=true`）账号的有效收件箱（`role="inbox"` 且非 paused），当距上次检查超期（默认 1200 秒）且无在途任务时，自动入队 `SYNC_FOLDER_DELTA` 任务。
+- [ ] AC-002：批量入队多账号收件箱检查任务时，执行错峰平摊，各任务的 `run_after` 时间在周期窗口内均匀分散，避免瞬时并发堆积。
+- [ ] AC-003：移除 `sync_folder_delta` 退出时的尾递归自调度逻辑，单次任务执行完毕后不再自我追加下一轮任务。
+- [ ] AC-004：`sync_folder_delta` 检测到新拉取邮件（`upserted > 0`）时，自动入队 `ARCHIVE_MIME_BATCH` 正文归档任务。
+- [ ] AC-005：Worker 消费自动触发的 `ARCHIVE_MIME_BATCH` 任务后，对应邮件的 HTML/纯文本正文成功解析并持久化写入 PostgreSQL `message_bodies` 表。
+- [ ] AC-006：单次增量检查遭遇异常失败或重试耗尽后，下一个周期的 Worker 巡检调度仍能正常为该账号收件箱补发任务，具备自愈能力。
+- [ ] AC-007：环境变量 `MAIL_CORE_INBOX_POLL_INTERVAL_S` 支持动态覆盖收件箱轮询周期，未配置时默认 1200.0 秒。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：`pytest .repo_template/tests -q -m contract` (189 passed)；`scripts/run-mail-core-tests.sh run -k "test_worker_scheduler or test_delta_archive_integration"` (7 passed)；前端测试与构建全部通过。
-- 黑盒：`npm --prefix src/frontend run test:e2e` (18 passed)；`python3 scripts/run_full_stack_e2e.py` 核心真实 Dovecot+Worker 同步通过。
-- review：code PASS，test PASS，指纹 `6c4351a0be90c36e` 匹配。
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-- 实现 Worker 主循环独立周期巡检调度器，每 60 秒轮询一次，自动为超期（默认 1200 秒 / 20 分钟）收件箱按错峰算法入队 `SYNC_FOLDER_DELTA`。
-- 彻底废除增量同步执行末尾的尾递归自调度逻辑，实现调度权威与任务执行解耦。
-- 实现增量收信连带正文自动存库，新邮件入库后自动触发 `ARCHIVE_MIME_BATCH` 下载完整 MIME 并将解析提取出的 HTML/纯文本直接写入 PostgreSQL `message_bodies` 表。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：用户需求与架构排查
+
+### 有意不测
+
+- 真实外部 300 个真实 Outlook 邮箱的长周期在线运行（使用本地 DB 夹具与 mock provider 模拟大账号集与时间推移）。
+
+### 测试策略
+
+- 单元测试：`tests/mail_core/test_worker_scheduler.py` 验证巡检调度逻辑、超时判定、任务去重、错峰打散时间计算以及失败自愈。
+- 集成测试：`tests/mail_core/test_delta_archive_integration.py` 验证增量收信拉到新邮件后，自动派生 `ARCHIVE_MIME_BATCH` 并解析落库 `message_bodies`。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无
+
+### 风险与回退
+
+- 风险：若数据库中积压了大量长期未同步的冷账号，初次巡检可能一次性排队较多任务。
+- 防御：错峰打散算法将任务在 1200 秒内平摊，且受既有全局 8 连接槽位限制，不会冲击外部提供商或打满线程。
+- 回退：git revert 对应 commit。
+
+### 依赖与约束
+
+- 依赖既有 `worker_jobs` 表结构与 `ConnectionSlots` 机制，无需新增数据库迁移。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：记录 20 分钟独立收件箱巡检调度器、错峰平摊策略及增量收信连带正文自动存库架构。

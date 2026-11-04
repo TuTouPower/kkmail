@@ -1,55 +1,77 @@
----
-tid: "t051"
-slug: "mailbox_folder_role_aliases"
-title: "修正邮箱文件夹角色重复显示与映射"
-status: "done"
-branch: "t051_mailbox_folder_role_aliases"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "427bdb7ca2d10cfa3e12edc960bae37f30390023"
-depends_on: ""
-conflicts_with: ""
-note: "来源 p037；保留远端 folder_id，不按 role 合并目录"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+侧栏把同账号所有同角色文件夹显示成同一标准名称。25 个 Graph 账号各有两条 `role=inbox` 记录，导致两个“收件箱”无法区分。3 个 QQ IMAP 账号的远端 `Deleted Messages` 当前归为 `other`。远端文件夹可能是别名或独立目录，不能按角色删并。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 同账号同角色有多个远端文件夹时，侧栏名称必须区分原始名称或完整父路径；每个文件夹仍按自己的 `folder_id` 导航。
+- IMAP 文件夹名 `Deleted Messages` 识别为废纸篓角色。
+- 保留 `Outbox` 与 `Conversation History` 的独立身份；缺少权威 special-use / well-known 标记时不得将其并入“已发送”。
 
-按用户要求在主分支实现，代码已在 `970f74c`。本 task worktree 用于补齐 task 证据、复审与归档；未重复修改业务代码。
+### 非范围
 
-Graph 文件夹角色分类优先使用 canonical ID；同账号角色标签冲突时在侧栏显示原始名称或完整路径，保留各自 `folder_id`。IMAP `Deleted Messages` 映射到 `trash`。Outbox 与 Conversation History 在缺少权威角色标记时仍为 `other`。
+- 不删除或合并远端文件夹、邮件或邮件位置。
+- 不改变 `发件箱`、`Outbox`、`Conversation History` 的角色，仅凭显示名称不推断它们等同于已发送。
 
-## Review 处置
+### 验收标准
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+<!-- 规范（门禁必留，不得删除） -->
 
-### Round N (YYYY-MM-DDThh:mm:ss+08:00)
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
+<!-- /规范 -->
 
-Round 1 零 finding。代码与测试复审均 PASS。
+- [ ] AC-001：同账号存在多个 `role=inbox` 或多个其他标准角色时，侧栏为每个远端文件夹显示可区分名称，并能分别打开对应 `folder_id`。
+- [ ] AC-002：IMAP `Deleted Messages` 文件夹返回 `trash` 角色并显示废纸篓分类。
+- [ ] AC-003：没有权威 special-use / well-known 标记的 `Outbox` 与 `Conversation History` 保持独立 `other` 文件夹，不被重命名为已发送或与 sent folder 合并。
 
-## 收尾报告
+### 可测试性声明
 
-### 验收与验证
+<!-- 规范（门禁必留，不得删除） -->
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：完整后端 505 passed；前端 276 passed；Desktop 单测与 packaged 测试通过；OpenAPI、TypeScript、生产构建与 lint 通过；模板契约 149 passed / 1 skipped。
-- 黑盒：UI E2E 16 passed；真实全栈 E2E 8 passed。
-- review：代码与测试复审均 PASS；复审目标为 `970f74c`（相对 `00c951b`）。
-- AC 证据：见 `handoff.json`
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-### 结果摘要
+<!-- /规范 -->
 
-文件夹角色映射与侧栏区分已完成。未删除或合并远端目录，三个验收条件均由自动测试覆盖。
+- 全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：p037（2026-10-24 核实：25 个 Graph 账号各有两个 inbox-role 目录；三个 QQ 账号的 `Deleted Messages` 均为 `other`；重复 inbox 目录间未发现同一邮件位置）。
+
+### 有意不测
+
+- Graph 重复目录是否是远端别名：不据此删除或合并目录；本 task 保证 UI 可辨认和独立访问。
+
+### 测试策略
+
+- Provider 单测覆盖 IMAP `Deleted Messages` 与 Graph inbox 角色边界。
+- Sidebar 组件测试注入多个同角色文件夹，断言显示名不同、点击仍选各自 `folder_id`。
+- 断言 `Outbox` / `Conversation History` 不因英文名或本地化显示名被错误归成 sent。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无。未知的远端别名关系不影响本 task 的保守呈现策略。
+
+### 风险与回退
+
+- 风险：角色重复时名称更长；保留原始名称可避免用户误选。
+- 回退：恢复原侧栏标准名和 IMAP 映射；不需要回滚数据。
+
+### 依赖与约束
+
+- 保留每个不同 `remote_id` / `folder_id`；禁止仅按 role 去重。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：说明特殊角色只用于筛选，不是远端文件夹身份；侧栏同角色文件夹需区分名称。

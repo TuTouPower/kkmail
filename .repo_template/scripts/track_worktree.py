@@ -34,75 +34,86 @@ def read_payload():
 # Events that close a task's active window: the worktree is no longer valid.
 TERMINAL_EVENTS = {"report", "integrated", "attempt_terminal"}
 
-# Hook 每次 Bash 调用都跑，两个 jsonl 都是 append-only 无界增长：只读尾部
-# 窗口（A135）。ledger 只取该 tid 的尾部事件——start 已滑出尾窗的旧任务
-# 不再回溯整表，解析为无 worktree；去重只比最后一行，同样只读尾部。
-TAIL_READ_BYTES = 65536
 
-
-def _tail_lines(path):
-    """返回文件尾部窗口内的完整行（首行可能是半行时丢弃）。读失败返回 []。"""
+def _iter_lines_reverse(path, block_size=8192):
+    """从文件末尾向前逐行产出非空行。"""
     try:
-        with open(path, "rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            size = handle.tell()
-            start = max(0, size - TAIL_READ_BYTES)
-            handle.seek(start)
-            raw = handle.read()
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            position = f.tell()
+            remainder = b""
+            while position > 0:
+                read_size = min(block_size, position)
+                position -= read_size
+                f.seek(position)
+                chunk = f.read(read_size) + remainder
+                lines = chunk.split(b"\n")
+                remainder = lines[0]
+                for line in reversed(lines[1:]):
+                    cleaned = line.strip()
+                    if cleaned:
+                        yield cleaned.decode("utf-8", errors="replace")
+            if remainder.strip():
+                yield remainder.strip().decode("utf-8", errors="replace")
     except OSError:
-        return []
-    text = raw.decode("utf-8", errors="replace")
-    lines = text.splitlines()
-    if start > 0 and lines:
-        lines = lines[1:]  # 首行是被窗口截断的半行
-    return lines
-
-
-def _last_line(path):
-    lines = _tail_lines(path)
-    return lines[-1] if lines else ""
+        return
 
 
 def resolve_worktree(project, tid):
     """Worktree path (absolute) for a tid from the attempt ledger, or ''.
 
-    A `start` event opens the window; `attempt_reserved` with state=running
-    keeps it open; any terminal event (report/integrated/attempt_terminal) closes it,
-    so a merged or finished task no longer resolves to its (removed) worktree.
+    逆序扫描账本（从后向前），匹配到该 tid 的最新状态即快速终止（Issue #61）。
+    A `start` event opens the window; any non-terminal event
+    (attempt_reserved / execution_claimed 等) keeps it open; terminal events
+    (report/integrated/attempt_terminal) close it.
     """
     ledger = os.path.join(project, "docs", "runtime", "dispatch_ledger.jsonl")
     if not os.path.isfile(ledger):
         return ""
     worktree = ""
     active = False
-    for raw_line in _tail_lines(ledger):
-        line = raw_line.strip()
-        if not line:
-            continue
+    saw_latest = False
+    for line in _iter_lines_reverse(ledger):
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
-            # ledger 损坏行静默跳过会让该 tid 的 worktree 解析丢失；
-            # 打 WARNING，与 ledger 的 fail-closed 语义对齐可见性（F35）。
-            # 尾窗内行号不再是全文件行号，只报损坏行内容摘要。
-            print(
-                f"WARNING: attempt 账本损坏行已跳过（{ledger} 尾部：{line[:80]!r}）",
-                file=sys.stderr,
-            )
             continue
-        if not isinstance(rec, dict) or rec.get("tid") != tid:
+        if rec.get("tid") != tid:
             continue
         event = rec.get("event")
-        if event == "start":
-            worktree = str(rec.get("worktree") or "")
+        if not saw_latest:
+            saw_latest = True
+            if event in TERMINAL_EVENTS:
+                return ""
+            if event == "start":
+                worktree = str(rec.get("worktree") or "")
+                active = True
+                break
+            # 非终态事件不携带 worktree，继续向前找到对应 start 事件
             active = True
-        elif event == "attempt_reserved" and rec.get("state") == "running":
-            active = True
-        elif event in TERMINAL_EVENTS:
-            active = False
+        else:
+            if event == "start":
+                worktree = str(rec.get("worktree") or "")
+                break
     if not active or not worktree:
         return ""
     return os.path.normpath(os.path.join(project, worktree))
+
+
+def _read_last_line(path):
+    """O(1) 读取文件最后一行用于去重（Issue #61）。"""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            if size == 0:
+                return ""
+            buffer_size = min(size, 4096)
+            f.seek(size - buffer_size)
+            lines = f.read().splitlines()
+            return lines[-1].decode("utf-8", errors="replace") if lines else ""
+    except OSError:
+        return ""
 
 
 def append_record(path, record):
@@ -111,8 +122,8 @@ def append_record(path, record):
     except OSError:
         return
     line = json.dumps(record, ensure_ascii=False)
-    # De-dup: skip when the last record is identical（只读尾部，A135）。
-    if _last_line(path).strip() == line:
+    # De-dup: skip when the last record is identical (O(1) tail check).
+    if _read_last_line(path).strip() == line:
         return
     try:
         with open(path, "a", encoding="utf-8") as handle:
@@ -121,24 +132,15 @@ def append_record(path, record):
         pass
 
 
-# 触发条件（与文件头注释对齐）：命令必须真的在调用 track_worktree.py 或
-# task.py；其它工具的 --tid 参数 / 字面量里的 `start tNNN` 不算（A344）。
-_TRIGGER_SCRIPT_RE = re.compile(r"(?:^|[/\s\"'])(?:track_worktree|task)\.py(?:\s|\"|'|$)")
-
-
 def extract_tid(command, fallback_tid):
     """Extract tid from the triggering command, or fall back.
 
-    Accepts `--tid tNNN`, `--tid=tNNN`, and the positional form used by
-    task.py (`task.py start tNNN`). Commands that do not invoke
-    track_worktree.py / task.py never yield a tid.
+    Accepts `--tid tNNN`, `--tid=tNNN`, `start tNNN`, and `run-begin tNNN`.
     """
-    if not _TRIGGER_SCRIPT_RE.search(command):
-        return fallback_tid
     match = re.search(r"--tid[= ](\S+)", command)
     if match:
         return match.group(1)
-    match = re.search(r"\bstart\s+(t\d+)", command)
+    match = re.search(r"\b(?:start|run-begin)\s+(t\d+)", command)
     if match:
         return match.group(1)
     return fallback_tid
@@ -161,6 +163,11 @@ def main():
             return 0
         tool_input = payload.get("tool_input") or {}
         command = str(tool_input.get("command") or "")
+        if not any(keyword in command for keyword in ("track_worktree", "start", "run-begin", "--tid")):
+            return 0
+        ledger_path = os.path.join(project, "docs", "runtime", "dispatch_ledger.jsonl")
+        if not os.path.isfile(ledger_path):
+            return 0
         tid = extract_tid(command, args.tid)
         if not tid:
             return 0

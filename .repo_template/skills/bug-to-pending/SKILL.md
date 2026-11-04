@@ -2,16 +2,22 @@
 name: bug-to-pending
 description: 复现 bug、定位根因、扫描同类位点、分析测试缺口并登记 pending；不在本 skill 修生产代码。用户报告 bug、要求排查根因或分析缺陷影响面时调用。
 disable-model-invocation: true
+metadata:
+  opencode/autoinvoke: "false"
 ---
 
 # bug-to-pending
 
 复现 bug、定位根因、扫描同类位点、分析测试缺口并登记 pending；用户批准后再建修复 task。不在本 skill 修生产代码。
 
+## 组合契约
+
+仅用户显式授权入口或 registry.json 已登记父流程可执行；作为子流程时由父流程直接读取本正文，原样传递参数、identity、owner_id 与授权，不扩大授权。完整规则见 `.repo_template/docs/usage.md`「skill 调用」。
+
 ## 模式
 
 - 默认：分析登记后询问是否立项，批准则调用 `task-create`，最后询问 pending commit。
-- `analysis-only`：只分析和登记，返回 `pNNN` 后结束；不立项、不 commit。供 `task-work`、`pending-record` 等内部调用。
+- `analysis-only`：只分析和登记，返回 `pNNN` 后结束；不立项、不 commit。供 `pending-record` 等内部调用。
 
 ## 流程
 
@@ -21,7 +27,7 @@ disable-model-invocation: true
 4. 按同一 helper/API 误用、校验缺失、默认值、复制块或对称路径扫描同类位点。确认成立的合并进同一修复范围；吃不准的单列，不算已确认。
 5. 说明现有测试为何未发现，以及应在哪个层级、场景和断言补测，覆盖主点和已确认同类位点。
 6. 用 `pending.py new --kind bug` 新建或就地更新等价条目，写现象、影响、根因、同类清单、测试缺口和 `.scratch/` 线索。
-7. analysis-only 到此结束。默认模式向用户汇报并询问是否立项；批准后用 `task-create` 建覆盖完整修复面的 backlog task。
+7. analysis-only 到此结束。默认模式向用户汇报并询问是否立项；批准后直接读取 `task-create` 正文建覆盖完整修复面的 backlog task；spec 写来源 pNNN，随后用 `pending.py archive {pNNN} --resolution transferred --fix-ref {tid} --reason "已核实根因与范围并转交该 task" --write` 转办归档，pNNN 与 tid 双向关联。归档表示已转办，不冒充修复完成。
 8. 列出 pending 改动，询问是否单独提交；task-create 的创建 commit 不混入 pending 文件。
 
 ## 边界

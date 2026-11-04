@@ -1,77 +1,88 @@
----
-tid: "t013"
-slug: "test_pg_runtime"
-title: "建立可复用 PostgreSQL 测试容器与每轮独立测试库"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "f268461776e218f605ba859ad621a6410369a67b"
-depends_on: ""
-conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 07d178cb"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+2026-10-22 测试评估确认：未配置数据库时后端 315 项中 96 项因 PG 条件跳过。现有 run-mail-core-tests.sh 需要人工提供数据库地址；测试 fixture 会删除 auth_credentials。用户确认本地固定专用 PG 容器、完整测试每轮重建数据库，CI 每个 job 使用一次性容器。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 测试专用 Compose、生命周期入口与目标保护，复用 scripts/run-mail-core-tests.sh；不复用业务 Compose 的 PostgreSQL、凭据或持久化卷。实现落点为项目 scripts/、测试配置及 tests/，不修改 .repo_template。
+- 本地固定 PostgreSQL 16 容器可显式启动、停止和复用；一次完整运行分配唯一 kkmail_test\_ 前缀数据库，建库、迁移、执行、清理形成同一受控生命周期。
+- 将目标保护放到所有数据库测试必经入口，包含直接 pytest 的共享 fixture；仅校验库名不够，还须确认专用测试实例身份与测试运行所有权。
+- 测试产物、Blob、备份及临时目录统一隔离至当前仓库 .scratch/ 下本轮目录；环境安装与测试执行分开，复用 uv 管理的环境，不在每轮测试中无条件 pip install。
 
-创建依据：本会话测试评估与用户确认；2026-10-22 核对 run-mail-core-tests.sh、tests/mail_core/conftest.py 和 docker-compose.mail-core.yml。未启动容器或连接业务 DB。
+### 非范围
 
-### 2026-10-22 主分支执行
+- 不操作业务数据库，不增加 SQLite 替代实现、Redis、消息队列或托管测试服务。
+- 不在本 task 承担逐用例业务数据隔离；由后续 backend_test_isolation 交付。
 
-- 用户明确要求不用 task 工具链，直接在 main 按 t013–t023 顺序执行，保留逐项实现、验证、review 与提交思路。不启动 worktree、不写 attempt；front matter 保留原值，不作为本次实施完成证据。
-- 已新增专用测试 Compose 与运行入口，建立容器/PG cluster identity、独立运行记录和数据库 comment 联合保护；直接 pytest 在收集前和 fixture 删除前验证。
-- 包装入口不再每轮安装依赖；完整运行经生产 Alembic 创建 schema，结束、失败和可捕获中断走本轮清理，保留报告和所有权记录。
-- 已执行保护测试与显式快速套件，PG 用例未执行。尚未启动测试容器或连接业务数据库。
-- 用户已提供专用随机密码，保存至忽略文件 `.env.test`（0600），未复用业务密码。专用 PG 已启动，重复 start 保持容器 ID 与服务进程。
-- 安全测试：17 passed；显式快速套件（已配置密码）241 passed / 103 skipped，PG live probes 确认不执行。完整套件 337 passed / 2 failed / 2 skipped，约 130 秒；失败为 LISTEN 消费前序残留、旧 SSE dispatch 测试未设置真实 subscriber。保留原始失败证据，完整连续两轮 AC 尚未通过，交由紧随其后的 t014 在获准测试隔离范围收口。
-- 真实验证：两个独立仓库进程分配不同数据库与产物目录；取消首轮后第二轮哨兵保持。断言失败、真实 Alembic 迁移失败、SIGTERM 与分配阶段 OSError/KeyboardInterrupt 均验证清理；运行后无残留带标记数据库或 owner role。PG skip 回归证明失败报告为 exit 1，不产生 pytest INTERNALERROR。
-- 独立代码 review：三项 important 已修复，末次复审未发现重要问题；见 `review_code.md`，未将完整 task 验收标为 PASS。
-- 后续验证：t014 完成后，最终 seed 41、17 各 352 passed / 2 IMAP skipped；两个独立测试库、相同完整 testcase 集合，容器与 PG 服务进程持续复用。
-- 最后补验：真实未登记 PG 实例不能被入口采用，直接 pytest 拒绝实例身份不匹配，哨兵保持；SIGKILL 留下可辨认记录，按 exact UUID 清理成功。临时负向容器已按 CID 与专属 label 验证后删除，不触及常驻服务或业务数据。
+### 验收标准
 
-## Review 处置
+<!-- 规范（门禁必留，不得删除） -->
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-尚未开始 review，无 finding。
+<!-- /规范 -->
 
-### 勘误（2026-10-27，A64）
+- [x] AC-001：同一本地测试容器连续执行两轮完整测试时，容器身份及 PG 服务进程保持复用；每轮获得不同测试库，第二轮看不到第一轮预置哨兵数据。
+- [x] AC-002：两个仓库/worktree 同时申请测试运行时，数据库名和产物目录不同；结束或取消任意一轮只清理该轮拥有资源，不终止另一轮和常驻容器。
+- [x] AC-003：缺少数据库配置、数据库名称越界、连接到未登记专用测试实例或无运行所有权时，入口及直接 pytest 在迁移和 fixture 删除前失败；无害哨兵库的表和数据保持不变，日志不打印凭据。
+- [x] AC-004：正常结束、测试失败与可捕获中断均关闭 API/Worker/连接并清理本轮数据库；无法自动处理的强制终止留下可辨认所有权记录，后续清理只处理明确指定的残留运行，禁止扫描删除未知库。
+- [x] AC-005：从空库经生产 Alembic 路径建表后执行数据库测试；选择完整 DB 套件时缺少 PG、连接失败或数据库用例因 PG 条件跳过均返回非零。快速单测模式明确报告未执行 DB 套件，不伪称全量通过。
+- [x] AC-006：缺少操作者提供的随机测试数据库密码时拒绝启动；端口仅绑定 loopback，测试卷不挂载业务数据；同一测试环境无需重复安装依赖，输出可脱敏定位的分阶段耗时及失败状态。
 
-上文「尚未开始 review，无 finding。」为创建期残留文本，与已存在的 review 及收尾报告矛盾，保留原文不覆写。实际 Review 处置以 [`review_code.md`](review_code.md) 为准：独立代码审查提出 3 项 important，均已修复，末次复审未发现重要问题，未将完整 task 验收标为 PASS；后续完整套件与共享测试入口由 t014 收口，其复审结论见 `review_code.md`「后续验收补证」与本文件收尾报告。
+### 可测试性声明
 
-## 收尾报告
+<!-- 规范（门禁必留，不得删除） -->
 
-### 验收与验证
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-- spec：[`spec.md`](spec.md)
-- 结果：runtime 实现及全部 AC 验证完成；实现 commit `8f93e8e`，后续完整套件由 t014 收口
-- 测试：17 项安全测试；最终两轮完整 PG 套件各 352 passed / 2 IMAP skipped
-- 黑盒：双仓库并发、取消隔离、真实未登记 PG 哨兵、迁移/断言失败、SIGTERM、SIGKILL 残留及 exact cleanup
-- review：独立代码审查无未解决重要问题；t014 对当前共享测试入口与隔离再次完成 code/test review
-- AC 证据：实施笔记、保护测试、两轮 JUnit/coverage/test_summary 与 review 报告；按用户授权不生成工具链 handoff
+<!-- /规范 -->
 
-### 结果摘要
+全部 AC 可自动测试；执行阶段必须给出真实运行证据，外部环境不可用不得替代为模拟通过。
 
-- 专用容器与每轮数据库生命周期已验证，业务数据库与凭据未复用；两项真实 IMAP 跳过交由 t016 实施，不计为协议通过。
+## 上下文区
 
-## 状态勘误（2026-10-27，A52）
+- 来源：无外部条目；本会话测试评估、固定容器方案与用户批准（2026-10-22）。创建依据：本会话测试评估与用户确认；2026-10-22 核对 run-mail-core-tests.sh、tests/mail_core/conftest.py 和 docker-compose.mail-core.yml。未启动容器或连接业务 DB。
 
-- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
-- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
-- commit 锚点：实现提交 `07d178cbe369e52681a3b6533bb8164741112579`（正文收尾原记 `8f93e8e` 为历史重写前哈希，同标题提交）；diff_anchor 补记为该实现提交的父提交 `f268461776e218f605ba859ad621a6410369a67b`；本批归档提交 `161a6e10`。
-- `docs/archive/tasks_index.json` 已按勘误后的 front matter 重新生成（t013 条目）。
+### 有意不测
 
-## 归档完整性补记（2026-10-27，A243）
+- 不模拟无法捕获的 SIGKILL 执行清理回调；用残留记录与显式回收验证恢复路径。
 
-- 本目录无 `handoff.json`：按用户授权不生成工具链 handoff（与收尾报告 AC 证据行原述一致，此处提至显处重申）。
-- 本目录无独立 `review_test.md`：t013 未单独做 test review；t014 对当前共享测试入口与隔离再次完成 code/test review，覆盖本 task 的测试面，事实见 `review_code.md`「后续验收补证」与本文件收尾报告的 review 行，不另补造 review 文件。
+### 测试策略
+
+- 使用真正 PG 校验生命周期、双运行并存及取消清理；用无害哨兵库验证拒绝写入，而非对真实业务库试错。
+- 负向测试覆盖直接 pytest 绕过包装脚本、URL 查询参数覆盖目标、连接残留、密码缺失和迁移失败；fixture 保护先于 autouse 删除执行。
+- 记录容器启动、建库/迁移、测试、清理耗时，作为是否需要优化的依据；不引入预迁移模板库等未经测量的优化。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无尚未裁定的外部产品契约；执行环境、工具可用性与权限按实施入口核对，缺少前提须失败并报告，不能用 skip 代替本 task 验收。
+
+### 风险与回退
+
+- 风险：数据库删除目标错误、遗留连接阻塞 DROP、容器与运行身份混淆。所有破坏性操作必须验证所有权并先停止本轮进程；不得凭前缀批量删除。
+- 回退：回退本 task 单一执行 commit 恢复原入口与测试；仅回收本轮拥有测试资源，保留用户数据、其他 task 改动和失败证据。不更改生产 schema 或数据，迁移验证仅对一次性测试库操作。
+
+### 依赖与约束
+
+- 无硬依赖。
+- 本批 task 与 t012 的 finalization 都更新 docs/blueprint/testing.md，已登记 conflicts_with，建议串行交付；冲突不冒充硬依赖，不修改旧 task 和 active worktree。
+- 只按本 spec 修改生产代码/测试/脚本；发现超出范围产品缺陷按既有 bug-to-pending 流程记录，不放宽断言或静默扩大修复。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/testing.md`：测试容器管理、快速/完整入口、数据库保护和分阶段耗时。
+- `docs/blueprint/decisions.md`：本地固定测试容器、每轮独立测试库，CI 一次性容器；禁止业务实例作为测试目标。
+
+## 归档勘误注记
+
+- 2026-10-27 补：上下文区「来源」行含会话残留措辞，历史原文不覆写，按决策记录改读为「2026-10-22 用户批准：测试评估与固定容器方案；创建依据为同日核对 `run-mail-core-tests.sh`、`tests/mail_core/conftest.py` 与 `docker-compose.mail-core.yml`，未启动容器或连接业务 DB」。后续归档写作统一使用带日期的决策记录句，不再沿用会话残留措辞。

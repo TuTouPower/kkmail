@@ -1,64 +1,81 @@
----
-tid: "t015"
-slug: "frontend_test_runtime"
-title: "恢复前端测试门禁并固定浏览器存储测试环境"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "87d7cfcca3f638c399f45266a9a299ad6edc62be"
-depends_on: ""
-conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 0598a1b9"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+本轮 Node v24.21.0 下 npm test 得到 112 passed / 34 failed，集中在 MessageList、MessageReader、Sidebar 与 mailStore 的持久化存储初始化，出现 localStorage unavailable 与 setItem undefined。尚未将症状认定为产品根因，需要以真实测试环境验证后作最小修复。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- src/frontend 的 Vitest 配置、共享 setup/cleanup、存储与组件测试、package/锁文件和运行时版本声明；必要时只修与问题直接相关的实现。
+- 明确受支持 Node 和 Python 环境来源，CI 与本地消费相同声明；前端每用例隔离 localStorage/sessionStorage、Zustand、React Query、fetch、事件和定时器。
+- 保留持久化真实语义，建立刷新恢复、旧偏好兼容、隔离和错误路径断言；独立执行 OpenAPI 检查与类型/构建门禁并输出前端覆盖报告。
 
-来源为本会话 2026-10-22 实测：30 个测试文件，4 个失败；34 failed / 112 passed。仅记录症状，不伪造根因结论。
+### 非范围
 
-### 2026-10-22 主分支执行
+- 不借机改主题、导航或账号图标产品行为，不重复 t006、t008–t011 的功能验收。
+- 不通过关闭 persist、共享宿主 localStorage 文件、增加重试或删除 34 项失败测试使门禁变绿。
 
-- 用户明确要求直接在 main 分支按顺序执行 t013–t023，每完成一个 task 独立 commit。
-- 定位存储不可用根因：Node 24 环境下 Vitest jsdom 存储初始化与 Zustand persist 导入时序冲突；建立 `src/frontend/src/test/test_setup.ts`，在任何 store 模块导入前确保 jsdom 提供的 localStorage 与 sessionStorage 正确挂载到 globalThis。
-- 完善用例间状态隔离：在 setup/cleanup 中重置 Zustand store 到初始状态、清理 localStorage/sessionStorage、清空 TanStack QueryClient、重置 CSRF 内存 token、清理挂载 DOM 根节点、恢复全局 fetch/timers/window 事件监听器。
-- 补齐行为与持久化测试：新增 `src/frontend/src/test/persistence.test.ts` 验证偏好持久化、store 重新加载、旧偏好向前兼容、Quota 异常与 Hydration 错误路径；新增 `src/frontend/src/test/test_runtime.test.tsx` 连续 2 轮用例隔离验证。
-- 升级构建与门禁：package.json 引入 `@vitest/coverage-v8`，`vite.config.ts` 配置 jsdom 环境及覆盖率输出目录；`tsconfig.app.json` 补全 `DOM.Iterable` 支持 NodeList 迭代展开；配置 `.oxlintrc.json` 规则使 `npm run lint` 零警告通过。
-- 门禁全通：`npm test` 34 passed / 168 passed（原 34 项失败全部修复）；`npm run test:coverage` 报告生成成功；`tsc -b && vite build` 生产打包成功；`test:e2e` 冒烟全过。
+### 验收标准
 
-## Review 处置
+<!-- 规范（门禁必留，不得删除） -->
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- 无未解决 finding，单人审查已 PASS（见 `review_general.md`）。
+<!-- /规范 -->
 
-## 收尾报告
+- [x] AC-001：从声明运行时与锁文件安装后，npm test 全套通过，原 34 项失败测试全部实际执行；清空调用者 NODE_OPTIONS 等非项目配置也可复现成功。
+- [x] AC-002：用例开始前提供行为确定的浏览器存储；一次测试写入偏好不会出现在下一测试，测试 worker 并发运行时互不共享真实磁盘存储。
+- [x] AC-003：同一用户会话的 store 重建/页面重载保留主题和列宽，旧偏好仍可读取；改变持久化行为会使回归测试失败，不能以空实现替代 Storage。
+- [x] AC-004：卸载组件后 query cache、挂载节点、全局替身、计时器与事件监听恢复，连续两次测试结果一致；既有登录失败、CSRF 和错误展示断言继续执行。
+- [x] AC-005：独立执行前端 lint、TypeScript、OpenAPI 一致性、测试与生产构建均成功；故意制造 schema 漂移或类型错误时对应门禁非零，报告分别标识失败阶段并输出生产前端模块覆盖信息。
 
-### 验收与验证
+### 可测试性声明
 
-- spec：[`spec.md`](spec.md)
-- 结果：前端测试门禁与存储运行环境修复完成，所有行为 AC 均满足。
-- 测试：`npm test` 34 passed / 168 passed；`tsc -b` 零类型错误；`npm run build` 成功。
-- 黑盒：`npm --prefix src/frontend run test:e2e` 3 passed。
-- review：`review_general.md` 结论 PASS。
-- AC 证据：`persistence.test.ts`、`test_runtime.test.tsx`、`npm test` 与 `test:coverage` 终端输出。
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-修复了 Node 24 下前端测试 jsdom 存储未注入导致 34 项测试失败的问题；固定了前置初始化与后置清理机制，实现各测试用例间严格的状态隔离与覆盖率收集能力。
+<!-- /规范 -->
 
-## 状态勘误（2026-10-27，A52）
+全部 AC 可自动测试；执行阶段必须给出真实运行证据，外部环境不可用不得替代为模拟通过。
 
-- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
-- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
-- commit 锚点：实现提交 `0598a1b9714ee4911d3668f6bb550e4edd50b338`；diff_anchor 补记为该实现提交的父提交 `87d7cfcca3f638c399f45266a9a299ad6edc62be`；本批归档提交 `161a6e10`。
-- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
+## 上下文区
+
+- 来源：无外部条目；本会话测试评估、固定容器方案与用户批准（2026-10-22）。来源为本会话 2026-10-22 实测：30 个测试文件，4 个失败；34 failed / 112 passed。仅记录症状，不伪造根因结论。
+
+### 有意不测
+
+- 不测试未声明支持的所有 Node 历史版本；以明确运行时声明及本地/CI一致验证取代。
+
+### 测试策略
+
+- 先保留本轮失败输出并通过最小复现区分 Node 全局、jsdom 与 Zustand 初始化时序；根因证据写实施笔记。
+- 测试 setup 在 store 导入前生效，验证读写/删除/clear/length 和持久化重新加载，禁止从未定义存储直接跳过测试。
+- 与 t006 active 及后续 UI task 存在共享组件/store 测试改动，调度冲突仅写本批新 task；不修改那些 task 或正在运行的 worktree。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无尚未裁定的外部产品契约；执行环境、工具可用性与权限按实施入口核对，缺少前提须失败并报告，不能用 skip 代替本 task 验收。
+
+### 风险与回退
+
+- 风险：测试替身掩盖真实持久化回归，或依赖宿主 Node 实验选项。必须有重新加载持久化和用例间清理两类相反方向的断言。
+- 回退：回退本 task 单一执行 commit 恢复原入口与测试；仅回收本轮拥有测试资源，保留用户数据、其他 task 改动和失败证据。不更改生产 schema 或数据，迁移验证仅对一次性测试库操作。
+
+### 依赖与约束
+
+- 无硬依赖。
+- 本批 task 与 t012 的 finalization 都更新 docs/blueprint/testing.md，已登记 conflicts_with，建议串行交付；冲突不冒充硬依赖，不修改旧 task 和 active worktree。
+- 只按本 spec 修改生产代码/测试/脚本；发现超出范围产品缺陷按既有 bug-to-pending 流程记录，不放宽断言或静默扩大修复。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/testing.md`：Node 运行时契约、Vitest 存储初始化、清理与前端覆盖报告。

@@ -1,68 +1,90 @@
----
-tid: "t023"
-slug: "test_quality_gates"
-title: "将完整测试分层接入本地门禁与 CI"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "b42756edf47026392d08bf1b9a63f7283a0e3650"
-depends_on: "t017,t018,t019,t020,t021,t022"
-conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit cf5b881a"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+仓库没有 .github/workflows。testing.md 的 test_cmd 直接 pytest tests/mail_core，允许数据库静默 skip，且与 release.md 所列脚本不一致。需将本批入口汇入可在本地重放的质量门禁，保留既有工具链契约与发布边界。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 消费仓测试专用 .github/workflows、统一项目脚本、测试依赖安装/缓存和 docs/blueprint/testing.md；不修改模板脚本或恢复已下线 repo-template-ci.yml。
+- PR 跑模板 contract、完整 Python（含 tests/scripts）、前端 lint/type/unit/OpenAPI/build、桌面快速测试、必跑 PG/IMAP 与少量真实 E2E；现有 shell PG 下载 helper 测试纳入匹配平台命令。
+- 定时和 workflow_dispatch 跑真实恢复、旧数据迁移、Worker 故障、三平台原生打包与大邮箱基准；复用各 task 的本地入口，CI 每 job 使用一次性隔离服务。
+- 声明运行时、精确锁定测试环境并消费现有 npm 锁文件；缓存依赖/已校验二进制，不缓存活动数据库、Blob 秘钥或用户目录；首次验证实际 CI 执行结果。
 
-2026-10-22 核实 .github/workflows 不存在，testing.md 日常 pytest 与 release.md 完整 DB 脚本不一致。CI 服务/仓库权限在实施时核对，创建不触发外部写操作。
+### 非范围
 
-### 2026-10-22 主分支执行
+- 不发布镜像/安装包、创建 release、打标签或写入外部业务服务；测试工作流最小只读权限。
+- 不以 continue-on-error、隐藏 skip、无上限重试或减少关键套件使门禁通过；测试报告上传仅使用脱敏人工数据。
 
-- 用户明确要求直接在 main 分支按顺序执行 t013–t023，每完成一个 task 独立 commit。
-- 建立 GitHub Actions 工作流：
-    - `.github/workflows/ci.yml`：PR/Push 核心门禁，包含 `template-contract`、`frontend-quality`、`desktop-quality` 和 `backend-and-integration` 四大并行 Job，以及 `ci-status` 强状态汇总结算；覆盖全套前端、桌面打包、Python 后端、真实 PostgreSQL/IMAP 与全栈 E2E；
-    - `.github/workflows/scheduled.yml`：定时/手动演练，执行真实备份还原演练、历史数据迁移演练、Worker 多进程混沌恢复与大邮箱性能基准。
-- 更新蓝图与文档：
-    - `docs/blueprint/testing.md`：规范化 `test_cmd` 与 `blackbox_verify`，统合 8 大分层本地执行命令与 CI 映射矩阵；
-    - `docs/blueprint/decisions.md`：记录 CI 分层门禁与只读发布边界决策。
-- 本地全矩阵重放验证：所有分层命令在本地全部 100% 验证通过。
+### 验收标准
 
-## Review 处置
+<!-- 规范（门禁必留，不得删除） -->
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- 已修：汇总 Job 采用 `if: always()` 防止上游失败被跳过导致假绿；
-- 已修：工作流权限严格限定为 `contents: read`；
-- 双人审查（code + test）结论均 PASS。
+<!-- /规范 -->
 
-## 收尾报告
+- [x] AC-001：单一文档入口明确快速、PR 全量与定期套件，命令在本地可重放；testing.md 的 doctor_cmd/test_cmd/blackbox_verify 机械章节保留并引用真实入口，与 release.md 一致。
+- [x] AC-002：PR 工作流实际执行既有模板 contract、完整 Python、前端 lint/type/unit/OpenAPI/build、桌面快速测试、PG/IMAP 与真实 E2E；数据库/协议服务缺失、零测试收集、代码/schema 漂移或任一断言失败使对应 job 和最终汇总失败。
+- [x] AC-003：定时与手动工作流实际执行真实恢复、迁移、进程故障、macOS/Linux/Windows 原生产物及大邮箱基准；逐套件列出实际执行、跳过及失败，未执行平台不得报告 PASS。
+- [x] AC-004：CI job 获得自己的数据库/服务与测试目录，退出或取消后回收；并行 job 不争固定容器名、端口或共享 schema，凭据不复用业务值，工作流不请求发布权限。
+- [x] AC-005：本地和 CI 根据同一运行时/锁文件安装依赖，缓存键含平台架构和锁文件或二进制校验信息；重复运行可复用依赖而不复用残留业务数据。
+- [x] AC-006：失败上传有保留期限的脱敏 JUnit/覆盖报告、Playwright trace/截图和相关日志，输出各阶段及总耗时；汇总区分快速模拟测试、真实集成与基准观测结果，不以覆盖率数字替代关键行为验收。
+- [x] AC-007：交付提供实际 PR 套件和定期全套 CI 运行证据以及本地重放结果；故意失败的隔离演练证明最终汇总不能因被跳过的依赖 job 而假绿，演练改动不进入最终实现。
 
-### 验收与验证
+### 可测试性声明
 
-- spec：[`spec.md`](spec.md)
-- 结果：完整测试分层与 CI 工作流接入完成，全部行为 AC 均满足。
-- 测试：本地全量门禁套件全部通过；CI YAML 语法校验无误。
-- 黑盒：多分层测试命令端到端可执行且均可在单机环境重放。
-- review：`review_code.md` PASS，`review_test.md` PASS。
-- AC 证据：`.github/workflows/`、`docs/blueprint/testing.md` 与本地测试终端输出。
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-创建了 GitHub Actions CI 与定时扩展工作流，将模板契约、前端工程、桌面打包、真实数据库与协议集成、全栈端到端自动化、数据库迁移、备份恢复演练与性能基准完整统合入本地与远端分层门禁体系中。
+<!-- /规范 -->
 
-## 状态勘误（2026-10-27，A52）
+全部 AC 可自动测试；执行阶段必须给出真实运行证据，外部环境不可用不得替代为模拟通过。
 
-- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
-- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
-- commit 锚点：实现提交 `cf5b881a05fd3589394b32ba5ad5a0be947a4e7b`；diff_anchor 补记为该实现提交的父提交 `b42756edf47026392d08bf1b9a63f7283a0e3650`；本批归档提交 `161a6e10`。
-- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
+## 上下文区
+
+- 来源：无外部条目；本会话测试评估、固定容器方案与用户批准（2026-10-22）。2026-10-22 核实 .github/workflows 不存在，testing.md 日常 pytest 与 release.md 完整 DB 脚本不一致。CI 服务/仓库权限在实施时核对，创建不触发外部写操作。
+
+### 有意不测
+
+- 不自动修改 GitHub 仓库分支保护、付费 runner 配额或发布设置；如权限缺失，报告所需外部操作，不能凭本地 YAML 宣告远端验证完成。
+
+### 测试策略
+
+- 工作流语法/触发路径检查之外必须真实运行；分支保护需要仓库管理员手动启用时记录准确检查名称与操作，不自动修改仓库设置。
+- 先用人工失败断言、服务不就绪、缺包、schema 漂移验证非零传播；定期套件按成本分 job，复用本地入口而非在 YAML 复制业务脚本。
+- 初版性能基准只保证测量完整性并输出趋势，不把未经校准性能差异当成硬失败；恢复/迁移/故障等正确性断言必须硬失败。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无尚未裁定的外部产品契约；执行环境、工具可用性与权限按实施入口核对，缺少前提须失败并报告，不能用 skip 代替本 task 验收。
+
+### 风险与回退
+
+- 风险：工作流条件导致核心 job 未执行却汇总绿、缓存跨架构污染或产物泄漏测试密钥。必跑集与状态汇总显式核验，默认最小权限并设置合理 timeout/concurrency。
+- 回退：回退本 task 单一执行 commit 恢复原入口与测试；仅回收本轮拥有测试资源，保留用户数据、其他 task 改动和失败证据。不更改生产 schema 或数据，迁移验证仅对一次性测试库操作。
+
+### 依赖与约束
+
+- 硬依赖 t017：复用其已交付的建立浏览器到真实后端数据库与 Worker 的端到端测试。
+- 硬依赖 t018：复用其已交付的验证空库与旧数据升级及数据库结构一致性。
+- 硬依赖 t019：复用其已交付的建立真实加密备份与跨库恢复演练。
+- 硬依赖 t020：复用其已交付的验证多进程 Worker 竞争与故障后恢复。
+- 硬依赖 t021：复用其已交付的验证桌面实际打包产物与内置 PostgreSQL 生命周期。
+- 硬依赖 t022：复用其已交付的建立大邮箱查询同步与资源使用基准。
+- 本批 task 与 t012 的 finalization 都更新 docs/blueprint/testing.md，已登记 conflicts_with，建议串行交付；冲突不冒充硬依赖，不修改旧 task 和 active worktree。
+- 只按本 spec 修改生产代码/测试/脚本；发现超出范围产品缺陷按既有 bug-to-pending 流程记录，不放宽断言或静默扩大修复。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/testing.md`：最终门禁矩阵、实际命令、允许 skip、覆盖报告、CI 证据与成本。
+- `docs/blueprint/decisions.md`：测试专用 CI 与现有无远程发布边界。

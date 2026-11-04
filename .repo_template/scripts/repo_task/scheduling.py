@@ -1,5 +1,7 @@
 """Canonical scheduling implementation for the task toolchain."""
 
+from __future__ import annotations
+
 import repo_task.context as ctx
 
 from .documents import parse_tid_list, tid_sort_key
@@ -8,49 +10,43 @@ from .store import discover_effective_tasks, scan_tasks
 
 
 def _dependency_cycle(dependencies: dict[str, list[str]]) -> list[str] | None:
-    # A97: explicit-stack iterative DFS. The previous recursive visit()
-    # raised a bare RecursionError on dependency chains deeper than the
-    # interpreter recursion limit; iteration keeps the same traversal
-    # order (roots sorted by tid_sort_key, dependencies in listed order)
-    # and the same cycle-path shape (stack slice + repeated entry node).
     state: dict[str, int] = {}
-    stack: list[str] = []
 
-    for root in sorted(dependencies, key=tid_sort_key):
-        if state.get(root, 0) != 0:
+    for start_tid in sorted(dependencies, key=tid_sort_key):
+        if state.get(start_tid, 0) != 0:
             continue
-        state[root] = 1
-        stack.append(root)
-        frames: list[tuple[str, object]] = [
-            (root, iter(dependencies.get(root, [])))
-        ]
-        while frames:
-            tid, dep_iter = frames[-1]
+        stack = [start_tid]
+        state[start_tid] = 1
+        it_stack = [iter(dependencies.get(start_tid, []))]
+        while stack:
+            parent = stack[-1]
+            children_it = it_stack[-1]
             try:
-                dependency = next(dep_iter)  # type: ignore[arg-type]
+                dep = next(children_it)
+                if dep not in dependencies:
+                    continue
+                dep_state = state.get(dep, 0)
+                if dep_state == 1:
+                    idx = stack.index(dep)
+                    return stack[idx:] + [dep]
+                elif dep_state == 0:
+                    state[dep] = 1
+                    stack.append(dep)
+                    it_stack.append(iter(dependencies.get(dep, [])))
             except StopIteration:
-                frames.pop()
                 stack.pop()
-                state[tid] = 2
-                continue
-            if dependency not in dependencies:
-                continue
-            dep_state = state.get(dependency, 0)
-            if dep_state == 1:
-                start = stack.index(dependency)
-                return stack[start:] + [dependency]
-            if dep_state == 0:
-                state[dependency] = 1
-                stack.append(dependency)
-                frames.append(
-                    (dependency, iter(dependencies.get(dependency, [])))
-                )
+                it_stack.pop()
+                state[parent] = 2
     return None
 
-def compute_schedule() -> dict:
-    """可跑集与分组计算：cmd_view 渲染与 reconcile 行动计划共用的只读调度图。"""
+def compute_schedule(tasks: dict | None = None) -> dict:
+    """可跑集与分组计算：cmd_view 渲染与 reconcile 行动计划共用的只读调度图。
+
+    传入 tasks 时复用调用方已完成的 effective discovery，避免重复扫描（Issue #77）。
+    """
     require_primary_worktree()
-    tasks = discover_effective_tasks()
+    if tasks is None:
+        tasks = discover_effective_tasks()
 
     dependencies: dict[str, list[str]] = {}
     conflicts: dict[str, set[str]] = {tid: set() for tid in tasks}

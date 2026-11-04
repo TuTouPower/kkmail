@@ -1,62 +1,83 @@
----
-tid: "t073"
-slug: "idle_catchup_enqueue_failure_selfheal"
-title: "IDLE 补偿 delta 入队失败自愈"
-status: "done"
-branch: "t073_idle_catchup_enqueue_failure_selfheal"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "c7ce5875956c622498af62bd7397b3bc86b726a6"
-depends_on: ""
-conflicts_with: ""
-note: "来源 p072；建连补偿入队失败后重试，持续失败释放 IDLE 席位让 t057 轮询兜底"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+p072 记录 t071 的残余风险：建连补偿 `SYNC_FOLDER_DELTA` 入队失败时，`_enqueue_catchup` 只记录日志并继续 `idling`；账号仍 held，t057 收件箱轮询被跳过。若此后既无 IDLE 变化事件也不重连，断线窗口内到达的邮件会持续缺失，可能无限期。需要让一次瞬时入队失败可重试，持续失败时释放 IDLE 席位让轮询兜底，并在重连后再次补偿。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- `_enqueue_catchup` 在入队失败时按有界指数退避重试；重试期间响应 watch 的 stop_event。
+- 重试成功时保持当前 IDLE 会话与 held/idling 状态，仅产生既有去重键任务。
+- 重试预算耗尽仍失败时，watch 进入 backoff 并关闭当前会话；账号不再出现在 held 集合，t057 收件箱轮询可入队；下一次重连继续尝试补偿。
+- 不新增配置项，不改变 `enqueue_job` 去重语义，不绕过 baseline/lease/fencing，不把账号标记 failed。
+- 补充覆盖瞬时失败、持续失败与停机中断的测试。
 
-- `_enqueue_catchup` 改为有界重试（3 次，0.2s/0.4s 指数退避，上限 2s），重试期间响应 `stop_event`；成功返回 True。
-- 重试预算耗尽时 `_watch_loop` 置 `backoff`、关闭当前会话并释放 held 席位，使 t057 收件箱轮询可入队；下次重连继续补偿；账号不标记 failed。
-- 新增 3 个测试：瞬时失败后成功且保持 held/idling；持续失败后 backoff/释放席位并可由 t057 入队；stop 期间退避 2s 内退出。复用 t071 去重测试回归 AC-004。
-- 验证：contract 189 passed；t061 相关 37 passed；UI E2E 21 passed；全栈 E2E 8 passed。
-- 文档：`architecture.md` 与 `mail_sync_and_storage.md` 的 t061 契约已补补偿失败重试与释放 held 兜底。
+### 非范围
 
-## Review 处置
+- 不新增持久化补偿队列或调度器；不改 t057 轮询间隔。
+- 不处理非补偿路径的 delta 入队失败。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-31T23:16:08+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t073_test_f001|important|已修|AC-003 测试改为等待至少一次重试后再停止，等待超过剩余退避断言不再重试，并验证另一健康 watch 仍 held/alive/未关闭|`tests/mail_core/test_t061_idle_watcher.py:1104`|
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-Round 1 代码 review 零 finding。
+<!-- /规范 -->
 
-### Round 2 (2026-10-31T23:43:00+08:00)
+- [ ] AC-001：补偿入队前 N 次（重试预算内）抛异常、随后成功时，收件箱 delta 任务最终存在，账号保持 held/idling，无需新的 IDLE 变化事件，账号 `sync_status` 不为 `failed`。
+- [ ] AC-002：补偿入队持续失败直到重试预算耗尽时，watch 进入 backoff 且当前会话关闭，账号不再属于 held 集合；`schedule_periodic_inbox_sync` 可为该账号入队收件箱 delta，账号 `sync_status` 不为 `failed`。
+- [ ] AC-003：重试退避期间收到停止信号时，watch 线程在 2 秒内退出，不再继续重试，也不影响其他 watch。
+- [ ] AC-004：补偿首次成功或重试后成功的既有路径只产生一个同去重键任务，不出现并行重复执行（不回归 t071 AC-001/AC-002）。
 
-Round 2 代码与测试 review 均零 finding。
+### 可测试性声明
 
-## 收尾报告
+<!-- 规范（门禁必留，不得删除） -->
 
-### 验收与验证
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：contract 189 passed；t061 相关 37 passed；t073 新增 3 用例全过
-- 黑盒：UI E2E 21 passed；真实全栈 E2E 8 passed
-- review：code Round 2 PASS、test Round 2 PASS，0 未解决 finding，review_scope=eb456e938615009f
-- AC 证据：见 `handoff.json`
+<!-- /规范 -->
 
-### 结果摘要
+- 全部 AC 可自动测试。
 
-- 补偿入队瞬时失败按 3 次有界指数退避重试；预算耗尽则关闭会话、置 backoff 并释放 held 席位，由 t057 轮询兜底，下次重连继续补偿；账号不标记 failed。
+## 上下文区
+
+- 来源：`p072`（2026-10-31 t071 代码 review Round 1/2/3 残余风险；AC-005 只要求失败隔离，未要求自愈）。
+
+### 有意不测
+
+- 真实 PostgreSQL 宕机/恢复时序：使用测试注入的入队异常覆盖重试与降级路径。
+- 其他入队路径（IDLE changed、t057）的失败恢复：沿用既有行为，不在本 task 扩展。
+
+### 测试策略
+
+- `IdleWatcherManager` 层用假 IDLE 会话与可注入异常的 `_enqueue_delta`：瞬时失败后成功、持续失败后 backoff/释放 held、stop 中断退避。
+- 复用 t071 首连/重连/去重测试回归 AC-004；fresh PostgreSQL 下验证 `schedule_periodic_inbox_sync` 在解除 held 后可入队。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无
+
+### 风险与回退
+
+- 风险：持续数据库故障时 watch 反复重连可能增加连接 churn；有界重试 + 指数 backoff 限制频率，且仅在补偿入队失败时触发。
+- 风险：退避期间让出 held 会短暂失去实时 IDLE 信号；由 t057 轮询兜底，恢复后重新建连补偿。
+- 回退：移除重试与降级分支，恢复 t071 的失败隔离行为；无数据模型或迁移变更。
+
+### 依赖与约束
+
+- 依赖 t071 已合入的建连补偿；与 t072 修改同一测试文件，执行顺序 t072 → t073。
+- 不新增运行时依赖或配置键。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：t061 章节补充补偿失败重试与释放 held 让轮询兜底。
+- `docs/specs/mail_sync_and_storage.md`：t061 契约补充补偿失败自愈边界。

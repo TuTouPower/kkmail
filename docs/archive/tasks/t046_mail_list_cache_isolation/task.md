@@ -1,57 +1,77 @@
----
-tid: "t046"
-slug: "mail_list_cache_isolation"
-title: "隔离邮件列表缓存前缀并补齐视图范围匹配"
-status: "done"
-branch: "t046_mail_list_cache_isolation"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "2a5fabadae189b5498a80320cf64a7b12aded81e"
-depends_on: ""
-conflicts_with: ""
-note: "来源 p028；防止 account-folders 等非列表查询被当成 MailItem 数组触发 mailKey 抛错。"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+前端 `queries.ts` 将 `MAIL_LIST_PREFIX` 定义为宽泛的顶层 `['mail-core']`，而侧栏 `AccountFolders` 将账号文件夹统计数组缓存在 `['mail-core', 'account-folders', accountId]` 下（元素为无 `id` 的 `FolderStatsItem`）。只要用户展开过任一侧栏账号节点，`patchCachedMail`、`removeCachedMail`、`findCachedMail` 就会把文件夹数组当成 `MailItem[]` 遍历并调用 `mailKey(m)`，立即抛出 `Error: mailKey requires a non-empty message id`，导致点击未读邮件自动标已读、手动标已读/未读、加旗标、全部已读、删除邮件全部报错中断，甚至在 `MessageReader` 渲染期触发页面崩溃。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 严格限定邮件列表缓存匹配范围：仅对 `['mail-core', 'inbox', ...]` 与 `['mail-core', 'search', ...]` 查询执行邮件列表项读取、乐观更新与删除清理，排除 `account-folders`、`stats`、`folder-stats` 等非邮件列表缓存。
+- 在遍历、提取、更新缓存项及 `setReadOptimistic` 过滤时统一校验有效邮件主键（非空字符串 `id`），防御非邮件对象或异常空 ID。
+- 修复 `findCachedMail` 的当前视图 scope 优先匹配逻辑，完整覆盖 `account`、`folder`、`favorite`（带 `accountId`）与 `group` 视图，避免误判为全局 `__all__` 或误命中非列表查询。
+- 收窄 `MessageReader` 的 QueryCache 订阅触发条件，仅在邮件列表查询（`inbox` / `search`）变更时重算选中邮件快照。
 
-1. 诊断与复现：
-   - 根因在于 `queries.ts` 中 `MAIL_LIST_PREFIX` 声明为过于宽泛的 `['mail-core']`，导致 `patchCachedMail`、`removeCachedMail`、`findCachedMail` 在遍历缓存时扫描并篡改了 `['mail-core', 'account-folders', accountId]`、`stats` 等非邮件列表查询。
-   - 当侧栏加载账号文件夹后，这些缓存中包含的是无 `id` 的 `FolderStatsItem` 对象，调用 `mailKey(m)` 即抛出 `Error: mailKey requires a non-empty message id`，破坏了标已读/旗标/删除链路，并在 `MessageReader` 订阅响应时导致阅读器崩溃。
-   - `findCachedMail` 仅判断 `view.type === 'account'`，遗漏了 `folder`、`favorite`（含 `accountId`）与 `group`（`group:${groupId}`）视图的优先 scope 匹配。
-2. 修复方案：
-   - 提取并导出统一谓词 `isMailListQueryKey(key)`，严格匹配 `['mail-core', 'inbox', ...]` 与 `['mail-core', 'search', ...]` 查询，收窄 `setQueriesData`、`findCachedMail` 与 `MessageReader` 订阅范围。
-   - 在 `extractItemsFromCache`、`updateItemsInCache`、`setReadOptimistic` 中加入防御性非空字符串 `id` 校验，杜绝非邮件对象传递给 `mailKey`。
-   - 在 `findCachedMail` 中补齐 `folder`、`favorite` 与 `group` 视图当前的 scope 匹配优先级。
-3. 验证与规范：
-   - 在 `queries.cache.test.ts` 与 `MessageReader.test.tsx` 补充非邮件列表查询共存时的查找、乐观更新、删除与多视图优先级测试，并在 `docs/blueprint/conventions.md` §五.1 固化该列表缓存谓词隔离规范。
+### 非范围
 
-## Review 处置
+- 不改变后端邮件已读、旗标或删除 API 契约。
+- 不改变侧栏文件夹统计查询的数据结构。
 
-### Round 1 (2026-10-23T22:30:00+08:00)
+### 验收标准
 
-Round 1 零 finding。
+<!-- 规范（门禁必留，不得删除） -->
 
-## 收尾报告
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-### 验收与验证
+<!-- /规范 -->
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：`(cd src/frontend && npm test && npx tsc -b && npm run build && npm run lint)` 39 文件 265 项全通；`(cd src/desktop && npm test)` 全通；`pytest .repo_template/tests -q -m contract` 150 项全通；`scripts/run-mail-core-tests.sh unit` 309 项全通。
-- 黑盒：`npm --prefix src/frontend run test:e2e`（14 项全部通过）；`python3 scripts/run_full_stack_e2e.py`（8 项全栈真实端到端测试全通）。
-- review：`docs/tasks/t046_mail_list_cache_isolation/review_general.md` 单轮 PASS，0 finding。
-- AC 证据：见 `handoff.json`
+- [ ] AC-001：当 QueryCache 中同时存在 `['mail-core', 'account-folders', accountId]`（及 `stats`、`folder-stats`）与邮件列表缓存时，执行 `findCachedMail`、`markReadOptimistic`、`setReadOptimistic`、`flagOptimistic`、`setCachedReadState`、`removeCachedMail` 均不触碰非邮件列表缓存，不抛出 `mailKey requires a non-empty message id`，且 `account-folders` 缓存数据保持原样不被篡改。
+- [ ] AC-002：在侧栏展开账号文件夹并进入任意目录后，点击未读邮件打开、切换已读/未读、切换旗标、批量全部已读、移到废纸篓均正常向后端发起请求并完成前端乐观状态更新，阅读器正常渲染不崩溃。
+- [ ] AC-003：`findCachedMail` 在 `account`、`folder`、`favorite`（含 `accountId`）与 `group` 视图下均优先命中当前视图对应 scope（`accountId` 或 `group:{groupId}`）的邮件列表缓存。
 
-### 结果摘要
+### 可测试性声明
 
-- 严格隔离邮件列表查询缓存范围至 inbox/search 前缀，防御非邮件对象误调 mailKey，补齐多视图优先 scope 匹配并收窄阅读器订阅，解决侧栏展开文件夹后标记已读报错与阅读器崩溃。遗留：无。
+<!-- 规范（门禁必留，不得删除） -->
+
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+- 全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：`p028`（2026-10-23 核实：`src/frontend/src/api/queries.ts:63, 199-288` 与 `src/frontend/src/components/MessageReader.tsx:26-31` 中 `MAIL_LIST_PREFIX` 碰撞缺陷仍存在，`.scratch/repro_mailkey_error.test.tsx` 3 个复现用例均命中）
+
+### 有意不测
+
+- 无
+
+### 测试策略
+
+- 在 `src/frontend/src/api/queries.cache.test.ts` 与 `src/frontend/src/api/mailCore.mutations.test.ts` 补充 `account-folders` / `folder-stats` 与 `inbox` / `search` 共存时的乐观更新、删除、查找及多视图 scope 优先级单元测试。
+- 在组件测试中补充 `<Sidebar />` 展开文件夹后与 `<MessageList />` / `<MessageReader />` 联动点击未读邮件、切换状态的集成回归测试。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无
+
+### 风险与回退
+
+- 风险：收窄列表缓存匹配谓词若遗漏某类合法列表 queryKey，会导致该列表乐观更新失效。
+- 回退：通过统一的 `isMailListQueryKey` 辅助函数精确匹配 `queryKey[0] === 'mail-core' && (queryKey[1] === 'inbox' || queryKey[1] === 'search')`，覆盖全部列表与搜索查询。
+
+### 依赖与约束
+
+- 须符合 `docs/blueprint/conventions.md` §五.1「导航 Scope 隔离」约定。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/conventions.md`：在 §五.1 补充邮件列表缓存前缀隔离（`inbox`/`search` 与 `account-folders`/`stats` 严格区分）规则。

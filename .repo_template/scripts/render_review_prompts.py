@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""render_review_prompts.py - 从 task.md front matter 渲染 code/test reviewer 完整 prompt。
+"""render_review_prompts.py - 从 progress.md front matter 渲染 full/single reviewer 完整 prompt。
 
-提示词正文存于 .repo_template/docs/review_prompts/ 下四个 txt（code_prompt.txt / test_prompt.txt / general_prompt.txt / share_prompt.txt）。full 级别用 code_prompt.txt + test_prompt.txt（各自拼 share_prompt.txt），single 级别用 general_prompt.txt（拼 share_prompt.txt）；四个模板缺一即报错退出。
+提示词正文存于 .repo_template/docs/review_prompts/ 下四个 txt（code_prompt.txt / test_prompt.txt / share_prompt.txt / general_prompt.txt）。
+review_level=full 使用 code + test；review_level=single 使用 general。
 
-reviewer 不再自行去读 spec：契约区与上下文区正文直接注入 prompt，消除信息不对称。
+reviewer 不再自行去读 task：契约区与上下文区正文直接注入 prompt，消除信息不对称。
 契约区自 diff_anchor 后有变更时，prompt 末尾附「契约区 drift 警告」与 diff 供 reviewer 核对。
 
 用法：
   python3 .repo_template/scripts/render_review_prompts.py --task-dir docs/tasks/t001_my_slug
-  python3 .repo_template/scripts/render_review_prompts.py --task docs/tasks/t001_my_slug/task.md
+  python3 .repo_template/scripts/render_review_prompts.py --progress docs/tasks/t001_my_slug/progress.md
   python3 .repo_template/scripts/render_review_prompts.py --task-dir ... --out-dir .scratch/review_prompts
 
 必填 front matter：tid, slug, diff_anchor
-可选：spec_path（默认 <task_dir>/spec.md）、review_level
+可选：spec_path（默认 <task_dir>/task.md）、review_level
 默认 stdout；--out-dir 时 full 写入 code_review_prompt.md 与 test_review_prompt.md，single 写入 general_review_prompt.md
 """
+
+from __future__ import annotations
 
 import argparse
 import difflib
@@ -23,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from repo_task.context import TaskDataError
+from repo_task.context import PROGRESS_FILE, TaskDataError
 from repo_task.documents import (
     atomic_write_text,
     parse_front_matter as _parse_front_matter,
@@ -137,9 +140,15 @@ def apply_placeholders(template: str, values: dict) -> str:
     return PLACEHOLDER_RE.sub(lambda m: values[m.group(1)], template)
 
 
+def _normalize_checkboxes(text: str) -> str:
+    """归一化 markdown checkbox，将 - [x] / - [X] 替换为 - [ ]，以便仅对比契约语义漂移。"""
+    return re.sub(r"^(\s*-\s*)\[[xX]\]", r"\1[ ]", text, flags=re.MULTILINE)
+
+
 def contract_drift_notice(spec_rel: str, diff_anchor: str, current_contract: str) -> str:
     """契约区相对 diff_anchor 有变更时返回追加给 reviewer 的警告块。
 
+    忽略仅 checkbox 勾选状态（[ ] -> [x]）的变化。
     无变更返回 ""。anchor 已由调用方校验；历史版本没有该 spec 或 git show
     暂时失败时打 stderr 警告并返回 ""，不阻断渲染。
     """
@@ -159,7 +168,7 @@ def contract_drift_notice(spec_rel: str, diff_anchor: str, current_contract: str
         )
         return ""
     anchored = extract_section(r.stdout, CONTRACT_HEADING)
-    if anchored == current_contract:
+    if _normalize_checkboxes(anchored) == _normalize_checkboxes(current_contract):
         return ""
     diff = "\n".join(
         difflib.unified_diff(
@@ -183,7 +192,7 @@ def render_review_prompts(
     task_path: Path | None = None,
 ) -> dict[str, str]:
     task_dir, rel_task_dir = resolve_repo_path(task_dir, label="task directory")
-    task_path = task_path or task_dir / "task.md"
+    task_path = task_path or task_dir / PROGRESS_FILE
     task_path, _ = resolve_repo_path(task_path, label="task file", require_file=True)
 
     template_paths = {
@@ -212,7 +221,7 @@ def render_review_prompts(
         )
     diff_anchor = validate_diff_anchor(fm["diff_anchor"])
 
-    spec_value = fm.get("spec_path") or f"{rel_task_dir}/spec.md"
+    spec_value = fm.get("spec_path") or f"{rel_task_dir}/task.md"
     if "\\" in spec_value:
         sys.exit(f"spec_path must use POSIX separators: {spec_value!r}")
     spec_input = Path(spec_value)
@@ -280,8 +289,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--task", help="task.md 路径")
-    parser.add_argument("--task-dir", help="task 目录（内含 task.md）")
+    parser.add_argument("--task", "--progress", dest="task", help=f"{PROGRESS_FILE} 路径")
+    parser.add_argument("--task-dir", help=f"task 目录（内含 {PROGRESS_FILE}）")
     parser.add_argument("--out-dir", help="输出目录；不填则 stdout")
     args = parser.parse_args()
 

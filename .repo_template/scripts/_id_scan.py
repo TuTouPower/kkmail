@@ -21,11 +21,15 @@ pending.py / findings.py 共用。条目以「一条目一文件」形式存放�
 释放锁时新条目已落盘，后续扫描必然可见，不存在两个进程取到同号的窗口。
 """
 
+from __future__ import annotations
+
+import os
 import re
+import shutil
 import subprocess
 import sys
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from repo_task.locks import TASK_ID_LOCK_NAME, git_common_lock
 
@@ -60,7 +64,7 @@ def _run_git(repo_root: Path, args: list[str]) -> str:
 def id_lock(repo_root: Path):
     """在 git 公共目录上取排他锁，覆盖「扫描取号 → 建文件」全过程。
 
-    委托 repo_task.locks.git_common_lock：锁文件先写 1 字节再锁，兼容 Windows
+    委托 repo_task.locks.git_common_lock：锁文件初始化与同线程重入由公共 helper 处理，兼容 Windows
     msvcrt（空文件锁 1 字节超 EOF 抛 OSError，RT-011）。git 失败包装为 IdScanError。
     """
     try:
@@ -98,21 +102,13 @@ def _entry_number(prefix: str, name: str, *, kind: str) -> int | None:
 def _numbers_from_branch(
     repo_root: Path, branch: str, prefix: str, dirs: tuple[str, ...], kind: str
 ) -> dict[int, list[str]]:
-    # 单次 ls-tree 跨目录批量取数（A309）：legacy 总账文件清单并入同一次
-    # 调用，不再按目录逐个扇出子进程；正文仅对实际存在的文件发 show。
-    legacy_files = [f"{directory}.md" for directory in dirs] if kind == "file" else []
-    legacy_set = set(legacy_files)
     text = _run_git(
-        repo_root, ["ls-tree", "-r", "--name-only", branch, "--", *dirs, *legacy_files]
+        repo_root, ["ls-tree", "-r", "--name-only", branch, "--", *dirs]
     )
     found: dict[int, list[str]] = {}
-    present_legacy: set[str] = set()
     for rel in text.splitlines():
         rel = rel.strip()
         if not rel:
-            continue
-        if rel in legacy_set:
-            present_legacy.add(rel)
             continue
         parts = Path(rel).parts
         # 目录型条目在 ls-tree -r 下只出现为其内部文件路径；身份取条目目录的完整
@@ -130,9 +126,7 @@ def _numbers_from_branch(
                     paths.append(identity)
                 break
     if kind == "file":
-        _merge_legacy_body_numbers(
-            repo_root, branch, prefix, legacy_files, present_legacy, found
-        )
+        _merge_legacy_body_numbers(repo_root, branch, prefix, dirs, found)
     return found
 
 
@@ -140,19 +134,19 @@ def _merge_legacy_body_numbers(
     repo_root: Path,
     branch: str,
     prefix: str,
-    legacy_files: list[str],
-    present_legacy: set[str],
+    dirs: tuple[str, ...],
     found: dict[int, list[str]],
 ) -> None:
     """把 legacy 单文件正文小节标题中的编号并入扫描结果。
 
     旧格式一个目录对应一个总账文件（`docs/pending.md`、`docs/findings.md`），
-    条目是 `### pNNN …` / `## dNNN …` 小节。存在性已由调用方的单次
-    ls-tree 判定（A309）；仅对实际存在的文件发 show 读正文。
+    条目是 `### pNNN …` / `## dNNN …` 小节；文件不存在时零成本跳过。
     """
     heading_re = re.compile(rf"^#+[ \t]+{prefix}([0-9]{{3,}})(?![0-9])", re.MULTILINE)
-    for legacy in legacy_files:
-        if legacy not in present_legacy:
+    for directory in dirs:
+        legacy = f"{directory}.md"
+        listed = _run_git(repo_root, ["ls-tree", "--name-only", branch, "--", legacy])
+        if not listed.strip():
             continue
         body = _run_git(repo_root, ["show", f"{branch}:{legacy}"])
         for match in heading_re.finditer(body):
@@ -231,8 +225,32 @@ def allocate(
         if path.exists():
             raise IdScanError(f"{path} 已存在；请先处理后重试")
         target_dir.mkdir(parents=True, exist_ok=True)
-        path.write_text(body.replace("{id}", entry_id), encoding="utf-8", newline="\n")
+        tmp_path = target_dir / f".tmp_{entry_id}_{slug}.md"
+        try:
+            tmp_path.write_bytes(body.replace("{id}", entry_id).encode("utf-8"))
+            os.replace(tmp_path, path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
     return path
+
+
+def _safe_file_name(name: str) -> str:
+    """files 键必须是目标目录内的相对路径；拒绝绝对路径、..、反斜杠与盘符。"""
+    if not name or "\x00" in name:
+        raise IdScanError(f"文件名非法：{name!r}")
+    path = PurePosixPath(name)
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or "\\" in name
+        or ":" in name
+        or not path.parts
+    ):
+        raise IdScanError(
+            f"文件名非法（不得为绝对路径或越出目标目录）：{name!r}"
+        )
+    return path.as_posix()
 
 
 def allocate_dir(
@@ -250,15 +268,25 @@ def allocate_dir(
     """
     if not SLUG_RE.match(slug):
         raise IdScanError(f"slug 须匹配 {SLUG_RE.pattern}（收到 {slug!r}）")
+    safe_files = {_safe_file_name(name): content for name, content in files.items()}
     with id_lock(repo_root):
         number = scan_max_id(repo_root, prefix, dirs, kind="dir") + 1
         entry_id = f"{prefix}{number:03d}"
         path = target_dir / f"{entry_id}_{slug}"
         if path.exists():
             raise IdScanError(f"{path} 已存在；请先处理后重试")
-        path.mkdir(parents=True)
-        for name, content in files.items():
-            (path / name).write_text(
-                content.replace("{id}", entry_id), encoding="utf-8", newline="\n"
-            )
+        target_dir.mkdir(parents=True, exist_ok=True)
+        tmp_dir = target_dir / f".tmp_{entry_id}_{slug}"
+        try:
+            if tmp_dir.exists():
+                shutil.rmtree(tmp_dir)
+            tmp_dir.mkdir(parents=True)
+            for name, content in safe_files.items():
+                dest_file = tmp_dir / name
+                dest_file.parent.mkdir(parents=True, exist_ok=True)
+                dest_file.write_bytes(content.replace("{id}", entry_id).encode("utf-8"))
+            os.replace(tmp_dir, path)
+        except BaseException:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
     return path

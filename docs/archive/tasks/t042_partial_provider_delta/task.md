@@ -1,78 +1,74 @@
----
-tid: "t042"
-slug: "partial_provider_delta"
-title: "保留服务商部分更新中未返回字段"
-status: "done"
-branch: ""
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: ""
-depends_on: ""
-conflicts_with: ""
-note: "来源 p025；用户授权直接 main 修复。区分字段缺省与显式清空，拒绝不完整 Gmail hydration。"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+p025 复现 Graph partial delta 把缺省字段覆盖为空，Gmail metadata projection 缺 snippet 也清空既有摘要；不完整 hydration 被误当完整记录。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 区分 provider 未返回字段与显式空值；修复 Graph partial content 与 Gmail metadata/history hydration，经真实 upsert 保留原字段。
 
-- 用户授权直接在 `main` 修复；实现包含 supplied_fields、Graph 字段存在性、Gmail hydration 完整性检查、同页 partial/flag 顺序合并。实现已提交 `c755ebd`，审查 PASS；最终 PostgreSQL 全量 477 passed / 0 skipped。
-- 工具状态说明：`task.py edit` 无 status 参数，`start` 必须建立 worktree；用户明确要求直接 main，因此不创建假 worktree、不伪造 active/done。front matter 保持脚本登记的 backlog，实际实施与验证事实记录于正文。
+### 非范围
 
-## Review 处置
+- 不批量重写历史邮件，不删除运行容器数据，不改服务商原始摘要，不执行生产部署。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-23T19:17:52+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t042_code_f001|important|已修|同页同邮件部分字段与状态按响应顺序合并，避免只保留最后一条而丢数据。|`c755ebd`|
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-最终代码与测试审查均 PASS，见 [review_code.md](review_code.md)、[review_test.md](review_test.md)。
+<!-- /规范 -->
 
-## 收尾报告
+- [x] AC-001：Graph 部分更新只改变响应明确包含字段，subject/from/snippet/地址组等未返回字段保持原值。
+- [x] AC-002：Graph 明确返回空 subject、空 snippet 或空收件人数组时，能够清除对应旧值，不因真假判断丢掉清空操作。
+- [x] AC-003：Gmail metadata projection 未返回 snippet 时保留已存服务商摘要；初次无摘要保持空，不生成摘要写回。
+- [x] AC-004：Gmail history upsert 必须成功 hydrate；缺 id、ID 不匹配、只有 id、GET 失败均不得作为完整邮件成功应用或推进游标。
+- [x] AC-005：常规完整邮件仍正确同步，状态未知与本地未收敛写回意图保护不回退。
 
-### 验收与验证
+### 可测试性声明
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部行为验收、审查与门禁通过；实现已在 main，pending 已闭环。
-- 测试：最终 partial/race/detail PG 定向 19 passed。前端全量 260 passed；TypeScript、生产构建、lint、OpenAPI/CSS 检查通过。模板契约 149 passed / 1 skipped；桌面单元与打包冒烟通过。最终串行 PostgreSQL 全量 477 passed / 0 skipped（378.17s），运行 e9e0192dae624ce980a1ae3ee8fe66b3，测试库清理成功。
-- 黑盒：stub E2E 13 passed；真实全栈 E2E 串行运行 8 passed。首轮与 stub 并行构建 dist 冲突导致 HTTP 500，定位后改为串行构建/运行并通过；未部署生产。
-- review：代码与测试审查均 PASS，见 [review_code.md](review_code.md)、[review_test.md](review_test.md)。
-- AC 证据：见下表；直接 main 实施，不生成或伪造 worktree `handoff.json`。
+<!-- 规范（门禁必留，不得删除） -->
 
-|AC|实际证据|
-|---|---|
-|AC-001|`test_partial_graph_and_gmail_updates_preserve_omissions_and_apply_explicit_empty` 真实 PG 逐字段验证 Graph subject/from partial 保留遗漏值。|
-|AC-002|同一真实 PG 用例验证显式空 subject/snippet/To/Cc 持久化清空，与 omitted 明确区分。|
-|AC-003|同一用例覆盖 Gmail list/history metadata 无 snippet 时保留旧摘要，新 ID 首次插入仍无摘要。|
-|AC-004|`test_gmail_rejects_incomplete_or_mismatched_hydration` 与 `test_gmail_hydration_failure_never_uses_partial_history_headers` 覆盖两入口缺 id/id-only/mismatch/GET 异常。|
-|AC-005|`test_delta_application_combines_partial_changes_in_response_order` 覆盖 partial/flag/full/delete 顺序；既有真实本地意图保护回归保留。|
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-### 结果摘要
+<!-- /规范 -->
 
-- 修复提交：`c755ebd`。
-- Graph/Gmail 部分 projection 通过 supplied_fields 保留缺省字段，显式空值可清空；Gmail hydration 验证失败即阻断页，同页 partial/flag 按响应顺序合并。
-- 最终 PG 全量：477 passed / 0 skipped；不变更脚本状态。
+全部 AC 可自动测试。
 
-## 最终全量验证说明
+## 上下文区
 
-- 注记：本节所述全量运行（运行 `e9e0192dae624ce980a1ae3ee8fe66b3`）为 t041–t043 同批联合验证，三份 task 共用同一运行记录，非各 task 独立运行。
-- 真实 IMAP 与 PostgreSQL 全量串行运行：477 passed / 0 skipped，只有既有 Starlette 弃用警告；运行 `e9e0192dae624ce980a1ae3ee8fe66b3`，正常清理本轮测试库。
-- 首轮两个旧夹具失败已补明确输入并保持原预期。第二轮与 IMAP 定向并行共用测试邮箱，目标邮件被另一套件清理；停止并行后最终全量通过。未因环境失败修改生产行为。
-- 未部署生产，未改写运行容器数据。
+- 来源：p025（2026-10-23；根因与官方文档链接见原 pending）；p024 仅共享未知值原则，状态持久化独立由 t041 交付。
 
-## 直接 main 执行归档补记（2026-10-23T21:29:04+08:00）
+### 有意不测
 
-- 状态修正时间：2026-10-23T21:29:04+08:00；归档提交 `8b826b2c` 将 front matter 状态由 backlog 修正为 done 并迁入 `docs/archive/tasks/`。正文实施笔记中「front matter 保持脚本登记的 backlog」为执行时流程限制记录，由本节更新。
-- 实际执行分支：main；执行 commit：`c755ebd`。
-- 依据：实现已提交且审查 PASS、最终 PostgreSQL 全量 477 passed / 0 skipped，见正文实施笔记与收尾报告；本任务直接在 main 完成，未创建登记 worktree/attempt，不补造 handoff。
+- 真实 OAuth 邮箱：不依赖用户凭据；通过服务商响应契约 fixture 与真实 PostgreSQL 验证落库行为。
+
+### 测试策略
+
+- Graph 只含 id+subject/from 的变更与显式空值经真实 PG upsert；Gmail metadata projection 缺省 snippet；缺 id/id-only/mismatch 与 GET 异常不推进成功页。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- Graph updated resource 只保证 id 与更新字段；Gmail metadata 为 ID、labels、headers，History 常只有 id/threadId；来源见 p025 官方 API 文档与本仓契约 fixture。
+
+### 风险与回退
+
+- 风险：调用方将 null 误当 false 或把部分响应当完整快照；测试覆盖首次插入、已有数据与显示分支。
+- 回退：保留历史事实值；迁移降级遇未知值拒绝造假，可回滚应用并从部署前备份恢复数据库。
+
+### 依赖与约束
+
+- 用户明确要求直接在 main 修复；登记引用不冒充工具链 worktree 执行状态。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/conventions.md`：未知邮件状态与服务商字段缺省语义。

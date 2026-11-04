@@ -1,53 +1,77 @@
----
-tid: "t005"
-slug: "sync_refresh_and_imap_id"
-title: "修复列表刷新联动远端同步新建账号入队与网易IMAP握手"
-status: "done"
-branch: "t005_sync_refresh_and_imap_id"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "51947c44b01f95ed69799ce2de4cf13b924d95a3"
-depends_on: ""
-conflicts_with: ""
-note: ""
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+当前邮件客户端收件箱界面点击“刷新”按钮仅使本地 TanStack Query 缓存失效重刷只读 API，未触发远端拉取，空收件箱或新账号刷新无任何邮件；新创建/导入账号未自动入队首次同步任务；同时网易 163 等 IMAP 邮箱因缺省 RFC 2971 ID 握手被服务端返回 `NO ['SELECT Unsafe Login']` 拒绝。需联动远端同步、自动入队初始任务并支持 IMAP ID 握手。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 前端 `MessageList.tsx` 刷新按钮联动调用单账号同步（`POST /api/accounts/{id}/sync`）或全量同步（`POST /api/accounts/sync-all`），展示排队反馈；
+- 后端 `create_account_app` 事务提交后自动入队 `SYNC_ACCOUNT_FOLDERS` 初始同步任务；
+- 后端 `ImapProvider` 支持 RFC 2971 `ID` 指令握手，解除网易等邮箱 `SELECT Unsafe Login` 拦截，并对不支持 `ID` 的服务保持静默放行兼容。
 
-1. 前端 `MessageList.tsx` 改造 `refreshView()`：判断单账号 vs 全局收件箱分别发起 `api.syncAccount` 或 `api.syncAll()`，显示排队状态提示并在请求过程中增加旋转动效；
-2. 应用层 `accounts.py` 在 `create_account_app` 创建账号时自动调用 `enqueue_account_sync`，账号创建即进入后台同步队列；
-3. 后端 `imap.py` 在 `_connect()` 认证后自动下发 RFC 2971 `ID` 客户端标识指令，解除网易等邮箱服务 `SELECT Unsafe Login` 拦截，异常安全捕获放行保证兼容性；
-4. 补充针对性单元测试，全量门禁检查通过。
+### 非范围
 
-## Review 处置
+- 不修改现有 OAuth 协议和 Microsoft Graph Delta 解析契约；
+- 不调整后台 Worker 现有轮询与 Claim 消费机制。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-22T11:25:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零 finding。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [x] AC-001：前端邮件列表顶部点击刷新按钮时，若处于单账号视图则触发单账号同步 API，若处于全局收件箱或非单账号视图则触发全量同步 API，并展示排队状态。
+- [x] AC-002：通过 `create_account_app` 创建新邮箱账号后，`worker_jobs` 表中必定存在该账号对应的 `SYNC_ACCOUNT_FOLDERS` 初始任务。
+- [x] AC-003：后端 `ImapProvider._connect()` 在连接认证后发送 RFC 2971 `ID` 客户端标识命令，支持网易等需要 ID 握手的 IMAP 服务。
+- [x] AC-004：当目标 IMAP 服务不支持或拒绝 RFC 2971 `ID` 命令时，`ImapProvider._connect()` 捕获并放行，连接和后续文件夹查询正常执行。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：pytest 217 passed；vitest 30 files / 146 tests passed
-- 黑盒：playwright E2E 3 passed
-- review：review_general.md PASS
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-已完成列表刷新触发远端同步、新建账号自动排队初始同步及网易 IMAP ID 握手支持，闭环 p009。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：`p009`（2026-10-22；确认前端刷新无后端同步、新建账号无初始入队及网易 Unsafe Login 拦截）
+
+### 有意不测
+
+- 无
+
+### 测试策略
+
+- 前端：在 `MessageList.test.tsx` 中模拟点击刷新按钮，断言对应的同步 API 请求被发送并产生状态反馈。
+- 后端：在单测中验证新建账号后作业队列生成，以及使用 mock IMAP client 断言 ID 命令正常发送与不支持容错。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无
+
+### 风险与回退
+
+- 风险：若个别老旧 IMAP 服务器对非法命令断开连接，已通过条件判断与异常捕获避免影响。
+- 回退：`git revert` 本 task 执行提交。
+
+### 依赖与约束
+
+- 无
+
+### Finalization 时更新的 blueprint
+
+- 无

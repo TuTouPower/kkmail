@@ -28,7 +28,6 @@ DEFAULT_REVIEW_LEVEL = "full"
 LEDGER_REPORT_STATUSES = ("done", "blocked", "failed")
 LEDGER_TERMINAL_STATUSES = ("completed", "failed", "stopped")
 LEDGER_FAIL_CLASSES = ("infra", "task", "contract")
-ATTEMPT_EXECUTORS = ("inline",)
 SLUG_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 TASK_BRANCH_RE = re.compile(r"^(t[0-9]+)_[a-z][a-z0-9_]*$")
 TID_RE = re.compile(r"^t([0-9]+)$")
@@ -61,8 +60,10 @@ SPEC_REQUIRED_HEADINGS = (
 )
 SPEC_GUIDE_OPEN = "<!-- 规范（门禁必留，不得删除） -->"
 SPEC_GUIDE_CLOSE = "<!-- /规范 -->"
-TASK_REQUIRED_HEADINGS = (
-    (1, "Task 过程总账"),
+PROGRESS_FILE = "progress.md"
+PROGRESS_TITLE = "Task 进展"
+PROGRESS_REQUIRED_HEADINGS = (
+    (1, PROGRESS_TITLE),
     (2, "实施笔记"),
     (2, "Review 处置"),
     (2, "收尾报告"),

@@ -1,64 +1,78 @@
----
-tid: "t039"
-slug: "folder_stats_scope_truth"
-title: "保持邮件数量统计与查询范围一致"
-status: "done"
-branch: "t039_folder_stats_scope_truth"
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "852c01372e17a4d858050eb2e9fed148870e5495"
-depends_on: ""
-conflicts_with: ""
-note: "来源：审查确认缺少目标文件夹时合计全目录、部分账号失败时显示不完整的全局总数。"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+邮件列表在目标文件夹角色不存在时回退为所有文件夹合计；全账号统计部分请求失败后，又把成功账号合计展示成完整数量，数值与邮件查询范围不一致。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 目标文件夹角色不存在时显示 0 或未知，不显示其他范围合计。
+- 全账号统计仅在所有账号请求成功后展示完整总数；部分失败时显示未知，不冒充完整数。
+- 核对 Sidebar 的 inbox unread 回退；无 inbox 或请求失败时，不以其他文件夹之和冒充 inbox 数。
+- 增加 MessageList/Sidebar 展示测试和必要 blueprint 约束。
 
-实现与证据：
+### 非范围
 
-- MessageList 仅取目标 folder/role 统计；目标 role 缺失按 0 计。全账号统计任一请求失败时返回未知，列表显示 `—`，不展示成功账号小计。
-- 全账号统计请求尚未返回且邮件行已加载时仍显示统计未知；全部账号响应成功后才展示完整数量。
-- Sidebar fallback 仅取 inbox role 的 unread_count；无 inbox、缺 unread_count 或请求失败均记为未知，账号徽标和全局徽标显示 `-`。
-- 新增 MessageList/Sidebar 组件测试覆盖单账号缺 role、全账号部分失败、全账号成功、跨账号缺 role、Sidebar 无 inbox；既有测试覆盖 Sidebar fallback 请求失败。
-- 共享约定由 t040 集中更新，本 task 未改 blueprint。
-- Round 1 review finding `t039_gen_f001` 已修：延迟统计响应测试验证邮件行先出现时仍显示未知，响应齐全后显示准确合计。
-- 验证：前端 216 项测试通过；MessageList/Sidebar 目标测试 34 项通过；TypeScript、生产构建、lint 通过；stub E2E 8/8、真实全栈 E2E 3/3 通过。
+- 不调整后端统计定义、Gmail 标签去重或邮件查询范围。
+- 不新增部分统计指标；可隐藏不完整数值。
 
-## Review 处置
+### 验收标准
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+<!-- 规范（门禁必留，不得删除） -->
 
-### Round 1 (2026-10-23T08:34:21+08:00)
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-|finding_id|severity|status|rationale|fix_ref|
-|---|---|---|---|---|
-|t039_gen_f001|important|已修|统计响应未完成时，列表不再将已加载行数显示为全账号总数|src/frontend/src/components/MessageList.tsx:220；src/frontend/src/components/MessageList.test.tsx:223|
+<!-- /规范 -->
 
-### Round 2 (2026-10-23T08:37:01+08:00)
+- [ ] AC-001：目标 role/folder 不存在时 MessageList 不用全目录数量冒充目标数量。
+- [ ] AC-002：全账号任一统计请求失败时界面不显示成功账号小计为完整全局总数；所有账号成功时仍显示正确合计。
+- [ ] AC-003：Sidebar 无 inbox role 或 inbox unread 无法取得时，不显示其他 role 合计作为 inbox 未读数。
+- [ ] AC-004：自动测试覆盖 role 缺失、单/全账号成功、部分请求失败、无 inbox 的展示行为。
 
-Round 2 零 finding。独立 reviewer 复验 `t039_gen_f001` 已消除，AC-001 至 AC-004 全部 PASS；reviewed_scope：`deba6f7b41c7e43a`。
+### 可测试性声明
 
-## 收尾报告
+<!-- 规范（门禁必留，不得删除） -->
 
-### 验收与验证
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-- spec：[`spec.md`](spec.md)
-- 结果：AC-001 至 AC-004 全部满足
-- 测试：`npm test` 216 passed；MessageList/Sidebar 34 passed；`npx tsc -b`、`npm run build`、`npm run lint` 通过
-- 黑盒：`npm run test:e2e` 8 passed；`scripts/run_full_stack_e2e.py` 3 passed，临时数据库清理成功
-- review：Round 1 的 `t039_gen_f001` 已修；Round 2 独立 review PASS，0 新 finding
-- AC 证据：见 `handoff.json`
+<!-- /规范 -->
 
-### 结果摘要
+全部 AC 可自动测试。
 
-- 统计只展示与目标查询 scope 一致的数据；统计未完成、失败和缺少 inbox 统计均显示未知。Round 1 review finding 已修，Round 2 review PASS。实现与验证证据见 `handoff.json`。
+## 上下文区
+
+- 来源：2026-10-23 MessageList 与 Sidebar 静态审查；两处均发现缺目标 role 时汇总其他目录；MessageList 另吞掉单账号请求失败并显示部分合计。
+
+### 有意不测
+
+- 具体网络错误文案：验证不把不完整数据显示为完整数字即可。
+
+### 测试策略
+
+- 组件测试按账号提供 stats 响应与失败场景，观察列表数量文本和 Sidebar unread；验证 A 成功、B 失败时不展示 A 小计为全局总数。
+- 运行 MessageList/Sidebar 与全量前端门禁。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无。DTO 与目标 scope 查询语义可由仓库 API schema 和组件测试核验。
+
+### 风险与回退
+
+- 风险：把请求失败当零会造成另一种假统计。
+- 回退：统计未知时隐藏数字或提示不可用；不回退到其他范围合计。
+
+### 依赖与约束
+
+- t038 修改不同组件，可并行；本 task 仅改列表与侧栏统计。
+
+### Finalization 时更新的 blueprint
+
+- 由 t040 集中更新 `docs/blueprint/conventions.md`，本 task 不改共享 blueprint。

@@ -1,58 +1,86 @@
----
-tid: "t056"
-slug: "gmail_sync_strategy_and_timeout"
-title: "优化 Gmail 虚拟文件夹同步策略与 IMAP 超时及角色映射"
-status: "done"
-branch: "t056_gmail_sync_strategy_and_timeout"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "6105e02038c594ae5d185da55a6fe35c3b7adc8d"
-depends_on: ""
-conflicts_with: ""
-note: "排除 Gmail 虚拟文件夹重复拉取，放宽 IMAP 超时与分批粒度，完善 RFC 6154 标志映射，瞬时网络超时防抖"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+Gmail IMAP 采用标签（Label）多重映射机制，其特有的虚拟全量文件夹（`[Gmail]/所有邮件` 对应 `\All`，`[Gmail]/重要` 对应 `\Important`）包含了账户下的全量邮件。当前同步引擎将它们作为普通独立文件夹全量拉取，导致同一封邮件被重复多次下载，本地邮件数成倍膨胀（如 3,700 封实际收件膨胀至 7,290 封；该数字据用户 2026-10 反馈日志，未入库，仅作量级示意），引发巨量无效 IO 与存储浪费。
+同时，IMAP Provider 默认 Socket 读超时过短（30s），且单任务循环 20 页（1000 封），跨国访问 Gmail IMAP 时极易偶发 `TimeoutError`。且任务发生瞬时超时时，账号状态被立即打上 `failed` 红色告警，缺乏网络抖动容错。此外，RFC 6154 属性解析遗漏 `\All` 与 `\Flagged`，导致 Gmail 核心文件夹降级为 `role = "other"`。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 在 IMAP 文件夹发现阶段识别 Gmail 提供商：默认将 `\All`（所有邮件）及 `\Important`（重要邮件）虚拟文件夹标记为 `sync_status = "paused"`，不排入常规自动抓取队列。
+- 补齐 `src/mail_core/providers/imap.py` 中的 RFC 6154 属性解析：支持 `\All` $\\rightarrow$ `role = "all"`，`\Flagged` $\\rightarrow$ `role = "flagged"`。
+- 放宽 IMAP Provider 默认超时至 60.0 秒。
+- 调整 `sync_folder_metadata` 默认单次任务 `max_pages` 为 10，平滑单次网络占用。
+- 优化 Worker 同步异常处理：瞬态网络超时（`TimeoutError`、`SSLEOFError`）进入常规重试并退避，不立即将账号状态置为 `failed`。
 
-1. 建立测试用例 `tests/mail_core/test_gmail_sync_strategy_and_timeout.py` 覆盖 5 条 AC 并确认基线全红；
-2. 扩展 `src/mail_core/providers/imap.py` RFC 6154 标志位解析（\all -> all, \flagged -> flagged），并将默认 Socket 超时放宽至 60.0s；
-3. `src/mail_core/sync/engine.py` 实现 Gmail 虚拟标签文件夹默认 paused 策略与排期过滤，将 `max_pages` 默认参数调整为 10；
-4. `src/mail_core/worker/handlers.py` 优化瞬态网络超时错误处理，避免在可重试期内错误标记账户为 failed；
-5. 后端单测、全套回归与 Playwright 轻量/全栈 E2E 黑盒验证全部通过。
+### 非范围
 
-## Review 处置
+- 不修改现有数据库历史已下载的重复邮件（避免破坏用户本地缓存）。
+- 不引入客户端本地标签（Labels）的多对多交互重构。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-26T23:30:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零 finding。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [ ] AC-001：在 IMAP 文件夹发现中，Gmail 账号的 `\All`（所有邮件）与 `\Important`（重要）文件夹默认初始同步状态为 `sync_status = "paused"`，常规同步不自动为其拉取邮件。
+- [ ] AC-002：`ImapProvider.discover_folders` 解析到 `\All` 标志时赋予 `role = "all"`，解析到 `\Flagged` 标志时赋予 `role = "flagged"`。
+- [ ] AC-003：`ImapProvider` 默认 Socket 读取超时放宽为 60.0 秒。
+- [ ] AC-004：`sync_folder_metadata` 默认单次最大拉取页数 `max_pages` 调整为 10 页。
+- [ ] AC-005：Worker 执行同步任务遇到 `TimeoutError` 或 `SSLEOFError` 等瞬时网络错误进行重新排期时，账号的 `sync_status` 保持原有状态或维持 `running`，不被置为 `failed`。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：`./scripts/run-mail-core-tests.sh run -k "test_gmail_sync_strategy_and_timeout or test_imap_noselect or test_imap_id or test_sync_account_folders"` 通过（29 passed）；前端测试通过（446 passed）
-- 黑盒：Playwright UI E2E 通过（18 passed）；Playwright Full Stack E2E 通过（8 passed）
-- review：Round 1 双 PASS（零 finding）
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-- AC-001：Gmail 账号下 `\All`（所有邮件）与 `\Important`（重要）默认置为 `paused`，常规同步不自动排队拉取其邮件，杜绝收件箱邮件重复抓取。
-- AC-002：`ImapProvider.list_folder_catalog` 支持将 `\All` 映射为 `role = "all"`，`\Flagged` 映射为 `role = "flagged"`。
-- AC-003：`ImapProvider` 默认读取超时放宽为 60.0 秒。
-- AC-004：`sync_folder_metadata` 默认单次最大拉取页数 `max_pages` 调整为 10 页。
-- AC-005：Worker 遇到瞬态网络超时或 SSL 断连进行任务重试时，账号 `sync_status` 保持原有状态不被置为 `failed`。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：用户日志反馈排查发现
+
+### 有意不测
+
+- 真实跨国连接 Google IMAP 服务器的网络抖动：使用 mock/本地 IMAP stub 验证超时配置与异常拦截。
+
+### 测试策略
+
+- 单元测试：`tests/mail_core/` 下针对 `ImapProvider` 的标志位解析、超时默认值进行断言。
+- 同步与 Worker 测试：针对 Gmail 文件夹发现的 paused 策略和 Worker 瞬态网络超时的错误恢复机制编写测试用例。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无
+
+### 风险与回退
+
+- 风险：若用户依赖在“所有邮件”文件夹中查看被跳过收件箱直接归档的邮件，默认 paused 需手动点进该文件夹触发同步。主流客户端（如 Outlook/Apple Mail）对 Gmail 均默认排除 All Mail 同步。
+- 回退：git revert 对应 commit。
+
+### 依赖与约束
+
+- 依赖现有的 alembic 迁移机制（本变更不改动数据表 DDL，仅涉及业务逻辑与默认值）。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：记录 Gmail 虚拟标签文件夹默认 paused 策略与 IMAP 超时规范。
+
+## 归档勘误注记（2026-10-27 补）
+
+- 本 spec 范围与 AC-004 所述 `sync_folder_metadata` 的实现落点统一为 `src/mail_core/sync/engine.py` 同步阶段（该函数默认值 `max_pages=10`）；正文未逐处标注文件路径处，以本注记为准。
+- `src/mail_core/sync/delta.py` 的 delta 路径（`sync_folder_delta`）另有独立默认值 `max_pages=20`，不在本 task 范围内；背景中「单任务循环 20 页」指调整前的同步引擎行为，勿与 delta 路径的 20 页混同。

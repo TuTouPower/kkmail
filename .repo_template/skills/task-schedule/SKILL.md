@@ -2,11 +2,17 @@
 name: task-schedule
 description: 为 backlog task 写入真实的硬依赖 depends_on 与并发冲突 conflicts_with，执行计划由 task.py plan 只读计算。用户要求排依赖、标冲突或排出并发执行计划时调用。
 disable-model-invocation: true
+metadata:
+  opencode/autoinvoke: "false"
 ---
 
 # task-schedule
 
 为 backlog task 写入真实的硬依赖和并发冲突；执行计划由 `task.py plan` 只读计算。
+
+## 组合契约
+
+仅用户显式授权入口或 registry.json 已登记父流程可执行；作为子流程时由父流程直接读取本正文，原样传递参数、identity、owner_id 与授权，不扩大授权。完整规则见 `.repo_template/docs/usage.md`「skill 调用」。
 
 ## 流程
 

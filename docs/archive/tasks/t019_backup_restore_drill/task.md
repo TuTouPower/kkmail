@@ -1,74 +1,80 @@
----
-tid: "t019"
-slug: "backup_restore_drill"
-title: "建立真实加密备份与跨库恢复演练"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "4ea0a6f17fb5dce8de4c15d869eaf879705ddcbb"
-depends_on: "t014"
-conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 1312431b"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+test_backup_verify_drill.py 明确不运行 pg_restore；scripts/mail-core-backup-restore-drill.sh 使用不可连接地址并可降级 SQL stub。当前只能证明打包、加密和校验，不能证明数据库和 Blob 可以恢复为可用实例。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 复用生产 backup/package 与 crypto 路径，升级恢复演练入口及 tests/mail_core，使用源库和全新目标库、独立 Blob 目录。
+- 真实 pg_dump、备份包校验、解密、真实 pg_restore 及应用读取；源数据包含认证、加密 provider 凭据、邮件、全文索引、附件、Blob 与关联。
+- 校验错误密钥、损坏包、缺 Blob、还原失败与目标保护，crypto-only 快速测试继续保留但不计作恢复成功。
 
-2026-10-22 核实 test_backup_verify_drill.py 和 mail-core-backup-restore-drill.sh 均无真实 pg_restore；沿用已有加密与包格式。
+### 非范围
 
-### 2026-10-22 主分支执行
+- 不新增自动覆盖生产库的恢复功能，不把用户真实邮件、密码或备份作为测试数据。
+- 不允许用 allow_dump_stub、Mock pg_dump/pg_restore 或仅 checksum 代替真实恢复验收。
 
-- 用户明确要求直接在 main 分支按顺序执行 t013–t023，每完成一个 task 独立 commit。
-- 生产恢复能力补齐：在 `src/mail_core/backup/package.py` 实现 `restore_backup_package` 与 `RestoreResult`，支持校验前置、解包、解密、`pg_restore` 真实数据库恢复以及 Blob 目录还原。
-- 安全防护与目标检查：
-    - AC-004：严格拒绝源库与目标库相同，防止破坏性覆盖；检查目标 Blob 目录拒绝路径穿越与越界符号链接；
-    - AC-003：错误密钥拒绝、文件篡改校验失败、缺少引用 Blob 抛出明确异常；
-    - AC-005：拒绝将 SQL stub 备份作为可恢复备份。
-- 建立客户端代理：在 `scripts/test_pg_client/` 提供基于测试 PG 容器的真实 `pg_dump` 与 `pg_restore` 代理，映射宿主机与容器端口；在 `scripts/test_pg_runtime.py` 的测试环境中注入 PATH。
-- 新增 `tests/mail_core/test_backup_restore_drill_live.py`：
-    - 在源库注入账号、邮件、正文、附件并写入真实加密 Blob；
-    - 生成真实加密备份包并完成校验；
-    - 动态分配全新目标数据库 `kkmail_drill_target_*` 并执行恢复；
-    - 在目标库中完整断言账号、邮件主题/正文、附件文件，并使用密钥解密读取 Blob 比对原始字节；
-    - 执行失败边界与篡改防护测试。
-- 门禁通过：2 项测试全通过 (5.73s)；`scripts/mail-core-backup-restore-drill.sh` 顺利完成。
+### 验收标准
 
-## Review 处置
+<!-- 规范（门禁必留，不得删除） -->
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- 已修：归档解包结构修正，对齐 `postgres.dump` 与 `blobs.tar`；
-- 已修：测试客户端代理映射端口 `:15433` 到 `:5432`；
-- 双人审查（code + test）结论均 PASS。
+<!-- /规范 -->
 
-## 收尾报告
+- [x] AC-001：从人工种子源库使用生产备份逻辑生成非 stub 的加密包，经校验与解密后真实恢复到另一个空测试库，全流程单一命令完成且产出明确阶段结果。
+- [x] AC-002：恢复后另启真实应用验证登录、邮件数量和身份、主题/正文、搜索结果、附件下载哈希以及 provider 凭据解密与原数据一致；使用正确恢复密钥环，不能仅断言 SQL 表存在。
+- [x] AC-003：错误密钥、篡改包、缺少被引用 Blob、pg_restore 失败及不完整恢复均返回非零，不输出恢复成功；失败不改变源库，目标不会被标记为可用实例。
+- [x] AC-004：源库与目标相同、目标不是本轮拥有空测试库、路径逃逸或符号链接越界时，在覆盖/删除前拒绝；无害哨兵目标数据保持原样，临时明文和密钥不进入日志/版本库。
+- [x] AC-005：重复演练得到相同数据校验结果，正常和失败后清理连接、目标库及明文 staging；报告真实备份/恢复耗时、包大小和验证项，SQL stub 被明确拒绝作为恢复证据。
 
-### 验收与验证
+### 可测试性声明
 
-- spec：[`spec.md`](spec.md)
-- 结果：真实加密备份与跨库恢复演练闭环，全部行为 AC 均满足。
-- 测试：`scripts/run-mail-core-tests.sh run -k test_backup_restore_drill_live` 2 passed。
-- 黑盒：源库全实体加密备份 -> 全新独立数据库与 Blob 还原 -> 目标库业务实体与加密 Blob 字节核验。
-- review：`review_code.md` PASS，`review_test.md` PASS。
-- AC 证据：`test_backup_restore_drill_live.py` 与 `mail-core-backup-restore-drill.sh` 终端实测输出。
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-在生产备份模块补齐了真正的恢复逻辑 `restore_backup_package` 与安全防覆盖守卫；建立了基于真实 PostgreSQL 容器与原生 `pg_dump`/`pg_restore` 的跨库恢复演练测试，证明了数据库结构、业务数据及加密 Blob 可以完整、无损地还原到全新实例中。
+<!-- /规范 -->
 
-## 状态勘误（2026-10-27，A52）
+全部 AC 可自动测试；执行阶段必须给出真实运行证据，外部环境不可用不得替代为模拟通过。
 
-- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
-- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
-- commit 锚点：实现提交 `1312431b58ada455a994c0842e52947a28cc0422`；diff_anchor 补记为该实现提交的父提交 `4ea0a6f17fb5dce8de4c15d869eaf879705ddcbb`；本批归档提交 `161a6e10`。
-- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
+## 上下文区
+
+- 来源：无外部条目；本会话测试评估、固定容器方案与用户批准（2026-10-22）。2026-10-22 核实 test_backup_verify_drill.py 和 mail-core-backup-restore-drill.sh 均无真实 pg_restore；沿用已有加密与包格式。
+
+### 有意不测
+
+- 不以每 PR 恢复全部生产规模数据，定期运行小规模完整演练；大规模性能由基准 task 覆盖。
+
+### 测试策略
+
+- 使用同 PG 主版本真实客户端与 server；恢复目标由测试环境分配，不接受任意业务 URL。
+- 数据验证通过独立 session、生产 API 和 Blob 解密/附件字节比对；错误路径使用有意篡改的人工包。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无尚未裁定的外部产品契约；执行环境、工具可用性与权限按实施入口核对，缺少前提须失败并报告，不能用 skip 代替本 task 验收。
+
+### 风险与回退
+
+- 风险：恢复目标覆盖、明文 staging 泄露、密钥与备份包不匹配、缺 Blob 仍被当成功。保留源库且隔离目标，只有全部业务校验通过才报告成功。
+- 回退：回退本 task 单一执行 commit 恢复原入口与测试；仅回收本轮拥有测试资源，保留用户数据、其他 task 改动和失败证据。不更改生产 schema 或数据，迁移验证仅对一次性测试库操作。
+
+### 依赖与约束
+
+- 硬依赖 t014：复用其已交付的隔离后端测试状态并建立确定性数据夹具。
+- 本批 task 与 t012 的 finalization 都更新 docs/blueprint/testing.md，已登记 conflicts_with，建议串行交付；冲突不冒充硬依赖，不修改旧 task 和 active worktree。
+- 只按本 spec 修改生产代码/测试/脚本；发现超出范围产品缺陷按既有 bug-to-pending 流程记录，不放宽断言或静默扩大修复。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/testing.md`：真实恢复命令、必需客户端、数据与密钥校验、失败证据和清理。

@@ -16,6 +16,8 @@ rename 不自动改文档正文里的引用——slug 改动需人工核对 docs
 脚本只负责让文件名与新的 slug 一致。
 """
 
+from __future__ import annotations
+
 import argparse
 import re
 import subprocess
@@ -102,9 +104,8 @@ def cmd_list(_args: argparse.Namespace) -> None:
             if not ENTRY_FILE_RE.match(path.name):
                 continue
             # 摘要取 H1 标题（# dNNN 描述）——文件首行必有，字段名变体不影响检索
-            # A343（与 pending list 同病）：非 UTF-8 字节以替换字符继续列出。
             title = ""
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            for line in path.read_text(encoding="utf-8").splitlines():
                 if line.startswith("# "):
                     title = line[2:].strip()
                     break

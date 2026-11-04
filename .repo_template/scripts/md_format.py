@@ -114,6 +114,15 @@ def format_paths(rel_paths: list[str], *, check: bool = False) -> list[str]:
             "一般已全局安装：uv tool install md-kx）；未装或不在 PATH 时用 "
             "`uv tool install md-kx` 安装，或把已装的 md_kx 加入 PATH。"
         )
+    # 越界路径防御（Issue #17）
+    for rel in rel_paths:
+        try:
+            resolved = (REPO_ROOT / rel).resolve()
+            if not resolved.is_relative_to(REPO_ROOT.resolve()):
+                raise MdFormatError(f"路径 {rel} 越过仓库边界，拒绝格式化")
+        except OSError as e:
+            raise MdFormatError(f"无法解析路径 {rel}：{e}") from e
+
     snapshots: dict[Path, bytes] = {}
     if not check:
         for rel in rel_paths:
@@ -131,36 +140,12 @@ def format_paths(rel_paths: list[str], *, check: bool = False) -> list[str]:
                     [executable, "--check", str(path)], capture_output=True,
                     text=True, encoding="utf-8", errors="replace", timeout=30,
                 )
-                if result.returncode == 0:
-                    continue
-                if result.returncode != 1:
+                if result.returncode == 1:
+                    changed.append(rel)
+                elif result.returncode != 0:
                     raise MdFormatError(
                         f"md_kx --check 失败（{rel}）：{result.stderr.strip()}"
                     )
-                # exit 1 既可能是格式漂移，也可能是解析/内部错误（A339）：以
-                # 「试格式化后内容是否变化」校验输出形态。试跑在原文件上进行
-                # （保证 .md_kx.toml 发现路径与正式格式化一致），随后恢复原
-                # 字节，check 不写盘的语义不变；非漂移按 MdFormatError 抛出。
-                original = path.read_bytes()
-                probe = subprocess.run(
-                    [executable, str(path)], capture_output=True, text=True,
-                    encoding="utf-8", errors="replace", timeout=30,
-                )
-                try:
-                    if probe.returncode != 0:
-                        raise MdFormatError(
-                            f"md_kx --check 失败（{rel}）："
-                            f"{result.stderr.strip() or probe.stderr.strip()}"
-                        )
-                    if path.read_bytes() == original:
-                        raise MdFormatError(
-                            f"md_kx --check 失败（{rel}）：退出码 1 但试格式化"
-                            f"无内容变化，非格式漂移：{result.stderr.strip()}"
-                        )
-                finally:
-                    if path.read_bytes() != original:
-                        path.write_bytes(original)
-                changed.append(rel)
                 continue
             before = snapshots[path]
             result = subprocess.run(
@@ -172,7 +157,7 @@ def format_paths(rel_paths: list[str], *, check: bool = False) -> list[str]:
             after = path.read_bytes()
             if before != after:
                 changed.append(rel)
-    except MdFormatError as error:
+    except (MdFormatError, OSError, subprocess.SubprocessError) as error:
         suffix = "；已回滚本次已格式化的文件" if _restore_snapshots(snapshots) else ""
         raise MdFormatError(f"{error}{suffix}") from error
     return changed
@@ -207,14 +192,10 @@ def main(argv: list[str] | None = None) -> None:
         if args.changed and args.all:
             raise MdFormatError("--changed 与 --all 互斥")
         if args.paths:
-            # 点名模式下黑名单命中显式报错（与 format_paths 的拒绝语义统一），
-            # 不得静默丢弃后报「无改动」（A240）。
             rejected = [p for p in args.paths if _is_blacklisted(p)]
             if rejected:
-                raise MdFormatError(
-                    f"点名路径在黑名单，拒绝格式化：{', '.join(rejected)}"
-                )
-            rels = list(args.paths)
+                raise MdFormatError(f"{', '.join(rejected)} 在黑名单，拒绝格式化")
+            rels = args.paths
         elif args.changed:
             rels = collect_changed()
         elif args.all or args.check:

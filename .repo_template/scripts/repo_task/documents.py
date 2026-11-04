@@ -1,24 +1,22 @@
 """Canonical documents implementation for the task toolchain."""
 
+from __future__ import annotations
+
 import os
 import re
-import subprocess
-import sys
+import secrets
 import tempfile
 from pathlib import Path
 
 import repo_task.context as ctx
 
 
-_DQ_ESCAPES = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\", '"': '"'}
+class DocumentWriteError(ctx.TaskDataError, ValueError):
+    """文档写入被拒绝（如目标是软链）；同时满足库层 ValueError 与 CLI 统一出口。"""
 
 
 def _quote(value: str) -> str:
-    """YAML 双引号标量：转义反斜杠、双引号与换行/回车。
-
-    换行必须转义为 \\n 字面序列：front matter 是逐行解析的状态权威文件，
-    值中的真实换行会拆行并可注入伪造键（A22）。
-    """
+    """YAML 双引号标量：转义反斜杠、双引号与换行符。"""
     escaped = (
         str(value)
         .replace("\\", "\\\\")
@@ -34,15 +32,23 @@ def _unquote(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("\"", "'"):
         inner = value[1:-1]
         if value[0] == "'":
-            # YAML 单引号标量以 '' 表示字面单引号，须还原（A239）
-            return inner.replace("''", "'")
+            return inner
         out, i = [], 0
         while i < len(inner):
             if inner[i] == "\\" and i + 1 < len(inner):
                 nxt = inner[i + 1]
-                # 已知转义按语义解码（\n -> 换行）；未知转义保留后一个字符，
-                # 与历史手写值的宽容解析保持一致。
-                out.append(_DQ_ESCAPES.get(nxt, nxt))
+                if nxt == "n":
+                    out.append("\n")
+                elif nxt == "r":
+                    out.append("\r")
+                elif nxt == "t":
+                    out.append("\t")
+                elif nxt == "\\":
+                    out.append("\\")
+                elif nxt == '"':
+                    out.append('"')
+                else:
+                    out.append(nxt)
                 i += 2
             else:
                 out.append(inner[i])
@@ -50,37 +56,62 @@ def _unquote(value: str) -> str:
         return "".join(out)
     return value
 
+def _clean_line(line: str) -> str:
+    return line[:-1] if line.endswith("\r") else line
+
+
 def parse_front_matter_text(text: str, *, source: str) -> tuple[dict, str]:
     """从文本返回 (front matter dict, 正文)。
 
-    这是 YAML 的受限子集，不是完整 YAML 解析器（A239 子集语义）：
-    - 每行一个 `key: value`；重复键报错，不静默覆盖。
-    - 值支持双引号（转义见 _quote/_unquote）与单引号（'' 还原为 '）。
-    - 未引号值仅当 `#` 前为空格、且值不以引号或方括号开头时，才把
-      ` #...` 视为行内注释剥离；以 `[` 开头的值整体保留，避免把
-      列表式值中的 ` #` 误截断。
+    格式漂移 fail-closed：首尾围栏必须是独占一行的 ``---``；区内非空、非注释行
+    必须含冒号；重复键报错。错误均带 ``文件:行号``，避免依赖边等字段静默丢失。
     """
-    if not text.startswith("---"):
-        raise ctx.TaskDataError(f"{source}: task.md 必须以 YAML front matter (---) 开头")
-    end = text.find("\n---", 3)
-    if end == -1:
+    lines = text.split("\n")
+    if not lines or _clean_line(lines[0]) != "---":
+        raise ctx.TaskDataError(
+            f"{source}:1: {ctx.PROGRESS_FILE} 必须以独占一行的 YAML front matter (---) 开头"
+        )
+    end = None
+    for index in range(1, len(lines)):
+        line = _clean_line(lines[index])
+        if line == "---":
+            end = index
+            break
+        if line.startswith("---"):
+            raise ctx.TaskDataError(
+                f"{source}:{index + 1}: front matter 结束围栏必须是独占一行的 ---"
+                f"（当前 {line!r}）"
+            )
+    if end is None:
         raise ctx.TaskDataError(f"{source}: front matter 未闭合（缺结束的 ---）")
-    body = text[end + 4:].lstrip("\n")
+
     fm = {}
-    for line in text[3:end].splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or ":" not in line:
+    first_seen: dict[str, int] = {}
+    for index in range(1, end):
+        raw = _clean_line(lines[index])
+        line = raw.strip()
+        if not line or line.startswith("#"):
             continue
+        if ":" not in line:
+            raise ctx.TaskDataError(
+                f"{source}:{index + 1}: 无法解析 front matter 行（缺冒号）：{line!r}"
+            )
         key, _, val = line.partition(":")
         key = key.strip()
+        if not key:
+            raise ctx.TaskDataError(f"{source}:{index + 1}: front matter 键为空")
         if key in fm:
-            raise ctx.TaskDataError(f"{source}: front matter 重复键 {key!r}")
+            raise ctx.TaskDataError(
+                f"{source}:{index + 1}: front matter 重复键 {key!r}"
+                f"（首次见第 {first_seen[key]} 行）"
+            )
         val = val.strip()
-        # 未加引号的值剥掉行内注释（# 前须有空格），防照搬文档示例后值被污染；
-        # 以方括号开头的值不剥离（见 docstring 子集语义）。
-        if val and val[0] not in ("\"", "'", "["):
+        # 未加引号的值剥掉行内注释（# 前须有空格），防照搬文档示例后值被污染
+        if val and val[0] not in ("\"", "'"):
             val = val.split(" #", 1)[0].rstrip()
         fm[key] = _unquote(val)
+        first_seen[key] = index + 1
+    body = "\n".join(lines[end + 1:]).lstrip("\n")
     return fm, body
 
 def parse_front_matter(path: Path) -> tuple[dict, str]:
@@ -102,80 +133,49 @@ def dump_front_matter(fm: dict) -> str:
     lines.append("---")
     return "\n".join(lines) + "\n"
 
-_DEFAULT_MODE: int | None = None
-
-
-def _default_file_mode() -> int:
-    """新文件默认权限：0o666 & ~umask，进程内只推导一次并缓存。
-
-    推导放在一次性子进程里读继承的 umask：os.umask 是进程级全局状态，
-    在本进程内读写它会与并发线程/其他调用方互相干扰（A71）。
-    子进程不可用时回退 0o644（umask 022 的常见结果）。
-    """
-    global _DEFAULT_MODE
-    if _DEFAULT_MODE is None:
+def _create_temporary_file(path: Path, *, encoding: str = "utf-8"):
+    prefix = f".{path.name}."
+    suffix = ".tmp"
+    for _ in range(100):
+        candidate = path.parent / f"{prefix}{secrets.token_hex(8)}{suffix}"
         try:
-            out = subprocess.run(
-                [sys.executable, "-c", "import os; print(oct(0o666 & ~os.umask(0)))"],
-                capture_output=True, text=True, timeout=10,
-            )
-            _DEFAULT_MODE = int(out.stdout.strip(), 0) if out.returncode == 0 else 0o644
-        except (OSError, ValueError, subprocess.SubprocessError):
-            _DEFAULT_MODE = 0o644
-    return _DEFAULT_MODE
-
-
-def _fsync_dir(directory: Path) -> None:
-    """POSIX 下对目录 fd 做 fsync，使刚 replace 的目录项落盘；失败静默忽略。"""
-    if os.name != "posix":
-        return
-    try:
-        fd = os.open(directory, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+            f = open(fd, mode="w", encoding=encoding, newline="\n")
+            return f, candidate
+        except FileExistsError:
+            continue
+    raise OSError(f"Failed to create unique temporary file for {path}")
 
 
 def atomic_write_text(path: Path | str, content: str, *, encoding: str = "utf-8") -> None:
-    """tmp 文件 + fsync + os.replace + 目录 fsync 原子写，防中断产生半写状态。
+    """tmp 文件 + fsync + os.replace 原子写，保证两级语义。
 
-    使用同目录唯一临时文件，防止并发写入相互覆盖；保留已有目标权限，
-    新文件用 _default_file_mode() 的缓存推导值。replace 后对父目录 fsync，
-    目录项落盘才算完成；仍不承诺断电安全——介质/文件系统不兑现 fsync 时无效。
+    - 防半写：进程中断、并发写、读者不会看到截断或混合内容。
+    - 不保证掉电后 rename 已持久：未 fsync 父目录，ext4 等文件系统在掉电后
+      可能回退为旧版本或丢失新建文件。需要该保证时由调用方另行处理。
+
+    使用同目录唯一临时文件，防止并发写入相互覆盖；保留已有目标权限或应用系统 umask，
+    写完后 os.replace 原子替换。不支持向软链路径写入。
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        mode = path.stat().st_mode & 0o7777
-    else:
-        mode = _default_file_mode()
+    if path.is_symlink():
+        raise DocumentWriteError(f"atomic_write_text does not support writing to symlink: {path}")
 
-    temporary_file = tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding=encoding,
-        newline="\n",
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-    )
-    temporary = Path(temporary_file.name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing_mode = (path.stat().st_mode & 0o7777) if path.exists() else None
+
+    temporary_file, temporary = _create_temporary_file(path, encoding=encoding)
     try:
         with temporary_file:
             temporary_file.write(content)
             temporary_file.flush()
             os.fsync(temporary_file.fileno())
-        try:
-            os.chmod(temporary, mode)
-        except OSError:
-            pass
+        if existing_mode is not None:
+            try:
+                os.chmod(temporary, existing_mode)
+            except OSError:
+                pass
         os.replace(temporary, path)
-        _fsync_dir(path.parent)
     except BaseException:
         try:
             temporary.unlink(missing_ok=True)
@@ -193,66 +193,32 @@ def write_front_matter_many(files: list[tuple[Path, dict, str]]) -> None:
 
     单个 write_front_matter 已原子，但多个文件顺序写中途崩溃仍可能只更新一部分；
     两阶段把 conflict 关系清理等批量写的「部分更新」窗口缩到 replace 循环（RT-008）。
-    replace 前先把各目标的原字节备份在内存中；replace 阶段中途失败时按备份
-    逐个写回已替换文件（写回本身失败则在异常信息中点名需人工核对的文件），
-    避免只更新一部分（A225）。进程崩溃（非异常）不在此保证内。
     """
-    staged: list[tuple[Path, Path, int]] = []
-    default_mode = _default_file_mode()
+    staged: list[tuple[Path, Path, int | None]] = []
+
+    for path, _fm, _body in files:
+        if Path(path).is_symlink():
+            raise DocumentWriteError(f"write_front_matter_many does not support writing to symlink: {path}")
 
     try:
         for path, fm, body in files:
             path = Path(path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            mode = (path.stat().st_mode & 0o7777) if path.exists() else default_mode
-            temporary_file = tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                newline="\n",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            )
-            temporary = Path(temporary_file.name)
+            existing_mode = (path.stat().st_mode & 0o7777) if path.exists() else None
+            temporary_file, temporary = _create_temporary_file(path, encoding="utf-8")
             # 在写入前登记清理对象，防止写入/fsync 异常导致临时文件残留（P3）
-            staged.append((path, temporary, mode))
+            staged.append((path, temporary, existing_mode))
             with temporary_file:
                 temporary_file.write(dump_front_matter(fm) + "\n" + body)
                 temporary_file.flush()
                 os.fsync(temporary_file.fileno())
-        # replace 前备份各目标原字节（不存在记 None），供中途失败时回滚（A225）
-        backups: dict[Path, bytes | None] = {
-            path: (path.read_bytes() if path.exists() else None)
-            for path, _, _ in staged
-        }
-        replaced: list[Path] = []
-        try:
-            for path, temporary, mode in staged:
+        for path, temporary, existing_mode in staged:
+            if existing_mode is not None:
                 try:
-                    os.chmod(temporary, mode)
+                    os.chmod(temporary, existing_mode)
                 except OSError:
                     pass
-                os.replace(temporary, path)
-                replaced.append(path)
-                _fsync_dir(path.parent)
-        except BaseException as replace_error:
-            unrestored = []
-            for done_path in replaced:
-                original = backups[done_path]
-                try:
-                    if original is None:
-                        done_path.unlink(missing_ok=True)
-                    else:
-                        atomic_write_text(done_path, original.decode("utf-8"))
-                except (OSError, UnicodeDecodeError):
-                    unrestored.append(str(done_path))
-            if unrestored:
-                raise ctx.TaskDataError(
-                    "write_front_matter_many 在 replace 阶段失败且以下文件回滚失败，"
-                    f"需人工核对：{', '.join(unrestored)}（原始错误：{replace_error}）"
-                ) from replace_error
-            raise
+            os.replace(temporary, path)
     except BaseException:
         for _, temporary, _ in staged:
             try:
@@ -464,17 +430,61 @@ def _extract_markdown_section(text: str, level: int, title: str) -> str | None:
 AC_ID_RE = re.compile(r"AC-\d{3}")
 
 
+def _strip_fenced_code(text: str) -> str:
+    """去除 Markdown 中围栏代码块（``` 或 ~~~），避免代码块内的示例内容被误解析。"""
+    lines = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not in_fence:
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                in_fence = True
+                fence_char = stripped[0]
+                fence_len = len(stripped) - len(stripped.lstrip(fence_char))
+                continue
+            lines.append(line)
+        else:
+            if stripped.startswith(fence_char * fence_len):
+                in_fence = False
+    return "\n".join(lines)
+
+
 def extract_ac_ids(spec_text: str) -> list[str]:
-    """从 spec 验收标准节提取 AC-NNN 编号，按出现顺序去重。"""
+    """从 spec 验收标准节提取 AC-NNN 编号，按出现顺序去重。跳过代码块示例（Issue #31）。"""
     acceptance = _extract_markdown_section(spec_text, 3, "验收标准")
     if not acceptance:
         return []
+    cleaned = _strip_fenced_code(acceptance)
     seen: list[str] = []
-    for line in acceptance.splitlines():
+    for line in cleaned.splitlines():
         for match in AC_ID_RE.findall(line):
             if match not in seen:
                 seen.append(match)
     return seen
+
+
+def extract_ac_statuses(spec_text: str) -> list[tuple[str, bool]]:
+    """从 task.md(spec) 验收标准节提取 (AC-NNN, is_checked) 列表。
+
+    跳过代码块示例（Issue #31）。按行扫描 `- [ ]` 或 `- [x]` / `- [X]`。
+    """
+    acceptance = _extract_markdown_section(spec_text, 3, "验收标准")
+    if not acceptance:
+        return []
+    cleaned = _strip_fenced_code(acceptance)
+    results: list[tuple[str, bool]] = []
+    seen: set[str] = set()
+    for line in cleaned.splitlines():
+        match = re.match(r"^\s*-\s*\[([ xX])\]\s*(?:\[deploy\]\s*)?(AC-\d{3})", line)
+        if match:
+            box = match.group(1)
+            ac_id = match.group(2)
+            if ac_id not in seen:
+                seen.add(ac_id)
+                results.append((ac_id, box in ("x", "X")))
+    return results
 
 
 def _extract_guide_blocks(text: str) -> list[str]:
@@ -514,12 +524,12 @@ def validate_task_documents(
     missing_spec_headings = _missing_heading_sequence(spec_text, ctx.SPEC_REQUIRED_HEADINGS)
     if missing_spec_headings:
         problems.append(
-            "spec.md 缺必需标题、标题层级错误或顺序错误："
+            "task.md 缺必需标题、标题层级错误或顺序错误："
             + "、".join(missing_spec_headings)
         )
 
     # 规范块属于严格模板契约；repo-template-sync 负责先强制迁移存量 task。
-    template_spec_path = ctx.TEMPLATE_DIR / "spec.md"
+    template_spec_path = ctx.TEMPLATE_DIR / "task.md"
     if template_spec_path.is_file():
         template_blocks = _extract_guide_blocks(
             template_spec_path.read_text(encoding="utf-8")
@@ -529,40 +539,43 @@ def validate_task_documents(
             missing_blocks = [item for item in template_blocks if item not in spec_blocks]
             if missing_blocks:
                 problems.append(
-                    f"spec.md 缺或被改 {len(missing_blocks)} 个当前规范块；"
+                    f"task.md 缺或被改 {len(missing_blocks)} 个当前规范块；"
                     "先运行 repo-template-sync 强制迁移，规范块不得手改"
                 )
 
     acceptance = _extract_markdown_section(spec_text, 3, "验收标准")
-    if not acceptance or not re.search(
-        r"^\s*-\s*\[ \]\s*\S", acceptance, re.MULTILINE
+    cleaned_acceptance = _strip_fenced_code(acceptance) if acceptance else ""
+    if not cleaned_acceptance or not re.search(
+        r"^\s*-\s*\[[ xX]\]\s*\S", cleaned_acceptance, re.MULTILINE
     ):
-        problems.append("spec.md 验收标准为空")
+        problems.append("task.md 验收标准为空")
 
-    if acceptance:
+    if cleaned_acceptance:
         ac_ids: list[str] = []
-        for line in acceptance.splitlines():
+        for line in cleaned_acceptance.splitlines():
             stripped = line.strip()
-            if not stripped.startswith("- [ ]"):
+            if not (stripped.startswith("- [ ]") or stripped.startswith("- [x]") or stripped.startswith("- [X]")):
                 continue
             match = re.match(
-                r"-\s*\[\s*\]\s*(?:\[deploy\]\s*)?(AC-\d{3})", stripped
+                r"^-\s*\[([ xX])\]\s*(?:\[deploy\]\s*)?(AC-\d{3})", stripped
             )
             if not match:
                 problems.append(
-                    "spec.md 验收标准条目缺 AC 编号（格式 `- [ ] AC-NNN：`，"
+                    "task.md 验收标准条目缺 AC 编号（格式 `- [ ] AC-NNN：`，"
                     f"[deploy] 位于编号前）：{stripped[:60]}"
                 )
                 continue
-            ac_id = match.group(1)
+            box, ac_id = match.group(1), match.group(2)
+            if creation and box in ("x", "X"):
+                problems.append(f"task.md AC 创建期不得提前勾选：{ac_id}")
             if ac_id in ac_ids:
-                problems.append(f"spec.md AC 编号重复：{ac_id}")
+                problems.append(f"task.md AC 编号重复：{ac_id}")
             ac_ids.append(ac_id)
 
-    missing_task_headings = _missing_heading_sequence(task_body, ctx.TASK_REQUIRED_HEADINGS)
+    missing_task_headings = _missing_heading_sequence(task_body, ctx.PROGRESS_REQUIRED_HEADINGS)
     if missing_task_headings:
         problems.append(
-            "task.md 缺必需标题、标题层级错误或顺序错误："
+            f"{ctx.PROGRESS_FILE} 缺必需标题、标题层级错误或顺序错误："
             + "、".join(missing_task_headings)
         )
 
@@ -572,7 +585,7 @@ def validate_task_documents(
         line for line in ctx.IMPLEMENTATION_NOTE_GUIDANCE if line not in visible_task_lines
     ]
     if missing_guidance:
-        problems.append("task.md 实施笔记缺当前模板固定说明；先运行 repo-template-sync 强制迁移")
+        problems.append(f"{ctx.PROGRESS_FILE} 实施笔记缺当前模板固定说明；先运行 repo-template-sync 强制迁移")
 
     notes = _extract_markdown_section(task_body, 2, "实施笔记")
     if notes is not None:
@@ -582,14 +595,14 @@ def validate_task_documents(
             if line.strip() and line.strip() not in ctx.IMPLEMENTATION_NOTE_GUIDANCE
         ]
         if not payload_lines:
-            problems.append("task.md 实施笔记为空；无事项时写「无」")
+            problems.append(f"{ctx.PROGRESS_FILE} 实施笔记为空；无事项时写「无」")
 
     if not allow_template_placeholders:
         visible_text = "\n".join(_visible_markdown_lines(spec_text + "\n" + task_body))
         placeholders = ctx.TEMPLATE_PLACEHOLDER_RE.findall(_strip_inline_code(visible_text))
         if placeholders:
             problems.append(
-                f"spec.md / task.md 残留 {len(placeholders)} 个模板占位符："
+                f"task.md / {ctx.PROGRESS_FILE} 残留 {len(placeholders)} 个模板占位符："
                 + "、".join(sorted(set(placeholders))[:3])
             )
 

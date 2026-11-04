@@ -59,9 +59,6 @@ def _in_git_repo() -> bool:
 def _baseline_ok(baseline: str) -> bool:
     if not baseline or baseline == "no-git":
         return False
-    if baseline.startswith("-"):
-        # 形态校验先于一切 git 调用：以 '-' 开头会被 git 解析为选项（A338）。
-        return False
     return _git(
         ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{baseline}^{{commit}}"]
     ).returncode == 0
@@ -72,11 +69,6 @@ def _warn_degraded(baseline: str) -> None:
         f"WARNING: baseline {baseline!r} 不可解析，退化为存在性/未跟踪判断，覆盖降级",
         file=sys.stderr,
     )
-    if baseline.startswith("-"):
-        print(
-            "WARNING: baseline 以 '-' 开头，按非法形态拒绝（防 git 选项注入）",
-            file=sys.stderr,
-        )
 
 
 def _untracked_files(excludes: list[str]) -> list[str]:
@@ -111,8 +103,7 @@ def cmd_deliverable(args) -> int:
             print("present — untracked new file")
             return 0
         stat = _git(
-            ["diff", "--stat", "--end-of-options", args.baseline, "--", args.path],
-            check=True,
+            ["diff", "--stat", "--end-of-options", args.baseline, "--", args.path], check=True
         ).stdout.strip()
         if stat:
             print(f"present — changed vs baseline ({stat.splitlines()[-1].strip()})")
@@ -160,35 +151,36 @@ def cmd_added_lines(args) -> int:
         )
         current_path = ""
         skip_file = False
-        in_hunk = False
         for line in result.stdout.splitlines():
-            if line.startswith("diff --git "):
-                in_hunk = False
-                continue
-            # +++ 只在 hunk 上下文之外才是文件头；hunk 内内容以 ++ 开头的新增行
-            # 呈 +++… 形态，是真实新增行不得漏报（A263）。
-            if not in_hunk and line.startswith("+++ "):
+            if line.startswith("+++ "):
                 current_path = line[4:].removeprefix("b/")
                 skip_file = _excluded(current_path, args.exclude)
                 continue
-            if line.startswith("@@ "):
-                in_hunk = True
-                continue
             if skip_file:
                 continue
-            if line.startswith("+"):
+            if line.startswith("+") and not line.startswith("+++"):
                 print(line[1:])
+    failed = False
     for path in _untracked_files(args.exclude):
         file_path = Path(path)
-        if not file_path.is_file():
-            continue
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        except FileNotFoundError:
+            print(
+                f"WARNING: 未跟踪文件读取时已消失，新增行未计入：{path}",
+                file=sys.stderr,
+            )
+            continue
+        except OSError as error:
+            print(
+                f"WARNING: 未跟踪文件读取失败，新增行未计入：{path}（{error}）",
+                file=sys.stderr,
+            )
+            failed = True
             continue
         for line in content.splitlines():
             print(line)
-    return 0
+    return 1 if failed else 0
 
 
 def main() -> None:

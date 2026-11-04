@@ -1,59 +1,79 @@
----
-tid: "t040"
-slug: "mail_data_truth_docs"
-title: "固化邮件来源数据与展示统计契约文档"
-status: "done"
-branch: ""
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: ""
-depends_on: "t035,t036,t037,t038,t039"
-conflicts_with: ""
-note: "依赖 t035–t039 已合入结果，统一更新架构、数据来源、展示兜底与统计范围文档。"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+t035–t039 修复邮件来源字段、日期、迁移和 UI 统计语义后，需要把跨模块原则写入长期 blueprint，防止后续代码重新把未知值冒充事实。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 核对已合入 task 的实际实现与测试证据。
+- 更新 architecture/conventions；如实现新增门禁命令，同步 testing。
+- 文档明确 provider 原值、缺失值、派生展示值和不同统计范围的边界。
 
-- 用户授权直接在 `main` 实施与维护；相关契约与架构规则已在 commit `d52879b` 固化至 `docs/blueprint/architecture.md`、`docs/blueprint/conventions.md` 以及 `docs/specs/mail_sync_and_storage.md`。
-- 工具状态说明：`task.py edit` 无 status 参数，`start` 必须建立 worktree；用户明确要求直接 main，因此直接在 main 收尾并归档。
+### 非范围
 
-## Review 处置
+- 不改生产代码或历史数据。
+- 不将未由 t035–t039 实现和测试证明的内容写成规范。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-23T19:30:03+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零新增 finding；general 审查 PASS，见 [review_general.md](review_general.md)。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [x] AC-001：blueprint 对 provider 局部字段、未知值与保真规则和实现一致，并有准确代码/test 引用。
+- [x] AC-002：blueprint 区分收件时间、MIME 日期、缺失时间；文档的排序和展示契约与最终 API/查询测试一致。
+- [x] AC-003：blueprint 明确列表展示 fallback 不写回源字段、账号邮箱不冒充邮件地址、统计失败/缺目标不冒充完整数。
+- [x] AC-004：文档更新通过 markdown 格式检查，引用的门禁命令真实存在；不改生产/运行数据。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部行为验收、审查与门禁通过；实现已在 main。
-- 测试：文档规范与 markdown 检查通过，不涉及生产代码变更。
-- 黑盒：不适用（纯文档固化）。
-- review：general 审查 PASS，见 [review_general.md](review_general.md)。
-- AC 证据：见下表；直接 main 实施，不生成或伪造 worktree `handoff.json`。
+### 可测试性声明
 
-|AC|实际证据|
-|---|---|
-|AC-001|`docs/blueprint/conventions.md` 与 `architecture.md` 固化 provider 局部字段、未知值与保真规则。|
-|AC-002|`docs/blueprint/conventions.md` 明确收件时间、MIME 日期与排序展示契约。|
-|AC-003|`docs/blueprint/conventions.md` 明确展示 fallback、账号邮箱与未读统计范围契约。|
-|AC-004|文档已随 `d52879b` 提交并通过核验，未改生产运行数据。|
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-- 提交记录：`d52879b`。
-- 完整固化邮件数据来源保真、字段缺省与显式清空、未知状态及展示统计范围契约。
+<!-- /规范 -->
+
+- AC-001–AC-003：需人工逐项对照已合入实现与测试；AC-004 运行 md_kx 检查并验证命令存在。
+
+## 上下文区
+
+- 来源：t035、t036、t037、t038、t039 的完成实现、测试与 review 报告。
+
+### 有意不测
+
+- 本 task 不运行生产逻辑测试；生产行为证据继承各先行 task 的有效门禁结果。
+
+### 测试策略
+
+- 文档 diff review；md_kx `--check`；抽查实现/AC 对应引用与命令。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 先行 task 未完成前禁止 start；所有契约由已完成 task 的证据确定。
+
+### 风险与回退
+
+- 风险：文档承诺超出代码测试实际覆盖。
+- 回退：逐条删除无证据的约束并链接遗留 task；不改生产数据。
+
+### 依赖与约束
+
+- 硬依赖 t035、t036、t037、t038、t039 全部合入。
+- 文档来源仅可使用主干上已合入代码和报告。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/conventions.md`：数据来源保真、未知状态、展示 fallback、统计 scope 规则。
+- `docs/blueprint/architecture.md`：仅当先行任务实际改变邮件时间/领域模型时更新。
+- `docs/blueprint/testing.md`：仅当先行任务增加质量门禁时更新。

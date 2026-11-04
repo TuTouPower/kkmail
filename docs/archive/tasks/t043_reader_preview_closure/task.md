@@ -1,73 +1,73 @@
----
-tid: "t043"
-slug: "reader_preview_closure"
-title: "核验正文摘要隔离并闭环原修复记录"
-status: "done"
-branch: ""
-worktree: ""
-review_level: "single"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: ""
-depends_on: ""
-conflicts_with: ""
-note: "来源 p022；原 main 修复 commit 4c28237、4c4dd7a 已合入，本 task 核验当前实现与回归后闭环文档。"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+p022 已由 main commit 4c28237、4c4dd7a 修复，但 pending 仍写“改动未提交”。本 task 只核验当前正文隔离与展示 fallback 回归，闭环陈旧记录。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 核验正文只用 detail.body、互斥状态分支以及列表摘要原值/展示 fallback 规则；更新 p022 实际完成证据。
 
-- 当前主干已有 `4c28237`、`4c4dd7a`。已核对 MessageReader 含 HTML 摘要加载/空正文/解析失败/请求失败回归及后端只读预览用例；前端回归与 general review 已通过；最终 PostgreSQL 全量 477 passed / 0 skipped。
-- 工具状态说明：`task.py edit` 无 status 参数，`start` 必须建立 worktree；用户明确要求直接 main，因此不创建假 worktree、不伪造 active/done。front matter 保持脚本登记的 backlog，实际实施与验证事实记录于正文。
+### 非范围
 
-## Review 处置
+- 不批量重写历史邮件，不删除运行容器数据，不改服务商原始摘要，不执行生产部署。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-23T19:17:52+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零新增 finding；general 审查 PASS，见 [review_general.md](review_general.md)。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [x] AC-001：带 HTML body_preview 且 detail.body 为空时，不渲染摘要正文，必须展示同步/空正文占位。
+- [x] AC-002：加载、详情请求失败、解析失败和空正文状态不创建正常正文容器；已有正文按 html/text 分流。
+- [x] AC-003：列表优先服务商摘要、缺失时从已有正文生成展示预览且不写回 snippet；当前回归验证通过。
+- [x] AC-004：p022 记录引用实际 main 修复提交与当前验证结果，不再声称未提交。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部行为验收、审查与门禁通过；实现已在 main，pending 已闭环。
-- 测试：前端全量 260 passed；TypeScript、生产构建、lint、OpenAPI/CSS 检查通过。模板契约 149 passed / 1 skipped；桌面单元与打包冒烟通过。最终串行 PostgreSQL 全量 477 passed / 0 skipped（378.17s），运行 e9e0192dae624ce980a1ae3ee8fe66b3，测试库清理成功。
-- 黑盒：stub E2E 13 passed；真实全栈 E2E 串行运行 8 passed。首轮与 stub 并行构建 dist 冲突导致 HTTP 500，定位后改为串行构建/运行并通过；未部署生产。
-- review：general 审查 PASS，见 [review_general.md](review_general.md)。
-- AC 证据：见下表；直接 main 实施，不生成或伪造 worktree `handoff.json`。
+### 可测试性声明
 
-|AC|实际证据|
-|---|---|
-|AC-001|`MessageReader.test.tsx` 含 HTML body_preview 与 body 空值、archived true/false/null 回归；当前前端全量通过。|
-|AC-002|`MessageReader.test.tsx` 加载/请求失败/解析失败/空正文互斥断言及正常 html/text 渲染用例；当前前端全量通过。|
-|AC-003|`test_list_body_preview_is_read_only_and_preserves_provider_snippet` 核验服务商摘要原值、展示 fallback 与查询不写回；最终串行 PG 全量 477 passed / 0 skipped。|
-|AC-004|p022 已记录实际 main commit 4c28237、4c4dd7a 与本轮验证信息，移除“未提交”陈旧描述。|
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-- 修复提交：`4c28237、4c4dd7a`。
-- 核验现有 main 正文/摘要隔离修复，更新 p022 过时状态；未重复修改正文渲染实现或运行邮件数据。
-- 最终 PG 全量：477 passed / 0 skipped；不变更脚本状态。
+<!-- /规范 -->
 
-## 最终全量验证说明
+全部 AC 可自动测试。
 
-- 注记：本节所述全量运行（运行 `e9e0192dae624ce980a1ae3ee8fe66b3`）为 t041–t043 同批联合验证，三份 task 共用同一运行记录，非各 task 独立运行。
-- 真实 IMAP 与 PostgreSQL 全量串行运行：477 passed / 0 skipped，只有既有 Starlette 弃用警告；运行 `e9e0192dae624ce980a1ae3ee8fe66b3`，正常清理本轮测试库。
-- 首轮两个旧夹具失败已补明确输入并保持原预期。第二轮与 IMAP 定向并行共用测试邮箱，目标邮件被另一套件清理；停止并行后最终全量通过。未因环境失败修改生产行为。
-- 未部署生产，未改写运行容器数据。
+## 上下文区
 
-## 直接 main 执行归档补记（2026-10-23T21:29:04+08:00）
+- 来源：p022（2026-10-23；上述提交已在 main，仍需本轮回归确认）。
 
-- 状态修正时间：2026-10-23T21:29:04+08:00；归档提交 `8b826b2c` 将 front matter 状态由 backlog 修正为 done 并迁入 `docs/archive/tasks/`。正文实施笔记中「front matter 保持脚本登记的 backlog」为执行时流程限制记录，由本节更新。
-- 实际执行分支：main；执行 commit：`4c28237`、`4c4dd7a`（原 main 修复，本 task 核验当前实现与回归后闭环）。
-- 依据：核验已通过且最终 PostgreSQL 全量 477 passed / 0 skipped，见正文实施笔记与收尾报告；本任务直接在 main 完成，未创建登记 worktree/attempt，不补造 handoff。
+### 有意不测
+
+- 真实 OAuth 邮箱：不依赖用户凭据；通过服务商响应契约 fixture 与真实 PostgreSQL 验证落库行为。
+
+### 测试策略
+
+- 运行既有 MessageReader、列表预览与查询不写回回归；对照生产源码与原修复提交；核查待办状态。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无；数据缺省与显式值语义由本仓契约和生产路径回归验证。
+
+### 风险与回退
+
+- 风险：陈旧文档把既有修复描述成未提交，或缺少当前回归证据。
+- 回退：验证失败保留 pending 未闭环，修复后重新验证；不修改历史运行数据。
+
+### 依赖与约束
+
+- 用户明确要求直接在 main 修复；登记引用不冒充工具链 worktree 执行状态。
+
+### Finalization 时更新的 blueprint
+
+- 无；现有 conventions 第九节已包含正文/摘要隔离规则。

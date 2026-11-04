@@ -1,10 +1,12 @@
 """task 调度看板本地服务。
 
-只读；stdlib http.server；无 WebSocket、无后台轮询。每次请求重新计算
-schedule，页面通过注入 JSON 交给客户端 JS 渲染；静态资源（board.css /
-board.js）从同目录 view_static/ 读取，无构建、无 CDN 依赖。
+只读；stdlib http.server；无 WebSocket、无后台轮询。首页 HTML 在 500ms TTL
+内复用渲染结果；`/task-doc` 每次请求重新计算 schedule。页面通过注入 JSON 交给
+客户端 JS 渲染；静态资源（board.css / board.js）从同目录 view_static/ 读取，
+无构建、无 CDN 依赖。
 """
 
+import contextlib
 import json
 import os
 import platform
@@ -12,6 +14,8 @@ import secrets
 import socket
 import subprocess
 import sys
+import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,28 +30,22 @@ from .plan import (
     compute_batch_plan,
 )
 from .scheduling import compute_schedule
-from .store import discover_effective_sources, git_text_at_ref
+from .store import discover_effective_bundle, git_text_at_ref
 
 _STATIC_DIR = Path(__file__).resolve().parent / "view_static"
-_DOC_NAMES = {"spec": "spec.md", "task": "task.md"}
-
-# A29: /task-doc 一次性访问 token。serve() 启动时生成，经看板页面注入
-# window.__DOC_TOKEN__，board.js 请求 /task-doc 时以查询参数携带；未启动
-# serve 的嵌入/测试场景为 None，此时不做 token 校验（Host/Origin 校验仍生效）。
-_DOC_TOKEN: str | None = None
+_DOC_NAMES = {"task": "task.md", "progress": ctx.PROGRESS_FILE, "spec": "task.md"}
+_SESSION_TOKEN = secrets.token_hex(16)
 
 
-class _ThreadingHTTPServerV6(ThreadingHTTPServer):
-    """IPv6 版 ThreadingHTTPServer：仅切换地址族，其余行为一致。"""
-
-    address_family = socket.AF_INET6
-
-
-def _server_class_for_host(host: str):
-    """按 host 字面选择服务器类：含 ``:`` 的 IPv6 字面量必须用 AF_INET6，
-    否则 _is_loopback_host 认可的 ::1 用 AF_INET 服务器必然绑定失败。"""
-    normalized = (host or "").strip().strip("[]")
-    return _ThreadingHTTPServerV6 if ":" in normalized else ThreadingHTTPServer
+def _find_free_port(host: str) -> int:
+    try:
+        infos = socket.getaddrinfo(host, 0, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+        family = infos[0][0] if infos else socket.AF_INET
+    except socket.gaierror:
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with contextlib.closing(socket.socket(family, socket.SOCK_STREAM)) as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
 
 
 def _build_model():
@@ -57,17 +55,41 @@ def _build_model():
     """
     model = build_board_model(compute_schedule())
     model["plan"] = compute_batch_plan(model)
+    model["token"] = _SESSION_TOKEN
     return model
 
 
 def _render_html(model: dict) -> str:
-    """纯函数：读取模板，注入模型 JSON（转义 </script> 防闭合注入）
-    与 /task-doc 访问 token（A29）。"""
+    """纯函数：读取模板，注入模型 JSON（转义 </script>、<!-- 与 Unicode 分隔符防注入）。"""
     template = (_STATIC_DIR / "board.html").read_text(encoding="utf-8")
-    payload = json.dumps(model, ensure_ascii=False).replace("</", "<\\/")
-    html = template.replace("__BOARD_JSON__", payload)
-    # 占位符须与标识符 window.__DOC_TOKEN__ 区分，否则 replace 会连标识符一起替换
-    return html.replace("__DOC_TOKEN_JSON__", json.dumps(_DOC_TOKEN or ""))
+    payload = (
+        json.dumps(model, ensure_ascii=False)
+        .replace("</", "<\\/")
+        .replace("<!--", "<\\!--")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+    return template.replace("__BOARD_JSON__", payload)
+
+
+_RENDER_CACHE_LOCK = threading.Lock()
+_CACHED_HTML: str = ""
+_LAST_RENDER_TIME: float = 0.0
+_RENDER_CACHE_TTL = 0.5  # 500ms 内的并发请求复用渲染结果，平抑高并发资源冲击（Issue #48）
+
+
+def _get_rendered_html() -> str:
+    global _CACHED_HTML, _LAST_RENDER_TIME
+    now = time.monotonic()
+    if _CACHED_HTML and (now - _LAST_RENDER_TIME < _RENDER_CACHE_TTL):
+        return _CACHED_HTML
+    with _RENDER_CACHE_LOCK:
+        now = time.monotonic()
+        if _CACHED_HTML and (now - _LAST_RENDER_TIME < _RENDER_CACHE_TTL):
+            return _CACHED_HTML
+        _CACHED_HTML = _render_html(_build_model())
+        _LAST_RENDER_TIME = now
+        return _CACHED_HTML
 
 
 def _allowed_doc_roots(base: Path) -> tuple[Path, ...]:
@@ -86,7 +108,7 @@ def _resolve_task_doc_in(base: Path, tasks: dict[str, dict], tid: str, doc: str)
         raise ctx.TaskDataError(f"未知任务 {tid!r}")
     filename = _DOC_NAMES.get(doc)
     if filename is None:
-        raise ctx.TaskDataError(f"未知文档类型 {doc!r}（仅 spec/task）")
+        raise ctx.TaskDataError(f"未知文档类型 {doc!r}（仅 task/progress）")
     directory = tasks[tid].get("dir", "")
     root = base.resolve()
     path = (root / directory / filename).resolve()
@@ -114,7 +136,7 @@ def _read_task_doc(schedule: dict, sources: dict, tid: str, doc: str) -> bytes:
             raise ctx.TaskDataError(f"未知任务 {tid!r}")
         filename = _DOC_NAMES.get(doc)
         if filename is None:
-            raise ctx.TaskDataError(f"未知文档类型 {doc!r}（仅 spec/task）")
+            raise ctx.TaskDataError(f"未知文档类型 {doc!r}（仅 task/progress）")
         rel = f"{tasks[tid].get('dir', '')}/{filename}"
         return git_text_at_ref(entry["read_at"], rel).encode("utf-8")
     base = (
@@ -211,103 +233,18 @@ def _open_browser(url: str) -> None:
         pass
 
 
-def _log_error_detail(context: str, error: BaseException):
-    """A61: 异常详情只记内部 stderr，对外响应一律固定文案，
-    避免回显异常原文与绝对路径。"""
-    print(f"view_server: {context}：{error}", file=sys.stderr)
-
-
-_LOOPBACK_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
-
-
-def _split_host_port(value: str) -> tuple[str, int | None]:
-    """解析 Host/Origin 的 netloc → (hostname, port)；解析失败返回 ("", None)。"""
-    try:
-        parts = urlsplit(f"//{value.strip()}")
-        return (parts.hostname or "").lower(), parts.port
-    except ValueError:
-        return "", None
-
-
-def _server_address(handler) -> tuple | None:
-    server = getattr(handler, "server", None)
-    address = getattr(server, "server_address", None)
-    return address if isinstance(address, tuple) and len(address) >= 2 else None
-
-
-def _request_host_allowed(handler) -> bool:
-    """A29: Host 必须是 loopback 名 + 服务器实际端口，防 DNS rebinding
-    用外部域名把浏览器请求重绑到本机看板。显式 --allow-non-loopback
-    绑定（通配或指定 LAN 地址）是用户已确认的暴露面，按绑定地址放行。"""
-    headers = getattr(handler, "headers", None)
-    host = headers.get("Host") if headers is not None else None
-    if not host:
-        return False
-    hostname, port = _split_host_port(host)
-    if not hostname:
-        return False
-    address = _server_address(handler)
-    if address is not None and port != address[1]:
-        return False
-    if hostname in _LOOPBACK_HOSTNAMES:
-        return True
-    if address is not None:
-        bind = str(address[0]).lower()
-        if bind in ("0.0.0.0", "::") or hostname == bind:
-            return True
-    return False
-
-
-def _request_origin_allowed(handler) -> bool:
-    """A29: 带 Origin 的请求必须是同源（与 Host 完全一致），拒绝跨站发起。"""
-    headers = getattr(handler, "headers", None)
-    if headers is None:
-        return True
-    origin = headers.get("Origin")
-    if not origin:
-        return True
-    try:
-        parts = urlsplit(origin)
-    except ValueError:
-        return False
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        return False
-    host = headers.get("Host") or ""
-    host_name, host_port = _split_host_port(host)
-    try:
-        origin_port = parts.port
-    except ValueError:
-        return False
-    return parts.hostname.lower() == host_name and origin_port == host_port
-
-
-def _request_allowed(handler) -> bool:
-    """请求级门禁。headers 缺失只出现在直接构造假 handler 的单测里，
-    真实请求经 http.server 解析后必有 headers，此时严格校验。"""
-    if getattr(handler, "headers", None) is None:
-        return True
-    return _request_host_allowed(handler) and _request_origin_allowed(handler)
-
-
-def _expected_doc_token(handler) -> str | None:
-    server = getattr(handler, "server", None)
-    token = getattr(server, "doc_token", None)
-    return token if token else _DOC_TOKEN
-
-
 class _Handler(BaseHTTPRequestHandler):
-    # A259: 单连接请求超时（秒）。ThreadingHTTPServer 无内建超时，慢/半截
-    # 请求会无限期占住线程；StreamRequestHandler.setup 依据此值 settimeout。
-    timeout = 30
-
     def _send_bytes(self, status: int, body: bytes, content_type: str):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        # A61: 全响应安全头，防 MIME 嗅探与外部资源加载
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "default-src 'self'")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'",
+        )
         self.end_headers()
         self.wfile.write(body)
 
@@ -322,25 +259,25 @@ class _Handler(BaseHTTPRequestHandler):
         http.server 对线程内未捕获异常只打 traceback 并关连接，客户端得到空响应。
         """
         try:
-            if not _request_allowed(self):
-                self._send_error_text(403, "请求被拒绝")
-                return
             self._route_get()
         except SystemExit as error:
             self._send_error_text(503, str(error) or "服务不可用（运行环境不满足）")
         except Exception as error:  # noqa: BLE001 - 请求级兜底，保证有明确错误响应
-            _log_error_detail("未捕获异常", error)
-            self._send_error_text(500, "内部错误")
+            self._send_error_text(500, f"内部错误：{error}")
 
     def _route_get(self):
         parts = urlsplit(self.path)
         path = parts.path
+        query = parse_qs(parts.query)
         if path in ("/", "/index.html"):
+            token = (query.get("token") or [""])[0]
+            if _SESSION_TOKEN and token != _SESSION_TOKEN:
+                self._send_error_text(403, "禁止访问：缺少或无效的看板会话令牌")
+                return
             try:
-                html = _render_html(_build_model())
+                html = _get_rendered_html()
             except Exception as e:
-                _log_error_detail("渲染失败", e)
-                self._send_error_text(500, "渲染失败")
+                self._send_error_text(500, f"渲染失败：{e}")
                 return
             self._send_bytes(200, html.encode("utf-8"), "text/html; charset=utf-8")
             return
@@ -352,8 +289,7 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 body = (_STATIC_DIR / name).read_bytes()
             except OSError as e:
-                _log_error_detail("读取静态资源失败", e)
-                self._send_error_text(500, "读取静态资源失败")
+                self._send_error_text(500, f"读取静态资源失败：{e}")
                 return
             content_type = (
                 "text/css; charset=utf-8" if name.endswith(".css")
@@ -362,29 +298,20 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_bytes(200, body, content_type)
             return
         if path == "/task-doc":
-            query = parse_qs(parts.query)
-            # A29: 正文接口须携带 serve 启动时生成的一次性 token
-            expected_token = _expected_doc_token(self)
-            provided_token = (query.get("token") or [""])[0]
-            if expected_token and not secrets.compare_digest(
-                provided_token, expected_token
-            ):
-                self._send_error_text(403, "请求被拒绝")
+            token = (query.get("token") or [""])[0]
+            if _SESSION_TOKEN and token != _SESSION_TOKEN:
+                self._send_error_text(403, "禁止访问：缺少或无效的看板会话令牌")
                 return
             tid = (query.get("tid") or [""])[0]
             doc = (query.get("doc") or [""])[0]
             try:
-                body = _read_task_doc(
-                    compute_schedule(), discover_effective_sources(), tid, doc
-                )
+                tasks, sources = discover_effective_bundle()
+                body = _read_task_doc(compute_schedule(tasks), sources, tid, doc)
             except ctx.TaskDataError as e:
-                # TaskDataError 文案可能含越界文档的绝对路径，一律固定文案对外
-                _log_error_detail("任务文档不可用", e)
-                self._send_error_text(404, "任务文档不存在或不可用")
+                self._send_error_text(404, str(e))
                 return
             except OSError as e:
-                _log_error_detail("读取文档失败", e)
-                self._send_error_text(500, "读取文档失败")
+                self._send_error_text(500, f"读取文档失败：{e}")
                 return
             self._send_bytes(200, body, "text/plain; charset=utf-8")
             return
@@ -401,9 +328,12 @@ def _is_loopback_host(host: str) -> bool:
 
 
 def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
-    global _DOC_TOKEN
-    # A29: 每次启动生成一次性 token，经看板页面注入、/task-doc 校验
-    _DOC_TOKEN = secrets.token_urlsafe(32)
+    if not isinstance(port, int) or port < 0 or port > 65535:
+        sys.exit(f"看板端口非法：{port!r}；端口必须在 0 到 65535 之间（0 为自动选空闲端口）")
+    port = port or _find_free_port(host)
+    # ThreadingHTTPServer 对 IPv6 字面量需要方括号才能当 URL host
+    url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    url = f"http://{url_host}:{port}/?token={_SESSION_TOKEN}"
     if not _is_loopback_host(host):
         if not allow_non_loopback:
             sys.exit(
@@ -416,18 +346,22 @@ def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
             "只读但会暴露 task spec/task 正文，确认网络边界后再用",
             file=sys.stderr,
         )
-    bind_host = host[1:-1] if host.startswith("[") and host.endswith("]") else host
     try:
-        # port=0 时由 OS 在构造时直接分配空闲端口，不做探活-释放-重绑，
-        # 消除 _find_free_port 式的 TOCTOU 窗口；实际端口从 server_address 读。
-        httpd = _server_class_for_host(bind_host)((bind_host, port), _Handler)
+        infos = socket.getaddrinfo(host, 0, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+        family = infos[0][0] if infos else socket.AF_INET
+    except socket.gaierror:
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+    server_cls = ThreadingHTTPServer
+    if family == socket.AF_INET6:
+        class _IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+            address_family = socket.AF_INET6
+        server_cls = _IPv6ThreadingHTTPServer
+
+    try:
+        httpd = server_cls((host, port), _Handler)
     except OSError as error:
         sys.exit(f"看板端口 {port} 绑定失败（{error}）；改用 --port 0 自动选空闲端口")
-    httpd.doc_token = _DOC_TOKEN
-    actual_port = httpd.server_address[1]
-    # ThreadingHTTPServer 对 IPv6 字面量需要方括号才能当 URL host
-    url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    url = f"http://{url_host}:{actual_port}/"
     print(f"task 看板已启动：{url}")
     print("只读服务；Ctrl+C 退出。")
     _open_browser(url)
@@ -436,5 +370,3 @@ def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
     except KeyboardInterrupt:
         print("\n关闭。")
         httpd.shutdown()
-    finally:
-        httpd.server_close()

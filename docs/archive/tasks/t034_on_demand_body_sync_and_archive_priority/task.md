@@ -1,55 +1,81 @@
----
-tid: "t034"
-slug: "on_demand_body_sync_and_archive_priority"
-title: "按需即时同步邮件正文与归档调度优化"
-status: "done"
-branch: "t034_on_demand_body_sync_and_archive_priority"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "ed3bfeecc579b99de892b9c364de03101efb9531"
-depends_on: ""
-conflicts_with: ""
-note: "来源 p021；用户点击未同步邮件时按需置为最高优先级即时拉取正文，修复增量轮询导致的归档饥饿"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+当用户添加包含大量历史邮件的邮箱时，系统两阶段同步机制会首先快速完成邮件元数据增量入库（`metadata_synced`）。但在后续正文归档阶段，由于后台任务调度器中文件夹增量轮询 `sync_folder_delta`（优先级 70）以固定间隔高频入队且未加限制，导致优先级 90 的批量归档任务 `archive_mime_batch` 长期处于被抢占饥饿状态，历史邮件正文拉取推进极为迟缓。
+同时，当用户在前端主动点击查看一封尚未完成正文归档的历史邮件时，系统仅展示“邮件正文尚未完成同步或内容为空”静态占位，缺乏按需即时同步（On-Demand Sync）与优先级抢占机制，用户无法即时获取当前查看邮件的完整正文。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 增加按需即时正文同步入口（详情接口获取未归档邮件或显式触发端点），将目标邮件归档优先级置为最高（抢占普通后台任务），立刻触发单封邮件的 MIME 拉取与解析入库；
+- 治理后台任务调度优先级饥饿问题：调整批量正文归档 `archive_mime_batch` 与定时增量轮询 `sync_folder_delta` 的优先级体系，并增加轮询任务去重保护，避免后台归档被无限饥饿；
+- 前端 `MessageReader` 在遇到未归档正文邮件时，展示正在即时同步的加载反馈与重试按钮；同步完成后自动刷新并平滑渲染正文。
 
-1. **调度优先级治理与去重保护**：将定时增量空转轮询优先级降为 75（并增加 `dedupe_key=f"delta:{aid}:{fid}"` 防止短时间内重复入队堆积），批量正文归档续批优先级提升为 60（高于 75，彻底解除增量轮询对批量正文归档的饥饿压制）。
-2. **按需即时正文归档链路**：在详情查询与新增端点 `POST /api/mail/messages/{id}/sync-body` 中，检测到未完成归档时将 `MessageArchiveState.priority` 提升为 0 并入队最高优先级的即时归档任务（priority=10）；同时支持就地单封归档尝试以即刻响应；若抓取失败或 MIME 损坏，同步持久化 `MessageBody.parse_error`。
-3. **前端交互与平滑渲染**：在 `MessageReader` 中检测到未归档正文时，展示旋转动态加载提示并在后台即时同步完成后平滑渲染正文，失败时展示具体原因与重试按钮，并与合法空邮件明确隔离。
-4. **测试与契约生成**：TDD 新增后端 `test_on_demand_body_sync.py` 与前端 `MessageReader.test.tsx` 单元测试，OpenAPI 导出与 schema 重新生成并通过校验。
+### 非范围
 
-## Review 处置
+- 不修改底层加密 Blob 存储模型（KKMS AEAD）与数据库 schema；
+- 不变更已读/删除写回出站状态机；
+- 不涉及大附件流式下载策略变更。
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+### 验收标准
 
-### Round 1 (2026-10-23T06:05:00+08:00)
+<!-- 规范（门禁必留，不得删除） -->
 
-Round 1 零 finding。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-## 收尾报告
+<!-- /规范 -->
 
-### 验收与验证
+- [ ] AC-001：对处于 `metadata_synced` 状态的邮件，调用按需正文同步接口或请求详情时，能将该邮件置为最高归档优先级（priority=10），并成功触发即时归档任务；
+- [ ] AC-002：按需归档任务执行后，能成功从 Provider 拉取原始 MIME 邮件，完成正文解析（HTML/纯文本）及附件元数据入库，并将 `MessageArchiveState` 更新为 `archive_complete`；
+- [ ] AC-003：优化 Worker 任务队列调度优先级：普通增量轮询 `sync_folder_delta` 与后台批量归档 `archive_mime_batch` 优先级合理分层，后台批量归档任务不再被频繁生成的增量轮询无限饥饿阻塞；
+- [ ] AC-004：前端在打开正文未同步的邮件时，展示正在同步中的动态加载提示，并在按需同步完成或收到更新通知后自动刷新展示正文，不再停留在静态未完成提示上；
+- [ ] AC-005：若邮件在 Provider 端拉取失败或解析错误，按需同步应捕获并正确持久化 `parse_error`，前端展示对应错误提示而不是无限加载。
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部满足
-- 测试：后端测试全量 397 passed（含 `test_on_demand_body_sync.py`）、前端 195 passed + tsc ok + build ok + lint ok、桌面端测试 ok
-- 黑盒：Playwright UI 冒烟测试 8 passed、真实全栈端到端测试 3 passed
-- review：双轴审阅均 PASS（`review_code.md` PASS, `review_test.md` PASS, scope: `86dfd16022521d64`）
-- AC 证据：见 `handoff.json`
+### 可测试性声明
 
-### 结果摘要
+<!-- 规范（门禁必留，不得删除） -->
 
-- 实现未归档邮件按需最高优先级（priority=10）即时正文拉取与落库；
-- 治理 Worker 任务调度优先级倒挂与饥饿问题，解除增量轮询对后台批量归档的压制；
-- 前端提供正在同步动态加载反馈、错误原因展示与重试交互，平滑自动渲染正文。
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试。
+
+## 上下文区
+
+- 来源：`p021`（2026-10-23 现场复现与核实：容器运行已久但 8347 封邮件中 7237 封历史邮件因任务优先级 70 与 90 倒挂导致正文归档被 delta 饿死，同时前端缺少按需即时抓取机制）
+
+### 有意不测
+
+- 真实第三方网络超时与断网场景：采用 Mock Provider 或本地测试 Dovecot 模拟。
+
+### 测试策略
+
+- 后端：基于测试 Session 与 Worker / IMAP 夹具编写按需同步接口测试与调度优先级测试；
+- 前端：使用 Vitest / React Testing Library 覆盖 `MessageReader` 的按需同步加载、成功渲染与失败重试状态。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+无
+
+### 风险与回退
+
+- 风险：高并发连续切换未归档邮件可能导致同一邮件重复入队或 Provider 瞬时连接压力。
+- 回退：按需任务增加单邮件锁或去重键（dedupe_key），已在归档中的任务不再重复入队。
+
+### 依赖与约束
+
+无
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/architecture.md`：记录按需邮件正文同步机制与 Worker 任务调度优先级治理方案。
+- `docs/blueprint/conventions.md`：记录未归档邮件前端加载反馈交互与按需同步契约。

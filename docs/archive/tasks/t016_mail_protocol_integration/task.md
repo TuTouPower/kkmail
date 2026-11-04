@@ -1,71 +1,82 @@
----
-tid: "t016"
-slug: "mail_protocol_integration"
-title: "增强真实 IMAP 集成与邮件服务商协议契约测试"
-status: "done"
-branch: "main"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "0598a1b9714ee4911d3668f6bb550e4edd50b338"
-depends_on: "t014"
-conflicts_with: ""
-note: "本会话批准测试增强；本地复用专用 PG 容器、每轮独立测试库；已于 2026-10-22 在 main 直接执行并完成（未用 task 工具链/worktree），实现 commit 082e203e"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+现有 Dovecot 夹具和两个 live IMAP 测试未自动纳入完整门禁，端口未监听时跳过。Gmail/Graph 已有 transport fixture 合约测试，应复用并补关键失败路径；普通 CI 不应依赖真实个人邮箱或外部 OAuth 凭据。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 复用 tests/mail_core/fixtures/dovecot、start-mail-core-imap.sh 与现有 provider 测试，建立测试专用、可重置、无需业务 Compose 密钥的 IMAP 服务入口。
+- 通过真实 ImapProvider、数据库及 Worker 路径验证首次同步、分页、增量、标志写回、现有安全 Trash 操作、断线重连和 UIDVALIDITY 失效恢复。
+- 以字节/传输夹具补 Gmail/Graph 既有适配器的 token 刷新、分页、增量过期、429/5xx、超时与脱敏；无真实服务凭据作为合并前置。
 
-2026-10-22 核实已有 Dovecot Dockerfile、seed.eml、test_imap_provider_live.py、test_imap_sync_loop.py 和 test_gmail_graph_contracts.py；不新造第二套服务商适配器。
+### 非范围
 
-### 2026-10-22 主分支执行
+- 不新增发信、任意跨文件夹移动或归档产品操作，不重复 t007 裸 GBK 修复及 t008 新文件夹导航。
+- 不把模拟 transport 称为真实 Gmail/Graph 联网验证；外部真实账号探针只能显式 opt-in，不能作为默认 CI 条件。
 
-- 用户明确要求直接在 main 分支按顺序执行 t013–t023，每完成一个 task 独立 commit。
-- 在 `config/test_pg_compose.yaml` 中增加独立的 `imap` (Dovecot) 服务，消除对业务 Compose 环境变量与口令的依赖，绑定端口 `127.0.0.1:1143`；`scripts/start-mail-core-imap.sh` 优先利用测试 Compose 启动并等待服务健康就绪。
-- 新增 `tests/mail_core/test_imap_protocol_suite.py`：
-    - AC-001：就绪检查、密码错误拒绝、关闭端口连接失败断言；
-    - AC-002：中文主题、multipart HTML/text 邮件正文同步；二进制附件 Blob 解密校验；同 Message-ID 重复邮件安全共存；再次同步保持严格幂等；
-    - AC-003：远端增量变更（新增、Flag 变化、删除）在本地 reconcile 反映；本地标为已读经 `push_remote_operations` 写回到 Dovecot 并可在服务端 `\Seen` FLAGS 观测；
-    - AC-004：移入 Trash 仅影响目标邮件；缺失 MOVE 能力拒绝不安全全目录 EXPUNGE；非 SSL 端口开启 `use_ssl=True` 立即握手失败阻断。
-- 增强 `tests/mail_core/test_gmail_graph_contracts.py`：
-    - AC-005：覆盖 Gmail/Graph 分页终止/重复 pageToken 终止、过期游标不前进、OAuth token 刷新失败与异常日志敏感凭据脱敏、5xx/Timeout 重试幂等性。
-- 修复 `tests/mail_core/test_imap_sync_loop.py` 中测试账号针对本地 loopback 的 `MAIL_CORE_ALLOW_PRIVATE_HOSTS` 环境变量；`test_imap_provider_live.py` 与 `test_imap_sync_loop.py` 原来跳过的两项测试彻底激活并通过。
-- 全量套件 361 passed / 0 skipped / 0 failed 彻底绿。
+### 验收标准
 
-## Review 处置
+<!-- 规范（门禁必留，不得删除） -->
 
-每个结构化 finding 一行。`已修` 表示本 task 已修复；`遗留` 必须指向 `pNNN` 或 follow-up tid；`撤回` 必须写清理由。critical/important 未解决时不得 PASS。
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- 已修：附件 Blob 正确通过 `MessageBlob.content_sha256` 经 `BlobStore.get` 进行流式解密校验；
-- 已修：`push_remote_operations` 调用修正为接收 `account_id`，并断言 `pushed` 字段。
-- 双人审查（code + test）结论均 PASS。
+<!-- /规范 -->
 
-## 收尾报告
+- [x] AC-001：协议测试入口从独立干净邮箱种子启动服务并等待就绪，显式选择协议套件时服务缺失、认证错误或就绪超时返回非零，不以缺端口 skip 或退回 MemoryProvider 冒充真实 IMAP 通过。
+- [x] AC-002：真实生产 Worker 将包含中文、multipart HTML/text、附件、同 Message-ID 和多页邮件同步入库；逐项断言主题、正文、附件字节、身份和计数，重复同步不产生重复邮件。
+- [x] AC-003：远端新增、读状态/旗标变化与删除后，后续增量反映至本地；本地单封状态更新经真实写回在服务端可观察，重连与 UIDVALIDITY 失效恢复后不丢不重。
+- [x] AC-004：现有安全移入废纸篓路径在支持能力时仅影响目标邮件；缺失 MOVE/UIDPLUS 能力或 TLS 证书校验失败时拒绝不安全操作，不调用全目录 EXPUNGE，不吞失败。
+- [x] AC-005：Gmail/Graph transport fixture 覆盖分页终止/重复页、过期 cursor、token 刷新失败、429 重试约束、5xx 和超时，断言游标不错误前进、错误脱敏与重放幂等；至少含异常响应结构。
+- [x] AC-006：服务与邮箱状态可重复重置；协议日志及失败产物不含密码/token，默认执行不访问真实邮箱或修改用户账号。
 
-### 验收与验证
+### 可测试性声明
 
-- spec：[`spec.md`](spec.md)
-- 结果：全部行为 AC 验证通过，真实 IMAP 集成测试闭环。
-- 测试：`scripts/run-mail-core-tests.sh run` 361 passed / 0 skipped；快速模式 255 passed / 102 skipped。
-- 黑盒：真实 Dovecot 服务端 FLAGS、Message-ID、附件内容与删除收敛双向验证。
-- review：`review_code.md` PASS，`review_test.md` PASS。
-- AC 证据：`test_imap_protocol_suite.py`、`test_gmail_graph_contracts.py` 实测输出。
+<!-- 规范（门禁必留，不得删除） -->
 
-### 结果摘要
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
 
-激活并增强了基于 Dovecot 容器的真实 IMAP 集成测试，覆盖中文多部分、加密附件解密校验、重复 Message-ID、本地写回与服务端可观察性、安全废纸篓移动与 TLS 阻断；完善了 Gmail/Graph 传输异常与敏感凭据脱敏断言，全量后端测试实现 0 跳过全通过。
+<!-- /规范 -->
 
-## 状态勘误（2026-10-27，A52）
+全部 AC 可自动测试；执行阶段必须给出真实运行证据，外部环境不可用不得替代为模拟通过。
 
-- 本节为事后补记，不覆写上文历史：front matter 创建期原值 branch/diff_anchor 为空、note 尾句为「仅创建 backlog」，与 done 状态及正文实施记录矛盾，现已按实际执行方式勘误补记。
-- 实际执行方式：2026-10-22 按用户要求直接在 main 分支执行（不使用 task.py、worktree 或 attempt），与正文「2026-10-22 主分支执行」节一致。
-- commit 锚点：实现提交 `082e203eafb2afceb955b75f78687d4cdba64b5e`；diff_anchor 补记为该实现提交的父提交 `0598a1b9714ee4911d3668f6bb550e4edd50b338`；本批归档提交 `161a6e10`。
-- `docs/archive/tasks_index.json` 已在本批（t013–t023）补记全部完成后按勘误后的 front matter 重新生成。
+## 上下文区
+
+- 来源：无外部条目；本会话测试评估、固定容器方案与用户批准（2026-10-22）。2026-10-22 核实已有 Dovecot Dockerfile、seed.eml、test_imap_provider_live.py、test_imap_sync_loop.py 和 test_gmail_graph_contracts.py；不新造第二套服务商适配器。
+
+### 有意不测
+
+- 不做 Gmail/Microsoft 外网服务可用性门禁，不依赖个人邮箱、真实收费配额或真实 OAuth secret。
+
+### 测试策略
+
+- 真实协议层使用 Dovecot 和可控网络中断；缺失能力、坏证书及异常服务商响应使用受控协议夹具并准确标注模拟边界。
+- TLS 用本地测试证书和隔离 endpoint，验证信任正确与不受信拒绝两条路径，不关闭生产校验。
+- 针对已知 p016 不增加手动二次 push 来伪造调度收敛；若现有缺陷阻断新链路，保留失败证据并引用t012 独立修复流程。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 无尚未裁定的外部产品契约；执行环境、工具可用性与权限按实施入口核对，缺少前提须失败并报告，不能用 skip 代替本 task 验收。
+
+### 风险与回退
+
+- 风险：真实服务种子污染、端口探测假就绪、协议重试无界或误触业务邮箱。服务身份与凭据均来自本轮夹具，网络访问限制在测试 endpoint。
+- 回退：回退本 task 单一执行 commit 恢复原入口与测试；仅回收本轮拥有测试资源，保留用户数据、其他 task 改动和失败证据。不更改生产 schema 或数据，迁移验证仅对一次性测试库操作。
+
+### 依赖与约束
+
+- 硬依赖 t014：复用其已交付的隔离后端测试状态并建立确定性数据夹具。
+- 本批 task 与 t012 的 finalization 都更新 docs/blueprint/testing.md，已登记 conflicts_with，建议串行交付；冲突不冒充硬依赖，不修改旧 task 和 active worktree。
+- 只按本 spec 修改生产代码/测试/脚本；发现超出范围产品缺陷按既有 bug-to-pending 流程记录，不放宽断言或静默扩大修复。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/testing.md`：IMAP 服务生命周期、必跑协议分类、服务商夹具与真实验证边界。

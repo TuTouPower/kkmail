@@ -1,70 +1,87 @@
----
-tid: "t006"
-slug: "dark_reader_theme"
-title: "统一深色阅读体验与语义颜色"
-status: "done"
-branch: "t006_dark_reader_theme"
-worktree: ""
-review_level: "full"
-review_limit: "5"
-verify_limit: "5"
-diff_anchor: "7d7a5b3d915b94d200f252ad17425345b1be632f"
-depends_on: ""
-conflicts_with: ""
-note: "来源 p010、p012；合并主题与样式交付"
----
+# Task spec
 
-# Task 过程总账
+## 背景
 
-front matter 只经 `task.py` 修改；reviewer 只写对应 `review_*.md`。
+p010 的远程图片拦截条、重试按钮、菜单、警告和错误页存在未定义颜色变量；p012 要求统一 Apple Mail 风格深色阅读体验。两项共享设计 token、MessageReader 与正文容器，合并交付，避免两次改写相同主题规则。
 
-## 实施笔记
+## 契约区
 
-执行期记录关键步骤、决策、验证、阻塞和用户批准的新轮次上限。
+### 范围
 
-创建期不预测实施步骤。只记有追溯价值的内容；无事项时写“无”。
+- 深色三栏、列表选中/失焦/悬停、文字和图标层级；同步 assets/DESIGN.md。
+- 纯文本、无显式配色 HTML 与固定配色 HTML 的正文背景和纸张边界；实时跟随当前有效主题。
+- 修复 p010 已确认样式位点及未定义变量，建立面向前端应用源码的 CSS 变量引用校验。
+- 保持现有邮件净化、CSP、iframe 沙箱与按邮件放行远程图片边界。
 
-1. **CSS 变量静态检查与负向夹具 (AC-006)**：
-   - 建立 `src/frontend/scripts/check_css_tokens.mjs` 与 `src/frontend/src/lib/checkCssTokens.ts`；
-   - 编写 `checkCssTokens.test.ts` 包含负向测试夹具与项目静态扫描断言；已接入 `npm test` 门禁。
-2. **修复未定义变量与脱离设计系统位点 (AC-004)**：
-   - 修复 `Sidebar.tsx` 重试按钮未定义的 `--border`、`--card`、`--fg` 为 `--line`、`--surface-2`、`--text`；
-   - 修复 `SettingsModal.tsx` 警告未定义的 `--yellow` 为 `--warning`；
-   - 修复 `ErrorBoundary.tsx` 全页错误未定义的 `--bg` 为 `--canvas` 并移除硬编码暗色回退；
-   - 修复 `tokens.css` 上下文菜单 `--panel-surface` 为 `--surface`，移除硬编码色；
-   - 修复 `MessageReader.tsx` 提示条 `--panel` 为 `--surface-2` 并修饰放行按钮。
-3. **Apple Mail 原生深色色阶与聚焦选中规则 (AC-001, AC-002)**：
-   - `tokens.css` 对齐深色三栏（侧栏 `#1E1E1E`、列表 `#212124`、阅读容器 `#1A1A1C`、边框 `#2C2C2E`、悬停 `#2A2A2E`、未读点 `#0A84FF`、主文本 `#FFFFFF`、次级 `#E4E4E6`、辅助 `#8E8E93`、图标 `#98989D`、悬停 `#FFFFFF`、发件人字重 600）；
-   - 实现 `.message-list:focus-within .message-row.selected` 聚焦样式（背景 `#0A60FE`、文字 `#FFFFFF`、时间副标题 `#D0E2FF`）与失焦回退 `#323236`；
-   - 同步更新 `assets/DESIGN.md`。
-4. **正文深色适配与独立纸张卡片 (AC-003, AC-005)**：
-   - `mailBody.ts` 实现 `classifyMailHtml` 保守分类与基于主题的 `buildMailSrcdoc`，CSP 与 DOMPurify 安全红线严格保持；
-   - `MessageReader.tsx` 针对固定浅色富文本在深色模式下以 `.mail-paper-card` 独立白底纸张卡片隔离呈现，主题切换即时响应；
-   - 拦截外链图片默认提示，放行仅对当前邮件生效，切换邮件重置拦截。
-5. **门禁与验证**：
-   - 前端单元测试 32 个测试套件（161 个测试）全部通过；
-   - 前端类型检查 `tsc -b` 与生产打包 `npm run build` 全部成功；
-   - E2E 冒烟测试 `npm --prefix src/frontend run test:e2e` 全部通过；
-   - 模板契约测试与后端测试全部通过。
+### 非范围
 
-## Review 处置
+- 不做强制反色，不改变邮件原有固定配色内容，不增加皮肤系统。
+- 不全面清理品牌色、阴影、透明度或所有历史硬编码值；只修复已确认主题缺陷及本 task 引入值。
+- 不改侧栏折叠、文件夹导航和账号图标产品行为。
 
-Round 1: 0 finding（PASS）。
+### 验收标准
 
-## 收尾报告
+<!-- 规范（门禁必留，不得删除） -->
 
-### 验收与验证
+只写可观察、可独立验证的行为；每条使用稳定且不复用的 `AC-NNN`。需真实部署或人工环境验证时在编号前加 `[deploy]`。创建时均为未勾选（`- [ ]`）；实施验证通过后由实施 Agent 就地打勾（`- [x]`）；由 Review Agent 独立复核打勾真实性。技术选型不作为行为 AC。review 判 FAIL 且需修改交付内容时，实施 Agent 撤回全部打勾，修复并重验后重新打勾；reviewer 用 `TICK-VALID` / `TICK-VOID` 逐条判定。
 
-- spec：[`spec.md`](spec.md)
-- 结果：PASS（全部 AC 达成并通过独立代码及测试双路审阅）
-- 测试：`pytest .repo_template/tests -q -m contract` (148 passed)、`pytest tests/mail_core -q` (217 passed)、`(cd src/frontend && npm test && npx tsc -b && npm run build)` (161 passed, build ok)、`(cd src/desktop && npm test)` (ok)
-- 黑盒：`npm --prefix src/frontend run test:e2e` (3 passed, 4.8s)
-- review：`review_code.md` PASS、`review_test.md` PASS (`reviewed_scope: 4ec6f59d51f6f2e2`)
-- AC 证据：见 `handoff.json`
+<!-- /规范 -->
 
-### 结果摘要
+- [x] AC-001：深色模式三栏背景分别为侧栏 #1E1E1E、列表 #212124、阅读容器 #1A1A1C；边框 #2C2C2E；列表悬停 #2A2A2E，未读点 #0A84FF，主文本/次级文本/辅助文本/图标分别为 #FFFFFF / #E4E4E6 / #8E8E93 / #98989D，图标悬停 #FFFFFF；发件人字重 600。亮色模式仍可读。
+- [x] AC-002：列表拥有焦点时，选中邮件背景 #0A60FE、主文字 #FFFFFF、时间与副标题 #D0E2FF；焦点离开列表后背景 #323236，恢复焦点后恢复聚焦选中样式，选择对象不变。
+- [x] AC-003：深色模式纯文本与无显式配色 HTML 正文使用 #1A1A1C 底色及可读文字；固定浅色富文本保留白底和自身文字颜色，并以带内边距、圆角的独立纸张卡片显示，外层阅读容器保持深色；亮暗主题切换后正文即时更新。
+- [x] AC-004：亮暗两种主题下，远程图片提示条、放行按钮、侧栏重试按钮、右键菜单及危险项悬停、设置警告、模块与全页错误界面均有可读文字和主题一致背景、边框；不再因引用未定义变量而落入错误主题背景。
+- [x] AC-005：含外链图片 HTML 邮件默认显示拦截提示，点击“仅此邮件允许加载”后仅当前邮件允许远程图片；切换到另一邮件仍默认拦截，CSP 和 iframe 禁脚本边界保持有效。
+- [x] AC-006：前端应用样式引用未声明 CSS 变量时，自动检查失败并指出变量与文件；修复后检查通过，并能通过注入错误引用的负向夹具验证检查有效。
 
-- 统一深色阅读体验对齐 Apple Mail 原生三栏与色阶对比；
-- 消除全工程 7 处未定义 CSS 变量，建立构建与测试静态 Token 扫描门禁；
-- 纯文本与无配色 HTML 深色自适应，固定浅色富文本以独立白底纸张卡片隔离呈现；
-- 保持 DOMPurify、无脚本 iframe、严格 CSP 与外链图片放行安全隔离。
+### 可测试性声明
+
+<!-- 规范（门禁必留，不得删除） -->
+
+逐条说明不可自动测试的 AC 及替代验证；全部可测则写“全部 AC 可自动测试”。
+
+<!-- /规范 -->
+
+全部 AC 可自动测试；视觉截图为补充复核，不替代计算样式及交互断言。
+
+## 上下文区
+
+- 来源：p010、p012（2026-10-22 核实：MessageReader.tsx:182/196、Sidebar.tsx:269–271、SettingsModal.tsx:133、ErrorBoundary.tsx:68、tokens.css:828 等仍存在；扫描得到 --panel / --border / --card / --fg / --yellow / --bg / --panel-surface 七个未定义变量。tokens.css 深色三栏仍为旧色、--mail-body 仍为白色。MessageReader 组件测试仅有纯文本正文，mailBody.test.ts 已覆盖底层图片 CSP，但缺组件放行与主题场景。无等价 effective task。）
+
+### 有意不测
+
+- 不要求每个操作系统显示器的色彩还原一致；以浏览器计算样式和组件截图验证指定颜色及布局。
+
+### 测试策略
+
+- MessageReader.test.tsx：HTML 拦截条、当前邮件放行、切换邮件、主题切换与正文卡片类型。
+- mailBody.test.ts：无配色/显式浅色/显式深色与恶意 HTML 夹具；验证 srcDoc 背景文字、CSP 和 sandbox；不得通过放宽 style/meta 等净化规则达成主题适配。
+- MessageList 与浏览器交互：键盘/指针焦点进出列表、选中态文字及三栏计算样式；亮暗两套截图作视觉复核。
+- 对 ErrorBoundary、Sidebar、SettingsModal、菜单做计算样式回归；校验脚本覆盖 TS/TSX/CSS 静态变量引用并识别合法局部变量声明，排除生成文件和第三方内容。
+- TDD：先证明当前未定义变量、错误背景与组件图片放行测试失败，再修复；不就地改旧测试预期迎合输出。
+
+### 未知契约清单
+
+<!-- 规范（门禁必留，不得删除） -->
+
+未核实的外部契约标为 `UNVERIFIED-BLOCKING` 或 `UNVERIFIED-SPIKE`；核实后改写为结论和验证方式。无则写“无”。
+
+<!-- /规范 -->
+
+- 创建假设（已征询，尚未收到偏好回复）：正文分类采用保守规则：无显式配色内容跟随主题；显式固定浅色内容保留白底；深色声明仅作为受控分类线索，不授权放宽净化和 iframe 边界。声明信息即使读取，也不能原样注入不受信任 head/style。
+- 用户已给出 p012 精确色值；作为目标设计常量使用，不要求查询或复刻不同 macOS 版本色值。
+
+### 风险与回退
+
+- 风险：HTML 内容颜色与主题默认文字混用可能造成不可读；焦点样式若复用全局 --selected 会误改侧栏和设置。正文内容与应用 chrome 必须分开处理。
+- 回退：回退本 task 执行 commit 恢复既有主题和渲染规则；不涉及数据迁移。
+
+### 依赖与约束
+
+- 无硬依赖。与 t008、t009、t010 共用 tokens.css 或相关组件，建议串行实施并复查叠加效果。
+- 必须沿用 DOMPurify、无脚本 iframe 与 CSP；视觉规则不得扩大邮件执行权限。
+
+### Finalization 时更新的 blueprint
+
+- `docs/blueprint/conventions.md`：语义颜色引用检查、邮件正文主题分类与沙箱边界。
+- `docs/blueprint/decisions.md`：深色正文保守适配及固定浅色纸张方案。

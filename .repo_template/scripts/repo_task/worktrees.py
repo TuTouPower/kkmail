@@ -1,8 +1,9 @@
 """Canonical worktrees implementation for the task toolchain."""
 
+from __future__ import annotations
+
 import os
 import re
-from datetime import datetime
 from pathlib import Path
 
 import repo_task.context as ctx
@@ -10,110 +11,69 @@ import repo_task.context as ctx
 from .git_ops import _get_head, _git, current_branch, default_branch, resolve_local_branch, worktree_paths
 from .store import discover_effective_sources, load_task_at_ref
 
-# link_local_env 收集源与 unlink_managed_env_links 清理走树共用的剪枝
-# 目录集合：依赖/缓存/元数据大树既不含需链的本地配置，也不该在每次
-# cleanup/rollback 时被全量遍历（A208）。
-SKIP_DIRS = {".git", "node_modules", ".scratch", "__pycache__", "venv", ".venv", "target"}
-
-# A401（回归 R3-H55 安全面）：可链入 task worktree 的本地文件显式
-# allowlist（仓内相对 POSIX 路径）。默认空——真实 .env 等未入库文件
-# 不再被全量软链进每个 worktree；确需链入某个非敏感本地配置文件时，
-# 在此逐个明示登记，且每次链入都逐个写审计日志（见 _audit_env_link）。
-LOCAL_ENV_ALLOWLIST: tuple[str, ...] = ()
-
-
-def _audit_env_link(source: Path, dst: Path, worktree: Path) -> None:
-    """逐个记录链入审计（源、目标 worktree、时间）到 .scratch 审计日志。
-
-    审计写失败以 OSError 冒泡（fail-closed）：调用方 start 会据此回滚，
-    不出现「已链入、无审计」的不可追溯状态。
-    """
-    audit_path = ctx.REPO_ROOT / ".scratch" / "local_env_link_audit.log"
-    audit_path.parent.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(ctx.TZ_CN).isoformat(timespec="seconds")
-    with audit_path.open("a", encoding="utf-8") as f:
-        f.write(
-            f"{ts} | link_local_env | source={source} "
-            f"| worktree={worktree} | dst={dst}\n"
-        )
-
-
 def link_local_env(worktree: Path) -> list[str]:
-    """把 allowlist 登记的本地文件软链进 worktree（同相对路径）。
+    """把主仓未入库的 .env 软链进 worktree（同相对路径）。
 
-    仅 LOCAL_ENV_ALLOWLIST 明示登记的条目是候选（A401）；未登记者
-    （含全部真实 .env）默认不链。用 os.walk 遍历并在遍历期原地剪枝
-    SKIP_DIRS（A260）。符号链接源须校验其 resolve 仍在 REPO_ROOT 内：
-    解析出仓的条目拒绝链入（即使已登记）。先物化源列表再建链，防止
-    遍历中把刚创建的软链当新源导致级联嵌套；每链入一个文件逐个写
-    审计日志（_audit_env_link）。
+    用 rglob 覆盖任意层级嵌套；跳过 .git、node_modules、.scratch 等
+    噪声目录，避免递归进依赖/缓存树。先物化源列表再建链，防止 rglob
+    在遍历中把刚创建的软链当新源导致级联嵌套。
     """
     linked = []
-    wanted = set(LOCAL_ENV_ALLOWLIST)
-    if not wanted:
-        return linked
+    skip_dirs = {
+        ".git", "node_modules", ".scratch", "__pycache__", "venv", ".venv",
+        "target", "worktrees", "artifacts", "data", "docs", ".repo_template",
+    }
     try:
         worktree_resolved = worktree.resolve()
     except OSError:
         worktree_resolved = None
+
     try:
-        repo_root_resolved = ctx.REPO_ROOT.resolve()
-    except OSError:
-        repo_root_resolved = ctx.REPO_ROOT
+        repo_root_res = ctx.REPO_ROOT.resolve()
+        registered_worktrees = {
+            Path(p).resolve() for p in worktree_paths().keys()
+            if Path(p).resolve() != repo_root_res
+        }
+    except Exception:
+        registered_worktrees = set()
+    if worktree_resolved and worktree_resolved != ctx.REPO_ROOT.resolve():
+        registered_worktrees.add(worktree_resolved)
+
     sources = []
     for root, dirs, files in os.walk(ctx.REPO_ROOT, followlinks=False):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        for name in files:
-            src = Path(root) / name
-            try:
-                rel = src.relative_to(ctx.REPO_ROOT)
-            except ValueError:
-                continue
-            if rel.as_posix() not in wanted:
-                continue
-            if not src.is_file():
-                continue
-            try:
-                src.resolve().relative_to(repo_root_resolved)
-            except ValueError:
-                continue  # 登记条目解析出仓，拒绝链入（A401/A260）
-            except OSError:
-                continue
-            sources.append(src)
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        if ".env" in files:
+            sources.append(Path(root) / ".env")
     for src in sources:
         try:
             rel = src.relative_to(ctx.REPO_ROOT)
         except ValueError:
             continue
-        if worktree_resolved is not None:
-            try:
-                src.resolve().relative_to(worktree_resolved)
-                continue  # 跳过目标 worktree 自身内的登记文件
-            except ValueError:
-                pass
+        if any(part in skip_dirs for part in rel.parts[:-1]):
+            continue
+        try:
+            src_res = src.resolve()
+            if any(src_res.is_relative_to(wt) for wt in registered_worktrees):
+                continue
+        except (ValueError, OSError):
+            pass
         dst = worktree / rel
         if dst.exists() or dst.is_symlink():
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.symlink_to(os.path.relpath(src, dst.parent))
-        _audit_env_link(src, dst, worktree)
         linked.append(str(rel))
     return linked
 
 def is_managed_env_link(worktree: Path, link: Path) -> bool:
-    """仅识别 link_local_env() 为主仓对应文件创建的软链。
-
-    候选为 allowlist 登记条目（A401）；相对路径名为 .env 的历史链接
-    （allowlist 之前由旧实现所建）同样认作托管，保证 cleanup 仍能
-    清理存量真实 .env 链接。
-    """
+    """仅识别 link_local_env() 为主仓对应 .env 创建的软链。"""
     if not link.is_symlink():
         return False
     try:
         rel = link.relative_to(worktree)
     except ValueError:
         return False
-    if rel.name != ".env" and rel.as_posix() not in LOCAL_ENV_ALLOWLIST:
+    if rel.name != ".env":
         return False
     source = ctx.REPO_ROOT / rel
     expected = os.path.relpath(source, link.parent)
@@ -128,19 +88,10 @@ def is_managed_env_link(worktree: Path, link: Path) -> bool:
 
 def unlink_managed_env_links(worktree: Path) -> None:
     # 用 os.walk 而非 Path.rglob：rglob 在 Python 3.10+ 会跳过 dangling
-    # symlink（源已删的托管链接），清理时恰恰需要删除这类残留。
-    # 原地过滤 dirs 剪枝 skip 目录（含 .git），避免每次 cleanup/rollback
-    # 全量走 node_modules/.venv 等大树（A208；与 link_local_env 共用集合）。
-    # 候选文件名：历史 .env + allowlist 登记条目的文件名（A401）。
-    candidate_names = {".env"} | {
-        Path(entry).name for entry in LOCAL_ENV_ALLOWLIST
-    }
+    # symlink（源已删的 .env 链接），清理时恰恰需要删除这类残留。
     for root, dirs, files in os.walk(worktree, followlinks=False):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        for name in files:
-            if name not in candidate_names:
-                continue
-            link = Path(root) / name
+        if ".env" in files:
+            link = Path(root) / ".env"
             if is_managed_env_link(worktree, link):
                 link.unlink()
 
@@ -172,7 +123,7 @@ def resolve_start_base(base_arg: str | None) -> tuple[str, str]:
             f"（应为 {expected_branch!r}）；拒绝伪装成 task 分支的普通分支"
         )
     if previous_fm.get("status") not in ctx.ARCHIVED_STATUSES:
-        # 分支 tip 状态由 finish 的归档移动 commit 决定。有效状态显示已完成
+        # 分支 tip 状态由 finish 提交的实现 commit 决定。有效状态显示已完成
         # 而分支 tip 仍是 backlog 时，真实原因是完成状态尚未提交，不是没完成。
         hint = ""
         try:

@@ -9,32 +9,16 @@ REPO_ROOT = SCRIPTS_DIR.parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from repo_task.documents import parse_front_matter, validate_task_documents
+from review_support import fill_spec_text
 
 pytestmark = pytest.mark.contract
 
-SPEC_TEMPLATE = (REPO_ROOT / ".repo_template/docs/task_template/spec.md").read_text(encoding="utf-8")
-_, TASK_BODY_TEMPLATE = parse_front_matter(REPO_ROOT / ".repo_template/docs/task_template/task.md")
+SPEC_TEMPLATE = (REPO_ROOT / ".repo_template/docs/task_template/task.md").read_text(encoding="utf-8")
+_, TASK_BODY_TEMPLATE = parse_front_matter(REPO_ROOT / ".repo_template/docs/task_template/progress.md")
 
 
 def _fill_spec_text(text: str) -> str:
-    replacements = {
-        "{为什么需要此变更。}": "测试背景。",
-        "{本 task 包含什么。}": "测试范围。",
-        "{明确不做什么。}": "无。",
-        "{可独立验证的行为结果。}": "可验证行为。",
-        "- AC-001：{不可测原因与替代验证方式}": "- 全部 AC 可自动测试",
-        "- {分支或场景}：{不测原因}": "- 无",
-        "- {内容}": "- 按项目默认",
-        "- {契约}：{分类标记}，{待验证方式}": "- 无",
-        "- 风险：{可能失败的地方}": "- 风险：无",
-        "- 回退：{失败后如何恢复}": "- 回退：无",
-        "- {前置依赖、平台、安全或兼容性约束；无则写「无」。}": "- 无",
-        "- `{文件路径}`：{具体条目；无则写「无」}": "- 无",
-        "- 来源：{pNNN / finding_id / 原 tid}（核实日期与结论；无外部来源写「无」）": "- 来源：无",
-    }
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-    return text
+    return fill_spec_text(text, contract_item="无")
 
 
 def _filled_spec() -> str:
@@ -184,3 +168,72 @@ def test_actual_implementation_note_can_replace_default_none():
     problems, _ = validate_task_documents(_filled_spec(), task_body)
 
     assert problems == []
+
+
+def test_extract_ac_ids_ignores_fenced_code_examples():
+    """验证 extract_ac_ids 忽略围栏代码块中的示例 AC 编号（Issue #31）。"""
+    from repo_task.documents import extract_ac_ids
+
+    spec = """
+### 验收标准
+
+- [ ] AC-001: 正式验收项。
+
+```python
+# 示例代码块：
+# - [ ] AC-002: 假验收项
+print("AC-999")
+```
+
+~~~markdown
+- [ ] AC-003: 另一个代码块内的假验收项
+~~~
+"""
+    ids = extract_ac_ids(spec)
+    assert ids == ["AC-001"]
+
+
+def test_extract_ac_statuses_tracks_checked_state():
+    """验证 extract_ac_statuses 正确提取勾选状态并跳过代码块。"""
+    from repo_task.documents import extract_ac_statuses
+
+    spec = """
+### 验收标准
+
+- [ ] AC-001: 待实现。
+- [x] AC-002: 已实现。
+- [X] AC-003: 大写已实现。
+
+```markdown
+- [x] AC-999: 假代码块
+```
+"""
+    statuses = extract_ac_statuses(spec)
+    assert statuses == [
+        ("AC-001", False),
+        ("AC-002", True),
+        ("AC-003", True),
+    ]
+
+
+def test_acceptance_checked_ac_allowed_in_implementation():
+    """实施期（creation=False）允许 AC 打勾。"""
+    spec = _filled_spec().replace(
+        "- [ ] AC-001：可验证行为。",
+        "- [x] AC-001：可验证行为。",
+        1,
+    )
+    problems, _ = validate_task_documents(spec, TASK_BODY_TEMPLATE, creation=False)
+    assert problems == []
+
+
+def test_acceptance_checked_ac_fails_during_creation():
+    """创建期（creation=True）禁止 AC 提前打勾。"""
+    spec = _filled_spec().replace(
+        "- [ ] AC-001：可验证行为。",
+        "- [x] AC-001：可验证行为。",
+        1,
+    )
+    problems, _ = validate_task_documents(spec, TASK_BODY_TEMPLATE, creation=True)
+    assert any("创建期不得提前勾选" in p and "AC-001" in p for p in problems)
+
