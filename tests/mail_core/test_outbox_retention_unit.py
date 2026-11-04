@@ -477,15 +477,15 @@ def test_migration_0026_matches_model_definitions():
     assert "drop_column" in source and "drop_index" in source
 
 
-def test_alembic_chain_head_is_0026():
+def test_alembic_chain_has_single_head():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     cfg = Config(str(ROOT / "src/mail_core/db/alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "src/mail_core/db/alembic"))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == ["20261026_0026"]
-    assert script.get_revision("20261026_0026").down_revision == "20261026_0025"
+    assert script.get_heads() == ["20261031_0030"]
+    assert script.get_revision("20261031_0030").down_revision == "20261027_0029"
 
 
 def test_dispatch_without_subscribers_advances_cursor_without_counting(monkeypatch):

@@ -74,7 +74,7 @@ def test_archive_batch_completes_and_respects_hard_quota(tmp_path, monkeypatch):
     mime = {str(i): (b"x" * 100) + str(i).encode() for i in range(1, 4)}
     provider.seed("INBOX", metas, mime)
 
-    def _build(account, store=None):
+    def _build(account, store=None, **kwargs):
         return provider
 
     original_engine = engine_mod.build_provider

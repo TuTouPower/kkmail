@@ -105,8 +105,8 @@ def test_a27_sync_folder_delta_sanitizes_errors(monkeypatch):
             session.commit()
             account_id = acc.id
 
-        monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None: provider)
-        monkeypatch.setattr(delta_mod, "build_provider", lambda a, s=None: provider)
+        monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None, **kwargs: provider)
+        monkeypatch.setattr(delta_mod, "build_provider", lambda a, s=None, **kwargs: provider)
 
         assert sync_account_folders(account_id, worker_id="w", store=store)["status"] == "ok"
         with Session() as session:
@@ -155,7 +155,7 @@ def test_a27_sync_account_folders_sanitizes_last_sync_error(monkeypatch):
                 raise ProviderHttpError("Failed folder listing: access_token=SECRET_TOKEN", status=502, body="SECRET_BODY")
 
         provider = FlakyFolders()
-        monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None: provider)
+        monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None, **kwargs: provider)
 
         with pytest.raises(ProviderHttpError):
             sync_account_folders(account_id, worker_id="w", store=store)
@@ -185,7 +185,7 @@ def test_a27_remote_push_sanitizes_errors(monkeypatch):
                 raise ProviderHttpError("Failed remote op: client_secret=LEAK123", status=500, body="BODY_LEAK")
 
         provider = PushCrash(folders=[RemoteFolder("INBOX", "INBOX", "inbox")])
-        monkeypatch.setattr(push_mod, "build_provider", lambda a, s=None: provider)
+        monkeypatch.setattr(push_mod, "build_provider", lambda a, s=None, **kwargs: provider)
 
         with Session() as session:
             enqueue_remote_operation(
@@ -230,8 +230,8 @@ def test_a28_worker_handler_rate_limited_single_job(monkeypatch):
             session.commit()
             account_id = acc.id
 
-        monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None: provider)
-        monkeypatch.setattr(delta_mod, "build_provider", lambda a, s=None: provider)
+        monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None, **kwargs: provider)
+        monkeypatch.setattr(delta_mod, "build_provider", lambda a, s=None, **kwargs: provider)
 
         sync_account_folders(account_id, worker_id="w", store=store)
         with Session() as session:
@@ -318,7 +318,7 @@ def test_a28_remote_push_rate_limit_respects_retry_after_and_attempt_cap(
                 raise RateLimitedError("Hit limit", retry_after_seconds=75.0)
 
         provider = RateLimitedPush(folders=[RemoteFolder("INBOX", "INBOX", "inbox")])
-        monkeypatch.setattr(push_mod, "build_provider", lambda a, s=None: provider)
+        monkeypatch.setattr(push_mod, "build_provider", lambda a, s=None, **kwargs: provider)
 
         now = datetime.now(timezone.utc)
         with Session() as session:
@@ -377,7 +377,7 @@ def test_a29_sync_account_folders_releases_lease_on_build_provider_failure(monke
             session.commit()
             account_id = acc.id
 
-        def fail_build(account, store=None):
+        def fail_build(account, store=None, **kwargs):
             raise ValueError("corrupted credentials during build")
 
         monkeypatch.setattr(engine_mod, "build_provider", fail_build)
@@ -407,7 +407,7 @@ def test_a29_sync_folder_metadata_releases_lease_on_build_provider_failure(monke
             session.commit()
             account_id, folder_id = acc.id, folder.id
 
-        def fail_build(account, store=None):
+        def fail_build(account, store=None, **kwargs):
             raise RuntimeError("provider init failed")
 
         monkeypatch.setattr(engine_mod, "build_provider", fail_build)
@@ -438,13 +438,13 @@ def test_a29_sync_folder_delta_releases_lease_on_build_provider_failure(monkeypa
             session.commit()
             account_id = acc.id
 
-        monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None: provider)
+        monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None, **kwargs: provider)
         sync_account_folders(account_id, worker_id="w", store=store)
         with Session() as session:
             folder_id = session.scalar(select(Folder.id).where(Folder.account_id == account_id))
         sync_folder_metadata(account_id, folder_id, worker_id="w", store=store)
 
-        def fail_build(account, store=None):
+        def fail_build(account, store=None, **kwargs):
             raise RuntimeError("delta build failure")
 
         monkeypatch.setattr(delta_mod, "build_provider", fail_build)
@@ -479,7 +479,7 @@ def test_a29_remote_push_releases_lease_on_build_provider_failure(monkeypatch):
             )
             session.commit()
 
-        def fail_build(account, store=None):
+        def fail_build(account, store=None, **kwargs):
             raise RuntimeError("push build failure")
 
         monkeypatch.setattr(push_mod, "build_provider", fail_build)
@@ -535,7 +535,7 @@ def test_a29_archive_batch_releases_lease_and_restores_claims_on_build_failure(m
             session.commit()
             msg_id = msg.id
 
-        def fail_build(account, store=None):
+        def fail_build(account, store=None, **kwargs):
             raise RuntimeError("archive provider build failed")
 
         monkeypatch.setattr(archive_mod, "build_provider", fail_build)

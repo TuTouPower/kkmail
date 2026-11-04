@@ -129,7 +129,7 @@ def test_delta_provider_error_completes_claim_and_leaves_one_pending_retry(monke
         def delta_changes(self, _remote_id, _cursor):
             raise RuntimeError("synthetic provider outage")
 
-    monkeypatch.setattr(delta_mod, "build_provider", lambda _account, _store=None: FailingDeltaProvider())
+    monkeypatch.setattr(delta_mod, "build_provider", lambda _account, _store=None, **kwargs: FailingDeltaProvider())
     observed_results = []
     original_evaluate_result = _evaluate_result
 
@@ -268,8 +268,8 @@ def test_page_followups_use_job_type_dedupe_key(monkeypatch, sync_path, exhauste
             return DeltaPage(changes=[], next_cursor={"historyId": "2"}, exhausted=False)
 
     provider = PartialProvider()
-    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None: provider)
-    monkeypatch.setattr(delta_mod, "build_provider", lambda _account, _store=None: provider)
+    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None, **kwargs: provider)
+    monkeypatch.setattr(delta_mod, "build_provider", lambda _account, _store=None, **kwargs: provider)
     if sync_path == "metadata":
         result = sync_folder_metadata(account_id, folder_id, worker_id="page-followup", store=object(), max_pages=1)
     else:
@@ -299,7 +299,7 @@ def test_delta_cursor_invalid_marks_metadata_rebuild_as_scheduled(monkeypatch):
         def delta_changes(self, _remote_id, _cursor):
             raise CursorInvalidError("cursor expired")
 
-    monkeypatch.setattr(delta_mod, "build_provider", lambda _account, _store=None: InvalidCursorProvider())
+    monkeypatch.setattr(delta_mod, "build_provider", lambda _account, _store=None, **kwargs: InvalidCursorProvider())
     result = sync_folder_delta(account_id, folder_id, worker_id="delta-worker", store=object())
 
     assert result["status"] == "cursor_invalid"
@@ -326,7 +326,7 @@ def test_metadata_cursor_invalid_marks_rebuild_as_scheduled(monkeypatch):
         def fetch_metadata_page(self, _remote_id, _cursor):
             raise CursorInvalidError("cursor expired")
 
-    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None: InvalidCursorProvider())
+    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None, **kwargs: InvalidCursorProvider())
     result = sync_folder_metadata(account_id, folder_id, worker_id="metadata-worker", store=object())
 
     assert result["status"] == "cursor_invalid"
@@ -403,7 +403,7 @@ def test_noselect_folder_discovery_preserves_parent_and_skips_metadata_job(monke
                 RemoteFolder("Other/QQ邮件订阅", "QQ邮件订阅", "other", parent_remote_id="Other"),
             ]
 
-    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None: CatalogProvider())
+    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None, **kwargs: CatalogProvider())
     def unexpected_provider(*_args, **_kwargs):
         raise AssertionError("non-selectable folder must not call a provider")
 
@@ -516,7 +516,7 @@ def test_folder_discovery_pauses_missing_remote_and_deduplicates_metadata_job(mo
         def list_folders(self):
             return [RemoteFolder("INBOX", "INBOX", "inbox")]
 
-    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None: ListingProvider())
+    monkeypatch.setattr(engine_mod, "build_provider", lambda _account, _store=None, **kwargs: ListingProvider())
     sync_account_folders(account_id, worker_id="folders-test", store=object())
     sync_account_folders(account_id, worker_id="folders-test", store=object())
 

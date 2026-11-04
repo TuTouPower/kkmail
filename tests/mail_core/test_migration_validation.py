@@ -58,12 +58,13 @@ def _get_alembic_config() -> Config:
 
 def test_alembic_chain_has_single_head():
     # Head/length track the live chain (verified against alembic output):
-    # migrations 0022-0026 landed after this assertion was written
+    # migrations 0022-0030 landed after this assertion was written
     # (outbox publication seq, sync requests/targets, archive claim
-    # revision, sync execution tracking, outbox retention watermark).
+    # revision, sync execution tracking, outbox retention watermark,
+    # recipient search, CHECK constraints, remote image allowlists).
     script = ScriptDirectory.from_config(_get_alembic_config())
-    assert script.get_heads() == ["20261026_0026"]
-    current = script.get_revision("20261026_0026")
+    assert script.get_heads() == ["20261031_0030"]
+    current = script.get_revision("20261031_0030")
     visited = []
     while current is not None:
         visited.append(current.revision)
@@ -72,7 +73,7 @@ def test_alembic_chain_has_single_head():
             break
         assert isinstance(down, str), f"Fork at {current.revision}"
         current = script.get_revision(down)
-    assert len(visited) == 26
+    assert len(visited) == 30
     assert visited[-1] == "20261020_0001"
 
 

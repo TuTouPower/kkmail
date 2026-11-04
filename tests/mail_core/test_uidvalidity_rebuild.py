@@ -106,7 +106,7 @@ def test_sync_folder_metadata_rebuilds_on_cursor_invalid():
     provider = BoomProvider(folders=[RemoteFolder("INBOX", "INBOX", "inbox")])
     originals = engine_mod.build_provider
 
-    def _build(account, store=None):
+    def _build(account, store=None, **kwargs):
         return provider
 
     engine_mod.build_provider = _build

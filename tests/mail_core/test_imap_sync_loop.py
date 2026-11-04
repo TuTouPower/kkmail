@@ -67,7 +67,7 @@ def test_memory_provider_sync_folders_and_metadata():
 
     original = engine_mod.build_provider
 
-    def _build(account, store=None):
+    def _build(account, store=None, **kwargs):
         if account.provider == "memory":
             return provider
         return original(account, store)

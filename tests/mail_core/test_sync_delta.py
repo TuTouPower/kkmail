@@ -33,7 +33,7 @@ def test_memory_incremental_delta_upsert_flag_delete():
     )
     originals = (engine_mod.build_provider, delta_mod.build_provider)
 
-    def _build(account, store=None):
+    def _build(account, store=None, **kwargs):
         return provider
 
     engine_mod.build_provider = delta_mod.build_provider = _build

@@ -46,7 +46,6 @@ def _run_trash(provider: str, *, trash_folder=None):
         patch.object(mutations, "enqueue_remote_operation", side_effect=_enqueue),
         patch.object(mutations, "_recompute_stats_for_folders", lambda *a, **k: None),
         patch.object(mutations, "_wake_push", lambda *a, **k: None),
-        patch.object(mutations, "try_notify_outbox", lambda *a, **k: None),
     ):
         result = mutations.trash_message(session, message_id)
     assert result.operation_id is not None
