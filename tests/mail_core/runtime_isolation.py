@@ -22,7 +22,10 @@ def clear_database():
         tables = ", ".join(target.dialect.identifier_preparer.quote(table.name) for table in Base.metadata.sorted_tables)
         with target.begin() as connection:
             connection.execute(text("SET LOCAL lock_timeout = '2s'"))
-            connection.execute(text("SET LOCAL statement_timeout = '5s'"))
+            # The truncate spans every table plus RESTART IDENTITY. Under
+            # heavy host IO (Docker/OrbStack on a loaded machine) 5s is too
+            # tight and cancels setup/teardown without any assertion failing.
+            connection.execute(text("SET LOCAL statement_timeout = '30s'"))
             connection.execute(text(f"TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE"))
     finally:
         target.dispose()
