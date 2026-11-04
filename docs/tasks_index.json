@@ -2,5 +2,22 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/tasks/{tid}_{slug}/progress.md front matter",
     "workspace": ".",
-    "tasks": []
+    "tasks": [
+        {
+            "tid": "t075",
+            "slug": "backup_export_permission_boundary",
+            "title": "重构备份与宿主导出边界并保留应用私有 blob 权限",
+            "status": "backlog",
+            "branch": "",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p074；备份进程被迫跨宿主/应用两个数据所有者，0600 blob 备份失败；保留私有权限并重设计备份导出的身份与权限边界",
+            "dir": "docs/tasks/t075_backup_export_permission_boundary"
+        }
+    ]
 }
