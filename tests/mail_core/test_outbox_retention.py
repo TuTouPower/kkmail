@@ -57,11 +57,6 @@ def test_prune_published_prefix_blocker_and_unpublished_survivor():
         session.commit()
         prior_retained = head_before - watermark_before
 
-        unpublished = OutboxEvent(event_type="sync.progress", payload={"kind": "unpublished"})
-        session.add(unpublished)
-        session.commit()
-        unpublished_id = unpublished.id
-
         batch = _publish(session, [{"kind": "blocker"}])
         blocker_seq = batch.last_seq
         session.execute(
@@ -79,6 +74,14 @@ def test_prune_published_prefix_blocker_and_unpublished_survivor():
             .values(published_at=now - OLD)
         )
         session.commit()
+
+        # Insert the survivor only after publication: publish_committed_batch
+        # publishes every committed unpublished row, so adding it before the
+        # blocker would publish it too and defeat the retention guarantee.
+        unpublished = OutboxEvent(event_type="sync.progress", payload={"kind": "unpublished"})
+        session.add(unpublished)
+        session.commit()
+        unpublished_id = unpublished.id
 
     with Session() as session:
         deleted = prune_published(session, now=now)
@@ -113,12 +116,26 @@ def test_prune_published_prefix_blocker_and_unpublished_survivor():
 
 def test_replay_cursor_below_watermark_gets_retention_gap():
     Session = get_session_factory()
+    now = datetime.now(timezone.utc)
+    # Per-test isolation truncates the publication state, so advance the
+    # watermark inside this test instead of depending on another test's
+    # leftovers (which also made this skip under the required full suite).
     with Session() as session:
+        batch = _publish(session, [{"kind": "pruned"}])
+        pruned_seq = batch.last_seq
+        session.execute(
+            update(OutboxEvent)
+            .where(OutboxEvent.publication_seq == pruned_seq)
+            .values(published_at=now - OLD)
+        )
+        session.commit()
+        assert prune_published(session, now=now) >= 1
+        session.commit()
         epoch, head_seq = publication_head(session)
         watermark = pruned_through_seq(session)
 
-    if watermark == 0:
-        pytest.skip("retention watermark not advanced in this database yet")
+    assert watermark >= pruned_seq
+    assert watermark <= head_seq
 
     # Cursor one below the watermark: the gap to head may be tiny, but the
     # next row the client needs has been pruned.

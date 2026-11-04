@@ -30,25 +30,10 @@ from mail_core.mail.application.sync_requests import (
 )
 from mail_core.mail.domain.enums import JobStatus, JobType
 from mail_core.mail.storage.models import Account, SyncRequestTarget, WorkerJob
+from tests.mail_core.sqlite_schema import sqlite_table_ddl
 
 _DDL = [
-    """
-    CREATE TABLE accounts (
-        id CHAR(36) PRIMARY KEY,
-        email VARCHAR(320) NOT NULL,
-        provider VARCHAR(32) NOT NULL,
-        display_name VARCHAR(255),
-        credential_ref VARCHAR(512),
-        group_id CHAR(36),
-        master_order INTEGER,
-        group_order INTEGER,
-        sync_enabled BOOLEAN NOT NULL DEFAULT 1,
-        sync_status VARCHAR(32) NOT NULL DEFAULT 'idle',
-        config JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
+    sqlite_table_ddl(Account.__table__),
     """
     CREATE TABLE sync_requests (
         id CHAR(36) PRIMARY KEY,

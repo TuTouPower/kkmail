@@ -80,5 +80,8 @@ def test_periodic_successor_detection():
     continuation = SimpleNamespace(payload={"folder_id": "f"})
     assert _successor_is_periodic(job, poll, {"exhausted": True}) is True  # type: ignore[arg-type]
     assert _successor_is_periodic(job, poll, {}) is True  # type: ignore[arg-type]
-    assert _successor_is_periodic(job, continuation, {"exhausted": True}) is False  # type: ignore[arg-type]
+    # t057: an exhausted sync run ends the current periodic round, so its
+    # successor is the next independent poll even without a poll_round.
+    assert _successor_is_periodic(job, continuation, {"exhausted": True}) is True  # type: ignore[arg-type]
+    assert _successor_is_periodic(job, continuation, {}) is False  # type: ignore[arg-type]
     assert _successor_is_periodic(job, None, {"exhausted": True}) is False  # type: ignore[arg-type]

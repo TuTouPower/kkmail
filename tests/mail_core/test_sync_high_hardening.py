@@ -15,7 +15,7 @@ from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import RemoteOperationStatus
 from mail_core.mail.storage import Folder, RemoteOperation
 from mail_core.mail.storage.models import AccountSyncLease
-from mail_core.providers.base import RemoteFolder, RemoteMessageMeta
+from mail_core.providers.base import RemoteFolder, RemoteMessageMeta, RemoteOperationResult
 from mail_core.providers.graph import graph_folder_role
 from mail_core.providers.http import CursorInvalidError, ProviderHttpError
 from mail_core.providers.oauth import _url_is_sync_cursor_endpoint, urllib_json_request
@@ -212,6 +212,22 @@ def test_remote_push_isolates_per_op_errors():
     now = datetime.now(timezone.utc)
 
     class Flaky(MemoryProvider):
+        def apply_remote_operations(self, operations):
+            # t064 batch contract: a per-op provider failure is returned as
+            # that op's result so the rest of the batch still executes.
+            results = []
+            for op in operations:
+                rid = op.desired_state.get("remote_id")
+                if rid == "bad":
+                    results.append(
+                        (op.op_id, RemoteOperationResult(success=False, error="RuntimeError: provider crash"))
+                    )
+                else:
+                    results.append(
+                        (op.op_id, super().apply_remote_operation(op.op_type, op.desired_state))
+                    )
+            return results
+
         def apply_remote_operation(self, op_type, desired_state):
             rid = desired_state.get("remote_id")
             if rid == "bad":

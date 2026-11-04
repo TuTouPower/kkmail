@@ -464,7 +464,7 @@ def push_remote_operations(
                         next_attempt_at=next_attempt,
                     )
                     op.attempts = max(0, int(op.attempts) - 1)
-            enqueue_job(
+            followup = enqueue_job(
                 session,
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
                 account_id=account_id,
@@ -473,12 +473,24 @@ def push_remote_operations(
                 run_after=next_attempt,
                 dedupe_key=f"remote-op-push:{account_id}",
             )
+            # The executing job carries the same dedupe key, so the followup
+            # usually coalesces into its _queue_next. Settlement must know,
+            # otherwise it strips the coalesced followup when marking the job
+            # DONE and leaves the op PENDING with no executable job.
+            followup_coalesced = followup.status == JobStatus.CLAIMED.value
             try:
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
             except FencingMismatch:
                 pass
             session.commit()
-        return {"status": "capacity_unavailable", "retry_after": delay, "pushed": 0, "failed": 0}
+        return {
+            "status": "capacity_unavailable",
+            "retry_after": delay,
+            "followup_scheduled": True,
+            "followup_coalesced": followup_coalesced,
+            "pushed": 0,
+            "failed": 0,
+        }
     except Exception:
         with Session() as session:
             try:
@@ -555,7 +567,7 @@ def push_remote_operations(
                         next_attempt_at=next_attempt,
                     )
                     op.attempts = max(0, int(op.attempts) - 1)
-            enqueue_job(
+            followup = enqueue_job(
                 session,
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
                 account_id=account_id,
@@ -564,12 +576,20 @@ def push_remote_operations(
                 run_after=next_attempt,
                 dedupe_key=f"remote-op-push:{account_id}",
             )
+            followup_coalesced = followup.status == JobStatus.CLAIMED.value
             try:
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
             except FencingMismatch:
                 pass
             session.commit()
-        return {"status": "capacity_unavailable", "retry_after": delay, "pushed": 0, "failed": 0}
+        return {
+            "status": "capacity_unavailable",
+            "retry_after": delay,
+            "followup_scheduled": True,
+            "followup_coalesced": followup_coalesced,
+            "pushed": 0,
+            "failed": 0,
+        }
 
     # Post-network settlement under fencing
     pushed = 0

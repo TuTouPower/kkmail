@@ -540,20 +540,24 @@ def test_a29_archive_batch_releases_lease_and_restores_claims_on_build_failure(m
 
         monkeypatch.setattr(archive_mod, "build_provider", fail_build)
 
-        with pytest.raises(RuntimeError, match="archive provider build failed"):
-            run_archive_batch(account_id=account_id, worker_id="worker-arch", store=store, payload={"batch_size": 10})
+        # R18/t064: provider construction failure is isolated to the affected
+        # claims and persisted as a retriable provider_error instead of
+        # escaping the batch; archive no longer takes the metadata lease.
+        result = run_archive_batch(
+            account_id=account_id, worker_id="worker-arch", store=store, payload={"batch_size": 10}
+        )
+        assert result["status"] == "ok"
+        assert result["completed"] == 0
+        assert result["failed"] == 1
 
         with Session() as session:
-            # Lease must be expired/released
-            lease = session.get(AccountSyncLease, account_id)
-            if lease is not None:
-                assert lease.lease_expires_at <= datetime.now(timezone.utc) + timedelta(seconds=1)
+            assert session.get(AccountSyncLease, account_id) is None
 
-                # Claim must be restored to ARCHIVE_PENDING with claimed_by cleared
-                st = session.get(MessageArchiveState, msg_id)
-                assert st is not None
-                assert st.state == ArchiveState.ARCHIVE_PENDING.value
-                assert st.claimed_by is None
-                assert "RuntimeError" in (st.last_error or "")
+            # Claim must be restored to ARCHIVE_PENDING with claimed_by cleared
+            st = session.get(MessageArchiveState, msg_id)
+            assert st is not None
+            assert st.state == ArchiveState.ARCHIVE_PENDING.value
+            assert st.claimed_by is None
+            assert "RuntimeError" in (st.last_error or "")
     finally:
         set_credential_store(None)

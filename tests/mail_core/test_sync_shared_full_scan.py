@@ -19,9 +19,8 @@ These tests drive the real chain on a SQLite engine --
 ``sync_folder_metadata`` -> ``complete_job`` -> ``claim_jobs`` (reconcile)
 -> ``complete_job`` -- following ``test_sync_execution_lock_order.py`` /
 ``test_sync_successor_binding_backfill.py``: SQLite strips ``FOR UPDATE``
-and cannot execute the PostgreSQL advisory generation lock or
-``pg_notify``, so ``lock_generation`` and ``try_notify_outbox`` are
-patched out; neither is the invariant under test. The PostgreSQL version
+and cannot execute the PostgreSQL advisory generation lock, so
+``lock_generation`` is patched out; it is not the invariant under test. The PostgreSQL version
 of the single-request lifecycle lives in
 ``test_sync_execution_tracking.py::test_full_scan_resets_cursor_and_completes_only_after_reconcile``
 (skipped in unit mode: no ``MAIL_CORE_DATABASE_URL`` in this sandbox).
@@ -54,25 +53,10 @@ from mail_core.providers.base import MetadataPage, RemoteFolder
 from mail_core.sync import engine as engine_mod
 from mail_core.sync import execution as execution_mod
 from mail_core.sync.jobs import claim_jobs, complete_job
+from tests.mail_core.sqlite_schema import sqlite_table_ddl
 
 _DDL = [
-    """
-    CREATE TABLE accounts (
-        id CHAR(36) PRIMARY KEY,
-        email VARCHAR(320) NOT NULL,
-        provider VARCHAR(32) NOT NULL,
-        display_name VARCHAR(255),
-        credential_ref VARCHAR(512),
-        group_id CHAR(36),
-        master_order INTEGER,
-        group_order INTEGER,
-        sync_enabled BOOLEAN NOT NULL DEFAULT 1,
-        sync_status VARCHAR(32) NOT NULL DEFAULT 'idle',
-        config JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
+    sqlite_table_ddl(Account.__table__),
     """
     CREATE TABLE folders (
         id CHAR(36) PRIMARY KEY,
@@ -357,7 +341,6 @@ def test_shared_full_requests_complete_only_after_metadata_and_reconcile():
     with (
         patch.object(engine_mod, "_session_factory", lambda: Session),
         patch.object(engine_mod, "build_provider", lambda *_a, **_k: provider),
-        patch("mail_core.sync.metadata.try_notify_outbox", lambda _s: None),
     ):
         # --- Discovery phase -------------------------------------------------
         discovery_id, payload = _claim_one(Session, JobType.SYNC_ACCOUNT_FOLDERS.value, account_id)

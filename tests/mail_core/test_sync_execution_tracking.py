@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -91,7 +92,12 @@ def _report(request_id):
         return get_sync_request_report(session, request_id)
 
 
-def _claim_one(job_type: str | None = None, account_id: uuid.UUID | None = None) -> uuid.UUID:
+def _claim_one(
+    job_type: str | None = None,
+    account_id: uuid.UUID | None = None,
+    *,
+    now: datetime | None = None,
+) -> uuid.UUID:
     Session = get_session_factory()
     with Session() as session:
         jobs = claim_jobs(
@@ -100,6 +106,7 @@ def _claim_one(job_type: str | None = None, account_id: uuid.UUID | None = None)
             limit=1,
             job_types=[job_type] if job_type else None,
             account_id=account_id,
+            now=now,
         )
         assert jobs, "expected a claimable job"
         job_id = jobs[0].id
@@ -262,7 +269,13 @@ def test_retriable_failure_keeps_target_open_terminal_failure_fails_request():
     assert report.state in ("queued", "running")
     assert report.failed_count == 0
 
-    job_id = _claim_one(JobType.SYNC_FOLDER_DELTA.value, account_id)
+    # fail_job requeues with backoff, so the retry only becomes claimable
+    # after the backoff window.
+    job_id = _claim_one(
+        JobType.SYNC_FOLDER_DELTA.value,
+        account_id,
+        now=datetime.now(timezone.utc) + timedelta(seconds=5),
+    )
     with Session() as session:
         job = session.get(WorkerJob, job_id)
         fail_job(session, job, "final boom", worker_id=WORKER, max_attempts=1)
