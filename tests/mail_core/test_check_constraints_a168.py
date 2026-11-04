@@ -60,4 +60,4 @@ def test_migration_adds_same_named_constraints_on_0028():
     for name in EXPECTED.values():
         assert name in text
     assert "create_check_constraint" in text
-    assert "drop_check_constraint" in text
+    assert "drop_constraint" in text

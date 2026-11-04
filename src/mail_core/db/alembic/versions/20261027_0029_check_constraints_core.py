@@ -56,17 +56,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_check_constraint(
+    op.drop_constraint(
         "ck_blob_quota_reservations_reserved_bytes_positive",
         "blob_quota_reservations",
         type_="check",
     )
-    op.drop_check_constraint(
+    op.drop_constraint(
         "ck_message_blobs_ref_count_nonnegative",
         "message_blobs",
         type_="check",
     )
-    op.drop_check_constraint(
+    op.drop_constraint(
         "ck_message_archive_state_state_valid",
         "message_archive_state",
         type_="check",
