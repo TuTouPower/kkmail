@@ -1,0 +1,23 @@
+# p074 部署备份进程被迫同时适配宿主与应用的私有权限边界，导致 0600 blob 无法备份
+
+- 现象：2026-11-05 部署 `scripts/deploy_mail_core.sh --no-push` 在备份阶段失败：`sealed_backup_failed:PermissionError`，进程退出，迁移/重建/重启均未执行。备份目录只留下空的 `.package.lock`。用同一镜像手工执行 `run_backup()` 得到完整堆栈：`tarfile.add` 读取 `/var/lib/kkmail/blobs/00/77/0077c04...blob` 时 `PermissionError: [Errno 13] Permission denied`。该卷当时 15176 个 blob 中 127 个为 `0600`、owner `10001:999`，其余 15049 个为 `0644`；部署备份容器以宿主 uid `501:20` 运行（`scripts/deploy_mail_core.sh:76`），无法读取 `0600` 文件。把 127 个文件临时改成 `0644` 后同一部署成功。
+- 影响：部署/离线备份被直接阻断，且只要应用继续写新 blob 就会再次触发。线上数据未损坏，失败发生在密封包写入之前。受影响的不是 blob 写入本身，而是“备份进程必须同时读取应用私有数据并写入宿主私有目录”这一跨所有者边界；恢复路径还存在文件权限随 umask 漂移的独立缺陷。历史 15049 个 `0644` 文件的来源未完全确认，可能来自恢复或旧写入路径，不能据此反推 0600 是缺陷。
+- 根因：
+    - 权限失败的直接归因正确，但 0600 不是缺陷。`BlobStore` 用私有临时文件写入后原子替换，轮换路径同样明确使用 `0600`；这些行为符合“应用数据仅应用所有者可读”的私有存储设计。已确认写入位点：`src/mail_core/blobs/store.py:128`（`_put_locked`）、`src/mail_core/blobs/store.py:190`（`_put_streaming_locked`）；轮换位点：`src/mail_core/blobs/rotate.py:185-196`；`tests/mail_core/test_a318_rewrap_file_hardening.py:19` 也把替换后 `0600` 作为预期。
+    - 真正的架构缺陷是权限边界冲突：部署脚本为写入宿主 `0700` 备份目录，给备份进程指定宿主 uid（`scripts/deploy_mail_core.sh:73`、`:76`）；同一进程又必须读取应用 uid 所有的私有 blob。一个进程被迫同时适配两个数据所有者。Git 历史印证了来回摆动：`77622a45` 为读取 0600 移除宿主 uid 限制，`4c00620f` 又为写入宿主目录加回宿主 uid。
+    - “统一改 0644”不是长期方案：它通过扩大访问权限适配部署，且修复不完整。已实测 umask=077 时 `BlobStore` 创建的根目录与分片目录均为 `0700`，即使文件改成 `0644`，其他 uid 仍无法遍历目录。当前也没有明确业务需求要求任意 uid 直接读取 blob；密文不是允许全员可读的充分理由。
+    - 恢复路径存在另一处权限契约缺口：`src/mail_core/backup/package.py:1589` 用 `open("xb")` 创建文件，未显式设置最终 owner/权限，`src/mail_core/backup/package.py:1596` 直接替换目标。同一份包含 0600 blob 的归档，umask=022 时恢复为 `0644`，umask=077 时恢复为 `0600`；权限随进程环境变化，而不是服从目标存储契约。
+    - 本次不是密钥轮换：`.env` 仅有 `MAIL_CORE_BLOB_KEY_V1`，数据库 `message_blobs` 15176 行与 `credential_secrets` 42 行的 `key_version` 全为 `1`，127 个 `0600` 文件 mtime 连续分布在 2026-10-30 至 2026-11-04，而非轮换的一次性批量重写；当前 keyring active version 为 1，轮换不会触发重写。
+- 测试缺口：
+    - `tests/scripts/test_deploy_mail_core_r4adopt_p51.py:62` 的 A13 测试只匹配脚本文本，强制备份容器使用宿主 uid，把某种实现方式当成架构要求，却没有验证该身份能否读取应用数据；这正是权限问题反复出现的重要缺口。
+    - `tests/mail_core/test_a318_rewrap_file_hardening.py:19` 对最终 `0600` 的断言本身合理，不应判为错误；真正缺失的是真实身份与文件权限的集成验证。
+    - `tests/mail_core/test_high_blobs_providers_metadata.py` 与 `tests/mail_core/test_blob_rewrap.py` 只验证内容和版本，不校验最终 mode、目录遍历权限或恢复后的 owner/mode；`BlobStore` 的 put/put_streaming 测试也未验证私有目录在异常 umask 下的行为。
+    - 验收应覆盖：真实新写入与轮换后的 `0600` blob 可备份；无关 uid 无法读取 blob（含目录遍历）；宿主导出的密封包归属正确；恢复在不同 umask（至少 022 与 077）下得到相同权限，且恢复后的应用读取、写入与再次备份均成功。
+- 推荐修复：保留 blob 私有权限，重设计备份与宿主导出边界。
+    - 应用数据统一所有者：API、Worker、备份与恢复进程使用明确且稳定的应用 uid；blob 文件 `0600`，私有目录 `0700`；备份容器对 blob 只读挂载，不获得写权限。
+    - 备份在容器私有工作目录完成：由应用身份生成并验证密封包，不直接写宿主目录。部署备份可使用保留至导出结束的独立容器，无须强制引入长期命名 volume。
+    - 宿主负责导出与发布：通过 Docker CLI/API 将完成的包导出到宿主所有的 `0700` staging 目录，再校验并原子发布。`docker cp` 导出到本地时文件归执行者所有，能明确跨越身份边界，不要求备份进程本身变成宿主 uid。
+    - 恢复遵循目标身份：恢复进程使用目标应用 uid，显式创建私有目录与文件，不继承归档 uid，也不依赖 umask；存量权限通过受控维护流程一次性归一化，不在每次启动时递归修补。
+    - 部署脚本与 A13 测试同步调整：取消“备份容器必须用宿主 uid”的文本断言，改为验证备份身份能读取应用数据、导出包归属宿主、备份目录始终 `0700`。本次事故中临时把存量 blob 改为 `0644` 只是解除部署阻塞的现场处置，不是目标契约；后续按受控维护流程把存量归一化回应用 uid + `0600`。
+- 线索：失败部署目录 `.scratch/deploy_backup_20261105_053012`（仅空 `.package.lock`）；手工复现命令：`MAIL_CORE_DEPLOY_BACKUP_DIR="$PWD/.scratch/deploy_backup_20261105_053012" docker compose -f docker-compose.mail-core.yml --profile maintenance run --rm --user "$(id -u):$(id -g)" --entrypoint python3 backup -c 'from mail_core.backup import run_backup; print(run_backup(output_dir="/backup/package"))'`；权限统计：`docker run --rm -v kkmail_kkmail_mail_core_blobs:/b:ro --entrypoint sh kkmail-mail-core-backup -c 'find /b -type f -perm 600 | wc -l'`；当前写入模式实测：`docker compose -f docker-compose.mail-core.yml --profile distributed exec -T api python -c 'import stat,tempfile; from pathlib import Path; from mail_core.blobs.store import BlobStore; d=Path(tempfile.mkdtemp()); s=BlobStore(root=d); s.put(b"probe"); print([(oct(stat.S_IMODE(p.stat().st_mode)), p.stat().st_uid) for p in d.rglob("*.blob")])'` 输出 `0o600, 10001`；umask 目录行为实测：`umask 077; ...` 下 `BlobStore` 根目录/分片目录均为 `0700`；恢复权限复现：同一归档在 `umask 022` 与 `umask 077` 下恢复，目标文件分别为 `0644` 与 `0600`。
+- 处理：未开
