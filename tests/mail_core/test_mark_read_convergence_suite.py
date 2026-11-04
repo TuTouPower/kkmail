@@ -88,10 +88,18 @@ def test_ac001_multi_batch_mark_read_auto_convergence(monkeypatch):
         assert batch.count == 26
         assert batch.last_message_id is not None
 
-        # Wire fake provider
+        # Wire fake provider. Production batches up to 500 operations per push
+        # (t064); this test deliberately caps the push at 20 so 26 operations
+        # exercise the automatic follow-up-job convergence path.
         fake_provider = FakeBatchPushProvider()
         from mail_core.sync import remote_push
 
+        real_push = remote_push.push_remote_operations
+        monkeypatch.setattr(
+            remote_push,
+            "push_remote_operations",
+            lambda *args, **kwargs: real_push(*args, **{**kwargs, "limit": 20}),
+        )
         monkeypatch.setattr(remote_push, "build_provider", lambda *args, **kwargs: fake_provider)
 
         # Worker loop 1: Claim first job

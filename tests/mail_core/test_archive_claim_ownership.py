@@ -572,7 +572,10 @@ def test_pg_two_session_claim_competition_old_worker_cannot_overwrite():
             assert st.claimed_by == "worker-2"
             assert st.claim_revision == 3
             assert st.retry_count == 0
-            assert not st.last_error
+            # Reclaim records an explicit diagnostic marker. The stale worker's
+            # settlements must not add their own error on top of it.
+            assert st.last_error == "|reclaimed_stale_archive_claim"
+            assert "RuntimeError" not in st.last_error
 
         # Worker2's own settlement still applies.
         with Session() as s2:

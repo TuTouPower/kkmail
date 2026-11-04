@@ -255,8 +255,9 @@ def test_a16_dedup_hit_does_not_inflate_current_used_bytes():
 
 def test_a27_oversized_mime_rejected_as_parse_error(monkeypatch):
     from mail_core.blobs.archive import MimeParseError, parse_mime_content
+    from mail_core.config import MailCoreConfig
 
-    monkeypatch.setenv("MAIL_CORE_MIME_MAX_BYTES", "64")
+    monkeypatch.setattr(archive_mod, "get_config", lambda: MailCoreConfig(max_mime_bytes=64))
     raw = b"From: a@b.c\r\nSubject: big\r\nContent-Type: text/plain\r\n\r\n" + b"x" * 200
     with pytest.raises(MimeParseError) as exc_info:
         parse_mime_content(raw)
@@ -265,8 +266,11 @@ def test_a27_oversized_mime_rejected_as_parse_error(monkeypatch):
 
 def test_a27_oversized_attachment_skipped_with_partial_body(monkeypatch):
     from mail_core.blobs.archive import MimeParseError, parse_mime_content
+    from mail_core.config import MailCoreConfig
 
-    monkeypatch.setenv("MAIL_CORE_ATTACHMENT_MAX_BYTES", "16")
+    monkeypatch.setattr(
+        archive_mod, "get_config", lambda: MailCoreConfig(max_attachment_bytes=16)
+    )
     raw = (
         b"From: a@b.c\r\nSubject: s\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n"
         b"--b\r\nContent-Type: text/plain\r\n\r\nhello body\r\n"
@@ -466,9 +470,13 @@ def test_a235_archive_comments_have_no_undefined_internal_codes():
 
 def test_a27_normal_message_under_limits_still_parses(monkeypatch):
     from mail_core.blobs.archive import parse_mime_content
+    from mail_core.config import MailCoreConfig
 
-    monkeypatch.setenv("MAIL_CORE_MIME_MAX_BYTES", "100000")
-    monkeypatch.setenv("MAIL_CORE_ATTACHMENT_MAX_BYTES", "100000")
+    monkeypatch.setattr(
+        archive_mod,
+        "get_config",
+        lambda: MailCoreConfig(max_mime_bytes=100000, max_attachment_bytes=100000),
+    )
     plain, html, atts = parse_mime_content(_SIMPLE_MIME)
     assert plain is not None and "hello" in plain
     assert atts == []

@@ -1108,7 +1108,12 @@ def run_archive_batch(
             parse_err = None
         except MimeParseError as parse_exc:
             stage = getattr(parse_exc, "stage", "content")
-            err_str = safe_error(parse_exc)[:2000]
+            # MimeParseError carries only controlled stage/detail fields built
+            # from defect types and safe_error() summaries, so its string form
+            # is safe to persist and keeps the stage visible to the reader.
+            # safe_error() itself converges non-provider exceptions to the type
+            # name, which would erase stage/detail and hide the parse cause.
+            err_str = str(parse_exc)[:2000]
             log.warning("archive mime parse error for message %s stage=%s: %s", mid, stage, err_str)
             plain_text = parse_exc.partial_plain
             html_text = parse_exc.partial_html
@@ -1406,16 +1411,9 @@ def run_archive_batch(
     _close_providers()
 
     with Session() as session:
-        target_state = session.get(MessageArchiveState, target_msg_id) if target_msg_id is not None else None
-        target_event_fields = (
-            {
-                "message_id": str(target_msg_id),
-                "state": target_state.state if target_state is not None else None,
-                "has_error": bool(target_state and target_state.last_error),
-            }
-            if target_msg_id is not None
-            else {}
-        )
+        # Per-message completion/failure events are already emitted by the
+        # publish/settle paths. The batch summary below is aggregate-only and
+        # must not masquerade as a second target event for the same message.
         batch_message_ids = [str(c.message_id) for c in claims]
         if completed:
             session.add(
@@ -1426,7 +1424,6 @@ def run_archive_batch(
                         "completed": completed,
                         "failed": failed,
                         "message_ids": batch_message_ids,
-                        **target_event_fields,
                     },
                 )
             )
@@ -1450,7 +1447,6 @@ def run_archive_batch(
                         "completed": completed,
                         "failed": failed,
                         "message_ids": batch_message_ids,
-                        **target_event_fields,
                     },
                 )
             )

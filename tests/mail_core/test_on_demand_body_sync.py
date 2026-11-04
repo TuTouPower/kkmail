@@ -271,8 +271,11 @@ def test_ac003_worker_jobs_priority_governance():
         fid = folder.id
         aid = acc.id
 
-    # 验证 delta 轮询任务入队的优先级与去重键
+    # t057 removed delta's tail self-scheduling; the periodic inbox scheduler
+    # owns routine polling and enqueues it at priority 75 with a stable dedupe key.
     from mail_core.providers.base import DeltaPage
+    from mail_core.worker.main import schedule_periodic_inbox_sync
+
     mock_prov = MagicMock()
     mock_prov.delta_changes.return_value = DeltaPage(
         changes=[],
@@ -284,9 +287,20 @@ def test_ac003_worker_jobs_priority_governance():
         assert res["status"] == "ok"
 
     with Session() as session:
+        assert (
+            session.scalar(
+                select(WorkerJob).where(
+                    WorkerJob.job_type == JobType.SYNC_FOLDER_DELTA.value,
+                    WorkerJob.account_id == aid,
+                    WorkerJob.status == JobStatus.PENDING.value,
+                )
+            )
+            is None
+        ), "delta must not self-schedule after exhausting its page"
+        assert schedule_periodic_inbox_sync(session, poll_interval_s=0.0) == 1
+        session.commit()
         delta_job = session.scalars(
-            select(WorkerJob)
-            .where(
+            select(WorkerJob).where(
                 WorkerJob.job_type == JobType.SYNC_FOLDER_DELTA.value,
                 WorkerJob.account_id == aid,
                 WorkerJob.status == JobStatus.PENDING.value,
@@ -330,8 +344,10 @@ def test_a293_worker_failure_visible_in_message_status():
     with Session() as session:
         st = session.get(MessageArchiveState, mid)
         assert st is not None
-        assert st.last_error is not None
-        assert "Remote IMAP server timeout" in st.last_error
+        # A325: non-provider exception messages are not persisted; only the
+        # converged type plus controlled fields may reach last_error.
+        assert st.last_error == "RuntimeError"
+        assert "Remote IMAP server timeout" not in st.last_error
 
         body = session.get(MessageBody, mid)
         if body is not None:
