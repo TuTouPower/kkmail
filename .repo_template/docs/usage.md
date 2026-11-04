@@ -19,7 +19,8 @@
 |`.claude/skills/` / `.agents/skills/`|指向 `.repo_template/skills/` 的软链|只维护软链|
 |`.opencode/commands/`|各 skill 的 opencode `/` 触发器（由 SKILL.md description 生成，调 `skill` 工具执行）|只读（改 SKILL.md 后重跑 `link-skills`）；手写命令保留|
 |`.repo_template/scripts/`|模板自带 task 工具链：`task.py` 是 CLI 入口，业务实现位于 `repo_task/`，另含 pending.py/findings.py/spikes.py 等|仅模板演进时修改；复制或维护必须保留 `task.py` 与完整 `repo_task/`，并随模板复制进新项目|
-|`../{repo}_{tid}/`（仓库外）|task 工作副本（git worktree）|`run-begin`（内含 start）在主仓默认分支执行，保留主仓未提交改动；实施、测试、review、finish/drop 只在自身 worktree 执行。`finish` 机器生成 `handoff.json`（不手写）并提交实现 commit；`run-close` 在主仓收尾与清理，`integrate` 负责归档；本地 `.env` 软链回主仓|
+|`../{repo}_{tid}/`（仓库外）|task 工作副本（git worktree）|`run-begin`（内含 start）在主仓默认分支执行，保留主仓未提交改动；实施、测试、review、finish/drop 只在自身 worktree 执行。`finish` 机器生成 `handoff.json`（不手写）并提交实现 commit；`run-close` 在主仓收尾与清理，`integrate` 负责归档；本地 `.env` 与 `.worktreeinclude` 命中的忽略路径软链回主仓|
+|`.worktreeinclude`|task worktree 本地文件接管清单（gitignore 语法）|消费仓自有；初始化时随模板复制示例，同步不覆盖|
 
 ## 命令执行约定
 
@@ -30,6 +31,12 @@
 ## task 状态读取
 
 task 状态读取优先级：登记 worktree → 未合并 task 分支 ref → 主干，`task.py effective-status` 只读输出有效状态与来源。进行中 task 的状态在其合并前不进主干；`list/show/preflight --ref` 用于只读分支快照，不能据主干旧 backlog 重复 start 或维护。
+
+## task worktree 本地文件
+
+`start`（含 `run-begin`）把主仓任意层级（跳过依赖、缓存与产物目录）的 `.env` 软链进 task worktree；主仓根有 `.worktreeinclude` 时，另把其命中且确被 `.gitignore` 忽略的文件或整目录软链到同相对路径，用于本地配置、证书、容器数据等不入库但测试必需的内容。未被忽略的未跟踪文件（在途工作）、已入库文件、`.git` 与 `docs/runtime/` 不链接；worktree 已有同名路径时跳过。`.gitignore` 以 `/` 结尾的规则只匹配目录、不匹配同名软链，脚本对这类链接在 Git 公共目录 `info/exclude` 的托管块追加锚定规则，保证链接在 worktree 中仍被忽略、不会被暂存；该路径在主仓本已忽略，规则不改变主仓行为。清理、drop、rewind 只删除脚本创建的软链，不触及主仓目标。
+
+软链共享同一份内容，worktree 内的修改即修改主仓；需要隔离的配置不要列入。含 editable 安装的环境目录（如 `.venv`）会让测试实际运行主仓源码，不要列入，在 worktree 内重建（如 `uv sync`）。docker compose 默认以目录名作 project 名，worktree 会得到另一套网络、卷和容器名，数据库为空且端口可能冲突；串行验证需要复用主仓容器与数据时，在 `.env` 中固定 `COMPOSE_PROJECT_NAME`，需要隔离时按 task 设定 project 名与端口。
 
 ## 命名与格式
 
@@ -54,6 +61,7 @@ task 状态读取优先级：登记 worktree → 未合并 task 分支 ref → �
 |skill|角色|
 |---|---|
 |`bug-to-pending`|用户入口|
+|`pending-fix`|用户入口|
 |`pending-record`|用户入口|
 |`repo-cleanup`|用户入口|
 |`repo-hygiene`|用户入口|
@@ -132,7 +140,7 @@ hook 在调度账本存在、命令包含 `run-begin` / `start` / `track_worktre
 
 ## 附属生命周期闭环
 
-pending 归档必须提供非空 `--reason`，说明处理结果、验证依据或转办/去重去向；`--fix-ref` 可选，不要求 task ID，可记录 main、commit、PR、条目或 task。默认 resolution=resolved；转办显式用 `--resolution transferred`，其他类型为 obsolete/duplicate，所有类型均只强制备注，不强制引用。存在 task 时保留 pNNN 与 tid 双向关联；直接在 main 完成时如实写备注，不伪造 task ID。
+pending 归档必须提供非空 `--reason`，说明处理结果、验证依据或转办/去重去向；`--fix-ref` 可选，不要求 task ID，可记录 main、commit、PR、条目或 task。默认 resolution=resolved；转办显式用 `--resolution transferred`，其他类型为 obsolete/duplicate，所有类型均只强制备注，不强制引用。存在 task 时保留 pNNN 与 tid 双向关联；直接在 main 完成时如实写备注，不伪造 task ID。小而低风险的 pending 经用户授权后由 `pending-fix` 在 main 直修，准入与流程见该 skill。
 
 ```bash
 python3 .repo_template/scripts/pending.py archive p001 --reason "按用户要求在 main 修复；专项测试通过" --write

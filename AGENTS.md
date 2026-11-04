@@ -10,13 +10,13 @@ kkmail 是基于 mail-core 的现代化自托管多账号邮件客户端（FastA
 
 |路径|用途|写权归属|
 |---|---|---|
-|`src/`|源码根；后端、前端、桌面端具体目录见下|仅在 task 执行期按 spec 修改；debug 复现不得写入|
-|`src/mail_core/`|后端唯一实现（FastAPI + PostgreSQL + Worker）；分层见 `src/mail_core/README.md`|仅在 task 执行期按 spec 修改|
-|`src/mail_core/db/alembic/`|数据库迁移；数据模型改动必须附带迁移|仅在 task 执行期修改|
-|`src/frontend/`|前端唯一实现（React SPA，由 mail-core 同源提供）|仅在 task 执行期按 spec 修改|
-|`src/desktop/`|Electron 桌面端主进程与 PostgreSQL 管理器|仅在 task 执行期按 spec 修改|
-|`tests/`|测试套件（后端单测/集成测试与 E2E）|仅在 task 执行期按 spec 修改；debug 复现不得写入|
-|`scripts/`|项目构建、迁移与开发脚本|仅在 task 执行期按 spec 修改；debug 复现不得写入|
+|`src/`|源码根；后端、前端、桌面端具体目录见下|仅在 task 执行期按 spec 修改，或经授权由 `pending-fix` 在 main 直修；debug 复现不得写入|
+|`src/mail_core/`|后端唯一实现（FastAPI + PostgreSQL + Worker）；分层见 `src/mail_core/README.md`|仅在 task 执行期按 spec 修改，或经授权由 `pending-fix` 在 main 直修|
+|`src/mail_core/db/alembic/`|数据库迁移；数据模型改动必须附带迁移|仅在 task 执行期修改，或经授权由 `pending-fix` 在 main 直修|
+|`src/frontend/`|前端唯一实现（React SPA，由 mail-core 同源提供）|仅在 task 执行期按 spec 修改，或经授权由 `pending-fix` 在 main 直修|
+|`src/desktop/`|Electron 桌面端主进程与 PostgreSQL 管理器|仅在 task 执行期按 spec 修改，或经授权由 `pending-fix` 在 main 直修|
+|`tests/`|测试套件（后端单测/集成测试与 E2E）|仅在 task 执行期按 spec 修改，或经授权由 `pending-fix` 在 main 直修；debug 复现不得写入|
+|`scripts/`|项目构建、迁移与开发脚本|仅在 task 执行期按 spec 修改，或经授权由 `pending-fix` 在 main 直修；debug 复现不得写入|
 |`docs/specs_index.md`|当前生效 spec 清单（在表即生效）|task 收尾时更新；废弃删除行|
 |`docs/specs/<slug>.md`|需求级 spec（按已完成 task 累积）|task 收尾时累积更新；废弃移入`docs/archive/specs/`|
 |`docs/tasks/{tid}_{slug}/`|task 工作区兼**状态权威**（backlog 起即存在）；含执行回执 `handoff.json`|`task.md` / `progress.md` 正文由实现侧写；执行回执由 `finish` 生成，不手写；`progress.md` front matter 只经 `.repo_template/scripts/task.py`；reviewer 写 `review_code.md` / `review_test.md`（`single` 级写 `review_general.md`）；done 由 `integrate` 在 merge commit 中移入 `docs/archive/tasks/{tid}_{slug}/`，`drop` 由脚本移入|
@@ -31,7 +31,7 @@ kkmail 是基于 mail-core 的现代化自托管多账号邮件客户端（FastA
 |`docs/archive/`|完结或终止的历史|日常只追加；归档 task 的格式迁移仅由模板同步执行，见[同步规程](.repo_template/docs/sync.md#workflow-schema-%E5%BC%BA%E5%88%B6%E8%BF%81%E7%A7%BB)|
 |`schemas/`|跨服务接口契约|改契约走 task 流程|
 |`config/`|配置（默认 + 环境覆盖 +`.env.example`）|仅`.env.example` 入库；真值写本地 `.env`|
-|`assets/`|静态资产源文件|仅在 task 执行期按 spec 修改；debug 复现不得写入|
+|`assets/`|静态资产源文件|仅在 task 执行期按 spec 修改，或经授权由 `pending-fix` 在 main 直修；debug 复现不得写入|
 |`.repo_template/`|模板工具链（skills、scripts、docs、hooks）|仅模板演进时修改；细目与写权见`.repo_template/docs/usage.md`|
 |`artifacts/` `data/` `.scratch/`|产物、运行数据、一次性草稿|运行与草稿；debug 复现和临时实验只写`.scratch/`（已 gitignore）；需保留的 spike 验证材料写 `docs/spikes/{sid}_{slug}/code/`|
 
