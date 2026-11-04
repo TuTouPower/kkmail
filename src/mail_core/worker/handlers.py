@@ -304,6 +304,8 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 full=bool(payload.get("full")),
                 scan_generation=_uuid_or_none(payload.get("scan_generation")),
                 request_id=_uuid_or_none(payload.get("request_id")),
+                # t074: requeues inside keep this job's priority.
+                priority=job.priority,
             )
             log.info("sync_folder_metadata %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
@@ -367,6 +369,8 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 store=get_credential_store(),
                 traffic_class=traffic_class,
                 poll_round=int(payload.get("poll_round") or 0),
+                # t074: requeues inside keep this job's priority.
+                priority=job.priority,
             )
             log.info("sync_folder_delta %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
