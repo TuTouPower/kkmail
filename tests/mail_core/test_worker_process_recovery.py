@@ -196,17 +196,34 @@ def test_worker_sigkill_and_survivor_reclaim(managed_subprocesses):
 
     assert reclaimed_and_done is True
 
-    # Fencing check (AC-003): Stale worker lease commit must be rejected
+    # Fencing check (AC-003): Stale worker lease commit must be rejected.
+    # Use a dedicated account so the survivor's still-running periodic jobs
+    # on the reclaim account cannot hold its lease during this probe.
     from datetime import timedelta
     with Session() as session:
-        lease = acquire_lease(session, account_id=acc_id, owner_id="worker-alive", ttl=timedelta(seconds=60))
+        fence_acc = create_account(
+            session,
+            email=f"fence-{uuid.uuid4().hex[:8]}@example.com",
+            provider="memory",
+            config={},
+        )
+        session.commit()
+        fence_acc_id = fence_acc.id
+
+    with Session() as session:
+        lease = acquire_lease(
+            session,
+            account_id=fence_acc_id,
+            owner_id="worker-alive",
+            ttl=timedelta(seconds=60),
+        )
         session.commit()
         alive_token = lease.fencing_token
 
     # Simulate dead worker reviving with stale token
     with Session() as session:
         with pytest.raises(FencingMismatch):
-            assert_fencing(session, account_id=acc_id, fencing_token=alive_token - 1)
+            assert_fencing(session, account_id=fence_acc_id, fencing_token=alive_token - 1)
 
 
 # --- AC-004: Separate Processes LISTEN/NOTIFY and Rollback Isolation ---------------
@@ -230,18 +247,16 @@ def test_api_worker_split_listen_notify_and_rollback_isolation(managed_subproces
         session.commit()
         acc_id = acc.id
 
-    # 1. Committed Transaction: triggers NOTIFY
+    # 1. Committed Transaction: the session wake hook emits NOTIFY on commit
+    # (t062), without any explicit notify_outbox call.
     from mail_core.mail.storage.models import OutboxEvent
-    from mail_core.realtime.notify import notify_outbox
 
     with Session() as session:
         event = OutboxEvent(event_type="test.event", account_id=acc_id, payload={"ok": True})
         session.add(event)
         session.commit()
-        notify_outbox(session)
-        session.commit()
 
-    # Assert listener catches notification
+    # Assert listener catches exactly one notification
     notifies = list(listener_conn.notifies(timeout=3, stop_after=1))
     assert len(notifies) == 1
     assert notifies[0].channel == "mail_core_outbox"

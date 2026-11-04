@@ -65,8 +65,13 @@ def test_handle_job_capacity_exception_with_garbage_retry_after_reschedules():
     job.id = uuid.uuid4()
     job.locked_by = "w-a18"
     session = MagicMock()
-    exc = ProviderCapacityUnavailable("saturated")
-    exc.retry_after_seconds = "abc"  # type: ignore[attr-defined]
+
+    class _GarbageRetryCapacity(ProviderCapacityUnavailable):
+        @property
+        def retry_after_seconds(self):
+            return "abc"
+
+    exc = _GarbageRetryCapacity("saturated")
     with (
         patch("mail_core.blobs.gc.run_gc_blobs", side_effect=exc),
         patch.object(handlers, "reschedule_job") as reschedule,

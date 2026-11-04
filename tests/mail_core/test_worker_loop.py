@@ -30,13 +30,14 @@ def _stub_run_infrastructure(monkeypatch):
     """Stub the run()-level infrastructure the loop tests do not exercise.
 
     worker_main.run() now builds a session factory and starts a
-    WorkerHeartbeatLoop before entering the tick loop. These tests fake
-    _tick/_reclaim_once, so they must also fake that startup seam —
+    WorkerHeartbeatLoop, a UnifiedClaimHeartbeatLoop, a JobWakeListener
+    and the IDLE watcher before entering the tick loop. These tests fake
+    _tick/_reclaim_once, so they must also fake those startup seams —
     otherwise run() raises DatabaseConfigError in unit mode (no
-    MAIL_CORE_DATABASE_URL) before any tick happens.
+    MAIL_CORE_DATABASE_URL) or leaves real background threads behind.
     """
 
-    class _FakeHeartbeatLoop:
+    class _FakeLoop:
         def __init__(self, *_args, **_kwargs):
             pass
 
@@ -52,14 +53,21 @@ def _stub_run_infrastructure(monkeypatch):
     )
     monkeypatch.setattr(
         "mail_core.worker.heartbeat.WorkerHeartbeatLoop",
-        _FakeHeartbeatLoop,
+        _FakeLoop,
+    )
+    monkeypatch.setattr(worker_main, "UnifiedClaimHeartbeatLoop", _FakeLoop)
+    monkeypatch.setattr(worker_main, "_schedule_periodic_sync_once", lambda: 0)
+    monkeypatch.setattr("mail_core.worker.wake.JobWakeListener", _FakeLoop)
+    monkeypatch.setattr(
+        "mail_core.sync.idle_watcher.get_idle_manager",
+        lambda *_args, **_kwargs: _FakeLoop(),
     )
 
 
 def test_worker_stops_on_flag(monkeypatch):
     ticked = threading.Event()
 
-    def fake_tick(_worker_id):
+    def fake_tick(_worker_id, **_kwargs):
         ticked.set()
         return worker_main.TickResult(claimed=0, handled=0)
 
@@ -91,17 +99,14 @@ def test_reclaim_once_calls_reclaim_stale_claims():
         session.commit.assert_called()
 
 
-def test_claim_heartbeat_refreshes_all_jobs_in_claimed_batch(monkeypatch):
+def test_claim_heartbeat_refreshes_all_jobs_in_claimed_batch():
     import uuid
 
-    monkeypatch.setattr(worker_main, "_claim_heartbeat_interval_s", lambda: 0.01)
     heartbeat_calls = []
     all_refreshed = threading.Event()
     job_ids = [uuid.uuid4(), uuid.uuid4()]
-    now = datetime(2026, 10, 25, 10, 0, tzinfo=timezone.utc)
-    claim_times = {job_id: now for job_id in job_ids}
-    claim_lock = threading.Lock()
-    stop_event = threading.Event()
+    claimed_at = datetime(2026, 10, 25, 10, 0, tzinfo=timezone.utc)
+    refreshed_at = datetime(2026, 10, 25, 10, 1, tzinfo=timezone.utc)
 
     class Session:
         def __enter__(self):
@@ -117,41 +122,78 @@ def test_claim_heartbeat_refreshes_all_jobs_in_claimed_batch(monkeypatch):
         heartbeat_calls.append((job_id, worker_id, locked_at))
         if len(heartbeat_calls) == 2:
             all_refreshed.set()
-        return now
+        return refreshed_at
 
-    with patch("mail_core.sync.jobs.heartbeat_job_claim", side_effect=refresh):
-        thread = threading.Thread(
-            target=worker_main._heartbeat_claims,
-            args=(
-                lambda: Session(),
-                [(job_ids[0], "worker-1", now), (job_ids[1], "worker-1", now)],
-                claim_times,
-                claim_lock,
-                stop_event,
-            ),
-            daemon=True,
+    tokens = {
+        job_id: worker_main.InFlightJob(
+            job_id=job_id,
+            worker_id="worker-1",
+            traffic_class=worker_main.TrafficClass.FOREGROUND,
+            locked_at=claimed_at,
         )
-        thread.start()
-        assert all_refreshed.wait(1)
-        stop_event.set()
-        thread.join(timeout=1)
+        for job_id in job_ids
+    }
+    with worker_main._in_flight_lock:
+        worker_main._in_flight_jobs.update(tokens)
 
-    assert not thread.is_alive()
-    assert [call[0] for call in heartbeat_calls] == job_ids
-    assert all(claim_times[job_id] != now for job_id in job_ids)
+    loop = worker_main.UnifiedClaimHeartbeatLoop(
+        lambda: Session(), "worker-1", interval_s=0.01
+    )
+    try:
+        with patch("mail_core.sync.jobs.heartbeat_job_claim", side_effect=refresh):
+            loop.start()
+            assert all_refreshed.wait(1)
+            deadline = threading.Event()
+            for _ in range(200):
+                with worker_main._in_flight_lock:
+                    if all(
+                        worker_main._in_flight_jobs[job_id].locked_at == refreshed_at
+                        for job_id in job_ids
+                    ):
+                        break
+                deadline.wait(0.01)
+    finally:
+        loop.stop(timeout=1)
+        with worker_main._in_flight_lock:
+            for job_id in job_ids:
+                worker_main._in_flight_jobs.pop(job_id, None)
+
+    assert not loop._thread.is_alive()
+    assert [call[0] for call in heartbeat_calls[: len(job_ids)]] == job_ids
+    assert {call[0] for call in heartbeat_calls} == set(job_ids)
+    with worker_main._in_flight_lock:
+        assert all(
+            tokens[job_id].locked_at == refreshed_at for job_id in job_ids
+        )
 
 
 def test_run_reclaims_on_a_separate_time_cadence(monkeypatch):
     _stub_run_infrastructure(monkeypatch)
     clock = iter((0.0, 10.0, 60.0, 61.0))
-    monkeypatch.setattr(worker_main, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None))
-    monkeypatch.setattr(worker_main, "RECLAIM_INTERVAL_S", 60.0)
+    monkeypatch.setattr(
+        worker_main,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(clock, 61.0), sleep=lambda _seconds: None),
+    )
+    monkeypatch.setattr(
+        worker_main,
+        "get_config",
+        lambda: SimpleNamespace(
+            worker_poll_s=0.01,
+            worker_id="test-worker",
+            worker_max_idle_s=10.0,
+            worker_heartbeat_s=15.0,
+            worker_reclaim_interval_s=60.0,
+            schedule_interval_s=3600.0,
+        ),
+    )
     monkeypatch.setattr("mail_core.blobs.crypto.load_keyring_from_env", lambda: {})
+    monkeypatch.setattr(worker_main, "_wait_for_next_poll", lambda _delay: False)
     reclaim = MagicMock()
     monkeypatch.setattr(worker_main, "_reclaim_once", reclaim)
     ticks = 0
 
-    def tick(_worker_id):
+    def tick(_worker_id, **_kwargs):
         nonlocal ticks
         ticks += 1
         if ticks == 4:
@@ -191,7 +233,7 @@ def test_run_uses_base_poll_after_claimed_jobs_fail(monkeypatch):
     monkeypatch.setattr(
         worker_main,
         "_tick",
-        lambda _worker_id: worker_main.TickResult(claimed=3, handled=0),
+        lambda _worker_id, **_kwargs: worker_main.TickResult(claimed=3, handled=0),
     )
 
     worker_main.run(poll_interval_s=2.0)
@@ -258,13 +300,13 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
     from mail_core.db.session import get_session_factory
     from mail_core.mail.domain.enums import JobStatus, JobType
     from mail_core.mail.storage.models import Account, WorkerJob
+    from mail_core.sync.jobs import _max_attempts
     from mail_core.worker.handlers import handle_job
 
     Session = get_session_factory()
-    account_id = uuid.uuid4()
     folder_id = uuid.uuid4()
     with Session() as session:
-        account = Account(email=f"self-heal-{account_id.hex[:10]}@example.test", provider="imap")
+        account = Account(email=f"self-heal-{uuid.uuid4().hex[:10]}@example.test", provider="imap")
         session.add(account)
         session.flush()
         account_id = account.id
@@ -276,18 +318,12 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
             locked_by="worker-failed",
             attempts=1,
         )
-        successful_job = WorkerJob(
-            job_type=JobType.SYNC_FOLDER_DELTA.value,
-            account_id=account_id,
-            payload={"folder_id": str(folder_id)},
-            status=JobStatus.CLAIMED.value,
-            locked_by="worker-success",
-            attempts=1,
-        )
-        session.add_all([failed_job, successful_job])
+        session.add(failed_job)
         session.commit()
-        failed_job_id, successful_job_id = failed_job.id, successful_job.id
+        failed_job_id = failed_job.id
 
+    # A retryable, non-terminal failure requeues the job but must not flap the
+    # account to "failed" (t056: only auth or terminal failures do that).
     with Session() as session:
         job = session.get(WorkerJob, failed_job_id)
         assert job is not None
@@ -299,9 +335,60 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
         session.commit()
         account = session.get(Account, account_id)
         assert account is not None
+        assert account.sync_status == "idle"
+        assert "last_sync_error" not in (account.config or {})
+        job = session.get(WorkerJob, failed_job_id)
+        assert job is not None
+        assert job.status == JobStatus.PENDING.value
+        assert job.failure_attempts == 1
+
+    # A terminal failure marks the account failed with a sanitized error and
+    # leaves the job terminally FAILED.
+    with Session() as session:
+        job = session.get(WorkerJob, failed_job_id)
+        assert job is not None
+        job.status = JobStatus.CLAIMED.value
+        job.locked_by = "worker-terminal"
+        job.locked_at = datetime.now(timezone.utc)
+        job.failure_attempts = _max_attempts() - 1
+        session.commit()
+        with patch(
+            "mail_core.sync.delta.sync_folder_delta",
+            side_effect=RuntimeError("permanent provider outage"),
+        ):
+            assert handle_job(session, job, worker_id="worker-terminal") is False
+        session.commit()
+        account = session.get(Account, account_id)
+        assert account is not None
         assert account.sync_status == "failed"
         assert (account.config or {}).get("last_sync_error")
-        assert session.get(WorkerJob, failed_job_id).status == JobStatus.PENDING.value
+        job = session.get(WorkerJob, failed_job_id)
+        assert job is not None
+        assert job.status == JobStatus.FAILED.value
+
+        # Another job still carries a retryable error: a successful job must
+        # not hide that outstanding failure.
+        pending_error_job = WorkerJob(
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            account_id=account_id,
+            payload={"folder_id": str(folder_id)},
+            status=JobStatus.PENDING.value,
+            attempts=1,
+            failure_attempts=1,
+            last_error="temporary provider outage",
+        )
+        successful_job = WorkerJob(
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            account_id=account_id,
+            payload={"folder_id": str(folder_id)},
+            status=JobStatus.CLAIMED.value,
+            locked_by="worker-success",
+            attempts=1,
+        )
+        session.add_all([pending_error_job, successful_job])
+        session.commit()
+        pending_error_job_id = pending_error_job.id
+        successful_job_id = successful_job.id
 
     with Session() as session:
         job = session.get(WorkerJob, successful_job_id)
@@ -314,13 +401,13 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
         assert account.sync_status == "failed"
         assert (account.config or {}).get("last_sync_error")
 
+    # Retrying the outstanding job succeeds and recovers the account status.
     with Session() as session:
-        retry = session.get(WorkerJob, failed_job_id)
+        retry = session.get(WorkerJob, pending_error_job_id)
         assert retry is not None
         retry.status = JobStatus.CLAIMED.value
         retry.locked_by = "worker-retry"
         retry.locked_at = datetime.now(timezone.utc)
-        retry.attempts = 2
         session.commit()
         with patch("mail_core.sync.delta.sync_folder_delta", return_value={"status": "ok"}):
             assert handle_job(session, retry, worker_id="worker-retry") is True
@@ -392,8 +479,9 @@ def test_tick_failed_job_not_counted_as_handled():
 
     from mail_core.mail.storage.models import WorkerJob
 
-    job = WorkerJob(job_type="no_such_type_xyz", payload={})
+    job = WorkerJob(job_type="no_such_type_xyz", payload={}, status="claimed")
     job.id = uuid.uuid4()
+    job.locked_by = "w-fail-count"
 
     class _S:
         def __enter__(self):
@@ -420,7 +508,7 @@ def test_tick_failed_job_not_counted_as_handled():
         patch("mail_core.sync.jobs.claim_jobs", return_value=[job]),
         patch("mail_core.worker.handlers.handle_job", return_value=False),
     ):
-        result = worker_main._tick("w-fail-count")
+        result = worker_main._tick("w-fail-count", limit=1)
     assert result.claimed == 1
     assert result.handled == 0
 
@@ -429,6 +517,7 @@ def test_handle_job_sanitizes_error_in_update_account_sync_status():
     import uuid
     from mail_core.mail.domain.enums import JobType, SyncStatus
     from mail_core.mail.storage.models import Account, WorkerJob
+    from mail_core.sync.jobs import _max_attempts
     from mail_core.worker.handlers import handle_job
 
     account_id = uuid.uuid4()
@@ -439,6 +528,9 @@ def test_handle_job_sanitizes_error_in_update_account_sync_status():
         payload={"account_id": str(account_id)},
     )
     job.id = uuid.uuid4()
+    # Account status is only marked failed on a terminal non-transient
+    # failure, so make this execution the last allowed attempt.
+    job.failure_attempts = _max_attempts() - 1
 
     mock_account = MagicMock(spec=Account)
     mock_account.sync_enabled = True
@@ -464,7 +556,9 @@ def test_handle_job_sanitizes_error_in_update_account_sync_status():
         )
         passed_error = call_kwargs.get("error", "")
         assert "my_secret_password" not in passed_error
-        assert "[REDACTED]" in passed_error
+        # A325: non-provider exception messages are dropped entirely; only
+        # the exception type survives in the persisted status error.
+        assert passed_error == "ValueError"
 
 
 def test_handle_job_resolves_credential_store_inside_job_error_boundary():
