@@ -16,7 +16,7 @@ IMAP_PASSFILE=""
 
 cleanup_imap_passfile() {
   if [[ -n "$IMAP_PASSFILE" ]]; then
-    rm -f -- "$IMAP_PASSFILE" || echo "Could not remove temporary IMAP passfile." >&2
+    unlink "$IMAP_PASSFILE" || echo "Could not remove temporary IMAP passfile." >&2
   fi
 }
 trap cleanup_imap_passfile EXIT
