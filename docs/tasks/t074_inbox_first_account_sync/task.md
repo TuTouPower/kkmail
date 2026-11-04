@@ -1,7 +1,7 @@
 ---
 tid: "t074"
 slug: "inbox_first_account_sync"
-title: "账号级同步收件箱优先与 delta 重排优先级保持"
+title: "账号级同步收件箱优先与同步链重排优先级保持"
 status: "backlog"
 branch: ""
 worktree: ""
@@ -11,7 +11,7 @@ verify_limit: "5"
 diff_anchor: ""
 depends_on: ""
 conflicts_with: ""
-note: "来源 p073；手动刷新收件箱排在全部文件夹 delta 之后串行执行；inbox 优先入队并在 delta 重排时保持优先级"
+note: "来源 p073；手动刷新收件箱排在全部文件夹 delta 之后串行执行；inbox 优先入队并在 delta 重排时保持优先级; review 修订：metadata 重排路径纳入优先级保持；测试改为断言 priority 数值严格小于同账号其他文件夹；明确不抢占在途任务、无 inbox 时回退、优先级全局副作用"
 ---
 
 # Task 过程总账
