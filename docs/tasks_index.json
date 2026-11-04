@@ -2,5 +2,22 @@
     "generated_by": ".repo_template/scripts/task.py",
     "authority": "docs/tasks/{tid}_{slug}/task.md front matter",
     "workspace": ".",
-    "tasks": []
+    "tasks": [
+        {
+            "tid": "t074",
+            "slug": "inbox_first_account_sync",
+            "title": "账号级同步收件箱优先与 delta 重排优先级保持",
+            "status": "backlog",
+            "branch": "",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "5",
+            "verify_limit": "5",
+            "diff_anchor": "",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p073；手动刷新收件箱排在全部文件夹 delta 之后串行执行；inbox 优先入队并在 delta 重排时保持优先级",
+            "dir": "docs/tasks/t074_inbox_first_account_sync"
+        }
+    ]
 }
