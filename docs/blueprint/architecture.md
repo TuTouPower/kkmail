@@ -72,6 +72,11 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
     - 严格匹配连接槽 8/6 规则：后台批量归档任务（`archive_mime_batch` 无 `message_id`）最多同时占用 `total_slots - background_start_slot` 个执行位，剩余执行位永久为前台即时任务（按需即时归档、写回、元数据扫描）保留；
     - 租约任务认领期排他：同账号在途执行租约类任务（`sync_account_folders`、`sync_folder_metadata`、`sync_folder_delta`、`reconcile_folder`、`remote_operation_push`）时，该账号其他租约任务跳过认领，绝不引发同账号内部 `lease_busy` 自锁或争抢；不同账号并行执行；同账号非租约归档任务可与租约任务安全并行。
     - 定时增量空转轮询增加去重键（`delta:{account_id}:{folder_id}`），防止单个文件夹在短时间内重复入队堆积，彻底解除增量轮询对后台批量正文归档的压制。
+3. **账号内收件箱优先与重排优先级保持 (t074)**：
+    - 账号级文件夹发现（`sync_account_folders`）派生的子任务中，收件箱（`role="inbox"`）的 priority 严格小于同账号其他文件夹：delta 为 **55**（其他文件夹 60）、无基线初始化的 metadata 为 **45**（其他文件夹 50）。同一发现事务内所有子任务 `created_at` 并列，次序只能靠 priority 数值严格更小保证，不依赖入队循环或 provider 返回顺序；
+    - delta 与 metadata 在租约冲突、限流、连接预算不足、临时 provider 错误、fencing 冲突与分页未耗尽等重新排期路径中，后续任务必须保持原任务的 priority：worker handler 把已认领任务的 `job.priority` 透传给同步函数，同步函数的 `priority` 参数默认仍为类型默认值（delta 60 / metadata 50），直接调用方行为不变；metadata 的 cursor-invalid 重建保持显式 **40** 不随透传降低，`sync_account_folders` 自身的容量/限流重排不在此列；
+    - 账号不存在 `role="inbox"` 文件夹时不产生优先任务，回退现有全局分层；收件箱优先只在 pending 队列内生效，不抢占已认领（CLAIMED）的同账号任务，同步请求仍等账号内全部文件夹任务结算后才进入终态；
+    - priority 是跨账号的全局数值：收件箱 55/45 同时也排在其他账号的普通 delta（60）之前，该跨账号副作用已知并接受。
 
 ## 供应商账户配置与 Microsoft OAuth 授权
 

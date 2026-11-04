@@ -1,0 +1,14 @@
+{
+  "tid": "t074",
+  "attempt": 1,
+  "execution_id": "164b7a18f40b42919cc73153e52c0b59",
+  "status": "done",
+  "branch": "t074_inbox_first_account_sync",
+  "base_sha": "923bc4b1628e5a528191401d0e903d0935f0d264",
+  "tests": "`tests/mail_core` unit 模式 1418 passed / 6 failed / 376 skipped（失败集与 base 逐行一致、零新增）；contract 222 passed / 1 skipped；新增 `tests/mail_core/test_sync_inbox_first.py` 22 项本机 PG 门控 skip，核心场景经 SQLite harness 真跑 50/50 通过（基线同 harness 14 项失败），PG 环境复跑仍欠",
+  "blackbox": "`npm --prefix src/frontend run test:e2e` 21 passed；前端 `npm test`、`tsc -b`、`npm run build` 均通过",
+  "review": "full review 两轮——Round 1 code 路 PASS 零 finding、test 路 PASS 1 条 minor（AC-003 认领次序组合测试缺口）；补测修复后 Round 2 双路 PASS、零 finding，AC 5/5 双路 TICK-VALID，reviewed_scope c3352168a06b021e",
+  "review_scope": "c3352168a06b021e",
+  "pending": [],
+  "findings": []
+}

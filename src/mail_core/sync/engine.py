@@ -391,7 +391,11 @@ def sync_account_folders(
                         job_type=JobType.SYNC_FOLDER_DELTA.value,
                         account_id=account_id,
                         payload=delta_payload,
-                        priority=60,
+                        # t074: within one account the inbox delta sorts
+                        # strictly ahead of sibling folders (55 < 60).
+                        # Priority numbers are the only guarantee — all
+                        # child jobs of this transaction share created_at.
+                        priority=55 if existing.role == "inbox" else 60,
                         dedupe_key=f"delta:{account_id}:{existing.id}",
                     )
                     if request_id is not None:
@@ -419,7 +423,9 @@ def sync_account_folders(
                         job_type=JobType.SYNC_FOLDER_METADATA.value,
                         account_id=account_id,
                         payload=metadata_payload,
-                        priority=50,
+                        # t074: inbox baseline first within the account
+                        # (45 < 50), same rationale as the delta above.
+                        priority=45 if existing.role == "inbox" else 50,
                         dedupe_key=f"metadata:{account_id}:{existing.id}",
                     )
                     if request_id is not None:
@@ -481,12 +487,19 @@ def sync_folder_metadata(
     scan_generation: uuid.UUID | None = None,
     request_id: uuid.UUID | None = None,
     traffic_class: TrafficClass = TrafficClass.FOREGROUND,
+    priority: int = 50,
 ) -> dict:
     """Pull metadata pages until exhausted or max_pages; enqueue reconcile when done.
 
     Heartbeats the account lease between pages so long folders do not expire the
     120s default TTL mid-loop (architecture §7.5). Provider I/O exceptions always
     release the lease before propagating.
+
+    ``priority`` is the executing job's priority: metadata requeues
+    (lease conflict, rate limit, capacity, unexhausted paging) keep it
+    instead of resetting to the type default (t074). The cursor-invalid
+    rebuild below keeps its explicit 40 regardless. Direct callers that
+    omit it keep the historical 50.
     """
     Session = _session_factory()
     with Session() as session:
@@ -507,7 +520,7 @@ def sync_folder_metadata(
                 job_type=JobType.SYNC_FOLDER_METADATA.value,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id), **_scan_context_payload(full, scan_generation, request_id)},
-                priority=50,
+                priority=priority,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=5),
                 dedupe_key=f"metadata:{account_id}:{folder_id}",
             )
@@ -653,7 +666,7 @@ def sync_folder_metadata(
                 job_type=JobType.SYNC_FOLDER_METADATA.value,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id), **_scan_context_payload(full, scan_generation, request_id)},
-                priority=50,
+                priority=priority,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                 dedupe_key=f"metadata:{account_id}:{folder_id}",
             )
@@ -677,7 +690,7 @@ def sync_folder_metadata(
                 job_type=JobType.SYNC_FOLDER_METADATA.value,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id), **_scan_context_payload(full, scan_generation, request_id)},
-                priority=50,
+                priority=priority,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                 dedupe_key=f"metadata:{account_id}:{folder_id}",
             )
@@ -760,7 +773,7 @@ def sync_folder_metadata(
                 job_type=JobType.SYNC_FOLDER_METADATA.value,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id), **_scan_context_payload(full, scan_generation, request_id)},
-                priority=50,
+                priority=priority,
                 dedupe_key=f"metadata:{account_id}:{folder_id}",
             )
         release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)

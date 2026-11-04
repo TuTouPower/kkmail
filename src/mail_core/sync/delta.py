@@ -304,6 +304,7 @@ def _reschedule_delta_after_fencing_mismatch(
     *,
     account_id: uuid.UUID,
     folder_id: uuid.UUID,
+    priority: int = 60,
 ) -> bool:
     """A147: keep the periodic poll chain alive after a fencing loss.
 
@@ -311,14 +312,15 @@ def _reschedule_delta_after_fencing_mismatch(
     a fencing_mismatch exit used to end polling for the folder forever.
     Re-enqueue one delayed delta under the usual dedupe key (coalescing
     into any run the new lease owner already scheduled) and report
-    whether it coalesced into a CLAIMED job.
+    whether it coalesced into a CLAIMED job. The reschedule keeps the
+    original job's ``priority`` (t074).
     """
     followup = enqueue_job(
         session,
         job_type=JobType.SYNC_FOLDER_DELTA.value,
         account_id=account_id,
         payload={"folder_id": str(folder_id)},
-        priority=60,
+        priority=priority,
         run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
         dedupe_key=f"delta:{account_id}:{folder_id}",
     )
@@ -335,12 +337,18 @@ def sync_folder_delta(
     max_pages: int = 20,
     poll_round: int = 0,
     traffic_class: TrafficClass = TrafficClass.FOREGROUND,
+    priority: int = 60,
 ) -> dict:
     """Apply provider delta pages under fencing.
 
     Heartbeats between pages (default TTL 120s). On ``CursorInvalidError`` the
     checkpoint is cleared and a metadata rebuild is enqueued. Generic provider
     errors release the lease and re-raise after an explicit retry job.
+
+    ``priority`` is the executing job's priority: every delta requeue
+    (lease conflict, rate limit, capacity, provider error, fencing loss,
+    unexhausted paging) keeps it instead of resetting to the type
+    default (t074). Direct callers that omit it keep the historical 60.
     """
     Session = __import__("mail_core.db.session", fromlist=["get_session_factory"]).get_session_factory()
     with Session() as session:
@@ -373,7 +381,7 @@ def sync_folder_delta(
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id)},
-                priority=60,
+                priority=priority,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=5),
                 dedupe_key=f"delta:{account_id}:{folder_id}",
             )
@@ -456,7 +464,7 @@ def sync_folder_delta(
                 except FencingMismatch:
                     session.rollback()
                     followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                        session, account_id=account_id, folder_id=folder_id
+                        session, account_id=account_id, folder_id=folder_id, priority=priority
                     )
                     session.commit()
                     return {
@@ -490,7 +498,7 @@ def sync_folder_delta(
                     job_type=JobType.SYNC_FOLDER_DELTA.value,
                     account_id=account_id,
                     payload={"folder_id": str(folder_id)},
-                    priority=60,
+                    priority=priority,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                     dedupe_key=f"delta:{account_id}:{folder_id}",
                 )
@@ -507,7 +515,7 @@ def sync_folder_delta(
                     job_type=JobType.SYNC_FOLDER_DELTA.value,
                     account_id=account_id,
                     payload={"folder_id": str(folder_id)},
-                    priority=60,
+                    priority=priority,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                     dedupe_key=f"delta:{account_id}:{folder_id}",
                 )
@@ -535,7 +543,7 @@ def sync_folder_delta(
                         "reason": "provider_error",
                         "detail": err_summary,
                     },
-                    priority=60,
+                    priority=priority,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=15),
                     dedupe_key=f"delta:{account_id}:{folder_id}",
                 )
@@ -563,7 +571,7 @@ def sync_folder_delta(
             except FencingMismatch:
                 session.rollback()
                 followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                    session, account_id=account_id, folder_id=folder_id
+                    session, account_id=account_id, folder_id=folder_id, priority=priority
                 )
                 session.commit()
                 return {
@@ -603,7 +611,7 @@ def sync_folder_delta(
             except FencingMismatch:
                 session.rollback()
                 followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                    session, account_id=account_id, folder_id=folder_id
+                    session, account_id=account_id, folder_id=folder_id, priority=priority
                 )
                 session.commit()
                 return {
@@ -628,7 +636,7 @@ def sync_folder_delta(
         except FencingMismatch:
             session.rollback()
             followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                session, account_id=account_id, folder_id=folder_id
+                session, account_id=account_id, folder_id=folder_id, priority=priority
             )
             session.commit()
             return {
@@ -651,7 +659,7 @@ def sync_folder_delta(
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
                 account_id=account_id,
                 payload={"folder_id": str(folder_id)},
-                priority=60,
+                priority=priority,
                 dedupe_key=f"delta:{account_id}:{folder_id}",
             )
         release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
