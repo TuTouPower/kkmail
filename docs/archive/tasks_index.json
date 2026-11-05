@@ -1186,6 +1186,22 @@
             "conflicts_with": "",
             "note": "来源 p073；手动刷新收件箱排在全部文件夹 delta 之后串行执行；inbox 优先入队并在 delta 重排时保持优先级; review 修订：metadata 重排路径纳入优先级保持；测试改为断言 priority 数值严格小于同账号其他文件夹；明确不抢占在途任务、无 inbox 时回退、优先级全局副作用",
             "dir": "docs/archive/tasks/t074_inbox_first_account_sync"
+        },
+        {
+            "tid": "t075",
+            "slug": "backup_export_permission_boundary",
+            "title": "重构备份与宿主导出边界并保留应用私有 blob 权限",
+            "status": "done",
+            "branch": "t075_backup_export_permission_boundary",
+            "worktree": "",
+            "review_level": "full",
+            "review_limit": "6",
+            "verify_limit": "5",
+            "diff_anchor": "18f0f5e3e1f5d3f5a3437d7d1cc401bf5b0ffd48",
+            "depends_on": "",
+            "conflicts_with": "",
+            "note": "来源 p074；备份进程被迫跨宿主/应用两个数据所有者，0600 blob 备份失败；保留私有权限并重设计备份导出的身份与权限边界; budget: review_limit: 5->6; md_format 在 Round 5 后仅插入空行；需重审最终格式化 scope",
+            "dir": "docs/archive/tasks/t075_backup_export_permission_boundary"
         }
     ]
 }

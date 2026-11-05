@@ -4,7 +4,7 @@ mail-core 部署的升级路径（Flask / SQLite / OutlookEmail v2 镜像路径�
 
 仓库根目录可运行 `scripts/deploy_mail_core.sh` 串行执行部署：检查本地 `main` 与远端可快进、推送代码、创建并校验密封备份、标记旧镜像、重建 distributed Compose 服务、运行迁移，并检查 `/ready`、`/health`、worker 和 SPA 静态资源。脚本遇到分叉分支、未提交改动或门禁失败时停止，不执行 force-push。
 
-1. **备份**：用密封备份包，不要对运行中的 PostgreSQL 数据目录做 `cp`。执行备份需保证 `pg_dump` 可用并在完整环境变量下运行。执行前提：须在仓库根目录下运行，并设置 `PYTHONPATH=src`（源码布局下 `mail_core` 包位于 `src/`，缺此前提直接运行会报 `ImportError`）。下述命令为静态核对，未在本轮实测：
+1. **备份**：用密封备份包，不要对运行中的 PostgreSQL 数据目录做 `cp`。执行备份需保证 `pg_dump` 可用并在完整环境变量下运行。Docker 部署使用 `scripts/deploy_mail_core.sh`：备份以应用 UID 读取私有 `0600` blob，在容器私有目录生成密封包，再由宿主导出到 `0700` staging 并校验后发布；不要用 `--user` 覆盖成宿主 UID。源码路径执行前提：须在仓库根目录下运行，并设置 `PYTHONPATH=src`（源码布局下 `mail_core` 包位于 `src/`，缺此前提直接运行会报 `ImportError`）。下述命令为静态核对，未在本轮实测：
     ```bash
     PYTHONPATH=src python -c "from mail_core.backup import run_backup; print(run_backup(output_dir='/path/to/backups'))"
     ```
@@ -17,4 +17,5 @@ mail-core 部署的升级路径（Flask / SQLite / OutlookEmail v2 镜像路径�
 ## 回滚
 
 - **降级风险**：基线迁移 `20261020_0001` 与核心统一模式 `20261020_0002` 绝不可随意降级（执行 downgrade 会破坏性 DROP `messages`、`accounts` 等核心业务表）。涉及核心表结构变动的降级，必须通过导入升级前备份包进行恢复，不可依赖单向 downgrade。
+- **私有权限归一化**：blob 文件应为应用 UID + `0600`、私有目录 `0700`，恢复后不得继承归档 UID 或 umask。存量 mode 漂移时在应用 UID 容器内显式执行 `python -m mail_core.blobs.permissions /var/lib/kkmail/blobs`；需要修复 owner 时以 root + `CHOWN/FOWNER/DAC_OVERRIDE` 加 `--target-uid 10001 --target-gid 999` 执行受控 chown（异属主 0700 目录需 DAC_OVERRIDE 才能遍历）。宿主备份目录可用 `.venv/bin/python scripts/normalize_mail_core_permissions.py <dir>`。不要在应用启动时做递归权限修补。
 - **密钥退休**：轮换期间必须保留 `MAIL_CORE_BLOB_KEYS` 中全部旧密钥。`run_rewrap()` 先重加密所有 blob 文件并逐文件提交版本元数据，确认无错误且没有旧版本 blob 后才重加密 `credential_secrets`。只有结果同时满足 `errors == []`、`remaining_old_version_blobs == 0`、`remaining_old_version_credentials == 0` 和 `safe_to_retire_old_keys == true`，才可从 keyring 移除旧密钥。若 `limit` 后仍有旧版本文件、未配置数据库、凭据迁移未提交、校验失败或任一旧版本仍有引用，必须保留旧密钥，完成剩余迁移后重新检查结果。

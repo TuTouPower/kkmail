@@ -53,28 +53,54 @@ def test_a266_push_is_opt_out_and_announced():
 # --- A13: backup dir stays 0700; package is verified, not just present ---
 
 
-def test_a13_backup_dir_is_never_world_accessible():
+def test_a13_backup_dir_and_staging_are_never_world_accessible():
     text = _deploy_text()
     assert "0777" not in text, "backup dir must never be chmod 0777"
-    assert 'chmod 0700 "$backup_dir"' in text
+    assert 'chmod 0700 "$backup_dir" "$staging_dir"' in text
 
 
-def test_a13_backup_container_runs_as_host_user():
+def test_a13_backup_runs_as_application_identity_without_host_user_override():
     text = _deploy_text()
-    # The backup container must write as the host user so the 0700 dir works
-    # without widening permissions.
-    backup_run = re.search(r"run [^\n]*backup", text)
+    backup_run = re.search(r"docker compose[^\n]*--profile maintenance run[^\n]*backup", text)
     assert backup_run, "deploy must run the backup service"
-    assert '--user "$(id -u):$(id -g)"' in backup_run.group(0)
-
-
-def test_a13_backup_package_is_verified_after_write():
-    text = _deploy_text()
-    assert "verify_backup_package" in text, (
-        "deploy must verify the sealed package (manifest + member checksums) "
-        "via mail_core.backup.verify_backup_package, not only [[ -s ]]"
+    run_line = backup_run.group(0)
+    assert "--user" not in run_line, (
+        "the backup process must keep the image application uid so it can read "
+        "private 0600 blobs; forcing the host uid recreates the cross-owner bug"
     )
-    assert "MANIFEST" in text
+    assert "--name" in run_line, "the stopped container must remain for host export"
+    assert "--rm" not in run_line, "removing the container before export loses the package"
+
+
+def test_a13_deploy_uses_host_side_backup_export_module():
+    text = _deploy_text()
+    assert "mail_core.backup.export" in text, (
+        "deploy must call the tested host-side export module, not inline "
+        "docker cp/verification logic that no behavioral test can execute"
+    )
+    assert "--container \"$backup_container\"" in text
+    assert "--staging-dir \"$staging_dir\"" in text
+    assert "--backup-dir \"$backup_dir\"" in text
+
+
+def test_a13_compose_backup_has_no_host_bind_and_blob_is_read_only():
+    import yaml
+
+    services = yaml.safe_load(_compose_text())["services"]
+    volumes = services["backup"].get("volumes") or []
+    assert volumes == ["kkmail_mail_core_blobs:/var/lib/kkmail/blobs:ro"], (
+        "the backup container must read blobs read-only and keep its package "
+        "in a container-private directory, not a host bind mount"
+    )
+    assert "MAIL_CORE_DEPLOY_BACKUP_DIR" not in _compose_text()
+
+
+def test_a13_backup_image_owns_private_workdir():
+    dockerfile = (ROOT / "Dockerfile.mail-core-backup").read_text(encoding="utf-8")
+    assert "mkdir -p /backup" in dockerfile
+    assert "chown 10001:999 /backup" in dockerfile
+    assert "chmod 0700 /backup" in dockerfile
+    assert "USER 10001:999" in dockerfile
 
 
 # --- A161: image names must be discovered, not assumed from a prefix ---

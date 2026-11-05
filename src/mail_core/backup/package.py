@@ -32,6 +32,7 @@ from mail_core.backup.crypto import (
     load_backup_keyring,
 )
 from mail_core.blobs.archive import blob_root
+from mail_core.blobs.private_fs import make_private_chain, make_private_dir as _shared_make_private_dir
 from mail_core.blobs.crypto import (
     MAGIC as _BLOB_MAGIC,
     BlobCryptoError,
@@ -492,15 +493,11 @@ def _safe_rmtree(path: Path) -> None:
         pass
 
 
-def _make_private_dir(path: Path) -> Path:
+def _make_private_dir(path: Path, *, strict: bool = False) -> Path:
     """Create a private 0700 directory, refusing symlinks."""
     if path.is_symlink():
         raise BackupCryptoError(f"refusing to use symlink as private workspace: {path}")
-    path.mkdir(parents=True, exist_ok=True)
-    try:
-        path.chmod(0o700)
-    except OSError:
-        pass
+    _shared_make_private_dir(path, strict=strict)
     return path
 
 
@@ -1572,11 +1569,11 @@ def _extract_blobs_to_staging(
                 )
                 if rel:
                     dirs.append(rel)
-                    (staging_blobs / rel).mkdir(parents=True, exist_ok=True)
+                    make_private_chain(staging_blobs / rel, staging_blobs, strict=True)
                 continue
             rel_path = member.name[len("blobs/") :].strip("/")
             dest_file = staging_blobs / rel_path
-            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            make_private_chain(dest_file.parent, staging_blobs, strict=True)
             f = t.extractfile(member)
             if f is None:
                 raise RuntimeError(f"cannot read blobs.tar member: {member.name!r}")
@@ -1586,8 +1583,15 @@ def _extract_blobs_to_staging(
             created = False
             streamed = hashlib.sha256()
             try:
-                with f, temp_file.open("xb") as out:
-                    created = True
+                fd = os.open(
+                    temp_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
+                created = True
+                try:
+                    os.fchmod(fd, 0o600)
+                except (AttributeError, OSError):
+                    pass
+                with f, os.fdopen(fd, "wb") as out:
                     for chunk in iter(lambda: f.read(1024 * 1024), b""):
                         streamed.update(chunk)
                         out.write(chunk)
@@ -1635,7 +1639,7 @@ def _publish_staged_blobs(
     kept; any other existing file is refused, never overwritten.
     """
     for rel_dir in dirs:
-        (target_blobs / rel_dir).mkdir(parents=True, exist_ok=True)
+        make_private_chain(target_blobs / rel_dir, target_blobs, strict=True)
     for rel_path in sorted(inventory):
         expected = inventory[rel_path]
         dest_file = target_blobs / rel_path
@@ -1652,7 +1656,7 @@ def _publish_staged_blobs(
             raise RuntimeError(f"refusing to overwrite existing blob path: {rel_path}")
         if not staged_file.is_file():
             raise RuntimeError(f"staged blob missing before publish: {rel_path}")
-        dest_file.parent.mkdir(parents=True, exist_ok=True)
+        make_private_chain(dest_file.parent, target_blobs, strict=True)
         _publish_rename(staged_file, dest_file, target_blobs)
         _fsync_dir(dest_file.parent)
     _safe_rmtree(staging_blobs)
@@ -2056,7 +2060,7 @@ def restore_backup_package(
     op_id = _validate_operation_id(operation_id or uuid.uuid4().hex)
 
     target_blobs.parent.mkdir(parents=True, exist_ok=True)
-    target_blobs.mkdir(parents=True, exist_ok=True)
+    _make_private_dir(target_blobs, strict=True)
 
     # Exclusive restore target: one operation at a time per blob root.
     with _backup_destination_lock(target_blobs):
@@ -2146,6 +2150,7 @@ def resume_restore_backup_package(
             "restore resume refused: target blobs dir does not exist: "
             f"{target_blobs}"
         )
+    _make_private_dir(target_blobs, strict=True)
     op_log = _read_restore_operation_log(target_blobs)
     if op_log is None:
         raise RuntimeError(

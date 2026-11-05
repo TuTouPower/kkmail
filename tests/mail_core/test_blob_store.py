@@ -1,3 +1,8 @@
+import os
+import stat
+
+import pytest
+
 from mail_core.blobs import BlobStore
 
 
@@ -96,3 +101,41 @@ def test_put_propagates_existing_blob_read_errors(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "open", original_open)
     assert blob_path.read_bytes() == original_blob
+
+
+@pytest.mark.parametrize("umask", [0o022, 0o077])
+@pytest.mark.parametrize("streaming", [False, True], ids=["put", "streaming"])
+def test_put_uses_private_file_and_directory_modes(tmp_path, umask, streaming):
+    root = tmp_path / "blobs"
+    old_umask = os.umask(umask)
+    try:
+        store = BlobStore(root)
+        if streaming:
+            result = store.put_streaming([b"private mode probe"])
+        else:
+            result = store.put(b"private mode probe")
+    finally:
+        os.umask(old_umask)
+
+    blob = store.path_for(result.content_sha256)
+    assert stat.S_IMODE(blob.stat().st_mode) == 0o600
+    assert stat.S_IMODE(blob.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(blob.parent.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+
+
+def test_blob_store_does_not_recursively_repair_existing_shards(tmp_path):
+    root = tmp_path / "blobs"
+    shard = root / "aa" / "bb"
+    shard.mkdir(parents=True)
+    blob = shard / "old.blob"
+    blob.write_bytes(b"old ciphertext")
+    root.chmod(0o755)
+    shard.chmod(0o755)
+    blob.chmod(0o644)
+
+    BlobStore(root)
+
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    assert stat.S_IMODE(shard.stat().st_mode) == 0o755
+    assert stat.S_IMODE(blob.stat().st_mode) == 0o644

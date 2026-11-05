@@ -78,8 +78,11 @@ services:
       MAIL_CORE_BLOB_ROOT: "/var/lib/kkmail/blobs"
       MAIL_CORE_BACKUP_DIR: "/backup"
     volumes:
+      # The backup process runs as the application uid and reads private
+      # 0600 blobs.  Its package is written to the container-private
+      # /backup directory and exported by the host-side deploy script;
+      # there is deliberately no host bind mount here.
       - kkmail_mail_core_blobs:/var/lib/kkmail/blobs:ro
-      - "${MAIL_CORE_DEPLOY_BACKUP_DIR:-./.scratch/deploy_backup}:/backup"
     depends_on:
       postgres:
         condition: service_healthy

@@ -63,39 +63,49 @@ fi
 stamp="$(date +%Y%m%d_%H%M%S)"
 commit="$(git rev-parse --short=8 HEAD)"
 backup_dir="$repo_root/.scratch/deploy_backup_$stamp"
+staging_dir="$repo_root/.scratch/.deploy_backup_staging_$stamp"
+backup_container="kkmail-deploy-backup-$stamp"
+created_backup_dir=0
+backup_published=0
+
+cleanup_deploy_backup() {
+    local status=$?
+    trap - EXIT
+    docker rm -f "$backup_container" >/dev/null 2>&1 || true
+    rm -rf "$staging_dir"
+    if [[ "$status" != "0" && "$created_backup_dir" == "1" && "$backup_published" == "0" ]]; then
+        # Never leave a package that later rollback steps could mistake for
+        # a complete backup. A package published before a later deployment
+        # failure is kept on purpose as the rollback source.
+        rm -rf "$backup_dir"
+    fi
+    exit "$status"
+}
+trap cleanup_deploy_backup EXIT
+
 mkdir -p "$repo_root/.scratch"
 mkdir "$backup_dir"
-# Keep the backup dir private (0700) for its whole lifetime: the backup
-# container below runs as the host user (--user), so it can write into a
-# 0700 directory owned by that user. Never widen this to world-writable —
-# during that window any local user could replace the sealed package
-# that a later rollback would trust.
-chmod 0700 "$backup_dir"
-export MAIL_CORE_DEPLOY_BACKUP_DIR="$backup_dir"
+created_backup_dir=1
+mkdir "$staging_dir"
+# Host-side paths are private for their whole lifetime. The backup process
+# never writes here: it runs as the application uid and reads 0600 blobs in
+# the container; the host exports the finished package afterwards.
+chmod 0700 "$backup_dir" "$staging_dir"
 
-docker compose -f docker-compose.mail-core.yml --profile maintenance run --build --rm --user "$(id -u):$(id -g)" backup
+# Run the backup with the image's application uid (no --user override). The
+# service has no host bind mount; it writes the sealed package into its
+# container-private /backup directory.
+docker compose -f docker-compose.mail-core.yml --profile maintenance run --build --name "$backup_container" -T backup
+[[ -d "$staging_dir" ]] || fail "backup export staging directory disappeared"
+
+PYTHONPATH="$repo_root/src${PYTHONPATH:+:$PYTHONPATH}" "$python_bin" -m mail_core.backup.export \
+    --container "$backup_container" \
+    --staging-dir "$staging_dir" \
+    --backup-dir "$backup_dir"
 [[ -s "$backup_dir/package/backup.kkbak" ]] || fail "sealed backup package is missing"
-# Existence is not integrity: verify the sealed package (MANIFEST.json /
-# MANIFEST.sha256 and every member checksum, incl. backup.kkbak) with the
-# same verifier restores use before treating it as a rollback source.
-MAIL_CORE_DEPLOY_BACKUP_DIR="$backup_dir" "$python_bin" - <<'PY'
-import os
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path.cwd() / "src"))
-from mail_core.backup import verify_backup_package
-
-package_dir = Path(os.environ["MAIL_CORE_DEPLOY_BACKUP_DIR"]) / "package"
-result = verify_backup_package(package_dir)
-if not result.ok:
-    raise SystemExit(
-        "sealed backup package failed verification: " + "; ".join(result.errors)
-    )
-print(
-    f"verified sealed backup package: {result.members_checked} members checked"
-)
-PY
+backup_published=1
+docker rm -f "$backup_container" >/dev/null 2>&1 || true
+rmdir "$staging_dir"
 
 # Image names are NOT "<clone-dir>-<service>": Compose derives the project
 # name from the checkout directory, so a renamed clone would break every

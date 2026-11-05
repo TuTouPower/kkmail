@@ -26,6 +26,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from mail_core.blobs.archive import blob_root
 from mail_core.blobs.crypto import Keyring, iter_unwrap, iter_wrap, load_keyring_from_env, read_key_version
+from mail_core.blobs.private_fs import make_private_dir
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import CredentialSecret, MessageBlob
 
@@ -177,6 +178,9 @@ def rewrap_blob_file(
         old_ver = read_key_version(fh)
     if old_ver == target:
         return False, old_ver
+    # The shard directory is part of the private storage contract too: a
+    # 0755 directory makes the 0600 blob unreachable for other identities.
+    make_private_dir(path.parent)
     tmp = path.with_name(f"{path.name}.rewrap-{uuid.uuid4().hex}")
     created = False
     try:
