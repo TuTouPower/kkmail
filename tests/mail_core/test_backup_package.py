@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
+import stat
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -1357,3 +1360,156 @@ def test_restore_database_identity_ignores_username_and_normalizes_aliases():
     assert id2 == id3
     assert id1 == ("postgresql", "127.0.0.1", 5432, "kkmail_db")
 
+
+
+@pytest.mark.parametrize("umask", [0o022, 0o077])
+def test_restore_blobs_have_private_modes_regardless_of_umask(tmp_path, monkeypatch, umask):
+    source_blobs = tmp_path / "source-blobs"
+    source_blob = source_blobs / "aa" / "bb" / "message.blob"
+    source_blob.parent.mkdir(parents=True)
+    source_blob.write_bytes(b"private restore payload")
+    source_blob.chmod(0o644)
+
+    package_dir = tmp_path / "plain-backup"
+    create_backup_package(
+        package_dir,
+        include_blobs=True,
+        database_url_override="postgresql://backup:pw@127.0.0.1:5432/source",
+        blobs_dir=source_blobs,
+        encrypt=False,
+        allow_dump_stub=True,
+    )
+    monkeypatch.setattr(
+        backup_package.shutil,
+        "which",
+        lambda name: "/fake/pg_restore" if name == "pg_restore" else None,
+    )
+    monkeypatch.setattr(
+        backup_package.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout=b"", stderr=b""
+        ),
+    )
+
+    target_blobs = tmp_path / "restored-blobs"
+    old_umask = os.umask(umask)
+    try:
+        result = restore_backup_package(
+            package_dir,
+            target_database_url="postgresql://restore:pw@127.0.0.1:5432/target",
+            target_blobs_dir=target_blobs,
+            source_database_url="postgresql://backup:pw@127.0.0.1:5432/source",
+            allow_stub=True,
+        )
+    finally:
+        os.umask(old_umask)
+
+    assert result.ok
+    blob = target_blobs / "aa" / "bb" / "message.blob"
+    assert blob.read_bytes() == b"private restore payload"
+    assert stat.S_IMODE(target_blobs.stat().st_mode) == 0o700
+    assert stat.S_IMODE(blob.parent.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(blob.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(blob.stat().st_mode) == 0o600
+    assert (blob.stat().st_uid, blob.stat().st_gid) == (os.getuid(), os.getgid())
+
+
+def test_restored_blob_store_can_be_written_and_backed_up_again(tmp_path, monkeypatch):
+    import base64
+
+    from mail_core.blobs import BlobStore
+
+    monkeypatch.setenv(
+        "MAIL_CORE_BLOB_KEY_V1", base64.b64encode(b"7" * 32).decode()
+    )
+    monkeypatch.delenv("MAIL_CORE_BLOB_KEYS", raising=False)
+    monkeypatch.delenv("MAIL_CORE_BLOB_KEY_VERSION", raising=False)
+    monkeypatch.delenv("MAIL_CORE_BLOB_ACTIVE_VERSION", raising=False)
+
+    source_blobs = tmp_path / "source-blobs"
+    source_store = BlobStore(source_blobs)
+    source_result = source_store.put(b"restored private payload")
+    source_blob = source_store.path_for(source_result.content_sha256)
+
+    package_dir = tmp_path / "plain-backup"
+    create_backup_package(
+        package_dir,
+        include_blobs=True,
+        database_url_override="postgresql://backup:pw@127.0.0.1:5432/source",
+        blobs_dir=source_blobs,
+        encrypt=False,
+        allow_dump_stub=True,
+    )
+    monkeypatch.setattr(
+        backup_package.shutil,
+        "which",
+        lambda name: "/fake/pg_restore" if name == "pg_restore" else None,
+    )
+    monkeypatch.setattr(
+        backup_package.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout=b"", stderr=b""
+        ),
+    )
+
+    target_blobs = tmp_path / "restored-blobs"
+    restore_backup_package(
+        package_dir,
+        target_database_url="postgresql://restore:pw@127.0.0.1:5432/target",
+        target_blobs_dir=target_blobs,
+        source_database_url="postgresql://backup:pw@127.0.0.1:5432/source",
+        allow_stub=True,
+    )
+
+    from mail_core.blobs.permissions import normalize_private_permissions
+
+    normalize_private_permissions(target_blobs)
+    restored = target_blobs / source_result.storage_path
+    assert restored.read_bytes() == source_blob.read_bytes()
+    store = BlobStore(target_blobs)
+    assert store.get(source_result.content_sha256) == b"restored private payload"
+
+    written = store.put(b"new mail after restore")
+    assert store.get(written.content_sha256) == b"new mail after restore"
+
+    second_package = tmp_path / "second-backup"
+    create_backup_package(
+        second_package,
+        include_blobs=True,
+        database_url_override="postgresql://backup:pw@127.0.0.1:5432/source",
+        blobs_dir=target_blobs,
+        encrypt=False,
+        allow_dump_stub=True,
+    )
+    assert verify_backup_package(second_package, allow_stub=True).ok
+    assert stat.S_IMODE(store.path_for(written.content_sha256).stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("umask", [0o022, 0o077])
+def test_restore_staging_makes_intermediate_dirs_private_without_tar_dir_members(
+    tmp_path, umask
+):
+    blobs_tar = tmp_path / "blobs.tar"
+    payload = b"blob without directory members"
+    with tarfile.open(blobs_tar, "w") as archive:
+        member = tarfile.TarInfo("blobs/aa/bb/x.blob")
+        member.size = len(payload)
+        member.uid = 0
+        member.gid = 0
+        archive.addfile(member, io.BytesIO(payload))
+
+    staging = tmp_path / "target" / ".restore_staging"
+    staging.mkdir(parents=True)
+    old_umask = os.umask(umask)
+    try:
+        backup_package._extract_blobs_to_staging(blobs_tar, staging)
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE((staging / "aa").stat().st_mode) == 0o700
+    assert stat.S_IMODE((staging / "aa" / "bb").stat().st_mode) == 0o700
+    blob = staging / "aa" / "bb" / "x.blob"
+    assert stat.S_IMODE(blob.stat().st_mode) == 0o600
+    assert (blob.stat().st_uid, blob.stat().st_gid) == (os.getuid(), os.getgid())

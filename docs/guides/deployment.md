@@ -23,6 +23,33 @@ docker compose -f docker-compose.mail-core.yml --profile distributed up --build 
 - 局域网 HTTP 部署继续可用，Compose 默认 `MAIL_CORE_COOKIE_SECURE=0`。HTTP 不加密会话 Cookie；同一网络中能够监听流量的设备可能读取 Cookie。仅在可信局域网使用 HTTP。敏感远程访问应经过 TLS 反向代理，并设置 `MAIL_CORE_COOKIE_SECURE=1`；启用 Secure Cookie 后，浏览器不会通过明文 HTTP 发送会话 Cookie。
 - `migrate` 服务先执行 `alembic upgrade head`，`api` / `worker` 在其成功后启动（distributed API 已配置 `MAIL_CORE_SKIP_MIGRATIONS=1` 与 `MAIL_CORE_EMBEDDED_WORKER=0`，独立 worker 实例 ID 为 `distributed-worker-1`；若单进程运行可通过 `MAIL_CORE_SKIP_MIGRATIONS=0 MAIL_CORE_EMBEDDED_WORKER=1` 启动）；`/ready` 会在数据库不可达、schema 未到 head 或 LISTEN 未就绪时返回 503。
 
+## 部署备份与权限边界
+
+- `scripts/deploy_mail_core.sh` 的备份服务以镜像内应用 UID 运行，blob 卷只读；密封包先写入容器私有目录，随后由宿主导出到本次部署新建的 `0700` staging 目录。导出后脚本会拒绝符号链接、规范文件/目录权限为 `0600`/`0700`、校验导出归属为执行部署的宿主用户，并用 `verify_backup_package` 校验通过后才原子发布为 `.scratch/deploy_backup_<stamp>`。
+
+- 不要再用 `--user "$(id -u):$(id -g)"` 运行备份容器，也不要把宿主备份目录 bind mount 给备份进程；这样会让同一进程同时面对宿主与应用两个数据所有者。
+
+- blob 与私有目录保持应用 UID + `0600`/`0700`。存量权限漂移时使用显式维护命令，不在应用启动时递归修补：
+
+    ```bash
+    docker compose -f docker-compose.mail-core.yml --profile distributed \
+      run --rm --no-deps --entrypoint python3 api \
+      -m mail_core.blobs.permissions /var/lib/kkmail/blobs
+    ```
+
+    宿主备份目录可用 `.venv/bin/python scripts/normalize_mail_core_permissions.py <dir>` 归一化。默认以应用 UID 运行只规范 mode，异属主会拒绝；需要修复 owner 时，以 root + `CHOWN/FOWNER/DAC_OVERRIDE` 显式提供目标 UID/GID：
+
+    ```bash
+    docker compose -f docker-compose.mail-core.yml --profile distributed \
+      run --rm --no-deps --user 0:0 \
+      --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE \
+      --entrypoint python3 api \
+      -m mail_core.blobs.permissions /var/lib/kkmail/blobs \
+      --target-uid 10001 --target-gid 999
+    ```
+
+    `DAC_OVERRIDE` 用于遍历异属主的 `0700` 目录，`FOWNER`/`CHOWN` 用于修改 mode/owner；这些能力只作用于一次性的维护容器，不加入长期运行服务。
+
 ## 对外暴露
 
 Microsoft 网页 OAuth 需将 `MAIL_CORE_PUBLIC_ORIGIN` 设置为应用实际 HTTPS Origin（协议、域名及需要时的端口，不含路径或查询）。Compose 会将该值传入 API；修改后重新创建 API 容器。在 Entra 应用的 Web 平台登记 `<Origin>/api/accounts/oauth/callback/microsoft`，与账户表单显示的回调 URI 完全一致。Client ID 和 Client Secret 在账户表单输入，服务端加密保存，不写入镜像或前端包。Google 账户不使用 OAuth：仅通过 IMAP（`imap.gmail.com`）加应用专用密码接入，无需 Origin 或 Google Cloud 配置。

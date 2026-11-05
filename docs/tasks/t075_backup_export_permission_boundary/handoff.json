@@ -1,0 +1,14 @@
+{
+  "tid": "t075",
+  "attempt": 1,
+  "execution_id": "418ad9a0356747f9a682f573d0bb435c",
+  "status": "done",
+  "branch": "t075_backup_export_permission_boundary",
+  "base_sha": "18f0f5e3e1f5d3f5a3437d7d1cc401bf5b0ffd48",
+  "tests": "touched 单元 113 passed；DB 相关 39 passed；完整 backend 1975 passed / 2 skipped；frontend 572 passed + tsc/build；desktop 全通过",
+  "blackbox": "Playwright 21 passed；真实 Docker 集成覆盖应用 UID 备份 0600 blob、宿主导出/verify、无关 UID 读取/遍历拒绝、特权 owner 迁移与归一化后再次备份",
+  "review": "code PASS（Round 5，0 finding）；test PASS（Round 5，仅 f015/f016 测试精度余量已撤回）",
+  "review_scope": "5a13ad32a8a09133",
+  "pending": [],
+  "findings": []
+}

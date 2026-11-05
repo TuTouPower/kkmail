@@ -13,6 +13,7 @@ from pathlib import Path
 from collections.abc import Iterator
 
 from mail_core.blobs.crypto import CHUNK_SIZE as _CRYPTO_CHUNK_SIZE
+from mail_core.blobs.private_fs import make_private_dir
 from mail_core.blobs.crypto import BlobCryptoError, BlobIntegrityError, Keyring, iter_unwrap, iter_wrap, load_keyring_from_env, read_key_version, wrap
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -61,7 +62,7 @@ class BlobStore:
         self.root = Path(root)
         self.keyring = keyring or load_keyring_from_env()
         self.key_version = key_version if key_version is not None else self.keyring.active_version
-        self.root.mkdir(parents=True, exist_ok=True)
+        make_private_dir(self.root)
         # A138: per-digest put locks (registry guarded by its own lock).
         self._put_locks: dict[str, threading.Lock] = {}
         self._put_locks_guard = threading.Lock()
@@ -123,7 +124,8 @@ class BlobStore:
                 # under an unknown key version raises plain
                 # BlobCryptoError and must also fall through to a rewrite.
                 pass
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        make_private_dir(dest.parent.parent)
+        make_private_dir(dest.parent)
         payload = wrap(data, keyring=self.keyring, key_version=self.key_version)
         fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=".tmp-")
         try:
@@ -186,7 +188,8 @@ class BlobStore:
                 return BlobWriteResult(digest, dest.stat().st_size, rel, disk_version)
             except BlobCryptoError:
                 pass
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        make_private_dir(dest.parent.parent)
+        make_private_dir(dest.parent)
         fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=".tmp-")
         size = 0
         try:

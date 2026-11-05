@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import stat
 
+import pytest
+
 import mail_core.blobs.rotate as rotate
 from mail_core.blobs.crypto import Keyring, unwrap, wrap
 
@@ -16,13 +18,21 @@ def _make_old_blob(tmp_path):
     return keyring, path
 
 
-def test_rewrap_replaced_file_has_0600_permissions(tmp_path):
+@pytest.mark.parametrize("umask", [0o022, 0o077])
+def test_rewrap_replaced_file_has_0600_permissions(tmp_path, umask):
     keyring, path = _make_old_blob(tmp_path)
+    path.parent.chmod(0o755)
 
-    changed, ver = rotate.rewrap_blob_file(path, keyring=keyring)
+    old_umask = os.umask(umask)
+    try:
+        changed, ver = rotate.rewrap_blob_file(path, keyring=keyring)
+    finally:
+        os.umask(old_umask)
 
     assert changed and ver == 2
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert (path.stat().st_uid, path.stat().st_gid) == (os.getuid(), os.getgid())
     assert unwrap(path.read_bytes(), keyring=keyring) == (b"a318-payload", 2)
 
 

@@ -10,6 +10,12 @@ RUN python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --retries 5 --require-hashes -r /tmp/requirements-mail-core.lock
 COPY src/mail_core ./src/mail_core
 
+# Container-private backup workspace. The deploy script exports the sealed
+# package from this container after the backup finishes; it never bind-mounts
+# a host directory into the backup process, so the process can keep the
+# application uid and still read 0600 blobs.
+RUN mkdir -p /backup && chown 10001:999 /backup && chmod 0700 /backup
+
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONPATH=/app/src
 

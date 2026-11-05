@@ -210,6 +210,7 @@ scripts/mail-core-backup-restore-drill.sh
 - **防覆盖与越界阻断**：严格拒绝源库与目标库相同，防止破坏性覆盖生产库；严格校验目标 Blob 目录拒绝路径穿越与越界符号链接；
 - **真实业务核验**：恢复后通过独立会话核验账号、邮件、正文、附件关联，并使用密钥解密读取 Blob 确保字节与原始附件完全一致；
 - **篡改与伪造拒绝**：校验错误密钥、篡改数据、缺失 Blob 抛出明确异常；声明禁止将 SQL stub 备份伪造为可恢复证据。
+- **私有权限与身份边界 (t075)**：覆盖新写入/轮换后 blob 的 `0600` 文件与 `0700` 目录（umask 022/077）、以无关 UID 读取失败、备份容器以应用 UID 读取真实 0600 blob、宿主导出 staging 归属与 0700、恢复后 owner/mode 一致且应用可再次备份。相关入口：`tests/mail_core/test_backup_container_permissions.py`（真实 Docker：应用 UID 备份 0600 blob、宿主导出、无关 UID 拒绝）、`tests/mail_core/test_backup_export.py`（导出/校验/失败不发布/0700/0600）、`tests/mail_core/test_blob_permissions.py`、`tests/mail_core/test_blob_store.py`、`tests/mail_core/test_backup_package.py`。
 
 ## 多进程 Worker 竞争与故障恢复测试
 

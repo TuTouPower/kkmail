@@ -46,6 +46,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
 
     - 原文存储：内容寻址分块 AES-256-GCM 流式加密 (`KKMS`)，支持多版本密钥轮换。
     - 附件与垃圾回收：严格追踪 `MessageBlobLink` 与 `Attachment.blob_id` 双重引用，Fail-Closed 二次校验防误删。
+    - 私有数据权限与备份边界 (t075)：API / Worker / 备份 / 恢复统一使用容器镜像的应用 UID；blob 文件固定 `0600`、私有目录固定 `0700`，不依赖进程 umask。备份容器只读挂载 blob 卷，在容器私有目录生成并校验密封包；部署脚本由宿主通过 Docker CLI/API 导出到宿主所有的 `0700` staging，重新规范归属/权限并校验后才原子发布。恢复以目标应用 UID 显式创建私有目录与文件，不继承归档 UID 或 umask；存量权限只经显式维护命令归一化，不由应用启动路径递归修补。
     - MIME 解析错误传递链路：Worker 归档期解析正文、报头或附件文件名失败时，保存 raw MIME 至 BlobStore 确保可恢复性，并持久记录脱敏 `MessageBody.parse_error`；详情 API (`/api/mail/messages/{id}`) 完整返回该字段；前端 `mailCoreToMailDetail` 转换透传至 `MailDetail.parse_error`，`MessageReader` 以可访问 alert 横幅明确提示解析失败及原因，即使存在摘要或部分内容亦不被静默吞掉或伪报为空正文。
 
 ## 桌面主进程与安全复制边界
