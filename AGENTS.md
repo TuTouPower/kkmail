@@ -39,6 +39,8 @@ kkmail 是基于 mail-core 的现代化自托管多账号邮件客户端（FastA
 |`config/`|配置（默认 + 环境覆盖 +`.env.example`）|仅`.env.example` 入库；真值写本地 `.env`|
 |`assets/`|静态资产源文件|仅在 task 执行期按 spec 修改，或经授权由 `pending-fix` 在 main 直修；debug 复现不得写入|
 |`.repo_template/`|模板工具链（skills、scripts、docs、hooks）|仅模板演进时修改；细目与写权见`.repo_template/docs/usage.md`|
+|`.repo_template/docs/task_template/`|task 文件模板（非工作项）|只改模板本身|
+|`.repo_template/docs/review_prompts/`|review prompt 模板|改审查标准时更新|
 |`artifacts/` `data/` `.scratch/`|产物、运行数据、一次性草稿|运行与草稿；debug 复现和临时实验只写`.scratch/`（已 gitignore）；需保留的 spike 验证材料写 `docs/spikes/{sid}_{slug}/code/`|
 
 ## 开发原则
