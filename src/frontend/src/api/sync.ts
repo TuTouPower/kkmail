@@ -41,6 +41,108 @@ export function syncFailureDetail(reports: readonly SyncRequestOut[]): string | 
   return null
 }
 
+/**
+ * A21: Whether any of the completed immediate sync requests launched a
+ * background sync for non-inbox folders that is still in flight.
+ */
+export function hasActiveBackgroundSync(reports: readonly SyncRequestOut[]): boolean {
+  return reports.some(
+    (report) =>
+      Boolean(report.background_request_id) &&
+      report.background_state !== 'complete' &&
+      report.background_state !== 'failed',
+  )
+}
+
+/**
+ * A21: Failure detail specifically for decoupled background folder sync.
+ */
+export function backgroundSyncFailureDetail(reports: readonly SyncRequestOut[]): string | null {
+  for (const report of reports) {
+    if (report.background_state !== 'failed') continue
+    const message = (report.background_errors ?? []).map((error) => error.safe_message).find((text) => !!text)
+    return message ?? '部分文件夹同步失败'
+  }
+  return null
+}
+
+export interface BackgroundSyncProgress {
+  active: boolean
+  state: 'queued' | 'running' | 'complete' | 'failed' | null
+  error: string | null
+}
+
+/**
+ * A21: Monitor decoupled background folder discovery and sync independently
+ * without holding the primary sync button in a spinning state.
+ */
+export async function pollBackgroundSync(
+  initial: readonly SyncRequestOut[],
+  callbacks: {
+    onProgress?: (progress: BackgroundSyncProgress) => void
+    isCancelled?: () => boolean
+    pollIntervalMs?: number
+  } = {},
+): Promise<void> {
+  const interval = callbacks.pollIntervalMs ?? SYNC_POLL_INTERVAL_MS
+  const bgIds = Array.from(
+    new Set(
+      initial
+        .map((r) => r.background_request_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  )
+  if (!bgIds.length) return
+
+  let activeReports = [...initial]
+  for (;;) {
+    if (callbacks.isCancelled?.()) return
+    const stillActive = activeReports.filter(
+      (r) =>
+        Boolean(r.background_request_id) &&
+        r.background_state !== 'complete' &&
+        r.background_state !== 'failed',
+    )
+    if (!stillActive.length) {
+      const err = backgroundSyncFailureDetail(activeReports)
+      callbacks.onProgress?.({
+        active: false,
+        state: err ? 'failed' : 'complete',
+        error: err,
+      })
+      return
+    }
+
+    callbacks.onProgress?.({
+      active: true,
+      state: 'running',
+      error: null,
+    })
+
+    await new Promise<void>((resolve) => setTimeout(resolve, interval))
+    if (callbacks.isCancelled?.()) return
+
+    try {
+      const freshBg = await Promise.all(
+        stillActive.map((r) => api.getSyncRequest(r.background_request_id!)),
+      )
+      const freshById = new Map(freshBg.map((r) => [r.id, r]))
+      activeReports = activeReports.map((r) => {
+        if (!r.background_request_id) return r
+        const fresh = freshById.get(r.background_request_id)
+        if (!fresh) return r
+        return {
+          ...r,
+          background_state: fresh.state,
+          background_errors: fresh.errors,
+        }
+      })
+    } catch {
+      // Tolerate transient errors during background poll
+    }
+  }
+}
+
 export interface SyncWaitResult {
   reports: SyncRequestOut[]
   cancelled: boolean

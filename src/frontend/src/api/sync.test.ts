@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { __resetCsrfForTests, api, type SyncRequestOut } from './client'
-import { isSyncTerminalState, SYNC_POLL_MAX_CONSECUTIVE_FAILURES, syncFailureDetail, waitForSyncRequests } from './sync'
+import {
+  backgroundSyncFailureDetail,
+  hasActiveBackgroundSync,
+  isSyncTerminalState,
+  pollBackgroundSync,
+  SYNC_POLL_MAX_CONSECUTIVE_FAILURES,
+  syncFailureDetail,
+  waitForSyncRequests,
+} from './sync'
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -163,5 +171,83 @@ describe('sync terminal state and failure detail', () => {
 
   it('falls back to a generic message when a failed request has no safe_message', () => {
     expect(syncFailureDetail([report({ state: 'failed', errors: [] })])).toBe('同步失败')
+  })
+})
+
+describe('A21 decoupled background sync feedback', () => {
+  it('detects active background sync correctly', () => {
+    expect(hasActiveBackgroundSync([report({ background_request_id: 'bg-1', background_state: 'running' })])).toBe(true)
+    expect(hasActiveBackgroundSync([report({ background_request_id: 'bg-1', background_state: 'queued' })])).toBe(true)
+    expect(hasActiveBackgroundSync([report({ background_request_id: 'bg-1', background_state: 'complete' })])).toBe(false)
+    expect(hasActiveBackgroundSync([report({ background_request_id: 'bg-1', background_state: 'failed' })])).toBe(false)
+    expect(hasActiveBackgroundSync([report({ background_request_id: null })])).toBe(false)
+  })
+
+  it('extracts background failure details safely', () => {
+    const failedBg = report({
+      background_request_id: 'bg-1',
+      background_state: 'failed',
+      background_errors: [{ target_id: 't-1', code: 'timeout', safe_message: '垃圾箱同步超时' }],
+    })
+    expect(backgroundSyncFailureDetail([failedBg])).toBe('垃圾箱同步超时')
+    expect(backgroundSyncFailureDetail([report({ background_state: 'complete' })])).toBeNull()
+  })
+
+  it('pollBackgroundSync monitors until background complete', async () => {
+    let callCount = 0
+    const mock = vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u === '/api/mail/sync/requests/bg-1') {
+        callCount += 1
+        return json(report({ id: 'bg-1', state: callCount >= 2 ? 'complete' : 'running' }))
+      }
+      return json({ detail: 'unexpected' }, 404)
+    })
+    vi.stubGlobal('fetch', mock)
+
+    const progresses: any[] = []
+    await pollBackgroundSync(
+      [report({ id: 'req-1', state: 'complete', background_request_id: 'bg-1', background_state: 'running' })],
+      {
+        pollIntervalMs: 1,
+        onProgress: (p) => progresses.push(p),
+      },
+    )
+
+    expect(progresses.some((p) => p.active)).toBe(true)
+    const final = progresses[progresses.length - 1]
+    expect(final.active).toBe(false)
+    expect(final.state).toBe('complete')
+  })
+
+  it('pollBackgroundSync reports isolated error when background fails', async () => {
+    const mock = vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u === '/api/mail/sync/requests/bg-err') {
+        return json(
+          report({
+            id: 'bg-err',
+            state: 'failed',
+            errors: [{ target_id: 't-2', code: 'folder_err', safe_message: '归档文件夹网络中断' }],
+          }),
+        )
+      }
+      return json({ detail: 'unexpected' }, 404)
+    })
+    vi.stubGlobal('fetch', mock)
+
+    const progresses: any[] = []
+    await pollBackgroundSync(
+      [report({ id: 'req-1', state: 'complete', background_request_id: 'bg-err', background_state: 'running' })],
+      {
+        pollIntervalMs: 1,
+        onProgress: (p) => progresses.push(p),
+      },
+    )
+
+    const final = progresses[progresses.length - 1]
+    expect(final.active).toBe(false)
+    expect(final.state).toBe('failed')
+    expect(final.error).toBe('归档文件夹网络中断')
   })
 })

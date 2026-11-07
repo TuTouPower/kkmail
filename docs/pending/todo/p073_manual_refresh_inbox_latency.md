@@ -6,4 +6,15 @@
 - 测试缺口：`tests/mail_core/test_sync_mode_policy.py` 等只种一个 inbox 文件夹，从不覆盖多文件夹的入队顺序与优先级，故 inbox 排第 6 无测试可红；baseline/metadata 入队路径同样无顺序断言；`delta.py` 与 `engine.py` metadata 续页/lease-busy/限流重排的 priority 保持也无覆盖。应补后端测试：种 inbox + 多个有 baseline 的文件夹，断言 inbox 任务 priority 数值严格小于其他文件夹（同事务 `created_at` 并列，不能只断言认领顺序）；覆盖全量/metadata 分页续页路径；覆盖 delta 与 metadata 各重排路径后 inbox 优先级不丢失。前端补充验证：收件箱 delta 落库触发 `message.upserted` 后列表即可见，不以整个账号请求终态为可见前提。
 - 线索：`.scratch/bug_inbox_refresh_latency/timeline.md`；生产证据见 `sync_requests` id `006196f0-0ca3-43e4-9842-97fe87656a58` 与对应 `worker_jobs` 时间戳。
 - 残留（t074 不覆盖）：文件夹发现 12.5s 仍在收件箱前，前端仍等全部文件夹完成后终态/停止旋转；因此按钮空转时长不会完全消失。后续可选：手动刷新先入队 folder-scoped delta 绕开发现耗时，或缓存/并行目录发现。
-- 处理：未开
+- 处理：已解决（Adoption A21）
+    - 解耦方案：
+        1. 在 `create_sync_request` / `resolve_sync_targets` 中，对已有有效收件箱的账号，主刷新请求的目标直接解析为收件箱文件夹，入队 `SYNC_FOLDER_DELTA`（priority=20，前台交互优先级），仅以收件箱同步完成作为主刷新请求的终态判定依据。
+        2. 全目录发现（`SYNC_ACCOUNT_FOLDERS`）与其它非收件箱文件夹的同步拓扑拆分为独立的后台任务请求（`background=True`，priority=60），由主请求携带 `background_request_id` 关联追踪，独立调度、独立结算。
+        3. 若为新账号或收件箱角色失效，回退至必要目录发现流程，不产生解耦后台请求。
+        4. 前端 `api/sync.ts` 与 `MessageList.tsx` 在收件箱终态后立即解除 loading 旋转并失效/刷新邮件列表；后台任务在状态栏独立监控展示进度；若后台次要文件夹同步失败，执行错误隔离，不覆盖收件箱已成功的状态。
+    - 测试覆盖：
+        - `tests/mail_core/test_sync_inbox_first.py`：新增 `test_a21_inbox_settles_independently_and_background_syncs_siblings`、`test_a21_background_folder_failure_is_isolated_from_inbox` 和 `test_a21_new_account_without_inbox_runs_discovery`，覆盖多文件夹下收件箱优先结算、后台任务独立完成、错误隔离与新账号回退。
+        - `src/frontend/src/api/sync.test.ts`：覆盖 `hasActiveBackgroundSync`、`backgroundSyncFailureDetail` 与 `pollBackgroundSync`。
+    - 契约说明：
+        - `SyncRequestOut` 扩展 `inbox_ready`、`background_request_id`、`background_state` 和 `background_errors` 字段。
+        - OpenAPI 规范（`schemas/openapi.json`）与前端生成类型（`schema.ts`）已同步更新。

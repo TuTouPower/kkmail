@@ -331,7 +331,12 @@ def sync_account_folders(
             account.email.lower().endswith(("@gmail.com", "@googlemail.com"))
             or "gmail" in str((account.config or {}).get("imap_host", "")).lower()
         )
-        for rf in remote_folders:
+        # A21: Sort folders so inbox is processed and enqueued first
+        sorted_remote_folders = sorted(
+            remote_folders,
+            key=lambda rf: 0 if (getattr(rf, "role", None) == "inbox" or getattr(rf, "name", "").upper() == "INBOX") else 1,
+        )
+        for rf in sorted_remote_folders:
             # A321: virtual folders are identified ONLY by role or the
             # exact remote_id set. A name-substring heuristic would pause
             # user labels such as "[Gmail]/重要客户" forever.

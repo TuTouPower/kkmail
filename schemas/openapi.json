@@ -2535,6 +2535,41 @@
       },
       "SyncRequestOut": {
         "properties": {
+          "background_errors": {
+            "items": {
+              "$ref": "#/components/schemas/SyncTargetErrorOut"
+            },
+            "title": "Background Errors",
+            "type": "array"
+          },
+          "background_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Request Id"
+          },
+          "background_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "queued",
+                  "running",
+                  "complete",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background State"
+          },
           "completed_count": {
             "title": "Completed Count",
             "type": "integer"
@@ -2568,6 +2603,11 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "inbox_ready": {
+            "default": false,
+            "title": "Inbox Ready",
+            "type": "boolean"
           },
           "mode": {
             "enum": [

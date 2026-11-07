@@ -501,11 +501,16 @@ def test_claimed_metadata_job_lease_busy_successor_keeps_priority():
 
 
 # ---------------------------------------------------------------------------
-# AC-004: the request settles only after every folder job settles
+# Adoption A21: Inbox sync settles independently, background syncs siblings
 # ---------------------------------------------------------------------------
+# Note on removed test:
+# test_request_settles_only_after_all_folder_deltas was removed because its semantics
+# required the primary manual refresh request to wait for all sibling folder deltas
+# before reaching a terminal state. Under Adoption A21, manual inbox sync is decoupled
+# from background full discovery, achieving an independent terminal state upon inbox delta completion.
 
 
-def test_request_settles_only_after_all_folder_deltas(monkeypatch):
+def test_a21_inbox_settles_independently_and_background_syncs_siblings(monkeypatch):
     account_id, folders = _seed_account(baselines=True)
     provider = _provider()
     monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, **_k: provider)
@@ -515,7 +520,7 @@ def test_request_settles_only_after_all_folder_deltas(monkeypatch):
     with Session() as session:
         req, created = create_sync_request(
             session,
-            client_request_id=f"t074-{uuid.uuid4().hex}",
+            client_request_id=f"a21-{uuid.uuid4().hex}",
             mode="delta",
             trigger="manual",
             scope={"account_id": str(account_id)},
@@ -526,33 +531,112 @@ def test_request_settles_only_after_all_folder_deltas(monkeypatch):
         assert created
         request_id = req.id
 
-    discovery_job_id = _claim_one(account_id, JobType.SYNC_ACCOUNT_FOLDERS.value)
-    assert _run_job(discovery_job_id) is True
+    # 1. Under A21, the primary request targets the known inbox folder directly (priority 20)
+    # and a separate background request targets full discovery (priority 60).
+    with Session() as session:
+        report = get_sync_request_report(session, request_id)
+        assert report is not None
+        assert report.state == "queued"
+        assert report.inbox_ready is False
+        assert report.background_request_id is not None
+        assert report.background_state == "queued"
+        bg_req_id = uuid.UUID(report.background_request_id)
 
-    by_folder = _jobs_by_folder(account_id, JobType.SYNC_FOLDER_DELTA.value)
-    assert by_folder[folders["INBOX"]].priority == 55
-
-    # Inbox settles first; the request must stay non-terminal while the
-    # sibling folder deltas are still outstanding.
+    # 2. Worker claims inbox delta first (priority 20 < 60)
     inbox_job_id = _claim_one(account_id, JobType.SYNC_FOLDER_DELTA.value)
     with Session() as session:
         claimed = session.get(WorkerJob, inbox_job_id)
         assert uuid.UUID(str(claimed.payload["folder_id"])) == folders["INBOX"]
+        assert claimed.priority == 20
+    assert _run_job(inbox_job_id) is True
+
+    # 3. Upon inbox delta completion, primary request enters terminal complete state immediately!
+    with Session() as session:
+        report = get_sync_request_report(session, request_id)
+        assert report is not None
+        assert report.state == "complete"
+        assert report.finished_at is not None
+        assert report.inbox_ready is True
+        # Background sync is still queued / running
+        assert report.background_state in ("queued", "running")
+
+    # 4. Now background folder discovery job runs independently
+    discovery_job_id = _claim_one(account_id, JobType.SYNC_ACCOUNT_FOLDERS.value)
+    assert _run_job(discovery_job_id) is True
+
+    # Sibling folders run their deltas until all phase jobs complete
+    while True:
+        try:
+            job_id = _claim_one(account_id, JobType.SYNC_FOLDER_DELTA.value)
+            assert _run_job(job_id) is True
+        except AssertionError:
+            break
+
+    # 5. Background sync request now finishes and settles to complete
+    with Session() as session:
+        report = get_sync_request_report(session, request_id)
+        assert report is not None
+        assert report.state == "complete"
+        assert report.background_state == "complete"
+
+        bg_report = get_sync_request_report(session, bg_req_id)
+        assert bg_report is not None
+        assert bg_report.state == "complete"
+
+
+def test_a21_background_folder_failure_is_isolated_from_inbox(monkeypatch):
+    monkeypatch.setenv("MAIL_CORE_JOB_MAX_ATTEMPTS", "1")
+    account_id, folders = _seed_account(baselines=True)
+    provider = _provider()
+    monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, **_k: provider)
+    monkeypatch.setattr(delta_mod, "build_provider", lambda *_a, **_k: provider)
+
+    Session = get_session_factory()
+    with Session() as session:
+        req, created = create_sync_request(
+            session,
+            client_request_id=f"a21-fail-{uuid.uuid4().hex}",
+            mode="delta",
+            trigger="manual",
+            scope={"account_id": str(account_id)},
+            account_id=account_id,
+            folder_id=None,
+        )
+        session.commit()
+        assert created
+        request_id = req.id
+
+    # Settle inbox delta successfully
+    inbox_job_id = _claim_one(account_id, JobType.SYNC_FOLDER_DELTA.value)
     assert _run_job(inbox_job_id) is True
 
     with Session() as session:
         report = get_sync_request_report(session, request_id)
-    assert report.state != "complete"
-    assert report.finished_at is None
+        assert report.state == "complete"
 
-    for _ in range(2):
-        job_id = _claim_one(account_id, JobType.SYNC_FOLDER_DELTA.value)
-        assert _run_job(job_id) is True
+    # Background discovery runs
+    discovery_job_id = _claim_one(account_id, JobType.SYNC_ACCOUNT_FOLDERS.value)
+    assert _run_job(discovery_job_id) is True
 
+    # Make provider fail for sibling deltas
+    monkeypatch.setattr(
+        delta_mod,
+        "sync_folder_delta",
+        lambda *args, **kwargs: {"status": "error", "error": "sibling_failed"},
+    )
+    while True:
+        try:
+            sibling_job_id = _claim_one(account_id, JobType.SYNC_FOLDER_DELTA.value)
+            _run_job(sibling_job_id)
+        except AssertionError:
+            break
+
+    # Primary request remains complete (error isolation)
     with Session() as session:
         report = get_sync_request_report(session, request_id)
-    assert report.state == "complete"
-    assert report.finished_at is not None
+        assert report.state == "complete"
+        assert report.inbox_ready is True
+        assert report.background_state == "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -631,3 +715,47 @@ def test_requeued_inbox_delta_claimed_before_sibling():
         claimed = session.get(WorkerJob, job_id)
         assert uuid.UUID(str(claimed.payload["folder_id"])) == folders["INBOX"]
         assert claimed.priority == 55
+
+
+def test_a21_new_account_without_inbox_runs_discovery(monkeypatch):
+    # For a new account or an account with no selectable inbox,
+    # manual refresh follows the required discovery flow directly.
+    account_id, folders = _seed_account(baselines=False, remote_folders=[])
+    provider = MemoryProvider(folders=[RemoteFolder("INBOX", "INBOX", "inbox")])
+    monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, **_k: provider)
+
+    Session = get_session_factory()
+    with Session() as session:
+        req, created = create_sync_request(
+            session,
+            client_request_id=f"a21-new-{uuid.uuid4().hex}",
+            mode="delta",
+            trigger="manual",
+            scope={"account_id": str(account_id)},
+            account_id=account_id,
+            folder_id=None,
+        )
+        session.commit()
+        assert created
+        request_id = req.id
+
+    with Session() as session:
+        report = get_sync_request_report(session, request_id)
+        assert report is not None
+        assert report.state == "queued"
+        # No background decoupled request created because this request itself does discovery
+        assert report.background_request_id is None
+
+    # Claim and run discovery job
+    discovery_job_id = _claim_one(account_id, JobType.SYNC_ACCOUNT_FOLDERS.value)
+    assert _run_job(discovery_job_id) is True
+
+    # Now the inbox has been discovered and its initial metadata job enqueued
+    metadata_job_id = _claim_one(account_id, JobType.SYNC_FOLDER_METADATA.value)
+    assert _run_job(metadata_job_id) is True
+
+    with Session() as session:
+        report = get_sync_request_report(session, request_id)
+        assert report is not None
+        assert report.state == "complete"
+        assert report.inbox_ready is True
