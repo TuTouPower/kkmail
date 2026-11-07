@@ -63,9 +63,9 @@
         - Verification: static
 - [High][95] docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3 — 已归档 pending 正文泄露真实用户个人 Gmail 邮箱地址
     - Sources: bundle_local_docs_archive_general.md (f_docs_archive_general_p060_pii_leak)
-    - f_docs_archive_general_p060_pii_leak: docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3 正文写出："用户截图 2026-10-27（账号 xiaoxiaoguang2000@gmail.com）。"; xiaoxiaoguang2000@gmail.com 明显为用户真实个人邮箱，非 example.com / test.com 等脱敏样例，直接导致个人 PII 隐私在公开仓外泄
+    - f_docs_archive_general_p060_pii_leak: docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3 正文曾写出真实个人邮箱："用户截图 2026-10-27（账号 [REDACTED_GMAIL]）"（已脱敏为 user@example.com 并勘误）；明显为用户真实个人邮箱，非 example.com / test.com 等脱敏样例，直接导致个人 PII 隐私在公开仓外泄
         - Impact: 公开仓库中直接暴露特定开发者的真实个人邮箱，面临垃圾邮件骚扰与身份关联风险，违反开源安全脱敏铁律
-        - Fix: 将 xiaoxiaoguang2000@gmail.com 替换为符合 RFC 2606 的脱敏样例（如 user_gmail@example.com），并在文末注明脱敏修订
+        - Fix: 将真实个人邮箱替换为符合 RFC 2606 的脱敏样例（如 user@example.com），并在文末注明脱敏修订
         - Verification: static
 - [High][95] src/mail_core/db/alembic/versions/ — Alembic 迁移链线性膨胀（0001~0030）与大表同步 DDL 锁升级阻断演进
     - Sources: bundle_global_evolution.md (f_evo_alembic_linear_debt_and_lock_risk)
@@ -117,21 +117,21 @@
         - Verification: static
 - [Medium][100] docs/archive/tasks/t075_backup_export_permission_boundary/review_code.md:6 — 归档任务 review 文件硬编码开发者本地绝对路径及系统用户名
     - Sources: bundle_local_docs_archive_tasks_b.md (f_docs_archive_tasks_b_absolute_paths_in_reviews)
-    - f_docs_archive_tasks_b_absolute_paths_in_reviews: docs/archive/tasks/t075_backup_export_permission_boundary/review_code.md:6 及 review_test.md:6 包含 target：git -C '/Users/karson/kar/code/kkmail_t075'; docs/archive/tasks/t061_idle_inbox_and_all_folder_status_patrol/review_code.md:6 及 review_test.md:6 包含 target：git -C '/home/hatch/workspace/kkmail_t061'; 此问题此前已在第三轮审阅 docs/archive/reviews/review_20261025_020805/bundle_privacy_history.md 与第四轮审阅中被定为 Medium，但在新增任务归档时再次被带入
+    - f_docs_archive_tasks_b_absolute_paths_in_reviews: docs/archive/tasks/t075_backup_export_permission_boundary/review_code.md:6 及 review_test.md:6 原包含本地私有绝对路径 target：git -C '<workspace>/kkmail_t075'（现已脱敏并勘误）；docs/archive/tasks/t061_idle_inbox_and_all_folder_status_patrol/review_code.md:6 及 review_test.md:6 原包含 target：git -C '<workspace>/kkmail_t061'（现已脱敏并勘误）；此问题此前已在第三轮审阅 docs/archive/reviews/review_20261025_020805/bundle_privacy_history.md 与第四轮审阅中被定为 Medium，但在新增任务归档时再次被带入
         - Impact: 在公开开源仓库暴露维护者的本地工作目录层级与操作系统用户名，违反公开仓安全基线
         - Fix: 对 docs/archive/tasks/t061/ 及 t075/ 的 review_code.md 与 review_test.md 执行脱敏清洗，将本地绝对路径统一替换为相对路径或占位符（如 git -C '<local-path>'），并在 CI/pre-commit 增加路径门禁
         - Verification: static
 - [Medium][90] docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11 — 已归档 pending 仍残留真实口令长度特征描述未脱敏
     - Sources: bundle_local_docs_archive_general.md (f_docs_archive_general_p027_credential_characteristic_leak)
-    - f_docs_archive_general_p027_credential_characteristic_leak: docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11 描述："（当前保存口令长 13 位，非有效 16 位网易客户端授权码或口令错误）"; 在第四轮 review（review_20261027_021416/review_intensive.md:11）中已作为 Critical 明确指出应"删除账号 UUID 与口令长度描述"，当前仍保留了 13 位口令长度的具体特征
+    - f_docs_archive_general_p027_credential_characteristic_leak: docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11 曾包含口令具体长度描述（已脱敏泛化为因口令配置不匹配并勘误）；在第四轮 review（review_20261027_021416/review_intensive.md:11）中已作为 Critical 明确指出应"删除账号 UUID 与口令长度描述"，此前仍保留了口令长度的具体特征
         - Impact: 泄露了特定账号的密码长度与凭据特征，降低了口令字典破解空间
-        - Fix: 删除"当前保存口令长 13 位"等精确长度描述，泛化为"因口令配置不匹配导致认证失败"
+        - Fix: 删除精确口令长度特征描述，泛化为"因口令配置不匹配导致认证失败"
         - Verification: static
 - [Medium][95] docs/archive/reviews/review_20261026_005019_full_repository/execution_log.md:5 — 历史审阅修复执行日志残留宿主机绝对路径
     - Sources: bundle_local_docs_reviews_historical.md (f_docs_reviews_execution_log_absolute_path)
-    - f_docs_reviews_execution_log_absolute_path: docs/archive/reviews/review_20261026_005019_full_repository/execution_log.md:5 包含字面路径："- 集成工作区：/Users/karson/kar/code/kkmail_review_integration"; 同目录下的 repair_plan.md 已在之前轮次修复为 占位，但 execution_log.md 遗漏了该项替换
+    - f_docs_reviews_execution_log_absolute_path: docs/archive/reviews/review_20261026_005019_full_repository/execution_log.md:5 原包含开发者宿主机绝对路径（已脱敏为 "$WORKTREES/kkmail_review_integration" 占位并勘误）；同目录下的 repair_plan.md 已在之前轮次修复为占位，但 execution_log.md 遗漏了该项替换
         - Impact: 公开仓库中暴露开发者本地工作区路径和用户名
-        - Fix: 将 execution_log.md:5 中的绝对路径替换为 /kkmail_review_integration 占位符
+        - Fix: 将 execution_log.md:5 中的绝对路径替换为 $WORKTREES/kkmail_review_integration 占位符
         - Verification: static
 - [Medium][95] src/mail_core/security/auth.py:564 — 底层认证模块反向依赖运行时引导模块形成导入环
     - Sources: bundle_global_architecture.md (f_arch_auth_bootstrap_cycle)
@@ -153,7 +153,7 @@
         - Verification: static
 - [Medium][95] docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3, docs/archive/tasks/t075/review_code.md:6 — 敏感信息（PII 真实邮箱/宿主机路径/口令特征）反复渗入历史归档且缺乏自动化门禁
     - Sources: bundle_global_evolution.md (f_evo_archive_governance_pii_and_path_leak_recurrent)
-    - f_evo_archive_governance_pii_and_path_leak_recurrent: docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3 泄露真实用户个人邮箱 xiaoxiaoguang2000@gmail.com (f_docs_archive_general_p060_pii_leak)；; docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11 残留真实口令 13 位长度特征；; docs/archive/tasks/t075/review_code.md:6 及 t061/review_code.md:6 包含开发者宿主机绝对路径（/Users/karson/... 与 /home/hatch/...）；; 上述问题在第三轮及第四轮 review 中已多次作为 Medium/Critical 指出并局部修复，但在后续新 task 归档中再次反复出现，缺乏自动化 pre-commit 门禁。
+    - f_evo_archive_governance_pii_and_path_leak_recurrent: docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3 曾泄露真实用户个人邮箱（已脱敏为 user@example.com 并勘误） (f_docs_archive_general_p060_pii_leak)；; docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11 原残留真实口令长度特征（已脱敏并勘误）；; docs/archive/tasks/t075/review_code.md:6 及 t061/review_code.md:6 原包含开发者宿主机绝对路径（已脱敏为占位符并勘误）；; 上述问题在第三轮及第四轮 review 中已多次作为 Medium/Critical 指出并局部修复，但在后续新 task 归档中再次反复出现，缺乏自动化 pre-commit 门禁。
         - Impact: 开源公开仓库中持续暴露特定开发者隐私与环境结构，产生合规与钓鱼风险；“归档只追加”原则与脱敏要求频繁冲突，反复消耗工程人力进行全仓正则扫描与人工勘误，长期资产治理成本发散。
         - Fix: 在 .repo_template/hooks/pre-commit 与 CI 检查中植入自动化脱敏门禁，通过正则表达式强制阻断非 RFC 2606 邮箱、密码长度数值描述及本地绝对路径；对历史已泄露文件执行一次性就地脱敏并附加勘误修订声明。
         - Verification: static

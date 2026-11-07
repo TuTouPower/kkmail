@@ -3,7 +3,7 @@
 - task：`t061_idle_inbox_and_all_folder_status_patrol`
 - spec：`docs/tasks/t061_idle_inbox_and_all_folder_status_patrol/spec.md`
 - diff_anchor：`327acc0250f26c71d7ad2b777e876b92ff79c484`
-- target：`git -C '/home/hatch/workspace/kkmail_t061' diff 327acc0250f26c71d7ad2b777e876b92ff79c484`
+- target：`git -C '<workspace>/kkmail_t061' diff 327acc0250f26c71d7ad2b777e876b92ff79c484`
 - round：1
 - reviewed_at：2026-10-28T04:56:26+08:00
 
@@ -323,3 +323,5 @@ reviewed_scope: 56fefa3627511b3d
 - 总体判断：已提交的单一执行 commit 与前五轮最终 PASS 的代码形态一致，收尾文档/handoff 改动未引入代码或文档不一致，无阻断项，可放行。
 
 verdict: PASS
+
+- 勘误注记：Line 6 宿主机绝对路径已脱敏为占位符 <workspace>/kkmail_t061。

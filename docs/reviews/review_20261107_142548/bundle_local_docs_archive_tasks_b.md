@@ -45,7 +45,7 @@
 
 - [Medium][100] docs/archive/tasks/t075_backup_export_permission_boundary/review_code.md:6 — 归档任务 review 文件硬编码开发者本地绝对路径及系统用户名
     - ID: f_docs_archive_tasks_b_absolute_paths_in_reviews; verification: static
-    - Evidence: docs/archive/tasks/t075_backup_export_permission_boundary/review_code.md:6 及 review_test.md:6 包含 target：git -C '/Users/karson/kar/code/kkmail_t075'; docs/archive/tasks/t061_idle_inbox_and_all_folder_status_patrol/review_code.md:6 及 review_test.md:6 包含 target：git -C '/home/hatch/workspace/kkmail_t061'; 此问题此前已在第三轮审阅 docs/archive/reviews/review_20261025_020805/bundle_privacy_history.md 与第四轮审阅中被定为 Medium，但在新增任务归档时再次被带入
+    - Evidence: docs/archive/tasks/t075_backup_export_permission_boundary/review_code.md:6 及 review_test.md:6 原包含宿主机私有绝对路径 target：git -C '<workspace>/kkmail_t075'（现已脱敏并勘误）；docs/archive/tasks/t061_idle_inbox_and_all_folder_status_patrol/review_code.md:6 及 review_test.md:6 原包含本地工作区绝对路径 target：git -C '<workspace>/kkmail_t061'（现已脱敏并勘误）；此问题此前已在第三轮审阅 docs/archive/reviews/review_20261025_020805/bundle_privacy_history.md 与第四轮审阅中被定为 Medium，但在新增任务归档时再次被带入
     - Impact: 在公开开源仓库暴露维护者的本地工作目录层级与操作系统用户名，违反公开仓安全基线
     - Fix: 对 docs/archive/tasks/t061/ 及 t075/ 的 review_code.md 与 review_test.md 执行脱敏清洗，将本地绝对路径统一替换为相对路径或占位符（如 git -C '<local-path>'），并在 CI/pre-commit 增加路径门禁
 

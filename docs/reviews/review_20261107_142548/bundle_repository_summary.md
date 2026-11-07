@@ -86,9 +86,9 @@ ______________________________________________________________________
 
 2. **公开仓个人隐私与敏感信息外泄（High / Medium）**：
 
-    - `f_docs_archive_general_p060_pii_leak` (High)：归档文档 `docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3` 泄露真实用户个人邮箱 `xiaoxiaoguang2000@gmail.com`。此为公开仓脱敏违规。
-    - `f_docs_archive_general_p027_credential_characteristic_leak` (Medium)：`p027` 存在口令长度特征（13位）描述。
-    - `f_docs_archive_tasks_b_absolute_paths_in_reviews` (Medium) 与 `f_docs_reviews_execution_log_absolute_path` (Medium)：多份归档文档及执行日志中硬编码开发者宿主机绝对路径（包含用户名 `/Users/karson/...`）。
+    - `f_docs_archive_general_p060_pii_leak` (High)：归档文档 `docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3` 曾泄露真实用户个人邮箱（已脱敏为 `user@example.com` 并勘误）。此为公开仓脱敏违规。
+    - `f_docs_archive_general_p027_credential_characteristic_leak` (Medium)：`p027` 原存在口令长度特征描述（已脱敏并勘误）。
+    - `f_docs_archive_tasks_b_absolute_paths_in_reviews` (Medium) 与 `f_docs_reviews_execution_log_absolute_path` (Medium)：多份归档文档及执行日志中硬编码开发者宿主机绝对路径（已脱敏为占位符并勘误）。
     - **系统影响**：不影响运行时逻辑正确性，但对公开开源仓库存在个人隐私泄露和环境信息泄露合规风险。
 
 3. **测试门禁有效性与断言退化（Medium / Low）**：

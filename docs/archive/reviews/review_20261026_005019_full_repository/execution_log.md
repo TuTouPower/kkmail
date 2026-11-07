@@ -2,7 +2,7 @@
 
 - 基线 B0 SHA：`332de0ff7ed00f0be8725dba647b1ec0035ff8ab`
 - 开始时间：`2026-10-26T01:30:00+08:00`
-- 集成工作区：`/Users/karson/kar/code/kkmail_review_integration`
+- 集成工作区：`$WORKTREES/kkmail_review_integration`
 - 集成分支：`review_fix/integration`
 
 ## 波次与屏障推进记录
@@ -34,3 +34,5 @@
 |F10|`review_fix/f10_sync`|`kkmail_review_f10_sync`|A|4|已交付 (`22ce64e9`, `d94b017b`, `2107c33f`, `38e51d6c`)|
 |F11|`review_fix/integration`|`kkmail_review_integration`|B|1|已交付 (`bb922e9b`)|
 |F12|`review_fix/integration`|`kkmail_review_integration`|I|1|已交付 (repair_results.md)|
+
+- 勘误注记：Line 5 宿主机绝对路径已脱敏替换为 $WORKTREES/kkmail_review_integration 占位符。

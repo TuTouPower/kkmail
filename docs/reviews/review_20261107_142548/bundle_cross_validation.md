@@ -10,7 +10,7 @@ Reviewer: subagent_independent_validator
     - Evidence: src/mail_core/runtime/bootstrap.py:41-55, 61-76
 - f_arch_desktop_startup_toctou_acknowledged_in_test: agree — 端口探测 TOCTOU 竞态未改后端绑定协议，以单测断言注释承认缺陷妥协保留，事实确凿。
     - Evidence: src/desktop/startup.js:190-208; src/desktop/startup.test.js:64-78
-- f_docs_archive_general_p060_pii_leak: agree — 确凿泄露真实个人邮箱 xiaoxiaoguang2000@gmail.com，未脱敏。
+- f_docs_archive_general_p060_pii_leak: agree — 确凿泄露真实个人邮箱（现已脱敏为 user@example.com）。
     - Evidence: docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3
 - f_evo_alembic_linear_debt_and_lock_risk: agree — 11 天堆叠 30 个迁移，大表同步 DDL 持有 ACCESS EXCLUSIVE 锁且存在回滚不可逆事实。
     - Evidence: src/mail_core/db/alembic/versions/20261027_0027_search_recipient_and_account_recipients.py:6-15,126-139

@@ -53,9 +53,9 @@
 - [Medium][95] docs/archive/reviews/review_20261026_005019_full_repository/execution_log.md:5 — 历史审阅修复执行日志残留宿主机绝对路径
 
     - ID: f_docs_reviews_execution_log_absolute_path; verification: static
-    - Evidence: docs/archive/reviews/review_20261026_005019_full_repository/execution_log.md:5 包含字面路径："- 集成工作区：/Users/karson/kar/code/kkmail_review_integration"; 同目录下的 repair_plan.md 已在之前轮次修复为 占位，但 execution_log.md 遗漏了该项替换
+    - Evidence: docs/archive/reviews/review_20261026_005019_full_repository/execution_log.md:5 原包含开发者宿主机绝对路径（已脱敏为 "$WORKTREES/kkmail_review_integration" 占位并勘误）；同目录下的 repair_plan.md 已在之前轮次修复为占位，但 execution_log.md 遗漏了该项替换
     - Impact: 公开仓库中暴露开发者本地工作区路径和用户名
-    - Fix: 将 execution_log.md:5 中的绝对路径替换为 /kkmail_review_integration 占位符
+    - Fix: 将 execution_log.md:5 中的绝对路径替换为 $WORKTREES/kkmail_review_integration 占位符
 
 ## views
 
