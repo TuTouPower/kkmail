@@ -17,8 +17,8 @@ from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent
 from mail_core.providers.connection_slots import (
     CAPACITY_ERRORS,
-    CAPACITY_RETRY_SECONDS,
     TrafficClass,
+    get_capacity_retry_seconds,
 )
 from mail_core.providers.factory import build_provider
 from mail_core.sync.engine import local_remote_ids_for_folder
@@ -211,7 +211,7 @@ def reconcile_folder(
                 session.commit()
             except FencingMismatch:
                 session.rollback()
-        delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+        delay = float(getattr(exc, "retry_after_seconds", None) or get_capacity_retry_seconds())
         return {"status": "capacity_unavailable", "retry_after": delay}
     except Exception as exc:
         from mail_core.security.redact import safe_provider_summary

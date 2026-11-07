@@ -16,8 +16,8 @@ from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, RemoteOperation
 from mail_core.providers.connection_slots import (
     CAPACITY_ERRORS,
-    CAPACITY_RETRY_SECONDS,
     TrafficClass,
+    get_capacity_retry_seconds,
     is_capacity_error,
 )
 from mail_core.providers.factory import build_provider
@@ -446,7 +446,7 @@ def push_remote_operations(
     try:
         provider = build_provider(account_snapshot, store or get_credential_store(), traffic_class=traffic_class)
     except CAPACITY_ERRORS as exc:
-        delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+        delay = float(getattr(exc, "retry_after_seconds", None) or get_capacity_retry_seconds())
         next_attempt = datetime.now(timezone.utc) + timedelta(seconds=delay)
         with Session() as session:
             try:
@@ -549,7 +549,7 @@ def push_remote_operations(
                         log.warning("lease heartbeat between chunks failed: %s", hb_exc)
 
     if is_capacity_error(caught_batch_exc):
-        delay = float(getattr(caught_batch_exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+        delay = float(getattr(caught_batch_exc, "retry_after_seconds", None) or get_capacity_retry_seconds())
         next_attempt = datetime.now(timezone.utc) + timedelta(seconds=delay)
         with Session() as session:
             try:

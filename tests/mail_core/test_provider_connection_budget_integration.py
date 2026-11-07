@@ -26,11 +26,11 @@ from types import SimpleNamespace
 import pytest
 
 from mail_core.providers.connection_slots import (
-    TOTAL_SLOTS,
     InMemoryPermitFactory,
     ProviderCapacityUnavailable,
     ProviderControlError,
     TrafficClass,
+    get_total_slots,
     traffic_class_for_job,
 )
 from mail_core.providers.graph import GraphProvider
@@ -194,7 +194,7 @@ def test_control_failure_stops_imap_before_any_io(factory, fake_imap):
 
 
 def test_http_capacity_shortage_never_reaches_transport(factory):
-    held = [factory.acquire(TrafficClass.FOREGROUND) for _ in range(TOTAL_SLOTS)]
+    held = [factory.acquire(TrafficClass.FOREGROUND) for _ in range(get_total_slots())]
     calls = []
 
     def transport(method, path, params):

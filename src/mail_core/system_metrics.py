@@ -55,11 +55,6 @@ class SyncMetrics(BaseModel):
     # falsely implied a per-account maximum.
     last_sync_lag_seconds: float | None = None
 
-    @property
-    def max_sync_lag_seconds(self) -> float | None:
-        """Deprecated alias for :attr:`last_sync_lag_seconds` (A346 rename)."""
-        return self.last_sync_lag_seconds
-
 
 class StorageMetrics(BaseModel):
     total_bytes: int | None = None

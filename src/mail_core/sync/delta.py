@@ -16,8 +16,8 @@ from mail_core.mail.storage.models import Account, Folder, Message, MessageLocat
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
 from mail_core.providers.connection_slots import (
     CAPACITY_ERRORS,
-    CAPACITY_RETRY_SECONDS,
     TrafficClass,
+    get_capacity_retry_seconds,
 )
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
@@ -424,7 +424,7 @@ def sync_folder_delta(
         with Session() as session:
             _release_quiet(session)
             session.commit()
-        delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+        delay = float(getattr(exc, "retry_after_seconds", None) or get_capacity_retry_seconds())
         return {"status": "capacity_unavailable", "retry_after": delay}
     except Exception:
         with Session() as session:
@@ -508,7 +508,7 @@ def sync_folder_delta(
         except CAPACITY_ERRORS as exc:
             # Budget deferral: delayed followup, no provider_error, no
             # account failure marking (design §7).
-            delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+            delay = float(getattr(exc, "retry_after_seconds", None) or get_capacity_retry_seconds())
             with Session() as session:
                 followup = enqueue_job(
                     session,

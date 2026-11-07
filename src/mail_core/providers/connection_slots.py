@@ -57,19 +57,6 @@ def get_capacity_retry_seconds() -> float:
     return get_config().capacity_retry_seconds
 
 
-# Module-level legacy aliases for compatibility
-def __getattr__(name: str) -> Any:
-    if name == "TOTAL_SLOTS":
-        return get_total_slots()
-    if name == "BACKGROUND_START_SLOT":
-        return get_background_start_slot()
-    if name == "CAPACITY_RETRY_SECONDS":
-        return get_capacity_retry_seconds()
-    if name == "RESERVED_METADATA_SLOTS":
-        return get_background_start_slot()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 class TrafficClass(StrEnum):
     """Explicit provider-I/O traffic class carried by providers/transports."""
 
@@ -423,30 +410,16 @@ def permit_scope(
         permit.release()
 
 
-# ---------------------------------------------------------------------------
-# Backwards-compatible helper (legacy session-based call sites / PG tests)
-# ---------------------------------------------------------------------------
-
-
 @contextlib.contextmanager
 def provider_connection_permit(
-    session: Any = None,
     *,
-    traffic_class: TrafficClass | str | bool | None = None,
-    is_background: bool | None = None,
+    traffic_class: TrafficClass | str | None = None,
     permit_factory: PermitFactory | None = None,
 ) -> Iterator[int]:
-    """Acquire a connection permit and yield the slot number.
-
-    Legacy callers passed a business ``Session`` positionally.  The
-    session is *not* used for locking any more (design §7 forbids holding
-    a session advisory lock on a pooled connection); a dedicated control
-    connection is opened instead and closed on release.
-    """
-    if traffic_class is None:
-        traffic_class = TrafficClass.BACKGROUND if is_background else TrafficClass.FOREGROUND
+    """Acquire a connection permit and yield the slot number."""
+    tc = TrafficClass.FOREGROUND if traffic_class is None else _coerce_traffic_class(traffic_class)
     factory = permit_factory or default_permit_factory()
-    permit = factory.acquire(_coerce_traffic_class(traffic_class))
+    permit = factory.acquire(tc)
     try:
         yield permit.slot
     finally:

@@ -16,7 +16,7 @@ from mail_core.accounts.service import update_account_sync_status
 from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
 from mail_core.mail.storage.models import Account, WorkerJob
 from mail_core.providers.connection_slots import (
-    CAPACITY_RETRY_SECONDS,
+    get_capacity_retry_seconds,
     is_capacity_error,
     traffic_class_for_job,
 )
@@ -75,7 +75,7 @@ def _uuid_or_none(value: Any) -> uuid.UUID | None:
         return None
 
 
-def _coerce_retry_after(value: Any, *, fallback: float = CAPACITY_RETRY_SECONDS) -> float:
+def _coerce_retry_after(value: Any, *, fallback: float | None = None) -> float:
     """Coerce a capacity ``retry_after`` hint to a usable delay (A18).
 
     Handler results and provider exceptions carry this value across
@@ -85,14 +85,15 @@ def _coerce_retry_after(value: Any, *, fallback: float = CAPACITY_RETRY_SECONDS)
     ``float(...)`` failure here would turn a no-attempt deferral into a
     counted job failure.
     """
+    fb = get_capacity_retry_seconds() if fallback is None else fallback
     if isinstance(value, bool):
-        return fallback
+        return fb
     try:
         delay = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return fallback
+        return fb
     if not math.isfinite(delay) or delay < 0:
-        return fallback
+        return fb
     return delay
 
 

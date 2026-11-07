@@ -18,8 +18,8 @@ from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, Syn
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.connection_slots import (
     CAPACITY_ERRORS,
-    CAPACITY_RETRY_SECONDS,
     TrafficClass,
+    get_capacity_retry_seconds,
 )
 from mail_core.providers.factory import build_provider
 from mail_core.providers.http import CursorInvalidError, RateLimitedError
@@ -215,7 +215,7 @@ def sync_account_folders(
             remote_folders = list(list_remote_folders())  # network
         except CAPACITY_ERRORS as exc:
             # Budget deferral: delayed followup, no failure marking.
-            delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+            delay = float(getattr(exc, "retry_after_seconds", None) or get_capacity_retry_seconds())
             with Session() as session:
                 retry_payload: dict = {}
                 if request_id is not None:
@@ -659,7 +659,7 @@ def sync_folder_metadata(
             "pages": pages,
         }
     except CAPACITY_ERRORS as exc:
-        delay = float(getattr(exc, "retry_after_seconds", None) or CAPACITY_RETRY_SECONDS)
+        delay = float(getattr(exc, "retry_after_seconds", None) or get_capacity_retry_seconds())
         with Session() as session:
             followup = enqueue_job(
                 session,

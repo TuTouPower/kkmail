@@ -18,7 +18,10 @@ import pytest
 
 from mail_core.mail.domain.enums import JobType
 from mail_core.mail.storage.models import WorkerJob
-from mail_core.providers.connection_slots import CAPACITY_RETRY_SECONDS, ProviderCapacityUnavailable
+from mail_core.providers.connection_slots import (
+    ProviderCapacityUnavailable,
+    get_capacity_retry_seconds,
+)
 from mail_core.worker import handlers
 from mail_core.worker.handlers import _coerce_retry_after, _evaluate_result
 
@@ -28,7 +31,7 @@ from mail_core.worker.handlers import _coerce_retry_after, _evaluate_result
     ["abc", "", float("nan"), float("inf"), float("-inf"), -3, -0.5, None, object(), {"x": 1}, True],
 )
 def test_coerce_retry_after_falls_back_for_invalid_values(raw):
-    assert _coerce_retry_after(raw) == CAPACITY_RETRY_SECONDS
+    assert _coerce_retry_after(raw) == get_capacity_retry_seconds()
 
 
 @pytest.mark.parametrize(
@@ -55,7 +58,7 @@ def test_evaluate_result_capacity_with_garbage_retry_after_reschedules_without_a
         )
     assert outcome is False
     reschedule.assert_called_once()
-    assert reschedule.call_args.kwargs["delay_seconds"] == CAPACITY_RETRY_SECONDS
+    assert reschedule.call_args.kwargs["delay_seconds"] == get_capacity_retry_seconds()
     fail.assert_not_called()
     complete.assert_not_called()
 
@@ -80,5 +83,5 @@ def test_handle_job_capacity_exception_with_garbage_retry_after_reschedules():
         outcome = handlers.handle_job(session, job, worker_id="w-a18")
     assert outcome is False
     reschedule.assert_called_once()
-    assert reschedule.call_args.kwargs["delay_seconds"] == CAPACITY_RETRY_SECONDS
+    assert reschedule.call_args.kwargs["delay_seconds"] == get_capacity_retry_seconds()
     fail.assert_not_called()

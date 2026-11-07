@@ -7,7 +7,7 @@ last successful sync *globally*" (not a per-account max); and the
 the code could never produce.
 
 Fix: a few-seconds in-process TTL cache, the field renamed to
-``last_sync_lag_seconds`` (old name kept as a read-only alias property),
+``last_sync_lag_seconds``,
 and the status comment trimmed to the values actually produced.
 """
 
@@ -70,8 +70,7 @@ def test_sync_lag_field_renamed_to_last_sync_lag_seconds(monkeypatch, tmp_path):
     dumped = report.sync.model_dump()
     assert "last_sync_lag_seconds" in dumped
     assert "max_sync_lag_seconds" not in dumped
-    # Read-only backwards-compatible alias.
-    assert report.sync.max_sync_lag_seconds == report.sync.last_sync_lag_seconds
+    assert not hasattr(report.sync, "max_sync_lag_seconds")
 
 
 def test_metrics_are_cached_for_a_few_seconds(monkeypatch, tmp_path):

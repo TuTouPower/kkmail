@@ -11,7 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from mail_core.config import get_config
 from mail_core.logging_config import configure_logging
