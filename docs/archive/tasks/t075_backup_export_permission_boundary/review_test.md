@@ -3,7 +3,7 @@
 - task：`t075_backup_export_permission_boundary`
 - spec：`docs/tasks/t075_backup_export_permission_boundary/task.md`
 - diff_anchor：`18f0f5e3e1f5d3f5a3437d7d1cc401bf5b0ffd48`
-- target：`git -C '/Users/karson/kar/code/kkmail_t075' diff 18f0f5e3e1f5d3f5a3437d7d1cc401bf5b0ffd48`
+- target：`git -C '<workspace>/kkmail_t075' diff 18f0f5e3e1f5d3f5a3437d7d1cc401bf5b0ffd48`
 - round：1
 - reviewed_at：2026-11-05T06:40:08+08:00
 
@@ -358,3 +358,5 @@ reviewed_scope: 5a13ad32a8a09133
 coverage = 6 / 6
 
 verdict: PASS
+
+- 勘误注记：Line 6 宿主机绝对路径已脱敏为占位符 <workspace>/kkmail_t075。

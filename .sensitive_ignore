@@ -1,0 +1,8 @@
+# Sensitive Document Checker Ignore Patterns
+# Format: gitignore-style path globs or file paths
+
+# Historical archived files containing intentional test cases or legacy references
+docs/archive/pending/p056_microsoft_oauth_onboarding_ux_and_credential_guidance.md
+docs/archive/pending/p059_search_recipient_and_alias_support.md
+docs/archive/tasks/t066_remote_images_persist_and_reload/**
+docs/archive/reviews/review_20261027_021416/**

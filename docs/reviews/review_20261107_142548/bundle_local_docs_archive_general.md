@@ -46,16 +46,16 @@
 - [High][95] docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3 — 已归档 pending 正文泄露真实用户个人 Gmail 邮箱地址
 
     - ID: f_docs_archive_general_p060_pii_leak; verification: static
-    - Evidence: docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3 正文写出："用户截图 2026-10-27（账号 xiaoxiaoguang2000@gmail.com）。"; xiaoxiaoguang2000@gmail.com 明显为用户真实个人邮箱，非 example.com / test.com 等脱敏样例，直接导致个人 PII 隐私在公开仓外泄
+    - Evidence: docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3 正文曾写出真实个人邮箱："用户截图 2026-10-27（账号 [REDACTED_GMAIL]）"（已脱敏为 user@example.com 并勘误）；明显为用户真实个人邮箱，非 example.com / test.com 等脱敏样例，直接导致个人 PII 隐私在公开仓外泄
     - Impact: 公开仓库中直接暴露特定开发者的真实个人邮箱，面临垃圾邮件骚扰与身份关联风险，违反开源安全脱敏铁律
-    - Fix: 将 xiaoxiaoguang2000@gmail.com 替换为符合 RFC 2606 的脱敏样例（如 user_gmail@example.com），并在文末注明脱敏修订
+    - Fix: 将真实个人邮箱替换为符合 RFC 2606 的脱敏样例（如 user@example.com），并在文末注明脱敏修订
 
 - [Medium][90] docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11 — 已归档 pending 仍残留真实口令长度特征描述未脱敏
 
     - ID: f_docs_archive_general_p027_credential_characteristic_leak; verification: static
-    - Evidence: docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11 描述："（当前保存口令长 13 位，非有效 16 位网易客户端授权码或口令错误）"; 在第四轮 review（review_20261027_021416/review_intensive.md:11）中已作为 Critical 明确指出应"删除账号 UUID 与口令长度描述"，当前仍保留了 13 位口令长度的具体特征
+    - Evidence: docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11 曾包含口令具体长度描述（已脱敏泛化为因口令配置不匹配并勘误）；在第四轮 review（review_20261027_021416/review_intensive.md:11）中已作为 Critical 明确指出应"删除账号 UUID 与口令长度描述"，此前仍保留了口令长度的具体特征
     - Impact: 泄露了特定账号的密码长度与凭据特征，降低了口令字典破解空间
-    - Fix: 删除"当前保存口令长 13 位"等精确长度描述，泛化为"因口令配置不匹配导致认证失败"
+    - Fix: 删除精确口令长度特征描述，泛化为"因口令配置不匹配导致认证失败"
 
 - [Low][90] docs/archive/pending/README.md:15-75 — docs/archive/pending/README.md 闭环日期对照表漏登 p060 至 p074
 

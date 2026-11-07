@@ -30,7 +30,7 @@
 - [Medium][95] docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3, docs/archive/tasks/t075/review_code.md:6 — 敏感信息（PII 真实邮箱/宿主机路径/口令特征）反复渗入历史归档且缺乏自动化门禁
 
     - ID: f_evo_archive_governance_pii_and_path_leak_recurrent; verification: static
-    - Evidence: docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3 泄露真实用户个人邮箱 xiaoxiaoguang2000@gmail.com (f_docs_archive_general_p060_pii_leak)；; docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11 残留真实口令 13 位长度特征；; docs/archive/tasks/t075/review_code.md:6 及 t061/review_code.md:6 包含开发者宿主机绝对路径（/Users/karson/... 与 /home/hatch/...）；; 上述问题在第三轮及第四轮 review 中已多次作为 Medium/Critical 指出并局部修复，但在后续新 task 归档中再次反复出现，缺乏自动化 pre-commit 门禁。
+    - Evidence: docs/archive/pending/p060_gmail_virtual_folder_not_selectable.md:3 曾泄露真实用户个人邮箱（已脱敏为 user@example.com 并勘误） (f_docs_archive_general_p060_pii_leak)；; docs/archive/pending/p027_account_folder_sync_failure_and_unknown_unread_badge.md:11 原残留口令长度特征（已脱敏并勘误）；; docs/archive/tasks/t075/review_code.md:6 及 t061/review_code.md:6 原包含开发者宿主机绝对路径（已脱敏为占位符并勘误）；; 上述问题在第三轮及第四轮 review 中已多次作为 Medium/Critical 指出并局部修复，但在后续新 task 归档中再次反复出现，缺乏自动化 pre-commit 门禁。
     - Impact: 开源公开仓库中持续暴露特定开发者隐私与环境结构，产生合规与钓鱼风险；“归档只追加”原则与脱敏要求频繁冲突，反复消耗工程人力进行全仓正则扫描与人工勘误，长期资产治理成本发散。
     - Fix: 在 .repo_template/hooks/pre-commit 与 CI 检查中植入自动化脱敏门禁，通过正则表达式强制阻断非 RFC 2606 邮箱、密码长度数值描述及本地绝对路径；对历史已泄露文件执行一次性就地脱敏并附加勘误修订声明。
 

@@ -3,7 +3,7 @@
 - task：`t061_idle_inbox_and_all_folder_status_patrol`
 - spec：`docs/tasks/t061_idle_inbox_and_all_folder_status_patrol/spec.md`
 - diff_anchor：`327acc0250f26c71d7ad2b777e876b92ff79c484`
-- target：`git -C '/home/hatch/workspace/kkmail_t061' diff 327acc0250f26c71d7ad2b777e876b92ff79c484`
+- target：`git -C '<workspace>/kkmail_t061' diff 327acc0250f26c71d7ad2b777e876b92ff79c484`
 - round：1
 - reviewed_at：2026-10-28T04:56:20+08:00
 
@@ -398,3 +398,5 @@ reviewed_scope: 56fefa3627511b3d
 - 已提交测试无恒真/弱化断言、无就地改测、无 mock 掉被测逻辑的迹象；DB 门控用例本机未执行，其结论基于断言逐条查证，CI 以 `MAIL_CORE_REQUIRE_DB=1` 实跑仍为合并前的既定外部验证项（与前轮披露一致，非本轮新增问题）。
 
 verdict: PASS
+
+- 勘误注记：Line 6 宿主机绝对路径已脱敏为占位符 <workspace>/kkmail_t061。
