@@ -342,28 +342,15 @@ def create_sync_request(
                 # generation, never the running execution.
                 if mode == "delta":
                     if cand.folder_id is not None:
-                        cp = session.get(SyncCheckpoint, {"account_id": cand.account_id, "folder_id": cand.folder_id})
-                        baseline_ready = cp is not None and bool(cp.full_scan_complete)
-                        if baseline_ready:
-                            job = enqueue_job(
-                                session,
-                                job_type=JobType.SYNC_FOLDER_DELTA.value,
-                                account_id=cand.account_id,
-                                payload={"folder_id": str(cand.folder_id), "request_id": str(request_id)},
-                                priority=20,
-                                dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
-                            )
-                            phase = "delta"
-                        else:
-                            job = enqueue_job(
-                                session,
-                                job_type=JobType.SYNC_FOLDER_METADATA.value,
-                                account_id=cand.account_id,
-                                payload={"folder_id": str(cand.folder_id), "request_id": str(request_id)},
-                                priority=20,
-                                dedupe_key=f"metadata:{cand.account_id}:{cand.folder_id}",
-                            )
-                            phase = "metadata"
+                        job = enqueue_job(
+                            session,
+                            job_type=JobType.SYNC_FOLDER_DELTA.value,
+                            account_id=cand.account_id,
+                            payload={"folder_id": str(cand.folder_id), "request_id": str(request_id)},
+                            priority=20,
+                            dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
+                        )
+                        phase = "delta"
                     else:
                         job = enqueue_job(
                             session,
