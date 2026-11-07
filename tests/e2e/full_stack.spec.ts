@@ -182,7 +182,7 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
     const csrf = (await meRes.json()).csrf_token as string
     expect(csrf).toBeTruthy()
 
-    const inboxRes = await page1.request.get('/api/inbox?limit=50')
+    const inboxRes = await page1.request.get('/api/mail/inbox?limit=50')
     expect(inboxRes.status()).toBe(200)
     const inboxData = (await inboxRes.json()) as { items?: Array<{ id: string; subject?: string; is_read?: boolean }> }
     const items = inboxData.items || []
@@ -190,7 +190,7 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
 
     const targetMessage = items[0]
     // 显式保证该目标邮件为未读状态
-    const markUnreadRes = await page1.request.post(`/api/messages/${targetMessage.id}/read`, {
+    const markUnreadRes = await page1.request.post(`/api/mail/messages/${targetMessage.id}/read`, {
       data: { is_read: false },
       headers: { 'x-csrf-token': csrf },
     })

@@ -98,3 +98,15 @@
 - 未完成/环境受限：PG pytest 门禁套件与真实 E2E（Playwright、Electron）未在本机运行；R09(d) 仅更新 e2e 定位器（设置页 Escape 退出），未实跑 Playwright。
 - 遗留事项：B5c(b) 已按简报裁决规则处理完毕（函数与其自测一并删除），无待裁决项。本轮无 push，等待用户指令。
 - 下一步：无既定下一步；是否 push 由用户决定。
+
+---
+
+## 2026-10-27T14:45:00+08:00 agent → developer
+
+- 当前焦点：规范治理与文档重构（清理 specs 验收标准模板、收敛 blueprint 蓝图架构、归档已闭环 pending/reviews、理顺全仓文档体系）。
+- branch：main
+- head_commit：a7255499
+- 已完成：p060（Gmail 虚拟文件夹导航同步报错修复并测试先红后绿）已归档；全仓第四轮审阅缺陷修复已合入 main；deploy 虚拟环境解析已修复。
+- 验证：后端 unit 门禁与前端测试通过。
+- 未完成/环境受限：PG Docker 环境门控测试待在有容器环境补跑。
+- 下一步：推进 docs/specs/ 与 docs/blueprint/ 的规范化重构。
