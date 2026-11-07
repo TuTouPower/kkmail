@@ -1684,6 +1684,12 @@ export interface components {
         };
         /** SyncRequestOut */
         SyncRequestOut: {
+            /** Background Errors */
+            background_errors?: components["schemas"]["SyncTargetErrorOut"][];
+            /** Background Request Id */
+            background_request_id?: string | null;
+            /** Background State */
+            background_state?: ("queued" | "running" | "complete" | "failed") | null;
             /** Completed Count */
             completed_count: number;
             /** Created At */
@@ -1696,6 +1702,11 @@ export interface components {
             finished_at?: string | null;
             /** Id */
             id: string;
+            /**
+             * Inbox Ready
+             * @default false
+             */
+            inbox_ready: boolean;
             /**
              * Mode
              * @enum {string}

@@ -102,6 +102,11 @@ class SyncRequestOut(BaseModel):
     created_at: str
     finished_at: str | None = None
     errors: list[SyncTargetErrorOut] = Field(default_factory=list)
+    # A21: Decoupled inbox terminal state & background full sync status
+    inbox_ready: bool = False
+    background_request_id: str | None = None
+    background_state: Literal["queued", "running", "complete", "failed"] | None = None
+    background_errors: list[SyncTargetErrorOut] = Field(default_factory=list)
 
 
 _SCOPE_KEYS = ("account_id", "group_id", "folder_id", "folder_role", "all")
@@ -162,6 +167,7 @@ def resolve_sync_targets(
     folder_id: uuid.UUID | None = None,
     folder_role: str | None = None,
     limit_accounts: int | None = None,
+    mode: str = "delta",
 ) -> list[TargetCandidate]:
     """Resolve targets while enforcing enabled status and selectable folders."""
     acc_ids = enabled_account_ids(session, group_id=group_id)
@@ -226,8 +232,23 @@ def resolve_sync_targets(
             for f in role_folders:
                 key = f"account:{aid}:folder:{f.id}:role:{folder_role}"
                 targets.append(TargetCandidate(account_id=aid, folder_id=f.id, folder_role=folder_role, target_key=key))
+        elif mode == "delta":
+            # A21: If an account has a known selectable inbox, decouple inbox sync
+            # so the primary sync request resolves directly to the inbox folder.
+            inbox = session.scalars(
+                select(Folder)
+                .where(Folder.account_id == aid)
+                .where(Folder.role == "inbox")
+                .where(Folder.sync_status != SyncStatus.PAUSED.value)
+            ).first()
+            if inbox is not None:
+                key = f"account:{aid}:folder:{inbox.id}:role:inbox"
+                targets.append(TargetCandidate(account_id=aid, folder_id=inbox.id, folder_role="inbox", target_key=key))
+            else:
+                key = f"account:{aid}:folder:all:role:all"
+                targets.append(TargetCandidate(account_id=aid, folder_id=None, folder_role=None, target_key=key))
         else:
-            # Entire account
+            # Entire account (full scan discovery)
             key = f"account:{aid}:folder:all:role:all"
             targets.append(TargetCandidate(account_id=aid, folder_id=None, folder_role=None, target_key=key))
 
@@ -279,6 +300,7 @@ def create_sync_request(
         folder_id=folder_id,
         folder_role=folder_role,
         limit_accounts=limit_accounts,
+        mode=mode,
     )
 
     request_id = uuid.uuid4()
@@ -320,15 +342,28 @@ def create_sync_request(
                 # generation, never the running execution.
                 if mode == "delta":
                     if cand.folder_id is not None:
-                        job = enqueue_job(
-                            session,
-                            job_type=JobType.SYNC_FOLDER_DELTA.value,
-                            account_id=cand.account_id,
-                            payload={"folder_id": str(cand.folder_id), "request_id": str(request_id)},
-                            priority=20,
-                            dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
-                        )
-                        phase = "delta"
+                        cp = session.get(SyncCheckpoint, {"account_id": cand.account_id, "folder_id": cand.folder_id})
+                        baseline_ready = cp is not None and bool(cp.full_scan_complete)
+                        if baseline_ready:
+                            job = enqueue_job(
+                                session,
+                                job_type=JobType.SYNC_FOLDER_DELTA.value,
+                                account_id=cand.account_id,
+                                payload={"folder_id": str(cand.folder_id), "request_id": str(request_id)},
+                                priority=20,
+                                dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
+                            )
+                            phase = "delta"
+                        else:
+                            job = enqueue_job(
+                                session,
+                                job_type=JobType.SYNC_FOLDER_METADATA.value,
+                                account_id=cand.account_id,
+                                payload={"folder_id": str(cand.folder_id), "request_id": str(request_id)},
+                                priority=20,
+                                dedupe_key=f"metadata:{cand.account_id}:{cand.folder_id}",
+                            )
+                            phase = "metadata"
                     else:
                         job = enqueue_job(
                             session,
@@ -383,6 +418,75 @@ def create_sync_request(
                     )
                     target.requested_generation = root_generation
 
+            # A21: Decouple inbox sync from background full sync (folder discovery + sibling folders)
+            # When requesting a delta sync on account scope, accounts with an existing inbox have their
+            # main request target mapped to the inbox folder (settles immediately upon inbox delta completion).
+            # We schedule a background SyncRequest for full folder discovery and sibling folder sync.
+            bg_account_ids = [
+                cand.account_id
+                for cand in candidates
+                if cand.folder_id is not None and cand.folder_role == "inbox"
+            ]
+            if mode == "delta" and bg_account_ids and not scope.get("background") and folder_id is None:
+                bg_request_id = uuid.uuid4()
+                bg_client_req_id = f"bg_{request_id.hex}"
+                bg_scope: dict[str, Any] = {"background": True, "parent_request_id": str(request_id)}
+                if account_id is not None:
+                    bg_scope["account_id"] = str(account_id)
+                elif group_id is not None:
+                    bg_scope["group_id"] = str(group_id)
+                else:
+                    bg_scope["all"] = True
+                bg_req = SyncRequest(
+                    id=bg_request_id,
+                    client_request_id=bg_client_req_id,
+                    mode="delta",
+                    trigger=trigger,
+                    state="queued",
+                    scope=bg_scope,
+                    created_at=now,
+                )
+                session.add(bg_req)
+                session.flush()
+
+                for aid in bg_account_ids:
+                    bg_target = SyncRequestTarget(
+                        id=uuid.uuid4(),
+                        request_id=bg_request_id,
+                        account_id=aid,
+                        folder_id=None,
+                        target_key=f"account:{aid}:folder:all:role:all",
+                        requested_generation=uuid.uuid4(),
+                        state="queued",
+                        created_at=now,
+                    )
+                    session.add(bg_target)
+                    session.flush()
+
+                    bg_job = enqueue_job(
+                        session,
+                        job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
+                        account_id=aid,
+                        payload={"request_id": str(bg_request_id)},
+                        priority=60,
+                        dedupe_key=f"sync:{aid}",
+                    )
+                    bg_gen, bg_bound_job = binding_generation_for(session, bg_job)
+                    bind_target(
+                        session,
+                        target=bg_target,
+                        execution_generation=bg_gen,
+                        job=bg_bound_job,
+                        phase="folder_discovery",
+                        folder_id=None,
+                        status="queued",
+                    )
+                    bg_target.requested_generation = bg_gen
+
+                req_scope = dict(req.scope or {})
+                req_scope["background_request_id"] = str(bg_request_id)
+                req.scope = req_scope
+
             session.flush()
     except IntegrityError:
         # A concurrent request with the same client_request_id won the insert;
@@ -399,7 +503,13 @@ def create_sync_request(
     return req, True
 
 
-def _build_report(req: SyncRequest, targets: list[SyncRequestTarget]) -> SyncRequestOut:
+def _build_report(
+    req: SyncRequest,
+    targets: list[SyncRequestTarget],
+    *,
+    background_req: SyncRequest | None = None,
+    background_targets: list[SyncRequestTarget] | None = None,
+) -> SyncRequestOut:
     queued = sum(1 for t in targets if t.state == "queued")
     running = sum(1 for t in targets if t.state == "running")
     completed = sum(1 for t in targets if t.state == "complete")
@@ -419,6 +529,26 @@ def _build_report(req: SyncRequest, targets: list[SyncRequestTarget]) -> SyncReq
         if t.state == "failed"
     ]
 
+    # A21: Decoupled inbox ready and background sync status
+    inbox_ready = current_state in ("complete", "failed")
+    bg_request_id_str: str | None = None
+    bg_state: Literal["queued", "running", "complete", "failed"] | None = None
+    bg_errors: list[SyncTargetErrorOut] = []
+
+    if background_req is not None:
+        bg_request_id_str = str(background_req.id)
+        bg_state = background_req.state  # type: ignore[assignment]
+        if background_targets:
+            bg_errors = [
+                SyncTargetErrorOut(target_id=str(t.id), code=t.error_code or "error", safe_message=t.safe_error)
+                for t in background_targets
+                if t.state == "failed"
+            ]
+    else:
+        raw_bg_id = (req.scope or {}).get("background_request_id")
+        if raw_bg_id:
+            bg_request_id_str = str(raw_bg_id)
+
     return SyncRequestOut(
         id=str(req.id),
         mode=req.mode,  # type: ignore[arg-type]
@@ -432,6 +562,10 @@ def _build_report(req: SyncRequest, targets: list[SyncRequestTarget]) -> SyncReq
         created_at=req.created_at.isoformat(),
         finished_at=req.finished_at.isoformat() if req.finished_at else None,
         errors=errors,
+        inbox_ready=inbox_ready,
+        background_request_id=bg_request_id_str,
+        background_state=bg_state,
+        background_errors=bg_errors,
     )
 
 
@@ -444,7 +578,22 @@ def get_sync_request_report(session: Session, request_id: uuid.UUID) -> SyncRequ
             select(SyncRequestTarget).where(SyncRequestTarget.request_id == request_id)
         ).all()
     )
-    return _build_report(req, targets)
+    bg_req = None
+    bg_targets = None
+    bg_id_str = (req.scope or {}).get("background_request_id")
+    if bg_id_str:
+        try:
+            bg_id = uuid.UUID(str(bg_id_str))
+            bg_req = session.get(SyncRequest, bg_id)
+            if bg_req is not None:
+                bg_targets = list(
+                    session.scalars(
+                        select(SyncRequestTarget).where(SyncRequestTarget.request_id == bg_id)
+                    ).all()
+                )
+        except (ValueError, TypeError):
+            pass
+    return _build_report(req, targets, background_req=bg_req, background_targets=bg_targets)
 
 
 #: Scope keys that identify *whose* mail a request syncs. They must match
@@ -567,7 +716,45 @@ def list_recent_sync_requests(
         )
     ).all():
         targets_by_request.setdefault(target.request_id, []).append(target)
-    return [_build_report(req, targets_by_request.get(req.id, [])) for req in matched]
+
+    # Batch load background requests if any
+    bg_ids: list[uuid.UUID] = []
+    for req in matched:
+        bg_id_str = (req.scope or {}).get("background_request_id")
+        if bg_id_str:
+            try:
+                bg_ids.append(uuid.UUID(str(bg_id_str)))
+            except (ValueError, TypeError):
+                pass
+    bg_requests: dict[uuid.UUID, SyncRequest] = {}
+    bg_targets_by_request: dict[uuid.UUID, list[SyncRequestTarget]] = {}
+    if bg_ids:
+        for bg_r in session.scalars(select(SyncRequest).where(SyncRequest.id.in_(bg_ids))).all():
+            bg_requests[bg_r.id] = bg_r
+        for target in session.scalars(select(SyncRequestTarget).where(SyncRequestTarget.request_id.in_(bg_ids))).all():
+            bg_targets_by_request.setdefault(target.request_id, []).append(target)
+
+    reports: list[SyncRequestOut] = []
+    for req in matched:
+        bg_req = None
+        bg_targets = None
+        bg_id_str = (req.scope or {}).get("background_request_id")
+        if bg_id_str:
+            try:
+                b_uuid = uuid.UUID(str(bg_id_str))
+                bg_req = bg_requests.get(b_uuid)
+                bg_targets = bg_targets_by_request.get(b_uuid, [])
+            except (ValueError, TypeError):
+                pass
+        reports.append(
+            _build_report(
+                req,
+                targets_by_request.get(req.id, []),
+                background_req=bg_req,
+                background_targets=bg_targets,
+            )
+        )
+    return reports
 
 
 def record_account_activity(session: Session, account_ids: list[uuid.UUID], ttl_seconds: int = 45) -> None:
