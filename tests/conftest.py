@@ -1,4 +1,4 @@
-"""Root pytest config. All tests live under tests/mail_core/."""
+"""Root pytest config covering tests/mail_core and tests/scripts."""
 
 import os
 import sys

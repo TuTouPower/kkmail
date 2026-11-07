@@ -5,10 +5,10 @@
 |slug|task 清单|最后更新时间|
 |---|---|---|
 |account_connection|t053, t054, t055|2026-10-27|
-|auth_and_session||2026-10-27|
+|auth_and_session|t010, t011, t020, t021|2026-10-27|
 |mail_sync_and_storage|t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075|2026-11-05|
 |inbox_ui_and_search|t002, t003, t024, t027, t032, t051, t052, t065, t068|2026-10-31|
-|mail_account_navigation_and_read_state||2026-10-27|
+|mail_account_navigation_and_read_state|t002, t005, t006, t022|2026-10-27|
 |testing_quality|t013, t014|2026-10-27|
 
 <!-- 示例行（实际项目使用时从真实 task 收尾开始填写；示例勿放表内，「在表即生效」）：

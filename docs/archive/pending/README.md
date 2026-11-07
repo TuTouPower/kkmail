@@ -73,3 +73,17 @@
 |p057|[p057_imap_custom_username_toggle.md](p057_imap_custom_username_toggle.md)|2026-10-25|未记录|fix/review-20261026-commits|
 |p058|[p058_gmail_folder_tree_flattening.md](p058_gmail_folder_tree_flattening.md)|2026-10-27|未记录|main|
 |p059|[p059_search_recipient_and_alias_support.md](p059_search_recipient_and_alias_support.md)|2026-10-27|未记录|main|
+|p060|[p060_gmail_virtual_folder_not_selectable.md](p060_gmail_virtual_folder_not_selectable.md)|2026-10-27|未记录|fix/folder-not-selectable|
+|p061|[p061_ui_reference_element_coverage_and_overlay_overlap.md](p061_ui_reference_element_coverage_and_overlay_overlap.md)|2026-10-27|未记录|main|
+|p062|[p062_sidebar_toggle_all_account_folder_trees.md](p062_sidebar_toggle_all_account_folder_trees.md)|2026-10-27|未记录|main|
+|p063|[p063_mail_body_sync_queue_hang_and_delay.md](p063_mail_body_sync_queue_hang_and_delay.md)|2026-10-30|未记录|t062,t063,t064|
+|p064|[p064_sidebar_scrollbar_gutter_layout_shift.md](p064_sidebar_scrollbar_gutter_layout_shift.md)|2026-10-30|未记录|main|
+|p065|[p065_message_reader_height_and_dark_scrollbar.md](p065_message_reader_height_and_dark_scrollbar.md)|2026-10-30|未记录|main|
+|p066|[p066_remote_images_reload_and_source_allow.md](p066_remote_images_reload_and_source_allow.md)|2026-10-30|未记录|t066|
+|p067|[p067_cid_inline_image_mapping.md](p067_cid_inline_image_mapping.md)|2026-10-30|未记录|t066|
+|p068|[p068_reader_view_mode_override_lifecycle.md](p068_reader_view_mode_override_lifecycle.md)|2026-10-30|未记录|t066|
+|p069|[p069_remote_image_extract_unquoted_src.md](p069_remote_image_extract_unquoted_src.md)|2026-10-31|未记录|t069|
+|p070|[p070_idle_reconnect_missed_inbox_mail.md](p070_idle_reconnect_missed_inbox_mail.md)|2026-10-31|未记录|t071|
+|p071|[p071_t061_idle_watcher_preexisting_red_tests.md](p071_t061_idle_watcher_preexisting_red_tests.md)|2026-10-31|未记录|t072|
+|p072|[p072_idle_catchup_enqueue_failure_starvation.md](p072_idle_catchup_enqueue_failure_starvation.md)|2026-10-31|未记录|t073|
+|p074|[p074_blob_file_mode_backup_unreadable.md](p074_blob_file_mode_backup_unreadable.md)|2026-11-05|未记录|t075；resolution=transferred；reason=已核实范围并转交 t075：保留 blob 私有权限，重设计备份/宿主导出/恢复身份与权限边界|

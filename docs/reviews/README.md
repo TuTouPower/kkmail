@@ -25,3 +25,4 @@
 |`review_20261026_180800_current_repository`|目录名带主题后缀（`_current_repository`）；仅 `review_report.md` 一份|
 |`review_20261026_commits`|目录名无时间戳、仅主题（`_commits`）；仅 `review_report.md`、`repair_design.md` 两份|
 |`review_20261027_021416`|`_meta/` 在本地磁盘存在但按 `.gitignore` 未入库（另含 `_meta.log` 与 `unit01_files.txt`…`unit13_files.txt`）；bundle 按序号命名（`bundle_unit01.md`…`bundle_unit13.md`）；另有 `validation.md`、`regression.md`、`bundle_cross_validation_regression.md`|
+|`review_20261030_103516`|只有 `adoption.md` 一份文件，无 `_meta/`、`bundle_*.md` 与其他审阅报告；已归档至 `docs/archive/reviews/review_20261030_103516/`|
