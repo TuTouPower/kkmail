@@ -26,9 +26,10 @@ test('provider forms: Google IMAP help, Microsoft OAuth and nested dialog focus 
   await expect(dialog).not.toBeVisible()
 })
 
-test('Microsoft browser and device login create and reauthorize accounts on narrow screens', async ({ page }) => {
+test('Microsoft browser and device login create and reauthorize accounts on narrow screens', async ({ page, context }) => {
   await setupStubApi(page, { authedInitially: true, accounts: [{ id: 'existing-ms', email: 'existing@outlook.com',
     provider: 'graph', account_type: 'graph', sync_enabled: false, group_id: 'grp-1' }] })
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.addInitScript(() => { window.open = () => ({ opener: null } as unknown as Window) })
   await page.goto('/')
   await page.getByRole('button', { name: '设置', exact: true }).click()
@@ -55,10 +56,34 @@ test('Microsoft browser and device login create and reauthorize accounts on narr
   await expect(edit).toContainText('ABCD-EFGH')
   await expect(edit.getByRole('link', { name: '打开微软登录页' })).toHaveAttribute('href', 'https://microsoft.com/devicelogin')
   await edit.getByRole('button', { name: '复制验证码', exact: true }).click()
-  await expect(edit).toContainText(/已复制验证码|复制失败/)
+  await expect(edit).toContainText('已复制验证码')
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('ABCD-EFGH')
   await expect(edit).toContainText('已完成 Microsoft 授权：existing@outlook.com')
   const request = page.waitForRequest(req => req.method() === 'PATCH' && req.url().endsWith('/api/accounts/existing-ms'))
   await edit.getByRole('button', { name: '保存修改', exact: true }).click()
   expect((await request).postDataJSON()).toMatchObject({ oauth_flow_id: 'stub-oauth-flow-1' })
   await expect(edit).not.toBeVisible()
+})
+
+test('Microsoft device login code copy failure displays fallback notice when clipboard write fails', async ({ page }) => {
+  await setupStubApi(page, { authedInitially: true, accounts: [{ id: 'existing-ms', email: 'existing@outlook.com',
+    provider: 'graph', account_type: 'graph', sync_enabled: false, group_id: 'grp-1' }] })
+  await page.goto('/')
+  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: '编辑账户 existing@outlook.com', exact: true }).click()
+  const edit = page.getByRole('dialog', { name: '编辑账户', exact: true })
+  await edit.getByLabel('Microsoft 登录方式').selectOption('device_code')
+  await edit.getByRole('button', { name: '重新授权', exact: true }).click()
+  await expect(edit).toContainText('ABCD-EFGH')
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: () => Promise.reject(new Error('clipboard write rejected')),
+      },
+    })
+    document.execCommand = () => false
+  })
+  await edit.getByRole('button', { name: '复制验证码', exact: true }).click()
+  await expect(edit).toContainText('复制失败')
 })

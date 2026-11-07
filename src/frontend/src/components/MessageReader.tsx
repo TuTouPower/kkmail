@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Mail, MailOpen, Trash2, Flag, ArrowLeft, RefreshCw, Sun, Moon } from 'lucide-react'
-import { findCachedMail, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail, type MailItem } from '../api/queries'
+import { findCachedMail, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, isMailListQueryKey, setReadOptimistic, queryClient, removeCachedMail, type MailDetail, type MailItem } from '../api/queries'
 import {
   allowMessageRemoteImages,
   allowSenderRemoteImages,
@@ -166,9 +166,9 @@ const MessageReader = memo(function MessageReader() {
     try {
       await allowMessageRemoteImages(selected.id, controller.signal)
       if (useMailStore.getState().selectedKey !== targetKey) return
-      queryClient.setQueryData(
+      queryClient.setQueryData<MailDetail>(
         ['detail', 'mail-core', selected.id],
-        (old: any) => (old ? { ...old, remote_images_allowed: true } : old)
+        old => (old ? { ...old, remote_images_allowed: true } : old)
       )
       await queryClient.invalidateQueries({ queryKey: ['detail', 'mail-core', selected.id] })
     } catch (err: any) {

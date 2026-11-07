@@ -40,7 +40,6 @@ test('settings workspace: filters, sync preference, native modal keyboard and se
   await settings.getByRole('switch', { name: '暂停同步 long-address-for-settings@gmail.com' }).click()
   await expect(settings.getByRole('switch', { name: '启用同步 long-address-for-settings@gmail.com' })).toHaveAttribute('aria-checked', 'false')
   await settings.getByRole('searchbox', { name: '搜索账户' }).fill('')
-  await page.screenshot({ path: '../../.scratch/settings_design_review/current_accounts.png' })
 
   const add = settings.getByRole('button', { name: '添加账户', exact: true })
   await add.click()
@@ -61,7 +60,6 @@ test('settings workspace: filters, sync preference, native modal keyboard and se
   await settings.getByRole('button', { name: '通用', exact: true }).click()
   await settings.getByRole('button', { name: '深色', exact: true }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
-  await page.screenshot({ path: '../../.scratch/settings_design_review/current_general.png' })
 })
 
 test('settings workspace: narrow layouts preserve account controls and avoid overflow', async ({ page }) => {
@@ -73,11 +71,9 @@ test('settings workspace: narrow layouts preserve account controls and avoid ove
     await expect(settings.getByRole('combobox', { name: '移动 long-address-for-settings@gmail.com' })).toBeVisible()
     expect(await settings.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true)
     expect(await settings.locator('.settings-content').evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true)
-    if (width === 390) await page.screenshot({ path: '../../.scratch/settings_design_review/current_mobile_accounts.png' })
     await settings.getByRole('button', { name: '通用', exact: true }).click()
     await expect(settings.getByRole('button', { name: '跟随系统', exact: true })).toBeVisible()
     expect(await settings.locator('.settings-content').evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true)
-    if (width === 390) await page.screenshot({ path: '../../.scratch/settings_design_review/current_mobile_general.png' })
     await settings.getByRole('button', { name: '账户管理', exact: true }).click()
   }
   await settings.getByRole('button', { name: '添加账户', exact: true }).click()
