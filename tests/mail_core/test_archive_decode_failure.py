@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
+from mail_core.accounts import create_account
 from mail_core.api.app import app
 from mail_core.blobs.archive import MimeParseError, run_archive_batch
 from mail_core.blobs.crypto import Keyring
@@ -17,6 +17,7 @@ from mail_core.blobs.store import BlobStore
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.queries import get_message_detail
 from mail_core.mail.domain.enums import ArchiveState
+from mail_core.security.credentials import DictCredentialStore, set_credential_store
 from mail_core.mail.storage.models import (
     Account,
     Attachment,

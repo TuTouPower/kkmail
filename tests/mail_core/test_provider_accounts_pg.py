@@ -5,9 +5,9 @@ import uuid
 import pytest
 from sqlalchemy import select
 
-from mail_core.accounts.credentials import DbCredentialStore, load_json_secret
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import Account
+from mail_core.security.credentials import DbCredentialStore, load_json_secret
 
 pytestmark = pytest.mark.skipif(not os.environ.get('MAIL_CORE_DATABASE_URL'), reason='PG required')
 

@@ -10,12 +10,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import func, select
 
-from mail_core.accounts.credentials import DictCredentialStore
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import JobStatus, JobType, RemoteOperationStatus
 from mail_core.mail.storage.models import Account, RemoteOperation, WorkerJob
 from mail_core.providers.base import RemoteOperationItem, RemoteOperationResult
 from mail_core.providers.connection_slots import TrafficClass
+from mail_core.security.credentials import DictCredentialStore
 from mail_core.providers.graph import GraphProvider
 from mail_core.providers.http import ProviderHttpError
 from mail_core.providers.imap import ImapProvider, format_imap_remote_id

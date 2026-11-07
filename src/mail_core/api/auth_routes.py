@@ -144,6 +144,13 @@ def change_password(
         change_login_password(current=body.current_login_password, new=body.login_password)
     except AuthConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        import os
+        from mail_core.runtime.bootstrap import clear_initial_password
+
+        clear_initial_password(os.environ.get("MAIL_CORE_DATA_DIR"))
+    except Exception:
+        pass
     # The session cookie the caller holds is already invalid; clear it so
     # the client does not keep presenting a dead session.
     _clear_session_cookie(response)

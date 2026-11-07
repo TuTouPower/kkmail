@@ -490,9 +490,10 @@ pg_only = pytest.mark.skipif(
 def test_pg_two_session_claim_competition_old_worker_cannot_overwrite():
     from sqlalchemy import select
 
-    from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
+    from mail_core.accounts import create_account
     from mail_core.blobs.archive import claim_archive_batch, reclaim_stale_archive_claims
     from mail_core.db.session import get_session_factory
+    from mail_core.security.credentials import DictCredentialStore, set_credential_store
 
     Session = get_session_factory()
     store = DictCredentialStore({"r": "x"})

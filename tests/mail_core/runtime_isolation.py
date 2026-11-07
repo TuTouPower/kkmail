@@ -33,13 +33,13 @@ def clear_database():
 
 @contextmanager
 def isolated_runtime(monkeypatch, tmp_path, session):
-    from mail_core.accounts.credentials import set_credential_store
     from mail_core.accounts.oauth_flow import reset_oauth_flow_state
     from mail_core.api.app import _code_schema_head
     from mail_core.api import sse
     from mail_core.db import session as db
     from mail_core.realtime import dispatcher, listener
     from mail_core.security.auth import reset_auth_caches
+    from mail_core.security.credentials import set_credential_store
     from mail_core.security.ratelimit import login_limiter
     from mail_core.worker import main as worker
     import mail_core.sync.delta as delta

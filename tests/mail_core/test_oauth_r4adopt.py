@@ -8,8 +8,7 @@ import time
 
 import pytest
 
-from mail_core.accounts import DictCredentialStore
-from mail_core.accounts.credentials import credential_edit
+from mail_core.security.credentials import DictCredentialStore, credential_edit
 from mail_core.providers.oauth import OAuthTokenClient
 
 _TOKEN_URI = "https://login.microsoftonline.com/common/oauth2/v2.0/token"

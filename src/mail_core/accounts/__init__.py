@@ -1,17 +1,3 @@
-from mail_core.accounts.credentials import (
-    CompositeCredentialStore,
-    CredentialCorruptError,
-    CredentialStore,
-    DbCredentialStore,
-    DictCredentialStore,
-    EnvCredentialStore,
-    KeyringCredentialStore,
-    ReadOnlyCredentialRef,
-    get_credential_store,
-    load_json_secret,
-    save_json_secret,
-    set_credential_store,
-)
 from mail_core.accounts.service import (
     account_ids_for_group,
     enabled_account_ids,
@@ -39,14 +25,6 @@ from mail_core.accounts.settings_store import (
 )
 
 __all__ = [
-    "CompositeCredentialStore",
-    "CredentialCorruptError",
-    "CredentialStore",
-    "DbCredentialStore",
-    "DictCredentialStore",
-    "EnvCredentialStore",
-    "KeyringCredentialStore",
-    "ReadOnlyCredentialRef",
     "create_account",
     "account_ids_for_group",
     "enabled_account_ids",
@@ -64,10 +42,6 @@ __all__ = [
     "StaleSidebarLayoutError",
     "update_account",
     "update_account_sync_status",
-    "get_credential_store",
-    "load_json_secret",
-    "save_json_secret",
-    "set_credential_store",
     "get_app_setting",
     "get_fetch_timeout_seconds",
     "get_public_settings",

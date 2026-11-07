@@ -20,7 +20,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import func, select, text
 
-from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
+from mail_core.accounts import create_account
+from mail_core.security.credentials import DictCredentialStore, set_credential_store
 from mail_core.blobs.archive import (
     maybe_resume_quota_paused_archives,
     parse_mime_content,

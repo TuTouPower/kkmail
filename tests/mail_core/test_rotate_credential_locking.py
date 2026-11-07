@@ -70,8 +70,8 @@ pg_only = pytest.mark.skipif(not DATABASE_URL, reason="MAIL_CORE_DATABASE_URL no
 def test_rotation_does_not_overwrite_concurrent_refresh():
     from sqlalchemy import func
 
-    from mail_core.accounts.credentials import credential_lock_key
     from mail_core.db.session import get_session_factory
+    from mail_core.security.credentials import credential_lock_key
 
     SessionFactory = get_session_factory()
     old_pt = b'{"refresh_token": "old-token"}'

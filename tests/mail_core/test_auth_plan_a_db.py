@@ -9,7 +9,6 @@ from unittest.mock import patch
 import bcrypt
 
 from mail_core.security.auth import (
-    _SESSION_EPOCH_CACHE_TTL_SECONDS,
     AuthConfigError,
     change_login_password,
     get_login_password_hash,
@@ -278,11 +277,10 @@ def test_change_password_atomic_commit_and_rollback_on_failure():
         assert read_session(cookie_val_2) is not None
 
 
-def test_cross_process_epoch_revocation_is_bounded_by_cache_ttl():
-    """A86: Remote epoch changes apply after the short cache TTL."""
+def test_cross_process_epoch_revocation_immediate_via_db():
+    """A13: DB is the sole authority for session epoch; revocation is immediate across processes."""
     reset_auth_caches()
     stored_cred = {"hash": "dummy", "epoch": 1}
-    fake_time = [100.0]
     query_count = 0
     db_unavailable = False
 
@@ -323,25 +321,21 @@ def test_cross_process_epoch_revocation_is_bounded_by_cache_ttl():
             "MAIL_CORE_SECRET_KEY": "test_secret_key_12345678901234567890",
         }),
         patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
-        patch("mail_core.security.auth.time.monotonic", side_effect=lambda: fake_time[0]),
     ):
         cookie_val, _ = issue_session()
         assert read_session(cookie_val) is not None
-        assert query_count == 1
+        assert query_count == 2  # issue_session + read_session both consult DB
 
-        # Another process increments epoch directly in DB. The cached epoch remains valid only until TTL expiry.
+        # Process A updates epoch in DB. Even without NOTIFY, Process B immediately
+        # reads the authoritative epoch from DB on next read_session and rejects old session.
         stored_cred["epoch"] = 2
-        assert read_session(cookie_val) is not None
-        assert query_count == 1
-
-        fake_time[0] += _SESSION_EPOCH_CACHE_TTL_SECONDS
         assert read_session(cookie_val) is None
-        assert query_count == 2
 
-        current_cookie, _ = issue_session()
+        # When DB is unavailable, authentication fails closed immediately.
         db_unavailable = True
-        fake_time[0] += _SESSION_EPOCH_CACHE_TTL_SECONDS
-        assert read_session(current_cookie) is None
+        with pytest.raises(AuthConfigError, match="could not fetch session epoch from database"):
+            get_session_epoch()
+        assert read_session(cookie_val) is None
 
 
 def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
@@ -414,6 +408,7 @@ def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
 
 
 def test_get_session_epoch_does_not_create_a_missing_credential_row():
+    """A13: When DB is configured and credential row is missing, fail closed without adding rows."""
     reset_auth_caches()
 
     class FakeSession:
@@ -437,7 +432,8 @@ def test_get_session_epoch_does_not_create_a_missing_credential_row():
             patch.dict(os.environ, {"MAIL_CORE_DATABASE_URL": "postgresql://test/db"}),
             patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
         ):
-            assert get_session_epoch() == 1
+            with pytest.raises(AuthConfigError, match="auth credential record missing in database"):
+                get_session_epoch()
     finally:
         reset_auth_caches()
 

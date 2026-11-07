@@ -9,13 +9,14 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import select
 
-from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
+from mail_core.accounts import create_account
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage import Folder, SyncCheckpoint
 from mail_core.providers.base import RemoteFolder
 from mail_core.providers.http import CursorInvalidError
 from mail_core.providers.imap import _check_uidvalidity
 from mail_core.providers.stub_memory import MemoryProvider
+from mail_core.security.credentials import DictCredentialStore, set_credential_store
 from mail_core.sync import sync_folder_metadata
 from mail_core.sync.leases import acquire_lease
 import mail_core.sync.engine as engine_mod

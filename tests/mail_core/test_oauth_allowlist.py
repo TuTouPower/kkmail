@@ -7,8 +7,8 @@ import time
 
 import pytest
 
-from mail_core.accounts.credentials import DictCredentialStore
 from mail_core.providers.oauth import OAuthError, OAuthTokenClient
+from mail_core.security.credentials import DictCredentialStore
 
 
 def test_token_uri_rejects_ssrf_target():

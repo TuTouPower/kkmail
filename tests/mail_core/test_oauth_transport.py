@@ -7,11 +7,11 @@ import time
 
 import pytest
 
-from mail_core.accounts import DictCredentialStore
 from mail_core.mail.storage.models import Account
 from mail_core.providers.factory import build_provider
 from mail_core.providers.graph import GraphNotConfiguredError, GraphProvider
 from mail_core.providers.http import AmbiguousOutcomeError, ProviderHttpError
+from mail_core.security.credentials import DictCredentialStore
 from mail_core.providers.oauth import (
     BearerTransport,
     OAuthError,
@@ -210,7 +210,7 @@ def test_oauth_token_error_text_strips_controls_and_caps_length():
 def test_keyring_store_has_no_silent_memory_fallback(monkeypatch):
     import builtins
 
-    from mail_core.accounts import KeyringCredentialStore
+    from mail_core.security.credentials import KeyringCredentialStore
 
     real_import = builtins.__import__
 
@@ -226,7 +226,7 @@ def test_keyring_store_has_no_silent_memory_fallback(monkeypatch):
 
 
 def test_env_store_is_read_only(monkeypatch):
-    from mail_core.accounts import EnvCredentialStore, ReadOnlyCredentialRef
+    from mail_core.security.credentials import EnvCredentialStore, ReadOnlyCredentialRef
 
     monkeypatch.setenv("KK_TEST_SECRET", "s3cret")
     store = EnvCredentialStore()

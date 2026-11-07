@@ -5,7 +5,7 @@ import copy
 import math
 from urllib.parse import urlsplit
 
-from mail_core.accounts.credentials import credential_edit
+from mail_core.security.credentials import credential_edit
 from mail_core.accounts.microsoft_oauth import (
     MICROSOFT_SCOPE, authority, friendly_error, http_error, response_error, stage_verified_response,
 )

@@ -1,8 +1,13 @@
 """Provider-specific account connection validation (no network login)."""
 from urllib.parse import urlsplit
 
-MICROSOFT_DOMAINS = frozenset(('outlook.com', 'outlook.cn', 'hotmail.com', 'live.com', 'msn.com', 'hotmail.co.uk', 'live.co.uk', 'hotmail.fr', 'live.fr', 'hotmail.de', 'live.de', 'outlook.de'))
-MICROSOFT_IMAP_HOSTS = frozenset(('outlook.office365.com', 'imap-mail.outlook.com', 'imap.outlook.com', 'imap.hotmail.com', 'outlook.office.com'))
+from mail_core.providers.host_security import (
+    MICROSOFT_DOMAINS,
+    MICROSOFT_IMAP_HOSTS,
+    reject_microsoft_imap,
+    validate_imap_host,
+)
+
 PROFILES = {'other': {'imap'}, 'google': {'imap'}, 'microsoft': {'graph'}, 'qq': {'imap'}, 'netease_163': {'imap'}, 'netease_126': {'imap'}, 'netease_yeah': {'imap'}, 'icloud': {'imap'}, 'yahoo': {'imap'}, 'zoho': {'imap'}}
 CREDENTIAL_FIELDS = {'imap': {'password', 'secret'}, 'graph': {'client_id', 'client_secret', 'refresh_token', 'token_uri', 'scope'}}
 # A165: providers validate_connection knows how to validate. Internal test
@@ -14,13 +19,6 @@ INTERNAL_TEST_PROVIDERS = frozenset({'memory', 'stub'})
 # Runtime cache keys the OAuth layer itself writes into stored credentials;
 # they are tolerated in a credential set but are not provider input fields.
 RUNTIME_CACHE_KEYS = frozenset({'access_token', 'expires_at'})
-
-
-def reject_microsoft_imap(email: str, config: dict) -> None:
-    host = str(config.get('imap_host') or config.get('host') or '').strip().lower().rstrip('.')
-    if (email.strip().lower().rsplit('@', 1)[-1] in MICROSOFT_DOMAINS or host in MICROSOFT_IMAP_HOSTS
-            or config.get('provider_profile') == 'microsoft'):
-        raise ValueError('Microsoft IMAP is not supported; use Microsoft Graph OAuth')
 
 
 def merge_credentials(
@@ -78,7 +76,6 @@ def validate_connection(email: str, provider: str, config: dict, credentials: di
         host = config.get('imap_host') or config.get('host')
         if not isinstance(host, str) or not host.strip():
             raise ValueError('config.imap_host: required')
-        from mail_core.providers.factory import validate_imap_host
         validate_imap_host(host)
         for key in ('imap_port', 'port'):
             if key in config and config[key] is not None:

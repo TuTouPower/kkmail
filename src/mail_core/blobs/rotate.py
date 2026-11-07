@@ -42,7 +42,7 @@ def _cred_key(keyring: Keyring, version: int) -> bytes:
 
 
 def _rewrap_credential_secrets(session: Session, keyring: Keyring, target_version: int) -> int:
-    from mail_core.accounts.credentials import credential_lock_key
+    from mail_core.security.credentials import credential_lock_key
 
     candidate_refs = list(
         session.scalars(

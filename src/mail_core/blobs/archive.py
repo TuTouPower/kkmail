@@ -21,7 +21,7 @@ from typing import Any
 
 from sqlalchemy import select, update
 
-from mail_core.accounts.credentials import CredentialStore, get_credential_store
+from mail_core.security.credentials import CredentialStore, get_credential_store
 from mail_core.blobs.quota import (
     QuotaExceededError,
     acquire_blob_digest_lock,

@@ -82,7 +82,6 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-from mail_core.accounts.credentials import DbCredentialStore, save_json_secret
 from mail_core.blobs.crypto import Keyring
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import (
@@ -92,9 +91,8 @@ from mail_core.mail.storage.models import (
     FolderStats,
     Message,
     MessageBody,
-    MessageLocation,
-    MessageSearch,
 )
+from mail_core.security.credentials import DbCredentialStore, save_json_secret
 
 _MAX_POSTGRES_BIGINT = (1 << 63) - 1
 _MAX_POSTGRES_BIGINT_TEXT = str(_MAX_POSTGRES_BIGINT)

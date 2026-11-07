@@ -18,7 +18,6 @@ import json
 import logging
 import os
 import secrets
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -37,12 +36,9 @@ _SESSION_SALT = "kkmail-mail-core-session-v1"
 _password_hash: bytes | None = None
 _api_keys: frozenset[str] | None = None
 _session_epoch: int = 1
-_SESSION_EPOCH_CACHE_TTL_SECONDS = 5.0
 _DEFAULT_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 _MAX_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 365
 _session_max_age_seconds: int | None = None
-_session_epoch_cache: tuple[int, float] | None = None
-_session_epoch_generation = 0
 
 
 class AuthConfigError(RuntimeError):
@@ -71,11 +67,14 @@ MAX_PASSWORD_BYTES = 72
 _BCRYPT_MAX_PASSWORD_BYTES = MAX_PASSWORD_BYTES
 
 
-def _bcrypt_password_bytes(password: str) -> bytes:
+def bcrypt_password_bytes(password: str) -> bytes:
     encoded = password.encode("utf-8")
     if len(encoded) > _BCRYPT_MAX_PASSWORD_BYTES:
         raise AuthConfigError("password must not exceed 72 bytes when encoded as UTF-8")
     return encoded
+
+
+_bcrypt_password_bytes = bcrypt_password_bytes
 
 
 def _write_password_hash_file(path: Path, password_hash: bytes) -> None:
@@ -105,22 +104,11 @@ class AuthPrincipal:
 
 def reset_auth_caches() -> None:
     """Test helper: clear cached password hash, API keys, session epoch, and max age."""
-    global _password_hash, _api_keys, _session_epoch, _session_epoch_cache, _session_max_age_seconds
-    global _session_epoch_generation
+    global _password_hash, _api_keys, _session_epoch, _session_max_age_seconds
     _password_hash = None
     _api_keys = None
     _session_epoch = 1
-    _session_epoch_cache = None
     _session_max_age_seconds = None
-    _session_epoch_generation += 1
-
-
-def _update_session_epoch_cache(epoch: int) -> None:
-    """Publish a session epoch change made by this process."""
-    global _session_epoch, _session_epoch_cache, _session_epoch_generation
-    _session_epoch = epoch
-    _session_epoch_generation += 1
-    _session_epoch_cache = (epoch, time.monotonic())
 
 
 def require_secret_key() -> str:
@@ -281,7 +269,6 @@ def _persist_db_password_hash(hash_str: str, increment_epoch: bool = False) -> b
                 try_notify_session_revocation(session, int(cred.session_epoch))
             session.commit()
             if increment_epoch and cred is not None:
-                _update_session_epoch_cache(cred.session_epoch)
                 _close_local_session_streams(current_epoch=int(cred.session_epoch))
             return True
     except Exception as exc:
@@ -372,24 +359,14 @@ def validate_auth_config() -> None:
     load_api_keys()  # validate JSON if present
 
 
-def get_session_epoch(*, force_refresh: bool = False) -> int:
-    """Fetch the session epoch from a short-lived cache or the authoritative database.
-
-    ``force_refresh`` bypasses the process cache when an SSE stream subscribes,
-    closing the race between session validation and subscription setup.
+def get_session_epoch() -> int:
+    """Fetch the authoritative session epoch from database, or in-memory epoch if DB not configured.
 
     Raises:
-        AuthConfigError: If database is configured but query fails (fail-closed).
+        AuthConfigError: If database is configured but record is missing or query fails (fail-closed).
     """
-    global _session_epoch, _session_epoch_cache
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
         return _session_epoch
-
-    now = time.monotonic()
-    cached = _session_epoch_cache
-    if not force_refresh and cached is not None and now - cached[1] < _SESSION_EPOCH_CACHE_TTL_SECONDS:
-        return cached[0]
-    generation = _session_epoch_generation
 
     try:
         from mail_core.db.session import get_session_factory
@@ -398,15 +375,11 @@ def get_session_epoch(*, force_refresh: bool = False) -> int:
         Session = get_session_factory()
         with Session() as session:
             cred = session.get(AuthCredential, "default")
-            epoch = getattr(cred, "session_epoch", None) if cred is not None else None
-            if epoch is None:
-                epoch = _session_epoch
-            if generation != _session_epoch_generation:
-                # A local password change or logout completed while this query ran.
-                return _session_epoch
-            _session_epoch = epoch
-            _session_epoch_cache = (epoch, time.monotonic())
-            return epoch
+            if cred is None or getattr(cred, "session_epoch", None) is None:
+                raise AuthConfigError("auth credential record missing in database")
+            return int(cred.session_epoch)
+    except AuthConfigError:
+        raise
     except Exception as exc:
         log.error(
             "could not fetch session epoch from database (error type=%s)",
@@ -434,10 +407,10 @@ def invalidate_all_sessions() -> None:
     Raises:
         AuthConfigError: If database is configured but update fails.
     """
+    global _session_epoch
     if not (os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip():
-        current_epoch = _session_epoch + 1
-        _update_session_epoch_cache(current_epoch)
-        _close_local_session_streams(current_epoch=current_epoch)
+        _session_epoch += 1
+        _close_local_session_streams(current_epoch=_session_epoch)
         return
     try:
         from mail_core.db.session import get_session_factory
@@ -460,8 +433,8 @@ def invalidate_all_sessions() -> None:
                 cred.session_epoch = (getattr(cred, "session_epoch", None) or 1) + 1
             try_notify_session_revocation(session, int(cred.session_epoch))
             session.commit()
-            _update_session_epoch_cache(cred.session_epoch)
-        _close_local_session_streams(current_epoch=int(cred.session_epoch))
+            new_epoch = int(cred.session_epoch)
+        _close_local_session_streams(current_epoch=new_epoch)
     except Exception as exc:
         log.error("could not increment session epoch in database: %s", exc)
         raise AuthConfigError(f"could not increment session epoch in database: {exc}") from exc
@@ -531,12 +504,12 @@ def change_login_password(*, current: str, new: str) -> None:
     """Verify current password and persist new bcrypt hash + session epoch atomically in one DB tx."""
     import bcrypt
 
-    global _password_hash
+    global _password_hash, _session_epoch
     if not verify_password(current):
         raise AuthConfigError("current password incorrect")
     if len(new) < 8:
         raise AuthConfigError("new password must be at least 8 characters")
-    hashed = bcrypt.hashpw(_bcrypt_password_bytes(new), bcrypt.gensalt())
+    hashed = bcrypt.hashpw(bcrypt_password_bytes(new), bcrypt.gensalt())
     hashed_str = hashed.decode("utf-8")
 
     has_db = bool((os.environ.get("MAIL_CORE_DATABASE_URL") or "").strip())
@@ -547,9 +520,8 @@ def change_login_password(*, current: str, new: str) -> None:
 
     # If without DB, increment epoch in memory
     if not has_db:
-        current_epoch = _session_epoch + 1
-        _update_session_epoch_cache(current_epoch)
-        _close_local_session_streams(current_epoch=current_epoch)
+        _session_epoch += 1
+        _close_local_session_streams(current_epoch=_session_epoch)
 
     # Refresh in-memory cache only after DB commit succeeded
     _password_hash = hashed
@@ -559,10 +531,3 @@ def change_login_password(*, current: str, new: str) -> None:
             _write_password_hash_file(Path(path_raw), hashed)
         except Exception as exc:
             log.warning("could not write password hash to %s: %s", path_raw, exc)
-
-    try:
-        from mail_core.runtime.bootstrap import clear_initial_password
-
-        clear_initial_password(os.environ.get("MAIL_CORE_DATA_DIR"))
-    except Exception as exc:
-        log.warning("could not clear initial password: %s", exc)

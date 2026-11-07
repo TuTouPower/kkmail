@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, func, or_, select
 
-from mail_core.accounts.credentials import CredentialStore, get_credential_store
+from mail_core.security.credentials import CredentialStore, get_credential_store
 from mail_core.mail.application.remote_ops import mark_remote_operation, reclaim_stale_in_progress
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, RemoteOperationStatus
 from mail_core.mail.storage.folder_stats import recompute_folder_stats

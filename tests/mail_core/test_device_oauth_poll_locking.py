@@ -19,8 +19,8 @@ from contextlib import contextmanager
 import pytest
 
 from mail_core.accounts import device_oauth, oauth_flow
-from mail_core.accounts.credentials import DictCredentialStore, load_json_secret
 from mail_core.accounts.device_oauth import DevicePollTooSoon, poll_device_flow
+from mail_core.security.credentials import DictCredentialStore, load_json_secret
 
 
 def _store_with_device_flow(**overrides):

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
+from mail_core.accounts import create_account
 from mail_core.blobs.archive import run_archive_batch
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.remote_ops import enqueue_remote_operation
@@ -18,6 +18,7 @@ from mail_core.mail.storage import Account, AccountSyncLease, Folder, Message, M
 from mail_core.providers.base import RemoteFolder, RemoteMessageMeta
 from mail_core.providers.http import CursorInvalidError, ProviderHttpError, RateLimitedError
 from mail_core.providers.stub_memory import MemoryProvider
+from mail_core.security.credentials import DictCredentialStore, set_credential_store
 from mail_core.security.redact import safe_provider_summary
 from mail_core.sync import enqueue_job, push_remote_operations, sync_folder_delta, sync_folder_metadata
 import mail_core.sync.delta as delta_mod

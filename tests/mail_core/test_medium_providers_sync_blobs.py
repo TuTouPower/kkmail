@@ -426,9 +426,9 @@ def test_imap_fetch_metadata_page_bounded_search_pagination(monkeypatch):
 
 
 def test_build_provider_imap_json_credentials_unpack():
-    from mail_core.accounts.credentials import DictCredentialStore
     from mail_core.mail.storage.models import Account
     from mail_core.providers.factory import build_provider
+    from mail_core.security.credentials import DictCredentialStore
 
     store = DictCredentialStore({
         "ref-dict": {"password": "real-secret-from-dict"},
@@ -465,9 +465,9 @@ def test_build_provider_imap_json_credentials_unpack():
 
 
 def test_build_provider_imap_json_credentials_rejects_missing_password():
-    from mail_core.accounts.credentials import DictCredentialStore
     from mail_core.mail.storage.models import Account
     from mail_core.providers.factory import build_provider
+    from mail_core.security.credentials import DictCredentialStore
 
     secret = '{"refresh_token": "must-not-appear-in-error"}'
     store = DictCredentialStore({"ref-json": secret})
@@ -485,8 +485,8 @@ def test_build_provider_imap_json_credentials_rejects_missing_password():
 
 def test_create_account_duplicate_does_not_overwrite_credentials(monkeypatch):
     from unittest.mock import MagicMock
-    from mail_core.accounts.credentials import DictCredentialStore, set_credential_store
     from mail_core.accounts.service import create_account
+    from mail_core.security.credentials import DictCredentialStore, set_credential_store
 
     store = DictCredentialStore({"account:existing@test.com": {"password": "old-password"}})
     set_credential_store(store)
