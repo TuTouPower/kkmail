@@ -6,7 +6,7 @@
 
 - 当前焦点：落实 `docs/reviews/review_20261107_142548/adoption_decision.md` 全部 22 项采纳决策（A1–A22）。
 - branch：main
-- head_commit：7f754a17
+- head_commit：b0b55340
 - 已完成：
     - A1: 补齐 `remote_writeback`、`worker/main` 与 `search/index` 缺失的 typing 导入；
     - A2: 彻底移除废弃的 Outbox v1 `fetch_since` 接口与旧调用，重建 v2 publication seq 回放测试；
