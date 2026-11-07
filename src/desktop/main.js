@@ -10,9 +10,8 @@ const path = require('path')
 const { spawn } = require('child_process')
 const { sidecarPath, frontendDistPath, attachContentGuards } = require('./paths')
 const {
-  parsePort,
-  freePort,
   waitForHealth,
+  waitForSidecarReady,
   scrubEnv,
   redactSecrets,
   isChildDead,
@@ -46,7 +45,6 @@ desktopLogger.info('Starting kkmail desktop', {
   node: process.versions.node,
 })
 
-const PORT = parsePort(process.env.KKMAIL_DESKTOP_PORT)
 const HOST = '127.0.0.1'
 let backend = null
 let backendExit = null
@@ -113,14 +111,12 @@ async function startBackend() {
     throw new Error(`PostgreSQL 启动失败: ${pgResult.reason || 'unknown'}`)
   }
   const dataRoot = pg.paths().dataRoot
-  const port = await freePort(PORT, HOST)
-  if (port == null) throw new Error('无法分配本地端口给 mail-core')
   const target = backendCommand()
   const databaseUrl = pg.databaseUrl()
   const instanceToken = crypto.randomBytes(24).toString('hex')
   const baseExtras = {
     MAIL_CORE_HOST: HOST,
-    MAIL_CORE_PORT: String(port),
+    MAIL_CORE_PORT: '0',
     MAIL_CORE_DATA_DIR: dataRoot,
     MAIL_CORE_DATABASE_URL: databaseUrl,
     KKMAIL_SIDECAR: '1',
@@ -159,6 +155,7 @@ async function startBackend() {
       app.quit()
     }
   })
+  const { port } = await waitForSidecarReady(backend, 60000)
   // A386: instanceToken reaches the sidecar only via the spawn
   // environment above (private startup channel); /health is probed
   // without any token header exchange.

@@ -190,21 +190,8 @@ function tryListen(port, host = '127.0.0.1') {
 /**
  * Pick a port that is free *right now*.
  *
- * A301 — TOCTOU warning: this is a probe, NOT a reservation. tryListen
- * closes its server before returning, and the caller (main.js) only
- * spawns the backend — which is what actually binds the port — after
- * PostgreSQL has started. In that window any other local process can
- * take the port. Accepted residual race; the failure shapes are:
- *   - the backend cannot bind and exits: startBackend surfaces the
- *     child's exit via waitForHealth's shouldStop (后端已退出), not a
- *     freePort error;
- *   - another service takes the port and accepts connections:
- *     waitForHealth polls the wrong service until it rejects with
- *     "backend timeout" / a bad-status error.
- * Eliminating the race requires the backend to bind port 0 and report
- * the assigned port back to the launcher (a backend protocol change);
- * until that exists, treat the two failure shapes above as the
- * port-raced signature and retry the launch.
+ * Auxiliary helper retained for PostgreSQL tests and package smoke tests.
+ * mail-core sidecar dynamically binds port 0 and reports back via waitForSidecarReady.
  */
 async function freePort(preferred, host = '127.0.0.1') {
   const exact = await tryListen(preferred, host)
@@ -212,6 +199,109 @@ async function freePort(preferred, host = '127.0.0.1') {
   const any = await tryListen(0, host)
   if (any) return any
   throw new Error(`无法绑定本地端口（首选 ${preferred}，系统分配也失败）`)
+}
+
+/**
+ * A16: Wait for mail-core sidecar to bind port 0 and report the bound address
+ * via stdout structured handshake KKMAIL_SIDECAR_READY:{...}.
+ */
+function waitForSidecarReady(child, timeoutMs = 60000) {
+  if (!child) {
+    return Promise.reject(new Error('child process required'))
+  }
+  if (
+    (child.exitCode !== null && child.exitCode !== undefined) ||
+    (child.signalCode !== null && child.signalCode !== undefined)
+  ) {
+    return Promise.reject(
+      new Error(`后端已退出 (code=${child.exitCode}, signal=${child.signalCode})`),
+    )
+  }
+  if (!child.stdout) {
+    return Promise.reject(new Error('child stdout unavailable'))
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let timer = null
+    let buffer = ''
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      child.removeListener('exit', onExit)
+      child.removeListener('error', onError)
+      if (child.stdout && typeof child.stdout.removeListener === 'function') {
+        child.stdout.removeListener('data', onData)
+      }
+    }
+
+    const settle = (fn, val) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      fn(val)
+    }
+
+    const onExit = (code, signal) => {
+      settle(reject, new Error(`后端已退出 (code=${code}, signal=${signal})`))
+    }
+
+    const onError = (err) => {
+      settle(reject, err || new Error('child error'))
+    }
+
+    const processLine = (line) => {
+      const prefix = 'KKMAIL_SIDECAR_READY:'
+      const idx = line.indexOf(prefix)
+      if (idx === -1) return
+      const rawJson = line.slice(idx + prefix.length).trim()
+      let payload
+      try {
+        payload = JSON.parse(rawJson)
+      } catch (err) {
+        settle(reject, new Error(`无法解析 sidecar 就绪消息: ${err && err.message}`))
+        return
+      }
+      const allowedHosts = new Set(['127.0.0.1', 'localhost'])
+      if (!payload || typeof payload !== 'object' || !allowedHosts.has(payload.host)) {
+        settle(reject, new Error(`非法 sidecar host: ${payload && payload.host}`))
+        return
+      }
+      const port = Number(payload.port)
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        settle(reject, new Error(`非法 sidecar port: ${payload && payload.port}`))
+        return
+      }
+      settle(resolve, { host: payload.host, port, status: payload.status || 'ready' })
+    }
+
+    const onData = (chunk) => {
+      if (settled) return
+      buffer += chunk.toString('utf8')
+      let newlineIdx
+      while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newlineIdx).trim()
+        buffer = buffer.slice(newlineIdx + 1)
+        if (line) processLine(line)
+        if (settled) return
+      }
+      const trimmed = buffer.trim()
+      if (trimmed.includes('KKMAIL_SIDECAR_READY:') && trimmed.endsWith('}')) {
+        processLine(trimmed)
+      }
+    }
+
+    child.on('exit', onExit)
+    child.on('error', onError)
+    child.stdout.on('data', onData)
+
+    timer = setTimeout(() => {
+      settle(reject, new Error('sidecar ready timeout'))
+    }, Math.max(0, timeoutMs))
+  })
 }
 
 /**
@@ -420,6 +510,7 @@ module.exports = {
   tryListen,
   freePort,
   waitForHealth,
+  waitForSidecarReady,
   scrubEnv,
   redactSecrets,
   isChildDead,
