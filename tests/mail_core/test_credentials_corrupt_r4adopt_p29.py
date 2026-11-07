@@ -17,8 +17,8 @@ from types import SimpleNamespace as _SimpleNamespace
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM
 
-from mail_core.accounts.credentials import CredentialCorruptError, DbCredentialStore
 from mail_core.blobs.crypto import Keyring as _Keyring
+from mail_core.security.credentials import CredentialCorruptError, DbCredentialStore
 
 
 class _FakeSession:

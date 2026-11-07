@@ -11,10 +11,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mail_core.accounts.credentials import get_credential_store
 from mail_core.accounts.service import update_account_sync_status
 from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
 from mail_core.mail.storage.models import Account, WorkerJob
+from mail_core.security.credentials import get_credential_store
 from mail_core.providers.connection_slots import (
     get_capacity_retry_seconds,
     is_capacity_error,

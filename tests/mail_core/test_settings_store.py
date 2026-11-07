@@ -123,10 +123,10 @@ def test_runtime_timeout_uses_persisted_setting_without_injected_session(provide
     import os
     if not os.environ.get('MAIL_CORE_DATABASE_URL'):
         pytest.skip('PG required')
-    from mail_core.accounts.credentials import DictCredentialStore
     from mail_core.db.session import get_session_factory
     from mail_core.mail.storage.models import Account
     from mail_core.providers.factory import build_provider
+    from mail_core.security.credentials import DictCredentialStore
 
     with get_session_factory()() as session:
         update_public_settings(session, {'mail_fetch_timeout_seconds': '75'})
@@ -147,9 +147,9 @@ def test_build_provider_logs_timeout_lookup_failure_with_account_context(
 ):
     from unittest.mock import patch
 
-    from mail_core.accounts.credentials import DictCredentialStore
     from mail_core.mail.storage.models import Account
     from mail_core.providers.factory import build_provider
+    from mail_core.security.credentials import DictCredentialStore
 
     account_id = uuid.uuid4()
     account = Account(

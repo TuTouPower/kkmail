@@ -17,12 +17,13 @@ import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import URL
 
-from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
+from mail_core.accounts import create_account
 from mail_core.backup.crypto import BackupCryptoError, load_backup_keyring
 from mail_core.backup.package import create_backup_package, restore_backup_package, verify_backup_package
 from mail_core.blobs import BlobStore, load_keyring_from_env
 from mail_core.db.session import get_engine, get_session_factory
 from mail_core.mail.storage.models import Account, Attachment, Folder, Message, MessageBlob, MessageBlobLink, MessageBody
+from mail_core.security.credentials import DictCredentialStore, set_credential_store
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),

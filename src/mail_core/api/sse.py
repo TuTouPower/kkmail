@@ -84,10 +84,10 @@ def _stream_wait_timeout_s(next_epoch_recheck: float | None, now: float) -> floa
     return min(15.0, max(1.0, next_epoch_recheck - now))
 
 
-def _get_session_epoch(force_refresh: bool = False) -> int:
+def _get_session_epoch() -> int:
     from mail_core.security.auth import get_session_epoch
 
-    return get_session_epoch(force_refresh=force_refresh)
+    return get_session_epoch()
 
 
 def _format_sse(cursor_id: str, event: str, data: dict) -> str:
@@ -268,7 +268,7 @@ async def stream_events(
         # A271: verify the session epoch before committing to a
         # StreamingResponse; a stale epoch previously produced a 200
         # with an empty body instead of an auth error.
-        current_epoch = await asyncio.to_thread(_get_session_epoch, True)
+        current_epoch = await asyncio.to_thread(_get_session_epoch)
         if current_epoch != session_epoch:
             raise HTTPException(status_code=401, detail="session epoch changed")
 

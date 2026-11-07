@@ -11,11 +11,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from mail_core.accounts import oauth_flow
-from mail_core.accounts.credentials import get_credential_store, load_json_secret
 from mail_core.api.app import app
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import Account
 from mail_core.providers.http import ProviderHttpError
+from mail_core.security.credentials import get_credential_store, load_json_secret
 from tests.mail_core.conftest import TEST_LOGIN_PASSWORD
 
 SCOPE = 'https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read'

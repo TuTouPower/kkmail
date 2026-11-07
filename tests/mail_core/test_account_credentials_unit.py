@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mail_core.accounts.credentials import (
+from mail_core.security.credentials import (
     CompositeCredentialStore,
     DictCredentialStore,
     EnvCredentialStore,

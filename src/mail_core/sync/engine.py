@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mail_core.accounts.credentials import CredentialStore, get_credential_store
+from mail_core.security.credentials import CredentialStore, get_credential_store
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncRunStatus, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.connection_slots import (

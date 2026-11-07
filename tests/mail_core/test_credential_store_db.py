@@ -8,10 +8,10 @@ import uuid
 
 import pytest
 
-from mail_core.accounts import CompositeCredentialStore, CredentialCorruptError, DbCredentialStore
 from mail_core.blobs.crypto import Keyring
 from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import CredentialSecret
+from mail_core.security.credentials import CompositeCredentialStore, CredentialCorruptError, DbCredentialStore
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
@@ -70,7 +70,7 @@ def test_composite_routes_plain_refs_to_db(monkeypatch):
 
 def test_account_credentials_transactional_atomicity():
     from mail_core.accounts.service import create_account
-    from mail_core.accounts.credentials import set_credential_store
+    from mail_core.security.credentials import set_credential_store
     set_credential_store(DbCredentialStore(keyring=_ring()))
 
     Session = get_session_factory()

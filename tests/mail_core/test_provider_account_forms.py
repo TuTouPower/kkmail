@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from mail_core.accounts.connection import validate_connection, merge_credentials
-from mail_core.accounts.credentials import DictCredentialStore
 from mail_core.providers.factory import build_provider
+from mail_core.security.credentials import DictCredentialStore
 
 
 @pytest.mark.parametrize('email,host', [
@@ -96,8 +96,8 @@ def test_invalid_profile_and_imap_user_types_are_validation_errors(monkeypatch):
 
 
 def test_operator_managed_environment_refresh_caches_access_and_rotated_refresh_token(monkeypatch):
-    from mail_core.accounts.credentials import EnvCredentialStore
     from mail_core.providers.oauth import OAuthTokenClient
+    from mail_core.security.credentials import EnvCredentialStore
     monkeypatch.setenv('TEST_PROVIDER_ENV', json.dumps({'client_id': 'id', 'refresh_token': 'r'}))
     calls = []
 

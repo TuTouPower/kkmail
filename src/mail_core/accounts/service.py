@@ -12,9 +12,9 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from mail_core.accounts.credentials import get_credential_store, save_json_secret
 from mail_core.mail.domain.enums import JobType, ProviderType, SyncStatus
 from mail_core.mail.storage.models import Account, AccountGroup
+from mail_core.security.credentials import get_credential_store, save_json_secret
 from mail_core.sync.jobs import enqueue_job
 
 SIDEBAR_LAYOUT_LOCK_ID = 0x4B4B4D41494C  # Stable advisory lock key for organization writes.
@@ -133,7 +133,7 @@ def update_account(
     if acc is None:
         raise LookupError("account not found")
     from mail_core.accounts.connection import validate_connection, merge_credentials, reject_microsoft_imap
-    from mail_core.accounts.credentials import credential_edit
+    from mail_core.security.credentials import credential_edit
     effective_config = {**(acc.config or {}), **(config_patch or {})}
     if acc.provider == "imap" and (config_patch or credentials or clear_credentials or sync_enabled is True):
         reject_microsoft_imap(acc.email, effective_config)
@@ -173,7 +173,7 @@ def update_account(
         if (acc.provider or "").lower() == "imap":
             imap_host = merged.get("imap_host") or merged.get("host")
             if imap_host:
-                from mail_core.providers.factory import validate_imap_host
+                from mail_core.providers.host_security import validate_imap_host
 
                 validate_imap_host(imap_host)
         acc.config = merged

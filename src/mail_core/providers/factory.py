@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import logging
-import socket
 import time
 
-from mail_core.accounts.credentials import CredentialStore, get_credential_store
+from mail_core.security.credentials import CredentialStore, get_credential_store
 from mail_core.mail.storage.models import Account
 from mail_core.providers.base import MailProvider
 from mail_core.providers.connection_slots import (
@@ -16,7 +14,14 @@ from mail_core.providers.connection_slots import (
     default_permit_factory,
 )
 from mail_core.providers.graph import GraphNotConfiguredError, GraphProvider
-from mail_core.providers.host_security import is_restricted_ip, private_hosts_allowed
+from mail_core.providers.host_security import (
+    is_loopback_host,
+    is_private_host,
+    is_restricted_ip,
+    private_hosts_allowed,
+    reject_microsoft_imap,
+    validate_imap_host,
+)
 from mail_core.providers.imap import ImapProvider
 from mail_core.providers.oauth import (
     BearerTransport,
@@ -102,33 +107,6 @@ def _oauth_transport(
     return BearerTransport(token_client=client, inner=api, base_url=base)
 
 
-def is_private_host(host: str) -> bool:
-    h = host.strip().lower()
-    if h in ("localhost", "localhost.localdomain") or h.endswith(".local") or h.endswith(".localhost"):
-        return True
-    try:
-        return is_restricted_ip(h)
-    except ValueError:
-        pass
-    try:
-        for res in socket.getaddrinfo(h, None):
-            if is_restricted_ip(res[4][0]):
-                return True
-    except (socket.gaierror, socket.herror, OSError):
-        pass
-    return False
-
-
-def validate_imap_host(host: str) -> None:
-    # Build-time check only: a DNS TOCTOU window remains until the
-    # connect-time peer re-check in imap.py — see the residual-risk note
-    # in providers/host_security.py (A350).
-    if private_hosts_allowed():
-        return
-    if is_private_host(host):
-        raise ValueError(f"imap host {host!r} is a private or loopback address (SSRF protection)")
-
-
 def _validated_imap_host(raw: object) -> str:
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError(f"imap_host must be a non-empty string, got {raw!r}")
@@ -147,16 +125,6 @@ def _validated_imap_port(raw: object, *, use_ssl: bool) -> int:
     if not 1 <= port <= 65535:
         raise ValueError(f"imap_port must be an integer in 1..65535, got {port}")
     return port
-
-
-def _is_loopback_host(host: str) -> bool:
-    normalized = host.strip().lower().strip("[]")
-    if normalized == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(normalized).is_loopback
-    except ValueError:
-        return False
 
 
 def build_provider(
@@ -206,7 +174,6 @@ def build_provider(
         return MemoryProvider.from_config(cfg)
 
     if provider == "imap":
-        from mail_core.accounts.connection import reject_microsoft_imap
         reject_microsoft_imap(account.email, cfg)
         if not account.credential_ref:
             raise ValueError("imap account missing credential_ref")
@@ -242,8 +209,10 @@ def build_provider(
         port = _validated_imap_port(raw_port, use_ssl=use_ssl)
         if not use_ssl:
             logger.warning("plaintext IMAP is configured; credentials and messages are unencrypted")
-            if not _is_loopback_host(host):
+            if not is_loopback_host(host):
                 raise ValueError("plaintext IMAP is only allowed for loopback hosts")
+        # Build-time check only: a DNS TOCTOU window remains until the
+        # connect-time peer re-check in imap.py — see providers/host_security.py (A350).
         validate_imap_host(host)
         return ImapProvider(host=host, port=port, username=user, password=password, use_ssl=use_ssl, timeout=effective_timeout, traffic_class=traffic_class, permit_factory=permit_factory)
 

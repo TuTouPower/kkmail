@@ -578,9 +578,9 @@ def test_exchange_redirect_url_api_creates_graph_account_pg(api_client, monkeypa
     from sqlalchemy import select
 
     from mail_core.accounts import oauth_flow
-    from mail_core.accounts.credentials import get_credential_store, load_json_secret
     from mail_core.db.session import get_session_factory
     from mail_core.mail.storage.models import Account
+    from mail_core.security.credentials import get_credential_store, load_json_secret
 
     email = f"redirect-{uuid.uuid4().hex[:8]}@outlook.com"
     forms = []

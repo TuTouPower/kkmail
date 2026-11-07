@@ -17,7 +17,7 @@ import logging
 
 import pytest
 
-from mail_core.accounts.credentials import CompositeCredentialStore, _may_accept_keyword
+from mail_core.security.credentials import CompositeCredentialStore, _may_accept_keyword
 
 
 class _UninspectableCallable:
@@ -49,7 +49,7 @@ class _UninspectableStore:
 
 def test_may_accept_keyword_returns_false_for_uninspectable_signature(caplog):
     callable_obj = _UninspectableCallable()
-    with caplog.at_level(logging.WARNING, logger="mail_core.accounts.credentials"):
+    with caplog.at_level(logging.WARNING, logger="mail_core.security.credentials"):
         assert _may_accept_keyword(callable_obj, "session") is False
     assert any("signature" in record.message for record in caplog.records)
 

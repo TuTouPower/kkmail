@@ -3,7 +3,7 @@ import time
 from contextlib import contextmanager
 
 from mail_core.accounts import oauth_flow
-from mail_core.accounts.credentials import DictCredentialStore, load_json_secret
+from mail_core.security.credentials import DictCredentialStore, load_json_secret
 
 
 def _flow_store_with_pending_flow():

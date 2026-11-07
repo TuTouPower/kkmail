@@ -74,9 +74,9 @@ def test_factory_same_time_pagination_and_duplicate_message_ids(seed):
 @pytest.mark.parametrize("fail", [False, True])
 def test_cleanup_restores_threads_providers_credentials_and_commits(tmp_path, fail, request):
     from contextlib import nullcontext
-    from mail_core.accounts.credentials import DictCredentialStore, get_credential_store, set_credential_store
     from mail_core.realtime.dispatcher import OutboxDispatcher
     from mail_core.realtime.listener import OutboxListenThread
+    from mail_core.security.credentials import DictCredentialStore, get_credential_store, set_credential_store
     from mail_core.db.session import get_engine
     from mail_core.worker import main as worker
     import threading

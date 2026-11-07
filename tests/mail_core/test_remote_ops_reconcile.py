@@ -8,13 +8,14 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy import select, func
 
-from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
+from mail_core.accounts import create_account
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import RemoteOperationStatus
 from mail_core.mail.storage import Folder, Message, MessageLocation, RemoteOperation, SyncCheckpoint
 from mail_core.providers.base import RemoteFolder, RemoteMessageMeta
 from mail_core.providers.stub_memory import MemoryProvider
+from mail_core.security.credentials import DictCredentialStore, set_credential_store
 from mail_core.sync import push_remote_operations, reconcile_folder, sync_account_folders, sync_folder_metadata
 from mail_core.sync.engine import local_remote_ids_for_folder
 import mail_core.sync.engine as engine_mod

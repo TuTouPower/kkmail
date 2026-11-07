@@ -4,12 +4,13 @@ import uuid
 import pytest
 from sqlalchemy import select
 
-from mail_core.accounts import DictCredentialStore, create_account
+from mail_core.accounts import create_account
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import RemoteOperationStatus
 from mail_core.mail.storage.models import Folder, Message, MessageLocation, RemoteOperation
 from mail_core.providers.base import RemoteMessageMeta, RemoteOperationResult
+from mail_core.security.credentials import DictCredentialStore
 from mail_core.sync.metadata import upsert_messages
 import mail_core.sync.remote_push as remote_push
 

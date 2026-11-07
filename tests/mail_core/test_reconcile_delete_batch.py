@@ -18,11 +18,12 @@ import pytest
 from sqlalchemy import select
 
 import mail_core.sync.reconcile as reconcile_mod
-from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
+from mail_core.accounts import create_account
 from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import OutboxEventType
 from mail_core.mail.storage import Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
 from mail_core.providers.base import ReconcileAction
+from mail_core.security.credentials import DictCredentialStore, set_credential_store
 from mail_core.sync import reconcile_folder
 
 pytestmark_db = pytest.mark.skipif(

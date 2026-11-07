@@ -283,8 +283,8 @@ def test_concurrent_executions_never_exceed_eight(factory):
 
 
 def test_oauth_refresh_releases_permit_before_mail_api_call(factory):
-    from mail_core.accounts.credentials import DictCredentialStore
     from mail_core.providers.oauth import BearerTransport, OAuthTokenClient
+    from mail_core.security.credentials import DictCredentialStore
 
     store = DictCredentialStore(
         {
@@ -423,9 +423,9 @@ def test_traffic_class_derived_from_job_type_and_message_id():
 
 
 def test_build_provider_propagates_traffic_class_and_factory(factory):
-    from mail_core.accounts.credentials import DictCredentialStore
     from mail_core.mail.storage.models import Account
     from mail_core.providers.factory import build_provider
+    from mail_core.security.credentials import DictCredentialStore
 
     store = DictCredentialStore({"ref": {"password": "pw"}})
     account = Account(

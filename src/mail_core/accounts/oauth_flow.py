@@ -17,7 +17,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mail_core.accounts.credentials import (
+from mail_core.security.credentials import (
     CompositeCredentialStore,
     CredentialStore,
     DbCredentialStore,

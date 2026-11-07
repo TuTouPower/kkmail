@@ -3,8 +3,8 @@ from __future__ import annotations
 from urllib.parse import parse_qs, urlsplit
 import pytest
 from mail_core.accounts import oauth_flow
-from mail_core.accounts.credentials import load_json_secret, save_json_secret
 from mail_core.security.auth import AuthPrincipal
+from mail_core.security.credentials import load_json_secret, save_json_secret
 
 def _principal():
     return AuthPrincipal(via="session", csrf_token="csrf-a162")

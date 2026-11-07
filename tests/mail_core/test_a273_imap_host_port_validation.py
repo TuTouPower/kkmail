@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mail_core.accounts.credentials import DictCredentialStore
+from mail_core.security.credentials import DictCredentialStore
 from mail_core.mail.storage.models import Account
 from mail_core.providers.factory import build_provider
 

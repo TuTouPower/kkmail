@@ -18,13 +18,14 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import func, select
 
-from mail_core.accounts import DictCredentialStore, create_account, set_credential_store
+from mail_core.accounts import create_account
 from mail_core.blobs import BlobStore
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.mutations import set_message_read
 from mail_core.mail.domain.enums import JobType, ProviderType
 from mail_core.mail.storage import Attachment, Folder, Message, MessageBlob, MessageBlobLink, RemoteOperation, WorkerJob
 from mail_core.providers.imap import ImapProvider
+from mail_core.security.credentials import DictCredentialStore, set_credential_store
 from mail_core.sync import enqueue_job, sync_account_folders, sync_folder_metadata
 from mail_core.sync.jobs import claim_jobs
 from mail_core.sync.reconcile import reconcile_folder

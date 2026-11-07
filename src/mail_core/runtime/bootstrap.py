@@ -212,9 +212,9 @@ def bootstrap_data_dir(data_dir: str | os.PathLike[str], env: dict[str, str] | N
                     initial_pw_path,
                     lambda: secrets.token_urlsafe(12),
                 )
-                from mail_core.security.auth import _bcrypt_password_bytes
+                from mail_core.security.auth import bcrypt_password_bytes
 
-                hashed = bcrypt.hashpw(_bcrypt_password_bytes(initial), bcrypt.gensalt())
+                hashed = bcrypt.hashpw(bcrypt_password_bytes(initial), bcrypt.gensalt())
                 _atomic_write_secret(hash_path, hashed)
                 applied["MAIL_CORE_PASSWORD_HASH_PATH"] = "initial-password-generated"
         return applied

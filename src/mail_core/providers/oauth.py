@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import urlencode
 
-from mail_core.accounts.credentials import (
+from mail_core.security.credentials import (
     CredentialStore,
     load_json_secret,
     credential_edit,
