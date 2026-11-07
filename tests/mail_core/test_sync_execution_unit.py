@@ -53,19 +53,10 @@ def test_alembic_chain_single_head_and_linear():
     cfg = Config(str(ROOT / "src/mail_core/db/alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "src/mail_core/db/alembic"))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == ["20261031_0030"]
-    current = script.get_revision("20261031_0030")
-    assert current.down_revision == "20261027_0029"
-    visited = []
-    while current is not None:
-        visited.append(current.revision)
-        down = current.down_revision
-        if down is None:
-            break
-        assert isinstance(down, str), f"fork at {current.revision}"
-        current = script.get_revision(down)
-    assert visited[-1] == "20261020_0001"
-    assert len(visited) == 30
+    assert script.get_heads() == ["20261107_0001"]
+    current = script.get_revision("20261107_0001")
+    assert current is not None
+    assert current.down_revision is None
 
 
 def test_settle_is_noop_for_job_double_without_generation():

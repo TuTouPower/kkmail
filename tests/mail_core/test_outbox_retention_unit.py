@@ -456,25 +456,11 @@ def test_outbox_model_dropped_dispatched_at_and_old_consumption_index():
     assert publication_index.unique is True
 
 
-def _load_migration_0026():
-    path = ROOT / "src/mail_core/db/alembic/versions/20261026_0026_outbox_retention_watermark.py"
-    spec = importlib.util.spec_from_file_location("migration_20261026_0026", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module, path.read_text(encoding="utf-8")
-
-
-def test_migration_0026_matches_model_definitions():
-    migration, source = _load_migration_0026()
-    assert migration.revision == "20261026_0026"
-    assert migration.down_revision == "20261026_0025"
-    # New column: same name/type/default family as the model declares.
-    assert '"pruned_through_seq"' in source or "'pruned_through_seq'" in source or "pruned_through_seq" in source
+def test_baseline_matches_model_definitions():
+    path = ROOT / "src/mail_core/db/alembic/versions/20261107_0001_unified_baseline.py"
+    source = path.read_text(encoding="utf-8")
+    assert "pruned_through_seq" in source
     assert "BigInteger" in source
-    # The old consumption model is removed in the same migration.
-    assert "ix_outbox_undispatched" in source
-    assert "dispatched_at" in source
-    assert "drop_column" in source and "drop_index" in source
 
 
 def test_alembic_chain_has_single_head():
@@ -484,8 +470,8 @@ def test_alembic_chain_has_single_head():
     cfg = Config(str(ROOT / "src/mail_core/db/alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "src/mail_core/db/alembic"))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == ["20261031_0030"]
-    assert script.get_revision("20261031_0030").down_revision == "20261027_0029"
+    assert script.get_heads() == ["20261107_0001"]
+    assert script.get_revision("20261107_0001").down_revision is None
 
 
 def test_dispatch_without_subscribers_advances_cursor_without_counting(monkeypatch):

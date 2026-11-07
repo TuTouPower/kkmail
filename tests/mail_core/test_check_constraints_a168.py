@@ -19,7 +19,7 @@ from mail_core.mail.domain.enums import ArchiveState
 import mail_core.mail.storage.models  # noqa: F401  (register tables)
 
 VERSIONS = Path(__file__).resolve().parents[2] / "src" / "mail_core" / "db" / "alembic" / "versions"
-MIGRATION = VERSIONS / "20261027_0029_check_constraints_core.py"
+BASELINE = VERSIONS / "20261107_0001_unified_baseline.py"
 
 EXPECTED = {
     "message_archive_state": "ck_message_archive_state_state_valid",
@@ -52,12 +52,9 @@ def test_reserved_bytes_check_is_positive():
     assert "reserved_bytes" in sql and "> 0" in sql
 
 
-def test_migration_adds_same_named_constraints_on_0028():
-    assert MIGRATION.is_file(), "migration 0029 missing"
-    text = MIGRATION.read_text(encoding="utf-8")
-    assert 'revision: str = "20261027_0029"' in text
-    assert 'down_revision: Union[str, None] = "20261027_0028"' in text
+def test_migration_adds_same_named_constraints_in_baseline():
+    assert BASELINE.is_file(), "unified baseline missing"
+    text = BASELINE.read_text(encoding="utf-8")
+    assert 'revision: str = "20261107_0001"' in text
     for name in EXPECTED.values():
         assert name in text
-    assert "create_check_constraint" in text
-    assert "drop_constraint" in text

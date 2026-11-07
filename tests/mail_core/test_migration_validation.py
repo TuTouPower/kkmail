@@ -1,13 +1,15 @@
-"""Database Migration & Schema Integrity Validation Tests (t018).
+"""Database Migration & Schema Integrity Validation Tests (adoption A17).
 
-Verifies linear Alembic migration history, three historical revision upgrade windows
-with data preservation, relational constraints/indexes/FTS, ORM drift detection,
-and reversible upgrade/downgrade cycles against real PostgreSQL.
+Verifies single unified Alembic baseline migration, clean empty database
+upgrade, reversible downgrade base to upgrade head cycles, relational
+constraints/indexes/FTS, zero ORM schema drift, and offline baseline stamp tool
+against real PostgreSQL.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,26 +20,42 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Column, Integer, String, inspect, select, text
+from sqlalchemy import Column, Integer, String, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from mail_core.db.session import get_engine, get_session_factory
+from mail_core.mail.domain.enums import ArchiveState
 from mail_core.mail.storage.models import (
     Account,
     AccountGroup,
     Attachment,
     Base,
+    BlobQuotaReservation,
     Folder,
+    FolderPatrolStatus,
     Message,
+    MessageArchiveState,
     MessageBlob,
     MessageBlobLink,
     MessageBody,
     MessageLocation,
+    MessageRemoteImageAllow,
+    OutboxEvent,
+    SenderRemoteImageAllow,
     WorkerJob,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = str(ROOT / "src/mail_core/db/alembic.ini")
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+
+from migrate_to_unified_baseline import (
+    REQUIRED_TABLES,
+    UNIFIED_BASELINE_REVISION,
+    stamp_unified_baseline,
+    verify_database_schema,
+)
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
@@ -53,18 +71,18 @@ def _get_alembic_config() -> Config:
     return cfg
 
 
-# --- AC-001: Linear migration, single head and branch rejection --------------------
+# --- AC-001: Single unified baseline migration without forks ----------------------
 
 
 def test_alembic_chain_has_single_head():
-    # Head/length track the live chain (verified against alembic output):
-    # migrations 0022-0030 landed after this assertion was written
-    # (outbox publication seq, sync requests/targets, archive claim
-    # revision, sync execution tracking, outbox retention watermark,
-    # recipient search, CHECK constraints, remote image allowlists).
+    """Adoption A17: Migration history is squashed to a single unified baseline."""
     script = ScriptDirectory.from_config(_get_alembic_config())
-    assert script.get_heads() == ["20261031_0030"]
-    current = script.get_revision("20261031_0030")
+    assert script.get_heads() == [UNIFIED_BASELINE_REVISION]
+
+    current = script.get_revision(UNIFIED_BASELINE_REVISION)
+    assert current is not None
+    assert current.down_revision is None
+
     visited = []
     while current is not None:
         visited.append(current.revision)
@@ -73,329 +91,107 @@ def test_alembic_chain_has_single_head():
             break
         assert isinstance(down, str), f"Fork at {current.revision}"
         current = script.get_revision(down)
-    assert len(visited) == 30
-    assert visited[-1] == "20261020_0001"
+
+    assert len(visited) == 1
+    assert visited == [UNIFIED_BASELINE_REVISION]
 
 
-def test_nullable_message_time_migration_preserves_known_received_time():
-    """Revision 0017 must preserve a provider received time already stored at 0015."""
+# --- AC-002: Empty database upgrade & reversible downgrade cycle -------------------
+
+
+def test_clean_upgrade_head_creates_all_tables_and_seeds():
+    """Empty database upgrade head creates all tables and initialized seeds."""
     cfg = _get_alembic_config()
     engine = get_engine()
-    account_id = uuid.uuid4()
-    message_id = uuid.uuid4()
-    received_at = datetime(2025, 5, 4, 3, 2, 1, tzinfo=timezone.utc)
 
     try:
         with engine.connect() as conn:
-            command.downgrade(cfg, "20261022_0015")
+            command.downgrade(cfg, "base")
 
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO accounts (id, email, provider, created_at, updated_at)
-                    VALUES (:id, :email, 'imap', NOW(), NOW())
-                    """
-                ),
-                {"id": account_id, "email": f"migration-time-{account_id.hex[:8]}@example.com"},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO messages (id, account_id, remote_id, subject, from_address, sort_time, is_read, is_flagged)
-                    VALUES (:id, :account_id, 'received-time-preservation', 'Known time', 'sender@example.com', :sort_time, false, false)
-                    """
-                ),
-                {"id": message_id, "account_id": account_id, "sort_time": received_at},
-            )
+        table_names = set(inspect(engine).get_table_names())
+        assert table_names <= {"alembic_version"}
 
         with engine.connect() as conn:
             command.upgrade(cfg, "head")
 
+        table_names_after = set(inspect(engine).get_table_names())
+        assert REQUIRED_TABLES <= table_names_after
+
+        # Verify publication state singleton was seeded
         with engine.connect() as conn:
-            actual_received_at = conn.execute(
-                text("SELECT sort_time FROM messages WHERE id = :id"), {"id": message_id}
-            ).scalar_one()
-            assert actual_received_at == received_at
+            pub_state = conn.execute(
+                text("SELECT id, next_seq, pruned_through_seq FROM outbox_publication_state WHERE id = 1")
+            ).one()
+            assert pub_state[0] == 1
+            assert pub_state[1] == 1
+            assert pub_state[2] == 0
     finally:
         with engine.connect() as conn:
             command.upgrade(cfg, "head")
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM messages WHERE id = :id"), {"id": message_id})
-            conn.execute(text("DELETE FROM accounts WHERE id = :id"), {"id": account_id})
 
 
-def test_nullable_remote_id_migration_preserves_known_provider_id():
-    cfg = _get_alembic_config()
-    engine = get_engine()
-    account_id = uuid.uuid4()
-    message_id = uuid.uuid4()
-    remote_id = "graph-provider-id-exact"
-
-    try:
-        with engine.connect() as conn:
-            command.downgrade(cfg, "20261023_0017")
-
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO accounts (id, email, provider, created_at, updated_at)
-                    VALUES (:id, :email, 'graph', NOW(), NOW())
-                    """
-                ),
-                {"id": account_id, "email": f"migration-remote-{account_id.hex[:8]}@example.com"},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO messages (id, account_id, remote_id, subject, from_address, is_read, is_flagged)
-                    VALUES (:id, :account_id, :remote_id, 'Known ID', 'sender@example.com', false, false)
-                    """
-                ),
-                {"id": message_id, "account_id": account_id, "remote_id": remote_id},
-            )
-
-        with engine.connect() as conn:
-            command.upgrade(cfg, "head")
-
-        with engine.connect() as conn:
-            actual_remote_id = conn.execute(
-                text("SELECT remote_id FROM messages WHERE id = :id"), {"id": message_id}
-            ).scalar_one()
-            assert actual_remote_id == remote_id
-    finally:
-        with engine.connect() as conn:
-            command.upgrade(cfg, "head")
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM messages WHERE id = :id"), {"id": message_id})
-            conn.execute(text("DELETE FROM accounts WHERE id = :id"), {"id": account_id})
-
-
-def test_nullable_remote_id_migration_allows_unknowns_and_rejects_lossy_downgrade():
+def test_revertible_downgrade_base_and_upgrade_head_cycle():
+    """Verifies reversible downgrade base and upgrade head cycle against real PostgreSQL."""
     cfg = _get_alembic_config()
     engine = get_engine()
     Session = get_session_factory()
 
     try:
+        # 1. Downgrade to base
         with engine.connect() as conn:
-            command.downgrade(cfg, "20261023_0017")
+            command.downgrade(cfg, "base")
+
+        tables_at_base = set(inspect(engine).get_table_names())
+        assert tables_at_base <= {"alembic_version"}
+
+        # 2. Upgrade back to head
         with engine.connect() as conn:
             command.upgrade(cfg, "head")
 
-        columns = {column["name"]: column for column in inspect(engine).get_columns("messages")}
-        assert columns["remote_id"]["nullable"] is True
+        tables_at_head = set(inspect(engine).get_table_names())
+        assert REQUIRED_TABLES <= tables_at_head
 
+        # 3. Insert and verify data
         with Session() as session:
-            account = Account(email=f"remote-null-{uuid.uuid4().hex[:8]}@example.com", provider="stub")
+            account = Account(
+                email=f"cycle-{uuid.uuid4().hex[:8]}@example.com",
+                provider="imap",
+            )
             session.add(account)
-            session.flush()
-            first = Message(
-                account_id=account.id,
-                remote_id=None,
-                subject="Unknown remote identity one",
-                from_address="sender@example.com",
-                is_read=False, is_flagged=False, has_attachments=False,
-            )
-            second = Message(
-                account_id=account.id,
-                remote_id=None,
-                subject="Unknown remote identity two",
-                from_address="sender@example.com",
-                is_read=False, is_flagged=False, has_attachments=False,
-            )
-            session.add_all((first, second))
             session.commit()
-            account_id = account.id
-            message_ids = (first.id, second.id)
+            acc_id = account.id
 
-        with pytest.raises(RuntimeError, match="messages.remote_id contains NULL"):
-            command.downgrade(cfg, "20261023_0017")
-
-        with engine.connect() as conn:
-            assert MigrationContext.configure(conn).get_current_revision() == ScriptDirectory.from_config(cfg).get_current_head()
-        with Session() as session:
-            assert all(session.get(Message, mid) is not None for mid in message_ids)
-            session.query(Message).filter(Message.id.in_(message_ids)).delete(synchronize_session=False)
-            session.delete(session.get(Account, account_id))
+            folder = Folder(
+                account_id=acc_id,
+                remote_id="INBOX",
+                name="Inbox",
+                role="inbox",
+            )
+            session.add(folder)
             session.commit()
 
-        with engine.connect() as conn:
-            command.downgrade(cfg, "20261023_0017")
-        columns_0017 = {column["name"]: column for column in inspect(engine).get_columns("messages")}
-        assert columns_0017["remote_id"]["nullable"] is False
+            msg = Message(
+                account_id=acc_id,
+                remote_id="msg-cycle-01",
+                subject="Test cycle",
+                from_address="sender@example.com",
+                sort_time=datetime.now(timezone.utc),
+            )
+            session.add(msg)
+            session.commit()
+
+            assert session.get(Message, msg.id) is not None
     finally:
+        # Guarantee database stays at head
         with engine.connect() as conn:
             command.upgrade(cfg, "head")
 
 
-# --- AC-002: Three revision windows upgrade with data preservation -----------------
-
-
-def test_migration_three_revision_windows_data_preservation():
-    """AC-002: Downgrades to 3 historical revision windows, inserts SQL data, upgrades to head and verifies."""
-    cfg = _get_alembic_config()
-    engine = get_engine()
-
-    account_id = uuid.uuid4()
-    folder_id = uuid.uuid4()
-    message_id = uuid.uuid4()
-    blob_id = uuid.uuid4()
-    att_id = uuid.uuid4()
-
-    try:
-        # Window 1: Downgrade to unified schema (f5f312751c77)
-        with engine.connect() as conn:
-            command.downgrade(cfg, "f5f312751c77")
-
-        # Insert valid data for unified schema
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO accounts (id, email, provider, created_at, updated_at)
-                    VALUES (:acc_id, 'mig-test@example.com', 'imap', NOW(), NOW())
-                    """
-                ),
-                {"acc_id": account_id},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO folders (id, account_id, remote_id, name, role, created_at, updated_at)
-                    VALUES (:fld_id, :acc_id, 'INBOX', '收件箱', 'inbox', NOW(), NOW())
-                    """
-                ),
-                {"fld_id": folder_id, "acc_id": account_id},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO messages (id, account_id, remote_id, subject, from_address, sort_time, is_read, is_flagged)
-                    VALUES (:msg_id, :acc_id, 'msg-leg-001', 'Legacy Preserved Subject', 'sender@test.com', NOW(), false, true)
-                    """
-                ),
-                {"msg_id": message_id, "acc_id": account_id},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO message_locations (id, message_id, folder_id)
-                    VALUES (:loc_id, :msg_id, :fld_id)
-                    """
-                ),
-                {"loc_id": uuid.uuid4(), "msg_id": message_id, "fld_id": folder_id},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO message_blobs (id, content_sha256, key_version, size_bytes, storage_path, ref_count, created_at)
-                    VALUES (:blob_id, 'deadbeefcafe0001000200030004000500060007000800090010001100120013', 1, 1024, 'blobs/deadbeef', 1, NOW())
-                    """
-                ),
-                {"blob_id": blob_id},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO message_blob_links (message_id, blob_id)
-                    VALUES (:msg_id, :blob_id)
-                    """
-                ),
-                {"msg_id": message_id, "blob_id": blob_id},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO attachments (id, message_id, filename, content_type, size_bytes)
-                    VALUES (:att_id, :msg_id, 'legacy_report.pdf', 'application/pdf', 1024)
-                    """
-                ),
-                {"att_id": att_id, "msg_id": message_id},
-            )
-
-        # Window 2: Upgrade to 20261021_0011 (prior to auth_credentials)
-        with engine.connect() as conn:
-            command.upgrade(cfg, "20261021_0011")
-
-        with engine.begin() as conn:
-            # Insert remote_operations with next_attempt_at introduced in 0011
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO remote_operations (id, account_id, entity_key, op_type, status, next_attempt_at, desired_state, created_at, updated_at)
-                    VALUES (:op_id, :acc_id, 'msg:msg-leg-001', 'mark_read', 'pending', NOW(), '{"is_read": true}'::jsonb, NOW(), NOW())
-                    """
-                ),
-                {"op_id": uuid.uuid4(), "acc_id": account_id},
-            )
-
-        # Window 3: Upgrade to 20261022_0014 (prior to 0015 attachment part_id)
-        with engine.connect() as conn:
-            command.upgrade(cfg, "20261022_0014")
-
-        with engine.begin() as conn:
-            # auth_credentials and session_epoch available
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO auth_credentials (id, login_password_hash, session_epoch, updated_at)
-                    VALUES ('default', 'mocked_bcrypt_hash_val', 42, NOW())
-                    ON CONFLICT (id) DO UPDATE SET session_epoch = 42
-                    """
-                )
-            )
-
-        # Upgrade to the current head, including nullable message received time.
-        with engine.connect() as conn:
-            command.upgrade(cfg, "head")
-
-        # Verify all data intact
-        with engine.connect() as conn:
-            # 1. Message intact
-            msg_row = conn.execute(
-                text("SELECT subject, from_address, is_read, is_flagged FROM messages WHERE id = :id"),
-                {"id": message_id},
-            ).one()
-            assert msg_row[0] == "Legacy Preserved Subject"
-            assert msg_row[1] == "sender@test.com"
-            assert msg_row[2] is False
-            assert msg_row[3] is True
-
-            # 2. Attachment part_id backfilled cleanly
-            att_row = conn.execute(
-                text("SELECT filename, part_id FROM attachments WHERE id = :id"),
-                {"id": att_id},
-            ).one()
-            assert att_row[0] == "legacy_report.pdf"
-            assert att_row[1] is not None
-            assert str(att_row[1]).startswith("legacy_")
-
-            # 3. Auth credentials and session_epoch preserved
-            auth_row = conn.execute(text("SELECT login_password_hash, session_epoch FROM auth_credentials WHERE id = 'default'")).one()
-            assert auth_row[0] == "mocked_bcrypt_hash_val"
-            assert auth_row[1] == 42
-
-            # 4. Message blob links preserved
-            link_row = conn.execute(
-                text("SELECT blob_id FROM message_blob_links WHERE message_id = :id"),
-                {"id": message_id},
-            ).one()
-            assert link_row[0] == blob_id
-    finally:
-        # Guarantee database returns to clean head
-        try:
-            with engine.connect() as conn:
-                command.upgrade(cfg, "head")
-        except Exception:
-            pass
-
-
-# --- AC-003: Relational Constraints, Indexes, Keyset & FTS -------------------------
+# --- AC-003: Relational Constraints, Indexes, CHECK constraints & FTS -------------
 
 
 def test_schema_constraints_indexes_and_fts_semantics():
-    """AC-003: Verifies unique constraints, foreign keys CASCADE/RESTRICT, FTS search and keyset order."""
+    """Verifies relational integrity, CHECK constraints, indexes, keyset order and FTS."""
     Session = get_session_factory()
     test_email = f"constraints-{uuid.uuid4().hex[:8]}@example.com"
     with Session() as session:
@@ -428,7 +224,14 @@ def test_schema_constraints_indexes_and_fts_semantics():
             session.flush()
         session.rollback()
 
-        # 2. Foreign Key: invalid account_id must be rejected
+        # 2. Case-insensitive email unique index on accounts
+        dup_acc = Account(email=test_email.upper(), provider="graph")
+        session.add(dup_acc)
+        with pytest.raises(IntegrityError):
+            session.flush()
+        session.rollback()
+
+        # 3. Foreign Key: invalid account_id must be rejected
         ghost_msg = Message(
             account_id=uuid.uuid4(),
             remote_id="ghost-1",
@@ -441,7 +244,7 @@ def test_schema_constraints_indexes_and_fts_semantics():
             session.flush()
         session.rollback()
 
-        # 3. MessageBlob foreign key RESTRICT: cannot delete blob referenced by links
+        # 4. MessageBlob foreign key RESTRICT: cannot delete blob referenced by links
         blob = MessageBlob(
             content_sha256=uuid.uuid4().hex * 2,
             size_bytes=512,
@@ -470,11 +273,40 @@ def test_schema_constraints_indexes_and_fts_semantics():
             session.flush()
         session.rollback()
 
-        # 4. Keyset order and FTS trigram index availability
-        # Index this test's committed message ("Searchable Subject
-        # Keyword") and prove the FTS document actually matches it —
-        # COUNT(*) alone is >= 0 even on an empty/broken index, and
-        # `is not None` asserted nothing at all.
+        # 5. CHECK constraint: blob ref_count >= 0
+        invalid_blob = MessageBlob(
+            content_sha256=uuid.uuid4().hex * 2,
+            size_bytes=512,
+            storage_path="path/invalid",
+            ref_count=-1,
+        )
+        session.add(invalid_blob)
+        with pytest.raises(IntegrityError):
+            session.flush()
+        session.rollback()
+
+        # 6. CHECK constraint: blob quota reserved_bytes > 0
+        invalid_res = BlobQuotaReservation(
+            worker_id="test-worker",
+            reserved_bytes=0,
+            expires_at=datetime.now(timezone.utc),
+        )
+        session.add(invalid_res)
+        with pytest.raises(IntegrityError):
+            session.flush()
+        session.rollback()
+
+        # 7. CHECK constraint: archive state valid enum value
+        invalid_state = MessageArchiveState(
+            message_id=msg.id,
+            state="invalid_state_xyz",
+        )
+        session.add(invalid_state)
+        with pytest.raises(IntegrityError):
+            session.flush()
+        session.rollback()
+
+        # 8. Keyset order and FTS trigram index availability
         from mail_core.search.index import upsert_message_search
 
         upsert_message_search(session, message_id=msg.id)
@@ -492,18 +324,19 @@ def test_schema_constraints_indexes_and_fts_semantics():
             ).scalars().all()
             assert msg.id in hit_ids
 
-            # Verify keyset index exists
+            # Verify keyset indexes exist
             indexes = inspect(engine).get_indexes("messages")
             idx_names = {idx["name"] for idx in indexes}
             assert "ix_messages_sort_id" in idx_names
             assert "uq_messages_account_remote" in idx_names
+            assert "ix_messages_account_internet_id" in idx_names
 
 
 # --- AC-004: ORM Schema Drift & Negative Detection ---------------------------------
 
 
 def test_orm_schema_drift_and_negative_detection():
-    """AC-004: Asserts zero drift between SQLAlchemy models and PostgreSQL database catalog."""
+    """Asserts zero drift between SQLAlchemy models and PostgreSQL database catalog."""
     engine = get_engine()
 
     # 1. Explicit catalog assertions for PostgreSQL-specific generated column and GIN indexes
@@ -562,168 +395,20 @@ def test_orm_schema_drift_and_negative_detection():
         Account.__table__._columns.remove(fake_col)
 
 
-# --- Current migration rollback and historical predecessor cycle -----------------
+# --- AC-005: Live Database Verification with Offline Tool --------------------------
 
 
-def test_revertible_downgrade_and_upgrade_cycle():
-    """The t027 ordering and prior blob migrations remain reversible below t037."""
-    cfg = _get_alembic_config()
+def test_offline_migration_tool_verifies_and_stamps_live_db():
+    """Verify that migrate_to_unified_baseline tool accepts the live database."""
     engine = get_engine()
-    Session = get_session_factory()
-    with Session() as session:
-        group = AccountGroup(name=f"migration-group-{uuid.uuid4().hex}", sort_order=17)
-        session.add(group)
-        session.flush()
-        account = Account(
-            email=f"migration-member-{uuid.uuid4().hex}@example.test",
-            provider="imap",
-            group_id=group.id,
-            master_order=4,
-            group_order=2,
-        )
-        session.add(account)
-        session.commit()
-        group_id, account_id = group.id, account.id
+    with engine.connect() as conn:
+        errors = verify_database_schema(conn)
+        assert errors == []
 
-    try:
-        # Remove t037 and t036 before exercising the sidebar ordering migration.
-        with engine.connect() as conn:
-            command.downgrade(cfg, "20261023_0016")
+        stamp_unified_baseline(conn, dry_run=False)
+        conn.commit()
 
-        cols_0016 = {c["name"]: c for c in inspect(engine).get_columns("messages")}
-        assert cols_0016["sort_time"]["nullable"] is False
-        assert cols_0016["remote_id"]["nullable"] is False
-
-        with engine.connect() as conn:
-            command.downgrade(cfg, "20261022_0015")
-
-        columns_0015 = {c["name"] for c in inspect(engine).get_columns("accounts")}
-        assert "master_order" not in columns_0015
-        assert "group_order" not in columns_0015
-        assert "blob_quota_reservations" in set(inspect(engine).get_table_names())
-
-        # Downgrade the prior blob migration (0015 -> 0014).
-        with engine.connect() as conn:
-            command.downgrade(cfg, "20261022_0014")
-
-        tables_0014 = set(inspect(engine).get_table_names())
-        assert "blob_quota_reservations" not in tables_0014
-        cols_0014 = {c["name"] for c in inspect(engine).get_columns("attachments")}
-        assert "part_id" not in cols_0014
-
-        # Re-upgrade to head (0014 -> 0018).
-        with engine.connect() as conn:
-            command.upgrade(cfg, "head")
-
-        tables_head = set(inspect(engine).get_table_names())
-        assert "blob_quota_reservations" in tables_head
-        attachment_columns = {c["name"] for c in inspect(engine).get_columns("attachments")}
-        assert "part_id" in attachment_columns
-        account_columns = {c["name"] for c in inspect(engine).get_columns("accounts")}
-        assert {"master_order", "group_order"} <= account_columns
-        message_columns = {c["name"]: c for c in inspect(engine).get_columns("messages")}
-        assert message_columns["sort_time"]["nullable"] is True
-        assert message_columns["remote_id"]["nullable"] is True
-        with Session() as session:
-            migrated_group = session.get(AccountGroup, group_id)
-            migrated_account = session.get(Account, account_id)
-            assert migrated_group is not None and migrated_group.sort_order == 17
-            assert migrated_account is not None and migrated_account.group_id == group_id
-            assert migrated_account.master_order is None and migrated_account.group_order is None
-    finally:
-        with engine.connect() as conn:
-            command.upgrade(cfg, "head")
-
-
-def test_nullable_message_time_migration_round_trips_to_head_and_predecessor():
-    """Revision 0017 round-trips through later revisions and refuses a lossy downgrade."""
-    cfg = _get_alembic_config()
-    engine = get_engine()
-
-    try:
-        with engine.connect() as conn:
-            command.downgrade(cfg, "20261023_0016")
-
-        cols_0016 = {c["name"]: c for c in inspect(engine).get_columns("messages")}
-        assert cols_0016["sort_time"]["nullable"] is False
-        account_cols_0016 = {c["name"] for c in inspect(engine).get_columns("accounts")}
-        assert {"master_order", "group_order"} <= account_cols_0016
-
-        with engine.connect() as conn:
-            command.upgrade(cfg, "head")
-
-        cols_head = {c["name"]: c for c in inspect(engine).get_columns("messages")}
-        assert cols_head["sort_time"]["nullable"] is True
-        assert cols_head["remote_id"]["nullable"] is True
-
-        Session = get_session_factory()
-        with Session() as session:
-            account = Account(email=f"rollback-null-{uuid.uuid4().hex[:8]}@example.com", provider="stub")
-            session.add(account)
-            session.flush()
-            unknown_time = Message(
-                account_id=account.id,
-                remote_id="unknown-time",
-                subject="Unknown time",
-                from_address="sender@example.com",
-                sort_time=None,
-                is_read=False, is_flagged=False, has_attachments=False,
-            )
-            session.add(unknown_time)
-            session.commit()
-            account_id, message_id = account.id, unknown_time.id
-
-        with pytest.raises(RuntimeError, match="messages.sort_time contains NULL"):
-            command.downgrade(cfg, "20261023_0016")
-
-        with engine.connect() as conn:
-            assert MigrationContext.configure(conn).get_current_revision() == ScriptDirectory.from_config(cfg).get_current_head()
-        with Session() as session:
-            session.delete(session.get(Message, message_id))
-            session.flush()
-            session.delete(session.get(Account, account_id))
-            session.commit()
-
-        with engine.connect() as conn:
-            command.downgrade(cfg, "20261022_0015")
-
-        cols_0015 = {c["name"]: c for c in inspect(engine).get_columns("messages")}
-        assert cols_0015["sort_time"]["nullable"] is False
-        account_cols_0015 = {c["name"] for c in inspect(engine).get_columns("accounts")}
-        assert "master_order" not in account_cols_0015
-        assert "group_order" not in account_cols_0015
-        assert "blob_quota_reservations" in set(inspect(engine).get_table_names())
-    finally:
-        with engine.connect() as conn:
-            command.upgrade(cfg, "head")
-
-
-def test_nullable_status_migration_preserves_known_values_and_rejects_lossy_downgrade():
-    cfg = _get_alembic_config()
-    engine = get_engine()
-    account_id, message_id = uuid.uuid4(), uuid.uuid4()
-    try:
-        command.downgrade(cfg, "20261023_0018")
-        with engine.begin() as connection:
-            connection.execute(text("INSERT INTO accounts (id, email, provider) VALUES (:id, :email, 'graph')"),
-                               {"id": account_id, "email": f"status-migration-{account_id}@example.com"})
-            connection.execute(text("INSERT INTO messages (id, account_id, remote_id, is_read, is_flagged, has_attachments) VALUES (:id, :account_id, 'known', true, false, true)"),
-                               {"id": message_id, "account_id": account_id})
-        command.upgrade(cfg, "head")
-        columns = {column["name"]: column for column in inspect(engine).get_columns("messages")}
-        for name in ("is_read", "is_flagged", "has_attachments"):
-            assert columns[name]["nullable"] is True
-            assert columns[name]["default"] is None
-        with engine.begin() as connection:
-            known = connection.execute(text("SELECT is_read, is_flagged, has_attachments FROM messages WHERE id = :id"), {"id": message_id}).one()
-            assert tuple(known) == (True, False, True)
-            connection.execute(text("UPDATE messages SET is_flagged = NULL WHERE id = :id"), {"id": message_id})
-        with pytest.raises(RuntimeError, match="mail status or unread counts contain NULL"):
-            command.downgrade(cfg, "20261023_0018")
-        with engine.begin() as connection:
-            assert connection.execute(text("SELECT is_flagged FROM messages WHERE id = :id"), {"id": message_id}).scalar_one() is None
-            connection.execute(text("UPDATE messages SET is_flagged = false WHERE id = :id"), {"id": message_id})
-        command.downgrade(cfg, "20261023_0018")
-        command.upgrade(cfg, "head")
-    finally:
-        command.upgrade(cfg, "head")
+        cur_rev = conn.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+        assert cur_rev == UNIFIED_BASELINE_REVISION
