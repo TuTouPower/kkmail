@@ -33,8 +33,10 @@ def test_second():
     env.pop("MAIL_CORE_DATABASE_URL", None)
     env.pop("MAIL_CORE_REQUIRE_DB", None)
     env.pop("KKMAIL_TEST_REPORT_DIR", None)
+    root = Path(__file__).resolve().parents[2]
+    env["PYTHONPATH"] = f"{root / 'src'}:{env.get('PYTHONPATH', '')}"
     result = subprocess.run([sys.executable, "-m", "pytest", str(probe), "-q"],
-                            cwd=Path(__file__).resolve().parents[2], env=env, capture_output=True, text=True)
+                            cwd=root, env=env, capture_output=True, text=True)
     assert result.returncode == 2, result.stdout + result.stderr
     assert "backend isolation setup cleanup failed (RuntimeError)" in result.stdout + result.stderr
     assert not marker.exists()

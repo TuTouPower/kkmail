@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -61,6 +62,10 @@ def test_sync_folder_metadata_default_max_pages_is_10():
     assert sig.parameters["max_pages"].default == 10
 
 
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 def test_sync_account_folders_pauses_gmail_virtual_folders():
     """AC-001: For Gmail accounts, All Mail and Important folders default to paused and are not enqueued."""
     Session = get_session_factory()
@@ -114,6 +119,10 @@ def test_sync_account_folders_pauses_gmail_virtual_folders():
         assert str(folder_map["[Gmail]/重要"].id) not in enqueued_folder_ids
 
 
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 def test_worker_transient_network_timeout_does_not_fail_account():
     """AC-005: Transient network timeout keeps account status intact and requeues job."""
     Session = get_session_factory()
@@ -161,6 +170,10 @@ def test_worker_transient_network_timeout_does_not_fail_account():
         assert account.sync_status == "running"
 
 
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 def test_worker_permanent_auth_error_still_fails_and_disables_account():
     """PermanentAuthError must still set account to AUTH_FAILED and disable sync."""
     Session = get_session_factory()

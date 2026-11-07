@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import select
 
 from mail_core.db.session import get_session_factory
@@ -18,6 +20,11 @@ from mail_core.search.index import (
 )
 from mail_core.sync.leases import acquire_lease
 from mail_core.sync.metadata import apply_metadata_page
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 
 def test_recipient_address_in_search_and_account():

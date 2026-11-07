@@ -11,7 +11,7 @@ from pathlib import Path
 
 def legacy_account_connection(row) -> tuple[str, dict]:
     """Reject unsupported/missing IMAP configuration before any import writes."""
-    from mail_core.accounts.connection import MICROSOFT_DOMAINS, reject_microsoft_imap
+    from mail_core.providers.host_security import MICROSOFT_DOMAINS, reject_microsoft_imap
 
     email = row["email"].strip().lower()
     auth_type = (row["authorization_type"] or "").strip().lower()
@@ -91,6 +91,8 @@ from mail_core.mail.storage.models import (
     FolderStats,
     Message,
     MessageBody,
+    MessageLocation,
+    MessageSearch,
 )
 from mail_core.security.credentials import DbCredentialStore, save_json_secret
 
