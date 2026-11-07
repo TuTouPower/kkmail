@@ -13,32 +13,24 @@ aggregated to complete and the request flipped to ``complete`` at the end
 of folder discovery, while the metadata/reconcile work it depended on was
 still queued.
 
-These tests drive the real chain on a SQLite engine --
+These tests drive the real chain on PostgreSQL:
 ``create_sync_request`` (x2, sharing) -> ``claim_jobs`` ->
 ``sync_account_folders`` -> ``complete_job`` -> ``claim_jobs`` ->
 ``sync_folder_metadata`` -> ``complete_job`` -> ``claim_jobs`` (reconcile)
--> ``complete_job`` -- following ``test_sync_execution_lock_order.py`` /
-``test_sync_successor_binding_backfill.py``: SQLite strips ``FOR UPDATE``
-and cannot execute the PostgreSQL advisory generation lock, so
-``lock_generation`` is patched out; it is not the invariant under test. The PostgreSQL version
-of the single-request lifecycle lives in
-``test_sync_execution_tracking.py::test_full_scan_resets_cursor_and_completes_only_after_reconcile``
-(skipped in unit mode: no ``MAIL_CORE_DATABASE_URL`` in this sandbox).
-
-No existing test is modified by this file.
+-> ``complete_job``.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from mail_core.sync import jobs as jobs_mod
+import pytest
+from sqlalchemy import select
 
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import sessionmaker
-
+from mail_core.db.session import get_session_factory
 from mail_core.mail.application.sync_requests import create_sync_request, get_sync_request_report
 from mail_core.mail.domain.enums import JobType
 from mail_core.mail.storage.models import (
@@ -51,146 +43,12 @@ from mail_core.mail.storage.models import (
 )
 from mail_core.providers.base import MetadataPage, RemoteFolder
 from mail_core.sync import engine as engine_mod
-from mail_core.sync import execution as execution_mod
 from mail_core.sync.jobs import claim_jobs, complete_job
-from tests.mail_core.sqlite_schema import sqlite_table_ddl
 
-_DDL = [
-    sqlite_table_ddl(Account.__table__),
-    """
-    CREATE TABLE folders (
-        id CHAR(36) PRIMARY KEY,
-        account_id CHAR(36) NOT NULL,
-        remote_id VARCHAR(512) NOT NULL,
-        name VARCHAR(512) NOT NULL,
-        role VARCHAR(32) NOT NULL DEFAULT 'other',
-        parent_remote_id VARCHAR(512),
-        sync_status VARCHAR(32) NOT NULL DEFAULT 'idle',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE folder_stats (
-        folder_id CHAR(36) PRIMARY KEY,
-        total_count INTEGER NOT NULL DEFAULT 0,
-        unread_count INTEGER,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE account_sync_leases (
-        account_id CHAR(36) PRIMARY KEY,
-        owner_id VARCHAR(128) NOT NULL,
-        lease_expires_at DATETIME NOT NULL,
-        heartbeat_at DATETIME NOT NULL,
-        fencing_token INTEGER NOT NULL DEFAULT 0
-    )
-    """,
-    """
-    CREATE TABLE sync_runs (
-        id CHAR(36) PRIMARY KEY,
-        account_id CHAR(36) NOT NULL,
-        folder_id CHAR(36),
-        phase VARCHAR(64) NOT NULL,
-        status VARCHAR(32) NOT NULL,
-        stats JSON NOT NULL DEFAULT '{}',
-        error TEXT,
-        fencing_token INTEGER,
-        started_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_checkpoints (
-        account_id CHAR(36) NOT NULL,
-        folder_id CHAR(36) NOT NULL,
-        cursor JSON NOT NULL DEFAULT '{}',
-        uidvalidity BIGINT,
-        modseq BIGINT,
-        history_id VARCHAR(128),
-        delta_link TEXT,
-        full_scan_complete BOOLEAN NOT NULL DEFAULT 0,
-        scan_generation CHAR(36),
-        fencing_token INTEGER,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        PRIMARY KEY (account_id, folder_id)
-    )
-    """,
-    """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_targets (
-        id CHAR(36) PRIMARY KEY,
-        request_id CHAR(36) NOT NULL,
-        account_id CHAR(36),
-        folder_id CHAR(36),
-        target_key VARCHAR(255) NOT NULL,
-        requested_generation CHAR(36) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_target_jobs (
-        id CHAR(36) PRIMARY KEY,
-        target_id CHAR(36) NOT NULL,
-        execution_generation CHAR(36) NOT NULL,
-        job_id CHAR(36),
-        phase VARCHAR(64) NOT NULL DEFAULT 'sync',
-        folder_id CHAR(36),
-        status VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE outbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        payload JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        publication_seq BIGINT,
-        published_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE worker_jobs (
-        id CHAR(36) PRIMARY KEY,
-        execution_generation CHAR(36) NOT NULL,
-        job_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        dedupe_key VARCHAR(128),
-        payload JSON NOT NULL DEFAULT '{}',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        priority INTEGER NOT NULL DEFAULT 100,
-        run_after DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        failure_attempts INTEGER NOT NULL DEFAULT 0,
-        locked_by VARCHAR(128),
-        locked_at DATETIME,
-        last_error TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-]
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 _NOW = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
 _WORKER = "w-defect4"
@@ -204,14 +62,6 @@ class _Provider:
 
     def fetch_metadata_page(self, _remote_id, _cursor):
         return MetadataPage(items=[], next_cursor={"uid_next": 2}, exhausted=True)
-
-
-def _make_session_factory():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    return sessionmaker(bind=engine)
 
 
 def _seed_account(Session) -> uuid.UUID:
@@ -234,39 +84,21 @@ def _seed_account(Session) -> uuid.UUID:
     return account_id
 
 
-class _NaiveUTCDateTime(datetime):
-    """datetime whose now() is naive UTC.
-
-    SQLite strips tzinfo when storing ``DateTime(timezone=True)`` values,
-    so a re-read ``WorkerJob.run_after`` is naive and the pending-job
-    payload merge in ``enqueue_job`` would compare it against an aware
-    ``datetime.now(timezone.utc)`` (PostgreSQL returns aware values; this
-    is a harness-only artifact). Making the jobs module produce naive UTC
-    during request creation keeps the comparison consistent without
-    touching the sharing semantics under test.
-    """
-
-    @classmethod
-    def now(cls, tz=None):  # noqa: D102 - test harness shim
-        return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
 def _create_two_full_requests(Session, account_id: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
     ids = []
-    with patch.object(jobs_mod, "datetime", _NaiveUTCDateTime):
-        with Session() as session:
-            for _ in range(2):
-                req, created = create_sync_request(
-                    session,
-                    client_request_id=f"defect4-{uuid.uuid4().hex}",
-                    mode="full",
-                    trigger="manual",
-                    scope={"account_id": str(account_id)},
-                    account_id=account_id,
-                )
-                assert created
-                ids.append(req.id)
-            session.commit()
+    with Session() as session:
+        for _ in range(2):
+            req, created = create_sync_request(
+                session,
+                client_request_id=f"defect4-{uuid.uuid4().hex}",
+                mode="full",
+                trigger="manual",
+                scope={"account_id": str(account_id)},
+                account_id=account_id,
+            )
+            assert created
+            ids.append(req.id)
+        session.commit()
     return ids[0], ids[1]
 
 
@@ -294,8 +126,7 @@ def _complete(Session, job_id: uuid.UUID) -> None:
     with Session() as session:
         job = session.get(WorkerJob, job_id)
         assert job is not None
-        with patch.object(execution_mod, "lock_generation", lambda _s, _g: None):
-            complete_job(session, job, worker_id=_WORKER)
+        complete_job(session, job, worker_id=_WORKER)
         session.commit()
 
 
@@ -304,7 +135,7 @@ def _uuid_or_none(value) -> uuid.UUID | None:
 
 
 def test_shared_full_requests_complete_only_after_metadata_and_reconcile():
-    Session = _make_session_factory()
+    Session = get_session_factory()
     account_id = _seed_account(Session)
     first_id, second_id = _create_two_full_requests(Session, account_id)
 
@@ -314,7 +145,7 @@ def test_shared_full_requests_complete_only_after_metadata_and_reconcile():
     with Session() as session:
         discovery_jobs = list(
             session.scalars(
-                select(WorkerJob).where(WorkerJob.job_type == JobType.SYNC_ACCOUNT_FOLDERS.value)
+                select(WorkerJob).where(WorkerJob.job_type == JobType.SYNC_ACCOUNT_FOLDERS.value, WorkerJob.account_id == account_id)
             ).all()
         )
         assert len(discovery_jobs) == 1
@@ -338,10 +169,7 @@ def test_shared_full_requests_complete_only_after_metadata_and_reconcile():
         assert bindings[0].execution_generation == bindings[1].execution_generation
 
     provider = _Provider()
-    with (
-        patch.object(engine_mod, "_session_factory", lambda: Session),
-        patch.object(engine_mod, "build_provider", lambda *_a, **_k: provider),
-    ):
+    with patch.object(engine_mod, "build_provider", lambda *_a, **_k: provider):
         # --- Discovery phase -------------------------------------------------
         discovery_id, payload = _claim_one(Session, JobType.SYNC_ACCOUNT_FOLDERS.value, account_id)
         result = engine_mod.sync_account_folders(
@@ -370,10 +198,9 @@ def test_shared_full_requests_complete_only_after_metadata_and_reconcile():
             folder = session.scalar(select(Folder).where(Folder.account_id == account_id))
             assert folder is not None
             folder_id = folder.id
-            # Pre-seed folder stats so the empty metadata page does not
-            # trigger a stats recompute (which needs the message tables).
-            session.add(FolderStats(folder_id=folder_id, total_count=0, unread_count=0, updated_at=_NOW))
-            session.commit()
+            if session.get(FolderStats, folder_id) is None:
+                session.add(FolderStats(folder_id=folder_id, total_count=0, unread_count=0, updated_at=_NOW))
+                session.commit()
 
         # --- Metadata phase --------------------------------------------------
         metadata_id, payload = _claim_one(Session, JobType.SYNC_FOLDER_METADATA.value, account_id)

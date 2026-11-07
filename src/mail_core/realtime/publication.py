@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from mail_core.mail.storage.models import OutboxEvent, OutboxPublicationState
@@ -30,17 +31,7 @@ def get_publication_state(session: Session) -> OutboxPublicationState:
     # dies on the primary key. Insert with ON CONFLICT DO NOTHING and
     # re-read: the winner's row is the singleton either way.
     values = dict(id=1, epoch=uuid.uuid4(), next_seq=1, pruned_through_seq=0)
-    dialect = session.get_bind().dialect.name
-    if dialect == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-        session.execute(pg_insert(OutboxPublicationState).values(**values).on_conflict_do_nothing())
-    elif dialect == "sqlite":
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-        session.execute(sqlite_insert(OutboxPublicationState).values(**values).on_conflict_do_nothing())
-    else:  # pragma: no cover - production is PostgreSQL, tests SQLite
-        session.add(OutboxPublicationState(**values))
+    session.execute(pg_insert(OutboxPublicationState).values(**values).on_conflict_do_nothing())
     session.flush()
     state = session.scalar(select(OutboxPublicationState).where(OutboxPublicationState.id == 1))
     if state is None:  # pragma: no cover - insert above must have landed or conflicted

@@ -161,7 +161,12 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
   test('双页面并发下真实SSE推送与实时状态更新 (AC-005)', async ({ browser }) => {
     const context = await browser.newContext()
     const page1 = await context.newPage()
-    const page2 = await context.newPage()
+
+    // 监听 page1 的 SSE 连接建立
+    const sseReadyPage1 = page1.waitForResponse(
+      (res) => res.url().includes('/api/events') && res.status() === 200,
+      { timeout: 15000 },
+    )
 
     // page1 登录
     await page1.goto('/')
@@ -169,19 +174,53 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
     await page1.locator('#login-password').fill(E2E_PASSWORD)
     await page1.locator('button[type="submit"]').click()
     await expect(page1.getByRole('button', { name: '所有收件箱', exact: true })).toBeVisible({ timeout: 15000 })
+    await sseReadyPage1
 
-    // page2 访问（共享 Cookie 自动已登录）
+    // 前提：通过 API 校验并保证至少存在一封未读邮件夹具
+    const meRes = await page1.request.get('/api/auth/me')
+    expect(meRes.status()).toBe(200)
+    const csrf = (await meRes.json()).csrf_token as string
+    expect(csrf).toBeTruthy()
+
+    const inboxRes = await page1.request.get('/api/inbox?limit=50')
+    expect(inboxRes.status()).toBe(200)
+    const inboxData = (await inboxRes.json()) as { items?: Array<{ id: string; subject?: string; is_read?: boolean }> }
+    const items = inboxData.items || []
+    expect(items.length, '前置夹具错误：数据库中必须至少存在一封邮件供测试').toBeGreaterThan(0)
+
+    const targetMessage = items[0]
+    // 显式保证该目标邮件为未读状态
+    const markUnreadRes = await page1.request.post(`/api/messages/${targetMessage.id}/read`, {
+      data: { is_read: false },
+      headers: { 'x-csrf-token': csrf },
+    })
+    expect(markUnreadRes.status()).toBe(200)
+
+    // page2 访问（共享 Cookie 自动已登录并建立独立 SSE）
+    const page2 = await context.newPage()
+    const sseReadyPage2 = page2.waitForResponse(
+      (res) => res.url().includes('/api/events') && res.status() === 200,
+      { timeout: 15000 },
+    )
     await page2.goto('/')
     await expect(page2.getByRole('button', { name: '所有收件箱', exact: true })).toBeVisible({ timeout: 15000 })
+    await sseReadyPage2
 
-    // 在 page1 点击第一封邮件
-    const firstMailPage1 = page1.locator('.message-row').first()
-    if (await firstMailPage1.isVisible()) {
-      await firstMailPage1.click()
-      // 触发已读更新，page2 应该通过 SSE 自动保持一致，页面不报错
-      await page2.waitForTimeout(1000)
-      await expect(page2.locator('body')).toBeVisible()
-    }
+    // 两个页面分别定位同一邮件项，断言初始均为未读状态
+    const mailItemPage1 = page1.locator('.message-row').first()
+    const mailItemPage2 = page2.locator('.message-row').first()
+
+    await expect(mailItemPage1).toBeVisible({ timeout: 10000 })
+    await expect(mailItemPage2).toBeVisible({ timeout: 10000 })
+    await expect(mailItemPage1).toHaveClass(/unread/, { timeout: 10000 })
+    await expect(mailItemPage2).toHaveClass(/unread/, { timeout: 10000 })
+
+    // page1 点击该邮件触发标读
+    await mailItemPage1.click()
+    await expect(mailItemPage1).not.toHaveClass(/unread/, { timeout: 10000 })
+
+    // page2 不点击、不刷新，通过真实 SSE 广播更新状态，断言自动收敛为已读
+    await expect(mailItemPage2).not.toHaveClass(/unread/, { timeout: 15000 })
 
     await context.close()
   })

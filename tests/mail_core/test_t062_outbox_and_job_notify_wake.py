@@ -356,14 +356,106 @@ def test_ac007_notify_failure_does_not_abort_transaction(monkeypatch, caplog):
         assert row is not None
 
 
-def test_ac008_non_postgresql_dialect_noop():
-    """AC-008: Non-PostgreSQL dialect sessions commit OutboxEvent / WorkerJob without error."""
-    engine = create_engine("sqlite:///:memory:")
+def test_pg_outbox_and_worker_job_commit_rollback_notify_and_concurrency():
+    """True PostgreSQL contract: commit, rollback, notify and concurrent locking."""
+    Session = get_session_factory()
+    collector = NotificationCollector([OUTBOX_CHANNEL, JOB_CHANNEL])
+    collector.start()
 
-    with Session(engine) as session:
-        session.execute(text("CREATE TABLE dummy (id INT)"))
-        session.execute(text("INSERT INTO dummy VALUES (1)"))
-        session.commit()
+    now_utc = datetime.now(timezone.utc)
+    tag = uuid.uuid4().hex[:8]
+
+    try:
+        # 1. Rollback contract: rolled back writes must NOT persist and must NOT emit pg_notify
+        with Session() as session:
+            session.add(
+                OutboxEvent(
+                    event_type=OutboxEventType.SYNC_PROGRESS.value,
+                    payload={"tag": tag, "rollback": True},
+                )
+            )
+            session.add(
+                WorkerJob(
+                    job_type=JobType.GC_BLOBS.value,
+                    status=JobStatus.PENDING.value,
+                    run_after=now_utc - timedelta(seconds=1),
+                    dedupe_key=f"rb-job-{tag}",
+                )
+            )
+            session.flush()
+            session.rollback()
+
+        time.sleep(0.3)
+        assert len(collector.notifications) == 0, f"rolled back session leaked notifies: {collector.notifications}"
+        with Session() as session:
+            assert session.scalar(select(WorkerJob).where(WorkerJob.dedupe_key == f"rb-job-{tag}")) is None
+
+        # 2. Commit contract: committed OutboxEvent and WorkerJob persist and emit NOTIFY
+        outbox_row_id = None
+        job_id = None
+        with Session() as session:
+            outbox_row = OutboxEvent(
+                event_type=OutboxEventType.SYNC_PROGRESS.value,
+                payload={"tag": tag, "commit": True},
+            )
+            session.add(outbox_row)
+            job = WorkerJob(
+                job_type=JobType.GC_BLOBS.value,
+                status=JobStatus.PENDING.value,
+                run_after=now_utc - timedelta(seconds=1),
+                dedupe_key=f"commit-job-{tag}",
+            )
+            session.add(job)
+            session.commit()
+            outbox_row_id = outbox_row.id
+            job_id = job.id
+
+        # Verify DB persistence
+        with Session() as session:
+            assert session.get(OutboxEvent, outbox_row_id) is not None
+            assert session.get(WorkerJob, job_id) is not None
+
+        # Wait for notifications
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            outbox_notes = [p for ch, p in collector.notifications if ch == OUTBOX_CHANNEL]
+            job_notes = [p for ch, p in collector.notifications if ch == JOB_CHANNEL]
+            if outbox_notes and job_notes:
+                break
+            time.sleep(0.05)
+        assert any(ch == OUTBOX_CHANNEL for ch, _ in collector.notifications), "expected outbox NOTIFY"
+        assert any(ch == JOB_CHANNEL for ch, _ in collector.notifications), "expected job NOTIFY"
+
+        # 3. Concurrent locking contract: FOR UPDATE SKIP LOCKED ensures only one worker claims the job
+        claim_results: list[list[uuid.UUID]] = []
+        barrier = threading.Barrier(2)
+
+        def worker_claim(worker_name: str):
+            with Session() as s:
+                barrier.wait(timeout=2.0)
+                claimed = claim_jobs(s, worker_id=worker_name, limit=1, job_types=[JobType.GC_BLOBS.value])
+                claimed_ids = [j.id for j in claimed]
+                s.commit()
+                claim_results.append(claimed_ids)
+
+        t1 = threading.Thread(target=worker_claim, args=("w1",))
+        t2 = threading.Thread(target=worker_claim, args=("w2",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=3.0)
+        t2.join(timeout=3.0)
+
+        # One worker gets the job, the other gets empty list (or claimed other jobs, but this job claimed exactly once)
+        all_claimed_ids = [jid for sub in claim_results for jid in sub if jid == job_id]
+        assert len(all_claimed_ids) == 1, f"job {job_id} should be claimed exactly once, got {all_claimed_ids}"
+
+        with Session() as session:
+            final_job = session.get(WorkerJob, job_id)
+            assert final_job is not None
+            assert final_job.status == JobStatus.CLAIMED.value
+            assert final_job.locked_by in ("w1", "w2")
+    finally:
+        collector.stop()
 
 
 def test_job_wake_listener_exponential_backoff_on_failures():

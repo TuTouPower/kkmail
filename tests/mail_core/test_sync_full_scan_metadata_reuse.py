@@ -9,115 +9,35 @@ in-flight generation, allocated a NEW root generation and forced a
 second full scan with a cursor reset, instead of observing the scan
 already in progress.
 
-Pinned here on SQLite (hand DDL, following
-test_sync_shared_full_scan.py): after discovery is DONE and a metadata
+Pinned here on PostgreSQL: after discovery is DONE and a metadata
 job is still PENDING, a second full request reuses the in-flight root
 generation; once the metadata job is DONE too, the helper reports no
-in-flight generation. No existing test is modified by this file.
+in-flight generation.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import sessionmaker
+import pytest
+from sqlalchemy import select
 
+from mail_core.db.session import get_session_factory
 from mail_core.mail.application.sync_requests import (
     _inflight_full_root_generation,
     create_sync_request,
 )
 from mail_core.mail.domain.enums import JobStatus, JobType
 from mail_core.mail.storage.models import Account, SyncRequestTarget, WorkerJob
-from tests.mail_core.sqlite_schema import sqlite_table_ddl
 
-_DDL = [
-    sqlite_table_ddl(Account.__table__),
-    """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_targets (
-        id CHAR(36) PRIMARY KEY,
-        request_id CHAR(36) NOT NULL,
-        account_id CHAR(36),
-        folder_id CHAR(36),
-        target_key VARCHAR(255) NOT NULL,
-        requested_generation CHAR(36) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_target_jobs (
-        id CHAR(36) PRIMARY KEY,
-        target_id CHAR(36) NOT NULL,
-        execution_generation CHAR(36) NOT NULL,
-        job_id CHAR(36),
-        phase VARCHAR(64) NOT NULL DEFAULT 'sync',
-        folder_id CHAR(36),
-        status VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE outbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        payload JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        publication_seq BIGINT,
-        published_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE worker_jobs (
-        id CHAR(36) PRIMARY KEY,
-        execution_generation CHAR(36) NOT NULL,
-        job_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        dedupe_key VARCHAR(128),
-        payload JSON NOT NULL DEFAULT '{}',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        priority INTEGER NOT NULL DEFAULT 100,
-        run_after DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        failure_attempts INTEGER NOT NULL DEFAULT 0,
-        locked_by VARCHAR(128),
-        locked_at DATETIME,
-        last_error TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-]
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 _NOW = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
-
-
-def _make_session_factory():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    return sessionmaker(bind=engine)
 
 
 def _create_full_request(Session, account_id: uuid.UUID) -> uuid.UUID:
@@ -145,7 +65,7 @@ def _requested_generation(Session, request_id: uuid.UUID) -> uuid.UUID:
 
 
 def test_full_request_reuses_root_generation_while_metadata_in_flight():
-    Session = _make_session_factory()
+    Session = get_session_factory()
     account_id = uuid.uuid4()
     folder_id = uuid.uuid4()
     with Session() as session:
@@ -208,7 +128,7 @@ def test_full_request_reuses_root_generation_while_metadata_in_flight():
     # Once the metadata job AND the second request's own discovery job
     # are done too, nothing is in flight anymore.
     with Session() as session:
-        for job in session.scalars(select(WorkerJob)).all():
+        for job in session.scalars(select(WorkerJob).where(WorkerJob.account_id == account_id)).all():
             job.status = JobStatus.DONE.value
         session.commit()
     with Session() as session:

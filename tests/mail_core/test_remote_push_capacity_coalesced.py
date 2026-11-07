@@ -16,135 +16,33 @@ concluded an independent successor already existed, marked the job
 DONE and stripped ``_queue_*`` from its payload -- destroying the
 coalesced followup. The op stayed PENDING with zero active jobs.
 
-This test drives the real chain on SQLite (hand DDL, following
-test_sync_shared_full_scan.py): seed a CLAIMED push job + a PENDING
+This test drives the real chain on PostgreSQL: seed a CLAIMED push job + a PENDING
 op, make the provider raise ``ProviderCapacityUnavailable``, run
 ``push_remote_operations``, then settle with ``complete_job`` exactly
 as the handler does, and assert a PENDING successor survives.
-``lock_generation`` (PostgreSQL advisory lock) is patched out; the
-session factory is pointed at the test engine. No existing test is
-modified by this file.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import sessionmaker
+import pytest
+from sqlalchemy import select
 
-from mail_core.db import session as db_session_mod
+from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import JobStatus, JobType, RemoteOperationStatus
 from mail_core.mail.storage.models import Account, RemoteOperation, WorkerJob
 from mail_core.providers.connection_slots import ProviderCapacityUnavailable
-from mail_core.sync import execution as execution_mod
 from mail_core.sync import remote_push as remote_push_mod
 from mail_core.sync.jobs import complete_job
-from tests.mail_core.sqlite_schema import sqlite_table_ddl
 
-_DDL = [
-    sqlite_table_ddl(Account.__table__),
-    """
-    CREATE TABLE account_sync_leases (
-        account_id CHAR(36) PRIMARY KEY,
-        owner_id VARCHAR(128) NOT NULL,
-        lease_expires_at DATETIME NOT NULL,
-        heartbeat_at DATETIME NOT NULL,
-        fencing_token INTEGER NOT NULL DEFAULT 0
-    )
-    """,
-    """
-    CREATE TABLE remote_operations (
-        id CHAR(36) PRIMARY KEY,
-        account_id CHAR(36) NOT NULL,
-        entity_key VARCHAR(512) NOT NULL,
-        op_type VARCHAR(64) NOT NULL,
-        desired_state JSON NOT NULL DEFAULT '{}',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        attempts INTEGER NOT NULL DEFAULT 0,
-        last_error TEXT,
-        next_attempt_at DATETIME,
-        idempotency_key VARCHAR(128) UNIQUE,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE worker_jobs (
-        id CHAR(36) PRIMARY KEY,
-        execution_generation CHAR(36) NOT NULL,
-        job_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        dedupe_key VARCHAR(128),
-        payload JSON NOT NULL DEFAULT '{}',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        priority INTEGER NOT NULL DEFAULT 100,
-        run_after DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        failure_attempts INTEGER NOT NULL DEFAULT 0,
-        locked_by VARCHAR(128),
-        locked_at DATETIME,
-        last_error TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_targets (
-        id CHAR(36) PRIMARY KEY,
-        request_id CHAR(36) NOT NULL,
-        account_id CHAR(36),
-        folder_id CHAR(36),
-        target_key VARCHAR(255) NOT NULL,
-        requested_generation CHAR(36) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_target_jobs (
-        id CHAR(36) PRIMARY KEY,
-        target_id CHAR(36) NOT NULL,
-        execution_generation CHAR(36) NOT NULL,
-        job_id CHAR(36),
-        phase VARCHAR(64) NOT NULL DEFAULT 'sync',
-        folder_id CHAR(36),
-        status VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE outbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        payload JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        publication_seq BIGINT,
-        published_at DATETIME
-    )
-    """,
-]
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 _NOW = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
 _WORKER = "w-push"
@@ -158,12 +56,7 @@ class _CapacityProvider:
 
 
 def test_capacity_coalesced_followup_survives_settlement():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    Session = sessionmaker(bind=engine)
-
+    Session = get_session_factory()
     account_id = uuid.uuid4()
     job_id = uuid.uuid4()
     op_id = uuid.uuid4()
@@ -171,7 +64,7 @@ def test_capacity_coalesced_followup_survives_settlement():
         session.add(
             Account(
                 id=account_id,
-                email="push@example.test",
+                email=f"push-{uuid.uuid4().hex[:8]}@example.test",
                 provider="memory",
                 credential_ref="ref",
                 config={},
@@ -210,10 +103,7 @@ def test_capacity_coalesced_followup_survives_settlement():
         )
         session.commit()
 
-    with (
-        patch.object(db_session_mod, "get_session_factory", lambda: Session),
-        patch.object(remote_push_mod, "build_provider", lambda *a, **k: _CapacityProvider()),
-    ):
+    with patch.object(remote_push_mod, "build_provider", lambda *a, **k: _CapacityProvider()):
         result = remote_push_mod.push_remote_operations(
             account_id, worker_id=_WORKER, store=object()
         )
@@ -236,8 +126,7 @@ def test_capacity_coalesced_followup_survives_settlement():
     with Session() as session:
         job = session.get(WorkerJob, job_id)
         assert job is not None
-        with patch.object(execution_mod, "lock_generation", lambda _s, _g: None):
-            successor = complete_job(session, job, worker_id=_WORKER, result=result)
+        successor = complete_job(session, job, worker_id=_WORKER, result=result)
         session.commit()
         assert successor is not None, (
             "settlement destroyed the coalesced followup: no successor job"
