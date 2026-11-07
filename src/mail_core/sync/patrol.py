@@ -1,12 +1,13 @@
-"""All-folder STATUS patrol (t061 AC-008..AC-014).
+"""All-folder STATUS patrol (t061 AC-008..AC-014, adoption A14).
 
 Extends the t057 periodic scheduling idea beyond the inbox: every
 non-paused folder of every sync-enabled account is probed on a cycle
 with a cheap provider STATUS call. Only a probe whose comparable
 dimensions differ from the stored baseline enqueues a
 ``SYNC_FOLDER_DELTA``; the delta job then converges the folder through
-the existing pipeline. The probe baseline lives in the checkpoint
-cursor JSONB (``last_status`` / ``last_probe_at``) — no migration.
+the existing pipeline. The probe baseline and probe tracking live in
+the dedicated ``folder_patrol_status`` table, completely separated
+from the ``SyncCheckpoint.cursor`` protocol sync cursor.
 
 The patrol itself never writes message data, never triggers a full
 metadata scan, and isolates per-folder failures.
@@ -24,15 +25,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import JobType, SyncStatus
-from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint
+from mail_core.mail.storage.models import Account, Folder, FolderPatrolStatus, SyncCheckpoint
 from mail_core.providers.base import FolderStatus
 from mail_core.sync.jobs import enqueue_job
 
 log = logging.getLogger("mail_core.sync.patrol")
 
-_CURSOR_STATUS_KEY = "last_status"
-_CURSOR_PROBE_AT_KEY = "last_probe_at"
-_CURSOR_FAILURES_KEY = "last_probe_failures"
 _DIMENSIONS = ("messages", "uidnext", "unseen", "highestmodseq")
 
 
@@ -104,12 +102,16 @@ def schedule_folder_status_patrol(
 
     rows = list(
         session.execute(
-            select(Folder, Account, SyncCheckpoint)
+            select(Folder, Account, SyncCheckpoint, FolderPatrolStatus)
             .join(Account, Account.id == Folder.account_id)
             .outerjoin(
                 SyncCheckpoint,
                 (SyncCheckpoint.account_id == Folder.account_id)
                 & (SyncCheckpoint.folder_id == Folder.id),
+            )
+            .outerjoin(
+                FolderPatrolStatus,
+                FolderPatrolStatus.folder_id == Folder.id,
             )
             .where(
                 Account.sync_enabled.is_(True),
@@ -120,24 +122,22 @@ def schedule_folder_status_patrol(
         ).all()
     )
 
-    due: list[tuple[float, Folder, Account, SyncCheckpoint | None]] = []
-    for folder, account, cp in rows:
-        cursor = dict(cp.cursor or {}) if cp is not None else {}
-        last_probe_at = cursor.get(_CURSOR_PROBE_AT_KEY)
-        last_epoch = (
-            float(last_probe_at)
-            if isinstance(last_probe_at, (int, float)) and not isinstance(last_probe_at, bool)
-            else None
-        )
+    due: list[tuple[float, Folder, Account, SyncCheckpoint | None, FolderPatrolStatus | None]] = []
+    for folder, account, cp, fps in rows:
+        last_epoch: float | None = None
+        if fps is not None and fps.last_probe_at is not None:
+            last_epoch = fps.last_probe_at.timestamp()
         if last_epoch is not None and now_epoch - last_epoch < config.interval_s:
             result.skipped_not_due += 1
             continue
-        due.append((last_epoch if last_epoch is not None else 0.0, folder, account, cp))
+        due.append((last_epoch if last_epoch is not None else 0.0, folder, account, cp, fps))
 
     # Rotation (AC-013): folders that have never been probed or whose
     # last attempt is older than the max-unprobed bound go first; within
     # each group, least-recently attempted first; capped per sweep.
-    def _rotation_key(item: tuple[float, Folder, Account, SyncCheckpoint | None]) -> tuple[int, float, str]:
+    def _rotation_key(
+        item: tuple[float, Folder, Account, SyncCheckpoint | None, FolderPatrolStatus | None],
+    ) -> tuple[int, float, str]:
         last_epoch = item[0]
         critical = last_epoch == 0.0 or (now_epoch - last_epoch) > config.max_unprobed_s
         return (0 if critical else 1, last_epoch, str(item[1].id))
@@ -145,7 +145,12 @@ def schedule_folder_status_patrol(
     due.sort(key=_rotation_key)
     selected = due[: config.max_probes]
 
-    def _record_attempt(folder: Folder, account: Account, cp: SyncCheckpoint | None, *, failed: bool) -> SyncCheckpoint:
+    def _record_attempt(
+        folder: Folder,
+        fps: FolderPatrolStatus | None,
+        *,
+        failed: bool,
+    ) -> FolderPatrolStatus:
         """Advance the probe-attempt clock for success AND failure.
 
         A failed folder must not stay permanently "most overdue":
@@ -154,25 +159,28 @@ def schedule_folder_status_patrol(
         AC-014). The attempt timestamp is the due-clock; failures are
         counted separately and cleared on the next success.
         """
-        if cp is None:
-            cp = SyncCheckpoint(account_id=account.id, folder_id=folder.id, cursor={})
-            session.add(cp)
-            session.flush()
-        cursor = dict(cp.cursor or {})
-        cursor[_CURSOR_PROBE_AT_KEY] = now_epoch
-        if failed:
-            cursor[_CURSOR_FAILURES_KEY] = int(cursor.get(_CURSOR_FAILURES_KEY) or 0) + 1
+        if fps is None:
+            fps = FolderPatrolStatus(
+                folder_id=folder.id,
+                last_status=None,
+                last_probe_at=current_time,
+                last_probe_failures=1 if failed else 0,
+            )
+            session.add(fps)
         else:
-            cursor.pop(_CURSOR_FAILURES_KEY, None)
-        cp.cursor = cursor
+            fps.last_probe_at = current_time
+            if failed:
+                fps.last_probe_failures = (fps.last_probe_failures or 0) + 1
+            else:
+                fps.last_probe_failures = 0
         session.flush()
-        return cp
+        return fps
 
     providers: dict[uuid.UUID, Any] = {}
     provider_errors: dict[uuid.UUID, Exception] = {}
-    for _epoch, folder, account, cp in selected:
+    for _epoch, folder, account, cp, fps in selected:
         if account.id in provider_errors:
-            _record_attempt(folder, account, cp, failed=True)
+            _record_attempt(folder, fps, failed=True)
             result.failed += 1
             continue
         provider = providers.get(account.id)
@@ -188,7 +196,7 @@ def schedule_folder_status_patrol(
                     safe_error(exc),
                 )
                 provider_errors[account.id] = exc
-                _record_attempt(folder, account, cp, failed=True)
+                _record_attempt(folder, fps, failed=True)
                 result.failed += 1
                 continue
             providers[account.id] = provider
@@ -204,29 +212,31 @@ def schedule_folder_status_patrol(
                 account.id,
                 safe_error(exc),
             )
-            _record_attempt(folder, account, cp, failed=True)
+            _record_attempt(folder, fps, failed=True)
             result.failed += 1
             continue
         if status is None:
             # Unsupported probe or unparseable response: treat as a
             # failed probe (retried next patrol cycle), never as
             # "no change".
-            _record_attempt(folder, account, cp, failed=True)
+            _record_attempt(folder, fps, failed=True)
             result.failed += 1
             continue
 
         result.probed += 1
-        cp = _record_attempt(folder, account, cp, failed=False)
-        cursor = dict(cp.cursor or {})
-        baseline = FolderStatus.from_dict(cursor.get(_CURSOR_STATUS_KEY))
-        baseline_ready = bool(cp.full_scan_complete)
+        fps = _record_attempt(folder, fps, failed=False)
+        baseline = (
+            FolderStatus.from_dict(fps.last_status)
+            if fps.last_status is not None
+            else None
+        )
+        baseline_ready = bool(cp.full_scan_complete) if cp is not None else False
         is_changed = (
             baseline is not None
             and baseline_ready
             and bool(changed_dimensions(baseline, status))
         )
-        cursor[_CURSOR_STATUS_KEY] = status.to_dict()
-        cp.cursor = cursor
+        fps.last_status = status.to_dict()
         session.flush()
 
         if is_changed:

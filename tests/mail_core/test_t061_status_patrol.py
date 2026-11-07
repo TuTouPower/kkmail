@@ -15,7 +15,13 @@ import pytest
 from sqlalchemy import select
 
 from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
-from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, WorkerJob
+from mail_core.mail.storage.models import (
+    Account,
+    Folder,
+    FolderPatrolStatus,
+    SyncCheckpoint,
+    WorkerJob,
+)
 from mail_core.providers.base import FolderStatus
 from mail_core.sync.patrol import (
     PatrolConfig,
@@ -90,15 +96,23 @@ def _seed_folder(
     )
     session.add(folder)
     session.flush()
-    cursor: dict = {}
-    if last_status is not None:
-        cursor["last_status"] = last_status
-    if last_probe_epoch is not None:
-        cursor["last_probe_at"] = last_probe_epoch
+    if last_status is not None or last_probe_epoch is not None:
+        fps = FolderPatrolStatus(
+            folder_id=folder.id,
+            last_status=last_status,
+            last_probe_at=(
+                datetime.fromtimestamp(last_probe_epoch, tz=timezone.utc)
+                if last_probe_epoch is not None
+                else None
+            ),
+            last_probe_failures=0,
+        )
+        session.add(fps)
+        session.flush()
     cp = SyncCheckpoint(
         account_id=acc.id,
         folder_id=folder.id,
-        cursor=cursor,
+        cursor={},
         full_scan_complete=baseline,
     )
     session.add(cp)
@@ -174,11 +188,17 @@ def test_ac008_ac009_first_probe_records_baseline_without_enqueue():
         assert set(provider.probed) == {remote for _a, _f, remote in seeded}
         for acc_id, folder_id, _remote in seeded:
             assert _delta_jobs(session, acc_id, folder_id) == []
+            fps = session.get(FolderPatrolStatus, folder_id)
+            assert fps is not None
+            assert fps.last_status["messages"] == 5
+            assert fps.last_probe_at is not None
+            assert fps.last_probe_failures == 0
             cp = session.get(
                 SyncCheckpoint, {"account_id": acc_id, "folder_id": folder_id}
             )
-            assert cp.cursor["last_status"]["messages"] == 5
-            assert "last_probe_at" in cp.cursor
+            assert "last_status" not in cp.cursor
+            assert "last_probe_at" not in cp.cursor
+            assert "last_probe_failures" not in cp.cursor
 
 
 @pytest.mark.skipif(
@@ -209,6 +229,12 @@ def test_ac009_unchanged_probe_enqueues_nothing():
         assert result.probed == 1
         assert result.changed == 0
         assert _delta_jobs(session, acc_id, folder_id) == []
+        fps = session.get(FolderPatrolStatus, folder_id)
+        assert fps is not None
+        assert fps.last_status["messages"] == 5
+        cp = session.get(SyncCheckpoint, {"account_id": acc_id, "folder_id": folder_id})
+        assert "last_status" not in cp.cursor
+        assert "last_probe_at" not in cp.cursor
 
 
 @pytest.mark.skipif(
@@ -243,8 +269,12 @@ def test_ac010_changed_probe_enqueues_delta_and_updates_baseline():
         assert jobs[0].job_type == JobType.SYNC_FOLDER_DELTA.value
         assert jobs[0].status == JobStatus.PENDING.value
         assert jobs[0].payload == {"folder_id": str(folder_id)}
+        fps = session.get(FolderPatrolStatus, folder_id)
+        assert fps is not None
+        assert fps.last_status["messages"] == 6
         cp = session.get(SyncCheckpoint, {"account_id": acc_id, "folder_id": folder_id})
-        assert cp.cursor["last_status"]["messages"] == 6
+        assert "last_status" not in cp.cursor
+        assert "last_probe_at" not in cp.cursor
 
 
 @pytest.mark.skipif(
@@ -280,10 +310,14 @@ def test_ac011_ac012_skips_paused_disabled_and_records_no_baseline():
         assert len(provider.probed) == 1
         for acc_id, folder_id in ids.values():
             assert _delta_jobs(session, acc_id, folder_id) == []
+        fps = session.get(FolderPatrolStatus, ids["nobase"][1])
+        assert fps is not None
+        assert fps.last_status["messages"] == 1
         cp = session.get(
             SyncCheckpoint, {"account_id": ids["nobase"][0], "folder_id": ids["nobase"][1]}
         )
-        assert cp.cursor["last_status"]["messages"] == 1
+        assert "last_status" not in cp.cursor
+        assert "last_probe_at" not in cp.cursor
         assert cp.full_scan_complete is False
 
 
@@ -384,11 +418,15 @@ def test_ac014_probe_failure_isolated_per_folder():
         assert len(_delta_jobs(session, good_id, good_folder_id)) == 1
         # The failed folder's attempt clock advanced (review f001):
         # it must not be retried on every scheduler sweep.
+        fps_bad = session.get(FolderPatrolStatus, bad_folder_id)
+        assert fps_bad is not None
+        assert fps_bad.last_probe_at == now
+        assert fps_bad.last_probe_failures == 1
         cp_bad = session.get(
             SyncCheckpoint, {"account_id": bad_id, "folder_id": bad_folder_id}
         )
-        assert cp_bad.cursor["last_probe_at"] == now.timestamp()
-        assert cp_bad.cursor["last_probe_failures"] == 1
+        assert "last_probe_at" not in cp_bad.cursor
+        assert "last_probe_failures" not in cp_bad.cursor
 
     # An immediate re-sweep (60s scheduler cadence) must NOT re-probe
     # the failed folder: it retries next patrol cycle, not next sweep.
@@ -477,3 +515,219 @@ def test_patrol_disabled_is_noop():
         session.commit()
         assert result.probed == 0
         assert provider.probed == []
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
+def test_folder_patrol_status_cascade_delete():
+    """Adoption A14: Folder deletion cascades to FolderPatrolStatus."""
+    from mail_core.db.session import get_session_factory
+
+    Session = get_session_factory()
+    now = datetime.now(timezone.utc)
+    status = FolderStatus(messages=5, uidnext=6, unseen=1, highestmodseq=1)
+    with Session() as session:
+        _acc, folder = _seed_folder(
+            session,
+            last_status=status.to_dict(),
+            last_probe_epoch=now.timestamp(),
+        )
+        folder_id = folder.id
+        session.commit()
+
+    with Session() as session:
+        fps = session.get(FolderPatrolStatus, folder_id)
+        assert fps is not None
+
+        # Delete folder
+        folder_obj = session.get(Folder, folder_id)
+        session.delete(folder_obj)
+        session.commit()
+
+    with Session() as session:
+        assert session.get(Folder, folder_id) is None
+        assert session.get(FolderPatrolStatus, folder_id) is None
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
+def test_checkpoint_cursor_isolation_and_rebuild():
+    """Adoption A14: Rebuilding sync checkpoint preserves patrol status and keeps cursor clean."""
+    from mail_core.db.session import get_session_factory
+    from mail_core.sync.checkpoints import invalidate_checkpoint_for_rebuild
+    from mail_core.sync.leases import acquire_lease
+
+    Session = get_session_factory()
+    now = datetime.now(timezone.utc)
+    status = FolderStatus(messages=5, uidnext=6, unseen=1, highestmodseq=1)
+    with Session() as session:
+        acc, folder = _seed_folder(
+            session,
+            last_status=status.to_dict(),
+            last_probe_epoch=(now - timedelta(seconds=1300)).timestamp(),
+        )
+        acc_id, folder_id = acc.id, folder.id
+        session.commit()
+
+    with Session() as session:
+        lease = acquire_lease(session, account_id=acc_id, owner_id="test-worker")
+        session.commit()
+
+    with Session() as session:
+        cp = invalidate_checkpoint_for_rebuild(
+            session,
+            account_id=acc_id,
+            folder_id=folder_id,
+            fencing_token=lease.fencing_token,
+        )
+        session.commit()
+        assert cp.cursor == {}
+        assert cp.full_scan_complete is False
+
+    with Session() as session:
+        # Patrol status remains intact
+        fps = session.get(FolderPatrolStatus, folder_id)
+        assert fps is not None
+        assert fps.last_status == status.to_dict()
+
+        # When patrol runs, full_scan_complete=False means baseline_ready is False,
+        # so changed probe does NOT enqueue delta
+        new_status = FolderStatus(messages=10, uidnext=11, unseen=2, highestmodseq=2)
+        provider = _FakeProbeProvider(new_status)
+        result = schedule_folder_status_patrol(
+            session,
+            config=_cfg(),
+            provider_factory=lambda account: provider,
+            now=now,
+        )
+        session.commit()
+        assert result.probed == 1
+        assert result.changed == 0
+        assert _delta_jobs(session, acc_id, folder_id) == []
+
+        # Checkpoint cursor stays pristine
+        cp_after = session.get(SyncCheckpoint, {"account_id": acc_id, "folder_id": folder_id})
+        assert cp_after.cursor == {}
+        assert "last_status" not in cp_after.cursor
+        assert "last_probe_at" not in cp_after.cursor
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
+def test_alembic_cursor_migration_sql():
+    """Adoption A14: Verify migration logic that extracts patrol keys into folder_patrol_status."""
+    from sqlalchemy import text
+    from mail_core.db.session import get_session_factory
+
+    Session = get_session_factory()
+    test_folder_id = uuid.uuid4()
+    test_account_id = uuid.uuid4()
+
+    with Session() as session:
+        # Seed an account and folder
+        acc = Account(
+            id=test_account_id,
+            email=f"migrate-{uuid.uuid4().hex[:8]}@example.com",
+            provider="stub",
+            credential_ref="ref",
+            sync_enabled=True,
+        )
+        session.add(acc)
+        folder = Folder(
+            id=test_folder_id,
+            account_id=acc.id,
+            remote_id="remote-migrate",
+            name="Migrate",
+            role="sent",
+        )
+        session.add(folder)
+        session.flush()
+
+        # Inject legacy patrol keys directly into checkpoint cursor
+        cp = SyncCheckpoint(
+            account_id=acc.id,
+            folder_id=folder.id,
+            cursor={
+                "remote_cursor": "token-123",
+                "last_status": {"messages": 42, "uidnext": 100},
+                "last_probe_at": 1700000000.5,
+                "last_probe_failures": 3,
+            },
+            full_scan_complete=True,
+        )
+        session.add(cp)
+        session.commit()
+
+    with Session() as session:
+        # Run migration insert SQL
+        session.execute(
+            text(
+                """
+                INSERT INTO folder_patrol_status (
+                    folder_id,
+                    last_status,
+                    last_probe_at,
+                    last_probe_failures,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    folder_id,
+                    CASE WHEN cursor ? 'last_status' THEN cursor->'last_status' ELSE NULL END,
+                    CASE
+                        WHEN cursor ? 'last_probe_at' AND (cursor->>'last_probe_at') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                        THEN to_timestamp((cursor->>'last_probe_at')::double precision)
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN cursor ? 'last_probe_failures' AND (cursor->>'last_probe_failures') ~ '^[0-9]+$'
+                        THEN (cursor->>'last_probe_failures')::integer
+                        ELSE 0
+                    END,
+                    now(),
+                    now()
+                FROM sync_checkpoints
+                WHERE folder_id = :fid
+                  AND (cursor ? 'last_status' OR cursor ? 'last_probe_at' OR cursor ? 'last_probe_failures')
+                ON CONFLICT (folder_id) DO UPDATE SET
+                    last_status = EXCLUDED.last_status,
+                    last_probe_at = EXCLUDED.last_probe_at,
+                    last_probe_failures = EXCLUDED.last_probe_failures,
+                    updated_at = EXCLUDED.updated_at;
+                """
+            ),
+            {"fid": test_folder_id},
+        )
+        # Run migration cleanup SQL
+        session.execute(
+            text(
+                """
+                UPDATE sync_checkpoints
+                SET cursor = cursor - ARRAY['last_status', 'last_probe_at', 'last_probe_failures']
+                WHERE folder_id = :fid
+                  AND (cursor ? 'last_status' OR cursor ? 'last_probe_at' OR cursor ? 'last_probe_failures');
+                """
+            ),
+            {"fid": test_folder_id},
+        )
+        session.commit()
+
+    with Session() as session:
+        fps = session.get(FolderPatrolStatus, test_folder_id)
+        assert fps is not None
+        assert fps.last_status == {"messages": 42, "uidnext": 100}
+        assert fps.last_probe_at is not None
+        assert abs(fps.last_probe_at.timestamp() - 1700000000.5) < 0.01
+        assert fps.last_probe_failures == 3
+
+        cp = session.get(SyncCheckpoint, {"account_id": test_account_id, "folder_id": test_folder_id})
+        assert cp.cursor == {"remote_cursor": "token-123"}
+        assert "last_status" not in cp.cursor
+        assert "last_probe_at" not in cp.cursor
+        assert "last_probe_failures" not in cp.cursor

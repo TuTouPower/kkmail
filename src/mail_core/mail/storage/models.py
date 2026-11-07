@@ -328,6 +328,30 @@ class FolderStats(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class FolderPatrolStatus(Base):
+    """Folder status patrol baseline and probe tracking (adoption A14)."""
+
+    __tablename__ = "folder_patrol_status"
+
+    folder_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("folders.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    last_status: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    last_probe_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_probe_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class AccountSyncLease(Base):
     """Account-level sync lease + fencing token (architecture §7.5)."""
 
