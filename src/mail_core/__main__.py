@@ -13,8 +13,10 @@ Options (env):
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
+import socket
 import threading
 from pathlib import Path
 
@@ -106,9 +108,29 @@ def main(argv: list[str] | None = None) -> None:
 
     from mail_core.api.app import app
 
-    # Proxy headers handling is managed inside FastAPI via ProxyHeadersMiddleware when
-    # MAIL_CORE_FORWARDED_ALLOW_IPS is explicitly configured, avoiding double parsing.
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info", proxy_headers=False)
+    is_sidecar = os.environ.get("KKMAIL_SIDECAR") == "1" or args.port == 0
+    if is_sidecar:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind((args.host, args.port))
+        sock.listen(128)
+        bound_port = sock.getsockname()[1]
+        print(
+            f"KKMAIL_SIDECAR_READY:{json.dumps({'status': 'ready', 'port': bound_port, 'host': args.host})}",
+            flush=True,
+        )
+        config = uvicorn.Config(app, host=args.host, port=bound_port, log_level="info", proxy_headers=False)
+        server = uvicorn.Server(config)
+        try:
+            server.run(sockets=[sock])
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    else:
+        # Proxy headers handling is managed inside FastAPI via ProxyHeadersMiddleware when
+        # MAIL_CORE_FORWARDED_ALLOW_IPS is explicitly configured, avoiding double parsing.
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info", proxy_headers=False)
 
 
 if __name__ == "__main__":

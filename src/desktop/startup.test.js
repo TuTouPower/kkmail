@@ -7,6 +7,7 @@ const {
   parsePort,
   freePort,
   waitForHealth,
+  waitForSidecarReady,
   scrubEnv,
   redactSecrets,
   stopChildTree,
@@ -61,20 +62,197 @@ assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
   assert.deepStrictEqual(ENV_ALLOW_PREFIX, ['LC_'])
 }
 
-// freePort (A301): the TOCTOU race between probing a port free and the
-// backend actually binding it is an accepted residual risk (eliminating
-// it needs a backend bind-0/report-back protocol change). Guard that
-// the race, its window, and its failure shapes stay documented at
-// freePort so nobody mistakes the probe for a reservation.
-{
-  const src = fs.readFileSync(path.join(__dirname, 'startup.js'), 'utf8')
-  const fnIdx = src.indexOf('async function freePort')
-  assert.ok(fnIdx > 0)
-  const docBlock = src.slice(Math.max(0, fnIdx - 2500), fnIdx)
-  assert.match(docBlock, /TOCTOU/, 'freePort must carry a TOCTOU warning')
-  assert.match(docBlock, /后端已退出/, 'the doc must name the backend-exit failure shape')
-  assert.match(docBlock, /backend timeout/, 'the doc must name the health-timeout failure shape')
-  assert.match(docBlock, /bind.*0|port 0/, 'the doc must name the bind-0 report-back fix direction')
+// A16: Replace disclosure comment assertions with waitForSidecarReady comprehensive tests
+async function testWaitForSidecarReady() {
+  // 1. 正常解析结构化就绪消息
+  {
+    const child = new EventEmitter()
+    child.stdout = new EventEmitter()
+    child.exitCode = null
+    child.signalCode = null
+
+    const readyPromise = waitForSidecarReady(child, 2000)
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        'preceding log line\nKKMAIL_SIDECAR_READY:{"status": "ready", "port": 18765, "host": "127.0.0.1"}\ntrailing log line\n',
+      ),
+    )
+    const res = await readyPromise
+    assert.strictEqual(res.host, '127.0.0.1')
+    assert.strictEqual(res.port, 18765)
+    assert.strictEqual(res.status, 'ready')
+  }
+  {
+    const child = new EventEmitter()
+    child.stdout = new EventEmitter()
+    child.exitCode = null
+    child.signalCode = null
+
+    const readyPromise = waitForSidecarReady(child, 2000)
+    child.stdout.emit(
+      'data',
+      Buffer.from('KKMAIL_SIDECAR_READY:{"status": "ready", "port": 28765, "host": "localhost"}\n'),
+    )
+    const res = await readyPromise
+    assert.strictEqual(res.host, 'localhost')
+    assert.strictEqual(res.port, 28765)
+  }
+
+  // 2. 非法 host / 非法 port 校验并拒绝
+  {
+    // 非法 host
+    for (const badHost of ['0.0.0.0', '192.168.1.1', 'example.com']) {
+      const child = new EventEmitter()
+      child.stdout = new EventEmitter()
+      child.exitCode = null
+      child.signalCode = null
+
+      const readyPromise = waitForSidecarReady(child, 2000)
+      child.stdout.emit(
+        'data',
+        `KKMAIL_SIDECAR_READY:{"status": "ready", "port": 18765, "host": "${badHost}"}\n`,
+      )
+      await assert.rejects(readyPromise, /非法 sidecar host/)
+    }
+
+    // 非法 port: 0, 70000, -1, 'bad'
+    for (const badPort of [0, 70000, -1, 'bad']) {
+      const child = new EventEmitter()
+      child.stdout = new EventEmitter()
+      child.exitCode = null
+      child.signalCode = null
+
+      const readyPromise = waitForSidecarReady(child, 2000)
+      child.stdout.emit(
+        'data',
+        `KKMAIL_SIDECAR_READY:{"status": "ready", "port": ${JSON.stringify(badPort)}, "host": "127.0.0.1"}\n`,
+      )
+      await assert.rejects(readyPromise, /非法 sidecar port/)
+    }
+
+    // 无法解析的 JSON
+    {
+      const child = new EventEmitter()
+      child.stdout = new EventEmitter()
+      child.exitCode = null
+      child.signalCode = null
+
+      const readyPromise = waitForSidecarReady(child, 2000)
+      child.stdout.emit('data', 'KKMAIL_SIDECAR_READY:{broken json}\n')
+      await assert.rejects(readyPromise, /无法解析 sidecar 就绪消息/)
+    }
+  }
+
+  // 3. 子进程提前退出时快速失败
+  {
+    // exit 提前退出
+    const child1 = new EventEmitter()
+    child1.stdout = new EventEmitter()
+    child1.exitCode = null
+    child1.signalCode = null
+
+    const p1 = waitForSidecarReady(child1, 2000)
+    child1.emit('exit', 1, null)
+    await assert.rejects(p1, (err) => {
+      assert.strictEqual(err.message, '后端已退出 (code=1, signal=null)')
+      return true
+    })
+
+    // exit 信号退出
+    const child2 = new EventEmitter()
+    child2.stdout = new EventEmitter()
+    child2.exitCode = null
+    child2.signalCode = null
+
+    const p2 = waitForSidecarReady(child2, 2000)
+    child2.emit('exit', null, 'SIGTERM')
+    await assert.rejects(p2, (err) => {
+      assert.strictEqual(err.message, '后端已退出 (code=null, signal=SIGTERM)')
+      return true
+    })
+
+    // 调用时子进程已死亡
+    const deadChild = new EventEmitter()
+    deadChild.stdout = new EventEmitter()
+    deadChild.exitCode = 2
+    deadChild.signalCode = null
+
+    await assert.rejects(waitForSidecarReady(deadChild, 2000), (err) => {
+      assert.strictEqual(err.message, '后端已退出 (code=2, signal=null)')
+      return true
+    })
+
+    // error 事件
+    const child3 = new EventEmitter()
+    child3.stdout = new EventEmitter()
+    child3.exitCode = null
+    child3.signalCode = null
+
+    const p3 = waitForSidecarReady(child3, 2000)
+    child3.emit('error', new Error('spawn ENOENT'))
+    await assert.rejects(p3, /spawn ENOENT/)
+  }
+
+  // 4. 超时处理
+  {
+    const child = new EventEmitter()
+    child.stdout = new EventEmitter()
+    child.exitCode = null
+    child.signalCode = null
+
+    const readyPromise = waitForSidecarReady(child, 50)
+    await assert.rejects(readyPromise, (err) => {
+      assert.strictEqual(err.message, 'sidecar ready timeout')
+      return true
+    })
+  }
+
+  // 5. 真实 Node 子进程并发绑定端口 0 互斥并回传
+  {
+    const cp = require('child_process')
+    const net = require('net')
+    const children = []
+    const count = 3
+    const childScript = `
+      const net = require('net');
+      const srv = net.createServer((sock) => sock.end('ok'));
+      srv.listen(0, '127.0.0.1', () => {
+        const port = srv.address().port;
+        process.stdout.write('KKMAIL_SIDECAR_READY:' + JSON.stringify({ status: 'ready', port, host: '127.0.0.1' }) + '\\n');
+      });
+      process.stdin.resume();
+    `
+    try {
+      for (let i = 0; i < count; i++) {
+        const child = cp.spawn(process.execPath, ['-e', childScript], {
+          stdio: ['pipe', 'pipe', 'inherit'],
+        })
+        children.push(child)
+      }
+
+      const readyResults = await Promise.all(children.map((c) => waitForSidecarReady(c, 5000)))
+      const ports = readyResults.map((r) => r.port)
+      assert.strictEqual(ports.length, count)
+      assert.strictEqual(new Set(ports).size, count, `所有绑定的端口必须唯一: ${ports.join(',')}`)
+      for (const res of readyResults) {
+        assert.strictEqual(res.host, '127.0.0.1')
+        assert.ok(res.port >= 1 && res.port <= 65535)
+        const connected = await new Promise((resolve, reject) => {
+          const socket = net.createConnection({ port: res.port, host: res.host }, () => {
+            socket.end()
+            resolve(true)
+          })
+          socket.once('error', reject)
+        })
+        assert.strictEqual(connected, true)
+      }
+    } finally {
+      for (const child of children) {
+        try { child.kill('SIGKILL') } catch (_) {}
+      }
+    }
+  }
 }
 
 // scrubEnv (A128): code-execution / library-injection variables must not
@@ -254,6 +432,8 @@ assert.deepStrictEqual(backendExitDisposition({ isQuitting: true, hasWindow: fal
 assert.deepStrictEqual(backendExitDisposition({}), { quit: true, showDialog: false })
 
 ;(async () => {
+  await testWaitForSidecarReady()
+
   const p = await freePort(0)
   assert.ok(p >= 1 && p <= 65535)
 
