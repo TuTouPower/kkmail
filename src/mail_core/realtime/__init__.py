@@ -4,7 +4,6 @@ from mail_core.realtime.notify import CHANNEL, JOB_CHANNEL, notify_jobs, notify_
 from mail_core.realtime.outbox import (
     OutboxItem,
     fetch_published_since,
-    fetch_since,
     prune_published,
     pruned_through_seq,
     publication_head,
@@ -17,7 +16,6 @@ __all__ = [
     "OutboxItem",
     "OutboxListenThread",
     "fetch_published_since",
-    "fetch_since",
     "get_dispatcher",
     "notify_jobs",
     "notify_outbox",

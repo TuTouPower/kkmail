@@ -21,7 +21,7 @@ from mail_core.mail.domain.enums import OutboxEventType
 from mail_core.mail.storage import OutboxEvent
 from mail_core.realtime.dispatcher import SSE_STREAM_CLOSE
 from mail_core.realtime import events as events_mod
-from mail_core.realtime.outbox import fetch_since, prune_published
+from mail_core.realtime.outbox import fetch_published_since, prune_published
 from mail_core.security.auth import AuthPrincipal
 from tests.mail_core.conftest import TEST_API_KEY
 
@@ -251,24 +251,59 @@ def test_cursor_ahead_of_head_emits_resync_hint():
 @_requires_db
 def test_account_filtered_replay_includes_global_null_account():
     from mail_core.db.session import get_session_factory
+    from mail_core.mail.storage import Account
+    from mail_core.realtime.outbox import publication_head
+    from mail_core.realtime.publication import publish_committed_batch
 
     Session = get_session_factory()
-    aid = uuid.uuid4()
-    with Session() as session:
-        # Ensure account exists for FK when we set account_id — use NULL global + skip FK account row
-        # by only inserting NULL-account events and account-scoped via raw UUID without FK? account_id FK
-        # allows NULL. For non-null we need an Account row — use only global here vs filter that matches none.
-        g = OutboxEvent(event_type="sync.progress", account_id=None, payload={"global": True})
-        session.add(g)
-        session.commit()
-        gid = g.id
-        before = gid - 1
+    target_aid = uuid.uuid4()
+    other_aid = uuid.uuid4()
 
-    rows = None
     with Session() as session:
-        # Filter by a random account id: must still return the global row.
-        rows = fetch_since(session, last_event_id=before, limit=50, account_id=aid)
-    assert any(r.id == gid and r.account_id is None for r in rows)
+        acc1 = Account(id=target_aid, email=f"target-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        acc2 = Account(id=other_aid, email=f"other-{uuid.uuid4().hex[:8]}@example.com", provider="imap")
+        session.add_all([acc1, acc2])
+        session.commit()
+
+        _epoch, base_seq = publication_head(session)
+
+        # 1. Global event (account_id is None)
+        g = OutboxEvent(event_type="sync.progress", account_id=None, payload={"scope": "global"})
+        # 2. Target account event
+        t = OutboxEvent(event_type="sync.progress", account_id=target_aid, payload={"scope": "target"})
+        # 3. Other account event
+        o = OutboxEvent(event_type="sync.progress", account_id=other_aid, payload={"scope": "other"})
+        session.add_all([g, t, o])
+        session.commit()
+
+        # Run real publication batch to assign publication_seq
+        batch = publish_committed_batch(session, limit=50)
+        session.commit()
+        assert batch.count >= 3
+
+        g_id, t_id, o_id = g.id, t.id, o.id
+        g_seq, t_seq, o_seq = g.publication_seq, t.publication_seq, o.publication_seq
+        assert g_seq is not None and t_seq is not None and o_seq is not None
+
+    with Session() as session:
+        # Replay with target_aid filter: must return both target account events and global events,
+        # but exclude other account events.
+        rows = fetch_published_since(session, after_seq=base_seq, limit=50, account_id=target_aid)
+        matched_ids = [r.id for r in rows]
+        assert g_id in matched_ids
+        assert t_id in matched_ids
+        assert o_id not in matched_ids
+
+        # Verify global event has account_id is None and target event has account_id == target_aid
+        g_row = next(r for r in rows if r.id == g_id)
+        assert g_row.account_id is None
+        t_row = next(r for r in rows if r.id == t_id)
+        assert t_row.account_id == target_aid
+
+        # Events must be ordered strictly by publication_seq
+        seqs = [r.publication_seq for r in rows]
+        assert seqs == sorted(seqs)
+        assert all(s > base_seq for s in seqs)
 
 
 @_requires_db

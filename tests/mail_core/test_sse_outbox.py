@@ -14,7 +14,7 @@ from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import OutboxEventType
 from mail_core.mail.storage import OutboxEvent
 from mail_core.realtime.dispatcher import OutboxDispatcher
-from mail_core.realtime.outbox import fetch_since
+from mail_core.realtime.outbox import fetch_published_since
 
 _requires_db = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
@@ -54,8 +54,16 @@ def test_dispatch_marks_outbox_and_sse_replays_last_event_id():
     first_cursor = received_cursors[0]
 
     with Session() as session:
-        rows = fetch_since(session, last_event_id=first, limit=10)
-        types = [r.event_type for r in rows if r.id > first]
+        first_event = session.get(OutboxEvent, first)
+        second_event = session.get(OutboxEvent, second)
+        assert first_event is not None and first_event.publication_seq is not None
+        assert second_event is not None and second_event.publication_seq is not None
+        assert first_event.publication_seq < second_event.publication_seq
+
+        rows = fetch_published_since(session, after_seq=first_event.publication_seq, limit=10)
+        assert all(r.publication_seq is not None and r.publication_seq > first_event.publication_seq for r in rows)
+        assert [r.publication_seq for r in rows] == sorted(r.publication_seq for r in rows)
+        types = [r.event_type for r in rows]
         assert OutboxEventType.SYNC_COMPLETED.value in types or any(r.id == second for r in rows)
 
     client = TestClient(app, headers={"Authorization": f"Bearer {TEST_API_KEY}"})
