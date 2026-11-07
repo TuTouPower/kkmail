@@ -215,12 +215,41 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
     await expect(mailItemPage1).toHaveClass(/unread/, { timeout: 10000 })
     await expect(mailItemPage2).toHaveClass(/unread/, { timeout: 10000 })
 
+    // 断言初始未读计数大于 0，且 page1 与 page2 均可见并一致
+    const inboxBadgePage1 = page1.locator('.tree-category-row[aria-label="所有收件箱"] .unread-badge')
+    const inboxBadgePage2 = page2.locator('.tree-category-row[aria-label="所有收件箱"] .unread-badge')
+    await expect(inboxBadgePage1).toBeVisible({ timeout: 10000 })
+    await expect(inboxBadgePage2).toBeVisible({ timeout: 10000 })
+
+    const initialCountText = await inboxBadgePage1.textContent()
+    const initialCount = parseInt(initialCountText?.trim() || '0', 10)
+    expect(initialCount, '初始未读计数必须大于0').toBeGreaterThan(0)
+    await expect(inboxBadgePage2).toHaveText(String(initialCount), { timeout: 10000 })
+    await expect(page1.locator('.list-count')).toContainText(`${initialCount} 封未读`, { timeout: 10000 })
+    await expect(page2.locator('.list-count')).toContainText(`${initialCount} 封未读`, { timeout: 10000 })
+
+    const assertUnreadConvergence = async (
+      page: import('@playwright/test').Page,
+      badge: import('@playwright/test').Locator,
+      expected: number,
+      timeout = 15000,
+    ) => {
+      if (expected > 0) {
+        await expect(badge).toHaveText(String(expected), { timeout })
+      } else {
+        await expect(badge).toHaveCount(0, { timeout })
+      }
+      await expect(page.locator('.list-count')).toContainText(`${expected} 封未读`, { timeout })
+    }
+
     // page1 点击该邮件触发标读
     await mailItemPage1.click()
     await expect(mailItemPage1).not.toHaveClass(/unread/, { timeout: 10000 })
+    await assertUnreadConvergence(page1, inboxBadgePage1, initialCount - 1, 10000)
 
-    // page2 不点击、不刷新，通过真实 SSE 广播更新状态，断言自动收敛为已读
+    // page2 不点击、不刷新，通过真实 SSE 广播更新状态，断言自动收敛为已读与未读计数收敛
     await expect(mailItemPage2).not.toHaveClass(/unread/, { timeout: 15000 })
+    await assertUnreadConvergence(page2, inboxBadgePage2, initialCount - 1, 15000)
 
     await context.close()
   })
