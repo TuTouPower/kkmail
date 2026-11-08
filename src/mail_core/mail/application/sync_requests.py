@@ -109,7 +109,15 @@ class SyncRequestOut(BaseModel):
     background_errors: list[SyncTargetErrorOut] = Field(default_factory=list)
 
 
-_SCOPE_KEYS = ("account_id", "group_id", "folder_id", "folder_role", "all")
+_SCOPE_KEYS = (
+    "account_id",
+    "group_id",
+    "folder_id",
+    "folder_role",
+    "all",
+    "background",
+    "parent_request_id",
+)
 
 
 def _canonical_scope(
@@ -119,6 +127,8 @@ def _canonical_scope(
     group_id: uuid.UUID | None = None,
     folder_id: uuid.UUID | None = None,
     folder_role: str | None = None,
+    background: bool | None = None,
+    parent_request_id: uuid.UUID | str | None = None,
 ) -> dict[str, Any]:
     """Normalize a sync scope so idempotency compares intent, not serialization.
 
@@ -131,15 +141,17 @@ def _canonical_scope(
     for key in _SCOPE_KEYS:
         value = raw.get(key)
         if value is not None:
-            canonical[key] = str(value) if key != "all" else bool(value)
+            canonical[key] = bool(value) if key in ("all", "background") else str(value)
     for key, value in (
         ("account_id", account_id),
         ("group_id", group_id),
         ("folder_id", folder_id),
         ("folder_role", folder_role),
+        ("background", background),
+        ("parent_request_id", parent_request_id),
     ):
         if value is not None:
-            canonical[key] = str(value)
+            canonical[key] = bool(value) if key in ("all", "background") else str(value)
     return canonical
 
 
@@ -430,7 +442,7 @@ def create_sync_request(
                     mode="delta",
                     trigger=trigger,
                     state="queued",
-                    scope=bg_scope,
+                    scope=_canonical_scope(bg_scope),
                     created_at=now,
                 )
                 session.add(bg_req)
@@ -517,7 +529,11 @@ def _build_report(
     ]
 
     # A21: Decoupled inbox ready and background sync status
-    inbox_ready = current_state in ("complete", "failed")
+    inbox_targets = [t for t in targets if ":role:inbox" in t.target_key]
+    if inbox_targets:
+        inbox_ready = all(t.state == "complete" for t in inbox_targets)
+    else:
+        inbox_ready = current_state == "complete"
     bg_request_id_str: str | None = None
     bg_state: Literal["queued", "running", "complete", "failed"] | None = None
     bg_errors: list[SyncTargetErrorOut] = []
@@ -614,6 +630,8 @@ def _scope_matches(canonical: dict[str, Any], wanted: dict[str, Any]) -> bool:
         if canonical.get(key) != wanted.get(key):
             return False
     if "folder_role" in wanted and canonical.get("folder_role") != wanted["folder_role"]:
+        return False
+    if bool(canonical.get("background")) != bool(wanted.get("background")):
         return False
     return True
 

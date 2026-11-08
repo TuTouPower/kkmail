@@ -180,6 +180,7 @@ describe('A21 decoupled background sync feedback', () => {
     expect(hasActiveBackgroundSync([report({ background_request_id: 'bg-1', background_state: 'queued' })])).toBe(true)
     expect(hasActiveBackgroundSync([report({ background_request_id: 'bg-1', background_state: 'complete' })])).toBe(false)
     expect(hasActiveBackgroundSync([report({ background_request_id: 'bg-1', background_state: 'failed' })])).toBe(false)
+    expect(hasActiveBackgroundSync([report({ background_request_id: 'bg-1', background_state: null })])).toBe(false)
     expect(hasActiveBackgroundSync([report({ background_request_id: null })])).toBe(false)
   })
 
@@ -249,5 +250,94 @@ describe('A21 decoupled background sync feedback', () => {
     expect(final.active).toBe(false)
     expect(final.state).toBe('failed')
     expect(final.error).toBe('归档文件夹网络中断')
+  })
+
+  it('pollBackgroundSync respects max consecutive failures budget', async () => {
+    let callCount = 0
+    const mock = vi.fn(async () => {
+      callCount += 1
+      throw new Error('connection reset')
+    })
+    vi.stubGlobal('fetch', mock)
+
+    const progresses: any[] = []
+    await pollBackgroundSync(
+      [report({ id: 'req-1', state: 'complete', background_request_id: 'bg-err', background_state: 'running' })],
+      {
+        pollIntervalMs: 1,
+        maxFailures: 3,
+        onProgress: (p) => progresses.push(p),
+      },
+    )
+
+    expect(callCount).toBe(3)
+    const final = progresses[progresses.length - 1]
+    expect(final.active).toBe(false)
+    expect(final.state).toBe('failed')
+    expect(final.error).toBe('connection reset')
+  })
+
+  it('pollBackgroundSync times out when max attempts budget exceeded', async () => {
+    let callCount = 0
+    const mock = vi.fn(async () => {
+      callCount += 1
+      return json(report({ id: 'bg-hang', state: 'running' }))
+    })
+    vi.stubGlobal('fetch', mock)
+
+    const progresses: any[] = []
+    await pollBackgroundSync(
+      [report({ id: 'req-1', state: 'complete', background_request_id: 'bg-hang', background_state: 'running' })],
+      {
+        pollIntervalMs: 1,
+        maxAttempts: 4,
+        onProgress: (p) => progresses.push(p),
+      },
+    )
+
+    expect(callCount).toBe(4)
+    const final = progresses[progresses.length - 1]
+    expect(final.active).toBe(false)
+    expect(final.state).toBe('failed')
+    expect(final.error).toBe('后台同步超时')
+  })
+
+  it('pollBackgroundSync exits promptly on cancellation signal', async () => {
+    // 1. Pre-cancelled
+    const mock = vi.fn()
+    vi.stubGlobal('fetch', mock)
+    const progresses1: any[] = []
+    await pollBackgroundSync(
+      [report({ id: 'req-1', state: 'complete', background_request_id: 'bg-1', background_state: 'running' })],
+      {
+        pollIntervalMs: 1,
+        isCancelled: () => true,
+        onProgress: (p) => progresses1.push(p),
+      },
+    )
+    expect(mock).not.toHaveBeenCalled()
+    expect(progresses1).toHaveLength(0)
+
+    // 2. Mid-flight cancellation
+    let cancelled = false
+    let callCount = 0
+    const mock2 = vi.fn(async () => {
+      callCount += 1
+      cancelled = true
+      return json(report({ id: 'bg-2', state: 'running' }))
+    })
+    vi.stubGlobal('fetch', mock2)
+    const progresses2: any[] = []
+    await pollBackgroundSync(
+      [report({ id: 'req-2', state: 'complete', background_request_id: 'bg-2', background_state: 'running' })],
+      {
+        pollIntervalMs: 1,
+        isCancelled: () => cancelled,
+        onProgress: (p) => progresses2.push(p),
+      },
+    )
+    expect(callCount).toBe(1)
+    // Should not have emitted any terminal complete/failed progress
+    expect(progresses2.some((p) => p.state === 'complete' || p.state === 'failed')).toBe(false)
   })
 })

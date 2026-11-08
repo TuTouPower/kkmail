@@ -502,10 +502,13 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
 
   const [isSyncing, setIsSyncing] = useState(false)
   const syncCancelledRef = useRef(false)
+  const backgroundSyncAbortRef = useRef<(() => void) | null>(null)
 
   // Unmounting stops the wait (the backend sync itself keeps running).
   useEffect(() => () => {
     syncCancelledRef.current = true
+    backgroundSyncAbortRef.current?.()
+    backgroundSyncAbortRef.current = null
   }, [])
 
   /**
@@ -519,6 +522,8 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     if (isSyncing) return
     setIsSyncing(true)
     syncCancelledRef.current = false
+    backgroundSyncAbortRef.current?.()
+    backgroundSyncAbortRef.current = null
     try {
       let submitError: unknown = null
       let initial: SyncRequestOut[]
@@ -558,11 +563,16 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
       ])
       // A21: If background non-inbox sync is still in flight, monitor it separately
       if (hasActiveBackgroundSync(reports)) {
+        let cancelled = false
+        const abort = () => {
+          cancelled = true
+        }
+        backgroundSyncAbortRef.current = abort
         setBackgroundSyncStatus({ text: '收件箱已同步，后台正在同步其余文件夹...', isError: false })
         void pollBackgroundSync(reports, {
-          isCancelled: () => syncCancelledRef.current,
+          isCancelled: () => cancelled || syncCancelledRef.current,
           onProgress: (progress) => {
-            if (syncCancelledRef.current) return
+            if (cancelled || syncCancelledRef.current) return
             if (progress.active) {
               setBackgroundSyncStatus({ text: '收件箱已同步，后台正在同步其余文件夹...', isError: false })
             } else if (progress.state === 'failed' && progress.error) {
@@ -571,7 +581,13 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
               setBackgroundSyncStatus(null)
             }
           },
+        }).finally(() => {
+          if (backgroundSyncAbortRef.current === abort) {
+            backgroundSyncAbortRef.current = null
+          }
         })
+      } else {
+        setBackgroundSyncStatus(null)
       }
     } catch (err) {
       if (!syncCancelledRef.current) setActionStatus(`立即同步失败：${errorMessage(err)}`)
