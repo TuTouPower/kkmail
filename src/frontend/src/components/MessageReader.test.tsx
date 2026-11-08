@@ -891,8 +891,8 @@ describe('<MessageReader />', () => {
     const { container } = await render(<MessageReader />)
     await waitFor(() => {
       expect(container.textContent).toContain('Public benchmarks')
+      expect(container.querySelector('[role="alert"]')).toBeNull()
     })
-    expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
   // A293 replaces the old HTTP 200-detail response test with the accepted-job contract.
