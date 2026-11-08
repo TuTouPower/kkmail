@@ -25,13 +25,48 @@ from migrate_to_unified_baseline import (
     verify_database_schema,
 )
 
+EXPECTED_CORE_TABLES: frozenset[str] = frozenset({
+    "account_groups",
+    "credential_secrets",
+    "app_settings",
+    "auth_credentials",
+    "accounts",
+    "account_sync_leases",
+    "account_sync_activity",
+    "folders",
+    "threads",
+    "messages",
+    "message_locations",
+    "message_bodies",
+    "message_blobs",
+    "message_blob_links",
+    "attachments",
+    "thread_messages",
+    "sync_checkpoints",
+    "sync_runs",
+    "remote_operations",
+    "folder_stats",
+    "folder_patrol_status",
+    "outbox_publication_state",
+    "outbox",
+    "message_archive_state",
+    "worker_jobs",
+    "message_search",
+    "blob_quota_reservations",
+    "sync_requests",
+    "sync_request_targets",
+    "sync_request_target_jobs",
+    "message_remote_image_allows",
+    "sender_remote_image_allows",
+})
+
 
 def _create_full_schema_engine():
     """Create an in-memory SQLite engine populated with all required tables and columns."""
     engine = create_engine("sqlite:///:memory:")
     metadata = MetaData()
 
-    for table_name in REQUIRED_TABLES:
+    for table_name in EXPECTED_CORE_TABLES:
         cols = [Column("id", String(64), primary_key=True)]
         req_cols = REQUIRED_COLUMNS.get(table_name, frozenset())
         for col_name in req_cols:
@@ -42,6 +77,16 @@ def _create_full_schema_engine():
 
     metadata.create_all(engine)
     return engine
+
+
+def test_required_tables_matches_expected_core_32_tables():
+    """Verify REQUIRED_TABLES against the hardcoded specification of 32 core tables.
+
+    Prevents self-referential / circular testing where tests pass trivially
+    by simply importing whatever REQUIRED_TABLES happens to contain.
+    """
+    assert len(EXPECTED_CORE_TABLES) == 32
+    assert REQUIRED_TABLES == EXPECTED_CORE_TABLES
 
 
 def test_verify_schema_succeeds_on_full_schema():
