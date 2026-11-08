@@ -78,8 +78,8 @@ class MailCoreConfig:
 
     def validate(self) -> None:
         """Validate numeric ranges and logical constraints."""
-        if not (1 <= self.port <= 65535):
-            raise ConfigError(f"invalid port: {self.port} (must be between 1 and 65535)")
+        if not (0 <= self.port <= 65535):
+            raise ConfigError(f"invalid port: {self.port} (must be between 0 and 65535)")
 
         if self.total_slots <= 0:
             raise ConfigError(f"invalid total_slots: {self.total_slots} (must be > 0)")

@@ -29,11 +29,14 @@ def set_config(config: MailCoreConfig) -> None:
         _current_config = config
 
 
-def reset_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
-    """Reset and re-load configuration singleton from environment."""
+def reset_config(env: Mapping[str, str] | None = None) -> MailCoreConfig | None:
+    """Reset configuration singleton to None, or re-load if env is provided."""
     global _current_config
     with _lock:
-        _current_config = load_config(env)
+        if env is not None:
+            _current_config = load_config(env)
+        else:
+            _current_config = None
         return _current_config
 
 

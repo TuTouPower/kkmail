@@ -60,12 +60,15 @@ def _port_value(raw: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
-    from mail_core.config import get_config
-
-    # Validate core configuration on first frame
-    get_config()
+    from mail_core.config import ConfigError, get_config
 
     parser = argparse.ArgumentParser(prog="python -m mail_core")
+    try:
+        # Validate core configuration on first frame
+        get_config()
+    except ConfigError as exc:
+        parser.error(str(exc))
+
     try:
         default_port = _port_value(os.environ.get("MAIL_CORE_PORT") or "8000")
     except argparse.ArgumentTypeError as exc:

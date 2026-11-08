@@ -6,9 +6,22 @@ and the ``--port`` flag share one validation callable.
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 import pytest
 
 from mail_core import __main__ as main_module
+from mail_core.config import reset_config
+
+
+@pytest.fixture(autouse=True)
+def _ensure_clean_config():
+    reset_config()
+    yield
+    reset_config()
 
 
 def test_invalid_env_port_is_argparse_error(monkeypatch):
@@ -112,4 +125,37 @@ def test_port_0_outputs_ready_handshake(monkeypatch, capsys):
     assert isinstance(data["port"], int) and data["port"] > 0
     assert captured["port"] == data["port"]
     assert len(captured["sockets"]) == 1
+
+
+def test_real_subprocess_port_0_sidecar_startup():
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    src_dir = str(repo_root / "src")
+
+    env = os.environ.copy()
+    env["KKMAIL_SIDECAR"] = "1"
+    env["MAIL_CORE_PORT"] = "0"
+    env["PYTHONPATH"] = f"{src_dir}:{env.get('PYTHONPATH', '')}".rstrip(":")
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "mail_core", "--skip-migrations", "--no-worker"],
+        cwd=str(repo_root),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        first_line = proc.stdout.readline()
+        assert "KKMAIL_SIDECAR_READY:" in first_line
+        data = json.loads(first_line.split("KKMAIL_SIDECAR_READY:")[1].strip())
+        assert data.get("status") == "ready"
+        port = data.get("port")
+        assert isinstance(port, int) and port > 0
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
