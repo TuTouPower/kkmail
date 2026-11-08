@@ -16,8 +16,13 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from mail_core.api.app import app
-from mail_core.mail.application.sync_requests import _canonical_scope, _intent_matches
-from mail_core.mail.storage.models import SyncRequest
+from mail_core.mail.application.sync_requests import (
+    _build_report,
+    _canonical_scope,
+    _intent_matches,
+    _scope_matches,
+)
+from mail_core.mail.storage.models import SyncRequest, SyncRequestTarget
 from tests.mail_core.conftest import TEST_LOGIN_PASSWORD
 
 
@@ -67,3 +72,74 @@ def test_sync_all_cookie_session_requires_csrf_token():
     wrong = client.post("/api/accounts/sync-all", headers={"X-CSRF-Token": "not-the-token"})
     assert wrong.status_code == 403
     assert wrong.json()["detail"]["csrf_error"] is True
+
+
+def test_canonical_scope_preserves_background_and_parent_request_id():
+    account_id = uuid.uuid4()
+    parent_id = uuid.uuid4()
+    bg_scope = _canonical_scope(
+        {"account_id": account_id, "background": True, "parent_request_id": parent_id, "trigger": "manual"}
+    )
+    assert bg_scope == {
+        "account_id": str(account_id),
+        "background": True,
+        "parent_request_id": str(parent_id),
+    }
+
+    fg_scope = _canonical_scope({"account_id": account_id})
+    assert bg_scope != fg_scope
+
+    bg_req = SyncRequest(
+        id=uuid.uuid4(),
+        client_request_id=f"bg_{parent_id.hex}",
+        mode="delta",
+        trigger="manual",
+        state="queued",
+        scope=bg_scope,
+    )
+    assert not _intent_matches(bg_req, mode="delta", trigger="manual", canonical_scope=fg_scope)
+    assert not _scope_matches(_canonical_scope(bg_req.scope), fg_scope)
+
+
+def test_build_report_inbox_ready_only_when_inbox_targets_complete():
+    from datetime import datetime, timezone
+
+    account_id = uuid.uuid4()
+    req = SyncRequest(
+        id=uuid.uuid4(),
+        client_request_id="test-req",
+        mode="delta",
+        trigger="manual",
+        state="failed",
+        scope={"account_id": str(account_id)},
+        created_at=datetime.now(timezone.utc),
+    )
+    failed_inbox_target = SyncRequestTarget(
+        id=uuid.uuid4(),
+        request_id=req.id,
+        account_id=account_id,
+        folder_id=uuid.uuid4(),
+        target_key=f"account:{account_id}:folder:123:role:inbox",
+        requested_generation=uuid.uuid4(),
+        state="failed",
+        error_code="sync_error",
+        safe_error="Sync failed",
+    )
+    report_failed = _build_report(req, [failed_inbox_target])
+    assert report_failed.state == "failed"
+    assert report_failed.inbox_ready is False
+
+    req.state = "complete"
+    success_inbox_target = SyncRequestTarget(
+        id=uuid.uuid4(),
+        request_id=req.id,
+        account_id=account_id,
+        folder_id=uuid.uuid4(),
+        target_key=f"account:{account_id}:folder:123:role:inbox",
+        requested_generation=uuid.uuid4(),
+        state="complete",
+    )
+    report_success = _build_report(req, [success_inbox_target])
+    assert report_success.state == "complete"
+    assert report_success.inbox_ready is True
+

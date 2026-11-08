@@ -23,6 +23,9 @@ export const SYNC_POLL_INTERVAL_MS = 1_000
  */
 export const SYNC_POLL_MAX_CONSECUTIVE_FAILURES = 3
 
+export const BACKGROUND_SYNC_POLL_MAX_ATTEMPTS = 120
+export const BACKGROUND_SYNC_POLL_MAX_FAILURES = 5
+
 export function isSyncTerminalState(state: SyncRequestOut['state']): boolean {
   return state === 'complete' || state === 'failed'
 }
@@ -49,8 +52,7 @@ export function hasActiveBackgroundSync(reports: readonly SyncRequestOut[]): boo
   return reports.some(
     (report) =>
       Boolean(report.background_request_id) &&
-      report.background_state !== 'complete' &&
-      report.background_state !== 'failed',
+      (report.background_state === 'queued' || report.background_state === 'running'),
   )
 }
 
@@ -72,31 +74,36 @@ export interface BackgroundSyncProgress {
   error: string | null
 }
 
+export interface PollBackgroundSyncOptions {
+  onProgress?: (progress: BackgroundSyncProgress) => void
+  isCancelled?: () => boolean
+  pollIntervalMs?: number
+  maxAttempts?: number
+  maxFailures?: number
+}
+
 /**
  * A21: Monitor decoupled background folder discovery and sync independently
  * without holding the primary sync button in a spinning state.
  */
 export async function pollBackgroundSync(
   initial: readonly SyncRequestOut[],
-  callbacks: {
-    onProgress?: (progress: BackgroundSyncProgress) => void
-    isCancelled?: () => boolean
-    pollIntervalMs?: number
-  } = {},
+  callbacks: PollBackgroundSyncOptions = {},
 ): Promise<void> {
+  const hasBg = initial.some((r) => Boolean(r.background_request_id))
+  if (!hasBg) return
+
   const interval = callbacks.pollIntervalMs ?? SYNC_POLL_INTERVAL_MS
-  const bgIds = Array.from(
-    new Set(
-      initial
-        .map((r) => r.background_request_id)
-        .filter((id): id is string => Boolean(id)),
-    ),
-  )
-  if (!bgIds.length) return
+  const maxAttempts = callbacks.maxAttempts ?? BACKGROUND_SYNC_POLL_MAX_ATTEMPTS
+  const maxFailures = callbacks.maxFailures ?? BACKGROUND_SYNC_POLL_MAX_FAILURES
 
   let activeReports = [...initial]
+  let consecutiveFailures = 0
+  let attempts = 0
+
   for (;;) {
     if (callbacks.isCancelled?.()) return
+
     const stillActive = activeReports.filter(
       (r) =>
         Boolean(r.background_request_id) &&
@@ -113,6 +120,15 @@ export async function pollBackgroundSync(
       return
     }
 
+    if (attempts >= maxAttempts) {
+      callbacks.onProgress?.({
+        active: false,
+        state: 'failed',
+        error: '后台同步超时',
+      })
+      return
+    }
+
     callbacks.onProgress?.({
       active: true,
       state: 'running',
@@ -122,10 +138,14 @@ export async function pollBackgroundSync(
     await new Promise<void>((resolve) => setTimeout(resolve, interval))
     if (callbacks.isCancelled?.()) return
 
+    attempts += 1
+
     try {
       const freshBg = await Promise.all(
         stillActive.map((r) => api.getSyncRequest(r.background_request_id!)),
       )
+      if (callbacks.isCancelled?.()) return
+      consecutiveFailures = 0
       const freshById = new Map(freshBg.map((r) => [r.id, r]))
       activeReports = activeReports.map((r) => {
         if (!r.background_request_id) return r
@@ -137,8 +157,17 @@ export async function pollBackgroundSync(
           background_errors: fresh.errors,
         }
       })
-    } catch {
-      // Tolerate transient errors during background poll
+    } catch (err) {
+      if (callbacks.isCancelled?.()) return
+      consecutiveFailures += 1
+      if (consecutiveFailures >= maxFailures) {
+        callbacks.onProgress?.({
+          active: false,
+          state: 'failed',
+          error: err instanceof Error ? err.message : '后台同步网络请求连续失败',
+        })
+        return
+      }
     }
   }
 }
