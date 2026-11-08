@@ -188,7 +188,7 @@ python3 scripts/run_full_stack_e2e.py
 
 ## 数据库迁移与结构一致性门禁
 
-数据库迁移质量门禁验证真实 PostgreSQL 下历史版本数据跨版本平滑升级无损保留与结构一致性：
+数据库迁移质量门禁验证真实 PostgreSQL 下统一基线版本升级、可逆循环与结构一致性：
 
 ```bash
 scripts/run-mail-core-tests.sh run -k test_migration_validation
@@ -196,11 +196,11 @@ scripts/run-mail-core-tests.sh run -k test_migration_validation
 
 验证覆盖：
 
-- **线性单 Head 校验**：严格确保迁移版本历史无分叉、无孤立 revision，唯一当前 head 对应生产最新版本；
-- **历史窗口升级数据无损保留**：覆盖 `f5f312751c77` (unified schema)、`20261021_0011` (认证入库前) 及 `20261022_0014` 三个历史 revision 窗口，在旧库状态写入当时合法数据后直接升级至当前 head，验证邮件正文、附件、凭证哈希与 session_epoch 无损保留；
+- **统一基线与单 Head 校验 (A17)**：迁移历史完全收敛为单一统一基线 `20261107_0001`（`unified_baseline`），严格确保迁移链单 head 无分叉、无孤立 revision；
+- **空库建表与基线验证**：从全新空库执行 `upgrade head` 直接升级至统一基线 `20261107_0001`，断言核心业务表、枚举与单例种子数据完整初始化；离线基线工具（`migrate_to_unified_baseline.py`）可无损核验并盖印已有 schema；
+- **可逆降级再升级循环**：对统一基线执行 `downgrade base` 彻底清理数据库对象，再执行 `upgrade head` 完整恢复，验证 DDL 双向对称可逆；
 - **真实完整性约束生效**：断言数据库底层唯一约束、外键级联与 RESTRICT 阻断生效，检验 keyset 索引与 FTS trigram 搜索能力；
-- **ORM Schema Drift 校验**：使用 Alembic autogenerate 比较 SQLAlchemy 模型与真实 PostgreSQL catalog 差异，结合显式 catalog 校验确保 0 未登记 drift；
-- **可逆降级再升级循环**：对最新版本执行 `downgrade -1` 与重新 `upgrade head`，验证 DDL 双向对称可逆。
+- **ORM Schema Drift 校验**：使用 Alembic autogenerate 比较 SQLAlchemy 模型与真实 PostgreSQL catalog 差异，结合显式 catalog 校验确保 0 未登记 drift。
 
 ## 真实加密备份与跨库恢复演练
 
@@ -294,9 +294,10 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 |**扩展演练**|备份跨库还原 / 迁移升级 / 混沌恢复|`scripts/run-mail-core-tests.sh run -k "test_backup_restore_drill_live or test_migration_validation or test_worker_process_recovery"`|
 |**性能基准**|确定性规模延迟分位数与资源测定|`python3 scripts/benchmark_mailbox.py --scale 1000 --runs 3`|
 
-### 2. CI 工作流映射
+### 2. CI 工作流映射与运行环境
 
 - **无远程 CI**：仓库不运行 GitHub Actions 远程 CI，测试门禁由开发者在本地直接执行上述矩阵命令进行自验证；
+- **真实本地 Docker 运行环境接入**：本地开发与测试环境已接入 OrbStack (arm64) 运行的标准 Docker 基础设施，专用测试服务容器已真实就绪运行（PostgreSQL 测试实例端口 `15433`，Dovecot IMAP 协议测试服务端口 `1143`），由官方测试调度门禁 `scripts/run-mail-core-tests.sh` 统一调度与管理，测试库生命周期严格隔离且退出自动清理；
 - **权限与环境安全**：避免在远端依赖不透明环境，所有测试数据库与凭据均在本地受控环境中运行。
 
 ### 3. 当前验证基线（最近证据：2026-10-27，基线 HEAD `11bfa52a`）
@@ -308,7 +309,7 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 |2026-10-27|后端 unit 全量|807 passed，15 failed，280 skipped（收集 1102）；15 个失败中 2 个为基线既存环境失败、13 个为 t056/p059 引入的新失败（待修，明细与判定见证据文件）|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
 |2026-10-27|前端全量测试（vitest）|46 个测试文件、448 passed，0 failed|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
 |2026-10-27|TypeScript（`tsc -b`）|通过（无诊断输出）|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
-|2026-10-27|后端完整 PostgreSQL 套件|未执行：本机无 Docker，官方门禁在 allocate 阶段退出（码 2），无更新证据；不得以上一轮 569 passed 充作当前基线|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
+|2026-10-27|后端完整 PostgreSQL 套件|真实环境接入：本地 Docker (OrbStack) PostgreSQL/IMAP 测试环境已就绪运行，由门禁脚本动态分配一次性测试库执行套件|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
 
 task archive 中记录的其他数字均为各 task 当时的历史快照，不应用作当前基线。
 

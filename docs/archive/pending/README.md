@@ -86,4 +86,5 @@
 |p070|[p070_idle_reconnect_missed_inbox_mail.md](p070_idle_reconnect_missed_inbox_mail.md)|2026-10-31|未记录|t071|
 |p071|[p071_t061_idle_watcher_preexisting_red_tests.md](p071_t061_idle_watcher_preexisting_red_tests.md)|2026-10-31|未记录|t072|
 |p072|[p072_idle_catchup_enqueue_failure_starvation.md](p072_idle_catchup_enqueue_failure_starvation.md)|2026-10-31|未记录|t073|
+|p073|[p073_manual_refresh_inbox_latency.md](p073_manual_refresh_inbox_latency.md)|2026-11-09|2026-11-04|Adoption A21 已解决|
 |p074|[p074_blob_file_mode_backup_unreadable.md](p074_blob_file_mode_backup_unreadable.md)|2026-11-05|未记录|t075；resolution=transferred；reason=已核实范围并转交 t075：保留 blob 私有权限，重设计备份/宿主导出/恢复身份与权限边界|
