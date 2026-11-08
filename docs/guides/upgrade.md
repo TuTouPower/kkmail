@@ -9,9 +9,15 @@ mail-core 部署的升级路径（Flask / SQLite / OutlookEmail v2 镜像路径�
     PYTHONPATH=src python -c "from mail_core.backup import run_backup; print(run_backup(output_dir='/path/to/backups'))"
     ```
     未传 `output_dir` 时用 `MAIL_CORE_BACKUP_DIR`；会写包并校验。密钥（`--data-dir/secrets/` 或环境变量中声明的密钥）需单独安全脱机备份。
-2. **更新代码 / 镜像**：
-    - Docker Compose 部署：执行 `docker compose -f docker-compose.mail-core.yml up --build -d api worker`，依赖会自动拉起 `migrate` 容器执行数据库迁移，成功后启动新版 `api` 与 `worker`。
-    - 非 Docker 部署：拉取代码、更新依赖 `pip install -r requirements-mail-core.txt`、构建前端 SPA 并执行 `alembic -c src/mail_core/db/alembic.ini upgrade head`，然后重启进程。
+2. **升级数据库与更新代码 / 镜像**：
+    - **从老版本升级至统一基线**：若数据库处于历史版本（如 `20261031_0030` 等早于 `20261107_0001` 的老版本），在执行常规部署启动前请先运行离线迁移工具：
+        ```bash
+        python scripts/migrate_to_unified_baseline.py
+        ```
+        该工具会自动创建补齐结构（如 `folder_patrol_status` 表）、迁移已有巡检数据并清理游标，校验全量 schema 后将 `alembic_version` 安全校准至统一基线 `20261107_0001`。随后再执行常规部署启动。
+    - **常规部署更新**：
+        - Docker Compose 部署：执行 `docker compose -f docker-compose.mail-core.yml up --build -d api worker`，依赖会自动拉起 `migrate` 容器执行数据库迁移，成功后启动新版 `api` 与 `worker`。
+        - 非 Docker 部署：拉取代码、更新依赖 `pip install -r requirements-mail-core.txt`、构建前端 SPA 并执行 `alembic -c src/mail_core/db/alembic.ini upgrade head`，然后重启进程。
 3. **确认**：`/ready` 返回 200（schema 与代码 head 一致）。
 
 ## 回滚
