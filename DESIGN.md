@@ -18,7 +18,7 @@ colors:
   surface-container-dark: "#31373A"
   hover-dark: "#2B3134"
   selected-dark: "#33393D"
-  selected-focused-dark: "#0A60FE"
+  selected-focused-dark: "#0066CC"
   text-dark: "#FFFFFF"
   muted-dark: "#8E8E93"
   subtle-dark: "#E4E4E6"
@@ -104,7 +104,7 @@ spacing:
   3xl: 32px
   4xl: 40px
   sidebar-width: 270px
-  sidebar-collapsed-width: 48px
+  sidebar-collapsed-width: 0px
   message-list-width: 350px
   mobile-breakpoint: 760px
 rounded:
@@ -297,7 +297,7 @@ components:
 
 Mail is a multi-account email workspace inspired by the clarity, density, and restrained native feel of Apple Mail. It should feel focused, reliable, quiet, and efficient—not like a dashboard full of cards. The product is intended to run as a desktop application on macOS, Windows, and Linux, and as a responsive web application served from Docker. The same design language must work with a mouse, keyboard, touch input, and narrow mobile viewports. A browser extension is permanently out of scope (wontfix)—do not design extension chrome, side panels, or extension-only flows.
 
-The interface prioritizes the email itself. Avoid a permanent branded masthead: no decorative logo or product-name row at the top of the workspace. Use available vertical space for mail navigation, message lists, and reading. The sidebar starts with a compact collapse control above Personal Favorites. Settings live behind one settings entry at the bottom of the sidebar; account management and appearance preferences belong inside that settings surface rather than scattered across the main chrome.
+The interface prioritizes the email itself. Avoid a permanent branded masthead: no decorative logo or product-name row at the top of the workspace. Use available vertical space for mail navigation, message lists, and reading. The sidebar starts with the unified All Accounts aggregation section. In wide desktop layouts, the collapse toggle control allows completely collapsing the sidebar (0px width) to maximize horizontal space matching Apple Mail, with its restore control accessible in the message list header (or adjacent to window traffic lights on macOS). Settings live behind one settings entry at the bottom of the sidebar; account management and appearance preferences belong inside that settings surface rather than scattered across the main chrome.
 
 The information architecture has three desktop regions: a navigation sidebar, a message list, and a reading pane. The sidebar supports independently collapsible account groups and independently collapsible accounts, with standard folders nested under each account. The message list owns list-scoped controls such as search, filtering, sorting, refresh, selection, and Mark All as Read. Compose placement shown in older visual references is non-shipped. The reading pane owns shipped actions that affect the current message, including mark read/unread, archive, trash, junk, move, flag, and secondary actions. Reply, reply all, and forward are visual references only and are not shipped actions. A given action should have one obvious home; do not duplicate the same primary action in multiple toolbars.
 
@@ -305,7 +305,7 @@ Dark mode is the default visual reference for the current prototype. Light mode 
 
 ## Colors
 
-The palette uses layered charcoal surfaces in dark mode and cool neutral surfaces in light mode. A single blue family identifies the primary action, focus, unread indicators, and active navigation. Filled buttons and selected message rows use a deeper, high-contrast blue; the brighter system blue is reserved for icons, focus indicators, and small emphasis. Green is reserved for positive connection or synchronization status. Red is reserved for destructive actions and security-critical errors. Avoid adding a second competing accent color.
+The palette uses layered charcoal surfaces in dark mode and cool neutral surfaces in light mode. A single blue family identifies the primary action, focus, unread indicators, and active navigation. Filled buttons and focused selected message rows use the high-contrast primary blue (`#0066CC`, with sub-elements derived via `color-mix` rather than disconnected arbitrary hues); defocused selection uses the neutral selected surface (`#33393D` in dark mode, `#E5E7EB` in light mode). The brighter accent blue is reserved for icons, focus indicators, and small emphasis. Green is reserved for positive connection or synchronization status. Red is reserved for destructive actions and security-critical errors. Avoid adding a second competing accent color.
 
 - **Primary (`#0066CC`):** high-contrast blue for filled primary actions and selected message rows with white foreground text.
 - **Accent (`#0A84FF`):** brighter blue for focus indicators, unread dots, active icons, and subtle interactive emphasis.
@@ -336,7 +336,7 @@ The `typography` tokens define reusable roles, not mandatory HTML tags. Map them
 
 Use a three-column workspace that fills the viewport height: sidebar, message list, and reader. The default target widths are 270px for the sidebar and 350px for the message list; the reader takes the remaining space and must be allowed to shrink without forcing the whole page to scroll horizontally. The sidebar and message list scroll independently from the reading pane. Use thin dividers to distinguish columns instead of heavy card shadows.
 
-The sidebar can collapse to a narrow 48px rail. Its collapse control must remain visible in the rail so users can restore navigation. Place this control above the Personal Favorites label. Do not introduce a global application title bar inside the web layout; native window controls belong to the desktop shell, if a desktop wrapper is used.
+The sidebar can collapse completely (0px width, fully hidden to free horizontal space, matching native Apple Mail). Its expand control is housed at the leading edge of the message list header (or adjacent to the window controls in macOS desktop mode) so users can restore navigation at any time. Do not introduce a global application title bar inside the web layout; native window controls belong to the desktop shell, if a desktop wrapper is used.
 
 ### Message list
 
@@ -376,7 +376,8 @@ Borders are thin and low-contrast at rest, but must become more visible on hover
 
 ### Navigation and account tree
 
-- **Sidebar collapse control:** one compact control at the very top of the sidebar, above Personal Favorites. Keep it available when the sidebar is collapsed.
+- **Sidebar collapse control:** in expanded mode, users can toggle the sidebar; when collapsed, the sidebar completely hides (0px width) to free horizontal space, and the restore/expand control remains accessible at the leading edge of the message list header (or in the macOS titlebar area).
+- **All Accounts section:** top-level unified navigation aggregating Inboxes, Starred, Important, and Sent folders across all configured accounts.
 - **Account group:** group label, disclosure control, and optional account count. Collapsing a group hides its account rows but does not alter account state or folder contents.
 - **Account row:** provider mark, email address, unread count, and independent disclosure control. Clicking the account identity opens its inbox; clicking its disclosure control only expands or collapses its folder tree.
 - **Folder row:** consistent icon, label, and optional unread count. Active folder/account context must be obvious without relying on text color alone.
@@ -417,7 +418,7 @@ The following component tokens are the implementation reference for recurring co
 ## Do's and Don'ts
 
 - **Do** remove the branded top masthead from the main workspace; do not add a logo or product name above the three-column layout.
-- **Do** place the sidebar collapse control above Personal Favorites and keep it available when collapsed.
+- **Do** allow the sidebar to collapse completely (0px width) to maximize reading space, keeping the restore control accessible in the message list header or titlebar area.
 - **Do** keep Settings as the single bottom-left entry point for account management, theme, and general preferences.
 - **Do** separate list-level actions from current-message actions. Every persistent toolbar button must have one clear scope.
 - **Do** put Mark All as Read next to list filters and counts, and restrict its effect to the current visible list scope.
