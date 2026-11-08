@@ -233,15 +233,22 @@ def resolve_sync_targets(
                 key = f"account:{aid}:folder:{f.id}:role:{folder_role}"
                 targets.append(TargetCandidate(account_id=aid, folder_id=f.id, folder_role=folder_role, target_key=key))
         elif mode == "delta":
-            # A21: If an account has a known selectable inbox, decouple inbox sync
-            # so the primary sync request resolves directly to the inbox folder.
+            # A21: If an account has a known selectable inbox with a completed
+            # baseline, decouple inbox sync so the primary sync request resolves
+            # directly to the inbox folder. When baseline is incomplete or absent,
+            # fall back to account discovery so the baseline can be established cleanly.
             inbox = session.scalars(
                 select(Folder)
                 .where(Folder.account_id == aid)
                 .where(Folder.role == "inbox")
                 .where(Folder.sync_status != SyncStatus.PAUSED.value)
             ).first()
-            if inbox is not None:
+            cp = (
+                session.get(SyncCheckpoint, {"account_id": aid, "folder_id": inbox.id})
+                if inbox is not None
+                else None
+            )
+            if inbox is not None and cp is not None and bool(cp.full_scan_complete):
                 key = f"account:{aid}:folder:{inbox.id}:role:inbox"
                 targets.append(TargetCandidate(account_id=aid, folder_id=inbox.id, folder_role="inbox", target_key=key))
             else:

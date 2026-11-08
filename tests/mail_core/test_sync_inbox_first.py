@@ -29,6 +29,7 @@ from mail_core.mail.storage.models import (
     Folder,
     Message,
     SyncCheckpoint,
+    SyncRequestTarget,
     WorkerJob,
 )
 from mail_core.providers.base import DeltaPage, RemoteFolder, RemoteMessageMeta
@@ -759,3 +760,70 @@ def test_a21_new_account_without_inbox_runs_discovery(monkeypatch):
         assert report is not None
         assert report.state == "complete"
         assert report.inbox_ready is True
+
+
+def test_inbox_without_completed_baseline_falls_back_to_discovery(monkeypatch):
+    # When an inbox folder exists in DB but baseline is not completed
+    # (full_scan_complete is False), delta mode falls back to account discovery
+    # instead of locking directly onto inbox delta (which would fail with baseline_required).
+    remote_folders = [RemoteFolder("INBOX", "INBOX", "inbox")]
+    account_id, folders = _seed_account(baselines=False, remote_folders=remote_folders)
+    Session = get_session_factory()
+    with Session() as session:
+        session.add(
+            SyncCheckpoint(
+                account_id=account_id,
+                folder_id=folders["INBOX"],
+                cursor={"modseq": 0},
+                full_scan_complete=False,
+            )
+        )
+        session.commit()
+
+    provider = MemoryProvider(folders=list(remote_folders))
+    monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, **_k: provider)
+
+    with Session() as session:
+        req, created = create_sync_request(
+            session,
+            client_request_id=f"t3-major-{uuid.uuid4().hex}",
+            mode="delta",
+            trigger="manual",
+            scope={"account_id": str(account_id)},
+            account_id=account_id,
+            folder_id=None,
+        )
+        session.commit()
+        assert created
+        request_id = req.id
+
+    with Session() as session:
+        report = get_sync_request_report(session, request_id)
+        assert report is not None
+        assert report.state == "queued"
+        assert report.background_request_id is None
+        req_targets = list(
+            session.scalars(
+                select(SyncRequestTarget).where(SyncRequestTarget.request_id == request_id)
+            ).all()
+        )
+        assert len(req_targets) == 1
+        assert req_targets[0].folder_id is None
+        assert req_targets[0].target_key == f"account:{account_id}:folder:all:role:all"
+
+    # Claim and run discovery job
+    discovery_job_id = _claim_one(account_id, JobType.SYNC_ACCOUNT_FOLDERS.value)
+    assert _run_job(discovery_job_id) is True
+
+    # Initial metadata scan completes baseline for the inbox
+    metadata_job_id = _claim_one(account_id, JobType.SYNC_FOLDER_METADATA.value)
+    assert _run_job(metadata_job_id) is True
+
+    with Session() as session:
+        report = get_sync_request_report(session, request_id)
+        assert report is not None
+        assert report.state == "complete"
+        assert report.inbox_ready is True
+        cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folders["INBOX"]})
+        assert cp is not None
+        assert cp.full_scan_complete is True
