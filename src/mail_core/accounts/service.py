@@ -132,7 +132,8 @@ def update_account(
     acc = session.scalar(select(Account).where(Account.id == account_id).with_for_update())
     if acc is None:
         raise LookupError("account not found")
-    from mail_core.accounts.connection import validate_connection, merge_credentials, reject_microsoft_imap
+    from mail_core.accounts.connection import merge_credentials, validate_connection
+    from mail_core.providers.host_security import reject_microsoft_imap
     from mail_core.security.credentials import credential_edit
     effective_config = {**(acc.config or {}), **(config_patch or {})}
     if acc.provider == "imap" and (config_patch or credentials or clear_credentials or sync_enabled is True):

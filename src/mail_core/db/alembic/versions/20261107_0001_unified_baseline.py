@@ -27,7 +27,7 @@ def upgrade() -> None:
     op.create_table(
         "account_groups",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("name", sa.String(length=128), nullable=False, unique=True),
+        sa.Column("name", sa.String(length=128), nullable=False),
         sa.Column("color", sa.String(length=32), nullable=True),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
@@ -501,7 +501,7 @@ def upgrade() -> None:
     op.create_table(
         "sync_requests",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("client_request_id", sa.String(length=64), nullable=False, unique=True),
+        sa.Column("client_request_id", sa.String(length=64), nullable=False),
         sa.Column("mode", sa.String(length=32), nullable=False),
         sa.Column("trigger", sa.String(length=32), nullable=False),
         sa.Column("state", sa.String(length=32), server_default=sa.text("'queued'"), nullable=False),

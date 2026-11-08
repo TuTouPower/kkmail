@@ -61,7 +61,7 @@ class _NoLoginCredentialsConfigured(AuthConfigError):
 # older/truncating builds silently used only the first 72 bytes (letting
 # distinct passwords sharing a 72-byte prefix verify against each other).
 # Nothing here may rely on either behaviour: producers reject over-long
-# passwords via _bcrypt_password_bytes, verify_password rejects them
+# passwords via bcrypt_password_bytes, verify_password rejects them
 # explicitly, and the API schemas enforce the same byte budget.
 MAX_PASSWORD_BYTES = 72
 _BCRYPT_MAX_PASSWORD_BYTES = MAX_PASSWORD_BYTES
@@ -74,24 +74,27 @@ def bcrypt_password_bytes(password: str) -> bytes:
     return encoded
 
 
-_bcrypt_password_bytes = bcrypt_password_bytes
-
-
 def _write_password_hash_file(path: Path, password_hash: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp_path = path.with_name(f".{path.name}.tmp.{secrets.token_hex(8)}")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         if hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)
         else:
-            os.chmod(path, 0o600)
-        stream = os.fdopen(fd, "wb")
-        fd = -1
-        with stream as output:
+            os.chmod(tmp_path, 0o600)
+        with open(fd, "wb", closefd=True) as output:
             output.write(password_hash)
-    finally:
-        if fd >= 0:
-            os.close(fd)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,7 +318,7 @@ def get_login_password_hash() -> bytes:
     if not plain:
         raise _NoLoginCredentialsConfigured("Set MAIL_CORE_LOGIN_PASSWORD_HASH (bcrypt) or MAIL_CORE_LOGIN_PASSWORD for mail-core login")
 
-    _password_hash = bcrypt.hashpw(_bcrypt_password_bytes(plain), bcrypt.gensalt())
+    _password_hash = bcrypt.hashpw(bcrypt_password_bytes(plain), bcrypt.gensalt())
     if not _persist_db_password_hash(_password_hash.decode("utf-8")):
         raise AuthConfigError("failed to persist bootstrap password hash to database")
     if path_raw:

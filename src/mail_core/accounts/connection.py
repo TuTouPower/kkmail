@@ -2,8 +2,6 @@
 from urllib.parse import urlsplit
 
 from mail_core.providers.host_security import (
-    MICROSOFT_DOMAINS,
-    MICROSOFT_IMAP_HOSTS,
     reject_microsoft_imap,
     validate_imap_host,
 )

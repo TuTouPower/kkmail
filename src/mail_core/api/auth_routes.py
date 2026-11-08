@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
@@ -20,6 +23,8 @@ from mail_core.security.auth import (
     session_max_age,
     verify_password,
 )
+
+log = logging.getLogger("mail_core.api.auth_routes")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -145,12 +150,11 @@ def change_password(
     except AuthConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
-        import os
         from mail_core.runtime.bootstrap import clear_initial_password
 
         clear_initial_password(os.environ.get("MAIL_CORE_DATA_DIR"))
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("could not clear initial password file: %s", exc)
     # The session cookie the caller holds is already invalid; clear it so
     # the client does not keep presenting a dead session.
     _clear_session_cookie(response)
