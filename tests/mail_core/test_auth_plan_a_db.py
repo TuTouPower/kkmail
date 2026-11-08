@@ -278,7 +278,12 @@ def test_change_password_atomic_commit_and_rollback_on_failure():
 
 
 def test_cross_process_epoch_revocation_immediate_via_db():
-    """A13: DB is the sole authority for session epoch; revocation is immediate across processes."""
+    """A13: DB is the sole authority for session epoch; revocation is immediate across processes.
+
+    Historical note: The obsolete test_cross_process_epoch_revocation_is_bounded_by_cache_ttl
+    and its TTL-window semantics are obsolete and have been completely retired/deleted.
+    Session epoch is queried from the DB authoritatively without a TTL window.
+    """
     reset_auth_caches()
     stored_cred = {"hash": "dummy", "epoch": 1}
     query_count = 0
@@ -407,8 +412,13 @@ def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
         assert read_session(cookie_val_2) is not None
 
 
-def test_get_session_epoch_does_not_create_a_missing_credential_row():
-    """A13: When DB is configured and credential row is missing, fail closed without adding rows."""
+def test_a13_missing_credential_record_fails_closed():
+    """A13: When DB is configured but credential row is missing, fail closed by raising AuthConfigError.
+
+    Historical note: The legacy test_get_session_epoch_does_not_create_a_missing_credential_row
+    (which asserted default epoch 1 on missing row) is retired and deleted. Under A13 semantics,
+    a missing credential record must fail closed immediately without creating rows or returning 1.
+    """
     reset_auth_caches()
 
     class FakeSession:

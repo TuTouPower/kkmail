@@ -151,6 +151,23 @@ def _claim_one(account_id, job_type: str | None = None) -> uuid.UUID:
         return job_id
 
 
+def _try_claim_one(account_id, job_type: str | None = None) -> uuid.UUID | None:
+    Session = get_session_factory()
+    with Session() as session:
+        jobs = claim_jobs(
+            session,
+            worker_id=WORKER,
+            limit=1,
+            job_types=[job_type] if job_type else None,
+            account_id=account_id,
+        )
+        if not jobs:
+            return None
+        job_id = jobs[0].id
+        session.commit()
+        return job_id
+
+
 def _run_job(job_id) -> bool:
     Session = get_session_factory()
     with Session() as session:
@@ -567,11 +584,10 @@ def test_a21_inbox_settles_independently_and_background_syncs_siblings(monkeypat
 
     # Sibling folders run their deltas until all phase jobs complete
     while True:
-        try:
-            job_id = _claim_one(account_id, JobType.SYNC_FOLDER_DELTA.value)
-            assert _run_job(job_id) is True
-        except AssertionError:
+        job_id = _try_claim_one(account_id, JobType.SYNC_FOLDER_DELTA.value)
+        if job_id is None:
             break
+        assert _run_job(job_id) is True
 
     # 5. Background sync request now finishes and settles to complete
     with Session() as session:
@@ -626,11 +642,10 @@ def test_a21_background_folder_failure_is_isolated_from_inbox(monkeypatch):
         lambda *args, **kwargs: {"status": "error", "error": "sibling_failed"},
     )
     while True:
-        try:
-            sibling_job_id = _claim_one(account_id, JobType.SYNC_FOLDER_DELTA.value)
-            _run_job(sibling_job_id)
-        except AssertionError:
+        sibling_job_id = _try_claim_one(account_id, JobType.SYNC_FOLDER_DELTA.value)
+        if sibling_job_id is None:
             break
+        _run_job(sibling_job_id)
 
     # Primary request remains complete (error isolation)
     with Session() as session:

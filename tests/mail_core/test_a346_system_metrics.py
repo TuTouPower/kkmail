@@ -69,8 +69,16 @@ def test_sync_lag_field_renamed_to_last_sync_lag_seconds(monkeypatch, tmp_path):
     assert report.sync.last_sync_lag_seconds >= 89.0
     dumped = report.sync.model_dump()
     assert "last_sync_lag_seconds" in dumped
-    assert "max_sync_lag_seconds" not in dumped
+
+
+def test_a3_max_sync_lag_seconds_alias_removed(monkeypatch, tmp_path):
+    """A3/A346: obsolete max_sync_lag_seconds alias is completely removed and no longer exposed."""
+    monkeypatch.setenv("MAIL_CORE_BLOB_ROOT", str(tmp_path))
+    now = datetime.now(timezone.utc)
+    report = get_system_health_metrics(_mock_session(now))
     assert not hasattr(report.sync, "max_sync_lag_seconds")
+    dumped = report.sync.model_dump()
+    assert "max_sync_lag_seconds" not in dumped
 
 
 def test_metrics_are_cached_for_a_few_seconds(monkeypatch, tmp_path):
