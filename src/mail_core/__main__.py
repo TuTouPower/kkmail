@@ -41,13 +41,34 @@ def _configure_proxy_headers(*, enabled: bool, forwarded_allow_ips: str | None) 
 def run_migrations() -> None:
     from alembic import command
     from alembic.config import Config
+    from sqlalchemy import create_engine, inspect, text
 
     import mail_core.db as db_pkg
+    from mail_core.db.session import database_url
 
     # Resolve via the package (works from source and from a PyInstaller bundle).
     here = Path(db_pkg.__file__).resolve().parent
     cfg = Config(str(here / "alembic.ini"))
     cfg.set_main_option("script_location", str(here / "alembic"))
+
+    # Guard against legacy revisions before Alembic attempts upgrade
+    db_url = cfg.get_main_option("sqlalchemy.url") or database_url()
+    check_engine = create_engine(db_url)
+    try:
+        with check_engine.connect() as conn:
+            inspector = inspect(conn)
+            if "alembic_version" in inspector.get_table_names():
+                current_rev = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one_or_none()
+                if current_rev and current_rev != "20261107_0001":
+                    raise RuntimeError(
+                        f"Database is at legacy revision '{current_rev}'. "
+                        "Run 'python scripts/migrate_to_unified_baseline.py' to upgrade to the unified baseline."
+                    )
+    finally:
+        check_engine.dispose()
+
     command.upgrade(cfg, "head")
 
 
