@@ -97,10 +97,6 @@ SAFE_CREDENTIAL_PLACEHOLDERS = {
     "[redacted]",
     "<password>",
     "<secret>",
-    "changeme",
-    "dummy",
-    "password",
-    "secret",
     "testpassword",
     "your_password_here",
 }
@@ -180,8 +176,6 @@ def is_ignored(
     path: Path,
     root: Path,
     ignore_patterns: Sequence[str],
-    ignore_archived_errata: bool = False,
-    file_content: str | None = None,
 ) -> bool:
     try:
         rel_path = path.resolve().relative_to(root.resolve()).as_posix()
@@ -197,18 +191,14 @@ def is_ignored(
         if pattern.endswith("/**") and rel_path.startswith(pattern[:-3]):
             return True
 
-    # Archived errata exemption
-    if ignore_archived_errata and "docs/archive" in rel_path:
-        content = file_content
-        if content is None and path.is_file():
-            content = path.read_text(encoding="utf-8", errors="ignore")
-        if content and ("勘误注记" in content or "Errata:" in content or "<!-- sensitive-ignore -->" in content):
-            return True
-
     return False
 
 
-def scan_file(path: Path) -> list[Violation]:
+def scan_file(
+    path: Path,
+    ignore_archived_errata: bool = False,
+    root: Path | None = None,
+) -> list[Violation]:
     violations: list[Violation] = []
     try:
         content = path.read_text(encoding="utf-8", errors="ignore")
@@ -216,10 +206,20 @@ def scan_file(path: Path) -> list[Violation]:
         print(f"Warning: could not read {path}: {exc}", file=sys.stderr)
         return violations
 
+    try:
+        rel_path = path.resolve().relative_to(root.resolve()).as_posix() if root else path.as_posix()
+    except ValueError:
+        rel_path = path.as_posix()
+    is_archived = "docs/archive" in rel_path
+
     lines = content.splitlines()
     for lineno, line in enumerate(lines, start=1):
         # Allow line-level bypass comment
         if "sensitive-allow" in line or "noqa: sensitive" in line:
+            continue
+
+        # Precision errata line exemption: only allow historical archived lines that explicitly contain errata notice
+        if ignore_archived_errata and is_archived and ("勘误注记" in line or "Errata:" in line):
             continue
 
         # 1. Check emails
@@ -374,9 +374,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--ignore-archived-errata",
-        action="store_true",
-        default=True,
-        help="Ignore historical docs in docs/archive that contain errata notices",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Allow line-level errata exemptions in historical docs under docs/archive (default: false, scan all lines)",
     )
 
     args = parser.parse_args(argv)
@@ -394,11 +394,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     scanned_count = 0
 
     for path in target_files:
-        if is_ignored(path, root, ignore_patterns, args.ignore_archived_errata):
+        if is_ignored(path, root, ignore_patterns):
             continue
 
         scanned_count += 1
-        violations = scan_file(path)
+        violations = scan_file(path, ignore_archived_errata=args.ignore_archived_errata, root=root)
         all_violations.extend(violations)
 
     if all_violations:

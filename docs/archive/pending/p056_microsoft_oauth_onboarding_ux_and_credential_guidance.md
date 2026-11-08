@@ -95,7 +95,7 @@ https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id={CLIENT
 #### (1) 表单初始状态（极简输入）
 
 - 界面仅展示：
-    - **邮箱地址**（输入框，如 `myname@outlook.com`）；
+    - **邮箱地址**（输入框，如 `user@example.com`）；
     - **所属分组**（下拉选择）；
     - **主操作按钮**：【微软授权登录】（带有微软品牌图标的蓝色主按钮）；
     - **高级选项（折叠 `details`）**：默认收起，内含“自定义 Client ID”与“自定义重定向 URI”（仅供有自备 Azure 应用的高级开发者修改）。
@@ -157,3 +157,4 @@ ______________________________________________________________________
 
 - 线索：`.scratch/reproduce_microsoft_oauth_form_ux.mjs`
 - 处理：fix/review-20261026-commits
+- 勘误注记：原示例邮箱已按开源合规要求脱敏替换为 RFC 2606 示例地址 user@example.com。

@@ -4,11 +4,12 @@
 
 ## doctor_cmd
 
-环境前置检查：工具链契约测试可成功收集；Markdown 格式化器存在。
+环境前置检查：工具链契约测试可成功收集；Markdown 格式化器存在；敏感文档门禁扫描通过。
 
 ```bash
 pytest .repo_template/tests -q --collect-only -m contract
 command -v md_kx || true
+python3 scripts/check_doc_sensitive.py docs --check
 ```
 
 ## verification_policy
@@ -25,12 +26,13 @@ project_configured
 
 ## test_cmd
 
-同步与日常快速门禁（模板契约、前端构建链与桌面端单测）：
+同步与日常快速门禁（模板契约、前端构建链与桌面端单测、敏感文档扫描）：
 
 ```bash
 pytest .repo_template/tests -q -m contract
 (cd src/frontend && npm test && npx tsc -b && npm run build)
 (cd src/desktop && npm test)
+python3 scripts/check_doc_sensitive.py docs --check
 ```
 
 ## blackbox_verify
@@ -71,6 +73,7 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
 |**前端生产构建**|Vite 生产打包|`(cd src/frontend && npm run build)`|
 |**桌面端测试**|Node 进程管理、路径与安全|`(cd src/desktop && npm test)`|
 |**模板契约测试**|工具链合法性冒烟|`pytest .repo_template/tests -q -m contract`|
+|**敏感文档防泄漏门禁**|个人邮箱/宿主路径/凭据泄漏扫描|`python3 scripts/check_doc_sensitive.py docs --check`|
 |**后端单元/集成测试**|FastAPI + PG + Worker|`scripts/run-mail-core-tests.sh run`|
 |**UI 稳定编号与引用**|快捷键、气泡浮标、复制格式与唯一性|`(cd src/frontend && npm test -t uiReference)`|
 |**写回收敛与统计一致性**|批次自动续跑、意图保护与孤儿恢复|`scripts/run-mail-core-tests.sh run -k test_mark_read_convergence_suite`|
@@ -281,6 +284,7 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 |分层|覆盖内容|本地执行命令|
 |---|---|---|
 |**前置契约**|模板契约与工具链冒烟|`pytest .repo_template/tests -q -m contract`|
+|**敏感扫描**|个人邮箱/宿主路径/凭据泄漏扫描|`python3 scripts/check_doc_sensitive.py docs --check`|
 |**前端全量**|样式/类型/单元/构建/OpenAPI|`(cd src/frontend && npm test && npx tsc -b && npm run build && npm run lint)`|
 |**桌面全量**|进程管理单测 + 原生打包冒烟|`(cd src/desktop && npm test && npm run test:packaged)`|
 |**后端快速**|无数据库/内存 Provider 单元|`scripts/run-mail-core-tests.sh unit`|

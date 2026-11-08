@@ -152,7 +152,7 @@ Path: /Users/someuser/path # noqa: sensitive
     assert "PASSED" in proc.stdout
 
 
-def test_ignore_mechanism_archived_errata(tmp_path: Path):
+def test_archived_errata_whole_file_bypass_eliminated(tmp_path: Path):
     archive_dir = tmp_path / "docs" / "archive"
     archive_dir.mkdir(parents=True)
     doc = archive_dir / "legacy_with_errata.md"
@@ -166,8 +166,54 @@ def test_ignore_mechanism_archived_errata(tmp_path: Path):
         encoding="utf-8",
     )
 
-    proc = run_checker(str(doc), "--check", "--ignore-archived-errata", "--root", str(tmp_path))
-    assert proc.returncode == 0, f"Expected errata exemption to pass, got {proc.returncode}: {proc.stderr}"
+    # Default run: whole-file errata bypass is eliminated, sensitive line must be caught
+    proc_default = run_checker(str(doc), "--check", "--root", str(tmp_path))
+    assert proc_default.returncode == 1, "Expected violation to be caught under default settings"
+    assert "personal@gmail.com" in proc_default.stderr
+
+    # Even with --ignore-archived-errata, the non-annotated sensitive line must still be caught
+    proc_flag = run_checker(str(doc), "--check", "--ignore-archived-errata", "--root", str(tmp_path))
+    assert proc_flag.returncode == 1, "Expected non-annotated sensitive line to be caught even with --ignore-archived-errata"
+    assert "personal@gmail.com" in proc_flag.stderr
+
+
+def test_archived_errata_line_level_precision(tmp_path: Path):
+    archive_dir = tmp_path / "docs" / "archive"
+    archive_dir.mkdir(parents=True)
+    doc = archive_dir / "line_errata.md"
+    doc.write_text(
+        """# Archived Document
+
+- 勘误注记：历史已归档说明中曾提及 legacy_user@gmail.com 已闭环。
+""",
+        encoding="utf-8",
+    )
+
+    # Default: strict line-by-line scanning catches it
+    proc_strict = run_checker(str(doc), "--check", "--no-ignore-archived-errata", "--root", str(tmp_path))
+    assert proc_strict.returncode == 1
+    assert "legacy_user@gmail.com" in proc_strict.stderr
+
+    # With precision line exemption: only lines containing errata notice are allowed
+    proc_allowed = run_checker(str(doc), "--check", "--ignore-archived-errata", "--root", str(tmp_path))
+    assert proc_allowed.returncode == 0, f"Expected precision line exemption to pass: {proc_allowed.stderr}"
+
+
+def test_weak_password_placeholder_rejected(tmp_path: Path):
+    doc = tmp_path / "weak_pwd.md"
+    doc.write_text(
+        """# Config Notes
+
+password: "changeme"
+api_key = 'dummy12345'
+""",
+        encoding="utf-8",
+    )
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1, f"Expected weak passwords to be rejected, got {proc.returncode}"
+    assert "[CREDENTIAL]" in proc.stderr
+    assert "Plaintext password pattern detected" in proc.stderr
 
 
 def test_repo_docs_gate_passes():
