@@ -4,7 +4,7 @@
 Detects:
 1. Sensitive personal emails (excluding test/reserved domains like example.com, test.com, localhost, etc.)
 2. Real host private user paths (e.g. /Users/<username> or /home/<username>)
-3. Credential leak signatures (private key headers, plaintext password assignments, token signatures)
+3. Credential leak signatures (private key headers, assignment-shaped credentials, token signatures)
 """
 
 from __future__ import annotations
@@ -87,10 +87,20 @@ TOKEN_RE = re.compile(
 # Password length disclosure pattern (e.g. 口令长 13 位)
 PWD_LEN_RE = re.compile(r"(?:口令|密码)长\s*\d+\s*位")
 
-# Plaintext password assignment pattern
-PWD_ASSIGN_RE = re.compile(
-    r"(?i)\b(?:password|passwd|secret_key|api_key|access_token)\s*[:=]\s*[\"']([^\"'\s]{8,})[\"']"
-    r"|\b(?:password|passwd|secret_key|api_key|access_token)[:=]([A-Za-z0-9!@#$%^&_+=?\-]{8,})"
+CREDENTIAL_KEYWORDS = (
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "api_key",
+    "access_token",
+    "token",
+    "credential",
+)
+
+ASSIGN_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*"
+    r"(?:[\"']([^\"']*)[\"']|(\S+))"
 )
 
 SAFE_CREDENTIAL_PLACEHOLDERS = {
@@ -106,7 +116,13 @@ SAFE_CREDENTIAL_PLACEHOLDERS = {
     "api_key",
     "access_token",
     "default",
+    "changeme",
+    "dummy12345",
 }
+
+CODE_PROSE_CHARS = frozenset("().,;`[]>/\\#=+: ")
+
+ALLOW_MARKER_RE = re.compile(r"<!--\s*sensitive-allow\s*-->|#\s*noqa:\s*sensitive")
 
 
 @dataclass
@@ -114,8 +130,15 @@ class Violation:
     file_path: Path
     line_number: int
     category: str
-    message: str
     matched_text: str
+
+
+def redact(violation: Violation, root: Path) -> str:
+    try:
+        display_path = violation.file_path.relative_to(root)
+    except ValueError:
+        display_path = violation.file_path.name
+    return f"{display_path}:{violation.line_number} [{violation.category.upper()}]"
 
 
 def is_allowed_email(email: str, domain: str) -> bool:
@@ -135,7 +158,7 @@ def is_allowed_email(email: str, domain: str) -> bool:
     return False
 
 
-def is_allowed_user_path(full_path: str, username: str, line: str) -> bool:
+def is_allowed_user_path(full_path: str, username: str) -> bool:
     # Check if username is generic or a placeholder
     user_lower = username.lower()
     if user_lower in ALLOWED_PATH_USERS:
@@ -145,7 +168,7 @@ def is_allowed_user_path(full_path: str, username: str, line: str) -> bool:
 
     # Check if it's purely a regex pattern or documentation reference
     # e.g., `/Users/[^/\s]+` or `"/Users/"` or `/(Users|home)/`
-    if "[^" in full_path or line.strip().startswith(("#", "//", "<!--")):
+    if "[^" in full_path:
         return True
     if re.search(r"/[a-zA-Z0-9_-]+/[^/]+\[\^", full_path):
         return True
@@ -154,12 +177,15 @@ def is_allowed_user_path(full_path: str, username: str, line: str) -> bool:
 
 
 def is_safe_credential(value: str) -> bool:
-    v_lower = value.lower()
-    if v_lower in SAFE_CREDENTIAL_PLACEHOLDERS:
+    v = value.strip()
+    lower = v.lower()
+    if lower in SAFE_CREDENTIAL_PLACEHOLDERS:
         return True
-    if v_lower.startswith("$") or v_lower.startswith("{") or v_lower.startswith("<"):
+    if not v or v.startswith(("<", "$", "{", "*", "?", "'", '"')):
         return True
-    if "redacted" in v_lower or "***" in v_lower:
+    if not v.isascii() or any(ch in CODE_PROSE_CHARS for ch in v):
+        return True
+    if v.replace("_", "").isalpha():
         return True
     return False
 
@@ -201,8 +227,8 @@ def is_ignored(
 
 
 def _allow_marker_pos(line: str) -> int:
-    positions = [p for p in (line.find("sensitive-allow"), line.find("noqa: sensitive")) if p >= 0]
-    return min(positions) if positions else -1
+    m = ALLOW_MARKER_RE.search(line)
+    return m.start() if m else -1
 
 
 def _allowed_match_index(line: str, row: list[Violation], marker_pos: int) -> int | None:
@@ -260,7 +286,6 @@ def scan_file(
                             file_path=path,
                             line_number=lineno,
                             category="email",
-                            message=f"Non-test personal email detected: '{email}'",
                             matched_text=email,
                         )
                     )
@@ -269,13 +294,12 @@ def scan_file(
             for m in USER_PATH_RE.finditer(line):
                 full_path = m.group(1)
                 user = m.group(2)
-                if not is_allowed_user_path(full_path, user, line):
+                if not is_allowed_user_path(full_path, user):
                     violations.append(
                         Violation(
                             file_path=path,
                             line_number=lineno,
                             category="path",
-                            message=f"Host private user path detected: '{full_path}'",
                             matched_text=full_path,
                         )
                     )
@@ -283,13 +307,12 @@ def scan_file(
             for m in WIN_USER_PATH_RE.finditer(line):
                 full_path = m.group(1)
                 user = m.group(2)
-                if not is_allowed_user_path(full_path, user, line):
+                if not is_allowed_user_path(full_path, user):
                     violations.append(
                         Violation(
                             file_path=path,
                             line_number=lineno,
                             category="path",
-                            message=f"Host private user path detected: '{full_path}'",
                             matched_text=full_path,
                         )
                     )
@@ -301,7 +324,6 @@ def scan_file(
                         file_path=path,
                         line_number=lineno,
                         category="credential",
-                        message="Private key header detected",
                         matched_text=line.strip(),
                     )
                 )
@@ -313,7 +335,6 @@ def scan_file(
                         file_path=path,
                         line_number=lineno,
                         category="credential",
-                        message=f"API token pattern detected: '{m_token.group(0)[:10]}...'",
                         matched_text=m_token.group(0),
                     )
                 )
@@ -325,24 +346,27 @@ def scan_file(
                         file_path=path,
                         line_number=lineno,
                         category="credential",
-                        message=f"Password length disclosure detected: '{m_pwd_len.group(0)}'",
                         matched_text=m_pwd_len.group(0),
                     )
                 )
 
-            m_pwd = PWD_ASSIGN_RE.search(line)
-            if m_pwd:
-                val = m_pwd.group(1) or m_pwd.group(2)
-                if not is_safe_credential(val):
-                    violations.append(
-                        Violation(
-                            file_path=path,
-                            line_number=lineno,
-                            category="credential",
-                            message=f"Plaintext password pattern detected: '{val[:3]}...'",
-                            matched_text=val,
-                        )
+            for m_assign in ASSIGN_RE.finditer(line):
+                key = m_assign.group(1)
+                if not any(kw in key.lower() for kw in CREDENTIAL_KEYWORDS):
+                    continue
+                value = m_assign.group(2)
+                if value is None:
+                    value = m_assign.group(3) or ""
+                if is_safe_credential(value):
+                    continue
+                violations.append(
+                    Violation(
+                        file_path=path,
+                        line_number=lineno,
+                        category="credential",
+                        matched_text=value,
                     )
+                )
 
             if marker_pos >= 0:
                 row = violations[row_start:]
@@ -417,8 +441,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     target_files = collect_target_files(args.targets, root)
     if not target_files:
-        print("No document files found to scan.")
-        return 0
+        print("Error: no document files found in existing target(s).", file=sys.stderr)
+        return 2
 
     all_violations: list[Violation] = []
     scanned_count = 0
@@ -434,19 +458,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if all_violations:
         print(f"\n[SENSITIVE DATA DETECTED] Found {len(all_violations)} violation(s):", file=sys.stderr)
         for v in all_violations:
-            try:
-                display_path = v.file_path.relative_to(root)
-            except ValueError:
-                display_path = v.file_path
-            print(
-                f"  {display_path}:{v.line_number} [{v.category.upper()}] {v.message}",
-                file=sys.stderr,
-            )
-            print(
-                f"    Line {v.line_number}: [REDACTED] {v.category} match "
-                f"({len(v.matched_text)} chars withheld)",
-                file=sys.stderr,
-            )
+            print(f"  {redact(v, root)}", file=sys.stderr)
 
         if args.check:
             return 1
