@@ -191,7 +191,9 @@ python3 scripts/run_full_stack_e2e.py
 数据库迁移质量门禁验证真实 PostgreSQL 下统一基线版本升级、可逆循环与结构一致性：
 
 ```bash
-scripts/run-mail-core-tests.sh run -k test_migration_validation
+# 旧 -k test_migration_validation 全库无匹配；改按模块名选中离线统一基线迁移工具测试
+# 收集核验：KKMAIL_TEST_MODE=unit PYTHONPATH=src python -m pytest -k test_migrate_to_unified_baseline --collect-only -q
+scripts/run-mail-core-tests.sh run -k test_migrate_to_unified_baseline
 ```
 
 验证覆盖：
