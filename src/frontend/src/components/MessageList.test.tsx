@@ -1126,6 +1126,86 @@ describe('<MessageList />', () => {
     await waitFor(() => expect(syncBtn.disabled).toBe(false))
     expect(syncBtn.querySelector('svg')?.getAttribute('class')).not.toContain('spin')
   })
+
+  it('surfaces a background failure that finished before the primary request and keeps the banner outside the scroll container (F1, F5)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (u === '/api/accounts/sync-all' && init?.method === 'POST') {
+        return json(syncReport({ id: 'req-all', state: 'running' }), 202)
+      }
+      if (u === '/api/mail/sync/requests/req-all') {
+        return json(syncReport({
+          id: 'req-all', state: 'complete', running_count: 0, completed_count: 1,
+          background_request_id: 'bg-1',
+          background_state: 'failed',
+          background_errors: [{ target_id: 't1', code: 'timeout', safe_message: '归档文件夹同步超时' }],
+        }))
+      }
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'u@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.includes('/folder-stats')) return json({ folders: [{ folder_id: 'f1', role: 'inbox', total_count: 2, unread_count: 1 }] })
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [row('a')], next_cursor: null })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'allInbox' } })
+    const { container } = await render(<MessageList />)
+    const syncBtn = container.querySelector('button[aria-label="立即同步"]') as HTMLButtonElement
+    await click(syncBtn)
+
+    await waitFor(() => {
+      const banner = container.querySelector('[data-testid="background-sync-status"]')
+      expect(banner).not.toBeNull()
+      expect(banner?.textContent).toContain('后台同步提示：归档文件夹同步超时')
+      expect(banner?.classList.contains('error')).toBe(true)
+    })
+    expect(container.querySelector('.message-list [data-testid="background-sync-status"]')).toBeNull()
+    expect(container.querySelector('.message-list')).not.toBeNull()
+  })
+
+  it('clears a stale background banner when a new sync submission throws (F2)', async () => {
+    let syncCall = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (u === '/api/accounts/sync-all' && init?.method === 'POST') {
+        syncCall += 1
+        if (syncCall === 1) return json(syncReport({ id: 'req-all', state: 'running' }), 202)
+        return json({ detail: 'sync submission rejected' }, 500)
+      }
+      if (u === '/api/mail/sync/requests/req-all') {
+        return json(syncReport({
+          id: 'req-all', state: 'complete', running_count: 0, completed_count: 1,
+          background_request_id: 'bg-1', background_state: 'running',
+        }))
+      }
+      if (u === '/api/mail/sync/requests/bg-1') {
+        return json(syncReport({ id: 'bg-1', state: 'running' }))
+      }
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'u@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.includes('/folder-stats')) return json({ folders: [{ folder_id: 'f1', role: 'inbox', total_count: 2, unread_count: 1 }] })
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [row('a')], next_cursor: null })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'allInbox' } })
+    const { container } = await render(<MessageList />)
+    const syncBtn = container.querySelector('button[aria-label="立即同步"]') as HTMLButtonElement
+
+    await click(syncBtn)
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="background-sync-status"]')?.textContent).toContain('后台正在同步其余文件夹')
+    })
+    await waitFor(() => expect(syncBtn.disabled).toBe(false))
+
+    await click(syncBtn)
+    await waitFor(() => expect(container.querySelector('.list-note.error')?.textContent).toContain('立即同步失败'))
+    expect(container.querySelector('[data-testid="background-sync-status"]')).toBeNull()
+  })
 })
 
 

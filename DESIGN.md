@@ -377,7 +377,7 @@ Borders are thin and low-contrast at rest, but must become more visible on hover
 ### Navigation and account tree
 
 - **Sidebar collapse control:** in expanded mode, users can toggle the sidebar; when collapsed, the sidebar completely hides (0px width) to free horizontal space, and the restore/expand control remains accessible at the leading edge of the message list header (or in the macOS titlebar area).
-- **All Accounts section:** top-level unified navigation aggregating Inboxes, Starred, Important, and Sent folders across all configured accounts.
+- **All Accounts section:** top-level unified navigation aggregating Inboxes, Unread, Sent, Drafts, Trash, and Junk across all configured accounts.
 - **Account group:** group label, disclosure control, and optional account count. Collapsing a group hides its account rows but does not alter account state or folder contents.
 - **Account row:** provider mark, email address, unread count, and independent disclosure control. Clicking the account identity opens its inbox; clicking its disclosure control only expands or collapses its folder tree.
 - **Folder row:** consistent icon, label, and optional unread count. Active folder/account context must be obvious without relying on text color alone.

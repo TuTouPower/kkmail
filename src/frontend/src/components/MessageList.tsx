@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type Ref } fro
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Search, RefreshCw, CheckCircle, SortAsc, Paperclip, X, Check, Flag, Mail, MailOpen, Trash2, ExternalLink, PanelLeft } from 'lucide-react'
 import { api, apiRequest, type AccountSummary, type SyncRequestOut } from '../api/client'
-import { hasActiveBackgroundSync, pollBackgroundSync, syncFailureDetail, waitForSyncRequests } from '../api/sync'
+import { backgroundSyncFailureDetail, hasActiveBackgroundSync, pollBackgroundSync, syncFailureDetail, waitForSyncRequests } from '../api/sync'
 import { accountScope, applyCachedReadStateWithRollback, beginReadMutation, fetchAccounts, flagOptimistic, invalidateMailListQueries, invalidateMailStatsQueries, markReadOptimistic, setReadOptimistic, queryClient, queryKeys, removeCachedMail, type MailItem } from '../api/queries'
 import { fetchGlobalStats, fetchMailCoreInbox, fetchMailCoreSearch, mailCoreToMailItem, postMailCoreMarkAllRead, postMailCoreMessageTrash } from '../api/mailCore'
 import type { AccountFolderStatsItemOut, AccountFolderStatsOut } from '../api/schemaTypes'
@@ -284,6 +284,13 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
 
   const [actionStatus, setActionStatus] = useState('')
   const [backgroundSyncStatus, setBackgroundSyncStatus] = useState<{ text: string; isError: boolean } | null>(null)
+  const applyBackgroundSyncStatus = useCallback((next: { text: string; isError: boolean } | null) => {
+    setBackgroundSyncStatus((prev) => {
+      if (prev === next) return prev
+      if (prev && next && prev.text === next.text && prev.isError === next.isError) return prev
+      return next
+    })
+  }, [])
   const sentinelRef = useRef<HTMLDivElement | null>(null)
   const messageListRef = useRef<HTMLDivElement | null>(null)
   const [messageListScrollTop, setMessageListScrollTop] = useState(0)
@@ -511,6 +518,12 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     backgroundSyncAbortRef.current = null
   }, [])
 
+  useEffect(() => {
+    backgroundSyncAbortRef.current?.()
+    backgroundSyncAbortRef.current = null
+    applyBackgroundSyncStatus(null)
+  }, [view, applyBackgroundSyncStatus])
+
   /**
    * Immediate sync for the accounts in the current view scope: account and
    * folder views sync their one account (all of its folders), a group view
@@ -524,6 +537,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     syncCancelledRef.current = false
     backgroundSyncAbortRef.current?.()
     backgroundSyncAbortRef.current = null
+    applyBackgroundSyncStatus(null)
     try {
       let submitError: unknown = null
       let initial: SyncRequestOut[]
@@ -568,17 +582,17 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
           cancelled = true
         }
         backgroundSyncAbortRef.current = abort
-        setBackgroundSyncStatus({ text: '收件箱已同步，后台正在同步其余文件夹...', isError: false })
+        applyBackgroundSyncStatus({ text: '收件箱已同步，后台正在同步其余文件夹...', isError: false })
         void pollBackgroundSync(reports, {
           isCancelled: () => cancelled || syncCancelledRef.current,
           onProgress: (progress) => {
             if (cancelled || syncCancelledRef.current) return
             if (progress.active) {
-              setBackgroundSyncStatus({ text: '收件箱已同步，后台正在同步其余文件夹...', isError: false })
+              applyBackgroundSyncStatus({ text: '收件箱已同步，后台正在同步其余文件夹...', isError: false })
             } else if (progress.state === 'failed' && progress.error) {
-              setBackgroundSyncStatus({ text: `后台同步提示：${progress.error}`, isError: true })
+              applyBackgroundSyncStatus({ text: `后台同步提示：${progress.error}`, isError: true })
             } else {
-              setBackgroundSyncStatus(null)
+              applyBackgroundSyncStatus(null)
             }
           },
         }).finally(() => {
@@ -587,7 +601,10 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
           }
         })
       } else {
-        setBackgroundSyncStatus(null)
+        const backgroundFailure = backgroundSyncFailureDetail(reports)
+        applyBackgroundSyncStatus(
+          backgroundFailure ? { text: `后台同步提示：${backgroundFailure}`, isError: true } : null,
+        )
       }
     } catch (err) {
       if (!syncCancelledRef.current) setActionStatus(`立即同步失败：${errorMessage(err)}`)
@@ -740,18 +757,18 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
           </div>
         )}
       </div>
+      {actionStatus && actionStatus.includes('失败') && <div role="status" className="list-note error">{actionStatus}</div>}
+      {backgroundSyncStatus && (
+        <div
+          role="status"
+          className={`list-note ${backgroundSyncStatus.isError ? 'error' : ''}`}
+          data-testid="background-sync-status"
+        >
+          {backgroundSyncStatus.text}
+        </div>
+      )}
+      {failure && <div role="alert" className="list-note error">{failure}</div>}
       <div ref={messageListRef} className={`message-list windowed ${selecting ? 'selecting' : ''}`} onScroll={handleScroll}>
-        {actionStatus && actionStatus.includes('失败') && <div role="status" className="list-note error">{actionStatus}</div>}
-        {backgroundSyncStatus && (
-          <div
-            role="status"
-            className={`list-note ${backgroundSyncStatus.isError ? 'error' : ''}`}
-            data-testid="background-sync-status"
-          >
-            {backgroundSyncStatus.text}
-          </div>
-        )}
-        {failure && <div role="alert" className="list-note error">{failure}</div>}
         {!loading && visible.length === 0 && (
           <div data-ui="ML13" style={{ padding: 45, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
             {accounts.length === 0 ? '还没有账户。在设置中添加账户后，这里会显示邮件。' : searching ? '没有匹配的邮件' : '没有邮件'}
