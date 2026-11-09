@@ -103,11 +103,15 @@ ASSIGN_RE = re.compile(
     r"(?:[\"']([^\"']*)[\"']|(\S+))"
 )
 
+# Explicit placeholders / boolean / None / common safe words (matched case-insensitively).
+# Only these literal shapes are exempt; everything else assignment-shaped is deny-by-default.
 SAFE_CREDENTIAL_PLACEHOLDERS = {
     "***",
     "[redacted]",
+    "redacted",
     "<password>",
     "<secret>",
+    "<change-me>",
     "testpassword",
     "your_password_here",
     "password",
@@ -118,9 +122,62 @@ SAFE_CREDENTIAL_PLACEHOLDERS = {
     "default",
     "changeme",
     "dummy12345",
+    "required",
+    "true",
+    "false",
+    "none",
+    "null",
+    "tbd",
+    "todo",
+    "placeholder",
+    "example",
+    "n/a",
 }
 
-CODE_PROSE_CHARS = frozenset("().,;`[]>/\\#=+: ")
+# Wholly-punctuation / ellipsis value shape (whole-value match, never a
+# contains-character exemption).
+PUNCT_ONLY_RE = re.compile(r"\A[^\w\s]+\Z")
+
+# Trailing punctuation stripped before a placeholder lookup; explicit rstrip
+# on known safe words only.
+SAFE_TRAILING_PUNCT = "`\"'.,;:!?)]}>"
+
+# Template / env references: whole-value templates or named API references;
+# never a contains-character exemption.
+SAFE_REFERENCE_RE = re.compile(
+    r"\A\$\{[^}]*\}"                  # ${ENV_VAR}
+    r"|\A\$\([^)]*\)"                # $(cmd)
+    r"|\A\{\{[^}]*\}\}"              # {{ template }}
+    r"|\A<[^<>]+>\Z"                 # <placeholder>
+    r"|\bos\.environ\b"              # os.environ[...] / os.environ.get(...)
+    r"|\bos\.getenv\s*\("            # os.getenv(...)
+    r"|\bgetenv\s*\("                # getenv(...)
+    r"|\bprocess\.env\b"             # process.env.X
+    r"|\bstore\.get_secret\s*\("     # store.get_secret(...)
+)
+
+# Code-expression shape: value starts with a structural opener, or the WHOLE
+# value is a function call. Anchored at both ends so a word containing parens
+# is not mistaken for a call.
+CODE_EXPRESSION_RE = re.compile(
+    r"\A[{($<]"
+    r"|\A[A-Za-z_][A-Za-z0-9_.]*\([^)]*\)?\Z"
+)
+
+IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+# Prefix/suffix tolerated for an isolated "key = value" line (markdown list
+# markers, a few code lead-ins, trailing comments). Anything else means the
+# match sits inside prose/code, i.e. an ASSIGN_RE mis-capture.
+_CLEAN_PREFIX_RE = re.compile(
+    r"(?:<!--.*-->\s*)?(?:[-*>#]\s*|\d+[.)]\s*)?"
+    r"(?:export\s+|set\s+|const\s+|let\s+|var\s+|self\.)?",
+    re.IGNORECASE,
+)
+_CLEAN_SUFFIX_RE = re.compile(
+    r"(?:[,;)\]}`\"']?\s*)?(?:#.*|//.*|<!--.*-->)?",
+    re.IGNORECASE,
+)
 
 ALLOW_MARKER_RE = re.compile(r"<!--\s*sensitive-allow\s*-->|#\s*noqa:\s*sensitive")
 
@@ -176,16 +233,54 @@ def is_allowed_user_path(full_path: str, username: str) -> bool:
     return False
 
 
-def is_safe_credential(value: str) -> bool:
+def _is_isolated_assignment(line: str, value: str) -> bool:
+    """True when `value` is the RHS of an isolated `key = value` assignment.
+
+    An isolated assignment has only list markers / code lead-ins before it and
+    (almost) nothing after it. In prose or code snippets ASSIGN_RE's unquoted
+    arm mis-captures a bare word (e.g. ``password = all power``); such matches
+    are not credential values at all. scan_file uses this as the total gate:
+    non-isolated matches are skipped before is_safe_credential is even called.
+    """
+    for m in ASSIGN_RE.finditer(line):
+        matched = m.group(2) if m.group(2) is not None else (m.group(3) or "")
+        if matched != value:
+            continue
+        prefix = line[: m.start()].strip()
+        suffix = line[m.end():].strip()
+        if _CLEAN_PREFIX_RE.fullmatch(prefix) and _CLEAN_SUFFIX_RE.fullmatch(suffix):
+            return True
+    return False
+
+
+def is_safe_credential(value: str, *, key: str | None = None) -> bool:
+    """Return True only for explicitly safe credential shapes (default-deny).
+
+    Pure value-based and independently unit-testable: ``key`` only enables
+    recognising self-assignment code (``token = token``). Whether a match is an
+    assignment at all is decided by the ``_is_isolated_assignment`` gate in
+    ``scan_file``; explicit allow markers are handled there too.
+    """
     v = value.strip()
+    if not v:
+        return True
+    # Non-ASCII prose (e.g. Chinese documentation) stays safe.
+    if not v.isascii():
+        return True
     lower = v.lower()
+    # Explicit placeholders / booleans / None, incl. safe words with trailing punctuation.
     if lower in SAFE_CREDENTIAL_PLACEHOLDERS:
         return True
-    if not v or v.startswith(("<", "$", "{", "*", "?", "'", '"')):
+    if v.rstrip(SAFE_TRAILING_PUNCT).lower() in SAFE_CREDENTIAL_PLACEHOLDERS:
         return True
-    if not v.isascii() or any(ch in CODE_PROSE_CHARS for ch in v):
+    # Wholly-punctuation / ellipsis values.
+    if PUNCT_ONLY_RE.fullmatch(v):
         return True
-    if v.replace("_", "").isalpha():
+    # Template / env references and code-expression shapes.
+    if SAFE_REFERENCE_RE.search(v) or CODE_EXPRESSION_RE.search(v):
+        return True
+    # Self-assignment code: value is the identifier equal to the key.
+    if key is not None and IDENTIFIER_RE.fullmatch(v) and v.lower() == key.lower():
         return True
     return False
 
@@ -357,7 +452,9 @@ def scan_file(
                 value = m_assign.group(2)
                 if value is None:
                     value = m_assign.group(3) or ""
-                if is_safe_credential(value):
+                if not _is_isolated_assignment(line, value):
+                    continue
+                if is_safe_credential(value, key=key):
                     continue
                 violations.append(
                     Violation(
