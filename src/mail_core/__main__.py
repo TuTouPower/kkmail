@@ -38,57 +38,6 @@ def _configure_proxy_headers(*, enabled: bool, forwarded_allow_ips: str | None) 
             log.warning("--proxy-headers requested without trusted proxy hosts; forwarded headers remain disabled")
 
 
-def _is_dated_revision(rev: str) -> bool:
-    return (
-        len(rev) > 9
-        and rev[:8].isdigit()
-        and rev[8] == "_"
-        and rev[9:].isdigit()
-    )
-
-
-def _single_alembic_revision(versions: list[str]) -> str | None:
-    if len(versions) > 1:
-        raise RuntimeError(
-            f"alembic_version contains {len(versions)} rows "
-            f"({', '.join(sorted(str(v) for v in versions))}); expected at most one head. "
-            "Resolve the duplicate version rows (restore a clean backup or stamp a single "
-            "head with scripts/migrate_to_unified_baseline.py) before starting mail-core."
-        )
-    return versions[0] if versions else None
-
-
-def _legacy_revision_error(current_rev: str | None, script: object) -> str | None:
-    if not current_rev:
-        return None
-    known_revisions = {rev.revision for rev in script.walk_revisions()}
-    if current_rev in known_revisions:
-        return None
-    heads = list(script.get_heads())
-    head_text = ", ".join(heads) if heads else "(none)"
-    dated_heads = [h for h in heads if _is_dated_revision(h)]
-    if _is_dated_revision(current_rev) and dated_heads and current_rev > max(dated_heads):
-        return (
-            f"Database revision '{current_rev}' is newer than the current heads "
-            f"({head_text}): the database was written by a newer kkmail build. "
-            "This is a version mismatch - upgrade kkmail before starting; do not "
-            "restore an older backup over it."
-        )
-    if _is_dated_revision(current_rev) and dated_heads and current_rev < min(dated_heads):
-        return (
-            f"Database is at a known historical revision '{current_rev}' "
-            f"(current heads: {head_text}). "
-            "Run 'python scripts/migrate_to_unified_baseline.py' to upgrade it to "
-            "the unified baseline offline, then start kkmail again."
-        )
-    return (
-        f"Database is at an unrecognized legacy revision '{current_rev}' "
-        f"(current heads: {head_text}). Its origin cannot be verified; restore a "
-        "known-good backup and migrate the data explicitly rather than stamping "
-        "or letting Alembic upgrade it."
-    )
-
-
 def run_migrations(*, check_only: bool = False) -> None:
     import sqlalchemy
 

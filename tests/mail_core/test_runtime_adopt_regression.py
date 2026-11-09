@@ -9,7 +9,7 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 
 import pytest
 
@@ -105,41 +105,13 @@ print("OK")
     assert "OK" in result.stdout
 
 
-def _fake_script(heads, revisions):
-    revs = [SimpleNamespace(revision=r) for r in revisions]
-    return SimpleNamespace(
-        get_heads=lambda: list(heads),
-        walk_revisions=lambda: iter(revs),
-    )
-
-
-def test_legacy_guard_accepts_previous_head_after_new_migration():
-    script = _fake_script(
-        ["20261108_0002"], ["20261108_0002", "20261107_0001"]
-    )
-    assert main_module._legacy_revision_error("20261107_0001", script) is None
-    assert main_module._legacy_revision_error("20261108_0002", script) is None
-    assert main_module._legacy_revision_error(None, script) is None
-
-
-def test_legacy_guard_rejects_unknown_revision_with_dynamic_heads():
-    script = _fake_script(
-        ["20261108_0002"], ["20261108_0002", "20261107_0001"]
-    )
-    message = main_module._legacy_revision_error("f5f312751c77", script)
-    assert message and "legacy" in message and "20261108_0002" in message
-
-
-def test_legacy_guard_accepts_real_baseline_revision():
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-
-    cfg = Config(str(REPO_ROOT / "src/mail_core/db/alembic.ini"))
-    cfg.set_main_option(
-        "script_location", str(REPO_ROOT / "src/mail_core/db/alembic")
-    )
-    script = ScriptDirectory.from_config(cfg)
-    assert main_module._legacy_revision_error("20261107_0001", script) is None
+# Retired (A13 follow-up): these three tests called the now-removed dead
+# helpers main_module._legacy_revision_error / _single_alembic_revision /
+# _is_dated_revision directly. Database-state classification has been unified
+# in mail_core.db.baseline.plan_migration (used by run_migrations() and the
+# offline migration tool), so the helpers are gone and these tests, which only
+# endorsed dead code, are deleted wholesale instead of being rewritten in
+# place. _fake_script was their sole support and is removed with them.
 
 
 def test_port_zero_requires_sidecar_flag():

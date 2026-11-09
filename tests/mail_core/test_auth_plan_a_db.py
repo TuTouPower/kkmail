@@ -277,70 +277,26 @@ def test_change_password_atomic_commit_and_rollback_on_failure():
         assert read_session(cookie_val_2) is not None
 
 
-def test_cross_process_epoch_revocation_immediate_via_db():
-    """A13: DB is the sole authority for session epoch; revocation is immediate across processes.
-
-    Historical note: The obsolete test_cross_process_epoch_revocation_is_bounded_by_cache_ttl
-    and its TTL-window semantics are obsolete and have been completely retired/deleted.
-    Session epoch is queried from the DB authoritatively without a TTL window.
-    """
-    reset_auth_caches()
-    stored_cred = {"hash": "dummy", "epoch": 1}
-    query_count = 0
-    db_unavailable = False
-
-    class FakeCred:
-        def __init__(self, id, hash_val, epoch=1):
-            self.id = id
-            self.login_password_hash = hash_val
-            stored_cred["epoch"] = epoch
-
-        @property
-        def session_epoch(self):
-            return stored_cred["epoch"]
-
-        @session_epoch.setter
-        def session_epoch(self, val):
-            stored_cred["epoch"] = val
-
-    class FakeSession:
-        def __enter__(self):
-            if db_unavailable:
-                raise RuntimeError("Database connection refused")
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, model, key, **_kwargs):  # accept Session.get options (e.g. with_for_update)
-            nonlocal query_count
-            query_count += 1
-            return FakeCred("default", stored_cred["hash"], stored_cred["epoch"])
-
-        def commit(self):
-            pass
-
-    with (
-        patch.dict(os.environ, {
-            "MAIL_CORE_DATABASE_URL": "postgresql://test/db",
-            "MAIL_CORE_SECRET_KEY": "test_secret_key_12345678901234567890",
-        }),
-        patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
-    ):
-        cookie_val, _ = issue_session()
-        assert read_session(cookie_val) is not None
-        assert query_count == 2  # issue_session + read_session both consult DB
-
-        # Process A updates epoch in DB. Even without NOTIFY, Process B immediately
-        # reads the authoritative epoch from DB on next read_session and rejects old session.
-        stored_cred["epoch"] = 2
-        assert read_session(cookie_val) is None
-
-        # When DB is unavailable, authentication fails closed immediately.
-        db_unavailable = True
-        with pytest.raises(AuthConfigError, match="could not fetch session epoch from database"):
-            get_session_epoch()
-        assert read_session(cookie_val) is None
+# Retired (A13 follow-up): test_cross_process_epoch_revocation_immediate_via_db
+# used FakeSession + a stored_cred dict to impersonate "cross-process" epoch
+# revocation. It had no independent process, no real PostgreSQL, and no way to
+# prove that a process which never received NOTIFY still rejects on its next
+# auth. It is NOT rewritten in place: the previous batch (7a010f21) flipped an
+# old assertion inside the implementation commit, which this repo's TDD rule
+# forbids -- when an implementation change invalidates an old test's semantics,
+# add a NEW independent test and either keep the old test untouched or delete
+# it wholesale with a written reason; never edit the old expectation in place.
+# The real behaviour is covered by NEW tests in
+# tests/mail_core/test_a13_session_revocation_multiprocess.py (two real
+# processes, real PG, NOTIFY lost/duplicated/out-of-order, DB fail-closed).
+# Other unit tests here that simulate a DB outage or a failed password
+# persistence (test_auth_db_query_failure_fails_closed_does_not_fallback_to_env,
+# test_change_login_password_fails_closed_on_db_error) stay as they are: their
+# intent is precisely to simulate a transaction/query failure that real PG
+# cannot be made to reproduce deterministically without polluting the shared
+# test database; converting them would destroy that intent. The still-valid
+# missing-credential fail-closed semantics below is upgraded to a real PG
+# session instead.
 
 
 def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
@@ -412,38 +368,37 @@ def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
         assert read_session(cookie_val_2) is not None
 
 
+@pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 def test_a13_missing_credential_record_fails_closed():
-    """A13: When DB is configured but credential row is missing, fail closed by raising AuthConfigError.
+    """A13 (real PostgreSQL): a missing credential row fails closed.
 
-    Historical note: The legacy test_get_session_epoch_does_not_create_a_missing_credential_row
-    (which asserted default epoch 1 on missing row) is retired and deleted. Under A13 semantics,
-    a missing credential record must fail closed immediately without creating rows or returning 1.
+    Replaces the former FakeSession version; the semantics are unchanged. With
+    MAIL_CORE_DATABASE_URL configured but no auth_credentials row,
+    get_session_epoch() must raise AuthConfigError instead of returning the
+    in-process default epoch 1, and the read path must not create a row. The
+    per-test TRUNCATE in isolated_runtime supplies the empty table and cleans
+    up afterwards; this test only ever reads the single 'default' row it owns.
     """
     reset_auth_caches()
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.storage.models import AuthCredential
 
-    class FakeSession:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, _model, _key):
-            return None
-
-        def add(self, _obj):
-            raise AssertionError("read path must not add AuthCredential")
-
-        def commit(self):
-            raise AssertionError("read path must not commit")
-
+    Session = get_session_factory()
     try:
-        with (
-            patch.dict(os.environ, {"MAIL_CORE_DATABASE_URL": "postgresql://test/db"}),
-            patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
+        with Session() as session:
+            assert session.get(AuthCredential, "default") is None
+
+        with pytest.raises(
+            AuthConfigError, match="auth credential record missing in database"
         ):
-            with pytest.raises(AuthConfigError, match="auth credential record missing in database"):
-                get_session_epoch()
+            get_session_epoch()
+
+        # The read path must not have inserted a credential row.
+        with Session() as session:
+            assert session.get(AuthCredential, "default") is None
     finally:
         reset_auth_caches()
 
