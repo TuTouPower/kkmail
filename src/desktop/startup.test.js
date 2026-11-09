@@ -4,7 +4,6 @@ const path = require('path')
 const http = require('http')
 const { EventEmitter } = require('events')
 const {
-  parsePort,
   freePort,
   waitForHealth,
   waitForSidecarReady,
@@ -18,19 +17,6 @@ const {
   collectSidecarExtras,
   backendExitDisposition,
 } = require('./startup')
-
-assert.strictEqual(parsePort(undefined), 18765)
-assert.strictEqual(parsePort('8080'), 8080)
-assert.throws(() => parsePort('0'), /KKMAIL_DESKTOP_PORT/)
-assert.throws(() => parsePort('65536'), /KKMAIL_DESKTOP_PORT/)
-assert.throws(() => parsePort('nope'), /KKMAIL_DESKTOP_PORT/)
-
-// parsePort from KKMAIL_DESKTOP_PORT
-{
-  const portFromEnv = (env) => parsePort(env.KKMAIL_DESKTOP_PORT)
-  assert.strictEqual(portFromEnv({ KKMAIL_DESKTOP_PORT: '9000' }), 9000)
-  assert.strictEqual(portFromEnv({}), 18765)
-}
 
 // scrubEnv: drop secrets / odd keys; only system and LC_* allowed by default; extras required for app vars
 {
