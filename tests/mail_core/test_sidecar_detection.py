@@ -107,25 +107,16 @@ def test_main_sidecar_branch_for_every_truthy_value(monkeypatch, capsys, value):
     assert web_calls == []
 
 
-def _fake_script(heads, revisions):
-    revs = [SimpleNamespace(revision=r) for r in revisions]
-    return SimpleNamespace(
-        get_heads=lambda: list(heads),
-        walk_revisions=lambda: iter(revs),
-    )
-
-
-def test_single_alembic_revision_accepts_zero_or_one_row():
-    assert main_module._single_alembic_revision([]) is None
-    assert main_module._single_alembic_revision(["20261107_0001"]) == "20261107_0001"
-
-
-def test_single_alembic_revision_rejects_multiple_rows():
-    with pytest.raises(RuntimeError, match="alembic_version") as excinfo:
-        main_module._single_alembic_revision(["20261107_0001", "20261108_0002"])
-    message = str(excinfo.value)
-    assert "2 rows" in message
-    assert "20261107_0001" in message and "20261108_0002" in message
+# Retired (A13 follow-up): _is_dated_revision / _single_alembic_revision /
+# _legacy_revision_error were dead helpers in mail_core.__main__ and are now
+# removed. Database-state classification is unified in
+# mail_core.db.baseline.plan_migration, which run_migrations() and the offline
+# migration tool both call. The tests that invoked those three private helpers
+# directly (test_single_alembic_revision_* here, test_legacy_guard_* here and
+# in test_runtime_adopt_regression.py) merely endorsed dead code, so they are
+# deleted wholesale rather than rewritten in place. The live-path test below
+# (test_run_migrations_refuses_multiple_alembic_version_rows) is unrelated and
+# kept unchanged.
 
 
 def test_run_migrations_refuses_multiple_alembic_version_rows(monkeypatch):
@@ -168,18 +159,8 @@ def test_run_migrations_refuses_multiple_alembic_version_rows(monkeypatch):
         main_module.run_migrations()
 
 
-def test_legacy_guard_distinguishes_revision_cases():
-    script = _fake_script(["20261108_0002"], ["20261108_0002", "20261107_0001"])
-    assert main_module._legacy_revision_error("20261107_0001", script) is None
-
-    newer = main_module._legacy_revision_error("20261109_0001", script)
-    older = main_module._legacy_revision_error("20261021_0003", script)
-    unknown = main_module._legacy_revision_error("f5f312751c77", script)
-
-    assert newer and "version mismatch" in newer and "20261108_0002" in newer
-    assert older and "migrate_to_unified_baseline.py" in older and "20261108_0002" in older
-    assert unknown and "legacy" in unknown and "backup" in unknown and "20261108_0002" in unknown
-    assert len({newer, older, unknown}) == 3
+# test_legacy_guard_distinguishes_revision_cases was here; retired together
+# with the three dead __main__ helpers (see the note above).
 
 
 def test_port_zero_startup_normalizes_sidecar_into_env(monkeypatch, capsys):
