@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
+from mail_core.mail.application.sync_requests import account_sync_failure_status, sync_context_payload
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncRunStatus, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.connection_slots import (
@@ -58,13 +59,12 @@ def _scan_context_payload(
 ) -> dict:
     """Full-scan lifecycle context carried in phase-job payloads (R08)."""
     if not full:
-        return {}
-    payload: dict = {"full": True}
-    if scan_generation is not None:
-        payload["scan_generation"] = str(scan_generation)
-    if request_id is not None:
-        payload["request_id"] = str(request_id)
-    return payload
+        return sync_context_payload(request_id)
+    return sync_context_payload(
+        request_id,
+        full=True,
+        scan_generation=str(scan_generation) if scan_generation is not None else None,
+    )
 
 
 def _should_enqueue_discovered_folder(role: str | None, *, background: bool) -> bool:
@@ -222,17 +222,11 @@ def sync_account_folders(
             # Budget deferral: delayed followup, no failure marking.
             delay = float(getattr(exc, "retry_after_seconds", None) or get_capacity_retry_seconds())
             with Session() as session:
-                retry_payload: dict = {}
-                if request_id is not None:
-                    retry_payload["request_id"] = str(request_id)
-                if background:
-                    retry_payload["background"] = True
-                retry_payload.update(_scan_context_payload(full, scan_generation, request_id))
                 followup = enqueue_job(
                     session,
                     job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                     account_id=account_id,
-                    payload=retry_payload,
+                    payload=_scan_context_payload(full, scan_generation, request_id),
                     priority=60,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                     dedupe_key=f"sync:{account_id}",
@@ -251,25 +245,22 @@ def sync_account_folders(
             delay = max(1.0, min(delay, 86400.0))
             with Session() as session:
                 acc = session.get(Account, account_id)
-                if acc is not None and not background:
-                    acc.sync_status = SyncStatus.FAILED.value
+                failure = account_sync_failure_status(
+                    result={"status": "rate_limited"}, is_background=background
+                )
+                if acc is not None and failure is not None:
+                    acc.sync_status = failure.value
                     cfg = dict(acc.config or {})
                     cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
                     cfg["last_sync_error"] = safe_provider_summary(exc)
                     acc.config = cfg
                     if hasattr(acc, "last_synced_at"):
                         setattr(acc, "last_synced_at", datetime.now(timezone.utc))
-                retry_payload: dict = {}
-                if request_id is not None:
-                    retry_payload["request_id"] = str(request_id)
-                if background:
-                    retry_payload["background"] = True
-                retry_payload.update(_scan_context_payload(full, scan_generation, request_id))
                 enqueue_job(
                     session,
                     job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                     account_id=account_id,
-                    payload=retry_payload,
+                    payload=_scan_context_payload(full, scan_generation, request_id),
                     priority=60,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                     dedupe_key=f"sync:{account_id}",
@@ -281,8 +272,9 @@ def sync_account_folders(
         with Session() as session:
             try:
                 acc = session.get(Account, account_id)
-                if acc is not None and not background:
-                    acc.sync_status = SyncStatus.FAILED.value
+                failure = account_sync_failure_status(result=exc, is_background=background)
+                if acc is not None and failure is not None:
+                    acc.sync_status = failure.value
                     cfg = dict(acc.config or {})
                     cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
                     cfg["last_sync_error"] = safe_provider_summary(exc)
@@ -399,14 +391,11 @@ def sync_account_folders(
                 cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": existing.id})
                 baseline_ready = cp is not None and bool(cp.full_scan_complete)
                 if not full and baseline_ready:
-                    delta_payload: dict = {"folder_id": str(existing.id)}
-                    if request_id is not None:
-                        delta_payload["request_id"] = str(request_id)
                     delta_job = enqueue_job(
                         session,
                         job_type=JobType.SYNC_FOLDER_DELTA.value,
                         account_id=account_id,
-                        payload=delta_payload,
+                        payload=sync_context_payload(request_id, folder_id=str(existing.id)),
                         # t074: within one account the inbox delta sorts
                         # strictly ahead of sibling folders (55 < 60).
                         # Priority numbers are the only guarantee — all
@@ -425,20 +414,14 @@ def sync_account_folders(
                             source_dedupe_key=f"sync:{account_id}",
                         )
                 else:
-                    metadata_payload: dict = {"folder_id": str(existing.id)}
-                    if full:
-                        # The execution layer must see the full-scan lifecycle:
-                        # root generation + owning request travel with the job.
-                        metadata_payload["full"] = True
-                        if scan_generation is not None:
-                            metadata_payload["scan_generation"] = str(scan_generation)
-                    if request_id is not None:
-                        metadata_payload["request_id"] = str(request_id)
                     metadata_job = enqueue_job(
                         session,
                         job_type=JobType.SYNC_FOLDER_METADATA.value,
                         account_id=account_id,
-                        payload=metadata_payload,
+                        payload={
+                            "folder_id": str(existing.id),
+                            **_scan_context_payload(full, scan_generation, request_id),
+                        },
                         # t074: inbox baseline first within the account
                         # (45 < 50), same rationale as the delta above.
                         priority=45 if existing.role == "inbox" else 50,
@@ -756,7 +739,7 @@ def sync_folder_metadata(
                     session,
                     job_type=JobType.RECONCILE_FOLDER.value,
                     account_id=account_id,
-                    payload={"folder_id": str(folder_id)},
+                    payload=sync_context_payload(request_id, folder_id=str(folder_id)),
                     priority=80,
                     dedupe_key=f"reconcile:{account_id}:{folder_id}",
                 )
@@ -764,7 +747,7 @@ def sync_folder_metadata(
                 session,
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
                 account_id=account_id,
-                payload={"folder_id": str(folder_id)},
+                payload=sync_context_payload(request_id, folder_id=str(folder_id)),
                 priority=60,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=2),
                 dedupe_key=f"delta:{account_id}:{folder_id}",

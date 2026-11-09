@@ -1,139 +1,111 @@
 """Adoption fixes for the sync backend review (background isolation).
 
-Covers:
-- P1-4: a background ``SYNC_ACCOUNT_FOLDERS`` failure must never write the
-  account ``sync_status=FAILED`` (spec mail_sync_and_storage.md §15.3).
-- P2-D1: dead host-security imports removed from providers.factory.
-- P2-S1: background folder discovery must not enqueue the inbox folder.
+The payload ``background`` marker is gone: background isolation is a property
+of ``SyncRequest.scope["background"]``, resolved through the ``request_id``
+lineage in mail_core.mail.application.sync_requests. The previous
+MagicMock-based tests asserted ``_is_background_sync(job)`` read that marker;
+their semantics no longer exist, so they were deleted rather than having
+their expectations rewritten to the new output. The real
+create/discovery/handler chain is covered by test_sync_background_lineage.py.
+The two unrelated guard tests at the bottom are kept unchanged.
 """
 
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone
 
-import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
-from mail_core.mail.domain.enums import JobType, SyncStatus
-from mail_core.mail.storage.models import WorkerJob
-from mail_core.worker import handlers
-from mail_core.worker.handlers import _evaluate_result, _is_background_sync
+from mail_core.mail.application.sync_requests import (
+    account_sync_failure_status,
+    is_permanent_auth_error,
+    resolve_sync_context,
+    sync_context_payload,
+)
+from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.storage.models import SyncRequest, WorkerJob
+from mail_core.providers.http import PermanentAuthError
 
-
-def _job(*, background: bool) -> WorkerJob:
-    payload: dict = {"request_id": str(uuid.uuid4())}
-    if background:
-        payload["background"] = True
-    job = WorkerJob(
-        job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
-        account_id=uuid.uuid4(),
-        status="claimed",
-        payload=payload,
+_NOW = datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)
+_REQUESTS_DDL = """
+    CREATE TABLE sync_requests (
+        id CHAR(36) PRIMARY KEY,
+        client_request_id VARCHAR(64) NOT NULL UNIQUE,
+        mode VARCHAR(32) NOT NULL,
+        "trigger" VARCHAR(32) NOT NULL,
+        state VARCHAR(32) NOT NULL DEFAULT 'queued',
+        scope TEXT NOT NULL DEFAULT '{}',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        finished_at DATETIME
     )
-    job.id = uuid.uuid4()
-    job.locked_by = "w-fix"
-    return job
+    """
 
 
-def _terminal_job(*, background: bool) -> WorkerJob:
-    from mail_core.sync.jobs import _max_attempts
-
-    job = _job(background=background)
-    job.failure_attempts = _max_attempts() - 1
-    return job
-
-
-def test_is_background_sync_reads_payload_marker():
-    assert _is_background_sync(_job(background=True)) is True
-    assert _is_background_sync(_job(background=False)) is False
-    assert _is_background_sync(WorkerJob(payload=None)) is False
-    assert _is_background_sync(WorkerJob(payload={"background": False})) is False
+def _session():
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(text(_REQUESTS_DDL))
+    return sessionmaker(bind=engine)
 
 
-@pytest.mark.parametrize("status", ["provider_error", "rate_limited"])
-def test_foreground_failure_marks_account_failed(status):
-    job = _job(background=False)
-    session = MagicMock()
-    with (
-        patch.object(handlers, "update_account_sync_status") as mark,
-        patch.object(handlers, "complete_job"),
-        patch.object(handlers, "fail_job"),
-    ):
-        _evaluate_result(session, job, {"status": status, "error": "boom"}, worker_id="w-fix")
-    mark.assert_called_once()
-    assert mark.call_args.args[2] is SyncStatus.FAILED
+def test_payload_marker_is_never_a_background_source():
+    Session = _session()
+    fg_id, bg_id = uuid.uuid4(), uuid.uuid4()
+    with Session() as session:
+        session.add(
+            SyncRequest(
+                id=fg_id,
+                client_request_id="fg",
+                mode="delta",
+                trigger="manual",
+                state="queued",
+                scope={"account_id": "x"},
+                created_at=_NOW,
+            )
+        )
+        session.add(
+            SyncRequest(
+                id=bg_id,
+                client_request_id="bg",
+                mode="delta",
+                trigger="manual",
+                state="queued",
+                scope={"background": True},
+                created_at=_NOW,
+            )
+        )
+        session.commit()
+        stale_marker = WorkerJob(payload={"request_id": str(fg_id), "background": True})
+        assert resolve_sync_context(session, stale_marker) == (False, fg_id)
+        clean_lineage = WorkerJob(payload={"request_id": str(bg_id)})
+        assert resolve_sync_context(session, clean_lineage) == (True, bg_id)
+        assert resolve_sync_context(session, WorkerJob(payload={})) == (False, None)
 
 
-@pytest.mark.parametrize("status", ["provider_error", "rate_limited"])
-def test_background_failure_does_not_mark_account_failed(status):
-    job = _job(background=True)
-    session = MagicMock()
-    with (
-        patch.object(handlers, "update_account_sync_status") as mark,
-        patch.object(handlers, "complete_job"),
-        patch.object(handlers, "fail_job"),
-    ):
-        _evaluate_result(session, job, {"status": status, "error": "boom"}, worker_id="w-fix")
-    mark.assert_not_called()
+def test_sync_context_payload_never_emits_background_marker():
+    rid = uuid.uuid4()
+    payload = sync_context_payload(rid, folder_id="f", full=True)
+    assert payload["request_id"] == str(rid)
+    assert "background" not in payload
 
 
-def test_handle_job_passes_background_flag_to_engine():
-    job = _job(background=True)
-    session = MagicMock()
-    session.get.return_value = MagicMock(sync_enabled=True)
-    with (
-        patch("mail_core.sync.engine.sync_account_folders", return_value={"status": "ok"}) as engine,
-        patch.object(handlers, "get_credential_store"),
-        patch.object(handlers, "complete_job"),
-        patch.object(handlers, "_recover_account_sync_status"),
-    ):
-        ok = handlers.handle_job(session, job, worker_id="w-fix")
-    assert ok is True
-    assert engine.call_args.kwargs["background"] is True
+def test_is_permanent_auth_error_classifies_auth_vs_transient():
+    assert is_permanent_auth_error(PermanentAuthError("rejected")) is True
+    assert is_permanent_auth_error({"status": "auth_failed"}) is True
+    assert is_permanent_auth_error({"error_code": "auth_failed"}) is True
+    assert is_permanent_auth_error({"status": "rate_limited"}) is False
+    assert is_permanent_auth_error(RuntimeError("transient")) is False
 
 
-def test_handle_job_foreground_does_not_pass_background_flag():
-    job = _job(background=False)
-    session = MagicMock()
-    session.get.return_value = MagicMock(sync_enabled=True)
-    with (
-        patch("mail_core.sync.engine.sync_account_folders", return_value={"status": "ok"}) as engine,
-        patch.object(handlers, "get_credential_store"),
-        patch.object(handlers, "complete_job"),
-        patch.object(handlers, "_recover_account_sync_status"),
-    ):
-        handlers.handle_job(session, job, worker_id="w-fix")
-    assert engine.call_args.kwargs["background"] is False
-
-
-def test_foreground_terminal_failure_marks_account_failed():
-    job = _terminal_job(background=False)
-    session = MagicMock()
-    session.in_transaction.return_value = True
-    session.get.return_value = MagicMock(sync_enabled=True)
-    with (
-        patch("mail_core.sync.engine.sync_account_folders", side_effect=RuntimeError("outage")),
-        patch.object(handlers, "update_account_sync_status") as mark,
-        patch.object(handlers, "fail_job"),
-    ):
-        ok = handlers.handle_job(session, job, worker_id="w-fix")
-    assert ok is False
-    mark.assert_called_once()
-
-
-def test_background_terminal_failure_does_not_mark_account_failed():
-    job = _terminal_job(background=True)
-    session = MagicMock()
-    session.in_transaction.return_value = True
-    session.get.return_value = MagicMock(sync_enabled=True)
-    with (
-        patch("mail_core.sync.engine.sync_account_folders", side_effect=RuntimeError("outage")),
-        patch.object(handlers, "update_account_sync_status") as mark,
-        patch.object(handlers, "fail_job"),
-    ):
-        ok = handlers.handle_job(session, job, worker_id="w-fix")
-    assert ok is False
-    mark.assert_not_called()
+def test_account_sync_failure_status_is_single_decision():
+    assert account_sync_failure_status(result=PermanentAuthError("x"), is_background=True) is SyncStatus.AUTH_FAILED
+    assert account_sync_failure_status(result=PermanentAuthError("x"), is_background=False) is SyncStatus.AUTH_FAILED
+    assert account_sync_failure_status(result={"status": "provider_error"}, is_background=True) is None
+    assert account_sync_failure_status(result={"status": "lease_busy"}, is_background=True) is None
+    assert account_sync_failure_status(result={"status": "rate_limited"}, is_background=True) is None
+    assert account_sync_failure_status(result={"status": "provider_error"}, is_background=False) is SyncStatus.FAILED
 
 
 def test_factory_does_not_import_dead_host_security_helpers():

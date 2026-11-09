@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.orm import sessionmaker
 
 from mail_core.mail.domain.enums import OutboxEventType
@@ -201,6 +201,90 @@ class _StaleFirstExecuteSession:
 class _StubProvider:
     def probe_folder_status(self, remote_id):
         return FolderStatus(messages=1, uidnext=1, unseen=0, highestmodseq=1)
+
+
+class _FailingProvider:
+    def probe_folder_status(self, remote_id):
+        raise RuntimeError("probe failed")
+
+
+def _seed_patrol_failure(*, failures: int):
+    engine = _patrol_engine()
+    Session = sessionmaker(bind=engine)
+    account_id = uuid.uuid4()
+    folder_id = uuid.uuid4()
+    with Session() as session:
+        session.add(
+            Account(id=account_id, email=f"s9-{uuid.uuid4().hex[:6]}@example.test",
+                    provider="stub", sync_enabled=True)
+        )
+        session.add(
+            Folder(id=folder_id, account_id=account_id, remote_id="Sent", name="Sent",
+                   role="sent", sync_status="idle")
+        )
+        session.flush()
+        session.add(
+            SyncCheckpoint(account_id=account_id, folder_id=folder_id, cursor={"modseq": 0},
+                           full_scan_complete=True)
+        )
+        session.add(
+            FolderPatrolStatus(folder_id=folder_id, last_status=None,
+                              last_probe_failures=failures)
+        )
+        session.commit()
+    return engine, Session, folder_id
+
+
+def _patrol_config():
+    return PatrolConfig(
+        enabled=True, interval_s=0.0, max_probes=10, max_unprobed_s=999999.0
+    )
+
+
+def test_s7_patrol_failure_count_is_atomic_sql_increment():
+    engine, Session, folder_id = _seed_patrol_failure(failures=3)
+    statements: list[str] = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        with Session() as session:
+            result = schedule_folder_status_patrol(
+                session,
+                config=_patrol_config(),
+                provider_factory=lambda acc: _FailingProvider(),
+                now=datetime(2026, 11, 9, 15, 0, 0, tzinfo=timezone.utc),
+            )
+            session.commit()
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+    assert result.failed == 1
+    updates = [
+        sql for sql in statements
+        if sql.lstrip().upper().startswith("UPDATE") and "folder_patrol_status" in sql
+    ]
+    assert any("coalesce" in sql.lower() and "+" in sql for sql in updates), updates
+    with Session() as session:
+        assert session.get(FolderPatrolStatus, folder_id).last_probe_failures == 4
+
+
+def test_s7_patrol_failure_count_accumulates_across_workers():
+    _engine, Session, folder_id = _seed_patrol_failure(failures=3)
+    for _ in range(2):
+        with Session() as session:
+            result = schedule_folder_status_patrol(
+                session,
+                config=_patrol_config(),
+                provider_factory=lambda acc: _FailingProvider(),
+                now=datetime(2026, 11, 9, 15, 0, 0, tzinfo=timezone.utc),
+            )
+            session.commit()
+            assert result.failed == 1
+    with Session() as session:
+        assert session.get(FolderPatrolStatus, folder_id).last_probe_failures == 5
 
 
 def test_s7_patrol_upsert_survives_concurrent_first_probe():

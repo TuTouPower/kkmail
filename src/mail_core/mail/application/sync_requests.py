@@ -109,6 +109,57 @@ class SyncRequestOut(BaseModel):
     background_errors: list[SyncTargetErrorOut] = Field(default_factory=list)
 
 
+def _coerce_uuid(value: Any) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def sync_context_payload(request_id: uuid.UUID | str | None = None, **extra: Any) -> dict[str, Any]:
+    payload = {key: value for key, value in extra.items() if value is not None}
+    if request_id is not None:
+        payload["request_id"] = str(request_id)
+    return payload
+
+
+def resolve_sync_context(session: Session, job: Any) -> tuple[bool, uuid.UUID | None]:
+    payload = getattr(job, "payload", None)
+    if not isinstance(payload, dict):
+        return False, None
+    request_id = _coerce_uuid(payload.get("request_id") or payload.get("parent_request_id"))
+    if request_id is None:
+        return False, None
+    req = session.get(SyncRequest, request_id)
+    if req is None:
+        return False, request_id
+    scope = req.scope if isinstance(req.scope, dict) else {}
+    return bool(scope.get("background")), request_id
+
+
+def is_permanent_auth_error(result: Any) -> bool:
+    if isinstance(result, BaseException):
+        from mail_core.providers.http import PermanentAuthError
+
+        return isinstance(result, PermanentAuthError)
+    if isinstance(result, dict):
+        return any(
+            str(result.get(key) or "") == SyncStatus.AUTH_FAILED.value
+            for key in ("status", "error_code", "error")
+        )
+    return False
+
+
+def account_sync_failure_status(*, result: Any, is_background: bool) -> SyncStatus | None:
+    if is_permanent_auth_error(result):
+        return SyncStatus.AUTH_FAILED
+    if is_background:
+        return None
+    return SyncStatus.FAILED
+
+
 _SCOPE_KEYS = (
     "account_id",
     "group_id",
@@ -372,7 +423,7 @@ def create_sync_request(
                             session,
                             job_type=JobType.SYNC_FOLDER_DELTA.value,
                             account_id=cand.account_id,
-                            payload={"folder_id": str(cand.folder_id), "request_id": str(request_id)},
+                            payload=sync_context_payload(request_id, folder_id=str(cand.folder_id)),
                             priority=20,
                             dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
                         )
@@ -382,7 +433,7 @@ def create_sync_request(
                             session,
                             job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                             account_id=cand.account_id,
-                            payload={"request_id": str(request_id)},
+                            payload=sync_context_payload(request_id),
                             priority=20,
                             dedupe_key=f"sync:{cand.account_id}",
                         )
@@ -411,11 +462,9 @@ def create_sync_request(
                         session,
                         job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                         account_id=cand.account_id,
-                        payload={
-                            "request_id": str(request_id),
-                            "full": True,
-                            "scan_generation": str(root_generation),
-                        },
+                        payload=sync_context_payload(
+                            request_id, full=True, scan_generation=str(root_generation)
+                        ),
                         priority=50,
                         dedupe_key=f"sync:{cand.account_id}",
                     )
@@ -480,7 +529,7 @@ def create_sync_request(
                         session,
                         job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                         account_id=aid,
-                        payload={"request_id": str(bg_request_id), "background": True},
+                        payload=sync_context_payload(bg_request_id),
                         priority=60,
                         dedupe_key=f"sync:{aid}",
                     )

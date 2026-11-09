@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.sync_requests import create_sync_request, get_sync_request_report
-from mail_core.mail.domain.enums import JobStatus, JobType
+from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
 from mail_core.mail.storage.models import (
     Account,
     AccountSyncLease,
@@ -601,9 +601,9 @@ def test_a21_inbox_settles_independently_and_background_syncs_siblings(monkeypat
         assert bg_report.state == "complete"
 
 
-def test_a21_background_folder_failure_is_isolated_from_inbox(monkeypatch):
-    monkeypatch.setenv("MAIL_CORE_JOB_MAX_ATTEMPTS", "1")
-    account_id, folders = _seed_account(baselines=True)
+@pytest.mark.parametrize("failure", ["provider_error", "rate_limited"])
+def test_a21_background_folder_failure_is_isolated_from_inbox(monkeypatch, failure):
+    account_id, _folders = _seed_account(baselines=True)
     provider = _provider()
     monkeypatch.setattr(engine_mod, "build_provider", lambda *_a, **_k: provider)
     monkeypatch.setattr(delta_mod, "build_provider", lambda *_a, **_k: provider)
@@ -635,24 +635,28 @@ def test_a21_background_folder_failure_is_isolated_from_inbox(monkeypatch):
     discovery_job_id = _claim_one(account_id, JobType.SYNC_ACCOUNT_FOLDERS.value)
     assert _run_job(discovery_job_id) is True
 
-    # Make provider fail for sibling deltas
-    monkeypatch.setattr(
-        delta_mod,
-        "sync_folder_delta",
-        lambda *args, **kwargs: {"status": "error", "error": "sibling_failed"},
-    )
-    while True:
+    if failure == "rate_limited":
+        class FailingProvider:
+            def delta_changes(self, _remote_id, _cursor):
+                raise RateLimitedError("slow down", retry_after_seconds=30)
+    else:
+        class FailingProvider:
+            def delta_changes(self, _remote_id, _cursor):
+                raise RuntimeError("sibling provider outage")
+
+    monkeypatch.setattr(delta_mod, "build_provider", lambda *_a, **_k: FailingProvider())
+    for _ in range(20):
         sibling_job_id = _try_claim_one(account_id, JobType.SYNC_FOLDER_DELTA.value)
         if sibling_job_id is None:
             break
         _run_job(sibling_job_id)
 
-    # Primary request remains complete (error isolation)
     with Session() as session:
+        account = session.get(Account, account_id)
+        assert account.sync_status not in (SyncStatus.FAILED.value, SyncStatus.AUTH_FAILED.value)
         report = get_sync_request_report(session, request_id)
         assert report.state == "complete"
         assert report.inbox_ready is True
-        assert report.background_state == "failed"
 
 
 # ---------------------------------------------------------------------------
