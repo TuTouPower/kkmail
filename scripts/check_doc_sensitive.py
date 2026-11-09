@@ -89,8 +89,8 @@ PWD_LEN_RE = re.compile(r"(?:口令|密码)长\s*\d+\s*位")
 
 # Plaintext password assignment pattern
 PWD_ASSIGN_RE = re.compile(
-    r"(?i)\b(?:password|passwd|secret_key|api_key|access_token)\s*[:=]\s*"
-    r"(?:[\"']([^\"'\s]{8,})[\"']|([^\s\"']{6,}))"
+    r"(?i)\b(?:password|passwd|secret_key|api_key|access_token)\s*[:=]\s*[\"']([^\"'\s]{8,})[\"']"
+    r"|\b(?:password|passwd|secret_key|api_key|access_token)[:=]([A-Za-z0-9!@#$%^&_+=?\-]{8,})"
 )
 
 SAFE_CREDENTIAL_PLACEHOLDERS = {
@@ -100,6 +100,12 @@ SAFE_CREDENTIAL_PLACEHOLDERS = {
     "<secret>",
     "testpassword",
     "your_password_here",
+    "password",
+    "passwd",
+    "secret_key",
+    "api_key",
+    "access_token",
+    "default",
 }
 
 

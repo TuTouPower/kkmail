@@ -240,7 +240,7 @@ def test_path_equals_user_path_detected(tmp_path: Path):
     doc.write_text(
         """# Review Document
 
-Target: path=/Users/john_doe/code/myrepo diff abc
+Target: path=/Users/karson/code/myrepo diff abc
 """,
         encoding="utf-8",
     )
@@ -248,7 +248,7 @@ Target: path=/Users/john_doe/code/myrepo diff abc
     proc = run_checker(str(doc), "--check")
     assert proc.returncode == 1
     assert "[PATH]" in proc.stderr
-    assert "/Users/john_doe" in proc.stderr
+    assert "/Users/karson" in proc.stderr
 
 
 def test_win_path_equals_user_path_detected(tmp_path: Path):
@@ -269,7 +269,7 @@ def test_unquoted_password_assignment_detected(tmp_path: Path):
     doc.write_text(
         """# Config Notes
 
-PASSWORD=secret
+PASSWORD=Sup3rSecret!value
 """,
         encoding="utf-8",
     )
@@ -281,7 +281,7 @@ PASSWORD=secret
 
 
 def test_sk_proj_token_detected(tmp_path: Path):
-    token = "sk-proj-" + "A" * 40
+    token = "sk-proj-Ab3Cd9Ef0Gh1Ij2Kl3Mn4Op5Qr6St7-_Zx"
     doc = tmp_path / "sk_proj.md"
     doc.write_text(
         f"# Secrets\n\napi token: {token}\n",
@@ -372,4 +372,10 @@ Path: /home/runner/work
 
     proc = run_checker("docs", "--check", "--root", str(tmp_path))
     assert proc.returncode == 0, proc.stderr
+    assert "PASSED" in proc.stdout
+
+
+def test_repo_docs_gate_passes():
+    proc = run_checker("--check")
+    assert proc.returncode == 0, f"Current repo docs gate failed: {proc.stderr} {proc.stdout}"
     assert "PASSED" in proc.stdout
