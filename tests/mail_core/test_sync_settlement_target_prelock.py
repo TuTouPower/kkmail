@@ -92,6 +92,20 @@ def test_settle_prelocks_all_targets_of_affected_requests():
     job_id = uuid.uuid4()
     with Session() as session:
         session.add(
+            WorkerJob(
+                id=job_id,
+                execution_generation=generation,
+                job_type="sync_folder_delta",
+                payload={},
+                status="claimed",
+                run_after=_NOW,
+                created_at=_NOW,
+                updated_at=_NOW,
+            )
+        )
+        session.commit()
+    with Session() as session:
+        session.add(
             SyncRequest(
                 id=request_id,
                 client_request_id=f"prelock-{uuid.uuid4().hex}",
@@ -134,18 +148,6 @@ def test_settle_prelocks_all_targets_of_affected_requests():
                 status="complete",
                 created_at=_NOW,
                 finished_at=_NOW,
-            )
-        )
-        session.add(
-            WorkerJob(
-                id=job_id,
-                execution_generation=generation,
-                job_type="sync_folder_delta",
-                payload={},
-                status="claimed",
-                run_after=_NOW,
-                created_at=_NOW,
-                updated_at=_NOW,
             )
         )
         session.commit()

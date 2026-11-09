@@ -195,6 +195,8 @@ def test_refresh_requests_locks_targets_before_requests_via_settle_path():
                 updated_at=_NOW,
             )
         )
+        session.commit()
+    with Session() as session:
         binding = session.scalar(select(SyncRequestTargetJob))
         assert binding is not None
         binding.job_id = job_id

@@ -75,6 +75,15 @@ def _seed(Session):
     target_id = uuid.uuid4()
     with Session() as session:
         session.add(
+            WorkerJob(
+                id=job_id, execution_generation=generation,
+                job_type="sync_folder_delta", payload={}, status="claimed",
+                run_after=_NOW, created_at=_NOW, updated_at=_NOW,
+            )
+        )
+        session.commit()
+    with Session() as session:
+        session.add(
             Account(
                 id=account_id,
                 email=f"r07-{account_id.hex}@example.test",
@@ -103,12 +112,6 @@ def _seed(Session):
                 status="running", created_at=_NOW,
             )
         )
-        job = WorkerJob(
-            id=job_id, execution_generation=generation,
-            job_type="sync_folder_delta", payload={}, status="claimed",
-            run_after=_NOW, created_at=_NOW, updated_at=_NOW,
-        )
-        session.add(job)
         session.commit()
     return account_id, job_id
 
