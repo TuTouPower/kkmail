@@ -204,15 +204,30 @@ def test_port_zero_startup_normalizes_sidecar_into_env(monkeypatch, capsys):
     monkeypatch.setattr(uvicorn, "Server", FakeServer)
     monkeypatch.setattr(uvicorn, "run", lambda _app, **kw: None)
 
-    main_module.main(["--port", "0", "--skip-migrations", "--no-worker"])
+    # main() normalizes the sidecar decision back into os.environ by design.
+    # monkeypatch.delenv() records nothing when the key was absent at setup,
+    # so without an explicit snapshot/restore the "1" would leak into the
+    # pytest process and poison later tests (e.g. a non-sidecar main() would
+    # take the real uvicorn.Server path and block forever).
+    _sentinel = object()
+    old_sidecar = os.environ.get("KKMAIL_SIDECAR", _sentinel)
+    old_port = os.environ.get("MAIL_CORE_PORT", _sentinel)
+    try:
+        main_module.main(["--port", "0", "--skip-migrations", "--no-worker"])
 
-    out = capsys.readouterr().out
-    assert "KKMAIL_SIDECAR_READY:" in out
-    assert os.environ["KKMAIL_SIDECAR"] == "1"
-    assert is_sidecar_enabled() is True
-    assert is_sidecar_enabled(os.environ) is True
+        out = capsys.readouterr().out
+        assert "KKMAIL_SIDECAR_READY:" in out
+        assert os.environ["KKMAIL_SIDECAR"] == "1"
+        assert is_sidecar_enabled() is True
+        assert is_sidecar_enabled(os.environ) is True
 
-    meta = get_oauth_metadata("microsoft")
-    assert meta["runtime_mode"] == "desktop"
-    assert meta["redirect_uri"] is not None
-    assert meta["redirect_uri"].startswith("http://localhost:")
+        meta = get_oauth_metadata("microsoft")
+        assert meta["runtime_mode"] == "desktop"
+        assert meta["redirect_uri"] is not None
+        assert meta["redirect_uri"].startswith("http://localhost:")
+    finally:
+        for _key, _old in (("KKMAIL_SIDECAR", old_sidecar), ("MAIL_CORE_PORT", old_port)):
+            if _old is _sentinel:
+                os.environ.pop(_key, None)
+            else:
+                os.environ[_key] = _old
