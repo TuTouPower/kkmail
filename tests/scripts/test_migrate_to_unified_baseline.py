@@ -402,6 +402,7 @@ def test_verify_schema_exempt_tables_only_skips_named_table():
 def test_run_migration_refuses_unsupported_legacy_database(tmp_path: Path, dry_run: bool):
     db_file = tmp_path / f"old_legacy_{'dry' if dry_run else 'apply'}.db"
     db_url = f"sqlite:///{db_file}"
+    legacy_cursor = json.dumps({"last_status": "ok", "delta_token": "keep-me"})
     engine = create_engine(db_url)
     with engine.begin() as conn:
         conn.execute(
@@ -415,6 +416,13 @@ def test_run_migration_refuses_unsupported_legacy_database(tmp_path: Path, dry_r
                 "folder_id VARCHAR(64), cursor TEXT)"
             )
         )
+        conn.execute(
+            text(
+                "INSERT INTO sync_checkpoints (id, folder_id, cursor) "
+                "VALUES ('cp-1', 'folder-1', :cur)"
+            ),
+            {"cur": legacy_cursor},
+        )
     engine.dispose()
 
     with pytest.raises(SchemaValidationError, match="not supported") as excinfo:
@@ -422,12 +430,66 @@ def test_run_migration_refuses_unsupported_legacy_database(tmp_path: Path, dry_r
     assert "message_remote_image_allows" in str(excinfo.value)
     assert "Restore the pre-upgrade sealed backup" in str(excinfo.value)
 
+    verify_engine = create_engine(db_url)
+    with verify_engine.connect() as conn:
+        from sqlalchemy import inspect
+        assert "folder_patrol_status" not in set(inspect(conn).get_table_names())
+        assert conn.execute(
+            text("SELECT cursor FROM sync_checkpoints WHERE id = 'cp-1'")
+        ).scalar_one() == legacy_cursor
+        assert conn.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalars().all() == ["20261027_0029"]
+    verify_engine.dispose()
+
+
+def test_dry_run_reports_missing_columns_on_existing_patrol_table(tmp_path: Path):
+    db_file = tmp_path / "legacy_0030_incomplete_patrol.db"
+    _create_0030_schema_engine(db_file)
+    db_url = f"sqlite:///{db_file}"
+    engine = create_engine(db_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE TABLE folder_patrol_status (folder_id VARCHAR(64) PRIMARY KEY)")
+        )
+    engine.dispose()
+
+    with pytest.raises(SchemaValidationError, match="not supported") as excinfo:
+        run_migration(db_url, dry_run=True)
+    msg = str(excinfo.value)
+    assert "folder_patrol_status" in msg
+    assert "missing required columns" in msg
+    assert "last_probe_failures" in msg
+
+
+def test_verify_schema_exempt_table_still_checks_columns_when_present():
+    engine = _create_full_schema_engine()
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE folder_patrol_status"))
+        conn.execute(
+            text("CREATE TABLE folder_patrol_status (folder_id VARCHAR(64) PRIMARY KEY)")
+        )
+    with engine.connect() as conn:
+        errors = verify_database_schema(
+            conn, exempt_tables=frozenset({"folder_patrol_status"})
+        )
+    joined = "\n".join(errors)
+    assert "folder_patrol_status" in joined
+    assert "missing required columns" in joined
+    assert "Missing required tables" not in joined
+
 
 def _captured_sql(call):
     return call.args[0].text
 
 
 def test_ensure_folder_patrol_status_emits_postgres_ddl():
+    """Mock-level check of the PostgreSQL DDL text only.
+
+    The connection is a MagicMock: no statement reaches a real PostgreSQL
+    server, so dialect or runtime failures cannot surface here. Real execution
+    is covered by tests/mail_core/test_migration_validation.py.
+    """
     conn = MagicMock()
     conn.dialect.name = "postgresql"
     inspector = MagicMock()
@@ -445,6 +507,12 @@ def test_ensure_folder_patrol_status_emits_postgres_ddl():
 
 
 def test_migrate_patrol_status_data_emits_postgres_ddl():
+    """Mock-level check of the PostgreSQL data-migration SQL text only.
+
+    The INSERT ... ON CONFLICT and cursor-minus-ARRAY statements are asserted
+    as strings against a MagicMock, never executed. Real JSONB execution is
+    covered by tests/mail_core/test_migration_validation.py.
+    """
     conn = MagicMock()
     conn.dialect.name = "postgresql"
     inspector = MagicMock()

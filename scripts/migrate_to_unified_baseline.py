@@ -196,8 +196,11 @@ def verify_database_schema(
 
     Returns a list of error messages describing missing tables or columns.
     If the returned list is empty, the schema matches the unified baseline.
-    ``exempt_tables`` excludes tables the offline tool will create later, so
-    a dry-run skips exactly those tables without masking other missing ones.
+    ``exempt_tables`` only waives the requirement that those tables exist: it
+    is for tables the offline tool will create later (e.g. on a dry-run, where
+    folder_patrol_status has not been built yet). It never waives column checks
+    for a table that does exist, so an incomplete existing table is still
+    reported instead of passing a dry-run and failing on apply.
     """
     inspector = inspect(bind)
     existing_tables = set(inspector.get_table_names())
@@ -210,7 +213,7 @@ def verify_database_schema(
 
     # Check columns for present tables
     for table_name, req_cols in sorted(REQUIRED_COLUMNS.items()):
-        if table_name in exempt_tables or table_name not in existing_tables:
+        if table_name not in existing_tables:
             continue
         existing_cols = {col["name"] for col in inspector.get_columns(table_name)}
         missing_cols = sorted(req_cols - existing_cols)
@@ -503,7 +506,7 @@ def run_migration(
     *,
     dry_run: bool = False,
 ) -> None:
-    """Perform offline schema verification, legacy upgrade, and baseline stamping."""
+    """Perform offline schema verification, supported legacy rebuild, and baseline stamping."""
     raw_url = database_url or os.environ.get("MAIL_CORE_DATABASE_URL")
     if not raw_url:
         raise ValueError(
@@ -520,14 +523,7 @@ def run_migration(
 
         is_legacy = is_legacy_revision(current_rev)
 
-        if is_legacy:
-            LOG.info(
-                "Detected legacy revision '%s'. Running automated upgrade to unified baseline...",
-                current_rev,
-            )
-            ensure_folder_patrol_status_table(conn, dry_run=dry_run)
-            migrate_patrol_status_data(conn, dry_run=dry_run)
-        else:
+        if not is_legacy:
             inspector = inspect(conn)
             existing = set(inspector.get_table_names())
             missing_critical = sorted(CORE_CRITICAL_TABLES - existing)
@@ -545,9 +541,7 @@ def run_migration(
                         "Refusing to stamp unified baseline."
                     )
 
-        exempt_tables = (
-            frozenset({"folder_patrol_status"}) if (dry_run and is_legacy) else frozenset()
-        )
+        exempt_tables = frozenset({"folder_patrol_status"}) if is_legacy else frozenset()
         errors = verify_database_schema(conn, exempt_tables=exempt_tables)
 
         if errors:
@@ -565,6 +559,15 @@ def run_migration(
             )
 
         LOG.info("Database schema verification passed. All tables and columns present.")
+
+        if is_legacy:
+            LOG.info(
+                "Detected supported legacy revision '%s'. Rebuilding folder_patrol_status "
+                "from sync_checkpoints before stamping the unified baseline.",
+                current_rev,
+            )
+            ensure_folder_patrol_status_table(conn, dry_run=dry_run)
+            migrate_patrol_status_data(conn, dry_run=dry_run)
         stamp_unified_baseline(conn, dry_run=dry_run)
         if not dry_run:
             conn.commit()
