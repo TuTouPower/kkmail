@@ -24,6 +24,7 @@ from sqlalchemy import (
     Table,
     UniqueConstraint,
     create_engine,
+    inspect,
     text,
 )
 
@@ -36,10 +37,15 @@ from mail_core.db.baseline import (
     REQUIRED_COLUMNS,
     REQUIRED_TABLES,
     UNIFIED_BASELINE_REVISION,
+    MigrationAction,
+    RevisionContext,
     SchemaValidationError,
     ensure_folder_patrol_status_table,
     is_legacy_revision,
     migrate_patrol_status_data,
+    offline_revision_context,
+    plan_migration,
+    read_database_state,
     run_migration,
     stamp_unified_baseline,
     verify_database_schema,
@@ -100,6 +106,84 @@ def _create_full_schema_engine(db_url: str = "sqlite:///:memory:"):
     return engine
 
 
+def _startup_revision_context():
+    """Build the startup entry's context from the real Alembic ScriptDirectory."""
+    import mail_core.db as db_pkg
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    here = Path(db_pkg.__file__).resolve().parent
+    cfg = Config(str(here / "alembic.ini"))
+    cfg.set_main_option("script_location", str(here / "alembic"))
+    script = ScriptDirectory.from_config(cfg)
+    return RevisionContext(
+        known_revisions=frozenset(r.revision for r in script.walk_revisions()),
+        legacy_revisions=KNOWN_LEGACY_REVISIONS,
+        heads=tuple(script.get_heads()),
+    )
+
+
+def _assert_no_version_stamp(db_url: str) -> None:
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            tables = set(inspect(conn).get_table_names())
+            rows: list[str] = []
+            if "alembic_version" in tables:
+                rows = list(
+                    conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+                )
+            assert UNIFIED_BASELINE_REVISION not in rows
+    finally:
+        engine.dispose()
+
+
+def _read_versions(db_url: str) -> list[str]:
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            tables = set(inspect(conn).get_table_names())
+            if "alembic_version" not in tables:
+                return []
+            return sorted(
+                conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+            )
+    finally:
+        engine.dispose()
+
+
+def _build_state_db(tmp_path: Path, state: str) -> str:
+    db_url = f"sqlite:///{tmp_path / ('state_' + state + '.db')}"
+    if state == "no_version_full":
+        _create_full_schema_engine(db_url).dispose()
+        return db_url
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            if state == "empty":
+                return db_url
+            if state == "no_version_one":
+                conn.execute(text("CREATE TABLE account_groups (id VARCHAR(64) PRIMARY KEY)"))
+                return db_url
+            if state == "multiple":
+                conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
+                conn.execute(text("INSERT INTO alembic_version VALUES ('20261107_0031')"))
+                return db_url
+            conn.execute(
+                text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
+            )
+            revision = {
+                "at_head": UNIFIED_BASELINE_REVISION,
+                "legacy": "20261031_0030",
+                "unknown": "unknown_rev_9999",
+            }[state]
+            conn.execute(text("INSERT INTO alembic_version VALUES (:rev)"), {"rev": revision})
+        return db_url
+    finally:
+        engine.dispose()
+
+
 def test_required_tables_matches_expected_core_32_tables():
     """Verify REQUIRED_TABLES against the hardcoded specification of 32 core tables.
 
@@ -146,10 +230,15 @@ def test_verify_schema_detects_missing_columns():
         assert "remote_id" in joined
 
 
-def test_run_migration_rejects_incomplete_schema(tmp_path: Path):
+def test_run_migration_rejects_empty_database(tmp_path: Path):
+    """退役理由：原 test_run_migration_rejects_incomplete_schema 把空库断言为
+    『Database schema verification failed』（旧实现的缺 critical 表分支）。统一分类后
+    空库归类 EMPTY_DATABASE，离线明确提示走启动/Alembic、不建表、不盖印。"""
     db_url = f"sqlite:///{tmp_path / 'empty.db'}"
-    with pytest.raises(SchemaValidationError, match="Database schema verification failed"):
+    with pytest.raises(SchemaValidationError, match="empty") as excinfo:
         run_migration(db_url)
+    assert "alembic upgrade head" in str(excinfo.value)
+    _assert_no_version_stamp(db_url)
 
 
 def test_stamp_unified_baseline_creates_table_and_sets_revision():
@@ -189,18 +278,26 @@ def test_stamp_unified_baseline_overwrites_prior_revision():
         assert versions == [UNIFIED_BASELINE_REVISION]
 
 
-def test_run_migration_success_flow(tmp_path: Path):
+def test_no_version_full_schema_refused_by_both_entries(tmp_path: Path, monkeypatch):
+    """退役理由：原 test_run_migration_success_flow 断言『无版本 + 全 32 表 → 成功
+    stamp』，固化了离线/启动双入口的行为分歧。统一分类后该状态为
+    NO_VERSION_WITH_BUSINESS_TABLES，两个入口一律拒绝、不盖印。"""
     db_url = f"sqlite:///{tmp_path / 'full.db'}"
-    _create_full_schema_engine(db_url)
-    run_migration(db_url, dry_run=False)
+    _create_full_schema_engine(db_url).dispose()
 
-    engine = create_engine(db_url)
-    try:
-        with engine.connect() as conn:
-            versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            assert versions == [UNIFIED_BASELINE_REVISION]
-    finally:
-        engine.dispose()
+    with pytest.raises(SchemaValidationError, match="no alembic_version mark"):
+        run_migration(db_url, dry_run=False)
+    _assert_no_version_stamp(db_url)
+
+    from mail_core import __main__ as main_module
+
+    upgrades: list[str] = []
+    monkeypatch.setattr("alembic.command.upgrade", lambda cfg, rev: upgrades.append(rev))
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", db_url)
+    with pytest.raises(RuntimeError, match="no alembic_version mark"):
+        main_module.run_migrations()
+    assert upgrades == []
+    _assert_no_version_stamp(db_url)
 
 
 def test_main_cli_returns_expected_exit_codes(tmp_path: Path):
@@ -209,15 +306,15 @@ def test_main_cli_returns_expected_exit_codes(tmp_path: Path):
         ret = main([])
         assert ret == 2
 
-    # 2. Schema validation failure
+    # 2. Empty DB: the offline tool refuses and points to startup/Alembic.
     ret = main(["--database-url", f"sqlite:///{tmp_path / 'empty.db'}"])
     assert ret == 1
 
-    # 3. Success
+    # 3. No version + full 32 tables: refused (retired: old case expected a success stamp).
     full_url = f"sqlite:///{tmp_path / 'full.db'}"
     _create_full_schema_engine(full_url)
     ret = main(["--database-url", full_url])
-    assert ret == 0
+    assert ret == 1
 
 
 def _create_0030_schema_engine(db_path: Path | str):
@@ -448,7 +545,10 @@ def test_migrate_from_0030_legacy_database_success(tmp_path: Path):
         assert versions == [UNIFIED_BASELINE_REVISION]
 
 
-def test_run_migration_refuses_stamp_on_unknown_revision_with_missing_tables(tmp_path: Path):
+def test_run_migration_refuses_unknown_revision_with_zero_writes(tmp_path: Path):
+    """退役理由：原用例断言『Refusing to stamp unified baseline』（旧实现把
+    unknown revision + 缺表 归入缺 critical 表分支的措辞）。统一分类后 unknown
+    revision 一律按 UNKNOWN_REVISION 拒绝、不盖印、零写入。"""
     db_file = tmp_path / "unknown_rev.db"
     db_url = f"sqlite:///{db_file}"
     engine = create_engine(db_url)
@@ -457,9 +557,12 @@ def test_run_migration_refuses_stamp_on_unknown_revision_with_missing_tables(tmp
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
         )
         conn.execute(text("INSERT INTO alembic_version VALUES ('unknown_rev_9999')"))
+    engine.dispose()
 
-    with pytest.raises(SchemaValidationError, match="Refusing to stamp unified baseline"):
+    before = _read_versions(db_url)
+    with pytest.raises(SchemaValidationError, match="unrecognized"):
         run_migration(db_url)
+    assert _read_versions(db_url) == before
 
 
 def test_legacy_revision_set_uses_real_hashed_id():
@@ -660,3 +763,38 @@ def test_migrate_patrol_status_data_emits_postgres_ddl():
     assert "to_timestamp" in insert_sql
     assert "::double precision" in insert_sql
     assert "cursor - ARRAY" in update_sql
+
+
+@pytest.mark.parametrize(
+    "state, expected_action",
+    [
+        ("empty", MigrationAction.EMPTY_DATABASE),
+        ("no_version_full", MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES),
+        ("no_version_one", MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES),
+        ("at_head", MigrationAction.AT_BASELINE),
+        ("legacy", MigrationAction.LEGACY),
+        ("unknown", MigrationAction.UNKNOWN_REVISION),
+        ("multiple", MigrationAction.MULTIPLE_VERSIONS),
+    ],
+)
+def test_plan_migration_two_entries_agree_on_classification(tmp_path, state, expected_action):
+    """Both entries supply a RevisionContext to the single planner.
+
+    The startup context comes from ScriptDirectory.walk_revisions/get_heads and
+    the offline context from baseline constants; for the same database state
+    the returned action must be identical, so the two entries cannot diverge.
+    """
+    db_url = _build_state_db(tmp_path, state)
+    startup_ctx = _startup_revision_context()
+    offline_ctx = offline_revision_context()
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            db_state = read_database_state(conn)
+    finally:
+        engine.dispose()
+    startup_plan = plan_migration(db_state, context=startup_ctx)
+    offline_plan = plan_migration(db_state, context=offline_ctx)
+    assert startup_plan.action == expected_action
+    assert offline_plan.action == expected_action
+    assert startup_plan.action == offline_plan.action

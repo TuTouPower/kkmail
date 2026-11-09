@@ -106,11 +106,15 @@ def run_migrations(*, check_only: bool = False) -> None:
     cfg.set_main_option("script_location", str(here / "alembic"))
     script = ScriptDirectory.from_config(cfg)
 
-    # Guard against legacy revisions before Alembic attempts upgrade
+    context = baseline.RevisionContext(
+        known_revisions=frozenset(r.revision for r in script.walk_revisions()),
+        legacy_revisions=baseline.KNOWN_LEGACY_REVISIONS,
+        heads=tuple(script.get_heads()),
+    )
+
     db_url = cfg.get_main_option("sqlalchemy.url") or database_url()
     check_engine = sqlalchemy.create_engine(baseline.check_connect_url(db_url))
     try:
-        current_rev: str | None = None
         with check_engine.connect() as conn:
             backend = baseline.make_url(db_url).get_backend_name()
             baseline.configure_read_only(conn, backend)
@@ -119,70 +123,58 @@ def run_migrations(*, check_only: bool = False) -> None:
             version_rows: list[str] = []
             if "alembic_version" in table_names:
                 version_rows = list(
-                    conn.execute(sqlalchemy.text("SELECT version_num FROM alembic_version"))
+                    conn.execute(
+                        sqlalchemy.text("SELECT version_num FROM alembic_version")
+                    )
                     .scalars()
                     .all()
                 )
-            current_rev = _single_alembic_revision(version_rows)
-
-            if current_rev is None:
-                if table_names & baseline.REQUIRED_TABLES:
-                    present = sorted(table_names & baseline.REQUIRED_TABLES)
-                    sample = ", ".join(present[:5])
-                    raise RuntimeError(
-                        "Database has business tables but no alembic_version mark "
-                        f"({len(present)} unified-baseline tables present, e.g. {sample}). "
-                        "Its origin cannot be verified; refusing to stamp the unified "
-                        "baseline blindly (creating the remaining tables could collide "
-                        "with existing data). Restore a known-good backup and migrate "
-                        "the data explicitly. The database was not modified."
-                    )
-                if check_only:
-                    return
-                command.upgrade(cfg, "head")
-                return
-
-            if current_rev in {rev.revision for rev in script.walk_revisions()}:
-                if check_only:
-                    return
-                command.upgrade(cfg, "head")
-                return
-
-            # Legacy check comes before any date-based comparison so a
-            # recognized legacy revision (e.g. 20261107_0031, dated after the
-            # unified baseline) is never misclassified as a newer build.
-            if baseline.is_legacy_revision(current_rev):
-                errors = baseline.verify_narrow_legacy_schema(conn)
-                if errors:
-                    detail = "\n  - ".join(errors)
-                    raise RuntimeError(
-                        f"Automatic upgrade of this legacy database (revision '{current_rev}') "
-                        "to the unified baseline is not supported: the narrow conversion "
-                        "path only handles the verified legacy shape.\n  - " + detail + "\n"
-                        "The database was not modified. Restore the pre-upgrade sealed "
-                        "backup into a deployment running the matching historical release "
-                        "and resolve the schema there; do not re-run this migration "
-                        "against the same database, it cannot reconstruct the missing schema."
-                    )
-                if check_only:
-                    return
-                try:
-                    outcome = baseline.apply_narrow_legacy_conversion(db_url)
-                except baseline.SchemaValidationError as exc:
-                    raise RuntimeError(
-                        f"Legacy conversion for revision '{current_rev}' failed and was "
-                        f"rolled back: {exc} The database was not modified."
-                    ) from exc
-                log.info("Narrow legacy conversion %s for revision '%s'", outcome, current_rev)
-                # "No-op" applies only to the current single-head tree; future
-                # trees always upgrade for real.
-                command.upgrade(cfg, "head")
-                return
-
-            message = _legacy_revision_error(current_rev, script) or (
-                f"Database revision '{current_rev}' is not recognized."
+            state = baseline.DatabaseState(
+                version_rows=tuple(version_rows),
+                table_names=frozenset(table_names),
             )
-            raise RuntimeError(f"{message} The database was not modified.")
+            plan = baseline.plan_migration(state, context=context)
+
+            if plan.action in (
+                baseline.MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES,
+                baseline.MigrationAction.UNKNOWN_REVISION,
+                baseline.MigrationAction.MULTIPLE_VERSIONS,
+            ):
+                raise RuntimeError(plan.message)
+
+            if plan.action in (
+                baseline.MigrationAction.EMPTY_DATABASE,
+                baseline.MigrationAction.AT_BASELINE,
+            ):
+                if check_only:
+                    return
+                command.upgrade(cfg, "head")
+                return
+
+            errors = baseline.verify_narrow_legacy_schema(conn)
+            if errors:
+                detail = "\n  - ".join(errors)
+                raise RuntimeError(
+                    f"Automatic upgrade of this legacy database (revision '{plan.current_revision}') "
+                    "to the unified baseline is not supported: the narrow conversion "
+                    "path only handles the verified legacy shape.\n  - " + detail + "\n"
+                    "The database was not modified. Restore the pre-upgrade sealed "
+                    "backup into a deployment running the matching historical release "
+                    "and resolve the schema there; do not re-run this migration "
+                    "against the same database, it cannot reconstruct the missing schema."
+                )
+            if check_only:
+                return
+            try:
+                outcome = baseline.apply_narrow_legacy_conversion(db_url)
+            except baseline.SchemaValidationError as exc:
+                raise RuntimeError(
+                    f"Legacy conversion for revision '{plan.current_revision}' failed and was "
+                    f"rolled back: {exc} The database was not modified."
+                ) from exc
+            log.info("Narrow legacy conversion %s for revision '%s'", outcome, plan.current_revision)
+            command.upgrade(cfg, "head")
+            return
     finally:
         check_engine.dispose()
 

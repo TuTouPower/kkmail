@@ -446,3 +446,25 @@ def test_t7_check_migrations_clean_subprocess_zero_writes(tmp_path):
             assert inspect(conn).get_table_names() == []
     finally:
         engine.dispose()
+
+
+def test_both_entries_delegate_to_single_planner(tmp_path, monkeypatch):
+    """Both entries classify through baseline.plan_migration, not their own judgement."""
+    empty_url = f"sqlite:///{tmp_path / 'delegate.db'}"
+    calls: list[object] = []
+    real_plan = baseline.plan_migration
+
+    def _spy(*args, **kwargs):
+        calls.append(kwargs.get("context"))
+        return real_plan(*args, **kwargs)
+
+    monkeypatch.setattr("mail_core.db.baseline.plan_migration", _spy)
+    upgrades = _mock_upgrade(monkeypatch)
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", empty_url)
+
+    main_module.run_migrations()
+    with pytest.raises(baseline.SchemaValidationError):
+        baseline.run_migration(empty_url, dry_run=True)
+
+    assert len(calls) == 2
+    assert upgrades == ["head"]
