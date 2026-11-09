@@ -2,9 +2,11 @@
 
 The prune service is exercised against a real SQLAlchemy session on a
 SQLite database whose two tables are created with raw DDL matching the
-current models (the PostgreSQL JSONB server defaults cannot be created on
-SQLite, but every column the retention logic reads or writes is present).
-PostgreSQL-backed end-to-end coverage lives in test_outbox_retention.py.
+current models. This covers only the dialect-independent prune and
+watermark algorithm: SQLite provides no PostgreSQL JSONB server defaults,
+FOR UPDATE or advisory locks, so these cases assert no PostgreSQL locking
+or concurrency semantics. PostgreSQL-backed end-to-end coverage lives in
+test_outbox_retention.py.
 
 Replay and dispatcher behavior are exercised through the production
 functions with their session-factory / publication helpers replaced by

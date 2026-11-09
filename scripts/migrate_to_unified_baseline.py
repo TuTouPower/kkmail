@@ -52,7 +52,7 @@ CORE_CRITICAL_TABLES: frozenset[str] = frozenset({
 
 KNOWN_LEGACY_REVISIONS: frozenset[str] = frozenset({
     "20261020_0001",
-    "20261020_0002",
+    "f5f312751c77",
     "20261021_0003",
     "20261021_0004",
     "20261021_0005",
@@ -91,7 +91,13 @@ def is_legacy_revision(rev: str | None) -> bool:
         return False
     if rev in KNOWN_LEGACY_REVISIONS:
         return True
-    return len(rev) == 13 and rev < UNIFIED_BASELINE_REVISION
+    return (
+        len(rev) == len(UNIFIED_BASELINE_REVISION)
+        and rev[:8].isdigit()
+        and rev[8] == "_"
+        and rev[9:].isdigit()
+        and rev < UNIFIED_BASELINE_REVISION
+    )
 
 REQUIRED_TABLES: frozenset[str] = frozenset({
     "account_groups",
@@ -181,24 +187,30 @@ class SchemaValidationError(RuntimeError):
     """Raised when the database schema does not meet the unified baseline requirements."""
 
 
-def verify_database_schema(bind: Engine | Connection) -> list[str]:
+def verify_database_schema(
+    bind: Engine | Connection,
+    *,
+    exempt_tables: frozenset[str] = frozenset(),
+) -> list[str]:
     """Verify that all required tables and columns exist on the target database.
 
     Returns a list of error messages describing missing tables or columns.
     If the returned list is empty, the schema matches the unified baseline.
+    ``exempt_tables`` excludes tables the offline tool will create later, so
+    a dry-run skips exactly those tables without masking other missing ones.
     """
     inspector = inspect(bind)
     existing_tables = set(inspector.get_table_names())
 
     errors: list[str] = []
 
-    missing_tables = sorted(REQUIRED_TABLES - existing_tables)
+    missing_tables = sorted(REQUIRED_TABLES - exempt_tables - existing_tables)
     if missing_tables:
         errors.append(f"Missing required tables: {', '.join(missing_tables)}")
 
     # Check columns for present tables
     for table_name, req_cols in sorted(REQUIRED_COLUMNS.items()):
-        if table_name not in existing_tables:
+        if table_name in exempt_tables or table_name not in existing_tables:
             continue
         existing_cols = {col["name"] for col in inspector.get_columns(table_name)}
         missing_cols = sorted(req_cols - existing_cols)
@@ -238,11 +250,19 @@ def stamp_unified_baseline(
                 text("INSERT INTO alembic_version (version_num) VALUES (:rev)"),
                 {"rev": revision},
             )
-        elif current != [revision]:
+        elif current == [revision]:
+            LOG.info("alembic_version already at %s; leaving it untouched", revision)
+        elif all(is_legacy_revision(r) for r in current):
             conn.execute(text("DELETE FROM alembic_version"))
             conn.execute(
                 text("INSERT INTO alembic_version (version_num) VALUES (:rev)"),
                 {"rev": revision},
+            )
+        else:
+            raise SchemaValidationError(
+                f"Refusing to overwrite alembic_version {current!r} with {revision!r}: "
+                "only an empty table or a recognized legacy revision may be stamped "
+                "to the unified baseline."
             )
 
     if isinstance(bind, Engine):
@@ -525,14 +545,23 @@ def run_migration(
                         "Refusing to stamp unified baseline."
                     )
 
-        errors = verify_database_schema(conn)
-        if dry_run and is_legacy:
-            errors = [e for e in errors if "folder_patrol_status" not in e]
+        exempt_tables = (
+            frozenset({"folder_patrol_status"}) if (dry_run and is_legacy) else frozenset()
+        )
+        errors = verify_database_schema(conn, exempt_tables=exempt_tables)
 
         if errors:
+            detail = "\n  - ".join(errors)
+            if is_legacy:
+                raise SchemaValidationError(
+                    "Automatic upgrade of this legacy database to the unified baseline is "
+                    "not supported: its schema is missing tables or columns that the offline "
+                    "tool cannot reconstruct (the alembic versions tree ships only the unified "
+                    "baseline, so incremental migrations cannot be replayed). Restore the "
+                    "pre-upgrade sealed backup into a fresh deployment instead.\n  - " + detail
+                )
             raise SchemaValidationError(
-                "Database schema verification failed for unified baseline:\n  - "
-                + "\n  - ".join(errors)
+                "Database schema verification failed for unified baseline:\n  - " + detail
             )
 
         LOG.info("Database schema verification passed. All tables and columns present.")
