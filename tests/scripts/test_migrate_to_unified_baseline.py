@@ -310,27 +310,6 @@ def test_run_migration_refuses_stamp_on_unknown_revision_with_missing_tables(tmp
         run_migration(db_url)
 
 
-def test_run_migrations_guard_raises_on_legacy_revision(tmp_path: Path, monkeypatch):
-    from mail_core.__main__ import run_migrations
-
-    db_file = tmp_path / "legacy_guard.db"
-    db_url = f"sqlite:///{db_file}"
-    engine = create_engine(db_url)
-    with engine.begin() as conn:
-        conn.execute(
-            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
-        )
-        conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
-
-    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", db_url)
-    with pytest.raises(RuntimeError) as excinfo:
-        run_migrations()
-
-    msg = str(excinfo.value)
-    assert "Database is at legacy revision '20261031_0030'" in msg
-    assert "Run 'python scripts/migrate_to_unified_baseline.py' to upgrade to the unified baseline." in msg
-
-
 def test_legacy_revision_set_uses_real_hashed_id():
     assert "f5f312751c77" in KNOWN_LEGACY_REVISIONS
     assert "20261020_0002" not in KNOWN_LEGACY_REVISIONS
@@ -529,3 +508,32 @@ def test_migrate_patrol_status_data_emits_postgres_ddl():
     assert "to_timestamp" in insert_sql
     assert "::double precision" in insert_sql
     assert "cursor - ARRAY" in update_sql
+
+
+def test_run_migrations_guard_reports_historical_revision_upgrade_path(tmp_path: Path, monkeypatch):
+    """Historical revisions must still be refused at startup, with the offline-tool path.
+
+    Replaces ``test_run_migrations_guard_raises_on_legacy_revision``: that test
+    locked the former single-message wording, which was retired when the startup
+    guard began distinguishing newer / historical / unverifiable revisions
+    (see tests/mail_core/test_sidecar_detection.py::test_legacy_guard_distinguishes_revision_cases).
+    """
+    from mail_core.__main__ import run_migrations
+
+    db_file = tmp_path / "historical_guard.db"
+    db_url = f"sqlite:///{db_file}"
+    engine = create_engine(db_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
+        )
+        conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", db_url)
+    with pytest.raises(RuntimeError) as excinfo:
+        run_migrations()
+
+    msg = str(excinfo.value)
+    assert "20261031_0030" in msg
+    assert "migrate_to_unified_baseline.py" in msg
+    assert "offline" in msg
