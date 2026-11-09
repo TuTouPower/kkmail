@@ -19,7 +19,6 @@ import os
 import socket
 import threading
 from pathlib import Path
-from typing import Any
 
 log = logging.getLogger("mail_core.main")
 
@@ -59,7 +58,7 @@ def _single_alembic_revision(versions: list[str]) -> str | None:
     return versions[0] if versions else None
 
 
-def _legacy_revision_error(current_rev: str | None, script: Any) -> str | None:
+def _legacy_revision_error(current_rev: str | None, script: object) -> str | None:
     if not current_rev:
         return None
     known_revisions = {rev.revision for rev in script.walk_revisions()}
