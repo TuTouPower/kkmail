@@ -13,7 +13,9 @@ to A30 -- its hand-written accounts DDL lacks the ``recipient_addresses``
 column added to the Account model, so seeding the account already
 raises ``sqlite3.OperationalError`` before any push logic runs. This
 file carries the corrected column in its own DDL and leaves that test
-untouched.
+untouched. All DDL here is hand-written SQLite: it validates only the
+dialect-independent attempt-budget logic and asserts no PostgreSQL
+JSONB defaults, row-level locking or concurrency semantics.
 """
 
 from __future__ import annotations

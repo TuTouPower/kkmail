@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, text
@@ -15,11 +15,15 @@ if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
 from migrate_to_unified_baseline import (
+    KNOWN_LEGACY_REVISIONS,
     REQUIRED_COLUMNS,
     REQUIRED_TABLES,
     UNIFIED_BASELINE_REVISION,
     SchemaValidationError,
+    ensure_folder_patrol_status_table,
+    is_legacy_revision,
     main,
+    migrate_patrol_status_data,
     run_migration,
     stamp_unified_baseline,
     verify_database_schema,
@@ -325,3 +329,135 @@ def test_run_migrations_guard_raises_on_legacy_revision(tmp_path: Path, monkeypa
     msg = str(excinfo.value)
     assert "Database is at legacy revision '20261031_0030'" in msg
     assert "Run 'python scripts/migrate_to_unified_baseline.py' to upgrade to the unified baseline." in msg
+
+
+def test_legacy_revision_set_uses_real_hashed_id():
+    assert "f5f312751c77" in KNOWN_LEGACY_REVISIONS
+    assert "20261020_0002" not in KNOWN_LEGACY_REVISIONS
+
+
+def test_is_legacy_revision_recognizes_hashed_revision():
+    assert is_legacy_revision("f5f312751c77") is True
+
+
+def test_is_legacy_revision_rejects_unknown_and_future_revisions():
+    assert is_legacy_revision(None) is False
+    assert is_legacy_revision("unknown_rev_9999") is False
+    assert is_legacy_revision("g9f312751c77") is False
+    assert is_legacy_revision("20261107_0001") is False
+    assert is_legacy_revision("20261201_0002") is False
+
+
+def test_stamp_refuses_to_overwrite_unknown_revision():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
+        )
+        conn.execute(text("INSERT INTO alembic_version VALUES ('some_future_head')"))
+
+    with pytest.raises(SchemaValidationError, match="Refusing to overwrite"):
+        stamp_unified_baseline(engine, dry_run=False)
+
+    with engine.connect() as conn:
+        versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+    assert versions == ["some_future_head"]
+
+
+def test_stamp_is_noop_when_already_at_baseline():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
+        )
+        conn.execute(
+            text("INSERT INTO alembic_version VALUES (:rev)"),
+            {"rev": UNIFIED_BASELINE_REVISION},
+        )
+
+    stamp_unified_baseline(engine, dry_run=False)
+
+    with engine.connect() as conn:
+        versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+    assert versions == [UNIFIED_BASELINE_REVISION]
+
+
+def test_verify_schema_exempt_tables_only_skips_named_table():
+    engine = create_engine("sqlite:///:memory:")
+    metadata = MetaData()
+    for table_name in REQUIRED_TABLES - {"folder_patrol_status", "accounts"}:
+        Table(table_name, metadata, Column("id", String(64), primary_key=True))
+    metadata.create_all(engine)
+
+    with engine.connect() as conn:
+        errors = verify_database_schema(
+            conn, exempt_tables=frozenset({"folder_patrol_status"})
+        )
+    joined = "\n".join(errors)
+    assert "accounts" in joined
+    assert "folder_patrol_status" not in joined
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["apply", "dry-run"])
+def test_run_migration_refuses_unsupported_legacy_database(tmp_path: Path, dry_run: bool):
+    db_file = tmp_path / f"old_legacy_{'dry' if dry_run else 'apply'}.db"
+    db_url = f"sqlite:///{db_file}"
+    engine = create_engine(db_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
+        )
+        conn.execute(text("INSERT INTO alembic_version VALUES ('20261027_0029')"))
+        conn.execute(text("CREATE TABLE folders (id VARCHAR(64) PRIMARY KEY)"))
+        conn.execute(
+            text(
+                "CREATE TABLE sync_checkpoints (id VARCHAR(64) PRIMARY KEY, "
+                "folder_id VARCHAR(64), cursor TEXT)"
+            )
+        )
+    engine.dispose()
+
+    with pytest.raises(SchemaValidationError, match="not supported") as excinfo:
+        run_migration(db_url, dry_run=dry_run)
+    assert "message_remote_image_allows" in str(excinfo.value)
+    assert "Restore the pre-upgrade sealed backup" in str(excinfo.value)
+
+
+def _captured_sql(call):
+    return call.args[0].text
+
+
+def test_ensure_folder_patrol_status_emits_postgres_ddl():
+    conn = MagicMock()
+    conn.dialect.name = "postgresql"
+    inspector = MagicMock()
+    inspector.get_table_names.return_value = ["folders", "sync_checkpoints"]
+    with patch("migrate_to_unified_baseline.inspect", return_value=inspector):
+        ensure_folder_patrol_status_table(conn, dry_run=False)
+
+    assert conn.execute.call_count == 1
+    sql = _captured_sql(conn.execute.call_args)
+    assert "CREATE TABLE folder_patrol_status" in sql
+    assert "UUID" in sql
+    assert "JSONB" in sql
+    assert "ON DELETE CASCADE" in sql
+    assert "now()" in sql
+
+
+def test_migrate_patrol_status_data_emits_postgres_ddl():
+    conn = MagicMock()
+    conn.dialect.name = "postgresql"
+    inspector = MagicMock()
+    inspector.get_table_names.return_value = ["sync_checkpoints", "folder_patrol_status"]
+    with patch("migrate_to_unified_baseline.inspect", return_value=inspector):
+        migrate_patrol_status_data(conn, dry_run=False)
+
+    assert conn.execute.call_count == 2
+    insert_sql = _captured_sql(conn.execute.call_args_list[0])
+    update_sql = _captured_sql(conn.execute.call_args_list[1])
+    assert "INSERT INTO folder_patrol_status" in insert_sql
+    assert "ON CONFLICT" in insert_sql
+    assert "cursor ? 'last_status'" in insert_sql
+    assert "to_timestamp" in insert_sql
+    assert "::double precision" in insert_sql
+    assert "cursor - ARRAY" in update_sql

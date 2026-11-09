@@ -11,7 +11,10 @@ As in test_sync_settlement_target_prelock.py, SQLite strips FOR UPDATE,
 so locking selects are identified as entity selects (they render every
 mapped column) captured via before_cursor_execute. The pinned invariant:
 in each entry point's statement stream, the first Target entity select
-precedes the first Binding entity select.
+precedes the first Binding entity select. This statement-order proxy is
+dialect-independent; SQLite has no FOR UPDATE or advisory locks, so the
+test does not exercise real PostgreSQL lock acquisition or deadlock (40P01)
+behavior and must not be read as PostgreSQL lock-semantics coverage.
 """
 
 from __future__ import annotations
