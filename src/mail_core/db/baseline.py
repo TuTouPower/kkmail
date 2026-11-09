@@ -1,0 +1,944 @@
+"""Single guarded entry for the unified-baseline migration.
+
+All judgement and execution logic for the ``20261107_0001`` unified baseline
+lives here. Both the offline wrapper
+(``scripts/migrate_to_unified_baseline.py``) and the startup orchestration
+(``mail_core.__main__.run_migrations``) share this module, so deployment and
+application startup can never disagree about what is convertible.
+
+Read-only checks open their own connection with a read-only transaction
+(``SET TRANSACTION READ ONLY`` on PostgreSQL, ``PRAGMA query_only=ON`` on
+SQLite) plus connection and statement timeouts. The narrow legacy conversion
+runs inside one write transaction that re-verifies everything from scratch
+(no precheck results are reused, closing the TOCTOU window) under a
+PostgreSQL advisory lock so concurrent converters serialize.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from typing import Any, Iterator
+
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    create_engine,
+    func,
+    inspect,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.engine import Connection, Engine, make_url
+
+LOG = logging.getLogger("migrate_to_unified_baseline")
+
+UNIFIED_BASELINE_REVISION = "20261107_0001"
+
+CORE_CRITICAL_TABLES: frozenset[str] = frozenset({
+    "accounts",
+    "folders",
+    "messages",
+    "sync_checkpoints",
+    "worker_jobs",
+})
+
+KNOWN_LEGACY_REVISIONS: frozenset[str] = frozenset({
+    "20261020_0001",
+    "f5f312751c77",
+    "20261021_0003",
+    "20261021_0004",
+    "20261021_0005",
+    "20261021_0006",
+    "20261021_0007",
+    "20261021_0008",
+    "20261021_0009",
+    "20261021_0010",
+    "20261021_0011",
+    "20261021_0012",
+    "20261021_0013",
+    "20261022_0014",
+    "20261022_0015",
+    "20261023_0016",
+    "20261023_0017",
+    "20261023_0018",
+    "20261023_0019",
+    "20261025_0020",
+    "20261025_0021",
+    "20261026_0022",
+    "20261026_0023",
+    "20261026_0024",
+    "20261026_0025",
+    "20261026_0026",
+    "20261027_0027",
+    "20261027_0028",
+    "20261027_0029",
+    "20261031_0030",
+    "20261107_0031",
+})
+
+
+def is_legacy_revision(rev: str | None) -> bool:
+    """Return True if rev represents a recognized migration prior to unified baseline."""
+    if not rev:
+        return False
+    if rev in KNOWN_LEGACY_REVISIONS:
+        return True
+    return (
+        len(rev) == len(UNIFIED_BASELINE_REVISION)
+        and rev[:8].isdigit()
+        and rev[8] == "_"
+        and rev[9:].isdigit()
+        and rev < UNIFIED_BASELINE_REVISION
+    )
+
+REQUIRED_TABLES: frozenset[str] = frozenset({
+    "account_groups",
+    "credential_secrets",
+    "app_settings",
+    "auth_credentials",
+    "accounts",
+    "account_sync_leases",
+    "account_sync_activity",
+    "folders",
+    "threads",
+    "messages",
+    "message_locations",
+    "message_bodies",
+    "message_blobs",
+    "message_blob_links",
+    "attachments",
+    "thread_messages",
+    "sync_checkpoints",
+    "sync_runs",
+    "remote_operations",
+    "folder_stats",
+    "folder_patrol_status",
+    "outbox_publication_state",
+    "outbox",
+    "message_archive_state",
+    "worker_jobs",
+    "message_search",
+    "blob_quota_reservations",
+    "sync_requests",
+    "sync_request_targets",
+    "sync_request_target_jobs",
+    "message_remote_image_allows",
+    "sender_remote_image_allows",
+})
+
+REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
+    "accounts": frozenset({
+        "id", "email", "provider", "group_id", "master_order", "group_order", "recipient_addresses"
+    }),
+    "messages": frozenset({
+        "id", "account_id", "sort_time", "remote_id", "is_read", "is_flagged", "has_attachments"
+    }),
+    "message_blobs": frozenset({
+        "id", "content_sha256", "key_version", "gc_eligible_at", "ref_count"
+    }),
+    "attachments": frozenset({
+        "id", "message_id", "part_id"
+    }),
+    "worker_jobs": frozenset({
+        "id", "execution_generation", "dedupe_key", "failure_attempts"
+    }),
+    "sync_checkpoints": frozenset({
+        "account_id", "folder_id", "scan_generation", "cursor"
+    }),
+    "sync_requests": frozenset({
+        "id", "client_request_id"
+    }),
+    "sync_request_targets": frozenset({
+        "id", "request_id", "target_key"
+    }),
+    "sync_request_target_jobs": frozenset({
+        "id", "target_id", "execution_generation"
+    }),
+    "folder_patrol_status": frozenset({
+        "folder_id", "last_status", "last_probe_failures"
+    }),
+    "outbox_publication_state": frozenset({
+        "id", "epoch", "next_seq", "pruned_through_seq"
+    }),
+    "outbox": frozenset({
+        "id", "publication_seq", "published_at"
+    }),
+    "message_archive_state": frozenset({
+        "message_id", "claim_revision", "state"
+    }),
+    "remote_operations": frozenset({
+        "id", "next_attempt_at"
+    }),
+    "message_search": frozenset({
+        "message_id", "to_text", "document"
+    }),
+}
+
+_PATROL_EXPECTED_COLUMNS: dict[str, tuple[str, bool, str | None]] = {
+    "folder_id": ("uuid", False, None),
+    "last_status": ("json", True, None),
+    "last_probe_at": ("datetime", True, None),
+    "last_probe_failures": ("integer", False, "0"),
+    "created_at": ("datetime", False, "now()"),
+    "updated_at": ("datetime", False, "now()"),
+}
+
+_NARROW_CONVERSION_LOCK_KEY = "mail-core:narrow-legacy-conversion"
+
+_CHECK_CONNECT_TIMEOUT_SECONDS = "10"
+_CHECK_STATEMENT_TIMEOUT = "10s"
+
+
+class SchemaValidationError(RuntimeError):
+    """Raised when the database schema does not meet the unified baseline requirements."""
+
+
+def check_connect_url(raw_url: str) -> str:
+    """Return the check-connection URL with a connection timeout applied.
+
+    PostgreSQL gets ``connect_timeout`` (via the URL query, never via engine
+    kwargs, so single-argument ``create_engine(url)`` keeps working).
+    SQLite needs no connection timeout for opening a file.
+    """
+    url = make_url(raw_url)
+    if url.get_backend_name() == "postgresql" and "connect_timeout" not in url.query:
+        url = url.update_query_pairs([("connect_timeout", _CHECK_CONNECT_TIMEOUT_SECONDS)])
+    # NOTE: str(URL) masks the password ("***") in this SQLAlchemy version;
+    # render explicitly so check engines authenticate with the real password.
+    return url.render_as_string(hide_password=False)
+
+
+def configure_read_only(conn: Connection, backend: str) -> None:
+    """Put an already-opened check connection into read-only mode with a statement timeout.
+
+    PostgreSQL uses real read-only transactions (never the SQLite PRAGMA, and
+    never PostgreSQL-only SQL on SQLite). Must be the first statement of the
+    transaction on PostgreSQL.
+    """
+    if backend == "postgresql":
+        conn.execute(text("SET TRANSACTION READ ONLY"))
+        conn.execute(text(f"SET LOCAL statement_timeout = '{_CHECK_STATEMENT_TIMEOUT}'"))
+    elif backend == "sqlite":
+        conn.execute(text("PRAGMA query_only=ON"))
+        conn.execute(text("PRAGMA busy_timeout=10000"))
+
+
+@contextmanager
+def read_only_connection(raw_url: str) -> Iterator[Connection]:
+    """Yield a read-only check connection with connection and statement timeouts.
+
+    The transaction is always rolled back and the engine disposed, so checks
+    perform zero writes by construction.
+    """
+    backend = make_url(raw_url).get_backend_name()
+    engine = create_engine(check_connect_url(raw_url))
+    try:
+        with engine.connect() as conn:
+            configure_read_only(conn, backend)
+            try:
+                yield conn
+            finally:
+                conn.rollback()
+    finally:
+        engine.dispose()
+
+
+def verify_database_schema(
+    bind: Engine | Connection,
+    *,
+    exempt_tables: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Verify that all required tables and columns exist on the target database.
+
+    Returns a list of error messages describing missing tables or columns.
+    If the returned list is empty, the schema matches the unified baseline.
+    ``exempt_tables`` only waives the requirement that those tables exist: it
+    is for tables the offline tool will create later (e.g. on a dry-run, where
+    folder_patrol_status has not been built yet). It never waives column checks
+    for a table that does exist, so an incomplete existing table is still
+    reported instead of passing a dry-run and failing on apply.
+    """
+    inspector = inspect(bind)
+    existing_tables = set(inspector.get_table_names())
+
+    errors: list[str] = []
+
+    missing_tables = sorted(REQUIRED_TABLES - exempt_tables - existing_tables)
+    if missing_tables:
+        errors.append(f"Missing required tables: {', '.join(missing_tables)}")
+
+    for table_name, req_cols in sorted(REQUIRED_COLUMNS.items()):
+        if table_name not in existing_tables:
+            continue
+        existing_cols = {col["name"] for col in inspector.get_columns(table_name)}
+        missing_cols = sorted(req_cols - existing_cols)
+        if missing_cols:
+            errors.append(
+                f"Table '{table_name}' is missing required columns: {', '.join(missing_cols)}"
+            )
+
+    return errors
+
+
+def _column_affinity(type_name: str) -> str:
+    upper = (type_name or "").upper()
+    if "JSON" in upper:
+        return "json"
+    if "UUID" in upper or "GUID" in upper:
+        return "uuid"
+    if "DATETIME" in upper or "TIMESTAMP" in upper:
+        return "datetime"
+    if "DATE" in upper:
+        return "date"
+    if "BOOL" in upper:
+        return "boolean"
+    if "INT" in upper:
+        return "integer"
+    if upper.startswith("FLOAT") or "REAL" in upper or "DOUBLE" in upper or "NUMERIC" in upper or "DECIMAL" in upper:
+        return "number"
+    if "TEXT" in upper or "CHAR" in upper or "CLOB" in upper or "STRING" in upper:
+        return "string"
+    if "BYTEA" in upper or "BLOB" in upper or "BINARY" in upper:
+        return "binary"
+    return upper.lower()
+
+
+def _normalize_default(value: Any) -> str | None:
+    if value is None:
+        return None
+    text_value = str(value).strip().lower()
+    while len(text_value) >= 2 and text_value.startswith("(") and text_value.endswith(")"):
+        text_value = text_value[1:-1].strip()
+    cast_at = text_value.find("::")
+    if cast_at != -1:
+        text_value = text_value[:cast_at].strip()
+    text_value = "".join(text_value.split())
+    if text_value in ("current_timestamp", "currenttimestamp"):
+        return "now()"
+    return text_value or None
+
+
+def _pk_columns(bind: Engine | Connection, table: str) -> list[str]:
+    info = inspect(bind).get_pk_constraint(table) or {}
+    return list(info.get("constrained_columns") or [])
+
+
+def _fk_specs(bind: Engine | Connection, table: str) -> dict[tuple[str, ...], tuple[str, tuple[str, ...], str]]:
+    specs: dict[tuple[str, ...], tuple[str, tuple[str, ...], str]] = {}
+    for fk in inspect(bind).get_foreign_keys(table):
+        cols = tuple(fk.get("constrained_columns") or [])
+        referred = str(fk.get("referred_table") or "")
+        referred_cols = tuple(fk.get("referred_columns") or [])
+        ondelete = str((fk.get("options") or {}).get("ondelete") or "").upper()
+        specs[cols] = (referred, referred_cols, ondelete)
+    return specs
+
+
+def _unique_specs(bind: Engine | Connection, table: str) -> set[tuple[str, ...]]:
+    return {
+        tuple(sorted(uq.get("column_names") or []))
+        for uq in inspect(bind).get_unique_constraints(table)
+    }
+
+
+def verify_narrow_legacy_schema(bind: Engine | Connection) -> list[str]:
+    """Deep validation for the narrow legacy conversion path.
+
+    Beyond table names and key column names, verifies every structure the
+    conversion touches: ``sync_checkpoints.cursor`` existence and JSON type,
+    the full ``folder_patrol_status`` column definitions (type, nullability,
+    default) when the table already exists, the related primary-key, foreign-
+    key and unique constraints compared by semantics (constraint names and
+    default-expression spellings are ignored), and a read-only data check over
+    the cursor column. Returns error strings; empty means convertible.
+    """
+    errors = verify_database_schema(bind, exempt_tables=frozenset({"folder_patrol_status"}))
+
+    inspector = inspect(bind)
+    existing = set(inspector.get_table_names())
+
+    if "sync_checkpoints" in existing:
+        try:
+            cols = {c["name"]: c for c in inspector.get_columns("sync_checkpoints")}
+        except Exception as exc:
+            errors.append(f"Table 'sync_checkpoints' columns are not introspectable: {exc}")
+            cols = {}
+        cursor = cols.get("cursor")
+        if cursor is not None and _column_affinity(str(cursor.get("type"))) != "json":
+            errors.append(
+                "Table 'sync_checkpoints' column 'cursor' has type "
+                f"'{cursor.get('type')}', expected a JSON/JSONB column: the patrol "
+                "data migration reads and rewrites JSON cursor keys."
+            )
+
+        expected_pk = {"account_id", "folder_id"}
+        actual_pk = set(_pk_columns(bind, "sync_checkpoints"))
+        if actual_pk != expected_pk:
+            errors.append(
+                "Table 'sync_checkpoints' primary key is "
+                f"({', '.join(sorted(actual_pk)) or 'none'}), expected "
+                "(account_id, folder_id): the conversion addresses rows by the "
+                "composite key."
+            )
+        expected_fks = {
+            ("account_id",): ("accounts", ("id",), "CASCADE"),
+            ("folder_id",): ("folders", ("id",), "CASCADE"),
+        }
+        actual_fks = _fk_specs(bind, "sync_checkpoints")
+        for cols_key, (ref_table, ref_cols, ondelete) in expected_fks.items():
+            actual = actual_fks.get(cols_key)
+            if actual is None:
+                errors.append(
+                    f"Table 'sync_checkpoints' is missing the foreign key on "
+                    f"({', '.join(cols_key)}) referencing {ref_table}."
+                )
+            elif actual != (ref_table, ref_cols, ondelete):
+                errors.append(
+                    f"Table 'sync_checkpoints' foreign key on ({', '.join(cols_key)}) "
+                    f"references {actual[0]}({', '.join(actual[1])}) "
+                    f"on-delete {actual[2] or 'none'}, expected "
+                    f"{ref_table}({', '.join(ref_cols)}) on-delete {ondelete}."
+                )
+
+        errors.extend(_check_cursor_data(bind))
+
+    if "folders" in existing:
+        if set(_pk_columns(bind, "folders")) != {"id"}:
+            errors.append(
+                "Table 'folders' primary key is not (id): folder_patrol_status "
+                "references folders(id) and the conversion depends on it."
+            )
+        if ("account_id", "remote_id") not in _unique_specs(bind, "folders"):
+            errors.append(
+                "Table 'folders' is missing the unique constraint on "
+                "(account_id, remote_id): patrol rows cannot be attributed safely."
+            )
+
+    if "accounts" in existing and set(_pk_columns(bind, "accounts")) != {"id"}:
+        errors.append(
+            "Table 'accounts' primary key is not (id): the conversion joins "
+            "through accounts(id)."
+        )
+
+    if "folder_patrol_status" in existing:
+        try:
+            patrol_cols = {c["name"]: c for c in inspector.get_columns("folder_patrol_status")}
+        except Exception as exc:
+            errors.append(f"Table 'folder_patrol_status' columns are not introspectable: {exc}")
+            patrol_cols = {}
+        for name, (affinity, nullable, default) in sorted(_PATROL_EXPECTED_COLUMNS.items()):
+            col = patrol_cols.get(name)
+            if col is None:
+                errors.append(
+                    f"Table 'folder_patrol_status' is missing required column '{name}'."
+                )
+                continue
+            if _column_affinity(str(col.get("type"))) != affinity:
+                errors.append(
+                    f"Table 'folder_patrol_status' column '{name}' has type "
+                    f"'{col.get('type')}', expected {affinity}."
+                )
+            if bool(col.get("nullable", True)) != nullable:
+                errors.append(
+                    f"Table 'folder_patrol_status' column '{name}' nullability is "
+                    f"{col.get('nullable')}, expected {'nullable' if nullable else 'NOT NULL'}."
+                )
+            if _normalize_default(col.get("default")) != _normalize_default(default):
+                errors.append(
+                    f"Table 'folder_patrol_status' column '{name}' default is "
+                    f"{col.get('default')!r}, expected {default!r}."
+                )
+        unexpected = sorted(set(patrol_cols) - set(_PATROL_EXPECTED_COLUMNS))
+        if unexpected:
+            errors.append(
+                "Table 'folder_patrol_status' has unexpected columns: "
+                f"{', '.join(unexpected)}."
+            )
+        if set(_pk_columns(bind, "folder_patrol_status")) != {"folder_id"}:
+            errors.append(
+                "Table 'folder_patrol_status' primary key is not (folder_id)."
+            )
+        patrol_fks = _fk_specs(bind, "folder_patrol_status")
+        expected_patrol_fk = ("folders", ("id",), "CASCADE")
+        if patrol_fks.get(("folder_id",)) != expected_patrol_fk:
+            errors.append(
+                "Table 'folder_patrol_status' must reference folders(id) "
+                "ON DELETE CASCADE on (folder_id)."
+            )
+
+    return errors
+
+
+def _check_cursor_data(bind: Engine | Connection) -> list[str]:
+    """Read-only data check over ``sync_checkpoints.cursor``.
+
+    Every non-NULL cursor must be a JSON object: the patrol migration only
+    understands object cursors and would otherwise silently skip rows. Runs no
+    writes on any backend.
+    """
+    errors: list[str] = []
+    backend = bind.dialect.name
+    try:
+        if backend == "postgresql":
+            bad = bind.execute(
+                text(
+                    "SELECT count(*) FROM sync_checkpoints "
+                    "WHERE cursor IS NULL OR jsonb_typeof(cursor) <> 'object'"
+                )
+            ).scalar() or 0
+            if bad:
+                errors.append(
+                    f"Table 'sync_checkpoints' has {bad} row(s) whose cursor is "
+                    "NULL or not a JSON object: the patrol data migration cannot "
+                    "interpret them."
+                )
+        else:
+            rows = bind.execute(
+                text("SELECT folder_id, cursor FROM sync_checkpoints")
+            ).fetchall()
+            bad_count = 0
+            for folder_id, raw in rows:
+                if raw is None:
+                    bad_count += 1
+                    continue
+                try:
+                    cur = json.loads(raw) if isinstance(raw, str) else raw
+                except Exception:
+                    bad_count += 1
+                    continue
+                if not isinstance(cur, dict):
+                    bad_count += 1
+            if bad_count:
+                errors.append(
+                    f"Table 'sync_checkpoints' has {bad_count} row(s) whose cursor "
+                    "is NULL, unparseable, or not a JSON object: the patrol data "
+                    "migration cannot interpret them."
+                )
+    except Exception as exc:
+        errors.append(f"Table 'sync_checkpoints' cursor data is not readable: {exc}")
+    return errors
+
+
+def _stamp_targets(current: list[str], revision: str) -> str:
+    if not current:
+        return "insert"
+    if current == [revision]:
+        return "noop"
+    if all(is_legacy_revision(r) for r in current):
+        return "replace"
+    raise SchemaValidationError(
+        f"Refusing to overwrite alembic_version {current!r} with {revision!r}: "
+        "only an empty table or a recognized legacy revision may be stamped "
+        "to the unified baseline."
+    )
+
+
+def stamp_unified_baseline(
+    bind: Engine | Connection,
+    *,
+    revision: str = UNIFIED_BASELINE_REVISION,
+    dry_run: bool = False,
+) -> None:
+    """Stamp the alembic_version table with the unified baseline revision."""
+    if dry_run:
+        _stamp_targets(_read_version_rows(bind), revision)
+        LOG.info("Dry-run: would stamp alembic_version to %s", revision)
+        return
+
+    def _execute(conn: Connection) -> None:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS alembic_version (
+                    version_num VARCHAR(32) NOT NULL,
+                    CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+                )
+                """
+            )
+        )
+        current = _read_version_rows(conn)
+        action = _stamp_targets(current, revision)
+        if action == "noop":
+            LOG.info("alembic_version already at %s; leaving it untouched", revision)
+            return
+        if action == "replace":
+            conn.execute(text("DELETE FROM alembic_version"))
+        conn.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES (:rev)"),
+            {"rev": revision},
+        )
+
+    if isinstance(bind, Engine):
+        with bind.begin() as conn:
+            _execute(conn)
+    else:
+        _execute(bind)
+
+    LOG.info("Successfully stamped alembic_version to %s", revision)
+
+
+def _read_version_rows(bind: Engine | Connection) -> list[str]:
+    inspector = inspect(bind)
+    if "alembic_version" not in inspector.get_table_names():
+        return []
+    if isinstance(bind, Engine):
+        with bind.connect() as conn:
+            return list(conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all())
+    return list(bind.execute(text("SELECT version_num FROM alembic_version")).scalars().all())
+
+
+def get_current_alembic_version(bind: Connection | Engine) -> str | None:
+    """Retrieve the current revision from alembic_version if present."""
+    rows = _read_version_rows(bind)
+    if len(rows) > 1:
+        raise SchemaValidationError(
+            f"alembic_version contains {len(rows)} rows; expected at most one."
+        )
+    return rows[0] if rows else None
+
+
+def ensure_folder_patrol_status_table(bind: Connection, *, dry_run: bool = False) -> None:
+    """Create folder_patrol_status table if it does not already exist."""
+    inspector = inspect(bind)
+    if "folder_patrol_status" in inspector.get_table_names():
+        return
+    if dry_run:
+        LOG.info("Dry-run: would create folder_patrol_status table")
+        return
+
+    if bind.dialect.name == "postgresql":
+        bind.execute(
+            text(
+                """
+                CREATE TABLE folder_patrol_status (
+                    folder_id UUID NOT NULL,
+                    last_status JSONB,
+                    last_probe_at TIMESTAMP WITH TIME ZONE,
+                    last_probe_failures INTEGER DEFAULT 0 NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+                    CONSTRAINT pk_folder_patrol_status PRIMARY KEY (folder_id),
+                    CONSTRAINT fk_folder_patrol_status_folder_id_folders FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE
+                )
+                """
+            )
+        )
+    else:
+        meta = MetaData()
+        Table("folders", meta, Column("id", String(64), primary_key=True))
+        t = Table(
+            "folder_patrol_status",
+            meta,
+            Column(
+                "folder_id",
+                UUID(as_uuid=True),
+                ForeignKey("folders.id", ondelete="CASCADE"),
+                primary_key=True,
+                nullable=False,
+            ),
+            Column("last_status", JSONB, nullable=True),
+            Column("last_probe_at", DateTime(timezone=True), nullable=True),
+            Column("last_probe_failures", Integer, nullable=False, server_default=text("0")),
+            Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+            Column("updated_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        )
+        t.create(bind)
+    LOG.info("Created folder_patrol_status table")
+
+
+def _migrate_patrol_status_data_generic(bind: Connection) -> None:
+    rows = bind.execute(text("SELECT folder_id, cursor FROM sync_checkpoints")).fetchall()
+    now_dt = datetime.now(timezone.utc)
+    patrol_keys = {"last_status", "last_probe_at", "last_probe_failures"}
+
+    for fid, raw_cursor in rows:
+        if raw_cursor is None:
+            continue
+        if isinstance(raw_cursor, str):
+            try:
+                cur = json.loads(raw_cursor)
+            except Exception:
+                continue
+        elif isinstance(raw_cursor, dict):
+            cur = dict(raw_cursor)
+        else:
+            continue
+
+        if not isinstance(cur, dict) or not any(k in cur for k in patrol_keys):
+            continue
+
+        status = cur.get("last_status")
+        probe_at_raw = cur.get("last_probe_at")
+        failures_raw = cur.get("last_probe_failures", 0)
+
+        probe_at_dt = None
+        if probe_at_raw is not None:
+            try:
+                if isinstance(probe_at_raw, (int, float)):
+                    probe_at_dt = datetime.fromtimestamp(float(probe_at_raw), tz=timezone.utc)
+                elif isinstance(probe_at_raw, str):
+                    try:
+                        probe_at_dt = datetime.fromtimestamp(float(probe_at_raw), tz=timezone.utc)
+                    except ValueError:
+                        probe_at_dt = datetime.fromisoformat(probe_at_raw)
+            except Exception:
+                probe_at_dt = None
+
+        failures = 0
+        if failures_raw is not None:
+            try:
+                failures = int(failures_raw)
+            except Exception:
+                failures = 0
+
+        status_val = json.dumps(status) if isinstance(status, (dict, list)) else status
+
+        existing = bind.execute(
+            text("SELECT 1 FROM folder_patrol_status WHERE folder_id = :fid"),
+            {"fid": str(fid)},
+        ).scalar()
+        if existing:
+            bind.execute(
+                text(
+                    """
+                    UPDATE folder_patrol_status
+                    SET last_status = :status,
+                        last_probe_at = :probe_at,
+                        last_probe_failures = :failures,
+                        updated_at = :now
+                    WHERE folder_id = :fid
+                    """
+                ),
+                {
+                    "status": status_val,
+                    "probe_at": probe_at_dt,
+                    "failures": failures,
+                    "now": now_dt,
+                    "fid": str(fid),
+                },
+            )
+        else:
+            bind.execute(
+                text(
+                    """
+                    INSERT INTO folder_patrol_status (
+                        folder_id, last_status, last_probe_at, last_probe_failures, created_at, updated_at
+                    ) VALUES (
+                        :fid, :status, :probe_at, :failures, :now, :now
+                    )
+                    """
+                ),
+                {
+                    "fid": str(fid),
+                    "status": status_val,
+                    "probe_at": probe_at_dt,
+                    "failures": failures,
+                    "now": now_dt,
+                },
+            )
+
+        new_cur = {k: v for k, v in cur.items() if k not in patrol_keys}
+        new_cur_val = json.dumps(new_cur) if isinstance(raw_cursor, str) else new_cur
+        bind.execute(
+            text("UPDATE sync_checkpoints SET cursor = :c WHERE folder_id = :fid"),
+            {"c": new_cur_val, "fid": str(fid)},
+        )
+
+
+def migrate_patrol_status_data(bind: Connection, *, dry_run: bool = False) -> None:
+    """Migrate legacy patrol state from sync_checkpoints.cursor to folder_patrol_status."""
+    inspector = inspect(bind)
+    tables = set(inspector.get_table_names())
+    if "sync_checkpoints" not in tables:
+        return
+    if "folder_patrol_status" not in tables and not dry_run:
+        return
+
+    if dry_run:
+        LOG.info("Dry-run: would migrate patrol data from sync_checkpoints.cursor to folder_patrol_status")
+        return
+
+    if bind.dialect.name == "postgresql":
+        bind.execute(
+            text(
+                """
+                INSERT INTO folder_patrol_status (
+                    folder_id,
+                    last_status,
+                    last_probe_at,
+                    last_probe_failures,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    folder_id,
+                    CASE WHEN cursor ? 'last_status' THEN cursor->'last_status' ELSE NULL END,
+                    CASE
+                        WHEN cursor ? 'last_probe_at' AND (cursor->>'last_probe_at') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                        THEN to_timestamp((cursor->>'last_probe_at')::double precision)
+                        ELSE NULL
+                    END,
+                    CASE
+                        WHEN cursor ? 'last_probe_failures' AND (cursor->>'last_probe_failures') ~ '^[0-9]+$'
+                        THEN (cursor->>'last_probe_failures')::integer
+                        ELSE 0
+                    END,
+                    now(),
+                    now()
+                FROM sync_checkpoints
+                WHERE cursor ? 'last_status' OR cursor ? 'last_probe_at' OR cursor ? 'last_probe_failures'
+                ON CONFLICT (folder_id) DO UPDATE SET
+                    last_status = EXCLUDED.last_status,
+                    last_probe_at = EXCLUDED.last_probe_at,
+                    last_probe_failures = EXCLUDED.last_probe_failures,
+                    updated_at = EXCLUDED.updated_at;
+                """
+            )
+        )
+        bind.execute(
+            text(
+                """
+                UPDATE sync_checkpoints
+                SET cursor = cursor - ARRAY['last_status', 'last_probe_at', 'last_probe_failures']
+                WHERE cursor ? 'last_status' OR cursor ? 'last_probe_at' OR cursor ? 'last_probe_failures';
+                """
+            )
+        )
+    else:
+        _migrate_patrol_status_data_generic(bind)
+
+    LOG.info("Migrated patrol status data and cleaned legacy cursor keys")
+
+
+def apply_narrow_legacy_conversion(database_url: str) -> str:
+    """Convert a validated narrow legacy database inside one write transaction.
+
+    Re-verifies everything from scratch inside the transaction (precheck
+    results are never reused, closing the TOCTOU window); any failure rolls
+    back the whole conversion. On PostgreSQL the transaction takes an
+    advisory lock so concurrent converters serialize; the loser re-reads the
+    revision and becomes a no-op. Returns ``"converted"`` or
+    ``"already-at-baseline"`` (idempotent re-run).
+    """
+    engine = create_engine(check_connect_url(database_url))
+    try:
+        with engine.begin() as conn:
+            if conn.dialect.name == "postgresql":
+                conn.execute(
+                    text(f"SELECT pg_advisory_xact_lock(hashtext('{_NARROW_CONVERSION_LOCK_KEY}'))")
+                )
+            current = _read_version_rows(conn)
+            if current == [UNIFIED_BASELINE_REVISION]:
+                return "already-at-baseline"
+            if len(current) != 1 or not is_legacy_revision(current[0]):
+                raise SchemaValidationError(
+                    f"Refusing narrow legacy conversion: alembic_version is {current!r} "
+                    "inside the conversion transaction; expected a single recognized "
+                    "legacy revision."
+                )
+            errors = verify_narrow_legacy_schema(conn)
+            if errors:
+                detail = "\n  - ".join(errors)
+                raise SchemaValidationError(
+                    "Re-verification inside the conversion transaction failed; "
+                    "rolling back without changes:\n  - " + detail
+                )
+            ensure_folder_patrol_status_table(conn)
+            migrate_patrol_status_data(conn)
+            stamp_unified_baseline(conn)
+            return "converted"
+    finally:
+        engine.dispose()
+
+
+def run_migration(
+    database_url: str | None = None,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Perform offline schema verification, supported legacy rebuild, and baseline stamping."""
+    import os
+
+    raw_url = database_url or os.environ.get("MAIL_CORE_DATABASE_URL")
+    if not raw_url:
+        raise ValueError(
+            "Database URL not specified and MAIL_CORE_DATABASE_URL is not set"
+        )
+
+    safe_url = make_url(raw_url).render_as_string(hide_password=True)
+    LOG.info("Connecting to database at %s", safe_url)
+
+    with read_only_connection(raw_url) as conn:
+        current_rev = get_current_alembic_version(conn)
+        LOG.info("Current alembic_version: %s", current_rev)
+
+        is_legacy = is_legacy_revision(current_rev)
+
+        if not is_legacy:
+            inspector = inspect(conn)
+            existing = set(inspector.get_table_names())
+            missing_critical = sorted(CORE_CRITICAL_TABLES - existing)
+            if missing_critical:
+                if current_rev is not None and current_rev != UNIFIED_BASELINE_REVISION:
+                    raise SchemaValidationError(
+                        f"Database schema verification failed for unified baseline: database is at unknown "
+                        f"revision '{current_rev}' and missing critical tables ({', '.join(missing_critical)}). "
+                        "Refusing to stamp unified baseline."
+                    )
+                elif current_rev is None:
+                    raise SchemaValidationError(
+                        f"Database schema verification failed for unified baseline: database has no alembic_version "
+                        f"and is missing critical tables ({', '.join(missing_critical)}). "
+                        "Refusing to stamp unified baseline."
+                    )
+
+        if is_legacy:
+            errors = verify_narrow_legacy_schema(conn)
+        else:
+            errors = verify_database_schema(conn)
+
+        if errors:
+            detail = "\n  - ".join(errors)
+            if is_legacy:
+                raise SchemaValidationError(
+                    "Automatic upgrade of this legacy database to the unified baseline is "
+                    "not supported: its schema is missing tables or columns that the offline "
+                    "tool cannot reconstruct (the alembic versions tree ships only the unified "
+                    "baseline, so incremental migrations cannot be replayed). Restore the "
+                    "pre-upgrade sealed backup into a fresh deployment instead.\n  - " + detail
+                )
+            raise SchemaValidationError(
+                "Database schema verification failed for unified baseline:\n  - " + detail
+            )
+
+        LOG.info("Database schema verification passed. All tables and columns present.")
+
+        stamp_unified_baseline(conn, dry_run=True)
+
+        if dry_run:
+            LOG.info("Dry-run complete: no writes were performed.")
+            return
+
+    if is_legacy:
+        LOG.info(
+            "Detected supported legacy revision '%s'. Rebuilding folder_patrol_status "
+            "from sync_checkpoints before stamping the unified baseline.",
+            current_rev,
+        )
+        apply_narrow_legacy_conversion(raw_url)
+        return
+
+    engine = create_engine(check_connect_url(raw_url))
+    try:
+        with engine.begin() as conn:
+            stamp_unified_baseline(conn, dry_run=False)
+    finally:
+        engine.dispose()

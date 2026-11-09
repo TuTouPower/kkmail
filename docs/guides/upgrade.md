@@ -21,6 +21,7 @@ mail-core 部署的升级路径（Flask / SQLite / OutlookEmail v2 镜像路径�
     - **常规部署更新**：
         - Docker Compose 部署：执行 `docker compose -f docker-compose.mail-core.yml up --build -d api worker`，依赖会自动拉起 `migrate` 容器执行数据库迁移，成功后启动新版 `api` 与 `worker`。
         - 非 Docker 部署：拉取代码、更新依赖 `pip install -r requirements-mail-core.txt`、构建前端 SPA 并执行 `alembic -c src/mail_core/db/alembic.ini upgrade head`，然后重启进程。
+    - **数据搬迁的写入暂停与回滚恢复点**：迁移容器运行前部署先停止 api 与 worker，隔离旧写入；回滚恢复点是迁移前创建并校验的密封备份快照，快照之后产生的新写入不在恢复点内（恢复即回到快照时刻）。
 3. **确认**：`/ready` 返回 200（schema 与代码 head 一致）。
 
 ## 回滚
