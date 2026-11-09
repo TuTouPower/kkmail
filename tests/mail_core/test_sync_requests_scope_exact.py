@@ -16,64 +16,30 @@ Stored canonical scope shapes (create_sync_request call sites):
 - delta group: ``{"group_id": G, "folder_role": R}``
 - delta folder: ``{"account_id": X, "folder_id": F, "folder_role": R}``
 
-These tests seed SyncRequest rows directly with those stored shapes on a
-SQLite engine (following test_sync_successor_binding_backfill.py) and call
-the application function; the PostgreSQL endpoint-level counterpart lives
-in test_sync_requests.py. No existing test is modified by this file: the
-pre-fix PG test that asserted an unfiltered list returns every scope's
-requests encoded the leak itself and is replaced there separately.
+These tests seed SyncRequest rows directly with those stored shapes into
+the real PostgreSQL schema created by ``alembic upgrade head`` (JSONB
+scope) and call the application function. No existing test is modified
+by this file.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+import pytest
 
+from mail_core.db.session import get_session_factory
 from mail_core.mail.application.sync_requests import list_recent_sync_requests
 from mail_core.mail.storage.models import SyncRequest
 
-_DDL = [
-    """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_targets (
-        id CHAR(36) PRIMARY KEY,
-        request_id CHAR(36) NOT NULL,
-        account_id CHAR(36),
-        folder_id CHAR(36),
-        target_key VARCHAR(255) NOT NULL,
-        requested_generation CHAR(36) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-]
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 _NOW = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
-
-
-def _make_session_factory():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    return sessionmaker(bind=engine)
 
 
 def _seed(Session, *, scope: dict, state: str) -> uuid.UUID:
@@ -102,7 +68,7 @@ def test_recent_sync_requests_no_filter_returns_only_global_and_account_filter_o
     """Required regression: one global + one single-account request, both
     unfinished. The unfiltered (global) query returns ONLY the global one;
     the account-filtered query returns ONLY the account one."""
-    Session = _make_session_factory()
+    Session = get_session_factory()
     account_id = uuid.uuid4()
     global_id = _seed(Session, scope={"all": True}, state="queued")
     account_req_id = _seed(Session, scope={"account_id": str(account_id)}, state="running")
@@ -119,7 +85,7 @@ def test_recent_sync_requests_delta_global_query_never_adopts_account_request():
     """The actual frontend leak: the global inbox view queries with only
     folder_role=inbox; a single-account delta request carries that same
     role plus an account_id and must never match it (and vice versa)."""
-    Session = _make_session_factory()
+    Session = get_session_factory()
     account_id = uuid.uuid4()
     group_id = uuid.uuid4()
     delta_global_id = _seed(Session, scope={"folder_role": "inbox"}, state="queued")
@@ -131,20 +97,16 @@ def test_recent_sync_requests_delta_global_query_never_adopts_account_request():
     )
 
     with Session() as session:
-        # Global inbox scope (frontend allInbox recovery query).
         reports = list_recent_sync_requests(session, folder_role="inbox")
         assert _ids(reports) == {str(delta_global_id)}
 
-        # Account scope, with and without the role refinement.
         reports = list_recent_sync_requests(session, account_id=account_id, folder_role="inbox")
         assert _ids(reports) == {str(delta_account_id)}
         reports = list_recent_sync_requests(session, account_id=account_id)
         assert _ids(reports) == {str(delta_account_id)}
 
-        # Group scope matches only the group request.
         reports = list_recent_sync_requests(session, group_id=group_id, folder_role="inbox")
         assert _ids(reports) == {str(delta_group_id)}
 
-        # A different account matches nothing.
         reports = list_recent_sync_requests(session, account_id=uuid.uuid4())
         assert reports == []

@@ -11,31 +11,30 @@ and, worse, a generation belonging only to a terminal job counted as
 forever instead of converging to ``execution_lost``.
 
 The fix restricts the query to ``PENDING``/``CLAIMED`` jobs -- the only
-non-terminal ``JobStatus`` values (``done``/``failed``/``cancelled`` are
-terminal; there is no ``running`` job status). Bindings that *do* carry a
-``job_id`` never consult this set: they converge via the bound job's own
-status branch. A terminal job's bindings are settled by
-``complete_job``/``fail_job`` in the settlement transaction, so an open
-``job_id``-NULL binding left at a terminal generation is by definition
-orphaned and must fail with ``execution_lost``.
+non-terminal ``JobStatus`` values. Bindings that *do* carry a ``job_id``
+never consult this set: they converge via the bound job's own status branch.
+A terminal job's bindings are settled by ``complete_job``/``fail_job`` in
+the settlement transaction, so an open ``job_id``-NULL binding left at a
+terminal generation is by definition orphaned and must fail with
+``execution_lost``.
 
-This file pins that on a SQLite engine, following
-``test_sync_execution_lock_order.py`` /
-``test_sync_successor_binding_backfill.py`` (raw DDL). On the old
-(unfiltered) code, case (i) below stays open and the test fails; with
-the fix it fails with ``execution_lost`` while case (ii) stays open.
+Runs against the real PostgreSQL schema created by ``alembic upgrade head``.
+On the old (unfiltered) code case (i) below stays open and the test fails;
+with the fix it fails with ``execution_lost`` while case (ii) stays open.
 
 No existing test is modified by this file.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import sessionmaker
+import pytest
+from sqlalchemy import select
 
+from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import JobStatus
 from mail_core.mail.storage.models import (
     SyncRequest,
@@ -45,91 +44,12 @@ from mail_core.mail.storage.models import (
 )
 from mail_core.sync.execution import EXECUTION_LOST_MESSAGE, converge_orphaned_bindings
 
-_DDL = [
-    """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_targets (
-        id CHAR(36) PRIMARY KEY,
-        request_id CHAR(36) NOT NULL,
-        account_id CHAR(36),
-        folder_id CHAR(36),
-        target_key VARCHAR(255) NOT NULL,
-        requested_generation CHAR(36) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_target_jobs (
-        id CHAR(36) PRIMARY KEY,
-        target_id CHAR(36) NOT NULL,
-        execution_generation CHAR(36) NOT NULL,
-        job_id CHAR(36),
-        phase VARCHAR(64) NOT NULL DEFAULT 'sync',
-        folder_id CHAR(36),
-        status VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE outbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        payload JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        publication_seq BIGINT,
-        published_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE worker_jobs (
-        id CHAR(36) PRIMARY KEY,
-        execution_generation CHAR(36) NOT NULL,
-        job_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        dedupe_key VARCHAR(128),
-        payload JSON NOT NULL DEFAULT '{}',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        priority INTEGER NOT NULL DEFAULT 100,
-        run_after DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        failure_attempts INTEGER NOT NULL DEFAULT 0,
-        locked_by VARCHAR(128),
-        locked_at DATETIME,
-        last_error TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-]
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 _NOW = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
-
-
-def _make_engine():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    return engine
 
 
 def _seed(Session, *, job_status: str) -> tuple[uuid.UUID, uuid.UUID]:
@@ -191,12 +111,9 @@ def _seed(Session, *, job_status: str) -> tuple[uuid.UUID, uuid.UUID]:
 
 
 def test_orphan_patrol_ignores_terminal_generations_but_keeps_pending_live():
-    engine = _make_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
 
-    # (i) DONE job at G1 + open job_id-NULL binding at G1: orphaned.
     done_binding_id, _g1 = _seed(Session, job_status=JobStatus.DONE.value)
-    # (ii) PENDING job at G2 + open job_id-NULL binding at G2: still live.
     pending_binding_id, _g2 = _seed(Session, job_status=JobStatus.PENDING.value)
 
     with Session() as session:
