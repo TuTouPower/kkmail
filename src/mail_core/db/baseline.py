@@ -1,10 +1,16 @@
-"""Single guarded entry for the unified-baseline migration.
+"""Shared classification and execution helpers for the unified-baseline migration.
 
-All judgement and execution logic for the ``20261107_0001`` unified baseline
-lives here. Both the offline wrapper
-(``scripts/migrate_to_unified_baseline.py``) and the startup orchestration
-(``mail_core.__main__.run_migrations``) share this module, so deployment and
-application startup can never disagree about what is convertible.
+Database state classification is centralized in :func:`plan_migration`: both
+the startup orchestration (``mail_core.__main__.run_migrations``) and the
+offline wrapper (``scripts/migrate_to_unified_baseline.py``) build a
+:class:`DatabaseState` and a :class:`RevisionContext`, then act on the single
+returned :class:`MigrationPlan`, so the two entries cannot disagree about which
+state a database is in. Execution differs by design: the startup entry can run
+``alembic upgrade head`` (and the narrow legacy conversion followed by an
+upgrade), while the offline tool only verifies schema, performs supported
+narrow legacy conversions and stamps; an empty database, or any no-version
+database carrying unified-baseline business tables, is refused by both
+entries.
 
 Read-only checks open their own connection with a read-only transaction
 (``SET TRANSACTION READ ONLY`` on PostgreSQL, ``PRAGMA query_only=ON`` on
@@ -19,7 +25,9 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Iterator
 
 from sqlalchemy import (
@@ -195,6 +203,50 @@ _NARROW_CONVERSION_LOCK_KEY = "mail-core:narrow-legacy-conversion"
 
 _CHECK_CONNECT_TIMEOUT_SECONDS = "10"
 _CHECK_STATEMENT_TIMEOUT = "10s"
+
+
+class MigrationAction(str, Enum):
+    """The single classification a database migration state can fall into."""
+
+    EMPTY_DATABASE = "empty_database"
+    AT_BASELINE = "at_baseline"
+    LEGACY = "legacy"
+    NO_VERSION_WITH_BUSINESS_TABLES = "no_version_with_business_tables"
+    UNKNOWN_REVISION = "unknown_revision"
+    MULTIPLE_VERSIONS = "multiple_versions"
+
+
+@dataclass(frozen=True)
+class RevisionContext:
+    """Revision sets the planner uses to classify a versioned database.
+
+    The startup entry builds ``known_revisions``/``heads`` from Alembic's
+    ScriptDirectory; the offline entry uses :func:`offline_revision_context`.
+    Both pass the context to :func:`plan_migration` as an explicit argument.
+    """
+
+    known_revisions: frozenset[str]
+    legacy_revisions: frozenset[str]
+    heads: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DatabaseState:
+    """Facts read from the database; classification depends only on these."""
+
+    version_rows: tuple[str, ...]
+    table_names: frozenset[str]
+
+
+@dataclass(frozen=True)
+class MigrationPlan:
+    """The single classification result plus the facts behind its message."""
+
+    action: MigrationAction
+    current_revision: str | None = None
+    version_rows: tuple[str, ...] = ()
+    business_tables: tuple[str, ...] = ()
+    message: str = ""
 
 
 class SchemaValidationError(RuntimeError):
@@ -859,6 +911,122 @@ def apply_narrow_legacy_conversion(database_url: str) -> str:
         engine.dispose()
 
 
+def offline_revision_context() -> RevisionContext:
+    """Revision sets for the offline entry, which has no ScriptDirectory.
+
+    The Alembic tree ships only the unified baseline (a single head), so the
+    set of revisions Alembic can service is exactly that revision. This makes
+    the offline context identical to the startup context for the current tree.
+    """
+    return RevisionContext(
+        known_revisions=frozenset({UNIFIED_BASELINE_REVISION}),
+        legacy_revisions=KNOWN_LEGACY_REVISIONS,
+        heads=(UNIFIED_BASELINE_REVISION,),
+    )
+
+
+def read_database_state(conn: Connection) -> DatabaseState:
+    """Read version rows and table names from an open read-only check connection."""
+    inspector = inspect(conn)
+    table_names = frozenset(inspector.get_table_names())
+    if "alembic_version" in table_names:
+        version_rows = tuple(
+            conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+        )
+    else:
+        version_rows = ()
+    return DatabaseState(version_rows=version_rows, table_names=table_names)
+
+
+def plan_migration(state: DatabaseState, *, context: RevisionContext) -> MigrationPlan:
+    """Classify a database state once, for both migration entries.
+
+    Both ``mail_core.__main__.run_migrations`` and ``run_migration`` build a
+    :class:`DatabaseState` and a :class:`RevisionContext` and act on the single
+    returned plan; classification never depends on which entry is running or
+    on ``check_only``/``dry_run``. The entries then execute only the actions
+    they support: startup can run ``alembic upgrade head``, the offline tool
+    verifies schema and converts supported legacy databases.
+    """
+    version_rows = state.version_rows
+    business_tables = tuple(sorted(state.table_names & REQUIRED_TABLES))
+
+    if len(version_rows) > 1:
+        return MigrationPlan(
+            action=MigrationAction.MULTIPLE_VERSIONS,
+            version_rows=version_rows,
+            message=(
+                f"alembic_version contains {len(version_rows)} rows "
+                f"({', '.join(sorted(version_rows))}); expected at most one head. "
+                "Resolve the duplicate version rows (restore a clean backup or stamp a "
+                "single head with scripts/migrate_to_unified_baseline.py) before running "
+                "migrations. The database was not modified."
+            ),
+        )
+
+    if not version_rows:
+        if business_tables:
+            sample = ", ".join(business_tables[:5])
+            return MigrationPlan(
+                action=MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES,
+                business_tables=business_tables,
+                message=(
+                    "Database has business tables but no alembic_version mark "
+                    f"({len(business_tables)} unified-baseline tables present, e.g. {sample}). "
+                    "Its origin cannot be verified; refusing to stamp the unified "
+                    "baseline blindly (creating the remaining tables could collide "
+                    "with existing data). Restore a known-good backup and migrate "
+                    "the data explicitly. The database was not modified."
+                ),
+            )
+        return MigrationPlan(
+            action=MigrationAction.EMPTY_DATABASE,
+            message=(
+                "Database is empty (no alembic_version and no unified-baseline "
+                "business tables). The offline tool does not create tables or stamp "
+                "an empty database: start mail-core (python -m mail_core) or run "
+                "'alembic upgrade head' to initialize the unified baseline. "
+                "The database was not modified."
+            ),
+        )
+
+    current = version_rows[0]
+    if current in context.known_revisions or current == UNIFIED_BASELINE_REVISION:
+        return MigrationPlan(
+            action=MigrationAction.AT_BASELINE,
+            current_revision=current,
+            version_rows=version_rows,
+            message=(
+                f"Database is at recognized revision '{current}' "
+                "(current unified baseline / migration tree)."
+            ),
+        )
+
+    if current in context.legacy_revisions or is_legacy_revision(current):
+        return MigrationPlan(
+            action=MigrationAction.LEGACY,
+            current_revision=current,
+            version_rows=version_rows,
+            message=(
+                f"Database is at known legacy revision '{current}': "
+                "the narrow legacy conversion path applies."
+            ),
+        )
+
+    head_text = ", ".join(context.heads) if context.heads else "(none)"
+    return MigrationPlan(
+        action=MigrationAction.UNKNOWN_REVISION,
+        current_revision=current,
+        version_rows=version_rows,
+        message=(
+            f"Database is at an unrecognized legacy revision '{current}' "
+            f"(current heads: {head_text}). Its origin cannot be verified; restore a "
+            "known-good backup and migrate the data explicitly rather than stamping "
+            "or letting Alembic upgrade it. The database was not modified."
+        ),
+    )
+
+
 def run_migration(
     database_url: str | None = None,
     *,
@@ -876,30 +1044,24 @@ def run_migration(
     safe_url = make_url(raw_url).render_as_string(hide_password=True)
     LOG.info("Connecting to database at %s", safe_url)
 
+    context = offline_revision_context()
     with read_only_connection(raw_url) as conn:
-        current_rev = get_current_alembic_version(conn)
-        LOG.info("Current alembic_version: %s", current_rev)
+        plan = plan_migration(read_database_state(conn), context=context)
+        LOG.info(
+            "Migration classification: %s (alembic_version %s)",
+            plan.action.value,
+            plan.current_revision,
+        )
 
-        is_legacy = is_legacy_revision(current_rev)
+        if plan.action in (
+            MigrationAction.MULTIPLE_VERSIONS,
+            MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES,
+            MigrationAction.UNKNOWN_REVISION,
+            MigrationAction.EMPTY_DATABASE,
+        ):
+            raise SchemaValidationError(plan.message)
 
-        if not is_legacy:
-            inspector = inspect(conn)
-            existing = set(inspector.get_table_names())
-            missing_critical = sorted(CORE_CRITICAL_TABLES - existing)
-            if missing_critical:
-                if current_rev is not None and current_rev != UNIFIED_BASELINE_REVISION:
-                    raise SchemaValidationError(
-                        f"Database schema verification failed for unified baseline: database is at unknown "
-                        f"revision '{current_rev}' and missing critical tables ({', '.join(missing_critical)}). "
-                        "Refusing to stamp unified baseline."
-                    )
-                elif current_rev is None:
-                    raise SchemaValidationError(
-                        f"Database schema verification failed for unified baseline: database has no alembic_version "
-                        f"and is missing critical tables ({', '.join(missing_critical)}). "
-                        "Refusing to stamp unified baseline."
-                    )
-
+        is_legacy = plan.action == MigrationAction.LEGACY
         if is_legacy:
             errors = verify_narrow_legacy_schema(conn)
         else:
@@ -931,7 +1093,7 @@ def run_migration(
         LOG.info(
             "Detected supported legacy revision '%s'. Rebuilding folder_patrol_status "
             "from sync_checkpoints before stamping the unified baseline.",
-            current_rev,
+            plan.current_revision,
         )
         apply_narrow_legacy_conversion(raw_url)
         return
