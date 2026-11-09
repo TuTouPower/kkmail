@@ -1576,21 +1576,6 @@
   }
 }
 
-.sidebar-collapsed .workspace {
-  /* Prefer inline gridTemplateColumns from App (includes resize tracks). */
-  grid-template-columns: 48px var(--list-w) minmax(0, 1fr);
-}
-
-.sidebar-collapsed .sidebar {
-  display: flex;
-  min-width: 0;
-}
-
-.sidebar-collapsed .sidebar-scroll,
-.sidebar-collapsed .sidebar-footer {
-  display: none;
-}
-
 /* --- list header / selection / checkbox fixes (review 2026-10-20) --- */
 .list-pane { min-width: 0; }
 .list-header { min-width: 0; }
