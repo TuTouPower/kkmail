@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import JobType, SyncStatus
@@ -160,19 +161,21 @@ def schedule_folder_status_patrol(
         counted separately and cleared on the next success.
         """
         if fps is None:
-            fps = FolderPatrolStatus(
+            values = dict(
                 folder_id=folder.id,
                 last_status=None,
                 last_probe_at=current_time,
-                last_probe_failures=1 if failed else 0,
+                last_probe_failures=0,
             )
-            session.add(fps)
+            session.execute(
+                pg_insert(FolderPatrolStatus).values(**values).on_conflict_do_nothing()
+            )
+            fps = session.get(FolderPatrolStatus, folder.id)
+        fps.last_probe_at = current_time
+        if failed:
+            fps.last_probe_failures = (fps.last_probe_failures or 0) + 1
         else:
-            fps.last_probe_at = current_time
-            if failed:
-                fps.last_probe_failures = (fps.last_probe_failures or 0) + 1
-            else:
-                fps.last_probe_failures = 0
+            fps.last_probe_failures = 0
         session.flush()
         return fps
 

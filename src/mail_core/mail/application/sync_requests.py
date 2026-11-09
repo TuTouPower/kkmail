@@ -230,6 +230,22 @@ def resolve_sync_targets(
         ]
 
     targets: list[TargetCandidate] = []
+    inbox_by_account: dict[uuid.UUID, Folder] = {}
+    checkpoint_by_folder: dict[uuid.UUID, SyncCheckpoint] = {}
+    if folder_role is None and mode == "delta" and acc_ids:
+        for f in session.scalars(
+            select(Folder)
+            .where(Folder.account_id.in_(acc_ids))
+            .where(Folder.role == "inbox")
+            .where(Folder.sync_status != SyncStatus.PAUSED.value)
+        ).all():
+            inbox_by_account.setdefault(f.account_id, f)
+        inbox_ids = [f.id for f in inbox_by_account.values()]
+        if inbox_ids:
+            for cp in session.scalars(
+                select(SyncCheckpoint).where(SyncCheckpoint.folder_id.in_(inbox_ids))
+            ).all():
+                checkpoint_by_folder[cp.folder_id] = cp
     for aid in acc_ids:
         if folder_role is not None:
             # All selectable folders matching this role
@@ -249,17 +265,8 @@ def resolve_sync_targets(
             # baseline, decouple inbox sync so the primary sync request resolves
             # directly to the inbox folder. When baseline is incomplete or absent,
             # fall back to account discovery so the baseline can be established cleanly.
-            inbox = session.scalars(
-                select(Folder)
-                .where(Folder.account_id == aid)
-                .where(Folder.role == "inbox")
-                .where(Folder.sync_status != SyncStatus.PAUSED.value)
-            ).first()
-            cp = (
-                session.get(SyncCheckpoint, {"account_id": aid, "folder_id": inbox.id})
-                if inbox is not None
-                else None
-            )
+            inbox = inbox_by_account.get(aid)
+            cp = checkpoint_by_folder.get(inbox.id) if inbox is not None else None
             if inbox is not None and cp is not None and bool(cp.full_scan_complete):
                 key = f"account:{aid}:folder:{inbox.id}:role:inbox"
                 targets.append(TargetCandidate(account_id=aid, folder_id=inbox.id, folder_role="inbox", target_key=key))
@@ -433,7 +440,7 @@ def create_sync_request(
                 for cand in candidates
                 if cand.folder_id is not None and cand.folder_role == "inbox"
             ]
-            if mode == "delta" and bg_account_ids and not scope.get("background") and folder_id is None:
+            if mode == "delta" and bg_account_ids and not scope.get("background") and folder_id is None and folder_role != "inbox":
                 bg_request_id = uuid.uuid4()
                 bg_client_req_id = f"bg_{request_id.hex}"
                 bg_scope: dict[str, Any] = {"background": True, "parent_request_id": str(request_id)}
@@ -473,7 +480,7 @@ def create_sync_request(
                         session,
                         job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                         account_id=aid,
-                        payload={"request_id": str(bg_request_id)},
+                        payload={"request_id": str(bg_request_id), "background": True},
                         priority=60,
                         dedupe_key=f"sync:{aid}",
                     )
@@ -681,7 +688,13 @@ def list_recent_sync_requests(
     # by the batched scan below instead of the old fixed 200-row window,
     # which starved older matching requests behind 200 newer unrelated
     # ones.
-    conditions = [SyncRequest.state.in_(states)]
+    conditions = [
+        SyncRequest.state.in_(states),
+        or_(
+            SyncRequest.scope["background"].as_boolean().is_(None),
+            SyncRequest.scope["background"].as_boolean().is_(False),
+        ),
+    ]
     if wanted:
         for key in _IDENTITY_SCOPE_KEYS:
             element = SyncRequest.scope[key]
