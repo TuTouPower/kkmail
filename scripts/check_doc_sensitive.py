@@ -69,11 +69,11 @@ EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
 
 # macOS and Linux user path pattern: e.g. /Users/alice or /home/bob
 USER_PATH_RE = re.compile(
-    r"(?:^|[\s\'\"`\(])(/(?:Users|home)/([a-zA-Z0-9._-]+)(?:/[^\s\'\"`\)]*)?)"
+    r"(?:^|[\s\'\"`\(=])(/(?:Users|home)/([a-zA-Z0-9._-]+)(?:/[^\s\'\"`\)]*)?)"
 )
 # Windows user path pattern: e.g. C:\Users\alice
 WIN_USER_PATH_RE = re.compile(
-    r"(?:^|[\s\'\"`\(])([A-Za-z]:\\Users\\([a-zA-Z0-9._-]+)(?:\\[^\s\'\"`\)]*)?)"
+    r"(?:^|[\s\'\"`\(=])([A-Za-z]:\\Users\\([a-zA-Z0-9._-]+)(?:\\[^\s\'\"`\)]*)?)"
 )
 
 # Private key headers
@@ -81,7 +81,7 @@ PRIVATE_KEY_RE = re.compile(r"-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----")
 
 # Token leak signatures (GitHub personal access token, AWS access key, OpenAI API key)
 TOKEN_RE = re.compile(
-    r"\b(?:ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}|AKIA[0-9A-Z]{16}|sk-[a-zA-Z0-9]{32,})\b"
+    r"\b(?:ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82}|AKIA[0-9A-Z]{16}|sk-[a-zA-Z0-9_-]{32,})\b"
 )
 
 # Password length disclosure pattern (e.g. 口令长 13 位)
@@ -90,6 +90,7 @@ PWD_LEN_RE = re.compile(r"(?:口令|密码)长\s*\d+\s*位")
 # Plaintext password assignment pattern
 PWD_ASSIGN_RE = re.compile(
     r"(?i)\b(?:password|passwd|secret_key|api_key|access_token)\s*[:=]\s*[\"']([^\"'\s]{8,})[\"']"
+    r"|\b(?:password|passwd|secret_key|api_key|access_token)[:=]([A-Za-z0-9!@#$%^&_+=?\-]{8,})"
 )
 
 SAFE_CREDENTIAL_PLACEHOLDERS = {
@@ -99,6 +100,12 @@ SAFE_CREDENTIAL_PLACEHOLDERS = {
     "<secret>",
     "testpassword",
     "your_password_here",
+    "password",
+    "passwd",
+    "secret_key",
+    "api_key",
+    "access_token",
+    "default",
 }
 
 
@@ -109,7 +116,6 @@ class Violation:
     category: str
     message: str
     matched_text: str
-    line_content: str
 
 
 def is_allowed_email(email: str, domain: str) -> bool:
@@ -194,6 +200,22 @@ def is_ignored(
     return False
 
 
+def _allow_marker_pos(line: str) -> int:
+    positions = [p for p in (line.find("sensitive-allow"), line.find("noqa: sensitive")) if p >= 0]
+    return min(positions) if positions else -1
+
+
+def _allowed_match_index(line: str, row: list[Violation], marker_pos: int) -> int | None:
+    candidates: list[tuple[int, int]] = []
+    for index, violation in enumerate(row):
+        pos = line.find(violation.matched_text)
+        if 0 <= pos < marker_pos:
+            candidates.append((pos, index))
+    if not candidates:
+        return None
+    return max(candidates)[1]
+
+
 def scan_file(
     path: Path,
     ignore_archived_errata: bool = False,
@@ -201,132 +223,132 @@ def scan_file(
 ) -> list[Violation]:
     violations: list[Violation] = []
     try:
-        content = path.read_text(encoding="utf-8", errors="ignore")
-    except Exception as exc:
-        print(f"Warning: could not read {path}: {exc}", file=sys.stderr)
-        return violations
-
-    try:
         rel_path = path.resolve().relative_to(root.resolve()).as_posix() if root else path.as_posix()
     except ValueError:
         rel_path = path.as_posix()
     is_archived = "docs/archive" in rel_path
 
-    lines = content.splitlines()
-    for lineno, line in enumerate(lines, start=1):
-        # Allow line-level bypass comment
-        if "sensitive-allow" in line or "noqa: sensitive" in line:
-            continue
+    try:
+        handle = path.open(encoding="utf-8", errors="ignore")
+    except Exception as exc:
+        print(f"Warning: could not read {path}: {exc}", file=sys.stderr)
+        return violations
 
-        # Precision errata line exemption: only allow historical archived lines that explicitly contain errata notice
-        if ignore_archived_errata and is_archived and ("勘误注记" in line or "Errata:" in line):
-            continue
+    with handle:
+        for lineno, raw_line in enumerate(handle, start=1):
+            line = raw_line.rstrip("\r\n")
+            marker_pos = _allow_marker_pos(line)
 
-        # 1. Check emails
-        for m in EMAIL_RE.finditer(line):
-            email = m.group(0)
-            domain = m.group(1)
-            # Skip false positive like npm scoped packages e.g. @types/node
-            start_idx = m.start()
-            if start_idx > 0 and line[start_idx - 1] == "/":
+            # Precision errata line exemption: only allow historical archived lines that explicitly contain errata notice
+            if ignore_archived_errata and is_archived and ("勘误注记" in line or "Errata:" in line):
                 continue
 
-            if not is_allowed_email(email, domain):
-                violations.append(
-                    Violation(
-                        file_path=path,
-                        line_number=lineno,
-                        category="email",
-                        message=f"Non-test personal email detected: '{email}'",
-                        matched_text=email,
-                        line_content=line.strip(),
+            row_start = len(violations)
+
+            # 1. Check emails
+            for m in EMAIL_RE.finditer(line):
+                email = m.group(0)
+                domain = m.group(1)
+                # Skip false positive like npm scoped packages e.g. @types/node
+                start_idx = m.start()
+                if start_idx > 0 and line[start_idx - 1] == "/":
+                    continue
+
+                if not is_allowed_email(email, domain):
+                    violations.append(
+                        Violation(
+                            file_path=path,
+                            line_number=lineno,
+                            category="email",
+                            message=f"Non-test personal email detected: '{email}'",
+                            matched_text=email,
+                        )
                     )
-                )
 
-        # 2. Check user host absolute paths
-        for m in USER_PATH_RE.finditer(line):
-            full_path = m.group(1)
-            user = m.group(2)
-            if not is_allowed_user_path(full_path, user, line):
-                violations.append(
-                    Violation(
-                        file_path=path,
-                        line_number=lineno,
-                        category="path",
-                        message=f"Host private user path detected: '{full_path}'",
-                        matched_text=full_path,
-                        line_content=line.strip(),
+            # 2. Check user host absolute paths
+            for m in USER_PATH_RE.finditer(line):
+                full_path = m.group(1)
+                user = m.group(2)
+                if not is_allowed_user_path(full_path, user, line):
+                    violations.append(
+                        Violation(
+                            file_path=path,
+                            line_number=lineno,
+                            category="path",
+                            message=f"Host private user path detected: '{full_path}'",
+                            matched_text=full_path,
+                        )
                     )
-                )
 
-        for m in WIN_USER_PATH_RE.finditer(line):
-            full_path = m.group(1)
-            user = m.group(2)
-            if not is_allowed_user_path(full_path, user, line):
-                violations.append(
-                    Violation(
-                        file_path=path,
-                        line_number=lineno,
-                        category="path",
-                        message=f"Host private user path detected: '{full_path}'",
-                        matched_text=full_path,
-                        line_content=line.strip(),
+            for m in WIN_USER_PATH_RE.finditer(line):
+                full_path = m.group(1)
+                user = m.group(2)
+                if not is_allowed_user_path(full_path, user, line):
+                    violations.append(
+                        Violation(
+                            file_path=path,
+                            line_number=lineno,
+                            category="path",
+                            message=f"Host private user path detected: '{full_path}'",
+                            matched_text=full_path,
+                        )
                     )
-                )
 
-        # 3. Check credentials
-        if PRIVATE_KEY_RE.search(line):
-            violations.append(
-                Violation(
-                    file_path=path,
-                    line_number=lineno,
-                    category="credential",
-                    message="Private key header detected",
-                    matched_text=line.strip(),
-                    line_content=line.strip(),
-                )
-            )
-
-        m_token = TOKEN_RE.search(line)
-        if m_token:
-            violations.append(
-                Violation(
-                    file_path=path,
-                    line_number=lineno,
-                    category="credential",
-                    message=f"API token pattern detected: '{m_token.group(0)[:10]}...'",
-                    matched_text=m_token.group(0),
-                    line_content=line.strip(),
-                )
-            )
-
-        m_pwd_len = PWD_LEN_RE.search(line)
-        if m_pwd_len:
-            violations.append(
-                Violation(
-                    file_path=path,
-                    line_number=lineno,
-                    category="credential",
-                    message=f"Password length disclosure detected: '{m_pwd_len.group(0)}'",
-                    matched_text=m_pwd_len.group(0),
-                    line_content=line.strip(),
-                )
-            )
-
-        m_pwd = PWD_ASSIGN_RE.search(line)
-        if m_pwd:
-            val = m_pwd.group(1)
-            if not is_safe_credential(val):
+            # 3. Check credentials
+            if PRIVATE_KEY_RE.search(line):
                 violations.append(
                     Violation(
                         file_path=path,
                         line_number=lineno,
                         category="credential",
-                        message=f"Plaintext password pattern detected: '{val[:3]}...'",
-                        matched_text=val,
-                        line_content=line.strip(),
+                        message="Private key header detected",
+                        matched_text=line.strip(),
                     )
                 )
+
+            m_token = TOKEN_RE.search(line)
+            if m_token:
+                violations.append(
+                    Violation(
+                        file_path=path,
+                        line_number=lineno,
+                        category="credential",
+                        message=f"API token pattern detected: '{m_token.group(0)[:10]}...'",
+                        matched_text=m_token.group(0),
+                    )
+                )
+
+            m_pwd_len = PWD_LEN_RE.search(line)
+            if m_pwd_len:
+                violations.append(
+                    Violation(
+                        file_path=path,
+                        line_number=lineno,
+                        category="credential",
+                        message=f"Password length disclosure detected: '{m_pwd_len.group(0)}'",
+                        matched_text=m_pwd_len.group(0),
+                    )
+                )
+
+            m_pwd = PWD_ASSIGN_RE.search(line)
+            if m_pwd:
+                val = m_pwd.group(1) or m_pwd.group(2)
+                if not is_safe_credential(val):
+                    violations.append(
+                        Violation(
+                            file_path=path,
+                            line_number=lineno,
+                            category="credential",
+                            message=f"Plaintext password pattern detected: '{val[:3]}...'",
+                            matched_text=val,
+                        )
+                    )
+
+            if marker_pos >= 0:
+                row = violations[row_start:]
+                exempt_index = _allowed_match_index(line, row, marker_pos)
+                if exempt_index is not None:
+                    del violations[row_start + exempt_index]
 
     return violations
 
@@ -385,6 +407,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     ignore_file = args.ignore_file or (root / ".sensitive_ignore")
     ignore_patterns = load_ignore_patterns(ignore_file)
 
+    for target_str in args.targets:
+        target = Path(target_str)
+        if not target.is_absolute():
+            target = root / target
+        if not target.exists():
+            print(f"Error: target path does not exist: {target}", file=sys.stderr)
+            return 2
+
     target_files = collect_target_files(args.targets, root)
     if not target_files:
         print("No document files found to scan.")
@@ -412,7 +442,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"  {display_path}:{v.line_number} [{v.category.upper()}] {v.message}",
                 file=sys.stderr,
             )
-            print(f"    Line {v.line_number}: {v.line_content}", file=sys.stderr)
+            print(
+                f"    Line {v.line_number}: [REDACTED] {v.category} match "
+                f"({len(v.matched_text)} chars withheld)",
+                file=sys.stderr,
+            )
 
         if args.check:
             return 1

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -216,7 +217,165 @@ api_key = 'dummy12345'
     assert "Plaintext password pattern detected" in proc.stderr
 
 
+def test_gate_output_redacts_secrets(tmp_path: Path):
+    doc = tmp_path / "redact.md"
+    doc.write_text(
+        """# Config Notes
+
+password: "supersecret123" and contact ops@corp.com
+""",
+        encoding="utf-8",
+    )
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    combined = proc.stdout + proc.stderr
+    assert "supersecret123" not in combined
+    assert 'password: "supersecret123" and contact ops@corp.com' not in combined
+    assert "[REDACTED]" in proc.stderr
+
+
+def test_path_equals_user_path_detected(tmp_path: Path):
+    doc = tmp_path / "path_eq.md"
+    doc.write_text(
+        """# Review Document
+
+Target: path=/Users/karson/code/myrepo diff abc
+""",
+        encoding="utf-8",
+    )
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert "[PATH]" in proc.stderr
+    assert "/Users/karson" in proc.stderr
+
+
+def test_win_path_equals_user_path_detected(tmp_path: Path):
+    doc = tmp_path / "win_path_eq.md"
+    doc.write_text(
+        "# Review Document\n\nTarget: path=C:\\Users\\john_doe\\repo cache\n",
+        encoding="utf-8",
+    )
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert "[PATH]" in proc.stderr
+    assert "C:\\Users\\john_doe" in proc.stderr
+
+
+def test_unquoted_password_assignment_detected(tmp_path: Path):
+    doc = tmp_path / "bare_pwd.md"
+    doc.write_text(
+        """# Config Notes
+
+PASSWORD=Sup3rSecret!value
+""",
+        encoding="utf-8",
+    )
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert "[CREDENTIAL]" in proc.stderr
+    assert "Plaintext password pattern detected" in proc.stderr
+
+
+def test_sk_proj_token_detected(tmp_path: Path):
+    token = "sk-proj-Ab3Cd9Ef0Gh1Ij2Kl3Mn4Op5Qr6St7-_Zx"
+    doc = tmp_path / "sk_proj.md"
+    doc.write_text(
+        f"# Secrets\n\napi token: {token}\n",
+        encoding="utf-8",
+    )
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert "[CREDENTIAL]" in proc.stderr
+    assert "API token pattern detected" in proc.stderr
+
+
+def test_missing_target_returns_nonzero(tmp_path: Path):
+    missing = tmp_path / "does_not_exist.md"
+    proc = run_checker(str(missing), "--check")
+    assert proc.returncode == 2
+    assert "does not exist" in proc.stderr
+
+
+def test_empty_existing_directory_still_passes(tmp_path: Path):
+    empty = tmp_path / "empty_docs"
+    empty.mkdir()
+    proc = run_checker(str(empty), "--check")
+    assert proc.returncode == 0
+    assert "No document files found to scan." in proc.stdout
+
+
+def test_scan_file_streams_without_read_text(tmp_path: Path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("check_doc_sensitive_under_test", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+
+    doc = tmp_path / "stream.md"
+    doc.write_text("Contact: alice_developer@gmail.com\n", encoding="utf-8")
+
+    def forbid_read_text(*args, **kwargs):
+        raise AssertionError("scan_file must not load the whole file via read_text")
+
+    monkeypatch.setattr(Path, "read_text", forbid_read_text)
+
+    violations = module.scan_file(doc, root=tmp_path)
+    assert [v.category for v in violations] == ["email"]
+
+
+def test_inline_allow_reports_other_secrets_on_same_line(tmp_path: Path):
+    doc = tmp_path / "inline_allow.md"
+    doc.write_text(
+        """# Review Document
+
+Contact alice@corp.com and bob@corp.com <!-- sensitive-allow -->
+""",
+        encoding="utf-8",
+    )
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert "alice@corp.com" in proc.stderr
+    assert "bob@corp.com" not in proc.stderr
+
+
+def test_inline_allow_does_not_exempt_match_after_marker(tmp_path: Path):
+    doc = tmp_path / "allow_after.md"
+    doc.write_text(
+        """# Review Document
+
+<!-- sensitive-allow --> PASSWORD=supersecret123
+""",
+        encoding="utf-8",
+    )
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert "[CREDENTIAL]" in proc.stderr
+
+
+def test_gate_on_clean_tree_passes(tmp_path: Path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "clean.md").write_text(
+        """# Clean Document
+
+Contact: user@example.com
+Path: /home/runner/work
+""",
+        encoding="utf-8",
+    )
+
+    proc = run_checker("docs", "--check", "--root", str(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    assert "PASSED" in proc.stdout
+
+
 def test_repo_docs_gate_passes():
     proc = run_checker("--check")
-    assert proc.returncode == 0, f"Current repo docs gate failed:\n{proc.stderr}\n{proc.stdout}"
+    assert proc.returncode == 0, f"Current repo docs gate failed: {proc.stderr} {proc.stdout}"
     assert "PASSED" in proc.stdout
