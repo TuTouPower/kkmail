@@ -24,6 +24,7 @@ from mail_core.mail.storage.models import (
     SyncRequestTarget,
     WorkerJob,
 )
+from mail_core.sync.context import sync_context_payload
 from mail_core.sync.execution import bind_target, binding_generation_for
 from mail_core.sync.jobs import enqueue_job
 
@@ -372,7 +373,7 @@ def create_sync_request(
                             session,
                             job_type=JobType.SYNC_FOLDER_DELTA.value,
                             account_id=cand.account_id,
-                            payload={"folder_id": str(cand.folder_id), "request_id": str(request_id)},
+                            payload=sync_context_payload(request_id, folder_id=str(cand.folder_id)),
                             priority=20,
                             dedupe_key=f"delta:{cand.account_id}:{cand.folder_id}",
                         )
@@ -382,7 +383,7 @@ def create_sync_request(
                             session,
                             job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                             account_id=cand.account_id,
-                            payload={"request_id": str(request_id)},
+                            payload=sync_context_payload(request_id),
                             priority=20,
                             dedupe_key=f"sync:{cand.account_id}",
                         )
@@ -411,11 +412,9 @@ def create_sync_request(
                         session,
                         job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                         account_id=cand.account_id,
-                        payload={
-                            "request_id": str(request_id),
-                            "full": True,
-                            "scan_generation": str(root_generation),
-                        },
+                        payload=sync_context_payload(
+                            request_id, full=True, scan_generation=str(root_generation)
+                        ),
                         priority=50,
                         dedupe_key=f"sync:{cand.account_id}",
                     )
@@ -480,7 +479,7 @@ def create_sync_request(
                         session,
                         job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
                         account_id=aid,
-                        payload={"request_id": str(bg_request_id), "background": True},
+                        payload=sync_context_payload(bg_request_id),
                         priority=60,
                         dedupe_key=f"sync:{aid}",
                     )

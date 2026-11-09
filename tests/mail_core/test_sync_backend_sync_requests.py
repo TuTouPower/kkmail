@@ -197,7 +197,10 @@ def test_s4_role_inbox_request_derives_no_background_request():
     assert bg_rows == []
 
 
-def test_s4_global_delta_request_still_derives_background_with_marker():
+def test_s4_global_delta_request_derives_background_via_scope():
+    """Replaces the marker-based test. The payload ``background`` key is gone
+    (zero-compat burden): the derived discovery job now carries only
+    ``request_id`` pointing at the request whose scope holds the flag."""
     engine = _make_engine()
     Session = sessionmaker(bind=engine)
     _seed_accounts(Session, 1)
@@ -215,19 +218,21 @@ def test_s4_global_delta_request_still_derives_background_with_marker():
                 scope={},
             )
             session.commit()
-    bg_calls = [
-        c for c in enq.call_args_list
-        if c.kwargs.get("job_type") == "sync_account_folders"
-        and c.kwargs.get("payload", {}).get("background") is True
-    ]
-    assert len(bg_calls) == 1
     with Session() as session:
         bg_rows = list(
             session.scalars(
                 select(SyncRequest).where(SyncRequest.scope["background"].as_boolean().is_(True))
             ).all()
         )
-    assert len(bg_rows) == 1
+        assert len(bg_rows) == 1
+        bg_id = bg_rows[0].id
+    bg_calls = [
+        c for c in enq.call_args_list
+        if c.kwargs.get("job_type") == "sync_account_folders"
+        and c.kwargs.get("payload", {}).get("request_id") == str(bg_id)
+    ]
+    assert len(bg_calls) == 1
+    assert "background" not in bg_calls[0].kwargs["payload"]
 
 
 def _seed_request(Session, *, scope: dict, state: str) -> uuid.UUID:

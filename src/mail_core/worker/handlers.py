@@ -12,6 +12,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.accounts.service import update_account_sync_status
+from mail_core.sync.context import (
+    account_sync_failure_status as _account_sync_failure_status,
+    is_permanent_auth_error as _is_permanent_auth_error,
+    resolve_sync_context as _resolve_sync_context,
+)
 from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
 from mail_core.mail.storage.models import Account, WorkerJob
 from mail_core.security.credentials import get_credential_store
@@ -73,11 +78,6 @@ def _uuid_or_none(value: Any) -> uuid.UUID | None:
         return uuid.UUID(str(value))
     except (ValueError, TypeError):
         return None
-
-
-def _is_background_sync(job: WorkerJob) -> bool:
-    payload = job.payload
-    return isinstance(payload, dict) and bool(payload.get("background"))
 
 
 def _coerce_retry_after(value: Any, *, fallback: float | None = None) -> float:
@@ -155,6 +155,9 @@ def _validate_job_payload(job: WorkerJob) -> tuple[dict[str, Any], str | None]:
 def _recover_account_sync_status(session: Session, job: WorkerJob) -> None:
     if job.account_id is None or job.job_type not in _ACCOUNT_SYNC_JOB_TYPES:
         return
+    is_background, _ = _resolve_sync_context(session, job)
+    if is_background:
+        return
     account = session.get(Account, job.account_id)
     if account is None or not account.sync_enabled or account.sync_status != SyncStatus.FAILED.value:
         return
@@ -170,6 +173,20 @@ def _recover_account_sync_status(session: Session, job: WorkerJob) -> None:
     )
     if active_error is None:
         update_account_sync_status(session, job.account_id, SyncStatus.IDLE)
+
+
+def _apply_account_sync_failure(
+    session: Session,
+    account_id: uuid.UUID,
+    failure: SyncStatus,
+    *,
+    error: str,
+) -> None:
+    update_account_sync_status(session, account_id, failure, error=error)
+    if failure is SyncStatus.AUTH_FAILED:
+        acc = session.get(Account, account_id)
+        if acc:
+            acc.sync_enabled = False
 
 
 def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: str) -> bool:
@@ -195,14 +212,16 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
         status in ("provider_error", "rate_limited")
         and job.account_id is not None
         and job.job_type in _ACCOUNT_SYNC_JOB_TYPES
-        and not _is_background_sync(job)
     ):
-        update_account_sync_status(
-            session,
-            job.account_id,
-            SyncStatus.FAILED,
-            error=str(result.get("error") or status),
-        )
+        is_background, _ = _resolve_sync_context(session, job)
+        failure = _account_sync_failure_status(result=result, is_background=is_background)
+        if failure is not None:
+            _apply_account_sync_failure(
+                session,
+                job.account_id,
+                failure,
+                error=str(result.get("error") or status),
+            )
     if status in ("ok", "sync_disabled", "skipped", "rate_limited") or result.get("followup_scheduled"):
         complete_job(session, job, worker_id=worker_id, result=result)
         if status == "ok":
@@ -251,6 +270,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
     # in the same worker process do not collide or invalidate each other's lease/claims.
     execution_owner = f"{worker_id}:{job.id}"
 
+    is_background, _ = _resolve_sync_context(session, job)
     try:
         if job.job_type in (
             JobType.SYNC_ACCOUNT_FOLDERS.value,
@@ -282,18 +302,20 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 store=get_credential_store(),
                 traffic_class=traffic_class,
                 full=bool(payload.get("full")),
-                background=_is_background_sync(job),
+                background=is_background,
                 scan_generation=_uuid_or_none(payload.get("scan_generation")),
                 request_id=_uuid_or_none(payload.get("request_id")),
             )
             log.info("sync_account_folders %s", _result_log_summary(result))
-            if result.get("status") in ("lease_busy", "provider_error") and not _is_background_sync(job):
-                update_account_sync_status(
-                    session,
-                    account_id,
-                    SyncStatus.FAILED,
-                    error=str(result.get("error") or result.get("status")),
-                )
+            if result.get("status") == "lease_busy":
+                failure = _account_sync_failure_status(result=result, is_background=is_background)
+                if failure is not None:
+                    _apply_account_sync_failure(
+                        session,
+                        account_id,
+                        failure,
+                        error=str(result.get("error") or result.get("status")),
+                    )
             return _evaluate_result(session, job, result, worker_id)
 
         if job.job_type == JobType.SYNC_FOLDER_METADATA.value:
@@ -379,6 +401,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 poll_round=int(payload.get("poll_round") or 0),
                 # t074: requeues inside keep this job's priority.
                 priority=job.priority,
+                request_id=_uuid_or_none(payload.get("request_id")),
             )
             log.info("sync_folder_delta %s", _result_log_summary(result))
             return _evaluate_result(session, job, result, worker_id)
@@ -410,7 +433,6 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         return False
     except Exception as exc:
         from mail_core.security.redact import safe_error
-        from mail_core.providers.http import PermanentAuthError
 
         if is_capacity_error(exc):
             # Budget/control deferral: reschedule without counting a
@@ -428,7 +450,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         log.debug("job %s traceback", job.id, exc_info=True)
         session.rollback()
 
-        is_auth_error = isinstance(exc, PermanentAuthError)
+        is_auth_error = _is_permanent_auth_error(exc)
         is_transient_network = (
             isinstance(exc, (TimeoutError, ConnectionError, OSError))
             or "ssl" in type(exc).__name__.lower()
@@ -439,17 +461,15 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         is_terminal = (curr_failure_attempts + 1) >= _max_attempts()
         should_mark_account_failed = is_auth_error or (is_terminal and not is_transient_network)
 
-        if account_id is not None and job.job_type in _ACCOUNT_SYNC_JOB_TYPES and should_mark_account_failed and not _is_background_sync(job):
-            try:
-                status_label = SyncStatus.AUTH_FAILED if is_auth_error else SyncStatus.FAILED
-                update_account_sync_status(session, account_id, status_label, error=safe_error(exc))
-                if is_auth_error:
-                    acc = session.get(Account, account_id)
-                    if acc:
-                        acc.sync_enabled = False
-                    session.commit()
-            except Exception as status_exc:
-                log.warning("failed to update account sync status for %s: %s", account_id, safe_error(status_exc))
-                session.rollback()
+        if account_id is not None and job.job_type in _ACCOUNT_SYNC_JOB_TYPES and should_mark_account_failed:
+            failure = _account_sync_failure_status(result=exc, is_background=is_background)
+            if failure is not None:
+                try:
+                    _apply_account_sync_failure(session, account_id, failure, error=safe_error(exc))
+                    if failure is SyncStatus.AUTH_FAILED:
+                        session.commit()
+                except Exception as status_exc:
+                    log.warning("failed to update account sync status for %s: %s", account_id, safe_error(status_exc))
+                    session.rollback()
         fail_job(session, job, exc, worker_id=worker_id)
         return False

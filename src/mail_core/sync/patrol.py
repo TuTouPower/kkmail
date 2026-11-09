@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -171,11 +171,18 @@ def schedule_folder_status_patrol(
                 pg_insert(FolderPatrolStatus).values(**values).on_conflict_do_nothing()
             )
             fps = session.get(FolderPatrolStatus, folder.id)
-        fps.last_probe_at = current_time
-        if failed:
-            fps.last_probe_failures = (fps.last_probe_failures or 0) + 1
-        else:
-            fps.last_probe_failures = 0
+        failure_count = (
+            func.coalesce(FolderPatrolStatus.last_probe_failures, 0) + 1 if failed else 0
+        )
+        session.execute(
+            update(FolderPatrolStatus)
+            .where(FolderPatrolStatus.folder_id == folder.id)
+            .values(
+                last_probe_at=current_time,
+                last_probe_failures=failure_count,
+                updated_at=func.now(),
+            )
+        )
         session.flush()
         return fps
 

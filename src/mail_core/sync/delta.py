@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
+from mail_core.sync.context import sync_context_payload
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
@@ -305,6 +306,7 @@ def _reschedule_delta_after_fencing_mismatch(
     account_id: uuid.UUID,
     folder_id: uuid.UUID,
     priority: int = 60,
+    request_id: uuid.UUID | None = None,
 ) -> bool:
     """A147: keep the periodic poll chain alive after a fencing loss.
 
@@ -319,7 +321,7 @@ def _reschedule_delta_after_fencing_mismatch(
         session,
         job_type=JobType.SYNC_FOLDER_DELTA.value,
         account_id=account_id,
-        payload={"folder_id": str(folder_id)},
+        payload=sync_context_payload(request_id, folder_id=str(folder_id)),
         priority=priority,
         run_after=datetime.now(timezone.utc) + timedelta(seconds=30),
         dedupe_key=f"delta:{account_id}:{folder_id}",
@@ -338,6 +340,7 @@ def sync_folder_delta(
     poll_round: int = 0,
     traffic_class: TrafficClass = TrafficClass.FOREGROUND,
     priority: int = 60,
+    request_id: uuid.UUID | None = None,
 ) -> dict:
     """Apply provider delta pages under fencing.
 
@@ -380,7 +383,7 @@ def sync_folder_delta(
                 session,
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
                 account_id=account_id,
-                payload={"folder_id": str(folder_id)},
+                payload=sync_context_payload(request_id, folder_id=str(folder_id)),
                 priority=priority,
                 run_after=datetime.now(timezone.utc) + timedelta(seconds=5),
                 dedupe_key=f"delta:{account_id}:{folder_id}",
@@ -450,11 +453,12 @@ def sync_folder_delta(
                         session,
                         job_type=JobType.SYNC_FOLDER_METADATA.value,
                         account_id=account_id,
-                        payload={
-                            "folder_id": str(folder_id),
-                            "reason": "cursor_invalid",
-                            "detail": safe_provider_summary(exc),
-                        },
+                        payload=sync_context_payload(
+                            request_id,
+                            folder_id=str(folder_id),
+                            reason="cursor_invalid",
+                            detail=safe_provider_summary(exc),
+                        ),
                         priority=40,
                         dedupe_key=f"metadata:{account_id}:{folder_id}",
                     )
@@ -464,7 +468,7 @@ def sync_folder_delta(
                 except FencingMismatch:
                     session.rollback()
                     followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                        session, account_id=account_id, folder_id=folder_id, priority=priority
+                        session, account_id=account_id, folder_id=folder_id, priority=priority, request_id=request_id
                     )
                     session.commit()
                     return {
@@ -497,7 +501,7 @@ def sync_folder_delta(
                     session,
                     job_type=JobType.SYNC_FOLDER_DELTA.value,
                     account_id=account_id,
-                    payload={"folder_id": str(folder_id)},
+                    payload=sync_context_payload(request_id, folder_id=str(folder_id)),
                     priority=priority,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                     dedupe_key=f"delta:{account_id}:{folder_id}",
@@ -514,7 +518,7 @@ def sync_folder_delta(
                     session,
                     job_type=JobType.SYNC_FOLDER_DELTA.value,
                     account_id=account_id,
-                    payload={"folder_id": str(folder_id)},
+                    payload=sync_context_payload(request_id, folder_id=str(folder_id)),
                     priority=priority,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=delay),
                     dedupe_key=f"delta:{account_id}:{folder_id}",
@@ -538,11 +542,12 @@ def sync_folder_delta(
                     session,
                     job_type=JobType.SYNC_FOLDER_DELTA.value,
                     account_id=account_id,
-                    payload={
-                        "folder_id": str(folder_id),
-                        "reason": "provider_error",
-                        "detail": err_summary,
-                    },
+                    payload=sync_context_payload(
+                        request_id,
+                        folder_id=str(folder_id),
+                        reason="provider_error",
+                        detail=err_summary,
+                    ),
                     priority=priority,
                     run_after=datetime.now(timezone.utc) + timedelta(seconds=15),
                     dedupe_key=f"delta:{account_id}:{folder_id}",
@@ -571,7 +576,7 @@ def sync_folder_delta(
             except FencingMismatch:
                 session.rollback()
                 followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                    session, account_id=account_id, folder_id=folder_id, priority=priority
+                    session, account_id=account_id, folder_id=folder_id, priority=priority, request_id=request_id
                 )
                 session.commit()
                 return {
@@ -611,7 +616,7 @@ def sync_folder_delta(
             except FencingMismatch:
                 session.rollback()
                 followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                    session, account_id=account_id, folder_id=folder_id, priority=priority
+                    session, account_id=account_id, folder_id=folder_id, priority=priority, request_id=request_id
                 )
                 session.commit()
                 return {
@@ -636,7 +641,7 @@ def sync_folder_delta(
         except FencingMismatch:
             session.rollback()
             followup_coalesced = _reschedule_delta_after_fencing_mismatch(
-                session, account_id=account_id, folder_id=folder_id, priority=priority
+                session, account_id=account_id, folder_id=folder_id, priority=priority, request_id=request_id
             )
             session.commit()
             return {
@@ -658,7 +663,7 @@ def sync_folder_delta(
                 session,
                 job_type=JobType.SYNC_FOLDER_DELTA.value,
                 account_id=account_id,
-                payload={"folder_id": str(folder_id)},
+                payload=sync_context_payload(request_id, folder_id=str(folder_id)),
                 priority=priority,
                 dedupe_key=f"delta:{account_id}:{folder_id}",
             )
