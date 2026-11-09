@@ -15,6 +15,7 @@ class MailCoreConfig:
     # Network & Server
     host: str = "127.0.0.1"
     port: int = 8000
+    sidecar: bool = False
     data_dir: str = ""
     public_origin: str = ""
     allow_loopback_oauth_origin: bool = False
@@ -80,6 +81,11 @@ class MailCoreConfig:
         """Validate numeric ranges and logical constraints."""
         if not (0 <= self.port <= 65535):
             raise ConfigError(f"invalid port: {self.port} (must be between 0 and 65535)")
+        if self.port == 0 and not self.sidecar:
+            raise ConfigError(
+                "invalid port: 0 is reserved for the desktop sidecar (KKMAIL_SIDECAR=1); "
+                "set MAIL_CORE_PORT to 1..65535 for a fixed port"
+            )
 
         if self.total_slots <= 0:
             raise ConfigError(f"invalid total_slots: {self.total_slots} (must be > 0)")

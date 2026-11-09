@@ -63,10 +63,24 @@ print(json.dumps({
     ]
 
     results = []
-    for p in processes:
-        stdout, stderr = p.communicate(timeout=15)
-        assert p.returncode == 0, f"Worker process failed: {stderr}"
-        results.append(json.loads(stdout.strip()))
+    try:
+        for p in processes:
+            try:
+                stdout, stderr = p.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                for q in processes:
+                    if q.poll() is None:
+                        q.kill()
+                for q in processes:
+                    q.wait()
+                raise
+            assert p.returncode == 0, f"Worker process failed: {stderr}"
+            results.append(json.loads(stdout.strip()))
+    finally:
+        for q in processes:
+            if q.poll() is None:
+                q.kill()
+                q.wait()
 
     assert len(results) == 4
     first = results[0]

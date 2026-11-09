@@ -74,21 +74,45 @@ def bcrypt_password_bytes(password: str) -> bytes:
     return encoded
 
 
+def _fsync_dir(dir_path: Path) -> None:
+    try:
+        dir_fd = os.open(dir_path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
+
+
 def _write_password_hash_file(path: Path, password_hash: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.tmp.{secrets.token_hex(8)}")
-    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd = None
     try:
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         if hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)
         else:
             os.chmod(tmp_path, 0o600)
         with open(fd, "wb", closefd=True) as output:
+            fd = None
             output.write(password_hash)
             output.flush()
             os.fsync(output.fileno())
         os.replace(tmp_path, path)
+        _fsync_dir(path.parent)
     except BaseException:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             if tmp_path.exists():
                 tmp_path.unlink()

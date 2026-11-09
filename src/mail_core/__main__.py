@@ -19,6 +19,7 @@ import os
 import socket
 import threading
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger("mail_core.main")
 
@@ -38,9 +39,24 @@ def _configure_proxy_headers(*, enabled: bool, forwarded_allow_ips: str | None) 
             log.warning("--proxy-headers requested without trusted proxy hosts; forwarded headers remain disabled")
 
 
+def _legacy_revision_error(current_rev: str | None, script: Any) -> str | None:
+    if not current_rev:
+        return None
+    known_revisions = {rev.revision for rev in script.walk_revisions()}
+    if current_rev in known_revisions:
+        return None
+    heads = script.get_heads()
+    return (
+        f"Database is at legacy revision '{current_rev}' "
+        f"(current heads: {', '.join(heads)}). "
+        "Run 'python scripts/migrate_to_unified_baseline.py' to upgrade to the unified baseline."
+    )
+
+
 def run_migrations() -> None:
     from alembic import command
     from alembic.config import Config
+    from alembic.script import ScriptDirectory
     from sqlalchemy import create_engine, inspect, text
 
     import mail_core.db as db_pkg
@@ -50,6 +66,7 @@ def run_migrations() -> None:
     here = Path(db_pkg.__file__).resolve().parent
     cfg = Config(str(here / "alembic.ini"))
     cfg.set_main_option("script_location", str(here / "alembic"))
+    script = ScriptDirectory.from_config(cfg)
 
     # Guard against legacy revisions before Alembic attempts upgrade
     db_url = cfg.get_main_option("sqlalchemy.url") or database_url()
@@ -61,15 +78,20 @@ def run_migrations() -> None:
                 current_rev = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one_or_none()
-                if current_rev and current_rev != "20261107_0001":
-                    raise RuntimeError(
-                        f"Database is at legacy revision '{current_rev}'. "
-                        "Run 'python scripts/migrate_to_unified_baseline.py' to upgrade to the unified baseline."
-                    )
+                error = _legacy_revision_error(current_rev, script)
+                if error:
+                    raise RuntimeError(error)
     finally:
         check_engine.dispose()
 
     command.upgrade(cfg, "head")
+
+
+def _sidecar_address_family(host: str) -> int:
+    try:
+        return socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)[0][0]
+    except socket.gaierror:
+        return socket.AF_INET
 
 
 def _port_value(raw: str) -> int:
@@ -134,10 +156,11 @@ def main(argv: list[str] | None = None) -> None:
 
     is_sidecar = os.environ.get("KKMAIL_SIDECAR") == "1" or args.port == 0
     if is_sidecar:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock = socket.socket(_sidecar_address_family(args.host), socket.SOCK_STREAM)
         sock.bind((args.host, args.port))
         sock.listen(128)
         bound_port = sock.getsockname()[1]
+        os.environ["MAIL_CORE_PORT"] = str(bound_port)
         print(
             f"KKMAIL_SIDECAR_READY:{json.dumps({'status': 'ready', 'port': bound_port, 'host': args.host})}",
             flush=True,

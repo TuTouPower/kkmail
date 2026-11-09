@@ -22,38 +22,38 @@ def _hash_bytes() -> bytes:
     return hashed
 
 
-def test_wait_accepts_hash_with_trailing_newline(tmp_path):
+def test_validate_bcrypt_hash_accepts_trailing_newline(tmp_path):
     path = tmp_path / "login-password.bcrypt"
     path.write_bytes(_hash_bytes() + b"\n")
     _validate_bcrypt_hash(path)  # must return, not raise
 
 
-def test_wait_accepts_hash_with_surrounding_whitespace(tmp_path):
+def test_validate_bcrypt_hash_accepts_surrounding_whitespace(tmp_path):
     path = tmp_path / "login-password.bcrypt"
     path.write_bytes(b"  " + _hash_bytes() + b" \n")
     _validate_bcrypt_hash(path)
 
 
-def test_wait_accepts_bare_60_byte_hash(tmp_path):
+def test_validate_bcrypt_hash_accepts_bare_60_byte_hash(tmp_path):
     path = tmp_path / "login-password.bcrypt"
     path.write_bytes(_hash_bytes())
     _validate_bcrypt_hash(path)
 
 
-def test_wait_still_rejects_wrong_prefix(tmp_path):
+def test_validate_bcrypt_hash_rejects_wrong_prefix(tmp_path):
     path = tmp_path / "login-password.bcrypt"
     path.write_bytes(b"x" * 60 + b"\n")
     with pytest.raises(RuntimeError):
         _validate_bcrypt_hash(path)
 
 
-def test_wait_still_rejects_wrong_length(tmp_path):
+def test_validate_bcrypt_hash_rejects_wrong_length(tmp_path):
     path = tmp_path / "login-password.bcrypt"
     path.write_bytes(b"$2b$short\n")
     with pytest.raises(RuntimeError):
         _validate_bcrypt_hash(path)
 
 
-def test_wait_still_rejects_missing_file(tmp_path):
+def test_validate_bcrypt_hash_rejects_missing_file(tmp_path):
     with pytest.raises(RuntimeError):
         _validate_bcrypt_hash(tmp_path / "missing.bcrypt")

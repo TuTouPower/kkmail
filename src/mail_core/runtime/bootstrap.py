@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import fcntl
 import logging
 import os
 import secrets
@@ -18,6 +17,11 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Callable, Iterator
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 import bcrypt
 
@@ -78,7 +82,7 @@ def _bootstrap_lock(secrets_dir: Path) -> Iterator[None]:
                 pass
             os.lseek(fd, 0, os.SEEK_SET)
             msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-        elif hasattr(fcntl, "flock"):
+        elif fcntl is not None and hasattr(fcntl, "flock"):
             fcntl.flock(fd, fcntl.LOCK_EX)
 
         _thread_local.locks[lock_path] = fd
@@ -92,7 +96,7 @@ def _bootstrap_lock(secrets_dir: Path) -> Iterator[None]:
 
                     os.lseek(fd, 0, os.SEEK_SET)
                     msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-                elif hasattr(fcntl, "flock"):
+                elif fcntl is not None and hasattr(fcntl, "flock"):
                     fcntl.flock(fd, fcntl.LOCK_UN)
             except OSError:
                 pass
