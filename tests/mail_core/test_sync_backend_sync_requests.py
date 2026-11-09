@@ -1,19 +1,21 @@
 """Adoption fixes for scoped sync requests (S3/S4/S5).
 
-All tests run against an in-memory SQLite engine with hand-written DDL
-(same pattern as test_sync_requests_paused_folder.py / test_sync_requests_scope_exact.py),
-so no PostgreSQL runtime is required.
+All DB-backed tests run against the real PostgreSQL schema built by
+Alembic; JSONB scope pushdown, UUID foreign keys and the session factory
+are the production ones. No hand-written DDL reproduces production tables.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from sqlalchemy import create_engine, event, select, text
-from sqlalchemy.orm import sessionmaker
+import pytest
+from sqlalchemy import event, select
 
+from mail_core.db.session import get_engine, get_session_factory
 import mail_core.mail.application.sync_requests as sr
 from mail_core.mail.application.sync_requests import (
     create_sync_request,
@@ -22,87 +24,15 @@ from mail_core.mail.application.sync_requests import (
 )
 from mail_core.mail.storage.models import (
     Account,
-    Base,
     Folder,
     SyncCheckpoint,
     SyncRequest,
 )
 
-_ACCOUNTS_DDL = """
-CREATE TABLE accounts (
-    id CHAR(36) PRIMARY KEY,
-    email VARCHAR(320) NOT NULL UNIQUE,
-    provider VARCHAR(32) NOT NULL,
-    display_name VARCHAR(255),
-    credential_ref VARCHAR(512),
-    group_id CHAR(36),
-    master_order INTEGER,
-    group_order INTEGER,
-    sync_enabled BOOLEAN NOT NULL DEFAULT 1,
-    sync_status VARCHAR(32) NOT NULL DEFAULT 'idle',
-    config TEXT NOT NULL DEFAULT '{}',
-    recipient_addresses TEXT NOT NULL DEFAULT '[]',
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
 )
-"""
-
-_CHECKPOINTS_DDL = """
-CREATE TABLE sync_checkpoints (
-    account_id CHAR(36) NOT NULL,
-    folder_id CHAR(36) NOT NULL,
-    cursor TEXT NOT NULL DEFAULT '{}',
-    uidvalidity BIGINT,
-    modseq BIGINT,
-    history_id VARCHAR(128),
-    delta_link TEXT,
-    full_scan_complete BOOLEAN NOT NULL DEFAULT 0,
-    scan_generation CHAR(36),
-    fencing_token BIGINT NOT NULL DEFAULT 0,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    PRIMARY KEY (account_id, folder_id)
-)
-"""
-
-_SYNC_REQUESTS_DDL = """
-CREATE TABLE sync_requests (
-    id CHAR(36) PRIMARY KEY,
-    client_request_id VARCHAR(64) NOT NULL UNIQUE,
-    mode VARCHAR(32) NOT NULL,
-    "trigger" VARCHAR(32) NOT NULL,
-    state VARCHAR(32) NOT NULL DEFAULT 'queued',
-    scope JSON NOT NULL DEFAULT '{}',
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    finished_at DATETIME
-)
-"""
-
-_SYNC_TARGETS_DDL = """
-CREATE TABLE sync_request_targets (
-    id CHAR(36) PRIMARY KEY,
-    request_id CHAR(36) NOT NULL,
-    account_id CHAR(36),
-    folder_id CHAR(36),
-    target_key VARCHAR(255) NOT NULL,
-    requested_generation CHAR(36) NOT NULL,
-    state VARCHAR(32) NOT NULL DEFAULT 'queued',
-    error_code VARCHAR(64),
-    safe_error VARCHAR(500),
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    finished_at DATETIME
-)
-"""
-
-_DDL = [_ACCOUNTS_DDL, _CHECKPOINTS_DDL, _SYNC_REQUESTS_DDL, _SYNC_TARGETS_DDL]
-
-
-def _make_engine():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    Base.metadata.create_all(engine, tables=[Folder.__table__])
-    return engine
 
 
 def _seed_accounts(Session, n: int, *, baseline: bool = True):
@@ -130,7 +60,8 @@ def _seed_accounts(Session, n: int, *, baseline: bool = True):
     return ids
 
 
-def _select_count(engine):
+def _select_count():
+    engine = get_engine()
     seen: list[str] = []
 
     def before(conn, cursor, statement, parameters, context, executemany):
@@ -142,13 +73,16 @@ def _select_count(engine):
 
 
 def test_s3_delta_resolution_uses_constant_number_of_queries():
+    Session = get_session_factory()
     counts = {}
+    # The real schema is shared for the whole test (per-test TRUNCATE only),
+    # so grow the dataset incrementally instead of rebuilding a fresh DB.
+    seeded = 0
     for n in (1, 6):
-        engine = _make_engine()
-        Session = sessionmaker(bind=engine)
-        _seed_accounts(Session, n)
+        _seed_accounts(Session, n - seeded)
+        seeded = n
         with Session() as session:
-            seen, cleanup = _select_count(engine)
+            seen, cleanup = _select_count()
             try:
                 targets = resolve_sync_targets(session, mode="delta")
             finally:
@@ -160,8 +94,7 @@ def test_s3_delta_resolution_uses_constant_number_of_queries():
 
 
 def test_s3_delta_resolution_falls_back_without_baseline():
-    engine = _make_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
     _seed_accounts(Session, 3, baseline=False)
     with Session() as session:
         targets = resolve_sync_targets(session, mode="delta")
@@ -170,8 +103,7 @@ def test_s3_delta_resolution_falls_back_without_baseline():
 
 
 def test_s4_role_inbox_request_derives_no_background_request():
-    engine = _make_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
     aid, _fid = _seed_accounts(Session, 1)[0]
     with (
         patch.object(sr, "enqueue_job", return_value=MagicMock()),
@@ -201,8 +133,7 @@ def test_s4_global_delta_request_derives_background_via_scope():
     """Replaces the marker-based test. The payload ``background`` key is gone
     (zero-compat burden): the derived discovery job now carries only
     ``request_id`` pointing at the request whose scope holds the flag."""
-    engine = _make_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
     _seed_accounts(Session, 1)
     with (
         patch.object(sr, "enqueue_job", return_value=MagicMock()) as enq,
@@ -258,8 +189,7 @@ def _ids(reports) -> set[str]:
 
 
 def test_s5_background_filter_is_pushed_into_sql():
-    engine = _make_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
     aid = uuid.uuid4()
     fg = _seed_request(Session, scope={"account_id": str(aid), "folder_role": "inbox"}, state="queued")
     bg = _seed_request(
@@ -275,7 +205,7 @@ def test_s5_background_filter_is_pushed_into_sql():
 
     with patch.object(sr, "_scope_matches", return_value=True):
         with Session() as session:
-            seen, cleanup = _select_count(engine)
+            seen, cleanup = _select_count()
             try:
                 reports = list_recent_sync_requests(session, account_id=aid)
             finally:

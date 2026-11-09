@@ -3,24 +3,26 @@
 Background isolation is derived from ``SyncRequest.scope["background"]`` via
 the ``request_id`` carried by every derived/requeued account-sync job, never
 from a payload marker. These tests run the real create/discovery/handler chain
-against an in-memory SQLite schema (only the PG advisory-lock primitive is
-stubbed, since it has no SQLite equivalent).
+against the real PostgreSQL schema built by Alembic; the advisory generation
+lock is stubbed so the single-process lineage chain does not depend on
+cross-worker coordination.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import sessionmaker
+import pytest
+from sqlalchemy import select
 
-import mail_core.db.session as db_session
 import mail_core.sync.delta as delta_mod
 import mail_core.sync.engine as engine_mod
 import mail_core.sync.execution as execution_mod
+from mail_core.db.session import get_session_factory
 from mail_core.mail.application.sync_requests import (
     create_sync_request,
     get_sync_request_report,
@@ -34,7 +36,6 @@ from mail_core.sync.context import (
 from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
 from mail_core.mail.storage.models import (
     Account,
-    Base,
     Folder,
     SyncCheckpoint,
     SyncRequest,
@@ -47,6 +48,11 @@ from mail_core.providers.http import PermanentAuthError, RateLimitedError
 from mail_core.providers.stub_memory import MemoryProvider
 from mail_core.worker.handlers import handle_job
 
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
+
 _NOW = datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)
 _WORKER = "w-lineage"
 _REMOTE_FOLDERS = [
@@ -55,148 +61,9 @@ _REMOTE_FOLDERS = [
     RemoteFolder("ARCHIVE", "ARCHIVE", "archive"),
 ]
 
-_DDL = [
-    """
-    CREATE TABLE accounts (
-        id CHAR(36) PRIMARY KEY,
-        email VARCHAR(320) NOT NULL UNIQUE,
-        provider VARCHAR(32) NOT NULL,
-        display_name VARCHAR(255),
-        credential_ref VARCHAR(512),
-        group_id CHAR(36),
-        master_order INTEGER,
-        group_order INTEGER,
-        sync_enabled BOOLEAN NOT NULL DEFAULT 1,
-        sync_status VARCHAR(32) NOT NULL DEFAULT 'idle',
-        config TEXT NOT NULL DEFAULT '{}',
-        recipient_addresses TEXT NOT NULL DEFAULT '[]',
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-    """,
-    """
-    CREATE TABLE sync_checkpoints (
-        account_id CHAR(36) NOT NULL,
-        folder_id CHAR(36) NOT NULL,
-        cursor TEXT NOT NULL DEFAULT '{}',
-        uidvalidity BIGINT,
-        modseq BIGINT,
-        history_id VARCHAR(128),
-        delta_link TEXT,
-        full_scan_complete BOOLEAN NOT NULL DEFAULT 0,
-        scan_generation CHAR(36),
-        fencing_token BIGINT NOT NULL DEFAULT 0,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        PRIMARY KEY (account_id, folder_id)
-    )
-    """,
-    """
-    CREATE TABLE account_sync_leases (
-        account_id CHAR(36) PRIMARY KEY,
-        owner_id VARCHAR(128) NOT NULL,
-        lease_expires_at DATETIME NOT NULL,
-        heartbeat_at DATETIME NOT NULL,
-        fencing_token BIGINT NOT NULL DEFAULT 0
-    )
-    """,
-    """
-    CREATE TABLE sync_runs (
-        id CHAR(36) PRIMARY KEY,
-        account_id CHAR(36) NOT NULL,
-        folder_id CHAR(36),
-        phase VARCHAR(64) NOT NULL,
-        status VARCHAR(32) NOT NULL,
-        stats TEXT NOT NULL DEFAULT '{}',
-        error TEXT,
-        fencing_token BIGINT,
-        started_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE outbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        payload TEXT NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        publication_seq BIGINT,
-        published_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE worker_jobs (
-        id CHAR(36) PRIMARY KEY,
-        execution_generation CHAR(36) NOT NULL,
-        job_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        dedupe_key VARCHAR(128),
-        payload TEXT NOT NULL DEFAULT '{}',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        priority INTEGER NOT NULL DEFAULT 100,
-        run_after DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        failure_attempts INTEGER NOT NULL DEFAULT 0,
-        locked_by VARCHAR(128),
-        locked_at DATETIME,
-        last_error TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope TEXT NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_targets (
-        id CHAR(36) PRIMARY KEY,
-        request_id CHAR(36) NOT NULL,
-        account_id CHAR(36),
-        folder_id CHAR(36),
-        target_key VARCHAR(255) NOT NULL,
-        requested_generation CHAR(36) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_target_jobs (
-        id CHAR(36) PRIMARY KEY,
-        target_id CHAR(36) NOT NULL,
-        execution_generation CHAR(36) NOT NULL,
-        job_id CHAR(36),
-        phase VARCHAR(64) NOT NULL DEFAULT 'sync',
-        folder_id CHAR(36),
-        status VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-]
-
 
 def _make_session(monkeypatch):
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    Base.metadata.create_all(engine, tables=[Folder.__table__])
-    Session = sessionmaker(bind=engine)
-    monkeypatch.setattr(db_session, "get_session_factory", lambda url=None: Session)
+    Session = get_session_factory()
     monkeypatch.setattr(execution_mod, "lock_generation", lambda session, generation: None)
     return Session
 

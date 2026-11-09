@@ -5,40 +5,31 @@ processes first-starting together both saw "no row", both inserted
 id=1, and one crashed with IntegrityError on the primary key. The fix
 inserts with ON CONFLICT DO NOTHING and re-reads the row.
 
-The race is simulated deterministically: a session wrapper whose first
-scalar() returns a stale "no row" while the row already exists.
+On the real PostgreSQL schema the conflict-safe insert is exercised for
+real; the race is simulated deterministically by a session wrapper whose
+first scalar() returns a stale "no row" while the row already exists.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import sessionmaker
+import pytest
+from sqlalchemy import select
 
+from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import OutboxPublicationState
 from mail_core.realtime.publication import get_publication_state
 
-_DDL = """
-CREATE TABLE outbox_publication_state (
-    id INTEGER PRIMARY KEY,
-    epoch CHAR(36) NOT NULL,
-    next_seq BIGINT NOT NULL,
-    pruned_through_seq BIGINT NOT NULL DEFAULT 0,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
 )
-"""
-
-
-def _make_session():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        conn.execute(text(_DDL))
-    return sessionmaker(bind=engine)
 
 
 class _StaleFirstReadSession:
-    """Delegates to a real session, but the first scalar() lies (stale
+    """Delegates to a real PG session, but the first scalar() lies (stale
     read: "no singleton row") to reproduce the two-process race."""
 
     def __init__(self, real):
@@ -56,7 +47,7 @@ class _StaleFirstReadSession:
 
 
 def test_get_publication_state_creates_singleton_once():
-    Session = _make_session()
+    Session = get_session_factory()
     with Session() as session:
         state = get_publication_state(session)
         session.commit()
@@ -70,7 +61,7 @@ def test_get_publication_state_creates_singleton_once():
 
 
 def test_get_publication_state_survives_stale_read_race():
-    Session = _make_session()
+    Session = get_session_factory()
     existing_epoch = uuid.uuid4()
     with Session() as session:
         session.add(

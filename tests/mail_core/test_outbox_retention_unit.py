@@ -1,36 +1,37 @@
-"""Package G-part-2 unit-mode coverage for outbox retention (R13, design §9.2).
+"""Package G-part-2 coverage for outbox retention (R13, design §9.2).
 
-The prune service is exercised against a real SQLAlchemy session on a
-SQLite database whose two tables are created with raw DDL matching the
-current models. This covers only the dialect-independent prune and
-watermark algorithm: SQLite provides no PostgreSQL JSONB server defaults,
-FOR UPDATE or advisory locks, so these cases assert no PostgreSQL locking
-or concurrency semantics. PostgreSQL-backed end-to-end coverage lives in
-test_outbox_retention.py.
-
-Replay and dispatcher behavior are exercised through the production
-functions with their session-factory / publication helpers replaced by
-controllable fakes — the same seams the production code uses.
+The prune service is exercised against the real PostgreSQL schema built by
+Alembic (the full suite supplies MAIL_CORE_DATABASE_URL); no hand-written
+DDL reproduces production tables. Replay and dispatcher behavior are
+exercised through the production functions with their session-factory /
+publication helpers replaced by controllable fakes — the same seams the
+production code uses. Model/migration alignment checks are pure metadata
+assertions with no DB dependency.
 """
 
 from __future__ import annotations
 
 import asyncio
-import importlib.util
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
 
 from mail_core.api import sse as sse_mod
+from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import OutboxEvent, OutboxPublicationState
 from mail_core.realtime import outbox as outbox_mod
 from mail_core.realtime.dispatcher import OutboxDispatcher
 from mail_core.realtime.outbox import prune_published, pruned_through_seq
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 EPOCH = str(uuid.uuid4())
@@ -40,43 +41,8 @@ FRESH = NOW - timedelta(hours=1)
 
 
 # ---------------------------------------------------------------------------
-# SQLite-backed retention service
+# Retention service (real PostgreSQL schema)
 # ---------------------------------------------------------------------------
-
-
-def _make_session_factory():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                CREATE TABLE outbox_publication_state (
-                    id INTEGER PRIMARY KEY,
-                    epoch CHAR(36) NOT NULL,
-                    next_seq BIGINT NOT NULL DEFAULT 1,
-                    pruned_through_seq BIGINT NOT NULL DEFAULT 0,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-                )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                CREATE TABLE outbox (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_type VARCHAR(64) NOT NULL,
-                    account_id CHAR(36),
-                    payload JSON NOT NULL DEFAULT '{}',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-                    publication_seq BIGINT,
-                    published_at DATETIME
-                )
-                """
-            )
-        )
-        conn.execute(text("CREATE UNIQUE INDEX ix_outbox_publication_seq ON outbox (publication_seq)"))
-    return sessionmaker(bind=engine)
 
 
 def _seed(Session, rows, *, watermark=0):
@@ -120,7 +86,7 @@ def _watermark(Session):
 
 
 def test_prune_deletes_old_published_prefix_and_advances_watermark():
-    Session = _make_session_factory()
+    Session = get_session_factory()
     _seed(Session, [(1, OLD), (2, OLD), (3, OLD)])
 
     with Session() as session:
@@ -132,7 +98,7 @@ def test_prune_deletes_old_published_prefix_and_advances_watermark():
 
 
 def test_prune_delete_and_watermark_advance_share_one_transaction():
-    Session = _make_session_factory()
+    Session = get_session_factory()
     _seed(Session, [(1, OLD), (2, OLD)])
 
     with Session() as session:
@@ -149,7 +115,7 @@ def test_prune_delete_and_watermark_advance_share_one_transaction():
 
 
 def test_prune_respects_batch_limit_and_continues_next_call():
-    Session = _make_session_factory()
+    Session = get_session_factory()
     _seed(Session, [(seq, OLD) for seq in range(1, 7)])
 
     with Session() as session:
@@ -166,7 +132,7 @@ def test_prune_respects_batch_limit_and_continues_next_call():
 
 
 def test_prune_batch_is_hard_capped_at_5000_rows():
-    Session = _make_session_factory()
+    Session = get_session_factory()
     _seed(Session, [(seq, OLD) for seq in range(1, 5002)])
 
     with Session() as session:
@@ -178,7 +144,7 @@ def test_prune_batch_is_hard_capped_at_5000_rows():
 
 
 def test_prune_never_deletes_unpublished_rows_regardless_of_age():
-    Session = _make_session_factory()
+    Session = get_session_factory()
     ids = _seed(Session, [(1, OLD), (None, None), (2, OLD)])
     unpublished_id = ids[None]
 
@@ -192,7 +158,7 @@ def test_prune_never_deletes_unpublished_rows_regardless_of_age():
 
 
 def test_prune_stops_at_newer_row_interleaved_in_sequence():
-    Session = _make_session_factory()
+    Session = get_session_factory()
     _seed(Session, [(1, OLD), (2, FRESH), (3, OLD)])
 
     with Session() as session:
@@ -206,7 +172,7 @@ def test_prune_stops_at_newer_row_interleaved_in_sequence():
 
 
 def test_prune_keeps_rows_inside_retention_window():
-    Session = _make_session_factory()
+    Session = get_session_factory()
     _seed(Session, [(1, FRESH), (2, FRESH)])
 
     with Session() as session:
@@ -217,7 +183,7 @@ def test_prune_keeps_rows_inside_retention_window():
 
 
 def test_prune_starts_above_existing_watermark():
-    Session = _make_session_factory()
+    Session = get_session_factory()
     _seed(Session, [(3, OLD), (4, OLD)], watermark=2)
 
     with Session() as session:
@@ -436,7 +402,7 @@ def test_dispatcher_commits_publication_seq_before_broadcast(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Model / migration alignment (programmatic drift check for unit mode)
+# Model / migration alignment (pure metadata assertions)
 # ---------------------------------------------------------------------------
 
 

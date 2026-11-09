@@ -7,17 +7,19 @@ MagicMock-based tests asserted ``_is_background_sync(job)`` read that marker;
 their semantics no longer exist, so they were deleted rather than having
 their expectations rewritten to the new output. The real
 create/discovery/handler chain is covered by test_sync_background_lineage.py.
-The two unrelated guard tests at the bottom are kept unchanged.
+The pure-function guard tests are kept unchanged; the one DB-backed
+lineage test uses the real PostgreSQL session factory.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+import pytest
 
+from mail_core.db.session import get_session_factory
 from mail_core.sync.context import (
     account_sync_failure_status,
     is_permanent_auth_error,
@@ -28,30 +30,16 @@ from mail_core.mail.domain.enums import SyncStatus
 from mail_core.mail.storage.models import SyncRequest, WorkerJob
 from mail_core.providers.http import PermanentAuthError
 
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
+
 _NOW = datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)
-_REQUESTS_DDL = """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope TEXT NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """
-
-
-def _session():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        conn.execute(text(_REQUESTS_DDL))
-    return sessionmaker(bind=engine)
 
 
 def test_payload_marker_is_never_a_background_source():
-    Session = _session()
+    Session = get_session_factory()
     fg_id, bg_id = uuid.uuid4(), uuid.uuid4()
     with Session() as session:
         session.add(
