@@ -1,22 +1,25 @@
 """Adoption fixes for outbox publication and folder patrol (S6/S7).
 
 Both fixes replace a select-then-insert with a conflict-safe upsert; the
-races are reproduced deterministically on SQLite with a stale first read
-(same technique as test_a352_publication_state_race.py).
+races are reproduced deterministically on the real PostgreSQL schema with
+a stale first read (same technique as test_a352_publication_state_race.py).
+The conflict-safe ON CONFLICT DO NOTHING paths are PostgreSQL-only and are
+now exercised for real rather than against hand-written DDL.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, event, select, text
-from sqlalchemy.orm import sessionmaker
+import pytest
+from sqlalchemy import event, select
 
+from mail_core.db.session import get_engine, get_session_factory
 from mail_core.mail.domain.enums import OutboxEventType
 from mail_core.mail.storage.models import (
     Account,
-    Base,
     Folder,
     FolderPatrolStatus,
     OutboxEvent,
@@ -27,93 +30,21 @@ from mail_core.providers.base import FolderStatus
 from mail_core.realtime.publication import publish_committed_batch
 from mail_core.sync.patrol import PatrolConfig, schedule_folder_status_patrol
 
-_PUB_DDL = [
-    """
-    CREATE TABLE outbox_publication_state (
-        id INTEGER PRIMARY KEY,
-        epoch CHAR(36) NOT NULL,
-        next_seq BIGINT NOT NULL,
-        pruned_through_seq BIGINT NOT NULL DEFAULT 0,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE outbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        payload JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        publication_seq BIGINT,
-        published_at DATETIME
-    )
-    """,
-]
-
-_ACCOUNTS_DDL = """
-CREATE TABLE accounts (
-    id CHAR(36) PRIMARY KEY,
-    email VARCHAR(320) NOT NULL UNIQUE,
-    provider VARCHAR(32) NOT NULL,
-    display_name VARCHAR(255),
-    credential_ref VARCHAR(512),
-    group_id CHAR(36),
-    master_order INTEGER,
-    group_order INTEGER,
-    sync_enabled BOOLEAN NOT NULL DEFAULT 1,
-    sync_status VARCHAR(32) NOT NULL DEFAULT 'idle',
-    config TEXT NOT NULL DEFAULT '{}',
-    recipient_addresses TEXT NOT NULL DEFAULT '[]',
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
 )
-"""
-
-_CHECKPOINTS_DDL = """
-CREATE TABLE sync_checkpoints (
-    account_id CHAR(36) NOT NULL,
-    folder_id CHAR(36) NOT NULL,
-    cursor TEXT NOT NULL DEFAULT '{}',
-    uidvalidity BIGINT,
-    modseq BIGINT,
-    history_id VARCHAR(128),
-    delta_link TEXT,
-    full_scan_complete BOOLEAN NOT NULL DEFAULT 0,
-    scan_generation CHAR(36),
-    fencing_token BIGINT NOT NULL DEFAULT 0,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    PRIMARY KEY (account_id, folder_id)
-)
-"""
-
-_PATROL_STATUS_DDL = """
-CREATE TABLE folder_patrol_status (
-    folder_id CHAR(36) PRIMARY KEY,
-    last_status JSON,
-    last_probe_at DATETIME,
-    last_probe_failures INTEGER NOT NULL DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-)
-"""
 
 
-def _pub_engine():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _PUB_DDL:
-            conn.execute(text(ddl))
-    return engine
+def _capture_sql():
+    engine = get_engine()
+    statements: list[str] = []
 
+    def _record(_conn, _cursor, statement, _params, _context, _executemany):
+        statements.append(statement)
 
-def _patrol_engine():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        conn.execute(text(_ACCOUNTS_DDL))
-        conn.execute(text(_CHECKPOINTS_DDL))
-        conn.execute(text(_PATROL_STATUS_DDL))
-    Base.metadata.create_all(engine, tables=[Folder.__table__])
-    return engine
+    event.listen(engine, "before_cursor_execute", _record)
+    return statements, lambda: event.remove(engine, "before_cursor_execute", _record)
 
 
 class _StaleFirstScalarSession:
@@ -132,8 +63,7 @@ class _StaleFirstScalarSession:
 
 
 def test_s6_publish_creates_state_on_first_start():
-    engine = _pub_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
     with Session() as session:
         session.add(OutboxEvent(event_type=OutboxEventType.SYNC_PROGRESS.value, payload={"n": 1}))
         session.commit()
@@ -151,8 +81,7 @@ def test_s6_publish_creates_state_on_first_start():
 
 
 def test_s6_publish_survives_stale_first_read_race():
-    engine = _pub_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
     existing_epoch = uuid.uuid4()
     with Session() as session:
         session.add(
@@ -209,8 +138,7 @@ class _FailingProvider:
 
 
 def _seed_patrol_failure(*, failures: int):
-    engine = _patrol_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
     account_id = uuid.uuid4()
     folder_id = uuid.uuid4()
     with Session() as session:
@@ -229,10 +157,10 @@ def _seed_patrol_failure(*, failures: int):
         )
         session.add(
             FolderPatrolStatus(folder_id=folder_id, last_status=None,
-                              last_probe_failures=failures)
+                               last_probe_failures=failures)
         )
         session.commit()
-    return engine, Session, folder_id
+    return Session, folder_id
 
 
 def _patrol_config():
@@ -242,13 +170,8 @@ def _patrol_config():
 
 
 def test_s7_patrol_failure_count_is_atomic_sql_increment():
-    engine, Session, folder_id = _seed_patrol_failure(failures=3)
-    statements: list[str] = []
-
-    def capture(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    event.listen(engine, "before_cursor_execute", capture)
+    Session, folder_id = _seed_patrol_failure(failures=3)
+    statements, stop_capture = _capture_sql()
     try:
         with Session() as session:
             result = schedule_folder_status_patrol(
@@ -259,7 +182,7 @@ def test_s7_patrol_failure_count_is_atomic_sql_increment():
             )
             session.commit()
     finally:
-        event.remove(engine, "before_cursor_execute", capture)
+        stop_capture()
 
     assert result.failed == 1
     updates = [
@@ -272,7 +195,7 @@ def test_s7_patrol_failure_count_is_atomic_sql_increment():
 
 
 def test_s7_patrol_failure_count_accumulates_across_workers():
-    _engine, Session, folder_id = _seed_patrol_failure(failures=3)
+    Session, folder_id = _seed_patrol_failure(failures=3)
     for _ in range(2):
         with Session() as session:
             result = schedule_folder_status_patrol(
@@ -288,8 +211,7 @@ def test_s7_patrol_failure_count_accumulates_across_workers():
 
 
 def test_s7_patrol_upsert_survives_concurrent_first_probe():
-    engine = _patrol_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
     account_id = uuid.uuid4()
     folder_id = uuid.uuid4()
     with Session() as session:
@@ -308,7 +230,7 @@ def test_s7_patrol_upsert_survives_concurrent_first_probe():
         )
         session.add(
             FolderPatrolStatus(folder_id=folder_id, last_status=None,
-                               last_probe_failures=3)
+                                last_probe_failures=3)
         )
         session.commit()
 
@@ -323,7 +245,7 @@ def test_s7_patrol_upsert_survives_concurrent_first_probe():
         result = schedule_folder_status_patrol(
             wrapped,  # type: ignore[arg-type]
             config=PatrolConfig(enabled=True, interval_s=0.0, max_probes=10,
-                                max_unprobed_s=999999.0),
+                                 max_unprobed_s=999999.0),
             provider_factory=lambda acc: _StubProvider(),
             now=now,
         )
@@ -338,8 +260,7 @@ def test_s7_patrol_upsert_survives_concurrent_first_probe():
 
 
 def test_s7_patrol_creates_status_when_absent():
-    engine = _patrol_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
     account_id = uuid.uuid4()
     folder_id = uuid.uuid4()
     with Session() as session:
@@ -358,7 +279,7 @@ def test_s7_patrol_creates_status_when_absent():
         result = schedule_folder_status_patrol(
             session,
             config=PatrolConfig(enabled=True, interval_s=0.0, max_probes=10,
-                                max_unprobed_s=999999.0),
+                                 max_unprobed_s=999999.0),
             provider_factory=lambda acc: _StubProvider(),
             now=now,
         )

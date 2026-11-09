@@ -7,21 +7,23 @@ pinned shape: fetch this generation's birth once, then ask "does a
 newer-born sibling generation exist?" with a LIMIT 1 existence query --
 no GROUP BY anywhere.
 
-SQLite + hand DDL following test_sync_checkpoint_generation_order.py;
-``assert_fencing`` is patched out.
+Runs against the real PostgreSQL schema built by Alembic. Foreign-key
+parent rows (Account/Folder) are seeded because the real schema enforces
+them; ``assert_fencing`` is patched out so no lease row is needed.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import create_engine, event, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import event
 
-from mail_core.mail.storage.models import SyncRequest, SyncRequestTarget
+from mail_core.db.session import get_engine, get_session_factory
+from mail_core.mail.storage.models import Account, Folder, SyncRequest, SyncRequestTarget
 from mail_core.sync import checkpoints as checkpoints_mod
 from mail_core.sync.checkpoints import (
     ScanGenerationMismatch,
@@ -29,51 +31,10 @@ from mail_core.sync.checkpoints import (
     commit_checkpoint,
 )
 
-_DDL = [
-    """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_targets (
-        id CHAR(36) PRIMARY KEY,
-        request_id CHAR(36) NOT NULL,
-        account_id CHAR(36),
-        folder_id CHAR(36),
-        target_key VARCHAR(255) NOT NULL,
-        requested_generation CHAR(36) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_checkpoints (
-        account_id CHAR(36) NOT NULL,
-        folder_id CHAR(36) NOT NULL,
-        cursor JSON NOT NULL DEFAULT '{}',
-        uidvalidity BIGINT,
-        modseq BIGINT,
-        history_id VARCHAR(128),
-        delta_link TEXT,
-        full_scan_complete BOOLEAN NOT NULL DEFAULT 0,
-        scan_generation CHAR(36),
-        fencing_token INTEGER NOT NULL DEFAULT 0,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        PRIMARY KEY (account_id, folder_id)
-    )
-    """,
-]
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 _T0 = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-00000000acc0")
@@ -84,6 +45,26 @@ _FOLDER = uuid.UUID("00000000-0000-0000-0000-00000000f01d")
 def _no_fencing():
     with patch.object(checkpoints_mod, "assert_fencing", lambda *_a, **_k: None):
         yield
+
+
+def _capture_sql():
+    engine = get_engine()
+    statements: list[str] = []
+
+    def _record(_conn, _cursor, statement, _params, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _record)
+    return statements, lambda: event.remove(engine, "before_cursor_execute", _record)
+
+
+def _seed_fk_parents(Session):
+    with Session() as session:
+        session.add(Account(id=_ACCOUNT, email="a293-fk@example.test",
+                            provider="imap", sync_enabled=True))
+        session.add(Folder(id=_FOLDER, account_id=_ACCOUNT, remote_id="INBOX",
+                           name="INBOX", role="inbox"))
+        session.commit()
 
 
 def _seed(session, generation, *, born_at):
@@ -115,35 +96,29 @@ def _seed(session, generation, *, born_at):
 
 
 def test_generation_check_is_limit1_existence_without_group_by():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
+    _seed_fk_parents(Session)
     gen_old, gen_new = uuid.uuid4(), uuid.uuid4()
-
-    statements: list[str] = []
-
-    @event.listens_for(engine, "before_cursor_execute")
-    def _capture(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
 
     with Session() as session:
         _seed(session, gen_old, born_at=_T0)
         _seed(session, gen_new, born_at=_T0 + timedelta(minutes=5))
         session.commit()
 
-        statements.clear()
-        with pytest.raises(ScanGenerationMismatch):
-            commit_checkpoint(
-                session,
-                account_id=_ACCOUNT,
-                folder_id=_FOLDER,
-                fencing_token=7,
-                cursor={"uid_next": 1},
-                scan_generation=gen_old,
-            )
-        session.rollback()
+        statements, stop_capture = _capture_sql()
+        try:
+            with pytest.raises(ScanGenerationMismatch):
+                commit_checkpoint(
+                    session,
+                    account_id=_ACCOUNT,
+                    folder_id=_FOLDER,
+                    fencing_token=7,
+                    cursor={"uid_next": 1},
+                    scan_generation=gen_old,
+                )
+            session.rollback()
+        finally:
+            stop_capture()
 
     generation_queries = [s for s in statements if "sync_request_targets" in s]
     assert generation_queries, "generation check issued no target query"
