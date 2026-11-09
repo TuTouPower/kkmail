@@ -56,6 +56,18 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_process_environ():
+    """Snapshot and restore os.environ so no test can poison later tests."""
+    before = dict(os.environ)
+    yield
+    for key in [k for k in os.environ if k not in before]:
+        del os.environ[key]
+    for key, value in before.items():
+        if os.environ.get(key) != value:
+            os.environ[key] = value
+
+
+@pytest.fixture(autouse=True)
 def _isolated_backend_runtime(monkeypatch, tmp_path, request):
     from tests.mail_core.runtime_isolation import isolated_runtime
     with isolated_runtime(monkeypatch, tmp_path, request.session):
