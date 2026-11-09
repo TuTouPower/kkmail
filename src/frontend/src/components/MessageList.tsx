@@ -283,14 +283,6 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
   const unreadCount = unreadUnknown ? null : searching ? raw.filter((m) => m.is_read === false).length : serverUnread ?? 0
 
   const [actionStatus, setActionStatus] = useState('')
-  const [backgroundSyncStatus, setBackgroundSyncStatus] = useState<{ text: string; isError: boolean } | null>(null)
-  const applyBackgroundSyncStatus = useCallback((next: { text: string; isError: boolean } | null) => {
-    setBackgroundSyncStatus((prev) => {
-      if (prev === next) return prev
-      if (prev && next && prev.text === next.text && prev.isError === next.isError) return prev
-      return next
-    })
-  }, [])
   const sentinelRef = useRef<HTMLDivElement | null>(null)
   const messageListRef = useRef<HTMLDivElement | null>(null)
   const [messageListScrollTop, setMessageListScrollTop] = useState(0)
@@ -507,22 +499,47 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
     }
   }
 
-  const [isSyncing, setIsSyncing] = useState(false)
-  const syncCancelledRef = useRef(false)
-  const backgroundSyncAbortRef = useRef<(() => void) | null>(null)
-
-  // Unmounting stops the wait (the backend sync itself keeps running).
-  useEffect(() => () => {
-    syncCancelledRef.current = true
-    backgroundSyncAbortRef.current?.()
-    backgroundSyncAbortRef.current = null
+  interface SyncGeneration {
+    id: number
+    active: boolean
+  }
+  interface SyncViewState {
+    generationId: number
+    isSyncing: boolean
+    background: { text: string; isError: boolean } | null
+    failure: string | null
+  }
+  const [syncView, setSyncView] = useState<SyncViewState>({ generationId: 0, isSyncing: false, background: null, failure: null })
+  const [currentGeneration, setCurrentGeneration] = useState(0)
+  const generationRef = useRef<SyncGeneration>({ id: 0, active: true })
+  const bumpGeneration = useCallback((): SyncGeneration => {
+    const previous = generationRef.current
+    previous.active = false
+    const next: SyncGeneration = { id: previous.id + 1, active: true }
+    generationRef.current = next
+    setCurrentGeneration(next.id)
+    return next
   }, [])
+  const updateSyncView = (generation: SyncGeneration, update: (prev: SyncViewState) => SyncViewState) => {
+    setSyncView((prev) => (generation.active ? update(prev) : prev))
+  }
+  const equalBackground = (a: SyncViewState['background'], b: SyncViewState['background']) =>
+    a === b || (!!a && !!b && a.text === b.text && a.isError === b.isError)
+  const setBackgroundFor = (generation: SyncGeneration, next: SyncViewState['background']) => {
+    updateSyncView(generation, (prev) => (equalBackground(prev.background, next) ? prev : { ...prev, background: next }))
+  }
+  const syncViewIsCurrent = syncView.generationId === currentGeneration
+  const isSyncing = syncViewIsCurrent && syncView.isSyncing
+  const backgroundSyncStatus = syncViewIsCurrent ? syncView.background : null
+  const syncFailure = syncViewIsCurrent ? syncView.failure : null
 
-  useEffect(() => {
-    backgroundSyncAbortRef.current?.()
-    backgroundSyncAbortRef.current = null
-    applyBackgroundSyncStatus(null)
-  }, [view, applyBackgroundSyncStatus])
+  useEffect(() => useMailStore.subscribe((state, prev) => {
+    if (state.view !== prev.view) bumpGeneration()
+  }), [bumpGeneration])
+
+  useEffect(() => () => {
+    generationRef.current.active = false
+  }, [])
 
   /**
    * Immediate sync for the accounts in the current view scope: account and
@@ -533,11 +550,8 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
    */
   async function syncCurrentScope() {
     if (isSyncing) return
-    setIsSyncing(true)
-    syncCancelledRef.current = false
-    backgroundSyncAbortRef.current?.()
-    backgroundSyncAbortRef.current = null
-    applyBackgroundSyncStatus(null)
+    const generation = bumpGeneration()
+    setSyncView({ generationId: generation.id, isSyncing: true, background: null, failure: null })
     try {
       let submitError: unknown = null
       let initial: SyncRequestOut[]
@@ -563,53 +577,45 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         initial = [await api.syncAll()]
       }
       const { reports, cancelled } = await waitForSyncRequests(initial, {
-        isCancelled: () => syncCancelledRef.current,
+        isCancelled: () => !generation.active,
       })
-      if (cancelled) return
+      if (cancelled || !generation.active) return
       const failure = syncFailureDetail(reports)
-      if (failure) setActionStatus(`立即同步失败：${failure}`)
-      else if (submitError) setActionStatus(`立即同步失败：${errorMessage(submitError)}`)
+      if (failure) updateSyncView(generation, (prev) => ({ ...prev, failure: `立即同步失败：${failure}` }))
+      else if (submitError) updateSyncView(generation, (prev) => ({ ...prev, failure: `立即同步失败：${errorMessage(submitError)}` }))
       await Promise.all([
         invalidateMailListQueries(),
         invalidateMailStatsQueries(),
         queryClient.invalidateQueries({ queryKey: queryKeys.accounts }),
         queryClient.invalidateQueries({ queryKey: queryKeys.stats }),
       ])
+      if (!generation.active) return
       // A21: If background non-inbox sync is still in flight, monitor it separately
       if (hasActiveBackgroundSync(reports)) {
-        let cancelled = false
-        const abort = () => {
-          cancelled = true
-        }
-        backgroundSyncAbortRef.current = abort
-        applyBackgroundSyncStatus({ text: '收件箱已同步，后台正在同步其余文件夹...', isError: false })
+        setBackgroundFor(generation, { text: '收件箱已同步，后台正在同步其余文件夹...', isError: false })
         void pollBackgroundSync(reports, {
-          isCancelled: () => cancelled || syncCancelledRef.current,
+          isCancelled: () => !generation.active,
           onProgress: (progress) => {
-            if (cancelled || syncCancelledRef.current) return
+            if (!generation.active) return
             if (progress.active) {
-              applyBackgroundSyncStatus({ text: '收件箱已同步，后台正在同步其余文件夹...', isError: false })
+              setBackgroundFor(generation, { text: '收件箱已同步，后台正在同步其余文件夹...', isError: false })
             } else if (progress.state === 'failed' && progress.error) {
-              applyBackgroundSyncStatus({ text: `后台同步提示：${progress.error}`, isError: true })
+              setBackgroundFor(generation, { text: `后台同步提示：${progress.error}`, isError: true })
             } else {
-              applyBackgroundSyncStatus(null)
+              setBackgroundFor(generation, null)
             }
           },
-        }).finally(() => {
-          if (backgroundSyncAbortRef.current === abort) {
-            backgroundSyncAbortRef.current = null
-          }
         })
       } else {
         const backgroundFailure = backgroundSyncFailureDetail(reports)
-        applyBackgroundSyncStatus(
-          backgroundFailure ? { text: `后台同步提示：${backgroundFailure}`, isError: true } : null,
-        )
+        setBackgroundFor(generation, backgroundFailure ? { text: `后台同步提示：${backgroundFailure}`, isError: true } : null)
       }
     } catch (err) {
-      if (!syncCancelledRef.current) setActionStatus(`立即同步失败：${errorMessage(err)}`)
+      if (generation.active) {
+        updateSyncView(generation, (prev) => ({ ...prev, failure: `立即同步失败：${errorMessage(err)}` }))
+      }
     } finally {
-      setIsSyncing(false)
+      updateSyncView(generation, (prev) => ({ ...prev, isSyncing: false }))
     }
   }
 
@@ -758,6 +764,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         )}
       </div>
       {actionStatus && actionStatus.includes('失败') && <div role="status" className="list-note error">{actionStatus}</div>}
+      {syncFailure && <div role="status" className="list-note error">{syncFailure}</div>}
       {backgroundSyncStatus && (
         <div
           role="status"
