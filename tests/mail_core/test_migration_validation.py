@@ -8,6 +8,7 @@ against real PostgreSQL.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import uuid
@@ -53,6 +54,9 @@ if str(ROOT / "scripts") not in sys.path:
 from migrate_to_unified_baseline import (
     REQUIRED_TABLES,
     UNIFIED_BASELINE_REVISION,
+    SchemaValidationError,
+    migrate_patrol_status_data,
+    run_migration,
     stamp_unified_baseline,
     verify_database_schema,
 )
@@ -412,3 +416,154 @@ def test_offline_migration_tool_verifies_and_stamps_live_db():
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
         assert cur_rev == UNIFIED_BASELINE_REVISION
+
+
+def test_offline_tool_refuses_legacy_schema_without_side_effects_on_postgres():
+    """A legacy/incomplete PostgreSQL schema is rejected before any write.
+
+    Adoption A17 keeps the explicit-refusal decision: the offline tool has no
+    general legacy upgrade path. Reducing a real PostgreSQL database to an
+    incomplete legacy schema must be refused without leaving a
+    folder_patrol_status table, rewriting sync_checkpoints.cursor, or changing
+    alembic_version.
+    """
+    cfg = _get_alembic_config()
+    engine = get_engine()
+    db_url = os.environ["MAIL_CORE_DATABASE_URL"]
+    legacy_cursor = json.dumps(
+        {"last_status": "idle", "last_probe_failures": 7, "delta_token": "keep-me"}
+    )
+    folder_id = uuid.uuid4()
+
+    with engine.connect() as conn:
+        command.downgrade(cfg, "base")
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO alembic_version (version_num) VALUES ('20261027_0029')")
+            )
+            conn.execute(text("CREATE TABLE folders (id UUID PRIMARY KEY)"))
+            conn.execute(
+                text(
+                    "CREATE TABLE sync_checkpoints ("
+                    "folder_id UUID PRIMARY KEY, cursor JSONB NOT NULL)"
+                )
+            )
+            conn.execute(
+                text("INSERT INTO folders (id) VALUES (:fid)"),
+                {"fid": folder_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sync_checkpoints (folder_id, cursor) "
+                    "VALUES (:fid, CAST(:cur AS jsonb))"
+                ),
+                {"fid": folder_id, "cur": legacy_cursor},
+            )
+
+        with pytest.raises(SchemaValidationError, match="not supported") as excinfo:
+            run_migration(db_url)
+        assert "Restore the pre-upgrade sealed backup" in str(excinfo.value)
+
+        with engine.connect() as conn:
+            assert "folder_patrol_status" not in set(inspect(conn).get_table_names())
+            cursor = conn.execute(
+                text("SELECT cursor FROM sync_checkpoints WHERE folder_id = :fid"),
+                {"fid": folder_id},
+            ).scalar_one()
+            assert cursor == json.loads(legacy_cursor)
+            assert conn.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalars().all() == ["20261027_0029"]
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS sync_checkpoints"))
+            conn.execute(text("DROP TABLE IF EXISTS folders"))
+            conn.execute(text("DELETE FROM alembic_version"))
+        with engine.connect() as conn:
+            command.upgrade(cfg, "head")
+
+
+def test_stamp_unified_baseline_executes_real_insert_on_postgres():
+    """stamp_unified_baseline performs a real INSERT on PostgreSQL.
+
+    The head database is already stamped, so alembic_version is cleared first
+    to force the INSERT branch to run against real DDL instead of a no-op.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM alembic_version"))
+
+    with engine.connect() as conn:
+        stamp_unified_baseline(conn, dry_run=False)
+        conn.commit()
+        versions = conn.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalars().all()
+    assert versions == [UNIFIED_BASELINE_REVISION]
+
+
+def test_patrol_status_migration_executes_on_real_postgres():
+    """The patrol data migration runs against a real JSONB PostgreSQL column.
+
+    The unit suite only asserts the emitted SQL strings; here the INSERT ...
+    ON CONFLICT and cursor-minus-ARRAY statements actually execute, and the
+    migrated row and cleaned cursor are read back from the database. No legacy
+    schema upgrade is performed.
+    """
+    engine = get_engine()
+    Session = get_session_factory()
+    with Session() as session:
+        account = Account(
+            email=f"patrol-{uuid.uuid4().hex[:8]}@example.com",
+            provider="imap",
+        )
+        session.add(account)
+        session.commit()
+        account_id = account.id
+        folder = Folder(
+            account_id=account_id,
+            remote_id="INBOX",
+            name="Inbox",
+            role="inbox",
+        )
+        session.add(folder)
+        session.commit()
+        folder_id = folder.id
+
+    cursor_value = {
+        "last_status": {"folder_path": "/Inbox", "uidvalidity": 12345},
+        "last_probe_at": 1700000000,
+        "last_probe_failures": 3,
+        "delta_token": "token-xyz",
+    }
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO sync_checkpoints (account_id, folder_id, cursor) "
+                "VALUES (:acc, :folder, CAST(:cur AS jsonb))"
+            ),
+            {"acc": account_id, "folder": folder_id, "cur": json.dumps(cursor_value)},
+        )
+
+    with engine.connect() as conn:
+        migrate_patrol_status_data(conn, dry_run=False)
+        conn.commit()
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT last_status, last_probe_at, last_probe_failures "
+                "FROM folder_patrol_status WHERE folder_id = :folder"
+            ),
+            {"folder": folder_id},
+        ).one()
+        assert row[0] == {"folder_path": "/Inbox", "uidvalidity": 12345}
+        assert row[1] is not None
+        assert row[2] == 3
+        remaining = conn.execute(
+            text("SELECT cursor FROM sync_checkpoints WHERE folder_id = :folder"),
+            {"folder": folder_id},
+        ).scalar_one()
+        assert remaining == {"delta_token": "token-xyz"}
