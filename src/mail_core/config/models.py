@@ -83,7 +83,7 @@ class MailCoreConfig:
             raise ConfigError(f"invalid port: {self.port} (must be between 0 and 65535)")
         if self.port == 0 and not self.sidecar:
             raise ConfigError(
-                "invalid port: 0 is reserved for the desktop sidecar (KKMAIL_SIDECAR=1); "
+                "invalid port: 0 is reserved for the desktop sidecar (enable KKMAIL_SIDECAR); "
                 "set MAIL_CORE_PORT to 1..65535 for a fixed port"
             )
 

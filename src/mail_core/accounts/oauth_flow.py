@@ -17,6 +17,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from mail_core.config.loader import is_sidecar_enabled
 from mail_core.security.credentials import (
     CompositeCredentialStore,
     CredentialStore,
@@ -194,7 +195,7 @@ def get_oauth_metadata(provider: str = "microsoft") -> dict[str, Any]:
     # back to its hardcoded built-in id while the backend exchanged with
     # the env override, guaranteeing a client mismatch.
     microsoft_client_id = default_microsoft_client_id()
-    if os.environ.get("KKMAIL_SIDECAR", "").strip() == "1":
+    if is_sidecar_enabled():
         port_raw = (os.environ.get("MAIL_CORE_PORT") or "18765").strip()
         if not port_raw.isdigit() or not (1 <= int(port_raw) <= 65535):
             raise ValueError("桌面端本地服务端口无效")

@@ -167,14 +167,6 @@ function redactSecrets(text, secrets = []) {
   return out
 }
 
-function parsePort(raw, fallback = DEFAULT_PORT) {
-  const n = Number(raw == null || raw === '' ? fallback : raw)
-  if (!Number.isInteger(n) || n < 1 || n > 65535) {
-    throw new Error(`KKMAIL_DESKTOP_PORT 无效（需要 1–65535 的整数）: ${raw}`)
-  }
-  return n
-}
-
 function tryListen(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const srv = net.createServer()
@@ -506,7 +498,6 @@ module.exports = {
   ENV_ALLOW_PREFIX,
   SIDECAR_CONFIG_KEYS,
   collectSidecarExtras,
-  parsePort,
   tryListen,
   freePort,
   waitForHealth,
