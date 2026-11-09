@@ -23,21 +23,23 @@ for the account. The pinned invariants:
   keep the previous behaviour -- there is nothing to order them
   against.
 
-SQLite + hand DDL, following test_sync_execution_lock_order.py;
-``assert_fencing`` is patched out (the lease is not under test).
+Runs against the real PostgreSQL schema created by ``alembic upgrade head``
+(UUID/JSONB/timestamptz); ``assert_fencing`` is patched out (the lease is
+not under test). The fixed account/folder ids are seeded so the real FK
+constraints on ``sync_checkpoints`` / ``sync_request_targets`` hold.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 
-from mail_core.mail.storage.models import SyncCheckpoint, SyncRequest, SyncRequestTarget
+from mail_core.db.session import get_session_factory
+from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, SyncRequest, SyncRequestTarget
 from mail_core.sync import checkpoints as checkpoints_mod
 from mail_core.sync.checkpoints import (
     ScanGenerationMismatch,
@@ -45,51 +47,10 @@ from mail_core.sync.checkpoints import (
     commit_checkpoint,
 )
 
-_DDL = [
-    """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_targets (
-        id CHAR(36) PRIMARY KEY,
-        request_id CHAR(36) NOT NULL,
-        account_id CHAR(36),
-        folder_id CHAR(36),
-        target_key VARCHAR(255) NOT NULL,
-        requested_generation CHAR(36) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_checkpoints (
-        account_id CHAR(36) NOT NULL,
-        folder_id CHAR(36) NOT NULL,
-        cursor JSON NOT NULL DEFAULT '{}',
-        uidvalidity BIGINT,
-        modseq BIGINT,
-        history_id VARCHAR(128),
-        delta_link TEXT,
-        full_scan_complete BOOLEAN NOT NULL DEFAULT 0,
-        scan_generation CHAR(36),
-        fencing_token INTEGER NOT NULL DEFAULT 0,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        PRIMARY KEY (account_id, folder_id)
-    )
-    """,
-]
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 _T0 = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-00000000acc0")
@@ -97,12 +58,26 @@ _FOLDER = uuid.UUID("00000000-0000-0000-0000-00000000f01d")
 _TOKEN = 7
 
 
-def _make_session():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    return sessionmaker(bind=engine)
+def _seed_infra(Session):
+    with Session() as session:
+        session.add(
+            Account(
+                id=_ACCOUNT,
+                email=f"gen-order-{uuid.uuid4().hex}@example.test",
+                provider="imap",
+                sync_enabled=True,
+            )
+        )
+        session.add(
+            Folder(
+                id=_FOLDER,
+                account_id=_ACCOUNT,
+                remote_id="INBOX",
+                name="INBOX",
+                role="inbox",
+            )
+        )
+        session.commit()
 
 
 def _seed_full_generation(session, generation: uuid.UUID, *, born_at: datetime, target_id: uuid.UUID | None = None) -> None:
@@ -168,26 +143,23 @@ def _checkpoint(session) -> SyncCheckpoint:
 
 
 def test_stale_generation_cannot_rebegin_or_commit_after_newer_generation():
-    Session = _make_session()
+    Session = get_session_factory()
+    _seed_infra(Session)
     gen1, gen2 = uuid.uuid4(), uuid.uuid4()
     with Session() as session:
-        # G1 is the only generation: begins and commits normally.
         _seed_full_generation(session, gen1, born_at=_T0)
         _begin(session, gen1)
         _commit(session, gen1, {"uid_next": 10})
         session.commit()
 
-        # G2 is allocated later and takes over the checkpoint.
         _seed_full_generation(session, gen2, born_at=_T0 + timedelta(minutes=5))
         _begin(session, gen2)
         row = _checkpoint(session)
         assert row.scan_generation == gen2
-        assert row.cursor == {}  # reset for the new generation
+        assert row.cursor == {}
         _commit(session, gen2, {"uid_next": 20})
         session.commit()
 
-        # A requeued G1 job re-acquires the lease and tries to begin:
-        # it must be rejected, not reset the cursor back to G1.
         with pytest.raises(ScanGenerationMismatch):
             _begin(session, gen1)
         session.rollback()
@@ -195,7 +167,6 @@ def test_stale_generation_cannot_rebegin_or_commit_after_newer_generation():
         assert row.scan_generation == gen2
         assert row.cursor == {"uid_next": 20}
 
-        # And G1 must not commit checkpoints anymore either.
         with pytest.raises(ScanGenerationMismatch):
             _commit(session, gen1, {"uid_next": 999})
         session.rollback()
@@ -203,8 +174,6 @@ def test_stale_generation_cannot_rebegin_or_commit_after_newer_generation():
         assert row.scan_generation == gen2
         assert row.cursor == {"uid_next": 20}
 
-        # The newest generation still works, and a same-generation
-        # retry keeps its cursor (no reset).
         _begin(session, gen2)
         row = _checkpoint(session)
         assert row.scan_generation == gen2
@@ -217,12 +186,13 @@ def test_stale_generation_cannot_rebegin_or_commit_after_newer_generation():
 def test_unrecorded_generations_keep_legacy_behaviour():
     """Generations without a full-request record cannot be ordered;
     begin/commit keep the pre-fix semantics for them."""
-    Session = _make_session()
+    Session = get_session_factory()
+    _seed_infra(Session)
     gen_a, gen_b = uuid.uuid4(), uuid.uuid4()
     with Session() as session:
         _begin(session, gen_a)
         _commit(session, gen_a, {"uid_next": 1})
-        _begin(session, gen_b)  # different generation: resets, as before
+        _begin(session, gen_b)
         row = _checkpoint(session)
         assert row.scan_generation == gen_b
         assert row.cursor == {}
@@ -239,7 +209,8 @@ def test_same_timestamp_generations_are_ordered_by_stable_total_order():
     key is therefore the stable total order ``(created_at, target id)``:
     the generation whose earliest target id is larger is the newer one.
     """
-    Session = _make_session()
+    Session = get_session_factory()
+    _seed_infra(Session)
     gen_old, gen_new = uuid.uuid4(), uuid.uuid4()
     older_target = uuid.UUID("00000000-0000-0000-0000-000000000001")
     newer_target = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -248,7 +219,6 @@ def test_same_timestamp_generations_are_ordered_by_stable_total_order():
         _seed_full_generation(session, gen_new, born_at=_T0, target_id=newer_target)
         session.commit()
 
-        # Same birth timestamp, smaller target id: stale.
         with pytest.raises(ScanGenerationMismatch):
             _begin(session, gen_old)
         session.rollback()
@@ -256,7 +226,6 @@ def test_same_timestamp_generations_are_ordered_by_stable_total_order():
             _commit(session, gen_old, {"uid_next": 999})
         session.rollback()
 
-        # Same birth timestamp, larger target id: current, works.
         _begin(session, gen_new)
         _commit(session, gen_new, {"uid_next": 20})
         session.commit()

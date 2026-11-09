@@ -15,20 +15,25 @@ only a binding whose generation is STILL not live is orphaned.
 
 The race is simulated by making the first live-set computation return
 a stale (pre-bind) snapshot while the decision-time recheck computes
-the real set from the database, following the raw-DDL SQLite pattern
-of test_sync_orphan_patrol_live_generations.py. No existing test is
-modified by this file.
+the real set from the database. The stale-read wrapper patches the
+module-level helper, not the session: the real PostgreSQL JSONB
+successor-generation path is exercised on the real session.
+
+Runs against the real PostgreSQL schema created by ``alembic upgrade head``.
+No existing test is modified by this file.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import sessionmaker
+import pytest
+from sqlalchemy import select
 
+from mail_core.db.session import get_session_factory
 from mail_core.mail.domain.enums import JobStatus
 from mail_core.mail.storage.models import (
     SyncRequest,
@@ -39,91 +44,12 @@ from mail_core.mail.storage.models import (
 from mail_core.sync import execution as execution_mod
 from mail_core.sync.execution import converge_orphaned_bindings
 
-_DDL = [
-    """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_targets (
-        id CHAR(36) PRIMARY KEY,
-        request_id CHAR(36) NOT NULL,
-        account_id CHAR(36),
-        folder_id CHAR(36),
-        target_key VARCHAR(255) NOT NULL,
-        requested_generation CHAR(36) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_target_jobs (
-        id CHAR(36) PRIMARY KEY,
-        target_id CHAR(36) NOT NULL,
-        execution_generation CHAR(36) NOT NULL,
-        job_id CHAR(36),
-        phase VARCHAR(64) NOT NULL DEFAULT 'sync',
-        folder_id CHAR(36),
-        status VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE outbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        payload JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        publication_seq BIGINT,
-        published_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE worker_jobs (
-        id CHAR(36) PRIMARY KEY,
-        execution_generation CHAR(36) NOT NULL,
-        job_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        dedupe_key VARCHAR(128),
-        payload JSON NOT NULL DEFAULT '{}',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        priority INTEGER NOT NULL DEFAULT 100,
-        run_after DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        failure_attempts INTEGER NOT NULL DEFAULT 0,
-        locked_by VARCHAR(128),
-        locked_at DATETIME,
-        last_error TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-]
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 _NOW = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
-
-
-def _make_engine():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    return engine
 
 
 def _seed_binding(Session, *, generation: uuid.UUID) -> uuid.UUID:
@@ -169,16 +95,12 @@ def _seed_binding(Session, *, generation: uuid.UUID) -> uuid.UUID:
 
 
 def test_patrol_rechecks_live_generations_before_failing_successor_binding():
-    engine = _make_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
 
     running_generation = uuid.uuid4()
     successor_generation = uuid.uuid4()
     orphan_generation = uuid.uuid4()
 
-    # A CLAIMED job whose successor generation was pre-allocated when a
-    # new request bound it (the bind committed after the patrol's
-    # snapshot was taken).
     with Session() as session:
         session.add(
             WorkerJob(
@@ -204,8 +126,6 @@ def test_patrol_rechecks_live_generations_before_failing_successor_binding():
     def stale_first_snapshot(session):
         calls["n"] += 1
         if calls["n"] == 1:
-            # The snapshot predates the bind commit: it cannot contain
-            # the successor generation (nor the running one).
             return set()
         return real_impl(session)
 
@@ -216,7 +136,6 @@ def test_patrol_rechecks_live_generations_before_failing_successor_binding():
             changed = converge_orphaned_bindings(session)
         session.commit()
 
-    # Only the genuinely orphaned binding converged.
     assert changed == 1
     with Session() as session:
         bindings = {b.id: b for b in session.scalars(select(SyncRequestTargetJob)).all()}

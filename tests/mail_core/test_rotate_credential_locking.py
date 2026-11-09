@@ -6,6 +6,9 @@ any lock and later write back re-encrypted *old* plaintext. A token refresh
 silently reverted to the old secret. Rotation now joins the credential_edit
 lock protocol: per-ref advisory lock (credential_lock_key) + FOR UPDATE
 re-read with populate_existing, in ref order.
+
+Runs against the real PostgreSQL schema created by ``alembic upgrade head``;
+the advisory-lock / row-lock protocol is exercised on real PostgreSQL.
 """
 
 from __future__ import annotations
@@ -21,7 +24,13 @@ from sqlalchemy.orm import Session
 
 from mail_core.blobs.crypto import Keyring
 from mail_core.blobs.rotate import _cred_key, _rewrap_credential_secrets
+from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import CredentialSecret
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 _KEYRING = Keyring(keys={1: os.urandom(32), 2: os.urandom(32)}, active_version=2)
 _REF = "acct-r03"
@@ -45,32 +54,23 @@ def _decrypt_row(session: Session, keyring: Keyring, ref: str) -> bytes:
     )
 
 
-def test_rewrap_roundtrip_sqlite(tmp_path):
-    """Non-gated smoke: a v1 row is rewrapped to v2 and still decrypts."""
-    from sqlalchemy import create_engine
-
-    engine = create_engine("sqlite://")
-    CredentialSecret.__table__.create(engine)
+def test_rewrap_roundtrip():
+    """A v1 row is rewrapped to v2 and still decrypts."""
+    SessionFactory = get_session_factory()
     nonce, ct = _encrypt(_KEYRING, 1, _REF, b'{"refresh_token": "tok"}')
-    with Session(engine) as session:
+    with SessionFactory() as session:
         session.add(CredentialSecret(ref=_REF, key_version=1, nonce=nonce, ciphertext=ct))
         session.commit()
-    with Session(engine) as session:
+    with SessionFactory() as session:
         assert _rewrap_credential_secrets(session, _KEYRING, 2) == 1
         session.commit()
-    with Session(engine) as session:
+    with SessionFactory() as session:
         assert _decrypt_row(session, _KEYRING, _REF) == b'{"refresh_token": "tok"}'
 
 
-DATABASE_URL = os.environ.get("MAIL_CORE_DATABASE_URL")
-pg_only = pytest.mark.skipif(not DATABASE_URL, reason="MAIL_CORE_DATABASE_URL not set")
-
-
-@pg_only
 def test_rotation_does_not_overwrite_concurrent_refresh():
     from sqlalchemy import func
 
-    from mail_core.db.session import get_session_factory
     from mail_core.security.credentials import credential_lock_key
 
     SessionFactory = get_session_factory()
@@ -126,7 +126,6 @@ def test_rotation_does_not_overwrite_concurrent_refresh():
     assert edit_holding.wait(timeout=30)
     t_rotate = threading.Thread(target=rotation)
     t_rotate.start()
-    # Let rotation reach its lock/read point, then let the edit commit.
     time.sleep(0.5)
     edit_release.set()
     t_edit.join(timeout=30)

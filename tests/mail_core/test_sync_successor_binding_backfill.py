@@ -10,131 +10,45 @@ rows, so their ``job_id`` stayed NULL. ``mark_bindings_running``
 NULL-job_id bindings are never matched, so they stayed ``queued``
 while the successor actually executed.
 
-The in-tree PostgreSQL test
-``test_sync_execution_tracking.py::test_claimed_job_request_binds_successor_not_running_execution``
-asserts ``binding.job_id == successor.id``, but it is skipped in unit
-mode (no ``MAIL_CORE_DATABASE_URL`` in this sandbox), so no candidate
-sync test fails in a unit-mode run at HEAD. This file pins the same
-invariant on a SQLite engine, following
-``test_sync_execution_lock_order.py``: SQLite strips ``FOR UPDATE``
-and cannot execute the PostgreSQL advisory generation lock, so
-``lock_generation`` is patched out -- the invariant under test is the
-backfilled ``job_id`` and the subsequent claim-time transition to
-``running``, neither of which depends on that lock.
+Runs against the real PostgreSQL schema created by ``alembic upgrade head``:
+``complete_job`` / ``claim_jobs`` take real FOR UPDATE / SKIP LOCKED row
+locks and the settlement path uses the real generation advisory lock.
+The invariant under test is the backfilled ``job_id`` and the subsequent
+claim-time transition to ``running``.
 
 No existing test is modified by this file.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import patch
 
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import sessionmaker
+import pytest
+from sqlalchemy import select
 
+from mail_core.db.session import get_session_factory
 from mail_core.mail.storage.models import (
     SyncRequest,
     SyncRequestTarget,
     SyncRequestTargetJob,
     WorkerJob,
 )
-from mail_core.sync import execution as execution_mod
 from mail_core.sync.execution import bind_target
 from mail_core.sync.jobs import claim_jobs, complete_job
 
-_DDL = [
-    """
-    CREATE TABLE sync_requests (
-        id CHAR(36) PRIMARY KEY,
-        client_request_id VARCHAR(64) NOT NULL UNIQUE,
-        mode VARCHAR(32) NOT NULL,
-        "trigger" VARCHAR(32) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        scope JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_targets (
-        id CHAR(36) PRIMARY KEY,
-        request_id CHAR(36) NOT NULL,
-        account_id CHAR(36),
-        folder_id CHAR(36),
-        target_key VARCHAR(255) NOT NULL,
-        requested_generation CHAR(36) NOT NULL,
-        state VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE sync_request_target_jobs (
-        id CHAR(36) PRIMARY KEY,
-        target_id CHAR(36) NOT NULL,
-        execution_generation CHAR(36) NOT NULL,
-        job_id CHAR(36),
-        phase VARCHAR(64) NOT NULL DEFAULT 'sync',
-        folder_id CHAR(36),
-        status VARCHAR(32) NOT NULL DEFAULT 'queued',
-        error_code VARCHAR(64),
-        safe_error VARCHAR(500),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        finished_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE outbox (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        payload JSON NOT NULL DEFAULT '{}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        publication_seq BIGINT,
-        published_at DATETIME
-    )
-    """,
-    """
-    CREATE TABLE worker_jobs (
-        id CHAR(36) PRIMARY KEY,
-        execution_generation CHAR(36) NOT NULL,
-        job_type VARCHAR(64) NOT NULL,
-        account_id CHAR(36),
-        dedupe_key VARCHAR(128),
-        payload JSON NOT NULL DEFAULT '{}',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        priority INTEGER NOT NULL DEFAULT 100,
-        run_after DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        failure_attempts INTEGER NOT NULL DEFAULT 0,
-        locked_by VARCHAR(128),
-        locked_at DATETIME,
-        last_error TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-    )
-    """,
-]
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 _NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 _WORKER = "w-defect3"
 
 
-def _make_engine():
-    engine = create_engine("sqlite://")
-    with engine.begin() as conn:
-        for ddl in _DDL:
-            conn.execute(text(ddl))
-    return engine
-
-
 def test_complete_job_backfills_successor_job_id_onto_preallocated_bindings():
-    engine = _make_engine()
-    Session = sessionmaker(bind=engine)
+    Session = get_session_factory()
 
     successor_generation = uuid.uuid4()
     job_id = uuid.uuid4()
@@ -186,8 +100,6 @@ def test_complete_job_backfills_successor_job_id_onto_preallocated_bindings():
             )
         )
         session.flush()
-        # As bind_target does for a request arriving mid-claim: bind to
-        # the pre-allocated successor generation with job_id NULL.
         binding = bind_target(
             session,
             target=target,
@@ -201,14 +113,11 @@ def test_complete_job_backfills_successor_job_id_onto_preallocated_bindings():
     with Session() as session:
         job = session.get(WorkerJob, job_id)
         assert job is not None
-        with patch.object(
-            execution_mod, "lock_generation", lambda _session, _gen: None
-        ):
-            successor = complete_job(session, job, worker_id=_WORKER)
-            assert successor is not None
-            assert successor.execution_generation == successor_generation
-            successor_id = successor.id
-            session.commit()
+        successor = complete_job(session, job, worker_id=_WORKER)
+        assert successor is not None
+        assert successor.execution_generation == successor_generation
+        successor_id = successor.id
+        session.commit()
 
     with Session() as session:
         binding = session.scalar(select(SyncRequestTargetJob))
@@ -216,8 +125,6 @@ def test_complete_job_backfills_successor_job_id_onto_preallocated_bindings():
         assert binding.job_id == successor_id
         assert binding.status == "queued"
 
-    # Claiming the successor must flip the binding to running via
-    # mark_bindings_running (which matches on job_id).
     with Session() as session:
         claimed = claim_jobs(session, worker_id=_WORKER, limit=1, now=_NOW)
         assert [j.id for j in claimed] == [successor_id]
