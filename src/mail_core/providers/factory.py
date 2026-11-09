@@ -16,9 +16,6 @@ from mail_core.providers.connection_slots import (
 from mail_core.providers.graph import GraphNotConfiguredError, GraphProvider
 from mail_core.providers.host_security import (
     is_loopback_host,
-    is_private_host,
-    is_restricted_ip,
-    private_hosts_allowed,
     reject_microsoft_imap,
     validate_imap_host,
 )

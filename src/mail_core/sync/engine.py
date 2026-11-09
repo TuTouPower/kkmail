@@ -67,6 +67,10 @@ def _scan_context_payload(
     return payload
 
 
+def _should_enqueue_discovered_folder(role: str | None, *, background: bool) -> bool:
+    return not (background and role == "inbox")
+
+
 def _request_targets(session: Session, request_id: uuid.UUID | None, account_id: uuid.UUID):
     """Sync-request targets of ``request_id`` belonging to this account."""
     if request_id is None:
@@ -176,6 +180,7 @@ def sync_account_folders(
     store: CredentialStore | None = None,
     lease_ttl: timedelta = timedelta(seconds=120),
     full: bool = False,
+    background: bool = False,
     scan_generation: uuid.UUID | None = None,
     request_id: uuid.UUID | None = None,
     traffic_class: TrafficClass = TrafficClass.FOREGROUND,
@@ -220,6 +225,8 @@ def sync_account_folders(
                 retry_payload: dict = {}
                 if request_id is not None:
                     retry_payload["request_id"] = str(request_id)
+                if background:
+                    retry_payload["background"] = True
                 retry_payload.update(_scan_context_payload(full, scan_generation, request_id))
                 followup = enqueue_job(
                     session,
@@ -244,7 +251,7 @@ def sync_account_folders(
             delay = max(1.0, min(delay, 86400.0))
             with Session() as session:
                 acc = session.get(Account, account_id)
-                if acc is not None:
+                if acc is not None and not background:
                     acc.sync_status = SyncStatus.FAILED.value
                     cfg = dict(acc.config or {})
                     cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
@@ -255,6 +262,8 @@ def sync_account_folders(
                 retry_payload: dict = {}
                 if request_id is not None:
                     retry_payload["request_id"] = str(request_id)
+                if background:
+                    retry_payload["background"] = True
                 retry_payload.update(_scan_context_payload(full, scan_generation, request_id))
                 enqueue_job(
                     session,
@@ -272,7 +281,7 @@ def sync_account_folders(
         with Session() as session:
             try:
                 acc = session.get(Account, account_id)
-                if acc is not None:
+                if acc is not None and not background:
                     acc.sync_status = SyncStatus.FAILED.value
                     cfg = dict(acc.config or {})
                     cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
@@ -385,6 +394,8 @@ def sync_account_folders(
                     existing.sync_status = SyncStatus.IDLE.value
             folder_ids.append(existing.id)
             if rf.selectable and existing.sync_status != SyncStatus.PAUSED.value:
+                if not _should_enqueue_discovered_folder(existing.role, background=background):
+                    continue
                 cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": existing.id})
                 baseline_ready = cp is not None and bool(cp.full_scan_complete)
                 if not full and baseline_ready:

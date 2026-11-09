@@ -21,9 +21,12 @@ class PublicationBatch:
     epoch: uuid.UUID
 
 
-def get_publication_state(session: Session) -> OutboxPublicationState:
+def get_publication_state(session: Session, *, with_for_update: bool = False) -> OutboxPublicationState:
     """Return singleton outbox publication state row, creating one if not present."""
-    state = session.scalar(select(OutboxPublicationState).where(OutboxPublicationState.id == 1))
+    stmt = select(OutboxPublicationState).where(OutboxPublicationState.id == 1)
+    if with_for_update:
+        stmt = stmt.with_for_update()
+    state = session.scalar(stmt)
     if state is not None:
         return state
     # A352: a plain select-then-insert races on multi-process first
@@ -33,7 +36,7 @@ def get_publication_state(session: Session) -> OutboxPublicationState:
     values = dict(id=1, epoch=uuid.uuid4(), next_seq=1, pruned_through_seq=0)
     session.execute(pg_insert(OutboxPublicationState).values(**values).on_conflict_do_nothing())
     session.flush()
-    state = session.scalar(select(OutboxPublicationState).where(OutboxPublicationState.id == 1))
+    state = session.scalar(stmt)
     if state is None:  # pragma: no cover - insert above must have landed or conflicted
         raise RuntimeError("outbox publication state row could not be created")
     return state
@@ -44,13 +47,7 @@ def publish_committed_batch(session: Session, *, limit: int = 100) -> Publicatio
 
     This ensures events are strictly ordered by commit arrival regardless of original transaction order.
     """
-    state = session.scalar(
-        select(OutboxPublicationState).where(OutboxPublicationState.id == 1).with_for_update()
-    )
-    if state is None:
-        state = OutboxPublicationState(id=1, epoch=uuid.uuid4(), next_seq=1)
-        session.add(state)
-        session.flush()
+    state = get_publication_state(session, with_for_update=True)
 
     rows = list(
         session.scalars(

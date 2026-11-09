@@ -75,6 +75,11 @@ def _uuid_or_none(value: Any) -> uuid.UUID | None:
         return None
 
 
+def _is_background_sync(job: WorkerJob) -> bool:
+    payload = job.payload
+    return isinstance(payload, dict) and bool(payload.get("background"))
+
+
 def _coerce_retry_after(value: Any, *, fallback: float | None = None) -> float:
     """Coerce a capacity ``retry_after`` hint to a usable delay (A18).
 
@@ -190,6 +195,7 @@ def _evaluate_result(session: Session, job: WorkerJob, result: dict, worker_id: 
         status in ("provider_error", "rate_limited")
         and job.account_id is not None
         and job.job_type in _ACCOUNT_SYNC_JOB_TYPES
+        and not _is_background_sync(job)
     ):
         update_account_sync_status(
             session,
@@ -276,11 +282,12 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
                 store=get_credential_store(),
                 traffic_class=traffic_class,
                 full=bool(payload.get("full")),
+                background=_is_background_sync(job),
                 scan_generation=_uuid_or_none(payload.get("scan_generation")),
                 request_id=_uuid_or_none(payload.get("request_id")),
             )
             log.info("sync_account_folders %s", _result_log_summary(result))
-            if result.get("status") in ("lease_busy", "provider_error"):
+            if result.get("status") in ("lease_busy", "provider_error") and not _is_background_sync(job):
                 update_account_sync_status(
                     session,
                     account_id,
@@ -432,7 +439,7 @@ def _handle_job_impl(session: Session, job: WorkerJob, *, worker_id: str | None 
         is_terminal = (curr_failure_attempts + 1) >= _max_attempts()
         should_mark_account_failed = is_auth_error or (is_terminal and not is_transient_network)
 
-        if account_id is not None and job.job_type in _ACCOUNT_SYNC_JOB_TYPES and should_mark_account_failed:
+        if account_id is not None and job.job_type in _ACCOUNT_SYNC_JOB_TYPES and should_mark_account_failed and not _is_background_sync(job):
             try:
                 status_label = SyncStatus.AUTH_FAILED if is_auth_error else SyncStatus.FAILED
                 update_account_sync_status(session, account_id, status_label, error=safe_error(exc))
