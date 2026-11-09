@@ -1206,6 +1206,67 @@ describe('<MessageList />', () => {
     await waitFor(() => expect(container.querySelector('.list-note.error')?.textContent).toContain('立即同步失败'))
     expect(container.querySelector('[data-testid="background-sync-status"]')).toBeNull()
   })
+
+  it('discards stale sync results and frees the sync button when the view changes before the primary request settles', async () => {
+    const posted: string[] = []
+    let releasePoll!: () => void
+    const pollGate = new Promise<void>((resolve) => { releasePoll = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url)
+      if (u === '/api/auth/me') return json({ csrf_token: 'fake-token' })
+      if (u === '/api/accounts/sync-all' && init?.method === 'POST') {
+        posted.push(u)
+        return json(syncReport({ id: 'req-all', state: 'running' }), 202)
+      }
+      if (u === '/api/mail/sync/requests/req-all') {
+        await pollGate
+        return json(syncReport({
+          id: 'req-all', state: 'failed', running_count: 0, failed_count: 1,
+          errors: [{ target_id: 't1', code: 'auth_failed', safe_message: '邮箱密码错误' }],
+          background_request_id: 'bg-1', background_state: 'failed',
+          background_errors: [{ target_id: 't2', code: 'timeout', safe_message: '归档同步超时' }],
+        }))
+      }
+      if (init?.method === 'POST' && u === '/api/accounts/acc-1/sync') {
+        posted.push(u)
+        return json(syncReport({ id: 'req-acc', state: 'complete', running_count: 0, completed_count: 1 }), 202)
+      }
+      if (u.startsWith('/api/accounts')) {
+        return json({ accounts: [{ id: 'acc-1', email: 'u@x.test', status: 'active', account_type: 'imap', provider: 'imap' }], total: 1, limit: 200, offset: 0, has_more: false })
+      }
+      if (u.includes('/folder-stats')) return json({ folders: [{ folder_id: 'f1', role: 'inbox', total_count: 2, unread_count: 1 }] })
+      if (u.startsWith('/api/mail/inbox')) return json({ items: [row('a')], next_cursor: null })
+      return json({ detail: 'unexpected' }, 404)
+    }))
+
+    useMailStore.setState({ view: { type: 'allInbox' } })
+    const { container } = await render(<MessageList />)
+    const syncBtn = container.querySelector('button[aria-label="立即同步"]') as HTMLButtonElement
+    await waitFor(() => expect(container.querySelector('.message-row')).not.toBeNull())
+    await click(syncBtn)
+    await waitFor(() => expect(syncBtn.disabled).toBe(true))
+
+    const { act } = await import('react')
+    await act(async () => {
+      useMailStore.setState({ view: { type: 'account', accountId: 'acc-1', email: 'u@x.test' } })
+    })
+
+    expect(syncBtn.disabled).toBe(false)
+    expect(container.querySelector('[data-testid="background-sync-status"]')).toBeNull()
+    expect(container.querySelector('.list-note.error')).toBeNull()
+
+    await act(async () => {
+      releasePoll()
+      await new Promise((r) => setTimeout(r, 20))
+    })
+
+    expect(container.querySelector('[data-testid="background-sync-status"]')).toBeNull()
+    expect(container.querySelector('.list-note.error')).toBeNull()
+    expect(syncBtn.disabled).toBe(false)
+
+    await click(syncBtn)
+    await waitFor(() => expect(posted).toContain('/api/accounts/acc-1/sync'))
+  })
 })
 
 

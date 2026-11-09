@@ -185,10 +185,10 @@ export async function waitForSyncRequests(
   let current = [...initial]
   let consecutivePollFailures = 0
   for (;;) {
+    if (options.isCancelled?.()) return { reports: current, cancelled: true }
     if (current.every((report) => isSyncTerminalState(report.state))) {
       return { reports: current, cancelled: false }
     }
-    if (options.isCancelled?.()) return { reports: current, cancelled: true }
     const pending = current.filter((report) => !isSyncTerminalState(report.state))
     try {
       const fresh = await Promise.all(pending.map((report) => api.getSyncRequest(report.id)))
@@ -202,10 +202,10 @@ export async function waitForSyncRequests(
       consecutivePollFailures += 1
       if (consecutivePollFailures >= SYNC_POLL_MAX_CONSECUTIVE_FAILURES) throw error
     }
+    if (options.isCancelled?.()) return { reports: current, cancelled: true }
     if (current.every((report) => isSyncTerminalState(report.state))) {
       return { reports: current, cancelled: false }
     }
-    if (options.isCancelled?.()) return { reports: current, cancelled: true }
     await new Promise<void>((resolve) => setTimeout(resolve, interval))
   }
 }

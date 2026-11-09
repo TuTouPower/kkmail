@@ -197,7 +197,7 @@ function App() {
   return (
     <div
       ref={appRef}
-      className={['app', isMacDesktop ? 'mac-desktop-shell' : '', drawerOpen ? 'sidebar-open' : '', sidebarCollapsed && wide ? 'sidebar-collapsed' : ''].filter(Boolean).join(' ')}
+      className={['app', isMacDesktop ? 'mac-desktop-shell' : '', drawerOpen ? 'sidebar-open' : ''].filter(Boolean).join(' ')}
       data-mobile-view={mobileView}
       style={{
         ['--sidebar-w' as string]: `${sidebarWidth}px`,
