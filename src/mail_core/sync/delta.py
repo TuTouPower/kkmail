@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
-from mail_core.mail.application.sync_requests import sync_context_payload
+from mail_core.sync.context import sync_context_payload
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta

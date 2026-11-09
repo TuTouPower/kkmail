@@ -22,9 +22,11 @@ import mail_core.sync.delta as delta_mod
 import mail_core.sync.engine as engine_mod
 import mail_core.sync.execution as execution_mod
 from mail_core.mail.application.sync_requests import (
-    account_sync_failure_status,
     create_sync_request,
     get_sync_request_report,
+)
+from mail_core.sync.context import (
+    account_sync_failure_status,
     is_permanent_auth_error,
     resolve_sync_context,
     sync_context_payload,

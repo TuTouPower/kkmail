@@ -2,7 +2,7 @@
 
 The payload ``background`` marker is gone: background isolation is a property
 of ``SyncRequest.scope["background"]``, resolved through the ``request_id``
-lineage in mail_core.mail.application.sync_requests. The previous
+lineage in mail_core.sync.context. The previous
 MagicMock-based tests asserted ``_is_background_sync(job)`` read that marker;
 their semantics no longer exist, so they were deleted rather than having
 their expectations rewritten to the new output. The real
@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from mail_core.mail.application.sync_requests import (
+from mail_core.sync.context import (
     account_sync_failure_status,
     is_permanent_auth_error,
     resolve_sync_context,

@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.accounts.service import update_account_sync_status
-from mail_core.mail.application.sync_requests import (
+from mail_core.sync.context import (
     account_sync_failure_status as _account_sync_failure_status,
     is_permanent_auth_error as _is_permanent_auth_error,
     resolve_sync_context as _resolve_sync_context,

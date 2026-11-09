@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
-from mail_core.mail.application.sync_requests import account_sync_failure_status, sync_context_payload
+from mail_core.sync.context import account_sync_failure_status, sync_context_payload
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncRunStatus, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.connection_slots import (
