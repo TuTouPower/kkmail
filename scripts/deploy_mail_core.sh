@@ -53,6 +53,17 @@ git fetch origin main
 git merge-base --is-ancestor origin/main main || fail "main diverges from origin/main; reconcile branches before deployment"
 docker compose version >/dev/null
 docker compose -f docker-compose.mail-core.yml --profile distributed config --quiet
+
+# Preflight schema gate (read-only, zero writes): same orchestration as
+# startup (python -m mail_core --check-migrations). Fails before any push,
+# build, backup, or migration. The host reaches the database at 127.0.0.1:5433
+# (postgres:5432 inside the Compose network).
+# shellcheck source=lib/preflight_schema_gate.sh
+source "$repo_root/scripts/lib/preflight_schema_gate.sh"
+export MAIL_CORE_DATABASE_URL="postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@127.0.0.1:5433/kkmail_mail"
+mail_core_preflight_check "$repo_root" "$python_bin" \
+    || fail "preflight schema check failed; refusing to push, back up, build, or migrate (the check itself performs zero writes)"
+
 if [[ "$no_push" == "1" ]]; then
     printf 'deploy_mail_core: --no-push given; skipping git push of main to origin/main\n'
 else
@@ -151,6 +162,15 @@ for service in api worker migrate; do
     [[ -n "$service_image" ]] || fail "could not resolve built image for service: $service"
     docker image tag "$service_image" "$(image_repo "$service_image"):$commit"
 done
+
+# Quiesce writers before migrating: stop api/worker so no old process writes
+# against a schema the migration is about to change. The migrate service runs
+# the single guarded entrypoint (python -m mail_core --migrate-only) in the
+# foreground; its exit code decides whether the new app starts.
+docker compose -f docker-compose.mail-core.yml --profile distributed stop api worker
+if ! docker compose -f docker-compose.mail-core.yml --profile distributed up --abort-on-container-exit --exit-code-from migrate migrate; then
+    fail "migration container failed; api/worker remain stopped, restore the sealed backup or fix forward before starting the app"
+fi
 docker compose -f docker-compose.mail-core.yml --profile distributed up -d api worker
 
 ready=0

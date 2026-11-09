@@ -89,39 +89,102 @@ def _legacy_revision_error(current_rev: str | None, script: object) -> str | Non
     )
 
 
-def run_migrations() -> None:
-    from alembic import command
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-    from sqlalchemy import create_engine, inspect, text
+def run_migrations(*, check_only: bool = False) -> None:
+    import sqlalchemy
 
     import mail_core.db as db_pkg
+    from mail_core.db import baseline
     from mail_core.db.session import database_url
 
     # Resolve via the package (works from source and from a PyInstaller bundle).
     here = Path(db_pkg.__file__).resolve().parent
+    from alembic import command
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
     cfg = Config(str(here / "alembic.ini"))
     cfg.set_main_option("script_location", str(here / "alembic"))
     script = ScriptDirectory.from_config(cfg)
 
     # Guard against legacy revisions before Alembic attempts upgrade
     db_url = cfg.get_main_option("sqlalchemy.url") or database_url()
-    check_engine = create_engine(db_url)
+    check_engine = sqlalchemy.create_engine(baseline.check_connect_url(db_url))
     try:
+        current_rev: str | None = None
         with check_engine.connect() as conn:
-            inspector = inspect(conn)
-            if "alembic_version" in inspector.get_table_names():
+            backend = baseline.make_url(db_url).get_backend_name()
+            baseline.configure_read_only(conn, backend)
+            inspector = sqlalchemy.inspect(conn)
+            table_names = set(inspector.get_table_names())
+            version_rows: list[str] = []
+            if "alembic_version" in table_names:
                 version_rows = list(
-                    conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+                    conn.execute(sqlalchemy.text("SELECT version_num FROM alembic_version"))
+                    .scalars()
+                    .all()
                 )
-                current_rev = _single_alembic_revision(version_rows)
-                error = _legacy_revision_error(current_rev, script)
-                if error:
-                    raise RuntimeError(error)
+            current_rev = _single_alembic_revision(version_rows)
+
+            if current_rev is None:
+                if table_names & baseline.REQUIRED_TABLES:
+                    present = sorted(table_names & baseline.REQUIRED_TABLES)
+                    sample = ", ".join(present[:5])
+                    raise RuntimeError(
+                        "Database has business tables but no alembic_version mark "
+                        f"({len(present)} unified-baseline tables present, e.g. {sample}). "
+                        "Its origin cannot be verified; refusing to stamp the unified "
+                        "baseline blindly (creating the remaining tables could collide "
+                        "with existing data). Restore a known-good backup and migrate "
+                        "the data explicitly. The database was not modified."
+                    )
+                if check_only:
+                    return
+                command.upgrade(cfg, "head")
+                return
+
+            if current_rev in {rev.revision for rev in script.walk_revisions()}:
+                if check_only:
+                    return
+                command.upgrade(cfg, "head")
+                return
+
+            # Legacy check comes before any date-based comparison so a
+            # recognized legacy revision (e.g. 20261107_0031, dated after the
+            # unified baseline) is never misclassified as a newer build.
+            if baseline.is_legacy_revision(current_rev):
+                errors = baseline.verify_narrow_legacy_schema(conn)
+                if errors:
+                    detail = "\n  - ".join(errors)
+                    raise RuntimeError(
+                        f"Automatic upgrade of this legacy database (revision '{current_rev}') "
+                        "to the unified baseline is not supported: the narrow conversion "
+                        "path only handles the verified legacy shape.\n  - " + detail + "\n"
+                        "The database was not modified. Restore the pre-upgrade sealed "
+                        "backup into a deployment running the matching historical release "
+                        "and resolve the schema there; do not re-run this migration "
+                        "against the same database, it cannot reconstruct the missing schema."
+                    )
+                if check_only:
+                    return
+                try:
+                    outcome = baseline.apply_narrow_legacy_conversion(db_url)
+                except baseline.SchemaValidationError as exc:
+                    raise RuntimeError(
+                        f"Legacy conversion for revision '{current_rev}' failed and was "
+                        f"rolled back: {exc} The database was not modified."
+                    ) from exc
+                log.info("Narrow legacy conversion %s for revision '%s'", outcome, current_rev)
+                # "No-op" applies only to the current single-head tree; future
+                # trees always upgrade for real.
+                command.upgrade(cfg, "head")
+                return
+
+            message = _legacy_revision_error(current_rev, script) or (
+                f"Database revision '{current_rev}' is not recognized."
+            )
+            raise RuntimeError(f"{message} The database was not modified.")
     finally:
         check_engine.dispose()
-
-    command.upgrade(cfg, "head")
 
 
 def _sidecar_address_family(host: str) -> int:
@@ -139,17 +202,11 @@ def _port_value(raw: str) -> int:
         raise argparse.ArgumentTypeError(f"invalid port value: {raw!r}") from None
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int | None:
     from mail_core.config import ConfigError, get_config, reset_config
     from mail_core.config.loader import is_sidecar_enabled
 
     parser = argparse.ArgumentParser(prog="python -m mail_core")
-    try:
-        # Validate core configuration on first frame
-        get_config()
-    except ConfigError as exc:
-        parser.error(str(exc))
-
     try:
         default_port = _port_value(os.environ.get("MAIL_CORE_PORT") or "8000")
     except argparse.ArgumentTypeError as exc:
@@ -170,7 +227,34 @@ def main(argv: list[str] | None = None) -> None:
         default=os.environ.get("MAIL_CORE_FORWARDED_ALLOW_IPS") or None,
         help="Comma-separated list of IPs/CIDRs to trust for proxy headers",
     )
+    gate = parser.add_mutually_exclusive_group()
+    gate.add_argument(
+        "--migrate-only",
+        action="store_true",
+        help="Run pending migrations, then exit without starting the API server or worker.",
+    )
+    gate.add_argument(
+        "--check-migrations",
+        action="store_true",
+        help="Read-only migration check: exit 0 when the database can start, non-zero otherwise. Performs zero writes.",
+    )
     args = parser.parse_args(argv)
+
+    if args.migrate_only or args.check_migrations:
+        # Gate flags run before get_config() and ignore MAIL_CORE_SKIP_MIGRATIONS.
+        from mail_core.db.session import DatabaseConfigError
+
+        try:
+            run_migrations(check_only=args.check_migrations)
+        except DatabaseConfigError as exc:
+            parser.error(str(exc))
+        return 0
+
+    try:
+        # Validate core configuration on first frame
+        get_config()
+    except ConfigError as exc:
+        parser.error(str(exc))
 
     is_sidecar = is_sidecar_enabled() or args.port == 0
     if is_sidecar:

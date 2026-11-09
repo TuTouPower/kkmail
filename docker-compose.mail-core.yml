@@ -58,7 +58,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["alembic", "-c", "src/mail_core/db/alembic.ini", "upgrade", "head"]
+    command: ["python", "-m", "mail_core", "--migrate-only"]
     restart: "no"
 
   backup:

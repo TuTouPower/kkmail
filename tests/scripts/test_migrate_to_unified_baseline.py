@@ -1,4 +1,9 @@
-"""Unit tests for scripts/migrate_to_unified_baseline.py (adoption A17)."""
+"""Unit tests for the unified-baseline migration logic (adoption A17).
+
+The logic moved from ``scripts/migrate_to_unified_baseline.py`` (now a thin
+argparse wrapper) to ``mail_core.db.baseline``; mocks and imports follow the
+new home.
+"""
 
 from __future__ import annotations
 
@@ -8,13 +13,25 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, text
+from sqlalchemy import (
+    Column,
+    ForeignKeyConstraint,
+    Integer,
+    JSON,
+    MetaData,
+    PrimaryKeyConstraint,
+    String,
+    Table,
+    UniqueConstraint,
+    create_engine,
+    text,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
-from migrate_to_unified_baseline import (
+from mail_core.db.baseline import (
     KNOWN_LEGACY_REVISIONS,
     REQUIRED_COLUMNS,
     REQUIRED_TABLES,
@@ -22,12 +39,12 @@ from migrate_to_unified_baseline import (
     SchemaValidationError,
     ensure_folder_patrol_status_table,
     is_legacy_revision,
-    main,
     migrate_patrol_status_data,
     run_migration,
     stamp_unified_baseline,
     verify_database_schema,
 )
+from migrate_to_unified_baseline import main
 
 EXPECTED_CORE_TABLES: frozenset[str] = frozenset({
     "account_groups",
@@ -65,9 +82,9 @@ EXPECTED_CORE_TABLES: frozenset[str] = frozenset({
 })
 
 
-def _create_full_schema_engine():
-    """Create an in-memory SQLite engine populated with all required tables and columns."""
-    engine = create_engine("sqlite:///:memory:")
+def _create_full_schema_engine(db_url: str = "sqlite:///:memory:"):
+    """Create a SQLite engine populated with all required tables and columns."""
+    engine = create_engine(db_url)
     metadata = MetaData()
 
     for table_name in EXPECTED_CORE_TABLES:
@@ -129,11 +146,10 @@ def test_verify_schema_detects_missing_columns():
         assert "remote_id" in joined
 
 
-def test_run_migration_rejects_incomplete_schema():
-    engine = create_engine("sqlite:///:memory:")
-    with patch("migrate_to_unified_baseline.create_engine", return_value=engine):
-        with pytest.raises(SchemaValidationError, match="Database schema verification failed"):
-            run_migration("sqlite:///:memory:")
+def test_run_migration_rejects_incomplete_schema(tmp_path: Path):
+    db_url = f"sqlite:///{tmp_path / 'empty.db'}"
+    with pytest.raises(SchemaValidationError, match="Database schema verification failed"):
+        run_migration(db_url)
 
 
 def test_stamp_unified_baseline_creates_table_and_sets_revision():
@@ -173,56 +189,192 @@ def test_stamp_unified_baseline_overwrites_prior_revision():
         assert versions == [UNIFIED_BASELINE_REVISION]
 
 
-def test_run_migration_success_flow():
-    engine = _create_full_schema_engine()
-    with patch("migrate_to_unified_baseline.create_engine", return_value=engine):
-        run_migration("sqlite:///:memory:", dry_run=False)
+def test_run_migration_success_flow(tmp_path: Path):
+    db_url = f"sqlite:///{tmp_path / 'full.db'}"
+    _create_full_schema_engine(db_url)
+    run_migration(db_url, dry_run=False)
 
-    with engine.connect() as conn:
-        versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-        assert versions == [UNIFIED_BASELINE_REVISION]
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+            assert versions == [UNIFIED_BASELINE_REVISION]
+    finally:
+        engine.dispose()
 
 
-def test_main_cli_returns_expected_exit_codes():
+def test_main_cli_returns_expected_exit_codes(tmp_path: Path):
     # 1. Missing URL
     with patch.dict("os.environ", {}, clear=True):
         ret = main([])
         assert ret == 2
 
     # 2. Schema validation failure
-    empty_engine = create_engine("sqlite:///:memory:")
-    with patch("migrate_to_unified_baseline.create_engine", return_value=empty_engine):
-        ret = main(["--database-url", "sqlite:///:memory:"])
-        assert ret == 1
+    ret = main(["--database-url", f"sqlite:///{tmp_path / 'empty.db'}"])
+    assert ret == 1
 
     # 3. Success
-    full_engine = _create_full_schema_engine()
-    with patch("migrate_to_unified_baseline.create_engine", return_value=full_engine):
-        ret = main(["--database-url", "sqlite:///:memory:"])
-        assert ret == 0
+    full_url = f"sqlite:///{tmp_path / 'full.db'}"
+    _create_full_schema_engine(full_url)
+    ret = main(["--database-url", full_url])
+    assert ret == 0
 
 
 def _create_0030_schema_engine(db_path: Path | str):
     """Create an engine populated with schema at revision 20261031_0030.
 
-    This includes all 31 tables (missing folder_patrol_status), alembic_version='20261031_0030',
-    and sample sync_checkpoints data containing legacy patrol keys in cursor.
+    Hand-written transcription of the real historical shape (composite
+    primary key and CASCADE foreign keys on sync_checkpoints, composite
+    unique on folders): all 31 tables (missing folder_patrol_status),
+    alembic_version='20261031_0030', and sample sync_checkpoints data
+    containing legacy patrol keys in cursor. Deliberately NOT generated
+    from REQUIRED_COLUMNS.
     """
     url = f"sqlite:///{db_path}"
     engine = create_engine(url)
     metadata = MetaData()
 
-    tables_0030 = REQUIRED_TABLES - {"folder_patrol_status"}
-    for table_name in tables_0030:
-        cols = [Column("id", String(64), primary_key=True)]
-        req_cols = REQUIRED_COLUMNS.get(table_name, frozenset())
-        for col_name in req_cols:
-            if col_name == "id":
-                continue
-            cols.append(Column(col_name, String(64)))
-        if table_name == "sync_checkpoints":
-            cols.append(Column("cursor", String(512)))
-        Table(table_name, metadata, *cols)
+    Table("account_groups", metadata, Column("id", String(64), primary_key=True))
+    Table("credential_secrets", metadata, Column("ref", String(512), primary_key=True))
+    Table("app_settings", metadata, Column("key", String(128), primary_key=True))
+    Table("auth_credentials", metadata, Column("id", String(64), primary_key=True))
+    Table(
+        "accounts",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("email", String(320), nullable=False),
+        Column("provider", String(32), nullable=False),
+        Column("group_id", String(64)),
+        Column("master_order", Integer),
+        Column("group_order", Integer),
+        Column("recipient_addresses", JSON, nullable=False),
+    )
+    Table("account_sync_leases", metadata, Column("account_id", String(64), primary_key=True))
+    Table("account_sync_activity", metadata, Column("account_id", String(64), primary_key=True))
+    Table(
+        "folders",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("account_id", String(64), nullable=False),
+        Column("remote_id", String(512), nullable=False),
+        UniqueConstraint("account_id", "remote_id"),
+    )
+    Table(
+        "threads",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("account_id", String(64), nullable=False),
+    )
+    Table(
+        "messages",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("account_id", String(64), nullable=False),
+        Column("sort_time", String(64)),
+        Column("remote_id", String(512)),
+        Column("is_read", Integer),
+        Column("is_flagged", Integer),
+        Column("has_attachments", Integer),
+    )
+    Table("message_locations", metadata, Column("id", String(64), primary_key=True))
+    Table("message_bodies", metadata, Column("message_id", String(64), primary_key=True))
+    Table(
+        "message_blobs",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("content_sha256", String(64), nullable=False),
+        Column("key_version", Integer, nullable=False),
+        Column("gc_eligible_at", String(64)),
+        Column("ref_count", Integer, nullable=False),
+    )
+    Table("message_blob_links", metadata, Column("message_id", String(64), primary_key=True))
+    Table(
+        "attachments",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("message_id", String(64), nullable=False),
+        Column("part_id", String(64)),
+    )
+    Table("thread_messages", metadata, Column("id", String(64), primary_key=True))
+    Table(
+        "sync_checkpoints",
+        metadata,
+        Column("account_id", String(64), nullable=False),
+        Column("folder_id", String(64), nullable=False),
+        Column("scan_generation", String(64)),
+        Column("cursor", JSON, nullable=False),
+        ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["folder_id"], ["folders.id"], ondelete="CASCADE"),
+        PrimaryKeyConstraint("account_id", "folder_id"),
+    )
+    Table("sync_runs", metadata, Column("id", String(64), primary_key=True))
+    Table(
+        "remote_operations",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("next_attempt_at", String(64)),
+    )
+    Table("folder_stats", metadata, Column("folder_id", String(64), primary_key=True))
+    Table(
+        "outbox_publication_state",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("epoch", String(64), nullable=False),
+        Column("next_seq", Integer, nullable=False),
+        Column("pruned_through_seq", Integer, nullable=False),
+    )
+    Table(
+        "outbox",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("publication_seq", Integer),
+        Column("published_at", String(64)),
+    )
+    Table(
+        "message_archive_state",
+        metadata,
+        Column("message_id", String(64), primary_key=True),
+        Column("claim_revision", Integer, nullable=False),
+        Column("state", String(32), nullable=False),
+    )
+    Table(
+        "worker_jobs",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("execution_generation", String(64), nullable=False),
+        Column("dedupe_key", String(128)),
+        Column("failure_attempts", Integer, nullable=False),
+    )
+    Table(
+        "message_search",
+        metadata,
+        Column("message_id", String(64), primary_key=True),
+        Column("to_text", String(64)),
+        Column("document", String(64)),
+    )
+    Table("blob_quota_reservations", metadata, Column("id", String(64), primary_key=True))
+    Table(
+        "sync_requests",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("client_request_id", String(64), nullable=False),
+    )
+    Table(
+        "sync_request_targets",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("request_id", String(64), nullable=False),
+        Column("target_key", String(255), nullable=False),
+    )
+    Table(
+        "sync_request_target_jobs",
+        metadata,
+        Column("id", String(64), primary_key=True),
+        Column("target_id", String(64), nullable=False),
+        Column("execution_generation", String(64), nullable=False),
+    )
+    Table("message_remote_image_allows", metadata, Column("message_id", String(64), primary_key=True))
+    Table("sender_remote_image_allows", metadata, Column("id", String(64), primary_key=True))
 
     metadata.create_all(engine)
 
@@ -234,8 +386,8 @@ def _create_0030_schema_engine(db_path: Path | str):
         conn.execute(
             text(
                 """
-                INSERT INTO sync_checkpoints (id, account_id, folder_id, scan_generation, cursor)
-                VALUES ('cp-1', 'acc-1', 'folder-1', '1', :cur)
+                INSERT INTO sync_checkpoints (account_id, folder_id, cursor)
+                VALUES ('acc-1', 'folder-1', :cur)
                 """
             ),
             {
@@ -282,7 +434,7 @@ def test_migrate_from_0030_legacy_database_success(tmp_path: Path):
 
         # 4. Assert sync_checkpoints.cursor has old keys stripped
         cp_row = conn.execute(
-            text("SELECT cursor FROM sync_checkpoints WHERE id = 'cp-1'")
+            text("SELECT cursor FROM sync_checkpoints WHERE folder_id = 'folder-1'")
         ).fetchone()
         assert cp_row is not None
         cur_data = json.loads(cp_row[0]) if isinstance(cp_row[0], str) else cp_row[0]
@@ -473,7 +625,7 @@ def test_ensure_folder_patrol_status_emits_postgres_ddl():
     conn.dialect.name = "postgresql"
     inspector = MagicMock()
     inspector.get_table_names.return_value = ["folders", "sync_checkpoints"]
-    with patch("migrate_to_unified_baseline.inspect", return_value=inspector):
+    with patch("mail_core.db.baseline.inspect", return_value=inspector):
         ensure_folder_patrol_status_table(conn, dry_run=False)
 
     assert conn.execute.call_count == 1
@@ -496,7 +648,7 @@ def test_migrate_patrol_status_data_emits_postgres_ddl():
     conn.dialect.name = "postgresql"
     inspector = MagicMock()
     inspector.get_table_names.return_value = ["sync_checkpoints", "folder_patrol_status"]
-    with patch("migrate_to_unified_baseline.inspect", return_value=inspector):
+    with patch("mail_core.db.baseline.inspect", return_value=inspector):
         migrate_patrol_status_data(conn, dry_run=False)
 
     assert conn.execute.call_count == 2
@@ -508,32 +660,3 @@ def test_migrate_patrol_status_data_emits_postgres_ddl():
     assert "to_timestamp" in insert_sql
     assert "::double precision" in insert_sql
     assert "cursor - ARRAY" in update_sql
-
-
-def test_run_migrations_guard_reports_historical_revision_upgrade_path(tmp_path: Path, monkeypatch):
-    """Historical revisions must still be refused at startup, with the offline-tool path.
-
-    Replaces ``test_run_migrations_guard_raises_on_legacy_revision``: that test
-    locked the former single-message wording, which was retired when the startup
-    guard began distinguishing newer / historical / unverifiable revisions
-    (see tests/mail_core/test_sidecar_detection.py::test_legacy_guard_distinguishes_revision_cases).
-    """
-    from mail_core.__main__ import run_migrations
-
-    db_file = tmp_path / "historical_guard.db"
-    db_url = f"sqlite:///{db_file}"
-    engine = create_engine(db_url)
-    with engine.begin() as conn:
-        conn.execute(
-            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
-        )
-        conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
-
-    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", db_url)
-    with pytest.raises(RuntimeError) as excinfo:
-        run_migrations()
-
-    msg = str(excinfo.value)
-    assert "20261031_0030" in msg
-    assert "migrate_to_unified_baseline.py" in msg
-    assert "offline" in msg
