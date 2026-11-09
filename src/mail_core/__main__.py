@@ -141,12 +141,13 @@ def _port_value(raw: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
-    from mail_core.config import ConfigError, get_config
+    from mail_core.config import ConfigError, get_config, reset_config
+    from mail_core.config.loader import is_sidecar_enabled
 
     parser = argparse.ArgumentParser(prog="python -m mail_core")
     try:
         # Validate core configuration on first frame
-        core_config = get_config()
+        get_config()
     except ConfigError as exc:
         parser.error(str(exc))
 
@@ -172,6 +173,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
+    is_sidecar = is_sidecar_enabled() or args.port == 0
+    if is_sidecar:
+        os.environ["KKMAIL_SIDECAR"] = "1"
+    reset_config()
+
     from mail_core.logging_config import configure_logging
 
     configure_logging(service_name="mail-core")
@@ -192,7 +198,6 @@ def main(argv: list[str] | None = None) -> None:
 
     from mail_core.api.app import app
 
-    is_sidecar = core_config.sidecar or args.port == 0
     if is_sidecar:
         sock = socket.socket(_sidecar_address_family(args.host), socket.SOCK_STREAM)
         sock.bind((args.host, args.port))

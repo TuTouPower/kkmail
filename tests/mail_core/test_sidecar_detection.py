@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -179,3 +180,39 @@ def test_legacy_guard_distinguishes_revision_cases():
     assert older and "migrate_to_unified_baseline.py" in older and "20261108_0002" in older
     assert unknown and "legacy" in unknown and "backup" in unknown and "20261108_0002" in unknown
     assert len({newer, older, unknown}) == 3
+
+
+def test_port_zero_startup_normalizes_sidecar_into_env(monkeypatch, capsys):
+    monkeypatch.delenv("KKMAIL_SIDECAR", raising=False)
+    monkeypatch.delenv("MAIL_CORE_PORT", raising=False)
+    monkeypatch.delenv("MAIL_CORE_HOST", raising=False)
+    fake_app = ModuleType("mail_core.api.app")
+    fake_app.app = object()
+    monkeypatch.setitem(sys.modules, "mail_core.api.app", fake_app)
+    import uvicorn
+
+    captured = {}
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+
+        def run(self, sockets=None):
+            captured["sockets"] = sockets
+            captured["port"] = self.config.port
+
+    monkeypatch.setattr(uvicorn, "Server", FakeServer)
+    monkeypatch.setattr(uvicorn, "run", lambda _app, **kw: None)
+
+    main_module.main(["--port", "0", "--skip-migrations", "--no-worker"])
+
+    out = capsys.readouterr().out
+    assert "KKMAIL_SIDECAR_READY:" in out
+    assert os.environ["KKMAIL_SIDECAR"] == "1"
+    assert is_sidecar_enabled() is True
+    assert is_sidecar_enabled(os.environ) is True
+
+    meta = get_oauth_metadata("microsoft")
+    assert meta["runtime_mode"] == "desktop"
+    assert meta["redirect_uri"] is not None
+    assert meta["redirect_uri"].startswith("http://localhost:")
