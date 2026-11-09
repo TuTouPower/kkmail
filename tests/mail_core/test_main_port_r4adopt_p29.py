@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 import pytest
 
@@ -145,7 +146,15 @@ def test_real_subprocess_port_0_sidecar_startup():
         text=True,
     )
     try:
-        first_line = proc.stdout.readline()
+        line_box = {}
+
+        def read_line():
+            line_box["line"] = proc.stdout.readline()
+
+        reader = threading.Thread(target=read_line, daemon=True)
+        reader.start()
+        reader.join(timeout=15)
+        first_line = line_box.get("line", "")
         assert "KKMAIL_SIDECAR_READY:" in first_line
         data = json.loads(first_line.split("KKMAIL_SIDECAR_READY:")[1].strip())
         assert data.get("status") == "ready"

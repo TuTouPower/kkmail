@@ -19,7 +19,6 @@ npm start
 |`KKMAIL_PG_BIN`|Electron / PostgresManager|覆盖 `initdb`/`pg_ctl` 所在二进制目录路径|
 |`KKMAIL_PG_PORT`|PostgresManager|本地回环 PostgreSQL 端口（整数 1–65535）|
 |`KKMAIL_PG_PASSWORD`|PostgresManager|覆盖每次安装生成的专用 PG 密码（通常生成并保存在 `secrets/`）|
-|`KKMAIL_DESKTOP_PORT`|Electron 主进程|mail-core API/UI 本地回环端口（整数 1–65535，默认 18765）|
 |`PYTHON`|Electron 主进程 (仅开发)|开发环境下用于拉起 `mail_core` 的 Python 可执行文件路径（Windows 默认 `python`，其余系统默认 `python3`）|
 |`KKMAIL_FRONTEND_DIST`|mail-core API|可选的 SPA 生产构建产物目录路径（`src/frontend/dist`）|
 |`MAIL_CORE_*`|mail-core 子进程|由 `startup.js` 显式注入（DB URL、blob 密钥、数据目录等）——不从父 shell 环境继承|
@@ -31,7 +30,7 @@ npm start
 
 1. `PostgresManager` 在 `userData/mail-core-data/` 下启动仅限本地回环的独立 PostgreSQL 集群（独立于安装目录；每次安装生成随机口令，使用 `scram-sha-256` 认证）。缺少 PG 二进制文件属于致命错误——见 `../../docs/guides/desktop.md`。
 2. 拉起携带 `--data-dir <userData>/mail-core-data` 的 mail-core：开发环境直接从仓库以 `python3 -m mail_core` 运行；生产打包环境调度 PyInstaller 产物 `resources/backend/kkmail-backend`（从根目录通过 `scripts/build-sidecar.sh` 构建）。打包应用缺少 sidecar 产物时拒绝启动。
-3. mail-core 在 `mail-core-data/secrets/`（权限 0600）中生成当前安装的会话密钥、Blob 密钥与备份密钥，执行数据库迁移，并在 `127.0.0.1` 启动 API 服务与内嵌 Worker。
+3. mail-core 在 `mail-core-data/secrets/`（权限 0600）中生成当前安装的会话密钥、Blob 密钥与备份密钥，执行数据库迁移，绑定 `127.0.0.1:0` 动态端口并经 stdout 就绪握手回传实际端口，随后启动 API 服务与内嵌 Worker；桌面端不提供固定端口配置，桌面端 OAuth 回调端口取自该实际绑定端口。
 4. `/health` 探测通过后打开应用窗口。首次运行会弹出一次性初始登录密码，用户在设置中完成改密后自动销毁。
 
 外链仅对 `https:` 与 `mailto:` 在系统默认浏览器中打开。本地回环 `http:` 绝不向外部打开（防止探测本地端口）——仅同源应用页面保留在窗口内，所有离开本地源的导航一律拦截。本地端口绝不暴露至 `127.0.0.1` 之外。

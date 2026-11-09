@@ -58,6 +58,7 @@ def load_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
     config = MailCoreConfig(
         host=source.get("MAIL_CORE_HOST") or "127.0.0.1",
         port=_parse_int(source.get("MAIL_CORE_PORT"), 8000, "port"),
+        sidecar=_parse_bool(source.get("KKMAIL_SIDECAR"), False),
         data_dir=source.get("MAIL_CORE_DATA_DIR") or "",
         public_origin=source.get("MAIL_CORE_PUBLIC_ORIGIN") or "",
         allow_loopback_oauth_origin=_parse_bool(source.get("MAIL_CORE_ALLOW_LOOPBACK_OAUTH_ORIGIN"), False),
