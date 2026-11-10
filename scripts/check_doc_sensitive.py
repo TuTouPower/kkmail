@@ -172,7 +172,19 @@ _CLEAN_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
-ALLOW_MARKER_RE = re.compile(r"<!--\s*sensitive-allow\s*-->|#\s*noqa:\s*sensitive")
+# Allow markers must carry a non-empty reason (A19): the marker is the sole
+# escape hatch under default-deny, so a bare marker earns no exemption and is
+# itself reported. Reasoned forms:
+#   <!-- sensitive-allow: <reason> -->
+#   # noqa: sensitive <reason>
+ALLOW_MARKER_RE = re.compile(
+    r"<!--\s*sensitive-allow:\s*\S.*?-->"
+    r"|#\s*noqa:\s*sensitive\s+\S"
+)
+REASONLESS_MARKER_RE = re.compile(
+    r"<!--\s*sensitive-allow\s*(?::\s*)?-->"
+    r"|#\s*noqa:\s*sensitive\s*$"
+)
 
 
 @dataclass
@@ -329,6 +341,11 @@ def _allow_marker_pos(line: str) -> int:
     return m.start() if m else -1
 
 
+def _reasonless_marker(line: str) -> str | None:
+    m = REASONLESS_MARKER_RE.search(line)
+    return m.group(0) if m else None
+
+
 def _allowed_match_index(line: str, row: list[Violation], marker_pos: int) -> int | None:
     candidates: list[tuple[int, int]] = []
     for index, violation in enumerate(row):
@@ -473,6 +490,20 @@ def scan_file(
                 exempt_index = _allowed_match_index(line, row, marker_pos)
                 if exempt_index is not None:
                     del violations[row_start + exempt_index]
+
+            # A reasonless allow marker earns no exemption and is itself a
+            # violation (A19); appended after exemption handling so it can
+            # never be exempted away.
+            reasonless = _reasonless_marker(line)
+            if reasonless is not None:
+                violations.append(
+                    Violation(
+                        file_path=path,
+                        line_number=lineno,
+                        category="marker",
+                        matched_text=reasonless,
+                    )
+                )
 
     return violations
 

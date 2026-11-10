@@ -69,12 +69,16 @@ Path: /Users/secret_dev/repo
 
 
 def test_ignore_mechanism_via_line_bypass(tmp_path: Path):
+    """Retirement note (adoption A19): markers must carry a reason; the
+    fixtures below use reasoned markers. Reasonless markers are asserted
+    non-exempt by the A19 tests at the bottom of this file.
+    """
     doc = tmp_path / "line_bypass.md"
     doc.write_text(
         """# Document with Line Bypass
 
-Contact: personal@gmail.com <!-- sensitive-allow -->
-Path: /Users/someuser/path # noqa: sensitive
+Contact: personal@gmail.com <!-- sensitive-allow: test fixture, intentional example address -->
+Path: /Users/someuser/path # noqa: sensitive test fixture, intentional example path
 """,
         encoding="utf-8",
     )
@@ -371,7 +375,7 @@ def test_inline_allow_exempts_only_nearest_match(tmp_path: Path, monkeypatch):
     doc = tmp_path / "inline_allow.md"
     doc.write_text(
         "# Review Document\n\n"
-        "Contact alice@corp.com and bob@corp.com <!-- sensitive-allow -->\n",
+        "Contact alice@corp.com and bob@corp.com <!-- sensitive-allow: fixture, only the nearest match is exempt -->\n",
         encoding="utf-8",
     )
     proc = run_checker(str(doc), "--check")
@@ -706,3 +710,42 @@ def test_a18_mixed_ascii_nonascii_denied(monkeypatch):
         assert module.is_safe_credential(value, key="password") is False, value
     for value in ("见上文", "（略）"):
         assert module.is_safe_credential(value) is True, value
+
+
+# --- Adoption A19: allow markers must carry a non-empty reason ---------------
+
+
+def test_a19_reasonless_marker_does_not_exempt_and_is_reported(tmp_path: Path, monkeypatch):
+    """A19: a bare ``<!-- sensitive-allow -->`` / ``# noqa: sensitive`` earns
+    no exemption, and the marker itself is reported as a [MARKER] violation."""
+    module = _load_module(monkeypatch)
+    doc = tmp_path / "reasonless.md"
+    doc.write_text(
+        "# Notes\n\n"
+        "Contact: personal@gmail.com <!-- sensitive-allow -->\n"
+        "PASSWORD=Sup3rSecret123 # noqa: sensitive\n",
+        encoding="utf-8",
+    )
+    violations = module.scan_file(doc, root=tmp_path)
+    categories = [v.category for v in violations]
+    assert categories.count("marker") == 2, categories
+    assert categories.count("email") == 1, categories
+    assert categories.count("credential") == 1, categories
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert "[MARKER]" in proc.stderr
+
+
+def test_a19_reasoned_marker_exempts(tmp_path: Path):
+    """A19: markers with a non-empty reason exempt the nearest prior match."""
+    doc = tmp_path / "reasoned.md"
+    doc.write_text(
+        "# Notes\n\n"
+        "Contact: personal@gmail.com <!-- sensitive-allow: archived quote, address already rotated -->\n"
+        "PASSWORD=Sup3rSecret123 # noqa: sensitive fixture value, not a real credential\n",
+        encoding="utf-8",
+    )
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 0, proc.stderr
+    assert "PASSED" in proc.stdout
