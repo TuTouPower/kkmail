@@ -18,7 +18,6 @@ import logging
 import os
 import socket
 import threading
-from pathlib import Path
 
 log = logging.getLogger("mail_core.main")
 
@@ -41,25 +40,16 @@ def _configure_proxy_headers(*, enabled: bool, forwarded_allow_ips: str | None) 
 def run_migrations(*, check_only: bool = False) -> None:
     import sqlalchemy
 
-    import mail_core.db as db_pkg
     from mail_core.db import baseline
     from mail_core.db.session import database_url
 
-    # Resolve via the package (works from source and from a PyInstaller bundle).
-    here = Path(db_pkg.__file__).resolve().parent
     from alembic import command
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
 
-    cfg = Config(str(here / "alembic.ini"))
-    cfg.set_main_option("script_location", str(here / "alembic"))
-    script = ScriptDirectory.from_config(cfg)
-
-    context = baseline.RevisionContext(
-        known_revisions=frozenset(r.revision for r in script.walk_revisions()),
-        legacy_revisions=baseline.KNOWN_LEGACY_REVISIONS,
-        heads=tuple(script.get_heads()),
-    )
+    # Tree location and the revision context come from the single source in
+    # baseline (resolves via the mail_core.db package, so it works from
+    # source and from a PyInstaller bundle), shared with the offline tool.
+    cfg = baseline.alembic_config()
+    context = baseline.revision_context(cfg)
 
     db_url = cfg.get_main_option("sqlalchemy.url") or database_url()
     check_engine = sqlalchemy.create_engine(baseline.check_connect_url(db_url))
@@ -67,40 +57,42 @@ def run_migrations(*, check_only: bool = False) -> None:
         with check_engine.connect() as conn:
             backend = baseline.make_url(db_url).get_backend_name()
             baseline.configure_read_only(conn, backend)
-            inspector = sqlalchemy.inspect(conn)
-            table_names = set(inspector.get_table_names())
-            version_rows: list[str] = []
-            if "alembic_version" in table_names:
-                version_rows = list(
-                    conn.execute(
-                        sqlalchemy.text("SELECT version_num FROM alembic_version")
-                    )
-                    .scalars()
-                    .all()
-                )
-            state = baseline.DatabaseState(
-                version_rows=tuple(version_rows),
-                table_names=frozenset(table_names),
-            )
+            state = baseline.read_database_state(conn)
             plan = baseline.plan_migration(state, context=context)
 
             if plan.action in (
                 baseline.MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES,
                 baseline.MigrationAction.UNKNOWN_REVISION,
+                baseline.MigrationAction.NEWER_THAN_CODE,
+                baseline.MigrationAction.LEGACY_UNSUPPORTED,
                 baseline.MigrationAction.MULTIPLE_VERSIONS,
             ):
                 raise RuntimeError(plan.message)
 
-            if plan.action in (
-                baseline.MigrationAction.EMPTY_DATABASE,
-                baseline.MigrationAction.AT_BASELINE,
-            ):
+            if plan.action == baseline.MigrationAction.EMPTY_DATABASE:
                 if check_only:
                     return
                 command.upgrade(cfg, "head")
                 return
 
-            errors = baseline.verify_narrow_legacy_schema(conn)
+            # Verification is dispatched by the shared verify_for_plan, so
+            # check_only and normal startup apply the same standard as the
+            # offline tool (A14): an AT_BASELINE database whose schema has
+            # drifted is refused here instead of being upgraded blindly.
+            errors = baseline.verify_for_plan(conn, plan)
+            if plan.action == baseline.MigrationAction.AT_BASELINE:
+                if errors:
+                    detail = "\n  - ".join(errors)
+                    raise RuntimeError(
+                        "Database schema verification failed for unified baseline:\n  - "
+                        + detail
+                        + "\nThe database was not modified."
+                    )
+                if check_only:
+                    return
+                command.upgrade(cfg, "head")
+                return
+
             if errors:
                 detail = "\n  - ".join(errors)
                 raise RuntimeError(

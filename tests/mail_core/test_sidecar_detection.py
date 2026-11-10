@@ -147,9 +147,11 @@ def test_run_migrations_refuses_multiple_alembic_version_rows(monkeypatch):
             pass
 
     monkeypatch.setattr(sqlalchemy, "create_engine", lambda url: FakeEngine())
+    # A2 follow-up: state reading moved into baseline.read_database_state, so
+    # the inspector fake must patch the reference that function actually
+    # uses (mail_core.db.baseline.inspect), not sqlalchemy.inspect.
     monkeypatch.setattr(
-        sqlalchemy,
-        "inspect",
+        "mail_core.db.baseline.inspect",
         lambda conn: SimpleNamespace(get_table_names=lambda: ["alembic_version"]),
     )
     monkeypatch.setattr(

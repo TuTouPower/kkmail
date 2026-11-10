@@ -42,7 +42,7 @@ if str(ROOT / "scripts") not in sys.path:
 
 from mail_core.db.baseline import (
     KNOWN_LEGACY_REVISIONS,
-    REQUIRED_COLUMNS,
+    NARROW_CONVERSION_LEGACY_REVISIONS,
     REQUIRED_TABLES,
     UNIFIED_BASELINE_REVISION,
     MigrationAction,
@@ -51,12 +51,12 @@ from mail_core.db.baseline import (
     ensure_folder_patrol_status_table,
     is_legacy_revision,
     migrate_patrol_status_data,
-    offline_revision_context,
     plan_migration,
     read_database_state,
+    revision_context,
     run_migration,
     stamp_unified_baseline,
-    verify_database_schema,
+    verify_baseline_schema,
 )
 from migrate_to_unified_baseline import main
 
@@ -145,70 +145,52 @@ def _schema_url(engine) -> str:
 
 
 def _create_full_schema(engine) -> None:
-    """Create the 32 minimal fake tables (id + required columns) in the schema."""
-    metadata = MetaData()
-    for table_name in EXPECTED_CORE_TABLES:
-        cols = [Column("id", String(64), primary_key=True)]
-        req_cols = REQUIRED_COLUMNS.get(table_name, frozenset())
-        for col_name in req_cols:
-            if col_name == "id":
-                continue
-            cols.append(Column(col_name, String(64)))
-        Table(table_name, metadata, *cols)
-    metadata.create_all(engine)
+    """Create the full baseline schema from the ORM metadata.
+
+    A16: the metadata is the single source of truth for what a baseline
+    schema is. The old fixture built 32 minimal fake tables (id +
+    REQUIRED_COLUMNS as String(64)), which only satisfied the retired
+    name-based verify; under compare_metadata verification such a schema
+    is (correctly) not a baseline.
+    """
+    import mail_core.mail.storage  # noqa: F401  (populates Base.metadata)
+    from mail_core.db.base import Base
+
+    Base.metadata.create_all(engine)
 
 
 def _create_0030_schema(engine) -> None:
-    """Build a PG-legal 0030 legacy shape (31 tables, no folder_patrol_status).
+    """Build a convertible 0030 legacy shape and seed one patrol row.
 
-    Retirement reason: the old hand-written SQLite transcription used
-    ``String(64)`` ids, ``JSON`` cursors and auto-disabled foreign keys, none of
-    which satisfy the PostgreSQL narrow-conversion checks (composite PK,
-    CASCADE FKs to UUID parents, JSONB cursor). This rebuilds the same intent
-    with real PostgreSQL types (UUID ids, JSONB cursor, BOOLEAN defaults where
-    needed use true/false, never 0/1) and seeds one patrol-bearing checkpoint
-    row plus its parent account/folder rows.
+    The shape is the unified baseline (ORM metadata) minus the
+    folder_patrol_status table, stamped 20261031_0030, with one
+    patrol-bearing checkpoint row plus its parent account/folder rows.
+
+    A16 note: the previous fixture hand-built minimal tables (VARCHAR(64)
+    columns, most columns missing). That is no longer a convertible legacy
+    database: the conversion now re-verifies the post-conversion schema
+    against the full baseline inside the transaction, so only a faithful
+    0030 shape (baseline minus the one table the conversion creates) can
+    convert. The fixture therefore starts from the real baseline shape.
     """
-    special = {"accounts", "folders", "sync_checkpoints"}
+    _create_full_schema(engine)
     with engine.begin() as conn:
-        for table_name in sorted(REQUIRED_TABLES - {"folder_patrol_status"} - special):
-            cols = ["id VARCHAR(64) PRIMARY KEY"]
-            for col_name in sorted(REQUIRED_COLUMNS.get(table_name, frozenset())):
-                if col_name != "id":
-                    cols.append(f"{col_name} VARCHAR(64)")
-            conn.execute(text(f"CREATE TABLE {table_name} ({', '.join(cols)})"))
-
-        conn.execute(text(
-            "CREATE TABLE accounts ("
-            "id UUID PRIMARY KEY, email VARCHAR(320), provider VARCHAR(32), "
-            "group_id VARCHAR(64), master_order VARCHAR(64), group_order VARCHAR(64), "
-            "recipient_addresses VARCHAR(64))"
-        ))
-        conn.execute(text(
-            "CREATE TABLE folders ("
-            "id UUID PRIMARY KEY, account_id UUID, remote_id VARCHAR(512), "
-            "CONSTRAINT uq_folders_account_remote UNIQUE (account_id, remote_id))"
-        ))
-        conn.execute(text(
-            "CREATE TABLE sync_checkpoints ("
-            "account_id UUID NOT NULL, folder_id UUID NOT NULL, "
-            "scan_generation VARCHAR(64), cursor JSONB NOT NULL, "
-            "PRIMARY KEY (account_id, folder_id), "
-            "FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE, "
-            "FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE)"
-        ))
+        conn.execute(text("DROP TABLE folder_patrol_status"))
         conn.execute(text(
             "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
         ))
         conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
         conn.execute(
-            text("INSERT INTO accounts (id) VALUES (:acc)"),
+            text(
+                "INSERT INTO accounts (id, email, provider) "
+                "VALUES (:acc, 'legacy@example.com', 'outlook')"
+            ),
             {"acc": _ACCOUNT_ID},
         )
         conn.execute(
             text(
-                "INSERT INTO folders (id, account_id, remote_id) "
-                "VALUES (:folder, :acc, 'INBOX')"
+                "INSERT INTO folders (id, account_id, remote_id, name) "
+                "VALUES (:folder, :acc, 'INBOX', 'Inbox')"
             ),
             {"folder": _FOLDER_ID, "acc": _ACCOUNT_ID},
         )
@@ -259,7 +241,8 @@ def _startup_revision_context():
     script = ScriptDirectory.from_config(cfg)
     return RevisionContext(
         known_revisions=frozenset(r.revision for r in script.walk_revisions()),
-        legacy_revisions=KNOWN_LEGACY_REVISIONS,
+        legacy_revisions=NARROW_CONVERSION_LEGACY_REVISIONS,
+        known_legacy_revisions=KNOWN_LEGACY_REVISIONS - NARROW_CONVERSION_LEGACY_REVISIONS,
         heads=tuple(script.get_heads()),
     )
 
@@ -303,36 +286,92 @@ def test_required_tables_matches_expected_core_32_tables():
     assert REQUIRED_TABLES == EXPECTED_CORE_TABLES
 
 
-def test_verify_schema_succeeds_on_full_schema(pg_engine):
+def test_verify_baseline_schema_succeeds_on_full_schema(pg_engine):
     _create_full_schema(pg_engine)
     with pg_engine.connect() as conn:
-        errors = verify_database_schema(conn)
+        errors = verify_baseline_schema(conn)
         assert errors == []
 
 
-def test_verify_schema_fails_on_empty_db(pg_engine):
+def test_verify_baseline_schema_fails_on_empty_db(pg_engine):
     with pg_engine.connect() as conn:
-        errors = verify_database_schema(conn)
-        assert len(errors) == 1
-        assert "Missing required tables" in errors[0]
-        assert "accounts" in errors[0]
-        assert "messages" in errors[0]
+        errors = verify_baseline_schema(conn)
+    assert len(errors) >= 32
+    joined = "\n".join(errors)
+    assert "accounts" in joined
+    assert "messages" in joined
 
 
-def test_verify_schema_detects_missing_columns(pg_engine):
+def test_verify_baseline_schema_detects_missing_columns(pg_engine):
     metadata = MetaData()
     for table_name in REQUIRED_TABLES:
         Table(table_name, metadata, Column("id", String(64), primary_key=True))
     metadata.create_all(pg_engine)
 
     with pg_engine.connect() as conn:
-        errors = verify_database_schema(conn)
-        assert len(errors) > 0
-        joined = "\n".join(errors)
-        assert "accounts" in joined
-        assert "recipient_addresses" in joined
-        assert "messages" in joined
-        assert "remote_id" in joined
+        errors = verify_baseline_schema(conn)
+    assert len(errors) > 0
+    joined = "\n".join(errors)
+    assert "accounts" in joined
+    assert "recipient_addresses" in joined
+    assert "messages" in joined
+    assert "remote_id" in joined
+
+
+def test_verify_baseline_schema_rejects_type_drift(pg_engine):
+    """A16: a column type drifted from the baseline is rejected (the retired
+    name-only verify accepted this database)."""
+    _create_full_schema(pg_engine)
+    with pg_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE accounts ALTER COLUMN email TYPE VARCHAR(64)"))
+    with pg_engine.connect() as conn:
+        errors = verify_baseline_schema(conn)
+    assert any("accounts" in e and "email" in e for e in errors)
+
+
+def test_verify_baseline_schema_rejects_dropped_constraint(pg_engine):
+    """A16: dropping a unique constraint is detected and rejected."""
+    _create_full_schema(pg_engine)
+    with pg_engine.connect() as conn:
+        email_uq = next(
+            uq["name"]
+            for uq in inspect(conn).get_unique_constraints("accounts")
+            if uq["column_names"] == ["email"]
+        )
+    with pg_engine.begin() as conn:
+        conn.execute(text(f'ALTER TABLE accounts DROP CONSTRAINT "{email_uq}"'))
+    with pg_engine.connect() as conn:
+        errors = verify_baseline_schema(conn)
+    assert errors != []
+
+
+def test_verify_baseline_schema_rejects_dropped_column(pg_engine):
+    """A16: a baseline database missing a column is rejected."""
+    _create_full_schema(pg_engine)
+    with pg_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE accounts DROP COLUMN display_name"))
+    with pg_engine.connect() as conn:
+        errors = verify_baseline_schema(conn)
+    assert any("display_name" in e for e in errors)
+
+
+def test_conversion_rejects_drifted_legacy_schema_and_rolls_back(pg_engine):
+    """A16: the post-conversion full comparison runs inside the conversion
+    transaction; a legacy database whose remaining schema drifts from the
+    baseline is refused and left completely untouched."""
+    db_url = _schema_url(pg_engine)
+    _create_0030_schema(pg_engine)
+    with pg_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE accounts ALTER COLUMN email TYPE VARCHAR(64)"))
+
+    with pytest.raises(SchemaValidationError, match="does not match the unified baseline"):
+        run_migration(db_url)
+
+    with pg_engine.connect() as conn:
+        assert "folder_patrol_status" not in set(inspect(conn).get_table_names())
+        assert conn.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalars().all() == ["20261031_0030"]
 
 
 def test_run_migration_rejects_empty_database(pg_engine):
@@ -539,23 +578,21 @@ def test_stamp_is_noop_when_already_at_baseline(pg_engine):
     assert versions == [UNIFIED_BASELINE_REVISION]
 
 
-def test_verify_schema_exempt_tables_only_skips_named_table(pg_engine):
-    metadata = MetaData()
-    for table_name in REQUIRED_TABLES - {"folder_patrol_status", "accounts"}:
-        Table(table_name, metadata, Column("id", String(64), primary_key=True))
-    metadata.create_all(pg_engine)
-
-    with pg_engine.connect() as conn:
-        errors = verify_database_schema(
-            conn, exempt_tables=frozenset({"folder_patrol_status"})
-        )
-    joined = "\n".join(errors)
-    assert "accounts" in joined
-    assert "folder_patrol_status" not in joined
+# Retired (A16): test_verify_schema_exempt_tables_only_skips_named_table and
+# test_verify_schema_exempt_table_still_checks_columns_when_present exercised
+# verify_database_schema(exempt_tables=...), which A16 deleted together with
+# REQUIRED_COLUMNS. The surviving intent of the second test — an existing but
+# incomplete folder_patrol_status is reported with its missing columns — is
+# covered by the narrow-conversion precondition check (see
+# test_dry_run_reports_missing_columns_on_existing_patrol_table).
 
 
 @pytest.mark.parametrize("dry_run", [False, True], ids=["apply", "dry-run"])
 def test_run_migration_refuses_unsupported_legacy_database(pg_engine, dry_run):
+    """A15 semantics: 20261027_0029 is a known legacy revision outside the
+    narrow-conversion set, so it is refused at classification time as
+    LEGACY_UNSUPPORTED (previously it reached the narrow schema check and
+    failed there on missing tables). Zero writes either way."""
     db_url = _schema_url(pg_engine)
     legacy_cursor = json.dumps({"last_status": "ok", "delta_token": "keep-me"})
     folder_id = uuid.uuid4()
@@ -582,7 +619,8 @@ def test_run_migration_refuses_unsupported_legacy_database(pg_engine, dry_run):
 
     with pytest.raises(SchemaValidationError, match="not supported") as excinfo:
         run_migration(db_url, dry_run=dry_run)
-    assert "message_remote_image_allows" in str(excinfo.value)
+    assert "20261027_0029" in str(excinfo.value)
+    assert "historical kkmail release" in str(excinfo.value)
     assert "Restore the pre-upgrade sealed backup" in str(excinfo.value)
 
     with pg_engine.connect() as conn:
@@ -607,23 +645,6 @@ def test_dry_run_reports_missing_columns_on_existing_patrol_table(pg_engine):
     assert "folder_patrol_status" in msg
     assert "missing required columns" in msg
     assert "last_probe_failures" in msg
-
-
-def test_verify_schema_exempt_table_still_checks_columns_when_present(pg_engine):
-    _create_full_schema(pg_engine)
-    with pg_engine.begin() as conn:
-        conn.execute(text("DROP TABLE folder_patrol_status"))
-        conn.execute(
-            text("CREATE TABLE folder_patrol_status (folder_id VARCHAR(64) PRIMARY KEY)")
-        )
-    with pg_engine.connect() as conn:
-        errors = verify_database_schema(
-            conn, exempt_tables=frozenset({"folder_patrol_status"})
-        )
-    joined = "\n".join(errors)
-    assert "folder_patrol_status" in joined
-    assert "missing required columns" in joined
-    assert "Missing required tables" not in joined
 
 
 def _captured_sql(call):
@@ -699,7 +720,7 @@ def test_plan_migration_two_entries_agree_on_classification(pg_engine, state, ex
     """
     _build_state(pg_engine, state)
     startup_ctx = _startup_revision_context()
-    offline_ctx = offline_revision_context()
+    offline_ctx = revision_context()
     with pg_engine.connect() as conn:
         db_state = read_database_state(conn)
     startup_plan = plan_migration(db_state, context=startup_ctx)
