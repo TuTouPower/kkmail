@@ -27,7 +27,11 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Iterator
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterator
+
+if TYPE_CHECKING:
+    from alembic.config import Config
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection, Engine, make_url
@@ -206,9 +210,10 @@ class MigrationAction(str, Enum):
 class RevisionContext:
     """Revision sets the planner uses to classify a versioned database.
 
-    The startup entry builds ``known_revisions``/``heads`` from Alembic's
-    ScriptDirectory; the offline entry uses :func:`offline_revision_context`.
-    Both pass the context to :func:`plan_migration` as an explicit argument.
+    Both entries build the context through :func:`revision_context`, so the
+    classification inputs (not just the classification function) are single-
+    sourced. The context is passed to :func:`plan_migration` as an explicit
+    argument.
     """
 
     known_revisions: frozenset[str]
@@ -767,17 +772,37 @@ def apply_narrow_legacy_conversion(database_url: str) -> str:
         engine.dispose()
 
 
-def offline_revision_context() -> RevisionContext:
-    """Revision sets for the offline entry, which has no ScriptDirectory.
+def alembic_config() -> Config:
+    """Build the Alembic ``Config`` for the migration tree shipped in this package.
 
-    The Alembic tree ships only the unified baseline (a single head), so the
-    set of revisions Alembic can service is exactly that revision. This makes
-    the offline context identical to the startup context for the current tree.
+    Single source for locating ``alembic.ini`` / the ``alembic`` directory:
+    both migration entries resolve the tree through here, relative to the
+    ``mail_core.db`` package, so it works from source and from a bundle.
     """
+    from alembic.config import Config
+
+    here = Path(__file__).resolve().parent
+    cfg = Config(str(here / "alembic.ini"))
+    cfg.set_main_option("script_location", str(here / "alembic"))
+    return cfg
+
+
+def revision_context(cfg: Config | None = None) -> RevisionContext:
+    """Build the single :class:`RevisionContext` both migration entries classify with.
+
+    ``known_revisions`` / ``heads`` always come from Alembic's
+    ``ScriptDirectory`` over the shipped tree, never from constants: the
+    moment a second revision is added to the tree, both entries see it.
+    ``cfg`` is injectable only so tests can point at a temporary tree;
+    production callers pass nothing (or the config they already built).
+    """
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(cfg or alembic_config())
     return RevisionContext(
-        known_revisions=frozenset({UNIFIED_BASELINE_REVISION}),
+        known_revisions=frozenset(r.revision for r in script.walk_revisions()),
         legacy_revisions=KNOWN_LEGACY_REVISIONS,
-        heads=(UNIFIED_BASELINE_REVISION,),
+        heads=tuple(script.get_heads()),
     )
 
 
@@ -900,7 +925,7 @@ def run_migration(
     safe_url = make_url(raw_url).render_as_string(hide_password=True)
     LOG.info("Connecting to database at %s", safe_url)
 
-    context = offline_revision_context()
+    context = revision_context()
     with read_only_connection(raw_url) as conn:
         plan = plan_migration(read_database_state(conn), context=context)
         LOG.info(

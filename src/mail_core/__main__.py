@@ -18,7 +18,6 @@ import logging
 import os
 import socket
 import threading
-from pathlib import Path
 
 log = logging.getLogger("mail_core.main")
 
@@ -41,25 +40,16 @@ def _configure_proxy_headers(*, enabled: bool, forwarded_allow_ips: str | None) 
 def run_migrations(*, check_only: bool = False) -> None:
     import sqlalchemy
 
-    import mail_core.db as db_pkg
     from mail_core.db import baseline
     from mail_core.db.session import database_url
 
-    # Resolve via the package (works from source and from a PyInstaller bundle).
-    here = Path(db_pkg.__file__).resolve().parent
     from alembic import command
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
 
-    cfg = Config(str(here / "alembic.ini"))
-    cfg.set_main_option("script_location", str(here / "alembic"))
-    script = ScriptDirectory.from_config(cfg)
-
-    context = baseline.RevisionContext(
-        known_revisions=frozenset(r.revision for r in script.walk_revisions()),
-        legacy_revisions=baseline.KNOWN_LEGACY_REVISIONS,
-        heads=tuple(script.get_heads()),
-    )
+    # Tree location and the revision context come from the single source in
+    # baseline (resolves via the mail_core.db package, so it works from
+    # source and from a PyInstaller bundle), shared with the offline tool.
+    cfg = baseline.alembic_config()
+    context = baseline.revision_context(cfg)
 
     db_url = cfg.get_main_option("sqlalchemy.url") or database_url()
     check_engine = sqlalchemy.create_engine(baseline.check_connect_url(db_url))

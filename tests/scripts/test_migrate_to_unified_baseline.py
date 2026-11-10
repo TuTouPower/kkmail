@@ -51,9 +51,9 @@ from mail_core.db.baseline import (
     ensure_folder_patrol_status_table,
     is_legacy_revision,
     migrate_patrol_status_data,
-    offline_revision_context,
     plan_migration,
     read_database_state,
+    revision_context,
     run_migration,
     stamp_unified_baseline,
     verify_database_schema,
@@ -699,7 +699,7 @@ def test_plan_migration_two_entries_agree_on_classification(pg_engine, state, ex
     """
     _build_state(pg_engine, state)
     startup_ctx = _startup_revision_context()
-    offline_ctx = offline_revision_context()
+    offline_ctx = revision_context()
     with pg_engine.connect() as conn:
         db_state = read_database_state(conn)
     startup_plan = plan_migration(db_state, context=startup_ctx)
