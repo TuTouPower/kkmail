@@ -112,6 +112,8 @@ SAFE_CREDENTIAL_PLACEHOLDERS = {
     "<password>",
     "<secret>",
     "<change-me>",
+    "<redacted>",
+    "<your-token>",
     "testpassword",
     "your_password_here",
     "password",
@@ -148,21 +150,11 @@ SAFE_REFERENCE_RE = re.compile(
     r"\A\$\{[^}]*\}\Z"               # ${ENV_VAR}
     r"|\A\$\([^)]*\)\Z"              # $(cmd)
     r"|\A\{\{[^}]*\}\}\Z"            # {{ template }}
-    r"|\A<[^<>]+>\Z"                 # <placeholder>
     r"|\Aos\.environ(\[[^\]]+\]|\.get\([^)]*\))\Z"  # os.environ[...] / os.environ.get(...)
     r"|\Aos\.getenv\([^)]*\)\Z"      # os.getenv(...)
     r"|\Agetenv\([^)]*\)\Z"          # getenv(...)
     r"|\Aprocess\.env(\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]+\])\Z"  # process.env.X
     r"|\Astore\.get_secret\([^)]*\)\Z"  # store.get_secret(...)
-)
-
-# Code-expression shape: the WHOLE value is a function call. Anchored at both
-# ends so a word containing parens is not mistaken for a call. (A4: the former
-# "starts with a structural opener" branch is deleted -- a value that merely
-# begins with one of ``{($<`` is not thereby a template or code expression;
-# legitimate template shapes are covered by SAFE_REFERENCE_RE above.)
-CODE_EXPRESSION_RE = re.compile(
-    r"\A[A-Za-z_][A-Za-z0-9_.]*\([^)]*\)?\Z"
 )
 
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -277,10 +269,15 @@ def is_safe_credential(value: str, *, key: str | None = None) -> bool:
     # Wholly-punctuation / ellipsis values.
     if PUNCT_ONLY_RE.fullmatch(v):
         return True
-    # Template / env references and code-expression shapes. SAFE_REFERENCE_RE
-    # branches are whole-value anchored and matched with fullmatch (A5): a
-    # value that merely *contains* an API reference name earns no exemption.
-    if SAFE_REFERENCE_RE.fullmatch(v) or CODE_EXPRESSION_RE.search(v):
+    # Template / env references. SAFE_REFERENCE_RE branches are whole-value
+    # anchored and matched with fullmatch (A5): a value that merely *contains*
+    # an API reference name earns no exemption. Shape-based code-expression
+    # exemptions are gone entirely (A17, default-deny): a function-call-shaped
+    # or angle-bracket value is indistinguishable from a real credential, so
+    # legitimate occurrences in docs must use an explicit reasoned allow
+    # marker (A19); angle-bracket placeholders are exempt only when explicitly
+    # listed in SAFE_CREDENTIAL_PLACEHOLDERS.
+    if SAFE_REFERENCE_RE.fullmatch(v):
         return True
     # Self-assignment code: value is the identifier equal to the key.
     if key is not None and IDENTIFIER_RE.fullmatch(v) and v.lower() == key.lower():

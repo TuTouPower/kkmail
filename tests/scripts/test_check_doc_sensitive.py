@@ -204,12 +204,17 @@ def test_five_credential_shapes_all_detected(tmp_path: Path):
 
 
 def test_code_identifiers_and_placeholders_not_flagged(tmp_path: Path):
+    """Retirement note (adoption A17): the fixture formerly included the
+    function-call lines ``self.password = password.strip()`` and
+    ``api_key = normalize_api_key(``. Under default-deny those shapes are no
+    longer exempt (a call-shaped value is indistinguishable from a real
+    credential); they are covered as denied shapes by the A17 test below, and
+    legitimate occurrences in real docs use a reasoned allow marker (A19).
+    """
     doc = tmp_path / "code.md"
     doc.write_text(
         "# Archived notes\n\n"
-        "self.password = password.strip()\n"
         "payload = data.get(\n"
-        "api_key = normalize_api_key(\n"
         "secret = store.get_secret(...)\n"
         "mode = default\n"
         "mask = ***\n"
@@ -495,11 +500,16 @@ def test_is_safe_credential_denies_weak_credential_shapes(monkeypatch):
 
 
 def test_is_safe_credential_allows_explicit_safe_shapes(monkeypatch):
-    """Only explicit safe shapes return True: placeholders/refs/code/prose.
+    """Only explicit safe shapes return True: placeholders/refs/prose.
 
     Retirement note (A22 issue-3): the former ("42", None) and ("3.14", None)
     numeric-literal cases are gone -- NUMBER_LITERAL_RE was removed because a
     pure numeric password such as 12345678 must be denied, not waived.
+
+    Retirement note (adoption A17): the former ("password.strip()", None) and
+    ("normalize_api_key(", None) function-call cases are gone -- the
+    code-expression shape exemption was deleted (default-deny); call-shaped
+    values are asserted denied by the A17 test below.
     """
     module = _load_module(monkeypatch)
     safe_shapes = [
@@ -525,8 +535,6 @@ def test_is_safe_credential_allows_explicit_safe_shapes(monkeypatch):
         ("getenv('X')", None),
         ("process.env.SECRET", None),
         ("store.get_secret(account.credential_ref)", None),
-        ("password.strip()", None),
-        ("normalize_api_key(", None),
         ("password", "password"),
         ("token", "token"),
         ("mysecret", "mysecret"),
@@ -624,14 +632,18 @@ def test_default_deny_catches_structure_chars_and_numeric_password(tmp_path):
 
 
 def test_prose_assignments_not_flagged_via_cli(tmp_path):
-    """Prose/code mis-captures stay clean (prerequisite for full docs scan gating)."""
+    """Prose/code mis-captures stay clean (prerequisite for full docs scan gating).
+
+    Retirement note (adoption A17): the fixture formerly included the isolated
+    line ``api_key = normalize_api_key(``; a call-shaped RHS is now
+    default-deny (see the A17 test), so it no longer belongs in a clean doc.
+    """
     doc = tmp_path / "prose.md"
     doc.write_text(
         "# Notes\n\n"
         "W1->>DB: 短事务获取 account_sync_leases<br/>fencing_token=T\n"
         "Route is guarded (single password = all power) can clone\n"
         "const token = await ensureCsrf()\n"
-        "api_key = normalize_api_key(\n"
         "- LOGIN_PASSWORD=***\n",
         encoding="utf-8",
     )
@@ -665,4 +677,18 @@ def test_a5_api_reference_substring_denied(monkeypatch):
         assert module.is_safe_credential(value) is False, value
         assert module.is_safe_credential(value, key="password") is False, value
     for value in ('os.environ["X"]', 'os.getenv("X")', "process.env.X"):
+        assert module.is_safe_credential(value) is True, value
+
+
+# --- Adoption A17: default-deny, no shape-based code/angle exemptions --------
+
+
+def test_a17_call_and_angle_shapes_denied(monkeypatch):
+    """A17: function-call-shaped and angle-bracket values are denied unless
+    the exact placeholder is explicitly whitelisted."""
+    module = _load_module(monkeypatch)
+    for value in ("Str0ng(Pass)", "<realpass123>", "loadSecret()"):
+        assert module.is_safe_credential(value) is False, value
+        assert module.is_safe_credential(value, key="password") is False, value
+    for value in ("<your-token>", "<password>", "<redacted>"):
         assert module.is_safe_credential(value) is True, value
