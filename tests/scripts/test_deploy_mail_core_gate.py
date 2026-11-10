@@ -2,7 +2,9 @@
 
 Uses stub executables on PATH for git/docker/curl/rg while the preflight
 gate itself always runs the real ``python -m mail_core --check-migrations``
-against throwaway SQLite databases. Never touches production databases.
+through PostgreSQL URLs. Database-backed cases use isolated PostgreSQL schemas
+or the shared at-head test DB; throwaway SQLite files are retired because the
+SQLite branch of the planner is being removed. Never touches production data.
 """
 
 from __future__ import annotations
@@ -11,16 +13,51 @@ import ast
 import os
 import stat
 import subprocess
+import uuid
 from pathlib import Path
 
+import pytest
 import yaml
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "deploy_mail_core.sh"
 PREFLIGHT_LIB = REPO_ROOT / "scripts" / "lib" / "preflight_schema_gate.sh"
 COMPOSE_FILE = REPO_ROOT / "docker-compose.mail-core.yml"
 PYTHON_BIN = REPO_ROOT / ".venv" / "bin" / "python"
+
+_NO_CONNECT_PG_URL = "postgresql+psycopg://kkmail:pw@127.0.0.1:5433/kkmail_mail"
+
+_DB_REQUIRED = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
+
+
+@pytest.fixture
+def _business_table_db():
+    """Create an isolated PG schema holding one business table; return its schema-scoped URL."""
+    base_url = os.environ["MAIL_CORE_DATABASE_URL"]
+    admin = create_engine(base_url)
+    schema = "deploy_gate_" + uuid.uuid4().hex
+    with admin.begin() as conn:
+        conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+    db_url = make_url(base_url).update_query_dict(
+        {"options": f"-csearch_path={schema}"}
+    ).render_as_string(hide_password=False)
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE accounts (id VARCHAR(64) PRIMARY KEY)"))
+    finally:
+        engine.dispose()
+    try:
+        yield db_url
+    finally:
+        with admin.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()
 
 
 def _run_bash(script: str, *, env: dict | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess:
@@ -83,7 +120,7 @@ def test_preflight_lib_source_has_no_side_effects():
     """Sourcing the lib defines the gate function and does nothing else."""
     proc = _run_bash(
         f"source {PREFLIGHT_LIB} && declare -F && echo SOURCE-OK",
-        env={"MAIL_CORE_DATABASE_URL": "sqlite:////tmp/x.db"},
+        env={"MAIL_CORE_DATABASE_URL": _NO_CONNECT_PG_URL},
     )
     assert proc.returncode == 0, proc.stderr
     assert "mail_core_preflight_check" in proc.stdout
@@ -172,23 +209,13 @@ def test_compose_migrate_service_uses_single_guarded_entrypoint():
     assert "--check-migrations" not in api_command
 
 
-def _business_table_db(path: Path) -> str:
-    db_url = f"sqlite:///{path}"
-    engine = create_engine(db_url)
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("CREATE TABLE accounts (id VARCHAR(64) PRIMARY KEY)"))
-    finally:
-        engine.dispose()
-    return db_url
-
-
-def test_deploy_fails_before_push_when_gate_fails(tmp_path: Path):
+@_DB_REQUIRED
+def test_deploy_fails_before_push_when_gate_fails(tmp_path: Path, _business_table_db: str):
     """Gate failure: real script exits non-zero with no push/build/backup/migrate markers."""
     stub_dir = tmp_path / "bin"
     markers = tmp_path / "markers"
     _make_stub_bin(stub_dir, markers)
-    db_url = _business_table_db(tmp_path / "gate-fail.db")
+    db_url = _business_table_db
     env = {
         "PATH": f"{stub_dir}:{os.environ['PATH']}",
         "POSTGRES_PASSWORD": "valid-pw_123",
@@ -217,12 +244,13 @@ def test_deploy_fails_before_push_when_gate_fails(tmp_path: Path):
         assert " run " not in logged
 
 
+@_DB_REQUIRED
 def test_deploy_gate_pass_proceeds_but_backup_failure_never_migrates(tmp_path: Path):
     """Gate pass reaches push; a later backup failure still never starts migrate/up."""
     stub_dir = tmp_path / "bin"
     markers = tmp_path / "markers"
     _make_stub_bin(stub_dir, markers)
-    db_url = f"sqlite:///{tmp_path / 'gate-pass.db'}"
+    db_url = os.environ["MAIL_CORE_DATABASE_URL"]
     env_path = f"{stub_dir}:{os.environ['PATH']}"
     proc = subprocess.run(
         ["bash", str(DEPLOY_SCRIPT), "--no-push"],
