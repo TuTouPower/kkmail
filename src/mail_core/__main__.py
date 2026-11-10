@@ -57,21 +57,7 @@ def run_migrations(*, check_only: bool = False) -> None:
         with check_engine.connect() as conn:
             backend = baseline.make_url(db_url).get_backend_name()
             baseline.configure_read_only(conn, backend)
-            inspector = sqlalchemy.inspect(conn)
-            table_names = set(inspector.get_table_names())
-            version_rows: list[str] = []
-            if "alembic_version" in table_names:
-                version_rows = list(
-                    conn.execute(
-                        sqlalchemy.text("SELECT version_num FROM alembic_version")
-                    )
-                    .scalars()
-                    .all()
-                )
-            state = baseline.DatabaseState(
-                version_rows=tuple(version_rows),
-                table_names=frozenset(table_names),
-            )
+            state = baseline.read_database_state(conn)
             plan = baseline.plan_migration(state, context=context)
 
             if plan.action in (

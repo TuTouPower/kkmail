@@ -64,3 +64,19 @@ def test_revision_context_sees_extra_revision_in_temp_tree(tmp_path):
 
 def test_offline_revision_context_is_gone():
     assert not hasattr(baseline, "offline_revision_context")
+
+
+def test_startup_entry_reads_state_via_baseline_helper():
+    """A2: the startup entry must not hand-copy database-state reading.
+
+    ``run_migrations`` delegates to ``baseline.read_database_state`` (the same
+    reader the offline entry uses), so any future extension of the reader
+    reaches both entries.
+    """
+    import inspect as py_inspect
+
+    from mail_core import __main__ as main_module
+
+    src = py_inspect.getsource(main_module.run_migrations)
+    assert "baseline.read_database_state(conn)" in src
+    assert "SELECT version_num FROM alembic_version" not in src
