@@ -167,3 +167,62 @@ def test_is_legacy_revision_is_set_membership_only():
     assert baseline.is_legacy_revision("20261107_0001") is False
     assert baseline.is_legacy_revision(None) is False
     assert baseline.is_legacy_revision("") is False
+
+
+def test_required_tables_match_orm_metadata():
+    """A16: REQUIRED_TABLES (planner business-table detection) and the ORM
+    metadata (schema truth) must name the same 32 tables."""
+    assert baseline.REQUIRED_TABLES == frozenset(baseline._baseline_metadata().tables)
+
+
+def test_baseline_diff_filter_ignores_only_registered_raw_sql_objects():
+    """A16: the compare_metadata exclusion list covers exactly the raw-SQL
+    objects of the baseline migration — nothing else is ignored."""
+    from sqlalchemy import Column, Index, Integer, MetaData, Table
+
+    metadata = MetaData()
+    table = Table(
+        "message_search", metadata, Column("message_id", Integer, primary_key=True)
+    )
+    document = Column("document", Integer)
+    assert (
+        baseline._is_ignored_baseline_diff(
+            ("remove_column", None, "message_search", document)
+        )
+        is True
+    )
+    assert (
+        baseline._is_ignored_baseline_diff(
+            ("remove_column", None, "message_search", Column("subject", Integer))
+        )
+        is False
+    )
+    assert (
+        baseline._is_ignored_baseline_diff(
+            ("remove_index", Index("ix_message_search_document", table.c.message_id))
+        )
+        is True
+    )
+    assert (
+        baseline._is_ignored_baseline_diff(
+            ("remove_index", Index("ix_unregistered", table.c.message_id))
+        )
+        is False
+    )
+    assert baseline._is_ignored_baseline_diff(("add_table", table)) is False
+    assert not hasattr(baseline, "REQUIRED_COLUMNS")
+    assert not hasattr(baseline, "_column_affinity")
+    assert not hasattr(baseline, "verify_database_schema")
+
+
+def test_describe_diff_names_table_and_column():
+    from sqlalchemy import Column, String
+
+    message = baseline._describe_diff(
+        ("add_column", None, "accounts", Column("recipient_addresses", String))
+    )
+    assert "accounts" in message and "recipient_addresses" in message
+    modify = baseline._describe_diff(
+        ("modify_type", None, "accounts", "email", {}, "VARCHAR(64)", "VARCHAR(320)")
+    )
+    assert "accounts" in modify and "email" in modify

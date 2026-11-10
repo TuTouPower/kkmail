@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from alembic.config import Config
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Connection, Engine, make_url
 
 LOG = logging.getLogger("migrate_to_unified_baseline")
@@ -160,61 +161,35 @@ REQUIRED_TABLES: frozenset[str] = frozenset({
     "sender_remote_image_allows",
 })
 
-REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
-    "accounts": frozenset({
-        "id", "email", "provider", "group_id", "master_order", "group_order", "recipient_addresses"
-    }),
-    "messages": frozenset({
-        "id", "account_id", "sort_time", "remote_id", "is_read", "is_flagged", "has_attachments"
-    }),
-    "message_blobs": frozenset({
-        "id", "content_sha256", "key_version", "gc_eligible_at", "ref_count"
-    }),
-    "attachments": frozenset({
-        "id", "message_id", "part_id"
-    }),
-    "worker_jobs": frozenset({
-        "id", "execution_generation", "dedupe_key", "failure_attempts"
-    }),
-    "sync_checkpoints": frozenset({
-        "account_id", "folder_id", "scan_generation", "cursor"
-    }),
-    "sync_requests": frozenset({
-        "id", "client_request_id"
-    }),
-    "sync_request_targets": frozenset({
-        "id", "request_id", "target_key"
-    }),
-    "sync_request_target_jobs": frozenset({
-        "id", "target_id", "execution_generation"
-    }),
-    "folder_patrol_status": frozenset({
-        "folder_id", "last_status", "last_probe_failures"
-    }),
-    "outbox_publication_state": frozenset({
-        "id", "epoch", "next_seq", "pruned_through_seq"
-    }),
-    "outbox": frozenset({
-        "id", "publication_seq", "published_at"
-    }),
-    "message_archive_state": frozenset({
-        "message_id", "claim_revision", "state"
-    }),
-    "remote_operations": frozenset({
-        "id", "next_attempt_at"
-    }),
-    "message_search": frozenset({
-        "message_id", "to_text", "document"
-    }),
-}
+def _is_uuid_column_type(col_type: Any) -> bool:
+    return isinstance(col_type, postgresql.UUID)
 
-_PATROL_EXPECTED_COLUMNS: dict[str, tuple[str, bool, str | None]] = {
-    "folder_id": ("uuid", False, None),
-    "last_status": ("json", True, None),
-    "last_probe_at": ("datetime", True, None),
-    "last_probe_failures": ("integer", False, "0"),
-    "created_at": ("datetime", False, "now()"),
-    "updated_at": ("datetime", False, "now()"),
+
+def _is_json_column_type(col_type: Any) -> bool:
+    return isinstance(col_type, (postgresql.JSON, postgresql.JSONB))
+
+
+def _is_timestamptz_column_type(col_type: Any) -> bool:
+    return isinstance(col_type, postgresql.TIMESTAMP) and bool(col_type.timezone)
+
+
+def _is_integer_column_type(col_type: Any) -> bool:
+    from sqlalchemy import BigInteger, Integer
+
+    return isinstance(col_type, Integer) and not isinstance(col_type, BigInteger)
+
+
+# folder_patrol_status column expectations for the narrow-conversion
+# precondition check: (type predicate, expected type label, nullable,
+# normalized default). PostgreSQL-precise types, matching the table the
+# conversion creates in ensure_folder_patrol_status_table.
+_PATROL_EXPECTED_COLUMNS: dict[str, tuple[Any, str, bool, str | None]] = {
+    "folder_id": (_is_uuid_column_type, "UUID", False, None),
+    "last_status": (_is_json_column_type, "JSONB", True, None),
+    "last_probe_at": (_is_timestamptz_column_type, "TIMESTAMP WITH TIME ZONE", True, None),
+    "last_probe_failures": (_is_integer_column_type, "INTEGER", False, "0"),
+    "created_at": (_is_timestamptz_column_type, "TIMESTAMP WITH TIME ZONE", False, "now()"),
+    "updated_at": (_is_timestamptz_column_type, "TIMESTAMP WITH TIME ZONE", False, "now()"),
 }
 
 _NARROW_CONVERSION_LOCK_KEY = "mail-core:narrow-legacy-conversion"
@@ -332,64 +307,138 @@ def read_only_connection(raw_url: str) -> Iterator[Connection]:
         engine.dispose()
 
 
-def verify_database_schema(
-    bind: Engine | Connection,
-    *,
-    exempt_tables: frozenset[str] = frozenset(),
-) -> list[str]:
-    """Verify that all required tables and columns exist on the target database.
+def _baseline_metadata():
+    """The unified baseline's single source of truth: the ORM metadata.
 
-    Returns a list of error messages describing missing tables or columns.
-    If the returned list is empty, the schema matches the unified baseline.
-    ``exempt_tables`` only waives the requirement that those tables exist: it
-    is for tables the offline tool will create later (e.g. on a dry-run, where
-    folder_patrol_status has not been built yet). It never waives column checks
-    for a table that does exist, so an incomplete existing table is still
-    reported instead of passing a dry-run and failing on apply.
+    Importing ``mail_core.mail.storage`` populates ``Base.metadata`` with
+    every model (the same import ``alembic/env.py`` performs). Done lazily
+    so this module stays importable without the full model graph.
     """
-    inspector = inspect(bind)
-    existing_tables = set(inspector.get_table_names())
+    import mail_core.mail.storage  # noqa: F401
 
+    from mail_core.db.base import Base
+
+    return Base.metadata
+
+
+# Objects the unified-baseline migration creates with raw SQL, outside the
+# ORM metadata. compare_metadata reports each of them as a removal on every
+# genuine baseline database, so they are excluded from the comparison. This
+# is the same registered set the drift test in
+# tests/mail_core/test_migration_validation.py has always excluded.
+_BASELINE_ONLY_COLUMNS: frozenset[tuple[str, str]] = frozenset({
+    # tsvector column maintained by a GENERATED ALWAYS expression in raw SQL.
+    ("message_search", "document"),
+})
+_BASELINE_ONLY_INDEXES: frozenset[str] = frozenset({
+    "ix_message_search_account",
+    "ix_message_search_document",  # GIN over the generated column above
+    "ix_message_search_from_trgm",  # raw-SQL GIN trgm indexes; the ORM
+    "ix_message_search_subject_trgm",  # declares from_text/to_text variants
+    "ix_remote_operations_retry",  # created by the migration, undeclared
+})
+
+
+def _flatten_diffs(diffs: Any) -> Iterator[tuple]:
+    for diff in diffs:
+        if isinstance(diff, list):
+            yield from _flatten_diffs(diff)
+        else:
+            yield diff
+
+
+def _is_ignored_baseline_diff(diff: tuple) -> bool:
+    kind = diff[0]
+    if kind == "remove_column":
+        column = diff[3]
+        return (diff[2], getattr(column, "name", None)) in _BASELINE_ONLY_COLUMNS
+    if kind == "remove_index":
+        return getattr(diff[1], "name", None) in _BASELINE_ONLY_INDEXES
+    return False
+
+
+def _describe_diff(diff: tuple) -> str:
+    kind = diff[0]
+    if kind in ("add_table", "remove_table"):
+        name = getattr(diff[1], "name", str(diff[1]))
+        if kind == "add_table":
+            return f"Missing required table: '{name}'."
+        return f"Table '{name}' exists in the database but is not part of the unified baseline."
+    if kind in ("add_column", "remove_column"):
+        table_name, column = diff[2], diff[3]
+        col_name = getattr(column, "name", str(column))
+        if kind == "add_column":
+            return f"Table '{table_name}' is missing required column '{col_name}'."
+        return (
+            f"Table '{table_name}' has column '{col_name}' which is not part "
+            "of the unified baseline."
+        )
+    if kind in ("add_index", "remove_index"):
+        index = diff[1]
+        name = getattr(index, "name", str(index))
+        table_name = getattr(getattr(index, "table", None), "name", "?")
+        if kind == "add_index":
+            return f"Index '{name}' on table '{table_name}' is missing."
+        return f"Index '{name}' on table '{table_name}' is not part of the unified baseline."
+    if kind in ("add_constraint", "remove_constraint"):
+        constraint = diff[1]
+        name = getattr(constraint, "name", None) or type(constraint).__name__
+        table_name = getattr(getattr(constraint, "table", None), "name", "?")
+        if kind == "add_constraint":
+            return f"Constraint '{name}' on table '{table_name}' is missing."
+        return f"Constraint '{name}' on table '{table_name}' is not part of the unified baseline."
+    if kind.startswith("modify_"):
+        table_name, col_name = diff[2], diff[3]
+        aspect = kind.removeprefix("modify_")
+        return (
+            f"Column '{table_name}.{col_name}' {aspect} differs: database has "
+            f"{diff[-2]!r}, the unified baseline expects {diff[-1]!r}."
+        )
+    return f"Schema difference from the unified baseline: {diff!r}"
+
+
+def verify_baseline_schema(bind: Engine | Connection) -> list[str]:
+    """Full-fidelity check that a database matches the unified baseline.
+
+    Compares the live catalog against the ORM metadata — the single source
+    of truth for the baseline schema — with Alembic's ``compare_metadata``:
+    table set, column names, PostgreSQL-exact column types, nullability,
+    primary keys, foreign keys, unique constraints and indexes across all
+    32 tables. Returns human-readable differences; empty means the schema
+    is exactly the baseline.
+
+    Deliberate comparison settings (the complete list of exclusions, each
+    with its reason):
+
+    - ``compare_type=True``: type drift (a widened VARCHAR, JSONB degraded
+      to JSON) must be caught; catching it is the point of the check.
+    - ``compare_server_default=False``: PostgreSQL renders defaults in its
+      own normalized spelling (``now()`` vs ``CURRENT_TIMESTAMP``, cast
+      suffixes), which differs textually between the baseline migration
+      and the ORM without any semantic difference; comparing them would
+      flag every genuine baseline database. (The narrow-conversion
+      precondition check still verifies the defaults of the one table the
+      conversion creates.)
+    - The raw-SQL objects in ``_BASELINE_ONLY_COLUMNS`` /
+      ``_BASELINE_ONLY_INDEXES`` are ignored: the baseline migration
+      creates them outside the ORM metadata, so they surface as removals
+      on every genuine baseline database.
+    """
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+
+    if isinstance(bind, Engine):
+        with bind.connect() as conn:
+            return verify_baseline_schema(conn)
+    ctx = MigrationContext.configure(
+        bind, opts={"compare_type": True, "compare_server_default": False}
+    )
     errors: list[str] = []
-
-    missing_tables = sorted(REQUIRED_TABLES - exempt_tables - existing_tables)
-    if missing_tables:
-        errors.append(f"Missing required tables: {', '.join(missing_tables)}")
-
-    for table_name, req_cols in sorted(REQUIRED_COLUMNS.items()):
-        if table_name not in existing_tables:
+    for diff in _flatten_diffs(compare_metadata(ctx, _baseline_metadata())):
+        if _is_ignored_baseline_diff(diff):
             continue
-        existing_cols = {col["name"] for col in inspector.get_columns(table_name)}
-        missing_cols = sorted(req_cols - existing_cols)
-        if missing_cols:
-            errors.append(
-                f"Table '{table_name}' is missing required columns: {', '.join(missing_cols)}"
-            )
-
+        errors.append(_describe_diff(diff))
     return errors
-
-
-def _column_affinity(type_name: str) -> str:
-    upper = (type_name or "").upper()
-    if "JSON" in upper:
-        return "json"
-    if "UUID" in upper or "GUID" in upper:
-        return "uuid"
-    if "DATETIME" in upper or "TIMESTAMP" in upper:
-        return "datetime"
-    if "DATE" in upper:
-        return "date"
-    if "BOOL" in upper:
-        return "boolean"
-    if "INT" in upper:
-        return "integer"
-    if upper.startswith("FLOAT") or "REAL" in upper or "DOUBLE" in upper or "NUMERIC" in upper or "DECIMAL" in upper:
-        return "number"
-    if "TEXT" in upper or "CHAR" in upper or "CLOB" in upper or "STRING" in upper:
-        return "string"
-    if "BYTEA" in upper or "BLOB" in upper or "BINARY" in upper:
-        return "binary"
-    return upper.lower()
 
 
 def _normalize_default(value: Any) -> str | None:
@@ -431,20 +480,37 @@ def _unique_specs(bind: Engine | Connection, table: str) -> set[tuple[str, ...]]
 
 
 def verify_narrow_legacy_schema(bind: Engine | Connection) -> list[str]:
-    """Deep validation for the narrow legacy conversion path.
+    """Conversion-precondition check for the narrow legacy conversion path.
 
-    Beyond table names and key column names, verifies every structure the
-    conversion touches: ``sync_checkpoints.cursor`` existence and JSON type,
-    the full ``folder_patrol_status`` column definitions (type, nullability,
-    default) when the table already exists, the related primary-key, foreign-
-    key and unique constraints compared by semantics (constraint names and
-    default-expression spellings are ignored), and a read-only data check over
-    the cursor column. Returns error strings; empty means convertible.
+    This deliberately does NOT re-verify the whole schema: full-baseline
+    equivalence is enforced by :func:`verify_baseline_schema` after the
+    conversion, inside the same transaction (see
+    :func:`apply_narrow_legacy_conversion`). What remains here is only what
+    the conversion itself relies on:
+
+    - every baseline table other than ``folder_patrol_status`` already
+      exists (the conversion creates only that one table, so anything else
+      missing can never be repaired by converting);
+    - ``sync_checkpoints`` has the composite primary key, the CASCADE
+      foreign keys and a JSON cursor column the patrol migration reads and
+      rewrites, and every cursor row is a readable JSON object;
+    - ``folders`` / ``accounts`` have the primary keys (and ``folders`` the
+      unique constraint) the conversion joins through;
+    - an already-existing ``folder_patrol_status`` matches the exact
+      PostgreSQL column definitions (type, nullability, default) of the
+      table the conversion would have created, with constraint semantics
+      compared by meaning (names and default spellings ignored).
+
+    Returns error strings; empty means the preconditions hold.
     """
-    errors = verify_database_schema(bind, exempt_tables=frozenset({"folder_patrol_status"}))
-
     inspector = inspect(bind)
     existing = set(inspector.get_table_names())
+
+    errors: list[str] = []
+
+    missing_tables = sorted((REQUIRED_TABLES - {"folder_patrol_status"}) - existing)
+    if missing_tables:
+        errors.append(f"Missing required tables: {', '.join(missing_tables)}")
 
     if "sync_checkpoints" in existing:
         try:
@@ -453,7 +519,7 @@ def verify_narrow_legacy_schema(bind: Engine | Connection) -> list[str]:
             errors.append(f"Table 'sync_checkpoints' columns are not introspectable: {exc}")
             cols = {}
         cursor = cols.get("cursor")
-        if cursor is not None and _column_affinity(str(cursor.get("type"))) != "json":
+        if cursor is not None and not _is_json_column_type(cursor.get("type")):
             errors.append(
                 "Table 'sync_checkpoints' column 'cursor' has type "
                 f"'{cursor.get('type')}', expected a JSON/JSONB column: the patrol "
@@ -515,17 +581,22 @@ def verify_narrow_legacy_schema(bind: Engine | Connection) -> list[str]:
         except Exception as exc:
             errors.append(f"Table 'folder_patrol_status' columns are not introspectable: {exc}")
             patrol_cols = {}
-        for name, (affinity, nullable, default) in sorted(_PATROL_EXPECTED_COLUMNS.items()):
+        missing_cols = sorted(set(_PATROL_EXPECTED_COLUMNS) - set(patrol_cols))
+        if missing_cols:
+            errors.append(
+                "Table 'folder_patrol_status' is missing required columns: "
+                f"{', '.join(missing_cols)}."
+            )
+        for name, (type_ok, expected_type, nullable, default) in sorted(
+            _PATROL_EXPECTED_COLUMNS.items()
+        ):
             col = patrol_cols.get(name)
             if col is None:
-                errors.append(
-                    f"Table 'folder_patrol_status' is missing required column '{name}'."
-                )
                 continue
-            if _column_affinity(str(col.get("type"))) != affinity:
+            if not type_ok(col.get("type")):
                 errors.append(
                     f"Table 'folder_patrol_status' column '{name}' has type "
-                    f"'{col.get('type')}', expected {affinity}."
+                    f"'{col.get('type')}', expected {expected_type}."
                 )
             if bool(col.get("nullable", True)) != nullable:
                 errors.append(
@@ -802,6 +873,13 @@ def apply_narrow_legacy_conversion(database_url: str) -> str:
                 )
             ensure_folder_patrol_status_table(conn)
             migrate_patrol_status_data(conn)
+            errors = verify_baseline_schema(conn)
+            if errors:
+                detail = "\n  - ".join(errors)
+                raise SchemaValidationError(
+                    "Post-conversion schema does not match the unified baseline; "
+                    "rolling back without changes:\n  - " + detail
+                )
             stamp_unified_baseline(conn)
             return "converted"
     finally:
@@ -1024,7 +1102,7 @@ def run_migration(
         if is_legacy:
             errors = verify_narrow_legacy_schema(conn)
         else:
-            errors = verify_database_schema(conn)
+            errors = verify_baseline_schema(conn)
 
         if errors:
             detail = "\n  - ".join(errors)

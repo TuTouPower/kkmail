@@ -7,7 +7,7 @@ creates a unique schema whose search_path is pinned through the connection URL
 opens on its own lands in that schema and the shared at-head public schema is
 never touched. The 0030 fixture DDL below is a frozen literal transcribed from
 the historical migrations (20261020_0002 base plus the incremental adds through
-20261031_0030); it is deliberately NOT generated from ``REQUIRED_COLUMNS`` so
+20261031_0030); it is deliberately NOT generated from the ORM metadata so
 the tests cannot pass trivially.
 """
 

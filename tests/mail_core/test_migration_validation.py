@@ -59,7 +59,7 @@ from mail_core.db.baseline import (
     migrate_patrol_status_data,
     run_migration,
     stamp_unified_baseline,
-    verify_database_schema,
+    verify_baseline_schema,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -407,7 +407,7 @@ def test_offline_migration_tool_verifies_and_stamps_live_db():
     """Verify that migrate_to_unified_baseline tool accepts the live database."""
     engine = get_engine()
     with engine.connect() as conn:
-        errors = verify_database_schema(conn)
+        errors = verify_baseline_schema(conn)
         assert errors == []
 
         stamp_unified_baseline(conn, dry_run=False)
@@ -575,10 +575,12 @@ def test_patrol_status_migration_executes_on_real_postgres():
 # Frozen literal: the 0030-era schema, transcribed from the deleted
 # incremental migrations (same frozen text as
 # tests/mail_core/test_startup_migrations.py::_DDL_0030_TABLES, duplicated
-# here so each suite stays independent). Never generated from
-# REQUIRED_COLUMNS.
+# here so each suite stays independent). Never generated from the ORM
+# metadata. (A16 correction: account_groups.name is NOT NULL, per historical
+# migration 20261021_0005 and the ORM metadata; an earlier transcription here
+# dropped it, which the post-conversion full comparison now rejects.)
 _PG_0030_DDL: tuple[str, ...] = (
-    "CREATE TABLE account_groups (id UUID NOT NULL, name VARCHAR(128), color VARCHAR(32), sort_order INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_account_groups PRIMARY KEY (id), CONSTRAINT uq_account_groups_name UNIQUE (name))",
+    "CREATE TABLE account_groups (id UUID NOT NULL, name VARCHAR(128) NOT NULL, color VARCHAR(32), sort_order INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_account_groups PRIMARY KEY (id), CONSTRAINT uq_account_groups_name UNIQUE (name))",
     "CREATE TABLE credential_secrets (ref TEXT NOT NULL, key_version INTEGER NOT NULL, nonce BYTEA NOT NULL, ciphertext BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_credential_secrets PRIMARY KEY (ref))",
     "CREATE TABLE app_settings (key VARCHAR(128) NOT NULL, value TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_app_settings PRIMARY KEY (key))",
     "CREATE TABLE auth_credentials (id VARCHAR(64) NOT NULL, login_password_hash VARCHAR(255), session_epoch INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_auth_credentials PRIMARY KEY (id))",
