@@ -145,9 +145,9 @@ SAFE_TRAILING_PUNCT = "`\"'.,;:!?)]}>"
 # Template / env references: whole-value templates or named API references;
 # never a contains-character exemption.
 SAFE_REFERENCE_RE = re.compile(
-    r"\A\$\{[^}]*\}"                  # ${ENV_VAR}
-    r"|\A\$\([^)]*\)"                # $(cmd)
-    r"|\A\{\{[^}]*\}\}"              # {{ template }}
+    r"\A\$\{[^}]*\}\Z"               # ${ENV_VAR}
+    r"|\A\$\([^)]*\)\Z"              # $(cmd)
+    r"|\A\{\{[^}]*\}\}\Z"            # {{ template }}
     r"|\A<[^<>]+>\Z"                 # <placeholder>
     r"|\bos\.environ\b"              # os.environ[...] / os.environ.get(...)
     r"|\bos\.getenv\s*\("            # os.getenv(...)
@@ -156,12 +156,13 @@ SAFE_REFERENCE_RE = re.compile(
     r"|\bstore\.get_secret\s*\("     # store.get_secret(...)
 )
 
-# Code-expression shape: value starts with a structural opener, or the WHOLE
-# value is a function call. Anchored at both ends so a word containing parens
-# is not mistaken for a call.
+# Code-expression shape: the WHOLE value is a function call. Anchored at both
+# ends so a word containing parens is not mistaken for a call. (A4: the former
+# "starts with a structural opener" branch is deleted -- a value that merely
+# begins with one of ``{($<`` is not thereby a template or code expression;
+# legitimate template shapes are covered by SAFE_REFERENCE_RE above.)
 CODE_EXPRESSION_RE = re.compile(
-    r"\A[{($<]"
-    r"|\A[A-Za-z_][A-Za-z0-9_.]*\([^)]*\)?\Z"
+    r"\A[A-Za-z_][A-Za-z0-9_.]*\([^)]*\)?\Z"
 )
 
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")

@@ -638,3 +638,17 @@ def test_prose_assignments_not_flagged_via_cli(tmp_path):
     proc = run_checker(str(doc), "--check")
     assert proc.returncode == 0, proc.stderr
     assert "PASSED" in proc.stdout
+
+
+# --- Adoption A4: opener-prefixed values are no longer a blanket exemption ---
+
+
+def test_a4_opener_prefixed_values_denied(monkeypatch):
+    """A4: a value merely starting with ``$``/``(``/``{``/``<`` is denied;
+    template references must match the whole value (``\\Z`` anchored)."""
+    module = _load_module(monkeypatch)
+    for value in ("$uperSecret99", "(hiddenpass1)", "${X}tail"):
+        assert module.is_safe_credential(value) is False, value
+        assert module.is_safe_credential(value, key="password") is False, value
+    for value in ("${X}", "$(cmd)", "{{ t }}"):
+        assert module.is_safe_credential(value) is True, value
