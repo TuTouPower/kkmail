@@ -692,3 +692,17 @@ def test_a17_call_and_angle_shapes_denied(monkeypatch):
         assert module.is_safe_credential(value, key="password") is False, value
     for value in ("<your-token>", "<password>", "<redacted>"):
         assert module.is_safe_credential(value) is True, value
+
+
+# --- Adoption A18: non-ASCII exemption narrowed to "no ASCII alphanumerics" -
+
+
+def test_a18_mixed_ascii_nonascii_denied(monkeypatch):
+    """A18: values mixing ASCII letters/digits with non-ASCII characters are
+    denied; only values with no ASCII alphanumerics at all count as prose."""
+    module = _load_module(monkeypatch)
+    for value in ("pässwort1", "密码123"):
+        assert module.is_safe_credential(value) is False, value
+        assert module.is_safe_credential(value, key="password") is False, value
+    for value in ("见上文", "（略）"):
+        assert module.is_safe_credential(value) is True, value

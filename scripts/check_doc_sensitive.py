@@ -257,8 +257,11 @@ def is_safe_credential(value: str, *, key: str | None = None) -> bool:
     v = value.strip()
     if not v:
         return True
-    # Non-ASCII prose (e.g. Chinese documentation) stays safe.
-    if not v.isascii():
+    # Prose values with no ASCII letters/digits at all (e.g. pure Chinese
+    # documentation such as 见上文 / （略）) stay safe. Any mix of ASCII
+    # alphanumerics with non-ASCII characters (A18: formerly waived wholesale
+    # by a bare ``not v.isascii()`` check) is denied like any other value.
+    if not any(c.isascii() and c.isalnum() for c in v):
         return True
     lower = v.lower()
     # Explicit placeholders / booleans / None, incl. safe words with trailing punctuation.
