@@ -304,7 +304,7 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 - **真实本地 Docker 运行环境接入**：本地开发与测试环境已接入 OrbStack (arm64) 运行的标准 Docker 基础设施，专用测试服务容器已真实就绪运行（PostgreSQL 测试实例端口 `15433`，Dovecot IMAP 协议测试服务端口 `1143`），由官方测试调度门禁 `scripts/run-mail-core-tests.sh` 统一调度与管理，测试库生命周期严格隔离且退出自动清理；
 - **权限与环境安全**：避免在远端依赖不透明环境，所有测试数据库与凭据均在本地受控环境中运行。
 
-### 3. 当前验证基线（最近证据：2026-10-27，基线 HEAD `11bfa52a`）
+### 3. 当前验证基线（最近证据：2026-11-10，基线 HEAD `f3c339c2`）
 
 本表集中记录近期完整门禁的结果。各行注明结果日期和证据；task 专项历史结果仍以对应归档 task 为准。此前 2026-10-24/25 的基线（后端完整 PostgreSQL 套件 569 passed 等）已被下表取代，不再用作当前基线；其原始记录见各 t055 归档文件与 [handoff](../handoff.md)。
 
@@ -314,6 +314,13 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 |2026-10-27|前端全量测试（vitest）|46 个测试文件、448 passed，0 failed|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
 |2026-10-27|TypeScript（`tsc -b`）|通过（无诊断输出）|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
 |2026-10-27|后端完整 PostgreSQL 套件|真实环境接入：本地 Docker (OrbStack) PostgreSQL/IMAP 测试环境已就绪运行，由门禁脚本动态分配一次性测试库执行套件|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
+|2026-11-10|模板契约|257 passed，1 skipped（云端机器复跑，与 handoff 声称一致）|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
+|2026-11-10|敏感扫描（已跟踪树）|583 个文件，0 违规；主克隆工作区未跟踪残留目录另有 7 处命中（未跟踪、清理未授权），已跟踪树干净|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
+|2026-11-10|前端全量（vitest + tsc + build + lint）|54 个文件、583 passed，0 failed；`tsc -b` 通过；build 通过；lint 0 warnings|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
+|2026-11-10|黑盒 E2E（stubApi）|21 passed|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
+|2026-11-10|桌面单测|12 个文件中 10 个通过，oauth 按设计 skip、postgresManager 真实启停 skip（无 PG 二进制）；`clipboard.test.js` 因本机克隆未装 electron 依赖无法运行（环境缺口）|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
+|2026-11-10|后端 unit 全量|1632 passed，8 failed，534 skipped；8 个失败逐项归属已定：3 个与采纳前基线共同既存、1 个未跟踪残留所致、4 个环境/套件上下文敏感（明细见证据）；基线 `c5cb8905` 同口径为 1731 passed，6 failed，397 skipped|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
+|2026-11-10|后端完整 PostgreSQL 套件|**未在本机复跑**（云端机器无 Docker/PG）：handoff 记录的用户侧 OrbStack 实测 2142 passed、2 skipped 尚无本机证据，须在 OrbStack 机器以基线 `f3c339c2` 复跑后回填本行|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
 
 task archive 中记录的其他数字均为各 task 当时的历史快照，不应用作当前基线。
 
