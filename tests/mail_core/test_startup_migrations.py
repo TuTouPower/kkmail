@@ -1,11 +1,14 @@
 """Startup migration orchestration tests (single guarded entry).
 
 Covers ``mail_core.__main__.run_migrations`` and the ``--migrate-only`` /
-``--check-migrations`` flags against file-backed SQLite databases. The 0030
-fixture DDL below is a frozen literal transcribed from the historical
-migrations (20261020_0002 base plus the incremental adds through
-20261031_0030); it is deliberately NOT generated from
-``REQUIRED_COLUMNS`` so the tests cannot pass trivially.
+``--check-migrations`` flags against isolated PostgreSQL schemas. Each case
+creates a unique schema whose search_path is pinned through the connection URL
+(``options=-csearch_path=...``), so every connection the production planner
+opens on its own lands in that schema and the shared at-head public schema is
+never touched. The 0030 fixture DDL below is a frozen literal transcribed from
+the historical migrations (20261020_0002 base plus the incremental adds through
+20261031_0030); it is deliberately NOT generated from ``REQUIRED_COLUMNS`` so
+the tests cannot pass trivially.
 """
 
 from __future__ import annotations
@@ -14,11 +17,13 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
 
 from mail_core import __main__ as main_module
 from mail_core.db import baseline
@@ -27,18 +32,21 @@ from mail_core.db.baseline import SchemaValidationError
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = str(REPO_ROOT / "src")
 
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
+
 # Frozen literal: the 0030-era schema (unified baseline minus the
 # folder_patrol_status table added by 0031), transcribed from the deleted
-# incremental migrations. PG-style type names are intentional: SQLite stores
-# them as declared and SQLAlchemy reports them back, so the same literal
-# exercises the semantic type/nullable/default/constraint comparison on both
-# backends.
+# incremental migrations. BOOLEAN defaults use SQL true/false so the literal is
+# valid PostgreSQL DDL (SQLite tolerated 1/0, PostgreSQL does not).
 _DDL_0030_TABLES: tuple[str, ...] = (
     "CREATE TABLE account_groups (id UUID NOT NULL, name VARCHAR(128) NOT NULL, color VARCHAR(32), sort_order INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_account_groups PRIMARY KEY (id), CONSTRAINT uq_account_groups_name UNIQUE (name))",
     "CREATE TABLE credential_secrets (ref TEXT NOT NULL, key_version INTEGER NOT NULL, nonce BYTEA NOT NULL, ciphertext BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_credential_secrets PRIMARY KEY (ref))",
     "CREATE TABLE app_settings (key VARCHAR(128) NOT NULL, value TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_app_settings PRIMARY KEY (key))",
     "CREATE TABLE auth_credentials (id VARCHAR(64) NOT NULL, login_password_hash VARCHAR(255), session_epoch INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_auth_credentials PRIMARY KEY (id))",
-    "CREATE TABLE accounts (id UUID NOT NULL, email VARCHAR(320) NOT NULL, provider VARCHAR(32) NOT NULL, display_name VARCHAR(255), credential_ref VARCHAR(512), group_id UUID, master_order INTEGER, group_order INTEGER, sync_enabled BOOLEAN NOT NULL DEFAULT 1, sync_status VARCHAR(32) NOT NULL DEFAULT 'idle', config JSONB NOT NULL DEFAULT '{}', recipient_addresses JSONB NOT NULL DEFAULT '[]', created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_accounts PRIMARY KEY (id), CONSTRAINT uq_accounts_email UNIQUE (email), CONSTRAINT fk_accounts_group_id FOREIGN KEY (group_id) REFERENCES account_groups (id) ON DELETE SET NULL)",
+    "CREATE TABLE accounts (id UUID NOT NULL, email VARCHAR(320) NOT NULL, provider VARCHAR(32) NOT NULL, display_name VARCHAR(255), credential_ref VARCHAR(512), group_id UUID, master_order INTEGER, group_order INTEGER, sync_enabled BOOLEAN NOT NULL DEFAULT true, sync_status VARCHAR(32) NOT NULL DEFAULT 'idle', config JSONB NOT NULL DEFAULT '{}', recipient_addresses JSONB NOT NULL DEFAULT '[]', created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_accounts PRIMARY KEY (id), CONSTRAINT uq_accounts_email UNIQUE (email), CONSTRAINT fk_accounts_group_id FOREIGN KEY (group_id) REFERENCES account_groups (id) ON DELETE SET NULL)",
     "CREATE TABLE account_sync_leases (account_id UUID NOT NULL, owner_id VARCHAR(128) NOT NULL, lease_expires_at TIMESTAMPTZ NOT NULL, heartbeat_at TIMESTAMPTZ NOT NULL, fencing_token BIGINT NOT NULL DEFAULT 0, CONSTRAINT pk_account_sync_leases PRIMARY KEY (account_id), CONSTRAINT fk_leases_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
     "CREATE TABLE account_sync_activity (account_id UUID NOT NULL, last_foreground_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL, CONSTRAINT pk_account_sync_activity PRIMARY KEY (account_id), CONSTRAINT fk_activity_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
     "CREATE TABLE folders (id UUID NOT NULL, account_id UUID NOT NULL, remote_id VARCHAR(512) NOT NULL, name VARCHAR(512) NOT NULL, role VARCHAR(32) NOT NULL DEFAULT 'other', parent_remote_id VARCHAR(512), sync_status VARCHAR(32) NOT NULL DEFAULT 'idle', created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_folders PRIMARY KEY (id), CONSTRAINT uq_folders_account_remote UNIQUE (account_id, remote_id), CONSTRAINT fk_folders_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
@@ -48,9 +56,9 @@ _DDL_0030_TABLES: tuple[str, ...] = (
     "CREATE TABLE message_bodies (message_id UUID NOT NULL, text_plain TEXT, text_html TEXT, parse_error TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_message_bodies PRIMARY KEY (message_id), CONSTRAINT fk_bodies_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE)",
     "CREATE TABLE message_blobs (id UUID NOT NULL, content_sha256 VARCHAR(64) NOT NULL, key_version INTEGER NOT NULL DEFAULT 1, size_bytes BIGINT NOT NULL, storage_path VARCHAR(1024) NOT NULL, ref_count INTEGER NOT NULL DEFAULT 1, gc_eligible_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_message_blobs PRIMARY KEY (id), CONSTRAINT uq_message_blobs_hash_key UNIQUE (content_sha256, key_version), CONSTRAINT ck_message_blobs_ref_count_nonnegative CHECK (ref_count >= 0))",
     "CREATE TABLE message_blob_links (message_id UUID NOT NULL, blob_id UUID NOT NULL, CONSTRAINT pk_message_blob_links PRIMARY KEY (message_id), CONSTRAINT fk_links_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE, CONSTRAINT fk_links_blob FOREIGN KEY (blob_id) REFERENCES message_blobs (id) ON DELETE RESTRICT)",
-    "CREATE TABLE attachments (id UUID NOT NULL, message_id UUID NOT NULL, blob_id UUID, part_id VARCHAR(64), filename VARCHAR(512) NOT NULL, content_type VARCHAR(255), size_bytes BIGINT, content_id VARCHAR(255), is_inline BOOLEAN NOT NULL DEFAULT 0, CONSTRAINT pk_attachments PRIMARY KEY (id), CONSTRAINT uq_attachments_message_part UNIQUE (message_id, part_id), CONSTRAINT fk_attachments_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE, CONSTRAINT fk_attachments_blob FOREIGN KEY (blob_id) REFERENCES message_blobs (id) ON DELETE SET NULL)",
+    "CREATE TABLE attachments (id UUID NOT NULL, message_id UUID NOT NULL, blob_id UUID, part_id VARCHAR(64), filename VARCHAR(512) NOT NULL, content_type VARCHAR(255), size_bytes BIGINT, content_id VARCHAR(255), is_inline BOOLEAN NOT NULL DEFAULT false, CONSTRAINT pk_attachments PRIMARY KEY (id), CONSTRAINT uq_attachments_message_part UNIQUE (message_id, part_id), CONSTRAINT fk_attachments_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE, CONSTRAINT fk_attachments_blob FOREIGN KEY (blob_id) REFERENCES message_blobs (id) ON DELETE SET NULL)",
     "CREATE TABLE thread_messages (id UUID NOT NULL, thread_id UUID NOT NULL, message_id UUID NOT NULL, position INTEGER NOT NULL DEFAULT 0, CONSTRAINT pk_thread_messages PRIMARY KEY (id), CONSTRAINT uq_thread_messages UNIQUE (thread_id, message_id), CONSTRAINT fk_tm_thread FOREIGN KEY (thread_id) REFERENCES threads (id) ON DELETE CASCADE, CONSTRAINT fk_tm_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE)",
-    "CREATE TABLE sync_checkpoints (account_id UUID NOT NULL, folder_id UUID NOT NULL, cursor JSONB NOT NULL DEFAULT '{}', uidvalidity BIGINT, modseq BIGINT, history_id VARCHAR(128), delta_link TEXT, full_scan_complete BOOLEAN NOT NULL DEFAULT 0, scan_generation UUID, fencing_token BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_sync_checkpoints PRIMARY KEY (account_id, folder_id), CONSTRAINT fk_checkpoints_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE, CONSTRAINT fk_checkpoints_folder FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE)",
+    "CREATE TABLE sync_checkpoints (account_id UUID NOT NULL, folder_id UUID NOT NULL, cursor JSONB NOT NULL DEFAULT '{}', uidvalidity BIGINT, modseq BIGINT, history_id VARCHAR(128), delta_link TEXT, full_scan_complete BOOLEAN NOT NULL DEFAULT false, scan_generation UUID, fencing_token BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_sync_checkpoints PRIMARY KEY (account_id, folder_id), CONSTRAINT fk_checkpoints_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE, CONSTRAINT fk_checkpoints_folder FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE)",
     "CREATE TABLE sync_runs (id UUID NOT NULL, account_id UUID NOT NULL, folder_id UUID, phase VARCHAR(64) NOT NULL, status VARCHAR(32) NOT NULL, stats JSONB NOT NULL DEFAULT '{}', error TEXT, fencing_token BIGINT, started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMPTZ, CONSTRAINT pk_sync_runs PRIMARY KEY (id), CONSTRAINT fk_runs_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE, CONSTRAINT fk_runs_folder FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE SET NULL)",
     "CREATE TABLE remote_operations (id UUID NOT NULL, account_id UUID NOT NULL, entity_key VARCHAR(512) NOT NULL, op_type VARCHAR(64) NOT NULL, desired_state JSONB NOT NULL DEFAULT '{}', status VARCHAR(32) NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, next_attempt_at TIMESTAMPTZ, idempotency_key VARCHAR(128), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_remote_operations PRIMARY KEY (id), CONSTRAINT uq_remote_operations_idempotency UNIQUE (idempotency_key), CONSTRAINT fk_remote_ops_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
     "CREATE TABLE folder_stats (folder_id UUID NOT NULL, total_count INTEGER NOT NULL DEFAULT 0, unread_count INTEGER, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_folder_stats PRIMARY KEY (folder_id), CONSTRAINT fk_stats_folder FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE)",
@@ -78,8 +86,33 @@ _LEGACY_CURSOR = {
 }
 
 
-def _make_0030_db(path: Path, *, revision: str = "20261031_0030") -> str:
-    db_url = f"sqlite:///{path}"
+@pytest.fixture
+def pg_schema():
+    """Yield a factory returning (schema, schema-scoped URL); drop every schema at teardown."""
+    base_url = os.environ["MAIL_CORE_DATABASE_URL"]
+    admin = create_engine(base_url)
+    created: list[str] = []
+
+    def _new() -> tuple[str, str]:
+        schema = "startup_" + uuid.uuid4().hex
+        with admin.begin() as conn:
+            conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+        url = make_url(base_url).update_query_dict(
+            {"options": f"-csearch_path={schema}"}
+        ).render_as_string(hide_password=False)
+        created.append(schema)
+        return schema, url
+
+    try:
+        yield _new
+    finally:
+        with admin.begin() as conn:
+            for schema in created:
+                conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()
+
+
+def _make_0030_db(db_url: str, *, revision: str = "20261031_0030") -> str:
     engine = create_engine(db_url)
     try:
         with engine.begin() as conn:
@@ -116,36 +149,53 @@ def _make_0030_db(path: Path, *, revision: str = "20261031_0030") -> str:
     return db_url
 
 
+def _as_json_text(value):
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    return value
+
+
 def _snapshot(db_url: str) -> dict:
+    """Read the schema through a PG inspector and normalize native types back to text.
+
+    PostgreSQL returns UUID columns as uuid.UUID and JSONB columns as dict/list,
+    whereas the frozen fixture assertions compare plain strings. Normalizing here
+    keeps every assertion byte-for-byte identical to the retired SQLite fixture.
+    """
     engine = create_engine(db_url)
     try:
         with engine.connect() as conn:
-            tables = sorted(inspect(conn).get_table_names())
+            insp = inspect(conn)
+            tables = sorted(insp.get_table_names())
             revs: list[str] = []
             if "alembic_version" in tables:
                 revs = sorted(
                     row[0] for row in conn.execute(text("SELECT version_num FROM alembic_version")).fetchall()
                 )
-            patrol: list[tuple] = []
-            if "folder_patrol_status" in tables:
-                try:
-                    patrol = [
-                        tuple(row)
-                        for row in conn.execute(
-                            text(
-                                "SELECT folder_id, last_status, last_probe_failures "
-                                "FROM folder_patrol_status ORDER BY folder_id"
-                            )
-                        ).fetchall()
-                    ]
-                except Exception:
-                    patrol = [("<unreadable>",)]
             cursors: list[tuple] = []
             if "sync_checkpoints" in tables:
                 cursors = sorted(
-                    (row[0], row[1])
+                    (str(row[0]), _as_json_text(row[1]))
                     for row in conn.execute(text("SELECT folder_id, cursor FROM sync_checkpoints")).fetchall()
                 )
+            patrol: list[tuple] = []
+            if "folder_patrol_status" in tables:
+                try:
+                    cols = {c["name"] for c in insp.get_columns("folder_patrol_status")}
+                    if {"folder_id", "last_status", "last_probe_failures"} <= cols:
+                        patrol = [
+                            (str(row[0]), _as_json_text(row[1]), row[2])
+                            for row in conn.execute(
+                                text(
+                                    "SELECT folder_id, last_status, last_probe_failures "
+                                    "FROM folder_patrol_status ORDER BY folder_id"
+                                )
+                            ).fetchall()
+                        ]
+                    else:
+                        patrol = [("<unreadable>",)]
+                except Exception:
+                    patrol = [("<unreadable>",)]
             return {"tables": tables, "revs": revs, "patrol": patrol, "cursors": cursors}
     finally:
         engine.dispose()
@@ -157,9 +207,10 @@ def _mock_upgrade(monkeypatch) -> list:
     return calls
 
 
-def test_t1_narrow_legacy_converts_inline(tmp_path, monkeypatch):
+def test_t1_narrow_legacy_converts_inline(pg_schema, monkeypatch):
     """T1: narrow legacy (0030) converts inline through the startup path."""
-    db_url = _make_0030_db(tmp_path / "narrow.db")
+    _, db_url = pg_schema()
+    _make_0030_db(db_url)
     upgrades = _mock_upgrade(monkeypatch)
     monkeypatch.setenv("MAIL_CORE_DATABASE_URL", db_url)
 
@@ -177,18 +228,20 @@ def test_t1_narrow_legacy_converts_inline(tmp_path, monkeypatch):
     assert state["cursors"] == [(_FOLDER_ID, json.dumps({"delta_token": "token-xyz"}))]
 
 
-def test_t2_unsupported_legacy_rejected_with_zero_changes(tmp_path, monkeypatch):
-    """T2: legacy revision with missing tables is refused; tables/data/revision untouched."""
-    db_file = tmp_path / "unsupported.db"
-    db_url = f"sqlite:///{db_file}"
+def test_t2_unsupported_legacy_rejected_with_zero_changes(pg_schema, monkeypatch):
+    """T2: legacy revision with missing tables is refused; tables/data/revision untouched.
+
+    The sync_checkpoints cursor is JSONB (not TEXT as in the retired SQLite
+    fixture): on PostgreSQL jsonb_typeof(text) aborts the read-only verification
+    transaction before the refusal message can be produced.
+    """
+    _, db_url = pg_schema()
     engine = create_engine(db_url)
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
         conn.execute(text("INSERT INTO alembic_version VALUES ('20261027_0029')"))
         conn.execute(text("CREATE TABLE folders (id VARCHAR(64) PRIMARY KEY)"))
-        conn.execute(
-            text("CREATE TABLE sync_checkpoints (folder_id VARCHAR(64) PRIMARY KEY, cursor TEXT)")
-        )
+        conn.execute(text("CREATE TABLE sync_checkpoints (folder_id VARCHAR(64) PRIMARY KEY, cursor JSONB)"))
         conn.execute(
             text("INSERT INTO sync_checkpoints (folder_id, cursor) VALUES ('f-1', '{\"a\": 1}')")
         )
@@ -209,10 +262,9 @@ def test_t2_unsupported_legacy_rejected_with_zero_changes(tmp_path, monkeypatch)
     assert upgrades == []
 
 
-def test_t3_dry_run_and_check_reject_without_writes(tmp_path, monkeypatch):
+def test_t3_dry_run_and_check_reject_without_writes(pg_schema, monkeypatch):
     """T3: dry-run and --check paths refuse unknown revisions and incomplete structure; zero writes."""
-    unknown_file = tmp_path / "unknown.db"
-    unknown_url = f"sqlite:///{unknown_file}"
+    _, unknown_url = pg_schema()
     engine = create_engine(unknown_url)
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
@@ -229,7 +281,8 @@ def test_t3_dry_run_and_check_reject_without_writes(tmp_path, monkeypatch):
     assert "not modified" in str(excinfo.value)
     assert _snapshot(unknown_url) == before_unknown
 
-    incomplete_url = _make_0030_db(tmp_path / "incomplete.db")
+    _, incomplete_url = pg_schema()
+    _make_0030_db(incomplete_url)
     engine = create_engine(incomplete_url)
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE folder_patrol_status (folder_id VARCHAR(64) PRIMARY KEY)"))
@@ -240,16 +293,16 @@ def test_t3_dry_run_and_check_reject_without_writes(tmp_path, monkeypatch):
     assert _snapshot(incomplete_url) == before_incomplete
 
 
-def test_t4_failed_conversion_rolls_back_and_rerun_is_idempotent(tmp_path, monkeypatch):
-    """T4: a mid-conversion failure rolls back data and revision; success then re-run is a no-op.
+def test_t4_failed_conversion_rolls_back_and_rerun_is_idempotent(pg_schema, monkeypatch):
+    """T4: a mid-conversion failure rolls back DDL/data/revision; success then re-run is a no-op.
 
-    SQLite (test-only backend) autocommits DDL outside the implicit DML
-    transaction, so the created-but-never-committed patrol table shell can
-    survive while every row change is undone. Full DDL rollback is a
-    PostgreSQL property and is proven against real PG in
-    tests/mail_core/test_migration_validation.py.
+    PostgreSQL rolls back the whole conversion transaction (including the
+    CREATE TABLE for folder_patrol_status), so the SQLite-only workaround that
+    manually dropped the surviving DDL shell is retired: nothing to clean up
+    before the successful re-run.
     """
-    db_url = _make_0030_db(tmp_path / "rollback.db")
+    _, db_url = pg_schema()
+    _make_0030_db(db_url)
     upgrades = _mock_upgrade(monkeypatch)
     monkeypatch.setenv("MAIL_CORE_DATABASE_URL", db_url)
     before = _snapshot(db_url)
@@ -269,13 +322,6 @@ def test_t4_failed_conversion_rolls_back_and_rerun_is_idempotent(tmp_path, monke
     assert after_failure["patrol"] == []
     assert upgrades == []
 
-    # On PostgreSQL the whole conversion transaction (including the CREATE
-    # TABLE) rolls back; emulate that here because SQLite autocommits DDL.
-    engine = create_engine(db_url)
-    with engine.begin() as conn:
-        conn.execute(text("DROP TABLE folder_patrol_status"))
-    engine.dispose()
-
     monkeypatch.setattr("mail_core.db.baseline.migrate_patrol_status_data", real_migrate)
     main_module.run_migrations()
     assert upgrades == ["head"]
@@ -287,17 +333,16 @@ def test_t4_failed_conversion_rolls_back_and_rerun_is_idempotent(tmp_path, monke
     assert _snapshot(db_url) == after_success
 
 
-def test_t5_empty_head_and_incremental_never_stamp(tmp_path, monkeypatch):
+def test_t5_empty_head_and_incremental_never_stamp(pg_schema, monkeypatch):
     """T5: empty DB initializes via upgrade; at-head/normal revisions never stamp; versioned-with-tables refused."""
-    empty_url = f"sqlite:///{tmp_path / 'empty.db'}"
+    _, empty_url = pg_schema()
     upgrades = _mock_upgrade(monkeypatch)
     monkeypatch.setenv("MAIL_CORE_DATABASE_URL", empty_url)
     main_module.run_migrations()
     assert upgrades == ["head"]
     assert _snapshot(empty_url)["tables"] == []
 
-    head_file = tmp_path / "head.db"
-    head_url = f"sqlite:///{head_file}"
+    _, head_url = pg_schema()
     engine = create_engine(head_url)
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
@@ -330,8 +375,7 @@ def test_t5_empty_head_and_incremental_never_stamp(tmp_path, monkeypatch):
     assert upgrades == ["head", "head", "head"]
     assert _snapshot(head_url) == before_head
 
-    orphans_file = tmp_path / "orphans.db"
-    orphans_url = f"sqlite:///{orphans_file}"
+    _, orphans_url = pg_schema()
     engine = create_engine(orphans_url)
     with engine.begin() as conn:
         conn.execute(text(_DDL_0030_TABLES[0]))
@@ -344,9 +388,9 @@ def test_t5_empty_head_and_incremental_never_stamp(tmp_path, monkeypatch):
     assert upgrades == ["head", "head", "head"]
 
 
-def test_t6_migrate_only_runs_without_server_or_worker(tmp_path, monkeypatch):
+def test_t6_migrate_only_runs_without_server_or_worker(monkeypatch):
     """T6: --migrate-only executes even with SKIP_MIGRATIONS=1 and never starts server/worker."""
-    db_url = f"sqlite:///{tmp_path / 'gate.db'}"
+    db_url = os.environ["MAIL_CORE_DATABASE_URL"]
     monkeypatch.delenv("MAIL_CORE_DATABASE_URL", raising=False)
     monkeypatch.delenv("MAIL_CORE_PORT", raising=False)
     monkeypatch.delenv("MAIL_CORE_HOST", raising=False)
@@ -398,16 +442,16 @@ def test_t6_migrate_only_and_check_are_mutually_exclusive():
     assert proc.returncode == 2
 
 
-def test_t7_check_migrations_exit_codes_and_zero_writes(tmp_path, monkeypatch):
+def test_t7_check_migrations_exit_codes_and_zero_writes(pg_schema, monkeypatch):
     """T7: --check-migrations reports pass/fail for the same fixtures with zero writes."""
-    good_url = _make_0030_db(tmp_path / "check-good.db")
+    _, good_url = pg_schema()
+    _make_0030_db(good_url)
     before_good = _snapshot(good_url)
     monkeypatch.setenv("MAIL_CORE_DATABASE_URL", good_url)
     assert main_module.main(["--check-migrations"]) == 0
     assert _snapshot(good_url) == before_good
 
-    bad_file = tmp_path / "check-bad.db"
-    bad_url = f"sqlite:///{bad_file}"
+    _, bad_url = pg_schema()
     engine = create_engine(bad_url)
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
@@ -420,10 +464,9 @@ def test_t7_check_migrations_exit_codes_and_zero_writes(tmp_path, monkeypatch):
     assert _snapshot(bad_url) == before_bad
 
 
-def test_t7_check_migrations_clean_subprocess_zero_writes(tmp_path):
+def test_t7_check_migrations_clean_subprocess_zero_writes(pg_schema):
     """T7: --check-migrations in a clean subprocess env (only DATABASE_URL + SKIP=1) exits 0 with zero writes."""
-    db_file = tmp_path / "clean.db"
-    db_url = f"sqlite:///{db_file}"
+    _, db_url = pg_schema()
     env = {
         "PATH": os.environ["PATH"],
         "PYTHONPATH": SRC_DIR,
@@ -448,9 +491,9 @@ def test_t7_check_migrations_clean_subprocess_zero_writes(tmp_path):
         engine.dispose()
 
 
-def test_both_entries_delegate_to_single_planner(tmp_path, monkeypatch):
+def test_both_entries_delegate_to_single_planner(pg_schema, monkeypatch):
     """Both entries classify through baseline.plan_migration, not their own judgement."""
-    empty_url = f"sqlite:///{tmp_path / 'delegate.db'}"
+    _, empty_url = pg_schema()
     calls: list[object] = []
     real_plan = baseline.plan_migration
 
