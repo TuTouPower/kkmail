@@ -18,7 +18,7 @@ project_configured
 
 ## verification_notes
 
-模板同步与日常快速门禁只覆盖模板契约、不依赖外部服务的构建/单测和浏览器冒烟：`test_cmd` 运行模板 contract、前端单测/类型检查/生产构建与桌面端单测；`blackbox_verify` 运行前端 stubApi 快速 E2E。后端完整 PostgreSQL 套件、真实 IMAP、全栈 E2E、桌面打包冒烟与性能基准依赖外部服务或长时运行，按下方「本地分层门禁与 CI 流水线映射」在 task/release 阶段单独执行。前端 `npm run lint` 与后端完整套件当前存在既存失败，未纳入同步门禁。
+模板同步与日常快速门禁只覆盖模板契约、不依赖外部服务的构建/单测和浏览器冒烟：`test_cmd` 运行模板 contract、前端单测/类型检查/生产构建与桌面端单测；`blackbox_verify` 运行前端 stubApi 快速 E2E。后端完整 PostgreSQL 套件、真实 IMAP、全栈 E2E、桌面打包冒烟与性能基准依赖外部服务或长时运行，按下方「本地分层门禁与 CI 流水线映射」在 task/release 阶段单独执行，未纳入同步门禁。历史记录中「前端 `npm run lint` 与后端完整套件存在既存失败」已过时：两者于 2026-11-10 全部修净并实测通过（前端 lint 零警告、后端全量 2142 passed），结果见 `docs/handoff.md` 最新节。
 
 ## gate_timeout_seconds
 

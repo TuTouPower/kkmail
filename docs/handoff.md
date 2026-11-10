@@ -2,12 +2,12 @@
 
 本文件只保留当前有效一节。过时段落由 `repo-hygiene` 迁入 `docs/archive/handoff.md`。
 
-## 2026-11-10T10:24:22+08:00 agent → developer
+## 2026-11-10T10:30:58+08:00 agent → developer
 
 - 当前焦点：落实 `docs/reviews/review_20261107_142548/adoption_decision.md` 的 A1–A22 采纳决策，完成本轮外部审阅意见整改，并把 A18 彻底清零。
 - branch：main
-- head_commit：048446c4（本节所述代码状态；交接文档提交另计）
-- 勘误：上上节标注 `2026-11-07T19:35:00+08:00`，却引用 11-09 05:52 才产生的 `707c49b2`；且把 A18 写成「彻底删除 SQLite 生产分支及测试手写 DDL」、把「未完成」写为「无」。上一节已更正时间与 head_commit 错配，本节把 A18 真正清零并撤下全部未完成项，不回改历史。
+- head_commit：c3c824f6（本节所述代码状态；交接文档提交另计）
+- 勘误：被本记录取代的原交接节标注 `2026-11-07T19:35:00+08:00`，却引用 11-09 05:52 才产生的 `707c49b2`，且把 A18 写成「彻底删除 SQLite 生产分支及测试手写 DDL」、把「未完成」写为「无」，三处均与仓库现状不符。本记录已据实更正时间与 head_commit 错配、把 A18 真正清零并撤下全部未完成项；不回改 Git 历史。
 - 已完成（A1–A22）：
     - A1: 补齐 `remote_writeback`、`worker/main` 与 `search/index` 缺失的 typing 导入；
     - A2: 彻底移除废弃的 Outbox v1 `fetch_since` 接口与旧调用，重建 v2 publication seq 回放测试；
@@ -36,12 +36,13 @@
     - A18 清零：25 个业务测试 + 3 个迁移/启动/部署测试全量迁真实 PG，补齐真实 schema 外键父行 seed；`baseline.py` 删净 SQLite 分支；`__main__.py` 统一分类后的 3 个死 helper 及过时测试删除；`test_auth_plan_a_db.py` 剩余 5 个 FakeSession 用例迁真实 PG。
     - A22：`is_safe_credential` 改 default-deny，删除「含 `.` `#` `/` `=`、空格或纯字母即判安全」及「含结构字符即整值 safe」反模式；`my.passw0rd`、`supersecret`、`correcthorsebatterystaple`、带逗号/括号/冒号形态与纯数字口令均检出。
     - A13：新增真实 PG 双进程撤销测试（B 未收 NOTIFY 仍拒绝旧会话、DB 故障 fail-closed、重复/乱序通知不影响 REST 判定），退役 FakeSession 旧测试并写明理由；记录上批「实现提交内就地改断言」的教训。
-    - A13 遗留回归修复：`test_microsoft_oauth.py` 17 个用例因 A13 fail-closed 与 `isolated_runtime` 每用例 TRUNCATE `auth_credentials` 而在全量套件失败，加 autouse fixture 用生产路径 seed 权威行。属本仓既存失败（`testing.md` 已声明后端完整套件存在既存失败），本轮一并修净。
+    - A13 遗留回归修复：`test_microsoft_oauth.py` 17 个用例因 A13 fail-closed 与 `isolated_runtime` 每用例 TRUNCATE `auth_credentials` 而在全量套件失败，加 autouse fixture 用生产路径 seed 权威行。属本仓历史既存失败，本轮一并修净；`testing.md` 中「后端完整套件存在既存失败」的过时声明已同步修正。
 - 验证：
     - 全量真实 PG 门禁：`scripts/run-mail-core-tests.sh run --no-cov` → **2142 passed, 2 skipped, 0 failed**（2 skip 为 `/dev/shm` 不可写与 Electron 集成模式未启用）。
     - 敏感文档扫描：`python3 scripts/check_doc_sensitive.py docs --check` 581 文件 0 违规；检测器单测 31 passed；模板契约 257 passed, 1 skipped。
     - 各阶段分批门禁：迁移/policy 99、竞态/outbox 56、sync/patrol 56、A13/双进程 105、合并态 137、microsoft_oauth 63+1 skip 全部 passed。
-    - 前端/桌面端/E2E 门禁本轮未改动相关代码，沿用上一节记录。
+    - 前端/桌面端/E2E 门禁本轮实测：`npm run lint`（oxlint 零警告）、`npm test`、`npx tsc -b`、`npm run build`（真实 dist 产物）全通过；桌面端 `npm test` 通过；前端 stubApi E2E 21 passed。
+    - 本轮所有门禁均为实测，未沿用历史记录。
 - 已核实（原「未完成」项全部结清，无遗留）：
     - `baseline.py` 已删除全部 SQLite 方言分支（`configure_read_only`、`ensure_folder_patrol_status_table`、`_migrate_patrol_status_data_generic`、`_check_cursor_data`、advisory lock 分支），非 PG 一律 `ValueError`。
     - `test_migrate_to_unified_baseline.py`、`test_startup_migrations.py`、`test_deploy_mail_core_gate.py` 全量 PG 化（逐用例 `CREATE SCHEMA` + `options=-csearch_path`，不触碰 public，测完 `DROP SCHEMA CASCADE`）。
