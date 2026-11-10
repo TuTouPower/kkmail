@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start a lightweight IMAP L2 fixture for mail-core tests.
-# Prefer docker compose service `imap` (Dovecot, profile=imap). Fallback: pymap.
+# Prefer docker compose service `imap` (Dovecot, test compose). Fallback: pymap.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -59,7 +59,7 @@ raise SystemExit(1)
 PY
 }
 
-if docker compose -p kkmail_test_pg -f config/test_pg_compose.yaml up -d imap; then
+if docker compose -p kkmail_test -f config/test_pg_compose.yaml up -d imap; then
   if wait_for_imap_ready; then
     echo "Dovecot IMAP via test compose on :$PORT"
     exit 0
@@ -67,13 +67,6 @@ if docker compose -p kkmail_test_pg -f config/test_pg_compose.yaml up -d imap; t
   exit 1
 fi
 
-if docker compose -f docker-compose.mail-core.yml --profile imap up -d imap; then
-  if wait_for_imap_ready; then
-    echo "Dovecot IMAP via compose (profile=imap) on :$PORT"
-    exit 0
-  fi
-  exit 1
-fi
 if [[ -n "$PY" ]] && "$PY" -c "import pymap" 2>/dev/null; then
   if [[ -z "$MAIL_CORE_IMAP_PASS" ]]; then
     echo "Refusing to start the pymap fallback: MAIL_CORE_IMAP_PASS is not set and there is no default fixture password. Set MAIL_CORE_IMAP_PASS explicitly (e.g. in .env.test) and re-run." >&2
@@ -95,8 +88,8 @@ if [[ -n "$PY" ]] && "$PY" -c "import pymap" 2>/dev/null; then
 fi
 
 cat >&2 <<HINT
-Neither docker compose imap nor pymap is available.
-  docker compose -f docker-compose.mail-core.yml --profile imap up -d imap
+Neither test compose imap nor pymap is available.
+  docker compose -p kkmail_test -f config/test_pg_compose.yaml up -d imap
   # or: python3 -m pip install pymap && ./scripts/start-mail-core-imap.sh
 HINT
 if [[ -z "${KKMAIL_TEST_PG_PASSWORD:-}" ]]; then

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Proxy pg_restore to dedicated test postgres container
-CONTAINER="kkmail_test_pg-postgres-1"
+CONTAINER="kkmail_test-postgres-1"
 ARGS=()
 FILE=""
 for arg in "$@"; do

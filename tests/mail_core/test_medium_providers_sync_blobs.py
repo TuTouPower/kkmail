@@ -345,10 +345,16 @@ def test_soft_quota_pauses_archive(tmp_path, monkeypatch):
     assert out["status"] == "paused_quota"
 
 
-def test_compose_imap_has_profile():
-    text = Path("docker-compose.mail-core.yml").read_text()
-    assert 'profiles: ["imap"]' in text
-    assert "kkmail-mail-core-imap" in text
+# 旧测试 test_compose_imap_has_profile 整体删除理由：
+# 正式 docker-compose.mail-core.yml 已剥离测试用 imap 服务，测试 fixture 统一收敛至 config/test_pg_compose.yaml。
+# 由 test_compose_isolation_and_test_fixture_location 覆盖新语义：正式 compose 无 imap，测试 compose 承载 imap 服务。
+def test_compose_isolation_and_test_fixture_location():
+    main_compose = Path("docker-compose.mail-core.yml").read_text()
+    assert "kkmail-mail-core-imap" not in main_compose
+    assert "\n  imap:" not in main_compose
+    test_compose = Path("config/test_pg_compose.yaml").read_text()
+    assert "\n  imap:" in test_compose
+    assert "kkmail-test-dovecot" in test_compose
 
 
 def test_chaos_script_uses_owned_test_runtime():
@@ -358,9 +364,13 @@ def test_chaos_script_uses_owned_test_runtime():
     assert "test_worker_kill_allows_lease_steal_and_rejects_stale_fencing" in chaos
 
 
+# 旧测试 test_other_scripts_prefer_python3_and_venv 整体删除理由：
+# 原断言 assert "--profile imap" in start 因剥离主 compose 回退而失效。
+# 由下述新测试覆盖：start 脚本指向专用测试 compose（-p kkmail_test），且优先 python3/venv。
 def test_other_scripts_prefer_python3_and_venv():
     start = Path("scripts/start-mail-core-imap.sh").read_text()
-    assert "--profile imap" in start
+    assert "-p kkmail_test" in start
+    assert "config/test_pg_compose.yaml" in start
     assert "command -v python3" in start
     side = Path("scripts/build-sidecar.sh").read_text()
     assert ".venv/bin/python" in side

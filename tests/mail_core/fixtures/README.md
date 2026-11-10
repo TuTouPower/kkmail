@@ -8,7 +8,7 @@
 ## 启动与运行
 
 ```bash
-docker compose -f docker-compose.mail-core.yml up -d --build imap
+docker compose -p kkmail_test -f config/test_pg_compose.yaml up -d --build imap
 # 或者使用脚本一键拉起
 ./scripts/start-mail-core-imap.sh
 

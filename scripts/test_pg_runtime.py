@@ -25,7 +25,7 @@ from sqlalchemy.pool import NullPool
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / ".scratch" / "test_runs"
-COMPOSE = ["compose", "-p", "kkmail_test_pg", "-f", str(ROOT / "config/test_pg_compose.yaml")]
+COMPOSE = ["compose", "-p", "kkmail_test", "-f", str(ROOT / "config/test_pg_compose.yaml")]
 LOG = logging.getLogger("test_pg_runtime")
 
 

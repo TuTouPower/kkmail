@@ -194,22 +194,6 @@ services:
     command: ["python", "-m", "mail_core.worker.main"]
     restart: unless-stopped
 
-
-  imap:
-    # L2 IMAP test fixture (Dovecot). Opt-in only — not part of the default stack.
-    #   docker compose -f docker-compose.mail-core.yml --profile imap up -d imap
-    profiles: ["imap"]
-    build:
-      context: ./tests/mail_core/fixtures/dovecot
-    container_name: kkmail-mail-core-imap
-    ports:
-      - "127.0.0.1:1143:143"
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 143 || exit 1"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-
 volumes:
   kkmail_mail_core_pg:
   kkmail_mail_core_blobs:
