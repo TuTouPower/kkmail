@@ -249,3 +249,23 @@ def test_verify_for_plan_dispatches_by_action(monkeypatch):
     assert baseline.verify_for_plan(None, plan(baseline.MigrationAction.EMPTY_DATABASE)) == []
     assert baseline.verify_for_plan(None, plan(baseline.MigrationAction.UNKNOWN_REVISION)) == []
     assert calls == ["full", "narrow"]
+
+
+def test_testing_doc_baseline_gate_describes_a16_full_comparison():
+    doc = (
+        Path(__file__).resolve().parents[2]
+        / "docs"
+        / "blueprint"
+        / "testing.md"
+    ).read_text(encoding="utf-8")
+    start = doc.index("## 数据库迁移与结构一致性门禁")
+    end = doc.index("\n## ", start + 1)
+    section = doc[start:end]
+
+    assert "verify_database_schema" not in section
+    assert "仅表名与关键列名" not in section
+    assert "两者都不做与统一基线完整 catalog 的等价校验" not in section
+    assert "verify_baseline_schema" in section
+    assert "compare_metadata" in section
+    assert hasattr(baseline, "verify_baseline_schema")
+    assert not hasattr(baseline, "verify_database_schema")
