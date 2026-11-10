@@ -1,3 +1,16 @@
+"""Import tests for the upstream outlookEmail v2 legacy database.
+
+Upstream outlookEmail v2 persisted retained mail in a SQLite *file*; that
+on-disk SQLite format is the real, external input contract consumed by
+``scripts/migrate_from_legacy_db.py`` and is exactly what these tests exercise.
+A18 ("tests must not use SQLite to run production behaviour") is unrelated:
+SQLite here is never a test database and never hosts application/runtime state.
+Every ``sqlite3`` call in this module only builds or reads the external input
+fixture; the importer under test reads that file and writes to real PostgreSQL
+via ``get_session_factory()``. The short-lived ``.scratch/legacy-import-*.sqlite``
+files are removed after each case by the ``legacy_sqlite_source`` fixture.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -29,6 +42,7 @@ pytestmark = pytest.mark.skipif(
 
 def _legacy_source(path: Path) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # external input fixture, not a test database (upstream v2 on-disk format)
     conn = sqlite3.connect(path)
     conn.execute(
         """
@@ -352,8 +366,23 @@ def _legacy_source(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_importer_preserves_legacy_mail_fields_without_mutating_sqlite_source():
-    source = Path(__file__).resolve().parents[2] / ".scratch" / f"legacy-import-{uuid.uuid4().hex}.sqlite"
+@pytest.fixture
+def legacy_sqlite_source():
+    """Unique path for the upstream v2 SQLite input; removed after the test.
+
+    The file is the external input fixture, not a test database. A fixture
+    finalizer guarantees cleanup even when the upstream-input builder raises
+    before the test's own try/finally block is entered.
+    """
+    path = Path(__file__).resolve().parents[2] / ".scratch" / f"legacy-import-{uuid.uuid4().hex}.sqlite"
+    try:
+        yield path
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_importer_preserves_legacy_mail_fields_without_mutating_sqlite_source(legacy_sqlite_source):
+    source = legacy_sqlite_source
     source_hash_before = _legacy_source(source)
     readonly = sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True)
     readonly.row_factory = sqlite3.Row
@@ -615,13 +644,12 @@ def test_importer_preserves_legacy_mail_fields_without_mutating_sqlite_source():
                 if account is not None:
                     session.delete(account)
                     session.commit()
-        source.unlink(missing_ok=True)
 
     assert source_hash_after == source_hash_before
 
 
-def test_importer_migrates_all_retained_messages_not_just_recent_200():
-    source = Path(__file__).resolve().parents[2] / ".scratch" / f"legacy-import-all-{uuid.uuid4().hex}.sqlite"
+def test_importer_migrates_all_retained_messages_not_just_recent_200(legacy_sqlite_source):
+    source = legacy_sqlite_source
     _legacy_source(source)
     sqlite_conn = sqlite3.connect(source)
     sqlite_conn.executemany(
@@ -674,4 +702,3 @@ def test_importer_migrates_all_retained_messages_not_just_recent_200():
                 if account is not None:
                     session.delete(account)
                     session.commit()
-        source.unlink(missing_ok=True)

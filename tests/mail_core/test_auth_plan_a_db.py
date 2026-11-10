@@ -1,12 +1,22 @@
-"""Unit tests for Plan A: Login password hash persisted in PostgreSQL."""
+"""Unit + real-PostgreSQL tests for Plan A: login password hash and session epoch.
+
+The five database cases run against real PostgreSQL via ``get_session_factory()``
+and real ``AuthCredential`` rows; they are skipped without
+``MAIL_CORE_DATABASE_URL`` (unit quick mode). Pure unit cases (file permissions,
+72-byte password limit, missing-credential fail-closed) stay unit-runnable.
+"""
 
 from __future__ import annotations
 
 import os
-import pytest
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import bcrypt
+import pytest
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session as OrmSession, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from mail_core.security.auth import (
     AuthConfigError,
@@ -20,327 +30,229 @@ from mail_core.security.auth import (
     verify_password,
 )
 
+requires_pg = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
-def test_auth_plan_a_database_persistence():
-    reset_auth_caches()
-    stored_cred = {"hash": None}
 
-    class FakeCred:
-        def __init__(self, id, hash_val):
-            self.id = id
-            stored_cred["hash"] = hash_val
+# Retired FakeSession/BrokenSession suite: the five cases below previously used
+# in-process FakeSession/BrokenSession doubles plus dicts to impersonate
+# PostgreSQL commits, rollbacks, outages and cross-process epoch reads. Such
+# doubles cannot prove real transactional/persistence semantics: a dict has no
+# transaction boundary, no rollback, no durable commit and no real fail-closed
+# DB error. Per this repo's TDD rule they are NOT edited in place (no flipping an
+# old assertion inside the implementation); each old body is removed wholesale
+# and replaced by a real-PG implementation over get_session_factory() and real
+# AuthCredential rows. The earlier A13 retirement note still applies: true
+# two-process revocation lives in
+# tests/mail_core/test_a13_session_revocation_multiprocess.py; here
+# reset_auth_caches() only simulates a process holding a stale in-memory epoch,
+# with the real DB row as the sole authority. isolated_runtime TRUNCATEs before
+# and after each case, so the 'default' row a case writes never leaks across
+# cases; no test TRUNCATEs the database itself.
 
-        @property
-        def login_password_hash(self):
-            return stored_cred["hash"]
 
-        @login_password_hash.setter
-        def login_password_hash(self, val):
-            stored_cred["hash"] = val
+def _credential_row():
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.storage.models import AuthCredential
 
-    class FakeSession:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, model, key, **_kwargs):  # accept Session.get options (e.g. with_for_update)
-            if stored_cred["hash"]:
-                return FakeCred("default", stored_cred["hash"])
+    Session = get_session_factory()
+    with Session() as session:
+        cred = session.get(AuthCredential, "default")
+        if cred is None:
             return None
+        return cred.login_password_hash, int(cred.session_epoch)
 
-        def add(self, obj):
-            stored_cred["hash"] = obj.login_password_hash
 
-        def commit(self):
-            pass
+def _seed_credential(password: str, epoch: int = 1) -> None:
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.storage.models import AuthCredential
 
-    with (
-        patch.dict(os.environ, {"MAIL_CORE_DATABASE_URL": "postgresql://test/db", "MAIL_CORE_LOGIN_PASSWORD": "initial_env_password"}),
-        patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
-    ):
-        # 1. First boot: DB empty, bootstraps from env
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    Session = get_session_factory()
+    with Session() as session:
+        cred = session.get(AuthCredential, "default")
+        if cred is None:
+            session.add(
+                AuthCredential(
+                    id="default",
+                    login_password_hash=password_hash,
+                    session_epoch=epoch,
+                )
+            )
+        else:
+            cred.login_password_hash = password_hash
+            cred.session_epoch = epoch
+        session.commit()
+
+
+@contextmanager
+def _injected_commit_failure():
+    """Raise from SQLAlchemy's before_commit so a real PG transaction cannot commit."""
+    armed = {"value": False}
+
+    def before_commit(session):
+        # before_commit also fires on nested SAVEPOINT releases (used by
+        # try_notify_session_revocation); only the outermost real commit must
+        # fail, so the transaction rolls back as a whole.
+        if armed["value"] and session.get_nested_transaction() is None:
+            raise RuntimeError("injected real-PG commit failure")
+
+    event.listen(OrmSession, "before_commit", before_commit)
+    try:
+        yield armed
+    finally:
+        armed["value"] = False
+        event.remove(OrmSession, "before_commit", before_commit)
+
+
+@requires_pg
+def test_auth_plan_a_database_persistence(monkeypatch):
+    """Real PG: first boot bootstraps a row, a change commits, DB stays authoritative."""
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "initial_env_password")
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
+    reset_auth_caches()
+    try:
+        # isolated_runtime left the table empty; get_login_password_hash()
+        # bootstraps from env and persists a real AuthCredential row.
         h1 = get_login_password_hash()
         assert bcrypt.checkpw(b"initial_env_password", h1)
-        assert stored_cred["hash"] is not None
-        assert bcrypt.checkpw(b"initial_env_password", stored_cred["hash"].encode("utf-8"))
+        stored = _credential_row()
+        assert stored is not None
+        db_hash_1, epoch_1 = stored
+        assert bcrypt.checkpw(b"initial_env_password", db_hash_1.encode("utf-8"))
+        assert epoch_1 == 1
         assert verify_password("initial_env_password")
 
-        # 2. Change password via API
         change_login_password(current="initial_env_password", new="new_changed_password_2026")
+        db_hash_2, epoch_2 = _credential_row()
+        assert bcrypt.checkpw(b"new_changed_password_2026", db_hash_2.encode("utf-8"))
+        assert epoch_2 == 2
         assert verify_password("new_changed_password_2026")
         assert not verify_password("initial_env_password")
-        assert bcrypt.checkpw(b"new_changed_password_2026", stored_cred["hash"].encode("utf-8"))
 
-        # 3. Simulate Compose container restart:
-        # Memory caches reset, but MAIL_CORE_LOGIN_PASSWORD still has the OLD env password!
+        # Simulate a container restart: env still carries the OLD password, but
+        # the DB row is authoritative and must win on the next read.
         reset_auth_caches()
-
-        # Database is authoritative: must load the new password, NOT the old env password!
         h2 = get_login_password_hash()
         assert bcrypt.checkpw(b"new_changed_password_2026", h2)
         assert verify_password("new_changed_password_2026")
         assert not verify_password("initial_env_password")
+    finally:
+        reset_auth_caches()
 
 
-def test_change_login_password_fails_closed_on_db_error():
+@requires_pg
+def test_change_login_password_fails_closed_on_db_error(monkeypatch):
+    """Real PG: a failed commit fails closed; old password and epoch survive the rollback."""
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "initial_password_1")
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
     reset_auth_caches()
-    stored_cred = {"hash": None, "epoch": 1}
-
-    class FakeCred:
-        def __init__(self, id, hash_val, epoch=1):
-            self.id = id
-            stored_cred["hash"] = hash_val
-            stored_cred["epoch"] = epoch
-
-        @property
-        def login_password_hash(self):
-            return stored_cred["hash"]
-
-        @login_password_hash.setter
-        def login_password_hash(self, val):
-            stored_cred["hash"] = val
-
-        @property
-        def session_epoch(self):
-            return stored_cred["epoch"]
-
-        @session_epoch.setter
-        def session_epoch(self, val):
-            stored_cred["epoch"] = val
-
-    class FakeSession:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, model, key, **_kwargs):  # accept Session.get options (e.g. with_for_update)
-            if stored_cred["hash"]:
-                return FakeCred("default", stored_cred["hash"], stored_cred["epoch"])
-            return None
-
-        def add(self, obj):
-            stored_cred["hash"] = obj.login_password_hash
-
-        def commit(self):
-            pass
-
-    with (
-        patch.dict(os.environ, {"MAIL_CORE_DATABASE_URL": "postgresql://test/db", "MAIL_CORE_LOGIN_PASSWORD": "initial_password_1"}),
-        patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
-    ):
-        get_login_password_hash()
+    try:
+        _seed_credential("initial_password_1", epoch=1)
         assert verify_password("initial_password_1")
+        hash_before, epoch_before = _credential_row()
 
-        with patch("mail_core.security.auth._persist_db_password_hash", return_value=False):
+        with _injected_commit_failure() as armed:
+            armed["value"] = True
             with pytest.raises(AuthConfigError, match="failed to persist password to database"):
                 change_login_password(current="initial_password_1", new="new_password_fails_to_save")
+            armed["value"] = False
 
-        # Memory cache and verification must remain unchanged
+        # No half-written state: the real transaction rolled back both columns.
+        hash_after, epoch_after = _credential_row()
+        assert hash_after == hash_before
+        assert epoch_after == epoch_before
         assert verify_password("initial_password_1")
         assert not verify_password("new_password_fails_to_save")
+    finally:
+        reset_auth_caches()
 
 
-def test_auth_db_query_failure_fails_closed_does_not_fallback_to_env():
-    """A37+A87: DB query failure fails closed and never falls back to the env password.
+@requires_pg
+def test_auth_db_query_failure_fails_closed_does_not_fallback_to_env(monkeypatch):
+    """Real PG: an unreachable DB fails closed and never falls back to the env password.
 
-    A87 supersedes the A37-era expectation that verify_password swallowed the
-    failure into False: a database failure is not a wrong password, so
-    verify_password now propagates AuthConfigError (the login route maps it
-    to 500 instead of recording a rate-limit failure).
+    A dead URL is handed to production via ``get_session_factory`` as a REAL
+    SQLAlchemy Engine/sessionmaker (not a FakeSession), so the query failure is
+    a genuine connection error. A87: verify_password propagates AuthConfigError
+    instead of disguising the outage as a wrong password.
     """
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "old_env_fallback_password")
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
     reset_auth_caches()
 
-    class BrokenSession:
-        def __enter__(self):
-            raise RuntimeError("Database connection refused")
-
-        def __exit__(self, *args):
-            return False
-
-    with (
-        patch.dict(os.environ, {
-            "MAIL_CORE_DATABASE_URL": "postgresql://test/db",
-            "MAIL_CORE_LOGIN_PASSWORD": "old_env_fallback_password",
-        }),
-        patch("mail_core.db.session.get_session_factory", return_value=lambda: BrokenSession()),
-    ):
-        # Must raise AuthConfigError directly, not fallback to old_env_fallback_password
-        with pytest.raises(AuthConfigError, match="failed to query authentication credentials"):
-            get_login_password_hash()
-
-        # verify_password must propagate the DB failure, not disguise it as a wrong password
-        with pytest.raises(AuthConfigError, match="failed to query authentication credentials"):
-            verify_password("old_env_fallback_password")
+    dead_url = "postgresql+psycopg://kkmail:kkmail@127.0.0.1:1/kkmail_test_dead"
+    dead_engine = create_engine(dead_url, poolclass=NullPool, connect_args={"connect_timeout": 2})
+    dead_sessionmaker = sessionmaker(bind=dead_engine)
+    try:
+        with patch("mail_core.db.session.get_session_factory", return_value=dead_sessionmaker):
+            with pytest.raises(AuthConfigError, match="failed to query authentication credentials"):
+                get_login_password_hash()
+            with pytest.raises(AuthConfigError, match="failed to query authentication credentials"):
+                verify_password("old_env_fallback_password")
+    finally:
+        dead_engine.dispose()
+        reset_auth_caches()
 
 
-def test_change_password_atomic_commit_and_rollback_on_failure():
-    """A37: Password hash and session epoch commit atomically; failure rolls back and keeps old state."""
+@requires_pg
+def test_change_password_atomic_commit_and_rollback_on_failure(monkeypatch):
+    """Real PG: hash+epoch commit atomically; a failed commit rolls both back."""
+    monkeypatch.setenv("MAIL_CORE_SECRET_KEY", "auth-plan-a-atomic-secret-key-1234567890")
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "valid_initial_pwd")
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
     reset_auth_caches()
-    stored_cred = {"hash": None, "epoch": 1}
-
-    class FakeCred:
-        def __init__(self, id, hash_val, epoch=1, session=None):
-            self.id = id
-            self._hash = hash_val
-            self._epoch = epoch
-            self._session = session
-
-        @property
-        def login_password_hash(self):
-            return self._session._pending_hash if (self._session and self._session._pending_hash is not None) else self._hash
-
-        @login_password_hash.setter
-        def login_password_hash(self, val):
-            if self._session:
-                self._session._pending_hash = val
-            else:
-                self._hash = val
-
-        @property
-        def session_epoch(self):
-            return self._session._pending_epoch if (self._session and self._session._pending_epoch is not None) else self._epoch
-
-        @session_epoch.setter
-        def session_epoch(self, val):
-            if self._session:
-                self._session._pending_epoch = val
-            else:
-                self._epoch = val
-
-    should_fail_commit = False
-
-    class FakeSession:
-        def __init__(self):
-            self._pending_hash = None
-            self._pending_epoch = None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, *args):
-            return False
-
-        def get(self, model, key, **_kwargs):  # accept Session.get options (e.g. with_for_update)
-            if stored_cred["hash"]:
-                return FakeCred("default", stored_cred["hash"], stored_cred["epoch"], session=self)
-            return None
-
-        def add(self, obj):
-            self._pending_hash = obj.login_password_hash
-            self._pending_epoch = obj.session_epoch
-
-        def commit(self):
-            if should_fail_commit:
-                raise RuntimeError("DB commit failed")
-            if self._pending_hash is not None:
-                stored_cred["hash"] = self._pending_hash
-            if self._pending_epoch is not None:
-                stored_cred["epoch"] = self._pending_epoch
-
-    with (
-        patch.dict(os.environ, {
-            "MAIL_CORE_DATABASE_URL": "postgresql://test/db",
-            "MAIL_CORE_LOGIN_PASSWORD": "valid_initial_pwd",
-            "MAIL_CORE_SECRET_KEY": "test_secret_key_12345678901234567890",
-        }),
-        patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
-    ):
-        get_login_password_hash()
+    try:
+        _seed_credential("valid_initial_pwd", epoch=1)
         assert verify_password("valid_initial_pwd")
         cookie_val, _ = issue_session()
         assert read_session(cookie_val) is not None
 
-        # 1. Successful change password atomically updates hash and epoch
+        # 1. Successful change: hash and epoch move together in one real commit.
         change_login_password(current="valid_initial_pwd", new="new_pwd_1234567")
+        hash_ok, epoch_ok = _credential_row()
+        assert bcrypt.checkpw(b"new_pwd_1234567", hash_ok.encode("utf-8"))
+        assert epoch_ok == 2
         assert verify_password("new_pwd_1234567")
         assert not verify_password("valid_initial_pwd")
-        assert stored_cred["epoch"] == 2
-        # Old session is revoked immediately
         assert read_session(cookie_val) is None
 
-        # 2. Simulated DB failure during next password change
+        # 2. A later change whose commit fails must roll BOTH columns back.
         cookie_val_2, _ = issue_session()
         assert read_session(cookie_val_2) is not None
-        should_fail_commit = True
+        with _injected_commit_failure() as armed:
+            armed["value"] = True
+            with pytest.raises(AuthConfigError, match="failed to persist password to database"):
+                change_login_password(current="new_pwd_1234567", new="another_pwd_fails")
+            armed["value"] = False
 
-        with pytest.raises(AuthConfigError, match="failed to persist password to database"):
-            change_login_password(current="new_pwd_1234567", new="another_pwd_fails")
-
-        # Must retain previous valid password and session
-        should_fail_commit = False
+        hash_after, epoch_after = _credential_row()
+        assert hash_after == hash_ok
+        assert epoch_after == epoch_ok
         assert verify_password("new_pwd_1234567")
         assert not verify_password("another_pwd_fails")
         assert read_session(cookie_val_2) is not None
+    finally:
+        reset_auth_caches()
 
 
-# Retired (A13 follow-up): test_cross_process_epoch_revocation_immediate_via_db
-# used FakeSession + a stored_cred dict to impersonate "cross-process" epoch
-# revocation. It had no independent process, no real PostgreSQL, and no way to
-# prove that a process which never received NOTIFY still rejects on its next
-# auth. It is NOT rewritten in place: the previous batch (7a010f21) flipped an
-# old assertion inside the implementation commit, which this repo's TDD rule
-# forbids -- when an implementation change invalidates an old test's semantics,
-# add a NEW independent test and either keep the old test untouched or delete
-# it wholesale with a written reason; never edit the old expectation in place.
-# The real behaviour is covered by NEW tests in
-# tests/mail_core/test_a13_session_revocation_multiprocess.py (two real
-# processes, real PG, NOTIFY lost/duplicated/out-of-order, DB fail-closed).
-# Other unit tests here that simulate a DB outage or a failed password
-# persistence (test_auth_db_query_failure_fails_closed_does_not_fallback_to_env,
-# test_change_login_password_fails_closed_on_db_error) stay as they are: their
-# intent is precisely to simulate a transaction/query failure that real PG
-# cannot be made to reproduce deterministically without polluting the shared
-# test database; converting them would destroy that intent. The still-valid
-# missing-credential fail-closed semantics below is upgraded to a real PG
-# session instead.
-
-
-def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
+@requires_pg
+def test_session_epoch_persisted_in_database_and_invalidates_across_processes(monkeypatch):
+    """Real PG: epoch is durable; invalidate_all_sessions commits, stale caches re-read DB."""
+    monkeypatch.setenv("MAIL_CORE_SECRET_KEY", "auth-plan-a-epoch-secret-key-1234567890")
+    monkeypatch.setenv("MAIL_CORE_LOGIN_PASSWORD", "epoch_seed_password")
+    monkeypatch.delenv("MAIL_CORE_LOGIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("MAIL_CORE_PASSWORD_HASH_PATH", "")
     reset_auth_caches()
-    stored_cred = {"hash": "dummy_hash", "epoch": 1}
+    try:
+        _seed_credential("epoch_seed_password", epoch=1)
 
-    class FakeCred:
-        def __init__(self, id, hash_val, epoch=1):
-            self.id = id
-            self.login_password_hash = hash_val
-            stored_cred["epoch"] = epoch
-
-        @property
-        def session_epoch(self):
-            return stored_cred["epoch"]
-
-        @session_epoch.setter
-        def session_epoch(self, val):
-            stored_cred["epoch"] = val
-
-    class FakeSession:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, model, key, **_kwargs):  # accept Session.get options (e.g. with_for_update)
-            return FakeCred("default", stored_cred["hash"], stored_cred["epoch"])
-
-        def add(self, obj):
-            stored_cred["epoch"] = obj.session_epoch
-
-        def commit(self):
-            pass
-
-    with (
-        patch.dict(os.environ, {
-            "MAIL_CORE_DATABASE_URL": "postgresql://test/db",
-            "MAIL_CORE_SECRET_KEY": "test_secret_key_12345678901234567890",
-        }),
-        patch("mail_core.db.session.get_session_factory", return_value=lambda: FakeSession()),
-    ):
-        # 1. Issue session with initial epoch = 1
         cookie_val, csrf = issue_session()
         assert cookie_val is not None
         session_data = read_session(cookie_val)
@@ -348,24 +260,24 @@ def test_session_epoch_persisted_in_database_and_invalidates_across_processes():
         assert session_data["epoch"] == 1
         assert session_data["csrf"] == csrf
 
-        # 2. Invalidate sessions: increment epoch in DB
         invalidate_all_sessions()
-        assert stored_cred["epoch"] == 2
-
-        # 3. Old session cookie must be rejected
+        _, epoch_after_invalidate = _credential_row()
+        assert epoch_after_invalidate == 2
         assert read_session(cookie_val) is None
 
-        # 4. Issue new session: gets epoch 2
         cookie_val_2, csrf_2 = issue_session()
         session_data_2 = read_session(cookie_val_2)
         assert session_data_2 is not None
         assert session_data_2["epoch"] == 2
+        assert session_data_2["csrf"] == csrf_2
 
-        # 5. Simulate another process having stale in-memory epoch = 1,
-        # but DB has epoch 2: read_session must check DB and reject cookie with epoch 1
+        # Simulate a process that never got the NOTIFY and holds a stale
+        # in-memory epoch: read_session must re-query the authoritative DB row.
         reset_auth_caches()
         assert read_session(cookie_val) is None
         assert read_session(cookie_val_2) is not None
+    finally:
+        reset_auth_caches()
 
 
 @pytest.mark.skipif(
