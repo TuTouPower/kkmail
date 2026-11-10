@@ -62,7 +62,10 @@ def test_docker_success_waits_for_imap_tcp_readiness(tmp_path):
     assert time.monotonic() - started >= 0.6
 
 
-def test_docker_errors_are_visible_when_no_fallback_is_available(tmp_path):
+# 旧测试 test_docker_errors_are_visible_when_no_fallback_is_available 整体删除理由：
+# 原测试断言 stderr 包含 2 次 'compose startup failure'（因旧版会尝试测试 compose 与正式 compose 回退）；
+# 在治理正式 docker-compose.mail-core.yml 剥离测试 imap 后，回退路径退役，由下方新测试覆盖单测试 compose 失败的错误透传语义。
+def test_test_compose_docker_error_is_visible_when_no_fallback(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _write_executable(fake_bin / "docker", "#!/bin/sh\necho 'compose startup failure' >&2\nexit 1\n")
@@ -83,8 +86,8 @@ def test_docker_errors_are_visible_when_no_fallback_is_available(tmp_path):
     )
 
     assert result.returncode == 1
-    assert result.stderr.count("compose startup failure") == 2
-    assert "Neither docker compose imap nor pymap is available" in result.stderr
+    assert "compose startup failure" in result.stderr
+    assert "Neither test compose imap nor pymap is available" in result.stderr
 
 
 def test_pymap_fallback_passes_private_passfile_and_cleans_it_up(tmp_path):
