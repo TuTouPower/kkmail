@@ -652,3 +652,17 @@ def test_a4_opener_prefixed_values_denied(monkeypatch):
         assert module.is_safe_credential(value, key="password") is False, value
     for value in ("${X}", "$(cmd)", "{{ t }}"):
         assert module.is_safe_credential(value) is True, value
+
+
+# --- Adoption A5: API references are whole-value only, never substring -------
+
+
+def test_a5_api_reference_substring_denied(monkeypatch):
+    """A5: a value merely containing ``os.environ`` (etc.) is denied; only a
+    whole-value reference expression is safe."""
+    module = _load_module(monkeypatch)
+    for value in ("abc os.environ leak", "os.environ leak"):
+        assert module.is_safe_credential(value) is False, value
+        assert module.is_safe_credential(value, key="password") is False, value
+    for value in ('os.environ["X"]', 'os.getenv("X")', "process.env.X"):
+        assert module.is_safe_credential(value) is True, value

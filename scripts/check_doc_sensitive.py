@@ -149,11 +149,11 @@ SAFE_REFERENCE_RE = re.compile(
     r"|\A\$\([^)]*\)\Z"              # $(cmd)
     r"|\A\{\{[^}]*\}\}\Z"            # {{ template }}
     r"|\A<[^<>]+>\Z"                 # <placeholder>
-    r"|\bos\.environ\b"              # os.environ[...] / os.environ.get(...)
-    r"|\bos\.getenv\s*\("            # os.getenv(...)
-    r"|\bgetenv\s*\("                # getenv(...)
-    r"|\bprocess\.env\b"             # process.env.X
-    r"|\bstore\.get_secret\s*\("     # store.get_secret(...)
+    r"|\Aos\.environ(\[[^\]]+\]|\.get\([^)]*\))\Z"  # os.environ[...] / os.environ.get(...)
+    r"|\Aos\.getenv\([^)]*\)\Z"      # os.getenv(...)
+    r"|\Agetenv\([^)]*\)\Z"          # getenv(...)
+    r"|\Aprocess\.env(\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]+\])\Z"  # process.env.X
+    r"|\Astore\.get_secret\([^)]*\)\Z"  # store.get_secret(...)
 )
 
 # Code-expression shape: the WHOLE value is a function call. Anchored at both
@@ -277,8 +277,10 @@ def is_safe_credential(value: str, *, key: str | None = None) -> bool:
     # Wholly-punctuation / ellipsis values.
     if PUNCT_ONLY_RE.fullmatch(v):
         return True
-    # Template / env references and code-expression shapes.
-    if SAFE_REFERENCE_RE.search(v) or CODE_EXPRESSION_RE.search(v):
+    # Template / env references and code-expression shapes. SAFE_REFERENCE_RE
+    # branches are whole-value anchored and matched with fullmatch (A5): a
+    # value that merely *contains* an API reference name earns no exemption.
+    if SAFE_REFERENCE_RE.fullmatch(v) or CODE_EXPRESSION_RE.search(v):
         return True
     # Self-assignment code: value is the identifier equal to the key.
     if key is not None and IDENTIFIER_RE.fullmatch(v) and v.lower() == key.lower():
