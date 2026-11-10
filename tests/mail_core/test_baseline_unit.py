@@ -80,3 +80,34 @@ def test_startup_entry_reads_state_via_baseline_helper():
     src = py_inspect.getsource(main_module.run_migrations)
     assert "baseline.read_database_state(conn)" in src
     assert "SELECT version_num FROM alembic_version" not in src
+
+
+def _plan_for(revision: str, *, context: baseline.RevisionContext | None = None):
+    ctx = context or baseline.revision_context()
+    state = baseline.DatabaseState(
+        version_rows=(revision,), table_names=frozenset()
+    )
+    return baseline.plan_migration(state, context=ctx)
+
+
+def test_plan_newer_than_code_for_future_dated_revision():
+    """A3: a dated revision beyond every head is its own classification.
+
+    It must not fall into UNKNOWN_REVISION, whose message advised restoring
+    a known-good backup — following that advice against a newer database
+    would discard newer data.
+    """
+    plan = _plan_for("20261201_0001")
+    assert plan.action is baseline.MigrationAction.NEWER_THAN_CODE
+    assert "newer version of kkmail" in plan.message
+    assert "Do NOT overwrite" in plan.message
+
+
+def test_plan_newer_than_code_requires_greater_than_all_heads():
+    ctx = baseline.RevisionContext(
+        known_revisions=frozenset({"20261107_0001", "20270101_0001"}),
+        legacy_revisions=frozenset(),
+        heads=("20261107_0001", "20270101_0001"),
+    )
+    plan = _plan_for("20261201_0001", context=ctx)
+    assert plan.action is baseline.MigrationAction.UNKNOWN_REVISION

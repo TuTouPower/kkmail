@@ -83,19 +83,27 @@ KNOWN_LEGACY_REVISIONS: frozenset[str] = frozenset({
 })
 
 
+def _is_dated_revision(rev: str) -> bool:
+    """Return True for the ``YYYYMMDD_NNNN`` revision shape used by this project.
+
+    Dated revisions order lexicographically, so a dated revision greater
+    than every known head is unambiguously "written by a newer build".
+    """
+    return (
+        len(rev) == len(UNIFIED_BASELINE_REVISION)
+        and rev[:8].isdigit()
+        and rev[8] == "_"
+        and rev[9:].isdigit()
+    )
+
+
 def is_legacy_revision(rev: str | None) -> bool:
     """Return True if rev represents a recognized migration prior to unified baseline."""
     if not rev:
         return False
     if rev in KNOWN_LEGACY_REVISIONS:
         return True
-    return (
-        len(rev) == len(UNIFIED_BASELINE_REVISION)
-        and rev[:8].isdigit()
-        and rev[8] == "_"
-        and rev[9:].isdigit()
-        and rev < UNIFIED_BASELINE_REVISION
-    )
+    return _is_dated_revision(rev) and rev < UNIFIED_BASELINE_REVISION
 
 REQUIRED_TABLES: frozenset[str] = frozenset({
     "account_groups",
@@ -201,6 +209,7 @@ class MigrationAction(str, Enum):
     EMPTY_DATABASE = "empty_database"
     AT_BASELINE = "at_baseline"
     LEGACY = "legacy"
+    NEWER_THAN_CODE = "newer_than_code"
     NO_VERSION_WITH_BUSINESS_TABLES = "no_version_with_business_tables"
     UNKNOWN_REVISION = "unknown_revision"
     MULTIPLE_VERSIONS = "multiple_versions"
@@ -895,6 +904,27 @@ def plan_migration(state: DatabaseState, *, context: RevisionContext) -> Migrati
         )
 
     head_text = ", ".join(context.heads) if context.heads else "(none)"
+    if (
+        context.heads
+        and _is_dated_revision(current)
+        and all(_is_dated_revision(head) for head in context.heads)
+        and all(current > head for head in context.heads)
+    ):
+        return MigrationPlan(
+            action=MigrationAction.NEWER_THAN_CODE,
+            current_revision=current,
+            version_rows=version_rows,
+            message=(
+                f"Database is at revision '{current}', which is newer than every "
+                f"revision this build of kkmail knows (current heads: {head_text}). "
+                "The database was written by a newer version of kkmail: upgrade "
+                "kkmail to a build that knows this revision instead of running "
+                "this older build against it. Do NOT overwrite the database with "
+                "an older backup, which would discard the newer data. "
+                "The database was not modified."
+            ),
+        )
+
     return MigrationPlan(
         action=MigrationAction.UNKNOWN_REVISION,
         current_revision=current,
@@ -938,6 +968,7 @@ def run_migration(
             MigrationAction.MULTIPLE_VERSIONS,
             MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES,
             MigrationAction.UNKNOWN_REVISION,
+            MigrationAction.NEWER_THAN_CODE,
             MigrationAction.EMPTY_DATABASE,
         ):
             raise SchemaValidationError(plan.message)
