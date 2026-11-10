@@ -69,16 +69,30 @@ def run_migrations(*, check_only: bool = False) -> None:
             ):
                 raise RuntimeError(plan.message)
 
-            if plan.action in (
-                baseline.MigrationAction.EMPTY_DATABASE,
-                baseline.MigrationAction.AT_BASELINE,
-            ):
+            if plan.action == baseline.MigrationAction.EMPTY_DATABASE:
                 if check_only:
                     return
                 command.upgrade(cfg, "head")
                 return
 
-            errors = baseline.verify_narrow_legacy_schema(conn)
+            # Verification is dispatched by the shared verify_for_plan, so
+            # check_only and normal startup apply the same standard as the
+            # offline tool (A14): an AT_BASELINE database whose schema has
+            # drifted is refused here instead of being upgraded blindly.
+            errors = baseline.verify_for_plan(conn, plan)
+            if plan.action == baseline.MigrationAction.AT_BASELINE:
+                if errors:
+                    detail = "\n  - ".join(errors)
+                    raise RuntimeError(
+                        "Database schema verification failed for unified baseline:\n  - "
+                        + detail
+                        + "\nThe database was not modified."
+                    )
+                if check_only:
+                    return
+                command.upgrade(cfg, "head")
+                return
+
             if errors:
                 detail = "\n  - ".join(errors)
                 raise RuntimeError(

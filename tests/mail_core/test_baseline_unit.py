@@ -226,3 +226,26 @@ def test_describe_diff_names_table_and_column():
         ("modify_type", None, "accounts", "email", {}, "VARCHAR(64)", "VARCHAR(320)")
     )
     assert "accounts" in modify and "email" in modify
+
+
+def test_verify_for_plan_dispatches_by_action(monkeypatch):
+    """A14: one dispatch maps each actionable plan to its verification;
+    both entries call it, so their verdicts cannot diverge."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        baseline, "verify_baseline_schema", lambda conn: calls.append("full") or ["e1"]
+    )
+    monkeypatch.setattr(
+        baseline,
+        "verify_narrow_legacy_schema",
+        lambda conn: calls.append("narrow") or ["e2"],
+    )
+
+    def plan(action: baseline.MigrationAction) -> baseline.MigrationPlan:
+        return baseline.MigrationPlan(action=action)
+
+    assert baseline.verify_for_plan(None, plan(baseline.MigrationAction.AT_BASELINE)) == ["e1"]
+    assert baseline.verify_for_plan(None, plan(baseline.MigrationAction.LEGACY)) == ["e2"]
+    assert baseline.verify_for_plan(None, plan(baseline.MigrationAction.EMPTY_DATABASE)) == []
+    assert baseline.verify_for_plan(None, plan(baseline.MigrationAction.UNKNOWN_REVISION)) == []
+    assert calls == ["full", "narrow"]

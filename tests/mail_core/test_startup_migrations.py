@@ -511,3 +511,51 @@ def test_both_entries_delegate_to_single_planner(pg_schema, monkeypatch):
 
     assert len(calls) == 2
     assert upgrades == ["head"]
+
+
+def test_t8_drifted_baseline_refused_by_all_three_entries(pg_schema, monkeypatch):
+    """A14: a baseline-stamped database whose schema drifted (one dropped
+    column) is refused identically by the startup check, normal startup and
+    the offline tool; undrifted, all three accept it."""
+    _, db_url = pg_schema()
+    import mail_core.mail.storage  # noqa: F401  (populates Base.metadata)
+    from mail_core.db.base import Base
+
+    engine = create_engine(db_url)
+    try:
+        Base.metadata.create_all(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE alembic_version ("
+                    "version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+                )
+            )
+            conn.execute(
+                text("INSERT INTO alembic_version VALUES (:rev)"),
+                {"rev": baseline.UNIFIED_BASELINE_REVISION},
+            )
+    finally:
+        engine.dispose()
+
+    upgrades = _mock_upgrade(monkeypatch)
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", db_url)
+
+    # Undrifted baseline: the startup check and the offline tool accept it.
+    main_module.run_migrations(check_only=True)
+    baseline.run_migration(db_url)
+
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE accounts DROP COLUMN display_name"))
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError, match="display_name"):
+        main_module.run_migrations(check_only=True)
+    with pytest.raises(RuntimeError, match="display_name"):
+        main_module.run_migrations()
+    assert upgrades == []
+    with pytest.raises(SchemaValidationError, match="display_name"):
+        baseline.run_migration(db_url)

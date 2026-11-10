@@ -629,6 +629,28 @@ def verify_narrow_legacy_schema(bind: Engine | Connection) -> list[str]:
     return errors
 
 
+def verify_for_plan(conn: Connection, plan: MigrationPlan) -> list[str]:
+    """Run the schema verification appropriate for a classified plan.
+
+    The single place that maps a classification to its verification, shared
+    by both entries so the same database gets the same verdict from the
+    startup preflight, normal startup and the offline tool:
+
+    - AT_BASELINE: the full baseline comparison (:func:`verify_baseline_schema`);
+    - LEGACY: the narrow-conversion preconditions
+      (:func:`verify_narrow_legacy_schema`);
+    - EMPTY_DATABASE: nothing exists to verify (startup creates the schema
+      by upgrading to head);
+    - any other action is refused by both entries before verification is
+      reached, so it verifies nothing here.
+    """
+    if plan.action is MigrationAction.AT_BASELINE:
+        return verify_baseline_schema(conn)
+    if plan.action is MigrationAction.LEGACY:
+        return verify_narrow_legacy_schema(conn)
+    return []
+
+
 def _check_cursor_data(bind: Engine | Connection) -> list[str]:
     """Read-only data check over ``sync_checkpoints.cursor`` on PostgreSQL.
 
@@ -1099,10 +1121,7 @@ def run_migration(
             raise SchemaValidationError(plan.message)
 
         is_legacy = plan.action == MigrationAction.LEGACY
-        if is_legacy:
-            errors = verify_narrow_legacy_schema(conn)
-        else:
-            errors = verify_baseline_schema(conn)
+        errors = verify_for_plan(conn, plan)
 
         if errors:
             detail = "\n  - ".join(errors)
