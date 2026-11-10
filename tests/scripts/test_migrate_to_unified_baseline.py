@@ -5,8 +5,8 @@ argparse wrapper) to ``mail_core.db.baseline``; mocks and imports follow the
 new home.
 
 Retirement (A18 wrap-up): this file previously exercised the offline tool
-entirely on in-memory / file-backed SQLite (``create_engine("sqlite:///...")``,
-``sqlite_master``). ``mail_core.db.baseline`` is now PostgreSQL-only: every
+entirely on in-memory / file-backed SQLite databases. ``mail_core.db.baseline``
+is now PostgreSQL-only: every
 read-only check, narrow-conversion step and patrol migration rejects a non-PG
 backend. SQLite fixtures therefore no longer touch production logic and were
 replaced wholesale rather than having their assertions flipped in place. Each

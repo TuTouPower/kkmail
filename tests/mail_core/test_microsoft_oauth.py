@@ -21,6 +21,23 @@ from tests.mail_core.conftest import TEST_LOGIN_PASSWORD
 SCOPE = 'https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read'
 
 
+@pytest.fixture(autouse=True)
+def _seed_auth_credential():
+    """A13 made get_session_epoch() fail-closed, and isolated_runtime truncates
+    auth_credentials before every test. Seed the authoritative row so Bearer/API-key
+    clients (which never call login()) can start an OAuth flow.
+    """
+    if not os.environ.get("MAIL_CORE_DATABASE_URL"):
+        return
+    from mail_core.mail.storage.models import AuthCredential
+
+    Session = get_session_factory()
+    with Session() as db:
+        if db.get(AuthCredential, "default") is None:
+            db.add(AuthCredential(id="default", session_epoch=1))
+            db.commit()
+
+
 def login():
     client = TestClient(app)
     response = client.post('/api/auth/login', json={'password': TEST_LOGIN_PASSWORD})

@@ -1,3 +1,11 @@
+"""Flag-state parsing in the upstream v2 legacy importer.
+
+The sqlite3 connection below is the *external input contract* of
+``scripts.migrate_from_legacy_db.migrate_retained_messages``: the upstream
+outlookEmail v2 store is a SQLite file. It is not a test database and is
+outside A18's "no test running production behaviour on SQLite" scope.
+"""
+
 from __future__ import annotations
 
 import sqlite3

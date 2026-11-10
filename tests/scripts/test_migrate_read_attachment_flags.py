@@ -1,4 +1,8 @@
-"""A178: is_read / has_attachments must use the same flag parsing as is_flagged."""
+"""A178: is_read / has_attachments must use the same flag parsing as is_flagged.
+
+The sqlite3 connection is the external input contract of the upstream v2
+legacy importer (``scripts.migrate_from_legacy_db``), not a test database.
+"""
 
 from __future__ import annotations
 

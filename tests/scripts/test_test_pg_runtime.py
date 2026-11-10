@@ -15,6 +15,8 @@ runtime = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runtime)
 
 
+# Non-PG / business-URL strings below are rejection fixtures for guard_database();
+# this suite never connects to a SQLite database.
 @pytest.mark.parametrize("url", [
     "", "sqlite:///kkmail_test_example", "postgresql://u:p@127.0.0.1/business",
     "postgresql://u:p@remote/kkmail_test_" + "a" * 32,
