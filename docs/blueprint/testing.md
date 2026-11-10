@@ -79,6 +79,8 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
 |**写回收敛与统计一致性**|批次自动续跑、意图保护与孤儿恢复|`scripts/run-mail-core-tests.sh run -k test_mark_read_convergence_suite`|
 |**MIME 解析错误与前端可见性**|正文/报头/附件名解析失败、API 传递与跨邮件状态隔离|`scripts/run-mail-core-tests.sh run -k test_archive_decode_failure` 及 `(cd src/frontend && npm test -t MessageReader)`|
 
+敏感文档门禁适用边界（`scripts/check_doc_sensitive.py`）：凭据检测为 default-deny——仅显式白名单占位、整值模板/环境引用、以及不含任何 ASCII 字母数字的纯散文值放行；同行多个赋值按语句分隔符（`;`、`&&`、`,` 后紧跟新的 `key=`）切成片段逐个判定。未加引号的多词值与散文在形状上不可区分：只取首词作候选值，且其余词使片段非孤立而不进入判定——这是检测原理边界，不是豁免承诺（加引号的多词值会整值捕获并判定）。合法例外一律使用带理由的行内 allow marker（`<!-- sensitive-allow: 理由 -->` 或 `# noqa: sensitive 理由`），无理由 marker 不豁免且本身计一条违规。
+
 ## PostgreSQL 测试运行时
 
 环境安装与测试执行分开，复用仓库 `.venv`：

@@ -93,13 +93,17 @@ CREDENTIAL_KEYWORDS = (
     "pwd",
     "secret",
     "api_key",
+    "apikey",
+    "private_key",
     "access_token",
     "token",
     "credential",
 )
 
+# Group 1: optional quote around the key (same quote both sides, A7);
+# group 2: key; group 3: quoted value; group 4: bare value.
 ASSIGN_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*"
+    r"(?i)(?<![A-Za-z0-9_])([\"']?)([A-Za-z_][A-Za-z0-9_]*)\1\s*[:=]\s*"
     r"(?:[\"']([^\"']*)[\"']|(\S+))"
 )
 
@@ -112,6 +116,8 @@ SAFE_CREDENTIAL_PLACEHOLDERS = {
     "<password>",
     "<secret>",
     "<change-me>",
+    "<redacted>",
+    "<your-token>",
     "testpassword",
     "your_password_here",
     "password",
@@ -145,23 +151,14 @@ SAFE_TRAILING_PUNCT = "`\"'.,;:!?)]}>"
 # Template / env references: whole-value templates or named API references;
 # never a contains-character exemption.
 SAFE_REFERENCE_RE = re.compile(
-    r"\A\$\{[^}]*\}"                  # ${ENV_VAR}
-    r"|\A\$\([^)]*\)"                # $(cmd)
-    r"|\A\{\{[^}]*\}\}"              # {{ template }}
-    r"|\A<[^<>]+>\Z"                 # <placeholder>
-    r"|\bos\.environ\b"              # os.environ[...] / os.environ.get(...)
-    r"|\bos\.getenv\s*\("            # os.getenv(...)
-    r"|\bgetenv\s*\("                # getenv(...)
-    r"|\bprocess\.env\b"             # process.env.X
-    r"|\bstore\.get_secret\s*\("     # store.get_secret(...)
-)
-
-# Code-expression shape: value starts with a structural opener, or the WHOLE
-# value is a function call. Anchored at both ends so a word containing parens
-# is not mistaken for a call.
-CODE_EXPRESSION_RE = re.compile(
-    r"\A[{($<]"
-    r"|\A[A-Za-z_][A-Za-z0-9_.]*\([^)]*\)?\Z"
+    r"\A\$\{[^}]*\}\Z"               # ${ENV_VAR}
+    r"|\A\$\([^)]*\)\Z"              # $(cmd)
+    r"|\A\{\{[^}]*\}\}\Z"            # {{ template }}
+    r"|\Aos\.environ(\[[^\]]+\]|\.get\([^)]*\))\Z"  # os.environ[...] / os.environ.get(...)
+    r"|\Aos\.getenv\([^)]*\)\Z"      # os.getenv(...)
+    r"|\Agetenv\([^)]*\)\Z"          # getenv(...)
+    r"|\Aprocess\.env(\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]+\])\Z"  # process.env.X
+    r"|\Astore\.get_secret\([^)]*\)\Z"  # store.get_secret(...)
 )
 
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -170,7 +167,7 @@ IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 # markers, a few code lead-ins, trailing comments). Anything else means the
 # match sits inside prose/code, i.e. an ASSIGN_RE mis-capture.
 _CLEAN_PREFIX_RE = re.compile(
-    r"(?:<!--.*-->\s*)?(?:[-*>#]\s*|\d+[.)]\s*)?"
+    r"(?:<!--.*-->\s*)?(?:\{\s*)?(?:[-*>#]\s*|\d+[.)]\s*)?"
     r"(?:export\s+|set\s+|const\s+|let\s+|var\s+|self\.)?",
     re.IGNORECASE,
 )
@@ -179,7 +176,19 @@ _CLEAN_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
-ALLOW_MARKER_RE = re.compile(r"<!--\s*sensitive-allow\s*-->|#\s*noqa:\s*sensitive")
+# Allow markers must carry a non-empty reason (A19): the marker is the sole
+# escape hatch under default-deny, so a bare marker earns no exemption and is
+# itself reported. Reasoned forms:
+#   <!-- sensitive-allow: <reason> -->
+#   # noqa: sensitive <reason>
+ALLOW_MARKER_RE = re.compile(
+    r"<!--\s*sensitive-allow:\s*\S.*?-->"
+    r"|#\s*noqa:\s*sensitive\s+\S"
+)
+REASONLESS_MARKER_RE = re.compile(
+    r"<!--\s*sensitive-allow\s*(?::\s*)?-->"
+    r"|#\s*noqa:\s*sensitive\s*$"
+)
 
 
 @dataclass
@@ -241,9 +250,12 @@ def _is_isolated_assignment(line: str, value: str) -> bool:
     arm mis-captures a bare word (e.g. ``password = all power``); such matches
     are not credential values at all. scan_file uses this as the total gate:
     non-isolated matches are skipped before is_safe_credential is even called.
+    The check is applied per assignment fragment (see
+    ``_split_assignment_fragments``), so several assignments sharing one
+    physical line are each judged on their own fragment.
     """
     for m in ASSIGN_RE.finditer(line):
-        matched = m.group(2) if m.group(2) is not None else (m.group(3) or "")
+        matched = m.group(3) if m.group(3) is not None else (m.group(4) or "")
         if matched != value:
             continue
         prefix = line[: m.start()].strip()
@@ -253,6 +265,24 @@ def _is_isolated_assignment(line: str, value: str) -> bool:
     return False
 
 
+# Statement separators for fragmenting a line into individual assignments
+# (A6): ``;``, ``&&``, and a comma immediately followed by a fresh ``key=`` /
+# ``key:`` (JSON-style rows are accepted once ASSIGN_RE allows quoted keys).
+_FRAGMENT_SPLIT_RE = re.compile(
+    r";|&&|,(?=\s*[\"']?[A-Za-z_][A-Za-z0-9_]*[\"']?\s*[:=])"
+)
+
+
+def _split_assignment_fragments(line: str) -> list[str]:
+    """Split a line into per-assignment fragments (A6).
+
+    The former gate judged the whole line all-or-nothing, so a second
+    assignment on the same line pushed every match out of scope. Each
+    fragment is now gated independently.
+    """
+    return _FRAGMENT_SPLIT_RE.split(line)
+
+
 def is_safe_credential(value: str, *, key: str | None = None) -> bool:
     """Return True only for explicitly safe credential shapes (default-deny).
 
@@ -260,12 +290,23 @@ def is_safe_credential(value: str, *, key: str | None = None) -> bool:
     recognising self-assignment code (``token = token``). Whether a match is an
     assignment at all is decided by the ``_is_isolated_assignment`` gate in
     ``scan_file``; explicit allow markers are handled there too.
+
+    Applicability boundary of the default-deny rule (A6): it judges the value
+    of an *isolated* assignment only. An unquoted multi-word value is
+    indistinguishable in shape from prose (``password = all power``), so only
+    its first word is ever captured as the candidate value, and the trailing
+    words make the fragment non-isolated, i.e. not judged at all. That is a
+    detection-principle boundary, not an exemption: quoted multi-word values
+    are captured whole and judged.
     """
     v = value.strip()
     if not v:
         return True
-    # Non-ASCII prose (e.g. Chinese documentation) stays safe.
-    if not v.isascii():
+    # Prose values with no ASCII letters/digits at all (e.g. pure Chinese
+    # documentation such as 见上文 / （略）) stay safe. Any mix of ASCII
+    # alphanumerics with non-ASCII characters (A18: formerly waived wholesale
+    # by a bare ``not v.isascii()`` check) is denied like any other value.
+    if not any(c.isascii() and c.isalnum() for c in v):
         return True
     lower = v.lower()
     # Explicit placeholders / booleans / None, incl. safe words with trailing punctuation.
@@ -276,8 +317,15 @@ def is_safe_credential(value: str, *, key: str | None = None) -> bool:
     # Wholly-punctuation / ellipsis values.
     if PUNCT_ONLY_RE.fullmatch(v):
         return True
-    # Template / env references and code-expression shapes.
-    if SAFE_REFERENCE_RE.search(v) or CODE_EXPRESSION_RE.search(v):
+    # Template / env references. SAFE_REFERENCE_RE branches are whole-value
+    # anchored and matched with fullmatch (A5): a value that merely *contains*
+    # an API reference name earns no exemption. Shape-based code-expression
+    # exemptions are gone entirely (A17, default-deny): a function-call-shaped
+    # or angle-bracket value is indistinguishable from a real credential, so
+    # legitimate occurrences in docs must use an explicit reasoned allow
+    # marker (A19); angle-bracket placeholders are exempt only when explicitly
+    # listed in SAFE_CREDENTIAL_PLACEHOLDERS.
+    if SAFE_REFERENCE_RE.fullmatch(v):
         return True
     # Self-assignment code: value is the identifier equal to the key.
     if key is not None and IDENTIFIER_RE.fullmatch(v) and v.lower() == key.lower():
@@ -324,6 +372,11 @@ def is_ignored(
 def _allow_marker_pos(line: str) -> int:
     m = ALLOW_MARKER_RE.search(line)
     return m.start() if m else -1
+
+
+def _reasonless_marker(line: str) -> str | None:
+    m = REASONLESS_MARKER_RE.search(line)
+    return m.group(0) if m else None
 
 
 def _allowed_match_index(line: str, row: list[Violation], marker_pos: int) -> int | None:
@@ -445,31 +498,46 @@ def scan_file(
                     )
                 )
 
-            for m_assign in ASSIGN_RE.finditer(line):
-                key = m_assign.group(1)
-                if not any(kw in key.lower() for kw in CREDENTIAL_KEYWORDS):
-                    continue
-                value = m_assign.group(2)
-                if value is None:
-                    value = m_assign.group(3) or ""
-                if not _is_isolated_assignment(line, value):
-                    continue
-                if is_safe_credential(value, key=key):
-                    continue
-                violations.append(
-                    Violation(
-                        file_path=path,
-                        line_number=lineno,
-                        category="credential",
-                        matched_text=value,
+            for fragment in _split_assignment_fragments(line):
+                for m_assign in ASSIGN_RE.finditer(fragment):
+                    key = m_assign.group(2)
+                    if not any(kw in key.lower() for kw in CREDENTIAL_KEYWORDS):
+                        continue
+                    value = m_assign.group(3)
+                    if value is None:
+                        value = m_assign.group(4) or ""
+                    if not _is_isolated_assignment(fragment, value):
+                        continue
+                    if is_safe_credential(value, key=key):
+                        continue
+                    violations.append(
+                        Violation(
+                            file_path=path,
+                            line_number=lineno,
+                            category="credential",
+                            matched_text=value,
+                        )
                     )
-                )
 
             if marker_pos >= 0:
                 row = violations[row_start:]
                 exempt_index = _allowed_match_index(line, row, marker_pos)
                 if exempt_index is not None:
                     del violations[row_start + exempt_index]
+
+            # A reasonless allow marker earns no exemption and is itself a
+            # violation (A19); appended after exemption handling so it can
+            # never be exempted away.
+            reasonless = _reasonless_marker(line)
+            if reasonless is not None:
+                violations.append(
+                    Violation(
+                        file_path=path,
+                        line_number=lineno,
+                        category="marker",
+                        matched_text=reasonless,
+                    )
+                )
 
     return violations
 

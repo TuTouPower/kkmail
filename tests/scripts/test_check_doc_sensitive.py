@@ -69,12 +69,16 @@ Path: /Users/secret_dev/repo
 
 
 def test_ignore_mechanism_via_line_bypass(tmp_path: Path):
+    """Retirement note (adoption A19): markers must carry a reason; the
+    fixtures below use reasoned markers. Reasonless markers are asserted
+    non-exempt by the A19 tests at the bottom of this file.
+    """
     doc = tmp_path / "line_bypass.md"
     doc.write_text(
         """# Document with Line Bypass
 
-Contact: personal@gmail.com <!-- sensitive-allow -->
-Path: /Users/someuser/path # noqa: sensitive
+Contact: personal@gmail.com <!-- sensitive-allow: test fixture, intentional example address -->
+Path: /Users/someuser/path # noqa: sensitive test fixture, intentional example path
 """,
         encoding="utf-8",
     )
@@ -204,12 +208,17 @@ def test_five_credential_shapes_all_detected(tmp_path: Path):
 
 
 def test_code_identifiers_and_placeholders_not_flagged(tmp_path: Path):
+    """Retirement note (adoption A17): the fixture formerly included the
+    function-call lines ``self.password = password.strip()`` and
+    ``api_key = normalize_api_key(``. Under default-deny those shapes are no
+    longer exempt (a call-shaped value is indistinguishable from a real
+    credential); they are covered as denied shapes by the A17 test below, and
+    legitimate occurrences in real docs use a reasoned allow marker (A19).
+    """
     doc = tmp_path / "code.md"
     doc.write_text(
         "# Archived notes\n\n"
-        "self.password = password.strip()\n"
         "payload = data.get(\n"
-        "api_key = normalize_api_key(\n"
         "secret = store.get_secret(...)\n"
         "mode = default\n"
         "mask = ***\n"
@@ -366,7 +375,7 @@ def test_inline_allow_exempts_only_nearest_match(tmp_path: Path, monkeypatch):
     doc = tmp_path / "inline_allow.md"
     doc.write_text(
         "# Review Document\n\n"
-        "Contact alice@corp.com and bob@corp.com <!-- sensitive-allow -->\n",
+        "Contact alice@corp.com and bob@corp.com <!-- sensitive-allow: fixture, only the nearest match is exempt -->\n",
         encoding="utf-8",
     )
     proc = run_checker(str(doc), "--check")
@@ -495,11 +504,16 @@ def test_is_safe_credential_denies_weak_credential_shapes(monkeypatch):
 
 
 def test_is_safe_credential_allows_explicit_safe_shapes(monkeypatch):
-    """Only explicit safe shapes return True: placeholders/refs/code/prose.
+    """Only explicit safe shapes return True: placeholders/refs/prose.
 
     Retirement note (A22 issue-3): the former ("42", None) and ("3.14", None)
     numeric-literal cases are gone -- NUMBER_LITERAL_RE was removed because a
     pure numeric password such as 12345678 must be denied, not waived.
+
+    Retirement note (adoption A17): the former ("password.strip()", None) and
+    ("normalize_api_key(", None) function-call cases are gone -- the
+    code-expression shape exemption was deleted (default-deny); call-shaped
+    values are asserted denied by the A17 test below.
     """
     module = _load_module(monkeypatch)
     safe_shapes = [
@@ -525,8 +539,6 @@ def test_is_safe_credential_allows_explicit_safe_shapes(monkeypatch):
         ("getenv('X')", None),
         ("process.env.SECRET", None),
         ("store.get_secret(account.credential_ref)", None),
-        ("password.strip()", None),
-        ("normalize_api_key(", None),
         ("password", "password"),
         ("token", "token"),
         ("mysecret", "mysecret"),
@@ -624,17 +636,170 @@ def test_default_deny_catches_structure_chars_and_numeric_password(tmp_path):
 
 
 def test_prose_assignments_not_flagged_via_cli(tmp_path):
-    """Prose/code mis-captures stay clean (prerequisite for full docs scan gating)."""
+    """Prose/code mis-captures stay clean (prerequisite for full docs scan gating).
+
+    Retirement note (adoption A17): the fixture formerly included the isolated
+    line ``api_key = normalize_api_key(``; a call-shaped RHS is now
+    default-deny (see the A17 test), so it no longer belongs in a clean doc.
+    """
     doc = tmp_path / "prose.md"
     doc.write_text(
         "# Notes\n\n"
         "W1->>DB: 短事务获取 account_sync_leases<br/>fencing_token=T\n"
         "Route is guarded (single password = all power) can clone\n"
         "const token = await ensureCsrf()\n"
-        "api_key = normalize_api_key(\n"
         "- LOGIN_PASSWORD=***\n",
         encoding="utf-8",
     )
     proc = run_checker(str(doc), "--check")
     assert proc.returncode == 0, proc.stderr
     assert "PASSED" in proc.stdout
+
+
+# --- Adoption A4: opener-prefixed values are no longer a blanket exemption ---
+
+
+def test_a4_opener_prefixed_values_denied(monkeypatch):
+    """A4: a value merely starting with ``$``/``(``/``{``/``<`` is denied;
+    template references must match the whole value (``\\Z`` anchored)."""
+    module = _load_module(monkeypatch)
+    for value in ("$uperSecret99", "(hiddenpass1)", "${X}tail"):
+        assert module.is_safe_credential(value) is False, value
+        assert module.is_safe_credential(value, key="password") is False, value
+    for value in ("${X}", "$(cmd)", "{{ t }}"):
+        assert module.is_safe_credential(value) is True, value
+
+
+# --- Adoption A5: API references are whole-value only, never substring -------
+
+
+def test_a5_api_reference_substring_denied(monkeypatch):
+    """A5: a value merely containing ``os.environ`` (etc.) is denied; only a
+    whole-value reference expression is safe."""
+    module = _load_module(monkeypatch)
+    for value in ("abc os.environ leak", "os.environ leak"):
+        assert module.is_safe_credential(value) is False, value
+        assert module.is_safe_credential(value, key="password") is False, value
+    for value in ('os.environ["X"]', 'os.getenv("X")', "process.env.X"):
+        assert module.is_safe_credential(value) is True, value
+
+
+# --- Adoption A17: default-deny, no shape-based code/angle exemptions --------
+
+
+def test_a17_call_and_angle_shapes_denied(monkeypatch):
+    """A17: function-call-shaped and angle-bracket values are denied unless
+    the exact placeholder is explicitly whitelisted."""
+    module = _load_module(monkeypatch)
+    for value in ("Str0ng(Pass)", "<realpass123>", "loadSecret()"):
+        assert module.is_safe_credential(value) is False, value
+        assert module.is_safe_credential(value, key="password") is False, value
+    for value in ("<your-token>", "<password>", "<redacted>"):
+        assert module.is_safe_credential(value) is True, value
+
+
+# --- Adoption A18: non-ASCII exemption narrowed to "no ASCII alphanumerics" -
+
+
+def test_a18_mixed_ascii_nonascii_denied(monkeypatch):
+    """A18: values mixing ASCII letters/digits with non-ASCII characters are
+    denied; only values with no ASCII alphanumerics at all count as prose."""
+    module = _load_module(monkeypatch)
+    for value in ("pässwort1", "密码123"):
+        assert module.is_safe_credential(value) is False, value
+        assert module.is_safe_credential(value, key="password") is False, value
+    for value in ("见上文", "（略）"):
+        assert module.is_safe_credential(value) is True, value
+
+
+# --- Adoption A19: allow markers must carry a non-empty reason ---------------
+
+
+def test_a19_reasonless_marker_does_not_exempt_and_is_reported(tmp_path: Path, monkeypatch):
+    """A19: a bare ``<!-- sensitive-allow -->`` / ``# noqa: sensitive`` earns
+    no exemption, and the marker itself is reported as a [MARKER] violation."""
+    module = _load_module(monkeypatch)
+    doc = tmp_path / "reasonless.md"
+    doc.write_text(
+        "# Notes\n\n"
+        "Contact: personal@gmail.com <!-- sensitive-allow -->\n"
+        "PASSWORD=Sup3rSecret123 # noqa: sensitive\n",
+        encoding="utf-8",
+    )
+    violations = module.scan_file(doc, root=tmp_path)
+    categories = [v.category for v in violations]
+    assert categories.count("marker") == 2, categories
+    assert categories.count("email") == 1, categories
+    assert categories.count("credential") == 1, categories
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert "[MARKER]" in proc.stderr
+
+
+def test_a19_reasoned_marker_exempts(tmp_path: Path):
+    """A19: markers with a non-empty reason exempt the nearest prior match."""
+    doc = tmp_path / "reasoned.md"
+    doc.write_text(
+        "# Notes\n\n"
+        "Contact: personal@gmail.com <!-- sensitive-allow: archived quote, address already rotated -->\n"
+        "PASSWORD=Sup3rSecret123 # noqa: sensitive fixture value, not a real credential\n",
+        encoding="utf-8",
+    )
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 0, proc.stderr
+    assert "PASSED" in proc.stdout
+
+
+# --- Adoption A6: per-fragment gate, same-line assignments each detected -----
+
+
+def test_a6_same_line_multiple_assignments_each_detected(tmp_path: Path, monkeypatch):
+    """A6: ``password=abc123; token=xyz789`` on one line yields two credential
+    violations (previously the whole line fell outside the all-or-nothing
+    gate). ``&&`` and comma-before-new-key separators behave the same."""
+    module = _load_module(monkeypatch)
+    doc = tmp_path / "multi.md"
+    doc.write_text(
+        "# Notes\n\n"
+        "password=abc123; token=xyz789\n"
+        "password=abc123 && token=xyz789\n"
+        "password=abc123, token=xyz789\n",
+        encoding="utf-8",
+    )
+    violations = module.scan_file(doc, root=tmp_path)
+    creds = [v for v in violations if v.category == "credential"]
+    assert len(creds) == 6, [(v.line_number, v.matched_text) for v in creds]
+    assert {v.matched_text for v in creds} == {"abc123", "xyz789"}
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert proc.stderr.count("[CREDENTIAL]") == 6
+
+
+# --- Adoption A7: apikey / private_key keywords and JSON key shapes ---------
+
+
+def test_a7_apikey_private_key_and_json_shapes_detected(tmp_path: Path, monkeypatch):
+    """A7: ``apikey`` and ``private_key`` are credential keywords, and a
+    quoted JSON key (``"password": "x",``) is an assignment shape the gate
+    accepts, including a two-key JSON line fragmented per A6."""
+    module = _load_module(monkeypatch)
+    doc = tmp_path / "a7.md"
+    doc.write_text(
+        "# Notes\n\n"
+        "apikey=Sup3rSecret123\n"
+        "private_key: Sup3rSecret123\n"
+        '"password": "Sup3rSecret123",\n'
+        '{"password": "Sup3rSecret123", "token": "xyz789abc"}\n',
+        encoding="utf-8",
+    )
+    violations = module.scan_file(doc, root=tmp_path)
+    creds = [v for v in violations if v.category == "credential"]
+    assert len(creds) == 5, [(v.line_number, v.matched_text) for v in creds]
+    assert {v.line_number for v in creds} == {3, 4, 5, 6}
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert proc.stderr.count("[CREDENTIAL]") == 5
+    assert "Sup3rSecret123" not in proc.stderr

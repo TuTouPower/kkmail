@@ -225,7 +225,7 @@ ______________________________________________________________________
 **Evidence**
 
 ```python
-api_key = normalize_api_key(
+api_key = normalize_api_key( <!-- sensitive-allow: 归档评审条目引用源码函数名，非凭据值 -->
     request.headers.get('X-API-Key')
     or request.args.get('api_key')
     or request.args.get('apikey')
