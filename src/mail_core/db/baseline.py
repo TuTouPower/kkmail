@@ -48,6 +48,11 @@ CORE_CRITICAL_TABLES: frozenset[str] = frozenset({
     "worker_jobs",
 })
 
+# Every revision the deleted legacy migration tree ever contained, enumerated
+# from Git history (the versions/ directory as of the parent of the squash
+# commit 5bc588cd that replaced the tree with the unified baseline; a scan of
+# all historical commits finds exactly these 31 ids and no others). The set is
+# closed and explicit: classification never guesses from a revision's shape.
 KNOWN_LEGACY_REVISIONS: frozenset[str] = frozenset({
     "20261020_0001",
     "f5f312751c77",
@@ -82,6 +87,15 @@ KNOWN_LEGACY_REVISIONS: frozenset[str] = frozenset({
     "20261107_0031",
 })
 
+# The only legacy revisions the narrow conversion supports: their schema is
+# the unified baseline minus the folder_patrol_status table, which the
+# conversion rebuilds (see docs/guides/upgrade.md). Every other known legacy
+# revision is classified LEGACY_UNSUPPORTED, never converted.
+NARROW_CONVERSION_LEGACY_REVISIONS: frozenset[str] = frozenset({
+    "20261031_0030",
+    "20261107_0031",
+})
+
 
 def _is_dated_revision(rev: str) -> bool:
     """Return True for the ``YYYYMMDD_NNNN`` revision shape used by this project.
@@ -98,12 +112,18 @@ def _is_dated_revision(rev: str) -> bool:
 
 
 def is_legacy_revision(rev: str | None) -> bool:
-    """Return True if rev represents a recognized migration prior to unified baseline."""
-    if not rev:
-        return False
-    if rev in KNOWN_LEGACY_REVISIONS:
-        return True
-    return _is_dated_revision(rev) and rev < UNIFIED_BASELINE_REVISION
+    """Return True if rev is one of the explicitly enumerated legacy revisions.
+
+    Membership in :data:`KNOWN_LEGACY_REVISIONS` only — no shape-based
+    heuristic. A dated string that was never a real revision (forged or
+    mistyped) is not legacy; the planner classifies it UNKNOWN_REVISION.
+    """
+    return bool(rev) and rev in KNOWN_LEGACY_REVISIONS
+
+
+def is_narrow_conversion_revision(rev: str | None) -> bool:
+    """Return True if the narrow legacy conversion supports this revision."""
+    return bool(rev) and rev in NARROW_CONVERSION_LEGACY_REVISIONS
 
 REQUIRED_TABLES: frozenset[str] = frozenset({
     "account_groups",
@@ -209,6 +229,7 @@ class MigrationAction(str, Enum):
     EMPTY_DATABASE = "empty_database"
     AT_BASELINE = "at_baseline"
     LEGACY = "legacy"
+    LEGACY_UNSUPPORTED = "legacy_unsupported"
     NEWER_THAN_CODE = "newer_than_code"
     NO_VERSION_WITH_BUSINESS_TABLES = "no_version_with_business_tables"
     UNKNOWN_REVISION = "unknown_revision"
@@ -223,11 +244,17 @@ class RevisionContext:
     classification inputs (not just the classification function) are single-
     sourced. The context is passed to :func:`plan_migration` as an explicit
     argument.
+
+    ``legacy_revisions`` are the legacy revisions the narrow conversion
+    supports (classified LEGACY); ``known_legacy_revisions`` are the other
+    explicitly enumerated revisions of the deleted legacy tree (classified
+    LEGACY_UNSUPPORTED).
     """
 
     known_revisions: frozenset[str]
     legacy_revisions: frozenset[str]
     heads: tuple[str, ...]
+    known_legacy_revisions: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -564,12 +591,12 @@ def _stamp_targets(current: list[str], revision: str) -> str:
         return "insert"
     if current == [revision]:
         return "noop"
-    if all(is_legacy_revision(r) for r in current):
+    if all(is_narrow_conversion_revision(r) for r in current):
         return "replace"
     raise SchemaValidationError(
         f"Refusing to overwrite alembic_version {current!r} with {revision!r}: "
-        "only an empty table or a recognized legacy revision may be stamped "
-        "to the unified baseline."
+        "only an empty table or a narrow-conversion-supported legacy revision "
+        "may be stamped to the unified baseline."
     )
 
 
@@ -760,11 +787,11 @@ def apply_narrow_legacy_conversion(database_url: str) -> str:
             current = _read_version_rows(conn)
             if current == [UNIFIED_BASELINE_REVISION]:
                 return "already-at-baseline"
-            if len(current) != 1 or not is_legacy_revision(current[0]):
+            if len(current) != 1 or not is_narrow_conversion_revision(current[0]):
                 raise SchemaValidationError(
                     f"Refusing narrow legacy conversion: alembic_version is {current!r} "
-                    "inside the conversion transaction; expected a single recognized "
-                    "legacy revision."
+                    "inside the conversion transaction; expected a single "
+                    "narrow-conversion-supported legacy revision."
                 )
             errors = verify_narrow_legacy_schema(conn)
             if errors:
@@ -810,8 +837,9 @@ def revision_context(cfg: Config | None = None) -> RevisionContext:
     script = ScriptDirectory.from_config(cfg or alembic_config())
     return RevisionContext(
         known_revisions=frozenset(r.revision for r in script.walk_revisions()),
-        legacy_revisions=KNOWN_LEGACY_REVISIONS,
+        legacy_revisions=NARROW_CONVERSION_LEGACY_REVISIONS,
         heads=tuple(script.get_heads()),
+        known_legacy_revisions=KNOWN_LEGACY_REVISIONS - NARROW_CONVERSION_LEGACY_REVISIONS,
     )
 
 
@@ -892,7 +920,7 @@ def plan_migration(state: DatabaseState, *, context: RevisionContext) -> Migrati
             ),
         )
 
-    if current in context.legacy_revisions or is_legacy_revision(current):
+    if current in context.legacy_revisions:
         return MigrationPlan(
             action=MigrationAction.LEGACY,
             current_revision=current,
@@ -900,6 +928,24 @@ def plan_migration(state: DatabaseState, *, context: RevisionContext) -> Migrati
             message=(
                 f"Database is at known legacy revision '{current}': "
                 "the narrow legacy conversion path applies."
+            ),
+        )
+
+    if current in context.known_legacy_revisions:
+        supported_text = ", ".join(sorted(NARROW_CONVERSION_LEGACY_REVISIONS))
+        return MigrationPlan(
+            action=MigrationAction.LEGACY_UNSUPPORTED,
+            current_revision=current,
+            version_rows=version_rows,
+            message=(
+                f"Database is at known legacy revision '{current}' from an older "
+                "kkmail release. It is not supported by the narrow conversion "
+                f"(supported legacy revisions: {supported_text}): this old-version "
+                "database must first be upgraded with the historical kkmail "
+                "release matching its revision. Restore the pre-upgrade sealed "
+                "backup into a fresh deployment instead of migrating it here; "
+                "do not re-run this migration against the same database. "
+                "The database was not modified."
             ),
         )
 
@@ -969,6 +1015,7 @@ def run_migration(
             MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES,
             MigrationAction.UNKNOWN_REVISION,
             MigrationAction.NEWER_THAN_CODE,
+            MigrationAction.LEGACY_UNSUPPORTED,
             MigrationAction.EMPTY_DATABASE,
         ):
             raise SchemaValidationError(plan.message)

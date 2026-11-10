@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mail_core.db import baseline
 from mail_core.db.baseline import UNIFIED_BASELINE_REVISION
 
@@ -34,7 +36,10 @@ def test_revision_context_matches_shipped_tree():
     ctx = baseline.revision_context()
     assert ctx.known_revisions == frozenset({UNIFIED_BASELINE_REVISION})
     assert ctx.heads == (UNIFIED_BASELINE_REVISION,)
-    assert ctx.legacy_revisions == baseline.KNOWN_LEGACY_REVISIONS
+    assert ctx.legacy_revisions == baseline.NARROW_CONVERSION_LEGACY_REVISIONS
+    assert ctx.known_legacy_revisions == (
+        baseline.KNOWN_LEGACY_REVISIONS - baseline.NARROW_CONVERSION_LEGACY_REVISIONS
+    )
 
 
 def test_revision_context_sees_extra_revision_in_temp_tree(tmp_path):
@@ -111,3 +116,54 @@ def test_plan_newer_than_code_requires_greater_than_all_heads():
     )
     plan = _plan_for("20261201_0001", context=ctx)
     assert plan.action is baseline.MigrationAction.UNKNOWN_REVISION
+
+
+def test_plan_unknown_for_dated_revision_that_never_existed():
+    """A15: the deleted legacy tree is enumerated explicitly; a dated string
+    that was never a real revision is UNKNOWN, not LEGACY."""
+    plan = _plan_for("20200101_0001")
+    assert plan.action is baseline.MigrationAction.UNKNOWN_REVISION
+
+
+@pytest.mark.parametrize("revision", ["20261031_0030", "20261107_0031"])
+def test_plan_legacy_for_narrow_supported_revisions(revision):
+    plan = _plan_for(revision)
+    assert plan.action is baseline.MigrationAction.LEGACY
+
+
+@pytest.mark.parametrize(
+    "revision",
+    ["20261020_0001", "f5f312751c77", "20261021_0005", "20261027_0029"],
+)
+def test_plan_legacy_unsupported_for_other_known_revisions(revision):
+    plan = _plan_for(revision)
+    assert plan.action is baseline.MigrationAction.LEGACY_UNSUPPORTED
+    assert "historical kkmail release" in plan.message
+
+
+def test_every_enumerated_legacy_revision_classifies():
+    """The full Git-history enumeration: each of the 31 old revisions is
+    either narrow-supported (LEGACY) or known-but-unsupported."""
+    assert len(baseline.KNOWN_LEGACY_REVISIONS) == 31
+    assert (
+        baseline.NARROW_CONVERSION_LEGACY_REVISIONS
+        <= baseline.KNOWN_LEGACY_REVISIONS
+    )
+    for revision in baseline.KNOWN_LEGACY_REVISIONS:
+        plan = _plan_for(revision)
+        expected = (
+            baseline.MigrationAction.LEGACY
+            if revision in baseline.NARROW_CONVERSION_LEGACY_REVISIONS
+            else baseline.MigrationAction.LEGACY_UNSUPPORTED
+        )
+        assert plan.action is expected, revision
+
+
+def test_is_legacy_revision_is_set_membership_only():
+    assert baseline.is_legacy_revision("f5f312751c77") is True
+    assert baseline.is_legacy_revision("20261031_0030") is True
+    assert baseline.is_legacy_revision("20200101_0001") is False
+    assert baseline.is_legacy_revision("20261201_0001") is False
+    assert baseline.is_legacy_revision("20261107_0001") is False
+    assert baseline.is_legacy_revision(None) is False
+    assert baseline.is_legacy_revision("") is False

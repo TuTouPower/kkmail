@@ -64,6 +64,7 @@ def run_migrations(*, check_only: bool = False) -> None:
                 baseline.MigrationAction.NO_VERSION_WITH_BUSINESS_TABLES,
                 baseline.MigrationAction.UNKNOWN_REVISION,
                 baseline.MigrationAction.NEWER_THAN_CODE,
+                baseline.MigrationAction.LEGACY_UNSUPPORTED,
                 baseline.MigrationAction.MULTIPLE_VERSIONS,
             ):
                 raise RuntimeError(plan.message)

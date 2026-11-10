@@ -42,6 +42,7 @@ if str(ROOT / "scripts") not in sys.path:
 
 from mail_core.db.baseline import (
     KNOWN_LEGACY_REVISIONS,
+    NARROW_CONVERSION_LEGACY_REVISIONS,
     REQUIRED_COLUMNS,
     REQUIRED_TABLES,
     UNIFIED_BASELINE_REVISION,
@@ -259,7 +260,8 @@ def _startup_revision_context():
     script = ScriptDirectory.from_config(cfg)
     return RevisionContext(
         known_revisions=frozenset(r.revision for r in script.walk_revisions()),
-        legacy_revisions=KNOWN_LEGACY_REVISIONS,
+        legacy_revisions=NARROW_CONVERSION_LEGACY_REVISIONS,
+        known_legacy_revisions=KNOWN_LEGACY_REVISIONS - NARROW_CONVERSION_LEGACY_REVISIONS,
         heads=tuple(script.get_heads()),
     )
 
@@ -556,6 +558,10 @@ def test_verify_schema_exempt_tables_only_skips_named_table(pg_engine):
 
 @pytest.mark.parametrize("dry_run", [False, True], ids=["apply", "dry-run"])
 def test_run_migration_refuses_unsupported_legacy_database(pg_engine, dry_run):
+    """A15 semantics: 20261027_0029 is a known legacy revision outside the
+    narrow-conversion set, so it is refused at classification time as
+    LEGACY_UNSUPPORTED (previously it reached the narrow schema check and
+    failed there on missing tables). Zero writes either way."""
     db_url = _schema_url(pg_engine)
     legacy_cursor = json.dumps({"last_status": "ok", "delta_token": "keep-me"})
     folder_id = uuid.uuid4()
@@ -582,7 +588,8 @@ def test_run_migration_refuses_unsupported_legacy_database(pg_engine, dry_run):
 
     with pytest.raises(SchemaValidationError, match="not supported") as excinfo:
         run_migration(db_url, dry_run=dry_run)
-    assert "message_remote_image_allows" in str(excinfo.value)
+    assert "20261027_0029" in str(excinfo.value)
+    assert "historical kkmail release" in str(excinfo.value)
     assert "Restore the pre-upgrade sealed backup" in str(excinfo.value)
 
     with pg_engine.connect() as conn:
