@@ -10,7 +10,7 @@
 | 门禁 | 命令 | 结果 |
 |---|---|---|
 | 模板契约 | `pytest .repo_template/tests -q -m contract` | 257 passed，1 skipped |
-| 敏感扫描（已跟踪树） | `python3 scripts/check_doc_sensitive.py docs --check`（干净 worktree 内运行） | 583 个文件，0 违规，PASSED |
+| 敏感扫描（已跟踪树） | `python3 scripts/check_doc_sensitive.py docs --check`（干净 worktree 内运行） | 583 个文件（`f3c339c2` 时点），0 违规，PASSED；本证据文件入库后树内文件数为 584，复扫仍 0 违规 |
 | 前端单测 | `(cd src/frontend && npm test)` | 54 个文件，583 passed，0 failed |
 | 前端类型 | `npx tsc -b` | 通过（exit 0） |
 | 前端构建 | `npm run build` | 通过 |
@@ -35,7 +35,7 @@
 
 基线侧独有失败（`f3c339c2` 已不失败）：`test_system_health.py::test_system_health_metrics_calculation`、`test_a160_drill_allowed_roots.py::test_a160_repo_internal_docs_path_is_refused`（后者在 /tmp worktree 路径下运行，路径语义受执行位置影响）。
 
-passed/skipped 结构变化（1731→1632 passed、397→534 skipped）：本轮采纳 A1/A2/A16 删除 SQLite 方言分支、相关用例改为 PG 门控，unit 模式下由 passed 转为 skipped，与各组独立审阅结论一致。
+passed/skipped 结构变化（1731→1632 passed、397→534 skipped）：对照区间 `c5cb8905..f3c339c2` 内的 PG 化工作整体所致——既包括区间前段用户侧的 pg-only 修复批（如 `957acb90` baseline 工具链 PostgreSQL-only 化及三个 pg-only 集成 merge），也包括本轮采纳 A1/A2/A16 的 SQLite 分支删除与 PG 门控新增；相关用例在 unit 模式下由 passed 转为 skipped，方向与各组独立审阅结论一致。此 delta 不应单独归因于本轮采纳。
 
 ## 与 handoff 既有声称的对齐核查
 

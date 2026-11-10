@@ -315,7 +315,7 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 |2026-10-27|TypeScript（`tsc -b`）|通过（无诊断输出）|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
 |2026-10-27|后端完整 PostgreSQL 套件|真实环境接入：本地 Docker (OrbStack) PostgreSQL/IMAP 测试环境已就绪运行，由门禁脚本动态分配一次性测试库执行套件|[第四轮 validation](../reviews/review_20261027_021416/validation.md)|
 |2026-11-10|模板契约|257 passed，1 skipped（云端机器复跑，与 handoff 声称一致）|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
-|2026-11-10|敏感扫描（已跟踪树）|583 个文件，0 违规；主克隆工作区未跟踪残留目录另有 7 处命中（未跟踪、清理未授权），已跟踪树干净|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
+|2026-11-10|敏感扫描（已跟踪树）|583 个文件（`f3c339c2` 时点，含证据文件后为 584），0 违规；主克隆工作区未跟踪残留目录另有 7 处命中（未跟踪、清理未授权），已跟踪树干净|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
 |2026-11-10|前端全量（vitest + tsc + build + lint）|54 个文件、583 passed，0 failed；`tsc -b` 通过；build 通过；lint 0 warnings|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
 |2026-11-10|黑盒 E2E（stubApi）|21 passed|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
 |2026-11-10|桌面单测|12 个文件中 10 个通过，oauth 按设计 skip、postgresManager 真实启停 skip（无 PG 二进制）；`clipboard.test.js` 因本机克隆未装 electron 依赖无法运行（环境缺口）|[A13 门禁复跑证据](../reviews/review_20261110_135843/a13_gate_rerun.md)|
