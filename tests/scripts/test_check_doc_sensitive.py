@@ -749,3 +749,29 @@ def test_a19_reasoned_marker_exempts(tmp_path: Path):
     proc = run_checker(str(doc), "--check")
     assert proc.returncode == 0, proc.stderr
     assert "PASSED" in proc.stdout
+
+
+# --- Adoption A6: per-fragment gate, same-line assignments each detected -----
+
+
+def test_a6_same_line_multiple_assignments_each_detected(tmp_path: Path, monkeypatch):
+    """A6: ``password=abc123; token=xyz789`` on one line yields two credential
+    violations (previously the whole line fell outside the all-or-nothing
+    gate). ``&&`` and comma-before-new-key separators behave the same."""
+    module = _load_module(monkeypatch)
+    doc = tmp_path / "multi.md"
+    doc.write_text(
+        "# Notes\n\n"
+        "password=abc123; token=xyz789\n"
+        "password=abc123 && token=xyz789\n"
+        "password=abc123, token=xyz789\n",
+        encoding="utf-8",
+    )
+    violations = module.scan_file(doc, root=tmp_path)
+    creds = [v for v in violations if v.category == "credential"]
+    assert len(creds) == 6, [(v.line_number, v.matched_text) for v in creds]
+    assert {v.matched_text for v in creds} == {"abc123", "xyz789"}
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert proc.stderr.count("[CREDENTIAL]") == 6

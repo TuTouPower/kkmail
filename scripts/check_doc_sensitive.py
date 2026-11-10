@@ -246,6 +246,9 @@ def _is_isolated_assignment(line: str, value: str) -> bool:
     arm mis-captures a bare word (e.g. ``password = all power``); such matches
     are not credential values at all. scan_file uses this as the total gate:
     non-isolated matches are skipped before is_safe_credential is even called.
+    The check is applied per assignment fragment (see
+    ``_split_assignment_fragments``), so several assignments sharing one
+    physical line are each judged on their own fragment.
     """
     for m in ASSIGN_RE.finditer(line):
         matched = m.group(2) if m.group(2) is not None else (m.group(3) or "")
@@ -258,6 +261,24 @@ def _is_isolated_assignment(line: str, value: str) -> bool:
     return False
 
 
+# Statement separators for fragmenting a line into individual assignments
+# (A6): ``;``, ``&&``, and a comma immediately followed by a fresh ``key=`` /
+# ``key:`` (JSON-style rows are accepted once ASSIGN_RE allows quoted keys).
+_FRAGMENT_SPLIT_RE = re.compile(
+    r";|&&|,(?=\s*[\"']?[A-Za-z_][A-Za-z0-9_]*[\"']?\s*[:=])"
+)
+
+
+def _split_assignment_fragments(line: str) -> list[str]:
+    """Split a line into per-assignment fragments (A6).
+
+    The former gate judged the whole line all-or-nothing, so a second
+    assignment on the same line pushed every match out of scope. Each
+    fragment is now gated independently.
+    """
+    return _FRAGMENT_SPLIT_RE.split(line)
+
+
 def is_safe_credential(value: str, *, key: str | None = None) -> bool:
     """Return True only for explicitly safe credential shapes (default-deny).
 
@@ -265,6 +286,14 @@ def is_safe_credential(value: str, *, key: str | None = None) -> bool:
     recognising self-assignment code (``token = token``). Whether a match is an
     assignment at all is decided by the ``_is_isolated_assignment`` gate in
     ``scan_file``; explicit allow markers are handled there too.
+
+    Applicability boundary of the default-deny rule (A6): it judges the value
+    of an *isolated* assignment only. An unquoted multi-word value is
+    indistinguishable in shape from prose (``password = all power``), so only
+    its first word is ever captured as the candidate value, and the trailing
+    words make the fragment non-isolated, i.e. not judged at all. That is a
+    detection-principle boundary, not an exemption: quoted multi-word values
+    are captured whole and judged.
     """
     v = value.strip()
     if not v:
@@ -465,25 +494,26 @@ def scan_file(
                     )
                 )
 
-            for m_assign in ASSIGN_RE.finditer(line):
-                key = m_assign.group(1)
-                if not any(kw in key.lower() for kw in CREDENTIAL_KEYWORDS):
-                    continue
-                value = m_assign.group(2)
-                if value is None:
-                    value = m_assign.group(3) or ""
-                if not _is_isolated_assignment(line, value):
-                    continue
-                if is_safe_credential(value, key=key):
-                    continue
-                violations.append(
-                    Violation(
-                        file_path=path,
-                        line_number=lineno,
-                        category="credential",
-                        matched_text=value,
+            for fragment in _split_assignment_fragments(line):
+                for m_assign in ASSIGN_RE.finditer(fragment):
+                    key = m_assign.group(1)
+                    if not any(kw in key.lower() for kw in CREDENTIAL_KEYWORDS):
+                        continue
+                    value = m_assign.group(2)
+                    if value is None:
+                        value = m_assign.group(3) or ""
+                    if not _is_isolated_assignment(fragment, value):
+                        continue
+                    if is_safe_credential(value, key=key):
+                        continue
+                    violations.append(
+                        Violation(
+                            file_path=path,
+                            line_number=lineno,
+                            category="credential",
+                            matched_text=value,
+                        )
                     )
-                )
 
             if marker_pos >= 0:
                 row = violations[row_start:]
