@@ -13,37 +13,23 @@ database carrying unified-baseline business tables, is refused by both
 entries.
 
 Read-only checks open their own connection with a read-only transaction
-(``SET TRANSACTION READ ONLY`` on PostgreSQL, ``PRAGMA query_only=ON`` on
-SQLite) plus connection and statement timeouts. The narrow legacy conversion
-runs inside one write transaction that re-verifies everything from scratch
-(no precheck results are reused, closing the TOCTOU window) under a
-PostgreSQL advisory lock so concurrent converters serialize.
+(``SET TRANSACTION READ ONLY`` on PostgreSQL) plus connection and statement
+timeouts. Only PostgreSQL is supported: every entry point rejects any other
+backend rather than silently skipping the read-only protection. The narrow
+legacy conversion runs inside one write transaction that re-verifies
+everything from scratch (no precheck results are reused, closing the TOCTOU
+window) under a PostgreSQL advisory lock so concurrent converters serialize.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Iterator
 
-from sqlalchemy import (
-    Column,
-    DateTime,
-    ForeignKey,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    create_engine,
-    func,
-    inspect,
-    text,
-)
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection, Engine, make_url
 
 LOG = logging.getLogger("migrate_to_unified_baseline")
@@ -254,11 +240,11 @@ class SchemaValidationError(RuntimeError):
 
 
 def check_connect_url(raw_url: str) -> str:
-    """Return the check-connection URL with a connection timeout applied.
+    """Return the PostgreSQL check-connection URL with a connection timeout applied.
 
-    PostgreSQL gets ``connect_timeout`` (via the URL query, never via engine
-    kwargs, so single-argument ``create_engine(url)`` keeps working).
-    SQLite needs no connection timeout for opening a file.
+    ``connect_timeout`` is applied via the URL query (never via engine kwargs,
+    so single-argument ``create_engine(url)`` keeps working). Only PostgreSQL
+    is supported; the offline tool rejects any other backend.
     """
     url = make_url(raw_url)
     if url.get_backend_name() == "postgresql" and "connect_timeout" not in url.query:
@@ -271,16 +257,17 @@ def check_connect_url(raw_url: str) -> str:
 def configure_read_only(conn: Connection, backend: str) -> None:
     """Put an already-opened check connection into read-only mode with a statement timeout.
 
-    PostgreSQL uses real read-only transactions (never the SQLite PRAGMA, and
-    never PostgreSQL-only SQL on SQLite). Must be the first statement of the
-    transaction on PostgreSQL.
+    PostgreSQL uses a real read-only transaction (``SET TRANSACTION READ ONLY``)
+    plus a statement timeout, and must be the first statement of the
+    transaction. Only PostgreSQL is supported; any other backend is rejected
+    instead of silently skipping the read-only protection.
     """
-    if backend == "postgresql":
-        conn.execute(text("SET TRANSACTION READ ONLY"))
-        conn.execute(text(f"SET LOCAL statement_timeout = '{_CHECK_STATEMENT_TIMEOUT}'"))
-    elif backend == "sqlite":
-        conn.execute(text("PRAGMA query_only=ON"))
-        conn.execute(text("PRAGMA busy_timeout=10000"))
+    if backend != "postgresql":
+        raise ValueError(
+            f"configure_read_only requires PostgreSQL, got {backend!r}"
+        )
+    conn.execute(text("SET TRANSACTION READ ONLY"))
+    conn.execute(text(f"SET LOCAL statement_timeout = '{_CHECK_STATEMENT_TIMEOUT}'"))
 
 
 @contextmanager
@@ -288,7 +275,8 @@ def read_only_connection(raw_url: str) -> Iterator[Connection]:
     """Yield a read-only check connection with connection and statement timeouts.
 
     The transaction is always rolled back and the engine disposed, so checks
-    perform zero writes by construction.
+    perform zero writes by construction. Only PostgreSQL is supported: a
+    non-PostgreSQL URL is rejected by :func:`configure_read_only`.
     """
     backend = make_url(raw_url).get_backend_name()
     engine = create_engine(check_connect_url(raw_url))
@@ -530,50 +518,28 @@ def verify_narrow_legacy_schema(bind: Engine | Connection) -> list[str]:
 
 
 def _check_cursor_data(bind: Engine | Connection) -> list[str]:
-    """Read-only data check over ``sync_checkpoints.cursor``.
+    """Read-only data check over ``sync_checkpoints.cursor`` on PostgreSQL.
 
-    Every non-NULL cursor must be a JSON object: the patrol migration only
+    Every non-NULL cursor must be a JSONB object: the patrol migration only
     understands object cursors and would otherwise silently skip rows. Runs no
-    writes on any backend.
+    writes. Only PostgreSQL is supported; any other backend is rejected.
     """
+    if bind.dialect.name != "postgresql":
+        raise ValueError("_check_cursor_data requires PostgreSQL")
     errors: list[str] = []
-    backend = bind.dialect.name
     try:
-        if backend == "postgresql":
-            bad = bind.execute(
-                text(
-                    "SELECT count(*) FROM sync_checkpoints "
-                    "WHERE cursor IS NULL OR jsonb_typeof(cursor) <> 'object'"
-                )
-            ).scalar() or 0
-            if bad:
-                errors.append(
-                    f"Table 'sync_checkpoints' has {bad} row(s) whose cursor is "
-                    "NULL or not a JSON object: the patrol data migration cannot "
-                    "interpret them."
-                )
-        else:
-            rows = bind.execute(
-                text("SELECT folder_id, cursor FROM sync_checkpoints")
-            ).fetchall()
-            bad_count = 0
-            for folder_id, raw in rows:
-                if raw is None:
-                    bad_count += 1
-                    continue
-                try:
-                    cur = json.loads(raw) if isinstance(raw, str) else raw
-                except Exception:
-                    bad_count += 1
-                    continue
-                if not isinstance(cur, dict):
-                    bad_count += 1
-            if bad_count:
-                errors.append(
-                    f"Table 'sync_checkpoints' has {bad_count} row(s) whose cursor "
-                    "is NULL, unparseable, or not a JSON object: the patrol data "
-                    "migration cannot interpret them."
-                )
+        bad = bind.execute(
+            text(
+                "SELECT count(*) FROM sync_checkpoints "
+                "WHERE cursor IS NULL OR jsonb_typeof(cursor) <> 'object'"
+            )
+        ).scalar() or 0
+        if bad:
+            errors.append(
+                f"Table 'sync_checkpoints' has {bad} row(s) whose cursor is "
+                "NULL or not a JSON object: the patrol data migration cannot "
+                "interpret them."
+            )
     except Exception as exc:
         errors.append(f"Table 'sync_checkpoints' cursor data is not readable: {exc}")
     return errors
@@ -658,7 +624,13 @@ def get_current_alembic_version(bind: Connection | Engine) -> str | None:
 
 
 def ensure_folder_patrol_status_table(bind: Connection, *, dry_run: bool = False) -> None:
-    """Create folder_patrol_status table if it does not already exist."""
+    """Create folder_patrol_status table on PostgreSQL if it does not already exist.
+
+    Only PostgreSQL is supported; any other backend is rejected instead of
+    silently skipping the table creation.
+    """
+    if bind.dialect.name != "postgresql":
+        raise ValueError("ensure_folder_patrol_status_table requires PostgreSQL")
     inspector = inspect(bind)
     if "folder_patrol_status" in inspector.get_table_names():
         return
@@ -666,147 +638,33 @@ def ensure_folder_patrol_status_table(bind: Connection, *, dry_run: bool = False
         LOG.info("Dry-run: would create folder_patrol_status table")
         return
 
-    if bind.dialect.name == "postgresql":
-        bind.execute(
-            text(
-                """
-                CREATE TABLE folder_patrol_status (
-                    folder_id UUID NOT NULL,
-                    last_status JSONB,
-                    last_probe_at TIMESTAMP WITH TIME ZONE,
-                    last_probe_failures INTEGER DEFAULT 0 NOT NULL,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-                    CONSTRAINT pk_folder_patrol_status PRIMARY KEY (folder_id),
-                    CONSTRAINT fk_folder_patrol_status_folder_id_folders FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE
-                )
-                """
+    bind.execute(
+        text(
+            """
+            CREATE TABLE folder_patrol_status (
+                folder_id UUID NOT NULL,
+                last_status JSONB,
+                last_probe_at TIMESTAMP WITH TIME ZONE,
+                last_probe_failures INTEGER DEFAULT 0 NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+                CONSTRAINT pk_folder_patrol_status PRIMARY KEY (folder_id),
+                CONSTRAINT fk_folder_patrol_status_folder_id_folders FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE
             )
+            """
         )
-    else:
-        meta = MetaData()
-        Table("folders", meta, Column("id", String(64), primary_key=True))
-        t = Table(
-            "folder_patrol_status",
-            meta,
-            Column(
-                "folder_id",
-                UUID(as_uuid=True),
-                ForeignKey("folders.id", ondelete="CASCADE"),
-                primary_key=True,
-                nullable=False,
-            ),
-            Column("last_status", JSONB, nullable=True),
-            Column("last_probe_at", DateTime(timezone=True), nullable=True),
-            Column("last_probe_failures", Integer, nullable=False, server_default=text("0")),
-            Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
-            Column("updated_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
-        )
-        t.create(bind)
+    )
     LOG.info("Created folder_patrol_status table")
 
 
-def _migrate_patrol_status_data_generic(bind: Connection) -> None:
-    rows = bind.execute(text("SELECT folder_id, cursor FROM sync_checkpoints")).fetchall()
-    now_dt = datetime.now(timezone.utc)
-    patrol_keys = {"last_status", "last_probe_at", "last_probe_failures"}
-
-    for fid, raw_cursor in rows:
-        if raw_cursor is None:
-            continue
-        if isinstance(raw_cursor, str):
-            try:
-                cur = json.loads(raw_cursor)
-            except Exception:
-                continue
-        elif isinstance(raw_cursor, dict):
-            cur = dict(raw_cursor)
-        else:
-            continue
-
-        if not isinstance(cur, dict) or not any(k in cur for k in patrol_keys):
-            continue
-
-        status = cur.get("last_status")
-        probe_at_raw = cur.get("last_probe_at")
-        failures_raw = cur.get("last_probe_failures", 0)
-
-        probe_at_dt = None
-        if probe_at_raw is not None:
-            try:
-                if isinstance(probe_at_raw, (int, float)):
-                    probe_at_dt = datetime.fromtimestamp(float(probe_at_raw), tz=timezone.utc)
-                elif isinstance(probe_at_raw, str):
-                    try:
-                        probe_at_dt = datetime.fromtimestamp(float(probe_at_raw), tz=timezone.utc)
-                    except ValueError:
-                        probe_at_dt = datetime.fromisoformat(probe_at_raw)
-            except Exception:
-                probe_at_dt = None
-
-        failures = 0
-        if failures_raw is not None:
-            try:
-                failures = int(failures_raw)
-            except Exception:
-                failures = 0
-
-        status_val = json.dumps(status) if isinstance(status, (dict, list)) else status
-
-        existing = bind.execute(
-            text("SELECT 1 FROM folder_patrol_status WHERE folder_id = :fid"),
-            {"fid": str(fid)},
-        ).scalar()
-        if existing:
-            bind.execute(
-                text(
-                    """
-                    UPDATE folder_patrol_status
-                    SET last_status = :status,
-                        last_probe_at = :probe_at,
-                        last_probe_failures = :failures,
-                        updated_at = :now
-                    WHERE folder_id = :fid
-                    """
-                ),
-                {
-                    "status": status_val,
-                    "probe_at": probe_at_dt,
-                    "failures": failures,
-                    "now": now_dt,
-                    "fid": str(fid),
-                },
-            )
-        else:
-            bind.execute(
-                text(
-                    """
-                    INSERT INTO folder_patrol_status (
-                        folder_id, last_status, last_probe_at, last_probe_failures, created_at, updated_at
-                    ) VALUES (
-                        :fid, :status, :probe_at, :failures, :now, :now
-                    )
-                    """
-                ),
-                {
-                    "fid": str(fid),
-                    "status": status_val,
-                    "probe_at": probe_at_dt,
-                    "failures": failures,
-                    "now": now_dt,
-                },
-            )
-
-        new_cur = {k: v for k, v in cur.items() if k not in patrol_keys}
-        new_cur_val = json.dumps(new_cur) if isinstance(raw_cursor, str) else new_cur
-        bind.execute(
-            text("UPDATE sync_checkpoints SET cursor = :c WHERE folder_id = :fid"),
-            {"c": new_cur_val, "fid": str(fid)},
-        )
-
-
 def migrate_patrol_status_data(bind: Connection, *, dry_run: bool = False) -> None:
-    """Migrate legacy patrol state from sync_checkpoints.cursor to folder_patrol_status."""
+    """Migrate legacy patrol state from sync_checkpoints.cursor to folder_patrol_status.
+
+    Only PostgreSQL is supported; any other backend is rejected instead of
+    silently skipping the migration.
+    """
+    if bind.dialect.name != "postgresql":
+        raise ValueError("migrate_patrol_status_data requires PostgreSQL")
     inspector = inspect(bind)
     tables = set(inspector.get_table_names())
     if "sync_checkpoints" not in tables:
@@ -818,55 +676,51 @@ def migrate_patrol_status_data(bind: Connection, *, dry_run: bool = False) -> No
         LOG.info("Dry-run: would migrate patrol data from sync_checkpoints.cursor to folder_patrol_status")
         return
 
-    if bind.dialect.name == "postgresql":
-        bind.execute(
-            text(
-                """
-                INSERT INTO folder_patrol_status (
-                    folder_id,
-                    last_status,
-                    last_probe_at,
-                    last_probe_failures,
-                    created_at,
-                    updated_at
-                )
-                SELECT
-                    folder_id,
-                    CASE WHEN cursor ? 'last_status' THEN cursor->'last_status' ELSE NULL END,
-                    CASE
-                        WHEN cursor ? 'last_probe_at' AND (cursor->>'last_probe_at') ~ '^-?[0-9]+(\\.[0-9]+)?$'
-                        THEN to_timestamp((cursor->>'last_probe_at')::double precision)
-                        ELSE NULL
-                    END,
-                    CASE
-                        WHEN cursor ? 'last_probe_failures' AND (cursor->>'last_probe_failures') ~ '^[0-9]+$'
-                        THEN (cursor->>'last_probe_failures')::integer
-                        ELSE 0
-                    END,
-                    now(),
-                    now()
-                FROM sync_checkpoints
-                WHERE cursor ? 'last_status' OR cursor ? 'last_probe_at' OR cursor ? 'last_probe_failures'
-                ON CONFLICT (folder_id) DO UPDATE SET
-                    last_status = EXCLUDED.last_status,
-                    last_probe_at = EXCLUDED.last_probe_at,
-                    last_probe_failures = EXCLUDED.last_probe_failures,
-                    updated_at = EXCLUDED.updated_at;
-                """
+    bind.execute(
+        text(
+            """
+            INSERT INTO folder_patrol_status (
+                folder_id,
+                last_status,
+                last_probe_at,
+                last_probe_failures,
+                created_at,
+                updated_at
             )
+            SELECT
+                folder_id,
+                CASE WHEN cursor ? 'last_status' THEN cursor->'last_status' ELSE NULL END,
+                CASE
+                    WHEN cursor ? 'last_probe_at' AND (cursor->>'last_probe_at') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                    THEN to_timestamp((cursor->>'last_probe_at')::double precision)
+                    ELSE NULL
+                END,
+                CASE
+                    WHEN cursor ? 'last_probe_failures' AND (cursor->>'last_probe_failures') ~ '^[0-9]+$'
+                    THEN (cursor->>'last_probe_failures')::integer
+                    ELSE 0
+                END,
+                now(),
+                now()
+            FROM sync_checkpoints
+            WHERE cursor ? 'last_status' OR cursor ? 'last_probe_at' OR cursor ? 'last_probe_failures'
+            ON CONFLICT (folder_id) DO UPDATE SET
+                last_status = EXCLUDED.last_status,
+                last_probe_at = EXCLUDED.last_probe_at,
+                last_probe_failures = EXCLUDED.last_probe_failures,
+                updated_at = EXCLUDED.updated_at;
+            """
         )
-        bind.execute(
-            text(
-                """
-                UPDATE sync_checkpoints
-                SET cursor = cursor - ARRAY['last_status', 'last_probe_at', 'last_probe_failures']
-                WHERE cursor ? 'last_status' OR cursor ? 'last_probe_at' OR cursor ? 'last_probe_failures';
-                """
-            )
+    )
+    bind.execute(
+        text(
+            """
+            UPDATE sync_checkpoints
+            SET cursor = cursor - ARRAY['last_status', 'last_probe_at', 'last_probe_failures']
+            WHERE cursor ? 'last_status' OR cursor ? 'last_probe_at' OR cursor ? 'last_probe_failures';
+            """
         )
-    else:
-        _migrate_patrol_status_data_generic(bind)
-
+    )
     LOG.info("Migrated patrol status data and cleaned legacy cursor keys")
 
 
@@ -875,18 +729,20 @@ def apply_narrow_legacy_conversion(database_url: str) -> str:
 
     Re-verifies everything from scratch inside the transaction (precheck
     results are never reused, closing the TOCTOU window); any failure rolls
-    back the whole conversion. On PostgreSQL the transaction takes an
-    advisory lock so concurrent converters serialize; the loser re-reads the
-    revision and becomes a no-op. Returns ``"converted"`` or
-    ``"already-at-baseline"`` (idempotent re-run).
+    back the whole conversion. Only PostgreSQL is supported: a non-PostgreSQL
+    URL is rejected and the advisory lock is always taken so concurrent
+    converters serialize; the loser re-reads the revision and becomes a
+    no-op. Returns ``"converted"`` or ``"already-at-baseline"`` (idempotent
+    re-run).
     """
     engine = create_engine(check_connect_url(database_url))
     try:
         with engine.begin() as conn:
-            if conn.dialect.name == "postgresql":
-                conn.execute(
-                    text(f"SELECT pg_advisory_xact_lock(hashtext('{_NARROW_CONVERSION_LOCK_KEY}'))")
-                )
+            if conn.dialect.name != "postgresql":
+                raise ValueError("narrow legacy conversion requires PostgreSQL")
+            conn.execute(
+                text(f"SELECT pg_advisory_xact_lock(hashtext('{_NARROW_CONVERSION_LOCK_KEY}'))")
+            )
             current = _read_version_rows(conn)
             if current == [UNIFIED_BASELINE_REVISION]:
                 return "already-at-baseline"

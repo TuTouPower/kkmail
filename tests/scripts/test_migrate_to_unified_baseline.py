@@ -1,32 +1,40 @@
-"""Unit tests for the unified-baseline migration logic (adoption A17).
+"""Unit tests for the unified-baseline migration logic (adoption A17 / A18).
 
 The logic moved from ``scripts/migrate_to_unified_baseline.py`` (now a thin
 argparse wrapper) to ``mail_core.db.baseline``; mocks and imports follow the
 new home.
+
+Retirement (A18 wrap-up): this file previously exercised the offline tool
+entirely on in-memory / file-backed SQLite (``create_engine("sqlite:///...")``,
+``sqlite_master``). ``mail_core.db.baseline`` is now PostgreSQL-only: every
+read-only check, narrow-conversion step and patrol migration rejects a non-PG
+backend. SQLite fixtures therefore no longer touch production logic and were
+replaced wholesale rather than having their assertions flipped in place. Each
+case now runs against the shared PostgreSQL test database, isolated to a
+per-test schema so mutable legacy/empty/baseline states never collide with the
+public schema (which ``clear_database()`` truncates between cases).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import (
     Column,
-    ForeignKeyConstraint,
-    Integer,
-    JSON,
     MetaData,
-    PrimaryKeyConstraint,
     String,
     Table,
-    UniqueConstraint,
     create_engine,
     inspect,
     text,
 )
+from sqlalchemy.engine import make_url
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT / "scripts") not in sys.path:
@@ -51,6 +59,11 @@ from mail_core.db.baseline import (
     verify_database_schema,
 )
 from migrate_to_unified_baseline import main
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAIL_CORE_DATABASE_URL"),
+    reason="MAIL_CORE_DATABASE_URL not set",
+)
 
 EXPECTED_CORE_TABLES: frozenset[str] = frozenset({
     "account_groups",
@@ -87,12 +100,53 @@ EXPECTED_CORE_TABLES: frozenset[str] = frozenset({
     "sender_remote_image_allows",
 })
 
+_ACCOUNT_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+_FOLDER_ID = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 
-def _create_full_schema_engine(db_url: str = "sqlite:///:memory:"):
-    """Create a SQLite engine populated with all required tables and columns."""
-    engine = create_engine(db_url)
+_LEGACY_CURSOR = {
+    "last_status": {"folder_path": "/Inbox", "uidvalidity": 12345},
+    "last_probe_at": 1700000000.0,
+    "last_probe_failures": 3,
+    "delta_token": "token-xyz",
+}
+
+
+@pytest.fixture
+def pg_engine():
+    """Yield an engine bound to a unique per-test PostgreSQL schema.
+
+    ``MAIL_CORE_DATABASE_URL`` points at the shared, already-migrated test
+    database. A dedicated ``CREATE SCHEMA``/``DROP SCHEMA ... CASCADE`` keeps
+    every mutable fixture (empty, baseline, 0030 legacy) inside this schema and
+    never drops or alters objects in ``public``. The URL query
+    ``options=-csearch_path=<schema>`` (psycopg) makes unqualified DDL and
+    ``inspect`` resolve to this schema.
+    """
+    base = make_url(os.environ["MAIL_CORE_DATABASE_URL"])
+    admin = create_engine(base.render_as_string(hide_password=False))
+    schema = "test_baseline_" + uuid.uuid4().hex
+    with admin.begin() as conn:
+        conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+    url = base.update_query_dict(
+        {"options": f"-csearch_path={schema}"}
+    ).render_as_string(hide_password=False)
+    engine = create_engine(url)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        with admin.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        admin.dispose()
+
+
+def _schema_url(engine) -> str:
+    return engine.url.render_as_string(hide_password=False)
+
+
+def _create_full_schema(engine) -> None:
+    """Create the 32 minimal fake tables (id + required columns) in the schema."""
     metadata = MetaData()
-
     for table_name in EXPECTED_CORE_TABLES:
         cols = [Column("id", String(64), primary_key=True)]
         req_cols = REQUIRED_COLUMNS.get(table_name, frozenset())
@@ -101,9 +155,96 @@ def _create_full_schema_engine(db_url: str = "sqlite:///:memory:"):
                 continue
             cols.append(Column(col_name, String(64)))
         Table(table_name, metadata, *cols)
-
     metadata.create_all(engine)
-    return engine
+
+
+def _create_0030_schema(engine) -> None:
+    """Build a PG-legal 0030 legacy shape (31 tables, no folder_patrol_status).
+
+    Retirement reason: the old hand-written SQLite transcription used
+    ``String(64)`` ids, ``JSON`` cursors and auto-disabled foreign keys, none of
+    which satisfy the PostgreSQL narrow-conversion checks (composite PK,
+    CASCADE FKs to UUID parents, JSONB cursor). This rebuilds the same intent
+    with real PostgreSQL types (UUID ids, JSONB cursor, BOOLEAN defaults where
+    needed use true/false, never 0/1) and seeds one patrol-bearing checkpoint
+    row plus its parent account/folder rows.
+    """
+    special = {"accounts", "folders", "sync_checkpoints"}
+    with engine.begin() as conn:
+        for table_name in sorted(REQUIRED_TABLES - {"folder_patrol_status"} - special):
+            cols = ["id VARCHAR(64) PRIMARY KEY"]
+            for col_name in sorted(REQUIRED_COLUMNS.get(table_name, frozenset())):
+                if col_name != "id":
+                    cols.append(f"{col_name} VARCHAR(64)")
+            conn.execute(text(f"CREATE TABLE {table_name} ({', '.join(cols)})"))
+
+        conn.execute(text(
+            "CREATE TABLE accounts ("
+            "id UUID PRIMARY KEY, email VARCHAR(320), provider VARCHAR(32), "
+            "group_id VARCHAR(64), master_order VARCHAR(64), group_order VARCHAR(64), "
+            "recipient_addresses VARCHAR(64))"
+        ))
+        conn.execute(text(
+            "CREATE TABLE folders ("
+            "id UUID PRIMARY KEY, account_id UUID, remote_id VARCHAR(512), "
+            "CONSTRAINT uq_folders_account_remote UNIQUE (account_id, remote_id))"
+        ))
+        conn.execute(text(
+            "CREATE TABLE sync_checkpoints ("
+            "account_id UUID NOT NULL, folder_id UUID NOT NULL, "
+            "scan_generation VARCHAR(64), cursor JSONB NOT NULL, "
+            "PRIMARY KEY (account_id, folder_id), "
+            "FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE, "
+            "FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+        ))
+        conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
+        conn.execute(
+            text("INSERT INTO accounts (id) VALUES (:acc)"),
+            {"acc": _ACCOUNT_ID},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO folders (id, account_id, remote_id) "
+                "VALUES (:folder, :acc, 'INBOX')"
+            ),
+            {"folder": _FOLDER_ID, "acc": _ACCOUNT_ID},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO sync_checkpoints (account_id, folder_id, cursor) "
+                "VALUES (:acc, :folder, CAST(:cur AS jsonb))"
+            ),
+            {"acc": _ACCOUNT_ID, "folder": _FOLDER_ID, "cur": json.dumps(_LEGACY_CURSOR)},
+        )
+
+
+def _build_state(engine, state: str) -> None:
+    if state == "no_version_full":
+        _create_full_schema(engine)
+        return
+    with engine.begin() as conn:
+        if state == "empty":
+            return
+        if state == "no_version_one":
+            conn.execute(text("CREATE TABLE account_groups (id VARCHAR(64) PRIMARY KEY)"))
+            return
+        if state == "multiple":
+            conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+            conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
+            conn.execute(text("INSERT INTO alembic_version VALUES ('20261107_0031')"))
+            return
+        conn.execute(
+            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
+        )
+        revision = {
+            "at_head": UNIFIED_BASELINE_REVISION,
+            "legacy": "20261031_0030",
+            "unknown": "unknown_rev_9999",
+        }[state]
+        conn.execute(text("INSERT INTO alembic_version VALUES (:rev)"), {"rev": revision})
 
 
 def _startup_revision_context():
@@ -152,38 +293,6 @@ def _read_versions(db_url: str) -> list[str]:
         engine.dispose()
 
 
-def _build_state_db(tmp_path: Path, state: str) -> str:
-    db_url = f"sqlite:///{tmp_path / ('state_' + state + '.db')}"
-    if state == "no_version_full":
-        _create_full_schema_engine(db_url).dispose()
-        return db_url
-    engine = create_engine(db_url)
-    try:
-        with engine.begin() as conn:
-            if state == "empty":
-                return db_url
-            if state == "no_version_one":
-                conn.execute(text("CREATE TABLE account_groups (id VARCHAR(64) PRIMARY KEY)"))
-                return db_url
-            if state == "multiple":
-                conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
-                conn.execute(text("INSERT INTO alembic_version VALUES ('20261107_0031')"))
-                return db_url
-            conn.execute(
-                text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
-            )
-            revision = {
-                "at_head": UNIFIED_BASELINE_REVISION,
-                "legacy": "20261031_0030",
-                "unknown": "unknown_rev_9999",
-            }[state]
-            conn.execute(text("INSERT INTO alembic_version VALUES (:rev)"), {"rev": revision})
-        return db_url
-    finally:
-        engine.dispose()
-
-
 def test_required_tables_matches_expected_core_32_tables():
     """Verify REQUIRED_TABLES against the hardcoded specification of 32 core tables.
 
@@ -194,16 +303,15 @@ def test_required_tables_matches_expected_core_32_tables():
     assert REQUIRED_TABLES == EXPECTED_CORE_TABLES
 
 
-def test_verify_schema_succeeds_on_full_schema():
-    engine = _create_full_schema_engine()
-    with engine.connect() as conn:
+def test_verify_schema_succeeds_on_full_schema(pg_engine):
+    _create_full_schema(pg_engine)
+    with pg_engine.connect() as conn:
         errors = verify_database_schema(conn)
         assert errors == []
 
 
-def test_verify_schema_fails_on_empty_db():
-    engine = create_engine("sqlite:///:memory:")
-    with engine.connect() as conn:
+def test_verify_schema_fails_on_empty_db(pg_engine):
+    with pg_engine.connect() as conn:
         errors = verify_database_schema(conn)
         assert len(errors) == 1
         assert "Missing required tables" in errors[0]
@@ -211,16 +319,13 @@ def test_verify_schema_fails_on_empty_db():
         assert "messages" in errors[0]
 
 
-def test_verify_schema_detects_missing_columns():
-    engine = create_engine("sqlite:///:memory:")
+def test_verify_schema_detects_missing_columns(pg_engine):
     metadata = MetaData()
-
-    # Create all tables but with only "id", omitting required columns
     for table_name in REQUIRED_TABLES:
         Table(table_name, metadata, Column("id", String(64), primary_key=True))
-    metadata.create_all(engine)
+    metadata.create_all(pg_engine)
 
-    with engine.connect() as conn:
+    with pg_engine.connect() as conn:
         errors = verify_database_schema(conn)
         assert len(errors) > 0
         joined = "\n".join(errors)
@@ -230,40 +335,38 @@ def test_verify_schema_detects_missing_columns():
         assert "remote_id" in joined
 
 
-def test_run_migration_rejects_empty_database(tmp_path: Path):
+def test_run_migration_rejects_empty_database(pg_engine):
     """退役理由：原 test_run_migration_rejects_incomplete_schema 把空库断言为
     『Database schema verification failed』（旧实现的缺 critical 表分支）。统一分类后
     空库归类 EMPTY_DATABASE，离线明确提示走启动/Alembic、不建表、不盖印。"""
-    db_url = f"sqlite:///{tmp_path / 'empty.db'}"
+    db_url = _schema_url(pg_engine)
     with pytest.raises(SchemaValidationError, match="empty") as excinfo:
         run_migration(db_url)
     assert "alembic upgrade head" in str(excinfo.value)
     _assert_no_version_stamp(db_url)
 
 
-def test_stamp_unified_baseline_creates_table_and_sets_revision():
-    engine = create_engine("sqlite:///:memory:")
-    stamp_unified_baseline(engine, dry_run=False)
+def test_stamp_unified_baseline_creates_table_and_sets_revision(pg_engine):
+    stamp_unified_baseline(pg_engine, dry_run=False)
 
-    with engine.connect() as conn:
+    with pg_engine.connect() as conn:
         versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
         assert versions == [UNIFIED_BASELINE_REVISION]
 
 
-def test_stamp_unified_baseline_dry_run_leaves_table_empty():
-    engine = create_engine("sqlite:///:memory:")
-    stamp_unified_baseline(engine, dry_run=True)
+def test_stamp_unified_baseline_dry_run_leaves_table_empty(pg_engine):
+    stamp_unified_baseline(pg_engine, dry_run=True)
 
-    with engine.connect() as conn:
-        tables = conn.execute(
-            text("SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'")
-        ).scalars().all()
-        assert tables == []
+    with pg_engine.connect() as conn:
+        exists = conn.execute(text(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = current_schema() AND table_name = 'alembic_version')"
+        )).scalar()
+        assert exists is False
 
 
-def test_stamp_unified_baseline_overwrites_prior_revision():
-    engine = create_engine("sqlite:///:memory:")
-    with engine.begin() as conn:
+def test_stamp_unified_baseline_overwrites_prior_revision(pg_engine):
+    with pg_engine.begin() as conn:
         conn.execute(
             text(
                 "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
@@ -271,19 +374,19 @@ def test_stamp_unified_baseline_overwrites_prior_revision():
         )
         conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
 
-    stamp_unified_baseline(engine, dry_run=False)
+    stamp_unified_baseline(pg_engine, dry_run=False)
 
-    with engine.connect() as conn:
+    with pg_engine.connect() as conn:
         versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
         assert versions == [UNIFIED_BASELINE_REVISION]
 
 
-def test_no_version_full_schema_refused_by_both_entries(tmp_path: Path, monkeypatch):
+def test_no_version_full_schema_refused_by_both_entries(pg_engine, monkeypatch):
     """退役理由：原 test_run_migration_success_flow 断言『无版本 + 全 32 表 → 成功
     stamp』，固化了离线/启动双入口的行为分歧。统一分类后该状态为
     NO_VERSION_WITH_BUSINESS_TABLES，两个入口一律拒绝、不盖印。"""
-    db_url = f"sqlite:///{tmp_path / 'full.db'}"
-    _create_full_schema_engine(db_url).dispose()
+    db_url = _schema_url(pg_engine)
+    _create_full_schema(pg_engine)
 
     with pytest.raises(SchemaValidationError, match="no alembic_version mark"):
         run_migration(db_url, dry_run=False)
@@ -300,211 +403,37 @@ def test_no_version_full_schema_refused_by_both_entries(tmp_path: Path, monkeypa
     _assert_no_version_stamp(db_url)
 
 
-def test_main_cli_returns_expected_exit_codes(tmp_path: Path):
-    # 1. Missing URL
+def test_main_cli_returns_expected_exit_codes(pg_engine):
+    db_url = _schema_url(pg_engine)
+
+    # 1. Missing URL -> 2
     with patch.dict("os.environ", {}, clear=True):
-        ret = main([])
-        assert ret == 2
+        assert main([]) == 2
 
-    # 2. Empty DB: the offline tool refuses and points to startup/Alembic.
-    ret = main(["--database-url", f"sqlite:///{tmp_path / 'empty.db'}"])
-    assert ret == 1
+    # 2. Empty schema: the offline tool refuses and points to startup/Alembic -> 1
+    assert main(["--database-url", db_url]) == 1
 
-    # 3. No version + full 32 tables: refused (retired: old case expected a success stamp).
-    full_url = f"sqlite:///{tmp_path / 'full.db'}"
-    _create_full_schema_engine(full_url)
-    ret = main(["--database-url", full_url])
-    assert ret == 1
+    # 3. No version + full 32 tables: refused -> 1 (retired: old case expected a success stamp)
+    _create_full_schema(pg_engine)
+    assert main(["--database-url", db_url]) == 1
 
-
-def _create_0030_schema_engine(db_path: Path | str):
-    """Create an engine populated with schema at revision 20261031_0030.
-
-    Hand-written transcription of the real historical shape (composite
-    primary key and CASCADE foreign keys on sync_checkpoints, composite
-    unique on folders): all 31 tables (missing folder_patrol_status),
-    alembic_version='20261031_0030', and sample sync_checkpoints data
-    containing legacy patrol keys in cursor. Deliberately NOT generated
-    from REQUIRED_COLUMNS.
-    """
-    url = f"sqlite:///{db_path}"
-    engine = create_engine(url)
-    metadata = MetaData()
-
-    Table("account_groups", metadata, Column("id", String(64), primary_key=True))
-    Table("credential_secrets", metadata, Column("ref", String(512), primary_key=True))
-    Table("app_settings", metadata, Column("key", String(128), primary_key=True))
-    Table("auth_credentials", metadata, Column("id", String(64), primary_key=True))
-    Table(
-        "accounts",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("email", String(320), nullable=False),
-        Column("provider", String(32), nullable=False),
-        Column("group_id", String(64)),
-        Column("master_order", Integer),
-        Column("group_order", Integer),
-        Column("recipient_addresses", JSON, nullable=False),
-    )
-    Table("account_sync_leases", metadata, Column("account_id", String(64), primary_key=True))
-    Table("account_sync_activity", metadata, Column("account_id", String(64), primary_key=True))
-    Table(
-        "folders",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("account_id", String(64), nullable=False),
-        Column("remote_id", String(512), nullable=False),
-        UniqueConstraint("account_id", "remote_id"),
-    )
-    Table(
-        "threads",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("account_id", String(64), nullable=False),
-    )
-    Table(
-        "messages",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("account_id", String(64), nullable=False),
-        Column("sort_time", String(64)),
-        Column("remote_id", String(512)),
-        Column("is_read", Integer),
-        Column("is_flagged", Integer),
-        Column("has_attachments", Integer),
-    )
-    Table("message_locations", metadata, Column("id", String(64), primary_key=True))
-    Table("message_bodies", metadata, Column("message_id", String(64), primary_key=True))
-    Table(
-        "message_blobs",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("content_sha256", String(64), nullable=False),
-        Column("key_version", Integer, nullable=False),
-        Column("gc_eligible_at", String(64)),
-        Column("ref_count", Integer, nullable=False),
-    )
-    Table("message_blob_links", metadata, Column("message_id", String(64), primary_key=True))
-    Table(
-        "attachments",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("message_id", String(64), nullable=False),
-        Column("part_id", String(64)),
-    )
-    Table("thread_messages", metadata, Column("id", String(64), primary_key=True))
-    Table(
-        "sync_checkpoints",
-        metadata,
-        Column("account_id", String(64), nullable=False),
-        Column("folder_id", String(64), nullable=False),
-        Column("scan_generation", String(64)),
-        Column("cursor", JSON, nullable=False),
-        ForeignKeyConstraint(["account_id"], ["accounts.id"], ondelete="CASCADE"),
-        ForeignKeyConstraint(["folder_id"], ["folders.id"], ondelete="CASCADE"),
-        PrimaryKeyConstraint("account_id", "folder_id"),
-    )
-    Table("sync_runs", metadata, Column("id", String(64), primary_key=True))
-    Table(
-        "remote_operations",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("next_attempt_at", String(64)),
-    )
-    Table("folder_stats", metadata, Column("folder_id", String(64), primary_key=True))
-    Table(
-        "outbox_publication_state",
-        metadata,
-        Column("id", Integer, primary_key=True),
-        Column("epoch", String(64), nullable=False),
-        Column("next_seq", Integer, nullable=False),
-        Column("pruned_through_seq", Integer, nullable=False),
-    )
-    Table(
-        "outbox",
-        metadata,
-        Column("id", Integer, primary_key=True),
-        Column("publication_seq", Integer),
-        Column("published_at", String(64)),
-    )
-    Table(
-        "message_archive_state",
-        metadata,
-        Column("message_id", String(64), primary_key=True),
-        Column("claim_revision", Integer, nullable=False),
-        Column("state", String(32), nullable=False),
-    )
-    Table(
-        "worker_jobs",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("execution_generation", String(64), nullable=False),
-        Column("dedupe_key", String(128)),
-        Column("failure_attempts", Integer, nullable=False),
-    )
-    Table(
-        "message_search",
-        metadata,
-        Column("message_id", String(64), primary_key=True),
-        Column("to_text", String(64)),
-        Column("document", String(64)),
-    )
-    Table("blob_quota_reservations", metadata, Column("id", String(64), primary_key=True))
-    Table(
-        "sync_requests",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("client_request_id", String(64), nullable=False),
-    )
-    Table(
-        "sync_request_targets",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("request_id", String(64), nullable=False),
-        Column("target_key", String(255), nullable=False),
-    )
-    Table(
-        "sync_request_target_jobs",
-        metadata,
-        Column("id", String(64), primary_key=True),
-        Column("target_id", String(64), nullable=False),
-        Column("execution_generation", String(64), nullable=False),
-    )
-    Table("message_remote_image_allows", metadata, Column("message_id", String(64), primary_key=True))
-    Table("sender_remote_image_allows", metadata, Column("id", String(64), primary_key=True))
-
-    metadata.create_all(engine)
-
-    with engine.begin() as conn:
-        conn.execute(
-            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
-        )
-        conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
+    # 4. At the unified baseline (full schema + baseline version) -> 0
+    with pg_engine.begin() as conn:
         conn.execute(
             text(
-                """
-                INSERT INTO sync_checkpoints (account_id, folder_id, cursor)
-                VALUES ('acc-1', 'folder-1', :cur)
-                """
-            ),
-            {
-                "cur": json.dumps(
-                    {
-                        "last_status": {"folder_path": "/Inbox", "uidvalidity": 12345},
-                        "last_probe_at": 1700000000.0,
-                        "last_probe_failures": 3,
-                        "delta_token": "token-xyz",
-                    }
-                )
-            },
+                "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+            )
         )
-    return engine
+        conn.execute(
+            text("INSERT INTO alembic_version VALUES (:rev)"),
+            {"rev": UNIFIED_BASELINE_REVISION},
+        )
+    assert main(["--database-url", db_url]) == 0
 
 
-def test_migrate_from_0030_legacy_database_success(tmp_path: Path):
-    db_file = tmp_path / "legacy_0030.db"
-    _create_0030_schema_engine(db_file)
-    db_url = f"sqlite:///{db_file}"
+def test_migrate_from_0030_legacy_database_success(pg_engine):
+    db_url = _schema_url(pg_engine)
+    _create_0030_schema(pg_engine)
 
     # 1. Run migration CLI on 0030 database
     ret = main(["--database-url", db_url])
@@ -513,9 +442,7 @@ def test_migrate_from_0030_legacy_database_success(tmp_path: Path):
     assert ret == 0
 
     # 3. Assert folder_patrol_status was created and contains migrated patrol data
-    verify_engine = create_engine(db_url)
-    with verify_engine.connect() as conn:
-        from sqlalchemy import inspect
+    with pg_engine.connect() as conn:
         tables = set(inspect(conn).get_table_names())
         assert "folder_patrol_status" in tables
 
@@ -523,7 +450,7 @@ def test_migrate_from_0030_legacy_database_success(tmp_path: Path):
             text("SELECT folder_id, last_status, last_probe_failures, last_probe_at FROM folder_patrol_status")
         ).fetchone()
         assert row is not None
-        assert row[0] == "folder-1"
+        assert row[0] == _FOLDER_ID
         status_data = json.loads(row[1]) if isinstance(row[1], str) else row[1]
         assert status_data == {"folder_path": "/Inbox", "uidvalidity": 12345}
         assert row[2] == 3
@@ -531,7 +458,8 @@ def test_migrate_from_0030_legacy_database_success(tmp_path: Path):
 
         # 4. Assert sync_checkpoints.cursor has old keys stripped
         cp_row = conn.execute(
-            text("SELECT cursor FROM sync_checkpoints WHERE folder_id = 'folder-1'")
+            text("SELECT cursor FROM sync_checkpoints WHERE folder_id = :fid"),
+            {"fid": _FOLDER_ID},
         ).fetchone()
         assert cp_row is not None
         cur_data = json.loads(cp_row[0]) if isinstance(cp_row[0], str) else cp_row[0]
@@ -545,19 +473,16 @@ def test_migrate_from_0030_legacy_database_success(tmp_path: Path):
         assert versions == [UNIFIED_BASELINE_REVISION]
 
 
-def test_run_migration_refuses_unknown_revision_with_zero_writes(tmp_path: Path):
+def test_run_migration_refuses_unknown_revision_with_zero_writes(pg_engine):
     """退役理由：原用例断言『Refusing to stamp unified baseline』（旧实现把
     unknown revision + 缺表 归入缺 critical 表分支的措辞）。统一分类后 unknown
     revision 一律按 UNKNOWN_REVISION 拒绝、不盖印、零写入。"""
-    db_file = tmp_path / "unknown_rev.db"
-    db_url = f"sqlite:///{db_file}"
-    engine = create_engine(db_url)
-    with engine.begin() as conn:
+    db_url = _schema_url(pg_engine)
+    with pg_engine.begin() as conn:
         conn.execute(
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
         )
         conn.execute(text("INSERT INTO alembic_version VALUES ('unknown_rev_9999')"))
-    engine.dispose()
 
     before = _read_versions(db_url)
     with pytest.raises(SchemaValidationError, match="unrecognized"):
@@ -582,25 +507,23 @@ def test_is_legacy_revision_rejects_unknown_and_future_revisions():
     assert is_legacy_revision("20261201_0002") is False
 
 
-def test_stamp_refuses_to_overwrite_unknown_revision():
-    engine = create_engine("sqlite:///:memory:")
-    with engine.begin() as conn:
+def test_stamp_refuses_to_overwrite_unknown_revision(pg_engine):
+    with pg_engine.begin() as conn:
         conn.execute(
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
         )
         conn.execute(text("INSERT INTO alembic_version VALUES ('some_future_head')"))
 
     with pytest.raises(SchemaValidationError, match="Refusing to overwrite"):
-        stamp_unified_baseline(engine, dry_run=False)
+        stamp_unified_baseline(pg_engine, dry_run=False)
 
-    with engine.connect() as conn:
+    with pg_engine.connect() as conn:
         versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
     assert versions == ["some_future_head"]
 
 
-def test_stamp_is_noop_when_already_at_baseline():
-    engine = create_engine("sqlite:///:memory:")
-    with engine.begin() as conn:
+def test_stamp_is_noop_when_already_at_baseline(pg_engine):
+    with pg_engine.begin() as conn:
         conn.execute(
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
         )
@@ -609,21 +532,20 @@ def test_stamp_is_noop_when_already_at_baseline():
             {"rev": UNIFIED_BASELINE_REVISION},
         )
 
-    stamp_unified_baseline(engine, dry_run=False)
+    stamp_unified_baseline(pg_engine, dry_run=False)
 
-    with engine.connect() as conn:
+    with pg_engine.connect() as conn:
         versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
     assert versions == [UNIFIED_BASELINE_REVISION]
 
 
-def test_verify_schema_exempt_tables_only_skips_named_table():
-    engine = create_engine("sqlite:///:memory:")
+def test_verify_schema_exempt_tables_only_skips_named_table(pg_engine):
     metadata = MetaData()
     for table_name in REQUIRED_TABLES - {"folder_patrol_status", "accounts"}:
         Table(table_name, metadata, Column("id", String(64), primary_key=True))
-    metadata.create_all(engine)
+    metadata.create_all(pg_engine)
 
-    with engine.connect() as conn:
+    with pg_engine.connect() as conn:
         errors = verify_database_schema(
             conn, exempt_tables=frozenset({"folder_patrol_status"})
         )
@@ -633,60 +555,51 @@ def test_verify_schema_exempt_tables_only_skips_named_table():
 
 
 @pytest.mark.parametrize("dry_run", [False, True], ids=["apply", "dry-run"])
-def test_run_migration_refuses_unsupported_legacy_database(tmp_path: Path, dry_run: bool):
-    db_file = tmp_path / f"old_legacy_{'dry' if dry_run else 'apply'}.db"
-    db_url = f"sqlite:///{db_file}"
+def test_run_migration_refuses_unsupported_legacy_database(pg_engine, dry_run):
+    db_url = _schema_url(pg_engine)
     legacy_cursor = json.dumps({"last_status": "ok", "delta_token": "keep-me"})
-    engine = create_engine(db_url)
-    with engine.begin() as conn:
+    folder_id = uuid.uuid4()
+    with pg_engine.begin() as conn:
         conn.execute(
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
         )
         conn.execute(text("INSERT INTO alembic_version VALUES ('20261027_0029')"))
-        conn.execute(text("CREATE TABLE folders (id VARCHAR(64) PRIMARY KEY)"))
+        conn.execute(text("CREATE TABLE folders (id UUID PRIMARY KEY)"))
         conn.execute(
             text(
-                "CREATE TABLE sync_checkpoints (id VARCHAR(64) PRIMARY KEY, "
-                "folder_id VARCHAR(64), cursor TEXT)"
+                "CREATE TABLE sync_checkpoints ("
+                "folder_id UUID PRIMARY KEY, cursor JSONB NOT NULL)"
             )
         )
+        conn.execute(text("INSERT INTO folders (id) VALUES (:fid)"), {"fid": folder_id})
         conn.execute(
             text(
-                "INSERT INTO sync_checkpoints (id, folder_id, cursor) "
-                "VALUES ('cp-1', 'folder-1', :cur)"
+                "INSERT INTO sync_checkpoints (folder_id, cursor) "
+                "VALUES (:fid, CAST(:cur AS jsonb))"
             ),
-            {"cur": legacy_cursor},
+            {"fid": folder_id, "cur": legacy_cursor},
         )
-    engine.dispose()
 
     with pytest.raises(SchemaValidationError, match="not supported") as excinfo:
         run_migration(db_url, dry_run=dry_run)
     assert "message_remote_image_allows" in str(excinfo.value)
     assert "Restore the pre-upgrade sealed backup" in str(excinfo.value)
 
-    verify_engine = create_engine(db_url)
-    with verify_engine.connect() as conn:
-        from sqlalchemy import inspect
+    with pg_engine.connect() as conn:
         assert "folder_patrol_status" not in set(inspect(conn).get_table_names())
         assert conn.execute(
-            text("SELECT cursor FROM sync_checkpoints WHERE id = 'cp-1'")
-        ).scalar_one() == legacy_cursor
+            text("SELECT cursor FROM sync_checkpoints")
+        ).scalar_one() == json.loads(legacy_cursor)
         assert conn.execute(
             text("SELECT version_num FROM alembic_version")
         ).scalars().all() == ["20261027_0029"]
-    verify_engine.dispose()
 
 
-def test_dry_run_reports_missing_columns_on_existing_patrol_table(tmp_path: Path):
-    db_file = tmp_path / "legacy_0030_incomplete_patrol.db"
-    _create_0030_schema_engine(db_file)
-    db_url = f"sqlite:///{db_file}"
-    engine = create_engine(db_url)
-    with engine.begin() as conn:
-        conn.execute(
-            text("CREATE TABLE folder_patrol_status (folder_id VARCHAR(64) PRIMARY KEY)")
-        )
-    engine.dispose()
+def test_dry_run_reports_missing_columns_on_existing_patrol_table(pg_engine):
+    db_url = _schema_url(pg_engine)
+    _create_0030_schema(pg_engine)
+    with pg_engine.begin() as conn:
+        conn.execute(text("CREATE TABLE folder_patrol_status (folder_id UUID PRIMARY KEY)"))
 
     with pytest.raises(SchemaValidationError, match="not supported") as excinfo:
         run_migration(db_url, dry_run=True)
@@ -696,14 +609,14 @@ def test_dry_run_reports_missing_columns_on_existing_patrol_table(tmp_path: Path
     assert "last_probe_failures" in msg
 
 
-def test_verify_schema_exempt_table_still_checks_columns_when_present():
-    engine = _create_full_schema_engine()
-    with engine.begin() as conn:
+def test_verify_schema_exempt_table_still_checks_columns_when_present(pg_engine):
+    _create_full_schema(pg_engine)
+    with pg_engine.begin() as conn:
         conn.execute(text("DROP TABLE folder_patrol_status"))
         conn.execute(
             text("CREATE TABLE folder_patrol_status (folder_id VARCHAR(64) PRIMARY KEY)")
         )
-    with engine.connect() as conn:
+    with pg_engine.connect() as conn:
         errors = verify_database_schema(
             conn, exempt_tables=frozenset({"folder_patrol_status"})
         )
@@ -777,22 +690,18 @@ def test_migrate_patrol_status_data_emits_postgres_ddl():
         ("multiple", MigrationAction.MULTIPLE_VERSIONS),
     ],
 )
-def test_plan_migration_two_entries_agree_on_classification(tmp_path, state, expected_action):
+def test_plan_migration_two_entries_agree_on_classification(pg_engine, state, expected_action):
     """Both entries supply a RevisionContext to the single planner.
 
     The startup context comes from ScriptDirectory.walk_revisions/get_heads and
     the offline context from baseline constants; for the same database state
     the returned action must be identical, so the two entries cannot diverge.
     """
-    db_url = _build_state_db(tmp_path, state)
+    _build_state(pg_engine, state)
     startup_ctx = _startup_revision_context()
     offline_ctx = offline_revision_context()
-    engine = create_engine(db_url)
-    try:
-        with engine.connect() as conn:
-            db_state = read_database_state(conn)
-    finally:
-        engine.dispose()
+    with pg_engine.connect() as conn:
+        db_state = read_database_state(conn)
     startup_plan = plan_migration(db_state, context=startup_ctx)
     offline_plan = plan_migration(db_state, context=offline_ctx)
     assert startup_plan.action == expected_action

@@ -199,7 +199,7 @@ scripts/run-mail-core-tests.sh run -k "test_migration_validation or test_migrate
 验证覆盖：
 
 - **统一基线与单 Head 校验 (A17)**：迁移历史完全收敛为单一统一基线 `20261107_0001`（`unified_baseline`），严格确保迁移链单 head 无分叉、无孤立 revision；
-- **空库建表与基线验证**：从全新空库执行 `upgrade head` 直接升级至统一基线 `20261107_0001`，断言核心业务表、枚举与单例种子数据完整初始化；离线基线工具（`migrate_to_unified_baseline.py`）与启动入口共用 `plan_migration` 的单一分类，空库由启动 `upgrade head` 建表、离线工具只提示走启动/Alembic 且不盖印，无 `alembic_version` 且存在业务表的库两个入口一律拒绝（32 表齐全也不例外）；离线工具对已知 legacy 走 `verify_narrow_legacy_schema`（表名/关键列名 + `sync_checkpoints.cursor` 类型与约束、`folder_patrol_status` 列定义与约束、cursor 数据可读性），对已在统一基线的库走 `verify_database_schema`（仅表名与关键列名），两者都不做与统一基线完整 catalog 的等价校验，不覆盖其余表的列类型、可空性、默认值、索引与外键；
+- **空库建表与基线验证**：从全新空库执行 `upgrade head` 直接升级至统一基线 `20261107_0001`，断言核心业务表、枚举与单例种子数据完整初始化；离线基线工具（`migrate_to_unified_baseline.py`）**仅支持 PostgreSQL**（非 PG 后端一律拒绝，不静默跳过只读/加锁保护；其脚本测试 `test_migrate_to_unified_baseline.py` 已全量迁真实 PostgreSQL，按用例用独立 `CREATE SCHEMA`/`DROP SCHEMA ... CASCADE` 隔离，不改 public schema），与启动入口共用 `plan_migration` 的单一分类，空库由启动 `upgrade head` 建表、离线工具只提示走启动/Alembic 且不盖印，无 `alembic_version` 且存在业务表的库两个入口一律拒绝（32 表齐全也不例外）；离线工具对已知 legacy 走 `verify_narrow_legacy_schema`（表名/关键列名 + `sync_checkpoints.cursor` 类型与约束、`folder_patrol_status` 列定义与约束、cursor 数据可读性），对已在统一基线的库走 `verify_database_schema`（仅表名与关键列名），两者都不做与统一基线完整 catalog 的等价校验，不覆盖其余表的列类型、可空性、默认值、索引与外键；
 - **可逆降级再升级循环**：对统一基线执行 `downgrade base` 彻底清理数据库对象，再执行 `upgrade head` 完整恢复，验证 DDL 双向对称可逆；
 - **真实完整性约束生效**：断言数据库底层唯一约束、外键级联与 RESTRICT 阻断生效，检验 keyset 索引与 FTS trigram 搜索能力；
 - **ORM Schema Drift 校验**：使用 Alembic autogenerate 比较 SQLAlchemy 模型与真实 PostgreSQL catalog 差异，结合显式 catalog 校验确保 0 未登记 drift。
