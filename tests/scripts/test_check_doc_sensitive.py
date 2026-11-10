@@ -775,3 +775,31 @@ def test_a6_same_line_multiple_assignments_each_detected(tmp_path: Path, monkeyp
     proc = run_checker(str(doc), "--check")
     assert proc.returncode == 1
     assert proc.stderr.count("[CREDENTIAL]") == 6
+
+
+# --- Adoption A7: apikey / private_key keywords and JSON key shapes ---------
+
+
+def test_a7_apikey_private_key_and_json_shapes_detected(tmp_path: Path, monkeypatch):
+    """A7: ``apikey`` and ``private_key`` are credential keywords, and a
+    quoted JSON key (``"password": "x",``) is an assignment shape the gate
+    accepts, including a two-key JSON line fragmented per A6."""
+    module = _load_module(monkeypatch)
+    doc = tmp_path / "a7.md"
+    doc.write_text(
+        "# Notes\n\n"
+        "apikey=Sup3rSecret123\n"
+        "private_key: Sup3rSecret123\n"
+        '"password": "Sup3rSecret123",\n'
+        '{"password": "Sup3rSecret123", "token": "xyz789abc"}\n',
+        encoding="utf-8",
+    )
+    violations = module.scan_file(doc, root=tmp_path)
+    creds = [v for v in violations if v.category == "credential"]
+    assert len(creds) == 5, [(v.line_number, v.matched_text) for v in creds]
+    assert {v.line_number for v in creds} == {3, 4, 5, 6}
+
+    proc = run_checker(str(doc), "--check")
+    assert proc.returncode == 1
+    assert proc.stderr.count("[CREDENTIAL]") == 5
+    assert "Sup3rSecret123" not in proc.stderr

@@ -93,13 +93,17 @@ CREDENTIAL_KEYWORDS = (
     "pwd",
     "secret",
     "api_key",
+    "apikey",
+    "private_key",
     "access_token",
     "token",
     "credential",
 )
 
+# Group 1: optional quote around the key (same quote both sides, A7);
+# group 2: key; group 3: quoted value; group 4: bare value.
 ASSIGN_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*"
+    r"(?i)(?<![A-Za-z0-9_])([\"']?)([A-Za-z_][A-Za-z0-9_]*)\1\s*[:=]\s*"
     r"(?:[\"']([^\"']*)[\"']|(\S+))"
 )
 
@@ -163,7 +167,7 @@ IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 # markers, a few code lead-ins, trailing comments). Anything else means the
 # match sits inside prose/code, i.e. an ASSIGN_RE mis-capture.
 _CLEAN_PREFIX_RE = re.compile(
-    r"(?:<!--.*-->\s*)?(?:[-*>#]\s*|\d+[.)]\s*)?"
+    r"(?:<!--.*-->\s*)?(?:\{\s*)?(?:[-*>#]\s*|\d+[.)]\s*)?"
     r"(?:export\s+|set\s+|const\s+|let\s+|var\s+|self\.)?",
     re.IGNORECASE,
 )
@@ -251,7 +255,7 @@ def _is_isolated_assignment(line: str, value: str) -> bool:
     physical line are each judged on their own fragment.
     """
     for m in ASSIGN_RE.finditer(line):
-        matched = m.group(2) if m.group(2) is not None else (m.group(3) or "")
+        matched = m.group(3) if m.group(3) is not None else (m.group(4) or "")
         if matched != value:
             continue
         prefix = line[: m.start()].strip()
@@ -496,12 +500,12 @@ def scan_file(
 
             for fragment in _split_assignment_fragments(line):
                 for m_assign in ASSIGN_RE.finditer(fragment):
-                    key = m_assign.group(1)
+                    key = m_assign.group(2)
                     if not any(kw in key.lower() for kw in CREDENTIAL_KEYWORDS):
                         continue
-                    value = m_assign.group(2)
+                    value = m_assign.group(3)
                     if value is None:
-                        value = m_assign.group(3) or ""
+                        value = m_assign.group(4) or ""
                     if not _is_isolated_assignment(fragment, value):
                         continue
                     if is_safe_credential(value, key=key):
