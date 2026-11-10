@@ -26,14 +26,14 @@
     - A15: 密钥初始化统一为跨进程 OS 文件互斥锁与持久化原子发布，移除忙等自旋并建立 fail-closed；
     - A16: desktop sidecar 启动动态持有 loopback 端口 0 并经专用结构化握手回传，根除 TOCTOU 竞态；
     - A17: 压缩 Alembic 历史迁移为单一当前权威基线 `20261107_0001`，提供一次性离线校验与 stamp 工具；
-    - A18: 数据库行为测试统一真实 PostgreSQL，生产与迁移工具代码的 SQLite 分支全部删除。25 个手写 SQLite DDL 复刻生产表的业务测试、离线工具/启动/部署 gate 测试全量迁 PG（逐用例 schema 隔离）；`baseline.py` 仅支持 PG，非 PG 显式抛错。
+    - A18: 数据库行为测试统一真实 PostgreSQL，生产与迁移工具代码的 SQLite 分支全部删除。手写 SQLite DDL 复刻生产表的业务测试已清零——`1fff64c6` 与 `a029d639` 两提交实际迁移的业务测试文件并集为 24 个，其中迁移前基线 `b5f70e95` 真正含手写 `CREATE TABLE` 的为 22 个，另 2 个无手写 DDL（`test_rotate_credential_locking.py` 用 `Base.metadata.create_all` 于 SQLite 引擎、`test_session_engine_thread_safety.py` 只是 SQLite smoke engine）；离线工具/启动/部署 gate 测试全量迁 PG（逐用例 schema 隔离）；`baseline.py` 仅支持 PG，非 PG 显式抛错。（计数复现：`git diff --name-only 1fff64c6^ 1fff64c6` 与 `git diff --name-only a029d639^ a029d639` 取并集得 24，再对并集逐文件 `git show b5f70e95:<file> | grep -c "CREATE TABLE"` 得 22 个非零。）
     - A19: 完整解除反向依赖（auth->bootstrap, host_security）并下沉 `CredentialStore` 到 `security/credentials`；
     - A20: 用真实 PostgreSQL 验证变更计数精确性与持久化副作用，阻断失效 fencing 提交；
     - A21: 收件箱刷新独立优先终态，完整目录发现与后台同步解耦独立反馈（闭环 p073）；
     - A22: 文件树原位最小脱敏并建立 `scripts/check_doc_sensitive.py` 敏感文档门禁；本轮把 `is_safe_credential` 改为 default-deny 并根除字符集豁免反模式。
 - 本轮审阅意见整改：
     - 迁移单入口：`mail_core.db.baseline.plan_migration` 集中分类，启动与离线两入口共用；无 `alembic_version` 且存在业务表的库两入口一律拒绝（32 表齐全也不例外），空库由启动 `upgrade head`、离线仅提示走启动/Alembic，不盲 stamp。
-    - A18 清零：25 个业务测试 + 3 个迁移/启动/部署测试全量迁真实 PG，补齐真实 schema 外键父行 seed；`baseline.py` 删净 SQLite 分支；`__main__.py` 统一分类后的 3 个死 helper 及过时测试删除；`test_auth_plan_a_db.py` 剩余 5 个 FakeSession 用例迁真实 PG。
+    - A18 清零：24 个业务测试文件（口径与计数复现见上 A18 条）+ 3 个迁移/启动/部署测试全量迁真实 PG，补齐真实 schema 外键父行 seed；`baseline.py` 删净 SQLite 分支；`__main__.py` 统一分类后的 3 个死 helper 及过时测试删除；`test_auth_plan_a_db.py` 剩余 5 个 FakeSession 用例迁真实 PG。
     - A22：`is_safe_credential` 改 default-deny，删除「含 `.` `#` `/` `=`、空格或纯字母即判安全」及「含结构字符即整值 safe」反模式；`my.passw0rd`、`supersecret`、`correcthorsebatterystaple`、带逗号/括号/冒号形态与纯数字口令均检出。
     - A13：新增真实 PG 双进程撤销测试（B 未收 NOTIFY 仍拒绝旧会话、DB 故障 fail-closed、重复/乱序通知不影响 REST 判定），退役 FakeSession 旧测试并写明理由；记录上批「实现提交内就地改断言」的教训。
     - A13 遗留回归修复：`test_microsoft_oauth.py` 17 个用例因 A13 fail-closed 与 `isolated_runtime` 每用例 TRUNCATE `auth_credentials` 而在全量套件失败，加 autouse fixture 用生产路径 seed 权威行。属本仓历史既存失败，本轮一并修净；`testing.md` 中「后端完整套件存在既存失败」的过时声明已同步修正。
