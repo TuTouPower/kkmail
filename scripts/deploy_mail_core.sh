@@ -64,6 +64,26 @@ export MAIL_CORE_DATABASE_URL="postgresql+psycopg://kkmail:${POSTGRES_PASSWORD}@
 mail_core_preflight_check "$repo_root" "$python_bin" \
     || fail "preflight schema check failed; refusing to push, back up, build, or migrate (the check itself performs zero writes)"
 
+# Pinned base images are a managed local baseline (config/base_images.lock).
+# Assert they exist BEFORE any push, backup, or image tagging: BuildKit only
+# reaches Docker Hub when a FROM tag is not resolvable locally, and under the
+# reverse-isolation setup (orb network_proxy none) the daemon has no proxy
+# path -- so a missing base image would otherwise fail the deploy only after
+# every irreversible step had already run.
+lock="$repo_root/config/base_images.lock"
+[[ -f "$lock" ]] || fail "missing $lock"
+while read -r base_tag _base_digest; do
+    [[ -n "$base_tag" ]] || continue
+    docker image inspect "$base_tag" >/dev/null 2>&1 \
+        || fail "pinned base image '$base_tag' is missing from the local daemon; run scripts/pin_base_images.sh (the daemon must never reach Docker Hub)"
+done < <("$python_bin" - "$lock" <<'PY'
+import json, sys
+for tag, digest in json.load(open(sys.argv[1])).items():
+    if not tag.startswith("_"):
+        print(tag, digest)
+PY
+)
+
 if [[ "$no_push" == "1" ]]; then
     printf 'deploy_mail_core: --no-push given; skipping git push of main to origin/main\n'
 else
@@ -156,6 +176,8 @@ if [[ -n "$migrate_image" ]] && docker image inspect "$migrate_image" >/dev/null
     docker image tag "$migrate_image" "$(image_repo "$migrate_image"):rollback-$stamp"
 fi
 
+# No --pull: with the pinned local baseline every FROM resolves locally,
+# so BuildKit performs zero registry requests during the build.
 docker compose -f docker-compose.mail-core.yml --profile distributed build api worker migrate
 for service in api worker migrate; do
     service_image="$(resolve_compose_image "$service")"

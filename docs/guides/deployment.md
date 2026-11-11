@@ -23,6 +23,15 @@ docker compose -f docker-compose.mail-core.yml --profile distributed up --build 
 - 局域网 HTTP 部署继续可用，Compose 默认 `MAIL_CORE_COOKIE_SECURE=0`。HTTP 不加密会话 Cookie；同一网络中能够监听流量的设备可能读取 Cookie。仅在可信局域网使用 HTTP。敏感远程访问应经过 TLS 反向代理，并设置 `MAIL_CORE_COOKIE_SECURE=1`；启用 Secure Cookie 后，浏览器不会通过明文 HTTP 发送会话 Cookie。
 - `migrate` 服务先执行 `alembic upgrade head`，`api` / `worker` 在其成功后启动（distributed API 已配置 `MAIL_CORE_SKIP_MIGRATIONS=1` 与 `MAIL_CORE_EMBEDDED_WORKER=0`，独立 worker 实例 ID 为 `distributed-worker-1`；若单进程运行可通过 `MAIL_CORE_SKIP_MIGRATIONS=0 MAIL_CORE_EMBEDDED_WORKER=1` 启动）；`/ready` 会在数据库不可达、schema 未到 head 或 LISTEN 未就绪时返回 503。
 
+## 基础镜像基线（离线可复现构建）
+
+`Dockerfile.mail-core` 的 `FROM` 使用平台无关的 tag（`node:22-alpine`、`python:3.13-slim`），**版本真相**集中在 [`config/base_images.lock`](../../config/base_images.lock)（不可变 index digest）。本机 OrbStack 采用反向隔离（`orb config set network_proxy none`）：Docker daemon 没有代理路径，只有容器进程通过 `~/.docker/config.json` 的 `proxies.default` 走 `host.docker.internal:7890`。daemon 侧的 `FROM` 解析若本地未命中，必然直连 Docker Hub 超时——这不是代理故障，而是「基础镜像的获取」此前从未进入部署契约。
+
+- 新机器首次部署前先执行 `scripts/pin_base_images.sh`：它在临时容器内用已注入的代理、按 lock 的 digest 把基础镜像导入本地 daemon 并打上 tag。这是全流程唯一联网点，幂等、可审计。
+- `scripts/deploy_mail_core.sh` 在 **push / 密封备份 / rollback tag 之前**断言这些 tag 在本地（`docker image inspect`），缺失即失败并提示运行引导脚本；`build` 不带 `--pull`，BuildKit 本地命中后零网络请求。
+- 因此部署不再依赖「Docker Hub 当时是否可达」或「网关代理当时是否开启」，CBrowser 沙箱的直连隔离也完全不受影响。
+- 升级基础镜像：更新 lock 中的 digest，重新运行 `scripts/pin_base_images.sh`，再按常规流程部署。
+
 ## 部署备份与权限边界
 
 - `scripts/deploy_mail_core.sh` 的备份服务以镜像内应用 UID 运行，blob 卷只读；密封包先写入容器私有目录，随后由宿主导出到本次部署新建的 `0700` staging 目录。导出后脚本会拒绝符号链接、规范文件/目录权限为 `0600`/`0700`、校验导出归属为执行部署的宿主用户，并用 `verify_backup_package` 校验通过后才原子发布为 `.scratch/deploy_backup_<stamp>`。
