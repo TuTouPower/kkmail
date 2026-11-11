@@ -3,9 +3,12 @@
 Covers ``mail_core.__main__.run_migrations`` and the ``--migrate-only`` /
 ``--check-migrations`` flags against isolated PostgreSQL schemas. Each case
 creates a unique schema whose search_path is pinned through the connection URL
-(``options=-csearch_path=<schema>,public``), so every connection the production
+(``options=-csearch_path=<schema>``), so every connection the production
 planner opens lands in that schema and the shared at-head public schema is
-never touched; public is on the path only so the pg_trgm opclass resolves.
+never touched. The production migration and ORM qualify their pg_trgm
+opclasses as ``public.gin_trgm_ops``, so no other schema is needed on the
+path and ``current_schema()``, ``inspect`` and ``compare_metadata`` see only
+the isolated schema.
 
 The 0030 legacy shape is derived from the unified baseline -- alembic upgrade
 head, the single source of truth A16 verifies against, minus
@@ -60,9 +63,10 @@ _LEGACY_CURSOR = {
 def pg_schema():
     """Yield a factory returning (schema, schema-scoped URL); drop every schema at teardown.
 
-    ``public`` stays on the search_path behind ``<schema>`` so the pg_trgm
-    opclass (installed in public by the baseline migration) resolves while
-    ``current_schema()`` and every inspector still see only ``<schema>``.
+    The search_path is pinned to ``<schema>`` alone. The production migration
+    and ORM qualify their pg_trgm opclasses as ``public.gin_trgm_ops``, so
+    unqualified DDL, ``current_schema()``, ``inspect`` and ``compare_metadata``
+    act only on the isolated schema; public is never visible to a fixture.
     """
     base_url = os.environ["MAIL_CORE_DATABASE_URL"]
     admin = create_engine(base_url)
@@ -73,7 +77,7 @@ def pg_schema():
         with admin.begin() as conn:
             conn.execute(text(f'CREATE SCHEMA "{schema}"'))
         url = make_url(base_url).update_query_dict(
-            {"options": f"-csearch_path={schema},public"}
+            {"options": f"-csearch_path={schema}"}
         ).render_as_string(hide_password=False)
         created.append(schema)
         return schema, url
@@ -94,14 +98,24 @@ def _make_0030_db(db_url: str, *, revision: str = "20261031_0030") -> str:
     baseline, so the shape must come from that single source: alembic upgrade
     head (full baseline) minus the one table the conversion creates. The real
     upgrade is invoked directly so fixture construction never depends on the
-    mock installed over the startup path's own upgrade call.
+    mock installed over the startup path's own upgrade call. Pre-creating an
+    empty schema-local alembic_version pins the schema at base so upgrade head
+    builds the full baseline inside ``<schema>``; with public off the path, the
+    DROP, stamp and seed that follow resolve only to ``<schema>``.
     """
     cfg = baseline.alembic_config()
     cfg.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
-    _alembic_upgrade(cfg, "head")
 
     engine = create_engine(db_url)
     try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE alembic_version ("
+                    "version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+                )
+            )
+        _alembic_upgrade(cfg, "head")
         with engine.begin() as conn:
             conn.execute(text("DROP TABLE folder_patrol_status"))
             conn.execute(
