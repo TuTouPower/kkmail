@@ -342,14 +342,9 @@ def test_t5_empty_head_and_incremental_never_stamp(pg_schema, monkeypatch):
     assert _snapshot(empty_url)["tables"] == []
 
     _, head_url = pg_schema()
-    engine = create_engine(head_url)
-    with engine.begin() as conn:
-        conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
-        conn.execute(
-            text("INSERT INTO alembic_version VALUES (:rev)"),
-            {"rev": baseline.UNIFIED_BASELINE_REVISION},
-        )
-    engine.dispose()
+    cfg = baseline.alembic_config()
+    cfg.set_main_option("sqlalchemy.url", head_url.replace("%", "%%"))
+    _alembic_upgrade(cfg, "head")
     before_head = _snapshot(head_url)
     monkeypatch.setenv("MAIL_CORE_DATABASE_URL", head_url)
     main_module.run_migrations()
