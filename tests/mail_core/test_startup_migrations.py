@@ -3,12 +3,19 @@
 Covers ``mail_core.__main__.run_migrations`` and the ``--migrate-only`` /
 ``--check-migrations`` flags against isolated PostgreSQL schemas. Each case
 creates a unique schema whose search_path is pinned through the connection URL
-(``options=-csearch_path=...``), so every connection the production planner
-opens on its own lands in that schema and the shared at-head public schema is
-never touched. The 0030 fixture DDL below is a frozen literal transcribed from
-the historical migrations (20261020_0002 base plus the incremental adds through
-20261031_0030); it is deliberately NOT generated from the ORM metadata so
-the tests cannot pass trivially.
+(``options=-csearch_path=<schema>,public``), so every connection the production
+planner opens lands in that schema and the shared at-head public schema is
+never touched; public is on the path only so the pg_trgm opclass resolves.
+
+The 0030 legacy shape is derived from the unified baseline -- alembic upgrade
+head, the single source of truth A16 verifies against, minus
+folder_patrol_status. A16's post-conversion check is a full compare_metadata
+over the real catalog, so a second hand-transcribed schema could never satisfy
+it; the object under test is the conversion logic (table creation, patrol data
+migration, stamping, idempotency, concurrent serialization, failed-conversion
+rollback), and deriving the shape from the baseline does not weaken any of
+those assertions. The pre-A16 worry that ORM-generated fixtures make the tests
+"pass trivially" no longer applies.
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+from alembic.command import upgrade as _alembic_upgrade
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
@@ -37,44 +45,6 @@ pytestmark = pytest.mark.skipif(
     reason="MAIL_CORE_DATABASE_URL not set",
 )
 
-# Frozen literal: the 0030-era schema (unified baseline minus the
-# folder_patrol_status table added by 0031), transcribed from the deleted
-# incremental migrations. BOOLEAN defaults use SQL true/false so the literal is
-# valid PostgreSQL DDL (SQLite tolerated 1/0, PostgreSQL does not).
-_DDL_0030_TABLES: tuple[str, ...] = (
-    "CREATE TABLE account_groups (id UUID NOT NULL, name VARCHAR(128) NOT NULL, color VARCHAR(32), sort_order INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_account_groups PRIMARY KEY (id), CONSTRAINT uq_account_groups_name UNIQUE (name))",
-    "CREATE TABLE credential_secrets (ref TEXT NOT NULL, key_version INTEGER NOT NULL, nonce BYTEA NOT NULL, ciphertext BYTEA NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_credential_secrets PRIMARY KEY (ref))",
-    "CREATE TABLE app_settings (key VARCHAR(128) NOT NULL, value TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_app_settings PRIMARY KEY (key))",
-    "CREATE TABLE auth_credentials (id VARCHAR(64) NOT NULL, login_password_hash VARCHAR(255), session_epoch INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_auth_credentials PRIMARY KEY (id))",
-    "CREATE TABLE accounts (id UUID NOT NULL, email VARCHAR(320) NOT NULL, provider VARCHAR(32) NOT NULL, display_name VARCHAR(255), credential_ref VARCHAR(512), group_id UUID, master_order INTEGER, group_order INTEGER, sync_enabled BOOLEAN NOT NULL DEFAULT true, sync_status VARCHAR(32) NOT NULL DEFAULT 'idle', config JSONB NOT NULL DEFAULT '{}', recipient_addresses JSONB NOT NULL DEFAULT '[]', created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_accounts PRIMARY KEY (id), CONSTRAINT uq_accounts_email UNIQUE (email), CONSTRAINT fk_accounts_group_id FOREIGN KEY (group_id) REFERENCES account_groups (id) ON DELETE SET NULL)",
-    "CREATE TABLE account_sync_leases (account_id UUID NOT NULL, owner_id VARCHAR(128) NOT NULL, lease_expires_at TIMESTAMPTZ NOT NULL, heartbeat_at TIMESTAMPTZ NOT NULL, fencing_token BIGINT NOT NULL DEFAULT 0, CONSTRAINT pk_account_sync_leases PRIMARY KEY (account_id), CONSTRAINT fk_leases_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
-    "CREATE TABLE account_sync_activity (account_id UUID NOT NULL, last_foreground_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL, CONSTRAINT pk_account_sync_activity PRIMARY KEY (account_id), CONSTRAINT fk_activity_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
-    "CREATE TABLE folders (id UUID NOT NULL, account_id UUID NOT NULL, remote_id VARCHAR(512) NOT NULL, name VARCHAR(512) NOT NULL, role VARCHAR(32) NOT NULL DEFAULT 'other', parent_remote_id VARCHAR(512), sync_status VARCHAR(32) NOT NULL DEFAULT 'idle', created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_folders PRIMARY KEY (id), CONSTRAINT uq_folders_account_remote UNIQUE (account_id, remote_id), CONSTRAINT fk_folders_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
-    "CREATE TABLE threads (id UUID NOT NULL, account_id UUID NOT NULL, provider_thread_key VARCHAR(512), subject_norm VARCHAR(998), sort_time TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_threads PRIMARY KEY (id), CONSTRAINT uq_threads_account_provider_key UNIQUE (account_id, provider_thread_key), CONSTRAINT fk_threads_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
-    "CREATE TABLE messages (id UUID NOT NULL, account_id UUID NOT NULL, remote_id VARCHAR(512), internet_message_id VARCHAR(998), thread_id UUID, subject TEXT NOT NULL DEFAULT '', from_address VARCHAR(320) NOT NULL DEFAULT '', from_name VARCHAR(255), to_addresses JSONB NOT NULL DEFAULT '[]', cc_addresses JSONB NOT NULL DEFAULT '[]', sort_time TIMESTAMPTZ, is_read BOOLEAN, is_flagged BOOLEAN, has_attachments BOOLEAN, snippet TEXT, size_bytes BIGINT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_messages PRIMARY KEY (id), CONSTRAINT uq_messages_account_remote UNIQUE (account_id, remote_id), CONSTRAINT fk_messages_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE, CONSTRAINT fk_messages_thread FOREIGN KEY (thread_id) REFERENCES threads (id) ON DELETE SET NULL)",
-    "CREATE TABLE message_locations (id UUID NOT NULL, message_id UUID NOT NULL, folder_id UUID NOT NULL, uid BIGINT, CONSTRAINT pk_message_locations PRIMARY KEY (id), CONSTRAINT uq_message_locations UNIQUE (message_id, folder_id), CONSTRAINT fk_locations_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE, CONSTRAINT fk_locations_folder FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE)",
-    "CREATE TABLE message_bodies (message_id UUID NOT NULL, text_plain TEXT, text_html TEXT, parse_error TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_message_bodies PRIMARY KEY (message_id), CONSTRAINT fk_bodies_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE)",
-    "CREATE TABLE message_blobs (id UUID NOT NULL, content_sha256 VARCHAR(64) NOT NULL, key_version INTEGER NOT NULL DEFAULT 1, size_bytes BIGINT NOT NULL, storage_path VARCHAR(1024) NOT NULL, ref_count INTEGER NOT NULL DEFAULT 1, gc_eligible_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_message_blobs PRIMARY KEY (id), CONSTRAINT uq_message_blobs_hash_key UNIQUE (content_sha256, key_version), CONSTRAINT ck_message_blobs_ref_count_nonnegative CHECK (ref_count >= 0))",
-    "CREATE TABLE message_blob_links (message_id UUID NOT NULL, blob_id UUID NOT NULL, CONSTRAINT pk_message_blob_links PRIMARY KEY (message_id), CONSTRAINT fk_links_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE, CONSTRAINT fk_links_blob FOREIGN KEY (blob_id) REFERENCES message_blobs (id) ON DELETE RESTRICT)",
-    "CREATE TABLE attachments (id UUID NOT NULL, message_id UUID NOT NULL, blob_id UUID, part_id VARCHAR(64), filename VARCHAR(512) NOT NULL, content_type VARCHAR(255), size_bytes BIGINT, content_id VARCHAR(255), is_inline BOOLEAN NOT NULL DEFAULT false, CONSTRAINT pk_attachments PRIMARY KEY (id), CONSTRAINT uq_attachments_message_part UNIQUE (message_id, part_id), CONSTRAINT fk_attachments_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE, CONSTRAINT fk_attachments_blob FOREIGN KEY (blob_id) REFERENCES message_blobs (id) ON DELETE SET NULL)",
-    "CREATE TABLE thread_messages (id UUID NOT NULL, thread_id UUID NOT NULL, message_id UUID NOT NULL, position INTEGER NOT NULL DEFAULT 0, CONSTRAINT pk_thread_messages PRIMARY KEY (id), CONSTRAINT uq_thread_messages UNIQUE (thread_id, message_id), CONSTRAINT fk_tm_thread FOREIGN KEY (thread_id) REFERENCES threads (id) ON DELETE CASCADE, CONSTRAINT fk_tm_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE)",
-    "CREATE TABLE sync_checkpoints (account_id UUID NOT NULL, folder_id UUID NOT NULL, cursor JSONB NOT NULL DEFAULT '{}', uidvalidity BIGINT, modseq BIGINT, history_id VARCHAR(128), delta_link TEXT, full_scan_complete BOOLEAN NOT NULL DEFAULT false, scan_generation UUID, fencing_token BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_sync_checkpoints PRIMARY KEY (account_id, folder_id), CONSTRAINT fk_checkpoints_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE, CONSTRAINT fk_checkpoints_folder FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE)",
-    "CREATE TABLE sync_runs (id UUID NOT NULL, account_id UUID NOT NULL, folder_id UUID, phase VARCHAR(64) NOT NULL, status VARCHAR(32) NOT NULL, stats JSONB NOT NULL DEFAULT '{}', error TEXT, fencing_token BIGINT, started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMPTZ, CONSTRAINT pk_sync_runs PRIMARY KEY (id), CONSTRAINT fk_runs_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE, CONSTRAINT fk_runs_folder FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE SET NULL)",
-    "CREATE TABLE remote_operations (id UUID NOT NULL, account_id UUID NOT NULL, entity_key VARCHAR(512) NOT NULL, op_type VARCHAR(64) NOT NULL, desired_state JSONB NOT NULL DEFAULT '{}', status VARCHAR(32) NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, next_attempt_at TIMESTAMPTZ, idempotency_key VARCHAR(128), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_remote_operations PRIMARY KEY (id), CONSTRAINT uq_remote_operations_idempotency UNIQUE (idempotency_key), CONSTRAINT fk_remote_ops_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
-    "CREATE TABLE folder_stats (folder_id UUID NOT NULL, total_count INTEGER NOT NULL DEFAULT 0, unread_count INTEGER, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_folder_stats PRIMARY KEY (folder_id), CONSTRAINT fk_stats_folder FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE)",
-    "CREATE TABLE outbox_publication_state (id INTEGER NOT NULL, epoch UUID NOT NULL, next_seq BIGINT NOT NULL DEFAULT 1, pruned_through_seq BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_outbox_publication_state PRIMARY KEY (id), CONSTRAINT ck_outbox_publication_state_singleton CHECK (id = 1))",
-    "CREATE TABLE outbox (id BIGINT NOT NULL, event_type VARCHAR(64) NOT NULL, account_id UUID, payload JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, publication_seq BIGINT, published_at TIMESTAMPTZ, CONSTRAINT pk_outbox PRIMARY KEY (id), CONSTRAINT fk_outbox_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL)",
-    "CREATE TABLE message_archive_state (message_id UUID NOT NULL, claim_revision BIGINT NOT NULL DEFAULT 0, state VARCHAR(32) NOT NULL DEFAULT 'metadata_synced', priority INTEGER NOT NULL DEFAULT 2, retry_count INTEGER NOT NULL DEFAULT 0, pause_reason VARCHAR(255), last_error TEXT, claimed_by VARCHAR(128), claimed_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_message_archive_state PRIMARY KEY (message_id), CONSTRAINT fk_archive_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE, CONSTRAINT ck_message_archive_state_state_valid CHECK (state IN ('metadata_synced', 'archive_pending', 'archive_in_progress', 'archive_paused_quota', 'archive_failed', 'archive_complete')))",
-    "CREATE TABLE worker_jobs (id UUID NOT NULL, execution_generation UUID NOT NULL, job_type VARCHAR(64) NOT NULL, account_id UUID, dedupe_key VARCHAR(128), payload JSONB NOT NULL DEFAULT '{}', status VARCHAR(32) NOT NULL DEFAULT 'pending', priority INTEGER NOT NULL DEFAULT 100, run_after TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, attempts INTEGER NOT NULL DEFAULT 0, failure_attempts INTEGER NOT NULL DEFAULT 0, locked_by VARCHAR(128), locked_at TIMESTAMPTZ, last_error TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_worker_jobs PRIMARY KEY (id), CONSTRAINT uq_worker_jobs_execution_generation UNIQUE (execution_generation), CONSTRAINT fk_jobs_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
-    "CREATE TABLE message_search (message_id UUID NOT NULL, account_id UUID NOT NULL, subject TEXT NOT NULL DEFAULT '', from_text TEXT NOT NULL DEFAULT '', to_text TEXT NOT NULL DEFAULT '', body_text TEXT NOT NULL DEFAULT '', document TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_message_search PRIMARY KEY (message_id), CONSTRAINT fk_search_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE, CONSTRAINT fk_search_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE)",
-    "CREATE TABLE blob_quota_reservations (id UUID NOT NULL, worker_id VARCHAR(128) NOT NULL, message_id UUID, reserved_bytes BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, expires_at TIMESTAMPTZ NOT NULL, CONSTRAINT pk_blob_quota PRIMARY KEY (id), CONSTRAINT fk_quota_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE, CONSTRAINT ck_blob_quota_reservations_reserved_bytes_positive CHECK (reserved_bytes > 0))",
-    "CREATE TABLE sync_requests (id UUID NOT NULL, client_request_id VARCHAR(64) NOT NULL, mode VARCHAR(32) NOT NULL, trigger VARCHAR(32) NOT NULL, state VARCHAR(32) NOT NULL DEFAULT 'queued', scope JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMPTZ, CONSTRAINT pk_sync_requests PRIMARY KEY (id), CONSTRAINT uq_sync_requests_client UNIQUE (client_request_id))",
-    "CREATE TABLE sync_request_targets (id UUID NOT NULL, request_id UUID NOT NULL, account_id UUID, folder_id UUID, current_job_id UUID, target_key VARCHAR(255) NOT NULL, requested_generation UUID NOT NULL, state VARCHAR(32) NOT NULL DEFAULT 'queued', error_code VARCHAR(64), safe_error VARCHAR(500), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMPTZ, CONSTRAINT pk_sync_request_targets PRIMARY KEY (id), CONSTRAINT uq_sync_targets_request_key UNIQUE (request_id, target_key), CONSTRAINT fk_targets_request FOREIGN KEY (request_id) REFERENCES sync_requests (id) ON DELETE CASCADE, CONSTRAINT fk_targets_account FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE SET NULL, CONSTRAINT fk_targets_folder FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE SET NULL, CONSTRAINT fk_targets_job FOREIGN KEY (current_job_id) REFERENCES worker_jobs (id) ON DELETE SET NULL)",
-    "CREATE TABLE sync_request_target_jobs (id UUID NOT NULL, target_id UUID NOT NULL, execution_generation UUID NOT NULL, job_id UUID, phase VARCHAR(64) NOT NULL DEFAULT 'sync', folder_id UUID, status VARCHAR(32) NOT NULL DEFAULT 'queued', error_code VARCHAR(64), safe_error VARCHAR(500), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TIMESTAMPTZ, CONSTRAINT pk_sync_request_target_jobs PRIMARY KEY (id), CONSTRAINT uq_sync_target_jobs_target_generation UNIQUE (target_id, execution_generation), CONSTRAINT fk_target_jobs_target FOREIGN KEY (target_id) REFERENCES sync_request_targets (id) ON DELETE CASCADE, CONSTRAINT fk_target_jobs_job FOREIGN KEY (job_id) REFERENCES worker_jobs (id) ON DELETE SET NULL, CONSTRAINT fk_target_jobs_folder FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE SET NULL)",
-    "CREATE TABLE message_remote_image_allows (message_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_message_remote_image_allows PRIMARY KEY (message_id), CONSTRAINT fk_mria_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE)",
-    "CREATE TABLE sender_remote_image_allows (id UUID NOT NULL, from_address VARCHAR(320) NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT pk_sender_remote_image_allows PRIMARY KEY (id), CONSTRAINT uq_sender_remote_image_allows_from_address UNIQUE (from_address))",
-)
-
 _ACCOUNT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 _FOLDER_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
@@ -88,7 +58,12 @@ _LEGACY_CURSOR = {
 
 @pytest.fixture
 def pg_schema():
-    """Yield a factory returning (schema, schema-scoped URL); drop every schema at teardown."""
+    """Yield a factory returning (schema, schema-scoped URL); drop every schema at teardown.
+
+    ``public`` stays on the search_path behind ``<schema>`` so the pg_trgm
+    opclass (installed in public by the baseline migration) resolves while
+    ``current_schema()`` and every inspector still see only ``<schema>``.
+    """
     base_url = os.environ["MAIL_CORE_DATABASE_URL"]
     admin = create_engine(base_url)
     created: list[str] = []
@@ -98,7 +73,7 @@ def pg_schema():
         with admin.begin() as conn:
             conn.execute(text(f'CREATE SCHEMA "{schema}"'))
         url = make_url(base_url).update_query_dict(
-            {"options": f"-csearch_path={schema}"}
+            {"options": f"-csearch_path={schema},public"}
         ).render_as_string(hide_password=False)
         created.append(schema)
         return schema, url
@@ -113,14 +88,24 @@ def pg_schema():
 
 
 def _make_0030_db(db_url: str, *, revision: str = "20261031_0030") -> str:
+    """Build a faithful 0030 legacy shape from the unified baseline truth.
+
+    A16's post-conversion check is a full compare_metadata against the ORM
+    baseline, so the shape must come from that single source: alembic upgrade
+    head (full baseline) minus the one table the conversion creates. The real
+    upgrade is invoked directly so fixture construction never depends on the
+    mock installed over the startup path's own upgrade call.
+    """
+    cfg = baseline.alembic_config()
+    cfg.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
+    _alembic_upgrade(cfg, "head")
+
     engine = create_engine(db_url)
     try:
         with engine.begin() as conn:
-            for stmt in _DDL_0030_TABLES:
-                conn.execute(text(stmt))
-            conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
+            conn.execute(text("DROP TABLE folder_patrol_status"))
             conn.execute(
-                text("INSERT INTO alembic_version (version_num) VALUES (:rev)"),
+                text("UPDATE alembic_version SET version_num = :rev"),
                 {"rev": revision},
             )
             conn.execute(
@@ -377,8 +362,11 @@ def test_t5_empty_head_and_incremental_never_stamp(pg_schema, monkeypatch):
 
     _, orphans_url = pg_schema()
     engine = create_engine(orphans_url)
+    # Orphan state: one business table and no alembic_version mark. By this
+    # point T5 has stubbed ScriptDirectory, so this is a single inline table
+    # rather than a baseline-derived shape.
     with engine.begin() as conn:
-        conn.execute(text(_DDL_0030_TABLES[0]))
+        conn.execute(text("CREATE TABLE account_groups (id UUID PRIMARY KEY)"))
     engine.dispose()
     before_orphans = _snapshot(orphans_url)
     monkeypatch.setenv("MAIL_CORE_DATABASE_URL", orphans_url)

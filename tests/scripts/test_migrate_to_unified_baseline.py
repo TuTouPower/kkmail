@@ -42,11 +42,9 @@ if str(ROOT / "scripts") not in sys.path:
 
 from mail_core.db.baseline import (
     KNOWN_LEGACY_REVISIONS,
-    NARROW_CONVERSION_LEGACY_REVISIONS,
     REQUIRED_TABLES,
     UNIFIED_BASELINE_REVISION,
     MigrationAction,
-    RevisionContext,
     SchemaValidationError,
     ensure_folder_patrol_status_table,
     is_legacy_revision,
@@ -119,8 +117,13 @@ def pg_engine():
     database. A dedicated ``CREATE SCHEMA``/``DROP SCHEMA ... CASCADE`` keeps
     every mutable fixture (empty, baseline, 0030 legacy) inside this schema and
     never drops or alters objects in ``public``. The URL query
-    ``options=-csearch_path=<schema>`` (psycopg) makes unqualified DDL and
-    ``inspect`` resolve to this schema.
+    ``options=-csearch_path=<schema>,public`` (psycopg) pins unqualified DDL
+    and ``inspect`` to this schema while letting the pg_trgm operator class
+    resolve: the unified baseline installs pg_trgm in ``public``, and the ORM
+    trigram indexes on ``message_search`` (gin_trgm_ops) need it on the path.
+    ``<schema>`` stays first, so ``current_schema()``, ``get_table_names()``,
+    ``inspect`` and ``compare_metadata`` still see only this schema -- the
+    at-head baseline tables in public never leak into the fixture.
     """
     base = make_url(os.environ["MAIL_CORE_DATABASE_URL"])
     admin = create_engine(base.render_as_string(hide_password=False))
@@ -128,7 +131,7 @@ def pg_engine():
     with admin.begin() as conn:
         conn.execute(text(f'CREATE SCHEMA "{schema}"'))
     url = base.update_query_dict(
-        {"options": f"-csearch_path={schema}"}
+        {"options": f"-csearch_path={schema},public"}
     ).render_as_string(hide_password=False)
     engine = create_engine(url)
     try:
@@ -227,24 +230,6 @@ def _build_state(engine, state: str) -> None:
             "unknown": "unknown_rev_9999",
         }[state]
         conn.execute(text("INSERT INTO alembic_version VALUES (:rev)"), {"rev": revision})
-
-
-def _startup_revision_context():
-    """Build the startup entry's context from the real Alembic ScriptDirectory."""
-    import mail_core.db as db_pkg
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-
-    here = Path(db_pkg.__file__).resolve().parent
-    cfg = Config(str(here / "alembic.ini"))
-    cfg.set_main_option("script_location", str(here / "alembic"))
-    script = ScriptDirectory.from_config(cfg)
-    return RevisionContext(
-        known_revisions=frozenset(r.revision for r in script.walk_revisions()),
-        legacy_revisions=NARROW_CONVERSION_LEGACY_REVISIONS,
-        known_legacy_revisions=KNOWN_LEGACY_REVISIONS - NARROW_CONVERSION_LEGACY_REVISIONS,
-        heads=tuple(script.get_heads()),
-    )
 
 
 def _assert_no_version_stamp(db_url: str) -> None:
@@ -712,14 +697,16 @@ def test_migrate_patrol_status_data_emits_postgres_ddl():
     ],
 )
 def test_plan_migration_two_entries_agree_on_classification(pg_engine, state, expected_action):
-    """Both entries supply a RevisionContext to the single planner.
+    """Both entries classify with the single production revision_context().
 
-    The startup context comes from ScriptDirectory.walk_revisions/get_heads and
-    the offline context from baseline constants; for the same database state
-    the returned action must be identical, so the two entries cannot diverge.
+    A1 removed the hand-built startup context: mail_core.__main__.run_migrations
+    and baseline.run_migration now both obtain their context from
+    baseline.revision_context(), which reads the real Alembic ScriptDirectory.
+    Contexts built from that single source must classify the same database
+    state identically, so the two entries cannot diverge.
     """
     _build_state(pg_engine, state)
-    startup_ctx = _startup_revision_context()
+    startup_ctx = revision_context()
     offline_ctx = revision_context()
     with pg_engine.connect() as conn:
         db_state = read_database_state(conn)
