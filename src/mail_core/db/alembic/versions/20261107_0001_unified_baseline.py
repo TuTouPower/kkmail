@@ -466,21 +466,21 @@ def upgrade() -> None:
     )
     op.execute("CREATE INDEX ix_message_search_account ON message_search (account_id)")
     op.execute("CREATE INDEX ix_message_search_document ON message_search USING GIN (document)")
-    op.execute("CREATE INDEX ix_message_search_from_trgm ON message_search USING GIN (from_text gin_trgm_ops)")
-    op.execute("CREATE INDEX ix_message_search_subject_trgm ON message_search USING GIN (subject gin_trgm_ops)")
+    op.execute("CREATE INDEX ix_message_search_from_trgm ON message_search USING GIN (from_text public.gin_trgm_ops)")
+    op.execute("CREATE INDEX ix_message_search_subject_trgm ON message_search USING GIN (subject public.gin_trgm_ops)")
     op.create_index(
         "ix_message_search_from_text_trgm",
         "message_search",
         ["from_text"],
         postgresql_using="gin",
-        postgresql_ops={"from_text": "gin_trgm_ops"},
+        postgresql_ops={"from_text": "public.gin_trgm_ops"},
     )
     op.create_index(
         "ix_message_search_to_text_trgm",
         "message_search",
         ["to_text"],
         postgresql_using="gin",
-        postgresql_ops={"to_text": "gin_trgm_ops"},
+        postgresql_ops={"to_text": "public.gin_trgm_ops"},
     )
 
     # 27. blob_quota_reservations
