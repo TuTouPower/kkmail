@@ -13,34 +13,67 @@ def _is_noise(name: str) -> bool:
 
 
 def _file_differs(a: Path, b: Path) -> bool:
-    if a.is_symlink() or b.is_symlink():
-        return a.resolve() != b.resolve()
-    if a.stat().st_size != b.stat().st_size:
+    """资产差异唯一比较器：软链比 readlink；普通文件依次比 size、执行位(0o111)、字节。"""
+    a_link, b_link = a.is_symlink(), b.is_symlink()
+    if a_link or b_link:
+        if a_link != b_link:
+            return True
+        return a.readlink() != b.readlink()
+    a_stat, b_stat = a.stat(), b.stat()
+    if a_stat.st_size != b_stat.st_size:
+        return True
+    if a_stat.st_mode & 0o111 != b_stat.st_mode & 0o111:
         return True
     return a.read_bytes() != b.read_bytes()
 
 
-def _reject_unsafe_target(dst: Path, reason: str) -> None:
+def _reject_unsafe_target(dst: Path, reason: str, sync: ctx.SyncContext) -> None:
     """拒绝目录与软链目标：copy2 会跟随文件软链写仓外，也会把文件写进同名目录。"""
     if dst.is_symlink():
         raise ctx.SyncError(
-            f"{ctx._rel(dst)} 是软链：{reason}。同步不得经软链写到仓外；请人工处理后重跑 apply"
+            f"{sync.rel(dst)} 是软链：{reason}。同步不得经软链写到仓外；请人工处理后重跑 apply"
         )
     if dst.is_dir():
-        raise ctx.SyncError(f"{ctx._rel(dst)} 是目录：{reason}。请人工处理该目录后重跑 apply")
+        raise ctx.SyncError(f"{sync.rel(dst)} 是目录：{reason}。请人工处理该目录后重跑 apply")
 
 
-def sync_dir(src_dir: Path, dst_dir: Path, changed: set[Path]) -> None:
+def _sync_link(src_link: Path, dst: Path, changed: set[Path], sync: ctx.SyncContext) -> None:
+    """链接对象独立同步：按 readlink 比较/替换，写盘前校验父目录链与链接目标边界。"""
+    link_target = src_link.readlink()
+    if not sync.contains(dst.parent):
+        raise ctx.SyncError(
+            f"{sync.rel(dst)} 父目录链含越界软链，拒绝在消费仓外创建链接；请人工处理后重跑 apply"
+        )
+    if not sync.contains(dst.parent / link_target):
+        raise ctx.SyncError(
+            f"{sync.rel(dst)} 链接目标 {link_target} 解析到消费仓外，拒绝创建越界链接；请人工处理后重跑 apply"
+        )
+    if dst.is_symlink():
+        if dst.readlink() == link_target:
+            return
+        dst.unlink()
+        dst.symlink_to(link_target)
+        changed.add(dst)
+    elif dst.exists():
+        raise ctx.SyncError(
+            f"{sync.rel(dst)} 是真实文件或目录，模板源是软链；拒绝覆盖，请人工处理后重跑 apply"
+        )
+    else:
+        dst.symlink_to(link_target)
+        changed.add(dst)
+
+
+def sync_dir(src_dir: Path, dst_dir: Path, changed: set[Path], sync: ctx.SyncContext) -> None:
     """树对树同步：src 全量复制（含覆盖），dst 中 src 没有的非噪声条目删除。"""
     if dst_dir.is_symlink():
         raise ctx.SyncError(
-            f"{ctx._rel(dst_dir)} 是目录软链，拒绝向软链目标执行树对树同步以防越界。请人工处理后重跑 apply"
+            f"{sync.rel(dst_dir)} 是目录软链，拒绝向软链目标执行树对树同步以防越界。请人工处理后重跑 apply"
         )
     if not dst_dir.exists():
         dst_dir.mkdir(parents=True)
     elif not dst_dir.is_dir():
         raise ctx.SyncError(
-            f"{ctx._rel(dst_dir)} 是文件，模板源是目录；类型不符，停止。"
+            f"{sync.rel(dst_dir)} 是文件，模板源是目录；类型不符，停止。"
             "请人工处理该路径后重跑 apply"
         )
     for entry in src_dir.iterdir():
@@ -48,16 +81,13 @@ def sync_dir(src_dir: Path, dst_dir: Path, changed: set[Path]) -> None:
             continue
         target = dst_dir / entry.name
         if target.is_symlink() and entry.is_dir() and not entry.is_symlink():
-            raise ctx.SyncError(f"{ctx._rel(target)} 是目录软链，模板源是真实目录，拒绝覆盖；停止")
+            raise ctx.SyncError(f"{sync.rel(target)} 是目录软链，模板源是真实目录，拒绝覆盖；停止")
         if entry.is_dir() and not entry.is_symlink():
-            sync_dir(entry, target, changed)
+            sync_dir(entry, target, changed, sync)
         elif entry.is_symlink():
-            _reject_unsafe_target(target, "模板源是文件/软链，拒绝写入目录内部")
-            if not target.exists() or _file_differs(entry, target):
-                shutil.copy2(entry, target, follow_symlinks=False)
-                changed.add(target)
+            _sync_link(entry, target, changed, sync)
         else:
-            _reject_unsafe_target(target, "模板源是文件，拒绝写入目录内部")
+            _reject_unsafe_target(target, "模板源是文件，拒绝写入目录内部", sync)
             if not target.exists() or _file_differs(entry, target):
                 shutil.copy2(entry, target)
                 changed.add(target)
@@ -72,15 +102,15 @@ def sync_dir(src_dir: Path, dst_dir: Path, changed: set[Path]) -> None:
             changed.add(entry)
 
 
-def sync_file(src: Path, dst: Path, changed: set[Path]) -> None:
+def sync_file(src: Path, dst: Path, changed: set[Path], sync: ctx.SyncContext) -> None:
     """单文件：src 有 → 拷贝（相同则不动）；src 无 → 删 dst。"""
     if not src.exists():
         if dst.exists():
-            _reject_unsafe_target(dst, "模板已无此文件，拒绝删除同名目录")
+            _reject_unsafe_target(dst, "模板已无此文件，拒绝删除同名目录", sync)
             dst.unlink()
             changed.add(dst)
         return
-    _reject_unsafe_target(dst, "模板源是文件，拒绝写入目录内部")
+    _reject_unsafe_target(dst, "模板源是文件，拒绝写入目录内部", sync)
     if not dst.exists() or _file_differs(src, dst):
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
@@ -105,11 +135,11 @@ def _dir_has_diff(src_dir: Path, dst_dir: Path) -> bool:
     return False
 
 
-def hard_sync_status(src: Path) -> list[dict]:
+def hard_sync_status(src: Path, sync: ctx.SyncContext) -> list[dict]:
     """硬同步清单状态：write / delete / same。"""
     out: list[dict] = []
     for rel in ctx.HARD_SYNC_DIRS:
-        s, d = src / rel, ctx.CONSUMER / rel
+        s, d = src / rel, sync.consumer / rel
         if not s.exists() and not d.exists():
             continue
         if not s.exists():
@@ -119,7 +149,7 @@ def hard_sync_status(src: Path) -> list[dict]:
         else:
             out.append({"rel": rel + "/", "state": "same"})
     for rel in ctx.HARD_SYNC_FILES:
-        s, d = src / rel, ctx.CONSUMER / rel
+        s, d = src / rel, sync.consumer / rel
         if not s.exists() and not d.exists():
             continue
         if not s.exists():
@@ -131,11 +161,11 @@ def hard_sync_status(src: Path) -> list[dict]:
     return out
 
 
-def retired_template_warnings() -> list[str]:
+def retired_template_warnings(sync: ctx.SyncContext) -> list[str]:
     """已下线模板产物残留提醒：只读检查，不写盘。"""
     warnings = []
     for rel in ctx.RETIRED_TEMPLATE_PATHS:
-        if (ctx.CONSUMER / rel).exists():
+        if (sync.consumer / rel).exists():
             warnings.append(
                 f"{rel} 为已下线模板产物（b3e5c8f 起不再分发），"
                 "确认无消费定制后手动删除，否则消费仓 format 门禁持续报红"

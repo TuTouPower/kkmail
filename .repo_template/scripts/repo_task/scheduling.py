@@ -39,19 +39,19 @@ def _dependency_cycle(dependencies: dict[str, list[str]]) -> list[str] | None:
                 state[parent] = 2
     return None
 
-def compute_schedule(tasks: dict | None = None) -> dict:
+def compute_schedule(tasks: dict | None = None, *, repo) -> dict:
     """可跑集与分组计算：cmd_view 渲染与 reconcile 行动计划共用的只读调度图。
 
     传入 tasks 时复用调用方已完成的 effective discovery，避免重复扫描（Issue #77）。
     """
-    require_primary_worktree()
+    require_primary_worktree(repo=repo)
     if tasks is None:
-        tasks = discover_effective_tasks()
+        tasks = discover_effective_tasks(repo=repo)
 
     dependencies: dict[str, list[str]] = {}
     conflicts: dict[str, set[str]] = {tid: set() for tid in tasks}
     for tid, task in tasks.items():
-        if task["status"] in ctx.ARCHIVED_STATUSES:
+        if task["status"] in ctx.TERMINAL_STATUSES:
             continue
         task_dependencies = parse_tid_list(
             task.get("depends_on", ""), field=f"{tid}.depends_on"
@@ -91,7 +91,7 @@ def compute_schedule(tasks: dict | None = None) -> dict:
             "invalid_graph: depends_on cycle " + " -> ".join(cycle)
         )
 
-    main_tasks = {task["tid"]: task for task in scan_tasks()}
+    main_tasks = {task["tid"]: task for task in scan_tasks(repo=repo)}
     main_done_set = {tid for tid, task in main_tasks.items() if task["status"] == "done"}
     effective_done_set = {tid for tid, task in tasks.items() if task["status"] == "done"}
     unmerged_done = sorted(effective_done_set - main_done_set, key=tid_sort_key)

@@ -9,8 +9,10 @@ import re
 import stat
 import tempfile
 from pathlib import Path
+from typing import Iterable, Mapping
 
 import repo_task.context as ctx
+from .handoff import validate_handoff
 
 from .attempts import (
     attempt_for_identity,
@@ -45,7 +47,7 @@ def _hash_part(digest, label: bytes, value: bytes) -> None:
 
 # review prompt 渲染输出文件名（按 review_level）：render_review_prompts 的输出 dict key
 # 同源于此（单一真相源）。产物经 --out-dir 落 task 目录后是 untracked 文件，若不入指纹
-# 排除列表会参与重算 → check_review_status 误判 review_scope=stale；本常量防两处漂移。
+# 排除列表会参与重算 → review-status 误判 review_scope=stale；本常量防两处漂移。
 REVIEW_PROMPT_OUTPUT_FILES = {
     "full": ("code_review_prompt.md", "test_review_prompt.md"),
     "single": ("general_review_prompt.md",),
@@ -60,16 +62,156 @@ REVIEW_PROCESS_FILES = (
 ) + tuple(name for names in REVIEW_PROMPT_OUTPUT_FILES.values() for name in names)
 
 
-def implementation_commit(ref: str, base_sha: str) -> str:
+TASK_CORE_ASSET_NAMES = {ctx.PROGRESS_FILE, "task.md", "handoff.json"}
+
+
+def validate_task_core_asset_changes(
+    before_entries: Mapping[str, tuple[str, str]],
+    after_entries: Mapping[str, tuple[str, str]],
+    owner_names: Iterable[str],
+) -> None:
+    """共享核心资产所有权校验（lifecycle 与 integration 共用）。
+
+    输入：完整的路径与条目字典/映射 path -> (mode, oid)（未被 review 规则过滤）；
+    owner_names 为当前授权修改的 task 规范目录名集合（如 {"t001_foo"}）。
+    核心资产定义：任何 task 目录（docs/tasks/{tid}_{slug}/）下的 progress.md、
+    task.md、handoff.json、review_*.md（含子目录下同名文件）。
+    目录识别与 scan_tasks 对齐：docs/tasks/ 下任意一级子目录（模板目录除外）都是
+    task 目录，不依赖目录名正则，避免非常规目录名绕过保护。
+    算法：遍历 before 与 after 并集，若任何路径属于非 owner 的 task 且命中核心资产，
+    若存在新增、删除、内容变化（OID 变化）或模式变化，立即抛出 TaskDataError 阻断。
+    允许修改非核心补充文件（普通文件需已审查），但绝不允许篡改非 owner 核心资产。
+    非法模式（symlink 120000 / gitlink 160000）仅在本次变更新引入时拒绝；历史存量
+    且未改动的非法模式不阻断无关 task 的 start/finish。
+    """
+    owners = set(owner_names)
+    all_paths = set(before_entries.keys()) | set(after_entries.keys())
+    legal_modes = ("100644", "100755")
+
+    for path in sorted(all_paths):
+        parts = path.split("/")
+        if len(parts) < 3 or parts[0] != "docs" or parts[1] != "tasks":
+            continue
+        task_dir_name = parts[2]
+        if task_dir_name == "task_template":
+            continue
+        if task_dir_name in owners:
+            continue
+
+        b_entry = before_entries.get(path)
+        a_entry = after_entries.get(path)
+        if b_entry == a_entry:
+            continue
+
+        # 仅在「新引入」非法模式时拒绝：before 已是合法/不存在，after 才出现非法模式。
+        # 历史存量 symlink/gitlink 只要未被本次改动触碰，就不应阻断不相关 task。
+        if a_entry is not None and a_entry[0] not in legal_modes:
+            raise ctx.TaskDataError(
+                f"非 owner task 目录含不支持的文件模式：执行者 {sorted(owners)} 引入非法模式 mode={a_entry[0]} 于 {path}"
+            )
+
+        filename = parts[-1]
+        is_core = (
+            filename in TASK_CORE_ASSET_NAMES
+            or (filename.startswith("review_") and filename.endswith(".md"))
+        )
+        if not is_core:
+            continue
+
+        if b_entry is None:
+            change_type = "added"
+        elif a_entry is None:
+            change_type = "deleted"
+        elif b_entry[0] != a_entry[0] and b_entry[1] != a_entry[1]:
+            change_type = "content_and_mode_changed"
+        elif b_entry[0] != a_entry[0]:
+            change_type = "mode_changed"
+        else:
+            change_type = "modified"
+        raise ctx.TaskDataError(
+            f"禁止修改其他 task 核心资产：执行者 {sorted(owners)} 试图修改 task {task_dir_name} 的核心资产 {path}（变更类型：{change_type}）"
+        )
+
+
+def git_tree_entries(
+    ref_or_tree: str, *, root: Path | None = None, repo: "ctx.RepoContext | None" = None,
+) -> dict[str, tuple[str, str]]:
+    """读取指定 commit / tree 的完整 entries：path -> (mode, oid)。"""
+    r = _git(["ls-tree", "-r", "-z", "--end-of-options", ref_or_tree], root=root, repo=repo)
+    if r.returncode != 0:
+        raise ctx.TaskDataError(f"无法读取 tree {ref_or_tree!r}：{r.stderr.strip()}")
+    entries: dict[str, tuple[str, str]] = {}
+    for item in r.stdout.split("\0"):
+        if not item:
+            continue
+        meta, path = item.split("\t", 1)
+        parts = meta.split()
+        if len(parts) >= 3:
+            entries[path] = (parts[0], parts[2])
+    return entries
+
+
+def git_worktree_entries(
+    root: Path, *, repo: "ctx.RepoContext | None" = None,
+) -> dict[str, tuple[str, str]]:
+    """读取 worktree 当前真实物理/暂存文件的完整 entries：path -> (mode, oid)。
+    未经过 review scope 过滤，反映交付候选真实内容。
+    """
+    algorithm = _required_git_bytes(["rev-parse", "--show-object-format"], root).decode().strip()
+    cached_out = _required_git_bytes(["ls-files", "--stage", "-z"], root)
+    entries: dict[str, tuple[str, str]] = {}
+    for item in cached_out.split(b"\0"):
+        if not item:
+            continue
+        meta, raw_p = item.split(b"\t", 1)
+        mode, oid, _stage = meta.decode("ascii").split()
+        entries[os.fsdecode(raw_p)] = (mode, oid)
+
+    modified_out = _required_git_bytes(["ls-files", "-m", "-d", "-z"], root)
+    modified_paths = [os.fsdecode(p) for p in modified_out.split(b"\0") if p]
+    others_out = _required_git_bytes(["ls-files", "--others", "--exclude-standard", "-z"], root)
+    untracked_paths = [os.fsdecode(p) for p in others_out.split(b"\0") if p]
+
+    for p in set(modified_paths) | set(untracked_paths):
+        source = root / p
+        try:
+            st = source.lstat()
+            mode = st.st_mode
+        except FileNotFoundError:
+            entries.pop(p, None)
+            continue
+        if stat.S_ISLNK(mode):
+            content = os.fsencode(os.readlink(source))
+            blob = f"blob {len(content)}\0".encode() + content
+            entries[p] = ("120000", hashlib.new(algorithm, blob).hexdigest())
+        elif stat.S_ISREG(mode):
+            git_mode = "100755" if mode & 0o111 else "100644"
+            oid = _required_git_bytes(["hash-object", f"--path={p}", "--", p], root).decode("ascii").strip()
+            entries[p] = (git_mode, oid)
+        elif stat.S_ISDIR(mode):
+            git_mode = "160000"
+            try:
+                oid = _required_git_bytes(["rev-parse", "HEAD"], source).decode().strip()
+            except Exception as error:
+                if isinstance(error, ctx.TaskDataError):
+                    raise
+                raise ctx.TaskDataError(f"解析 gitlink {p} HEAD 失败：{error}") from error
+            entries[p] = (git_mode, oid)
+        else:
+            raise ctx.TaskDataError(f"不支持的文件类型：{p}")
+    return entries
+
+
+def implementation_commit(ref: str, base_sha: str, *, repo) -> str:
     """校验执行分支形状：base_sha..ref 恰好一个非 merge 实现 commit，first parent 等于 base_sha。"""
     resolved = []
     for name, value in (("ref", ref), ("base", base_sha)):
-        result = _git(["rev-parse", "--verify", "--quiet", f"{value}^{{commit}}"])
+        result = _git(["rev-parse", "--verify", "--quiet", f"{value}^{{commit}}"], repo=repo)
         if result.returncode != 0 or not result.stdout.strip():
             raise ctx.TaskDataError(f"{name} {value!r} 无法解析为 commit")
         resolved.append(result.stdout.strip())
     tip, base = resolved
-    listing = _git(["rev-list", "--parents", f"{base}..{tip}"])
+    listing = _git(["rev-list", "--parents", f"{base}..{tip}"], repo=repo)
     if listing.returncode != 0:
         raise ctx.TaskDataError(f"无法列出 {base[:12]}..{tip[:12]} 的提交：{listing.stderr.strip()}")
     commits = [line.split() for line in listing.stdout.splitlines() if line.strip()]
@@ -88,15 +230,14 @@ def implementation_commit(ref: str, base_sha: str) -> str:
 # 仓库级 review 门禁指纹排除（非 task 目录路径）。
 SCOPE_FINGERPRINT_EXCLUDES = (
     ":(exclude)docs/pending", ":(exclude)docs/findings",
-    ":(exclude)docs/archive", ":(exclude)docs/tasks_index.json",
-    ":(exclude)docs/archive/tasks_index.json", ":(exclude)docs/spikes",
+    ":(exclude)docs/archive", ":(exclude)docs/spikes",
     ":(exclude).scratch",
 )
 
 
 def _review_scope_path(path: str, task_name: str) -> str | None:
-    # 当前 task 目录在执行分支内始终位于 docs/tasks/（归档发生在 integrate 的 merge
-    # commit，之后不再对该 task 计算指纹）：过程文件排除，spec/附件保留。
+    # 当前 task 目录在执行分支内始终位于 docs/tasks/（原位保留；integrate 的 merge
+    # commit 只把状态更新为 done/dropped/integrated，不做物理归档）：过程文件排除，spec/附件保留。
     prefix = f"docs/tasks/{task_name}/"
     if path.startswith(prefix):
         return None if path[len(prefix):] in REVIEW_PROCESS_FILES else path
@@ -124,11 +265,29 @@ _REVIEW_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB 单文件上限（Issue #50）
 
 
 def _review_worktree(root: Path, task_name: str) -> dict[str, tuple[str, str]]:
-    data = _required_git_bytes(["ls-files", "--cached", "--others", "--exclude-standard", "-z"], root)
+    cached_data = _required_git_bytes(["ls-files", "--cached", "-z"], root)
+    others_data = _required_git_bytes(["ls-files", "--others", "--exclude-standard", "-z"], root)
     algorithm = _required_git_bytes(["rev-parse", "--show-object-format"], root).decode().strip()
+
+    cached = {os.fsdecode(raw) for raw in cached_data.split(b"\0") if raw}
+    others = {os.fsdecode(raw) for raw in others_data.split(b"\0") if raw}
+
+    untracked_symlinks = [p for p in others if (root / p).is_symlink()]
+    if untracked_symlinks:
+        from .worktrees import find_unignored_env_symlinks
+        env_symlinks = find_unignored_env_symlinks(root, untracked_symlinks)
+        if env_symlinks:
+            first_path = next(iter(env_symlinks))
+            matched_rule = env_symlinks[first_path]
+            raise ctx.TaskDataError(
+                f"review scope 检测到未被忽略的环境软链：{first_path}（命中规则 {matched_rule}，"
+                f"因以 '/' 结尾仅忽略真实目录，未忽略同名软链）。"
+                f"若为本地环境资产，请在 .gitignore 或 info/exclude 补充精准规则（如 /{first_path}），"
+                f"或在主仓 .worktreeinclude 中声明；若为代码交付物，请执行 git add 暂存该软链。"
+            )
+
     tree = {}
-    for raw in set(data.split(b"\0")) - {b""}:
-        physical = os.fsdecode(raw)
+    for physical in sorted(cached | others):
         path = _review_scope_path(physical, task_name)
         if path is None:
             continue
@@ -149,12 +308,8 @@ def _review_worktree(root: Path, task_name: str) -> dict[str, tuple[str, str]]:
                     f"review scope 文件过大（{physical} 达到 {size // (1024 * 1024)}MB，上限 50MB）；"
                     "请将其放入 .gitignore 或划入排除目录"
                 )
-            h = hashlib.new(algorithm)
-            h.update(f"blob {size}\0".encode())
-            with open(source, "rb") as f:
-                while chunk := f.read(65536):
-                    h.update(chunk)
-            tree[path] = (git_mode, h.hexdigest())
+            oid = _required_git_bytes(["hash-object", f"--path={physical}", "--", physical], root).decode("ascii").strip()
+            tree[path] = (git_mode, oid)
         elif stat.S_ISDIR(mode):
             # Gitlinks are opaque dependencies. Bind their checked-out commit.
             git_mode = "160000"
@@ -167,7 +322,7 @@ def _review_worktree(root: Path, task_name: str) -> dict[str, tuple[str, str]]:
 
 def review_scope_fingerprint(
     diff_anchor: str, rel_task_dir: str, *, repo_root: Path | None = None,
-    ref: str | None = None,
+    ref: str | None = None, repo: "ctx.RepoContext | None" = None,
 ) -> str:
     """Hash the delivered content delta, independent of staging/commit.
 
@@ -175,8 +330,13 @@ def review_scope_fingerprint(
     only immutable committed blobs. A deleted file, mode or symlink change is part
     of the scope. Process files are excluded, never the current task's spec.
     Old diff-serialization fingerprints deliberately require a fresh review.
+    读取或校验失败一律显式抛 TaskDataError，绝不返回空串让调用方静默降级。
     """
-    root = (repo_root or ctx.REPO_ROOT).resolve()
+    root = (
+        (repo.root if repo else None)
+        or (Path(repo_root) if repo_root else None)
+        or Path.cwd()
+    ).resolve()
     task_name = Path(rel_task_dir).name
     try:
         before = _review_tree(root, diff_anchor, task_name)
@@ -205,8 +365,8 @@ def review_scope_fingerprint(
                 value = " ".join(tree[path]).encode() if path in tree else b"deleted"
                 _hash_part(digest, label, value)
         return digest.hexdigest()[:16]
-    except (ctx.TaskDataError, OSError, ValueError):
-        return ""  # fail closed; an unreadable output is never silently omitted
+    except (OSError, ValueError) as error:
+        raise ctx.TaskDataError(f"无法计算 review scope 指纹：{error}") from error
 
 
 def _required_git_bytes(args: list[str], root: Path) -> bytes:
@@ -314,28 +474,12 @@ def worktree_dirty_summary(root: Path) -> str:
     if not any((staged, unstaged, untracked)):
         return "clean"
     return f"staged={staged} unstaged={unstaged} untracked={untracked}"
-_HANDOFF_TYPES = {
-    "tid": str,
-    "attempt": int,
-    "execution_id": str,
-    "status": str,
-    "branch": str,
-    "base_sha": str,
-    "tests": str,
-    "blackbox": str,
-    "review": str,
-    "review_scope": str,
-    "pending": list,
-    "findings": list,
-}
 
 
 # progress.md「收尾报告 / 验收与验证」中的模板占位；handoff 的 tests/blackbox/review 不得是这些值
 HANDOFF_PLACEHOLDERS = ("待执行时填写",)
 _SUMMARY_LINES = (("tests", "测试"), ("blackbox", "黑盒"), ("review", "review"))
-_PENDING_PATH_RE = re.compile(
-    r"^docs/(?:pending/(?:todo|parked)|archive/pending)/(p[0-9]+)_[^/]+\.md$"
-)
+_PENDING_PATH_RE = re.compile(r"^docs/pending/(p[0-9]+)_[^/]+\.md$")
 _FINDING_PATH_RE = re.compile(r"^docs/findings/(d[0-9]+)_[^/]+\.md$")
 
 
@@ -367,7 +511,7 @@ def read_verification_summary(note_body: str) -> dict[str, str]:
 
 
 def staged_ledger_entries(root: Path) -> tuple[list[str], list[str]]:
-    """暂存区相对 HEAD 新增（含归档迁入）的 pending / findings 条目编号。"""
+    """暂存区相对 HEAD 新增的 pending / findings 条目编号。"""
     result = _git(["diff", "--cached", "--name-status", "--no-renames", "-z", "HEAD", "--"], root=root)
     if result.returncode != 0:
         raise ctx.TaskDataError(f"无法读取暂存区相对 HEAD 的变更：{result.stderr.strip()}")
@@ -388,7 +532,7 @@ def staged_ledger_entries(root: Path) -> tuple[list[str], list[str]]:
 
 def build_handoff(
     *, tid: str, attempt: int, execution_id: str, branch: str, base_sha: str,
-    review_scope: str, note_body: str, root: Path,
+    spec_source_sha: str, review_scope: str, note_body: str, root: Path,
 ) -> dict:
     """由 execution context、ledger、暂存区与 progress.md 机器生成 handoff.json；不手写。"""
     summary = read_verification_summary(note_body)
@@ -400,27 +544,21 @@ def build_handoff(
         "status": "done",
         "branch": branch,
         "base_sha": base_sha,
+        "spec_source_sha": spec_source_sha,
         **summary,
         "review_scope": review_scope,
         "pending": pending,
         "findings": findings,
     }
-    for key, expected in _HANDOFF_TYPES.items():
-        if not isinstance(handoff.get(key), expected) or (expected is str and not handoff[key]):
-            raise ctx.TaskDataError(f"生成的 handoff 字段 {key} 类型或值非法：{handoff.get(key)!r}")
+    validate_handoff(handoff, source="生成 handoff")
     return handoff
-
-
-def _validate_string_list(name: str, value) -> str | None:
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-        return f"{name} 必须是字符串数组"
-    return None
 
 
 def verify_integrate_ready(
     tid: str,
     attempt: int,
     execution_id: str,
+    *, repo,
 ) -> tuple[str, str, str]:
     """Verify one execution commit and exact handoff provenance.
 
@@ -428,7 +566,10 @@ def verify_integrate_ready(
     finish-unwind）按 kind 分流，不得匹配 detail 自然语言：
     ready（通过）、incomplete（条件未齐）、identity（参数非法）、branch（分支异常）、
     handoff（执行回执异常）、spec（验收标准异常）、provenance（血缘异常）、
+    privacy（分支 tip 引入变更的隐私泄漏或扫描失败）、
     review_scope_mismatch（提交内容偏离 review 内容）、review_gate（review 门禁失败）。
+    集成前校验收敛于此单一入口：tip 引入变更隐私、review scope、实现血缘、核心资产守卫
+    一次判定；失败均返回机器可判 kind，绝不静默放行。
     """
     if (
         not isinstance(attempt, int)
@@ -438,45 +579,40 @@ def verify_integrate_ready(
         or not execution_id
     ):
         return "contract", "identity", "verify 必须提供正整数 attempt 与非空 execution_id"
-    branches = _task_branch_names(tid)
+    branches = _task_branch_names(tid, repo=repo)
     if not branches:
         return "incomplete", "incomplete", "无本地 task 分支"
     if len(branches) > 1:
         return "contract", "branch", f"存在多个分支：{', '.join(branches)}"
     branch = branches[0]
     try:
-        task, fm, _ = load_task_at_ref(tid, branch)
+        task, fm, _ = load_task_at_ref(tid, branch, repo=repo)
     except ctx.TaskDataError as error:
         return "incomplete", "incomplete", str(error)
+    try:
+        from _id_scan import IdScanError, branch_uses_current_schema, validate_snapshot_ids
+        if not branch_uses_current_schema(repo.root, branch):
+            return "contract", "provenance", "执行分支未完成当前实体 schema 切换，禁止合入"
+        validate_snapshot_ids(repo.root, branch)
+    except IdScanError as error:
+        return "contract", "provenance", str(error)
     status = fm.get("status")
-    if status not in ctx.ARCHIVED_STATUSES:
+    if status not in ctx.TERMINAL_STATUSES:
         return "incomplete", "incomplete", f"分支 {branch!r} tip status={status!r} 非终态"
     handoff_path = f"{task['dir']}/handoff.json"
     try:
-        handoff = json.loads(git_text_at_ref(branch, handoff_path))
+        handoff = json.loads(git_text_at_ref(branch, handoff_path, repo=repo))
     except ctx.TaskDataError:
         return "contract", "handoff", f"分支 {branch!r} tip 缺 {handoff_path}"
     except json.JSONDecodeError:
         return "contract", "handoff", f"分支 {branch!r} tip {handoff_path} 无法解析"
-    if not isinstance(handoff, dict):
-        return "contract", "handoff", f"{handoff_path} 非 JSON 对象"
-    for key, expected in _HANDOFF_TYPES.items():
-        if key not in handoff:
-            return "contract", "handoff", f"{handoff_path} 缺必填字段 {key}"
-        if (
-            not isinstance(handoff[key], expected)
-            or (key == "attempt" and isinstance(handoff[key], bool))
-            or (key == "attempt" and handoff[key] <= 0)
-            or (expected is str and not handoff[key])
-        ):
-            return "contract", "handoff", f"{handoff_path} 字段 {key} 类型或值非法"
-    for key in ("pending", "findings"):
-        problem = _validate_string_list(key, handoff[key])
-        if problem:
-            return "contract", "handoff", f"{handoff_path} {problem}"
+    try:
+        validate_handoff(handoff, source=handoff_path)
+    except ctx.TaskDataError as error:
+        return "contract", "handoff", str(error)
     spec_path = f"{task['dir']}/task.md"
     try:
-        spec_text = git_text_at_ref(branch, spec_path)
+        spec_text = git_text_at_ref(branch, spec_path, repo=repo)
     except ctx.TaskDataError:
         return "contract", "spec", f"分支 {branch!r} tip 缺 {spec_path}"
     ac_statuses = extract_ac_statuses(spec_text)
@@ -495,27 +631,51 @@ def verify_integrate_ready(
     for key, expected in expected_values.items():
         if handoff.get(key) != expected:
             return "contract", "handoff", f"{handoff_path} {key}={handoff.get(key)!r} 与当前 {expected!r} 不符"
-    tip_result = _git(["rev-parse", f"refs/heads/{branch}^{{commit}}"])
-    base_result = _git(["rev-parse", f"{handoff['base_sha']}^{{commit}}"])
+    tip_result = _git(["rev-parse", f"refs/heads/{branch}^{{commit}}"], repo=repo)
+    base_result = _git(["rev-parse", f"{handoff['base_sha']}^{{commit}}"], repo=repo)
     if tip_result.returncode != 0:
         return "contract", "branch", f"分支 {branch!r} tip 无法解析 commit"
     if base_result.returncode != 0:
         return "contract", "handoff", f"{handoff_path} base_sha 无法解析 commit"
     base = base_result.stdout.strip()
     tip = tip_result.stdout.strip()
+    worktree = (repo.primary_root / repo.worktree_rel(tid)).resolve()
+    if worktree_paths(repo=repo).get(str(worktree)) == branch:
+        from .commit_txn import load as load_finish_txn, verify_committed_tree
+        try:
+            transaction = load_finish_txn(worktree)
+            if transaction is not None:
+                if any(transaction[key] != value for key, value in (("tid", tid), ("attempt", attempt), ("execution_id", execution_id))):
+                    raise ctx.TaskDataError("遗留 finish 事务身份不匹配")
+                verify_committed_tree(worktree, transaction)
+        except ctx.TaskDataError as error:
+            return "contract", "finish_tree_mismatch", str(error)
     diff_anchor = fm.get("diff_anchor")
     if not isinstance(diff_anchor, str) or not diff_anchor:
         return "contract", "provenance", f"分支 {branch!r} task diff_anchor 缺失或非法"
-    base_level = "full"
+    spec_source_sha = fm.get("spec_source_sha")
+    if not isinstance(spec_source_sha, str) or not spec_source_sha:
+        return "contract", "provenance", f"分支 {branch!r} task spec_source_sha 缺失或非法"
+    if handoff.get("spec_source_sha") != spec_source_sha:
+        return "contract", "provenance", (
+            f"{handoff_path} spec_source_sha={handoff.get('spec_source_sha')!r} "
+            f"与 task spec_source_sha={spec_source_sha!r} 不一致"
+        )
+    source_result = _git(["rev-parse", f"{spec_source_sha}^{{commit}}"], repo=repo)
+    if source_result.returncode != 0:
+        return "contract", "provenance", f"{handoff_path} spec_source_sha 无法解析 commit"
+    source_sha = source_result.stdout.strip()
     try:
-        base_text = git_text_at_ref(base, f"{task['dir']}/{ctx.PROGRESS_FILE}")
-    except ctx.TaskDataError:
-        base_text = None
-    if base_text is not None:
-        base_fm, _ = parse_front_matter_text(base_text, source=f"{base}:{task['dir']}/{ctx.PROGRESS_FILE}")
-        base_level = base_fm.get("review_level", "full")
+        _, source_fm, _ = load_task_at_ref(tid, source_sha, repo=repo)
+    except ctx.TaskDataError as error:
+        return "contract", "provenance", f"spec_source_sha {source_sha[:12]} 处 task 无法读取或损坏：{error}"
+    if source_fm.get("status") != "backlog":
+        return "contract", "provenance", (
+            f"spec_source_sha {source_sha[:12]} 处 task status={source_fm.get('status')!r} 非 backlog"
+        )
+    base_level = source_fm.get("review_level")
     if base_level not in ctx.REVIEW_LEVELS:
-        return "contract", "provenance", f"diff_anchor {base[:12]} 处 review_level 非法：{base_level!r}"
+        return "contract", "provenance", f"spec_source_sha {source_sha[:12]} 处 review_level 非法：{base_level!r}"
     tip_level = fm.get("review_level", "full")
     if tip_level not in ctx.REVIEW_LEVELS:
         return "contract", "provenance", f"分支 {branch!r} tip review_level 非法：{tip_level!r}"
@@ -526,19 +686,43 @@ def verify_integrate_ready(
         )
     shape = "执行分支必须恰好一个实现 commit"
     try:
-        implementation_commit(tip, base)
+        impl_sha = implementation_commit(tip, base, repo=repo)
     except ctx.TaskDataError as error:
         return "contract", "provenance", (
             f"{handoff_path} base_sha={handoff['base_sha']!r} 与分支 {branch!r} tip 不符：{error}；{shape}"
         )
+    try:
+        before_entries = git_tree_entries(base, repo=repo)
+        after_entries = git_tree_entries(impl_sha, repo=repo)
+        validate_task_core_asset_changes(before_entries, after_entries, {Path(task["dir"]).name})
+    except ctx.TaskDataError as error:
+        return "contract", "provenance", f"实现提交篡改其他 task 核心资产：{error}"
     if handoff["base_sha"] != base or diff_anchor != base:
         return "contract", "provenance", (
             f"{handoff_path} base_sha={handoff['base_sha']!r}、task diff_anchor="
             f"{diff_anchor!r} 与实现 commit 的 first parent {base!r} 不一致；{shape}"
         )
-    scope = review_scope_fingerprint(base, task["dir"], ref=tip)
-    if not scope:
-        return "contract", "provenance", f"无法计算分支 {branch!r} tip 的 review scope；{shape}"
+    # 集成前对分支 tip 引入的新增行复用隐私门禁（提交隐私闭环）：历史存量泄漏
+    # 不阻断本次合入，由显式审计入口另行覆盖；泄漏提交不得合入主干。
+    try:
+        from .privacy import PrivacyScanError, scan_commit_introduced_privacy
+        leaks = scan_commit_introduced_privacy(repo.root, tip)
+    except PrivacyScanError as error:
+        return "contract", "privacy", (
+            f"分支 {branch!r} tip 引入变更隐私扫描失败（fail-closed）：{error}；合入前必须重扫"
+        )
+    if leaks:
+        shown = "；".join(leaks[:8]) + (f" 等共 {len(leaks)} 处" if len(leaks) > 8 else "")
+        return "contract", "privacy", (
+            f"分支 {branch!r} tip 引入的变更检测到开发者家目录绝对路径泄漏（{shown}）；"
+            "泄漏提交不得合入主干，请按 recovery 处理"
+        )
+    try:
+        scope = review_scope_fingerprint(base, task["dir"], ref=tip, repo=repo)
+    except ctx.TaskDataError as error:
+        return "contract", "provenance", (
+            f"无法计算分支 {branch!r} tip 的 review scope：{error}；{shape}"
+        )
     if handoff["review_scope"] != scope:
         return "contract", "review_scope_mismatch", (
             f"{handoff_path} review_scope={handoff['review_scope']!r} 与分支 {branch!r} tip "
@@ -552,7 +736,7 @@ def verify_integrate_ready(
                 target = Path(tmp)
                 for name in (ctx.PROGRESS_FILE, "task.md", "review_code.md", "review_test.md", "review_general.md"):
                     try:
-                        text = git_text_at_ref(branch, f"{task['dir']}/{name}")
+                        text = git_text_at_ref(branch, f"{task['dir']}/{name}", repo=repo)
                     except ctx.TaskDataError:
                         if name in (ctx.PROGRESS_FILE, "task.md"):
                             raise
@@ -560,18 +744,24 @@ def verify_integrate_ready(
                     (target / name).write_text(text, encoding="utf-8")
                 result = evaluate_review(target, fm, scope)
             if result["overall"] != "PASS":
+                privacy_info = (
+                    f" privacy_review={result.get('privacy_review', '')} "
+                    f"privacy_review_detail={result.get('privacy_review_detail', '')}"
+                    if result.get("privacy_review") == "leak" else ""
+                )
                 return "contract", "review_gate", (
                     f"review gate：overall={result['overall']} "
                     f"review_scope={result['review_scope']} "
                     f"missing_disposition={result['missing_disposition']} "
                     f"ac_review={result['ac_review']} "
-                    f"ac_review_detail={result['ac_review_detail']}；"
+                    f"ac_review_detail={result['ac_review_detail']}"
+                    f"{privacy_info}；"
                     "最终提交须有同内容的 PASS 证据"
                 )
         except (ctx.TaskDataError, ReviewDataError, OSError) as error:
             return "contract", "review_gate", f"review gate：{error}"
     detail = "分支 tip terminal + exact handoff + 恰好一个实现 commit + review_scope 一致"
-    if not has_unmerged_commits(branch):
+    if not has_unmerged_commits(branch, repo=repo):
         detail += "（已合入）"
     return "ready", "ready", detail
 
@@ -581,9 +771,15 @@ def compute_ps_rows(
     effective: dict[str, dict],
     main_statuses: dict[str, str],
     *,
-    verifier=verify_integrate_ready,
+    repo: "ctx.RepoContext | None" = None,
+    verifier=None,
 ) -> list[dict]:
     # verifier 协议与 verify_integrate_ready 同形：(tid, attempt, execution_id) -> (verdict, kind, detail)。
+    if verifier is None:
+        def verifier(tid: str, attempt: int, execution_id: str):
+            if repo is None:
+                raise ctx.TaskDataError("compute_ps_rows 需要显式传入 repo 或 verifier")
+            return verify_integrate_ready(tid, attempt, execution_id, repo=repo)
     records = project_attempts(events)
     ledger_tids = {record["tid"] for record in records.values()}
     # 合并 effective 中 active 的 tid：frontmatter 被手工改状态但未走
@@ -592,8 +788,12 @@ def compute_ps_rows(
         tid for tid, task in effective.items()
         if task.get("status") == "active"
     }
+    corrupt_tids = {
+        tid for tid, task in effective.items()
+        if task.get("status") == "corrupt"
+    }
     rows = []
-    for tid in sorted(ledger_tids | active_tids, key=_ledger_tid_sort_key):
+    for tid in sorted(ledger_tids | active_tids | corrupt_tids, key=_ledger_tid_sort_key):
         record = current_attempt_record(tid, events)
         effective_status = effective.get(tid, {}).get("status", "")
         base = {
@@ -605,12 +805,17 @@ def compute_ps_rows(
             "last_activity": "-",
             "note": "",
         }
+        if effective_status == "corrupt":
+            base["state"] = "corrupt"
+            base["note"] = effective.get(tid, {}).get("note", "")
+            rows.append(base)
+            continue
         if record is None:
             # frontmatter active 但无 attempt：脏状态，标注无 reserve。
             base["state"] = f"{effective_status}(无 reserve)"
             rows.append(base)
             continue
-        if main_statuses.get(tid) in ctx.ARCHIVED_STATUSES:
+        if main_statuses.get(tid) in ctx.TERMINAL_STATUSES:
             base["state"] = main_statuses[tid]
             rows.append(base)
             continue

@@ -1,3 +1,8 @@
+---
+slug: inbox_ui_and_search
+status: active
+tasks: [t002, t003, t024, t027, t032, t051, t052, t065, t068]
+---
 # 收件箱交互、侧栏组织与检索技术规范 (Inbox UI, Sidebar & Search Specification)
 
 本文档定义 kkmail 前端三栏式阅读体验、侧栏组织架构、游标深翻页、全文检索与安全沙箱渲染技术规范。

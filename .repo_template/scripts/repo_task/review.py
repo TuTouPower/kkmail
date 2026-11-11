@@ -4,8 +4,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .context import PROGRESS_FILE, TaskDataError
-from .documents import extract_ac_statuses, parse_front_matter as _parse_front_matter
+from .context import FenceState, PROGRESS_FILE, TaskDataError
+from .documents import (
+    _INDENTED_CODE_RE,
+    extract_ac_statuses,
+    parse_front_matter as _parse_front_matter,
+)
+from .privacy import scan_text_privacy_leaks
 
 VERDICT_RE = re.compile(r"^verdict:\s*(PASS|FAIL)\s*$", re.MULTILINE)
 # 行首容忍照抄环节常见的轻量 markdown 修饰（反引号 / 加粗 / 列表前缀），
@@ -18,9 +23,6 @@ REVIEW_SCOPE_RE = re.compile(
 REVIEW_SCOPE_HINT_RE = re.compile(r"reviewed_scope", re.IGNORECASE)
 ROUND_HEADER_RE = re.compile(r"^##\s+Round\s+([0-9]+)(?:\s|$)", re.MULTILINE)
 H2_RE = re.compile(r"^##[ \t]+(.+?)[ \t]*$")
-FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
-# 闭栏须为裸围栏（无 info string）；fence 内带 info 的围栏行是内容，不是提前闭栏。
-FENCE_CLOSE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})[ \t]*$")
 FINDING_RE = re.compile(r"^(t[0-9]+)_(?:code|test|gen)_f[0-9]+$")
 # AC 复验行（J2/J3）：`- AC-NNN：TICK-VALID|TICK-VOID，re_verified|trust_prior。<证据>`。
 # 冒号、逗号接受全角与半角；允许 AC 编号与标签带反引号 / 加粗修饰；证据文字不解析。
@@ -48,26 +50,18 @@ def read(path: Path) -> str:
 
 
 def visible_markdown_lines(text: str) -> list[str]:
-    """移除 fenced code 与 blockquote，保留可参与结构解析的正文行。
+    """移除 fenced code、缩进代码块与 blockquote，保留可参与结构解析的正文行。
 
-    围栏规则与 repo_task.documents 一致：开栏可带 info string，闭栏须为裸围栏
-    且宽度 >= 开栏；fence 内带 info string 的围栏行是内容，不提前闭合代码块。
+    围栏规则统一委托 ctx.FenceState（与 documents/render_review_prompts 同源）；
+    缩进代码块（行首 4 空格或制表符）与 documents._strip_code_blocks 同口径跳过，
+    其中的 AC/verdict/scope 示例不得被采信。
     """
     lines = []
-    fence_marker = None
+    fence = FenceState()
     for line in text.splitlines():
-        if fence_marker is not None:
-            close = FENCE_CLOSE_RE.match(line)
-            if (
-                close
-                and close.group(1)[0] == fence_marker[0]
-                and len(close.group(1)) >= fence_marker[1]
-            ):
-                fence_marker = None
+        if fence.feed(line):
             continue
-        fence = FENCE_RE.match(line)
-        if fence:
-            fence_marker = (fence.group(1)[0], len(fence.group(1)))
+        if _INDENTED_CODE_RE.match(line):
             continue
         if line.lstrip().startswith(">"):
             continue
@@ -81,11 +75,11 @@ def extract_verdicts(path: Path) -> list[str]:
 
 
 def parse_front_matter(path: Path) -> dict:
-    """front matter 解析统一委托 repo_task.documents；缺失或非法返回 {}（宽容语义）。"""
+    """front matter 解析统一委托 repo_task.documents；缺失或非法抛出 ReviewDataError（A05）。"""
     try:
         fm, _ = _parse_front_matter(path)
-    except (OSError, TaskDataError):
-        return {}
+    except (OSError, TaskDataError) as error:
+        raise ReviewDataError(f"{path}: {error}") from error
     return fm
 
 
@@ -407,6 +401,11 @@ def evaluate_review(
                 "void" if "void" in ac_states else
                 "incomplete" if "incomplete" in ac_states else
                 "no_spec" if expected is None else "ok")
+    privacy_issues: list[str] = []
+    for report in reports:
+        if report.is_file():
+            privacy_issues.extend(scan_text_privacy_leaks(read(report), label=report.name))
+    privacy_state = "leak" if privacy_issues else ("" if not ac_states else "ok")
     overall = ("INCOMPLETE" if "MISSING" in effective else
                "FAIL" if "FAIL" in effective else "PASS")
     stats, disposed = _parse_disposition_rows(task_dir / PROGRESS_FILE)
@@ -421,11 +420,15 @@ def evaluate_review(
         scope_status = "stale"
     else:
         scope_status = "ok"
-    if overall == "PASS" and (missing or scope_status != "ok" or ac_state == "incomplete"):
+    if overall == "PASS" and (
+        missing or scope_status != "ok" or ac_state == "incomplete" or privacy_state == "leak"
+    ):
         overall = "INCOMPLETE"
     result.update(
         overall=overall, review_scope=scope_status, ac_review=ac_state,
         ac_review_detail="; ".join(ac_issues),
+        privacy_review=privacy_state,
+        privacy_review_detail="; ".join(privacy_issues),
         missing_disposition=",".join(missing), round=regression_rounds(*reports),
     )
     # Evidence repair does not itself spend a business regression round.
@@ -433,7 +436,8 @@ def evaluate_review(
         result["next_action"] = (
             "collect_reports" if "MISSING" in verdicts else
             "rerender_review" if scope_status != "ok" else
-            "complete_ac_review" if ac_state == "incomplete" else "complete_disposition"
+            "complete_ac_review" if ac_state == "incomplete" else
+            "sanitize_review_paths" if privacy_state == "leak" else "complete_disposition"
         )
     else:
         result["next_action"] = "finalize" if overall == "PASS" else "fix_or_block"

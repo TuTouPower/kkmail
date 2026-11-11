@@ -1,3 +1,8 @@
+---
+slug: testing_quality
+status: active
+tasks: [t013, t014]
+---
 # 测试工程、隔离机制与质量保障技术规范 (Testing & Quality Specification)
 
 本文档定义 kkmail 测试架构、数据库隔离策略、真实协议验证与自动化质量保障技术规范。

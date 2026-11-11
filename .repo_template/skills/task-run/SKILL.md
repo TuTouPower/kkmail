@@ -21,7 +21,7 @@ metadata:
 - 显式指定 tid 或 `/goal` 冻结队列：执行范围严格锁定为给定的成员序列；队列内成员按指定顺序执行到各自实现 commit 与 run-close 收尾，不逐 task 询问 commit。
 - 无参数调用：必须先列出 `task.py plan --serial --json` 拟定执行的成员清单（tid、title、顺序、所属链与 base）并向用户确认，取得明确同意后方可开始执行，禁止静默全量执行。
 - done/dropped 不作为新执行成员。
-- 队列启动后成员和顺序固定；依赖必须位于依赖者之前。队列外依赖须在 start 前已 done 且已合入，否则 `run-begin` 的 start 门禁拒绝。
+- 队列启动后成员和顺序固定；依赖必须位于依赖者之前。队列外依赖须在 start 前已 done（若未合入主干，链首 `run-begin` 可加 `--base <链尾分支>` 或在未指定 `--base` 时由脚本自动落到未合并依赖分支 tip）。
 - 队列按[执行拓扑](../../docs/architecture.md#%E6%89%A7%E8%A1%8C%E6%8B%93%E6%89%91)分链。执行前运行 `task.py plan --serial --json {队列 tid 按顺序}`（无参数调用直接用默认队列的输出），读取 `members[]` 的 `chain`、`base.tid`、`base.branch` 与 `queue_chains[]` 的 `tail`；队列启动后沿用该结果。
 
 ## 执行
@@ -30,7 +30,7 @@ metadata:
 
 对每个 tid：
 
-1. 新 task：`task.py run-begin {tid} --owner-id {owner_id}`，一次完成 start、reserve、claim 并输出 JSON identity。该成员 `base.tid` 非空（链内有前一成员）时加 `--base {base.branch}`；链首 `base.tid` 为空，不加 `--base`，以默认分支起步。已有 active、attempt、worktree 或同名分支时脚本拒绝并提示 recovery，不做隐式恢复：此时运行 `task.py recovery {tid}`，按其 phase 与 `.repo_template/docs/recovery.md` 恢复，不重复 run-begin。
+1. 新 task：`task.py run-begin {tid} --owner-id {owner_id}`，一次完成 start、reserve、claim 并输出 JSON identity。worktree 自动软链接管主仓 `.env` 与 `.worktreeinclude` 命中的忽略路径；未托管的本地环境软链须准确配置 Git 忽略以防阻断 review 与 finish。该成员 `base.tid` 非空（链内有前一成员）时加 `--base {base.branch}`；链首 `base.tid` 为空，不加 `--base`，以默认分支起步。已有 active、attempt、worktree 或同名分支时脚本拒绝并提示 recovery，不做隐式恢复：此时运行 `task.py recovery {tid}`，按其 phase 与 `.repo_template/docs/recovery.md` 恢复，不重复 run-begin。
 2. 在登记 worktree 直接读取 `task-work/SKILL.md` 正文执行，原样传递 tid 与 owner_id；不通过原生 Skill 工具调用。task-work 止于 `finish` 提交的实现 commit。
 3. 回到主仓：`task.py run-close {tid} --owner-id {owner_id} --result done`，一次完成 terminal completed、report done 与 exact cleanup；中途失败按提示重跑同一命令（重入安全）。
 4. 同链后继的 `--base` 是刚完成的前一成员分支（即当前成员 `plan` 输出的 `base.branch`）；其它链的成员各自从默认分支起步，互不继承。

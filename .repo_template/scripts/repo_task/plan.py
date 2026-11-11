@@ -95,7 +95,7 @@ def classify_node(
     status = task["status"]
     if status == "active":
         return "active"
-    if status in ctx.ARCHIVED_STATUSES:
+    if status in ctx.TERMINAL_STATUSES:
         return "done" if status == "done" else "dropped"
     if tid in schedule["selected"]:
         return "runnable"
@@ -110,9 +110,9 @@ def classify_node(
     return "backlog"
 
 
-def build_board_model(schedule: dict | None = None) -> dict:
+def build_board_model(schedule: dict | None = None, *, repo) -> dict:
     """调度图 → 看板/plan 共用模型（nodes + edges + summary）。"""
-    schedule = schedule if schedule is not None else compute_schedule()
+    schedule = schedule if schedule is not None else compute_schedule(repo=repo)
     tasks = schedule["tasks"]
     waiting_tids = {row[1] for row in schedule["waiting_deps"]}
     blocked_tids = {row[0] for row in schedule["blocked_conflicts"]}
@@ -155,7 +155,7 @@ def build_board_model(schedule: dict | None = None) -> dict:
     for node in nodes:
         summary[node["category"]] += 1
     return {
-        "project": ctx.REPO_ROOT.name,
+        "project": repo.name,
         "nodes": nodes,
         "edges": edges,
         "summary": summary,
@@ -645,7 +645,7 @@ def _unlock_rows(plan: dict, data: dict) -> list[dict]:
     return rows
 
 
-def build_execution_plan(*, mode: str = "batch", queue: list[str] | None = None) -> dict:
+def build_execution_plan(*, mode: str = "batch", queue: list[str] | None = None, repo) -> dict:
     """从当前仓库状态构建完整执行计划。
 
     mode=serial 时附 members / queue_chains（按队列内关系分链并给出各成员 base）；
@@ -653,8 +653,8 @@ def build_execution_plan(*, mode: str = "batch", queue: list[str] | None = None)
     """
     if queue is not None and mode != "serial":
         raise ctx.TaskDataError("invalid_queue: 显式 tid 队列须配合 --serial")
-    schedule = compute_schedule()
-    data = build_board_model(schedule)
+    schedule = compute_schedule(repo=repo)
+    data = build_board_model(schedule, repo=repo)
     if mode == "serial":
         plan = compute_serial_plan(data, queue=queue)
         slug_of = {tid: task["slug"] for tid, task in schedule["tasks"].items()}
@@ -662,7 +662,7 @@ def build_execution_plan(*, mode: str = "batch", queue: list[str] | None = None)
         plan.update(compute_queue_topology(
             ordered,
             data["edges"],
-            default_branch=resolve_default_branch(),
+            default_branch=resolve_default_branch(repo=repo),
             branch_of=lambda tid: f"{tid}_{slug_of[tid]}",
         ))
     else:
@@ -782,10 +782,11 @@ def format_plan_text(plan: dict, *, copy_only: bool = False) -> str:
 
 
 def cmd_plan(args: Any) -> None:
+    repo = args.repo
     mode = "serial" if getattr(args, "serial", False) else "batch"
     queue = list(getattr(args, "tids", None) or []) or None
     try:
-        plan = build_execution_plan(mode=mode, queue=queue)
+        plan = build_execution_plan(mode=mode, queue=queue, repo=repo)
     except ctx.TaskDataError as error:
         message = str(error)
         if not message.startswith(("invalid_graph:", "invalid_done:", "invalid_queue:")):

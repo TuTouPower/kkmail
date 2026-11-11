@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""commit-msg hook：merge 来源校验与编号校验。
+
+git merge 的自动提交不运行 pre-commit，且 pre-merge-commit 阶段 MERGE_HEAD
+已被移除；MERGE_HEAD 仅在 prepare-commit-msg / commit-msg 阶段可用，因此来源
+校验放在本 hook。
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+TOOLKIT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(TOOLKIT_ROOT / "scripts"))
+
+from _id_scan import IdScanError, validate_merge_sources, validate_snapshot_ids  # noqa: E402
+from repo_task.context import RepoContext, TaskDataError  # noqa: E402
+
+
+def _check() -> int:
+    root = RepoContext.for_root(Path.cwd()).root
+    try:
+        validate_merge_sources(root)
+        validate_snapshot_ids(root)
+    except IdScanError as error:
+        print(f"commit-msg: 编号校验失败（fail-closed）：{error}", file=sys.stderr)
+        return 1
+    if len(sys.argv) < 2:
+        print("commit-msg: 缺少提交消息文件参数（fail-closed）", file=sys.stderr)
+        return 1
+    return 0
+
+
+def main() -> int:
+    try:
+        return _check()
+    except TaskDataError as error:
+        print(f"commit-msg: 上下文解析失败（fail-closed）：{error}", file=sys.stderr)
+        return 1
+    except OSError as error:
+        print(f"commit-msg: 仓库操作失败（fail-closed）：{error}", file=sys.stderr)
+        return 1
+    except Exception as error:  # noqa: BLE001 - hook 必须单行报错，不打印 traceback
+        print(
+            f"commit-msg: 未预期错误（fail-closed）：{type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
+        return 1
+
+
+if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.exit(main())

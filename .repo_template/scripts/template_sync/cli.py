@@ -6,13 +6,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from repo_task.context import TaskDataError
-
 from . import context as ctx
 from .apply import cmd_apply
+from .healthcheck import run_healthcheck
 from .hooks import cmd_install_hooks
 from .shared_files import SHARED_DISPOSITIONS
 from .skills_links import cmd_link_skills
+from .migrate import KINDS, cmd_migrate
 from .state import cmd_init, cmd_prompt
 from .status_plan import cmd_plan, cmd_status
 from .transaction import cmd_transaction
@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--source", help="模板源：本机路径或 git remote URL")
     init.set_defaults(func=cmd_init)
 
+    migrate = sub.add_parser("migrate", help="显式迁移旧布局数据到当前格式")
+    migrate.add_argument("kind", choices=(*KINDS, "all"), help="迁移目标")
+    migrate.add_argument("--write", action="store_true", help="写入落盘（默认 dry-run）")
+    migrate.set_defaults(func=cmd_migrate)
+
     status_parser = sub.add_parser("status", help="读取状态与差异摘要")
     status_parser.add_argument("--fetch", action="store_true", help="URL 源联网刷新缓存（默认离线只读）")
     status_parser.set_defaults(func=cmd_status)
@@ -64,7 +69,6 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--skip-tests", action="store_true", help="仅跳过模板契约测试（-m contract），仍校验项目策略")
     apply.add_argument("--allow-dirty-source", action="store_true", help="显式开发模式；不推进 resolved commit")
     apply.add_argument("--expected-commit", help="必须与 plan 的完整来源 SHA 相同，否则零写入拒绝")
-    apply.add_argument("--agents-file", type=Path, help="在事务内应用已裁定的 AGENTS 语义合并；项目介绍必须保留")
     apply.set_defaults(func=cmd_apply)
 
     prompt = sub.add_parser("prompt", help="管理 user_prompts")
@@ -78,30 +82,42 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("link-skills", help="校验并修复宿主 skills 软链，生成 .opencode/commands 命令薄层").set_defaults(func=cmd_link_skills)
     hooks = sub.add_parser(
         "install-hooks",
-        help="幂等设置 core.hooksPath 指向工具链 hooks（已有其它值须 --force）；--statusline 改为启用状态行 hook",
+        help="幂等设置 core.hooksPath 指向工具链 hooks（已有其它值须 --force）",
     )
     hooks.add_argument("--force", action="store_true", help="覆盖已有的 core.hooksPath")
-    hooks.add_argument(
-        "--statusline",
-        action="store_true",
-        help="只把状态行 PostToolUse hook 写入 .claude/settings.json（不改 core.hooksPath）",
-    )
     hooks.set_defaults(func=cmd_install_hooks)
+    health = sub.add_parser("healthcheck", help="只读检查安装、hooks、来源、验证策略与模板占位符")
+    health.set_defaults(func=cmd_healthcheck)
     return parser
+
+
+def cmd_healthcheck(args: argparse.Namespace) -> int:
+    sync: ctx.SyncContext = args.sync
+    issues = run_healthcheck(sync)
+    if issues:
+        for issue in issues:
+            print(f"FAIL: {issue}")
+        return 1
+    print("healthcheck=PASS")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.consumer:
-        ctx.configure_consumer(args.consumer)
-    ctx.SOURCE_OVERRIDE = args.source if args.cmd != "init" else None
-    ctx.CHECKOUT_OVERRIDE = args.checkout
+    consumer = (
+        args.consumer.expanduser().resolve() if args.consumer else ctx.TOOLKIT_ROOT.parent
+    )
+    args.sync = ctx.SyncContext.for_consumer(
+        consumer,
+        source_override=args.source if args.cmd != "init" else None,
+        checkout_override=args.checkout,
+    )
     try:
         if getattr(args, "cmd", None) == "apply":
             args.decisions = _parse_decisions(args.decision)
         sys.exit(args.func(args))
-    except (ctx.SyncError, TaskDataError) as e:
+    except (ctx.SyncError, ctx.TaskDataError) as e:
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)
     except OSError as e:

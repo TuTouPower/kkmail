@@ -5,12 +5,19 @@ main 子进程，覆盖默认类别扫描、docs/ 保护、node/scratch/artifact
 清理、--keep 引用保护、硬保护路径永不删、scan 只读。
 """
 
+import json
+import os
+from contextlib import contextmanager
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from git_env_support import get_controlled_git_env
+from git_env_support import init_repo
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
@@ -32,6 +39,9 @@ def tree(tmp_path: Path) -> Path:
     (repo / "scripts").mkdir(parents=True)
     (repo / "scripts/debug.log").write_text("log\n")
     (repo / "docs").mkdir(parents=True)
+    (repo / "docs/runtime").mkdir(parents=True)
+    (repo / "docs/runtime/tasks_audit.log").write_text("audit\n")
+    (repo / "docs/runtime/dispatch_ledger.jsonl").write_text('{"event": "start"}\n')
     (repo / "docs/guide.log").write_text("log\n")           # docs/ 下 *.log 保护
     (repo / "docs/.DS_Store").write_bytes(b"x")             # docs/ 下 os 类可清
     (repo / ".DS_Store").write_bytes(b"x")
@@ -47,9 +57,7 @@ def tree(tmp_path: Path) -> Path:
     (repo / "artifacts/out.bin").write_bytes(b"x")
     (repo / "data").mkdir(parents=True)
     (repo / "data/db.sqlite").write_bytes(b"x")
-    subprocess.run(["git", "-C", str(repo), "init", "-b", "main"], capture_output=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@e.c"], capture_output=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], capture_output=True)
+    init_repo(repo)
     return repo
 
 
@@ -71,9 +79,10 @@ def test_scan_default_categories(tree):
     assert "docs/guide.log" not in paths
     assert "AGENTS.md" not in paths
     assert "README.md" not in paths
-    # 点名类别未点名 → 不入默认扫描
+    assert "docs/runtime/tasks_audit.log" not in paths
+    assert "docs/runtime/dispatch_ledger.jsonl" not in paths
+    # node/artifacts/data 仍须点名；scratch 默认行为由专项测试覆盖
     assert "node_modules" not in paths
-    assert ".scratch/exp/tmp.py" not in paths
 
 
 def test_apply_deletes_only_listed(tree):
@@ -148,13 +157,15 @@ def test_apply_unlinks_symlink_dir(tree):
 
 
 def test_default_categories_do_not_enter_unnamed_dirs(tmp_path):
-    """默认类别不得命中未点名目录树（.scratch/artifacts/data/node_modules）内文件。"""
+    """默认类别不得命中未点名目录树（artifacts/data/node_modules）内文件。
+
+    原「默认不进入 .scratch」断言按 L68 删除；scratch 默认清理由
+    test_default_scratch_is_default_cleaned 覆盖。
+    """
     repo = tmp_path / "repo"
     (repo / "artifacts/out/__pycache__").mkdir(parents=True)
     (repo / "artifacts/out/__pycache__/m.pyc").write_bytes(b"x")
     (repo / "artifacts/run.log").write_text("log\n")
-    (repo / ".scratch/exp").mkdir(parents=True)
-    (repo / ".scratch/exp/note.log").write_text("log\n")
     (repo / "data/cache").mkdir(parents=True)
     (repo / "data/cache/.DS_Store").write_bytes(b"x")
     (repo / "node_modules/pkg").mkdir(parents=True)
@@ -164,12 +175,24 @@ def test_default_categories_do_not_enter_unnamed_dirs(tmp_path):
     assert {h["path"] for h in hits} == set()
 
     # 点名类别仍能整树处理（不受剪枝影响）
-    hits, _ = rc.collect(repo, ["scratch", "artifacts", "data", "node"], [])
+    hits, _ = rc.collect(repo, ["artifacts", "data", "node"], [])
     paths = {h["path"] for h in hits}
-    assert ".scratch/exp/note.log" in paths
     assert "artifacts/run.log" in paths
     assert "data/cache/.DS_Store" in paths
     assert "node_modules" in paths
+
+
+def test_default_scratch_is_default_cleaned(tree):
+    """L68：scratch 默认清理无主内容，目录本身保留。"""
+    r = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "repo_cleanup.py"), "apply"],
+        cwd=tree, capture_output=True, text=True, encoding="utf-8",
+        env=get_controlled_git_env(),
+    )
+    assert r.returncode == 0, r.stderr
+    assert not (tree / ".scratch/exp/tmp.py").exists()
+    assert not (tree / ".scratch/exp").exists()
+    assert (tree / ".scratch").is_dir()
 
 
 def test_default_categories_skip_nested_unnamed_dirs(tmp_path):
@@ -194,24 +217,56 @@ def test_default_categories_skip_nested_unnamed_dirs(tmp_path):
     assert "src/node_modules" in {h["path"] for h in hits}
 
 
+def test_private_local_dir_is_never_collected_or_deleted(tmp_path):
+    """仓库根 local/ 是用户私有目录：任何类别都不进入，伪造 hits 也不删除。"""
+    repo = tmp_path / "repo"
+    for rel in (
+        "local/backup/run.log",
+        "local/backup/.DS_Store",
+        "local/backup/__pycache__/m.pyc",
+        "local/node_modules/pkg/index.js",
+        "src/local/debug.log",
+    ):
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n", encoding="utf-8")
+
+    hits, _ = rc.collect(repo, list(rc.ALL_CATEGORIES), [])
+    paths = {h["path"] for h in hits}
+    assert not any(path == "local" or path.startswith("local/") for path in paths)
+    # 只保护仓库根 local/；嵌套同名目录仍按类别处理。
+    assert "src/local/debug.log" in paths
+
+    forged = [
+        {"path": "local/backup/run.log", "category": "logs", "kind": "file"},
+        {"path": "local/backup", "category": "data", "kind": "dir"},
+        {"path": "local", "category": "data", "kind": "dir"},
+    ]
+    assert rc.apply_delete(repo, forged) == []
+    assert (repo / "local/backup/run.log").is_file()
+
+
 def test_cli_scan_is_read_only(tree):
     before = {str(p) for p in tree.rglob("*")}
     r = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "repo_cleanup.py"), "scan"],
         cwd=tree, capture_output=True, text=True, encoding="utf-8",
+        env=get_controlled_git_env(),
     )
     assert r.returncode == 0, r.stderr
     assert "repo-cleanup 预览" in r.stdout
     assert "src/app/__pycache__" in r.stdout
     assert "合计：" in r.stdout
     after = {str(p) for p in tree.rglob("*")}
-    assert before == after
+    lock = str(tree / ".git" / "repo_template_control.lock")
+    assert before == after - {lock}
 
 
 def test_cli_apply_default(tree):
     r = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "repo_cleanup.py"), "apply"],
         cwd=tree, capture_output=True, text=True, encoding="utf-8",
+        env=get_controlled_git_env(),
     )
     assert r.returncode == 0, r.stderr
     assert "模式：apply" in r.stdout
@@ -223,6 +278,7 @@ def test_cli_unknown_category_rejected(tree):
     r = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "repo_cleanup.py"), "scan", "bogus"],
         cwd=tree, capture_output=True, text=True, encoding="utf-8",
+        env=get_controlled_git_env(),
     )
     assert r.returncode != 0
     assert "未知类别" in r.stderr
@@ -282,6 +338,7 @@ def test_cli_apply_expected_count_blocks_on_change(tree):
     r = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "repo_cleanup.py"), "apply", "--expected-count", "999"],
         cwd=tree, capture_output=True, text=True, encoding="utf-8",
+        env=get_controlled_git_env(),
     )
     assert r.returncode != 0
     assert "清理候选数量发生变化" in r.stderr
@@ -289,3 +346,200 @@ def test_cli_apply_expected_count_blocks_on_change(tree):
 
 
 
+def _old(path):
+    old = time.time() - 4 * 86400
+    path.touch()
+    os.utime(path, (old, old), follow_symlinks=False)
+
+
+def _pending(repo, pid, slug, status, body, *, resolution="", reason=""):
+    target = repo / "docs/pending" / f"{pid}_{slug}.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    extra = ""
+    if resolution:
+        extra += f"resolution: {resolution}\n"
+    if reason:
+        extra += f"reason: {reason}\n"
+    target.write_text(f"---\npid: {pid}\nslug: {slug}\nstatus: {status}\n{extra}---\n\n# {pid}\n\n{body}\n", encoding="utf-8")
+    return target
+
+
+def _issue(repo, stamp, issue_url=""):
+    directory = repo / ".scratch/repo_template_issues"
+    directory.mkdir(parents=True, exist_ok=True)
+    full = directory / f"{stamp}.md"
+    copy = directory / f"{stamp}.issue.md"
+    front = f"---\nissue: {issue_url}\n---\n\n" if issue_url else "---\nissue: \n---\n\n"
+    full.write_text(front + "# report\n", encoding="utf-8")
+    copy.write_text(front + "# copy\n", encoding="utf-8")
+    return full, copy
+
+def test_pending_reference_protects_recent_draft(tmp_path):
+    repo = tmp_path / "repo"
+    target = repo / ".scratch/repro_p001"
+    target.mkdir(parents=True)
+    (target / "out.txt").write_text("draft\n", encoding="utf-8")
+    _pending(repo, "p001", "fix", "todo", "- 线索：`.scratch/repro_p001`")
+    init_repo(repo)
+
+    result = rc.scan_repository(repo, list(rc.DEFAULT_CATEGORIES), [])
+    assert any(item["path"] == ".scratch/repro_p001" for item in result.protected)
+    assert not any(h["path"].startswith(".scratch/repro_p001") for h in result.hits)
+    keeps = [item["path"] for item in result.protected]
+    rc.apply_delete(repo, result.hits, keeps)
+    assert (target / "out.txt").is_file()
+
+
+def test_pending_reference_expires_after_three_days(tmp_path):
+    repo = tmp_path / "repo"
+    target = repo / ".scratch/repro_p001"
+    target.mkdir(parents=True)
+    (target / "out.txt").write_text("draft\n", encoding="utf-8")
+    _pending(repo, "p001", "fix", "todo", "- 线索：`.scratch/repro_p001`")
+    init_repo(repo)
+    _old(target)
+    _old(target / "out.txt")
+
+    result = rc.scan_repository(repo, list(rc.DEFAULT_CATEGORIES), [])
+    hits = {h["path"]: h for h in result.hits}
+    assert "超期" in hits[".scratch/repro_p001/out.txt"]["reason"]
+    rc.apply_delete(repo, result.hits, [])
+    assert not target.exists()
+
+
+def test_closed_pending_reference_no_longer_protects(tmp_path):
+    repo = tmp_path / "repo"
+    target = repo / ".scratch/repro_p001"
+    target.mkdir(parents=True)
+    (target / "out.txt").write_text("draft\n", encoding="utf-8")
+    _pending(
+        repo, "p001", "fix", "closed", "- 线索：`.scratch/repro_p001`",
+        resolution="resolved", reason="fixed",
+    )
+    init_repo(repo)
+
+    result = rc.scan_repository(repo, list(rc.DEFAULT_CATEGORIES), [])
+    assert not result.protected
+    rc.apply_delete(repo, result.hits, [])
+    assert not target.exists()
+
+
+def test_dir_mtime_old_but_inner_file_new_stays_protected(tmp_path):
+    repo = tmp_path / "repo"
+    target = repo / ".scratch/repro_p001"
+    target.mkdir(parents=True)
+    inner = target / "out.txt"
+    inner.write_text("draft\n", encoding="utf-8")
+    _pending(repo, "p001", "fix", "todo", "- 线索：`.scratch/repro_p001`")
+    init_repo(repo)
+    _old(target)
+    os.utime(inner, None)
+
+    result = rc.scan_repository(repo, list(rc.DEFAULT_CATEGORIES), [])
+    assert any(item["path"] == ".scratch/repro_p001" for item in result.protected)
+
+
+def test_corrupt_pending_skips_scratch(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".scratch/exp").mkdir(parents=True)
+    (repo / ".scratch/exp/tmp.txt").write_text("x\n", encoding="utf-8")
+    (repo / "scripts").mkdir()
+    (repo / "scripts/debug.log").write_text("log\n", encoding="utf-8")
+    _pending(repo, "p001", "fix", "todo", "- 线索：`.scratch/exp`")
+    (repo / "docs/pending/p001_fix.md").write_text(
+        '---\npid: "p001"\n---\n# broken\n', encoding="utf-8"
+    )
+    init_repo(repo)
+
+    result = rc.scan_repository(repo, list(rc.DEFAULT_CATEGORIES), [])
+    assert result.scratch_note and "pending 条目损坏" in result.scratch_note
+    assert not any(h["path"].startswith(".scratch/") for h in result.hits)
+    assert "scripts/debug.log" in {h["path"] for h in result.hits}
+
+
+def test_unpublished_issue_pair_is_protected_when_recent(tmp_path):
+    repo = tmp_path / "repo"
+    full, copy = _issue(repo, "20261110-101500")
+    init_repo(repo)
+
+    result = rc.scan_repository(repo, list(rc.DEFAULT_CATEGORIES), [])
+    protected = {item["path"] for item in result.protected}
+    assert {".scratch/repo_template_issues/20261110-101500.md",
+            ".scratch/repo_template_issues/20261110-101500.issue.md"} <= protected
+    rc.apply_delete(repo, result.hits, [item["path"] for item in result.protected])
+    assert full.is_file() and copy.is_file()
+
+
+def test_unpublished_issue_pair_expires_after_three_days(tmp_path):
+    repo = tmp_path / "repo"
+    full, copy = _issue(repo, "20261110-101500")
+    init_repo(repo)
+    _old(full)
+    _old(copy)
+
+    result = rc.scan_repository(repo, list(rc.DEFAULT_CATEGORIES), [])
+    hits = {h["path"]: h for h in result.hits}
+    assert "超期" in hits[".scratch/repo_template_issues/20261110-101500.md"]["reason"]
+    rc.apply_delete(repo, result.hits, [])
+    assert not full.exists() and not copy.exists()
+
+
+def test_published_issue_pair_is_unowned_and_cleaned(tmp_path):
+    repo = tmp_path / "repo"
+    full, copy = _issue(repo, "20261110-101500", "https://github.com/o/r/issues/12")
+    init_repo(repo)
+
+    result = rc.scan_repository(repo, list(rc.DEFAULT_CATEGORIES), [])
+    hits = {h["path"]: h for h in result.hits}
+    assert "已发布 issue" in hits[".scratch/repo_template_issues/20261110-101500.md"]["reason"]
+    rc.apply_delete(repo, result.hits, [])
+    assert not full.exists() and not copy.exists()
+
+
+def test_orphan_issue_copy_is_unowned_and_cleaned(tmp_path):
+    repo = tmp_path / "repo"
+    directory = repo / ".scratch/repo_template_issues"
+    directory.mkdir(parents=True)
+    copy = directory / "20261110-101500.issue.md"
+    copy.write_text("body\n", encoding="utf-8")
+    init_repo(repo)
+
+    result = rc.scan_repository(repo, list(rc.DEFAULT_CATEGORIES), [])
+    hits = {h["path"]: h for h in result.hits}
+    assert "仅 .issue.md" in hits[".scratch/repo_template_issues/20261110-101500.issue.md"]["reason"]
+    rc.apply_delete(repo, result.hits, [])
+    assert not copy.exists()
+
+
+def test_corrupt_issue_front_matter_is_treated_as_unpublished(tmp_path):
+    repo = tmp_path / "repo"
+    directory = repo / ".scratch/repo_template_issues"
+    directory.mkdir(parents=True)
+    full = directory / "20261110-101500.md"
+    full.write_text("---\nissue: [\n---\n# broken\n", encoding="utf-8")
+    init_repo(repo)
+
+    result = rc.scan_repository(repo, list(rc.DEFAULT_CATEGORIES), [])
+    assert any(item["path"] == ".scratch/repo_template_issues/20261110-101500.md"
+               for item in result.protected)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [OSError("busy"), rc.TaskDataError("git 公共目录损坏")],
+)
+def test_lock_errors_become_cleanup_errors(tmp_path, monkeypatch, error):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(rc, "repo_root", lambda: repo)
+
+    @contextmanager
+    def boom(*args, **kwargs):
+        raise error
+        yield
+
+    monkeypatch.setattr(rc, "git_common_lock", boom)
+    with pytest.raises(SystemExit) as exc:
+        rc.main(["scan"])
+    assert "repo_cleanup:" in str(exc.value)
+    assert "无法获取控制面锁" in str(exc.value)

@@ -1,3 +1,8 @@
+---
+slug: account_connection
+status: active
+tasks: [t053, t054, t055]
+---
 # 账户连接与供应商技术规范 (Account Connection Specification)
 
 本文档定义 kkmail 多账号连接管理、供应商协议适配、OAuth 授权流程与凭据安全技术规范。

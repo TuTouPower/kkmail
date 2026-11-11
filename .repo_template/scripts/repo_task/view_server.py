@@ -1,13 +1,16 @@
 """task 调度看板本地服务。
 
-只读；stdlib http.server；无 WebSocket、无后台轮询。首页 HTML 在 500ms TTL
-内复用渲染结果；`/task-doc` 每次请求重新计算 schedule。页面通过注入 JSON 交给
-客户端 JS 渲染；静态资源（board.css / board.js）从同目录 view_static/ 读取，
-无构建、无 CDN 依赖。
+只读；stdlib http.server；无 WebSocket、无后台轮询。首页与 `/task-doc` 共享
+一份按 (repo, token) 键控、500ms TTL 的请求级缓存（有效状态发现 + schedule
+只算一次）。页面通过注入 JSON 交给客户端 JS 渲染；静态资源（board.css /
+board.js）从同目录 view_static/ 读取，无构建、无 CDN 依赖。
 """
+
+from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import platform
 import secrets
@@ -35,6 +38,7 @@ from .store import discover_effective_bundle, git_text_at_ref
 _STATIC_DIR = Path(__file__).resolve().parent / "view_static"
 _DOC_NAMES = {"task": "task.md", "progress": ctx.PROGRESS_FILE, "spec": "task.md"}
 _SESSION_TOKEN = secrets.token_hex(16)
+LOGGER = logging.getLogger(__name__)
 
 
 def _find_free_port(host: str) -> int:
@@ -48,14 +52,11 @@ def _find_free_port(host: str) -> int:
         return s.getsockname()[1]
 
 
-def _build_model():
-    """调度图 → 前端模型：节点、边、统计 + 后端权威 plan。
-
-    使用本模块 ``compute_schedule`` 引用，便于测试 monkeypatch。
-    """
-    model = build_board_model(compute_schedule())
+def _build_model(schedule: dict, token: str, *, repo) -> dict:
+    """调度图 → 前端模型：节点、边、统计 + 后端权威 plan。"""
+    model = build_board_model(schedule, repo=repo)
     model["plan"] = compute_batch_plan(model)
-    model["token"] = _SESSION_TOKEN
+    model["token"] = token
     return model
 
 
@@ -72,59 +73,108 @@ def _render_html(model: dict) -> str:
     return template.replace("__BOARD_JSON__", payload)
 
 
-_RENDER_CACHE_LOCK = threading.Lock()
-_CACHED_HTML: str = ""
-_LAST_RENDER_TIME: float = 0.0
-_RENDER_CACHE_TTL = 0.5  # 500ms 内的并发请求复用渲染结果，平抑高并发资源冲击（Issue #48）
+_RENDER_CACHE_TTL = 0.5  # 500ms 内复用渲染结果，平抑高并发资源冲击（Issue #48）
 
 
-def _get_rendered_html() -> str:
-    global _CACHED_HTML, _LAST_RENDER_TIME
-    now = time.monotonic()
-    if _CACHED_HTML and (now - _LAST_RENDER_TIME < _RENDER_CACHE_TTL):
-        return _CACHED_HTML
-    with _RENDER_CACHE_LOCK:
+class _DocNotFound(ctx.TaskDataError):
+    """任务文档 404 类错误：未知 tid/doc、路径越界、文档缺失。
+
+    与状态发现/渲染失败（TaskDataError → 500）区分：前者是请求资源不存在，
+    后者是服务端状态损坏。详情只进服务端日志，响应一律通用文案。
+    """
+
+
+class _BoardCache:
+    """按 (repo.root, token) 键控的请求级缓存，由每个 serve() 实例独占持有。
+
+    首页与 /task-doc 共享同一次有效状态发现与 schedule：消除模块级全局状态，
+    也避免 /task-doc 每次请求重复 discover_effective_bundle + compute_schedule。
+
+    文档数据与 board 渲染解耦：snapshot_data() 只做状态发现（文档端点用），
+    snapshot() 在其上叠加模型构建与 HTML 渲染（首页用）。渲染失败不影响文档，
+    文档缺失不影响首页；各自错误独立映射状态码。
+    """
+
+    def __init__(self, repo, token: str, ttl: float = _RENDER_CACHE_TTL):
+        self._repo = repo
+        self._token = token
+        self._ttl = ttl
+        self._lock = threading.Lock()
+        self._key: tuple[str, str] | None = None
+        self._time = 0.0
+        self._html = ""
+        self._html_valid = False
+        self._schedule = None
+        self._sources = None
+
+    def _data(self) -> tuple[dict, dict]:
+        """有效状态发现 + schedule；TTL 内复用。失败抛 TaskDataError（→500）。"""
+        key = (str(self._repo.root), self._token)
         now = time.monotonic()
-        if _CACHED_HTML and (now - _LAST_RENDER_TIME < _RENDER_CACHE_TTL):
-            return _CACHED_HTML
-        _CACHED_HTML = _render_html(_build_model())
-        _LAST_RENDER_TIME = now
-        return _CACHED_HTML
+        with self._lock:
+            if (
+                self._key == key
+                and self._schedule is not None
+                and (now - self._time < self._ttl)
+            ):
+                return self._schedule, self._sources
+            tasks, sources = discover_effective_bundle(repo=self._repo)
+            schedule = compute_schedule(tasks, repo=self._repo)
+            self._key, self._time = key, now
+            self._schedule, self._sources = schedule, sources
+            self._html_valid = False
+            return schedule, sources
+
+    def snapshot_data(self) -> tuple[dict, dict]:
+        """文档端点用：只返回 (schedule, sources)，不触碰渲染面。"""
+        return self._data()
+
+    def snapshot(self) -> tuple[str, dict, dict]:
+        """首页用：返回 (html, schedule, sources)，TTL 内复用渲染结果。"""
+        schedule, sources = self._data()
+        key = (str(self._repo.root), self._token)
+        with self._lock:
+            if self._html_valid and self._key == key:
+                return self._html, schedule, sources
+            model = _build_model(schedule, self._token, repo=self._repo)
+            html = _render_html(model)
+            self._html = html
+            self._html_valid = True
+            return html, schedule, sources
 
 
-def _allowed_doc_roots(base: Path) -> tuple[Path, ...]:
-    """任务文档允许的根：主仓用 ctx 常量（测试可 monkeypatch），worktree 用其自身路径。"""
-    if base.resolve() == ctx.REPO_ROOT.resolve():
-        return (ctx.TASKS_DIR.resolve(), ctx.ARCHIVE_TASKS_DIR.resolve())
+def _allowed_doc_roots(base: Path, repo) -> tuple[Path, ...]:
+    """任务文档允许的根：主仓用上下文派生路径，worktree 用其自身路径。"""
+    if base.resolve() == repo.root.resolve():
+        return (repo.tasks_dir.resolve(),)
     return (
         (base / "docs" / "tasks").resolve(),
-        (base / "docs" / "archive" / "tasks").resolve(),
     )
 
 
-def _resolve_task_doc_in(base: Path, tasks: dict[str, dict], tid: str, doc: str) -> Path:
-    """在给定工作区根下校验并解析任务文档路径；非法请求抛 ctx.TaskDataError。"""
+def _resolve_task_doc_in(base: Path, tasks: dict[str, dict], tid: str, doc: str, *, repo) -> Path:
+    """在给定工作区根下校验并解析任务文档路径；非法请求抛 _DocNotFound。"""
     if tid not in tasks:
-        raise ctx.TaskDataError(f"未知任务 {tid!r}")
+        raise _DocNotFound(f"未知任务 {tid!r}")
     filename = _DOC_NAMES.get(doc)
     if filename is None:
-        raise ctx.TaskDataError(f"未知文档类型 {doc!r}（仅 task/progress）")
+        raise _DocNotFound(f"未知文档类型 {doc!r}（仅 task/progress）")
     directory = tasks[tid].get("dir", "")
     root = base.resolve()
     path = (root / directory / filename).resolve()
-    if not any(path.is_relative_to(allowed) for allowed in _allowed_doc_roots(root)):
-        raise ctx.TaskDataError(f"任务 {tid} 文档路径越界：{path}")
+    if not any(path.is_relative_to(allowed) for allowed in _allowed_doc_roots(root, repo)):
+        raise _DocNotFound(f"任务 {tid} 文档路径越界：{path}")
     if not path.is_file():
-        raise ctx.TaskDataError(f"任务 {tid} 无 {filename}")
+        raise _DocNotFound(f"任务 {tid} 无 {filename}")
     return path
 
 
-def _resolve_task_doc(tasks: dict[str, dict], tid: str, doc: str) -> Path:
+def _resolve_task_doc(tasks: dict[str, dict], tid: str, doc: str, *, repo) -> Path:
     """主仓内解析任务文档路径；非法请求抛 ctx.TaskDataError。"""
-    return _resolve_task_doc_in(ctx.REPO_ROOT, tasks, tid, doc)
+    return _resolve_task_doc_in(repo.root, tasks, tid, doc, repo=repo)
 
 
-def _read_task_doc(schedule: dict, sources: dict, tid: str, doc: str) -> bytes:
+def _read_task_doc(schedule: dict, sources: dict, tid: str, doc: str, *, repo) -> bytes:
     """按有效状态来源读取任务文档：worktree 读该 worktree 文件、branch 用 git show、main 读主仓。
 
     task 状态权威在其 worktree/未合并分支：主仓副本可能是过期 backlog，归档路径甚至不存在。
@@ -133,18 +183,21 @@ def _read_task_doc(schedule: dict, sources: dict, tid: str, doc: str) -> bytes:
     entry = sources.get(tid) or {}
     if entry.get("source") == "branch" and entry.get("read_at"):
         if tid not in tasks:
-            raise ctx.TaskDataError(f"未知任务 {tid!r}")
+            raise _DocNotFound(f"未知任务 {tid!r}")
         filename = _DOC_NAMES.get(doc)
         if filename is None:
-            raise ctx.TaskDataError(f"未知文档类型 {doc!r}（仅 task/progress）")
+            raise _DocNotFound(f"未知文档类型 {doc!r}（仅 task/progress）")
         rel = f"{tasks[tid].get('dir', '')}/{filename}"
-        return git_text_at_ref(entry["read_at"], rel).encode("utf-8")
+        try:
+            return git_text_at_ref(entry["read_at"], rel, repo=repo).encode("utf-8")
+        except ctx.TaskDataError as error:
+            raise _DocNotFound(f"任务 {tid} 文档不可读：{error}") from error
     base = (
         Path(entry["read_at"])
         if entry.get("source") == "worktree" and entry.get("read_at")
-        else ctx.REPO_ROOT
+        else repo.root
     )
-    return _resolve_task_doc_in(base, tasks, tid, doc).read_bytes()
+    return _resolve_task_doc_in(base, tasks, tid, doc, repo=repo).read_bytes()
 
 
 def _is_wsl() -> bool:
@@ -254,16 +307,28 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
     def do_GET(self):
-        """请求级兜底：SystemExit（如非主工作区运行）与意外异常转明确文本响应。
+        """请求级兜底：异常详情只进服务端日志，客户端只得到通用文案。
 
-        http.server 对线程内未捕获异常只打 traceback 并关连接，客户端得到空响应。
+        http.server 对线程内未捕获异常只打 traceback 并关连接；这里统一转明确
+        文本响应，且 --allow-non-loopback 下不回显绝对路径、git 错误等内部信息。
         """
         try:
             self._route_get()
         except SystemExit as error:
+            # sys.exit 给出的是业务提示（如工作区限制），不含内部路径，可回显。
             self._send_error_text(503, str(error) or "服务不可用（运行环境不满足）")
-        except Exception as error:  # noqa: BLE001 - 请求级兜底，保证有明确错误响应
-            self._send_error_text(500, f"内部错误：{error}")
+        except _DocNotFound as error:
+            LOGGER.warning("看板任务文档不可用 path=%s：%s", self.path, error)
+            self._send_error_text(404, "请求的任务资源不可用")
+        except ctx.TaskDataError as error:
+            LOGGER.warning("看板状态发现/渲染失败 path=%s：%s", self.path, error)
+            self._send_error_text(500, "内部错误，请查看服务端日志")
+        except OSError as error:
+            LOGGER.warning("看板资源读取失败 path=%s：%s", self.path, error)
+            self._send_error_text(500, "内部错误，请查看服务端日志")
+        except Exception:
+            LOGGER.exception("看板请求处理失败 path=%s", self.path)
+            self._send_error_text(500, "内部错误，请查看服务端日志")
 
     def _route_get(self):
         parts = urlsplit(self.path)
@@ -274,11 +339,7 @@ class _Handler(BaseHTTPRequestHandler):
             if _SESSION_TOKEN and token != _SESSION_TOKEN:
                 self._send_error_text(403, "禁止访问：缺少或无效的看板会话令牌")
                 return
-            try:
-                html = _get_rendered_html()
-            except Exception as e:
-                self._send_error_text(500, f"渲染失败：{e}")
-                return
+            html, _, _ = self.server.board.snapshot()
             self._send_bytes(200, html.encode("utf-8"), "text/html; charset=utf-8")
             return
         if path.startswith("/static/"):
@@ -286,11 +347,7 @@ class _Handler(BaseHTTPRequestHandler):
             if name not in ("board.css", "board.js", "chain_plan.js"):
                 self._send_error_text(404, "静态资源不存在")
                 return
-            try:
-                body = (_STATIC_DIR / name).read_bytes()
-            except OSError as e:
-                self._send_error_text(500, f"读取静态资源失败：{e}")
-                return
+            body = (_STATIC_DIR / name).read_bytes()
             content_type = (
                 "text/css; charset=utf-8" if name.endswith(".css")
                 else "text/javascript; charset=utf-8"
@@ -304,15 +361,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             tid = (query.get("tid") or [""])[0]
             doc = (query.get("doc") or [""])[0]
-            try:
-                tasks, sources = discover_effective_bundle()
-                body = _read_task_doc(compute_schedule(tasks), sources, tid, doc)
-            except ctx.TaskDataError as e:
-                self._send_error_text(404, str(e))
-                return
-            except OSError as e:
-                self._send_error_text(500, f"读取文档失败：{e}")
-                return
+            schedule, sources = self.server.board.snapshot_data()
+            body = _read_task_doc(schedule, sources, tid, doc, repo=self.server.repo)
             self._send_bytes(200, body, "text/plain; charset=utf-8")
             return
         self._send_error_text(404, "未找到资源")
@@ -327,7 +377,7 @@ def _is_loopback_host(host: str) -> bool:
     return normalized in {"127.0.0.1", "localhost", "::1", "0:0:0:0:0:0:0:1"}
 
 
-def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
+def serve(host="127.0.0.1", port=0, *, repo, allow_non_loopback=False):
     if not isinstance(port, int) or port < 0 or port > 65535:
         sys.exit(f"看板端口非法：{port!r}；端口必须在 0 到 65535 之间（0 为自动选空闲端口）")
     port = port or _find_free_port(host)
@@ -360,6 +410,8 @@ def serve(host="127.0.0.1", port=0, *, allow_non_loopback=False):
 
     try:
         httpd = server_cls((host, port), _Handler)
+        httpd.repo = repo
+        httpd.board = _BoardCache(repo, _SESSION_TOKEN)
     except OSError as error:
         sys.exit(f"看板端口 {port} 绑定失败（{error}）；改用 --port 0 自动选空闲端口")
     print(f"task 看板已启动：{url}")

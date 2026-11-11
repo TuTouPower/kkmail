@@ -13,9 +13,6 @@
     "repo-cleanup": {
       "role": "public"
     },
-    "repo-hygiene": {
-      "role": "public"
-    },
     "repo-template-sync": {
       "role": "public"
     },
@@ -25,13 +22,13 @@
     "task-create": {
       "role": "public"
     },
-    "task-from-pending": {
+    "pending-to-task": {
       "role": "public"
     },
     "task-integrate": {
-      "role": "internal"
+      "role": "public"
     },
-    "task-merge": {
+    "task-combine": {
       "role": "public"
     },
     "task-preflight": {
@@ -60,11 +57,11 @@
       "child": "task-integrate"
     },
     {
-      "parent": "task-from-pending",
+      "parent": "pending-to-task",
       "child": "bug-to-pending"
     },
     {
-      "parent": "task-from-pending",
+      "parent": "pending-to-task",
       "child": "task-create"
     },
     {

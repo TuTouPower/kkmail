@@ -28,49 +28,61 @@ def _blocked(rule: str, substrings: list[str]) -> bool:
     return any(sub in rule for sub in substrings)
 
 
-def merge_gitignore(src: Path, blocked: list[str], changed: set[Path]) -> dict:
-    """追加模板独有规则（去重、遵从 prompt 拦截）；删除消费侧 prompt 禁止的 ignore 行。"""
-    dst = ctx.CONSUMER / ".gitignore"
+def _gitignore_blocks(lines: list[str], marker: str) -> tuple[list[str], list[str], list[str]]:
+    begin = f"# repo-template:{marker}:begin" if marker == "prettier" else "# repo-template:begin"
+    end = f"# repo-template:{marker}:end" if marker == "prettier" else "# repo-template:end"
+    try:
+        start = lines.index(begin)
+        stop = lines.index(end)
+    except ValueError:
+        return lines, [], []
+    if start > stop:
+        raise ctx.SyncError(".gitignore 托管块标记顺序错误")
+    return lines[:start], lines[start + 1:stop], lines[stop + 1:]
+
+
+def merge_gitignore(src: Path, blocked: list[str], changed: set[Path], sync: ctx.SyncContext) -> dict:
+    """替换 .gitignore 托管块；块外规则永不被同步删除。"""
+    dst = sync.consumer / ".gitignore"
     src_lines = (src / ".gitignore").read_text(encoding="utf-8").splitlines()
     dst_lines = dst.read_text(encoding="utf-8").splitlines() if dst.exists() else []
-    dst_set = {ln.strip() for ln in dst_lines}
-    added: list[str] = []
-    removed: list[str] = []
-    for ln in src_lines:
-        stripped = ln.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped in dst_set:
-            continue
-        if not stripped.startswith("!") and _blocked(stripped, blocked):
-            continue
-        added.append(stripped)
-    if blocked:
-        new_dst: list[str] = []
-        for ln in dst_lines:
-            stripped = ln.strip()
-            if (
-                stripped
-                and not stripped.startswith("#")
-                and not stripped.startswith("!")
-                and _blocked(stripped, blocked)
-            ):
-                removed.append(stripped)
-                continue
-            new_dst.append(ln)
-        dst_lines = new_dst
-    if added or removed:
-        if added:
-            dst_lines.append("")
-            dst_lines.append("# 同步自模板（repo-template-sync）")
-            dst_lines.extend(added)
-        text = "\n".join(dst_lines)
-        if not text.endswith("\n"):
-            text += "\n"
+    before, source_block, source_after = _gitignore_blocks(src_lines, "gitignore")
+    if not source_block:
+        raise ctx.SyncError("模板 .gitignore 缺 # repo-template:begin/end 托管块")
+    kept_source = [
+        line for line in source_block
+        if not (
+            line.strip()
+            and not line.strip().startswith(("#", "!"))
+            and _blocked(line.strip(), blocked)
+        )
+    ]
+    removed = [
+        line for line in source_block
+        if line.strip() and not line.strip().startswith(("#", "!"))
+        and _blocked(line.strip(), blocked)
+    ]
+    before_dst, dst_block, after_dst = _gitignore_blocks(dst_lines, "gitignore")
+    if not dst_block:
+        before_dst, after_dst = dst_lines, []
+    duplicates = [
+        line for line in before_dst + after_dst
+        if line.strip() and not line.strip().startswith("#") and line.strip() in {x.strip() for x in kept_source}
+    ]
+    result = [*before_dst, "# repo-template:begin", *kept_source, "# repo-template:end", *after_dst]
+    text = "\n".join(result)
+    if not text.endswith("\n"):
+        text += "\n"
+    if text != (dst.read_text(encoding="utf-8") if dst.exists() else ""):
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(text.encode("utf-8"))
+        dst.write_text(text, encoding="utf-8")
         changed.add(dst)
-    return {"added": added, "removed": removed, "dst": ctx._rel(dst)}
+    return {
+        "added": kept_source,
+        "removed": removed,
+        "outside_duplicates": duplicates,
+        "dst": sync.rel(dst),
+    }
 
 
 _PRETTIERIGNORE_OLD_HEADER = "# 同步自模板（repo-template-sync）：模板自有路径不受消费仓 format 门禁约束"
@@ -80,9 +92,9 @@ _PRETTIERIGNORE_HEADER = (
 )
 
 
-def merge_prettierignore(changed: set[Path]) -> dict:
+def merge_prettierignore(changed: set[Path], sync: ctx.SyncContext) -> dict:
     """机械合并 .prettierignore：模板自有路径去重追加，消费独有规则保留。"""
-    dst = ctx.CONSUMER / ".prettierignore"
+    dst = sync.consumer / ".prettierignore"
     dst_lines = dst.read_text(encoding="utf-8").splitlines() if dst.exists() else []
     dst_set = {ln.strip() for ln in dst_lines}
     added: list[str] = []
@@ -108,7 +120,7 @@ def merge_prettierignore(changed: set[Path]) -> dict:
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(text.encode("utf-8"))
         changed.add(dst)
-    return {"added": added, "dst": ctx._rel(dst)}
+    return {"added": added, "dst": sync.rel(dst)}
 
 
 _SECRET_KEY_RE = re.compile(
@@ -207,11 +219,11 @@ def _sanitize_mcp_servers(servers: dict, source: str | None = None) -> dict:
     return clean
 
 
-def merge_mcp(src: Path, changed: set[Path]) -> list[str]:
+def merge_mcp(src: Path, changed: set[Path], sync: ctx.SyncContext) -> list[str]:
     """按 server 键合并 MCP：模板新增键加入，已有键保留消费值（禁冲密钥）。"""
     merged: list[str] = []
     for rel in ctx.MCP_CANDIDATES:
-        sp, dp = src / rel, ctx.CONSUMER / rel
+        sp, dp = src / rel, sync.consumer / rel
         if not sp.exists():
             continue
         try:
@@ -228,7 +240,7 @@ def merge_mcp(src: Path, changed: set[Path]) -> list[str]:
             new_data = {**sdata, "mcpServers": _sanitize_mcp_servers(s_servers, rel)}
             dp.write_text(json.dumps(new_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             changed.add(dp)
-            merged.append(f"{ctx._rel(dp)}（新建，已占位化 env/args/url/headers 中的凭据，需审阅全部字段）")
+            merged.append(f"{sync.rel(dp)}（新建，已占位化 env/args/url/headers 中的凭据，需审阅全部字段）")
             continue
         try:
             draw = dp.read_text(encoding="utf-8")
@@ -254,7 +266,7 @@ def merge_mcp(src: Path, changed: set[Path]) -> list[str]:
         if touched:
             dp.write_bytes((json.dumps(ddata, ensure_ascii=False, indent=_detect_json_indent(draw)) + "\n").encode("utf-8"))
             changed.add(dp)
-            merged.append(ctx._rel(dp))
+            merged.append(sync.rel(dp))
     return merged
 
 
@@ -270,24 +282,24 @@ def shared_class(src_path: Path, dst_path: Path) -> str:
     return "none"
 
 
-def shared_status(src: Path) -> list[dict]:
+def shared_status(src: Path, sync: ctx.SyncContext) -> list[dict]:
     """裁定单元分类（AGENTS.md 目的地为软链时解引用实体再比对）。"""
     out: list[dict] = []
     for unit in ctx.SHARED_FILES:
         s = src / unit
         if unit == "AGENTS.md":
-            d = ctx.CONSUMER / "AGENTS.md"
+            d = sync.consumer / "AGENTS.md"
             if d.is_symlink():
                 d = d.resolve()
         else:
-            d = ctx.CONSUMER / unit
+            d = sync.consumer / unit
         out.append({"unit": unit, "cls": shared_class(s, d)})
     return out
 
 
-def _apply_shared_unit(unit: str, decision: str | None, src: Path, changed: set[Path]) -> None:
+def _apply_shared_unit(unit: str, decision: str | None, src: Path, changed: set[Path], sync: ctx.SyncContext) -> None:
     # 标题协议下只自动更新开发原则；其余部分分别保护或交 Agent。
-    if unit == "AGENTS.md" and _apply_agents_sectioned(src, changed):
+    if unit == "AGENTS.md" and _apply_agents_sectioned(src, changed, sync):
         print("AGENTS.md 已按标题协议处理：开发原则强制更新，目录规则交 agent 合并，项目介绍保留")
         return
     if not decision:
@@ -302,7 +314,7 @@ def _apply_shared_unit(unit: str, decision: str | None, src: Path, changed: set[
     if decision in ("keep", "keep_consumer"):
         return
     s = src / unit
-    d = ctx.CONSUMER / unit
+    d = sync.consumer / unit
     if d.is_symlink():
         d = d.resolve()
     if not s.exists():

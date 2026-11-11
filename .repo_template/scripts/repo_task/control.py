@@ -28,9 +28,10 @@ from .store import discover_effective_sources, discover_effective_tasks, scan_ta
 
 
 def cmd_effective_status(args):
+    repo = args.repo
     """只读输出每个有效 task 的状态与读取来源（worktree / branch / main）。"""
-    require_primary_worktree()
-    entries = discover_effective_sources()
+    require_primary_worktree(repo=repo)
+    entries = discover_effective_sources(repo=repo)
     rows = [
         e for e in entries.values()
         if not getattr(args, "status", None) or e["status"] in args.status
@@ -48,16 +49,18 @@ def cmd_effective_status(args):
 
 
 def cmd_view(args):
+    repo = args.repo
     if getattr(args, "serve", False):
         from .view_server import serve
         serve(
+            repo=repo,
             host=args.host,
             port=args.port,
             allow_non_loopback=bool(getattr(args, "allow_non_loopback", False)),
         )
         return
     try:
-        schedule = compute_schedule()
+        schedule = compute_schedule(repo=repo)
         tasks = schedule["tasks"]
         conflicts = schedule["conflicts"]
         main_done_set = schedule["main_done_set"]
@@ -122,7 +125,7 @@ def cmd_view(args):
                 + " ".join(unmerged_done) + "）"
             )
         # 本波链摘要：算法权威 = plan.compute_batch_plan
-        board = build_board_model(schedule)
+        board = build_board_model(schedule, repo=repo)
         batch = compute_batch_plan(board)
         n_chains = len(batch.get("chains") or [])
         if n_chains:
@@ -147,45 +150,107 @@ def _print_json(event: dict) -> None:
     print(json.dumps(event, ensure_ascii=False))
 
 
+# 展示层账本/绑定记录可能出现合法 JSON 非对象、编码异常等；统一降级为诊断，
+# 不让裸 traceback 打断已完成的业务事务（DS L268）。
+_STATUSLINE_ERRORS = (OSError, ValueError, TypeError, AttributeError)
+
+
+def _statusline_diagnostic(
+    action: str, repo: "ctx.RepoContext", owner_id: str, tid: str, detail: str,
+) -> None:
+    print(
+        f"WARNING: 状态行{action}失败（project={repo.root} owner_id={owner_id!r} "
+        f"tid={tid}：{detail}）；不影响任务收尾",
+        file=sys.stderr,
+    )
+
+
+def _bind_statusline(
+    repo: "ctx.RepoContext", owner_id: str, tid: str, attempt: int, execution_id: str, session_id: str,
+) -> None:
+    """展示层副作用：显式写入会话 → worktree 绑定；不吞 bind 返回值，失败只诊断。"""
+    from . import statusline
+
+    identity = f"session={session_id!r} attempt={attempt} execution_id={execution_id}"
+    try:
+        bound = statusline.bind(str(repo.root), session_id, tid, attempt, execution_id, owner_id=owner_id)
+    except _STATUSLINE_ERRORS as error:
+        _statusline_diagnostic(f"绑定（{identity}）", repo, owner_id, tid, str(error))
+        return
+    if not bound:
+        _statusline_diagnostic(
+            f"绑定（{identity}）", repo, owner_id, tid,
+            "无打开的 worktree 窗口；新 attempt 须有可判定的最新 start 事件",
+        )
+
+
+def _unbind_statusline(repo: "ctx.RepoContext", owner_id: str, tid: str, session_id: str) -> None:
+    from . import statusline
+
+    try:
+        statusline.unbind(str(repo.root), session_id, tid)
+    except _STATUSLINE_ERRORS as error:
+        _statusline_diagnostic("解绑", repo, owner_id, tid, str(error))
+
+
 @control_locked
 def cmd_attempt_reserve(args):
-    require_primary_worktree()
-    _print_json(reserve_attempt(args.tid, args.model))
+    repo = args.repo
+    require_primary_worktree(repo=repo)
+    _print_json(reserve_attempt(args.tid, args.model, repo=repo))
 
 
 @control_locked
 def cmd_attempt_claim(args):
-    require_primary_worktree()
-    attempt, execution_id = resolve_identity(args.tid, args.attempt, args.execution_id)
-    _print_json(claim_execution(args.tid, attempt, execution_id, args.owner_id,
+    repo = args.repo
+    require_primary_worktree(repo=repo)
+    attempt, execution_id = resolve_identity(
+        args.tid, args.attempt, args.execution_id, repo=repo
+    )
+    _print_json(claim_execution(args.tid, attempt, execution_id, args.owner_id, repo=repo,
                                replace_owner=args.replace_owner,
                                confirm_stopped=args.confirm_stopped))
 
 
 @control_locked
 def cmd_attempt_terminal(args):
-    require_primary_worktree()
-    attempt, execution_id = resolve_identity(args.tid, args.attempt, args.execution_id)
-    _print_json(terminal_attempt(args.tid, attempt, execution_id, args.status))
+    repo = args.repo
+    require_primary_worktree(repo=repo)
+    attempt, execution_id = resolve_identity(
+        args.tid, args.attempt, args.execution_id, repo=repo
+    )
+    _print_json(terminal_attempt(args.tid, attempt, execution_id, args.status, repo=repo))
 
 
-def require_report_done_ready(tid: str, attempt: int, execution_id: str) -> None:
+def require_report_done_ready(
+    tid: str, attempt: int, execution_id: str, *, repo: "ctx.RepoContext"
+) -> None:
     """report=done 的门禁：最终提交须带 exact handoff 与同内容的 review PASS 证据。"""
     suffix = "；先按 recovery 判定（review_repair / review_mismatch）处理后重跑 run-close"
     try:
-        verdict, _kind, detail = verify_integrate_ready(tid, attempt, execution_id)
+        verdict, kind, detail = verify_integrate_ready(tid, attempt, execution_id, repo=repo)
     except ctx.TaskDataError as error:
         sys.exit(f"report=done 拒绝：{error}{suffix}")
+    if verdict != "ready" and kind == "privacy":
+        sys.exit(
+            f"report=done 拒绝：{detail}；用 `git log -S <泄漏路径片段> --oneline` "
+            "定位引入提交：确属非个人环境固定路径，在 repo_task/privacy.py "
+            "FIXED_PATH_EXCEPTIONS 显式豁免，否则移除泄漏内容后重新 review；"
+            "先按 recovery 判定处理后重跑 run-close"
+        )
     if verdict != "ready":
         sys.exit(f"report=done 拒绝：{detail}{suffix}")
 
 
 @control_locked
 def cmd_attempt_report(args):
-    require_primary_worktree()
-    attempt, execution_id = resolve_identity(args.tid, args.attempt, args.execution_id)
+    repo = args.repo
+    require_primary_worktree(repo=repo)
+    attempt, execution_id = resolve_identity(
+        args.tid, args.attempt, args.execution_id, repo=repo
+    )
     if args.status == "done":
-        require_report_done_ready(args.tid, attempt, execution_id)
+        require_report_done_ready(args.tid, attempt, execution_id, repo=repo)
     _print_json(report_attempt(
         args.tid,
         attempt,
@@ -194,6 +259,7 @@ def cmd_attempt_report(args):
         sha=args.sha,
         fail_class=args.fail_class,
         reason=args.reason,
+        repo=repo,
     ))
 
 
@@ -201,56 +267,63 @@ def _recovery_hint(tid: str) -> str:
     return f"运行 `python3 .repo_template/scripts/task.py recovery {tid}` 判定现场"
 
 
-def _require_fresh_run(tid: str) -> None:
+def _require_fresh_run(tid: str, *, repo: "ctx.RepoContext") -> None:
     """run-begin 只接受从未执行过的 backlog task；既有现场一律交给 recovery。"""
     hint = _recovery_hint(tid)
-    task = discover_effective_tasks().get(tid)
+    task = discover_effective_tasks(repo=repo).get(tid)
     if task is None:
         sys.exit(f"run-begin 拒绝：{tid} 不存在")
     if task["status"] != "backlog":
         sys.exit(f"run-begin 拒绝：{tid} 有效状态为 {task['status']}（仅 backlog 可新启动）；{hint}，不做隐式恢复")
-    if attempts_for_tid(tid, ledger_read(tid=tid)):
+    if attempts_for_tid(tid, ledger_read(tid=tid, repo=repo)):
         sys.exit(f"run-begin 拒绝：{tid} 已有 attempt 记录；{hint}，不做隐式恢复")
-    rel = ctx.worktree_rel_path(tid)
-    path = (ctx.REPO_ROOT / rel).resolve()
-    if path.exists() or str(path) in worktree_paths():
+    rel = repo.worktree_rel(tid)
+    path = (repo.primary_root / rel).resolve()
+    if path.exists() or str(path) in worktree_paths(repo=repo):
         sys.exit(f"run-begin 拒绝：worktree {rel} 已存在；{hint}，不做隐式恢复")
     branch = f"{tid}_{task['slug']}"
-    if _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"]).returncode == 0:
+    if _git(
+        ["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], repo=repo
+    ).returncode == 0:
         sys.exit(f"run-begin 拒绝：分支 {branch!r} 已存在；{hint}，不做隐式恢复")
 
 
 @control_locked
 def cmd_run_begin(args):
+    repo = args.repo
     """start → reserve → claim 在同一控制面锁内完成；失败时现场原样保留给 recovery。"""
-    require_primary_worktree()
+    require_primary_worktree(repo=repo)
     tid, owner_id = args.tid, (args.owner_id or "").strip()
     if not ctx.TID_RE.fullmatch(tid):
         sys.exit(f"tid 非法：{tid!r}")
     if not owner_id:
         sys.exit("owner_id 必须是非空会话标识")
-    _require_fresh_run(tid)
+    _require_fresh_run(tid, repo=repo)
     step = "start"
     try:
         # start 的进度文本走 stderr，保持 stdout 仅输出 JSON identity
         with contextlib.redirect_stdout(sys.stderr):
-            cmd_start(argparse.Namespace(tid=tid, base=args.base))
+            cmd_start(argparse.Namespace(tid=tid, base=args.base, repo=repo))
         step = "reserve"
-        reserved = reserve_attempt(tid)
+        reserved = reserve_attempt(tid, repo=repo)
         step = "claim"
-        claim_execution(tid, reserved["attempt"], reserved["execution_id"], owner_id)
+        claim_execution(
+            tid, reserved["attempt"], reserved["execution_id"], owner_id, repo=repo
+        )
     except (SystemExit, ctx.TaskDataError, OSError) as error:
         detail = error.code if isinstance(error, SystemExit) else error
         sys.exit(
             f"run-begin 失败于步骤 {step}：{detail}\n"
             f"run-begin 不回滚已完成的步骤；{_recovery_hint(tid)}，勿重复 run-begin"
         )
+    if getattr(args, "session_id", None):
+        _bind_statusline(repo, owner_id, tid, reserved["attempt"], reserved["execution_id"], args.session_id)
     _print_json({
         "tid": tid,
         "attempt": reserved["attempt"],
         "execution_id": reserved["execution_id"],
-        "branch": f"{tid}_{discover_effective_tasks()[tid]['slug']}",
-        "worktree": str((ctx.REPO_ROOT / ctx.worktree_rel_path(tid)).resolve()),
+        "branch": f"{tid}_{discover_effective_tasks(repo=repo)[tid]['slug']}",
+        "worktree": str((repo.primary_root / repo.worktree_rel(tid)).resolve()),
         "owner_id": owner_id,
     })
 
@@ -265,15 +338,18 @@ _RUN_CLOSE_PLAN = {
 
 @control_locked
 def cmd_run_close(args):
+    repo = args.repo
     """按结果写 terminal + report（done 另 exact cleanup）；已写事件不重复写。"""
-    require_primary_worktree()
+    require_primary_worktree(repo=repo)
     tid, owner_id = args.tid, (args.owner_id or "").strip()
     if not ctx.TID_RE.fullmatch(tid):
         sys.exit(f"tid 非法：{tid!r}")
     terminal_status, report_status = _RUN_CLOSE_PLAN[args.result]
     try:
-        attempt, execution_id = resolve_identity(tid)
-        record = attempt_for_identity(tid, attempt, execution_id, ledger_read(tid=tid))
+        attempt, execution_id = resolve_identity(tid, repo=repo)
+        record = attempt_for_identity(
+            tid, attempt, execution_id, ledger_read(tid=tid, repo=repo)
+        )
     except ctx.TaskDataError as error:
         sys.exit(f"run-close 拒绝：{error}")
     if not owner_id or record["owner_id"] != owner_id:
@@ -304,15 +380,18 @@ def cmd_run_close(args):
     if args.result == "done":
         # 先验证再写：任何 ledger 写入前确认分支 tip 已是带 exact handoff 的实现 commit
         try:
-            _, sha = _resolve_integrate_branch(tid)
+            _, sha = _resolve_integrate_branch(tid, repo=repo)
         except ctx.TaskDataError as error:
             sys.exit(f"report=done 拒绝：{error}；先在 worktree 执行 finish")
-        require_report_done_ready(tid, attempt, execution_id)
+        require_report_done_ready(tid, attempt, execution_id, repo=repo)
+        # P1-3：run-close 边界统一校验 tip commit 隐私，泄漏提交不得闭环。
+        from .lifecycle import verify_tip_privacy
+        verify_tip_privacy(sha, repo=repo)
     written = []
     step = "terminal"
     try:
         if not terminal:
-            terminal_attempt(tid, attempt, execution_id, terminal_status)
+            terminal_attempt(tid, attempt, execution_id, terminal_status, repo=repo)
             written.append("terminal")
         step = "report"
         if not report:
@@ -321,12 +400,15 @@ def cmd_run_close(args):
                 sha=sha,
                 fail_class=args.fail_class if args.result == "failed" else None,
                 reason=args.reason,
+                repo=repo,
             )
             written.append("report")
         step = "cleanup"
         if args.result == "done":
-            print(_cleanup_worktree(tid, attempt, execution_id), file=sys.stderr)
+            print(_cleanup_worktree(tid, attempt, execution_id, repo=repo), file=sys.stderr)
             written.append("cleanup")
+        if getattr(args, "session_id", None):
+            _unbind_statusline(repo, owner_id, tid, args.session_id)
     except (SystemExit, ctx.TaskDataError, OSError) as error:
         detail = error.code if isinstance(error, SystemExit) else error
         sys.exit(
@@ -339,7 +421,8 @@ def cmd_run_close(args):
 
 
 def cmd_ledger_tail(args):
-    events = ledger_read()
+    repo = args.repo
+    events = ledger_read(repo=repo)
     if args.tid:
         events = [event for event in events if event.get("tid") == args.tid]
     if not events:
@@ -363,13 +446,14 @@ def cmd_ledger_tail(args):
 
 
 def cmd_ps(args):
-    require_primary_worktree()
-    events = ledger_read()
-    effective = discover_effective_tasks()
-    main_statuses = {task["tid"]: task["status"] for task in scan_tasks()}
-    rows = compute_ps_rows(events, effective, main_statuses)
+    repo = args.repo
+    require_primary_worktree(repo=repo)
+    events = ledger_read(repo=repo)
+    effective = discover_effective_tasks(allow_corrupt=True, repo=repo)
+    main_statuses = {task["tid"]: task["status"] for task in scan_tasks(repo=repo)}
+    rows = compute_ps_rows(events, effective, main_statuses, repo=repo)
     if not args.all:
-        rows = [row for row in rows if row["state"] not in ctx.ARCHIVED_STATUSES]
+        rows = [row for row in rows if row["state"] not in ctx.TERMINAL_STATUSES]
     if not rows:
         print("（无在飞 task；--all 显示已结束）")
         return

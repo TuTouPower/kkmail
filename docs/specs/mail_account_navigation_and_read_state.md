@@ -1,3 +1,8 @@
+---
+slug: mail_account_navigation_and_read_state
+status: active
+tasks: [t002, t005, t006, t022]
+---
 # 账号导航控制、读状态同步与地址交互技术规范 (Account Navigation & Read State Specification)
 
 本文档定义 kkmail 账号启闭控制、多目录已读状态同步、侧栏局部过滤及邮箱地址交互复制技术规范。

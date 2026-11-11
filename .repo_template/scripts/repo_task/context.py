@@ -1,26 +1,198 @@
-"""Repository paths, shared constants, and data errors."""
+"""Repository paths, shared constants, and data errors.
+
+仓库身份由不可变 ``RepoContext`` 表达：入口解析目标后构造，所有文件/Git 操作显式
+接收该上下文。``root`` 是主工作区（控制面身份），``worktree`` 是当前工作区
+（task 文档所在）；主工作区内两者相同。
+
+路径派生物（tasks 目录、ledger、audit、模板目录）全部由上下文计算，不再依赖
+模块级可变全局。
+"""
+
+from __future__ import annotations
 
 import os
 import re
+import subprocess
+from dataclasses import dataclass, field
 from datetime import timedelta, timezone
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent.parent
-TOOLKIT_ROOT = SCRIPT_DIR.parent
-REPO_ROOT = TOOLKIT_ROOT.parent
 
-ACTIVE_PATH = REPO_ROOT / "docs/tasks_index.json"
-ARCHIVE_PATH = REPO_ROOT / "docs/archive/tasks_index.json"
-AUDIT_PATH = REPO_ROOT / "docs/archive/tasks_audit.log"
-TASKS_DIR = REPO_ROOT / "docs" / "tasks"
-ARCHIVE_TASKS_DIR = REPO_ROOT / "docs" / "archive" / "tasks"
-TEMPLATE_DIR = TOOLKIT_ROOT / "docs" / "task_template"
-RUNTIME_DIR = REPO_ROOT / "docs" / "runtime"
-LEDGER_PATH = RUNTIME_DIR / "dispatch_ledger.jsonl"
+def git_common_dir(code_root: Path) -> Path:
+    """解析当前工作区的 Git common dir；非 Git 工作区退回 code_root。
+
+    主工作区返回 ``<repo>/.git``；linked worktree 也返回主仓的 common dir。
+    """
+    has_dot_git = (code_root / ".git").exists()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(code_root), "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise TaskDataError(
+            f"无法解析 {code_root} 的 git 公共目录（{error}）；"
+            "拒绝把工作区本地目录当作主工作区根"
+        ) from error
+    if result.returncode != 0:
+        if not has_dot_git:
+            return code_root
+        raise TaskDataError(
+            f"无法解析 {code_root} 的 git 公共目录："
+            f"git rev-parse --git-common-dir 退出码 {result.returncode}"
+            f"（{result.stderr.strip()}）；拒绝把工作区本地目录当作主工作区根"
+        )
+    if not result.stdout.strip():
+        raise TaskDataError(
+            f"无法解析 {code_root} 的 git 公共目录：git rev-parse --git-common-dir 输出为空；"
+            "拒绝把工作区本地目录当作主工作区根"
+        )
+    common = Path(result.stdout.strip())
+    if not common.is_absolute():
+        common = (code_root / common).resolve()
+    return common
+
+
+def _primary_root_from_common(common: Path) -> Path:
+    return common.parent if common.name == ".git" else common
+
+
+def common_state_dir(code_root: Path) -> Path:
+    """主仓与 worktree 共享的模板状态目录。"""
+    return git_common_dir(Path(code_root)) / "repo_template"
+
+
+def git_private_dir(code_root: Path) -> Path:
+    """当前工作区的私有 Git 目录；linked worktree 返回其独立 gitdir。"""
+    if not (code_root / ".git").exists():
+        return code_root
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(code_root), "rev-parse", "--absolute-git-dir"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise TaskDataError(f"无法解析 {code_root} 的 Git 私有目录（{error}）") from error
+    if result.returncode != 0 or not result.stdout.strip():
+        raise TaskDataError(f"无法解析 {code_root} 的 Git 私有目录")
+    return Path(result.stdout.strip())
+
+
+@dataclass(frozen=True)
+class RepoContext:
+    """不可变仓库身份。
+
+    root：当前工作区根（task 文档所在；主仓内等于 primary_root）。
+    primary_root：主工作区根（ledger、audit、worktree 登记与命名）。
+
+    _common_dir / _state_dir 是派生路径缓存（compare=False），不参与身份比较。
+    """
+
+    root: Path
+    primary_root: Path
+    _common_dir: Path | None = field(default=None, init=False, repr=False, compare=False)
+    _state_dir: Path | None = field(default=None, init=False, repr=False, compare=False)
+
+    @classmethod
+    def for_root(cls, root: Path, *, primary_root: Path | None = None) -> "RepoContext":
+        current = root.expanduser().resolve()
+        common: Path | None = None
+        if primary_root is None:
+            common = git_common_dir(current)
+            primary = _primary_root_from_common(common).expanduser().resolve()
+        else:
+            primary = primary_root.expanduser().resolve()
+        context = cls(root=current, primary_root=primary)
+        if common is not None:
+            object.__setattr__(context, "_common_dir", common)
+        return context
+
+    @classmethod
+    def from_code_location(cls, code_file: Path | str) -> "RepoContext":
+        """入口脚本/模块所在工作区：由 .repo_template 祖先定位；未命中即显式报错。"""
+        resolved = Path(code_file).resolve()
+        for parent in (resolved, *resolved.parents):
+            if parent.name == ".repo_template":
+                return cls.for_root(parent.parent)
+        raise TaskDataError(
+            f"无法从 {code_file} 定位 .repo_template 祖先；请显式指定仓库根（--root）"
+        )
+
+    @property
+    def name(self) -> str:
+        return self.primary_root.name
+
+    @property
+    def toolkit_root(self) -> Path:
+        return self.root / ".repo_template"
+
+    @property
+    def tasks_dir(self) -> Path:
+        return self.root / "docs" / "tasks"
+
+    @property
+    def template_dir(self) -> Path:
+        return self.toolkit_root / "docs" / "task_template"
+
+    @property
+    def common_dir(self) -> Path:
+        common = self._common_dir
+        if common is None:
+            common = git_common_dir(self.root)
+            object.__setattr__(self, "_common_dir", common)
+        return common
+
+    @property
+    def state_dir(self) -> Path:
+        state = self._state_dir
+        if state is None:
+            state = self.common_dir / "repo_template"
+            object.__setattr__(self, "_state_dir", state)
+        return state
+
+    @property
+    def ledger_path(self) -> Path:
+        return self.state_dir / "ledger.jsonl"
+
+    @property
+    def audit_path(self) -> Path:
+        return self.state_dir / "tasks_audit.log"
+
+    @property
+    def goal_path(self) -> Path:
+        return self.state_dir / "goal_queue.json"
+
+    @property
+    def statusline_path(self) -> Path:
+        return self.state_dir / "statusline_workdir.jsonl"
+
+    @property
+    def sync_state_path(self) -> Path:
+        return self.state_dir / "sync_state.json"
+
+    @property
+    def execution_context_path(self) -> Path:
+        return git_private_dir(self.root) / "repo-task-execution.json"
+
+    def rel(self, path: Path) -> str:
+        for base in (self.root, self.primary_root):
+            try:
+                return path.relative_to(base).as_posix()
+            except ValueError:
+                continue
+        return path.as_posix()
+
+    def worktree_rel(self, tid: str) -> str:
+        return f"../{self.name}_{tid}"
+
+    def effective_worktree(self, fm: dict) -> str:
+        """front matter 优先；主仓副本按命名约定推导。"""
+        return fm.get("worktree") or self.worktree_rel(fm["tid"])
+
 
 VALID_STATUSES = ("backlog", "active", "done", "dropped")
-ARCHIVED_STATUSES = ("done", "dropped")
-# 仅活跃目录内可 rewind 的状态及其顺序（防 forward）
+TERMINAL_STATUSES = ("done", "dropped")
+# 仅活跃状态可 rewind 及其顺序（防 forward）
 STATUS_ORDER = ("backlog", "active")
 DEFAULT_REWIND = {"active": "backlog"}  # 撤一步映射
 REVIEW_LEVELS = ("full", "single")
@@ -36,6 +208,37 @@ H3_RE = re.compile(r"^ {0,3}###[ \t]+(.+?)[ \t]*$")
 LIST_ITEM_RE = re.compile(r"^ {0,3}-[ \t]+(.+)$")
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
+
+
+class FenceState:
+    """Markdown fenced code 状态机：仓库内唯一的 fence 规则实现。
+
+    开栏用 ``FENCE_RE``（行首 0-3 空格 + 反引号/波浪号围栏），闭栏用
+    ``FENCE_CLOSE_RE``（裸围栏、同字符、宽度 >= 开栏）。围栏内带 info string
+    的围栏行是内容，不提前闭合代码块。``feed`` 返回该行是否属于 fenced code
+    （含开栏与闭栏行本身）；各消费方据此决定是否纳入结构解析或正文抽取。
+    """
+
+    __slots__ = ("marker",)
+
+    def __init__(self) -> None:
+        self.marker: tuple[str, int] | None = None
+
+    def feed(self, line: str) -> bool:
+        if self.marker is not None:
+            close = FENCE_CLOSE_RE.match(line)
+            if (
+                close
+                and close.group(1)[0] == self.marker[0]
+                and len(close.group(1)) >= self.marker[1]
+            ):
+                self.marker = None
+            return True
+        opening = FENCE_RE.match(line)
+        if opening:
+            self.marker = (opening.group(1)[0], len(opening.group(1)))
+            return True
+        return False
 UNVERIFIED_RE = re.compile(
     r"(?<![A-Z0-9_-])UNVERIFIED(?:-(BLOCKING|SPIKE))?(?![A-Z0-9_-])"
 )
@@ -76,7 +279,7 @@ TZ_CN = timezone(timedelta(hours=8))
 
 FRONT_MATTER_KEYS = (
     "tid", "slug", "title", "status", "branch", "worktree",
-    "review_level", "review_limit", "verify_limit", "diff_anchor", "depends_on", "conflicts_with",
+    "review_level", "review_limit", "verify_limit", "diff_anchor", "spec_source_sha", "depends_on", "conflicts_with",
     "note",
 )
 
@@ -85,18 +288,5 @@ class TaskDataError(Exception):
     """task 数据不一致。"""
 
 
-def _rel(path: Path) -> str:
-    try:
-        return path.relative_to(REPO_ROOT).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-
-def worktree_rel_path(tid: str) -> str:
-    return f"../{REPO_ROOT.name}_{tid}"
-
-def effective_worktree(fm: dict) -> str:
-    """worktree 相对路径：front matter 优先；主仓副本不含该字段（start 后不再回写主仓），
-    此时按命名约定推导。路径不存在或未登记时由 remove_worktree 安全放过。"""
-    return fm.get("worktree") or worktree_rel_path(fm["tid"])
+class TaskNotFoundError(TaskDataError):
+    """指定 ref 或目录中不存在目标 task。"""

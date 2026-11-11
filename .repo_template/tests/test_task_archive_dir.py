@@ -1,7 +1,8 @@
-"""task.py 目录扫描与归档一致性。
+"""task.py 目录扫描与原位状态一致性。
 
 通过 monkeypatch 把 task.py 全局路径指向 tmp_path 下临时目录，
-不依赖真实仓库结构、不触发 git。
+不依赖真实仓库结构、不触发 git。task 状态（backlog/active/done/dropped）
+原位表达在 docs/tasks/，不迁入 archive。
 """
 import json
 import sys
@@ -13,25 +14,22 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 import pytest
 from repo_task import context as ctx
-from repo_task import lifecycle, store, worktrees
+from repo_task.context import RepoContext
+from repo_task import lifecycle, worktrees
 from repo_task.context import TaskDataError
 from repo_task.documents import parse_front_matter, write_front_matter
-from repo_task.store import rebuild_index, scan_tasks
+from repo_task.store import scan_tasks
 from review_support import configure_project_verification
 
 pytestmark = pytest.mark.contract
 
 
 @pytest.fixture
-def fake_repo(tmp_path, monkeypatch):
+def fake_repo(tmp_path):
     """把 task.py 全局路径指向 tmp_path 下临时目录，并建空模板目录。"""
     tasks = tmp_path / "docs" / "tasks"
-    archive = tmp_path / "docs" / "archive" / "tasks"
     template = tasks / "task_template"
-    active_json = tmp_path / "docs" / "tasks_index.json"
-    archive_json = tmp_path / "docs" / "archive" / "tasks_index.json"
     tasks.mkdir(parents=True)
-    archive.mkdir(parents=True)
     template.mkdir()
     configure_project_verification(tmp_path)
     # 模板目录必须含 progress.md，scan_tasks 跳过 task_template/
@@ -40,13 +38,20 @@ def fake_repo(tmp_path, monkeypatch):
         {"tid": "t000", "slug": "example", "status": "backlog"},
         "模板正文\n",
     )
-    monkeypatch.setattr(ctx, "TASKS_DIR", tasks)
-    monkeypatch.setattr(ctx, "ARCHIVE_TASKS_DIR", archive)
-    monkeypatch.setattr(ctx, "TEMPLATE_DIR", template)
-    monkeypatch.setattr(ctx, "ACTIVE_PATH", active_json)
-    monkeypatch.setattr(ctx, "ARCHIVE_PATH", archive_json)
-    monkeypatch.setattr(ctx, "REPO_ROOT", tmp_path)
     return tmp_path
+
+
+@pytest.fixture
+def repo_ctx(fake_repo):
+    return RepoContext.for_root(fake_repo)
+
+
+def _docs_snapshot(root: Path) -> set[str]:
+    """docs/ 全树文件集合快照（含目录），用于验证只读命令零派生写入。"""
+    docs = root / "docs"
+    if not docs.is_dir():
+        return set()
+    return {p.relative_to(root).as_posix() for p in docs.rglob("*")}
 
 
 def _make_task(tasks_dir, tid, slug, status):
@@ -61,34 +66,34 @@ def _make_task(tasks_dir, tid, slug, status):
     return d
 
 
-def test_scan_empty(fake_repo):
-    assert scan_tasks() == []
+def test_scan_empty(fake_repo, repo_ctx):
+    assert scan_tasks(repo=repo_ctx) == []
 
 
-def test_scan_finds_active_task(fake_repo):
-    _make_task(ctx.TASKS_DIR, "t001", "alpha", "active")
-    rows = scan_tasks()
+def test_scan_finds_active_task(fake_repo, repo_ctx):
+    _make_task(repo_ctx.tasks_dir, "t001", "alpha", "active")
+    rows = scan_tasks(repo=repo_ctx)
     assert len(rows) == 1
     assert rows[0]["tid"] == "t001"
     assert rows[0]["status"] == "active"
 
 
-def test_scan_finds_archived_task(fake_repo):
-    _make_task(ctx.ARCHIVE_TASKS_DIR, "t002", "beta", "done")
-    rows = scan_tasks()
-    assert len(rows) == 1
-    assert rows[0]["tid"] == "t002"
-    assert rows[0]["status"] == "done"
+def test_scan_finds_done_and_dropped_tasks(fake_repo, repo_ctx):
+    _make_task(repo_ctx.tasks_dir, "t002", "beta", "done")
+    _make_task(repo_ctx.tasks_dir, "t003", "gamma", "dropped")
+    rows = scan_tasks(repo=repo_ctx)
+    assert len(rows) == 2
+    assert [(r["tid"], r["status"]) for r in rows] == [("t002", "done"), ("t003", "dropped")]
 
 
-def test_scan_rejects_invalid_tid(fake_repo):
-    _make_task(ctx.TASKS_DIR, "x99", "bad", "backlog")
+def test_scan_rejects_invalid_tid(fake_repo, repo_ctx):
+    _make_task(repo_ctx.tasks_dir, "x99", "bad", "backlog")
     with pytest.raises(TaskDataError, match="tid 非法"):
-        scan_tasks()
+        scan_tasks(repo=repo_ctx)
 
 
-def test_scan_rejects_dirname_mismatch(fake_repo):
-    d = ctx.TASKS_DIR / "t003_wrong"
+def test_scan_rejects_dirname_mismatch(fake_repo, repo_ctx):
+    d = repo_ctx.tasks_dir / "t003_wrong"
     d.mkdir()
     write_front_matter(
         d / "progress.md",
@@ -96,104 +101,73 @@ def test_scan_rejects_dirname_mismatch(fake_repo):
         "x\n",
     )
     with pytest.raises(TaskDataError, match="目录名与 front matter 不符"):
-        scan_tasks()
+        scan_tasks(repo=repo_ctx)
 
 
-def test_scan_rejects_invalid_status(fake_repo):
-    _make_task(ctx.TASKS_DIR, "t004", "gamma", "weird")
+def test_scan_rejects_invalid_status(fake_repo, repo_ctx):
+    _make_task(repo_ctx.tasks_dir, "t004", "gamma", "weird")
     with pytest.raises(TaskDataError, match="status 非法"):
-        scan_tasks()
+        scan_tasks(repo=repo_ctx)
 
 
-def test_scan_rejects_status_location_mismatch(fake_repo):
-    # active 状态出现在归档目录
-    _make_task(ctx.ARCHIVE_TASKS_DIR, "t005", "delta", "active")
-    with pytest.raises(TaskDataError, match="与所在目录不符"):
-        scan_tasks()
+def test_scan_all_valid_statuses_in_tasks_dir(fake_repo, repo_ctx):
+    _make_task(repo_ctx.tasks_dir, "t001", "a", "backlog")
+    _make_task(repo_ctx.tasks_dir, "t002", "b", "active")
+    _make_task(repo_ctx.tasks_dir, "t003", "c", "done")
+    _make_task(repo_ctx.tasks_dir, "t004", "d", "dropped")
+    rows = scan_tasks(repo=repo_ctx)
+    assert [(r["tid"], r["status"]) for r in rows] == [
+        ("t001", "backlog"), ("t002", "active"), ("t003", "done"), ("t004", "dropped")
+    ]
 
 
-def test_scan_accepts_done_in_active_dir(fake_repo):
-    # D1：finish 后 done 停在活跃目录，归档由 integrate 的 merge commit 完成
-    _make_task(ctx.TASKS_DIR, "t007", "zeta", "done")
-    rows = scan_tasks()
+def test_scan_accepts_done_in_tasks_dir(fake_repo, repo_ctx):
+    _make_task(repo_ctx.tasks_dir, "t007", "zeta", "done")
+    rows = scan_tasks(repo=repo_ctx)
     assert [(row["tid"], row["status"], row["dir"]) for row in rows] == [
         ("t007", "done", "docs/tasks/t007_zeta")
     ]
 
 
-def test_scan_rejects_dropped_in_active_dir(fake_repo):
-    # dropped 恒由脚本移入归档目录，活跃目录中的 dropped 是数据损坏
-    _make_task(ctx.TASKS_DIR, "t008", "eta", "dropped")
-    with pytest.raises(TaskDataError, match="与所在目录不符"):
-        scan_tasks()
+def test_scan_accepts_dropped_in_tasks_dir(fake_repo, repo_ctx):
+    _make_task(repo_ctx.tasks_dir, "t008", "eta", "dropped")
+    rows = scan_tasks(repo=repo_ctx)
+    assert [(row["tid"], row["status"], row["dir"]) for row in rows] == [
+        ("t008", "dropped", "docs/tasks/t008_eta")
+    ]
 
 
-def test_scan_rejects_backlog_in_archive_dir(fake_repo):
-    _make_task(ctx.ARCHIVE_TASKS_DIR, "t009", "theta", "backlog")
-    with pytest.raises(TaskDataError, match="与所在目录不符"):
-        scan_tasks()
-
-
-def test_rebuild_index_groups_by_directory_not_status(fake_repo):
-    _make_task(ctx.TASKS_DIR, "t001", "alpha", "done")
-    _make_task(ctx.ARCHIVE_TASKS_DIR, "t002", "beta", "done")
-    rebuild_index()
-    active = json.loads(ctx.ACTIVE_PATH.read_text(encoding="utf-8"))
-    archive = json.loads(ctx.ARCHIVE_PATH.read_text(encoding="utf-8"))
-    assert [t["tid"] for t in active["tasks"]] == ["t001"]
-    assert [t["tid"] for t in archive["tasks"]] == ["t002"]
-
-
-def test_scan_detects_dup_tid(fake_repo):
-    _make_task(ctx.TASKS_DIR, "t006", "eps", "backlog")
-    _make_task(ctx.ARCHIVE_TASKS_DIR, "t006", "eps", "done")
+def test_scan_detects_dup_tid(fake_repo, repo_ctx):
+    _make_task(repo_ctx.tasks_dir, "t006", "eps", "backlog")
+    d = repo_ctx.tasks_dir / "t006_dup"
+    d.mkdir()
+    write_front_matter(
+        d / "progress.md",
+        {"tid": "t006", "slug": "dup", "status": "done"},
+        "x\n",
+    )
     with pytest.raises(TaskDataError, match="重复 tid"):
-        scan_tasks()
+        scan_tasks(repo=repo_ctx)
 
 
-def test_scan_orders_by_tid_numerically(fake_repo):
-    _make_task(ctx.TASKS_DIR, "t010", "ten", "backlog")
-    _make_task(ctx.TASKS_DIR, "t002", "two", "backlog")
-    _make_task(ctx.TASKS_DIR, "t100", "hundred", "backlog")
-    rows = scan_tasks()
+def test_scan_orders_by_tid_numerically(fake_repo, repo_ctx):
+    _make_task(repo_ctx.tasks_dir, "t010", "ten", "backlog")
+    _make_task(repo_ctx.tasks_dir, "t002", "two", "backlog")
+    _make_task(repo_ctx.tasks_dir, "t100", "hundred", "backlog")
+    rows = scan_tasks(repo=repo_ctx)
     tids = [r["tid"] for r in rows]
     assert tids == ["t002", "t010", "t100"]
 
 
-def test_rebuild_index_splits_active_archive(fake_repo):
-    _make_task(ctx.TASKS_DIR, "t001", "alpha", "backlog")
-    _make_task(ctx.TASKS_DIR, "t002", "beta", "active")
-    _make_task(ctx.ARCHIVE_TASKS_DIR, "t003", "gamma", "done")
-    rebuild_index()
-    active = json.loads(ctx.ACTIVE_PATH.read_text(encoding="utf-8"))
-    archive = json.loads(ctx.ARCHIVE_PATH.read_text(encoding="utf-8"))
-    assert [t["tid"] for t in active["tasks"]] == ["t001", "t002"]
-    assert [t["tid"] for t in archive["tasks"]] == ["t003"]
-    assert active["authority"] == "docs/tasks/{tid}_{slug}/progress.md front matter"
-    assert archive["authority"] == (
-        "docs/archive/tasks/{tid}_{slug}/progress.md front matter"
-    )
-
-
-def test_rebuild_index_uses_utf8_and_lf(fake_repo):
-    _make_task(ctx.TASKS_DIR, "t001", "alpha", "backlog")
-    rebuild_index()
-    raw = ctx.ACTIVE_PATH.read_bytes()
-    assert b"\r\n" not in raw
-    # ensure_ascii=False：中文不转义
-    text = raw.decode("utf-8")
-    assert '"tasks"' in text
-
-
-def test_unlink_managed_links_only_removes_script_links(fake_repo):
+def test_unlink_managed_links_only_removes_script_links(fake_repo, repo_ctx):
     source = fake_repo / ".env"
     source.write_text("secret", encoding="utf-8")
     worktree = fake_repo / "worktree"
     worktree.mkdir()
 
-    assert worktrees.link_local_files(worktree) == [".env"]
+    assert worktrees.link_local_files(worktree, repo=repo_ctx) == [".env"]
     managed = worktree / ".env"
-    assert worktrees.is_managed_link(worktree, managed)
+    assert worktrees.is_managed_link(worktree, managed, repo=repo_ctx)
 
     nested = worktree / "config"
     nested.mkdir()
@@ -201,28 +175,28 @@ def test_unlink_managed_links_only_removes_script_links(fake_repo):
     other.write_text("other", encoding="utf-8")
     unmanaged = nested / ".env"
     unmanaged.symlink_to(other)
-    assert not worktrees.is_managed_link(worktree, unmanaged)
+    assert not worktrees.is_managed_link(worktree, unmanaged, repo=repo_ctx)
 
-    worktrees.unlink_managed_links(worktree)
+    worktrees.unlink_managed_links(worktree, repo=repo_ctx)
     assert not managed.is_symlink()
     assert unmanaged.is_symlink()
 
 
-def test_managed_env_link_stays_identifiable_after_source_removed(fake_repo):
+def test_managed_env_link_stays_identifiable_after_source_removed(fake_repo, repo_ctx):
     source = fake_repo / ".env"
     source.write_text("secret", encoding="utf-8")
     worktree = fake_repo / "worktree"
     worktree.mkdir()
-    worktrees.link_local_files(worktree)
+    worktrees.link_local_files(worktree, repo=repo_ctx)
     source.unlink()
 
     link = worktree / ".env"
-    assert worktrees.is_managed_link(worktree, link)
-    worktrees.unlink_managed_links(worktree)
+    assert worktrees.is_managed_link(worktree, link, repo=repo_ctx)
+    worktrees.unlink_managed_links(worktree, repo=repo_ctx)
     assert not link.is_symlink()
 
 
-def test_link_local_files_does_not_query_git_worktrees(fake_repo, monkeypatch):
+def test_link_local_files_does_not_query_git_worktrees(fake_repo, repo_ctx, monkeypatch):
     """链接本地配置不依赖 git worktree 发现：临时目录落在 git 仓库内也必须判绿。"""
     def forbidden():
         raise AssertionError("link_local_files 不应查询 git worktree 登记表")
@@ -232,10 +206,10 @@ def test_link_local_files_does_not_query_git_worktrees(fake_repo, monkeypatch):
     source.write_text("secret", encoding="utf-8")
     worktree = fake_repo / "worktree"
     worktree.mkdir()
-    assert worktrees.link_local_files(worktree) == [".env"]
+    assert worktrees.link_local_files(worktree, repo=repo_ctx) == [".env"]
 
 
-def test_link_local_files_skips_sources_inside_target_worktree(fake_repo):
+def test_link_local_files_skips_sources_inside_target_worktree(fake_repo, repo_ctx):
     """目标 worktree 落在主仓内时，其内部的 .env 不得被当成主仓源链入。"""
     source = fake_repo / ".env"
     source.write_text("secret", encoding="utf-8")
@@ -245,15 +219,15 @@ def test_link_local_files_skips_sources_inside_target_worktree(fake_repo):
     nested.mkdir()
     (nested / ".env").write_text("nested", encoding="utf-8")
 
-    assert worktrees.link_local_files(worktree) == [".env"]
+    assert worktrees.link_local_files(worktree, repo=repo_ctx) == [".env"]
     assert not (worktree / "nested" / ".env").is_symlink()
 
 
-def test_close_task_rolls_back_when_move_fails(fake_repo, monkeypatch):
-    """归档 move 失败时完整回滚 front matter（含 status/worktree/note），避免中间态（Issue #51）。"""
+def test_close_task_in_place_drop(fake_repo, repo_ctx, monkeypatch):
+    """drop 原位写 status: dropped，目录保留在 docs/tasks/{tid}_{slug}。"""
     import argparse
 
-    d = _make_task(ctx.TASKS_DIR, "t001", "alpha", "active")
+    d = _make_task(repo_ctx.tasks_dir, "t001", "alpha", "active")
     write_front_matter(
         d / "progress.md",
         {
@@ -262,47 +236,49 @@ def test_close_task_rolls_back_when_move_fails(fake_repo, monkeypatch):
         },
         "body\n",
     )
-
-    def boom(src, dst):
-        raise OSError("模拟移动失败")
-
-    monkeypatch.setattr(lifecycle, "shutil", SimpleNamespace(**{**vars(lifecycle.shutil), "move": boom}))
-    monkeypatch.setattr(lifecycle, "require_own_task_worktree", lambda fm: None)
-    monkeypatch.setattr(lifecycle, "in_own_task_worktree", lambda fm: False)
+    monkeypatch.setattr(lifecycle, "require_own_task_worktree", lambda fm, **kwargs: None)
+    monkeypatch.setattr(lifecycle, "in_own_task_worktree", lambda fm, **kwargs: False)
     monkeypatch.setattr(lifecycle, "remove_worktree", lambda wt, **kw: (True, ""))
-    with pytest.raises(SystemExit, match="归档移动失败"):
-        lifecycle._close_task(argparse.Namespace(tid="t001"), "dropped", "dropped: reason")
-    fm, _ = parse_front_matter(d / "progress.md")
-    # 全部字段完整回滚原状
-    assert fm["status"] == "active"
-    assert fm["worktree"] == "worktrees/t001_wt"
-    assert fm["note"] == "original note"
-    assert d.is_dir()  # 目录仍在活跃区
+
+    lifecycle._close_task(argparse.Namespace(tid="t001"), "dropped", "dropped: reason", repo=repo_ctx)
+    fm, _ = parse_front_matter(d / "progress.md", repo=repo_ctx)
+    assert fm["status"] == "dropped"
+    assert "dropped: reason" in fm["note"]
+    assert d.is_dir()
+    rows = scan_tasks(repo=repo_ctx)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "dropped"
+    assert rows[0]["dir"] == "docs/tasks/t001_alpha"
 
 
-def test_list_is_readonly_by_default(fake_repo, capsys):
-    """list 只罗列，不写派生 index。"""
+def test_list_is_readonly_and_never_writes_index(fake_repo, repo_ctx, capsys):
+    """A14：task 文件是唯一权威；list 只读，不生成任何派生索引文件（DS L294）。"""
     import argparse
 
-    _make_task(ctx.TASKS_DIR, "t001", "alpha", "backlog")
-    assert not ctx.ACTIVE_PATH.exists()
-    lifecycle.cmd_list(argparse.Namespace(status=None, rebuild=False, ref=None))
+    _make_task(repo_ctx.tasks_dir, "t001", "alpha", "backlog")
+    before = _docs_snapshot(fake_repo)
+    lifecycle.cmd_list(argparse.Namespace(status=None, ref=None, json=False, repo=repo_ctx))
     capsys.readouterr()
-    assert not ctx.ACTIVE_PATH.exists()
+    assert _docs_snapshot(fake_repo) == before
+    assert not (fake_repo / "docs" / "tasks_index.json").exists()
+    assert not (fake_repo / "docs/archive/tasks_index.json").exists()
 
 
-def test_list_rebuild_writes_index(fake_repo, capsys, monkeypatch):
+def test_list_json_exports_to_stdout_without_writing(fake_repo, repo_ctx, capsys):
+    """A14：机器可读导出只到 stdout，不落盘（DS L294）。"""
     import argparse
 
-    _make_task(ctx.TASKS_DIR, "t001", "alpha", "backlog")
-    monkeypatch.setattr(lifecycle, "require_primary_worktree", lambda: None)
-    lifecycle.cmd_list(argparse.Namespace(status=None, rebuild=True, ref=None))
-    out = capsys.readouterr().out
-    assert ctx.ACTIVE_PATH.exists()
-    assert "index rebuilt" in out
+    _make_task(repo_ctx.tasks_dir, "t001", "alpha", "backlog")
+    before = _docs_snapshot(fake_repo)
+    lifecycle.cmd_list(argparse.Namespace(status=None, ref=None, json=True, repo=repo_ctx))
+    payload = json.loads(capsys.readouterr().out)
+    assert [task["tid"] for task in payload["tasks"]] == ["t001"]
+    assert _docs_snapshot(fake_repo) == before
+    assert not (fake_repo / "docs" / "tasks_index.json").exists()
+    assert not (fake_repo / "docs/archive/tasks_index.json").exists()
 
 
-def test_purge_tombstone_cleanup_failure_warns_and_completes_purge(fake_repo, capsys, monkeypatch):
+def test_purge_tombstone_cleanup_failure_warns_and_completes_purge(fake_repo, repo_ctx, capsys, monkeypatch):
     """验证 purge 最终临时文件清理失败时区分逻辑完成与物理清理，并告警残留位置（Issue #65）。"""
     import argparse
     from contextlib import contextmanager
@@ -313,14 +289,13 @@ def test_purge_tombstone_cleanup_failure_warns_and_completes_purge(fake_repo, ca
 
     monkeypatch.setattr("repo_task.locks.git_common_lock", noop_lock)
 
-    d = _make_task(ctx.TASKS_DIR, "t001", "alpha", "backlog")
-    monkeypatch.setattr(lifecycle, "require_primary_worktree", lambda: None)
-    monkeypatch.setattr(lifecycle, "task_schedule_references", lambda tid: [])
-    monkeypatch.setattr(lifecycle, "tracked_anywhere", lambda p: False)
-    monkeypatch.setattr(lifecycle, "has_unmerged_commits", lambda b: False)
+    d = _make_task(repo_ctx.tasks_dir, "t001", "alpha", "backlog")
+    monkeypatch.setattr(lifecycle, "require_primary_worktree", lambda **kwargs: None)
+    monkeypatch.setattr(lifecycle, "task_schedule_references", lambda tid, **kwargs: [])
+    monkeypatch.setattr(lifecycle, "tracked_anywhere", lambda p, **kwargs: False)
+    monkeypatch.setattr(lifecycle, "has_unmerged_commits", lambda b, **kwargs: False)
     monkeypatch.setattr(lifecycle, "remove_worktree", lambda wt, **kw: (True, ""))
-    audit_file = fake_repo / "docs/archive/tasks_audit.log"
-    monkeypatch.setattr(ctx, "AUDIT_PATH", audit_file)
+    audit_file = repo_ctx.audit_path
 
     def boom_rmtree(path):
         raise OSError("locked tombstone")
@@ -328,7 +303,7 @@ def test_purge_tombstone_cleanup_failure_warns_and_completes_purge(fake_repo, ca
     monkeypatch.setattr(lifecycle, "shutil", SimpleNamespace(**{**vars(lifecycle.shutil), "rmtree": boom_rmtree}))
 
     # 运行 purge，不应抛出未捕获异常退出
-    lifecycle.cmd_purge(argparse.Namespace(tid="t001", reason="miscreated"))
+    lifecycle.cmd_purge(argparse.Namespace(tid="t001", reason="miscreated", repo=repo_ctx))
     out = capsys.readouterr().out
 
     # 逻辑完成：tid 已释放，审计日志已记录
@@ -340,8 +315,8 @@ def test_purge_tombstone_cleanup_failure_warns_and_completes_purge(fake_repo, ca
     assert "miscreated" in audit_file.read_text(encoding="utf-8")
 
 
-def test_purge_audit_failure_restores_directory_and_derived_index(fake_repo, monkeypatch):
-    """验证 purge 在审计阶段失败回滚后重新构建派生索引，保持索引与目录严格一致（Issue #35）。"""
+def test_purge_audit_failure_restores_directory(fake_repo, repo_ctx, monkeypatch):
+    """验证 purge 在审计阶段失败时恢复目录，不留已删但无审计的现场。"""
     import argparse
     from contextlib import contextmanager
 
@@ -351,14 +326,12 @@ def test_purge_audit_failure_restores_directory_and_derived_index(fake_repo, mon
 
     monkeypatch.setattr("repo_task.locks.git_common_lock", noop_lock)
 
-    d = _make_task(ctx.TASKS_DIR, "t001", "alpha", "backlog")
-    store.rebuild_index()
-    assert any(t["tid"] == "t001" for t in json.loads(ctx.ACTIVE_PATH.read_text())["tasks"])
+    d = _make_task(repo_ctx.tasks_dir, "t001", "alpha", "backlog")
 
-    monkeypatch.setattr(lifecycle, "require_primary_worktree", lambda: None)
-    monkeypatch.setattr(lifecycle, "task_schedule_references", lambda tid: [])
-    monkeypatch.setattr(lifecycle, "tracked_anywhere", lambda p: False)
-    monkeypatch.setattr(lifecycle, "has_unmerged_commits", lambda b: False)
+    monkeypatch.setattr(lifecycle, "require_primary_worktree", lambda **kwargs: None)
+    monkeypatch.setattr(lifecycle, "task_schedule_references", lambda tid, **kwargs: [])
+    monkeypatch.setattr(lifecycle, "tracked_anywhere", lambda p, **kwargs: False)
+    monkeypatch.setattr(lifecycle, "has_unmerged_commits", lambda b, **kwargs: False)
     monkeypatch.setattr(lifecycle, "remove_worktree", lambda wt, **kw: (True, ""))
 
     def boom_audit(*args, **kwargs):
@@ -367,56 +340,35 @@ def test_purge_audit_failure_restores_directory_and_derived_index(fake_repo, mon
     monkeypatch.setattr(lifecycle, "append_audit", boom_audit)
 
     with pytest.raises(SystemExit, match="purge 收尾失败.*已完整恢复"):
-        lifecycle.cmd_purge(argparse.Namespace(tid="t001", reason="miscreated"))
+        lifecycle.cmd_purge(argparse.Namespace(tid="t001", reason="miscreated", repo=repo_ctx))
 
-    # 目录恢复
+    # 目录恢复，权威数据仍在 task 文件
     assert d.exists()
-    # 派生索引也完整恢复包含 t001
-    active_data = json.loads(ctx.ACTIVE_PATH.read_text(encoding="utf-8"))
-    assert any(t["tid"] == "t001" for t in active_data["tasks"])
+    assert [row["tid"] for row in scan_tasks(repo=repo_ctx)] == ["t001"]
 
 
-def test_drop_move_failure_retry_leaves_no_duplicate_note(fake_repo, monkeypatch):
-    """验证 drop 移动失败后 note 不被污染，重试不会产生重复 dropped note（Issue #34）。"""
+def test_close_task_in_place_done(fake_repo, repo_ctx, monkeypatch):
+    """done 原位写 status: done，目录保留在 docs/tasks/{tid}_{slug}。"""
     import argparse
 
-    d = _make_task(ctx.TASKS_DIR, "t001", "alpha", "active")
+    d = _make_task(repo_ctx.tasks_dir, "t001", "alpha", "active")
     write_front_matter(
         d / "progress.md",
         {"tid": "t001", "slug": "alpha", "status": "active", "worktree": "worktrees/t001_wt", "note": "base note"},
         "body\n",
     )
+    monkeypatch.setattr(lifecycle, "require_own_task_worktree", lambda fm, **kwargs: None)
+    monkeypatch.setattr(lifecycle, "in_own_task_worktree", lambda fm, **kwargs: True)
+    monkeypatch.setattr(lifecycle, "_check_done_ready", lambda tid, d, repo=None: None)
 
-    should_fail = [True]
-    real_move = lifecycle.shutil.move
+    lifecycle._close_task(argparse.Namespace(tid="t001"), "done", None, repo=repo_ctx)
 
-    def flaky_move(src, dst):
-        if should_fail[0]:
-            raise OSError("flaky disk error")
-        return real_move(src, dst)
-
-    monkeypatch.setattr(lifecycle, "shutil", SimpleNamespace(**{**vars(lifecycle.shutil), "move": flaky_move}))
-    monkeypatch.setattr(lifecycle, "require_own_task_worktree", lambda fm: None)
-    monkeypatch.setattr(lifecycle, "in_own_task_worktree", lambda fm: False)
-    monkeypatch.setattr(lifecycle, "remove_worktree", lambda wt, **kw: (True, ""))
-
-    # 1. 首次 drop 失败
-    with pytest.raises(SystemExit, match="归档移动失败"):
-        lifecycle._close_task(argparse.Namespace(tid="t001"), "dropped", "dropped: drop reason")
-
-    fm1, _ = parse_front_matter(d / "progress.md")
-    # 失败后 note 保持原样
-    assert fm1["note"] == "base note"
-    assert "dropped:" not in fm1["note"]
-
-    # 2. 第二次重试成功
-    should_fail[0] = False
-    lifecycle._close_task(argparse.Namespace(tid="t001"), "dropped", "dropped: drop reason")
-
-    archived_note = ctx.ARCHIVE_TASKS_DIR / "t001_alpha" / "progress.md"
-    assert archived_note.is_file()
-    fm2, _ = parse_front_matter(archived_note)
-    # 重试成功后，note 仅追加了一次
-    assert fm2["note"].count("dropped: drop reason") == 1
+    fm, _ = parse_front_matter(d / "progress.md", repo=repo_ctx)
+    assert fm["status"] == "done"
+    assert d.is_dir()
+    rows = scan_tasks(repo=repo_ctx)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "done"
+    assert rows[0]["dir"] == "docs/tasks/t001_alpha"
 
 

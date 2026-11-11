@@ -1,3 +1,8 @@
+---
+slug: auth_and_session
+status: active
+tasks: [baseline]
+---
 # 用户认证与会话生命周期技术规范 (Auth and Session Specification)
 
 本文档定义 kkmail 的密码鉴权、持久化存储、签名会话机制、CSRF 防护与防爆破限流技术规范。

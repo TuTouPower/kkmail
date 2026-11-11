@@ -1,3 +1,8 @@
+---
+slug: mail_sync_and_storage
+status: active
+tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075]
+---
 # 邮件增量同步、MIME解析与分块加密存储技术规范 (Mail Sync, Parsing & Storage Specification)
 
 本文档定义 kkmail 多协议邮件同步引擎、Worker 任务调度、MIME 归档解析、安全删除阻断与分块内容寻址加密存储技术规范。

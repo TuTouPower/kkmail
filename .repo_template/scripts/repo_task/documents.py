@@ -69,7 +69,7 @@ def parse_front_matter_text(text: str, *, source: str) -> tuple[dict, str]:
     lines = text.split("\n")
     if not lines or _clean_line(lines[0]) != "---":
         raise ctx.TaskDataError(
-            f"{source}:1: {ctx.PROGRESS_FILE} 必须以独占一行的 YAML front matter (---) 开头"
+            f"{source}:1: 必须以独占一行的 YAML front matter (---) 开头"
         )
     end = None
     for index in range(1, len(lines)):
@@ -114,16 +114,16 @@ def parse_front_matter_text(text: str, *, source: str) -> tuple[dict, str]:
     body = "\n".join(lines[end + 1:]).lstrip("\n")
     return fm, body
 
-def parse_front_matter(path: Path) -> tuple[dict, str]:
+def parse_front_matter(
+    path: Path, *, repo: "ctx.RepoContext | None" = None,
+) -> tuple[dict, str]:
     """返回 (front matter dict, 正文)。缺失或不合法抛 ctx.TaskDataError。
 
-    本模块是唯一真相源；render_review_prompts.py / check_review_status.py 直接
+    本模块是唯一真相源；render_review_prompts.py / repo_task.review_status 直接
     委托本实现，各自只在 CLI 边界转换错误语义。
     """
-    return parse_front_matter_text(
-        path.read_text(encoding="utf-8"),
-        source=ctx._rel(path),
-    )
+    source = repo.rel(path) if repo is not None else path.as_posix()
+    return parse_front_matter_text(path.read_text(encoding="utf-8"), source=source)
 
 def dump_front_matter(fm: dict) -> str:
     """所有值一律双引号包裹并转义，避免特殊字符破坏 YAML。"""
@@ -343,24 +343,12 @@ def unverified_contract_gate(
     return problems, warnings
 
 def _visible_markdown_numbered_lines(text: str) -> list[tuple[int, str]]:
-    """返回 (行号, 行) 序列，剔除 fenced code 内的行。"""
+    """返回 (行号, 行) 序列，剔除 fenced code 内的行（规则委托 ctx.FenceState）。"""
     lines = []
-    fence_marker = None
+    fence = ctx.FenceState()
     for number, line in enumerate(text.splitlines(), 1):
-        if fence_marker is not None:
-            fence = ctx.FENCE_CLOSE_RE.match(line)
-            if (
-                fence
-                and fence.group(1)[0] == fence_marker[0]
-                and len(fence.group(1)) >= fence_marker[1]
-            ):
-                fence_marker = None
-            continue
-        fence = ctx.FENCE_RE.match(line)
-        if fence:
-            fence_marker = (fence.group(1)[0], len(fence.group(1)))
-            continue
-        lines.append((number, line))
+        if not fence.feed(line):
+            lines.append((number, line))
     return lines
 
 
@@ -400,23 +388,12 @@ def _missing_heading_sequence(
     return missing
 
 def _extract_markdown_section(text: str, level: int, title: str) -> str | None:
-    """提取指定标题到下一个同级或更高层级标题之间的正文。"""
+    """提取指定标题到下一个同级或更高层级标题之间的正文（fence 规则委托 ctx.FenceState）。"""
     lines = text.splitlines()
     start = None
-    fence_marker = None
+    fence = ctx.FenceState()
     for index, line in enumerate(lines):
-        if fence_marker is not None:
-            fence = ctx.FENCE_CLOSE_RE.match(line)
-            if (
-                fence
-                and fence.group(1)[0] == fence_marker[0]
-                and len(fence.group(1)) >= fence_marker[1]
-            ):
-                fence_marker = None
-            continue
-        fence = ctx.FENCE_RE.match(line)
-        if fence:
-            fence_marker = (fence.group(1)[0], len(fence.group(1)))
+        if fence.feed(line):
             continue
         heading = ctx.HEADING_RE.fullmatch(line)
         if not heading:
@@ -435,24 +412,27 @@ def _extract_markdown_section(text: str, level: int, title: str) -> str | None:
 AC_ID_RE = re.compile(r"AC-\d{3}")
 
 
-def _strip_fenced_code(text: str) -> str:
-    """去除 Markdown 中围栏代码块（``` 或 ~~~），避免代码块内的示例内容被误解析。"""
+# 缩进代码块：行首 4 空格或制表符（CommonMark 规则）。fence 统一后只识别 0-3
+# 空格围栏，缩进代码块内的 AC/示例不得采信：跳过缩进 ≥4 的区域。
+_INDENTED_CODE_RE = re.compile(r"^(?: {4}|\t)")
+
+
+def _strip_code_blocks(text: str) -> str:
+    """去除围栏代码块（规则委托 ctx.FenceState，闭栏须为裸围栏）与缩进代码块，
+    用于 AC/验收标准提取。
+
+    fenced 示例早有跳过先例（Issue #31）；缩进代码块同理：示例里的
+    `- [x] AC-001` 不得被算作真实勾选。段落续行误伤属保守取舍：
+    真实 AC 条目一律顶格（0 缩进），模板从不缩进 AC 行。
+    """
     lines = []
-    in_fence = False
-    fence_char = ""
-    fence_len = 0
+    fence = ctx.FenceState()
     for line in text.splitlines():
-        stripped = line.strip()
-        if not in_fence:
-            if stripped.startswith("```") or stripped.startswith("~~~"):
-                in_fence = True
-                fence_char = stripped[0]
-                fence_len = len(stripped) - len(stripped.lstrip(fence_char))
-                continue
-            lines.append(line)
-        else:
-            if stripped.startswith(fence_char * fence_len):
-                in_fence = False
+        if fence.feed(line):
+            continue
+        if _INDENTED_CODE_RE.match(line):
+            continue
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -461,7 +441,7 @@ def extract_ac_ids(spec_text: str) -> list[str]:
     acceptance = _extract_markdown_section(spec_text, 3, "验收标准")
     if not acceptance:
         return []
-    cleaned = _strip_fenced_code(acceptance)
+    cleaned = _strip_code_blocks(acceptance)
     seen: list[str] = []
     for line in cleaned.splitlines():
         for match in AC_ID_RE.findall(line):
@@ -478,7 +458,7 @@ def extract_ac_statuses(spec_text: str) -> list[tuple[str, bool]]:
     acceptance = _extract_markdown_section(spec_text, 3, "验收标准")
     if not acceptance:
         return []
-    cleaned = _strip_fenced_code(acceptance)
+    cleaned = _strip_code_blocks(acceptance)
     results: list[tuple[str, bool]] = []
     seen: set[str] = set()
     for line in cleaned.splitlines():
@@ -522,6 +502,7 @@ def validate_task_documents(
     require_verified: bool = False,
     allow_template_placeholders: bool = False,
     creation: bool = False,
+    repo: "ctx.RepoContext",
 ) -> tuple[list[str], list[str]]:
     """校验 task 创建骨架与未知契约门禁，返回 (阻塞项, 警告项)。"""
     problems, warnings = [], []
@@ -534,8 +515,8 @@ def validate_task_documents(
         )
 
     # 规范块属于严格模板契约；repo-template-sync 负责先强制迁移存量 task。
-    template_spec_path = ctx.TEMPLATE_DIR / "task.md"
-    if template_spec_path.is_file():
+    template_spec_path = (repo.template_dir / "task.md") if repo is not None else None
+    if template_spec_path is not None and template_spec_path.is_file():
         template_blocks = _extract_guide_blocks(
             template_spec_path.read_text(encoding="utf-8")
         )
@@ -549,7 +530,7 @@ def validate_task_documents(
                 )
 
     acceptance = _extract_markdown_section(spec_text, 3, "验收标准")
-    cleaned_acceptance = _strip_fenced_code(acceptance) if acceptance else ""
+    cleaned_acceptance = _strip_code_blocks(acceptance) if acceptance else ""
     if not cleaned_acceptance or not re.search(
         r"^\s*-\s*\[[ xX]\]\s*\S", cleaned_acceptance, re.MULTILINE
     ):
@@ -610,6 +591,31 @@ def validate_task_documents(
                 f"task.md / {ctx.PROGRESS_FILE} 残留 {len(placeholders)} 个模板占位符："
                 + "、".join(sorted(set(placeholders))[:3])
             )
+
+    if creation:
+        from .specs import SpecError, load_spec
+
+        linked = None
+        for line in _visible_markdown_lines(spec_text):
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                stripped = stripped[2:]
+            if stripped.startswith("关联 spec："):
+                linked = stripped.split("：", 1)[1].strip()
+                break
+        if linked is None:
+            problems.append("task.md 缺“关联 spec：”行；无关联写“无”")
+        elif linked != "无":
+            candidate = Path(linked)
+            if candidate.is_absolute() or ".." in candidate.parts or candidate.parts[:2] != ("docs", "specs"):
+                problems.append(f"关联 spec 路径必须在 docs/specs/ 下：{linked!r}")
+            elif not (repo.root / candidate).is_file():
+                problems.append(f"关联 spec 不存在：{linked}")
+            else:
+                try:
+                    load_spec(repo.root / candidate, root=repo.root)
+                except SpecError as error:
+                    problems.append(f"关联 spec 非法：{error}")
 
     contract_problems, contract_warnings = unverified_contract_gate(
         spec_text,

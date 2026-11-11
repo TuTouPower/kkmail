@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from pathlib import Path
 
 import repo_task.context as ctx
 
@@ -18,9 +19,11 @@ from .control import (
     cmd_view,
 )
 from .goal import cmd_goal, cmd_goal_check
-from .recovery import cmd_recovery, cmd_ledger_import
+from .recovery import cmd_recovery, cmd_ledger_import, cmd_finish_txn_clear
 from .graph import cmd_merge_backlog, cmd_graph_transaction
 from .plan import cmd_plan
+from .review_status import cmd_review_status
+from .specs import cmd_specs_list
 from .integration import cmd_cleanup_worktree, cmd_integrate, cmd_integrate_chain, cmd_start
 from .lifecycle import (
     cmd_add,
@@ -48,6 +51,18 @@ def main():
         description=f"task 状态入口（状态权威 = {ctx.PROGRESS_FILE}；执行权威 = exact attempt identity）"
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
+    from .privacy import PrivacyScanError, cmd_privacy_audit
+    specs = sub.add_parser("specs", help="长期 spec 派生清单")
+    specs_sub = specs.add_subparsers(dest="specs_cmd", required=True)
+    specs_list = specs_sub.add_parser("list", help="列出 spec front matter")
+    specs_list.add_argument("--all", action="store_true", help="包含 retired")
+    specs_list.add_argument("--json", action="store_true", help="JSON 输出")
+    specs_list.set_defaults(func=cmd_specs_list)
+
+    audit = sub.add_parser("privacy-audit", help="显式扫描指定 Git 快照全部非归档文本")
+    audit.add_argument("--ref", default="HEAD")
+    audit.set_defaults(func=cmd_privacy_audit)
+
     recovery = sub.add_parser("recovery", help="只读判定 start/finish/commit/attempt 中断阶段（JSON）")
     recovery.add_argument("tid")
     recovery.set_defaults(func=cmd_recovery)
@@ -73,7 +88,7 @@ def main():
     edit.add_argument("--conflicts-remove")
     edit.set_defaults(func=cmd_edit)
 
-    merge_backlog = sub.add_parser("merge-backlog", help="原子合并 backlog 图并归档来源；保留硬依赖并拒绝环")
+    merge_backlog = sub.add_parser("merge-backlog", help="原子合并 backlog 图并将来源标为 dropped；保留硬依赖并拒绝环")
     merge_backlog.add_argument("tid", help="保留或新建的目标 tid")
     merge_backlog.add_argument("--sources", required=True, help="逗号分隔来源 tid")
     merge_backlog.set_defaults(func=cmd_merge_backlog)
@@ -102,6 +117,13 @@ def main():
     preflight.add_argument("--owner-id", help="当前会话执行权，须与 ledger claim 一致")
     preflight.set_defaults(func=cmd_preflight)
 
+    review_status = sub.add_parser(
+        "review-status",
+        help="读 review 报告与处置表输出 verdict/证据完整性/回归轮次（与 finish/integrate 同源）",
+    )
+    review_status.add_argument("--task-dir", required=True)
+    review_status.set_defaults(func=cmd_review_status)
+
     limits = sub.add_parser("limits", help="增加 active task 的 review/verify 绝对上限")
     limits.add_argument("tid")
     limits.add_argument("--review", type=int)
@@ -111,7 +133,7 @@ def main():
 
     finish = sub.add_parser(
         "finish",
-        help="active -> done：严格校验后原位写 done、生成 handoff.json 并提交实现 commit（归档由 integrate 完成）；提交失败整体回滚",
+        help="active -> done：严格校验后原位写 done、生成 handoff.json 并提交实现 commit；提交失败整体回滚",
     )
     finish.add_argument("tid")
     finish.add_argument("--owner-id", required=True, help="当前会话执行权，须与 ledger claim 一致")
@@ -144,10 +166,17 @@ def main():
     purge.add_argument("--reason", required=True)
     purge.set_defaults(func=cmd_purge)
 
+    txn_clear = sub.add_parser(
+        "finish-txn-clear",
+        help="清理已完成（committed）的 finish 提交事务 journal（recovery 收尾出口）",
+    )
+    txn_clear.add_argument("tid")
+    txn_clear.set_defaults(func=cmd_finish_txn_clear)
+
     listing = sub.add_parser("list", help="列出 task")
     listing.add_argument("--status", choices=ctx.VALID_STATUSES)
     listing.add_argument("--ref")
-    listing.add_argument("--rebuild", action="store_true")
+    listing.add_argument("--json", action="store_true", help="机器可读导出到 stdout（不落盘）")
     listing.set_defaults(func=cmd_list)
 
     eff = sub.add_parser("effective-status", help="有效 task 状态与读取来源（worktree/branch/main，只读）")
@@ -208,6 +237,7 @@ def main():
     )
     run_begin.add_argument("tid")
     run_begin.add_argument("--owner-id", required=True, help="当前会话唯一标识，写入 ledger claim")
+    run_begin.add_argument("--session-id", help="可选宿主真实 session ID；提供时启用状态行绑定")
     run_begin.add_argument("--base", help="可选上一已完成 task 分支")
     run_begin.set_defaults(func=cmd_run_begin)
 
@@ -217,6 +247,7 @@ def main():
     )
     run_close.add_argument("tid")
     run_close.add_argument("--owner-id", required=True, help="须与 ledger claim 一致")
+    run_close.add_argument("--session-id", help="可选宿主真实 session ID；解除该会话状态行绑定")
     run_close.add_argument("--result", required=True, choices=("done", "blocked", "failed"))
     run_close.add_argument("--class", dest="fail_class", choices=ctx.LEDGER_FAIL_CLASSES,
                            help="仅 --result failed")
@@ -262,8 +293,8 @@ def main():
     _add_identity(cleanup)
     cleanup.set_defaults(func=cmd_cleanup_worktree)
 
-    integrate = sub.add_parser("integrate", help="合并单个 exact terminal attempt")
-    integrate.add_argument("tid")
+    integrate = sub.add_parser("integrate", help="合并单个 exact terminal attempt；无 tid 只列候选")
+    integrate.add_argument("tid", nargs="?")
     _add_identity(integrate)
     integrate.add_argument("--continue", dest="continue_merge", action="store_true")
     integrate.add_argument("--keep-branch", action="store_true", help="仅在 --continue 收尾或幂等重入时保留已合入分支")
@@ -315,10 +346,25 @@ def main():
     restore.set_defaults(func=cmd_ledger_import)
 
     args = parser.parse_args()
+    # 入口构造不可变仓库身份，所有子命令显式接收；不再依赖模块级路径。
+    args.repo = ctx.RepoContext.from_code_location(Path(__file__))
     try:
+        if args.cmd == "privacy-audit":
+            from .specs import retired_spec_paths_at_ref
+            from .store import scan_tasks_at_ref
+
+            excluded = [
+                task["dir"] for task in scan_tasks_at_ref(args.ref, repo=args.repo)
+                if task.get("status") in ctx.TERMINAL_STATUSES
+            ]
+            excluded.extend(retired_spec_paths_at_ref(args.ref, repo=args.repo))
+            args.privacy_excluded = excluded
         args.func(args)
-    except ctx.TaskDataError as error:
+    except (ctx.TaskDataError, PrivacyScanError) as error:
         sys.exit(f"{error}\n数据不一致；请提示用户处理。")
     except OSError as error:
         # 磁盘/权限等系统错误统一入口，避免多步命令中途裸 traceback（F20）
         sys.exit(f"{args.cmd} 失败（{error}）")
+    except (ValueError, TypeError, AttributeError) as error:
+        # 展示层账本/绑定记录非法结构统一降级，避免裸 traceback 打断已完成业务（DS L268）
+        sys.exit(f"{args.cmd} 失败（数据结构异常：{error}）；请检查相关 JSON/绑定记录")

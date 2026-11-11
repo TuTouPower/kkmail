@@ -19,7 +19,7 @@
     - A8: 补充阅读器详情缓存更新泛型约束 (`setQueryData<MailDetail>`)；
     - A9: 归档旧交接段落并更新当前最新交接记录；
     - A10: 补齐 `docs/specs_index.md` 中生效 spec 的任务溯源；
-    - A11: 补齐 `docs/archive/pending/README.md` 归档待办索引表格；
+    - A11: 补齐 `docs/pending/README.md` 归档待办索引表格；
     - A12: 补登 `docs/reviews/README.md` 中历史审阅会话布局差异；
     - A13: 会话撤销校验以数据库为唯一权威，彻底移除 5 秒本地 TTL 放行窗口；
     - A14: 巡检状态与协议游标解耦，建立 `FolderPatrolStatus` 独立持久化模型；

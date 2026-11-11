@@ -16,9 +16,11 @@ TOOLKIT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(TOOLKIT_ROOT / "scripts"))
 
 import md_format  # noqa: E402
+from _id_scan import IdScanError, validate_merge_sources, validate_snapshot_ids  # noqa: E402
+from repo_task.context import RepoContext
 
 # git pre-commit 保证 cwd 为仓库根；用 cwd 而非 __file__ 推导，消费仓/测试仓也正确。
-md_format.REPO_ROOT = Path.cwd()
+repo = RepoContext.for_root(Path.cwd())
 
 
 def staged_md() -> list[str]:
@@ -28,7 +30,7 @@ def staged_md() -> list[str]:
     否则中文等路径会被引号化而在后续 is_file 判断中被静默跳过。
     """
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR", "--", "*.md"],
+        ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=AM", "--", "*.md"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=30,
     )
@@ -37,8 +39,60 @@ def staged_md() -> list[str]:
         sys.exit(1)
     return [
         rel for rel in result.stdout.split("\0")
-        if rel and not md_format._is_blacklisted(rel)
+        if rel and not md_format._is_blacklisted(rel, repo=repo)
     ]
+
+
+def _git_z(args: list[str]) -> list[str]:
+    result = subprocess.run(
+        ["git", *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+    )
+    if result.returncode != 0:
+        print(f"pre-commit: git {' '.join(args)} 失败：{result.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    return [item for item in result.stdout.split("\0") if item]
+
+
+def _review_dirs(paths: list[str]) -> set[str]:
+    return {path.split("/")[2] for path in paths if path.startswith("docs/reviews/review_") and len(path.split("/")) > 2}
+
+
+def review_retention_check() -> int:
+    merge = subprocess.run(
+        ["git", "rev-parse", "--git-path", "MERGE_HEAD"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+    )
+    merge_path = Path(merge.stdout.strip()) if merge.returncode == 0 and merge.stdout.strip() else Path(".git/MERGE_HEAD")
+    if merge_path.exists():
+        return 0
+    added = _review_dirs(_git_z(["diff", "--cached", "--name-only", "--diff-filter=A", "-z", "--", "docs/reviews/review_*"]))
+    if not added:
+        return 0
+    head = set()
+    head_result = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", "docs/reviews/"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+    )
+    if head_result.returncode == 0:
+        head = _review_dirs([item for item in head_result.stdout.split("\0") if item])
+    if not (added - head):
+        return 0
+    dirs = _review_dirs(_git_z(["ls-files", "-z", "--", "docs/reviews/review_*"]))
+    if len(dirs) <= 5:
+        return 0
+    dated = []
+    for directory in dirs:
+        suffix = directory[len("review_"):]
+        date = suffix[:8]
+        if len(date) != 8 or not date.isdigit():
+            print(f"pre-commit: review 目录名缺 YYYYMMDD：docs/reviews/{directory}", file=sys.stderr)
+            return 1
+        dated.append((date, directory))
+    dated.sort(reverse=True)
+    print(f"pre-commit: 本次新增 review 后 docs/reviews 有 {len(dirs)} 个 review，超过 5 个。\n可删除的最旧目录：", file=sys.stderr)
+    for _date, directory in dated[5:]:
+        print(f"  git rm -r -q -- docs/reviews/{directory} && rm -rf -- docs/reviews/{directory}", file=sys.stderr)
+    return 1
 
 
 def dirty_vs_index(rels: list[str]) -> list[str]:
@@ -55,6 +109,14 @@ def dirty_vs_index(rels: list[str]) -> list[str]:
 
 
 def main() -> int:
+    try:
+        validate_merge_sources(repo.root)
+        validate_snapshot_ids(repo.root)
+    except IdScanError as error:
+        print(f"pre-commit: 编号校验失败（fail-closed）：{error}", file=sys.stderr)
+        return 1
+    if review_retention_check():
+        return 1
     rels = staged_md()
     if not rels:
         return 0
@@ -68,7 +130,7 @@ def main() -> int:
         print("提示：先 git add 这些文件，或 stash 未暂存改动后再提交。", file=sys.stderr)
         return 1
     try:
-        changed = md_format.format_paths(rels)
+        changed = md_format.format_paths(rels, repo=repo)
     except md_format.MdFormatError as error:
         print(f"pre-commit: {error}", file=sys.stderr)
         return 1
