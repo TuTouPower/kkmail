@@ -119,8 +119,13 @@ def pg_engine():
     database. A dedicated ``CREATE SCHEMA``/``DROP SCHEMA ... CASCADE`` keeps
     every mutable fixture (empty, baseline, 0030 legacy) inside this schema and
     never drops or alters objects in ``public``. The URL query
-    ``options=-csearch_path=<schema>`` (psycopg) makes unqualified DDL and
-    ``inspect`` resolve to this schema.
+    ``options=-csearch_path=<schema>,public`` (psycopg) pins unqualified DDL
+    and ``inspect`` to this schema while letting the pg_trgm operator class
+    resolve: the unified baseline installs pg_trgm in ``public``, and the ORM
+    trigram indexes on ``message_search`` (gin_trgm_ops) need it on the path.
+    ``<schema>`` stays first, so ``current_schema()``, ``get_table_names()``,
+    ``inspect`` and ``compare_metadata`` still see only this schema -- the
+    at-head baseline tables in public never leak into the fixture.
     """
     base = make_url(os.environ["MAIL_CORE_DATABASE_URL"])
     admin = create_engine(base.render_as_string(hide_password=False))
@@ -128,7 +133,7 @@ def pg_engine():
     with admin.begin() as conn:
         conn.execute(text(f'CREATE SCHEMA "{schema}"'))
     url = base.update_query_dict(
-        {"options": f"-csearch_path={schema}"}
+        {"options": f"-csearch_path={schema},public"}
     ).render_as_string(hide_password=False)
     engine = create_engine(url)
     try:

@@ -88,7 +88,12 @@ _LEGACY_CURSOR = {
 
 @pytest.fixture
 def pg_schema():
-    """Yield a factory returning (schema, schema-scoped URL); drop every schema at teardown."""
+    """Yield a factory returning (schema, schema-scoped URL); drop every schema at teardown.
+
+    ``public`` stays on the search_path behind ``<schema>`` so the pg_trgm
+    opclass (installed in public by the baseline migration) resolves while
+    ``current_schema()`` and every inspector still see only ``<schema>``.
+    """
     base_url = os.environ["MAIL_CORE_DATABASE_URL"]
     admin = create_engine(base_url)
     created: list[str] = []
@@ -98,7 +103,7 @@ def pg_schema():
         with admin.begin() as conn:
             conn.execute(text(f'CREATE SCHEMA "{schema}"'))
         url = make_url(base_url).update_query_dict(
-            {"options": f"-csearch_path={schema}"}
+            {"options": f"-csearch_path={schema},public"}
         ).render_as_string(hide_password=False)
         created.append(schema)
         return schema, url
