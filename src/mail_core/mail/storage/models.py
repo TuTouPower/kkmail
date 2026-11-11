@@ -459,8 +459,8 @@ class MessageSearch(Base):
 
     __tablename__ = "message_search"
     __table_args__ = (
-        Index("ix_message_search_from_text_trgm", "from_text", postgresql_using="gin", postgresql_ops={"from_text": "gin_trgm_ops"}),
-        Index("ix_message_search_to_text_trgm", "to_text", postgresql_using="gin", postgresql_ops={"to_text": "gin_trgm_ops"}),
+        Index("ix_message_search_from_text_trgm", "from_text", postgresql_using="gin", postgresql_ops={"from_text": "public.gin_trgm_ops"}),
+        Index("ix_message_search_to_text_trgm", "to_text", postgresql_using="gin", postgresql_ops={"to_text": "public.gin_trgm_ops"}),
     )
 
     message_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
