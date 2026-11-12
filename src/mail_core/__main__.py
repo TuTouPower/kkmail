@@ -82,7 +82,7 @@ def run_migrations(*, check_only: bool = False) -> None:
             if plan.action == baseline.MigrationAction.UPGRADE_TO_HEAD:
                 if check_only:
                     return
-                command.upgrade(cfg, "head")
+                baseline.upgrade_head_and_verify(db_url)
                 return
 
             # Verification is dispatched by the shared verify_for_plan, so
@@ -124,7 +124,7 @@ def run_migrations(*, check_only: bool = False) -> None:
                     f"rolled back: {exc} The database was not modified."
                 ) from exc
             log.info("Narrow legacy conversion %s for revision '%s'", outcome, plan.current_revision)
-            command.upgrade(cfg, "head")
+            baseline.upgrade_head_and_verify(db_url)
             return
     finally:
         check_engine.dispose()

@@ -1,0 +1,15 @@
+{
+  "tid": "t077",
+  "attempt": 1,
+  "execution_id": "5d068eab3cb14599816c9978e736d52a",
+  "status": "done",
+  "branch": "t077_legacy_fixture_truth_and_conversion_verify",
+  "base_sha": "bc61fd8bcf40e82819f9769f0ef7467e562c7c5f",
+  "spec_source_sha": "e3e45afeb8bd82af83073ffdef14da90aad2ea4e",
+  "tests": "定向 PG 80 passed（迁移正向/逆向、真实 0030 形状启动与离线双入口升级、历史值映射、负向 drift、豁免护栏、夹具形状自检、离线 UPGRADE_TO_HEAD）；后端 unit 1654 passed（2 个采纳前基线既存失败：`test_check_dep_locks` uv lock 漂移、`test_check_doc_sensitive` 历史 review 文档占位符/示例误判，主仓/t076 HEAD 复现）；前端/契约未改动无需重跑；全量 PG 门禁 **2189 passed、2 skipped、2 个上述既存失败**，无本 task 引入失败（前三次因测试 PG 瞬时 recovery mode / statement timeout / connection timeout 中断，均为基础设施故障而非代码失败；重启专用测试服务后第 4 次跑通，见 `.scratch/pg_gate_t077_clean.log`）。",
+  "blackbox": "stubApi E2E 21 passed；全栈真实 FastAPI + PG + Worker + 生产 SPA Playwright 8 passed（真实重放 0001→0002 迁移链）。",
+  "review": "full 级 2 轮，`review_code.md` / `review_test.md` Round 2 均 PASS；Round 1 七条 minor 全部已修并复核，Round 2 零 finding，coverage 6/6，无 TICK-VOID。",
+  "review_scope": "d53ff8ef015acd4a",
+  "pending": [],
+  "findings": []
+}
