@@ -1,7 +1,15 @@
 # Sensitive Document Checker Ignore Patterns
 # Format: gitignore-style path globs or file paths
+#
+# Historical / review artifacts are already excluded by responsibility in
+# check_doc_sensitive.py (ARCHIVE_DIR_PREFIXES). These patterns are kept for
+# explicit single-file scans and as a defensive second layer.
 
-# Historical archived files containing intentional test cases or legacy references
-docs/archive/tasks/t066_remote_images_persist_and_reload/**
-docs/archive/reviews/review_20261027_021416/**
-docs/reviews/**/_meta/**
+docs/archive/tasks/**
+docs/archive/reviews/**
+docs/reviews/**
+docs/tasks/**
+docs/pending/**
+docs/findings/**
+docs/spikes/**
+docs/handoff.md

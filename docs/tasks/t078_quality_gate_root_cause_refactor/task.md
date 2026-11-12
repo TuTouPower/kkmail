@@ -35,12 +35,12 @@ t076/t077 收尾报告把 `## test_cmd` 的两项长期失败归为「配置缺�
 
 <!-- /规范 -->
 
-- [ ] AC-001：`check_doc_sensitive.py` 扫描 `docs/` 时按目录职责排除归档/历史产物（`docs/reviews/**`、`docs/archive/**`、`docs/tasks/**`、`docs/pending/**`、`docs/findings/**`、`docs/spikes/**`、`docs/handoff.md`）；当前发布面（`docs/guides/**`、`docs/blueprint/*.md`、`docs/specs/*.md`、根 README）仍全量扫描。`.sensitive_ignore` 路径修正为真实位置。全仓 `python3 scripts/check_doc_sensitive.py docs --check` 报 **0 违规**，且 `test_repo_docs_gate_passes` 通过。
-- [ ] AC-002：扫描语义模型统一：邮箱 / 用户路径 / 口令长度只在「值形态」（isolated assignment 的 RHS 或孤立值行）判定；散文、markdown 表格、代码引用中的示例字符串不再报违规。`TOKEN_RE` / `PRIVATE_KEY_RE` 高危签名仍全文拦截，`ASSIGN_RE` 凭据赋值仍按 default-deny 判定。
-- [ ] AC-003：`check_dep_locks.py --check` 改为**离线自洽校验**：不调用 `uv pip compile`、不联网、不重解析；验证 lock 每行 `pkg==version --hash=sha256:...` 格式完整、覆盖 `.txt` 的直接依赖且版本满足其约束。`requirements-mail-core.lock` 内容不变（不升级生产依赖）；`test_check_dep_locks_script_passes` 与 `scripts/build-sidecar.sh` 的门禁调用字面量保持有效；模拟上游版本发版不触发漂移。人工生成模式仍可用。
-- [ ] AC-004：新增负向 true-positive 回归用例并全部通过：发布面里独立个人邮箱 / 真实口令赋值 / `ghp_` token / `-----BEGIN PRIVATE KEY-----` / 真实用户路径仍被拦截；散文中的 `foo@bar.com` / `[REDACTED_EMAIL]` / 代码引用不报；归档目录文件不被扫描；上游版本变化不影响 `--check` 结果。
-- [ ] AC-005：`docs/blueprint/testing.md` 的过期基线（`:21` 2142 passed、`:318/325` 0 违规、`:323` 未修如实登记）与 `:82` 敏感扫描规范描述同步为新模型；`## test_cmd` 四项（模板契约、前端全链、桌面单测、敏感扫描）全部通过，不再有「既存失败」需要登记。
-- [ ] AC-006：`docs/pending/p077_quality_gate_false_positives_and_lock_drift.md` 闭环为 `status=closed` / `resolution=resolved` / `fix_ref=t078`；`docs/specs/testing_quality.md` front matter `tasks` 登记 `t078`；本 task 不新增遗留项。
+- [x] AC-001：`check_doc_sensitive.py` 扫描 `docs/` 时按目录职责排除归档/历史产物（`docs/reviews/**`、`docs/archive/**`、`docs/tasks/**`、`docs/pending/**`、`docs/findings/**`、`docs/spikes/**`、`docs/handoff.md`）；当前发布面（`docs/guides/**`、`docs/blueprint/*.md`、`docs/specs/*.md`、根 README）仍全量扫描。`.sensitive_ignore` 路径修正为真实位置。全仓 `python3 scripts/check_doc_sensitive.py docs --check` 报 **0 违规**，且 `test_repo_docs_gate_passes` 通过。
+- [x] AC-002：扫描语义模型统一：邮箱 / 用户路径 / 口令长度只在「值形态」（isolated assignment 的 RHS 或孤立值行）判定；散文、markdown 表格、代码引用中的示例字符串不再报违规。`TOKEN_RE` / `PRIVATE_KEY_RE` 高危签名仍全文拦截，`ASSIGN_RE` 凭据赋值仍按 default-deny 判定。
+- [x] AC-003：`check_dep_locks.py --check` 改为**离线自洽校验**：不调用 `uv pip compile`、不联网、不重解析；验证 lock 每行 `pkg==version --hash=sha256:...` 格式完整、覆盖 `.txt` 的直接依赖且版本满足其约束。`requirements-mail-core.lock` 内容不变（不升级生产依赖）；`test_check_dep_locks_script_passes` 与 `scripts/build-sidecar.sh` 的门禁调用字面量保持有效；模拟上游版本发版不触发漂移。人工生成模式仍可用。
+- [x] AC-004：新增负向 true-positive 回归用例并全部通过：发布面里独立个人邮箱 / 真实口令赋值 / `ghp_` token / `-----BEGIN PRIVATE KEY-----` / 真实用户路径仍被拦截；散文中的 `foo@bar.com` / `[REDACTED_EMAIL]` / 代码引用不报；归档目录文件不被扫描；上游版本变化不影响 `--check` 结果。
+- [x] AC-005：`docs/blueprint/testing.md` 的过期基线（`:21` 2142 passed、`:318/325` 0 违规、`:323` 未修如实登记）与 `:82` 敏感扫描规范描述同步为新模型；`## test_cmd` 四项（模板契约、前端全链、桌面单测、敏感扫描）全部通过，不再有「既存失败」需要登记。
+- [x] AC-006：`docs/pending/p077_quality_gate_false_positives_and_lock_drift.md` 闭环为 `status=closed` / `resolution=resolved` / `fix_ref=t078`；`docs/specs/testing_quality.md` front matter `tasks` 登记 `t078`；本 task 不新增遗留项。
 
 ### 可测试性声明
 
