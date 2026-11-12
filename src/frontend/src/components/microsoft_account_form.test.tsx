@@ -9,6 +9,8 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); __resetCsrfForTests() })
 
+const accountHealth = { credential_state: 'valid', connectivity_state: 'connected', sync_activity: 'idle', last_connectivity_error: null }
+
 // p056 replacement note: the previous parametrized "browser login saves a
 // verified result (edit=false)" case asserted the OLD flat Microsoft
 // add-account form (manual Client ID/Secret fields + flow start). Adding a
@@ -27,7 +29,7 @@ it('Microsoft browser login reauthorizes an existing Graph account (edit)', asyn
   const open = vi.fn(() => openedWindow)
   vi.stubGlobal('open', open)
   const account = { id: 'graph-1', email: 'verified@outlook.com', provider: 'graph', account_type: 'graph',
-    status: 'active', sync_status: 'auth_failed', sync_enabled: false, oauth_tenant: 'consumers' }
+    status: 'active', ...accountHealth, sync_enabled: false, oauth_tenant: 'consumers' }
   vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit = {}) => {
     const url = String(input)
     requests.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(String(init.body)) : {} })
@@ -72,7 +74,7 @@ it('A20: overlapping OAuth status polls are suppressed while a check is in fligh
   let statusCalls = 0
   vi.stubGlobal('open', vi.fn(() => ({ opener: {} })))
   const account = { id: 'graph-1', email: 'verified@outlook.com', provider: 'graph', account_type: 'graph',
-    status: 'active', sync_status: 'auth_failed', sync_enabled: false, oauth_tenant: 'consumers' }
+    status: 'active', ...accountHealth, sync_enabled: false, oauth_tenant: 'consumers' }
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
     const url = String(input)
     let value: unknown = {}
@@ -134,7 +136,7 @@ it('device code reauthorization needs no callback or Secret, copies only the sho
     return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
   }))
   const account = { id: 'graph-device-1', email: 'device@outlook.com', provider: 'graph', account_type: 'graph',
-    status: 'active', sync_status: 'idle', sync_enabled: true }
+    status: 'active', ...accountHealth, sync_enabled: true }
   const { container } = await render(<AccountDialog account={account} groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
   await changeSelect(container.querySelector('#account-oauth-method'), 'device_code')
   expect(container.querySelector('#account-client-secret')).toBeNull()
@@ -177,7 +179,7 @@ it.each([
     return new Response(JSON.stringify(result), { headers: { 'content-type': 'application/json' } })
   }))
   const account = { id: 'legacy-account', email: 'legacy@example.com', provider, account_type: provider,
-    status: 'active', sync_status: 'idle', sync_enabled: true }
+    status: 'active', ...accountHealth, sync_enabled: true }
   const { container } = await render(<AccountDialog account={account}
     groups={[{ id: 'target-group', name: '新分组', account_count: 0, sort_order: 0 }]} groupsAvailable
     onClose={vi.fn()} onSaved={vi.fn(async () => {})} />)
@@ -211,7 +213,7 @@ function stubMicrosoftShell(exchange?: (body: Record<string, unknown>) => Respon
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
       exchanges.push(body)
       if (exchange) return exchange(body)
-      return new Response(JSON.stringify({ id: 'new-ms', email: 'real@outlook.com', provider: 'graph', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'graph' }), { headers: { 'content-type': 'application/json' } })
+      return new Response(JSON.stringify({ id: 'new-ms', email: 'real@outlook.com', provider: 'graph', status: 'active', ...accountHealth, sync_enabled: true, account_type: 'graph' }), { headers: { 'content-type': 'application/json' } })
     }
     return new Response(JSON.stringify({}), { headers: { 'content-type': 'application/json' } })
   }))
@@ -356,7 +358,7 @@ it('authorize and exchange both use the client id reported by OAuth metadata', a
     if (url.includes('/oauth/metadata')) return new Response(JSON.stringify({ provider: 'microsoft', runtime_mode: 'web', default_client_type: 'confidential', redirect_uri: null, callback_path: '/api/accounts/oauth/callback/microsoft', origin_configured: false, notice: 'n/a', microsoft_client_id: 'server-effective-client' }), { headers: { 'content-type': 'application/json' } })
     if (url.includes('/oauth/exchange-redirect-url')) {
       exchanges.push(JSON.parse(String(init.body)) as Record<string, unknown>)
-      return new Response(JSON.stringify({ id: 'new-ms', email: 'real@outlook.com', provider: 'graph', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'graph' }), { headers: { 'content-type': 'application/json' } })
+      return new Response(JSON.stringify({ id: 'new-ms', email: 'real@outlook.com', provider: 'graph', status: 'active', ...accountHealth, sync_enabled: true, account_type: 'graph' }), { headers: { 'content-type': 'application/json' } })
     }
     return new Response(JSON.stringify({}), { headers: { 'content-type': 'application/json' } })
   }))

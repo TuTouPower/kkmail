@@ -25,7 +25,13 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mail_core.db.base import Base
-from mail_core.mail.domain.enums import ArchiveState, SyncStatus
+from mail_core.mail.domain.enums import (
+    ArchiveState,
+    ConnectivityState,
+    CredentialState,
+    SyncActivity,
+    SyncStatus,
+)
 
 
 def _uuid() -> uuid.UUID:
@@ -105,8 +111,14 @@ class Account(Base):
     master_order: Mapped[Optional[int]] = mapped_column(Integer)
     group_order: Mapped[Optional[int]] = mapped_column(Integer)
     sync_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
-    sync_status: Mapped[str] = mapped_column(
-        String(32), nullable=False, server_default=text(f"'{SyncStatus.IDLE.value}'")
+    credential_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text(f"'{CredentialState.VALID.value}'")
+    )
+    connectivity_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text(f"'{ConnectivityState.CONNECTED.value}'")
+    )
+    sync_activity: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text(f"'{SyncActivity.IDLE.value}'")
     )
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     recipient_addresses: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))

@@ -60,7 +60,9 @@ def test_metadata_completion_enqueues_carry_dedupe_keys(monkeypatch):
         credential_ref="ref",
         config={},
         sync_enabled=True,
-        sync_status="idle",
+        credential_state="valid",
+        connectivity_state="connected",
+        sync_activity="idle",
     )
     folder = SimpleNamespace(
         id=folder_id,

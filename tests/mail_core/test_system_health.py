@@ -272,7 +272,6 @@ def test_system_health_sync_metrics_with_real_sync_run_done_status():
             email=f"metrics-{uuid.uuid4().hex[:6]}@example.com",
             provider="imap",
             sync_enabled=True,
-            sync_status="idle",
         )
         session.add(account)
         session.flush()

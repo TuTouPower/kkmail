@@ -10,15 +10,15 @@ opclasses as ``public.gin_trgm_ops``, so no other schema is needed on the
 path and ``current_schema()``, ``inspect`` and ``compare_metadata`` see only
 the isolated schema.
 
-The 0030 legacy shape is derived from the unified baseline -- alembic upgrade
-head, the single source of truth A16 verifies against, minus
-folder_patrol_status. A16's post-conversion check is a full compare_metadata
-over the real catalog, so a second hand-transcribed schema could never satisfy
-it; the object under test is the conversion logic (table creation, patrol data
-migration, stamping, idempotency, concurrent serialization, failed-conversion
-rollback), and deriving the shape from the baseline does not weaken any of
-those assertions. The pre-A16 worry that ORM-generated fixtures make the tests
-"pass trivially" no longer applies.
+The 0030 legacy shape is derived from the historical 0001 baseline --
+``alembic upgrade 20261107_0001`` -- minus ``folder_patrol_status``, so the
+fixture faithfully represents the real legacy input (``accounts.sync_status``,
+none of the three health columns). Full compare_metadata verification runs
+only after the incremental upgrade to head, never against the earlier-revision
+catalog. The object under test is the conversion logic (table creation, patrol
+data migration, stamping, idempotency, concurrent serialization, failed-
+conversion rollback); forging the shape from ``upgrade head`` would make those
+assertions vacuous, so each fixture asserts its historical shape.
 """
 
 from __future__ import annotations
@@ -92,16 +92,15 @@ def pg_schema():
 
 
 def _make_0030_db(db_url: str, *, revision: str = "20261031_0030") -> str:
-    """Build a faithful 0030 legacy shape from the unified baseline truth.
+    """Build a faithful 0030 legacy shape from the historical 0001 baseline.
 
-    A16's post-conversion check is a full compare_metadata against the ORM
-    baseline, so the shape must come from that single source: alembic upgrade
-    head (full baseline) minus the one table the conversion creates. The real
-    upgrade is invoked directly so fixture construction never depends on the
-    mock installed over the startup path's own upgrade call. Pre-creating an
-    empty schema-local alembic_version pins the schema at base so upgrade head
-    builds the full baseline inside ``<schema>``; with public off the path, the
-    DROP, stamp and seed that follow resolve only to ``<schema>``.
+    The fixture must describe the real legacy input: the 0001 baseline DDL
+    (``accounts.sync_status``, none of the three health columns) minus
+    ``folder_patrol_status``, stamped with the historical revision. Deriving it
+    from ``upgrade head`` would forge the new schema and make every conversion
+    test vacuous. The real upgrade is invoked directly so fixture construction
+    never depends on the mock installed over the startup path's own upgrade
+    call.
     """
     cfg = baseline.alembic_config()
     cfg.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
@@ -115,8 +114,21 @@ def _make_0030_db(db_url: str, *, revision: str = "20261031_0030") -> str:
                     "version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
                 )
             )
-        _alembic_upgrade(cfg, "head")
+        _alembic_upgrade(cfg, baseline.UNIFIED_BASELINE_REVISION)
         with engine.begin() as conn:
+            # Guard: the fixture must faithfully represent the historical
+            # 0001 shape, never the current head (three health columns).
+            account_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'accounts' AND table_schema = current_schema()"
+                    )
+                )
+            }
+            assert "sync_status" in account_columns
+            assert not {"credential_state", "connectivity_state", "sync_activity"} & account_columns
             conn.execute(text("DROP TABLE folder_patrol_status"))
             conn.execute(
                 text("UPDATE alembic_version SET version_num = :rev"),
@@ -201,8 +213,18 @@ def _snapshot(db_url: str) -> dict:
 
 
 def _mock_upgrade(monkeypatch) -> list:
+    """Record upgrade calls without replaying the Alembic chain.
+
+    These cases assert the orchestration (conversion + upgrade call). The
+    post-upgrade schema check is a separate collaborator covered by the
+    real-PG cases, so it is stubbed here to keep the assertion focused.
+    """
+
     calls: list = []
     monkeypatch.setattr("alembic.command.upgrade", lambda cfg, rev: calls.append(rev))
+    monkeypatch.setattr(
+        "mail_core.db.baseline.verify_upgraded_schema", lambda *a, **k: []
+    )
     return calls
 
 
@@ -353,11 +375,12 @@ def test_t5_empty_head_and_incremental_never_stamp(pg_schema, monkeypatch):
 
     class _FakeScript:
         def get_heads(self):
-            return ["20261108_0002"]
+            return ["20270101_0003"]
 
         def walk_revisions(self):
             return iter([
-                SimpleNamespace(revision="20261108_0002"),
+                SimpleNamespace(revision="20270101_0003"),
+                SimpleNamespace(revision=baseline.CURRENT_HEAD_REVISION),
                 SimpleNamespace(revision=baseline.UNIFIED_BASELINE_REVISION),
             ])
 
@@ -530,7 +553,7 @@ def test_t8_drifted_baseline_refused_by_all_three_entries(pg_schema, monkeypatch
             )
             conn.execute(
                 text("INSERT INTO alembic_version VALUES (:rev)"),
-                {"rev": baseline.UNIFIED_BASELINE_REVISION},
+                {"rev": baseline.CURRENT_HEAD_REVISION},
             )
     finally:
         engine.dispose()
@@ -556,3 +579,149 @@ def test_t8_drifted_baseline_refused_by_all_three_entries(pg_schema, monkeypatch
     assert upgrades == []
     with pytest.raises(SchemaValidationError, match="display_name"):
         baseline.run_migration(db_url)
+
+
+def test_t7_older_baseline_upgrades_in_place_with_data_mapping(pg_schema, monkeypatch):
+    """A database stamped at the unified baseline is upgraded to head by
+    startup, preserving accounts and mapping legacy sync_status values (t076).
+    """
+
+    _, db_url = pg_schema()
+    cfg = baseline.alembic_config()
+    cfg.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
+    # Build only the historical baseline (accounts.sync_status present).
+    _alembic_upgrade(cfg, baseline.UNIFIED_BASELINE_REVISION)
+
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, provider, sync_status, sync_enabled) "
+                    "VALUES (:id, :email, 'imap', 'auth_failed', true)"
+                ),
+                {"id": uuid.uuid4(), "email": "old-auth@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, provider, sync_status, sync_enabled) "
+                    "VALUES (:id, :email, 'imap', 'failed', true)"
+                ),
+                {"id": uuid.uuid4(), "email": "old-failed@example.test"},
+            )
+    finally:
+        engine.dispose()
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", db_url)
+    # Real upgrade (no mock): startup must classify UPGRADE_TO_HEAD and apply
+    # the incremental revision instead of refusing to start.
+    main_module.run_migrations()
+
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            rev = conn.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert rev == baseline.CURRENT_HEAD_REVISION
+            columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'accounts' AND table_schema = current_schema()"
+                    )
+                )
+            }
+            assert "sync_status" not in columns
+            assert {"credential_state", "connectivity_state", "sync_activity"} <= columns
+            auth = conn.execute(
+                text(
+                    "SELECT credential_state, connectivity_state, sync_enabled "
+                    "FROM accounts WHERE email = 'old-auth@example.test'"
+                )
+            ).one()
+            assert auth == ("invalid", "connected", False)
+            failed = conn.execute(
+                text(
+                    "SELECT credential_state, connectivity_state "
+                    "FROM accounts WHERE email = 'old-failed@example.test'"
+                )
+            ).one()
+            assert failed == ("valid", "degraded")
+    finally:
+        engine.dispose()
+
+
+def test_t8_real_0030_legacy_shape_upgrades_via_startup(pg_schema, monkeypatch):
+    """A faithful 0030 legacy shape (``accounts.sync_status``) upgrades to
+    head through the startup entry with forward status mapping (t077 AC-004).
+
+    Unlike the orchestration cases, no collaborator is mocked: the real
+    conversion, the real incremental upgrade and the real post-upgrade schema
+    check all run.
+    """
+
+    _, db_url = pg_schema()
+    _make_0030_db(db_url)
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, provider, sync_status) "
+                    "VALUES (:id, 'legacy-dead@example.test', 'imap', 'auth_failed')"
+                ),
+                {"id": uuid.uuid4()},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, provider, sync_status) "
+                    "VALUES (:id, 'legacy-broken@example.test', 'imap', 'failed')"
+                ),
+                {"id": uuid.uuid4()},
+            )
+    finally:
+        engine.dispose()
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", db_url)
+    main_module.run_migrations()
+
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            rev = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert rev == baseline.CURRENT_HEAD_REVISION
+            columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name='accounts' AND table_schema=current_schema()"
+                    )
+                )
+            }
+            assert "sync_status" not in columns
+            assert {"credential_state", "connectivity_state", "sync_activity"} <= columns
+            assert conn.execute(
+                text(
+                    "SELECT count(*) FROM information_schema.tables "
+                    "WHERE table_name='folder_patrol_status' AND table_schema=current_schema()"
+                )
+            ).scalar_one() == 1
+            dead = conn.execute(
+                text(
+                    "SELECT credential_state, sync_enabled FROM accounts "
+                    "WHERE email='legacy-dead@example.test'"
+                )
+            ).one()
+            assert dead == ("invalid", False)
+            broken = conn.execute(
+                text(
+                    "SELECT credential_state, connectivity_state FROM accounts "
+                    "WHERE email='legacy-broken@example.test'"
+                )
+            ).one()
+            assert broken == ("valid", "degraded")
+    finally:
+        engine.dispose()

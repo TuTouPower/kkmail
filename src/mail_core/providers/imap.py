@@ -814,12 +814,30 @@ class ImapProvider:
             except imaplib.IMAP4.error as exc:
                 msg = str(exc)
                 response_code = re.search(r"\[([A-Z0-9-]+)(?:\s|\])", msg, re.IGNORECASE)
-                # RFC 5530 defines EXPIRED as requiring a new passphrase. Other
-                # authentication failures may be temporary provider lockouts.
-                if response_code and response_code.group(1).upper() == "EXPIRED":
+                code = response_code.group(1).upper() if response_code else ""
+                upper_msg = msg.upper()
+                # A confirmed credential rejection must be surfaced as
+                # PermanentAuthError so the Worker can invalidate the account.
+                # RFC 5530 EXPIRED, AUTHENTICATIONFAILED / AUTHORIZATIONFAILED
+                # and explicit "invalid credentials" mean the stored secret is
+                # wrong.  Provider-side temporary lockouts ("too many login
+                # attempts", rate limiting) are deliberately excluded: they
+                # must stay retryable rather than disabling the account.
+                temporary_lockout = any(
+                    marker in upper_msg
+                    for marker in ("TOO MANY LOGIN", "TEMPORARILY", "LOCKED", "TRY AGAIN", "RATE LIMIT")
+                )
+                permanently_rejected = (
+                    code in ("EXPIRED", "AUTHENTICATIONFAILED", "AUTHORIZATIONFAILED")
+                    or "AUTHENTICATIONFAILED" in upper_msg
+                    or "INVALID CREDENTIALS" in upper_msg
+                ) and not temporary_lockout
+                if permanently_rejected:
                     from mail_core.providers.http import PermanentAuthError
 
-                    raise PermanentAuthError(f"IMAP authentication rejected permanently: {msg}") from exc
+                    raise PermanentAuthError(
+                        f"IMAP authentication rejected permanently: {msg}"
+                    ) from exc
                 raise
         except BaseException:
             # A117: any login-phase failure (OSError/SSLError/timeout, not

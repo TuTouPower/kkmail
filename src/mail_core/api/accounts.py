@@ -62,7 +62,10 @@ class AccountOut(BaseModel):
     master_order: int | None = None
     group_order: int | None = None
     status: str
-    sync_status: str
+    credential_state: str
+    connectivity_state: str
+    sync_activity: str
+    last_connectivity_error: str | None = None
     sync_enabled: bool
     account_type: str
     remark: str | None = None

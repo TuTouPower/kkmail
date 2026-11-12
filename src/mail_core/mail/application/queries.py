@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, case, cast, func, or_, select, String
 from sqlalchemy.orm import Session
 
-from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.domain.enums import ConnectivityState, CredentialState
 from mail_core.mail.storage.models import Account, AccountGroup, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
 
 _BODY_PREVIEW_SOURCE_CHARS = 4096
@@ -479,12 +479,13 @@ def _query_inbox_stats(
             func.sum(FolderStats.total_count).label("total_count"),
             func.count(FolderStats.unread_count).label("known_unread_count"),
             Account.sync_enabled.label("sync_enabled"),
-            Account.sync_status.label("sync_status"),
+            Account.credential_state.label("credential_state"),
+            Account.connectivity_state.label("connectivity_state"),
         )
         .select_from(Account)
         .outerjoin(Folder, (Folder.account_id == Account.id) & (Folder.role == folder_role))
         .outerjoin(FolderStats, FolderStats.folder_id == Folder.id)
-        .group_by(Account.id, Account.sync_enabled, Account.sync_status)
+        .group_by(Account.id, Account.sync_enabled, Account.credential_state, Account.connectivity_state)
         .where(Account.sync_enabled.is_(True))
         .order_by(Account.id.asc())
     )
@@ -506,12 +507,14 @@ def _query_inbox_stats(
             account_id=values["account_id"], unread_count=unread, total_count=total
         )
         accounts.append(acc_out)
-        sync_status = str(values["sync_status"] or SyncStatus.IDLE.value)
-        # sync_status is the only live判定 here: sync_enabled is恒真
-        # under the SQL filter above (A218).
-        is_faulty_without_target = folder_count == 0 and sync_status in (
-            SyncStatus.FAILED.value,
-            SyncStatus.AUTH_FAILED.value,
+        credential_state = str(values["credential_state"] or CredentialState.VALID.value)
+        connectivity_state = str(values["connectivity_state"] or ConnectivityState.CONNECTED.value)
+        # A faulty account cannot sync at all (dead credential or a tripped
+        # transport breaker) and has never produced a target folder; such an
+        # account must not poison the aggregate (A218 / t045).
+        is_faulty_without_target = folder_count == 0 and (
+            credential_state == CredentialState.INVALID.value
+            or connectivity_state == ConnectivityState.UNREACHABLE.value
         )
         if not is_faulty_without_target:
             active_accounts.append(acc_out)

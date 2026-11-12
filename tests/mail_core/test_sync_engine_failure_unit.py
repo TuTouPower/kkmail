@@ -10,7 +10,12 @@ from mail_core.sync import engine
 from mail_core.sync.leases import FencingMismatch
 
 
-def test_folder_listing_failure_updates_status_and_releases_lease_once(monkeypatch):
+def test_folder_listing_failure_releases_lease_once_without_touching_account_health(monkeypatch):
+    # t076: 账号健康状态写入已从 sync engine 移到 worker 层 health 状态机
+    # (handle_job._apply_account_health / accounts.health)；engine 失败仅释放
+    # lease 并上抛。旧断言 account.sync_status == "failed" 与
+    # account.config["last_sync_error"] 整体删除，账号级状态改由
+    # test_account_health_state_machine.py 覆盖。
     account = SimpleNamespace(
         id=uuid.uuid4(),
         email="sync-failure@example.test",
@@ -18,7 +23,9 @@ def test_folder_listing_failure_updates_status_and_releases_lease_once(monkeypat
         credential_ref=None,
         config={},
         sync_enabled=True,
-        sync_status="idle",
+        credential_state="valid",
+        connectivity_state="connected",
+        sync_activity="idle",
     )
     sessions = []
 
@@ -69,5 +76,6 @@ def test_folder_listing_failure_updates_status_and_releases_lease_once(monkeypat
     assert len(sessions) == 2
     assert [session.commits for session in sessions] == [1, 1]
     assert release_calls == [True]
-    assert account.sync_status == "failed"
-    assert account.config["last_sync_error"] == "ValueError"
+    assert account.credential_state == "valid" and account.connectivity_state == "connected"
+    assert account.connectivity_state == "connected"
+    assert account.sync_activity == "idle"

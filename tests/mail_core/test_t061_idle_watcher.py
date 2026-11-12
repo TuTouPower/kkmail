@@ -15,6 +15,11 @@ form a trailing group ordered by other-folder arrivals, then account
 creation time, then account id. The old expectations were removed
 rather than edited in place, per the repo rule against re-pointing
 old assertions at a new implementation's output.
+
+t076: 文件中所有 "账号不该被误标为 failed" 的断言
+(``sync_status != "failed"``) 整体重写为 ``credential_state == "valid"``：
+旧 Account.sync_status 单列已移除，"不该被误标" 的意图由 credential
+维度保留；Folder 级 sync_status 一律保留不动。
 """
 
 from __future__ import annotations
@@ -413,7 +418,7 @@ def test_ac001_no_idle_capability_falls_back_to_polling():
         with Session() as session:
             row = session.get(Account, acc_id)
             # Fallback must not poison the account status (AC-007).
-            assert row.sync_status != "failed"
+            assert row.credential_state == "valid" and row.connectivity_state == "connected"
     finally:
         manager.stop()
 
@@ -997,7 +1002,7 @@ def test_ac004_no_idle_capability_skips_catchup_and_keeps_polling(block_kind):
         assert manager.held_account_ids() == set()
         assert _delta_jobs_snapshot(Session, acc_id, folder_id) == []
         with Session() as session:
-            assert session.get(Account, acc_id).sync_status != "failed"
+            assert session.get(Account, acc_id).credential_state == "valid" and session.get(Account, acc_id).connectivity_state == "connected"
             enqueued = schedule_periodic_inbox_sync(
                 session,
                 idle_held_account_ids=manager.held_account_ids(),
@@ -1044,7 +1049,7 @@ def test_t073_ac001_catchup_retries_transient_enqueue_failure():
         assert manager.held_account_ids() == {acc_id}
         assert manager.snapshot()[acc_id] == "idling"
         with Session() as session:
-            assert session.get(Account, acc_id).sync_status != "failed"
+            assert session.get(Account, acc_id).credential_state == "valid" and session.get(Account, acc_id).connectivity_state == "connected"
     finally:
         manager.stop()
 
@@ -1087,7 +1092,7 @@ def test_t073_ac002_persistent_catchup_failure_releases_seat_for_polling():
         assert manager.held_account_ids() == set()
         assert _wait_until(lambda: built and built[0].closed)
         with Session() as session:
-            assert session.get(Account, acc_id).sync_status != "failed"
+            assert session.get(Account, acc_id).credential_state == "valid" and session.get(Account, acc_id).connectivity_state == "connected"
             enqueued = schedule_periodic_inbox_sync(
                 session,
                 idle_held_account_ids=manager.held_account_ids(),
@@ -1188,7 +1193,7 @@ def test_ac005_catchup_enqueue_failure_does_not_stop_watch():
         assert manager.held_account_ids() == {acc_id}
         assert manager.snapshot()[acc_id] in ("idling", "changed")
         with Session() as session:
-            assert session.get(Account, acc_id).sync_status != "failed"
+            assert session.get(Account, acc_id).credential_state == "valid" and session.get(Account, acc_id).connectivity_state == "connected"
     finally:
         manager.stop()
 
@@ -1421,6 +1426,6 @@ def test_ac007_repeated_failures_degrade_without_poisoning_account():
         assert _wait_until(lambda: manager.snapshot().get(acc_id) in ("backoff", "fallback"))
         with Session() as session:
             row = session.get(Account, acc_id)
-            assert row.sync_status != "failed"
+            assert row.credential_state == "valid" and row.connectivity_state == "connected"
     finally:
         manager.stop()

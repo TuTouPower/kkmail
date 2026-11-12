@@ -554,38 +554,8 @@ def test_handle_job_skips_when_sync_disabled():
         mock_complete.assert_called_once()
 
 
-def test_update_account_sync_status():
-    from unittest.mock import MagicMock
-    from mail_core.accounts.service import update_account_sync_status
-    from mail_core.mail.domain.enums import SyncStatus
-    from mail_core.mail.storage.models import Account
-
-    mock_session = MagicMock()
-    acc = Account(
-        email="s@ex.com",
-        provider="imap",
-        sync_status="running",
-        config={"last_sync_error": "prev error"},
-    )
-    mock_session.get.return_value = acc
-
-    # 1. Update to idle
-    res = update_account_sync_status(mock_session, uuid.uuid4(), SyncStatus.IDLE)
-    assert res is not None
-    assert res.sync_status == "idle"
-    assert "last_synced_at" in (res.config or {})
-    assert "last_sync_error" not in (res.config or {})
-
-    # 2. Update to failed with safe error sanitization
-    res_failed = update_account_sync_status(
-        mock_session, uuid.uuid4(), SyncStatus.FAILED, error="timeout connecting token=SECRET123"
-    )
-    assert res_failed is not None
-    assert res_failed.sync_status == "failed"
-    last_error = res_failed.config.get("last_sync_error")
-    assert last_error is not None
-    assert "SECRET123" not in last_error
-    assert last_error == "ProviderError"
+# 对应生产函数（账号同步状态写入）已删除，改由 health 状态机测试覆盖
+# （见 tests/mail_core/test_account_health_state_machine.py）。
 
 
 def test_imap_fetch_metadata_page_deleted_message_skips_without_raising(monkeypatch):

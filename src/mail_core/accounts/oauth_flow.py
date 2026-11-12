@@ -29,7 +29,7 @@ from mail_core.security.credentials import (
     save_json_secret,
 )
 from mail_core.db.session import get_session_factory
-from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.domain.enums import CredentialState
 from mail_core.mail.storage.models import Account, AccountGroup
 from mail_core.providers.oauth import default_urllib_token_post, urllib_json_request
 from mail_core.security.auth import AuthPrincipal, get_session_epoch
@@ -708,8 +708,10 @@ def consume_oauth_flow_for_reauthorize(
 
     account.credential_ref = cred_ref
     account.config = merged_config
-    if account.sync_status in (SyncStatus.FAILED.value, SyncStatus.AUTH_FAILED.value):
-        account.sync_status = SyncStatus.IDLE.value
+    if account.credential_state == CredentialState.INVALID.value:
+        from mail_core.accounts.health import reset_credential
+
+        reset_credential(session, account.id)
     _delete_ref(store, ref, session=session)
     if principal is not None:
         _clear_matching_active_pointer(store, session_binding_key(principal), clean_id, session=session)

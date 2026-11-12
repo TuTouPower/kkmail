@@ -132,6 +132,10 @@ export interface StubAccount {
   group_order?: number | null
   sync_state?: string
   sync_enabled?: boolean
+  credential_state?: string
+  connectivity_state?: string
+  sync_activity?: string
+  last_connectivity_error?: string | null
 }
 
 export interface StubGroup {
@@ -162,6 +166,10 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
       group_id: 'grp-1',
       sync_state: 'idle',
       sync_enabled: true,
+      credential_state: 'valid',
+      connectivity_state: 'connected',
+      sync_activity: 'idle',
+      last_connectivity_error: null,
     },
   ]
   let oauthDraft: Record<string, unknown> | null = null
@@ -286,7 +294,10 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
       return route.fulfill({
         status: 200,
         json: {
-          accounts: accountsList.slice(offset, offset + limit),
+          accounts: accountsList.slice(offset, offset + limit).map((account) => ({
+            credential_state: 'valid', connectivity_state: 'connected', sync_activity: 'idle', last_connectivity_error: null,
+            ...account,
+          })),
           total: accountsList.length,
           limit,
           offset,
@@ -305,10 +316,14 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
         group_id: body.group_id ? String(body.group_id) : undefined,
         sync_state: 'idle',
         sync_enabled: true,
+        credential_state: 'valid',
+        connectivity_state: 'connected',
+        sync_activity: 'idle',
+        last_connectivity_error: null,
       }
       currentAccounts = [...currentAccounts, newAcc]
       oauthDraft = null
-      return route.fulfill({ status: 200, json: { ...newAcc, status: 'active', sync_status: 'idle' } })
+      return route.fulfill({ status: 200, json: { ...newAcc, status: 'active' } })
     }
 
     // Manual immediate sync: the POSTs accept a sync request and the report
@@ -335,7 +350,10 @@ export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}
       const body = req.postDataJSON() || {}
       if (body.oauth_flow_id) oauthDraft = null
       currentAccounts = currentAccounts.map(a => a.id === id ? { ...a, sync_state: 'idle' } : a)
-      return route.fulfill({ status: 200, json: { ...found, status: 'active', sync_status: 'idle' } })
+      return route.fulfill({ status: 200, json: {
+        credential_state: 'valid', connectivity_state: 'connected', sync_activity: 'idle', last_connectivity_error: null,
+        ...found, status: 'active',
+      } })
     }
 
     if (path === '/api/accounts/oauth/metadata' && method === 'GET') {

@@ -1,3 +1,7 @@
+# t076: Account.sync_status 单列已移除；账号级状态断言整体重写为三维健康字段
+# (idle→valid+connected, failed→degraded/unreachable, auth_failed→invalid,
+#  running→syncing, "不该被误标"→valid)。Folder 级 sync_status 保留不动。
+
 import os
 import threading
 from datetime import datetime, timedelta, timezone
@@ -335,15 +339,20 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
         session.commit()
         account = session.get(Account, account_id)
         assert account is not None
-        assert account.sync_status == "idle"
+        assert account.credential_state == "valid" and account.connectivity_state == "connected"
         assert "last_sync_error" not in (account.config or {})
         job = session.get(WorkerJob, failed_job_id)
         assert job is not None
         assert job.status == JobStatus.PENDING.value
         assert job.failure_attempts == 1
+        # A requeued (still backing off) job keeps the account in-flight;
+        # only a terminal outcome resets it to idle (Round 3 f008).
+        assert account.sync_activity == "syncing"
 
-    # A terminal failure marks the account failed with a sanitized error and
-    # leaves the job terminally FAILED.
+    # A terminal failure (cap reached) fails the job terminally.  A plain
+    # business exception is neither an auth rejection nor a transport blip,
+    # so account health is never polluted; the sanitized error is persisted
+    # on the job row itself.
     with Session() as session:
         job = session.get(WorkerJob, failed_job_id)
         assert job is not None
@@ -360,14 +369,16 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
         session.commit()
         account = session.get(Account, account_id)
         assert account is not None
-        assert account.sync_status == "failed"
-        assert (account.config or {}).get("last_sync_error")
+        assert account.credential_state == "valid" and account.connectivity_state == "connected"
+        assert "last_sync_error" not in (account.config or {})
         job = session.get(WorkerJob, failed_job_id)
         assert job is not None
         assert job.status == JobStatus.FAILED.value
+        assert job.last_error is not None
 
-        # Another job still carries a retryable error: a successful job must
-        # not hide that outstanding failure.
+        # With the table-scan self-heal removed, a successful round trip
+        # deterministically closes the connectivity breaker even while another
+        # job still carries a retryable error.
         pending_error_job = WorkerJob(
             job_type=JobType.SYNC_FOLDER_DELTA.value,
             account_id=account_id,
@@ -389,6 +400,10 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
         session.commit()
         pending_error_job_id = pending_error_job.id
         successful_job_id = successful_job.id
+        acc = session.get(Account, account_id)
+        acc.connectivity_state = "degraded"
+        acc.config = {**dict(acc.config or {}), "last_connectivity_error": "OSError", "connectivity_failure_count": 1}
+        session.commit()
 
     with Session() as session:
         job = session.get(WorkerJob, successful_job_id)
@@ -398,8 +413,9 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
         session.commit()
         account = session.get(Account, account_id)
         assert account is not None
-        assert account.sync_status == "failed"
-        assert (account.config or {}).get("last_sync_error")
+        assert account.credential_state == "valid" and account.connectivity_state == "connected"
+        assert "last_sync_error" not in (account.config or {})
+        assert "last_connectivity_error" not in (account.config or {})
 
     # Retrying the outstanding job succeeds and recovers the account status.
     with Session() as session:
@@ -414,10 +430,10 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
         session.commit()
         account = session.get(Account, account_id)
         assert account is not None
-        assert account.sync_status == "idle"
+        assert account.credential_state == "valid" and account.connectivity_state == "connected"
         assert "last_sync_error" not in (account.config or {})
 
-        account.sync_status = "auth_failed"
+        account.credential_state = "invalid"
         account.sync_enabled = False
         auth_job = WorkerJob(
             job_type=JobType.SYNC_FOLDER_DELTA.value,
@@ -433,7 +449,7 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
         session.commit()
         account = session.get(Account, account_id)
         assert account is not None
-        assert account.sync_status == "auth_failed"
+        assert account.credential_state == "invalid"
 
 
 @pytestmark_db
@@ -470,7 +486,7 @@ def test_auxiliary_archive_failure_does_not_mark_account_sync_failed():
         session.commit()
         account = session.get(Account, account_id)
         assert account is not None
-        assert account.sync_status == "idle"
+        assert account.credential_state == "valid" and account.connectivity_state == "connected"
 
 
 def test_tick_failed_job_not_counted_as_handled():
@@ -513,9 +529,12 @@ def test_tick_failed_job_not_counted_as_handled():
     assert result.handled == 0
 
 
-def test_handle_job_sanitizes_error_in_update_account_sync_status():
+def test_handle_job_sanitizes_error_in_connectivity_failure():
+    # t076: 账号同步状态写入函数已删除；异常路径由
+    # account_failure_kind 分类后调用 record_connectivity_failure 写入脱敏诊断。
+    # 旧用例整体重写，patch 目标改为 record_connectivity_failure。
     import uuid
-    from mail_core.mail.domain.enums import JobType, SyncStatus
+    from mail_core.mail.domain.enums import JobType
     from mail_core.mail.storage.models import Account, WorkerJob
     from mail_core.sync.jobs import _max_attempts
     from mail_core.worker.handlers import handle_job
@@ -543,18 +562,13 @@ def test_handle_job_sanitizes_error_in_update_account_sync_status():
 
     with (
         patch("mail_core.sync.engine.sync_account_folders", side_effect=sensitive_exc),
-        patch("mail_core.worker.handlers.update_account_sync_status") as mock_update_status,
-        patch("mail_core.worker.handlers.fail_job"),
+        patch("mail_core.worker.handlers.record_connectivity_failure") as mock_failure,
+        patch("mail_core.worker.handlers.reschedule_job"),
     ):
         ok = handle_job(session, job, worker_id="test-worker")
         assert ok is False
-        mock_update_status.assert_called_once()
-        call_kwargs = mock_update_status.call_args[1]
-        assert (
-            call_kwargs.get("status") is SyncStatus.FAILED
-            or mock_update_status.call_args[0][2] is SyncStatus.FAILED
-        )
-        passed_error = call_kwargs.get("error", "")
+        mock_failure.assert_called_once()
+        passed_error = mock_failure.call_args.kwargs.get("error", "")
         assert "my_secret_password" not in passed_error
         # A325: non-provider exception messages are dropped entirely; only
         # the exception type survives in the persisted status error.
@@ -579,11 +593,12 @@ def test_handle_job_resolves_credential_store_inside_job_error_boundary():
 
     with (
         patch("mail_core.worker.handlers.get_credential_store", side_effect=RuntimeError("store unavailable")),
-        patch("mail_core.worker.handlers.fail_job") as mock_fail_job,
+        patch("mail_core.worker.handlers.reschedule_job") as mock_reschedule,
     ):
         assert handle_job(session, job, worker_id="test-worker") is False
 
-    mock_fail_job.assert_called_once()
+    mock_reschedule.assert_called_once()
+    assert mock_reschedule.call_args.kwargs["count_failure"] is True
 
 
 def test_handle_job_skips_credential_store_for_outbox_wake():
@@ -728,3 +743,46 @@ def test_worker_heartbeat_loop_runs_independently_and_stops():
         jobs_recorded = [call.kwargs.get("active_jobs") for call in mock_record.call_args_list]
         assert 3 in jobs_recorded
         assert loop._thread is None
+
+
+@pytestmark_db
+def test_auth_failure_job_completes_and_resets_sync_activity():
+    """After credential invalidation the retried job hits the sync-disabled
+    early return; handle_job must still reset sync_activity (Round 2 f007)."""
+
+    import uuid
+
+    from mail_core.accounts.health import mark_credential_invalid, set_sync_activity
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.enums import JobStatus, JobType
+    from mail_core.mail.storage.models import Account, WorkerJob
+    from mail_core.worker.handlers import handle_job
+
+    Session = get_session_factory()
+    with Session() as session:
+        acc = Account(email=f"auth-reset-{uuid.uuid4().hex[:8]}@example.test", provider="imap")
+        session.add(acc)
+        session.flush()
+        aid = acc.id
+        job = WorkerJob(
+            job_type=JobType.SYNC_FOLDER_DELTA.value,
+            account_id=aid,
+            payload={"folder_id": str(uuid.uuid4())},
+            status=JobStatus.CLAIMED.value,
+            locked_by="w-auth",
+            attempts=1,
+        )
+        session.add(job)
+        session.flush()
+        jid = job.id
+        mark_credential_invalid(session, aid)
+        set_sync_activity(session, aid, active=True)
+        session.commit()
+
+    with Session() as session:
+        job = session.get(WorkerJob, jid)
+        assert handle_job(session, job, worker_id="w-auth") is True
+        session.commit()
+        acc = session.get(Account, aid)
+        assert acc.credential_state == "invalid"
+        assert acc.sync_activity == "idle"

@@ -5,20 +5,23 @@ the startup orchestration (``mail_core.__main__.run_migrations``) and the
 offline wrapper (``scripts/migrate_to_unified_baseline.py``) build a
 :class:`DatabaseState` and a :class:`RevisionContext`, then act on the single
 returned :class:`MigrationPlan`, so the two entries cannot disagree about which
-state a database is in. Execution differs by design: the startup entry can run
-``alembic upgrade head`` (and the narrow legacy conversion followed by an
-upgrade), while the offline tool only verifies schema, performs supported
-narrow legacy conversions and stamps; an empty database, or any no-version
-database carrying unified-baseline business tables, is refused by both
-entries.
+state a database is in. Execution is unified: a database behind head (or a
+supported narrow legacy database) is converted where needed, then both entries
+replay the incremental Alembic chain to head through
+:func:`upgrade_head_and_verify` and only then run the full
+:func:`verify_baseline_schema` comparison against the ORM. An empty database,
+or any no-version database carrying unified-baseline business tables, is
+refused by both entries.
 
 Read-only checks open their own connection with a read-only transaction
 (``SET TRANSACTION READ ONLY`` on PostgreSQL) plus connection and statement
 timeouts. Only PostgreSQL is supported: every entry point rejects any other
 backend rather than silently skipping the read-only protection. The narrow
-legacy conversion runs inside one write transaction that re-verifies
-everything from scratch (no precheck results are reused, closing the TOCTOU
-window) under a PostgreSQL advisory lock so concurrent converters serialize.
+legacy conversion runs inside one write transaction that re-verifies its
+preconditions from scratch (no precheck results are reused, closing the TOCTOU
+window) under a PostgreSQL advisory lock so concurrent converters serialize;
+the full schema comparison runs after the subsequent upgrade to head, never
+against an earlier-revision catalog.
 """
 
 from __future__ import annotations
@@ -40,6 +43,9 @@ from sqlalchemy.engine import Connection, Engine, make_url
 LOG = logging.getLogger("migrate_to_unified_baseline")
 
 UNIFIED_BASELINE_REVISION = "20261107_0001"
+# The current Alembic head.  A database still stamped at the unified baseline
+# must be upgraded to this head before its schema matches the ORM.
+CURRENT_HEAD_REVISION = "20261112_0002"
 
 CORE_CRITICAL_TABLES: frozenset[str] = frozenset({
     "accounts",
@@ -203,6 +209,7 @@ class MigrationAction(str, Enum):
 
     EMPTY_DATABASE = "empty_database"
     AT_BASELINE = "at_baseline"
+    UPGRADE_TO_HEAD = "upgrade_to_head"
     LEGACY = "legacy"
     LEGACY_UNSUPPORTED = "legacy_unsupported"
     NEWER_THAN_CODE = "newer_than_code"
@@ -423,6 +430,10 @@ def verify_baseline_schema(bind: Engine | Connection) -> list[str]:
       ``_BASELINE_ONLY_INDEXES`` are ignored: the baseline migration
       creates them outside the ORM metadata, so they surface as removals
       on every genuine baseline database.
+
+    This check is only meaningful against a catalog that has already been
+    upgraded to head; the ORM describes the head, never an earlier revision.
+    Both migration entries therefore run it *after* ``command.upgrade(head)``.
     """
     from alembic.autogenerate import compare_metadata
     from alembic.migration import MigrationContext
@@ -439,6 +450,39 @@ def verify_baseline_schema(bind: Engine | Connection) -> list[str]:
             continue
         errors.append(_describe_diff(diff))
     return errors
+
+
+def verify_upgraded_schema(database_url: str) -> list[str]:
+    """Run the full ORM comparison against a database just upgraded to head.
+
+    The upgraded catalog and the ORM describe the same revision, so no
+    column-level exemption is needed or allowed.
+    """
+
+    with read_only_connection(database_url) as conn:
+        return verify_baseline_schema(conn)
+
+
+def upgrade_head_and_verify(database_url: str) -> None:
+    """Replay the incremental Alembic chain to head, then fully verify.
+
+    Single convergence point for both migration entries: the Alembic chain
+    is the only source of truth, and the complete ``compare_metadata`` check
+    runs only once the live catalog actually matches the head the ORM
+    describes.  Any drift left after the upgrade is reported as an error.
+    """
+
+    from alembic import command
+
+    cfg = alembic_config()
+    cfg.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+    command.upgrade(cfg, "head")
+    errors = verify_upgraded_schema(database_url)
+    if errors:
+        detail = "\n  - ".join(errors)
+        raise SchemaValidationError(
+            "Post-upgrade schema does not match the unified baseline:\n  - " + detail
+        )
 
 
 def _normalize_default(value: Any) -> str | None:
@@ -483,10 +527,10 @@ def verify_narrow_legacy_schema(bind: Engine | Connection) -> list[str]:
     """Conversion-precondition check for the narrow legacy conversion path.
 
     This deliberately does NOT re-verify the whole schema: full-baseline
-    equivalence is enforced by :func:`verify_baseline_schema` after the
-    conversion, inside the same transaction (see
-    :func:`apply_narrow_legacy_conversion`). What remains here is only what
-    the conversion itself relies on:
+    equivalence is enforced by :func:`upgrade_head_and_verify` after the
+    conversion has been upgraded to head -- only then does the live catalog
+    match the ORM the comparison is made against. What remains here is only
+    what the conversion itself relies on:
 
     - every baseline table other than ``folder_patrol_status`` already
       exists (the conversion creates only that one table, so anything else
@@ -641,8 +685,9 @@ def verify_for_plan(conn: Connection, plan: MigrationPlan) -> list[str]:
       (:func:`verify_narrow_legacy_schema`);
     - EMPTY_DATABASE: nothing exists to verify (startup creates the schema
       by upgrading to head);
-    - any other action is refused by both entries before verification is
-      reached, so it verifies nothing here.
+    - UPGRADE_TO_HEAD: nothing is verified *before* the upgrade (the earlier
+      revision's catalog legitimately differs from the head ORM); both
+      entries run :func:`upgrade_head_and_verify` afterwards instead.
     """
     if plan.action is MigrationAction.AT_BASELINE:
         return verify_baseline_schema(conn)
@@ -683,6 +728,9 @@ def _stamp_targets(current: list[str], revision: str) -> str:
     if not current:
         return "insert"
     if current == [revision]:
+        return "noop"
+    if current == [CURRENT_HEAD_REVISION]:
+        # Already past the baseline; never downgrade the stamp.
         return "noop"
     if all(is_narrow_conversion_revision(r) for r in current):
         return "replace"
@@ -861,13 +909,16 @@ def migrate_patrol_status_data(bind: Connection, *, dry_run: bool = False) -> No
 def apply_narrow_legacy_conversion(database_url: str) -> str:
     """Convert a validated narrow legacy database inside one write transaction.
 
-    Re-verifies everything from scratch inside the transaction (precheck
-    results are never reused, closing the TOCTOU window); any failure rolls
-    back the whole conversion. Only PostgreSQL is supported: a non-PostgreSQL
-    URL is rejected and the advisory lock is always taken so concurrent
-    converters serialize; the loser re-reads the revision and becomes a
-    no-op. Returns ``"converted"`` or ``"already-at-baseline"`` (idempotent
-    re-run).
+    Re-verifies the conversion preconditions from scratch inside the
+    transaction (precheck results are never reused, closing the TOCTOU
+    window); any failure rolls back the whole conversion. The transaction
+    produces the 0001 baseline shape plus ``folder_patrol_status`` and stamps
+    0001; the calling entry then runs ``upgrade_head_and_verify`` to replay
+    0002 and perform the full compare_metadata check. Only PostgreSQL is
+    supported: a non-PostgreSQL URL is rejected and the advisory lock is
+    always taken so concurrent converters serialize; the loser re-reads the
+    revision and becomes a no-op. Returns ``"converted"`` or
+    ``"already-at-baseline"`` (idempotent re-run).
     """
     engine = create_engine(check_connect_url(database_url))
     try:
@@ -895,13 +946,11 @@ def apply_narrow_legacy_conversion(database_url: str) -> str:
                 )
             ensure_folder_patrol_status_table(conn)
             migrate_patrol_status_data(conn)
-            errors = verify_baseline_schema(conn)
-            if errors:
-                detail = "\n  - ".join(errors)
-                raise SchemaValidationError(
-                    "Post-conversion schema does not match the unified baseline; "
-                    "rolling back without changes:\n  - " + detail
-                )
+            # The conversion stamps 0001; the three account-health columns are
+            # applied by the incremental 0002 upgrade performed by the calling
+            # entry immediately afterwards.  The full compare_metadata check
+            # therefore belongs *after* that upgrade (upgrade_head_and_verify),
+            # never here against an earlier-revision catalog.
             stamp_unified_baseline(conn)
             return "converted"
     finally:
@@ -962,9 +1011,9 @@ def plan_migration(state: DatabaseState, *, context: RevisionContext) -> Migrati
     Both ``mail_core.__main__.run_migrations`` and ``run_migration`` build a
     :class:`DatabaseState` and a :class:`RevisionContext` and act on the single
     returned plan; classification never depends on which entry is running or
-    on ``check_only``/``dry_run``. The entries then execute only the actions
-    they support: startup can run ``alembic upgrade head``, the offline tool
-    verifies schema and converts supported legacy databases.
+    on ``check_only``/``dry_run``. Both entries then execute the same upgrade
+    path: :func:`upgrade_head_and_verify` replays the incremental Alembic
+    chain to head and runs the full schema comparison against the ORM.
     """
     version_rows = state.version_rows
     business_tables = tuple(sorted(state.table_names & REQUIRED_TABLES))
@@ -1010,6 +1059,17 @@ def plan_migration(state: DatabaseState, *, context: RevisionContext) -> Migrati
 
     current = version_rows[0]
     if current in context.known_revisions or current == UNIFIED_BASELINE_REVISION:
+        if context.heads and current not in context.heads:
+            return MigrationPlan(
+                action=MigrationAction.UPGRADE_TO_HEAD,
+                current_revision=current,
+                version_rows=version_rows,
+                message=(
+                    f"Database is at earlier known revision '{current}'; "
+                    f"an Alembic upgrade to head '{', '.join(context.heads)}' "
+                    "is required (start mail-core to apply it)."
+                ),
+            )
         return MigrationPlan(
             action=MigrationAction.AT_BASELINE,
             current_revision=current,
@@ -1089,7 +1149,12 @@ def run_migration(
     *,
     dry_run: bool = False,
 ) -> None:
-    """Perform offline schema verification, supported legacy rebuild, and baseline stamping."""
+    """Perform offline schema verification and upgrade to head.
+
+    Both migration entries converge on the Alembic chain as the single source
+    of truth: a database behind head (or a supported narrow legacy database)
+    is upgraded to head and then fully compared against the ORM.
+    """
     import os
 
     raw_url = database_url or os.environ.get("MAIL_CORE_DATABASE_URL")
@@ -1121,6 +1186,10 @@ def run_migration(
             raise SchemaValidationError(plan.message)
 
         is_legacy = plan.action == MigrationAction.LEGACY
+        needs_upgrade = plan.action in (
+            MigrationAction.UPGRADE_TO_HEAD,
+            MigrationAction.LEGACY,
+        )
         errors = verify_for_plan(conn, plan)
 
         if errors:
@@ -1145,13 +1214,15 @@ def run_migration(
             LOG.info("Dry-run complete: no writes were performed.")
             return
 
-    if is_legacy:
-        LOG.info(
-            "Detected supported legacy revision '%s'. Rebuilding folder_patrol_status "
-            "from sync_checkpoints before stamping the unified baseline.",
-            plan.current_revision,
-        )
-        apply_narrow_legacy_conversion(raw_url)
+    if needs_upgrade:
+        if is_legacy:
+            LOG.info(
+                "Detected supported legacy revision '%s'. Rebuilding folder_patrol_status "
+                "from sync_checkpoints before upgrading to head.",
+                plan.current_revision,
+            )
+            apply_narrow_legacy_conversion(raw_url)
+        upgrade_head_and_verify(raw_url)
         return
 
     engine = create_engine(check_connect_url(raw_url))

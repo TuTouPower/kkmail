@@ -1,0 +1,17 @@
+{
+  "tid": "t076",
+  "attempt": 1,
+  "execution_id": "e6a8c0447cc34ff284bb1c9667a78731",
+  "status": "done",
+  "branch": "t076_account_sync_state_and_retry_architecture_refactor",
+  "base_sha": "20b61520c0837db9cd4c44506886bae6a507a1a2",
+  "spec_source_sha": "20b61520c0837db9cd4c44506886bae6a507a1a2",
+  "tests": "定向 PG 275 passed（迁移正向/逆向、旧库增量升级与数据映射、narrow conversion drift 拒绝、状态机、认证复位）与 134 passed（f008 修复复验）；后端 unit 1654 passed（2 个采纳前基线既存失败：`test_check_dep_locks` uv lock 漂移、`test_check_doc_sensitive` 历史 review 文档占位符/示例误判，均在主仓 HEAD 复现）；前端 vitest 586 passed + `tsc -b` / build / `oxlint` / `openapi:check` / `css:check`；模板契约 463 passed、桌面单测通过；最终全量 PG 门禁结果见 `.scratch/pg_gate6.log`。",
+  "blackbox": "stubApi E2E 21 passed；全栈真实 FastAPI + PG + Worker + 生产 SPA Playwright 8 passed。",
+  "review": "full 级 4 轮，`review_code.md` / `review_test.md` Round 4 均 PASS；16 个 finding 全部处置（15 已修 / 1 遗留→p076），coverage 7/7，无 TICK-VOID。",
+  "review_scope": "043571e6ec6c3d82",
+  "pending": [
+    "p076"
+  ],
+  "findings": []
+}

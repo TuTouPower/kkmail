@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.sync_requests import create_sync_request, get_sync_request_report
-from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
+from mail_core.mail.domain.enums import JobStatus, JobType
 from mail_core.mail.storage.models import (
     Account,
     AccountSyncLease,
@@ -337,7 +337,12 @@ def test_delta_capacity_requeue_keeps_priority(monkeypatch):
     assert _pending_job(account_id, JobType.SYNC_FOLDER_DELTA.value, folders["INBOX"]).priority == 55
 
 
-def test_delta_provider_error_requeue_keeps_priority(monkeypatch):
+def test_delta_provider_error_returns_without_private_requeue(monkeypatch):
+    """A provider error no longer spawns a private successor job: the Worker
+    framework retries the same job row in place, which preserves priority and
+    counts the failure (t076).
+    """
+
     account_id, folders = _seed_account(baselines=True)
 
     class BrokenProvider:
@@ -349,7 +354,20 @@ def test_delta_provider_error_requeue_keeps_priority(monkeypatch):
         account_id, folders["INBOX"], worker_id="w", store=object(), priority=55
     )
     assert result["status"] == "provider_error"
-    assert _pending_job(account_id, JobType.SYNC_FOLDER_DELTA.value, folders["INBOX"]).priority == 55
+    assert "followup_scheduled" not in result
+    assert "followup_coalesced" not in result
+    # No privately spawned successor; priority is preserved by the framework
+    # requeueing the original claimed row (covered by the Worker tests).
+    Session = get_session_factory()
+    with Session() as session:
+        spawned = session.scalar(
+            select(WorkerJob).where(
+                WorkerJob.account_id == account_id,
+                WorkerJob.job_type == JobType.SYNC_FOLDER_DELTA.value,
+                WorkerJob.status == JobStatus.PENDING.value,
+            )
+        )
+        assert spawned is None
 
 
 def test_delta_fencing_reschedule_keeps_priority(monkeypatch):
@@ -653,7 +671,8 @@ def test_a21_background_folder_failure_is_isolated_from_inbox(monkeypatch, failu
 
     with Session() as session:
         account = session.get(Account, account_id)
-        assert account.sync_status not in (SyncStatus.FAILED.value, SyncStatus.AUTH_FAILED.value)
+        # t076: 旧 "不该被误标 failed/auth_failed" → credential 保持 valid。
+        assert account.credential_state == "valid" and account.connectivity_state == "connected"
         report = get_sync_request_report(session, request_id)
         assert report.state == "complete"
         assert report.inbox_ready is True

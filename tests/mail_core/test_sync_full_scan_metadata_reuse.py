@@ -76,7 +76,6 @@ def test_full_request_reuses_root_generation_while_metadata_in_flight():
                 provider="imap",
                 credential_ref=None,
                 sync_enabled=True,
-                sync_status="idle",
                 config={},
                 created_at=_NOW,
                 updated_at=_NOW,

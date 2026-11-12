@@ -437,17 +437,33 @@ def reschedule_job(
     worker_id: str | None = None,
     delay_seconds: float = 5.0,
     now: datetime | None = None,
+    count_failure: bool = False,
+    error: BaseException | str | None = None,
 ) -> None:
-    """Delay a job *without* counting a failure (design §7 deferral).
+    """Requeue a job on the same row (framework-owned retry).
 
-    Used for local capacity/control deferrals (provider connection
-    budget saturated, slot control connection failed): the job returns
-    to PENDING with a short delay, ``failure_attempts`` and
-    ``last_error`` are untouched, and bound sync-request targets stay
-    open on the same execution generation.
+    * ``count_failure=False`` (default): a control deferral (capacity) that
+      must not count as a failure — ``failure_attempts``/``last_error`` stay
+      untouched and the delay is the caller-supplied one.
+    * ``count_failure=True``: a retriable execution failure — the same job id
+      is kept, ``failure_attempts`` is incremented, ``last_error`` is set, an
+      exponential-backoff window is stamped, and the terminal failure cap is
+      honoured via ``fail_job``.
+
+    Both paths keep bound sync-request targets open on the same execution
+    generation (``outcome="retriable"``); no successor job is created.
     """
+
     _assert_job_owner(job, worker_id)
     now = now or datetime.now(timezone.utc)
+
+    if count_failure:
+        # Delegate to the framework's single retry implementation: it owns
+        # failure counting, exponential backoff, the retry_after hint, the
+        # terminal cap and binding settlement.  No duplicate logic here.
+        fail_job(session, job, error or "retriable failure", worker_id=worker_id, now=now)
+        return
+
     delay = max(0.5, float(delay_seconds))
     job.status = JobStatus.PENDING.value
     job.run_after = now + timedelta(seconds=delay)

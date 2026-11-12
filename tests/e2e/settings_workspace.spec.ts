@@ -6,7 +6,9 @@ async function settingsFixture(page: Page) {
   const accounts = Array.from({ length: 18 }, (_, index) => ({
     id: `settings-${index}`, email: index === 0 ? 'long-address-for-settings@gmail.com' : `account-${index}@example.com`,
     provider: 'imap', account_type: 'imap', group_id: index % 2 ? undefined : 'work',
-    sync_enabled: index !== 1, sync_status: index === 0 ? 'auth_failed' : 'idle',
+    sync_enabled: index !== 1,
+    credential_state: index === 0 ? 'invalid' : 'valid',
+    connectivity_state: 'connected', sync_activity: 'idle', last_connectivity_error: null,
   }))
   await setupStubApi(page, { authedInitially: true, accounts, groups })
   await page.route('**/api/accounts**', async route => {
@@ -34,7 +36,10 @@ test('settings workspace: filters, sync preference, native modal keyboard and se
   await page.setViewportSize({ width: 1440, height: 960 })
   await settingsFixture(page)
   const settings = page.getByRole('region', { name: '应用设置' })
-  await expect(settings.getByText('认证失败', { exact: true })).toBeVisible()
+  // credential_state=invalid renders the 认证失败 health state; the old
+  // blanket 同步失败 single-value label must be absent.
+  await expect(settings.locator('.settings-sync-status').getByText('认证失败', { exact: true })).toBeVisible()
+  await expect(settings.getByText('同步失败', { exact: true })).toHaveCount(0)
   await settings.getByRole('searchbox', { name: '搜索账户' }).fill('gmail.com')
   await expect(settings.locator('.settings-account-row')).toHaveCount(1)
   await settings.getByRole('switch', { name: '暂停同步 long-address-for-settings@gmail.com' }).click()

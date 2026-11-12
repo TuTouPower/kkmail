@@ -22,11 +22,40 @@ class FolderRole(StrEnum):
 
 
 class SyncStatus(StrEnum):
+    """Folder-level selectability/pause state (NOT account health).
+
+    Account health is modelled orthogonally by ``CredentialState``,
+    ``ConnectivityState`` and ``SyncActivity``.  ``SyncStatus`` is retained
+    exclusively for ``folders.sync_status``.
+    """
+
     IDLE = "idle"
     RUNNING = "running"
     PAUSED = "paused"
     FAILED = "failed"
     AUTH_FAILED = "auth_failed"
+
+
+class CredentialState(StrEnum):
+    """Whether the stored credential can still authenticate with the provider."""
+
+    VALID = "valid"
+    INVALID = "invalid"
+
+
+class ConnectivityState(StrEnum):
+    """Transport reachability of the provider, tracked by the circuit breaker."""
+
+    CONNECTED = "connected"
+    DEGRADED = "degraded"
+    UNREACHABLE = "unreachable"
+
+
+class SyncActivity(StrEnum):
+    """Whether a sync job is currently executing for the account."""
+
+    IDLE = "idle"
+    SYNCING = "syncing"
 
 
 class SyncRunStatus(StrEnum):

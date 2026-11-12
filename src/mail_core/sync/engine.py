@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
-from mail_core.sync.context import account_sync_failure_status, sync_context_payload
+from mail_core.sync.context import sync_context_payload
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncRunStatus, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.connection_slots import (
@@ -244,18 +244,6 @@ def sync_account_folders(
             delay = float(exc.retry_after_seconds or 60)
             delay = max(1.0, min(delay, 86400.0))
             with Session() as session:
-                acc = session.get(Account, account_id)
-                failure = account_sync_failure_status(
-                    result={"status": "rate_limited"}, is_background=background
-                )
-                if acc is not None and failure is not None:
-                    acc.sync_status = failure.value
-                    cfg = dict(acc.config or {})
-                    cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
-                    cfg["last_sync_error"] = safe_provider_summary(exc)
-                    acc.config = cfg
-                    if hasattr(acc, "last_synced_at"):
-                        setattr(acc, "last_synced_at", datetime.now(timezone.utc))
                 enqueue_job(
                     session,
                     job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
@@ -271,16 +259,6 @@ def sync_account_folders(
     except Exception as exc:
         with Session() as session:
             try:
-                acc = session.get(Account, account_id)
-                failure = account_sync_failure_status(result=exc, is_background=background)
-                if acc is not None and failure is not None:
-                    acc.sync_status = failure.value
-                    cfg = dict(acc.config or {})
-                    cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
-                    cfg["last_sync_error"] = safe_provider_summary(exc)
-                    acc.config = cfg
-                    if hasattr(acc, "last_synced_at"):
-                        setattr(acc, "last_synced_at", datetime.now(timezone.utc))
                 release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
                 session.commit()
             except FencingMismatch:
@@ -447,15 +425,6 @@ def sync_account_folders(
         run.status = SyncRunStatus.DONE.value
         run.finished_at = datetime.now(timezone.utc)
         run.stats = {"folders": len(folder_ids), "upserted": upserted}
-        acc = session.get(Account, account_id)
-        if acc is not None and acc.sync_status not in (SyncStatus.FAILED.value, SyncStatus.AUTH_FAILED.value):
-            acc.sync_status = SyncStatus.IDLE.value
-            cfg = dict(acc.config or {})
-            cfg["last_synced_at"] = datetime.now(timezone.utc).isoformat()
-            cfg.pop("last_sync_error", None)
-            acc.config = cfg
-            if hasattr(acc, "last_synced_at"):
-                setattr(acc, "last_synced_at", datetime.now(timezone.utc))
         release_lease(session, account_id=account_id, owner_id=worker_id, fencing_token=fencing)
         session.commit()
         return {"status": "ok", "folders": len(folder_ids), "upserted": upserted}

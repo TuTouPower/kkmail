@@ -41,6 +41,7 @@ if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
 from mail_core.db.baseline import (
+    CURRENT_HEAD_REVISION,
     KNOWN_LEGACY_REVISIONS,
     REQUIRED_TABLES,
     UNIFIED_BASELINE_REVISION,
@@ -162,26 +163,37 @@ def _create_full_schema(engine) -> None:
 
 
 def _create_0030_schema(engine) -> None:
-    """Build a convertible 0030 legacy shape and seed one patrol row.
+    """Build a faithful convertible 0030 legacy shape from historical 0001 DDL.
 
-    The shape is the unified baseline (ORM metadata) minus the
-    folder_patrol_status table, stamped 20261031_0030, with one
-    patrol-bearing checkpoint row plus its parent account/folder rows.
-
-    A16 note: the previous fixture hand-built minimal tables (VARCHAR(64)
-    columns, most columns missing). That is no longer a convertible legacy
-    database: the conversion now re-verifies the post-conversion schema
-    against the full baseline inside the transaction, so only a faithful
-    0030 shape (baseline minus the one table the conversion creates) can
-    convert. The fixture therefore starts from the real baseline shape.
+    A real legacy database is the 0001 baseline (``accounts.sync_status``,
+    none of the three health columns) minus ``folder_patrol_status``, stamped
+    with the historical revision. Building it from the current ORM would forge
+    the new schema and make every conversion test vacuous, so the fixture
+    replays the historical Alembic revision instead.
     """
-    _create_full_schema(engine)
+
+    from alembic import command
+    from mail_core.db.baseline import UNIFIED_BASELINE_REVISION, alembic_config
+
+    cfg = alembic_config()
+    cfg.set_main_option("sqlalchemy.url", _schema_url(engine).replace("%", "%%"))
+    command.upgrade(cfg, UNIFIED_BASELINE_REVISION)
     with engine.begin() as conn:
+        # Guard: the fixture must faithfully represent the historical 0001
+        # shape, never the current head (three health columns).
+        account_columns = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'accounts' AND table_schema = current_schema()"
+                )
+            )
+        }
+        assert "sync_status" in account_columns
+        assert not {"credential_state", "connectivity_state", "sync_activity"} & account_columns
         conn.execute(text("DROP TABLE folder_patrol_status"))
-        conn.execute(text(
-            "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
-        ))
-        conn.execute(text("INSERT INTO alembic_version VALUES ('20261031_0030')"))
+        conn.execute(text("UPDATE alembic_version SET version_num = '20261031_0030'"))
         conn.execute(
             text(
                 "INSERT INTO accounts (id, email, provider) "
@@ -224,7 +236,7 @@ def _build_state(engine, state: str) -> None:
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
         )
         revision = {
-            "at_head": UNIFIED_BASELINE_REVISION,
+            "at_head": CURRENT_HEAD_REVISION,
             "legacy": "20261031_0030",
             "unknown": "unknown_rev_9999",
         }[state]
@@ -339,10 +351,19 @@ def test_verify_baseline_schema_rejects_dropped_column(pg_engine):
     assert any("display_name" in e for e in errors)
 
 
-def test_conversion_rejects_drifted_legacy_schema_and_rolls_back(pg_engine):
-    """A16: the post-conversion full comparison runs inside the conversion
-    transaction; a legacy database whose remaining schema drifts from the
-    baseline is refused and left completely untouched."""
+def test_conversion_rejects_drifted_legacy_schema_after_upgrade(pg_engine):
+    """A legacy database whose remaining schema drifts from the baseline is
+    refused by the post-upgrade full comparison (t077).
+
+    Rewritten from ``test_conversion_rejects_drifted_legacy_schema_and_rolls_back``:
+    the full compare_metadata check now runs after ``upgrade head`` against the
+    head the ORM describes, not inside the conversion transaction against an
+    earlier-revision catalog. Conversion and upgrade are therefore committed
+    before the check, so the old "zero writes / untouched" assertion no longer
+    holds; the invariant is that the drift is caught and the database is not
+    accepted as healthy.
+    """
+
     db_url = _schema_url(pg_engine)
     _create_0030_schema(pg_engine)
     with pg_engine.begin() as conn:
@@ -352,10 +373,9 @@ def test_conversion_rejects_drifted_legacy_schema_and_rolls_back(pg_engine):
         run_migration(db_url)
 
     with pg_engine.connect() as conn:
-        assert "folder_patrol_status" not in set(inspect(conn).get_table_names())
-        assert conn.execute(
-            text("SELECT version_num FROM alembic_version")
-        ).scalars().all() == ["20261031_0030"]
+        # The drift survives and the full comparison still rejects it, so a
+        # later run cannot silently accept the database as healthy.
+        assert verify_baseline_schema(conn)
 
 
 def test_run_migration_rejects_empty_database(pg_engine):
@@ -449,22 +469,43 @@ def test_main_cli_returns_expected_exit_codes(pg_engine):
         )
         conn.execute(
             text("INSERT INTO alembic_version VALUES (:rev)"),
-            {"rev": UNIFIED_BASELINE_REVISION},
+            {"rev": CURRENT_HEAD_REVISION},
         )
     assert main(["--database-url", db_url]) == 0
 
 
-def test_migrate_from_0030_legacy_database_success(pg_engine):
+def test_real_0030_shape_upgrades_to_head_with_forward_data_mapping(pg_engine):
+    """A faithful 0030 shape (``accounts.sync_status``) upgrades to head
+    through the offline entry, with legacy status values mapped forward (t077).
+
+    Rewritten from ``test_migrate_from_0030_legacy_database_success``: the
+    legacy fixture is now the real 0001 baseline instead of the current ORM,
+    and the offline entry replays the incremental 0002 revision rather than
+    merely stamping 0001. The old "version == UNIFIED_BASELINE_REVISION"
+    assertion is therefore replaced by the full head-upgrade contract.
+    """
+
     db_url = _schema_url(pg_engine)
     _create_0030_schema(pg_engine)
+    with pg_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, provider, sync_status) "
+                "VALUES (:acc, 'dead-credential@example.test', 'imap', 'auth_failed')"
+            ),
+            {"acc": uuid.uuid4()},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, provider, sync_status) "
+                "VALUES (:acc, 'broken-link@example.test', 'imap', 'failed')"
+            ),
+            {"acc": uuid.uuid4()},
+        )
 
-    # 1. Run migration CLI on 0030 database
     ret = main(["--database-url", db_url])
-
-    # 2. Assert exit code 0
     assert ret == 0
 
-    # 3. Assert folder_patrol_status was created and contains migrated patrol data
     with pg_engine.connect() as conn:
         tables = set(inspect(conn).get_table_names())
         assert "folder_patrol_status" in tables
@@ -479,7 +520,6 @@ def test_migrate_from_0030_legacy_database_success(pg_engine):
         assert row[2] == 3
         assert row[3] is not None
 
-        # 4. Assert sync_checkpoints.cursor has old keys stripped
         cp_row = conn.execute(
             text("SELECT cursor FROM sync_checkpoints WHERE folder_id = :fid"),
             {"fid": _FOLDER_ID},
@@ -491,9 +531,35 @@ def test_migrate_from_0030_legacy_database_success(pg_engine):
         assert "last_probe_failures" not in cur_data
         assert cur_data.get("delta_token") == "token-xyz"
 
-        # 5. Assert alembic_version stamped to unified baseline
+        # The offline entry replays 0002: full head schema + forward mapping.
         versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-        assert versions == [UNIFIED_BASELINE_REVISION]
+        assert versions == [CURRENT_HEAD_REVISION]
+        account_columns = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='accounts' AND table_schema=current_schema()"
+                )
+            )
+        }
+        assert "sync_status" not in account_columns
+        assert {"credential_state", "connectivity_state", "sync_activity"} <= account_columns
+
+        dead = conn.execute(
+            text(
+                "SELECT credential_state, sync_enabled FROM accounts "
+                "WHERE email='dead-credential@example.test'"
+            )
+        ).one()
+        assert dead == ("invalid", False)
+        broken = conn.execute(
+            text(
+                "SELECT credential_state, connectivity_state FROM accounts "
+                "WHERE email='broken-link@example.test'"
+            )
+        ).one()
+        assert broken == ("valid", "degraded")
 
 
 def test_run_migration_refuses_unknown_revision_with_zero_writes(pg_engine):
@@ -714,3 +780,65 @@ def test_plan_migration_two_entries_agree_on_classification(pg_engine, state, ex
     assert startup_plan.action == expected_action
     assert offline_plan.action == expected_action
     assert startup_plan.action == offline_plan.action
+
+
+def test_verify_baseline_schema_never_exempts_health_columns(pg_engine):
+    """A 0001-shaped catalog must report all four column differences.
+
+    Regression guard for t077 AC-001: if a column-level exemption were ever
+    reintroduced, every conversion test could go green on a forged shape and
+    this one must go red. ``verify_baseline_schema`` has no exemption switch;
+    it compares against the head ORM unconditionally.
+    """
+
+    from alembic import command
+    from mail_core.db.baseline import UNIFIED_BASELINE_REVISION, alembic_config
+
+    cfg = alembic_config()
+    cfg.set_main_option("sqlalchemy.url", _schema_url(pg_engine).replace("%", "%%"))
+    command.upgrade(cfg, UNIFIED_BASELINE_REVISION)
+    with pg_engine.connect() as conn:
+        errors = verify_baseline_schema(conn)
+    joined = "\n".join(errors)
+    assert "sync_status" in joined
+    assert "credential_state" in joined
+    assert "connectivity_state" in joined
+    assert "sync_activity" in joined
+
+
+def test_offline_upgrade_to_head_from_0001_baseline(pg_engine):
+    """UPGRADE_TO_HEAD via the offline entry replays 0002 and verifies.
+
+    The offline tool no longer refuses an earlier known revision; it replays
+    the incremental Alembic chain, then runs the full ORM comparison.
+    """
+
+    from alembic import command
+    from mail_core.db.baseline import UNIFIED_BASELINE_REVISION, alembic_config
+
+    db_url = _schema_url(pg_engine)
+    cfg = alembic_config()
+    cfg.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
+    command.upgrade(cfg, UNIFIED_BASELINE_REVISION)
+    with pg_engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == UNIFIED_BASELINE_REVISION
+
+    assert main(["--database-url", db_url]) == 0
+    with pg_engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == CURRENT_HEAD_REVISION
+        assert verify_baseline_schema(conn) == []
+        columns = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='accounts' AND table_schema=current_schema()"
+                )
+            )
+        }
+        assert "sync_status" not in columns
+        assert {"credential_state", "connectivity_state", "sync_activity"} <= columns

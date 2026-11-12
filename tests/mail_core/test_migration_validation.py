@@ -5,13 +5,14 @@ upgrade, reversible downgrade base to upgrade head cycles, relational
 constraints/indexes/FTS, zero ORM schema drift, and offline baseline stamp tool
 against real PostgreSQL.
 
-A16 derives the 0030 narrow-legacy fixtures from the unified baseline
-(alembic upgrade head, minus folder_patrol_status), the single schema truth
-the conversion verifies with a full compare_metadata over the real catalog.
-The assertions cover the conversion logic -- table creation, patrol data
-migration, stamping, idempotency, concurrent serialization, rollback -- not a
-second hand-written schema, so deriving the shape from the baseline does not
-make them pass trivially.
+The 0030 narrow-legacy fixtures are derived from the historical 0001 baseline
+(``alembic upgrade 20261107_0001``, minus ``folder_patrol_status``), so they
+carry the real legacy ``accounts.sync_status`` column rather than the current
+head's three health columns. The full compare_metadata check runs after the
+incremental upgrade to head. The assertions cover the conversion logic --
+table creation, patrol data migration, stamping, idempotency, concurrent
+serialization, rollback -- not a second hand-written schema; each fixture
+guards its historical shape so the tests cannot silently pass vacuously.
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ if str(ROOT / "scripts") not in sys.path:
 
 from mail_core.db import baseline
 from mail_core.db.baseline import (
+    CURRENT_HEAD_REVISION,
     REQUIRED_TABLES,
     UNIFIED_BASELINE_REVISION,
     SchemaValidationError,
@@ -88,9 +90,11 @@ def _get_alembic_config() -> Config:
 
 
 def test_alembic_chain_has_single_head():
-    """Adoption A17: Migration history is squashed to a single unified baseline."""
+    """Adoption A17: the migration tree has exactly one head (baseline plus
+    incremental revisions form a linear chain, never a fork)."""
+
     script = ScriptDirectory.from_config(_get_alembic_config())
-    assert script.get_heads() == [UNIFIED_BASELINE_REVISION]
+    assert script.get_heads() == [CURRENT_HEAD_REVISION]
 
     current = script.get_revision(UNIFIED_BASELINE_REVISION)
     assert current is not None
@@ -424,7 +428,7 @@ def test_offline_migration_tool_verifies_and_stamps_live_db():
         cur_rev = conn.execute(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
-        assert cur_rev == UNIFIED_BASELINE_REVISION
+        assert cur_rev == CURRENT_HEAD_REVISION
 
 
 def test_offline_tool_refuses_legacy_schema_without_side_effects_on_postgres():
@@ -581,18 +585,17 @@ def test_patrol_status_migration_executes_on_real_postgres():
 # --- AC-006: Narrow legacy conversion guarantees on real PostgreSQL ------------
 
 def _pg_build_0030_shape(cfg, engine) -> tuple[uuid.UUID, uuid.UUID]:
-    """Build the 0030 shape from the unified baseline truth and seed patrol data.
+    """Build a faithful 0030 legacy shape from the historical 0001 baseline.
 
-    A16's conversion re-verifies the post-conversion schema with a full
-    compare_metadata against the ORM baseline, so a hand-transcribed second
-    schema can never pass. 0030 is alembic upgrade head (the single baseline
-    truth) minus folder_patrol_status, stamped with the historical revision.
-    The assertions here cover the conversion logic -- table creation, patrol
-    data migration, stamping, idempotency, concurrent serialization and
-    rollback -- not the schema text, so deriving the shape from the baseline
-    does not weaken them.
+    A legacy database is the 0001 baseline DDL (``accounts.sync_status``,
+    none of the three health columns) minus ``folder_patrol_status``, stamped
+    with the historical revision. Deriving it from ``upgrade head`` would
+    forge the new schema and make every conversion test vacuous. The
+    assertions here cover the conversion logic -- table creation, patrol data
+    migration, stamping, idempotency, concurrent serialization and rollback
+    -- not the schema text.
     """
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, UNIFIED_BASELINE_REVISION)
     account_id = uuid.uuid4()
     folder_id = uuid.uuid4()
     cursor_value = {
@@ -602,6 +605,19 @@ def _pg_build_0030_shape(cfg, engine) -> tuple[uuid.UUID, uuid.UUID]:
         "delta_token": "token-xyz",
     }
     with engine.begin() as conn:
+        # Guard: the fixture must faithfully represent the historical 0001
+        # shape, never the current head (three health columns).
+        account_columns = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'accounts' AND table_schema = current_schema()"
+                )
+            )
+        }
+        assert "sync_status" in account_columns
+        assert not {"credential_state", "connectivity_state", "sync_activity"} & account_columns
         conn.execute(text("DROP TABLE folder_patrol_status"))
         conn.execute(text("UPDATE alembic_version SET version_num = '20261031_0030'"))
         conn.execute(

@@ -81,7 +81,7 @@ def test_ac001_schedules_overdue_inbox():
         assert job is not None
         assert job.status == JobStatus.PENDING.value
         assert job.priority == 75
-        assert job.payload == {"folder_id": str(folder_id)}
+        assert job.payload == {"folder_id": str(folder_id), "background": True}
 
 
 def test_ac001_ignores_disabled_accounts_and_paused_or_non_inbox_folders():

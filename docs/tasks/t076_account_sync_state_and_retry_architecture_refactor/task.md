@@ -47,13 +47,13 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：`Account` 模型与 PostgreSQL `accounts` 表结构移除 `sync_status`，新增 `credential_state`（`valid` / `invalid`，默认 `valid`）、`connectivity_state`（`connected` / `degraded` / `unreachable`，默认 `connected`）和 `sync_activity`（`idle` / `syncing`，默认 `idle`）字段，并提供完整的 Alembic 迁移脚本。
-- [ ] AC-002：移除 `delta.py` 中捕获 provider 异常后自行入队新任务并返回伪 `done` 的私有重试逻辑；单次网络异常（如 `OSError`、超时）直接交由 Worker 调度器调用带退避参数的 `reschedule_job`，保留原始任务 ID 并递增 `attempts` 与 `failure_attempts`。
-- [ ] AC-003：`worker/main.py` 的 `schedule_periodic_inbox_sync` 为所有周期性增量任务显式注入 `{"background": True}` 上下文；`resolve_sync_context` 识别该标记并返回 `is_background=True`，使周期同步的偶发网络抖动不外溢污染账号状态。
-- [ ] AC-004：实现确定性连接健康度状态机，单次网络异常使 `connectivity_state` 转为 `degraded`，只有在连续失败达 5 次阈值且超过 5 分钟窗口时才转为 `unreachable`；任一任务建连成功即由成功事件将 `connectivity_state` 立即恢复为 `connected`，彻底废除 `_recover_account_sync_status` 扫表擦除逻辑。
-- [ ] AC-005：当邮件服务商返回 401、`AUTHENTICATIONFAILED` 或 OAuth `invalid_grant` 且不可刷新时，准确将 `credential_state` 标记为 `invalid` 并置 `sync_enabled=False`；非认证异常（网络中断、超时、限流）严禁将 `credential_state` 修改为 `invalid`。
-- [ ] AC-006：`GET /api/accounts` 返回包含 `credential_state`、`connectivity_state`、`sync_activity` 和 `last_connectivity_error` 的 `AccountOut` 结构，移除旧 `sync_status`，OpenAPI 契约及前端类型同步对齐。
-- [ ] AC-007：前端 `Sidebar.tsx` 与 `SettingsModal.tsx` 移除静态硬编码文案「同步失败，请检查账户设置」；仅在 `credential_state === 'invalid'` 时渲染红标与凭据失效指引，在 `connectivity_state === 'degraded' | 'unreachable'` 时渲染网络重试或不可达状态，后台静默同步网络异常不触发侧栏全局报警。
+- [x] AC-001：`Account` 模型与 PostgreSQL `accounts` 表结构移除 `sync_status`，新增 `credential_state`（`valid` / `invalid`，默认 `valid`）、`connectivity_state`（`connected` / `degraded` / `unreachable`，默认 `connected`）和 `sync_activity`（`idle` / `syncing`，默认 `idle`）字段，并提供完整的 Alembic 迁移脚本。
+- [x] AC-002：移除 `delta.py` 中捕获 provider 异常后自行入队新任务并返回伪 `done` 的私有重试逻辑；单次网络异常（如 `OSError`、超时）直接交由 Worker 调度器调用带退避参数的 `reschedule_job`，保留原始任务 ID 并递增 `attempts` 与 `failure_attempts`。
+- [x] AC-003：`worker/main.py` 的 `schedule_periodic_inbox_sync` 为所有周期性增量任务显式注入 `{"background": True}` 上下文；`resolve_sync_context` 识别该标记并返回 `is_background=True`，使周期同步的偶发网络抖动不外溢污染账号状态。
+- [x] AC-004：实现确定性连接健康度状态机，单次网络异常使 `connectivity_state` 转为 `degraded`，只有在连续失败达 5 次阈值且超过 5 分钟窗口时才转为 `unreachable`；任一任务建连成功即由成功事件将 `connectivity_state` 立即恢复为 `connected`，彻底废除 `_recover_account_sync_status` 扫表擦除逻辑。
+- [x] AC-005：当邮件服务商返回 401、`AUTHENTICATIONFAILED` 或 OAuth `invalid_grant` 且不可刷新时，准确将 `credential_state` 标记为 `invalid` 并置 `sync_enabled=False`；非认证异常（网络中断、超时、限流）严禁将 `credential_state` 修改为 `invalid`。
+- [x] AC-006：`GET /api/accounts` 返回包含 `credential_state`、`connectivity_state`、`sync_activity` 和 `last_connectivity_error` 的 `AccountOut` 结构，移除旧 `sync_status`，OpenAPI 契约及前端类型同步对齐。
+- [x] AC-007：前端 `Sidebar.tsx` 与 `SettingsModal.tsx` 移除静态硬编码文案「同步失败，请检查账户设置」；仅在 `credential_state === 'invalid'` 时渲染红标与凭据失效指引，在 `connectivity_state === 'degraded' | 'unreachable'` 时渲染网络重试或不可达状态，后台静默同步网络异常不触发侧栏全局报警。
 
 ### 可测试性声明
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
 import json
 from typing import cast
@@ -12,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from mail_core.mail.domain.enums import JobType, ProviderType, SyncStatus
+from mail_core.mail.domain.enums import JobType, ProviderType, SyncActivity
 from mail_core.mail.storage.models import Account, AccountGroup
 from mail_core.security.credentials import get_credential_store, save_json_secret
 from mail_core.sync.jobs import enqueue_job
@@ -164,7 +163,7 @@ def update_account(
     if sync_enabled is not None:
         acc.sync_enabled = sync_enabled
         if not sync_enabled:
-            acc.sync_status = SyncStatus.IDLE.value
+            acc.sync_activity = SyncActivity.IDLE.value
     if config_patch:
         merged = dict(acc.config or {})
         merged.update(config_patch)
@@ -237,7 +236,7 @@ def enqueue_account_sync(session: Session, account_id: uuid.UUID) -> uuid.UUID:
         priority=50,
         dedupe_key=f"sync-folders:{account_id}",
     )
-    acc.sync_status = SyncStatus.RUNNING.value
+    acc.sync_activity = SyncActivity.SYNCING.value
     session.flush()
     return job.id
 
@@ -455,29 +454,3 @@ def delete_group(session: Session, group_id: uuid.UUID) -> None:
 
 def lock_sidebar_layout(session: Session) -> None:
     session.execute(select(func.pg_advisory_xact_lock(SIDEBAR_LAYOUT_LOCK_ID)))
-
-
-def update_account_sync_status(
-    session: Session,
-    account_id: uuid.UUID,
-    status: SyncStatus,
-    *,
-    error: str | None = None,
-    synced_at: datetime | None = None,
-) -> Account | None:
-    acc = session.get(Account, account_id)
-    if acc is None:
-        return None
-    acc.sync_status = status.value
-    ts = synced_at or datetime.now(timezone.utc)
-    cfg = dict(acc.config or {})
-    cfg["last_synced_at"] = ts.isoformat()
-    if error:
-        from mail_core.security.redact import safe_provider_summary
-
-        cfg["last_sync_error"] = safe_provider_summary(error)
-    elif status == SyncStatus.IDLE:
-        cfg.pop("last_sync_error", None)
-    acc.config = cfg
-    session.flush()
-    return acc

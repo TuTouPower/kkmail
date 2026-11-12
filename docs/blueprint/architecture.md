@@ -121,6 +121,16 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 2. **日常同步接口 100% 增量化**：`/api/accounts/sync-all` 与 `/api/accounts/{account_id}/sync` 的 `mode` 严格收敛为 `"delta"`；文件夹发现层若检测到该目录已具备基线，自动流转为 `SYNC_FOLDER_DELTA`，几秒内秒级完成，彻底杜绝日常操作误触历史全量扫描而阻断新邮件发现。
 3. **全量重扫异常自愈隔离**：全量历史重新拉取仅限远端游标失效（`CursorInvalidError`）时触发自愈重建，禁止暴露为日常常规触发路径。
 
+## 账号健康状态机与 Worker 统一重试调度 (t076)
+
+1. **账号健康状态机三维正交模型**：
+    - 账号级单一 `sync_status`（`idle` / `running` / `failed` / `auth_failed`）彻底移除，由 `src/mail_core/accounts/health.py` 统一维护四个正交字段：`credential_state`（`valid` / `invalid`，`invalid` 时 `sync_enabled=false`）只由认证结果决定，`connectivity_state`（`connected` / `degraded` / `unreachable`）只由传输可达性决定，`sync_activity`（`idle` / `syncing`）只表示是否有同步任务在途，链路诊断写入脱敏 `last_connectivity_error`；三者互不推导、互不覆盖，OpenAPI 与前端 `AccountOut` / `AccountSummary` 契约随新四字段收敛。
+    - 传输层网络抖动、超时与限流只作用于 `connectivity_state`，不得污染凭据态，也不外溢为账号认证失败或侧栏全局报警；后台静默同步故障同理不外溢。连接态熔断以连续 5 次失败且跨越 5 分钟窗口为阈值才置 `unreachable`，任一次链路成功即复位 `connected`，单次抖动只置 `degraded`。
+    - Folder 级 `folders.sync_status`（`paused` / `idle`）是独立实体，完全保留；账号健康状态变更不得触碰文件夹暂停/空闲语义。
+2. **Worker 统一重试调度**：
+    - 协议适配器与传输层不再各自实现重试或自行判定账号状态，瞬时错误统一回归 Worker 任务框架：由 `account_failure_kind` 分类故障来源，`resolve_sync_context` 在顶层注入 `background` 标记，`reschedule_job(count_failure=True)` 保留原 job ID、递增 `failure_attempts` 并按指数退避重排，周期任务 payload 统一携带 `background`。
+    - 失败是否影响账号健康状态由 Worker 框架集中裁定：后台静默任务失败不触发侧栏全局报警，认证类失败才更新 `credential_state`，链路类失败累计到熔断阈值才更新 `connectivity_state`，同步任务在途状态仅由 `sync_activity` 反映；凭据态与连接态始终正交，不因单次抖动互相污染。
+
 ## 远程图片放行存储与正文内联图片 Signed URL 预览 (t066)
 
 1. **远程图片放行模型**：

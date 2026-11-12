@@ -1,14 +1,15 @@
-"""Adoption fixes for the sync backend review (background isolation).
+"""Adoption fixes for the sync backend review (failure-domain isolation).
 
-The payload ``background`` marker is gone: background isolation is a property
-of ``SyncRequest.scope["background"]``, resolved through the ``request_id``
-lineage in mail_core.sync.context. The previous
-MagicMock-based tests asserted ``_is_background_sync(job)`` read that marker;
-their semantics no longer exist, so they were deleted rather than having
-their expectations rewritten to the new output. The real
-create/discovery/handler chain is covered by test_sync_background_lineage.py.
-The pure-function guard tests are kept unchanged; the one DB-backed
-lineage test uses the real PostgreSQL session factory.
+Background isolation is expressed either through ``SyncRequest.scope``
+``background`` lineage (resolved via ``request_id``) or through an explicit
+top-level ``background`` marker on silent/periodic jobs.  Account failures are
+classified orthogonally by ``account_failure_kind`` so that a transport blip
+can never be mistaken for an invalid credential.  The previous
+MagicMock-based tests asserted a since-deleted ``_is_background_sync`` helper
+and a single ``account_sync_failure_status`` enum; their semantics no longer
+exist, so they were rewritten rather than having their expectations nudged to
+the new output.  The real create/discovery/handler chain is covered by
+test_sync_background_lineage.py.
 """
 
 from __future__ import annotations
@@ -21,12 +22,12 @@ import pytest
 
 from mail_core.db.session import get_session_factory
 from mail_core.sync.context import (
-    account_sync_failure_status,
+    AccountFailureKind,
+    account_failure_kind,
     is_permanent_auth_error,
     resolve_sync_context,
     sync_context_payload,
 )
-from mail_core.mail.domain.enums import SyncStatus
 from mail_core.mail.storage.models import SyncRequest, WorkerJob
 from mail_core.providers.http import PermanentAuthError
 
@@ -38,7 +39,7 @@ pytestmark = pytest.mark.skipif(
 _NOW = datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def test_payload_marker_is_never_a_background_source():
+def test_explicit_background_marker_and_scope_lineage():
     Session = get_session_factory()
     fg_id, bg_id = uuid.uuid4(), uuid.uuid4()
     with Session() as session:
@@ -65,10 +66,11 @@ def test_payload_marker_is_never_a_background_source():
             )
         )
         session.commit()
-        stale_marker = WorkerJob(payload={"request_id": str(fg_id), "background": True})
-        assert resolve_sync_context(session, stale_marker) == (False, fg_id)
-        clean_lineage = WorkerJob(payload={"request_id": str(bg_id)})
-        assert resolve_sync_context(session, clean_lineage) == (True, bg_id)
+        # An explicit top-level marker is a first-class background source
+        # (silent/periodic polling), independent of any request lineage.
+        assert resolve_sync_context(session, WorkerJob(payload={"background": True})) == (True, None)
+        assert resolve_sync_context(session, WorkerJob(payload={"request_id": str(bg_id)})) == (True, bg_id)
+        assert resolve_sync_context(session, WorkerJob(payload={"request_id": str(fg_id)})) == (False, fg_id)
         assert resolve_sync_context(session, WorkerJob(payload={})) == (False, None)
 
 
@@ -87,13 +89,19 @@ def test_is_permanent_auth_error_classifies_auth_vs_transient():
     assert is_permanent_auth_error(RuntimeError("transient")) is False
 
 
-def test_account_sync_failure_status_is_single_decision():
-    assert account_sync_failure_status(result=PermanentAuthError("x"), is_background=True) is SyncStatus.AUTH_FAILED
-    assert account_sync_failure_status(result=PermanentAuthError("x"), is_background=False) is SyncStatus.AUTH_FAILED
-    assert account_sync_failure_status(result={"status": "provider_error"}, is_background=True) is None
-    assert account_sync_failure_status(result={"status": "lease_busy"}, is_background=True) is None
-    assert account_sync_failure_status(result={"status": "rate_limited"}, is_background=True) is None
-    assert account_sync_failure_status(result={"status": "provider_error"}, is_background=False) is SyncStatus.FAILED
+def test_account_failure_kind_is_orthogonal():
+    # A confirmed auth rejection invalidates the credential everywhere.
+    assert account_failure_kind(result=PermanentAuthError("x"), is_background=True) is AccountFailureKind.AUTH
+    assert account_failure_kind(result=PermanentAuthError("x"), is_background=False) is AccountFailureKind.AUTH
+    # A foreground transport blip degrades connectivity; a silent background
+    # one never pollutes account health.
+    blip = {"status": "provider_error", "error": "OSError code=101"}
+    assert account_failure_kind(result=blip, is_background=False) is AccountFailureKind.TRANSPORT
+    assert account_failure_kind(result=blip, is_background=True) is AccountFailureKind.NONE
+    # Control-flow outcomes leave account health untouched.
+    for result in ({"status": "lease_busy"}, {"status": "rate_limited"}, {"status": "provider_error"}):
+        assert account_failure_kind(result=result, is_background=True) is AccountFailureKind.NONE
+        assert account_failure_kind(result=result, is_background=False) is AccountFailureKind.NONE
 
 
 def test_factory_does_not_import_dead_host_security_helpers():

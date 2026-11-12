@@ -28,7 +28,8 @@ from mail_core.mail.application.sync_requests import (
     get_sync_request_report,
 )
 from mail_core.sync.context import (
-    account_sync_failure_status,
+    AccountFailureKind,
+    account_failure_kind,
     is_permanent_auth_error,
     resolve_sync_context,
     sync_context_payload,
@@ -302,12 +303,33 @@ def test_failure_status_classification_is_centralized():
     assert is_permanent_auth_error({"status": "auth_failed"}) is True
     assert is_permanent_auth_error({"error_code": "auth_failed"}) is True
     assert is_permanent_auth_error(RuntimeError("transient")) is False
-    assert account_sync_failure_status(result=PermanentAuthError("bad"), is_background=True) is SyncStatus.AUTH_FAILED
-    assert account_sync_failure_status(result={"status": "auth_failed"}, is_background=True) is SyncStatus.AUTH_FAILED
-    assert account_sync_failure_status(result={"status": "rate_limited"}, is_background=True) is None
-    assert account_sync_failure_status(result={"status": "provider_error"}, is_background=True) is None
-    assert account_sync_failure_status(result={"status": "rate_limited"}, is_background=False) is SyncStatus.FAILED
-    assert account_sync_failure_status(result=RuntimeError("x"), is_background=False) is SyncStatus.FAILED
+    # t076: 旧 account_sync_failure_status 返回单一 SyncStatus 已删除；
+    # 分类改由 account_failure_kind 正交表达（AUTH/TRANSPORT/NONE），
+    # 旧断言整体重写，禁止就地改预期字符串。
+    assert account_failure_kind(
+        result=PermanentAuthError("bad"), is_background=True
+    ) is AccountFailureKind.AUTH
+    assert account_failure_kind(
+        result={"status": "auth_failed"}, is_background=False
+    ) is AccountFailureKind.AUTH
+    assert account_failure_kind(
+        result={"status": "rate_limited"}, is_background=True
+    ) is AccountFailureKind.NONE
+    assert account_failure_kind(
+        result={"status": "provider_error"}, is_background=True
+    ) is AccountFailureKind.NONE
+    assert account_failure_kind(
+        result={"status": "rate_limited"}, is_background=False
+    ) is AccountFailureKind.NONE
+    assert account_failure_kind(
+        result=RuntimeError("x"), is_background=False
+    ) is AccountFailureKind.NONE
+    assert account_failure_kind(
+        result=ConnectionError("connection reset by peer"), is_background=False
+    ) is AccountFailureKind.TRANSPORT
+    assert account_failure_kind(
+        result=ConnectionError("connection reset by peer"), is_background=True
+    ) is AccountFailureKind.NONE
 
 
 def test_background_discovery_delta_children_carry_lineage(monkeypatch):
@@ -336,7 +358,7 @@ def test_background_discovery_delta_children_carry_lineage(monkeypatch):
         child_folders = {uuid.UUID(str(j.payload["folder_id"])) for j in children}
         assert folders["inbox"] not in child_folders
         assert child_folders == {folders["sent"], folders["archive"]}
-        assert session.get(Account, aid).sync_status == SyncStatus.IDLE.value
+        assert session.get(Account, aid).credential_state == "valid" and session.get(Account, aid).connectivity_state == "connected"
 
 
 def test_background_discovery_metadata_children_carry_lineage(monkeypatch):
@@ -353,26 +375,27 @@ def test_background_discovery_metadata_children_carry_lineage(monkeypatch):
         children = [j for j in metas if j.payload.get("request_id") == str(bg_id)]
         assert len(children) == 2
         assert all("background" not in j.payload for j in children)
-        assert session.get(Account, aid).sync_status == SyncStatus.IDLE.value
+        assert session.get(Account, aid).credential_state == "valid" and session.get(Account, aid).connectivity_state == "connected"
 
 
-def test_background_child_provider_error_does_not_fail_account(monkeypatch):
+def test_background_child_provider_error_requeues_without_polluting_account(monkeypatch):
+    """A background provider error is retried on the same job row by the
+    Worker framework; account health stays clean and no successor job with a
+    hand-rolled ``reason`` payload is spawned.
+    """
+
     Session, aid, folders, bg_id = _prepare(monkeypatch, baselines=True)
     child_id = _job_id(Session, aid, JobType.SYNC_FOLDER_DELTA.value, request_id=bg_id, dedupe_suffix=str(folders["sent"]))
     monkeypatch.setattr(delta_mod, "build_provider", lambda *a, **k: _BrokenDeltaProvider())
     _claim(Session, child_id)
-    assert _run(Session, child_id) is True
+    assert _run(Session, child_id) is False
     with Session() as session:
-        assert session.get(Account, aid).sync_status == SyncStatus.IDLE.value
-        requeued = list(
-            session.scalars(
-                select(WorkerJob).where(
-                    WorkerJob.account_id == aid,
-                    WorkerJob.job_type == JobType.SYNC_FOLDER_DELTA.value,
-                )
-            )
-        )
-        assert any(j.payload.get("reason") == "provider_error" and j.payload.get("request_id") == str(bg_id) for j in requeued)
+        acc = session.get(Account, aid)
+        assert acc.credential_state == "valid" and acc.connectivity_state == "connected"
+        retried = session.get(WorkerJob, child_id)
+        assert retried.status == JobStatus.PENDING.value
+        assert retried.failure_attempts == 1
+        assert retried.payload.get("request_id") == str(bg_id)
 
 
 def test_background_child_rate_limited_does_not_fail_account(monkeypatch):
@@ -382,7 +405,7 @@ def test_background_child_rate_limited_does_not_fail_account(monkeypatch):
     _claim(Session, child_id)
     assert _run(Session, child_id) is True
     with Session() as session:
-        assert session.get(Account, aid).sync_status == SyncStatus.IDLE.value
+        assert session.get(Account, aid).credential_state == "valid" and session.get(Account, aid).connectivity_state == "connected"
         requeued = list(
             session.scalars(
                 select(WorkerJob).where(
@@ -401,7 +424,7 @@ def test_background_metadata_child_rate_limited_does_not_fail_account(monkeypatc
     _claim(Session, child_id)
     assert _run(Session, child_id) is True
     with Session() as session:
-        assert session.get(Account, aid).sync_status == SyncStatus.IDLE.value
+        assert session.get(Account, aid).credential_state == "valid" and session.get(Account, aid).connectivity_state == "connected"
         requeued = list(
             session.scalars(
                 select(WorkerJob).where(
@@ -425,28 +448,45 @@ def test_background_child_permanent_auth_marks_auth_failed_and_disables(monkeypa
     assert _run(Session, child_id) is False
     with Session() as session:
         acc = session.get(Account, aid)
-        assert acc.sync_status == SyncStatus.AUTH_FAILED.value
+        assert acc.credential_state == "invalid"
         assert acc.sync_enabled is False
 
 
-def test_foreground_child_provider_error_marks_account_failed(monkeypatch):
+def test_foreground_child_transport_error_degrades_connectivity(monkeypatch):
+    """A foreground transport-class failure degrades connectivity but must
+    never invalidate the credential (AC-004 / AC-005).
+    """
+
     Session = _make_session(monkeypatch)
     aid, folders = _seed_account(Session, baselines=True)
     _rid, job_id = _seed_foreground_request(Session, aid, folders["sent"], JobType.SYNC_FOLDER_DELTA.value)
+
+    class _TransportBrokenDeltaProvider:
+        def delta_changes(self, remote_id, cursor):
+            raise ConnectionError("sibling provider unreachable")
+
     monkeypatch.setattr(engine_mod, "build_provider", lambda *a, **k: MemoryProvider(folders=list(_REMOTE_FOLDERS)))
-    monkeypatch.setattr(delta_mod, "build_provider", lambda *a, **k: _BrokenDeltaProvider())
-    assert _run(Session, job_id) is True
+    monkeypatch.setattr(delta_mod, "build_provider", lambda *a, **k: _TransportBrokenDeltaProvider())
+    assert _run(Session, job_id) is False
     with Session() as session:
         acc = session.get(Account, aid)
-        assert acc.sync_status == SyncStatus.FAILED.value
+        assert acc.credential_state == "valid"
+        assert acc.connectivity_state == "degraded"
+        assert acc.config.get("last_connectivity_error")
 
 
-def test_background_success_does_not_recover_failed_account(monkeypatch):
+def test_background_success_closes_connectivity_breaker(monkeypatch):
+    """Any successful provider round trip deterministically closes the
+    breaker, including a silent background discovery (no table-scan heal).
+    """
+
     Session = _make_session(monkeypatch)
     aid, folders = _seed_account(Session, baselines=True)
     _main_id, bg_id = _create_request(Session, aid)
     with Session() as session:
-        session.get(Account, aid).sync_status = SyncStatus.FAILED.value
+        acc = session.get(Account, aid)
+        acc.connectivity_state = "unreachable"
+        acc.config = {**dict(acc.config or {}), "last_connectivity_error": "OSError"}
         session.commit()
     monkeypatch.setattr(
         engine_mod, "build_provider", lambda *a, **k: MemoryProvider(folders=list(_REMOTE_FOLDERS))
@@ -455,7 +495,9 @@ def test_background_success_does_not_recover_failed_account(monkeypatch):
     _claim(Session, discovery_id)
     assert _run(Session, discovery_id) is True
     with Session() as session:
-        assert session.get(Account, aid).sync_status == SyncStatus.FAILED.value
+        acc = session.get(Account, aid)
+        assert acc.connectivity_state == "connected"
+        assert "last_connectivity_error" not in (acc.config or {})
 
 
 def test_foreground_success_recovers_failed_account(monkeypatch):
@@ -475,7 +517,7 @@ def test_foreground_success_recovers_failed_account(monkeypatch):
             )
         )
         acc = session.get(Account, aid)
-        acc.sync_status = SyncStatus.FAILED.value
+        acc.connectivity_state = "unreachable"
         job = WorkerJob(
             job_type=JobType.SYNC_ACCOUNT_FOLDERS.value,
             account_id=aid,
@@ -494,4 +536,4 @@ def test_foreground_success_recovers_failed_account(monkeypatch):
     )
     assert _run(Session, job_id) is True
     with Session() as session:
-        assert session.get(Account, aid).sync_status == SyncStatus.IDLE.value
+        assert session.get(Account, aid).credential_state == "valid" and session.get(Account, aid).connectivity_state == "connected"

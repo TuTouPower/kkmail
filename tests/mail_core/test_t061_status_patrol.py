@@ -414,7 +414,8 @@ def test_ac014_probe_failure_isolated_per_folder():
         assert result.changed == 1
         # The failing account is not marked failed by the patrol.
         acc = session.get(Account, bad_id)
-        assert acc.sync_status != "failed"
+        # t076: 旧 "不该被误标 failed" → credential 保持 valid。
+        assert acc.credential_state == "valid" and acc.connectivity_state == "connected"
         assert len(_delta_jobs(session, good_id, good_folder_id)) == 1
         # The failed folder's attempt clock advanced (review f001):
         # it must not be retried on every scheduler sweep.

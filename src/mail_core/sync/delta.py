@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mail_core.security.credentials import CredentialStore, get_credential_store
-from mail_core.sync.context import sync_context_payload
+from mail_core.sync.context import is_permanent_auth_error, sync_context_payload
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncStatus
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
@@ -537,32 +537,23 @@ def sync_folder_delta(
         except Exception as exc:
             err_summary = safe_provider_summary(exc)
             log.error("delta provider I/O failed for folder %s: %s", folder_id, err_summary)
+            # No private successor: the Worker framework retries this same job
+            # row with a counted failure and exponential backoff.
             with Session() as session:
-                followup = enqueue_job(
-                    session,
-                    job_type=JobType.SYNC_FOLDER_DELTA.value,
-                    account_id=account_id,
-                    payload=sync_context_payload(
-                        request_id,
-                        folder_id=str(folder_id),
-                        reason="provider_error",
-                        detail=err_summary,
-                    ),
-                    priority=priority,
-                    run_after=datetime.now(timezone.utc) + timedelta(seconds=15),
-                    dedupe_key=f"delta:{account_id}:{folder_id}",
-                )
-                followup_coalesced = followup.status == JobStatus.CLAIMED.value
                 _release_quiet(session)
                 session.commit()
-            return {
+            result = {
                 "status": "provider_error",
                 "error": err_summary,
-                "followup_scheduled": True,
-                "followup_coalesced": followup_coalesced,
                 "pages": pages,
                 **totals,
             }
+            # Preserve the auth classification across redaction: the sanitized
+            # summary deliberately drops the provider message, so carry it as
+            # a structured code for the Worker health classifier.
+            if is_permanent_auth_error(exc):
+                result["error_code"] = "auth_failed"
+            return result
 
         with Session() as session:
             try:

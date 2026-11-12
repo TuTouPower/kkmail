@@ -106,7 +106,7 @@
 8. **设置工作区与编辑反馈**：
 
     - 设置占据邮件主侧栏右侧工作区，按账户管理、分组管理、通用三类组织；移动端分类横向排列，账户卡片保留分组与同步状态入口。
-    - 同步开关只表示 `sync_enabled` 偏好；同步状态独立展示 `sync_status`，不得把启用同步等同于连接正常。
+    - 同步开关只表示 `sync_enabled` 偏好；账号健康状态必须按 `credential_state`、`connectivity_state`、`sync_activity` 三维分别独立展示（链路诊断见 `last_connectivity_error`），不设单值状态枚举映射，不得把启用同步等同于凭据有效或连接正常，也不得用单一状态混合表达凭据与链路。
     - 批量账户操作逐项执行，显示成功数与失败明细，仅保留失败账户供重试；筛选全选只影响当前筛选结果。
     - 添加账户按需打开原生 dialog，限制焦点范围并在关闭后恢复触发按钮焦点；凭据通过命名字段输入并经既有 API 加密存储，不要求用户编辑 JSON；供应商与认证方式旁提供帮助图标和独立说明弹窗。
     - 已有账户编辑通过 `PATCH /api/accounts/{account_id}` 更新连接配置、凭据与分组；账户摘要只返回白名单 IMAP 连接字段（含独立登录名）、供应商品牌与 OAuth 客户端类型，凭据不回显，编辑表单的空凭据输入保持已有凭据不变。
@@ -139,8 +139,9 @@
 4. **未读数未知语义**：
     - 目标账号任一 inbox FolderStats 行缺失时，账号未读数、总数及包含该账号的聚合返回 `null`；分组统计对缺失行同样返回未知；前端使用 `-` 显示未知，禁止把部分和或缺失行按零呈现；
     - 文件夹包含 `is_read: null` 邮件时，`FolderStats.unread_count` 返回 `null`；账号、分组和全局聚合传播该未知值，禁止 SQL `SUM` 忽略 null 后返回部分和。已知邮件总数保持准确，不因读状态未知而丢失；
-    - 故障账号聚合排除：当账号已禁用（`sync_enabled=false`）或处于同步/认证失败状态（`sync_status in ('failed', 'auth_failed')`）且未同步生成目标角色文件夹时，全局收件箱与分组汇总排除该故障账号，按其余正常账号聚合输出，不阻断正常账号的汇总；故障账号自身单独查询仍返回 `null`（`-`）；
-    - `sync_status` 仅由账号同步类任务故障更新；归档等辅助任务失败不得污染账号状态。同步任务成功后，只有账号没有带错误的待执行或执行中同步任务时，才将 `failed` 恢复为 `idle` 并清除 `last_sync_error`；`auth_failed` 不自动清除。侧栏账号根行始终显示同步失败标记，展开后即使保留旧文件夹树，也在树前显示失败提示；
+    - 账号健康状态机三维正交：`credential_state`（`valid` / `invalid`，`invalid` 时 `sync_enabled=false`）只由认证结果决定，`connectivity_state`（`connected` / `degraded` / `unreachable`）只由传输可达性决定，`sync_activity`（`idle` / `syncing`）只表示是否有同步任务执行中，链路诊断写脱敏 `last_connectivity_error`；三者互不推导、互不覆盖，传输层网络抖动、超时与限流不得污染 `credential_state`，后台静默同步故障不外溢为账号凭据失效或侧栏全局报警；连接态熔断须连续 5 次失败且跨越 5 分钟窗口才置 `unreachable`（失败计数单调累计、不因轮询间隔重置，仅成功清零），任一次链路成功即复位 `connected`，单次抖动只置 `degraded`；
+    - 故障账号聚合排除：当账号已禁用（`sync_enabled=false`）或 `credential_state==='invalid' || connectivity_state==='unreachable'` 且未同步生成目标角色文件夹时，全局收件箱、分组汇总与 MessageList folder-stats 汇总排除该故障账号，按其余正常账号聚合输出，不阻断正常账号的汇总；故障账号自身单独查询仍返回 `null`（`-`）；
+    - 前端按结构化状态精确呈现：`credential_state==='invalid'` 显示「凭据已失效，请重新授权或检查账户设置」与设置页「认证失败」，`connectivity_state==='unreachable'` 提示网络不可用、系统正在重试（链路诊断见脱敏 `last_connectivity_error`），`degraded` 提示「网络异常，正在重试」，二者不得显示「请检查账户设置」也不得触发侧栏全局报警；归档等辅助任务失败不得污染账号状态。Folder 级 `folders.sync_status`（`paused` / `idle`）是另一实体，完全保留，不受账号状态机变更影响；
     - 空文件夹统计初始化：新文件夹首次执行元数据同步（`apply_metadata_page`）且包含 0 封邮件时，立即生成 `FolderStats(total_count=0, unread_count=0)`，消除因空目录未变动导致 `FolderStats` 长期缺失的假性未知未读数；
     - IMAP `\Noselect` 节点只用于呈现父子目录结构，不是可查询邮箱；不得为其排 metadata/delta/reconcile 任务，旧任务执行时以 skipped 完成；不得显示未知未读数 `-`，其子目录保持可同步、可独立导航；
     - 侧栏与邮件列表头部统计语义保持一致：单账号或多账号缺失目标文件夹角色时，严格展示未知（`—` / `-`），禁止回退为全目录合计或静默按零填充。

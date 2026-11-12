@@ -36,12 +36,12 @@ t076 新增 Alembic revision `20261112_0002` 把 `accounts.sync_status` 拆为�
 
 <!-- /规范 -->
 
-- [ ] AC-001：`baseline.py` 中 `ignore_account_column_drift`、`_is_account_column_drift`、`_ACCOUNT_HEALTH_COLUMNS` 全部移除，全仓零引用；`verify_baseline_schema` 对 `accounts` 任意列差异（含 `sync_status` / 三维列）均不豁免，返回对应差异。
-- [ ] AC-002：三个 LEGACY 夹具由 `command.upgrade(cfg, "20261107_0001")` 派生；构造出的 `accounts` 表含 `sync_status`、不含 `credential_state` / `connectivity_state` / `sync_activity`；每个夹具在构造后立即断言该形状，防止再次退化为「由 head 伪造」。
-- [ ] AC-003：`apply_narrow_legacy_conversion` 转换事务内不再执行 `verify_baseline_schema`；`__main__.run_migrations` 与 `run_migration` 的 LEGACY / UPGRADE_TO_HEAD 分支在 `upgrade head` 后对升级后库执行 `verify_baseline_schema`，0 drift，失败时抛错且库不被接受。
-- [ ] AC-004：新增真实 PG 正向用例，从真实 0030 形状（`accounts.sync_status` 存在、`folder_patrol_status` 缺失、stamp `20261031_0030`）经启动升级，断言 `alembic_version` 为 `20261112_0002`、三列存在、`sync_status` 消失、`folder_patrol_status` 重建、历史 `auth_failed`→`credential_state=invalid` 且 `sync_enabled=false`、`failed`→`connectivity_state=degraded`。
-- [ ] AC-005：负向 drift 用例经整体重写并写明理由后，仍拒绝 `accounts.email` 改为 `VARCHAR(64)` 的 drift；`verify_baseline_schema` 对其余 32 张表的列、键、索引全量比对不削弱。
-- [ ] AC-006：`docs/pending/p076_legacy_0030_real_shape_upgrade_gate.md` 闭环为 `status=closed` / `resolution=resolved` / `fix_ref=t077`；本 task 不新增遗留项。
+- [x] AC-001：`baseline.py` 中 `ignore_account_column_drift`、`_is_account_column_drift`、`_ACCOUNT_HEALTH_COLUMNS` 全部移除，全仓零引用；`verify_baseline_schema` 对 `accounts` 任意列差异（含 `sync_status` / 三维列）均不豁免，返回对应差异。
+- [x] AC-002：三个 LEGACY 夹具由 `command.upgrade(cfg, "20261107_0001")` 派生；构造出的 `accounts` 表含 `sync_status`、不含 `credential_state` / `connectivity_state` / `sync_activity`；每个夹具在构造后立即断言该形状，防止再次退化为「由 head 伪造」。
+- [x] AC-003：`apply_narrow_legacy_conversion` 转换事务内不再执行 `verify_baseline_schema`；`__main__.run_migrations` 与 `run_migration` 的 LEGACY / UPGRADE_TO_HEAD 分支在 `upgrade head` 后对升级后库执行 `verify_baseline_schema`，0 drift，失败时抛错且库不被接受。
+- [x] AC-004：新增真实 PG 正向用例，从真实 0030 形状（`accounts.sync_status` 存在、`folder_patrol_status` 缺失、stamp `20261031_0030`）经启动升级，断言 `alembic_version` 为 `20261112_0002`、三列存在、`sync_status` 消失、`folder_patrol_status` 重建、历史 `auth_failed`→`credential_state=invalid` 且 `sync_enabled=false`、`failed`→`connectivity_state=degraded`。
+- [x] AC-005：负向 drift 用例经整体重写并写明理由后，仍拒绝 `accounts.email` 改为 `VARCHAR(64)` 的 drift；`verify_baseline_schema` 对其余 32 张表的列、键、索引全量比对不削弱。
+- [x] AC-006：`docs/pending/p076_legacy_0030_real_shape_upgrade_gate.md` 闭环为 `status=closed` / `resolution=resolved` / `fix_ref=t077`；本 task 不新增遗留项。
 
 ### 可测试性声明
 
@@ -92,4 +92,4 @@ t076 新增 Alembic revision `20261112_0002` 把 `accounts.sync_status` 拆为�
 ### Finalization 时更新的 blueprint
 
 - `docs/specs/mail_sync_and_storage.md`：front matter `tasks` 登记 `t077`。
-- `docs/blueprint/conventions.md`：迁移校验约定改为「升级到 head 后全量比对」，删除豁免约定（若 t076 分支文档仍描述旧行为）。
+- `docs/blueprint/testing.md`：迁移校验约定改为「升级到 head 后全量比对、无任何列豁免」，并同步单 head 线性链描述（已落地）。

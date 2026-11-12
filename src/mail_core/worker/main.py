@@ -276,7 +276,7 @@ def schedule_periodic_inbox_sync(
             session,
             job_type=JobType.SYNC_FOLDER_DELTA.value,
             account_id=account_id,
-            payload={"folder_id": str(folder_id)},
+            payload={"folder_id": str(folder_id), "background": True},
             priority=75,
             run_after=run_after,
             dedupe_key=f"delta:{account_id}:{folder_id}",

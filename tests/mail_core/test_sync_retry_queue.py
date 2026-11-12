@@ -108,14 +108,19 @@ def _seed_folder(*, full_scan_complete: bool) -> tuple[uuid.UUID, uuid.UUID]:
 
 
 @pytestmark_db
-def test_delta_provider_error_completes_claim_and_leaves_one_pending_retry(monkeypatch):
+def test_delta_provider_error_requeues_same_job_with_counted_failure(monkeypatch):
+    """A provider error is retried by the Worker framework on the same job
+    row: no privately spawned successor, no forged ``done``, no account-health
+    pollution for a plain (non-auth, non-transport) exception.
+    """
+
     Session = get_session_factory()
     account_id, folder_id = _seed_folder(full_scan_complete=True)
     with Session() as session:
         job = WorkerJob(
             job_type=JobType.SYNC_FOLDER_DELTA.value,
             account_id=account_id,
-            payload={"folder_id": str(folder_id), "_followup_needed": True},
+            payload={"folder_id": str(folder_id)},
             status=JobStatus.CLAIMED.value,
             locked_by="retry-worker",
             attempts=1,
@@ -142,10 +147,11 @@ def test_delta_provider_error_completes_claim_and_leaves_one_pending_retry(monke
         job = session.get(WorkerJob, job_id)
         assert job is not None
         with patch("mail_core.worker.handlers.get_credential_store", return_value=object()):
-            assert handle_job(session, job, worker_id="retry-worker") is True
+            assert handle_job(session, job, worker_id="retry-worker") is False
         session.commit()
 
-    assert observed_results[0]["followup_scheduled"] is True
+    # The handler no longer forges a successor / ``followup_scheduled``.
+    assert "followup_scheduled" not in observed_results[0]
     with Session() as session:
         jobs = list(
             session.scalars(
@@ -155,16 +161,19 @@ def test_delta_provider_error_completes_claim_and_leaves_one_pending_retry(monke
                 )
             )
         )
-        pending = [row for row in jobs if row.status == JobStatus.PENDING.value]
-        assert len(pending) == 1
-        assert pending[0].dedupe_key == f"delta:{account_id}:{folder_id}"
-        assert pending[0].last_error is None
-        assert session.get(WorkerJob, job_id).status == JobStatus.DONE.value
+        # Exactly one row: the original claim, requeued in place.
+        assert len(jobs) == 1
+        retried = jobs[0]
+        assert retried.id == job_id
+        assert retried.status == JobStatus.PENDING.value
+        assert retried.failure_attempts == 1
+        assert retried.last_error
+        assert "synthetic provider outage" not in retried.last_error
         account = session.get(Account, account_id)
         assert account is not None
-        assert account.sync_status == "failed"
-        assert (account.config or {}).get("last_sync_error")
-        assert "synthetic provider outage" not in str((account.config or {}).get("last_sync_error"))
+        assert account.credential_state == "valid" and account.connectivity_state == "connected"
+        assert account.connectivity_state == "connected"
+        assert "last_sync_error" not in (account.config or {})
 
 
 @pytestmark_db

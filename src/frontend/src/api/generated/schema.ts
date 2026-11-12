@@ -927,6 +927,10 @@ export interface components {
         AccountOut: {
             /** Account Type */
             account_type: string;
+            /** Connectivity State */
+            connectivity_state: string;
+            /** Credential State */
+            credential_state: string;
             /** Display Name */
             display_name?: string | null;
             /** Email */
@@ -942,6 +946,8 @@ export interface components {
             /** Id */
             id: string;
             imap_config?: components["schemas"]["ImapConfigOut"] | null;
+            /** Last Connectivity Error */
+            last_connectivity_error?: string | null;
             /** Master Order */
             master_order?: number | null;
             /** Oauth Client Type */
@@ -958,10 +964,10 @@ export interface components {
             remark?: string | null;
             /** Status */
             status: string;
+            /** Sync Activity */
+            sync_activity: string;
             /** Sync Enabled */
             sync_enabled: boolean;
-            /** Sync Status */
-            sync_status: string;
         };
         /** AccountUpdateIn */
         AccountUpdateIn: {
