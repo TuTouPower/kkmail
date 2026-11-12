@@ -1,17 +1,44 @@
 #!/usr/bin/env python3
-"""Verify or regenerate production dependency lockfile consistency."""
+"""Verify or regenerate production dependency lockfile consistency.
+
+``--check`` performs an offline self-consistency check: the committed lock
+must be a complete, hash-pinned snapshot satisfying the declared requirements.
+It never resolves the current upstream index, so an upstream release cannot
+make the gate fail. The previous model compared the lock against a freshly
+compiled one and therefore drifted on every upstream release.
+
+Without ``--check``, the lock is regenerated explicitly by an operator.
+"""
 
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+try:
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+except ImportError as _exc:  # pragma: no cover - environment guard
+    print(
+        "check_dep_locks.py requires 'packaging' (PEP 440). Install requirements-dev.txt.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2) from _exc
+
 ROOT = Path(__file__).resolve().parent.parent
 TXT_FILE = ROOT / "requirements-mail-core.txt"
 LOCK_FILE = ROOT / "requirements-mail-core.lock"
+
+_PIN_RE = re.compile(r"\A([A-Za-z0-9_.-]+)==([^\s\\]+)")
+_HASH_RE = re.compile(r"--hash=sha256:([0-9a-fA-F]{64})")
+_REQ_RE = re.compile(r"\A([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*(.*?)\s*\Z")
+
+
+def _norm(name: str) -> str:
+    return name.lower().replace("_", "-")
 
 
 def run_compile(output_path: Path) -> int:
@@ -33,11 +60,6 @@ def run_compile(output_path: Path) -> int:
     return proc.returncode
 
 
-def strip_header_comments(text: str) -> str:
-    lines = text.splitlines()
-    return "\n".join(line for line in lines if not line.startswith("#"))
-
-
 def canonicalize_header(text: str) -> str:
     """Replace uv's absolute-path header with a checkout-independent one."""
     lines = text.splitlines()
@@ -50,9 +72,78 @@ def canonicalize_header(text: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def verify_lock_offline(lock_path: Path, txt_path: Path) -> list[str]:
+    """Check that the lock is a complete, hash-pinned snapshot of the txt.
+
+    Pure offline: no ``uv`` invocation, no network, no comparison against a
+    freshly resolved result. An upstream release therefore cannot invalidate
+    an otherwise self-consistent lock.
+    """
+
+    if not txt_path.is_file():
+        return [f"Missing {txt_path}"]
+    if not lock_path.is_file():
+        return [f"Missing {lock_path}"]
+
+    errors: list[str] = []
+
+    direct: dict[str, str] = {}
+    for raw in txt_path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        m = _REQ_RE.match(line)
+        if m is None:
+            errors.append(f"{txt_path.name}: unparsable requirement {line!r}")
+            continue
+        direct[_norm(m.group(1))] = (m.group(2) or "").strip()
+
+    if not direct:
+        errors.append(f"{txt_path.name}: no direct requirements declared")
+
+    pins: dict[str, str] = {}
+    hashed: set[str] = set()
+    pending: str | None = None
+    for raw in lock_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        m = _PIN_RE.match(line)
+        if m is not None:
+            pending = _norm(m.group(1))
+            pins[pending] = m.group(2)
+            continue
+        if line.startswith("--hash=") and pending is not None and _HASH_RE.search(line):
+            hashed.add(pending)
+
+    if not pins:
+        errors.append(f"{lock_path.name}: no pinned packages found")
+
+    for name, version in pins.items():
+        if name not in hashed:
+            errors.append(f"{lock_path.name}: {name}=={version} has no sha256 hash")
+
+    for name, spec in direct.items():
+        if name not in pins:
+            errors.append(f"{txt_path.name}: {name} is not pinned in {lock_path.name}")
+            continue
+        if not spec:
+            errors.append(f"{txt_path.name}: {name} has no version constraint")
+            continue
+        try:
+            if not SpecifierSet(spec).contains(pins[name]):
+                errors.append(
+                    f"{lock_path.name}: {name}=={pins[name]} does not satisfy {spec}"
+                )
+        except (InvalidSpecifier, ValueError) as exc:
+            errors.append(
+                f"{txt_path.name}: {name} has invalid constraint {spec!r}: {exc}"
+            )
+
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check or update requirements-mail-core.lock")
-    parser.add_argument("--check", action="store_true", help="Check lockfile is up-to-date without writing")
+    parser.add_argument("--check", action="store_true", help="Check lockfile consistency offline without writing")
     args = parser.parse_args()
 
     if not TXT_FILE.is_file():
@@ -82,29 +173,17 @@ def main() -> int:
         print(f"Lockfile {LOCK_FILE} does not exist. Run scripts/check_dep_locks.py to generate it.", file=sys.stderr)
         return 1
 
-    with tempfile.NamedTemporaryFile("w+", suffix=".lock", delete=False) as tmp:
-        tmp_path = Path(tmp.name)
+    errors = verify_lock_offline(LOCK_FILE, TXT_FILE)
+    if errors:
+        detail = "\n  - ".join(errors)
+        print(
+            f"ERROR: {LOCK_FILE.name} is not self-consistent with {TXT_FILE.name}:\n  - {detail}",
+            file=sys.stderr,
+        )
+        return 1
 
-    try:
-        rc = run_compile(tmp_path)
-        if rc != 0:
-            return rc
-
-        current_content = strip_header_comments(LOCK_FILE.read_text(encoding="utf-8"))
-        fresh_content = strip_header_comments(tmp_path.read_text(encoding="utf-8"))
-
-        if current_content != fresh_content:
-            print(
-                f"ERROR: {LOCK_FILE.name} is out of date with {TXT_FILE.name}!\n"
-                f"Run: python scripts/check_dep_locks.py to regenerate it.",
-                file=sys.stderr,
-            )
-            return 1
-
-        print(f"OK: {LOCK_FILE.name} is synchronized with {TXT_FILE.name}")
-        return 0
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    print(f"OK: {LOCK_FILE.name} is synchronized with {TXT_FILE.name}")
+    return 0
 
 
 if __name__ == "__main__":

@@ -1,0 +1,15 @@
+{
+  "tid": "t078",
+  "attempt": 1,
+  "execution_id": "d57d4803abac4fb795be4b621a04bcc5",
+  "status": "done",
+  "branch": "t078_quality_gate_root_cause_refactor",
+  "base_sha": "b2050e33b7aa30ec21616936659002a4c77331f6",
+  "spec_source_sha": "b2050e33b7aa30ec21616936659002a4c77331f6",
+  "tests": "后端 unit **1658 passed、0 failed、537 skipped**（两个长期红灯均熄灭）；`tests/scripts` 199 passed、42 skipped；模板契约 463 passed、1 skipped；前端 vitest 586 passed + `tsc -b` + build + `oxlint`；桌面单测通过；`python3 scripts/check_doc_sensitive.py docs --check` 报 32 文件 0 违规；`.venv/bin/python scripts/check_dep_locks.py --check` 通过。`## test_cmd` 四项全绿，不再有「既存失败」需登记。",
+  "blackbox": "本 task 只改门禁脚本与测试，不改用户/调用方可观察行为；`blackbox_verify`（stubApi E2E 21 passed）在 t077 已验证、本次未触及前端生产代码，按相关门禁边界不重复执行。",
+  "review": "full 级 **5 轮**（`review_limit=5`），`review_code.md` / `review_test.md` 的 Round 5 双轴 PASS、0 新 finding、6/6 AC 全 TICK-VALID 且无 TICK-VOID；R1-R4 共 11 条 finding 全部已修并经独立复核。`review-status overall=PASS / next_action=finalize`。",
+  "review_scope": "e8cc9501ce3231ae",
+  "pending": [],
+  "findings": []
+}

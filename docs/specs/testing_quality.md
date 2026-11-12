@@ -1,7 +1,7 @@
 ---
 slug: testing_quality
 status: active
-tasks: [t013, t014]
+tasks: [t013, t014, t078]
 ---
 # 测试工程、隔离机制与质量保障技术规范 (Testing & Quality Specification)
 

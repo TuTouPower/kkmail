@@ -1,7 +1,10 @@
 ---
 pid: "p077"
 slug: "quality_gate_false_positives_and_lock_drift"
-status: "todo"
+status: "closed"
+resolution: "resolved"
+reason: "已从根因重构：扫描器统一值形态模型+归档分流、lock 改离线自洽校验、补负向 true-positive 测试、同步 testing.md 基线；test_cmd 四项全绿"
+fix_ref: "t078"
 ---
 # p077 质量门禁误报与依赖锁漂移：扫描语义模型不一致、归档被扫、lock 校验拿当下最新当基线
 
@@ -17,4 +20,4 @@ status: "todo"
     4. `docs/blueprint/testing.md` 基线声明是历史时点快照，未随归档文档入库与门禁模型演进同步。
 - 测试缺口：缺「发布面真泄漏仍被拦截」的负向回归用例（防止为绿而弱化断言）；`test_repo_docs_gate_passes` 长期红，掩盖了误报与真违规不可区分；`test_check_dep_locks_script_passes` 依赖联网重解析，无法稳定验证离线一致性。
 - 线索：`scripts/check_doc_sensitive.py:393-542`、`scripts/check_dep_locks.py:17-107`、`docs/blueprint/testing.md:21/82/318/323/325`、`.sensitive_ignore`
-- 处理：转 t078 立项（门禁属安全/质量契约，超出 `pending-fix` 准入：`docs/blueprint/` 长期行为 + 安全规则重写）。
+- 处理：t078；resolution=resolved；reason=已从根因重构：扫描器统一值形态模型+归档分流、lock 改离线自洽校验、补负向 true-positive 测试、同步 testing.md 基线；test_cmd 四项全绿

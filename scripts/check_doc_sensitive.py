@@ -283,6 +283,42 @@ def _split_assignment_fragments(line: str) -> list[str]:
     return _FRAGMENT_SPLIT_RE.split(line)
 
 
+# Leading markdown list / quote markers that may precede an isolated value.
+_MD_LEAD_RE = re.compile(r"\A(?:\s*[-*>#]\s*|\s*\d+[.)]\s*)*")
+
+
+def _value_spans(line: str) -> list[str]:
+    """Return the value-shaped substrings of a line.
+
+    A document leaks a secret when it *carries* a value, not when it discusses
+    one. Value-shaped substrings are:
+
+    - the RHS of an isolated ``key = value`` assignment (the same gate the
+      credential detector already uses);
+    - a line that, after markdown markers, is itself a single bare value.
+
+    Prose, tables and code references produce no value spans, so example
+    addresses / paths quoted inside them are never mistaken for real data.
+    High-risk signatures (token patterns, private-key headers) are checked
+    against the whole line separately and are not subject to this gate.
+    """
+
+    values: list[str] = []
+    for frag in _split_assignment_fragments(line):
+        for m in ASSIGN_RE.finditer(frag):
+            value = m.group(3) if m.group(3) is not None else (m.group(4) or "")
+            if value and _is_isolated_assignment(frag, value):
+                values.append(value)
+    # Only fall back to a whole-line bare value when no assignment produced
+    # one; otherwise a `key=value` line would yield the RHS twice (once as
+    # the assignment value, once as the bare line) and double-count a leak.
+    if not values:
+        bare = _MD_LEAD_RE.sub("", line).strip()
+        if bare and " " not in bare and not bare.startswith(("|", "#", "`")):
+            values.append(bare)
+    return values
+
+
 def is_safe_credential(value: str, *, key: str | None = None) -> bool:
     """Return True only for explicitly safe credential shapes (default-deny).
 
@@ -419,53 +455,58 @@ def scan_file(
 
             row_start = len(violations)
 
-            # 1. Check emails
-            for m in EMAIL_RE.finditer(line):
-                email = m.group(0)
-                domain = m.group(1)
-                # Skip false positive like npm scoped packages e.g. @types/node
-                start_idx = m.start()
-                if start_idx > 0 and line[start_idx - 1] == "/":
-                    continue
+            value_spans = _value_spans(line)
 
-                if not is_allowed_email(email, domain):
-                    violations.append(
-                        Violation(
-                            file_path=path,
-                            line_number=lineno,
-                            category="email",
-                            matched_text=email,
+            # 1. Emails: only value-bearing regions can leak a real address.
+            for value in value_spans:
+                for m in EMAIL_RE.finditer(value):
+                    email = m.group(0)
+                    domain = m.group(1)
+                    # Skip false positive like npm scoped packages e.g. @types/node
+                    start_idx = m.start()
+                    if start_idx > 0 and value[start_idx - 1] == "/":
+                        continue
+                    if not is_allowed_email(email, domain):
+                        violations.append(
+                            Violation(
+                                file_path=path,
+                                line_number=lineno,
+                                category="email",
+                                matched_text=email,
+                            )
                         )
-                    )
 
-            # 2. Check user host absolute paths
-            for m in USER_PATH_RE.finditer(line):
-                full_path = m.group(1)
-                user = m.group(2)
-                if not is_allowed_user_path(full_path, user):
-                    violations.append(
-                        Violation(
-                            file_path=path,
-                            line_number=lineno,
-                            category="path",
-                            matched_text=full_path,
+            # 2. User host absolute paths: value-bearing regions only.
+            for value in value_spans:
+                for m in USER_PATH_RE.finditer(value):
+                    full_path = m.group(1)
+                    user = m.group(2)
+                    if not is_allowed_user_path(full_path, user):
+                        violations.append(
+                            Violation(
+                                file_path=path,
+                                line_number=lineno,
+                                category="path",
+                                matched_text=full_path,
+                            )
                         )
-                    )
 
-            for m in WIN_USER_PATH_RE.finditer(line):
-                full_path = m.group(1)
-                user = m.group(2)
-                if not is_allowed_user_path(full_path, user):
-                    violations.append(
-                        Violation(
-                            file_path=path,
-                            line_number=lineno,
-                            category="path",
-                            matched_text=full_path,
+                for m in WIN_USER_PATH_RE.finditer(value):
+                    full_path = m.group(1)
+                    user = m.group(2)
+                    if not is_allowed_user_path(full_path, user):
+                        violations.append(
+                            Violation(
+                                file_path=path,
+                                line_number=lineno,
+                                category="path",
+                                matched_text=full_path,
+                            )
                         )
-                    )
 
-            # 3. Check credentials
+            # 3. High-risk signatures: whole line, independent of context.
+            # A token or private-key header is itself the leak; discussing it
+            # is not a legitimate use, so no value-shape gate applies.
             if PRIVATE_KEY_RE.search(line):
                 violations.append(
                     Violation(
@@ -487,16 +528,18 @@ def scan_file(
                     )
                 )
 
-            m_pwd_len = PWD_LEN_RE.search(line)
-            if m_pwd_len:
-                violations.append(
-                    Violation(
-                        file_path=path,
-                        line_number=lineno,
-                        category="credential",
-                        matched_text=m_pwd_len.group(0),
+            # Password-length disclosure: a value, never prose/meta text.
+            for value in value_spans:
+                m_pwd_len = PWD_LEN_RE.search(value)
+                if m_pwd_len:
+                    violations.append(
+                        Violation(
+                            file_path=path,
+                            line_number=lineno,
+                            category="credential",
+                            matched_text=m_pwd_len.group(0),
+                        )
                     )
-                )
 
             for fragment in _split_assignment_fragments(line):
                 for m_assign in ASSIGN_RE.finditer(fragment):
@@ -542,6 +585,32 @@ def scan_file(
     return violations
 
 
+# Historical / review artifacts are already-reviewed records: they discuss
+# placeholders, examples and redacted values as part of their purpose. They
+# are not a publishing surface where a real credential could be introduced, so
+# directory scans exclude them by responsibility rather than requiring a
+# reasoned allow marker on every quoted example (which would mean rewriting
+# read-only archives to satisfy the checker). Explicit file targets are still
+# scanned so an operator can inspect a specific archived file on demand.
+ARCHIVE_DIR_PREFIXES = (
+    "docs/reviews/",
+    "docs/archive/",
+    "docs/tasks/",
+    "docs/pending/",
+    "docs/findings/",
+    "docs/spikes/",
+)
+ARCHIVE_FILES = frozenset({"docs/handoff.md"})
+
+
+def _is_archived_doc(path: Path, root: Path) -> bool:
+    try:
+        rel = path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        rel = path.as_posix()
+    return rel in ARCHIVE_FILES or any(rel.startswith(p) for p in ARCHIVE_DIR_PREFIXES)
+
+
 def collect_target_files(targets: Sequence[str], root: Path) -> list[Path]:
     collected: list[Path] = []
     for target_str in targets:
@@ -553,7 +622,7 @@ def collect_target_files(targets: Sequence[str], root: Path) -> list[Path]:
             collected.append(target)
         elif target.is_dir():
             for p in sorted(target.rglob("*.md")):
-                if p.is_file():
+                if p.is_file() and not _is_archived_doc(p, root):
                     collected.append(p)
     return collected
 

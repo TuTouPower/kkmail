@@ -18,7 +18,9 @@ project_configured
 
 ## verification_notes
 
-模板同步与日常快速门禁只覆盖模板契约、不依赖外部服务的构建/单测和浏览器冒烟：`test_cmd` 运行模板 contract、前端单测/类型检查/生产构建与桌面端单测；`blackbox_verify` 运行前端 stubApi 快速 E2E。后端完整 PostgreSQL 套件、真实 IMAP、全栈 E2E、桌面打包冒烟与性能基准依赖外部服务或长时运行，按下方「本地分层门禁与 CI 流水线映射」在 task/release 阶段单独执行，未纳入同步门禁。历史记录中「前端 `npm run lint` 与后端完整套件存在既存失败」已过时：两者于 2026-11-10 全部修净并实测通过（前端 lint 零警告、后端全量 2142 passed），结果见 `docs/handoff.md` 最新节。
+模板同步与日常快速门禁只覆盖模板契约、不依赖外部服务的构建/单测和浏览器冒烟：`test_cmd` 运行模板 contract、前端单测/类型检查/生产构建与桌面端单测；`blackbox_verify` 运行前端 stubApi 快速 E2E。后端完整 PostgreSQL 套件、真实 IMAP、全栈 E2E、桌面打包冒烟与性能基准依赖外部服务或长时运行，按下方「本地分层门禁与 CI 流水线映射」在 task/release 阶段单独执行，未纳入同步门禁。
+
+当前基线（t078 之后）：`test_cmd` 四项全部通过，`python3 scripts/check_doc_sensitive.py docs --check` 报 0 违规；`check_dep_locks.py --check` 改为离线自洽校验后通过，不再因 uv 上游发版漂移。此前把敏感扫描误报与 lock 漂移写作「既存失败 / 如实登记」的处理已在 t078 从根因修复，不再沿用。历史时点数字（如 2142 passed、0 违规、lock 未修）仅见于下方历史证据表，不代表当前状态。
 
 ## gate_timeout_seconds
 
@@ -79,7 +81,9 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
 |**写回收敛与统计一致性**|批次自动续跑、意图保护与孤儿恢复|`scripts/run-mail-core-tests.sh run -k test_mark_read_convergence_suite`|
 |**MIME 解析错误与前端可见性**|正文/报头/附件名解析失败、API 传递与跨邮件状态隔离|`scripts/run-mail-core-tests.sh run -k test_archive_decode_failure` 及 `(cd src/frontend && npm test -t MessageReader)`|
 
-敏感文档门禁适用边界（`scripts/check_doc_sensitive.py`）：凭据检测为 default-deny——仅显式白名单占位、整值模板/环境引用、以及不含任何 ASCII 字母数字的纯散文值放行；同行多个赋值按语句分隔符（`;`、`&&`、`,` 后紧跟新的 `key=`）切成片段逐个判定。未加引号的多词值与散文在形状上不可区分：只取首词作候选值，且其余词使片段非孤立而不进入判定——这是检测原理边界，不是豁免承诺（加引号的多词值会整值捕获并判定）。合法例外一律使用带理由的行内 allow marker（`<!-- sensitive-allow: 理由 -->` 或 `# noqa: sensitive 理由`），无理由 marker 不豁免且本身计一条违规。
+敏感文档门禁适用边界（`scripts/check_doc_sensitive.py`，t078 重构）：文档**承载值**才可能泄漏，**讨论值**不算泄漏。邮箱、宿主用户路径、`口令长 N 位` 只在值形态区域检测——孤立 `key = value` 赋值的 RHS，或去掉 markdown 标记后整行即单个裸值；散文、表格、代码引用中的示例字符串不进入判定。私钥头（`-----BEGIN ... PRIVATE KEY-----`）与 token 签名（`ghp_` / `github_pat_` / `AKIA` / `sk-`）属高危签名，仍对整行无条件拦截。凭据赋值检测维持 default-deny：仅显式白名单占位、整值模板/环境引用、以及不含任何 ASCII 字母数字的纯散文值放行；同行多个赋值按语句分隔符（`;`、`&&`、`,` 后紧跟新的 `key=`）切成片段逐个判定。未加引号的多词值与散文在形状上不可区分：只取首词作候选值，且其余词使片段非孤立而不进入判定——这是检测原理边界，不是豁免承诺（加引号的多词值会整值捕获并判定）。
+
+扫描边界按目录职责分离：`docs/reviews/**`、`docs/archive/**`、`docs/tasks/**`、`docs/pending/**`、`docs/findings/**`、`docs/spikes/**` 与 `docs/handoff.md` 是已评审入库的归档记录，天然引用示例与占位符，目录扫描时整体排除；当前发布面（`docs/guides/**`、`docs/blueprint/*.md`、`docs/specs/*.md`、根 README）仍全量扫描。显式指定单个归档文件作为 target 时仍扫描，供人工核查。发布面里确属合法的示例值，用带理由的行内 allow marker（`<!-- sensitive-allow: 理由 -->` 或 `# noqa: sensitive 理由`）豁免；无理由 marker 不豁免且本身计一条违规。`.sensitive_ignore` 与脚本内置归档分流保持一致。
 
 ## PostgreSQL 测试运行时
 
@@ -306,7 +310,7 @@ python3 scripts/benchmark_mailbox.py --compare .scratch/base.json .scratch/candi
 
 ### 3. 当前验证基线（最近证据：2026-11-11，基线 HEAD `adf93f62`）
 
-本表集中记录近期完整门禁的结果。各行注明结果日期和证据；task 专项历史结果仍以对应归档 task 为准。此前 2026-10-24/25 的基线（后端完整 PostgreSQL 套件 569 passed 等）已被下表取代，不再用作当前基线；其原始记录见各 t055 归档文件与 [handoff](../handoff.md)。2026-11-10 各行为云端机器（无 Docker/PG）的复跑；2026-11-11 各行为本机 OrbStack 真实 PostgreSQL 全量复跑（`f3c339c2` 之后的 main 树），见 [本机全量复跑证据](../reviews/review_20261110_135843/a13_gate_rerun_orbstack.md)。
+本表集中记录近期完整门禁的结果。各行注明结果日期和证据；task 专项历史结果仍以对应归档 task 为准。此前 2026-10-24/25 的基线（后端完整 PostgreSQL 套件 569 passed 等）已被下表取代，不再用作当前基线；其原始记录见各 t055 归档文件与 [handoff](../handoff.md)。2026-11-10 各行为云端机器（无 Docker/PG）的复跑；2026-11-11 各行为本机 OrbStack 真实 PostgreSQL 全量复跑（`f3c339c2` 之后的 main 树），见 [本机全量复跑证据](../reviews/review_20261110_135843/a13_gate_rerun_orbstack.md)。**下表全部为历史时点快照**：其中敏感扫描「0 违规」与「lock 漂移未修、如实登记」等行在 t078 重构门禁后已不适用，当前状态一律以 `## verification_notes` 与本次门禁复跑为准，历史行由 Git 保留、不改写。
 
 |证据时间|门禁|结果|可追溯证据|
 |---|---|---|---|
