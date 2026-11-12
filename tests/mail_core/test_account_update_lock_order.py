@@ -111,7 +111,6 @@ def _account(*, sync_enabled: bool = True) -> Account:
         master_order=None,
         group_order=None,
         sync_enabled=sync_enabled,
-        sync_status="idle",
         config={},
     )
 

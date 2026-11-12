@@ -20,10 +20,12 @@
 
 ## 账户不同步
 
-1. 设置页查看账户 `sync_status`；worker 是否在运行（compose `worker` 服务或 `python -m mail_core` 内嵌 worker）。
-2. 查询失败作业：`SELECT job_type, attempts, last_error FROM worker_jobs WHERE status='failed' ORDER BY updated_at DESC LIMIT 20;`（错误已脱敏）。
-3. 429 / 限流会自动退避重排，不需要手动处理。
-4. IMAP：确认服务器支持 993/TLS；明文 143 需在账户 `config` 中显式 `use_ssl: false`。
+1. 设置页查看账户三维健康状态：`credential_state`（`valid` / `invalid`）、`connectivity_state`（`connected` / `degraded` / `unreachable`）、`sync_activity`（`idle` / `syncing`）与脱敏链路诊断 `last_connectivity_error`；确认 worker 是否在运行（compose `worker` 服务或 `python -m mail_core` 内嵌 worker）。
+2. 凭据失效：`credential_state='invalid'` 表示认证失败，`sync_enabled` 已置 `false`，需在设置页重新授权或检查账户凭据；网络恢复不会自动清除该状态。
+3. 网络抖动：`connectivity_state='degraded'` / `'unreachable'` 只表示传输链路异常，系统按退避自动重试，任一次链路成功即复位 `connected`，不要改动账户凭据或按「请检查账户设置」处理；按 `last_connectivity_error` 排查网络与服务端可达性并等待重试即可。
+4. 查询失败作业：`SELECT job_type, attempts, last_error FROM worker_jobs WHERE status='failed' ORDER BY updated_at DESC LIMIT 20;`（错误已脱敏）。
+5. 429 / 限流会自动退避重排，不需要手动处理。
+6. IMAP：确认服务器支持 993/TLS；明文 143 需在账户 `config` 中显式 `use_ssl: false`。
 
 ## 登录返回 429
 

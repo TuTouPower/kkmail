@@ -97,7 +97,9 @@ def _gmail_account():
         credential_ref="ref",
         config={"imap_host": "imap.gmail.com"},
         sync_enabled=True,
-        sync_status="idle",
+        credential_state="valid",
+        connectivity_state="connected",
+        sync_activity="idle",
     )
 
 

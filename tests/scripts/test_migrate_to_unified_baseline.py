@@ -41,6 +41,7 @@ if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
 from mail_core.db.baseline import (
+    CURRENT_HEAD_REVISION,
     KNOWN_LEGACY_REVISIONS,
     REQUIRED_TABLES,
     UNIFIED_BASELINE_REVISION,
@@ -224,7 +225,7 @@ def _build_state(engine, state: str) -> None:
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
         )
         revision = {
-            "at_head": UNIFIED_BASELINE_REVISION,
+            "at_head": CURRENT_HEAD_REVISION,
             "legacy": "20261031_0030",
             "unknown": "unknown_rev_9999",
         }[state]
@@ -449,7 +450,7 @@ def test_main_cli_returns_expected_exit_codes(pg_engine):
         )
         conn.execute(
             text("INSERT INTO alembic_version VALUES (:rev)"),
-            {"rev": UNIFIED_BASELINE_REVISION},
+            {"rev": CURRENT_HEAD_REVISION},
         )
     assert main(["--database-url", db_url]) == 0
 

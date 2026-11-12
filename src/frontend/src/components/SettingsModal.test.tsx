@@ -11,6 +11,13 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
+const defaultAccountHealth: {
+  credential_state: string
+  connectivity_state: string
+  sync_activity: string
+  last_connectivity_error: string | null
+} = { credential_state: 'valid', connectivity_state: 'connected', sync_activity: 'idle', last_connectivity_error: null }
+
 const puts: Array<{ url: string; body: unknown }> = []
 let settingsResponse: Record<string, string>
 
@@ -327,7 +334,7 @@ describe('<SettingsModal />', () => {
     const accountReads: Array<string | null> = []
     const layoutReads: Array<string | null> = []
     const currentAccount = () => ({
-      id: accountId, email: accountEmail, status: 'active', sync_status: 'idle',
+      id: accountId, email: accountEmail, status: 'active', ...defaultAccountHealth,
       account_type: 'imap', provider: 'imap', group_id: groupId,
       group_name: groups.find((group) => group.id === groupId)?.name ?? null,
     })
@@ -428,7 +435,7 @@ describe('<SettingsModal />', () => {
       if (url.pathname === '/api/auth/me') return json({ csrf_token: 'tok' })
       if (url.pathname === '/api/accounts' && method === 'GET') {
         const accounts = accountExists ? [{
-          id: 'account-delete', email: 'delete@example.test', status: 'active', sync_status: 'idle',
+          id: 'account-delete', email: 'delete@example.test', status: 'active', ...defaultAccountHealth,
           account_type: 'imap', provider: 'imap', group_id: null,
         }] : []
         return json({ accounts, total: accounts.length, limit: 200, offset: 0, has_more: false })
@@ -472,7 +479,10 @@ describe('<SettingsModal />', () => {
       id: string
       email: string
       status: string
-      sync_status: string
+      credential_state: string
+      connectivity_state: string
+      sync_activity: string
+      last_connectivity_error: string | null
       account_type: string
       provider: string
       group_id: null
@@ -488,7 +498,7 @@ describe('<SettingsModal />', () => {
       }
       if (url.pathname === '/api/accounts' && method === 'POST') {
         account = {
-          id: 'account-added', email: 'added@example.test', status: 'active', sync_status: 'idle',
+          id: 'account-added', email: 'added@example.test', status: 'active', ...defaultAccountHealth,
           account_type: 'imap', provider: 'imap', group_id: null,
         }
         revision += 1
@@ -587,7 +597,7 @@ describe('<SettingsModal />', () => {
   it('per-account sync button spins until that account sync finishes and stays silent on success', async () => {
     let releasePoll!: () => void
     const pollGate = new Promise<void>((resolve) => { releasePoll = resolve })
-    const account = { id: 'acc-1', email: 'a@x.test', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: null, group_name: null }
+    const account = { id: 'acc-1', email: 'a@x.test', status: 'active', ...defaultAccountHealth, sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: null, group_name: null }
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url)
       if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
@@ -631,7 +641,7 @@ describe('<SettingsModal />', () => {
     finished_at: state === 'running' ? null : '2026-10-28T00:00:05Z', errors,
   })
   const bulkAccount = (id: string, email: string, sync_enabled = true) => ({
-    id, email, status: 'active', sync_status: 'idle', sync_enabled,
+    id, email, status: 'active', ...defaultAccountHealth, sync_enabled,
     account_type: 'imap', provider: 'imap', group_id: null, group_name: null,
   })
   const bulkSyncButton = (container: HTMLElement): HTMLButtonElement | null => {
@@ -780,7 +790,7 @@ describe('<SettingsModal />', () => {
   it('deleting the group currently in view returns to all inbox and clears stale selection', async () => {
     const groups = [{ id: 'group-current', name: '当前分组', color: null, account_count: 1, sort_order: 0 }]
     const accounts = [{
-      id: 'account-current', email: 'current@example.test', status: 'active', sync_status: 'idle',
+      id: 'account-current', email: 'current@example.test', status: 'active', ...defaultAccountHealth,
       account_type: 'imap', provider: 'imap', group_id: 'group-current', group_name: '当前分组',
     }]
     const requests: Array<{ path: string; method: string }> = []
@@ -823,7 +833,7 @@ describe('<SettingsModal />', () => {
       { id: 'group-two', name: '二组', color: null, account_count: 0, sort_order: 1 },
     ]
     const account = {
-      id: 'account-one', email: 'one@example.test', status: 'active', sync_status: 'idle',
+      id: 'account-one', email: 'one@example.test', status: 'active', ...defaultAccountHealth,
       account_type: 'imap', provider: 'imap', group_id: 'group-one', group_name: '一组',
     }
     let currentGroupId: string | null = 'group-one'
@@ -856,14 +866,14 @@ describe('<SettingsModal />', () => {
     expect(useMailStore.getState().selectedIds).toEqual([])
   })
 
-  it('filters accounts by domain and applies bulk actions to the combined filtered selection', async () => {
+  it('renders credential/connectivity health and filters the combined selection by the invalid-credential state', async () => {
     const groups = [{ id: 'work', name: '工作', color: null, account_count: 4, sort_order: 0 }]
     const accounts = [
-      { id: 'gmail', email: 'ada@gmail.com', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
-      { id: 'qq-work-1', email: 'bob@qq.com', status: 'active', sync_status: 'failed', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
-      { id: 'qq-home', email: 'carol@qq.com', status: 'active', sync_status: 'failed', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: null, group_name: null },
-      { id: 'qq-work-2', email: 'ellen@qq.com', status: 'active', sync_status: 'failed', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
-      { id: '163-work', email: 'dave@163.com', status: 'active', sync_status: 'failed', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
+      { id: 'gmail', email: 'ada@gmail.com', status: 'active', ...defaultAccountHealth, sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
+      { id: 'qq-work-1', email: 'bob@qq.com', status: 'active', ...defaultAccountHealth, credential_state: 'invalid', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
+      { id: 'qq-home', email: 'carol@qq.com', status: 'active', ...defaultAccountHealth, credential_state: 'invalid', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: null, group_name: null },
+      { id: 'qq-work-2', email: 'ellen@qq.com', status: 'active', ...defaultAccountHealth, credential_state: 'invalid', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
+      { id: '163-work', email: 'dave@163.com', status: 'active', ...defaultAccountHealth, credential_state: 'invalid', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
     ]
     const updates: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init: RequestInit = {}) => {
@@ -881,6 +891,12 @@ describe('<SettingsModal />', () => {
 
     const { container } = await render(<SettingsPage />)
     await waitFor(() => expect(container.querySelectorAll('.settings-account-row')).toHaveLength(5))
+    // Three-dimensional health: invalid credentials render 认证失败, a healthy
+    // connected account renders 空闲; the old single-value 同步失败 label is gone.
+    const statusLabels = [...container.querySelectorAll('.settings-sync-status')].map((node) => node.textContent)
+    expect(statusLabels.filter((label) => label === '认证失败')).toHaveLength(4)
+    expect(statusLabels).toContain('空闲')
+    expect(container.textContent).not.toContain('同步失败')
     const domainSelect = container.querySelector('select[aria-label="按邮箱域名筛选"]') as HTMLSelectElement
     expect([...domainSelect.options].map(option => option.value)).toEqual(['all', '163.com', 'gmail.com', 'qq.com'])
 
@@ -889,7 +905,7 @@ describe('<SettingsModal />', () => {
 
     await changeSelect(domainSelect, 'qq.com')
     await changeSelect(container.querySelector('select[aria-label="按分组筛选"]'), 'work')
-    await changeSelect(container.querySelector('select[aria-label="按同步状态筛选"]'), 'failed')
+    await changeSelect(container.querySelector('select[aria-label="按同步状态筛选"]'), 'invalid')
     await typeInto(container.querySelector('input[aria-label="搜索账户"]'), 'qq.com')
     expect([...container.querySelectorAll('.settings-account-identity strong')].map(node => node.textContent)).toEqual(['bob@qq.com', 'ellen@qq.com'])
 
@@ -901,7 +917,7 @@ describe('<SettingsModal />', () => {
 
   it('copies a settings account address without triggering account actions', async () => {
     const account = {
-      id: 'copy-account', email: 'copy@example.test', status: 'active', sync_status: 'idle', sync_enabled: true,
+      id: 'copy-account', email: 'copy@example.test', status: 'active', ...defaultAccountHealth, sync_enabled: true,
       account_type: 'imap', provider: 'imap', group_id: null, group_name: null,
     }
     const calls: Array<{ method: string; url: string }> = []
@@ -932,7 +948,7 @@ describe('<SettingsModal />', () => {
       { id: 'personal', name: '个人', color: null, account_count: 0, sort_order: 1 },
     ]
     const account = {
-      id: 'account-edit', email: 'edit@example.test', status: 'active', sync_status: 'idle', sync_enabled: true,
+      id: 'account-edit', email: 'edit@example.test', status: 'active', ...defaultAccountHealth, sync_enabled: true,
       account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作',
       imap_config: { imap_host: 'imap.old.test', imap_port: 993, use_ssl: true },
     }
@@ -993,7 +1009,7 @@ describe('<SettingsModal />', () => {
 
   it('clears an optional OAuth secret only through the explicit clear list', async () => {
     const account = {
-      id: 'account-clear-secret', email: 'oauth@example.test', status: 'active', sync_status: 'idle', sync_enabled: true,
+      id: 'account-clear-secret', email: 'oauth@example.test', status: 'active', ...defaultAccountHealth, sync_enabled: true,
       account_type: 'graph', provider: 'graph', group_id: null, group_name: null,
       oauth_client_type: 'public', oauth_tenant: 'common', provider_profile: 'microsoft', imap_config: null,
     }
@@ -1029,9 +1045,9 @@ describe('<SettingsModal />', () => {
   it('p054: integrates stats, actions and filters into a single first row directly above the account list', async () => {
     const groups = [{ id: 'work', name: '工作', color: null, account_count: 1, sort_order: 0 }]
     const accounts = [
-      { id: 'a-gmail', email: 'ada@gmail.com', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
-      { id: 'a-qq-enabled', email: 'bob@qq.com', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: null, group_name: null },
-      { id: 'a-qq-paused', email: 'carol@qq.com', status: 'active', sync_status: 'idle', sync_enabled: false, account_type: 'imap', provider: 'imap', group_id: null, group_name: null },
+      { id: 'a-gmail', email: 'ada@gmail.com', status: 'active', ...defaultAccountHealth, sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: 'work', group_name: '工作' },
+      { id: 'a-qq-enabled', email: 'bob@qq.com', status: 'active', ...defaultAccountHealth, sync_enabled: true, account_type: 'imap', provider: 'imap', group_id: null, group_name: null },
+      { id: 'a-qq-paused', email: 'carol@qq.com', status: 'active', ...defaultAccountHealth, sync_enabled: false, account_type: 'imap', provider: 'imap', group_id: null, group_name: null },
     ]
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
       const url = new URL(String(input), 'http://localhost')
@@ -1076,7 +1092,7 @@ describe('<SettingsModal />', () => {
 
   it('p054: sync-preference toggle shows no success feedback on success', async () => {
     const account = {
-      id: 'toggle-account', email: 'toggle@example.test', status: 'active', sync_status: 'idle', sync_enabled: true,
+      id: 'toggle-account', email: 'toggle@example.test', status: 'active', ...defaultAccountHealth, sync_enabled: true,
       account_type: 'imap', provider: 'imap', group_id: null, group_name: null,
     }
     const patches: unknown[] = []
@@ -1106,7 +1122,7 @@ describe('<SettingsModal />', () => {
 
   it('p054: sync-preference toggle still reports an error feedback on failure', async () => {
     const account = {
-      id: 'toggle-fail-account', email: 'toggle-fail@example.test', status: 'active', sync_status: 'idle', sync_enabled: true,
+      id: 'toggle-fail-account', email: 'toggle-fail@example.test', status: 'active', ...defaultAccountHealth, sync_enabled: true,
       account_type: 'imap', provider: 'imap', group_id: null, group_name: null,
     }
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init: RequestInit = {}) => {
@@ -1166,7 +1182,7 @@ describe('<SettingsModal /> per-scope pending gate (A125)', () => {
       if (u === '/api/auth/me') return json({ csrf_token: 'tok' })
       if (u === '/api/accounts/sync-all') { await syncAllGate; return json({ id: 'req-all', mode: 'delta', trigger: 'manual', state: 'running', target_count: 1, queued_count: 0, running_count: 1, completed_count: 0, failed_count: 0, created_at: '2026-10-28T00:00:00Z', finished_at: null, errors: [] }, 202) }
       if (u === '/api/mail/sync/requests/req-all') return json({ id: 'req-all', mode: 'delta', trigger: 'manual', state: 'complete', target_count: 1, queued_count: 0, running_count: 0, completed_count: 1, failed_count: 0, created_at: '2026-10-28T00:00:00Z', finished_at: '2026-10-28T00:00:05Z', errors: [] })
-      if (u.startsWith('/api/accounts')) return json({ accounts: [{ id: 'acc-1', email: 'a@x.test', provider: 'imap', sync_enabled: true, sync_status: 'idle' }], total: 1, limit: 200, offset: 0, has_more: false })
+      if (u.startsWith('/api/accounts')) return json({ accounts: [{ id: 'acc-1', email: 'a@x.test', provider: 'imap', sync_enabled: true, ...defaultAccountHealth }], total: 1, limit: 200, offset: 0, has_more: false })
       if (u === '/api/groups') {
         if (init.method === 'POST') { groupCreates.push(JSON.parse(String(init.body))); return json({ id: 'g-1', name: '新分组', account_count: 0 }) }
         return json({ groups: [] })

@@ -410,7 +410,9 @@ def _dto(email, group_id=None):
     return AccountDTO(
         id=str(uuid.uuid4()), email=email, provider="graph", display_name=None,
         group_id=str(group_id) if group_id else None, group_name=None, group_color=None,
-        status="active", sync_status="idle", sync_enabled=True, account_type="graph",
+        status="active", credential_state="valid", connectivity_state="connected",
+        sync_activity="idle", last_connectivity_error=None,
+        sync_enabled=True, account_type="graph",
         remark=None, provider_profile="microsoft", oauth_client_type="public",
     )
 

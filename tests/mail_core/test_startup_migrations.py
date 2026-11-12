@@ -353,11 +353,12 @@ def test_t5_empty_head_and_incremental_never_stamp(pg_schema, monkeypatch):
 
     class _FakeScript:
         def get_heads(self):
-            return ["20261108_0002"]
+            return ["20270101_0003"]
 
         def walk_revisions(self):
             return iter([
-                SimpleNamespace(revision="20261108_0002"),
+                SimpleNamespace(revision="20270101_0003"),
+                SimpleNamespace(revision=baseline.CURRENT_HEAD_REVISION),
                 SimpleNamespace(revision=baseline.UNIFIED_BASELINE_REVISION),
             ])
 
@@ -530,7 +531,7 @@ def test_t8_drifted_baseline_refused_by_all_three_entries(pg_schema, monkeypatch
             )
             conn.execute(
                 text("INSERT INTO alembic_version VALUES (:rev)"),
-                {"rev": baseline.UNIFIED_BASELINE_REVISION},
+                {"rev": baseline.CURRENT_HEAD_REVISION},
             )
     finally:
         engine.dispose()
@@ -556,3 +557,75 @@ def test_t8_drifted_baseline_refused_by_all_three_entries(pg_schema, monkeypatch
     assert upgrades == []
     with pytest.raises(SchemaValidationError, match="display_name"):
         baseline.run_migration(db_url)
+
+
+def test_t7_older_baseline_upgrades_in_place_with_data_mapping(pg_schema, monkeypatch):
+    """A database stamped at the unified baseline is upgraded to head by
+    startup, preserving accounts and mapping legacy sync_status values (t076).
+    """
+
+    _, db_url = pg_schema()
+    cfg = baseline.alembic_config()
+    cfg.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
+    # Build only the historical baseline (accounts.sync_status present).
+    _alembic_upgrade(cfg, baseline.UNIFIED_BASELINE_REVISION)
+
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, provider, sync_status, sync_enabled) "
+                    "VALUES (:id, :email, 'imap', 'auth_failed', true)"
+                ),
+                {"id": uuid.uuid4(), "email": "old-auth@example.test"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, provider, sync_status, sync_enabled) "
+                    "VALUES (:id, :email, 'imap', 'failed', true)"
+                ),
+                {"id": uuid.uuid4(), "email": "old-failed@example.test"},
+            )
+    finally:
+        engine.dispose()
+
+    monkeypatch.setenv("MAIL_CORE_DATABASE_URL", db_url)
+    # Real upgrade (no mock): startup must classify UPGRADE_TO_HEAD and apply
+    # the incremental revision instead of refusing to start.
+    main_module.run_migrations()
+
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            rev = conn.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert rev == baseline.CURRENT_HEAD_REVISION
+            columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'accounts'"
+                    )
+                )
+            }
+            assert "sync_status" not in columns
+            assert {"credential_state", "connectivity_state", "sync_activity"} <= columns
+            auth = conn.execute(
+                text(
+                    "SELECT credential_state, connectivity_state, sync_enabled "
+                    "FROM accounts WHERE email = 'old-auth@example.test'"
+                )
+            ).one()
+            assert auth == ("invalid", "connected", False)
+            failed = conn.execute(
+                text(
+                    "SELECT credential_state, connectivity_state "
+                    "FROM accounts WHERE email = 'old-failed@example.test'"
+                )
+            ).one()
+            assert failed == ("valid", "degraded")
+    finally:
+        engine.dispose()

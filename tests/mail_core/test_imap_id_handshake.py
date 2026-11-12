@@ -215,3 +215,36 @@ def test_imap_connect_expired_response_code_raises_permanent_auth_error():
     with patch("imaplib.IMAP4_SSL", return_value=mock_client):
         with pytest.raises(PermanentAuthError, match="IMAP authentication rejected permanently"):
             provider._connect()
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "[AUTHENTICATIONFAILED] Invalid credentials",
+        "AUTHENTICATIONFAILED invalid credentials",
+        "[AUTHORIZATIONFAILED] access denied",
+    ],
+)
+def test_imap_connect_confirmed_auth_failure_raises_permanent_auth_error(response):
+    """A definite credential rejection (not a temporary lockout) must be
+    classified as a permanent auth error so the account can be invalidated
+    (t076 AC-005)."""
+
+    from mail_core.providers.http import PermanentAuthError
+
+    provider = ImapProvider(
+        host="imap.example.com",
+        port=993,
+        username="user@example.com",
+        password="badpassword",
+        use_ssl=True,
+    )
+
+    mock_client = MagicMock(spec=imaplib.IMAP4_SSL)
+    mock_client.sock = Mock()
+    mock_client.sock.getpeername.return_value = ("8.8.8.8", 993)
+    mock_client.login.side_effect = imaplib.IMAP4.error(response)
+
+    with patch("imaplib.IMAP4_SSL", return_value=mock_client):
+        with pytest.raises(PermanentAuthError, match="IMAP authentication rejected permanently"):
+            provider._connect()

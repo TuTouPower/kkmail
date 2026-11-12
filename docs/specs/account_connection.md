@@ -1,7 +1,7 @@
 ---
 slug: account_connection
 status: active
-tasks: [t053, t054, t055]
+tasks: [t053, t054, t055, t076]
 ---
 # 账户连接与供应商技术规范 (Account Connection Specification)
 

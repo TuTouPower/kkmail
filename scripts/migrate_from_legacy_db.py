@@ -643,7 +643,6 @@ def migrate(sqlite_path: Path, target_url: str) -> None:
                         display_name=a["remark"] or email_norm,
                         config=cfg,
                         group_id=group_id,
-                        sync_status="idle",
                         sync_enabled=bool(a["status"] == "active"),
                     )
                     session.add(acc)

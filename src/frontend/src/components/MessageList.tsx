@@ -192,7 +192,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
         const stats = await fetchGlobalStats(signal, groupId, folderRole)
         const activeAccounts = stats.accounts.filter((item) => {
           const acc = accounts.find((a) => a.id === item.account_id)
-          const isFaulty = acc && (acc.sync_enabled === false || acc.sync_status === 'failed' || acc.sync_status === 'auth_failed') && item.total_count === null
+          const isFaulty = acc && (acc.credential_state === 'invalid' || acc.connectivity_state === 'unreachable') && item.total_count === null
           return !isFaulty
         })
         return {
@@ -226,7 +226,7 @@ const MessageList = memo(function MessageList({ sidebarToggleRef }: { sidebarTog
       let unreadUnknown = false
       for (const { account: a, stats: s } of statsList) {
         if (!s) return null
-        const isFaulty = (a.sync_status === 'failed' || a.sync_status === 'auth_failed') && s.folders.length === 0
+        const isFaulty = (a.credential_state === 'invalid' || a.connectivity_state === 'unreachable') && s.folders.length === 0
         if (isFaulty) {
           continue
         }

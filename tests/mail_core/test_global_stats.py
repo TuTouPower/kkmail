@@ -30,12 +30,21 @@ requires_db = pytest.mark.skipif(
 )
 
 
-def _account(session, *, sync_enabled=True, sync_status="idle", group_id=None) -> Account:
+def _account(
+    session,
+    *,
+    sync_enabled=True,
+    credential_state="valid",
+    connectivity_state="connected",
+    group_id=None,
+) -> Account:
+    # t076: Account.sync_status 单列已移除；故障账号按新健康列显式构造。
     acc = Account(
         email=f"stats-{uuid.uuid4().hex[:10]}@example.com",
         provider="imap",
         sync_enabled=sync_enabled,
-        sync_status=sync_status,
+        credential_state=credential_state,
+        connectivity_state=connectivity_state,
         group_id=group_id,
     )
     session.add(acc)
@@ -67,8 +76,9 @@ def test_query_global_inbox_stats_excludes_disabled_accounts_and_keeps_enabled_s
     with Session() as session:
         acc1 = _account(session)
         _inbox(session, acc1, unread=5, total=10)
-        acc2 = _account(session, sync_enabled=False, sync_status="auth_failed")
-        acc3 = _account(session, sync_status="failed")  # enabled, no folders yet
+        # t076: 旧 auth_failed → credential_state="invalid"；failed → connectivity_state="unreachable"。
+        acc2 = _account(session, sync_enabled=False, credential_state="invalid")
+        acc3 = _account(session, connectivity_state="unreachable")  # enabled, no folders yet
         session.commit()
 
         result = query_global_inbox_stats(session)
@@ -106,7 +116,7 @@ def test_query_group_inbox_stats_excludes_disabled_accounts():
         session.flush()
         acc1 = _account(session, group_id=group.id)
         _inbox(session, acc1, unread=3, total=8)
-        _account(session, sync_enabled=False, sync_status="auth_failed", group_id=group.id)
+        _account(session, sync_enabled=False, credential_state="invalid", group_id=group.id)
         session.commit()
 
         result = query_group_inbox_stats(session, group.id)

@@ -1,12 +1,15 @@
 from mail_core.mail.domain.archive import ARCHIVE_TRANSITIONS, IllegalArchiveTransition, assert_transition, can_transition
 from mail_core.mail.domain.enums import (
     ArchiveState,
+    ConnectivityState,
+    CredentialState,
     FolderRole,
     JobStatus,
     JobType,
     OutboxEventType,
     ProviderType,
     RemoteOperationStatus,
+    SyncActivity,
     SyncPhase,
     SyncRunStatus,
     SyncStatus,
@@ -14,6 +17,8 @@ from mail_core.mail.domain.enums import (
 __all__ = [
     "ARCHIVE_TRANSITIONS",
     "ArchiveState",
+    "ConnectivityState",
+    "CredentialState",
     "FolderRole",
     "IllegalArchiveTransition",
     "JobStatus",
@@ -21,6 +26,7 @@ __all__ = [
     "OutboxEventType",
     "ProviderType",
     "RemoteOperationStatus",
+    "SyncActivity",
     "SyncPhase",
     "SyncRunStatus",
     "SyncStatus",

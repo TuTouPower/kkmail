@@ -74,7 +74,6 @@ def test_sync_account_folders_pauses_gmail_virtual_folders():
             email=f"test_user_{uuid.uuid4().hex[:8]}@gmail.com",
             provider="imap",
             sync_enabled=True,
-            sync_status="idle",
             config={"imap_host": "imap.gmail.com", "imap_port": 993},
         )
         session.add(account)
@@ -131,7 +130,6 @@ def test_worker_transient_network_timeout_does_not_fail_account():
             email=f"transient_{uuid.uuid4().hex[:8]}@gmail.com",
             provider="imap",
             sync_enabled=True,
-            sync_status="running",
         )
         session.add(account)
         session.flush()
@@ -165,9 +163,11 @@ def test_worker_transient_network_timeout_does_not_fail_account():
         # Job is requeued with backoff
         assert job.status == JobStatus.PENDING.value
         assert job.failure_attempts == 1
-        # Account is NOT marked as failed!
-        assert account.sync_status != SyncStatus.FAILED.value
-        assert account.sync_status == "running"
+        # t076: a foreground transport failure degrades connectivity but must
+        # never invalidate the credential (AC-004 / AC-005).
+        assert account.credential_state == "valid"
+        assert account.connectivity_state == "degraded"
+        assert account.sync_activity == "syncing"
 
 
 @pytest.mark.skipif(
@@ -182,7 +182,6 @@ def test_worker_permanent_auth_error_still_fails_and_disables_account():
             email=f"auth_fail_{uuid.uuid4().hex[:8]}@gmail.com",
             provider="imap",
             sync_enabled=True,
-            sync_status="running",
         )
         session.add(account)
         session.flush()
@@ -211,5 +210,5 @@ def test_worker_permanent_auth_error_still_fails_and_disables_account():
 
     with Session() as session:
         account = session.get(Account, account_id)
-        assert account.sync_status == SyncStatus.AUTH_FAILED.value
+        assert account.credential_state == "invalid"
         assert account.sync_enabled is False

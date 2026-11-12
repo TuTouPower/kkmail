@@ -94,7 +94,9 @@ def _account():
         credential_ref="ref",
         config={},
         sync_enabled=True,
-        sync_status="idle",
+        credential_state="valid",
+        connectivity_state="connected",
+        sync_activity="idle",
     )
 
 

@@ -13,6 +13,8 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); __resetCsrfForTests() })
 
+const accountHealth = { credential_state: 'valid', connectivity_state: 'connected', sync_activity: 'idle', last_connectivity_error: null }
+
 it('Google onboarding offers only IMAP app-password: no OAuth fields, Gmail presets prefilled, Microsoft still OAuth only', async () => {
   const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
   await changeSelect(container.querySelector('#account-vendor'), 'google')
@@ -179,7 +181,7 @@ it('p057: editing an account with a differing stored imap_user auto-checks the t
     email: 'person@example.test',
     provider: 'imap',
     status: 'active',
-    sync_status: 'idle',
+    ...accountHealth,
     sync_enabled: true,
     account_type: 'imap',
     imap_config: { imap_host: 'imap.example.test', imap_port: 993, use_ssl: true, imap_user: 'sys-user-42' },
@@ -208,7 +210,7 @@ it('p057: editing an account whose stored imap_user equals its email keeps the t
     email: 'person@example.test',
     provider: 'imap',
     status: 'active',
-    sync_status: 'idle',
+    ...accountHealth,
     sync_enabled: true,
     account_type: 'imap',
     imap_config: { imap_host: 'imap.example.test', imap_port: 993, use_ssl: true, imap_user: 'person@example.test' },
@@ -231,7 +233,7 @@ it('updates a single OAuth field without echoing or replacing saved secrets', as
     calls.push(JSON.parse(String(init.body)))
     return new Response(JSON.stringify({ id: 'a' }))
   }))
-  const account = { id: 'a', email: 'a@outlook.com', provider: 'graph', status: 'active', sync_status: 'idle', sync_enabled: true, account_type: 'graph' }
+  const account = { id: 'a', email: 'a@outlook.com', provider: 'graph', status: 'active', ...accountHealth, sync_enabled: true, account_type: 'graph' }
   const { container } = await render(<AccountDialog account={account} groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
   await typeInto(container.querySelector('#account-refresh-token'), 'new-refresh')
   await click(container.querySelector('button[type="submit"]'))
@@ -268,7 +270,7 @@ it('releases save controls when the account write succeeds but refresh fails', a
     email: 'a@example.test',
     provider: 'imap',
     status: 'active',
-    sync_status: 'idle',
+    ...accountHealth,
     sync_enabled: true,
     account_type: 'imap',
     imap_config: { imap_host: 'imap.example.test', imap_port: 993, use_ssl: true },

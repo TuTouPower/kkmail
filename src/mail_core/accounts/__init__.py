@@ -1,3 +1,11 @@
+from mail_core.accounts.health import (
+    health_fields,
+    mark_credential_invalid,
+    record_connectivity_failure,
+    record_connectivity_success,
+    reset_credential,
+    set_sync_activity,
+)
 from mail_core.accounts.service import (
     account_ids_for_group,
     enabled_account_ids,
@@ -15,7 +23,6 @@ from mail_core.accounts.service import (
     save_sidebar_layout,
     StaleSidebarLayoutError,
     update_account,
-    update_account_sync_status,
 )
 from mail_core.accounts.settings_store import (
     get_app_setting,
@@ -41,7 +48,12 @@ __all__ = [
     "save_sidebar_layout",
     "StaleSidebarLayoutError",
     "update_account",
-    "update_account_sync_status",
+    "health_fields",
+    "mark_credential_invalid",
+    "record_connectivity_failure",
+    "record_connectivity_success",
+    "reset_credential",
+    "set_sync_activity",
     "get_app_setting",
     "get_fetch_timeout_seconds",
     "get_public_settings",

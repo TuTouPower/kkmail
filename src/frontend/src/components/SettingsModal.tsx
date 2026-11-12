@@ -18,8 +18,22 @@ type Scope = Section | 'password'
 const BATCH_CONCURRENCY = 4
 type Feedback = { message: string; error?: boolean }
 const providers: Record<string, string> = { imap: 'IMAP', graph: 'Microsoft Graph' }
-const syncStates: Record<string, string> = { idle: '空闲', running: '同步中', failed: '同步失败', auth_failed: '认证失败', pending: '等待同步' }
-const syncFailed = (account: AccountSummary) => ['failed', 'auth_failed'].includes(account.sync_status)
+type HealthState = 'invalid' | 'unreachable' | 'degraded' | 'syncing' | 'idle'
+const healthLabels: Record<HealthState, string> = {
+  invalid: '认证失败',
+  unreachable: '网络不可达',
+  degraded: '网络异常·重试中',
+  syncing: '同步中',
+  idle: '空闲',
+}
+const healthIsError = (state: HealthState) => state === 'invalid' || state === 'unreachable' || state === 'degraded'
+function accountHealth(account: AccountSummary): HealthState {
+  if (account.credential_state === 'invalid') return 'invalid'
+  if (account.connectivity_state === 'unreachable') return 'unreachable'
+  if (account.connectivity_state === 'degraded') return 'degraded'
+  if (account.sync_activity === 'syncing') return 'syncing'
+  return 'idle'
+}
 const accountDomain = (email: string) => email.slice(email.lastIndexOf('@') + 1).trim().toLowerCase()
 
 function Status({ value }: { value?: Feedback }) {
@@ -114,7 +128,7 @@ export default function SettingsPage({
   const filtered = accounts.filter(a =>
     (!query || `${a.email} ${providers[a.provider] || a.provider} ${a.group_name || '未分组'} ${(a.recipient_addresses || []).join(' ')}`.toLowerCase().includes(query)) &&
     (groupFilter === 'all' || (groupFilter === 'ungrouped' ? !a.group_id : a.group_id === groupFilter)) &&
-    (stateFilter === 'all' || (stateFilter === 'enabled' ? a.sync_enabled !== false : stateFilter === 'disabled' ? a.sync_enabled === false : syncFailed(a))) &&
+    (stateFilter === 'all' || (stateFilter === 'enabled' ? a.sync_enabled !== false : stateFilter === 'disabled' ? a.sync_enabled === false : accountHealth(a) === stateFilter)) &&
     (domainFilter === 'all' || accountDomain(a.email) === domainFilter),
   )
   const selectedAccounts = accounts.filter(a => selected.has(a.id))
@@ -439,7 +453,7 @@ export default function SettingsPage({
               <div className="settings-toolbar">
                 <label className="settings-search"><Search size={15} /><input type="search" aria-label="搜索账户" placeholder="搜索邮箱、域名、服务商或分组" value={search} onChange={event => setSearch(event.target.value)} /></label>
                 <select aria-label="按分组筛选" value={groupFilter} onChange={event => setGroupFilter(event.target.value)} disabled={groupsQuery.isError}><option value="all">所有分组</option><option value="ungrouped">未分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
-                <select aria-label="按同步状态筛选" value={stateFilter} onChange={event => setStateFilter(event.target.value)}><option value="all">全部状态</option><option value="enabled">已启用同步</option><option value="disabled">已暂停同步</option><option value="failed">同步异常</option></select>
+                <select aria-label="按同步状态筛选" value={stateFilter} onChange={event => setStateFilter(event.target.value)}><option value="all">全部状态</option><option value="enabled">已启用同步</option><option value="disabled">已暂停同步</option><option value="invalid">认证失败</option><option value="unreachable">网络不可达</option><option value="degraded">网络异常·重试中</option><option value="syncing">同步中</option><option value="idle">空闲</option></select>
                 <select aria-label="按邮箱域名筛选" value={domainFilter} onChange={event => setDomainFilter(event.target.value)}><option value="all">所有域名</option>{domains.map(domain => <option key={domain} value={domain}>{domain}</option>)}</select>
               </div>
             </div>
@@ -471,7 +485,7 @@ export default function SettingsPage({
                     const groupId = event.target.value
                     void run('accounts', '移动账号', async () => { await moveAccount(account, groupId); await refreshOrganization() }, '账号分组已更新')
                   }}><option value="">不加入分组</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
-                  <span className={`settings-sync-status${syncFailed(account) ? ' is-error' : ''}`}><i />{syncStates[account.sync_status] || account.sync_status || '状态未知'}</span>
+                  <span className={`settings-sync-status${healthIsError(accountHealth(account)) ? ' is-error' : ''}`}><i />{healthLabels[accountHealth(account)]}</span>
                   <button className="settings-switch" type="button" role="switch" aria-checked={account.sync_enabled !== false} aria-label={`${account.sync_enabled === false ? '启用' : '暂停'}同步 ${account.email}`} disabled={pendingAccounts} onClick={() => void toggleSyncPreference(account)}><span /></button>
                   <div className="settings-row-actions"><button type="button" className="settings-icon-button" title="编辑账户" aria-label={`编辑账户 ${account.email}`} disabled={pendingAccounts} onClick={() => { setAddOpen(false); setEditingAccount(account) }}><Pencil size={14} /></button><button type="button" className="settings-icon-button" title="立即同步" aria-label={`同步 ${account.email}`} disabled={pendingAccounts || account.sync_enabled === false} onClick={() => void syncAccountNow(account)}><RefreshCw size={14} className={syncingAccountIds.has(account.id) ? 'spin' : ''} /></button><button type="button" className="settings-icon-button is-danger" aria-label={`删除账户 ${account.email}`} title="删除账户" disabled={pendingAccounts} onClick={() => void deleteAccount(account)}><Trash2 size={14} /><span className="settings-sr-only">删除</span></button></div>
                 </div>)}

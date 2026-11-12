@@ -40,6 +40,9 @@ from sqlalchemy.engine import Connection, Engine, make_url
 LOG = logging.getLogger("migrate_to_unified_baseline")
 
 UNIFIED_BASELINE_REVISION = "20261107_0001"
+# The current Alembic head.  A database still stamped at the unified baseline
+# must be upgraded to this head before its schema matches the ORM.
+CURRENT_HEAD_REVISION = "20261112_0002"
 
 CORE_CRITICAL_TABLES: frozenset[str] = frozenset({
     "accounts",
@@ -203,6 +206,7 @@ class MigrationAction(str, Enum):
 
     EMPTY_DATABASE = "empty_database"
     AT_BASELINE = "at_baseline"
+    UPGRADE_TO_HEAD = "upgrade_to_head"
     LEGACY = "legacy"
     LEGACY_UNSUPPORTED = "legacy_unsupported"
     NEWER_THAN_CODE = "newer_than_code"
@@ -397,7 +401,9 @@ def _describe_diff(diff: tuple) -> str:
     return f"Schema difference from the unified baseline: {diff!r}"
 
 
-def verify_baseline_schema(bind: Engine | Connection) -> list[str]:
+def verify_baseline_schema(
+    bind: Engine | Connection, *, ignore_account_column_drift: bool = False
+) -> list[str]:
     """Full-fidelity check that a database matches the unified baseline.
 
     Compares the live catalog against the ORM metadata — the single source
@@ -429,7 +435,7 @@ def verify_baseline_schema(bind: Engine | Connection) -> list[str]:
 
     if isinstance(bind, Engine):
         with bind.connect() as conn:
-            return verify_baseline_schema(conn)
+            return verify_baseline_schema(conn, ignore_account_column_drift=ignore_account_column_drift)
     ctx = MigrationContext.configure(
         bind, opts={"compare_type": True, "compare_server_default": False}
     )
@@ -437,8 +443,46 @@ def verify_baseline_schema(bind: Engine | Connection) -> list[str]:
     for diff in _flatten_diffs(compare_metadata(ctx, _baseline_metadata())):
         if _is_ignored_baseline_diff(diff):
             continue
+        if ignore_account_column_drift and _is_account_column_drift(diff):
+            continue
         errors.append(_describe_diff(diff))
     return errors
+
+
+_ACCOUNT_HEALTH_COLUMNS = frozenset({
+    "sync_status",
+    "credential_state",
+    "connectivity_state",
+    "sync_activity",
+})
+
+
+def _is_account_column_drift(diff: tuple) -> bool:
+    """Whether a diff is an ``accounts`` column difference introduced by the
+    account-health revision (0002).
+
+    A narrow legacy conversion stamps 0001, whose ``accounts`` table still
+    carries ``sync_status``; the shipped ORM describes the 0002 head with the
+    three health columns.  That difference is expected and is reconciled by
+    the incremental Alembic upgrade immediately after conversion, so the
+    post-conversion check ignores it while still validating every other
+    table, column, key and index.  Only these four columns are exempt: any
+    other ``accounts`` drift (e.g. a widened ``email``) must still be caught.
+    """
+
+    if not isinstance(diff, (tuple, list)) or len(diff) < 4:
+        return False
+    kind = diff[0]
+    if diff[2] != "accounts":
+        return False
+    if kind in ("add_column", "remove_column"):
+        column = diff[3]
+        col_name = getattr(column, "name", str(column))
+    elif kind in ("modify_nullable", "modify_type"):
+        col_name = str(diff[3])
+    else:
+        return False
+    return col_name in _ACCOUNT_HEALTH_COLUMNS
 
 
 def _normalize_default(value: Any) -> str | None:
@@ -684,6 +728,9 @@ def _stamp_targets(current: list[str], revision: str) -> str:
         return "insert"
     if current == [revision]:
         return "noop"
+    if current == [CURRENT_HEAD_REVISION]:
+        # Already past the baseline; never downgrade the stamp.
+        return "noop"
     if all(is_narrow_conversion_revision(r) for r in current):
         return "replace"
     raise SchemaValidationError(
@@ -895,7 +942,11 @@ def apply_narrow_legacy_conversion(database_url: str) -> str:
                 )
             ensure_folder_patrol_status_table(conn)
             migrate_patrol_status_data(conn)
-            errors = verify_baseline_schema(conn)
+            # The conversion stamps 0001; the three account-health columns are
+            # applied by the incremental 0002 upgrade right afterwards, so the
+            # post-conversion check ignores that expected column delta while
+            # still validating every other object of the baseline schema.
+            errors = verify_baseline_schema(conn, ignore_account_column_drift=True)
             if errors:
                 detail = "\n  - ".join(errors)
                 raise SchemaValidationError(
@@ -1010,6 +1061,17 @@ def plan_migration(state: DatabaseState, *, context: RevisionContext) -> Migrati
 
     current = version_rows[0]
     if current in context.known_revisions or current == UNIFIED_BASELINE_REVISION:
+        if context.heads and current not in context.heads:
+            return MigrationPlan(
+                action=MigrationAction.UPGRADE_TO_HEAD,
+                current_revision=current,
+                version_rows=version_rows,
+                message=(
+                    f"Database is at earlier known revision '{current}'; "
+                    f"an Alembic upgrade to head '{', '.join(context.heads)}' "
+                    "is required (start mail-core to apply it)."
+                ),
+            )
         return MigrationPlan(
             action=MigrationAction.AT_BASELINE,
             current_revision=current,
@@ -1119,6 +1181,14 @@ def run_migration(
             MigrationAction.EMPTY_DATABASE,
         ):
             raise SchemaValidationError(plan.message)
+
+        if plan.action == MigrationAction.UPGRADE_TO_HEAD:
+            raise SchemaValidationError(
+                f"Database is at earlier known revision '{plan.current_revision}'. "
+                "Start mail-core (python -m mail_core) to apply the incremental "
+                "Alembic upgrade to head; the offline tool does not replay "
+                "incremental revisions. The database was not modified."
+            )
 
         is_legacy = plan.action == MigrationAction.LEGACY
         errors = verify_for_plan(conn, plan)

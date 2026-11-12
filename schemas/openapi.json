@@ -214,6 +214,14 @@
             "title": "Account Type",
             "type": "string"
           },
+          "connectivity_state": {
+            "title": "Connectivity State",
+            "type": "string"
+          },
+          "credential_state": {
+            "title": "Credential State",
+            "type": "string"
+          },
           "display_name": {
             "anyOf": [
               {
@@ -287,6 +295,17 @@
               }
             ]
           },
+          "last_connectivity_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Connectivity Error"
+          },
           "master_order": {
             "anyOf": [
               {
@@ -357,13 +376,13 @@
             "title": "Status",
             "type": "string"
           },
+          "sync_activity": {
+            "title": "Sync Activity",
+            "type": "string"
+          },
           "sync_enabled": {
             "title": "Sync Enabled",
             "type": "boolean"
-          },
-          "sync_status": {
-            "title": "Sync Status",
-            "type": "string"
           }
         },
         "required": [
@@ -371,7 +390,9 @@
           "email",
           "provider",
           "status",
-          "sync_status",
+          "credential_state",
+          "connectivity_state",
+          "sync_activity",
           "sync_enabled",
           "account_type"
         ],

@@ -21,7 +21,7 @@ const accounts = [
   { id: 'acc-2', email: 'notes@a.example', status: 'active', account_type: 'imap', provider: 'imap', group_id: null },
 ]
 
-function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; syncStatusAcc1?: string; disabledAcc1?: boolean; disabledAcc2?: boolean; displayNameAcc1?: string; additionalAccounts?: Array<{ id: string; email: string; group_id: string | null; display_name?: string; recipient_addresses?: string[] }>; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
+function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; accountHealthAcc1?: { credential_state?: string; connectivity_state?: string; sync_activity?: string; last_connectivity_error?: string | null }; disabledAcc1?: boolean; disabledAcc2?: boolean; displayNameAcc1?: string; additionalAccounts?: Array<{ id: string; email: string; group_id: string | null; display_name?: string; recipient_addresses?: string[] }>; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
   const calls: Array<{ url: string; method: string; body?: string }> = []
   let acc1Unread = 2
   let acc2Unread = 1
@@ -53,7 +53,10 @@ function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failSta
     id: string
     email: string
     status: string
-    sync_status?: string
+    credential_state: string
+    connectivity_state: string
+    sync_activity: string
+    last_connectivity_error: string | null
     account_type: string
     provider: string
     group_id: string | null
@@ -66,7 +69,10 @@ function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failSta
     group_id: account.group_id ?? null,
     display_name: account.id === 'acc-1' ? options.displayNameAcc1 : account.display_name,
     sync_enabled: account.id === 'acc-1' ? !options.disabledAcc1 : !options.disabledAcc2,
-    sync_status: account.id === 'acc-1' && options.syncStatusAcc1 ? options.syncStatusAcc1 : 'idle',
+    credential_state: account.id === 'acc-1' ? options.accountHealthAcc1?.credential_state ?? 'valid' : 'valid',
+    connectivity_state: account.id === 'acc-1' ? options.accountHealthAcc1?.connectivity_state ?? 'connected' : 'connected',
+    sync_activity: account.id === 'acc-1' ? options.accountHealthAcc1?.sync_activity ?? 'idle' : 'idle',
+    last_connectivity_error: account.id === 'acc-1' ? options.accountHealthAcc1?.last_connectivity_error ?? null : null,
     recipient_addresses: account.recipient_addresses,
   }))
   let currentGroups = groups.map((group) => ({ ...group }))
@@ -1178,36 +1184,66 @@ describe('<Sidebar />', () => {
     expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-2"]')).not.toBeNull()
   })
 
-  it('displays sync failure message and does not show virtual unread item when account folders are empty and sync_status is auth_failed (AC-001)', async () => {
-    mockApi({ emptyFoldersAcc1: true, syncStatusAcc1: 'auth_failed' })
+  it('marks only invalid credentials with a red reauthorization icon and guidance (AC-007)', async () => {
+    mockApi({ emptyFoldersAcc1: true, accountHealthAcc1: { credential_state: 'invalid' } })
     const { container } = await render(<Sidebar />)
     await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')).not.toBeNull())
     const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
+    expect(account.querySelector('[aria-label="凭据已失效"]')).not.toBeNull()
+    expect(account.querySelector('.tree-account-sync-error')).not.toBeNull()
     await click(account.querySelector('.tree-disclosure'))
-    await waitFor(() => expect(account.textContent).toContain('同步失败，请检查账户设置'))
+    await waitFor(() => expect(account.textContent).toContain('凭据已失效，请重新授权或检查账户设置'))
+    expect(account.textContent).not.toContain('同步失败')
     expect(account.textContent).not.toContain('未读邮件')
   })
 
-  it('shows sync failure on the account row and above existing folders', async () => {
-    mockApi({ syncStatusAcc1: 'failed' })
+  it('shows a network-retry notice for unreachable connectivity without a credential red mark or settings hint (AC-007)', async () => {
+    mockApi({ accountHealthAcc1: { connectivity_state: 'unreachable', last_connectivity_error: 'connection timed out' } })
     const { container } = await render(<Sidebar />)
     await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')).not.toBeNull())
     const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
-    expect(account.querySelector('[aria-label="同步失败"]')).not.toBeNull()
-
+    expect(account.querySelector('.tree-account-sync-error')).toBeNull()
     await click(account.querySelector('.tree-disclosure'))
-    await waitFor(() => expect(account.textContent).toContain('同步失败，请检查账户设置'))
+    await waitFor(() => expect(account.textContent).toContain('网络连接不可用，系统正在重试'))
     expect(account.textContent).toContain('收件箱')
+    expect(account.textContent).not.toContain('请检查账户设置')
   })
 
-  it('displays no folders message when account folders are empty and sync_status is idle (AC-001)', async () => {
-    mockApi({ emptyFoldersAcc1: true, syncStatusAcc1: 'idle' })
+  it('reports a transient degraded connection with retry text but no account alarm (AC-007)', async () => {
+    mockApi({ accountHealthAcc1: { connectivity_state: 'degraded' } })
     const { container } = await render(<Sidebar />)
     await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')).not.toBeNull())
     const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
+    expect(account.querySelector('.tree-account-sync-error')).toBeNull()
+    await click(account.querySelector('.tree-disclosure'))
+    await waitFor(() => expect(account.textContent).toContain('网络异常，正在重试'))
+    expect(account.textContent).toContain('收件箱')
+    expect(account.textContent).not.toContain('请检查账户设置')
+  })
+
+  it('keeps a healthy connected account free of alarms and shows the plain empty state (AC-007)', async () => {
+    mockApi({ emptyFoldersAcc1: true })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
+    expect(account.querySelector('.tree-account-sync-error')).toBeNull()
     await click(account.querySelector('.tree-disclosure'))
     await waitFor(() => expect(account.textContent).toContain('暂无文件夹'))
+    expect(account.textContent).not.toContain('同步失败')
+    expect(account.textContent).not.toContain('重试')
     expect(account.textContent).not.toContain('未读邮件')
+  })
+
+  it('does not raise an alarm for a background silent sync (sync_activity=syncing) (AC-007)', async () => {
+    mockApi({ accountHealthAcc1: { sync_activity: 'syncing' } })
+    const { container } = await render(<Sidebar />)
+    await waitFor(() => expect(container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')).not.toBeNull())
+    const account = container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
+    expect(account.querySelector('.tree-account-sync-error')).toBeNull()
+    await click(account.querySelector('.tree-disclosure'))
+    await waitFor(() => expect(account.textContent).toContain('收件箱'))
+    expect(account.textContent).not.toContain('同步失败')
+    expect(account.textContent).not.toContain('请检查账户设置')
   })
 
   it('flattens Gmail [Gmail] namespace folders, strips prefixes and presents standard names (p058)', async () => {

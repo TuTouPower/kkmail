@@ -215,6 +215,7 @@ def reconcile_folder(
         return {"status": "capacity_unavailable", "retry_after": delay}
     except Exception as exc:
         from mail_core.security.redact import safe_provider_summary
+        from mail_core.sync.context import is_permanent_auth_error
 
         err_summary = safe_provider_summary(exc)
         log.error("reconcile provider I/O failed for folder %s: %s", folder_id, err_summary)
@@ -224,7 +225,10 @@ def reconcile_folder(
                 session.commit()
             except FencingMismatch:
                 session.rollback()
-        return {"status": "provider_error", "error": err_summary}
+        result = {"status": "provider_error", "error": err_summary}
+        if is_permanent_auth_error(exc):
+            result["error_code"] = "auth_failed"
+        return result
 
     deleted = 0
     batch_starts = range(0, max(1, len(actions)), RECONCILE_DELETE_BATCH_SIZE)

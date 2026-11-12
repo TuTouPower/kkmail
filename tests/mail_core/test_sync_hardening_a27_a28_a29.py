@@ -124,24 +124,32 @@ def test_a27_sync_folder_delta_sanitizes_errors(monkeypatch):
         assert res["error"] == "ProviderHttpError status=500"
         assert "LEAKED" not in res["error"]
 
-        # Check job payload written to database
+        # The sync layer no longer spawns a successor job carrying a
+        # hand-written diagnostic payload.  The Worker framework owns
+        # sanitization and persists a redacted ``job.last_error`` when it
+        # requeues this job in place (covered by the Worker/health tests).
+        # No job may leak the provider's sensitive text.
         with Session() as session:
-            job = session.scalar(
-                select(WorkerJob)
-                .where(WorkerJob.account_id == account_id)
-                .where(WorkerJob.job_type == JobType.SYNC_FOLDER_DELTA.value)
-                .order_by(WorkerJob.created_at.desc())
-                .limit(1)
+            jobs = list(
+                session.scalars(
+                    select(WorkerJob).where(WorkerJob.account_id == account_id)
+                )
             )
-            assert job is not None
-            assert job.payload.get("detail") == "ProviderHttpError status=500"
-            assert "LEAKED" not in str(job.payload)
+            assert jobs
+            assert all("LEAKED" not in str(j.payload) for j in jobs)
+            assert all(j.payload.get("detail") is None for j in jobs)
     finally:
         set_credential_store(None)
 
 
 @_requires_db
-def test_a27_sync_account_folders_sanitizes_last_sync_error(monkeypatch):
+def test_a27_sync_account_folders_leaves_account_health_untouched(monkeypatch):
+    """The sync engine no longer writes account diagnostics: sanitization and
+    health transitions are owned by the Worker layer (``job.last_error`` and
+    ``accounts.health``).  A provider failure must not touch account config
+    or the orthogonal health states.
+    """
+
     store = DictCredentialStore({"r": "x"})
     set_credential_store(store)
     Session = get_session_factory()
@@ -155,17 +163,17 @@ def test_a27_sync_account_folders_sanitizes_last_sync_error(monkeypatch):
             def list_folders(self):
                 raise ProviderHttpError("Failed folder listing: access_token=SECRET_TOKEN", status=502, body="SECRET_BODY")
 
-        provider = FlakyFolders()
-        monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None, **kwargs: provider)
+        monkeypatch.setattr(engine_mod, "build_provider", lambda a, s=None, **kwargs: FlakyFolders())
 
         with pytest.raises(ProviderHttpError):
             sync_account_folders(account_id, worker_id="w", store=store)
 
         with Session() as session:
             acc = session.get(Account, account_id)
-            last_err = (acc.config or {}).get("last_sync_error", "")
-            assert last_err == "ProviderHttpError status=502"
-            assert "SECRET" not in last_err
+            assert "last_sync_error" not in (acc.config or {})
+            assert "last_connectivity_error" not in (acc.config or {})
+            assert acc.credential_state == "valid" and acc.connectivity_state == "connected"
+            assert acc.connectivity_state == "connected"
     finally:
         set_credential_store(None)
 

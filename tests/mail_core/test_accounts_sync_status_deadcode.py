@@ -1,40 +1,25 @@
-"""A214: Account has no last_synced_at column — the hasattr branch is dead.
+"""A214 / t076: Account model column layout.
 
-The timestamp belongs only in config["last_synced_at"]; the service must
-not pretend to maintain a column attribute.
+账号同步状态写入函数及其死代码测试已删除；对应生产函数已删除，
+改由 health 状态机测试覆盖（test_account_health_state_machine.py）。
+``last_synced_at`` 仍只存在于 config["last_synced_at"]，不是列属性；
+``Account.sync_status`` 列已被三个正交健康列替换。
 """
 
 from __future__ import annotations
-
-import uuid
-from types import SimpleNamespace
-
-from mail_core.accounts.service import update_account_sync_status
-from mail_core.mail.domain.enums import SyncStatus
-
-
-class _FakeSession:
-    def __init__(self, acc):
-        self._acc = acc
-
-    def get(self, _model, _pk):
-        return self._acc
-
-    def flush(self):
-        pass
-
-
-def test_update_account_sync_status_stores_timestamp_only_in_config():
-    acc = SimpleNamespace(sync_status="idle", config={}, last_synced_at=None)
-    result = update_account_sync_status(_FakeSession(acc), uuid.uuid4(), SyncStatus.IDLE)
-    assert result is acc
-    assert acc.sync_status == SyncStatus.IDLE.value
-    assert "last_synced_at" in acc.config
-    # no phantom column attribute is written
-    assert acc.last_synced_at is None
 
 
 def test_account_model_has_no_last_synced_at_column():
     from mail_core.mail.storage.models import Account
 
     assert "last_synced_at" not in Account.__table__.columns
+
+
+def test_account_model_replaces_sync_status_with_health_columns():
+    from mail_core.mail.storage.models import Account
+
+    columns = Account.__table__.columns
+    assert "sync_status" not in columns
+    assert "credential_state" in columns
+    assert "connectivity_state" in columns
+    assert "sync_activity" in columns

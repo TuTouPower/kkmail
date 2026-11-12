@@ -32,7 +32,8 @@ def test_invalid_folder_sync_payload_fails_without_changing_account_status(job_t
 
     with (
         patch("mail_core.worker.handlers.fail_job") as fail,
-        patch("mail_core.worker.handlers.update_account_sync_status") as update_status,
+        patch("mail_core.worker.handlers.record_connectivity_failure") as connectivity,
+        patch("mail_core.worker.handlers.mark_credential_invalid") as credential,
     ):
         result = handle_job(session, job, worker_id="worker-invalid-payload")
 
@@ -40,5 +41,7 @@ def test_invalid_folder_sync_payload_fails_without_changing_account_status(job_t
     fail.assert_called_once()
     assert "invalid_payload:" in str(fail.call_args.args[2])
     assert fail.call_args.kwargs["max_attempts"] == 1
-    update_status.assert_not_called()
+    # t076: 账号同步状态写入函数已删除；invalid payload 不得触碰健康状态机。
+    connectivity.assert_not_called()
+    credential.assert_not_called()
     session.get.assert_not_called()

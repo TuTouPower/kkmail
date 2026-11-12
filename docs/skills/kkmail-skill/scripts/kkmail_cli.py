@@ -546,7 +546,12 @@ def main() -> None:
             else:
                 print(f"Accounts ({len(items)}):")
                 for a in items:
-                    print(f"  [{a.get('provider')}] {a.get('email')} (id: {a.get('id')}) - status: {a.get('sync_status')}")
+                    print(
+                        f"  [{a.get('provider')}] {a.get('email')} (id: {a.get('id')}) - "
+                        f"credential: {a.get('credential_state')}, "
+                        f"connectivity: {a.get('connectivity_state')}, "
+                        f"activity: {a.get('sync_activity')}"
+                    )
 
         elif args.cmd == "sync":
             res = client.sync_account(args.account_id)

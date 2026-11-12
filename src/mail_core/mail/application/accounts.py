@@ -19,6 +19,7 @@ from mail_core.accounts import (
     enqueue_account_sync,
     get_sidebar_layout,
     get_public_settings,
+    health_fields,
     list_accounts,
     list_groups,
     rename_group,
@@ -46,7 +47,10 @@ class AccountDTO:
     group_name: str | None
     group_color: str | None
     status: str
-    sync_status: str
+    credential_state: str
+    connectivity_state: str
+    sync_activity: str
+    last_connectivity_error: str | None
     sync_enabled: bool
     account_type: str
     remark: str | None
@@ -161,10 +165,10 @@ def _to_account_dto(acc: Account, groups: dict[UUID, AccountGroup]) -> AccountDT
         master_order=acc.master_order,
         group_order=acc.group_order,
         # A234: status is derived from the account's real state, not a
-        # hard-coded constant — sync-disabled accounts report "disabled";
-        # the detailed sync state stays in sync_status.
+        # hard-coded constant — sync-disabled accounts report "disabled".
+        # Health is orthogonally projected from the account state machine.
         status="active" if acc.sync_enabled else "disabled",
-        sync_status=acc.sync_status,
+        **health_fields(acc),
         sync_enabled=acc.sync_enabled,
         account_type=acc.provider,
         remark=remark,

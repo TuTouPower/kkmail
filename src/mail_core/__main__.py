@@ -75,6 +75,16 @@ def run_migrations(*, check_only: bool = False) -> None:
                 command.upgrade(cfg, "head")
                 return
 
+            # A database still stamped at an earlier known revision is upgraded
+            # in place (the new Alembic revision carries the schema change and
+            # forward data mapping); pre-upgrade schema verification is skipped
+            # because the old schema is expected to differ.
+            if plan.action == baseline.MigrationAction.UPGRADE_TO_HEAD:
+                if check_only:
+                    return
+                command.upgrade(cfg, "head")
+                return
+
             # Verification is dispatched by the shared verify_for_plan, so
             # check_only and normal startup apply the same standard as the
             # offline tool (A14): an AT_BASELINE database whose schema has

@@ -438,7 +438,7 @@ def test_alembic_chain_has_single_head():
     cfg = Config(str(ROOT / "src/mail_core/db/alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "src/mail_core/db/alembic"))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == ["20261107_0001"]
+    assert script.get_heads() == ["20261112_0002"]
     assert script.get_revision("20261107_0001").down_revision is None
 
 

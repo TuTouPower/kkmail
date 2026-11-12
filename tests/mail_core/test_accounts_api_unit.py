@@ -84,7 +84,10 @@ def test_list_accounts_serializes_slotted_dtos_mock(api_client):
         group_name=None,
         group_color=None,
         status="active",
-        sync_status="idle",
+        credential_state="valid",
+        connectivity_state="connected",
+        sync_activity="idle",
+        last_connectivity_error=None,
         sync_enabled=True,
         account_type="imap",
         remark="test remark",
@@ -106,6 +109,11 @@ def test_list_accounts_serializes_slotted_dtos_mock(api_client):
         assert acc["remark"] == "test remark"
         assert acc["imap_config"] == {"imap_host": "imap.kkmail.test", "imap_port": 993, "use_ssl": True}
         assert "credentials" not in acc
+        # t076: GET /api/accounts 契约含四个健康字段
+        assert acc["credential_state"] == "valid"
+        assert acc["connectivity_state"] == "connected"
+        assert acc["sync_activity"] == "idle"
+        assert acc["last_connectivity_error"] is None
 
 
 def test_account_dto_exposes_only_supported_imap_connection_fields():
@@ -123,7 +131,10 @@ def test_account_dto_exposes_only_supported_imap_connection_fields():
         master_order=None,
         group_order=None,
         sync_enabled=True,
-        sync_status="idle",
+        credential_state="valid",
+        connectivity_state="connected",
+        sync_activity="idle",
+        last_connectivity_error=None,
         config={
             "imap_host": "imap.kkmail.test",
             "imap_port": "143",
@@ -143,14 +154,23 @@ def test_account_status_is_derived_from_sync_enabled():
     # A234: replaces test_account_status_remains_active_when_sync_is_disabled
     # overall — that test enshrined the hard-coded status="active" bug.
     # New contract: status is derived from the account's real state —
-    # "disabled" when sync is disabled, "active" when sync is enabled —
-    # while sync_status keeps carrying the detailed sync state.
+    # "disabled" when sync is disabled, "active" when sync is enabled.
+    # t076: Account.sync_status 单列已被三个正交健康列 + config 诊断替换；
+    # 旧 "sync_status 携带详细同步状态" 断言整体重写为健康字段投影断言，
+    # 禁止把旧预期字符串就地改成新字段。
     from types import SimpleNamespace
     import uuid
 
     from mail_core.mail.application.accounts import _to_account_dto
 
-    def make_account(*, sync_enabled, sync_status="idle"):
+    def make_account(
+        *,
+        sync_enabled,
+        credential_state="valid",
+        connectivity_state="connected",
+        sync_activity="idle",
+        last_connectivity_error=None,
+    ):
         return SimpleNamespace(
             id=uuid.uuid4(),
             email="derived@kkmail.test",
@@ -160,17 +180,29 @@ def test_account_status_is_derived_from_sync_enabled():
             master_order=None,
             group_order=None,
             sync_enabled=sync_enabled,
-            sync_status=sync_status,
-            config={},
+            credential_state=credential_state,
+            connectivity_state=connectivity_state,
+            sync_activity=sync_activity,
+            config={"last_connectivity_error": last_connectivity_error},
         )
 
     disabled = _to_account_dto(make_account(sync_enabled=False), {})
     assert disabled.status == "disabled"
     assert disabled.sync_enabled is False
 
-    enabled = _to_account_dto(make_account(sync_enabled=True, sync_status="failed"), {})
+    enabled = _to_account_dto(
+        make_account(
+            sync_enabled=True,
+            connectivity_state="degraded",
+            last_connectivity_error="redacted: timeout",
+        ),
+        {},
+    )
     assert enabled.status == "active"
-    assert enabled.sync_status == "failed"
+    assert enabled.credential_state == "valid"
+    assert enabled.connectivity_state == "degraded"
+    assert enabled.sync_activity == "idle"
+    assert enabled.last_connectivity_error == "redacted: timeout"
 
 
 def _sync_all_fake_session(pages):
@@ -293,7 +325,10 @@ def test_create_account_serializes_slotted_dto_mock(api_client):
         group_name=None,
         group_color=None,
         status="active",
-        sync_status="idle",
+        credential_state="valid",
+        connectivity_state="connected",
+        sync_activity="idle",
+        last_connectivity_error=None,
         sync_enabled=True,
         account_type="imap",
         remark=None,
@@ -371,7 +406,10 @@ def test_update_account_serializes_slotted_dto_mock(api_client):
         group_name=None,
         group_color=None,
         status="active",
-        sync_status="idle",
+        credential_state="valid",
+        connectivity_state="connected",
+        sync_activity="idle",
+        last_connectivity_error=None,
         sync_enabled=True,
         account_type="imap",
         remark=None,
@@ -401,7 +439,10 @@ def test_account_update_passes_explicit_credential_clear_list(api_client, monkey
         group_name=None,
         group_color=None,
         status="active",
-        sync_status="idle",
+        credential_state="valid",
+        connectivity_state="connected",
+        sync_activity="idle",
+        last_connectivity_error=None,
         sync_enabled=True,
         account_type="graph",
         remark=None,

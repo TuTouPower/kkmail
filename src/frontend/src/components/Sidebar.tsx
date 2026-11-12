@@ -187,14 +187,29 @@ function sameMembership(a: SidebarLayout, b: SidebarLayout): boolean {
   return [...groups].every((id) => sameIds(a.groupAccountIds[id] || [], b.groupAccountIds[id] || []))
 }
 
+type AccountHealthNotice = { text: string; error: boolean }
+
+function accountHealthNotice(account: AccountSummary): AccountHealthNotice | null {
+  if (account.credential_state === 'invalid') {
+    return { text: '凭据已失效，请重新授权或检查账户设置', error: true }
+  }
+  if (account.connectivity_state === 'unreachable') {
+    return { text: '网络连接不可用，系统正在重试', error: true }
+  }
+  if (account.connectivity_state === 'degraded') {
+    return { text: '网络异常，正在重试', error: false }
+  }
+  return null
+}
+
 interface AccountFolderTreeProps {
   accountId: string
   accountEmail: string
   unreadCount: number | null | undefined
-  syncStatus?: string | null
+  account: AccountSummary
 }
 
-function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: AccountFolderTreeProps) {
+function AccountFolders({ accountId, accountEmail, unreadCount, account }: AccountFolderTreeProps) {
   const view = useMailStore((s) => s.view)
   const setView = useMailStore((s) => s.setView)
   const setListFilter = useMailStore((s) => s.setListFilter)
@@ -253,9 +268,10 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
   if (foldersQuery.isLoading) return <div className="tree-folder-status" style={{ paddingLeft: '90px' }}>正在加载文件夹…</div>
   if (foldersQuery.isError || !foldersQuery.data) return <div className="tree-folder-status tree-error" style={{ paddingLeft: '90px' }}>文件夹加载失败 <button className="tree-retry" type="button" onClick={() => void foldersQuery.refetch()}>重试</button></div>
 
+  const notice = accountHealthNotice(account)
   if (folders.length === 0) {
-    if (syncStatus === 'auth_failed' || syncStatus === 'failed') {
-      return <div className="tree-folder-status tree-error" role="status" style={{ paddingLeft: '90px' }}>同步失败，请检查账户设置</div>
+    if (notice) {
+      return <div className={`tree-folder-status${notice.error ? ' tree-error' : ''}`} role="status" style={{ paddingLeft: '90px' }}>{notice.text}</div>
     }
     return <div className="tree-folder-status" style={{ paddingLeft: '90px' }}>暂无文件夹</div>
   }
@@ -329,10 +345,9 @@ function AccountFolders({ accountId, accountEmail, unreadCount, syncStatus }: Ac
       </div>
     )
   })
-  const syncFailed = syncStatus === 'auth_failed' || syncStatus === 'failed'
   return (
     <>
-      {syncFailed && <div className="tree-folder-status tree-error" role="status" style={{ paddingLeft: '90px' }}>同步失败，请检查账户设置</div>}
+      {notice && <div className={`tree-folder-status${notice.error ? ' tree-error' : ''}`} role="status" style={{ paddingLeft: '90px' }}>{notice.text}</div>}
       <div className="tree-folder-list">
         {renderTree(inboxRoots)}
         <button type="button" className="tree-nav-row tree-folder-row" style={{ paddingLeft: '48px' }} onClick={() => {
@@ -607,7 +622,7 @@ function Sidebar() {
         let failed = false
         let succeeded = 0
         await Promise.all(enabledAccounts.map(async (account) => {
-          const isFaulty = (account.sync_enabled === false || account.sync_status === 'failed' || account.sync_status === 'auth_failed')
+          const isFaulty = account.credential_state === 'invalid' || account.connectivity_state === 'unreachable'
           try {
             const unread = await fetchAccountFolders(account.id, signal)
             if (unread === null) {
@@ -1153,12 +1168,12 @@ function Sidebar() {
           <button type="button" className="tree-account-select" title={account.email} aria-expanded={expanded} onClick={() => toggleExpandedAccount(account.id)}>
             <AccountIcon email={account.email} provider={account.provider} accountType={account.account_type} groupColor={account.group_color} />
             <span className="tree-label">{account.email}</span>
-            {(account.sync_status === 'failed' || account.sync_status === 'auth_failed') && <span className="tree-account-sync-error" role="img" aria-label="同步失败" title="同步失败"><AlertCircle size={14} /></span>}
+            {account.credential_state === 'invalid' && <span className="tree-account-sync-error" role="img" aria-label="凭据已失效" title="凭据已失效，请重新授权或检查账户设置"><AlertCircle size={14} /></span>}
             {unread === null ? <span className="side-count unread-badge unread-badge-unknown" aria-label="未读数未知">-</span> : unread && unread > 0 ? <span className="side-count unread-badge">{unread}</span> : null}
           </button>
           <CopyAddress variant="icon" address={account.email} />
         </div>
-        {expanded && <AccountFolders accountId={account.id} accountEmail={account.email} unreadCount={unread} syncStatus={account.sync_status} />}
+        {expanded && <AccountFolders accountId={account.id} accountEmail={account.email} unreadCount={unread} account={account} />}
       </div>
     )
   }
@@ -1169,7 +1184,7 @@ function Sidebar() {
     const searchTerm = groupSearchTerms[group.id] || ''
     const searchActive = searchTerm.trim().length > 0
     const groupUnread = members.reduce<number | null>((total, account) => {
-      const isFaulty = (account.sync_enabled === false || account.sync_status === 'failed' || account.sync_status === 'auth_failed')
+      const isFaulty = account.credential_state === 'invalid' || account.connectivity_state === 'unreachable'
       const count = unreadByAccount.get(account.id)
       if (count == null) {
         if (isFaulty) return total

@@ -34,8 +34,8 @@ def _config_for(tree: Path):
 
 def test_revision_context_matches_shipped_tree():
     ctx = baseline.revision_context()
-    assert ctx.known_revisions == frozenset({UNIFIED_BASELINE_REVISION})
-    assert ctx.heads == (UNIFIED_BASELINE_REVISION,)
+    assert ctx.known_revisions == frozenset({UNIFIED_BASELINE_REVISION, baseline.CURRENT_HEAD_REVISION})
+    assert ctx.heads == (baseline.CURRENT_HEAD_REVISION,)
     assert ctx.legacy_revisions == baseline.NARROW_CONVERSION_LEGACY_REVISIONS
     assert ctx.known_legacy_revisions == (
         baseline.KNOWN_LEGACY_REVISIONS - baseline.NARROW_CONVERSION_LEGACY_REVISIONS

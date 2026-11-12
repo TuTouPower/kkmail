@@ -4,8 +4,8 @@ import { __resetCsrfForTests } from '../api/client'
 import { changeSelect, cleanup, click, render, typeInto, waitFor } from '../test/render'
 
 const initialAccounts = [
-  { id: 'one', email: 'one@gmail.com', provider: 'graph', group_id: 'work', group_name: '工作', sync_enabled: true, sync_status: 'auth_failed', status: 'active', account_type: 'graph' },
-  { id: 'two', email: 'two@example.com', provider: 'imap', group_id: null, group_name: null, sync_enabled: false, sync_status: 'idle', status: 'disabled', account_type: 'imap' },
+  { id: 'one', email: 'one@gmail.com', provider: 'graph', group_id: 'work', group_name: '工作', sync_enabled: true, credential_state: 'invalid', connectivity_state: 'connected', sync_activity: 'idle', last_connectivity_error: null, status: 'active', account_type: 'graph' },
+  { id: 'two', email: 'two@example.com', provider: 'imap', group_id: null, group_name: null, sync_enabled: false, credential_state: 'valid', connectivity_state: 'connected', sync_activity: 'idle', last_connectivity_error: null, status: 'disabled', account_type: 'imap' },
 ]
 let accounts = structuredClone(initialAccounts)
 let groups = [{ id: 'work', name: '工作', account_count: 1, color: null, sort_order: 0 }]
@@ -51,10 +51,12 @@ afterEach(() => {
 })
 
 describe('settings workspace redesign', () => {
-  it('filters accounts by text, group and sync preference without confusing enabled with healthy', async () => {
+  it('filters accounts by text, group and credential/connectivity health without confusing enabled with healthy (AC-007)', async () => {
     const { container } = await render(<SettingsPage />)
     await waitFor(() => expect(container.textContent).toContain('one@gmail.com'))
-    expect(container.textContent).toContain('认证失败')
+    // one has invalid credentials -> 认证失败; two is paused but healthy -> 空闲.
+    expect([...container.querySelectorAll('.settings-sync-status')].map((node) => node.textContent)).toEqual(['认证失败', '空闲'])
+    expect(container.textContent).not.toContain('同步失败')
     await typeInto(container.querySelector('input[aria-label="搜索账户"]'), 'gmail.com')
     expect(container.textContent).toContain('one@gmail.com')
     expect(container.textContent).not.toContain('two@example.com')
@@ -63,9 +65,24 @@ describe('settings workspace redesign', () => {
     expect(container.textContent).not.toContain('one@gmail.com')
     expect(container.textContent).toContain('two@example.com')
     await changeSelect(container.querySelector('select[aria-label="按分组筛选"]'), 'all')
-    await changeSelect(container.querySelector('select[aria-label="按同步状态筛选"]'), 'failed')
+    await changeSelect(container.querySelector('select[aria-label="按同步状态筛选"]'), 'invalid')
     expect(container.textContent).toContain('one@gmail.com')
     expect(container.textContent).not.toContain('two@example.com')
+  })
+
+  it('renders each account health dimension in the status column (AC-007)', async () => {
+    accounts = [
+      { ...initialAccounts[1], id: 'cred', credential_state: 'invalid' },
+      { ...initialAccounts[1], id: 'unreach', connectivity_state: 'unreachable' },
+      { ...initialAccounts[1], id: 'degraded', connectivity_state: 'degraded' },
+      { ...initialAccounts[1], id: 'syncing', sync_activity: 'syncing' },
+      { ...initialAccounts[1], id: 'idle' },
+    ]
+    const { container } = await render(<SettingsPage />)
+    await waitFor(() => expect(container.querySelectorAll('.settings-account-row')).toHaveLength(5))
+    expect([...container.querySelectorAll('.settings-sync-status')].map((node) => node.textContent)).toEqual([
+      '认证失败', '网络不可达', '网络异常·重试中', '同步中', '空闲',
+    ])
   })
 
   it('persists sync preference through the authenticated account API', async () => {

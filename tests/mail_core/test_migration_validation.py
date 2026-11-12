@@ -61,6 +61,7 @@ if str(ROOT / "scripts") not in sys.path:
 
 from mail_core.db import baseline
 from mail_core.db.baseline import (
+    CURRENT_HEAD_REVISION,
     REQUIRED_TABLES,
     UNIFIED_BASELINE_REVISION,
     SchemaValidationError,
@@ -88,9 +89,11 @@ def _get_alembic_config() -> Config:
 
 
 def test_alembic_chain_has_single_head():
-    """Adoption A17: Migration history is squashed to a single unified baseline."""
+    """Adoption A17: the migration tree has exactly one head (baseline plus
+    incremental revisions form a linear chain, never a fork)."""
+
     script = ScriptDirectory.from_config(_get_alembic_config())
-    assert script.get_heads() == [UNIFIED_BASELINE_REVISION]
+    assert script.get_heads() == [CURRENT_HEAD_REVISION]
 
     current = script.get_revision(UNIFIED_BASELINE_REVISION)
     assert current is not None
@@ -424,7 +427,7 @@ def test_offline_migration_tool_verifies_and_stamps_live_db():
         cur_rev = conn.execute(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
-        assert cur_rev == UNIFIED_BASELINE_REVISION
+        assert cur_rev == CURRENT_HEAD_REVISION
 
 
 def test_offline_tool_refuses_legacy_schema_without_side_effects_on_postgres():
