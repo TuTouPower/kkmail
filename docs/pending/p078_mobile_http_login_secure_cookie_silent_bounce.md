@@ -1,7 +1,10 @@
 ---
 pid: "p078"
 slug: "mobile_http_login_secure_cookie_silent_bounce"
-status: "todo"
+status: "closed"
+resolution: "transferred"
+reason: "已立项 t079（cookie_secure_scheme_derived）取代本条建议修复方向：用户 2026-11-13 拍板不用 HTTPS、接受局域网 http 明文，正解为 Secure 属性改为由连接协议推导、删除 MAIL_CORE_COOKIE_SECURE 配置项并补登录回验闭环；本条所记 MAIL_CORE_COOKIE_SECURE=0 临时解法条目作废。"
+fix_ref: "t079"
 ---
 # p078 手机浏览器经 .local 域名 http 登录后静默回登录框：会话 Cookie 带 Secure 被丢弃
 
@@ -16,4 +19,4 @@ status: "todo"
 - 测试缺口：现有测试都在 localhost/测试客户端下运行，不模拟浏览器对「http 非可信源 + Secure Cookie」的丢弃行为，故漏过。应补：其一，cookie_secure 与 compose 默认值在 http 非 localhost 场景下的契约测试；其二，登录 200 但会话校验 401 时前端给出明确报错（而非静默回登录框）的用例。
 - 线索：docker-compose.mail-core.yml:132-134（默认 1 的注释与变量行）、src/mail_core/security/auth.py:175-189（cookie_secure）、src/mail_core/api/auth_routes.py:72-84（set_cookie/delete_cookie）、src/frontend/src/api/client.ts（login/checkSession）、src/frontend/src/lib/apiBase.ts（同源基地址）。复现于 Mac 本机 curl 与 Python cookiejar，无 .scratch/ 文件留存。
     建议修复方向（未实施）：部署层在局域网 http 场景显式设 MAIL_CORE_COOKIE_SECURE=0（compose 注释即为此设）仅为治标，会话将明文过局域网，仅适合可信局域网；根治是为局域网访问提供 HTTPS 并保留 Secure；同时前端在「登录成功但会话校验 401」时给出明确报错。
-- 处理：未开
+- 处理：t079；resolution=transferred；reason=已立项 t079（cookie_secure_scheme_derived）取代本条建议修复方向：用户 2026-11-13 拍板不用 HTTPS、接受局域网 http 明文，正解为 Secure 属性改为由连接协议推导、删除 MAIL_CORE_COOKIE_SECURE 配置项并补登录回验闭环；本条所记 MAIL_CORE_COOKIE_SECURE=0 临时解法条目作废。
