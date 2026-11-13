@@ -93,22 +93,10 @@ def test_a324_samesite_none_without_secure_falls_back_to_lax_with_warning(monkey
     from mail_core.security.auth import cookie_samesite
 
     monkeypatch.setenv("MAIL_CORE_COOKIE_SAMESITE", "none")
-    monkeypatch.delenv("MAIL_CORE_COOKIE_SECURE", raising=False)
     with caplog.at_level(logging.WARNING, logger="mail_core.security.auth"):
         assert cookie_samesite() == "lax"
         assert cookie_samesite(_fake_request("http")) == "lax"
     assert any("samesite" in r.message.lower() for r in caplog.records)
-
-
-def test_a324_samesite_none_with_secure_is_kept(monkeypatch):
-    from mail_core.security.auth import cookie_samesite
-
-    monkeypatch.setenv("MAIL_CORE_COOKIE_SAMESITE", "none")
-    monkeypatch.setenv("MAIL_CORE_COOKIE_SECURE", "1")
-    assert cookie_samesite() == "none"
-
-    monkeypatch.delenv("MAIL_CORE_COOKIE_SECURE", raising=False)
-    assert cookie_samesite(_fake_request("https")) == "none"
 
 
 @pytest.mark.parametrize("value", ["lax", "strict"])
@@ -116,7 +104,6 @@ def test_a324_other_samesite_values_unaffected_without_secure(monkeypatch, value
     from mail_core.security.auth import cookie_samesite
 
     monkeypatch.setenv("MAIL_CORE_COOKIE_SAMESITE", value)
-    monkeypatch.delenv("MAIL_CORE_COOKIE_SECURE", raising=False)
     assert cookie_samesite() == value
 
 

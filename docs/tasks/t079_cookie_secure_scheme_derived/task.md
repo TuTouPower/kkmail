@@ -34,13 +34,13 @@ p078（2026-11-13 用户实报并实测坐实）：手机经 http://karsondemacb
 
 <!-- /规范 -->
 
-- [ ] AC-001：经 http 入口（非 localhost 域名形态）登录后下发的会话 Cookie 不带 Secure 属性；回送后 GET /api/auth/me 返回 200 且刷新后会话保持（黑盒验证）。
-- [ ] AC-002：经 https 入口登录后下发的会话 Cookie 带 Secure 属性（黑盒或等价 scheme 注入验证，方法记入 progress.md）。
-- [ ] AC-003：MAIL_CORE_COOKIE_SECURE 彻底移除：compose 不注入、后端不读取、.env.example 与配置文档无残留，全仓检索为零（例外逐项在 progress.md 说明）。
-- [ ] AC-004：Secure 判定只取决于请求实际 scheme（含既有代理信任边界），单测覆盖 http/https 两路，SameSite=None 联动规则不回归。
-- [ ] AC-005：前端在 login 成功但回验失败时显示明确的会话建立失败错误、不静默回登录表单；冷启动未登录仍直接显示登录页不报错；前端测试覆盖两条路径。
-- [ ] AC-006：A98 被新决策记录正式取代并落盘；p078 已更新指向本 task。
-- [ ] AC-007：testing.md 的 doctor_cmd、test_cmd、blackbox_verify 全量通过；失效旧测试的删除逐条记录理由于 progress.md。
+- [x] AC-001：经 http 入口（非 localhost 域名形态）登录后下发的会话 Cookie 不带 Secure 属性；回送后 GET /api/auth/me 返回 200 且刷新后会话保持（黑盒验证）。
+- [x] AC-002：经 https 入口登录后下发的会话 Cookie 带 Secure 属性（黑盒或等价 scheme 注入验证，方法记入 progress.md）。
+- [x] AC-003：MAIL_CORE_COOKIE_SECURE 彻底移除：compose 不注入、后端不读取、.env.example 与配置文档无残留，全仓检索为零（例外逐项在 progress.md 说明）。
+- [x] AC-004：Secure 判定只取决于请求实际 scheme（含既有代理信任边界），单测覆盖 http/https 两路，SameSite=None 联动规则不回归。
+- [x] AC-005：前端在 login 成功但回验失败时显示明确的会话建立失败错误、不静默回登录表单；冷启动未登录仍直接显示登录页不报错；前端测试覆盖两条路径。
+- [x] AC-006：A98 被新决策记录正式取代并落盘；p078 已更新指向本 task。
+- [x] AC-007：testing.md 的 doctor_cmd、test_cmd、blackbox_verify 全量通过；失效旧测试的删除逐条记录理由于 progress.md。
 
 ### 可测试性声明
 

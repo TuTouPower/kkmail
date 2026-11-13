@@ -143,25 +143,6 @@ def test_a72_compose_sites_state_the_charset_restriction():
     assert "use URL-safe hex/base64url characters" not in text
 
 
-# --- A98: session cookie Secure must default on ---
-
-
-def test_a98_cookie_secure_defaults_to_on():
-    text = _compose_text()
-    assert 'MAIL_CORE_COOKIE_SECURE: "${MAIL_CORE_COOKIE_SECURE:-1}"' in text
-    assert 'MAIL_CORE_COOKIE_SECURE:-0' not in text
-
-
-def test_a98_compose_comment_explains_local_http_opt_out():
-    text = _compose_text()
-    idx = text.index('MAIL_CORE_COOKIE_SECURE: "${MAIL_CORE_COOKIE_SECURE:-1}"')
-    context = text[max(0, idx - 600):idx + 200]
-    assert "MAIL_CORE_COOKIE_SECURE=0" in context and "HTTP" in context, (
-        "the Secure default must be documented with the explicit local "
-        "HTTP debugging opt-out (set MAIL_CORE_COOKIE_SECURE=0)"
-    )
-
-
 # --- A154: bare `up` must not start an api that never runs migrations ---
 
 

@@ -71,7 +71,6 @@ class MailCoreConfig:
     # Security & Rate Limiting
     secret_key: str = ""
     session_max_age: int = 30 * 86400
-    cookie_secure: bool | None = None
     cookie_samesite: str = "lax"
     login_max_failures: int = 10
     login_window_s: float = 300.0

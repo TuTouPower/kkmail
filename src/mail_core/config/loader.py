@@ -22,17 +22,6 @@ def _parse_bool(val: str | None, default: bool) -> bool:
     return default
 
 
-def _parse_optional_bool(val: str | None) -> bool | None:
-    if val is None or not str(val).strip():
-        return None
-    cleaned = str(val).strip().lower()
-    if cleaned in _BOOL_TRUE:
-        return True
-    if cleaned in _BOOL_FALSE:
-        return False
-    return None
-
-
 def _parse_int(val: str | None, default: int, field_name: str) -> int:
     if val is None or not str(val).strip():
         return default
@@ -131,7 +120,6 @@ def load_config(env: Mapping[str, str] | None = None) -> MailCoreConfig:
         ),
         secret_key=source.get("MAIL_CORE_SECRET_KEY") or "",
         session_max_age=_parse_int(source.get("MAIL_CORE_SESSION_MAX_AGE"), 30 * 86400, "session_max_age"),
-        cookie_secure=_parse_optional_bool(source.get("MAIL_CORE_COOKIE_SECURE")),
         cookie_samesite=(source.get("MAIL_CORE_COOKIE_SAMESITE") or "lax").strip().lower(),
         login_max_failures=_parse_int(source.get("MAIL_CORE_LOGIN_MAX_FAILURES"), 10, "login_max_failures"),
         login_window_s=_parse_float(source.get("MAIL_CORE_LOGIN_WINDOW_S"), 300.0, "login_window_s"),

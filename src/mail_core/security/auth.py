@@ -7,7 +7,9 @@ Env contract:
   MAIL_CORE_PASSWORD_HASH_PATH         — optional file to persist hash after first boot
   MAIL_CORE_API_KEYS                   — comma-separated or JSON list of Bearer keys
   MAIL_CORE_SESSION_MAX_AGE            — seconds (default 30 days)
-  MAIL_CORE_COOKIE_SECURE              — 1/true for Secure cookie (HTTPS)
+  The session cookie Secure attribute is not configurable: it is
+  derived from the request scheme (set exactly when the request arrived
+  over HTTPS) — see cookie_secure() and decision 20261113 (t079).
   MAIL_CORE_COOKIE_SAMESITE            — lax|strict|none (default lax)
 """
 
@@ -173,9 +175,11 @@ def session_max_age() -> int:
 
 
 def cookie_secure(request: Any = None) -> bool:
-    env_val = os.environ.get("MAIL_CORE_COOKIE_SECURE")
-    if env_val is not None and env_val.strip() != "":
-        return env_val.strip().lower() in ("1", "true", "yes", "on")
+    # The Secure attribute states a fact about the connection that served
+    # the response, so it is derived from the request scheme only (t079,
+    # superseding A98). There is deliberately no configuration override:
+    # a configured value that contradicts the actual transport silently
+    # breaks session persistence on plain-HTTP entries (p078).
     if request is not None:
         scope = getattr(request, "scope", None)
         if isinstance(scope, dict) and scope.get("scheme") == "https":

@@ -1,0 +1,15 @@
+{
+  "tid": "t079",
+  "attempt": 1,
+  "execution_id": "1d577dd4b0a2424db88c801ac0af3c57",
+  "status": "done",
+  "branch": "t079_cookie_secure_scheme_derived",
+  "base_sha": "95c72cef4f1c0402bb6c47c3afa542a211fa625c",
+  "spec_source_sha": "95c72cef4f1c0402bb6c47c3afa542a211fa625c",
+  "tests": "接续者 2026-11-14 本机实跑复核——doctor_cmd（模板契约 collect 464、md_kx 存在、敏感扫描 PASSED 33 文件 0 违规）；test_cmd（模板契约 463 passed / 1 skipped；前端 vitest 591 passed / 55 文件、tsc -b 通过、build 通过；桌面 npm test exit 0，OAuth 集成按设计 skip；敏感扫描同上）；后端 tests 全量（unit 模式）1663 passed / 539 skipped / 0 failed；本 task 定向 5 文件合跑 66 passed / 3 skipped（其中新测后端 6 + 守卫 2，含出树链接用例；前端 login 新测 5 条含回验超时用例，计入 vitest 591）。未跑：后端完整 PG 套件不在 AC-007 三组门禁内（testing.md 明示为 task/release 阶段单独执行项），本轮未跑；本 task 后端改动在 unit 模式已全量覆盖。",
+  "blackbox": "AC-001/AC-002 以 TestClient 走真实登录路由（http 局域网域名形态：Set-Cookie 无 Secure、cookiejar 回送后 /me 两次 200；https scheme 注入：Set-Cookie 带 Secure、回送 200），旧代码同条件复现 p078 的 401，双轴审阅均独立复跑；blackbox_verify stubApi E2E 21 passed。真实 iOS Safari 未测，按 task.md「有意不测」以遵循浏览器 Cookie 规则的 TestClient jar 替代，p078 另有真机现象与 cookiejar 实测证据。",
+  "review": "双轴独立审阅 4 轮（review_limit 5 内）：Round 1 双 PASS（finding 2 minor）；Round 2 双 PASS（Round 1 两条确认消除，新记 code_f002）；Round 3 双 PASS（f002 确认消除，新记 code_f003）；Round 4 双 PASS（f003 确认消除，零新 finding）。终轮指纹双轴一致 9ac56619edd02fda。",
+  "review_scope": "9ac56619edd02fda",
+  "pending": [],
+  "findings": []
+}

@@ -20,7 +20,7 @@ docker compose -f docker-compose.mail-core.yml --profile distributed up --build 
 - 仓库不提供任何默认值。`POSTGRES_PASSWORD`、`MAIL_CORE_SECRET_KEY`、`MAIL_CORE_BLOB_KEY_V1`、`MAIL_CORE_BACKUP_KEY` 缺失时 compose 直接报错；登录密码（`MAIL_CORE_LOGIN_PASSWORD_HASH` 或 `MAIL_CORE_LOGIN_PASSWORD`）缺失时 API 进程拒绝启动。
 - 可选：`MAIL_CORE_API_KEYS` 配置供脚本 / 集成使用的 Bearer Key（见 [docs/guides/security.md](security.md) 的「认证」与「授权模型」章节）。
 - `MAIL_CORE_BACKUP_KEY` 必须与 blob 密钥不同。密钥丢失 = 已归档邮件与凭据无法解密，请离线保存。
-- 局域网 HTTP 部署继续可用，Compose 默认 `MAIL_CORE_COOKIE_SECURE=0`。HTTP 不加密会话 Cookie；同一网络中能够监听流量的设备可能读取 Cookie。仅在可信局域网使用 HTTP。敏感远程访问应经过 TLS 反向代理，并设置 `MAIL_CORE_COOKIE_SECURE=1`；启用 Secure Cookie 后，浏览器不会通过明文 HTTP 发送会话 Cookie。
+- 局域网 HTTP 部署继续可用。会话 Cookie 的 Secure 属性按请求 scheme 自动推导（无配置项）：经 HTTP 访问时不带 Secure、会话可正常保持；经 HTTPS 访问时自动带 Secure。HTTP 不加密会话 Cookie；同一网络中能够监听流量的设备可能读取 Cookie。仅在可信局域网使用 HTTP；敏感远程访问应经过 TLS 反向代理，届时 Secure 自动生效。
 - `migrate` 服务先执行 `alembic upgrade head`，`api` / `worker` 在其成功后启动（distributed API 已配置 `MAIL_CORE_SKIP_MIGRATIONS=1` 与 `MAIL_CORE_EMBEDDED_WORKER=0`，独立 worker 实例 ID 为 `distributed-worker-1`；若单进程运行可通过 `MAIL_CORE_SKIP_MIGRATIONS=0 MAIL_CORE_EMBEDDED_WORKER=1` 启动）；`/ready` 会在数据库不可达、schema 未到 head 或 LISTEN 未就绪时返回 503。
 
 ## 基础镜像基线（离线可复现构建）
@@ -67,7 +67,7 @@ Microsoft 网页 OAuth 需将 `MAIL_CORE_PUBLIC_ORIGIN` 设置为应用实际 HT
 
 不要把 8000 端口直接暴露到公网。需要远程访问时放在 TLS 反向代理之后，并：
 
-- 设置 `MAIL_CORE_COOKIE_SECURE=1`；
+- 无需为 Cookie 额外设置：经反向代理以 HTTPS 对外时，会话 Cookie 的 Secure 属性按请求 scheme 自动启用（须保证下方转发头信任配置正确，使应用看到的 scheme 为 https）；
 - 让 uvicorn 信任代理的 `X-Forwarded-For`（uvicorn 不读取环境变量，需在启动命令中传递命令行参数 `--forwarded-allow-ips=<代理地址>`；在 Docker Compose 中可通过覆盖 `api` 服务的 `command` 传入此参数），使登录限速按真实客户端地址生效；
 - 数据目录、PostgreSQL 数据与 blob 根目录放在加密卷上（Docker volume 本身不加密）。
 

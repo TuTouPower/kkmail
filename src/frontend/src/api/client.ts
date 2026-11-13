@@ -271,9 +271,9 @@ export function postJson<T>(path: string, body: unknown = {}, opts: RequestOptio
 
 export const api = {
   /** true when the session cookie is valid (also caches the CSRF token). */
-  async checkSession(): Promise<boolean> {
+  async checkSession(opts: { timeoutMs?: number } = {}): Promise<boolean> {
     try {
-      const me = await apiRequest<MeOut>('/api/auth/me')
+      const me = await apiRequest<MeOut>('/api/auth/me', { timeoutMs: opts.timeoutMs })
       setCsrfToken(me.csrf_token)
       return true
     } catch (err) {
@@ -304,6 +304,24 @@ export const api = {
       }
       if (!res.ok) throw errorFromBody(res.status, res.statusText, body, res.headers.get('Retry-After'))
       setCsrfToken((body as LoginOut | null)?.csrf_token)
+      // t079: a 200 from /login only proves the cookie was issued. Verify
+      // the session actually round-trips — the browser may have dropped
+      // the session cookie (p078) — and fail loudly with a named error
+      // instead of silently bouncing back to the login form. Cold-start
+      // session checks keep their silent behaviour in checkSession().
+      let established = false
+      try {
+        established = await api.checkSession({ timeoutMs })
+      } catch {
+        established = false
+      }
+      if (!established) {
+        throw markApiError({
+          status: 0,
+          code: 'session_not_established',
+          message: '登录已通过，但浏览器未能建立会话（会话 Cookie 未被保存）。请检查浏览器 Cookie 设置或访问地址后重试。',
+        })
+      }
     } catch (err) {
       if (tmo.timedOut()) {
         throw markApiError({ status: 0, code: 'timeout', message: `请求超时（${Math.round(timeoutMs / 1000)} 秒）` })

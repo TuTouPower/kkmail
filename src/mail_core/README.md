@@ -33,7 +33,7 @@ python -m mail_core --data-dir ./.kkmail-data
 |`MAIL_CORE_LOGIN_PASSWORD_HASH`, `MAIL_CORE_LOGIN_PASSWORD`, `MAIL_CORE_PASSWORD_HASH_PATH`|登录自举凭据来源。入库后以数据库凭据行为权威。|
 |`MAIL_CORE_API_KEYS`|集成调用的 Bearer Token。|
 |`MAIL_CORE_LOG_LEVEL`|根日志级别，默认为 `INFO`。非法值将记录警告并回退到 `INFO`。|
-|`MAIL_CORE_COOKIE_SECURE`, `MAIL_CORE_COOKIE_SAMESITE`, `MAIL_CORE_SESSION_MAX_AGE`|会话 Cookie 控制：未设置时 secure 跟随 HTTPS，SameSite 默认为 `lax`，max-age 默认为 30 天。|
+|`MAIL_CORE_COOKIE_SAMESITE`, `MAIL_CORE_SESSION_MAX_AGE`|会话 Cookie 控制：Secure 属性不设配置项，按请求 scheme 推导（HTTPS 时自动启用），SameSite 默认为 `lax`，max-age 默认为 30 天。|
 |`MAIL_CORE_LOGIN_MAX_FAILURES`, `MAIL_CORE_LOGIN_WINDOW_S`|登录失败速率限制，默认 300 秒内最多失败 10 次。|
 |`MAIL_CORE_SSE_MAX_CONNECTIONS`|单进程最大并发 SSE 流连接数，默认为 128。|
 |`MAIL_CORE_FORWARDED_ALLOW_IPS`|受信任代理 IP/CIDR；未设置时禁用代理标头中间件。|

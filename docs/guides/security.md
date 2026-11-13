@@ -3,7 +3,7 @@
 ## 认证
 
 - **登录**：数据库模式以 `auth_credentials.login_password_hash` 为权威。`MAIL_CORE_LOGIN_PASSWORD_HASH`、`MAIL_CORE_LOGIN_PASSWORD` 与 `MAIL_CORE_PASSWORD_HASH_PATH` 仅用于首次引导，成功写入数据库后不再覆盖该值；无数据库模式使用进程内哈希。桌面 / `python -m mail_core --data-dir` 首次缺少密码时生成随机初始密码写入 `<data-dir>/initial-password.txt`，哈希存于 `secrets/login-password.bcrypt`；用户在设置页修改登录密码后删除明文文件。没有可用引导值时进程拒绝启动。
-- **会话**：签名 Cookie（`MAIL_CORE_SECRET_KEY`，必填），`HttpOnly`，`SameSite=Lax`（`MAIL_CORE_COOKIE_SAMESITE`），有效期 `MAIL_CORE_SESSION_MAX_AGE`（默认 30 天）。经 HTTPS 访问时设置 `MAIL_CORE_COOKIE_SECURE=1`。
+- **会话**：签名 Cookie（`MAIL_CORE_SECRET_KEY`，必填），`HttpOnly`，`SameSite=Lax`（`MAIL_CORE_COOKIE_SAMESITE`），有效期 `MAIL_CORE_SESSION_MAX_AGE`（默认 30 天）。Secure 属性按请求 scheme 推导：经 HTTPS 访问时自动启用，无配置项。
 - **CSRF**：Cookie 会话下所有写请求必须带 `X-CSRF-Token`；前端拿不到令牌时不会发出写请求。
 - **API Key**：`MAIL_CORE_API_KEYS`（逗号分隔或 JSON 列表），`Authorization: Bearer`；不接受查询串里的 key。
 - **登录限速**：同一客户端地址在 `MAIL_CORE_LOGIN_WINDOW_S`（默认 300s）内失败 `MAIL_CORE_LOGIN_MAX_FAILURES`（默认 10）次后返回 429。按套接字对端地址计数，不信任 `X-Forwarded-For`；在反向代理后请在 uvicorn 启动命令中使用命令行参数 `--forwarded-allow-ips=<代理地址>` 只信任代理地址（uvicorn 不读取环境变量）。
@@ -68,7 +68,7 @@
 mail-core / compose **只监听 `127.0.0.1`**（API 默认 **8000**，不是旧 Flask **5000**）。
 
 - **不要**在防火墙上对公网开放 `8000/tcp`（或历史文档里的 `5000/tcp`）。
-- 需要远程访问时：只放行 **80/443**，由 TLS 反向代理转到本机 `127.0.0.1:8000`，并设置 `MAIL_CORE_COOKIE_SECURE=1`；因 uvicorn 不读取环境变量，需在启动命令中传递命令行参数 `--forwarded-allow-ips=<代理地址>`（见 [deployment.md](deployment.md)）。
+- 需要远程访问时：只放行 **80/443**，由 TLS 反向代理转到本机 `127.0.0.1:8000`，会话 Cookie 的 Secure 属性会在 HTTPS 下按请求 scheme 自动启用；因 uvicorn 不读取环境变量，需在启动命令中传递命令行参数 `--forwarded-allow-ips=<代理地址>`（见 [deployment.md](deployment.md)）。
 - 桌面版同样只绑 loopback；不要把 sidecar 端口映射到局域网。
 
 ## 备份（勿用裸 `cp`）
