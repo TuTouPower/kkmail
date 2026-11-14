@@ -51,17 +51,12 @@ def main():
         description=f"task 状态入口（状态权威 = {ctx.PROGRESS_FILE}；执行权威 = exact attempt identity）"
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    from .privacy import PrivacyScanError, cmd_privacy_audit
     specs = sub.add_parser("specs", help="长期 spec 派生清单")
     specs_sub = specs.add_subparsers(dest="specs_cmd", required=True)
     specs_list = specs_sub.add_parser("list", help="列出 spec front matter")
     specs_list.add_argument("--all", action="store_true", help="包含 retired")
     specs_list.add_argument("--json", action="store_true", help="JSON 输出")
     specs_list.set_defaults(func=cmd_specs_list)
-
-    audit = sub.add_parser("privacy-audit", help="显式扫描指定 Git 快照全部非归档文本")
-    audit.add_argument("--ref", default="HEAD")
-    audit.set_defaults(func=cmd_privacy_audit)
 
     recovery = sub.add_parser("recovery", help="只读判定 start/finish/commit/attempt 中断阶段（JSON）")
     recovery.add_argument("tid")
@@ -316,12 +311,17 @@ def main():
     goal.add_argument(
         "tids",
         nargs="*",
-        help="显式队列（严格按输入顺序）；与 --reset 互斥",
+        help="显式队列（严格按输入顺序）；与 --reset / --clear 互斥",
     )
     goal.add_argument(
         "--reset",
         action="store_true",
-        help="按依赖拓扑重建 backlog ∪ active 默认队列并覆盖已有快照",
+        help="按依赖拓扑重建 backlog ∪ active 默认队列并覆盖已有快照（与显式 tid / --clear 互斥）",
+    )
+    goal.add_argument(
+        "--clear",
+        action="store_true",
+        help="清除当前队列快照（不重建默认队列；与 --reset / 显式 tid 互斥）",
     )
     goal.add_argument(
         "--yes",
@@ -349,18 +349,8 @@ def main():
     # 入口构造不可变仓库身份，所有子命令显式接收；不再依赖模块级路径。
     args.repo = ctx.RepoContext.from_code_location(Path(__file__))
     try:
-        if args.cmd == "privacy-audit":
-            from .specs import retired_spec_paths_at_ref
-            from .store import scan_tasks_at_ref
-
-            excluded = [
-                task["dir"] for task in scan_tasks_at_ref(args.ref, repo=args.repo)
-                if task.get("status") in ctx.TERMINAL_STATUSES
-            ]
-            excluded.extend(retired_spec_paths_at_ref(args.ref, repo=args.repo))
-            args.privacy_excluded = excluded
         args.func(args)
-    except (ctx.TaskDataError, PrivacyScanError) as error:
+    except ctx.TaskDataError as error:
         sys.exit(f"{error}\n数据不一致；请提示用户处理。")
     except OSError as error:
         # 磁盘/权限等系统错误统一入口，避免多步命令中途裸 traceback（F20）

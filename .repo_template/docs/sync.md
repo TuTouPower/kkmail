@@ -16,7 +16,7 @@
 python3 "$product/.repo_template/scripts/repo_sync.py" --consumer "$consumer" --source "$source" --checkout "$checkout" apply --expected-commit "$commit"
 ```
 
-一次同步只开一个 `FileTransaction`，覆盖全部待迁移路径、模板同步路径与 common 状态文件。顺序固定为 `legacy-state → workflow-schema → pending-ledger → findings-ledger → entity-storage → state-root → conventions → agents-zones → specs-layout → reviews → adr → retired-hooks`，随后同步模板、格式化本次变更 Markdown、校验迁移收敛、spec 与实体契约、项目验证策略和模板契约测试。任一步失败整体回滚，不保留已完成迁移。
+一次同步只开一个 `FileTransaction`，覆盖全部待迁移路径、模板同步路径与 common 状态文件。顺序固定为 `legacy-state → workflow-schema → entity-storage → state-root → goal-snapshot → conventions → agents-zones → specs-layout → reviews → adr → retired-hooks → retired-docs`，随后同步模板、格式化本次变更 Markdown、校验迁移收敛、spec 与实体契约、项目验证策略和模板契约测试。任一步失败整体回滚，不保留已完成迁移。`entity-storage` 统一负责旧总账拆分、旧目录收敛、当前实体清单、重复编号一次性改号消除与精确路径引用更新；不再设独立 `pending-ledger` / `findings-ledger` 阶段，`status` / `plan` / `apply` 共用同一只读迁移计划。同步先持控制面锁、再持公共 ID 锁，ID 锁覆盖占用扫描、计划确定、备份、写盘、校验与回滚整轮 apply。
 
 开始前工作区与暂存区必须完全干净，未跟踪文件也须处理，忽略文件除外；来源 clean 且 SHA 与 plan 一致，无登记 worktree、无未结束同步或图事务，md_kx 可用。数据阻断项只报告与给出修复方案；用户批准后修复，修复单独批准并提交，再同步。迁移不从旧 state 推断来源，始终使用本轮固定来源。
 
@@ -36,6 +36,16 @@ python3 "$product/.repo_template/scripts/repo_sync.py" --consumer "$consumer" --
 
 迁移同时转换仅有旧 active spike 的仓库；归档与当前 task 均校验 tid/slug 与目录一致、全状态编号唯一。
 
+## entity-storage 统一编号消重
+
+`entity-storage` 在只读计划阶段一次性读取当前 `docs/{tasks,pending,findings,spikes}/`、旧目录（`docs/archive/tasks|pending|spikes`、`docs/pending/todo|parked`）与旧总账（`docs/pending.md`、`docs/findings.md`），按类别与原编号分组：
+
+- `d` / `p` / `s` 同号多条进入消重计划，按来源首次进入 Git 历史的提交时间稳定保留一条原号（无提交记录者排后、同时间按路径排序），其余从该类别本地最大占用号加一顺序改号；最大占用号覆盖本地/远端/历史/tag/worktree 磁盘与 index，并并入本轮旧总账解析出的全部编号。`tNNN` 重复仍阻断（关联分支、执行记录与受保护核心资产），不自动改号。
+- 计划先为每条来源确定最终编号、最终路径与最终内容（更新文件名、`pid`/`sid` front matter 与 H1 编号），再构建精确旧路径引用改写与删除清单；写盘先写全部最终目标、再删源，目标存在时必须属于本轮计划，禁止覆盖未知内容。
+- 能确定指向被改号条目的完整仓库相对路径与可解析文档相对路径自动更新（保留锚点、校验边界），纳入同一事务备份；裸 `dNNN` / `pNNN` / `sNNN` 与 `docs/tasks/*/` 受保护核心资产只在迁移报告列出文件、行号与改号映射供复核，不盲改、不作为旧编号运行期别名。
+- 阻断项：工作区/index 不干净、额外登记 worktree、其它当前协议本地分支内部仍有重复、重复 `tNNN`、软链/非规范命名/损坏元数据/身份矛盾、旧总账解析不完整、最终目标冲突。历史 commit 与已保存远端分支中的重复只参与最大占用号计算，不阻断同步。
+- 严格 `validate_current_entities`（`t`/`p`/`d`/`s` 命名、软链、形状、编号零重复）用于计划生成的最终结果与实际落盘结果；`no_op` 仅在整轮同步无交付差异且满足既有状态条件时收尾。
+
 旧目录 `docs/archive/tasks`、`docs/archive/spikes`、`docs/archive/pending`、`docs/pending/todo`、`docs/pending/parked` 中，顶层非规范实体项均在本次事务内删除，不作为数据阻断项。规范实体仅指 tasks/spikes 中名称匹配当前规范的真实目录，或 pending 中匹配 `pNNN_slug.md` 的普通文件。其余文件、目录、软链、隐藏项与命名不合规的形似实体项均删除；每项单列路径与类型，目录附内部全部文件路径，必须报告给用户。规范实体内部 front matter 非法、编号冲突等仍阻断。拒绝同步时整体回滚，恢复删除项原始字节与软链。
 
 ## 其它内置迁移
@@ -47,6 +57,10 @@ workflow 将 `spec.md` + `task.md` 或 `task.md` + `note.md` 转为 `task.md` + 
 `adr` 按围栏外 `## NNN 标题` 将 `decisions.md` 拆为一条一文件；重复编号、无编号 H2、正文 H1 等非法数据阻断。纯文本前言不生成 ADR，只进入报告，源文件随迁移移除。文件名为 `YYYYMMDD_<slug>.md`，同名追加 `_2`、`_3`；旧编号只保留正文 H1。
 
 state-root 在 entity-storage 之后，将 `docs/runtime/` 已识别状态、`.repo_template/sync_state.json` 与旧状态行迁入 `$GIT_COMMON_DIR/repo_template/`；清理旧 ledger lock 与已结束 `.scratch` 同步/图事务。状态行两处并存、runtime 未知残留、common 目标冲突均阻断。旧事务未结束或损坏时保留原备份，须先用对应旧版本恢复，当前恢复入口不接管旧 journal。
+
+`goal-snapshot` 在 `state-root` 之后将旧版 `goal_queue.json`（`version: 1`、未声明版本或缺失 `edges`）升版为现行 `version: 2`：保留原 `queue` 与 `created_at`，已有合法 `edges` 原样保留，缺失 `edges` 按当前主干任务图补齐；JSON 损坏、引用不存在 `tid` 或版本/结构非法均阻断，要求核对或删除快照后重试。运行期 `task.py goal` / `goal-check` 仅接受 `version: 2`，不对旧版快照做运行期兼容。
+
+`retired-docs` 清理已下线旧模板说明文档 `docs/pending/README.md` 与 `docs/findings/README.md`（目录模型、命令与 skill 规则已收敛到 `AGENTS.md` 与 `usage.md`）：纯历史模板内容直接删除；若包含消费仓自定义行则阻断并展示定制内容，须人工迁出有效说明至 `AGENTS.md` 项目区或 `docs/blueprint/conventions.md` 后删除该过期文件；不含旧模板口径的自写文档不触碰。
 
 存在状态为 done 但未合入默认分支的 task 分支时，先在旧工具链 integrate；迁移后只接受当前 schema。自定义 `test_cmd` 须先选定 `verification_policy: project_configured` 并填写 `verification_notes`。
 
@@ -80,9 +94,9 @@ state-root 在 entity-storage 之后，将 `docs/runtime/` 已识别状态、`.r
 
 status/plan 直接运行固定来源脚本，不提前覆盖本地同步器。apply 从固定 commit 的 Git archive 快照读取，来源、文件、入口、schema 与 state 共享同一版本。同步脚本不 commit，也不自行 accept；成功后事务保持 applied，保留完整未提交 diff 待用户审阅。
 
-agent 报告来源完整 SHA、全部变更路径、迁移报告、校验结果及 state/manifest；删除旧归档非实体项必须逐个单列，目录附内部文件，不能并入汇总。每次同步须用户单独明确批准 commit，不复用批量授权。批准后 `git add -A`，单个 commit 包含迁移与同步全部结果；hooks 正常运行，禁止 `--no-verify`。pre-commit 只读检查 Markdown，格式化已在 apply 审阅前完成，审批 diff 与最终提交内容一致。提交后立即 `transaction accept`；要求事务路径已提交、父提交等于同步前 HEAD，文件与 common 状态指纹不变。
+agent 报告来源完整 SHA、全部变更路径、迁移报告、校验结果及 state/manifest；删除旧归档非实体项必须逐个单列，目录附内部文件，不能并入汇总。每次同步须用户单独明确批准 commit，不复用批量授权。批准后 `git add -A`，单个 commit 包含迁移与同步全部结果；hooks 正常运行，禁止 `--no-verify`。pre-commit 只读检查 Markdown，格式化已在 apply 审阅前完成，审批 diff 与最终提交内容一致。提交后立即 `transaction accept`；要求事务路径已提交、父提交等于同步前 HEAD，文件与 common 状态指纹不变。同一来源重复 apply 若工作树相对 HEAD 无交付差异（common state 的 `last_synced_at` 变化不算）且未发生 `goal-snapshot` 等其他 common 状态迁移，脚本恢复本轮 common state 写入并把事务收尾为 `no_op` 终态，打印「无变更，事务已收尾」并返回 0，不产生 commit、不要求 accept，下一轮同步不被阻断；若工作树无差异但其他 common 状态（如 `goal_queue.json`）在迁移中已更新，则直接完成该状态迁移并收尾，无需空 commit。
 
-**回滚窗口仅限提交前。** 用户拒绝时 `transaction rollback` 整体恢复工作区、index 与 common 状态；applied 后现场发生变化，须先备份新增改动，再 `transaction rollback --confirm-restore`。已产生同步 commit 后禁止文件 rollback，只能按下节 revert；common 状态不会随 revert 恢复，须明确告知用户并人工核对。
+**回滚窗口仅限提交前。** 用户拒绝时 `transaction rollback` 整体恢复工作区、index 与 common 状态；applied 后现场发生变化，须先备份新增改动，再 `transaction rollback --confirm-restore`。已产生同步 commit 后禁止文件 rollback，只能按下节 revert；common 状态不会随 revert 恢复，须明确告知用户并人工核对。提交后 accept 失败或用户放弃、已 revert 同步 commit 并人工从备份恢复 common 状态到基线后，用 `transaction cancel --confirm-post-commit` 把 applied 事务收尾为 `cancelled` 终态：只读核验事务路径工作区干净、受管路径在 HEAD 与 `base_head` 内容一致、common 状态等于备份基线，并记录同步 commit 与时间；`--confirm-post-commit` 必填。cancel 不覆盖文件、不删 journal、不放宽指纹、不自动接受改写结果。`cancelled` 与 `no_op` 均为已结束终态，不阻断下一轮同步。
 
 文件事务记录与备份在 `$GIT_COMMON_DIR/repo_template/sync_transaction/`，图事务在同级 `graph_transaction/`。未结束或损坏事务阻断新同步；进程中断先 `transaction status`，备份新增改动后恢复。恢复失败标记 `restore_failed`、保留备份并报告人工恢复条件，不能据退出码宣称完整恢复。accept 后备份可在下轮同步清除；repo-cleanup 不读取或清理这些记录。图事务由 `task.py graph-transaction status` / `rollback` 管理。
 
@@ -98,7 +112,9 @@ agent 报告来源完整 SHA、全部变更路径、迁移报告、校验结果�
 
 ## .prettierignore 机械追加
 
-`repo_sync.py apply` 机械追加到消费仓 `.prettierignore`（消费独有规则保留，去重），`status` / `plan` 展示缺失项；豁免路径清单见 `usage.md`「命名与格式」。同步改写消费仓自有 JSON（`.claude/settings.json`、MCP）时沿用原缩进，不弄红门禁。模板不分发 `.github/workflows/repo-template-ci.yml`；残留时 `status` / `plan` / `apply` 警告，确认无消费定制后手动删除。
+`repo_sync.py apply` 机械追加到消费仓 `.prettierignore`（消费独有规则保留，去重），`status` / `plan` 展示缺失项；豁免路径以根锚定 `/.repo_template/` 整目录为边界，清单见 `usage.md`「命名与格式」。apply 在提交前用 git 的真实 gitignore 引擎校验模板自有 JSON 全部被有效忽略（保留规则顺序、否定、目录与根锚定语义，不复刻语法）：必需规则缺失、被消费仓否定规则抵消、或根锚定失效导致嵌套同名目录被误豁免，均整体回滚（此时尚未提交，可回滚）。模板自有资产不受消费仓 prettier 重排，审批 diff 与提交内容一致。
+
+**边界与责任**：上述校验只覆盖 `.repo_template/` 内模板自有资产，且用消费仓实际 `.prettierignore` 原文核验嵌套同名目录仍受检查；0b112d0 写入的未锚定 `.repo_template/` 会在合并时回收。目录外的同步写入（`.mcp.json`、`.cursor/mcp.json`、`.vscode/mcp.json`、`.claude/settings.json`、Markdown）仍受消费仓自身 formatter 管理；模板沿用消费仓原缩进，但不宣称其字节与消费仓 formatter 输出逐字节一致。同步契约要求提交阶段不改写受管文件（审批内容即提交内容，`transaction accept` 校验指纹）。apply 在冻结指纹前以真实工作区为准统一收集本轮写入集（含迁移器写入），检查其中的目录外配置：若它们未被消费仓 `.prettierignore` 豁免，即提交前整体回滚并明确报错，不返回成功再留下提交后死锁。受支持流程由消费仓承担：把这些路径纳入自己的 `.prettierignore`；配置后同步可完成，且能用真实 ignore 引擎复验（脚本只核验豁免，不读取 hook 模式；提交 hook 是否只读不在本检查范围内）。模板仓不代管消费仓 hook，也不为此执行消费仓 formatter。模板不分发 `.github/workflows/repo-template-ci.yml`；残留时 `status` / `plan` / `apply` 警告，确认无消费定制后手动删除。
 
 ## 实体协议切换验收
 

@@ -24,7 +24,14 @@ from .gates import _run_tests
 from .preflight import sync_preflight
 from .migrations import MIGRATIONS
 from .entity_storage_migration import validate_current_entities
-from .shared_files import _apply_shared_unit, merge_gitignore, merge_mcp, merge_prettierignore
+from .shared_files import (
+    _apply_shared_unit,
+    assert_commit_stability,
+    assert_format_exempt,
+    merge_gitignore,
+    merge_mcp,
+    merge_prettierignore,
+)
 from .skills_links import repair_symlinks, sync_opencode_commands
 from .source import _as_product, assert_not_self, resolve_src, src_dirty
 from .state import missing_state_message, prompt_substrings, read_state, write_state
@@ -70,7 +77,8 @@ def _preflight(src: Path, sync: ctx.SyncContext):
     result = sync_preflight(src, sync)
     if result.error:
         raise ctx.SyncError(result.error)
-    return [migration for migration in MIGRATIONS if migration.kind in dict(result.migrations)]
+    migrations = [migration for migration in MIGRATIONS if migration.kind in dict(result.migrations)]
+    return migrations, result.entity_plan
 
 
 def _transaction_roots(paths):
@@ -94,7 +102,7 @@ def _format_markdown(sync, paths):
     format_paths(_changed_markdown(sync, paths), repo=RepoContext.for_root(sync.consumer))
 
 
-def _validate_result(src, sync, paths):
+def _validate_result(src, sync, paths, changed):
     from md_format import format_paths
     from repo_task.context import RepoContext
     result = sync_preflight(src, sync)
@@ -105,6 +113,8 @@ def _validate_result(src, sync, paths):
     drift = format_paths(_changed_markdown(sync, paths), repo=RepoContext.for_root(sync.consumer), check=True)
     if drift:
         raise ctx.SyncError("Markdown 格式漂移：" + "、".join(drift))
+    assert_format_exempt(sync.consumer)
+    assert_commit_stability(sync.consumer, changed)
 
 
 def _apply_sync_write(
@@ -156,8 +166,48 @@ def _print_changed(paths: set[Path], header: str, sync: ctx.SyncContext) -> None
         print("（无改动）")
 
 
+def _has_delivery_diff(sync: ctx.SyncContext) -> bool:
+    status = _git(sync.consumer, "status", "--porcelain", "--untracked-files=all")
+    if status.returncode:
+        raise ctx.SyncError("无法读取本轮交付差异：" + status.stderr.strip())
+    return bool(status.stdout.strip())
+
+
+def _has_non_sync_state_diff(sync: ctx.SyncContext, transaction) -> bool:
+    data = transaction.read() or {}
+    other_paths = {
+        name: existed for name, existed in (data.get("state_paths") or {}).items()
+        if name != sync.state_path.name
+    }
+    if not other_paths:
+        return False
+    from repo_task.file_transaction import fingerprint
+    baseline = fingerprint(sync.consumer, (), other_paths, state_base=transaction.backup / "__state__")
+    current = fingerprint(sync.consumer, (), other_paths)
+    return baseline != current
+
+
+def _collect_delivery_paths(sync: ctx.SyncContext) -> set[Path]:
+    """以真实工作区为准统一收集本轮写入集（含迁移器局部 changed 未回传的路径）。"""
+    tracked = _git(sync.consumer, "diff", "--name-only", "-z", "HEAD")
+    untracked = _git(sync.consumer, "ls-files", "--others", "--exclude-standard", "-z")
+    return {
+        sync.consumer / rel
+        for rel in (tracked.stdout + untracked.stdout).split("\0")
+        if rel
+    }
+
+
 @consumer_locked
 def cmd_apply(args: argparse.Namespace) -> int:
+    """控制面锁在前、公共 ID 锁在后：锁覆盖占用扫描、计划、写盘、校验与回滚全轮 apply。"""
+    from _id_scan import id_lock
+
+    with id_lock(args.sync.consumer):
+        return _apply_body(args)
+
+
+def _apply_body(args: argparse.Namespace) -> int:
     sync: ctx.SyncContext = args.sync
     state = read_state(sync)
     if not state:
@@ -174,8 +224,10 @@ def cmd_apply(args: argparse.Namespace) -> int:
     if (sync.consumer / "AGENTS.md").is_symlink():
         raise ctx.SyncError("apply 不支持软链 AGENTS.md，先替换为真实文件后重跑")
     changed: set[Path] = set()
+    # _preflight 内 sync_preflight 构建一次统一实体计划并返回；备份路径与执行复用它，
+    # 计划构建/数据阻断经预检以 BLOCKED 呈现，不静默吞掉。
     try:
-        migrations = _preflight(src, sync)
+        migrations, entity_plan = _preflight(src, sync)
     except ctx.SyncError as error:
         print(f"错误: {error}", file=sys.stderr)
         return 1
@@ -184,7 +236,10 @@ def cmd_apply(args: argparse.Namespace) -> int:
              ".opencode/commands", ".md_kx.toml", ".gitignore", ".prettierignore",
              "AGENTS.md",
              *ctx.MCP_CANDIDATES]
-    paths = _transaction_roots(paths + [root for migration in migrations for root in migration.ROOTS])
+    extra_rels = list(entity_plan.transaction_extra_rels) if entity_plan is not None else []
+    paths = _transaction_roots(
+        paths + [root for migration in migrations for root in migration.ROOTS] + extra_rels
+    )
     state_paths = sorted({sync.state_path.name, *(root for migration in migrations for root in migration.STATE_ROOTS)})
     try:
         transaction.begin(paths, state_paths=state_paths)
@@ -197,20 +252,22 @@ def cmd_apply(args: argparse.Namespace) -> int:
         data["base_head"] = _git(sync.consumer, "rev-parse", "HEAD").stdout.strip()
         transaction.save(data)
         def write_snapshot(snapshot):
-            migration_sync = replace(sync, checkout_override=src)
+            migration_sync = replace(sync, checkout_override=src, entity_plan=entity_plan)
             for migration in migrations:
                 for report in migration.execute(migration_sync, snapshot):
                     print(f"{migration.kind}: {report}")
             migrated_state = read_state(sync) or state
             _apply_sync_write(snapshot, getattr(args, "decisions", None) or {}, changed,
                               prompt_substrings(migrated_state), sync=sync)
+            changed.update(_collect_delivery_paths(sync))
             return migrated_state
 
+        post_sync = replace(sync, entity_plan=None)  # 写盘后重新验证收敛，不复用旧计划
         if dirty:
             _assert_distributable_tree(src)
             state = write_snapshot(src)
             _format_markdown(sync, paths)
-            _validate_result(src, sync, paths)
+            _validate_result(src, post_sync, paths, changed)
         else:
             with tempfile.TemporaryDirectory(prefix="source_", dir=transaction.backup) as directory:
                 snapshot = Path(directory)
@@ -218,7 +275,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
                 _as_product(snapshot)
                 state = write_snapshot(snapshot)
                 _format_markdown(sync, paths)
-                _validate_result(snapshot, sync, paths)
+                _validate_result(snapshot, post_sync, paths, changed)
         if not args.skip_tests:
             if not _run_tests(sync.consumer):
                 raise ctx.SyncError("契约测试失败（pytest .repo_template/tests/ -q -m contract）")
@@ -246,15 +303,39 @@ def cmd_apply(args: argparse.Namespace) -> int:
         state["last_synced_at"] = _now_iso()
         state["resolved_checkout"] = str(src)
         write_state(state, sync=sync)
+        if not _has_delivery_diff(sync):
+            if _has_non_sync_state_diff(sync, transaction):
+                transaction.applied(verified=not args.skip_tests)
+                transaction.accept(verified=not args.skip_tests)
+                print(f"来源 SHA: {source_commit}")
+                print("无工作区变更；common 状态迁移已落盘并收尾（无需 commit）")
+                return 0
+            transaction.no_op()
+            print("无变更，事务已收尾")
+            return 0
         transaction.applied(verified=not args.skip_tests)
     except BaseException as error:
         # 可捕获中断同样先恢复基线；随后重新抛出，保留原退出语义。
         rollback_ok = False
+        leftovers: list[str] = []
         try:
             transaction.rollback(automatic=True)
             rollback_ok = True
         except Exception as rb_err:
             print(f"WARNING: 事务自动回滚失败（{rb_err}），现场可能残留未恢复文件", file=sys.stderr)
+
+        cleanup_leftover = None
+        cursor: BaseException | None = error
+        while cursor is not None and cleanup_leftover is None:
+            cleanup_leftover = getattr(cursor, "leftover", None)
+            cursor = cursor.__cause__ or cursor.__context__
+        if cleanup_leftover:
+            data = transaction.read()
+            data["status"] = "restore_failed"
+            data["restore_leftovers"] = [cleanup_leftover]
+            transaction.save(data)
+            leftovers = [cleanup_leftover]
+            rollback_ok = False
 
         if rollback_ok:
             _print_changed(changed, "\n=== 本次写入清单（失败，已回滚，仅供排查）===", sync=sync)
@@ -262,14 +343,14 @@ def cmd_apply(args: argparse.Namespace) -> int:
                   f"回滚备份保留在 {SYNC_TRANSACTION_DIR}", file=sys.stderr)
         else:
             _print_changed(changed, "\n=== 本次写入清单（失败且回滚未完成，现场可能残留混合状态）===", sync=sync)
+            if leftovers:
+                print("残留路径：" + "、".join(leftovers), file=sys.stderr)
             print(f"错误: {error}；自动回滚未完全成功，现场可能存在混合版本工具文件！"
                   f"备份保留在 {SYNC_TRANSACTION_DIR}，请人工执行 python3 ... repo_sync transaction rollback --confirm-restore 恢复基线", file=sys.stderr)
         if not isinstance(error, Exception):
             raise
         return 1
-    tracked = _git(sync.consumer, "diff", "--name-only", "-z", "HEAD")
-    untracked = _git(sync.consumer, "ls-files", "--others", "--exclude-standard", "-z")
-    changed.update(sync.consumer / rel for rel in (tracked.stdout + untracked.stdout).split("\0") if rel)
+    changed.update(_collect_delivery_paths(sync))
     print(f"来源 SHA: {source_commit}")
     _print_changed(changed, "\n=== 改动路径清单（commit 门禁点名 add）===", sync=sync)
     print("state 推进：last_synced_commit=" + ("已更新" if not dirty else "SRC dirty，未推进"))

@@ -127,9 +127,7 @@ AGENTS 保留长期不变量和写权；本文解释机制与取舍；usage 说�
 
 ## 实体协议与交付验证
 
-实体协议边界由 `.repo_template/entity_schema.json` 表达。运行期只理解当前布局；旧正文转换集中在 `template_sync.legacy_ledgers`，仅 apply 内置迁移导入。取号扫描当前协议的分支/worktree，合并入口验证协议与编号唯一性。版本标记不能替代源身份校验、目标模型验收或业务证据核验。
-
-交付隐私检查使用同一 snapshot 比较器；完整 blob 解码后比较新增文本行，检查点的输入分别是 index、候选 worktree 覆盖或确定 tree/commit。全量审计与交付门禁分离。具体策略见本文「路径隐私」。
+实体协议边界由 `.repo_template/entity_schema.json` 表达。运行期只理解当前布局；旧正文解析集中在 `template_sync.legacy_ledgers`，仅 `repo_sync.py apply` 内置 entity-storage 迁移导入。四类仓级编号（`t`/`p`/`d`/`s`）在 `TASK_ID_LOCK_NAME` 排他锁内按本机 Git commit 历史、本地分支、远端跟踪分支、tag 与全部 worktree 磁盘及 index 统一计算最大占用号加一，分配即全局唯一；占用计算与当前快照校验分离，运行期发现单个快照内同号多处或非法布局立即报错，合并入口验证协议与编号唯一性。存量 `d`/`p`/`s` 重复由同步期 entity-storage 统一只读计划一次性改号消除，连同精确路径引用一并纳入同一 `FileTransaction`，`status` / `plan` / `apply` 共用该计划。版本标记不能替代源身份校验、目标模型验收或业务证据核验。
 
 handoff 结构由 `repo_task.handoff` 单点校验。依赖来源查询保留缺失、坏数据、Git 查询失败与来源歧义诊断，不把查询失败改写成缺证据。工作区核心资产比较使用 Git 按路径执行 clean/EOL 规范化后的 blob OID。
 
@@ -137,11 +135,3 @@ handoff 结构由 `repo_task.handoff` 单点校验。依赖来源查询保留缺
 
 - 写权威状态数据（`progress.md` front matter、`docs/pending/`、review prompt 文件等）必须走 tmp 文件 + fsync + `os.replace` 原子写，防中断/掉电产生半写状态。派生 task 索引默认不落盘；需要机器可读导出时用 `task.py list --json` 输出到 stdout。
 - 公共 helper：`from repo_task.documents import atomic_write_text`。
-
-## 路径隐私
-
-- 提交与合并门禁只阻断本次新增文本行中的开发者家目录绝对路径；使用仓库相对路径或 `<worktree>`。未修改历史行留给显式审计处理，不阻断无关交付。
-- 交付比较器为 `repo_task.privacy.scan_privacy_changes`。finish 候选比较 HEAD 与 index，并覆盖本次将暂存的 task 文件；merge 比较第一父提交与目标 tree；tip 核对比较第一父提交与实际提交。review 报告作为完整新增证据扫描。
-- 比较前先严格解码完整 blob，再按文本行计算差异。支持 UTF-8、UTF-16/32（含 BOM 与可判定的无 BOM 文本）、GBK；无法解码的 Git 二进制对象或含 NUL 二进制跳过，其他编码错误阻断。不按扩展名豁免文本；所有交付入口使用同一二进制策略。
-- 全量审计命令为 `python3 .repo_template/scripts/task.py privacy-audit --ref HEAD`，在消费仓根执行；只读扫描非归档文本，发现泄漏退出 1。无泄漏输出 `privacy-audit=PASS`。全量 index/tree 库函数仅供显式审计，不能接入日常提交门禁。
-- 非个人环境固定路径只能在 `repo_task/privacy.py` 的 `FIXED_PATH_EXCEPTIONS` 中登记有依据的完整路径，不按用户名或容器身份全局豁免。隐私范围仍排除 `docs/archive/` 与 `.scratch/`。

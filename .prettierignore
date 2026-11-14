@@ -14,3 +14,5 @@ docs/**/handoff.json
 .repo_template/sync_manifest.json
 .repo_template/sync_policy.json
 .repo_template/skills/registry.json
+
+/.repo_template/
