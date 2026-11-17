@@ -35,7 +35,9 @@ ls-files 未跟踪路径与 --exclude glob 都使用同一套「仓库根相对�
 --exclude 取 fnmatch glob（如 'docs/*'），同时作用于 diff 路径与未跟踪文件。
 """
 
-from __future__ import annotations
+from _runtime import require_python, run
+
+require_python()
 
 import argparse
 import fnmatch
@@ -256,7 +258,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    main()
+    run(main)

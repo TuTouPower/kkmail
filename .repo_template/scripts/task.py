@@ -4,12 +4,13 @@
 Run this file directly; implementation lives in ``repo_task/`` and requires no installation.
 """
 
+from _runtime import require_python, run
+
+require_python()
+
 import sys
 
 from repo_task.cli import main
 
 if __name__ == "__main__":
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    main()
+    run(main)

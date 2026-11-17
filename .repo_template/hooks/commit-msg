@@ -6,13 +6,15 @@ git merge 的自动提交不运行 pre-commit，且 pre-merge-commit 阶段 MERG
 校验放在本 hook。
 """
 
-from __future__ import annotations
-
 import sys
 from pathlib import Path
 
 TOOLKIT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(TOOLKIT_ROOT / "scripts"))
+from _runtime import require_python, run
+
+require_python()
+
 
 from _id_scan import IdScanError, validate_merge_sources, validate_snapshot_ids  # noqa: E402
 from repo_task.context import RepoContext, TaskDataError  # noqa: E402
@@ -22,7 +24,7 @@ def _check() -> int:
     root = RepoContext.for_root(Path.cwd()).root
     try:
         validate_merge_sources(root)
-        validate_snapshot_ids(root)
+        validate_snapshot_ids(root, preserve_index=True)
     except IdScanError as error:
         print(f"commit-msg: 编号校验失败（fail-closed）：{error}", file=sys.stderr)
         return 1
@@ -50,7 +52,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    sys.exit(main())
+    run(main)

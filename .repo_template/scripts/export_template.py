@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Export only a committed product tree; never copy a developer worktree."""
 
+from _runtime import require_python, run
+
+require_python()
+
 import argparse
 import io
 import os
@@ -39,10 +43,11 @@ def is_non_distributable(name: str) -> bool:
 
 
 def _extract_product(stream, destination):
-    """Extract the Git archive subset safely using only Python 3.9 APIs.
+    """解包归档：先校验全部成员，再写普通文件/目录，最后按原始 linkname 写软链。
 
-    Validate every member first, write regular files/directories, then create
-    symlinks. No write ever traverses an archive-provided symlink.
+    tarfile.data_filter 会规范化 linkname（把 `dir/../file` 改成 `file`），改变
+    经符号链接解析后的实际目标，故不用于落盘；软链边界以 resolve 后的真实路径
+    校验。staging 原子性由调用方保证。
     """
     members = stream.getmembers()
     entries = {}
@@ -180,4 +185,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run(main)
