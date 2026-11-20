@@ -12,7 +12,7 @@ p081（2026-11-20 用户实报 + 两张手机截图）：同一封 Cloudflare �
 - 把策略选型、理由、安全边界与取舍写成 `docs/blueprint/decisions/YYYYMMDD_mail_document_rendering_contract.md` 决策记录，并在 `docs/blueprint/conventions.md` 增补邮件文档渲染契约条款；保留现有 CSP、sandbox、`no-referrer`、`<base target=_blank>` 与图片代理逻辑不变。
 - 补契约级单测：`mailBody.test.ts` 断言 srcdoc 含 viewport meta 与约定的宽度约束样式，并断言 CSP/sandbox 相关字符串不回归。
 - 复用 t080 落地的共享 `assertNoOverlap` helper 与 360px E2E 模板（不复制实现），新增固定宽度表格邮件 fixture 的阅读页 E2E：360px 视口下断言 iframe 内文档 `scrollWidth <= clientWidth`，标题/表格右边界落在屏内。
-- `docs/blueprint/testing.md` 的 blackbox 说明同步覆盖邮件正文窄屏场景；spec `inbox_ui_and_search` 的 tasks 登记 t081；p081 在本 task 完成后由 `pending.py close --resolution resolved --fix-ref t081` 闭环。
+- `docs/blueprint/testing.md` 的 blackbox 说明同步覆盖邮件正文窄屏场景；spec `inbox_ui_and_search` 的 tasks 登记 t081；p081 已在立项时以 `transferred` 转办至本 task（fix_ref=t081），本 task 完成后不再二次闭环。
 
 ### 非范围
 
@@ -29,12 +29,12 @@ p081（2026-11-20 用户实报 + 两张手机截图）：同一封 Cloudflare �
 
 <!-- /规范 -->
 
-- [ ] AC-001：所有 HTML 正文的 srcdoc 都包含 viewport meta；固定宽度表格邮件在 360px 视口下标题与表格右边界落在屏内，iframe 内文档 `scrollWidth <= clientWidth`（E2E 黑盒）。
-- [ ] AC-002：srcdoc 含约定的宽度约束样式；契约单测覆盖 viewport 与宽度约束字符串，且 CSP/sandbox/base/no-referrer 相关断言不回归。
-- [ ] AC-003：策略选型与理由落盘为 blueprint 决策记录，conventions 增补邮件文档渲染契约；安全边界在决策中明确为不变量。
-- [ ] AC-004：阅读页正文 E2E 复用 t080 的共享几何 helper/模板，代码中不存在复制的第二套 `assertNoOverlap` 实现；复用方式记入 progress.md。
-- [ ] AC-005：`docs/blueprint/testing.md`、spec `inbox_ui_and_search` 与 p081 同步更新，p081 转办闭环指向 t081。
-- [ ] AC-006：`docs/blueprint/testing.md` 的 `test_cmd` 与 `blackbox_verify` 全量通过；无弱化断言、无临时补丁残留。
+- [x] AC-001：所有 HTML 正文的 srcdoc 都包含 viewport meta；固定宽度表格邮件在 360px 视口下标题与表格右边界落在屏内，iframe 内文档 `scrollWidth <= clientWidth`（E2E 黑盒）。
+- [x] AC-002：srcdoc 含约定的宽度约束样式；契约单测覆盖 viewport 与宽度约束字符串，且 CSP/sandbox/base/no-referrer 相关断言不回归。
+- [x] AC-003：策略选型与理由落盘为 blueprint 决策记录，conventions 增补邮件文档渲染契约；安全边界在决策中明确为不变量。
+- [x] AC-004：阅读页正文 E2E 复用 t080 的共享几何 helper/模板，代码中不存在复制的第二套 `assertNoOverlap` 实现；复用方式记入 progress.md。
+- [x] AC-005：`docs/blueprint/testing.md`、spec `inbox_ui_and_search` 与 p081 同步更新，p081 转办闭环指向 t081。
+- [x] AC-006：`docs/blueprint/testing.md` 的 `test_cmd` 与 `blackbox_verify` 全量通过；无弱化断言、无临时补丁残留。
 
 ### 可测试性声明
 

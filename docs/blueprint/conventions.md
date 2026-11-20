@@ -9,7 +9,9 @@
     - 邮件 HTML 正文只能经由 `src/frontend/src/lib/mailBody.ts` 进行 DOMPurify 过滤与保守主题分类；
     - 必须在带有 CSP 约束的无脚本 `iframe` 沙箱（`srcDoc`）中呈现，严禁使用 `dangerouslySetInnerHTML`；
     - 不得为了适配深色模式放宽 `script`, `style`, `meta`, `link` 等安全净化标签；
-    - 显式固定浅色富文本邮件以独立纸张卡片承载并保留自身原色，无显式配色邮件自适应深色底与高对比度文字。
+    - 显式固定浅色富文本邮件以独立纸张卡片承载并保留自身原色，无显式配色邮件自适应深色底与高对比度文字；
+    - 邮件文档渲染契约由 `buildMailSrcdoc()` 独占：srcdoc 必须自带 viewport meta，并对固定宽度容器/表格施加 `width:auto !important; max-width:100% !important` 收敛，保证窄屏内容完整进入视口；宿主页面 viewport 不作用于 srcdoc；
+    - 视口与宽度适配不得放松 CSP/sandbox/`no-referrer`/代理重写；选型与回退见 `docs/blueprint/decisions/20261120_mail_document_rendering_contract.md`。
 3. **前端语义颜色与 Token 纪律**：
     - 前端组件与样式一律引用 `src/frontend/src/design-system/tokens.css` 声明的语义 CSS 变量；
     - `npm test` 与 `src/frontend/scripts/check_css_tokens.mjs` 门禁静态扫描所有源码中的 `var(--...)` 引用，拦截未定义变量与脱离设计系统值。

@@ -46,7 +46,7 @@ python3 scripts/check_doc_sensitive.py docs --check
 npm --prefix src/frontend run test:e2e
 ```
 
-快速 E2E 包含共享 360px 几何门禁（`tests/e2e/layoutGeometry.ts` 的 `assertNoOverlap`）：`reader_toolbar.spec.ts` 用长邮箱账号断言阅读页工具栏主信息槽与操作槽矩形不相交；该 helper 与模板供后续 task 复用，禁止复制第二套实现。`npm run css:check` 的 `check_layout_contracts.mjs` 静态守护断点单一来源与工具栏操作槽不回归绝对定位。
+快速 E2E 包含共享 360px 几何门禁（`tests/e2e/layoutGeometry.ts` 的 `assertNoOverlap`）：`reader_toolbar.spec.ts` 用长邮箱账号断言阅读页工具栏主信息槽与操作槽矩形不相交；该 helper 与模板供后续 task 复用，禁止复制第二套实现。`mail_body_viewport.spec.ts` 复用同一 360px 模板，用固定宽度表格邮件 fixture 断言 iframe 内文档无横向溢出。`npm run css:check` 的 `check_layout_contracts.mjs` 静态守护断点单一来源与工具栏操作槽不回归绝对定位。
 
 ### Electron 原生标题栏人工验证
 

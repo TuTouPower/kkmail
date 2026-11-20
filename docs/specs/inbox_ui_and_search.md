@@ -1,7 +1,7 @@
 ---
 slug: inbox_ui_and_search
 status: active
-tasks: [t002, t003, t024, t027, t032, t051, t052, t065, t068, t080]
+tasks: [t002, t003, t024, t027, t032, t051, t052, t065, t068, t080, t081]
 ---
 # 收件箱交互、侧栏组织与检索技术规范 (Inbox UI, Sidebar & Search Specification)
 
@@ -18,6 +18,7 @@ ______________________________________________________________________
 - **宽屏桌面模式**：侧栏折叠时完全从 DOM 与网格轨移除，释放水平空间；列表标题行常驻侧栏恢复入口，展开时支持鼠标连续拖拽调整分割条宽度并持久化偏好。
 - **移动端断点 (≤760px)**：侧栏自动转为覆盖式抽屉（Drawer）；遮罩点击、Escape 按键及导航项选中均可自动关闭抽屉并安全恢复焦点。抽屉状态与桌面折叠偏好相互独立。
 - **工具栏布局契约**：阅读页与列表/设置工具栏统一使用 `.app-toolbar` 原语；主信息槽可收缩省略，操作槽为常规 flex 项且禁止绝对定位覆盖，窄屏下保留点击目标与完整主信息。断点数值唯一来源为 `src/frontend/src/design-system/breakpoints.ts`，由 `check_layout_contracts.mjs` 守护。
+- **邮件文档渲染契约**：`buildMailSrcdoc()` 是 HTML 正文唯一构造点，srcdoc 自带 viewport meta 并对固定宽度表格/容器做宽度收敛；安全沙箱与 CSP 不变量不因适配放宽，决策见 `docs/blueprint/decisions/20261120_mail_document_rendering_contract.md`。
 
 ### 2. 桌面 Electron 与原生标题栏集成
 

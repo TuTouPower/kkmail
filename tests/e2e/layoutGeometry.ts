@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 
 type Rect = { x: number; y: number; width: number; height: number }
 
@@ -12,6 +12,18 @@ export function rectsOverlap(a: Rect, b: Rect): boolean {
   const aBottom = a.y + a.height
   const bBottom = b.y + b.height
   return a.x < bRight && b.x < aRight && a.y < bBottom && b.y < aBottom
+}
+
+/** Shared narrow-screen horizontal-overflow gate for iframe/scroll containers. */
+export async function assertNoHorizontalOverflow(locator: Locator): Promise<void> {
+  const metrics = await locator.evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }))
+  expect(
+    metrics.scrollWidth,
+    `horizontal overflow: scrollWidth=${metrics.scrollWidth}, clientWidth=${metrics.clientWidth}`,
+  ).toBeLessThanOrEqual(metrics.clientWidth + 1)
 }
 
 /** Shared narrow-screen geometry gate. Reused by reader toolbar and mail body specs. */

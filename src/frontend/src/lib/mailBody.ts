@@ -400,7 +400,10 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
 
   const bodyStyle = `margin:0;font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;word-wrap:break-word;background:${bg};color:${text}`
   const linkStyle = `a{color:${linkColor}}`
-  const imgStyle = `img{max-width:100%;height:auto}`
+  // Mobile rendering contract: the srcdoc is an independent browsing context,
+  // so the host page's viewport meta does not apply. Constrain fixed-width
+  // newsletter tables/wrappers instead of relying on horizontal scrolling.
+  const widthStyle = `html,body{max-width:100%}div,table,td,th{width:auto !important;max-width:100% !important;height:auto}img{max-width:100%;height:auto}`
   const invertStyle = shouldInvert
     ? 'html{filter:invert(100%) hue-rotate(180deg);background:#ffffff}img,video,canvas{filter:invert(100%) hue-rotate(180deg) drop-shadow(0 0 1px rgba(0, 0, 0, 0.75))}'
     : ''
@@ -410,7 +413,7 @@ export function buildMailSrcdoc(html: string, opts: MailSrcdocOptions = {}): str
     ? ':root{color-scheme:dark}html{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.28) transparent}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.28);border-radius:4px}::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.45)}'
     : ':root{color-scheme:light}html{scrollbar-width:thin;scrollbar-color:rgba(0,0,0,0.28) transparent}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.28);border-radius:4px}::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,0.45)}'
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${colorScheme}"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>${scrollbarStyle}${invertStyle}body{${bodyStyle}}${linkStyle}${imgStyle}</style></head><body>${sanitizedHtml}</body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><meta name="color-scheme" content="${colorScheme}"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank" rel="noopener noreferrer"><style>${scrollbarStyle}${invertStyle}body{${bodyStyle}}${linkStyle}${widthStyle}</style></head><body>${sanitizedHtml}</body></html>`
 }
 
 /**
