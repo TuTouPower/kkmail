@@ -343,6 +343,13 @@ describe('<MessageReader />', () => {
     expect(container.querySelector('.reader-location')?.textContent).toBe('other@x.test')
   })
 
+  it('keeps toolbar actions in the shared non-overlay contract', async () => {
+    const { container } = await render(<MessageReader />)
+    await waitFor(() => expect(container.querySelector('.reader-location')?.textContent).toBe('box@x.test'))
+    expect(container.querySelector('.reader-toolbar')?.classList.contains('app-toolbar')).toBe(true)
+    expect(container.querySelector('.reader-toolbar-actions')?.classList.contains('app-toolbar-actions')).toBe(true)
+  })
+
   it('keeps an unknown detail date blank instead of falling back to the selected row date', async () => {
     useMailStore.setState({ selectedKey: 'm-null-date' })
     const { container } = await render(<MessageReader />)

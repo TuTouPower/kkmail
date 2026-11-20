@@ -149,6 +149,7 @@ export interface SetupStubApiOptions {
   authedInitially?: boolean
   accounts?: StubAccount[]
   groups?: StubGroup[]
+  messages?: MockMessage[]
   folderStatsByAccount?: Record<string, StubFolder[] | { error: string }>
 }
 
@@ -156,7 +157,7 @@ export const FAKE_CSRF_TOKEN = 'fake-csrf-token'
 
 export async function setupStubApi(page: Page, options: SetupStubApiOptions = {}) {
   let isAuthed = options.authedInitially ?? false
-  const messages = createMockMessages()
+  const messages = options.messages ?? createMockMessages()
   let currentGroups = options.groups ?? [{ id: 'grp-1', name: '测试邮箱组', color: '#0879d9', sort_order: 0 }]
   let currentAccounts = options.accounts ?? [
     {

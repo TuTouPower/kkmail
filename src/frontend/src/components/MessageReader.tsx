@@ -383,10 +383,10 @@ const MessageReader = memo(function MessageReader() {
 
   return (
     <section className="reader-pane" aria-label="邮件正文">
-      <div data-ui="MR01" className="reader-toolbar">
+      <div data-ui="MR01" className="reader-toolbar app-toolbar">
         <button className="reader-action mobile-only" title="返回列表" aria-label="返回列表" onClick={() => setMobileView('list')}><ArrowLeft size={18} /></button>
-        <div className="reader-location"><CopyAddress address={selected.accountEmail}>{selected.accountEmail}</CopyAddress></div>
-        <div className="reader-toolbar-actions">
+        <div className="reader-location app-toolbar-primary"><CopyAddress address={selected.accountEmail}>{selected.accountEmail}</CopyAddress></div>
+        <div className="reader-toolbar-actions app-toolbar-actions">
           {showDarkToggle && (
             <button
               data-ui="MR11"

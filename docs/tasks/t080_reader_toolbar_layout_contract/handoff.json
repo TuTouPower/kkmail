@@ -1,0 +1,15 @@
+{
+  "tid": "t080",
+  "attempt": 1,
+  "execution_id": "458fc34cb54d422b85be8baf790fd5e3",
+  "status": "done",
+  "branch": "t080_reader_toolbar_layout_contract",
+  "base_sha": "81b6a255979bbd771f16c59e177da1378e04683f",
+  "spec_source_sha": "81b6a255979bbd771f16c59e177da1378e04683f",
+  "tests": "src/frontend `npm test` 通过（vitest + openapi:check + css:check 含新增 `check_layout_contracts.mjs`）；`npx tsc -b`、`npm run build` 通过；断点单一来源正例退出 0、mobile=720 与复合 723px 负例均退出 1。",
+  "blackbox": "`npm run test:e2e` 22 passed，含新增 `reader_toolbar.spec.ts` 在 360px 视口、长邮箱账号下断言 `.reader-location` 与 `.reader-toolbar-actions` 矩形不相交。",
+  "review": "full 双轴 2 轮；Round 1 code/test 均 PASS（minor 各 1），Round 2 双轴均 PASS 零 finding；AC 7/7 TICK-VALID。",
+  "review_scope": "0b63f6061dbac01b",
+  "pending": [],
+  "findings": []
+}

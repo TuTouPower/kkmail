@@ -16,8 +16,12 @@
 4. **HTTP 传输与状态机**：
     - 前端写操作一律走 `src/frontend/src/api/client.ts` 的 `apiRequest` / `postJson`；
     - 不安全请求自动带 `X-CSRF-Token`，缺失立即 Fail-Closed；
-    - 移动端 760px 响应式断点（`src/frontend/src/lib/viewport.ts`），导航统一走 Zustand store。
-5. **密钥与凭据规范**：
+    - 移动端响应式断点的唯一来源为 `src/frontend/src/design-system/breakpoints.ts`，由 `viewport.ts` 复用；CSS 媒体查询值必须经 `check_layout_contracts.mjs` 校验一致，禁止手工同步注释；导航统一走 Zustand store。
+5. **工具栏布局契约**：
+    - 所有顶部工具栏（阅读页、列表、设置）使用共享 `.app-toolbar` 原语：主信息槽 `.app-toolbar-primary` 为 `flex:1; min-width:0` 并省略溢出文本，操作槽 `.app-toolbar-actions` 为常规 flex 项 `flex:0 0 auto`；
+    - 严禁以绝对定位把操作按钮覆盖到主信息之上；窄屏（≤断点）时保持 36px 点击目标，次要信息省略或换行，不得切掉账号地址等主信息；
+    - `npm run css:check` 的 `check_layout_contracts.mjs` 同时校验断点单一来源与操作槽不使用绝对定位。
+6. **密钥与凭据规范**：
     - 不预设弱口令或示例密钥，缺失时拒绝启动；
     - 凭据仅经 `CredentialStore` 存储并由 blob keyring 派生加密；
     - 日志与 `last_error` 必须经 `mail_core.security.redact` 脱敏。

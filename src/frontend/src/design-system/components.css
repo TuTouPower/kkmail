@@ -1255,16 +1255,41 @@
   overflow: hidden;
 }
 
+/* Shared toolbar contract: the primary slot shrinks and ellipsizes; actions
+   stay in normal flow so they can never overlay the primary slot. */
+.app-toolbar,
+.reader-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .reader-toolbar {
   position: relative;
   height: 47px;
   min-height: 47px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
   padding: 0 14px;
   border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.app-toolbar-primary,
+.reader-location {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.app-toolbar-actions,
+.reader-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
 }
 
@@ -1345,26 +1370,6 @@
 
 .copy-address-feedback[data-failed="true"] {
   color: var(--red);
-}
-
-.reader-location {
-  font-size: 11px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  flex: 1;
-}
-
-.reader-toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
 }
 
 .reader-action {
@@ -1521,7 +1526,7 @@
   }
 }
 
-/* 760px must match MOBILE_MAX_WIDTH in src/lib/viewport.ts */
+/* mobile breakpoint: single source src/design-system/breakpoints.ts */
 @media (max-width: 760px) {
   :root {
     --sidebar-w: 290px;
