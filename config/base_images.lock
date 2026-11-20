@@ -1,4 +1,16 @@
 {
   "node:22-alpine": "sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202",
-  "python:3.13-slim": "sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90"
+  "python:3.13-slim": "sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90",
+  "_tools": {
+    "skopeo": {
+      "version": "1.22.4",
+      "base_url": "https://github.com/norrs/skopeo-binary/releases/download/v1.22.4/skopeo-{os}-{arch}",
+      "sha256": {
+        "darwin_arm64": "53b93e80c7f314bf09f04d2f825c6538b70062bc453130a4dd19a4783a4a91b2",
+        "darwin_amd64": "e32ed72993bd6107f18ed22e6caabf4099ce8d7ea9a9720daf1398c7c555d346",
+        "linux_arm64": "2800c606af9648a024474d3985a414f5535ba7c28f67302ad70f1740be7283e9",
+        "linux_amd64": "5858612bf956be867f11153999280c56a95ecad74a60222a8c0842414658bc27"
+      }
+    }
+  }
 }

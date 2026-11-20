@@ -27,9 +27,10 @@ docker compose -f docker-compose.mail-core.yml --profile distributed up --build 
 
 `Dockerfile.mail-core` 的 `FROM` 使用平台无关的 tag（`node:22-alpine`、`python:3.13-slim`），**版本真相**集中在 [`config/base_images.lock`](../../config/base_images.lock)（不可变 index digest）。本机 OrbStack 采用反向隔离（`orb config set network_proxy none`）：Docker daemon 没有代理路径，只有容器进程通过 `~/.docker/config.json` 的 `proxies.default` 走 `host.docker.internal:7890`。daemon 侧的 `FROM` 解析若本地未命中，必然直连 Docker Hub 超时——这不是代理故障，而是「基础镜像的获取」此前从未进入部署契约。
 
-- 新机器首次部署前先执行 `scripts/pin_base_images.sh`：它在临时容器内用已注入的代理、按 lock 的 digest 把基础镜像导入本地 daemon 并打上 tag。这是全流程唯一联网点，幂等、可审计。
+- 新机器首次部署前先执行 `scripts/pin_base_images.sh`：它用 `config/base_images.lock` 固定的校验和下载宿主侧 `skopeo`（不依赖任何预置镜像、不启动引导容器），经宿主代理按不可变 digest 把基础镜像直接导入本地 daemon。默认代理为 `http://127.0.0.1:7890`，可用 `KKMAIL_PIN_PROXY` 覆盖；设为空串表示宿主可直连 registry。这是全流程唯一联网点，幂等、可审计，且 daemon 始终不访问 registry。
+- 工具版本、下载模板与各平台 SHA256 固定在 `config/base_images.lock` 的 `_tools` 段；镜像按目标 daemon 的 OS/架构选择（`--override-os/--override-arch`），信任策略固定为仓库内的 `config/containers/skopeo-policy.json`，完整性由 digest + 工具校验和保证。
 - `scripts/deploy_mail_core.sh` 在 **push / 密封备份 / rollback tag 之前**断言这些 tag 在本地（`docker image inspect`），缺失即失败并提示运行引导脚本；`build` 不带 `--pull`，BuildKit 本地命中后零网络请求。
-- 因此部署不再依赖「Docker Hub 当时是否可达」或「网关代理当时是否开启」，CBrowser 沙箱的直连隔离也完全不受影响。
+- 因此部署不再依赖「Docker Hub 当时是否可达」或「网关代理当时是否开启」；引导脚本自身也不再依赖 daemon 去拉取一个未固定的 `alpine:latest`（该设计此前在反向隔离环境下必然自举失败）。CBrowser 沙箱的直连隔离完全不受影响。
 - 升级基础镜像：更新 lock 中的 digest，重新运行 `scripts/pin_base_images.sh`，再按常规流程部署。
 
 ## 部署备份与权限边界
