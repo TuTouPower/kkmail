@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
+import { MOBILE_MAX_WIDTH } from '../design-system/breakpoints'
 
-/** Matches the CSS breakpoint where the sidebar becomes an overlay drawer. */
-export const MOBILE_MAX_WIDTH = 760
+export { MOBILE_MAX_WIDTH }
 
 function subscribeResize(onChange: () => void) {
   window.addEventListener('resize', onChange)

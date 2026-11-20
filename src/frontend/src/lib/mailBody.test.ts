@@ -48,6 +48,15 @@ describe('mail body safety and dark mode classification (AC-003)', () => {
     expect(doc).not.toMatch(/onerror/i)
   })
 
+  it('injects viewport and fixed-width constraints as the mail document contract', () => {
+    const doc = buildMailSrcdoc('<div style="width:680px"><table width="680" style="width:680px"><tr><td>weekly report</td></tr></table></div>')
+    expect(doc).toContain('<meta name="viewport" content="width=device-width, initial-scale=1">')
+    expect(doc).toContain('width:auto !important')
+    expect(doc).toContain('max-width:100% !important')
+    expect(doc).toContain("default-src 'none'")
+    expect(doc).toContain("img-src 'self' data: cid:")
+  })
+
   it('removes link ping beacons and background URL attributes', () => {
     const out = sanitizeMailHtml(
       '<a href="https://example.com" ping="https://tracker.example/ping">link</a>' +

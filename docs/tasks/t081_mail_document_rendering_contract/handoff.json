@@ -1,0 +1,15 @@
+{
+  "tid": "t081",
+  "attempt": 1,
+  "execution_id": "d7d4f62479bc477d9b0983c805d8d79c",
+  "status": "done",
+  "branch": "t081_mail_document_rendering_contract",
+  "base_sha": "bb05825c9de416f92af090b8a258597456ee87f0",
+  "spec_source_sha": "81b6a255979bbd771f16c59e177da1378e04683f",
+  "tests": "src/frontend `npm test` 通过（vitest + openapi:check + css:check）、`npx tsc -b`、`npm run build`、`npm run lint` 通过。",
+  "blackbox": "`npm run test:e2e` 23 passed；`mail_body_viewport.spec.ts` 修复前红（`scrollWidth=680 / clientWidth=309`）、修复后绿，复用 t080 共享 360px 几何模板。",
+  "review": "full 双轴 2 轮；Round 1 code/test 均 PASS（code minor 1、test 零），Round 2 双轴均 PASS 零 finding；AC 6/6 TICK-VALID。",
+  "review_scope": "b7a8224d6fcf6f17",
+  "pending": [],
+  "findings": []
+}

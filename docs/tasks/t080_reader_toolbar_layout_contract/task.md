@@ -30,13 +30,13 @@ p080（2026-11-20 用户实报 + 两张手机截图）记录：手机窄屏阅�
 
 <!-- /规范 -->
 
-- [ ] AC-001：360px 视口下阅读页账号邮箱文本与操作按钮组的 `boundingBox()` 不相交；使用长邮箱账号作为边界样本，E2E 断言通过。
-- [ ] AC-002：阅读页工具栏操作区不再以绝对定位覆盖主信息；契约层测试断言该写法不存在，且窄屏降级后 36px 点击目标保持可见可点。
-- [ ] AC-003：设计系统存在单一工具栏布局契约（CSS 原语 + conventions 条款），阅读页已迁移；列表头部与设置工具栏完成审计，结论与处置记录在 progress.md。
-- [ ] AC-004：`MOBILE_MAX_WIDTH` 是断点唯一来源，静态检查能发现 CSS 中与之不一致的移动端断点；人工制造不一致时检查失败（验证记录入 progress.md）。
-- [ ] AC-005：共享 `assertNoOverlap` helper 与 360px E2E 模板以可复用形式落盘（独立文件/导出），阅读页用例已接入，t081 可直接复用且无需复制实现。
-- [ ] AC-006：`docs/blueprint/conventions.md` / `testing.md` 与 spec `inbox_ui_and_search` 同步更新；p080 已转办闭环指向 t080。
-- [ ] AC-007：`docs/blueprint/testing.md` 的 `test_cmd` 与 `blackbox_verify` 全量通过；无弱化断言、无临时补丁残留。
+- [x] AC-001：360px 视口下阅读页账号邮箱文本与操作按钮组的 `boundingBox()` 不相交；使用长邮箱账号作为边界样本，E2E 断言通过。
+- [x] AC-002：阅读页工具栏操作区不再以绝对定位覆盖主信息；契约层测试断言该写法不存在，且窄屏降级后 36px 点击目标保持可见可点。
+- [x] AC-003：设计系统存在单一工具栏布局契约（CSS 原语 + conventions 条款），阅读页已迁移；列表头部与设置工具栏完成审计，结论与处置记录在 progress.md。
+- [x] AC-004：`MOBILE_MAX_WIDTH` 是断点唯一来源，静态检查能发现 CSS 中与之不一致的移动端断点；人工制造不一致时检查失败（验证记录入 progress.md）。
+- [x] AC-005：共享 `assertNoOverlap` helper 与 360px E2E 模板以可复用形式落盘（独立文件/导出），阅读页用例已接入，t081 可直接复用且无需复制实现。
+- [x] AC-006：`docs/blueprint/conventions.md` / `testing.md` 与 spec `inbox_ui_and_search` 同步更新；p080 已转办闭环指向 t080。
+- [x] AC-007：`docs/blueprint/testing.md` 的 `test_cmd` 与 `blackbox_verify` 全量通过；无弱化断言、无临时补丁残留。
 
 ### 可测试性声明
 

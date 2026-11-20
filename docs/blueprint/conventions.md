@@ -9,15 +9,21 @@
     - 邮件 HTML 正文只能经由 `src/frontend/src/lib/mailBody.ts` 进行 DOMPurify 过滤与保守主题分类；
     - 必须在带有 CSP 约束的无脚本 `iframe` 沙箱（`srcDoc`）中呈现，严禁使用 `dangerouslySetInnerHTML`；
     - 不得为了适配深色模式放宽 `script`, `style`, `meta`, `link` 等安全净化标签；
-    - 显式固定浅色富文本邮件以独立纸张卡片承载并保留自身原色，无显式配色邮件自适应深色底与高对比度文字。
+    - 显式固定浅色富文本邮件以独立纸张卡片承载并保留自身原色，无显式配色邮件自适应深色底与高对比度文字；
+    - 邮件文档渲染契约由 `buildMailSrcdoc()` 独占：srcdoc 必须自带 viewport meta，并对固定宽度容器/表格施加 `width:auto !important; max-width:100% !important` 收敛，保证窄屏内容完整进入视口；宿主页面 viewport 不作用于 srcdoc；
+    - 视口与宽度适配不得放松 CSP/sandbox/`no-referrer`/代理重写；选型与回退见 `docs/blueprint/decisions/20261120_mail_document_rendering_contract.md`。
 3. **前端语义颜色与 Token 纪律**：
     - 前端组件与样式一律引用 `src/frontend/src/design-system/tokens.css` 声明的语义 CSS 变量；
     - `npm test` 与 `src/frontend/scripts/check_css_tokens.mjs` 门禁静态扫描所有源码中的 `var(--...)` 引用，拦截未定义变量与脱离设计系统值。
 4. **HTTP 传输与状态机**：
     - 前端写操作一律走 `src/frontend/src/api/client.ts` 的 `apiRequest` / `postJson`；
     - 不安全请求自动带 `X-CSRF-Token`，缺失立即 Fail-Closed；
-    - 移动端 760px 响应式断点（`src/frontend/src/lib/viewport.ts`），导航统一走 Zustand store。
-5. **密钥与凭据规范**：
+    - 移动端响应式断点的唯一来源为 `src/frontend/src/design-system/breakpoints.ts`，由 `viewport.ts` 复用；CSS 媒体查询值必须经 `check_layout_contracts.mjs` 校验一致，禁止手工同步注释；导航统一走 Zustand store。
+5. **工具栏布局契约**：
+    - 所有顶部工具栏（阅读页、列表、设置）使用共享 `.app-toolbar` 原语：主信息槽 `.app-toolbar-primary` 为 `flex:1; min-width:0` 并省略溢出文本，操作槽 `.app-toolbar-actions` 为常规 flex 项 `flex:0 0 auto`；
+    - 严禁以绝对定位把操作按钮覆盖到主信息之上；窄屏（≤断点）时保持 36px 点击目标，次要信息省略或换行，不得切掉账号地址等主信息；
+    - `npm run css:check` 的 `check_layout_contracts.mjs` 同时校验断点单一来源与操作槽不使用绝对定位。
+6. **密钥与凭据规范**：
     - 不预设弱口令或示例密钥，缺失时拒绝启动；
     - 凭据仅经 `CredentialStore` 存储并由 blob keyring 派生加密；
     - 日志与 `last_error` 必须经 `mail_core.security.redact` 脱敏。

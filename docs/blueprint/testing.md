@@ -46,6 +46,8 @@ python3 scripts/check_doc_sensitive.py docs --check
 npm --prefix src/frontend run test:e2e
 ```
 
+快速 E2E 包含共享 360px 几何门禁（`tests/e2e/layoutGeometry.ts` 的 `assertNoOverlap`）：`reader_toolbar.spec.ts` 用长邮箱账号断言阅读页工具栏主信息槽与操作槽矩形不相交；该 helper 与模板供后续 task 复用，禁止复制第二套实现。`mail_body_viewport.spec.ts` 复用同一 360px 模板，用固定宽度表格邮件 fixture 断言 iframe 内文档无横向溢出。`npm run css:check` 的 `check_layout_contracts.mjs` 静态守护断点单一来源与工具栏操作槽不回归绝对定位。
+
 ### Electron 原生标题栏人工验证
 
 `BrowserWindow` 参数单测不能证明 macOS 原生交通灯、真实拖动区或全屏行为。改动桌面标题栏后，使用隔离 `userData` 与测试服务启动独立 Electron 窗口，并以系统截图和操作记录验证：原生交通灯与侧栏按钮相邻、侧栏收起后按钮可用、空白区可拖动而按钮点击不拖窗、最小化/恢复、关闭/重新打开、全屏进出及窗口缩放后不重叠。不得用网页原型绘制的假交通灯代替证据。

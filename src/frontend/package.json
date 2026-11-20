@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run && npm run openapi:check && npm run css:check",
     "test:coverage": "vitest run --coverage",
-    "css:check": "node --test ./scripts/check_css_tokens.node-test.mjs && node ./scripts/check_css_tokens.mjs",
+    "css:check": "node --test ./scripts/check_css_tokens.node-test.mjs && node ./scripts/check_css_tokens.mjs && node ./scripts/check_layout_contracts.mjs",
     "test:e2e": "node ./scripts/run_e2e.mjs",
     "test:e2e:full": "python3 ../../scripts/run_full_stack_e2e.py",
     "openapi:gen": "openapi-typescript ../../schemas/openapi.json -o src/api/generated/schema.ts",
