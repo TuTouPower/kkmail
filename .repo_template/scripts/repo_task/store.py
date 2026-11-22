@@ -23,6 +23,7 @@ from .git_ops import (
     require_primary_worktree,
     worktree_paths,
 )
+from .ledger import ledger_read
 
 
 @dataclass(frozen=True)
@@ -503,6 +504,179 @@ def discover_effective_sources(
     只读；供 skill 依「task 状态读取优先级」在正确位置读取 task。
     """
     return discover_effective_bundle(allow_corrupt=allow_corrupt, repo=repo)[1]
+
+
+@dataclass(frozen=True)
+class TaskLocation:
+    """单 task 的权威位置与锁定事实；由 tid 唯一决定，不依赖 cwd 或全仓扫描。
+
+    worktree_root 为 None 表示无登记 worktree（主仓副本是滞后快照）。
+    spec_source_sha 取自权威工作区的 progress.md，供规则/spec 基线锁定。
+    """
+
+    tid: str
+    status: str
+    spec_source_sha: str
+    repo: ctx.RepoContext
+    task_dir: Path
+    worktree_root: Path | None
+
+
+def _read_task_front_matter(path: Path) -> dict:
+    """严格读取目标 progress.md；损坏即 fail-closed，定位到具体路径。"""
+    try:
+        text = path.read_text(encoding="utf-8", errors="strict")
+    except (UnicodeDecodeError, OSError) as error:
+        raise ctx.TaskDataError(f"{path} 读取失败：{error}") from error
+    fm, _ = parse_front_matter_text(text, source=str(path))
+    return fm
+
+
+def _latest_start_event(tid: str, *, repo: ctx.RepoContext) -> dict | None:
+    for event in reversed(ledger_read(tid=tid, repo=repo)):
+        if event.get("event") == "start" and event.get("tid") == tid:
+            return event
+    return None
+
+
+def _main_copy_location(tid: str, *, primary: ctx.RepoContext) -> TaskLocation:
+    """无 start 登记时回退主仓副本：那是滞后快照，状态准入由用途层决定。"""
+    directories = sorted(
+        d for d in primary.tasks_dir.glob(f"{tid}_*")
+        if d.is_dir() and (d / ctx.PROGRESS_FILE).is_file()
+    )
+    if not directories:
+        raise ctx.TaskNotFoundError(f"{tid} 不存在于 {primary.rel(primary.tasks_dir)}")
+    if len(directories) > 1:
+        names = ", ".join(d.name for d in directories)
+        raise ctx.TaskDataError(f"{tid} 对应多个 task 目录：{names}")
+    main_dir = directories[0]
+    main_fm = _read_task_front_matter(main_dir / ctx.PROGRESS_FILE)
+    if main_fm.get("tid") != tid:
+        raise ctx.TaskDataError(
+            f"{main_dir.name} 的 {ctx.PROGRESS_FILE} tid={main_fm.get('tid')!r}，与 {tid} 不一致"
+        )
+    return TaskLocation(
+        tid=tid,
+        status=str(main_fm.get("status", "")),
+        spec_source_sha=str(main_fm.get("spec_source_sha", "") or ""),
+        repo=primary,
+        task_dir=main_dir.resolve(),
+        worktree_root=None,
+    )
+
+
+def resolve_task_location(tid: str, *, repo: ctx.RepoContext) -> TaskLocation:
+    """单 task 定位：身份来自 start 时的 ledger 登记，用 Git 验证现场仍成立。
+
+    ledger 的 start 事件是 start 创建 worktree 时原子写入的权威登记，含
+    branch / worktree / spec_source_sha。不再用分支前缀、路径约定或内容相似度
+    重新发现身份；登记与现场任一不符即硬失败并输出差异，交 recovery 处理。
+    """
+    if not ctx.TID_RE.fullmatch(tid):
+        raise ctx.TaskDataError(f"tid 非法：{tid!r}")
+    primary = ctx.RepoContext.for_root(repo.primary_root)
+    start = _latest_start_event(tid, repo=primary)
+    if start is None:
+        return _main_copy_location(tid, primary=primary)
+
+    branch = str(start.get("branch") or "")
+    worktree_rel = str(start.get("worktree") or "")
+    locked_sha = str(start.get("spec_source_sha") or "")
+    if not branch or not worktree_rel or not locked_sha:
+        raise ctx.TaskDataError(f"{tid} 的 start 登记缺 branch/worktree/spec_source_sha：{start}")
+
+    expected = (primary.primary_root / worktree_rel).resolve()
+    if expected == primary.root.resolve():
+        raise ctx.TaskDataError(
+            f"{tid} 登记的 worktree 路径与主工作区相同：{expected}；拒绝把主工作区当任务 worktree"
+        )
+
+    registered = worktree_paths(repo=primary)
+    actual_branch = registered.get(str(expected))
+    if actual_branch != branch:
+        branches_at = {p: b for p, b in registered.items() if b == branch}
+        raise ctx.TaskDataError(
+            f"{tid} 登记 branch={branch!r} worktree={expected}，"
+            f"但 Git 登记该路径分支={actual_branch!r}、该分支路径={branches_at}"
+        )
+
+    task_rel = f"docs/tasks/{branch}"
+    progress = expected / task_rel / ctx.PROGRESS_FILE
+    if not progress.is_file():
+        raise ctx.TaskDataError(f"{tid} 登记 worktree {expected} 缺 {task_rel}/{ctx.PROGRESS_FILE}")
+    fm = _read_task_front_matter(progress)
+    if fm.get("tid") != tid:
+        raise ctx.TaskDataError(
+            f"{branch!r} 的 {ctx.PROGRESS_FILE} tid={fm.get('tid')!r}，与 {tid} 不一致"
+        )
+    fm_sha = str(fm.get("spec_source_sha") or "")
+    if fm_sha != locked_sha:
+        raise ctx.TaskDataError(
+            f"{tid} spec_source_sha 与 start 登记不一致："
+            f"ledger={locked_sha[:12]} progress={fm_sha[:12]}"
+        )
+
+    return TaskLocation(
+        tid=tid,
+        status=str(fm.get("status", "")),
+        spec_source_sha=locked_sha,
+        repo=ctx.RepoContext.for_root(expected),
+        task_dir=(expected / task_rel).resolve(),
+        worktree_root=expected,
+    )
+
+
+_REVIEW_TEMPLATE_DIR = ".repo_template/docs/review_prompts"
+_REVIEW_TEMPLATE_FILES = (
+    "code_prompt.txt", "test_prompt.txt", "general_prompt.txt", "share_prompt.txt",
+)
+
+
+def load_review_templates(spec_source_sha: str, *, repo: ctx.RepoContext) -> dict[str, str]:
+    """从 task 锁定的来源 commit 读取 review 提示词模板，规则与 spec 基线同源。
+
+    与 cwd、入口脚本位置、主仓当前模板内容无关；缺失或损坏 fail-closed。
+    """
+    if not spec_source_sha:
+        raise ctx.TaskDataError("review 模板读取失败：缺 spec_source_sha")
+    r = _git(
+        ["ls-tree", "-r", "-z", "--end-of-options", spec_source_sha, "--", _REVIEW_TEMPLATE_DIR],
+        repo=repo,
+    )
+    if r.returncode != 0:
+        raise ctx.TaskDataError(
+            f"无法读取 {spec_source_sha[:12]}:{_REVIEW_TEMPLATE_DIR}：{r.stderr.strip()}"
+        )
+    blobs: dict[str, str] = {}
+    for item in r.stdout.split("\0"):
+        if not item:
+            continue
+        meta, path = item.split("\t", 1)
+        parts = meta.split()
+        if len(parts) >= 3 and parts[1] == "blob":
+            blobs[path] = parts[2]
+    contents: dict[str, str] = {}
+    wanted: list[tuple[str, str]] = []
+    for name in _REVIEW_TEMPLATE_FILES:
+        rel = f"{_REVIEW_TEMPLATE_DIR}/{name}"
+        oid = blobs.get(rel)
+        if not oid:
+            raise ctx.TaskDataError(f"{spec_source_sha[:12]}:{rel} 不存在")
+        wanted.append((name, oid))
+    fetched = batch_cat_file([oid for _, oid in wanted], repo=repo)
+    for name, oid in wanted:
+        raw = fetched.get(oid)
+        rel = f"{_REVIEW_TEMPLATE_DIR}/{name}"
+        if raw is None:
+            raise ctx.TaskDataError(f"{spec_source_sha[:12]}:{rel} 无法读取")
+        try:
+            contents[name] = raw.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            raise ctx.TaskDataError(
+                f"{spec_source_sha[:12]}:{rel} UTF-8 解码失败：{error}"
+            ) from error
+    return contents
 
 
 def _discover_effective_entries(
