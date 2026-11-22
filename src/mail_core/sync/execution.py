@@ -1,44 +1,26 @@
-"""Sync-request execution tracking: bindings, settlement, aggregation (R06).
+"""Sync-request completion driven by real work, not by ephemeral executions.
 
-Implements repair design §5.1/§5.2. A ``SyncRequestTarget`` is satisfied by
-one or more job *executions*, recorded relationally in
-``SyncRequestTargetJob`` rows keyed by ``(target_id, execution_generation)``:
+A ``SyncRequestTarget`` is fulfilled by a ``WorkerJob`` row that actually
+exists. ``SyncRequestTargetJob`` links always carry a real ``job_id``;
+retries and reclaims keep the same job row. When a deduplicated job is
+CLAIMED and a newer request needs another pass, ``complete_job`` creates the
+successor first and migrates the waiting links onto it in the same
+transaction. Nothing is ever bound to a merely pre-allocated generation, so
+the old ``execution_lost`` state and its internal error text cannot occur.
 
-- a pending deduplicated job is reused under its own ``execution_generation``;
-- a request arriving while its job is CLAIMED binds the successor generation
-  pre-allocated exactly once in the job's ``_queue_next`` payload — never the
-  running execution;
-- ``complete_job`` creates/binds the successor and carries still-open targets
-  in the same transaction, except when the successor is the next periodic
-  poll round (periodic polling uses an independent generation and inherits
-  no observers);
-- retriable failure keeps targets open on the same generation; terminal
-  failure, account/folder deletion, or a lost execution fails them with a
-  stable ``error_code`` and a sanitized message.
-
-Settlement lock order (design §5.2, unified in R07) is fixed for every
-entry point that touches both relations: WorkerJob row → generation
-coordination lock (advisory) → ALL Targets of every affected request
-(UUID ascending, one pass, before any Binding is locked) → Binding rows
-(ordered by target) → Requests (UUID ascending). The previous order
-locked Bindings before Targets in the settlement path while the
-deletion path (``fail_open_targets``) locked Targets before Bindings;
-the two inverted orders deadlocked against each other (PostgreSQL
-40P01), so planning reads (column-only, non-locking) now determine the
-affected request set first and every path locks the full Target set
-before any Binding row. Request state and ``finished_at`` are derived
-from target aggregation and persisted here, in the write transaction;
-the report endpoint is read-only. Every persisted request state change
-emits a ``sync.request_updated`` Outbox event.
+Lock order: WorkerJob row → all Targets of affected requests (UUID ascending)
+→ Link rows → Requests (UUID ascending). Request state and ``finished_at``
+are derived here and every persisted transition emits a
+``sync.request_updated`` Outbox event.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
-from sqlalchemy import select, text
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import JobStatus, OutboxEventType
@@ -50,117 +32,108 @@ from mail_core.mail.storage.models import (
     WorkerJob,
 )
 
-OPEN_BINDING_STATES = ("queued", "running")
-TERMINAL_BINDING_STATES = ("complete", "failed")
+OPEN_LINK_STATES = ("queued", "running")
 TERMINAL_TARGET_STATES = ("complete", "failed")
 
 BASELINE_REQUIRED_MESSAGE = (
     "Folder has no completed baseline scan; a full initialization scan is required before delta sync"
 )
-EXECUTION_LOST_MESSAGE = "The bound sync execution no longer exists"
+SYNC_INCOMPLETE_MESSAGE = "同步未能完成，请重试"
+DEFAULT_FAILURE_MESSAGE = "同步失败，请稍后重试"
+ACCOUNT_DELETED_MESSAGE = "账户已删除，无法完成同步"
+FOLDER_DELETED_MESSAGE = "文件夹已删除，无法完成同步"
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def lock_generation(session: Session, generation: uuid.UUID) -> None:
-    """Per-generation coordination lock, taken after the WorkerJob row lock."""
-    session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-        {"key": str(generation)},
-    )
-
-
-def ensure_successor_generation(session: Session, job: WorkerJob) -> uuid.UUID:
-    """Return the successor generation for a CLAIMED job, allocating it once.
-
-    The generation lives in the job's ``_queue_next`` payload so that
-    ``complete_job`` creates the successor with exactly this generation and
-    requests bound to it are satisfied by that successor — not by the
-    currently running execution.
-    """
-    payload = dict(job.payload or {})
-    queue_next = dict(payload.get("_queue_next") or {})
-    existing = queue_next.get("execution_generation")
-    if existing:
-        try:
-            return uuid.UUID(str(existing))
-        except (ValueError, TypeError):
-            pass
-    generation = uuid.uuid4()
-    queue_next["execution_generation"] = str(generation)
-    payload["_queue_next"] = queue_next
-    job.payload = payload
-    session.flush()
-    return generation
-
-
-def binding_generation_for(session: Session, job: WorkerJob) -> tuple[uuid.UUID, WorkerJob | None]:
-    """Generation a new observer of ``job`` must bind, and the job row if live.
-
-    PENDING jobs bind their own generation. CLAIMED jobs bind the pre-allocated
-    successor generation with no job row yet (``job_id`` stays NULL until
-    ``complete_job`` materializes the successor).
-    """
-    if job.status == JobStatus.CLAIMED.value:
-        return ensure_successor_generation(session, job), None
-    return job.execution_generation, job
-
-
-def find_active_job(session: Session, dedupe_key: str) -> WorkerJob | None:
-    return session.scalar(
-        select(WorkerJob)
-        .where(WorkerJob.dedupe_key == dedupe_key)
-        .where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
-        .limit(1)
-    )
-
-
 def bind_target(
     session: Session,
     *,
     target: SyncRequestTarget,
-    execution_generation: uuid.UUID,
-    job: WorkerJob | None = None,
+    job: WorkerJob,
     phase: str = "sync",
     folder_id: uuid.UUID | None = None,
     status: str = "queued",
+    needs_successor: bool | None = None,
 ) -> SyncRequestTargetJob:
-    """Create or update the (target, generation) binding row."""
-    binding = session.scalar(
+    """Create or refresh a link from ``target`` to an existing ``job``.
+
+    The link is keyed by ``(target_id, job_id)``. A target that observes an
+    already-CLAIMED job needs one further pass for its own data goal; that is
+    recorded on the link and honoured when the job completes.
+    """
+    assert job.id is not None, "a sync target cannot be linked to a job without an id"
+    if needs_successor is None:
+        needs_successor = job.status == JobStatus.CLAIMED.value
+    link = session.scalar(
         select(SyncRequestTargetJob).where(
             SyncRequestTargetJob.target_id == target.id,
-            SyncRequestTargetJob.execution_generation == execution_generation,
+            SyncRequestTargetJob.job_id == job.id,
         )
     )
-    if binding is None:
-        binding = SyncRequestTargetJob(
+    if link is None:
+        link = SyncRequestTargetJob(
             id=uuid.uuid4(),
             target_id=target.id,
-            execution_generation=execution_generation,
-            job_id=job.id if job is not None else None,
+            job_id=job.id,
+            needs_successor=needs_successor,
             phase=phase,
             folder_id=folder_id if folder_id is not None else target.folder_id,
             status=status,
             created_at=_now(),
         )
-        session.add(binding)
+        session.add(link)
     else:
-        if job is not None and binding.job_id is None:
-            binding.job_id = job.id
-        if binding.phase == "sync" and phase != "sync":
-            binding.phase = phase
-        if binding.folder_id is None and folder_id is not None:
-            binding.folder_id = folder_id
+        if needs_successor:
+            link.needs_successor = True
+        if link.phase == "sync" and phase != "sync":
+            link.phase = phase
+        if link.folder_id is None and folder_id is not None:
+            link.folder_id = folder_id
+    if link.status in TERMINAL_TARGET_STATES and status in OPEN_LINK_STATES:
+        link.status = status
+        link.finished_at = None
+        link.error_code = None
+        link.safe_error = None
     session.flush()
-    return binding
+    return link
 
 
-def _request_ids_for_target_ids(
-    session: Session, target_ids: Iterable[uuid.UUID]
-) -> list[uuid.UUID]:
-    """Planning read (column-only, non-locking): requests owning the targets."""
+def migrate_waiting_links(session: Session, *, from_job: WorkerJob, to_job: WorkerJob) -> int:
+    """Move links that need a fresh pass onto a newly created successor.
+
+    Both jobs exist when this runs, so no link ever references a future
+    execution. Called by ``complete_job`` in the same transaction that
+    materializes the successor.
+    """
+    result = session.execute(
+        update(SyncRequestTargetJob)
+        .where(
+            SyncRequestTargetJob.job_id == from_job.id,
+            SyncRequestTargetJob.needs_successor.is_(True),
+            SyncRequestTargetJob.status.in_(OPEN_LINK_STATES),
+        )
+        .values(job_id=to_job.id, needs_successor=False, status="queued", finished_at=None)
+    )
+    session.flush()
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
+def has_waiting_links(session: Session, job: WorkerJob) -> bool:
+    return session.scalar(
+        select(SyncRequestTargetJob.id)
+        .where(
+            SyncRequestTargetJob.job_id == job.id,
+            SyncRequestTargetJob.needs_successor.is_(True),
+            SyncRequestTargetJob.status.in_(OPEN_LINK_STATES),
+        )
+        .limit(1)
+    ) is not None
+
+
+def _request_ids_for_target_ids(session: Session, target_ids: Iterable[uuid.UUID]) -> list[uuid.UUID]:
     ids = sorted({tid for tid in target_ids if tid is not None})
     if not ids:
         return []
@@ -175,16 +148,7 @@ def _request_ids_for_target_ids(
     )
 
 
-def _lock_target_sets(
-    session: Session, request_ids: Iterable[uuid.UUID]
-) -> dict[uuid.UUID, SyncRequestTarget]:
-    """Lock ALL Targets of the given requests, UUID ascending (lock order).
-
-    Every entry point that will lock or mutate Binding rows — or call
-    :func:`refresh_requests` — must hold this full set first, so no
-    transaction ever waits on a Target while holding a Binding or a
-    subset of the same Target set (R07).
-    """
+def _lock_target_sets(session: Session, request_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, SyncRequestTarget]:
     ids = sorted({rid for rid in request_ids if rid is not None})
     if not ids:
         return {}
@@ -200,25 +164,24 @@ def _lock_target_sets(
 
 
 def _aggregate_target(session: Session, target: SyncRequestTarget) -> None:
-    """Derive one target's state from its bindings (bindings already locked)."""
-    bindings = list(
+    links = list(
         session.scalars(
             select(SyncRequestTargetJob)
             .where(SyncRequestTargetJob.target_id == target.id)
             .order_by(SyncRequestTargetJob.created_at, SyncRequestTargetJob.id)
         ).all()
     )
-    if not bindings:
+    if not links:
         return
-    if any(b.status in OPEN_BINDING_STATES for b in bindings):
+    if any(link.status in OPEN_LINK_STATES for link in links):
         target.state = (
             "running"
-            if any(b.status == "running" or b.status == "complete" for b in bindings)
+            if any(link.status == "running" or link.status == "complete" for link in links)
             else "queued"
         )
         target.finished_at = None
         return
-    failed = [b for b in bindings if b.status == "failed"]
+    failed = [link for link in links if link.status == "failed"]
     if failed:
         target.state = "failed"
         target.error_code = failed[0].error_code or "sync_failed"
@@ -231,26 +194,10 @@ def _aggregate_target(session: Session, target: SyncRequestTarget) -> None:
 
 
 def refresh_requests(session: Session, request_ids: Iterable[uuid.UUID]) -> None:
-    """Re-aggregate targets and persist request state/finished_at + Outbox event.
-
-    This is the only place request state moves after creation; the report
-    endpoint never writes.
-
-    Lock acquisition follows the unified settlement lock order in two
-    phases, regardless of entry point: Phase 1 locks ALL involved
-    ``SyncRequestTarget`` rows (UUID ascending), Phase 2 locks ALL involved
-    ``SyncRequest`` rows (UUID ascending), and only then does Phase 3
-    aggregate and persist. Callers must already hold the full Target set
-    of every request they pass in (see :func:`_lock_target_sets`) and must
-    have locked any Binding rows they mutate *after* those Targets:
-    under the R07 order a caller never holds a Binding — or a subset of
-    one request's Targets — while waiting on another Target, which is
-    what used to deadlock settlement against account/folder deletion.
-    """
+    """Re-aggregate targets and persist request state + Outbox event."""
     ids = sorted({rid for rid in request_ids if rid is not None})
     if not ids:
         return
-    # Phase 1: lock every involved Target first, UUID ascending.
     targets_by_request: dict[uuid.UUID, list[SyncRequestTarget]] = {}
     for target in session.scalars(
         select(SyncRequestTarget)
@@ -259,17 +206,12 @@ def refresh_requests(session: Session, request_ids: Iterable[uuid.UUID]) -> None
         .with_for_update()
     ).all():
         targets_by_request.setdefault(target.request_id, []).append(target)
-    # Phase 2: lock every involved Request, UUID ascending.
     requests = {
         req.id: req
         for req in session.scalars(
-            select(SyncRequest)
-            .where(SyncRequest.id.in_(ids))
-            .order_by(SyncRequest.id)
-            .with_for_update()
+            select(SyncRequest).where(SyncRequest.id.in_(ids)).order_by(SyncRequest.id).with_for_update()
         ).all()
     }
-    # Phase 3: aggregate and persist, reusing the already-locked rows.
     for request_id in ids:
         req = requests.get(request_id)
         if req is None:
@@ -298,47 +240,36 @@ def refresh_requests(session: Session, request_ids: Iterable[uuid.UUID]) -> None
     session.flush()
 
 
-def _successor_is_periodic(job: WorkerJob, successor: WorkerJob | None, result: dict | None) -> bool:
-    """A successor carrying a new ``poll_round`` is the next periodic poll.
-
-    Poll rounds are independent executions: they must not inherit the
-    observers of the round that just finished (design §5.2). Continuation
-    successors (pagination, retries, claimed-job wakeups) never advance
-    ``poll_round``.
-    """
-    if successor is None:
-        return False
-    if result and result.get("exhausted"):
-        return True
-    successor_payload = successor.payload or {}
-    if "poll_round" not in successor_payload:
-        return False
-    try:
-        return int(successor_payload.get("poll_round") or 0) > int((job.payload or {}).get("poll_round") or 0)
-    except (TypeError, ValueError):
-        return False
+def find_active_job(session: Session, dedupe_key: str) -> WorkerJob | None:
+    return session.scalar(
+        select(WorkerJob)
+        .where(WorkerJob.dedupe_key == dedupe_key)
+        .where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
+        .limit(1)
+    )
 
 
-def _bind_initialization(session: Session, *, target: SyncRequestTarget, folder_id: uuid.UUID | None) -> None:
-    """Bind a delta target to the in-flight initialization (metadata) scan."""
+def _rebind_to_initialization(
+    session: Session, *, target: SyncRequestTarget, folder_id: uuid.UUID | None
+) -> bool:
+    """Hand a delta target to an in-flight metadata rebuild."""
     if target.account_id is None or folder_id is None:
-        return
+        return False
     job = find_active_job(session, f"metadata:{target.account_id}:{folder_id}")
     if job is None:
-        return
-    generation, bound_job = binding_generation_for(session, job)
+        return False
     bind_target(
         session,
         target=target,
-        execution_generation=generation,
-        job=bound_job,
+        job=job,
         phase="initialization",
         folder_id=folder_id,
         status="queued",
     )
+    return True
 
 
-def settle_job_bindings(
+def settle_job_links(
     session: Session,
     job: WorkerJob,
     *,
@@ -346,107 +277,76 @@ def settle_job_bindings(
     result: dict | None = None,
     error_code: str | None = None,
     safe_error: str | None = None,
-    successor: WorkerJob | None = None,
 ) -> set[uuid.UUID]:
-    """Settle every binding observing ``job``'s execution generation.
-
-    ``outcome`` is one of ``"complete"``, ``"failed"`` (terminal) or
-    ``"retriable"`` (targets stay open, progress retained, same generation).
-    Callers must already hold the WorkerJob row lock (complete_job/fail_job
-    do). Lock order (R07): generation advisory lock → planning reads →
-    ALL Targets of every affected request (UUID ascending) → this
-    generation's Binding rows. Locking the Bindings first inverted the
-    order against ``fail_open_targets`` (Targets → Bindings) and the two
-    paths deadlocked (PostgreSQL 40P01).
-    Returns the affected request IDs; callers persist the aggregation via
-    :func:`refresh_requests` in the same transaction (see jobs.py).
-    """
-    generation = getattr(job, "execution_generation", None)
-    if generation is None or not hasattr(session, "scalars"):
+    """Settle the links observing ``job``. Link rows are locked after targets."""
+    if not hasattr(session, "scalars") or job.id is None:
         return set()
-    lock_generation(session, generation)
-    # Planning read (no lock): which targets does this generation observe?
-    planned_target_ids = sorted(
-        {
-            tid
-            for tid in session.scalars(
-                select(SyncRequestTargetJob.target_id).where(
-                    SyncRequestTargetJob.execution_generation == generation
-                )
-            ).all()
-            if tid is not None
-        }
-    )
+    planned_target_ids: list[uuid.UUID] = []
+    for tid in session.scalars(
+        select(SyncRequestTargetJob.target_id).where(SyncRequestTargetJob.job_id == job.id)
+    ).all():
+        if isinstance(tid, uuid.UUID) and tid not in planned_target_ids:
+            planned_target_ids.append(tid)
     if not planned_target_ids:
         return set()
+    planned_target_ids.sort()
     affected_request_ids = _request_ids_for_target_ids(session, planned_target_ids)
-    # Lock the full Target set of every affected request before any Binding.
     targets = _lock_target_sets(session, affected_request_ids)
-    bindings = list(
+    links = list(
         session.scalars(
             select(SyncRequestTargetJob)
-            .where(SyncRequestTargetJob.execution_generation == generation)
+            .where(SyncRequestTargetJob.job_id == job.id)
             .order_by(SyncRequestTargetJob.target_id)
             .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
-    if not bindings:
+    if not links:
         return set()
     now = _now()
-    periodic = _successor_is_periodic(job, successor, result)
-    successor_generation = getattr(successor, "execution_generation", None) if successor is not None else None
     request_ids: set[uuid.UUID] = set()
-    for binding in bindings:
-        target = targets.get(binding.target_id)
+    for link in links:
+        target = targets.get(link.target_id)
         if target is None:
             continue
         request_ids.add(target.request_id)
-        if binding.status in TERMINAL_BINDING_STATES:
+        if link.status not in OPEN_LINK_STATES:
             continue
         if outcome == "retriable":
-            # Same generation retries: keep the target open with its progress.
-            binding.status = "queued"
-            binding.finished_at = None
+            link.status = "queued"
+            link.finished_at = None
             continue
         if outcome == "failed":
-            binding.status = "failed"
-            binding.error_code = error_code or "job_failed"
-            binding.safe_error = (safe_error or "")[:500] or None
-            binding.finished_at = now
+            link.status = "failed"
+            link.error_code = error_code or "sync_failed"
+            link.safe_error = (safe_error or DEFAULT_FAILURE_MESSAGE)[:500]
+            link.finished_at = now
             continue
-        # outcome == "complete"
         if result and result.get("baseline_required"):
-            binding.status = "failed"
-            binding.error_code = "baseline_required"
-            binding.safe_error = BASELINE_REQUIRED_MESSAGE
-            binding.finished_at = now
+            link.status = "failed"
+            link.error_code = "baseline_required"
+            link.safe_error = BASELINE_REQUIRED_MESSAGE
+            link.finished_at = now
             continue
-        binding.status = "complete"
-        binding.finished_at = now
         if result and result.get("await_initialization"):
-            _bind_initialization(session, target=target, folder_id=binding.folder_id or target.folder_id)
-        elif successor is not None and successor_generation is not None and not periodic:
-            bind_target(
-                session,
-                target=target,
-                execution_generation=successor_generation,
-                job=successor,
-                phase=binding.phase,
-                folder_id=binding.folder_id,
-                status="queued",
+            moved = _rebind_to_initialization(
+                session, target=target, folder_id=link.folder_id or target.folder_id
             )
+            if moved:
+                link.status = "complete"
+                link.finished_at = now
+                continue
+        link.status = "complete"
+        link.finished_at = now
     session.flush()
     return request_ids
 
 
-def mark_bindings_running(session: Session, jobs: list[WorkerJob]) -> None:
-    """Claim-time hook: bindings attached to newly claimed jobs become running."""
+def mark_links_running(session: Session, jobs: list[WorkerJob]) -> None:
+    """Claim hook: links attached to claimed jobs become running."""
     job_ids = [j.id for j in jobs if getattr(j, "id", None) is not None]
     if not job_ids or not hasattr(session, "scalars"):
         return
-    # Planning read (no lock), then the unified order: full Target sets of
-    # the affected requests first, Binding rows after (R07).
     planned = list(
         session.execute(
             select(SyncRequestTargetJob.id, SyncRequestTargetJob.target_id).where(
@@ -457,33 +357,29 @@ def mark_bindings_running(session: Session, jobs: list[WorkerJob]) -> None:
     )
     if not planned:
         return
-    _lock_target_sets(
-        session, _request_ids_for_target_ids(session, [tid for _bid, tid in planned])
-    )
-    bindings = list(
+    _lock_target_sets(session, _request_ids_for_target_ids(session, [tid for _lid, tid in planned]))
+    links = list(
         session.scalars(
             select(SyncRequestTargetJob)
-            .where(SyncRequestTargetJob.id.in_([bid for bid, _tid in planned]))
+            .where(SyncRequestTargetJob.id.in_([lid for lid, _tid in planned]))
             .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
-    mutated_target_ids = set()
-    for binding in bindings:
-        if binding.status != "queued":
+    mutated: set[uuid.UUID] = set()
+    for link in links:
+        if link.status != "queued":
             continue
-        binding.status = "running"
-        mutated_target_ids.add(binding.target_id)
+        link.status = "running"
+        mutated.add(link.target_id)
     session.flush()
-    refresh_requests(session, _request_ids_for_target_ids(session, mutated_target_ids))
+    refresh_requests(session, _request_ids_for_target_ids(session, mutated))
 
 
-def reset_bindings_for_job(session: Session, job: WorkerJob) -> set[uuid.UUID]:
-    """Reclaim hook: a reclaimed claim's running bindings return to queued."""
-    if not hasattr(session, "scalars"):
+def reset_links_for_job(session: Session, job: WorkerJob) -> set[uuid.UUID]:
+    """Reclaim hook: running links return to queued on the same job row."""
+    if not hasattr(session, "scalars") or job.id is None:
         return set()
-    # Planning read (no lock), then the unified order: full Target sets
-    # first, Binding rows after (R07).
     planned = list(
         session.execute(
             select(SyncRequestTargetJob.id, SyncRequestTargetJob.target_id).where(
@@ -494,25 +390,23 @@ def reset_bindings_for_job(session: Session, job: WorkerJob) -> set[uuid.UUID]:
     )
     if not planned:
         return set()
-    _lock_target_sets(
-        session, _request_ids_for_target_ids(session, [tid for _bid, tid in planned])
-    )
-    bindings = list(
+    _lock_target_sets(session, _request_ids_for_target_ids(session, [tid for _lid, tid in planned]))
+    links = list(
         session.scalars(
             select(SyncRequestTargetJob)
-            .where(SyncRequestTargetJob.id.in_([bid for bid, _tid in planned]))
+            .where(SyncRequestTargetJob.id.in_([lid for lid, _tid in planned]))
             .with_for_update()
             .execution_options(populate_existing=True)
         ).all()
     )
-    mutated_target_ids = set()
-    for binding in bindings:
-        if binding.status != "running":
+    mutated: set[uuid.UUID] = set()
+    for link in links:
+        if link.status != "running":
             continue
-        binding.status = "queued"
-        mutated_target_ids.add(binding.target_id)
+        link.status = "queued"
+        mutated.add(link.target_id)
     session.flush()
-    return set(_request_ids_for_target_ids(session, mutated_target_ids))
+    return set(_request_ids_for_target_ids(session, mutated))
 
 
 def fail_open_targets(
@@ -523,21 +417,8 @@ def fail_open_targets(
     error_code: str,
     safe_error: str,
 ) -> set[uuid.UUID]:
-    """Fail every still-open target for an account/folder being deleted.
-
-    Deletion paths call this before removing the entity so associated sync
-    requests converge to an explicit failure instead of pointing at a gone
-    account/folder (design §5.2).
-
-    Lock order (R07): planning reads → ALL Targets of every affected
-    request (UUID ascending) → the open Binding rows of the filtered
-    targets. This matches the settlement path exactly; the previous
-    Target→Binding here vs Binding→Target there deadlocked (40P01).
-    """
-    # Planning read (no lock): the filtered open targets.
-    planned_stmt = select(SyncRequestTarget.id).where(
-        SyncRequestTarget.state.in_(["queued", "running"])
-    )
+    """Fail every still-open target for a deleted account/folder."""
+    planned_stmt = select(SyncRequestTarget.id).where(SyncRequestTarget.state.in_(OPEN_LINK_STATES))
     if account_id is not None:
         planned_stmt = planned_stmt.where(SyncRequestTarget.account_id == account_id)
     if folder_id is not None:
@@ -545,44 +426,27 @@ def fail_open_targets(
     planned_ids = list(session.scalars(planned_stmt.order_by(SyncRequestTarget.id)).all())
     if not planned_ids:
         return set()
-    locked_targets = _lock_target_sets(
-        session, _request_ids_for_target_ids(session, planned_ids)
-    )
-    # State is re-checked on the locked rows: a target settled since the
-    # planning read must not be failed retroactively.
-    targets = [
-        locked_targets[tid]
-        for tid in planned_ids
-        if tid in locked_targets and locked_targets[tid].state in ("queued", "running")
-    ]
+    locked = _lock_target_sets(session, _request_ids_for_target_ids(session, planned_ids))
+    targets = [locked[tid] for tid in planned_ids if tid in locked and locked[tid].state in OPEN_LINK_STATES]
     if not targets:
         return set()
-    bindings_by_target: dict[uuid.UUID, list[SyncRequestTargetJob]] = {}
-    for binding in session.scalars(
-        select(SyncRequestTargetJob)
-        .where(
-            SyncRequestTargetJob.target_id.in_([t.id for t in targets]),
-            SyncRequestTargetJob.status.in_(OPEN_BINDING_STATES),
+    link_ids = list(
+        session.scalars(
+            select(SyncRequestTargetJob.id).where(
+                SyncRequestTargetJob.target_id.in_([t.id for t in targets]),
+                SyncRequestTargetJob.status.in_(OPEN_LINK_STATES),
+            )
+        ).all()
+    )
+    if link_ids:
+        session.execute(
+            update(SyncRequestTargetJob)
+            .where(SyncRequestTargetJob.id.in_(link_ids))
+            .values(status="failed", error_code=error_code, safe_error=safe_error[:500], finished_at=_now())
         )
-        .order_by(
-            SyncRequestTargetJob.target_id,
-            SyncRequestTargetJob.created_at,
-            SyncRequestTargetJob.id,
-        )
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).all():
-        bindings_by_target.setdefault(binding.target_id, []).append(binding)
     now = _now()
     request_ids: set[uuid.UUID] = set()
     for target in targets:
-        for binding in bindings_by_target.get(target.id, []):
-            if binding.status not in OPEN_BINDING_STATES:
-                continue
-            binding.status = "failed"
-            binding.error_code = error_code
-            binding.safe_error = safe_error[:500]
-            binding.finished_at = now
         target.state = "failed"
         target.error_code = error_code
         target.safe_error = safe_error[:500]
@@ -593,133 +457,85 @@ def fail_open_targets(
     return request_ids
 
 
-def _live_execution_generations(session: Session) -> set[uuid.UUID]:
-    """Generations executable right now: live jobs' own generations plus
-    the successor generations pre-allocated in their ``_queue_next``."""
-    live: set[uuid.UUID] = set(
+def converge_stalled_targets(
+    session: Session, *, limit: int = 200, stale_after: timedelta = timedelta(minutes=30)
+) -> int:
+    """Bound stale requests with a user-facing message.
+
+    With links always pointing at real jobs, the only way a target can remain
+    open indefinitely is a job that never advances (e.g. stranded in a
+    terminal state without settlement, or never claimed). This sweep converges
+    those targets instead of leaving the UI spinning forever. It never emits
+    an internal implementation-detail error.
+    """
+    cutoff = _now() - stale_after
+    planned = list(
         session.scalars(
-            select(WorkerJob.execution_generation).where(
-                WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value])
+            select(SyncRequestTarget.id)
+            .where(SyncRequestTarget.state.in_(OPEN_LINK_STATES))
+            .where(SyncRequestTarget.created_at < cutoff)
+            .order_by(SyncRequestTarget.created_at)
+            .limit(max(1, int(limit)))
+        ).all()
+    )
+    if not planned:
+        return 0
+    locked = _lock_target_sets(session, _request_ids_for_target_ids(session, planned))
+    targets = [
+        locked[tid]
+        for tid in planned
+        if tid in locked and locked[tid].state in OPEN_LINK_STATES
+    ]
+    if not targets:
+        return 0
+    target_ids = [t.id for t in targets]
+    # A target whose link still points at a live job is progressing, not
+    # stalled: a large account legitimately stays open far longer than the
+    # cutoff. Reclaim handles claimed jobs with a stale heartbeat; only
+    # targets left with no executable work converge here.
+    live_job_ids = set(
+        session.scalars(
+            select(WorkerJob.id).where(WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value]))
+        ).all()
+    )
+    live_target_ids = {
+        lid_target
+        for lid_target, job_id in session.execute(
+            select(SyncRequestTargetJob.target_id, SyncRequestTargetJob.job_id).where(
+                SyncRequestTargetJob.target_id.in_(target_ids),
+                SyncRequestTargetJob.status.in_(OPEN_LINK_STATES),
+            )
+        ).all()
+        if job_id in live_job_ids
+    }
+    stalled = [t for t in targets if t.id not in live_target_ids]
+    if not stalled:
+        return 0
+    link_ids = list(
+        session.scalars(
+            select(SyncRequestTargetJob.id).where(
+                SyncRequestTargetJob.target_id.in_([t.id for t in stalled]),
+                SyncRequestTargetJob.status.in_(OPEN_LINK_STATES),
             )
         ).all()
     )
-    # A322: extract only the successor generation in SQL via a JSON
-    # path expression instead of reading every live job's full payload
-    # into memory (payloads can carry large detail text, and the orphan
-    # patrol pays this on every cycle).
-    successor_generation = WorkerJob.payload["_queue_next"]["execution_generation"].as_string()
-    for generation in session.scalars(
-        select(successor_generation).where(
-            WorkerJob.status.in_([JobStatus.PENDING.value, JobStatus.CLAIMED.value])
-        )
-    ).all():
-        if generation:
-            try:
-                live.add(uuid.UUID(str(generation)))
-            except (ValueError, TypeError):
-                pass
-    return live
-
-
-def converge_orphaned_bindings(session: Session, *, limit: int = 200) -> int:
-    """Worker inspection/reaper path: converge bindings whose execution is gone.
-
-    Bindings pointing at a terminal job that somehow never settled, or whose
-    generation has no live job and no pre-allocated successor, become explicit
-    failures instead of leaving requests ``running`` forever. Also refreshes
-    any still-open requests so persisted state matches target aggregation.
-    """
-    from mail_core.security.redact import safe_error
-
-    live_generations = _live_execution_generations(session)
-    refreshed_live_generations: set[uuid.UUID] | None = None
-
-    # Planning reads (no locks): the candidate open bindings and the
-    # still-open requests the final aggregation sweep will refresh. The
-    # unified lock order (R07) then takes the full Target sets of BOTH
-    # groups before any Binding row is locked, so the sweep's
-    # refresh_requests calls below never wait on a Target while this
-    # transaction holds Bindings.
-    planned = list(
+    if link_ids:
         session.execute(
-            select(SyncRequestTargetJob.id, SyncRequestTargetJob.target_id)
-            .where(SyncRequestTargetJob.status.in_(OPEN_BINDING_STATES))
-            .order_by(SyncRequestTargetJob.created_at)
-            .limit(max(1, int(limit)))
-        ).all()
-    )
-    open_request_ids = list(
-        session.scalars(
-            select(SyncRequest.id)
-            .where(SyncRequest.state.in_(["queued", "running"]))
-            .order_by(SyncRequest.created_at)
-            .limit(max(1, int(limit)))
-        ).all()
-    )
-    _lock_target_sets(
-        session,
-        set(_request_ids_for_target_ids(session, [tid for _bid, tid in planned]))
-        | set(open_request_ids),
-    )
-    planned_order = {bid: index for index, (bid, _tid) in enumerate(planned)}
-    bindings = list(
-        session.scalars(
-            select(SyncRequestTargetJob)
-            .where(SyncRequestTargetJob.id.in_([bid for bid, _tid in planned]))
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).all()
-    ) if planned else []
-    bindings.sort(key=lambda b: planned_order.get(b.id, len(planned_order)))
-    now = _now()
-    changed = 0
-    touched_target_ids: set[uuid.UUID] = set()
-    for binding in bindings:
-        if binding.status not in OPEN_BINDING_STATES:
-            continue  # Settled between the planning scan and the lock.
-        job = session.get(WorkerJob, binding.job_id) if binding.job_id is not None else None
-        if job is not None:
-            if job.status == JobStatus.FAILED.value:
-                binding.status = "failed"
-                binding.error_code = "job_failed"
-                binding.safe_error = (safe_error(job.last_error) or "")[:500] or None
-                binding.finished_at = now
-            elif job.status == JobStatus.DONE.value:
-                binding.status = "complete"
-                binding.finished_at = now
-            elif job.status == JobStatus.CANCELLED.value:
-                binding.status = "failed"
-                binding.error_code = "job_cancelled"
-                binding.safe_error = "The bound sync job was cancelled"
-                binding.finished_at = now
-            else:
-                continue
-        elif binding.execution_generation in live_generations:
-            continue  # Pending job or pre-allocated successor: still executable.
-        else:
-            # Decision-time recheck: this binding was committed by a
-            # request that bound a CLAIMED job's pre-allocated successor
-            # (bind_target + ensure_successor_generation commit together),
-            # possibly AFTER the snapshot above was taken — the patrol can
-            # then see the binding but not its generation and would fail
-            # a healthy queued request as execution_lost. Recompute the
-            # live set once, now, before condemning any binding on it.
-            if refreshed_live_generations is None:
-                refreshed_live_generations = _live_execution_generations(session)
-            if binding.execution_generation in refreshed_live_generations:
-                continue
-            binding.status = "failed"
-            binding.error_code = "execution_lost"
-            binding.safe_error = EXECUTION_LOST_MESSAGE
-            binding.finished_at = now
-        changed += 1
-        touched_target_ids.add(binding.target_id)
-    if touched_target_ids:
-        refresh_requests(
-            session, _request_ids_for_target_ids(session, touched_target_ids)
+            update(SyncRequestTargetJob)
+            .where(SyncRequestTargetJob.id.in_(link_ids))
+            .values(
+                status="failed",
+                error_code="sync_incomplete",
+                safe_error=SYNC_INCOMPLETE_MESSAGE,
+                finished_at=_now(),
+            )
         )
-    # Persist aggregation for any request still marked open (bounded sweep;
-    # its Target sets were locked in the planning phase above).
-    if open_request_ids:
-        refresh_requests(session, open_request_ids)
-    return changed
+    for target in stalled:
+        target.state = "failed"
+        target.error_code = "sync_incomplete"
+        target.safe_error = SYNC_INCOMPLETE_MESSAGE
+        target.finished_at = _now()
+    request_ids = _request_ids_for_target_ids(session, [t.id for t in stalled])
+    session.flush()
+    refresh_requests(session, request_ids)
+    return len(stalled)

@@ -133,16 +133,28 @@
 
 ## 七、 状态收敛与统计可见性规范
 
+0. **同步请求完成与失败文案**：
+
+    - 请求完成由真实任务推进的数据决定，关联只读真实 WorkerJob；严禁绑定预分配代际或把「执行不存在」作为请求失败原因；
+    - 面向用户的同步失败文案必须可理解、可操作；内部调度术语（执行代际、绑定、execution_lost 等）不得出现在 API `safe_message` 或前端错误横条。
+
 1. **写回任务续跑与唤醒守卫**：
+
     - 去重键命中运行中 `claimed` 任务时，必须在任务载荷标记后续唤醒，在任务完成（`complete_job`）后原子派生后续待处理任务，严禁首批完成后丢失调度；
     - 针对批次余量、CAS 较新版本冲突及限流/瞬时错误，必须依据实际操作到期时间排期延迟任务，杜绝紧密空转。
     - 同步入口已提交后继任务时，结果必须标记 `followup_scheduled`；Worker 据此完成原任务，不再用 `fail_job` 重复排队。未标记后继的失败仍由 Worker 重试。
+
 2. **入站同步本地字段意图保护**：
+
     - `metadata upsert` 与 `delta flag patch` 在应用远端字段前，必须以 `get_unconverged_field_intents` 比对本地待推送操作及 60 秒写回完成窗口；
     - 仅保护受本地意图影响的读/标字段，不冻结正文、附件、主题等其他非相关字段；无未收敛意图时允许远端后续更新正常同步。
+
 3. **统计聚合事务可见性**：
+
     - 文件夹统计计算（`recompute_folder_stats`）在执行底层 SQL 聚合前必须确保 session 状态已 flush 至数据库事务，消除在 `autoflush=False` 下读到陈旧内存数据的时序缺陷。
+
 4. **未读数未知语义**：
+
     - 目标账号任一 inbox FolderStats 行缺失时，账号未读数、总数及包含该账号的聚合返回 `null`；分组统计对缺失行同样返回未知；前端使用 `-` 显示未知，禁止把部分和或缺失行按零呈现；
     - 文件夹包含 `is_read: null` 邮件时，`FolderStats.unread_count` 返回 `null`；账号、分组和全局聚合传播该未知值，禁止 SQL `SUM` 忽略 null 后返回部分和。已知邮件总数保持准确，不因读状态未知而丢失；
     - 账号健康状态机三维正交：`credential_state`（`valid` / `invalid`，`invalid` 时 `sync_enabled=false`）只由认证结果决定，`connectivity_state`（`connected` / `degraded` / `unreachable`）只由传输可达性决定，`sync_activity`（`idle` / `syncing`）只表示是否有同步任务执行中，链路诊断写脱敏 `last_connectivity_error`；三者互不推导、互不覆盖，传输层网络抖动、超时与限流不得污染 `credential_state`，后台静默同步故障不外溢为账号凭据失效或侧栏全局报警；连接态熔断须连续 5 次失败且跨越 5 分钟窗口才置 `unreachable`（失败计数单调累计、不因轮询间隔重置，仅成功清零），任一次链路成功即复位 `connected`，单次抖动只置 `degraded`；
@@ -151,11 +163,15 @@
     - 空文件夹统计初始化：新文件夹首次执行元数据同步（`apply_metadata_page`）且包含 0 封邮件时，立即生成 `FolderStats(total_count=0, unread_count=0)`，消除因空目录未变动导致 `FolderStats` 长期缺失的假性未知未读数；
     - IMAP `\Noselect` 节点只用于呈现父子目录结构，不是可查询邮箱；不得为其排 metadata/delta/reconcile 任务，旧任务执行时以 skipped 完成；不得显示未知未读数 `-`，其子目录保持可同步、可独立导航；
     - 侧栏与邮件列表头部统计语义保持一致：单账号或多账号缺失目标文件夹角色时，严格展示未知（`—` / `-`），禁止回退为全目录合计或静默按零填充。
+
 5. **服务商字段缺省与显式清空**：
+
     - `RemoteMessageMeta.supplied_fields` 为 `None` 时表示完整快照，为字段集合时表示部分 projection；Graph delta 必须标明实际返回字段。upsert 只更新集合内字段，不把缺省值当清空指令。
     - 明确返回的空主题、空摘要、空收件人数组按服务商原值应用；缺省字段保持已有值。日期与状态解析得到 `None` 表示未知，不能清除已知日期/状态。
     - 同页同封邮件的 partial upsert 与 flag patch 按响应顺序合并；后续显式字段覆盖先前同字段，未提供字段保留，delete 丢弃先前 patch。保持本地未收敛 read/flag 意图保护。
+
 6. **邮件状态未知值契约**：
+
     - IMAP FETCH 缺少 `FLAGS` 时读/旗标保持未知；只有显式 `FLAGS ()` 才表示 false。系统旗标按完整 token 忽略大小写匹配，扩展旗标不得因包含 Seen/Flagged 字样变成系统状态。
     - `Message.is_read`、`is_flagged`、`has_attachments` 为可空布尔值；服务商缺失时新记录存 `null`，不得由数据库 false 默认值补造事实。列表、详情、API 与前端类型保留 null。
     - 只有 `is_read === false` 才展示未读样式、计入已知未读集合或触发打开邮件自动标已读；未知状态不参与这些隐式操作。用户显式设置状态可写入真实布尔值，乐观更新失败时恢复原值（包括 null）。旗标按钮以混合状态表达未知。

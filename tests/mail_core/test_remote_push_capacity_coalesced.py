@@ -76,7 +76,6 @@ def test_capacity_coalesced_followup_survives_settlement():
         session.add(
             WorkerJob(
                 id=job_id,
-                execution_generation=uuid.uuid4(),
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
                 account_id=account_id,
                 payload={},

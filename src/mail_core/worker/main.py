@@ -110,7 +110,7 @@ def _reclaim_once() -> int:
         from mail_core.blobs.quota import prune_expired_quota_reservations
         from mail_core.db.session import get_session_factory
         from mail_core.realtime.outbox import prune_published
-        from mail_core.sync.execution import converge_orphaned_bindings
+        from mail_core.sync.execution import converge_stalled_targets
         from mail_core.sync.jobs import prune_completed_jobs, reclaim_stale_claims
         from mail_core.worker.heartbeat import cleanup_stale_heartbeats
     except Exception as exc:  # pragma: no cover
@@ -147,9 +147,9 @@ def _reclaim_once() -> int:
             True,
         ),
         (
-            "converge_orphaned_bindings",
-            lambda s: converge_orphaned_bindings(s, limit=200),
-            "converged %s orphaned sync-request binding(s)",
+            "converge_stalled_targets",
+            lambda s: converge_stalled_targets(s, limit=200),
+            "converged %s stalled sync-request target(s)",
             False,
         ),
         (

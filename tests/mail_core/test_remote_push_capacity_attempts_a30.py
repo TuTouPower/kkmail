@@ -54,7 +54,7 @@ def test_capacity_deferral_rounds_do_not_consume_attempts():
         )
         session.add(
             WorkerJob(
-                id=uuid.uuid4(), execution_generation=uuid.uuid4(),
+                id=uuid.uuid4(),
                 job_type=JobType.REMOTE_OPERATION_PUSH.value,
                 account_id=account_id, payload={}, status=JobStatus.CLAIMED.value,
                 locked_by=_WORKER, locked_at=_NOW,

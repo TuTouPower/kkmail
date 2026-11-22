@@ -1,0 +1,17 @@
+{
+  "tid": "t082",
+  "attempt": 1,
+  "execution_id": "34d88f2520e4415b9031eafce399cfec",
+  "status": "done",
+  "branch": "t082_sync_request_completion_by_data_watermark",
+  "base_sha": "1998e95ff67999ac896b9e118b47902ebfefdfc8",
+  "spec_source_sha": "1998e95ff67999ac896b9e118b47902ebfefdfc8",
+  "tests": "后端完整 PostgreSQL 套件 2202 passed / 2 skipped；`test_cmd` 全通过；唯一失败为 main 同现的环境既存用例（cookie t079 out-of-tree symlink 守卫，basetemp 在 worktree 内所致），外部 basetemp 重跑通过",
+  "blackbox": "`npm --prefix src/frontend run test:e2e` 23 passed",
+  "review": "Round 2 见本报告「Review 处置」；代码轴与测试轴均 PASS",
+  "review_scope": "dad3685032ec1332",
+  "pending": [
+    "p084"
+  ],
+  "findings": []
+}

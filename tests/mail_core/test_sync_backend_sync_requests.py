@@ -107,7 +107,6 @@ def test_s4_role_inbox_request_derives_no_background_request():
     aid, _fid = _seed_accounts(Session, 1)[0]
     with (
         patch.object(sr, "enqueue_job", return_value=MagicMock()),
-        patch.object(sr, "binding_generation_for", return_value=(uuid.uuid4(), MagicMock())),
         patch.object(sr, "bind_target"),
     ):
         with Session() as session:
@@ -137,7 +136,6 @@ def test_s4_global_delta_request_derives_background_via_scope():
     _seed_accounts(Session, 1)
     with (
         patch.object(sr, "enqueue_job", return_value=MagicMock()) as enq,
-        patch.object(sr, "binding_generation_for", return_value=(uuid.uuid4(), MagicMock())),
         patch.object(sr, "bind_target"),
     ):
         with Session() as session:

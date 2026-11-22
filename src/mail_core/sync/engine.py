@@ -27,10 +27,9 @@ from mail_core.providers.http import CursorInvalidError, RateLimitedError
 from mail_core.security.redact import safe_provider_summary
 from mail_core.sync.checkpoints import ScanGenerationMismatch, begin_scan_generation, invalidate_checkpoint_for_rebuild
 from mail_core.sync.execution import (
-    OPEN_BINDING_STATES,
+    OPEN_LINK_STATES,
     TERMINAL_TARGET_STATES,
     bind_target,
-    binding_generation_for,
     fail_open_targets,
     find_active_job,
 )
@@ -93,18 +92,11 @@ def _sharing_targets(
     source_dedupe_key: str | None,
     account_id: uuid.UUID,
 ):
-    """Targets of other full requests sharing the executing deduplicated job.
+    """Targets linked to the executing job that depend on the new phase.
 
     A deduplicated job's payload carries a single ``request_id``, but every
-    request that deduped onto the job holds a binding at the executing
-    job's execution generation. Phase jobs created during this execution
-    are dependencies of all of those requests, not only the payload one:
-    binding only the payload request lets the others aggregate to
-    complete when the shared job settles, while the phase work they
-    depend on is still queued. Terminal requests/targets and bindings
-    that already settled are skipped, as are non-full requests (a delta
-    request sharing the discovery job does not depend on full-scan
-    phases).
+    request deduped onto that job holds a link to the same real job row. Phase
+    jobs created during execution are dependencies of all of those requests.
     """
     if source_dedupe_key is None:
         return []
@@ -116,8 +108,8 @@ def _sharing_targets(
     target_ids = list(
         session.scalars(
             select(SyncRequestTargetJob.target_id).where(
-                SyncRequestTargetJob.execution_generation == job.execution_generation,
-                SyncRequestTargetJob.status.in_(OPEN_BINDING_STATES),
+                SyncRequestTargetJob.job_id == job.id,
+                SyncRequestTargetJob.status.in_(OPEN_LINK_STATES),
             )
         ).all()
     )
@@ -160,13 +152,11 @@ def _bind_phase_jobs(
             targets.append(target)
     if not targets:
         return
-    generation, bound_job = binding_generation_for(session, job)
     for target in targets:
         bind_target(
             session,
             target=target,
-            execution_generation=generation,
-            job=bound_job,
+            job=job,
             phase=phase,
             folder_id=folder_id,
             status="queued",

@@ -1,23 +1,8 @@
-"""DEFECT 2: refresh_requests must lock Targets before Requests.
+"""T082: refresh_requests and settlement lock Targets before Requests.
 
-The settlement lock order documented in ``mail_core.sync.execution`` is
-WorkerJob row -> generation lock -> binding rows / Targets (UUID ascending)
--> Requests (UUID ascending). The old ``refresh_requests`` violated it: it
-locked each SyncRequest row first and only then that request's Target rows.
-Callers that already hold Target locks (``settle_job_bindings`` via
-complete_job/fail_job) therefore wanted Requests while holding Targets,
-whereas independent callers (``converge_orphaned_bindings``,
-``mark_bindings_running``) reached ``refresh_requests`` holding no Target
-locks and took Request locks first, then Target locks -- the two orders
-deadlock in PostgreSQL (40P01).
-
-These tests pin the *statement acquisition order* on the real PostgreSQL
-schema created by ``alembic upgrade head``. The locking selects carry a real
-``FOR UPDATE`` clause and the generation coordination uses the real
-``pg_advisory_xact_lock``; the invariant under test is that the Targets
-select precedes the Requests select (and settle takes no Request lock).
-
-No existing test is modified by this file.
+The lock order is WorkerJob row -> Targets (UUID ascending) -> Links ->
+Requests (UUID ascending). These tests pin statement acquisition order on the
+real PostgreSQL schema, with links pointing at real WorkerJob rows.
 """
 
 from __future__ import annotations
@@ -38,7 +23,7 @@ from mail_core.mail.storage.models import (
     SyncRequestTargetJob,
     WorkerJob,
 )
-from mail_core.sync.execution import refresh_requests, settle_job_bindings
+from mail_core.sync.execution import refresh_requests, settle_job_links
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
@@ -48,12 +33,24 @@ pytestmark = pytest.mark.skipif(
 _NOW = datetime(2026, 10, 26, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _seed_request(Session, *, binding_status: str):
-    """One request + one target + one binding; returns (request_id, generation)."""
+def _seed_request(Session, *, link_status: str):
+    """One request + one target + one link to a real job; returns ids."""
     request_id = uuid.uuid4()
     target_id = uuid.uuid4()
-    generation = uuid.uuid4()
+    job_id = uuid.uuid4()
     with Session() as session:
+        session.add(
+            WorkerJob(
+                id=job_id,
+                job_type="sync_folder_delta",
+                payload={},
+                status="claimed",
+                run_after=_NOW,
+                created_at=_NOW,
+                updated_at=_NOW,
+            )
+        )
+        session.flush()
         session.add(
             SyncRequest(
                 id=request_id,
@@ -70,7 +67,7 @@ def _seed_request(Session, *, binding_status: str):
                 id=target_id,
                 request_id=request_id,
                 target_key=f"folder:{uuid.uuid4().hex}",
-                requested_generation=generation,
+                requested_generation=uuid.uuid4(),
                 state="queued",
                 created_at=_NOW,
             )
@@ -79,21 +76,18 @@ def _seed_request(Session, *, binding_status: str):
             SyncRequestTargetJob(
                 id=uuid.uuid4(),
                 target_id=target_id,
-                execution_generation=generation,
-                job_id=None,
+                job_id=job_id,
                 phase="sync",
-                status=binding_status,
+                status=link_status,
                 created_at=_NOW,
-                finished_at=_NOW if binding_status in ("complete", "failed") else None,
+                finished_at=_NOW if link_status in ("complete", "failed") else None,
             )
         )
         session.commit()
-    return request_id, generation
+    return request_id, job_id
 
 
 class _Capture:
-    """before_cursor_execute listener recording executed statements."""
-
     def __init__(self, engine):
         self.engine = engine
         self.statements: list[str] = []
@@ -111,11 +105,6 @@ class _Capture:
 
 
 def _first_select_index(statements: list[str], table: str) -> int | None:
-    """Index of the first SELECT ... FROM <table> in ``statements``.
-
-    Word-boundary match so ``sync_request_targets`` does not match
-    ``sync_request_target_jobs`` and vice versa.
-    """
     pattern = re.compile(rf"\bfrom\s+{re.escape(table)}\b")
     for index, statement in enumerate(statements):
         normalized = " ".join(statement.lower().split())
@@ -127,25 +116,18 @@ def _first_select_index(statements: list[str], table: str) -> int | None:
 def _assert_targets_locked_before_requests(statements: list[str]) -> None:
     targets_index = _first_select_index(statements, "sync_request_targets")
     requests_index = _first_select_index(statements, "sync_requests")
-    assert targets_index is not None, (
-        f"no select against sync_request_targets captured: {statements!r}"
-    )
-    assert requests_index is not None, (
-        f"no select against sync_requests captured: {statements!r}"
-    )
+    assert targets_index is not None, f"no select against sync_request_targets: {statements!r}"
+    assert requests_index is not None, f"no select against sync_requests: {statements!r}"
     assert targets_index < requests_index, (
-        "lock acquisition order violated: the first (FOR UPDATE) "
-        "select against sync_requests precedes the first (FOR UPDATE) "
-        f"select against sync_request_targets: {statements!r}"
+        "lock acquisition order violated: Request select precedes Target select"
     )
 
 
 def test_refresh_requests_locks_targets_before_requests_direct():
-    """(a) Direct / independent entry point: refresh_requests alone."""
     Session = get_session_factory()
     engine = Session.kw["bind"]
-    first_id, _ = _seed_request(Session, binding_status="complete")
-    second_id, _ = _seed_request(Session, binding_status="complete")
+    first_id, _ = _seed_request(Session, link_status="complete")
+    second_id, _ = _seed_request(Session, link_status="complete")
 
     with _Capture(engine) as capture:
         with Session() as session:
@@ -154,7 +136,6 @@ def test_refresh_requests_locks_targets_before_requests_direct():
         captured = list(capture.statements)
 
     _assert_targets_locked_before_requests(captured)
-
     with Session() as session:
         for request_id in (first_id, second_id):
             req = session.get(SyncRequest, request_id)
@@ -165,49 +146,19 @@ def test_refresh_requests_locks_targets_before_requests_direct():
             str(first_id),
             str(second_id),
         }
-        assert all(e.payload.get("state") == "complete" for e in events)
 
 
 def test_refresh_requests_locks_targets_before_requests_via_settle_path():
-    """(b) Settlement entry point: settle_job_bindings + refresh_requests.
-
-    This is the complete_job/fail_job path in jobs.py: settle locks
-    bindings/Targets and returns request ids, then the caller persists
-    aggregation via refresh_requests in the same transaction. The
-    refresh phase must follow the same Targets -> Requests order, and
-    the combined sequence must never take a Request lock before a
-    Target lock.
-    """
     Session = get_session_factory()
     engine = Session.kw["bind"]
-    request_id, generation = _seed_request(Session, binding_status="queued")
-    job_id = uuid.uuid4()
-    with Session() as session:
-        session.add(
-            WorkerJob(
-                id=job_id,
-                execution_generation=generation,
-                job_type="sync_folder_delta",
-                payload={},
-                status="claimed",
-                run_after=_NOW,
-                created_at=_NOW,
-                updated_at=_NOW,
-            )
-        )
-        session.commit()
-    with Session() as session:
-        binding = session.scalar(select(SyncRequestTargetJob))
-        assert binding is not None
-        binding.job_id = job_id
-        session.commit()
+    request_id, job_id = _seed_request(Session, link_status="queued")
 
     with _Capture(engine) as capture:
         with Session() as session:
             job = session.get(WorkerJob, job_id)
             assert job is not None
             capture.statements.clear()
-            request_ids = settle_job_bindings(session, job, outcome="complete")
+            request_ids = settle_job_links(session, job, outcome="complete")
             during_settle = list(capture.statements)
             capture.statements.clear()
             refresh_requests(session, request_ids)

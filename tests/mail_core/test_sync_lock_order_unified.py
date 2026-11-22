@@ -32,7 +32,7 @@ from mail_core.mail.storage.models import (
     SyncRequestTargetJob,
     WorkerJob,
 )
-from mail_core.sync.execution import fail_open_targets, settle_job_bindings
+from mail_core.sync.execution import fail_open_targets, settle_job_links
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
@@ -67,6 +67,15 @@ def _first_entity_select(statements: list[str], table: str) -> int | None:
     return None
 
 
+def _first_link_statement(statements: list[str]) -> int | None:
+    for i, s in enumerate(statements):
+        if "sync_request_target_jobs" not in s:
+            continue
+        if s.startswith("update") or (s.startswith("select") and "for update" in s):
+            return i
+    return None
+
+
 def _seed(Session):
     account_id = uuid.uuid4()
     request_id = uuid.uuid4()
@@ -76,7 +85,7 @@ def _seed(Session):
     with Session() as session:
         session.add(
             WorkerJob(
-                id=job_id, execution_generation=generation,
+                id=job_id,
                 job_type="sync_folder_delta", payload={}, status="claimed",
                 run_after=_NOW, created_at=_NOW, updated_at=_NOW,
             )
@@ -108,7 +117,7 @@ def _seed(Session):
         session.add(
             SyncRequestTargetJob(
                 id=uuid.uuid4(), target_id=target_id,
-                execution_generation=generation, job_id=job_id, phase="sync",
+                job_id=job_id, phase="sync",
                 status="running", created_at=_NOW,
             )
         )
@@ -118,11 +127,11 @@ def _seed(Session):
 
 def _assert_targets_before_bindings(statements: list[str]) -> None:
     target_idx = _first_entity_select(statements, "sync_request_targets")
-    binding_idx = _first_entity_select(statements, "sync_request_target_jobs")
+    link_idx = _first_link_statement(statements)
     assert target_idx is not None, f"no Target entity select in {statements}"
-    assert binding_idx is not None, f"no Binding entity select in {statements}"
-    assert target_idx < binding_idx, (
-        f"Target lock must precede Binding lock:\n" + "\n".join(statements)
+    assert link_idx is not None, f"no link statement in {statements}"
+    assert target_idx < link_idx, (
+        "Target lock must precede any link read or mutation:\n" + "\n".join(statements)
     )
 
 
@@ -134,7 +143,7 @@ def test_settle_locks_targets_before_bindings():
         job = session.get(WorkerJob, job_id)
         assert job is not None
         cap.statements.clear()
-        settle_job_bindings(session, job, outcome="complete")
+        settle_job_links(session, job, outcome="complete")
         session.commit()
     _assert_targets_before_bindings(cap.statements)
 

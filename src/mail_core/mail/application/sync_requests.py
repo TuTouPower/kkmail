@@ -25,7 +25,7 @@ from mail_core.mail.storage.models import (
     WorkerJob,
 )
 from mail_core.sync.context import sync_context_payload
-from mail_core.sync.execution import bind_target, binding_generation_for
+from mail_core.sync.execution import bind_target
 from mail_core.sync.jobs import enqueue_job
 
 
@@ -388,18 +388,14 @@ def create_sync_request(
                             dedupe_key=f"sync:{cand.account_id}",
                         )
                         phase = "folder_discovery"
-                    generation, bound_job = binding_generation_for(session, job)
                     bind_target(
                         session,
                         target=target,
-                        execution_generation=generation,
-                        job=bound_job,
+                        job=job,
                         phase=phase,
                         folder_id=cand.folder_id,
                         status="queued",
                     )
-                    # For delta the bound execution is the logical root.
-                    target.requested_generation = generation
                 else:
                     # Full scan: reuse the in-flight scan's root generation
                     # when one is already running for this account, so the
@@ -418,12 +414,10 @@ def create_sync_request(
                         priority=50,
                         dedupe_key=f"sync:{cand.account_id}",
                     )
-                    generation, bound_job = binding_generation_for(session, job)
                     bind_target(
                         session,
                         target=target,
-                        execution_generation=generation,
-                        job=bound_job,
+                        job=job,
                         phase="folder_discovery",
                         folder_id=cand.folder_id,
                         status="queued",
@@ -483,17 +477,14 @@ def create_sync_request(
                         priority=60,
                         dedupe_key=f"sync:{aid}",
                     )
-                    bg_gen, bg_bound_job = binding_generation_for(session, bg_job)
                     bind_target(
                         session,
                         target=bg_target,
-                        execution_generation=bg_gen,
-                        job=bg_bound_job,
+                        job=bg_job,
                         phase="folder_discovery",
                         folder_id=None,
                         status="queued",
                     )
-                    bg_target.requested_generation = bg_gen
 
                 req_scope = dict(req.scope or {})
                 req_scope["background_request_id"] = str(bg_request_id)

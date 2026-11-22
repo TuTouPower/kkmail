@@ -131,6 +131,13 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
     - 协议适配器与传输层不再各自实现重试或自行判定账号状态，瞬时错误统一回归 Worker 任务框架：由 `account_failure_kind` 分类故障来源，`resolve_sync_context` 在顶层注入 `background` 标记，`reschedule_job(count_failure=True)` 保留原 job ID、递增 `failure_attempts` 并按指数退避重排，周期任务 payload 统一携带 `background`。
     - 失败是否影响账号健康状态由 Worker 框架集中裁定：后台静默任务失败不触发侧栏全局报警，认证类失败才更新 `credential_state`，链路类失败累计到熔断阈值才更新 `connectivity_state`，同步任务在途状态仅由 `sync_activity` 反映；凭据态与连接态始终正交，不因单次抖动互相污染。
 
+## 同步请求完成判定：真实工作驱动 (t082)
+
+1. 同步请求目标只关联真实存在的 WorkerJob 行（`sync_request_target_jobs.job_id` 非空且外键级联）。任务重试、认领超时回收、去重合并与历史清理都不改变请求完成判定。
+2. 任务处于 CLAIMED 期间到达的新请求关联到该真实任务并标记 `needs_successor`；`complete_job` 先创建后继任务，再在同事务把等待关联迁移到后继，由后继覆盖其数据目标。不存在指向尚未创建执行的关联。
+3. `execution_lost` 状态类与「The bound sync execution no longer exists」文案彻底移除；只有数据确实无法推进（凭据失效、权限拒绝、账户/文件夹删除）才判失败，文案面向用户；无任务推进时由有界巡检收敛为可操作的重试提示，不留悬挂请求。
+4. 全量扫描的 `ScanGenerationMismatch` 防串扰机制保留，但代际只用于游标归属判定，不再承载请求完成观察。
+
 ## 远程图片放行存储与正文内联图片 Signed URL 预览 (t066)
 
 1. **远程图片放行模型**：

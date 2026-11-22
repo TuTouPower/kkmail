@@ -1,8 +1,7 @@
-"""Package C unit-mode coverage (R06/R08): schema shape, migration chain, and
-settlement helpers that must be safe against minimal job test doubles.
+"""T082 unit coverage: schema shape, migration chain, no-op settlement.
 
 PostgreSQL-backed lifecycle/competition behavior lives in
-test_sync_execution_tracking.py and test_sync_execution_migration.py.
+test_sync_request_completion_by_data.py and test_sync_execution_tracking.py.
 """
 
 from __future__ import annotations
@@ -17,15 +16,13 @@ from mail_core.mail.storage.models import (
     SyncRequestTargetJob,
     WorkerJob,
 )
-from mail_core.sync.execution import _successor_is_periodic, settle_job_bindings
+from mail_core.sync.execution import settle_job_links
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_worker_job_execution_generation_is_unique_and_non_null():
-    column = WorkerJob.__table__.c.execution_generation
-    assert column.nullable is False
-    assert column.unique is True
+def test_worker_job_has_no_execution_generation():
+    assert "execution_generation" not in WorkerJob.__table__.c
 
 
 def test_sync_checkpoint_scan_generation_is_nullable_uuid():
@@ -33,7 +30,7 @@ def test_sync_checkpoint_scan_generation_is_nullable_uuid():
     assert column.nullable is True
 
 
-def test_target_no_longer_has_current_job_id_and_binding_table_shape():
+def test_target_link_always_points_at_a_real_job():
     assert "current_job_id" not in SyncRequestTarget.__table__.c
     assert "requested_generation" in SyncRequestTarget.__table__.c
     unique_sets = {
@@ -41,9 +38,13 @@ def test_target_no_longer_has_current_job_id_and_binding_table_shape():
         for constraint in SyncRequestTargetJob.__table__.constraints
         if constraint.__class__.__name__ == "UniqueConstraint"
     }
-    assert ("target_id", "execution_generation") in unique_sets
-    job_fk = SyncRequestTargetJob.__table__.c.job_id.foreign_keys
-    assert job_fk and next(iter(job_fk)).ondelete == "SET NULL"
+    assert ("target_id", "job_id") in unique_sets
+    job_column = SyncRequestTargetJob.__table__.c.job_id
+    assert job_column.nullable is False
+    fk = next(iter(job_column.foreign_keys))
+    assert fk.ondelete == "CASCADE"
+    assert "needs_successor" in SyncRequestTargetJob.__table__.c
+    assert "execution_generation" not in SyncRequestTargetJob.__table__.c
 
 
 def test_alembic_chain_single_head_and_linear():
@@ -53,26 +54,13 @@ def test_alembic_chain_single_head_and_linear():
     cfg = Config(str(ROOT / "src/mail_core/db/alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "src/mail_core/db/alembic"))
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == ["20261112_0002"]
+    assert script.get_heads() == ["20261122_0003"]
     current = script.get_revision("20261107_0001")
     assert current is not None
     assert current.down_revision is None
 
 
-def test_settle_is_noop_for_job_double_without_generation():
+def test_settle_is_noop_for_job_double_without_session():
     job = SimpleNamespace(id=uuid.uuid4(), payload={})
     session = SimpleNamespace()  # no scalars: settlement must not explode
-    assert settle_job_bindings(session, job, outcome="complete") == set()  # type: ignore[arg-type]
-
-
-def test_periodic_successor_detection():
-    job = SimpleNamespace(payload={"poll_round": 0})
-    poll = SimpleNamespace(payload={"folder_id": "f", "poll_round": 1})
-    continuation = SimpleNamespace(payload={"folder_id": "f"})
-    assert _successor_is_periodic(job, poll, {"exhausted": True}) is True  # type: ignore[arg-type]
-    assert _successor_is_periodic(job, poll, {}) is True  # type: ignore[arg-type]
-    # t057: an exhausted sync run ends the current periodic round, so its
-    # successor is the next independent poll even without a poll_round.
-    assert _successor_is_periodic(job, continuation, {"exhausted": True}) is True  # type: ignore[arg-type]
-    assert _successor_is_periodic(job, continuation, {}) is False  # type: ignore[arg-type]
-    assert _successor_is_periodic(job, None, {"exhausted": True}) is False  # type: ignore[arg-type]
+    assert settle_job_links(session, job, outcome="complete") == set()  # type: ignore[arg-type]

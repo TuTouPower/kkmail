@@ -93,7 +93,7 @@ def test_delta_cursor_invalid_keeps_request_open_until_rebuild_settles(monkeypat
             account_id=account.id,
             folder_id=folder.id,
             target_key=f"folder:{folder.id}",
-            requested_generation=delta_job.execution_generation,
+            requested_generation=uuid.uuid4(),
             state="running",
         )
         session.add(target)
@@ -101,11 +101,11 @@ def test_delta_cursor_invalid_keeps_request_open_until_rebuild_settles(monkeypat
         bind_target(
             session,
             target=target,
-            execution_generation=delta_job.execution_generation,
             job=delta_job,
             phase="delta",
             folder_id=folder.id,
             status="running",
+            needs_successor=False,
         )
         session.commit()
         account_id, folder_id = account.id, folder.id
@@ -154,7 +154,7 @@ def test_delta_cursor_invalid_keeps_request_open_until_rebuild_settles(monkeypat
             )
         )
         assert transferred is not None, "binding was not transferred to the rebuild chain"
-        assert transferred.execution_generation == rebuild.execution_generation
+        assert transferred.job_id == rebuild.id
         rebuild_id = rebuild.id
 
     # A terminal rebuild failure must feed back: the original request fails.

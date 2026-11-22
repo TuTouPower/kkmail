@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import JobStatus, JobType
-from mail_core.mail.storage.models import SyncRequestTargetJob, WorkerJob
+from mail_core.mail.storage.models import WorkerJob
 
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RECLAIM_LIMIT = 100
@@ -86,10 +86,6 @@ def _record_claimed_followup(
         "priority": merged_priority,
         "run_after": merged_ra.isoformat(),
     }
-    # A successor generation pre-allocated for sync-request bindings (R06)
-    # must survive later claimed-job wakeups merging into _queue_next.
-    if next_req.get("execution_generation"):
-        queue_next_record["execution_generation"] = next_req["execution_generation"]
     p["_queue_next"] = queue_next_record
     p["_followup_needed"] = True
     p["_followup_run_after"] = merged_ra.isoformat()
@@ -289,10 +285,10 @@ def claim_jobs(
 
     session.flush()
     if claimed_rows:
-        # Sync-request bindings observing these executions become running.
-        from mail_core.sync.execution import mark_bindings_running
+        # Sync-request links observing these executions become running.
+        from mail_core.sync.execution import mark_links_running
 
-        mark_bindings_running(session, claimed_rows)
+        mark_links_running(session, claimed_rows)
     return claimed_rows
 
 
@@ -317,14 +313,13 @@ def complete_job(
     queue_next = payload.get("_queue_next")
     has_followup_flag = payload.get("_followup_needed")
 
-    followup_was_scheduled = bool(result and result.get("followup_scheduled")) and not bool(
-        result and result.get("followup_coalesced")
-    )
-    handler_has_more = bool(result and result.get("has_more"))
+    from mail_core.sync.execution import has_waiting_links
 
-    needs_successor = not followup_was_scheduled and (
-        bool(queue_next) or bool(has_followup_flag) or handler_has_more
-    )
+    handler_has_more = bool(result and result.get("has_more"))
+    # A target that arrived while this job was CLAIMED still needs a fresh
+    # pass. The successor is materialized first and its links are migrated
+    # onto it, so no request ever observes a merely planned execution.
+    needs_successor = bool(queue_next) or bool(has_followup_flag) or handler_has_more or has_waiting_links(session, locked_job)
 
     successor_job = None
     if needs_successor:
@@ -357,30 +352,17 @@ def complete_job(
         if result and result.get("next_run_after"):
             successor_run_after = result["next_run_after"]
 
-        # Requests that bound this CLAIMED job's successor carry the
-        # generation pre-allocated in _queue_next (design §5.2); the
-        # successor must be created with exactly that generation.
-        successor_generation = None
-        if queue_next and isinstance(queue_next, dict) and queue_next.get("execution_generation"):
-            try:
-                successor_generation = uuid.UUID(str(queue_next["execution_generation"]))
-            except (ValueError, TypeError):
-                successor_generation = None
+    locked_job.status = JobStatus.DONE.value
+    locked_job.locked_by = None
+    locked_job.locked_at = None
+    locked_job.payload = {
+        k: v
+        for k, v in payload.items()
+        if not k.startswith("_queue_") and not k.startswith("_followup_")
+    }
+    session.flush()
 
-        locked_job.status = JobStatus.DONE.value
-        locked_job.locked_by = None
-        locked_job.locked_at = None
-        clean_p = {
-            k: v
-            for k, v in payload.items()
-            if not k.startswith("_queue_") and not k.startswith("_followup_")
-        }
-        locked_job.payload = clean_p
-        session.flush()
-
-        successor_kwargs: dict = {}
-        if successor_generation is not None:
-            successor_kwargs["execution_generation"] = successor_generation
+    if needs_successor:
         successor_job = WorkerJob(
             job_type=locked_job.job_type,
             account_id=locked_job.account_id,
@@ -389,42 +371,18 @@ def complete_job(
             run_after=successor_run_after,
             status=JobStatus.PENDING.value,
             dedupe_key=locked_job.dedupe_key,
-            **successor_kwargs,
         )
         session.add(successor_job)
         session.flush()
-        if successor_generation is not None:
-            session.execute(
-                update(SyncRequestTargetJob)
-                .where(
-                    SyncRequestTargetJob.execution_generation == successor_generation,
-                    SyncRequestTargetJob.job_id.is_(None),
-                )
-                .values(job_id=successor_job.id)
-            )
-    else:
-        locked_job.status = JobStatus.DONE.value
-        locked_job.locked_by = None
-        locked_job.locked_at = None
-        clean_p = {
-            k: v
-            for k, v in payload.items()
-            if not k.startswith("_queue_") and not k.startswith("_followup_")
-        }
-        locked_job.payload = clean_p
-        session.flush()
+        from mail_core.sync.execution import migrate_waiting_links
 
-    # Settle sync-request bindings in this same transaction, before the
-    # current execution ends: open targets are carried onto the successor
-    # (except periodic poll successors), finished ones are aggregated into
-    # their requests (design §5.2). Lock order: this WorkerJob row is
-    # already locked above; settlement then takes generation → target →
-    # request locks.
-    from mail_core.sync.execution import refresh_requests, settle_job_bindings
+        migrate_waiting_links(session, from_job=locked_job, to_job=successor_job)
 
-    request_ids = settle_job_bindings(
-        session, locked_job, outcome="complete", result=result, successor=successor_job
-    )
+    # Settle links observing this job in the same transaction. Waiting links
+    # have already moved to the successor; finished ones are aggregated.
+    from mail_core.sync.execution import refresh_requests, settle_job_links
+
+    request_ids = settle_job_links(session, locked_job, outcome="complete", result=result)
     refresh_requests(session, request_ids)
 
     return successor_job
@@ -470,9 +428,9 @@ def reschedule_job(
     job.locked_by = None
     job.locked_at = None
     session.flush()
-    from mail_core.sync.execution import refresh_requests, settle_job_bindings
+    from mail_core.sync.execution import refresh_requests, settle_job_links
 
-    refresh_requests(session, settle_job_bindings(session, job, outcome="retriable"))
+    refresh_requests(session, settle_job_links(session, job, outcome="retriable"))
 
 
 def heartbeat_job_claim(
@@ -538,9 +496,9 @@ def fail_job(
             job.payload = stamped
         session.flush()
         # Retriable failure: bound targets stay open on the same generation.
-        from mail_core.sync.execution import refresh_requests, settle_job_bindings
+        from mail_core.sync.execution import refresh_requests, settle_job_links
 
-        refresh_requests(session, settle_job_bindings(session, job, outcome="retriable"))
+        refresh_requests(session, settle_job_links(session, job, outcome="retriable"))
         return
     else:
         job.status = JobStatus.FAILED.value
@@ -548,11 +506,11 @@ def fail_job(
         job.locked_at = None
     session.flush()
     # Terminal failure: bound targets fail with a stable code + sanitized text.
-    from mail_core.sync.execution import refresh_requests, settle_job_bindings
+    from mail_core.sync.execution import refresh_requests, settle_job_links
 
     refresh_requests(
         session,
-        settle_job_bindings(
+        settle_job_links(
             session,
             job,
             outcome="failed",
@@ -613,16 +571,15 @@ def reclaim_stale_claims(
             terminal.append(job)
     session.flush()
     if rows:
-        from mail_core.sync.execution import refresh_requests, reset_bindings_for_job, settle_job_bindings
+        from mail_core.sync.execution import refresh_requests, reset_links_for_job, settle_job_links
 
         request_ids: set[uuid.UUID] = set()
-        # Reclaim keeps the job's execution_generation; its bindings go back
-        # to queued rather than failing (design §5.1).
+        # Reclaim keeps the same job row; its links go back to queued.
         for job in requeued:
-            request_ids |= reset_bindings_for_job(session, job)
+            request_ids |= reset_links_for_job(session, job)
         # Terminal reclaims settle exactly like fail_job's cap path.
         for job in terminal:
-            request_ids |= settle_job_bindings(
+            request_ids |= settle_job_links(
                 session,
                 job,
                 outcome="failed",

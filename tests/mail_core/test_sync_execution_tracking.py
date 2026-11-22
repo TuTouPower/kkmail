@@ -166,29 +166,29 @@ def test_request_reaches_complete_after_real_handle_and_complete_job():
         assert any(e.payload.get("request_id") == str(request_id) and e.payload.get("state") == "complete" for e in events)
 
 
-def test_shared_pending_job_is_observed_by_two_requests():
+def test_shared_pending_job_links_two_requests_to_one_real_job():
     account_id, folder_id = _seed_account_folder()
     first = _create_delta_request(account_id, folder_id)
     second = _create_delta_request(account_id, folder_id)
 
     Session = get_session_factory()
     with Session() as session:
-        bindings = list(session.scalars(select(SyncRequestTargetJob)).all())
+        target_ids = {
+            t.id
+            for t in session.scalars(
+                select(SyncRequestTarget).where(SyncRequestTarget.request_id.in_([first, second]))
+            ).all()
+        }
         mine = [
-            b
-            for b in bindings
-            if b.target_id
-            in {
-                t.id
-                for t in session.scalars(
-                    select(SyncRequestTarget).where(SyncRequestTarget.request_id.in_([first, second]))
-                ).all()
-            }
+            link
+            for link in session.scalars(select(SyncRequestTargetJob)).all()
+            if link.target_id in target_ids
         ]
         assert len(mine) == 2
-        # Both requests observe the same deduplicated execution generation.
-        assert mine[0].execution_generation == mine[1].execution_generation
+        # Both requests link to the same real deduplicated job, never to a
+        # pre-allocated generation that may not materialize.
         assert mine[0].job_id == mine[1].job_id
+        assert all(link.job_id is not None for link in mine)
 
     job_id = _claim_one(JobType.SYNC_FOLDER_DELTA.value, account_id)
     with _delta_patches():
@@ -198,53 +198,43 @@ def test_shared_pending_job_is_observed_by_two_requests():
     assert _report(second).state == "complete"
 
 
-def test_claimed_job_request_binds_successor_not_running_execution():
+def test_claimed_job_request_completes_after_successor_pass():
     account_id, folder_id = _seed_account_folder()
     first = _create_delta_request(account_id, folder_id)
     job_id = _claim_one(JobType.SYNC_FOLDER_DELTA.value, account_id)
-
-    # Second request arrives while the job is CLAIMED.
-    second = _create_delta_request(account_id, folder_id)
+    second = _create_delta_request(account_id, folder_id)  # arrives while CLAIMED
 
     Session = get_session_factory()
     with Session() as session:
-        running_job = session.get(WorkerJob, job_id)
-        successor_generation = (running_job.payload.get("_queue_next") or {}).get("execution_generation")
-        assert successor_generation, "claimed job must pre-allocate a successor generation once"
         target = session.scalar(
             select(SyncRequestTarget).where(SyncRequestTarget.request_id == second)
         )
-        assert target.requested_generation == uuid.UUID(successor_generation)
-        assert target.requested_generation != running_job.execution_generation
-        binding = session.scalar(
+        link = session.scalar(
             select(SyncRequestTargetJob).where(SyncRequestTargetJob.target_id == target.id)
         )
-        assert binding.execution_generation == target.requested_generation
-        assert binding.job_id is None  # successor not created yet
+        assert link.job_id == job_id
+        assert link.needs_successor is True
 
     with _delta_patches():
         assert _run_job(job_id) is True
-
-    # Old execution completing must NOT complete the successor-bound request.
     assert _report(first).state == "complete"
-    second_report = _report(second)
-    assert second_report.state in ("queued", "running")
-    assert second_report.completed_count == 0
+    assert _report(second).state in ("queued", "running")
 
     Session = get_session_factory()
     with Session() as session:
         successor = session.scalar(
-            select(WorkerJob).where(
-                WorkerJob.execution_generation == uuid.UUID(successor_generation)
-            )
+            select(WorkerJob)
+            .where(WorkerJob.dedupe_key == f"delta:{account_id}:{folder_id}")
+            .where(WorkerJob.status == JobStatus.PENDING.value)
         )
-        assert successor is not None and successor.status == JobStatus.PENDING.value
-        binding = session.scalar(
-            select(SyncRequestTargetJob).where(
-                SyncRequestTargetJob.execution_generation == successor.execution_generation
-            )
+        assert successor is not None
+        link = session.scalar(
+            select(SyncRequestTargetJob)
+            .where(SyncRequestTargetJob.target_id == target.id)
+            .where(SyncRequestTargetJob.status.in_(["queued", "running"]))
         )
-        assert binding.job_id == successor.id
+        assert link.job_id == successor.id
+        assert link.needs_successor is False
         successor_id = successor.id
 
     claimed_successor = _claim_one(JobType.SYNC_FOLDER_DELTA.value, account_id)
@@ -490,7 +480,7 @@ def test_failed_metadata_folder_gets_no_reconcile():
         assert cp.full_scan_complete is False
 
 
-def test_reaper_converges_binding_whose_job_vanished():
+def test_stalled_target_converges_with_readable_message():
     account_id, folder_id = _seed_account_folder()
     request_id = _create_delta_request(account_id, folder_id)
 
@@ -499,23 +489,46 @@ def test_reaper_converges_binding_whose_job_vanished():
         target = session.scalar(
             select(SyncRequestTarget).where(SyncRequestTarget.request_id == request_id)
         )
-        binding = session.scalar(
+        target.created_at = datetime.now(timezone.utc) - timedelta(minutes=31)
+        link = session.scalar(
             select(SyncRequestTargetJob).where(SyncRequestTargetJob.target_id == target.id)
         )
-        job = session.get(WorkerJob, binding.job_id)
-        session.delete(job)  # FK SET NULL leaves the binding orphaned
+        job = session.get(WorkerJob, link.job_id)
+        job.status = JobStatus.DONE.value  # work ended without settling: genuinely stalled
         session.commit()
 
-    from mail_core.sync.execution import converge_orphaned_bindings
+    from mail_core.sync.execution import converge_stalled_targets
 
     with Session() as session:
-        changed = converge_orphaned_bindings(session)
+        changed = converge_stalled_targets(session, stale_after=timedelta(minutes=30))
         session.commit()
     assert changed >= 1
     report = _report(request_id)
     assert report.state == "failed"
-    assert report.errors and report.errors[0].code == "execution_lost"
+    assert report.errors and report.errors[0].code == "sync_incomplete"
+    assert "no longer exists" not in (report.errors[0].safe_message or "").lower()
 
+
+
+def test_stalled_reaper_keeps_target_with_live_job():
+    """AC-004: a long-running account with a live job must not be failed."""
+    account_id, folder_id = _seed_account_folder()
+    request_id = _create_delta_request(account_id, folder_id)
+    Session = get_session_factory()
+    with Session() as session:
+        target = session.scalar(
+            select(SyncRequestTarget).where(SyncRequestTarget.request_id == request_id)
+        )
+        target.created_at = datetime.now(timezone.utc) - timedelta(minutes=31)
+        session.commit()
+
+    from mail_core.sync.execution import converge_stalled_targets
+
+    with Session() as session:
+        changed = converge_stalled_targets(session, stale_after=timedelta(minutes=30))
+        session.commit()
+    assert changed == 0
+    assert _report(request_id).state != "failed"
 
 def test_account_deletion_fails_open_targets():
     account_id, folder_id = _seed_account_folder()
