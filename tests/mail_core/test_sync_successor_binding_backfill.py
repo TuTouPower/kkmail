@@ -1,22 +1,9 @@
-"""DEFECT 3: complete_job must backfill successor job_id onto pre-allocated bindings.
+"""T082: a waiting target's link migrates to the successor job.
 
-When a request arrives while its job is CLAIMED, ``execution.bind_target``
-pre-binds its targets to the successor generation pre-allocated in the
-job's ``_queue_next`` payload, with ``job_id = NULL`` (there is no
-successor job row yet). ``complete_job`` creates the successor with
-exactly that generation but (before this fix) never backfilled those
-rows, so their ``job_id`` stayed NULL. ``mark_bindings_running``
-(claim-time hook) finds bindings by ``job_id IN (claimed job ids)``;
-NULL-job_id bindings are never matched, so they stayed ``queued``
-while the successor actually executed.
-
-Runs against the real PostgreSQL schema created by ``alembic upgrade head``:
-``complete_job`` / ``claim_jobs`` take real FOR UPDATE / SKIP LOCKED row
-locks and the settlement path uses the real generation advisory lock.
-The invariant under test is the backfilled ``job_id`` and the subsequent
-claim-time transition to ``running``.
-
-No existing test is modified by this file.
+When a request arrives while its job is CLAIMED, the link points at that
+real job and is marked ``needs_successor``. ``complete_job`` creates the
+successor first and moves the link onto it in the same transaction, so the
+link never references a planned-but-absent execution.
 """
 
 from __future__ import annotations
@@ -44,13 +31,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 _NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-_WORKER = "w-defect3"
+_WORKER = "w-t082-links"
 
 
-def test_complete_job_backfills_successor_job_id_onto_preallocated_bindings():
+def test_complete_job_migrates_waiting_link_to_real_successor():
     Session = get_session_factory()
-
-    successor_generation = uuid.uuid4()
     job_id = uuid.uuid4()
     target_id = uuid.uuid4()
 
@@ -59,7 +44,7 @@ def test_complete_job_backfills_successor_job_id_onto_preallocated_bindings():
         session.add(
             SyncRequest(
                 id=request_id,
-                client_request_id=f"defect3-{uuid.uuid4().hex}",
+                client_request_id=f"t082-links-{uuid.uuid4().hex}",
                 mode="delta",
                 trigger="manual",
                 state="queued",
@@ -71,7 +56,7 @@ def test_complete_job_backfills_successor_job_id_onto_preallocated_bindings():
             id=target_id,
             request_id=request_id,
             target_key=f"folder:{uuid.uuid4().hex}",
-            requested_generation=successor_generation,
+            requested_generation=uuid.uuid4(),
             state="queued",
             created_at=_NOW,
         )
@@ -79,17 +64,8 @@ def test_complete_job_backfills_successor_job_id_onto_preallocated_bindings():
         session.add(
             WorkerJob(
                 id=job_id,
-                execution_generation=uuid.uuid4(),
                 job_type="sync_folder_delta",
-                payload={
-                    "folder_id": "f-1",
-                    "_queue_next": {
-                        "payload": {"folder_id": "f-1"},
-                        "priority": 10,
-                        "run_after": _NOW.isoformat(),
-                        "execution_generation": str(successor_generation),
-                    },
-                },
+                payload={"folder_id": "f-1"},
                 status="claimed",
                 priority=50,
                 run_after=_NOW,
@@ -100,38 +76,37 @@ def test_complete_job_backfills_successor_job_id_onto_preallocated_bindings():
             )
         )
         session.flush()
-        binding = bind_target(
-            session,
-            target=target,
-            execution_generation=successor_generation,
-            job=None,
-        )
-        assert binding.job_id is None
-        assert binding.status == "queued"
+        link = bind_target(session, target=target, job=session.get(WorkerJob, job_id))
+        assert link.job_id == job_id
+        assert link.needs_successor is True
         session.commit()
 
     with Session() as session:
         job = session.get(WorkerJob, job_id)
-        assert job is not None
         successor = complete_job(session, job, worker_id=_WORKER)
         assert successor is not None
-        assert successor.execution_generation == successor_generation
         successor_id = successor.id
         session.commit()
 
     with Session() as session:
-        binding = session.scalar(select(SyncRequestTargetJob))
-        assert binding is not None
-        assert binding.job_id == successor_id
-        assert binding.status == "queued"
+        link = session.scalar(select(SyncRequestTargetJob))
+        assert link is not None
+        assert link.job_id == successor_id
+        assert link.needs_successor is False
+        assert link.status == "queued"
+
+    from datetime import timedelta
 
     with Session() as session:
-        claimed = claim_jobs(session, worker_id=_WORKER, limit=1, now=_NOW)
+        claimed = claim_jobs(
+            session, worker_id=_WORKER, limit=1,
+            now=datetime.now(timezone.utc) + timedelta(seconds=1),
+        )
         assert [j.id for j in claimed] == [successor_id]
         session.commit()
 
     with Session() as session:
-        binding = session.scalar(select(SyncRequestTargetJob))
-        assert binding is not None
-        assert binding.job_id == successor_id
-        assert binding.status == "running"
+        link = session.scalar(select(SyncRequestTargetJob))
+        assert link is not None
+        assert link.job_id == successor_id
+        assert link.status == "running"

@@ -65,7 +65,6 @@ _REMOTE_FOLDERS = [
 
 def _make_session(monkeypatch):
     Session = get_session_factory()
-    monkeypatch.setattr(execution_mod, "lock_generation", lambda session, generation: None)
     return Session
 
 

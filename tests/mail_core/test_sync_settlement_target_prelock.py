@@ -39,7 +39,7 @@ from mail_core.mail.storage.models import (
     SyncRequestTargetJob,
     WorkerJob,
 )
-from mail_core.sync.execution import refresh_requests, settle_job_bindings
+from mail_core.sync.execution import refresh_requests, settle_job_links
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),
@@ -88,16 +88,26 @@ def test_settle_prelocks_all_targets_of_affected_requests():
     engine = Session.kw["bind"]
     request_id = uuid.uuid4()
     generation = uuid.uuid4()
-    other_generation = uuid.uuid4()
+    other_job_id = uuid.uuid4()
     job_id = uuid.uuid4()
     with Session() as session:
         session.add(
             WorkerJob(
                 id=job_id,
-                execution_generation=generation,
                 job_type="sync_folder_delta",
                 payload={},
                 status="claimed",
+                run_after=_NOW,
+                created_at=_NOW,
+                updated_at=_NOW,
+            )
+        )
+        session.add(
+            WorkerJob(
+                id=other_job_id,
+                job_type="sync_folder_delta",
+                payload={},
+                status="done",
                 run_after=_NOW,
                 created_at=_NOW,
                 updated_at=_NOW,
@@ -131,7 +141,6 @@ def test_settle_prelocks_all_targets_of_affected_requests():
             SyncRequestTargetJob(
                 id=uuid.uuid4(),
                 target_id=_HIGH,
-                execution_generation=generation,
                 job_id=job_id,
                 phase="sync",
                 status="running",
@@ -142,8 +151,7 @@ def test_settle_prelocks_all_targets_of_affected_requests():
             SyncRequestTargetJob(
                 id=uuid.uuid4(),
                 target_id=_LOW,
-                execution_generation=other_generation,
-                job_id=None,
+                job_id=other_job_id,
                 phase="sync",
                 status="complete",
                 created_at=_NOW,
@@ -157,7 +165,7 @@ def test_settle_prelocks_all_targets_of_affected_requests():
             job = session.get(WorkerJob, job_id)
             assert job is not None
             capture.statements.clear()
-            request_ids = settle_job_bindings(session, job, outcome="complete")
+            request_ids = settle_job_links(session, job, outcome="complete")
             during_settle = list(capture.statements)
             refresh_requests(session, request_ids)
             session.commit()
@@ -191,7 +199,7 @@ def test_settle_prelocks_all_targets_of_affected_requests():
         assert req.finished_at is not None
         binding = session.scalar(
             select(SyncRequestTargetJob).where(
-                SyncRequestTargetJob.execution_generation == generation
+                SyncRequestTargetJob.job_id == job_id
             )
         )
         assert binding is not None and binding.status == "complete"

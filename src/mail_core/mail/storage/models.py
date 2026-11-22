@@ -444,9 +444,6 @@ class WorkerJob(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
-    # Stable identity of one logical job execution; retries/reclaims of the
-    # same job row keep it, successors get a fresh one (design §5.1).
-    execution_generation: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True, default=_uuid)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
     account_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"))
     dedupe_key: Mapped[Optional[str]] = mapped_column(String(128))
@@ -541,26 +538,27 @@ class SyncRequestTarget(Base):
 
 
 class SyncRequestTargetJob(Base):
-    """Relational binding between a sync-request target and one job execution.
+    """Link between a sync-request target and the real job that fulfills it.
 
-    One target may bind several executions (full-scan phases, continuations);
-    several targets may observe the same deduplicated execution. ``job_id``
-    is NULL while the bound execution is a pre-allocated successor that has
-    not been created yet, and is set NULL again if the job row is pruned —
-    the terminal result stays readable on this row (design §5.1).
+    A link always points at an existing ``WorkerJob`` row. Retries and
+    reclaims keep the same job row; when a deduplicated job is claimed and a
+    newer request needs another pass, ``complete_job`` creates the successor
+    first and migrates the waiting links onto it in the same transaction.
+    No link ever points at a merely pre-allocated execution.
     """
 
     __tablename__ = "sync_request_target_jobs"
     __table_args__ = (
-        UniqueConstraint("target_id", "execution_generation", name="uq_sync_target_jobs_target_generation"),
+        UniqueConstraint("target_id", "job_id", name="uq_sync_target_jobs_target_job"),
         Index("ix_sync_target_jobs_job", "job_id"),
-        Index("ix_sync_target_jobs_generation", "execution_generation"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sync_request_targets.id", ondelete="CASCADE"), nullable=False)
-    execution_generation: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    job_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("worker_jobs.id", ondelete="SET NULL"))
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("worker_jobs.id", ondelete="CASCADE"), nullable=False)
+    # Set when the target arrived while its job was CLAIMED: the next pass
+    # must cover it, and the link moves to the successor at job completion.
+    needs_successor: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     phase: Mapped[str] = mapped_column(String(64), nullable=False, server_default=text("'sync'"))
     folder_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="SET NULL"))
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'queued'"))

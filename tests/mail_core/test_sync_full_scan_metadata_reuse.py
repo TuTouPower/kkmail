@@ -97,7 +97,6 @@ def test_full_request_reuses_root_generation_while_metadata_in_flight():
         session.add(
             WorkerJob(
                 id=uuid.uuid4(),
-                execution_generation=uuid.uuid4(),
                 job_type=JobType.SYNC_FOLDER_METADATA.value,
                 account_id=account_id,
                 dedupe_key=f"metadata:{account_id}:{folder_id}",

@@ -165,7 +165,7 @@ def test_shared_full_requests_complete_only_after_metadata_and_reconcile():
             ).all()
         )
         assert len(bindings) == 2
-        assert bindings[0].execution_generation == bindings[1].execution_generation
+        assert bindings[0].job_id == bindings[1].job_id
 
     provider = _Provider()
     with patch.object(engine_mod, "build_provider", lambda *_a, **_k: provider):

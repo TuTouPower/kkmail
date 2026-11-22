@@ -58,7 +58,7 @@ def _run_reclaim(monkeypatch, *, failing: str | None = None):
         patch("mail_core.blobs.archive.reclaim_stale_archive_claims", mocks["archive"]),
         patch("mail_core.realtime.outbox.prune_published", mocks["published"]),
         patch("mail_core.sync.jobs.prune_completed_jobs", mocks["jobs"]),
-        patch("mail_core.sync.execution.converge_orphaned_bindings", mocks["converge"]),
+        patch("mail_core.sync.execution.converge_stalled_targets", mocks["converge"]),
         patch("mail_core.blobs.quota.prune_expired_quota_reservations", mocks["quota"]),
         patch("mail_core.blobs.archive.maybe_resume_quota_paused_archives", mocks["resume"]),
         patch("mail_core.worker.heartbeat.cleanup_stale_heartbeats", mocks["heartbeats"]),
