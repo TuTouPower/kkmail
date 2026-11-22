@@ -30,7 +30,9 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Column, Integer, String, inspect, text
+from sqlalchemy import Column, Integer, String, create_engine, inspect, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
 from sqlalchemy.exc import IntegrityError
 
 from mail_core.db.session import get_engine, get_session_factory
@@ -770,3 +772,101 @@ def test_concurrent_narrow_conversion_is_serialized_on_postgres():
             assert remaining == {"delta_token": "token-xyz"}
     finally:
         _pg_restore_head(cfg, engine)
+
+
+# --- p084: orphan-link cleanup executed by 20261122_0003 --------------------------------
+
+def _alembic_config_for(url: str) -> Config:
+    """Alembic Config pinned to an arbitrary database URL (temp DB safe)."""
+    cfg = Config(ALEMBIC_INI)
+    cfg.set_main_option("script_location", str(ROOT / "src/mail_core/db/alembic"))
+    # ConfigParser interprets '%'; psycopg URL encoding produces '%XX' escapes.
+    cfg.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+    return cfg
+
+
+def test_orphan_links_are_settled_by_20261122_0003():
+    """Upgrade from 0002 with a job_id=NULL link must clear it and fail the target.
+
+    The generic clean-upgrade test only ever migrates an empty database, so a
+    regression in the data-repair SQL of 20261122_0003 would go unnoticed.
+    """
+    import importlib.util
+
+    migration_path = (
+        ROOT / "src/mail_core/db/alembic/versions/20261122_0003_real_job_links.py"
+    )
+    spec = importlib.util.spec_from_file_location("t082_migration", migration_path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    parsed = make_url(os.environ["MAIL_CORE_DATABASE_URL"])
+    db_name = f"kkmail_mig_tmp_{uuid.uuid4().hex[:16]}"
+    admin_url = parsed.set(database="postgres").render_as_string(hide_password=False)
+    temp_url = parsed.set(database=db_name).render_as_string(hide_password=False)
+    admin = create_engine(admin_url, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+    target = create_engine(temp_url, poolclass=NullPool)
+    cfg = _alembic_config_for(temp_url)
+    try:
+        with admin.connect() as conn:
+            conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+
+        # 0002 still has nullable job_id and the execution_generation column.
+        command.upgrade(cfg, "20261112_0002")
+        request_id = uuid.uuid4()
+        target_id = uuid.uuid4()
+        with target.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO sync_requests (id, client_request_id, mode, trigger, state) "
+                    "VALUES (:id, :cid, 'delta', 'manual', 'queued')"
+                ),
+                {"id": request_id, "cid": f"mig-orphan-{request_id.hex}"},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sync_request_targets "
+                    "(id, request_id, target_key, requested_generation, state) "
+                    "VALUES (:id, :rid, :key, :gen, 'queued')"
+                ),
+                {"id": target_id, "rid": request_id, "key": "orphan-target", "gen": uuid.uuid4()},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sync_request_target_jobs "
+                    "(id, target_id, execution_generation, job_id, status) "
+                    "VALUES (:id, :tid, :gen, NULL, 'queued')"
+                ),
+                {"id": uuid.uuid4(), "tid": target_id, "gen": uuid.uuid4()},
+            )
+        # Guard against a vacuous pass: the orphan must exist before upgrade.
+        with target.connect() as conn:
+            assert conn.execute(
+                text("SELECT count(*) FROM sync_request_target_jobs WHERE target_id = :tid AND job_id IS NULL"),
+                {"tid": target_id},
+            ).scalar_one() == 1
+
+        command.upgrade(cfg, "head")
+
+        with target.connect() as conn:
+            assert conn.execute(
+                text("SELECT count(*) FROM sync_request_target_jobs WHERE target_id = :tid"),
+                {"tid": target_id},
+            ).scalar_one() == 0
+            state, code, safe, finished = conn.execute(
+                text(
+                    "SELECT state, error_code, safe_error, finished_at "
+                    "FROM sync_request_targets WHERE id = :tid"
+                ),
+                {"tid": target_id},
+            ).one()
+            assert (state, code, safe) == ("failed", "sync_incomplete", migration.STALLED_MESSAGE)
+            assert finished is not None
+            assert conn.execute(
+                text("SELECT state FROM sync_requests WHERE id = :rid"), {"rid": request_id}
+            ).scalar_one() == "failed"
+    finally:
+        target.dispose()
+        with admin.connect() as conn:
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
+        admin.dispose()
