@@ -120,3 +120,22 @@ def test_allocation_failure_cleans_owned_database(monkeypatch, error):
     with runtime.engine(runtime.admin_url(record["port"])).connect() as connection:
         assert connection.scalar(text("SELECT 1 FROM pg_database WHERE datname=:db"), {"db": record["database"]}) is None
         assert connection.scalar(text("SELECT 1 FROM pg_roles WHERE rolname=:role"), {"role": record["owner_role"]}) is None
+
+
+def test_session_registry_tracks_and_reuses_active_service():
+    state = runtime.load_session()
+    assert state is not None, "harness run must establish a test session"
+    status = runtime.session_status()
+    assert status["alive"] is True
+    assert status["container_id"] == runtime.instance()[0]
+    original_postmaster = _postmaster_start()
+    again = runtime.ensure_session()
+    assert again["container_id"] == state["container_id"]
+    assert again["session_id"] == state["session_id"]
+    assert _postmaster_start() == original_postmaster, "session reuse must not restart PostgreSQL"
+
+
+def _postmaster_start():
+    _, port = runtime.instance()
+    with runtime.engine(runtime.admin_url(port)).connect() as connection:
+        return connection.scalar(text("SELECT pg_postmaster_start_time()"))
