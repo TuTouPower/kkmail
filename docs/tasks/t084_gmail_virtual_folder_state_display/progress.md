@@ -2,7 +2,7 @@
 tid: "t084"
 slug: "gmail_virtual_folder_state_display"
 title: "paused 虚拟目录侧栏状态可解释化并消除同步兜底文档矛盾"
-status: "backlog"
+status: "dropped"
 branch: ""
 worktree: ""
 review_level: "single"
@@ -12,7 +12,7 @@ diff_anchor: ""
 spec_source_sha: ""
 depends_on: ""
 conflicts_with: ""
-note: "来源 p086：新加 Gmail 账号后重要/所有邮件永久显示蓝色 - 被误读为仍在同步"
+note: "来源 p086：新加 Gmail 账号后重要/所有邮件永久显示蓝色 - 被误读为仍在同步; dropped: 按开发铁律重做：UI 补丁治标，根因是虚拟标签被建模为 paused 同步单元而非 message_locations 派生视图；由新架构 task 覆盖"
 ---
 
 # Task 进展
