@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -17,7 +18,9 @@ from mail_core.providers.http import PermanentAuthError
 from mail_core.security.redact import safe_provider_summary
 from mail_core.sync.context import (
     AccountFailureKind,
+    FailureDomain,
     account_failure_kind,
+    classify_failure,
     resolve_sync_context,
 )
 from mail_core.sync.jobs import backoff_seconds, reschedule_job
@@ -28,9 +31,13 @@ _BASE = datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)
 class _FakeSession:
     def __init__(self, acc):
         self._acc = acc
+        self.events = []
 
     def get(self, _model, _pk):
         return self._acc
+
+    def add(self, event):
+        self.events.append(event)
 
     def flush(self):
         pass
@@ -53,14 +60,13 @@ def test_connectivity_failure_single_is_degraded():
     )
     assert state is ConnectivityState.DEGRADED
     assert acc.connectivity_state == ConnectivityState.DEGRADED.value
-    assert acc.config[health.CFG_FAILURE_COUNT] == 1
-    assert acc.config[health.CFG_FIRST_FAILURE_AT] == _BASE.isoformat()
+    assert acc.config[health.CFG_FAILURE_TIMESTAMPS] == [_BASE.isoformat()]
     expected = safe_provider_summary("connection reset by peer")
     assert acc.config[health.CFG_LAST_CONNECTIVITY_ERROR] == expected
     assert health.health_fields(acc)["last_connectivity_error"] == expected
 
 
-def test_connectivity_failure_breaker_escalates_after_five_failures_across_window():
+def test_connectivity_failure_breaker_escalates_inside_window():
     acc = _account()
     session = _FakeSession(acc)
     for offset in (0, 60, 120, 180):
@@ -74,7 +80,63 @@ def test_connectivity_failure_breaker_escalates_after_five_failures_across_windo
     )
     assert state is ConnectivityState.UNREACHABLE
     assert acc.connectivity_state == ConnectivityState.UNREACHABLE.value
-    assert acc.config[health.CFG_FAILURE_COUNT] == health.CONNECTIVITY_FAILURE_THRESHOLD
+    assert len(acc.config[health.CFG_FAILURE_TIMESTAMPS]) == health.CONNECTIVITY_FAILURE_THRESHOLD
+
+
+def test_connectivity_failure_escalates_across_real_backoff_sequence():
+    """p088 review: a real retry sequence must eventually reach unreachable."""
+
+    acc = _account()
+    session = _FakeSession(acc)
+    elapsed = 0
+    state = ConnectivityState.DEGRADED
+    for attempt in range(1, 11):
+        state = health.record_connectivity_failure(
+            session, uuid.uuid4(), error="timeout", now=_BASE + timedelta(seconds=elapsed)
+        )
+        elapsed += backoff_seconds(attempt)
+    assert state is ConnectivityState.UNREACHABLE
+    assert acc.connectivity_state == ConnectivityState.UNREACHABLE.value
+
+
+def test_connectivity_failure_does_not_accumulate_across_days():
+    """p088: intermittent failures days apart must never reach unreachable."""
+
+    acc = _account()
+    session = _FakeSession(acc)
+    for day in range(5):
+        state = health.record_connectivity_failure(
+            session, uuid.uuid4(), error="timeout", now=_BASE + timedelta(days=day)
+        )
+        assert state is ConnectivityState.DEGRADED
+    assert acc.connectivity_state == ConnectivityState.DEGRADED.value
+    assert len(acc.config[health.CFG_FAILURE_TIMESTAMPS]) == 1
+
+
+def test_connectivity_transition_publishes_account_event():
+    acc = _account()
+    session = _FakeSession(acc)
+    health.record_connectivity_failure(session, uuid.uuid4(), error="timeout", now=_BASE)
+    assert len(session.events) == 1
+    assert session.events[0].payload == {"connectivity_state": ConnectivityState.DEGRADED.value}
+    health.record_connectivity_failure(session, uuid.uuid4(), error="timeout", now=_BASE)
+    assert len(session.events) == 1
+    health.record_connectivity_success(session, uuid.uuid4(), now=_BASE)
+    assert len(session.events) == 2
+    assert session.events[1].payload == {"connectivity_state": ConnectivityState.CONNECTED.value}
+
+
+def test_unreachable_breaker_is_rechecked_after_a_bounded_interval():
+    acc = _account()
+    session = _FakeSession(acc)
+    for offset in (0, 60, 120, 180, 300):
+        health.record_connectivity_failure(
+            session, uuid.uuid4(), error="timeout", now=_BASE + timedelta(seconds=offset)
+        )
+    assert acc.connectivity_state == ConnectivityState.UNREACHABLE.value
+    assert health.recheck_unreachable(session, uuid.uuid4(), now=_BASE + timedelta(minutes=10)) is None
+    assert health.recheck_unreachable(session, uuid.uuid4(), now=_BASE + timedelta(minutes=20)) is ConnectivityState.DEGRADED
+    assert acc.connectivity_state == ConnectivityState.DEGRADED.value
 
 
 def test_connectivity_success_closes_breaker_and_clears_diagnostics():
@@ -90,8 +152,7 @@ def test_connectivity_success_closes_breaker_and_clears_diagnostics():
     )
     assert acc.connectivity_state == ConnectivityState.CONNECTED.value
     for key in (
-        health.CFG_FAILURE_COUNT,
-        health.CFG_FIRST_FAILURE_AT,
+        health.CFG_FAILURE_TIMESTAMPS,
         health.CFG_LAST_CONNECTIVITY_ERROR,
         "last_sync_error",
     ):
@@ -137,6 +198,21 @@ def test_account_failure_kind_classifies_transport_auth_and_control_flow():
     assert account_failure_kind(
         result={"status": "rate_limited"}, is_background=False
     ) is AccountFailureKind.NONE
+
+
+def test_failure_classification_ignores_free_text():
+    """p088: non-network errors must not be promoted to transport failures."""
+
+    assert classify_failure(OSError(28, "No space left on device")).domain is FailureDomain.UNKNOWN
+    assert classify_failure(OSError(24, "Too many open files")).domain is FailureDomain.UNKNOWN
+    assert classify_failure(OSError(13, "Permission denied")).domain is FailureDomain.UNKNOWN
+    assert classify_failure(RuntimeError("DB connection string invalid")).domain is FailureDomain.UNKNOWN
+    assert classify_failure(RuntimeError("service temporarily unavailable")).domain is FailureDomain.UNKNOWN
+    assert classify_failure(
+        {"status": "provider_error", "error": "ProviderHttpError status=401"}
+    ).domain is FailureDomain.UNKNOWN
+    assert classify_failure(OSError(errno.ECONNRESET, "Connection reset by peer")).domain is FailureDomain.TRANSPORT
+    assert classify_failure(TimeoutError("timed out")).domain is FailureDomain.TRANSPORT
 
 
 def test_resolve_sync_context_reads_top_level_background_marker():
@@ -189,46 +265,14 @@ def test_reschedule_job_count_failure_keeps_id_and_counts_failure():
 
 def test_auth_signals_are_classified_structurally():
     from mail_core.providers.http import PermanentAuthError, ProviderHttpError
-    from mail_core.sync.context import is_permanent_auth_error
 
-    # HTTP 401 is redacted to "ProviderHttpError status=401" upstream; both
-    # the exception and the redacted summary must be recognised.
-    assert is_permanent_auth_error(ProviderHttpError("boom", status=401)) is True
-    assert is_permanent_auth_error(
-        {"status": "provider_error", "error": "ProviderHttpError status=401"}
-    ) is True
-    # IMAP AUTHENTICATIONFAILED is normalised to PermanentAuthError upstream.
-    assert is_permanent_auth_error(PermanentAuthError("auth rejected")) is True
-    # delta.py / reconcile.py carry auth classification in a structured code.
-    assert is_permanent_auth_error(
-        {"status": "provider_error", "error_code": "auth_failed"}
-    ) is True
-    assert is_permanent_auth_error({"error": "token endpoint error: invalid_grant"}) is True
-    assert is_permanent_auth_error({"error": "InvalidAuthenticationToken"}) is True
-    # Transport blips and control-flow outcomes are never auth failures.
-    assert is_permanent_auth_error(ConnectionError("connection reset")) is False
-    assert is_permanent_auth_error({"status": "rate_limited"}) is False
-    assert is_permanent_auth_error({"status": "provider_error", "error": "OSError code=101"}) is False
-
-
-def test_connectivity_breaker_escalates_across_realistic_backoff():
-    acc = _account()
-    session = _FakeSession(acc)
-    # Eight failures inside one job's exponential backoff sequence
-    # (1,2,4,...,128s): all degraded, the count accumulates without reset.
-    elapsed = 0
-    for attempt in range(1, 9):
-        assert health.record_connectivity_failure(
-            session, uuid.uuid4(), error="timeout",
-            now=_BASE + timedelta(seconds=elapsed),
-        ) is ConnectivityState.DEGRADED
-        elapsed += backoff_seconds(attempt)
-    # A later periodic poll (20 min) with no success in between crosses the
-    # window and reaches the threshold: unreachable is a live branch.
-    assert health.record_connectivity_failure(
-        session, uuid.uuid4(), error="timeout",
-        now=_BASE + timedelta(seconds=20 * 60),
-    ) is ConnectivityState.UNREACHABLE
+    assert classify_failure(ProviderHttpError("boom", status=401)).domain is FailureDomain.AUTH
+    assert classify_failure(PermanentAuthError("auth rejected")).domain is FailureDomain.AUTH
+    assert classify_failure({"failure_code": "auth"}).domain is FailureDomain.AUTH
+    assert classify_failure({"status": 401}).domain is FailureDomain.AUTH
+    assert classify_failure(ConnectionError("connection reset")).domain is FailureDomain.TRANSPORT
+    assert classify_failure({"status": "rate_limited"}).domain is FailureDomain.UNKNOWN
+    assert classify_failure({"failure_code": "transport"}).domain is FailureDomain.TRANSPORT
 
 
 def test_connectivity_breaker_negative_boundaries():
@@ -237,17 +281,15 @@ def test_connectivity_breaker_negative_boundaries():
     session = _FakeSession(acc)
     for offset in (0, 400):
         assert health.record_connectivity_failure(
-            session, uuid.uuid4(), error="timeout",
-            now=_BASE + timedelta(seconds=offset),
+            session, uuid.uuid4(), error="timeout", now=_BASE + timedelta(seconds=offset)
         ) is ConnectivityState.DEGRADED
-    # Five failures inside the window (no 5-minute span) also stays degraded.
+    # Five failures inside the window but without spanning it stay degraded.
     acc2 = _account()
     session2 = _FakeSession(acc2)
     elapsed = 0
     for attempt in range(1, 6):
         assert health.record_connectivity_failure(
-            session2, uuid.uuid4(), error="timeout",
-            now=_BASE + timedelta(seconds=elapsed),
+            session2, uuid.uuid4(), error="timeout", now=_BASE + timedelta(seconds=elapsed)
         ) is ConnectivityState.DEGRADED
         elapsed += backoff_seconds(attempt)
     assert acc2.connectivity_state == ConnectivityState.DEGRADED.value

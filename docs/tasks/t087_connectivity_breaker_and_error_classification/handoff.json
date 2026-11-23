@@ -1,0 +1,15 @@
+{
+  "tid": "t087",
+  "attempt": 1,
+  "execution_id": "9270ecd08bca447fa7cc585cfa7b861f",
+  "status": "done",
+  "branch": "t087_connectivity_breaker_and_error_classification",
+  "base_sha": "82b86fb716e34a0fe71bbc317bad75ac212f21e5",
+  "spec_source_sha": "82b86fb716e34a0fe71bbc317bad75ac212f21e5",
+  "tests": "后端 unit 1465 passed / 498 skipped（`test_account_health_state_machine.py` 14 passed）；模板契约 388 passed / 1 skipped；前端 vitest 55 文件 593 passed + `tsc -b` / `npm run build` / `oxlint --deny-warnings` 通过；桌面 12 文件单测通过（oauth 按设计 skip）；敏感文档扫描 0 违规。",
+  "blackbox": "`npm --prefix src/frontend run test:e2e` 23 passed（stubApi 快速 E2E，含 360px 几何门禁）。",
+  "review": "full 三轴收尾 `code_verdict=PASS` / `test_verdict=PASS` / `overall=PASS`，`review_scope=ok`、`ac_review=ok`、`round=3`、`next_action=finalize`；Round 1 两条 important 中 f001 撤回、f002 已修，Round 2 minor f004 已修，Round 3 刷新指纹。",
+  "review_scope": "3776754e0fb6f322",
+  "pending": [],
+  "findings": []
+}

@@ -1,7 +1,7 @@
 ---
 slug: mail_sync_and_storage
 status: active
-tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082]
+tasks: [t001, t026, t035, t036, t037, t041, t042, t043, t051, t052, t056, t074, t075, t077, t082, t087]
 ---
 # 邮件增量同步、MIME解析与分块加密存储技术规范 (Mail Sync, Parsing & Storage Specification)
 
@@ -23,6 +23,7 @@ ______________________________________________________________________
 - **分批拉取与瞬态网络重试**：
     - 单次元数据同步任务最大拉取批次限制为 10 页（约 500 封），避免长时间霸占 Worker 队列；
     - 遇到 `TimeoutError`、`SSLEOFError` 等网络瞬态故障时采用指数退避重试，未达重试上限不污染账号为 `failed` 状态。
+- **连接健康状态机与结构化故障分类**（t087）：`connectivity_state` 的 `unreachable` 仅在 5 分钟滑动窗口内累计 5 次传输失败且跨度达到 5 分钟时可达，窗口外失败开启新 streak，跨天累计不再升级；15 分钟无新失败的 `unreachable` 由 Worker 复核降级为 `degraded`，任何传输成功（含 IDLE 建连成功）复位 `connected`，状态迁移通过 `account.updated` 广播；故障分类使用异常类型、HTTP status、errno 与生产者附加的 `failure_code`，禁止自由文本 marker 匹配，磁盘满/句柄耗尽/配置错误不得计入连接健康。
 
 ### 2. Microsoft Graph 同步
 

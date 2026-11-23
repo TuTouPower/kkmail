@@ -29,8 +29,9 @@ from mail_core.mail.application.sync_requests import (
 )
 from mail_core.sync.context import (
     AccountFailureKind,
+    FailureDomain,
     account_failure_kind,
-    is_permanent_auth_error,
+    classify_failure,
     resolve_sync_context,
     sync_context_payload,
 )
@@ -298,10 +299,10 @@ def test_sync_context_payload_carries_lineage_without_marker():
 
 
 def test_failure_status_classification_is_centralized():
-    assert is_permanent_auth_error(PermanentAuthError("bad credentials")) is True
-    assert is_permanent_auth_error({"status": "auth_failed"}) is True
-    assert is_permanent_auth_error({"error_code": "auth_failed"}) is True
-    assert is_permanent_auth_error(RuntimeError("transient")) is False
+    assert classify_failure(PermanentAuthError("bad credentials")).domain is FailureDomain.AUTH
+    assert classify_failure({"failure_code": "auth"}).domain is FailureDomain.AUTH
+    assert classify_failure({"status": 401}).domain is FailureDomain.AUTH
+    assert classify_failure(RuntimeError("transient")).domain is FailureDomain.UNKNOWN
     # t076: 旧 account_sync_failure_status 返回单一 SyncStatus 已删除；
     # 分类改由 account_failure_kind 正交表达（AUTH/TRANSPORT/NONE），
     # 旧断言整体重写，禁止就地改预期字符串。

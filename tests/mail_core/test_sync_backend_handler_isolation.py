@@ -23,8 +23,9 @@ import pytest
 from mail_core.db.session import get_session_factory
 from mail_core.sync.context import (
     AccountFailureKind,
+    FailureDomain,
     account_failure_kind,
-    is_permanent_auth_error,
+    classify_failure,
     resolve_sync_context,
     sync_context_payload,
 )
@@ -81,12 +82,12 @@ def test_sync_context_payload_never_emits_background_marker():
     assert "background" not in payload
 
 
-def test_is_permanent_auth_error_classifies_auth_vs_transient():
-    assert is_permanent_auth_error(PermanentAuthError("rejected")) is True
-    assert is_permanent_auth_error({"status": "auth_failed"}) is True
-    assert is_permanent_auth_error({"error_code": "auth_failed"}) is True
-    assert is_permanent_auth_error({"status": "rate_limited"}) is False
-    assert is_permanent_auth_error(RuntimeError("transient")) is False
+def test_failure_classification_is_structural():
+    assert classify_failure(PermanentAuthError("rejected")).domain is FailureDomain.AUTH
+    assert classify_failure({"failure_code": "auth"}).domain is FailureDomain.AUTH
+    assert classify_failure({"status": 401}).domain is FailureDomain.AUTH
+    assert classify_failure({"status": "rate_limited"}).domain is FailureDomain.UNKNOWN
+    assert classify_failure(RuntimeError("transient")).domain is FailureDomain.UNKNOWN
 
 
 def test_account_failure_kind_is_orthogonal():

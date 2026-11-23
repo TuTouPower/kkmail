@@ -330,6 +330,32 @@ def _schedule_periodic_sync_once() -> int:
                 raise
     except Exception:
         log.exception("folder status patrol sweep failed")
+
+    # p088: half-open re-check for stale open breakers. Isolated from the
+    # scheduling and patrol domains so a failure here cannot mask either.
+    try:
+        from mail_core.accounts.health import recheck_unreachable
+        from mail_core.mail.domain.enums import ConnectivityState
+        from mail_core.mail.storage.models import Account
+        from sqlalchemy import select
+
+        with Session() as session:
+            ids = list(
+                session.scalars(
+                    select(Account.id).where(
+                        Account.connectivity_state == ConnectivityState.UNREACHABLE.value
+                    )
+                )
+            )
+            changed = 0
+            for account_id in ids:
+                if recheck_unreachable(session, account_id) is not None:
+                    changed += 1
+            session.commit()
+            if changed:
+                log.info("re-checked %s stale unreachable account breaker(s)", changed)
+    except Exception:
+        log.exception("connectivity breaker re-check sweep failed")
     return enqueued
 
 

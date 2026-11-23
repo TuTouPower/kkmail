@@ -402,7 +402,7 @@ def test_sync_failure_recovers_after_retry_without_hiding_other_errors():
         successful_job_id = successful_job.id
         acc = session.get(Account, account_id)
         acc.connectivity_state = "degraded"
-        acc.config = {**dict(acc.config or {}), "last_connectivity_error": "OSError", "connectivity_failure_count": 1}
+        acc.config = {**dict(acc.config or {}), "last_connectivity_error": "OSError"}
         session.commit()
 
     with Session() as session:
@@ -558,7 +558,9 @@ def test_handle_job_sanitizes_error_in_connectivity_failure():
     session.in_transaction.return_value = True
     session.get.return_value = mock_account
 
-    sensitive_exc = ValueError("connection failed: postgresql://user:my_secret_password@host/db?token=ya29.secret")
+    # p088: failure domain is structural now, so use a real transport error.
+    # The secret still lives only in the free-text message that must be redacted.
+    sensitive_exc = ConnectionError("connection failed: postgresql://user:my_secret_password@host/db?token=ya29.secret")
 
     with (
         patch("mail_core.sync.engine.sync_account_folders", side_effect=sensitive_exc),
@@ -572,7 +574,7 @@ def test_handle_job_sanitizes_error_in_connectivity_failure():
         assert "my_secret_password" not in passed_error
         # A325: non-provider exception messages are dropped entirely; only
         # the exception type survives in the persisted status error.
-        assert passed_error == "ValueError"
+        assert passed_error == "ConnectionError"
 
 
 def test_handle_job_resolves_credential_store_inside_job_error_boundary():

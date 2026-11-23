@@ -518,6 +518,7 @@ class IdleWatcherManager:
                 continue
 
             attempts = 0
+            self._record_connect_success(watch.account_id)
             self._set_state(watch, "idling")
             if not self._enqueue_catchup(watch):
                 # Persistent enqueue failure: stop holding the seat so
@@ -587,6 +588,18 @@ class IdleWatcherManager:
             if current is watch:
                 self._watches.pop(watch.account_id, None)
             self._states[watch.account_id] = "fallback"
+
+    def _record_connect_success(self, account_id: uuid.UUID) -> None:
+        """A successful IDLE session is a provider round-trip: close the breaker."""
+
+        from mail_core.accounts.health import record_connectivity_success
+
+        try:
+            with self._session_factory() as session:
+                record_connectivity_success(session, account_id)
+                session.commit()
+        except Exception:
+            log.debug("idle connectivity reset failed for account %s", account_id, exc_info=True)
 
     def _enqueue_catchup(self, watch: _Watch) -> bool:
         """Reconcile the gap before this IDLE session reports changes.
