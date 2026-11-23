@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import uuid
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -74,3 +75,7 @@ def test_invalid_account_id_reports_argument_error(monkeypatch):
     monkeypatch.setattr(db_session, "get_session_factory", lambda: lambda: _Session(True))
     with pytest.raises(SystemExit):
         _run_label_backfill(SimpleNamespace(account_id="not-a-uuid", force=False), _parser())
+
+
+def test_maintenance_lease_ttl_covers_slow_gmail_pages():
+    assert label_backfill.LEASE_TTL >= timedelta(minutes=5)

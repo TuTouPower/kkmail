@@ -34,7 +34,7 @@ from mail_core.sync.metadata import upsert_messages
 
 LOG = logging.getLogger("mail_core.label_backfill")
 
-LEASE_TTL = timedelta(seconds=120)
+LEASE_TTL = timedelta(minutes=30)
 OWNER_PREFIX = "label-backfill"
 FETCH_ATTEMPTS = 3
 
