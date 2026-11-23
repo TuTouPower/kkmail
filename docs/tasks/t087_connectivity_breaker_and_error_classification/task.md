@@ -27,13 +27,13 @@ p088（2026-11-23 用户实报 + 截图）证明侧栏红字「网络连接不�
 
 <!-- /规范 -->
 
-- [ ] AC-001：5 次传输失败必须落在同一滑动窗口内才使 `connectivity_state` 升级为 `unreachable`；同样的 5 次失败分散在超过窗口的时长且中间无成功时保持 `degraded`。后端测试按真实 `backoff_seconds` 序列推进时间，覆盖正反两例。
-- [ ] AC-002：非网络 `OSError`（ENOSPC/EMFILE/EACCES）、含 `connection string` 的配置错误、`temporarily unavailable` 服务端文案不再判为传输故障，`connectivity_state` 不被写为 `degraded` / `unreachable`；真实 `ConnectionError` / `TimeoutError` / `SSLEOFError` 仍判传输故障。反向与正向样本均有断言。
-- [ ] AC-003：任一次成功同步仍复位 `connected` 并清空失败计数、首次失败时间与诊断；`sync_enabled=false` 或 IDLE 持有账号不会因无成功事件而永久滞留 `unreachable`（有界自动复核或 UI 明确区分）。
-- [ ] AC-004：侧栏在账号有文件夹时也按 `credential_state` / `connectivity_state` 显示凭据失效、网络不可达或重试提示；`Sidebar.tsx` 不再把健康提示限制在 `folders.length === 0`。
-- [ ] AC-005：后端恢复 `connected` 后，前端不再因 5 分钟 staleTime 与 `refetchOnWindowFocus=false` 继续显示红字；E2E 断言文案与结构化状态一致。
-- [ ] AC-006：`docs/blueprint/testing.md` 的 `test_cmd` 与 `blackbox_verify` 全量通过，无弱化断言或临时补丁残留；`docs/blueprint/conventions.md:160` 的契约与实现一致。
-- [ ] AC-007：spec `mail_sync_and_storage` 与 `docs/blueprint/testing.md` 同步更新；p088 转办闭环指向 t087。
+- [x] AC-001：5 次传输失败必须落在同一滑动窗口内才使 `connectivity_state` 升级为 `unreachable`；同样的 5 次失败分散在超过窗口的时长且中间无成功时保持 `degraded`。后端测试按真实 `backoff_seconds` 序列推进时间，覆盖正反两例。
+- [x] AC-002：非网络 `OSError`（ENOSPC/EMFILE/EACCES）、含 `connection string` 的配置错误、`temporarily unavailable` 服务端文案不再判为传输故障，`connectivity_state` 不被写为 `degraded` / `unreachable`；真实 `ConnectionError` / `TimeoutError` / `SSLEOFError` 仍判传输故障。反向与正向样本均有断言。
+- [x] AC-003：任一次成功同步仍复位 `connected` 并清空失败计数、首次失败时间与诊断；`sync_enabled=false` 或 IDLE 持有账号不会因无成功事件而永久滞留 `unreachable`（有界自动复核或 UI 明确区分）。
+- [x] AC-004：侧栏在账号有文件夹时也按 `credential_state` / `connectivity_state` 显示凭据失效、网络不可达或重试提示；`Sidebar.tsx` 不再把健康提示限制在 `folders.length === 0`。
+- [x] AC-005：后端恢复 `connected` 后，前端不再因 5 分钟 staleTime 与 `refetchOnWindowFocus=false` 继续显示红字；E2E 断言文案与结构化状态一致。
+- [x] AC-006：`docs/blueprint/testing.md` 的 `test_cmd` 与 `blackbox_verify` 全量通过，无弱化断言或临时补丁残留；`docs/blueprint/conventions.md:160` 的契约与实现一致。
+- [x] AC-007：spec `mail_sync_and_storage` 与 `docs/blueprint/testing.md` 同步更新；p088 转办闭环指向 t087。
 
 ### 可测试性声明
 

@@ -6,6 +6,7 @@ import { buildSidebarMemberships, isSidebarLayoutReady } from '../lib/sidebar_la
 import { useMailStore } from '../store/mailStore'
 import { queryClient, queryKeys, setReadOptimistic } from '../api/queries'
 import { __resetCsrfForTests, type AccountSummary } from '../api/client'
+import { createThrottledInvalidator } from '../hooks/useMailCoreRealtime'
 import { cleanup, render, waitFor, click, typeInto } from '../test/render'
 
 function json(body: unknown, status = 200) {
@@ -21,7 +22,7 @@ const accounts = [
   { id: 'acc-2', email: 'notes@a.example', status: 'active', account_type: 'imap', provider: 'imap', group_id: null },
 ]
 
-function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; accountHealthAcc1?: { credential_state?: string; connectivity_state?: string; sync_activity?: string; last_connectivity_error?: string | null }; disabledAcc1?: boolean; disabledAcc2?: boolean; displayNameAcc1?: string; additionalAccounts?: Array<{ id: string; email: string; group_id: string | null; display_name?: string; recipient_addresses?: string[] }>; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response> } = {}) {
+function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failStats?: boolean; partialStats?: boolean; failAcc1Stats?: boolean; failAcc2Stats?: boolean; missingInboxAcc1?: boolean; duplicateInboxFoldersAcc1?: boolean; nonSelectableParentAcc1?: boolean; emptyFoldersAcc1?: boolean; accountHealthAcc1?: { credential_state?: string; connectivity_state?: string; sync_activity?: string; last_connectivity_error?: string | null }; disabledAcc1?: boolean; disabledAcc2?: boolean; displayNameAcc1?: string; additionalAccounts?: Array<{ id: string; email: string; group_id: string | null; display_name?: string; recipient_addresses?: string[] }>; failLayout?: boolean; staleLayout?: boolean; renameResponse?: () => Promise<Response>; healthRef?: { current: { credential_state?: string; connectivity_state?: string; sync_activity?: string; last_connectivity_error?: string | null } } } = {}) {
   const calls: Array<{ url: string; method: string; body?: string }> = []
   let acc1Unread = 2
   let acc2Unread = 1
@@ -49,6 +50,7 @@ function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failSta
       recipient_addresses: account.recipient_addresses,
     })),
   ]
+  const health = options.healthRef?.current ?? options.accountHealthAcc1
   let currentAccounts: Array<{
     id: string
     email: string
@@ -69,10 +71,10 @@ function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failSta
     group_id: account.group_id ?? null,
     display_name: account.id === 'acc-1' ? options.displayNameAcc1 : account.display_name,
     sync_enabled: account.id === 'acc-1' ? !options.disabledAcc1 : !options.disabledAcc2,
-    credential_state: account.id === 'acc-1' ? options.accountHealthAcc1?.credential_state ?? 'valid' : 'valid',
-    connectivity_state: account.id === 'acc-1' ? options.accountHealthAcc1?.connectivity_state ?? 'connected' : 'connected',
-    sync_activity: account.id === 'acc-1' ? options.accountHealthAcc1?.sync_activity ?? 'idle' : 'idle',
-    last_connectivity_error: account.id === 'acc-1' ? options.accountHealthAcc1?.last_connectivity_error ?? null : null,
+    credential_state: account.id === 'acc-1' ? health?.credential_state ?? 'valid' : 'valid',
+    connectivity_state: account.id === 'acc-1' ? health?.connectivity_state ?? 'connected' : 'connected',
+    sync_activity: account.id === 'acc-1' ? health?.sync_activity ?? 'idle' : 'idle',
+    last_connectivity_error: account.id === 'acc-1' ? health?.last_connectivity_error ?? null : null,
     recipient_addresses: account.recipient_addresses,
   }))
   let currentGroups = groups.map((group) => ({ ...group }))
@@ -138,7 +140,19 @@ function mockApi(options: { foldersAcc1?: any[]; failAccounts?: boolean; failSta
     }
     if (url.pathname === '/api/accounts') {
       if (options.failAccounts) return json({ detail: 'DB connection failed' }, 500)
-      const byId = new Map(currentAccounts.map((account) => [account.id, account]))
+      const liveHealth = options.healthRef?.current ?? options.accountHealthAcc1
+      const byId = new Map(currentAccounts.map((account) => [
+        account.id,
+        account.id === 'acc-1' && liveHealth
+          ? {
+              ...account,
+              credential_state: liveHealth.credential_state ?? 'valid',
+              connectivity_state: liveHealth.connectivity_state ?? 'connected',
+              sync_activity: liveHealth.sync_activity ?? 'idle',
+              last_connectivity_error: liveHealth.last_connectivity_error ?? null,
+            }
+          : account,
+      ]))
       const orderedAccounts = currentLayout.master_account_ids.map((id) => byId.get(id)).filter((account) => account !== undefined)
       return json({ accounts: orderedAccounts, total: orderedAccounts.length, limit: 200, offset: 0, has_more: false })
     }
@@ -1207,6 +1221,24 @@ describe('<Sidebar />', () => {
     await waitFor(() => expect(account.textContent).toContain('网络连接不可用，系统正在重试'))
     expect(account.textContent).toContain('收件箱')
     expect(account.textContent).not.toContain('请检查账户设置')
+  })
+
+  it('clears the red network notice when account.updated invalidates cached accounts after recovery (AC-005)', async () => {
+    const healthRef = { current: { connectivity_state: 'unreachable' } }
+    mockApi({ healthRef })
+    const { container } = await render(<Sidebar />)
+    const accountRow = () => container.querySelector('.tree-account-block[data-drop-list="master"][data-account-id="acc-1"]')!
+    await waitFor(() => expect(accountRow()).not.toBeNull())
+    await click(accountRow().querySelector('.tree-disclosure'))
+    await waitFor(() => expect(accountRow().textContent).toContain('网络连接不可用，系统正在重试'))
+    healthRef.current = { connectivity_state: 'connected' }
+    const invalidator = createThrottledInvalidator(queryClient, 0)
+    await act(async () => {
+      invalidator.handleEvent('account.updated', {})
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    await waitFor(() => expect(accountRow().textContent).not.toContain('网络连接不可用，系统正在重试'))
+    expect(accountRow().textContent).toContain('收件箱')
   })
 
   it('reports a transient degraded connection with retry text but no account alarm (AC-007)', async () => {

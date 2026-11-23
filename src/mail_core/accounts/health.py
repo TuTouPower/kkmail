@@ -20,15 +20,20 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from mail_core.mail.domain.enums import ConnectivityState, CredentialState, SyncActivity
-from mail_core.mail.storage.models import Account
+from mail_core.mail.domain.enums import (
+    ConnectivityState,
+    CredentialState,
+    OutboxEventType,
+    SyncActivity,
+)
+from mail_core.mail.storage.models import Account, OutboxEvent
 from mail_core.security.redact import safe_provider_summary
 
 CONNECTIVITY_FAILURE_THRESHOLD = 5
 CONNECTIVITY_WINDOW = timedelta(seconds=300)
+UNREACHABLE_RECHECK_INTERVAL = timedelta(minutes=15)
 
-CFG_FAILURE_COUNT = "connectivity_failure_count"
-CFG_FIRST_FAILURE_AT = "connectivity_first_failure_at"
+CFG_FAILURE_TIMESTAMPS = "connectivity_failure_timestamps"
 CFG_LAST_CONNECTIVITY_ERROR = "last_connectivity_error"
 CFG_LAST_SYNCED_AT = "last_synced_at"
 
@@ -39,6 +44,46 @@ def _now() -> datetime:
 
 def _config(acc: Account) -> dict[str, Any]:
     return dict(acc.config or {})
+
+
+def _publish_connectivity_change(
+    session: Session, acc: Account, previous: str
+) -> None:
+    """Broadcast a real transition so every client invalidates cached health."""
+
+    if previous != acc.connectivity_state:
+        session.add(
+            OutboxEvent(
+                event_type=OutboxEventType.ACCOUNT_UPDATED.value,
+                account_id=acc.id,
+                payload={"connectivity_state": acc.connectivity_state},
+            )
+        )
+
+
+def _stored_failure_timestamps(cfg: dict[str, Any]) -> list[datetime]:
+    raw = cfg.get(CFG_FAILURE_TIMESTAMPS)
+    if not isinstance(raw, list):
+        return []
+    stamps: list[datetime] = []
+    for item in raw:
+        try:
+            stamp = datetime.fromisoformat(str(item))
+        except (ValueError, TypeError):
+            continue
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        stamps.append(stamp)
+    return stamps
+
+
+def _failure_streak(cfg: dict[str, Any], now: datetime) -> list[datetime]:
+    """Consecutive failures: a gap larger than the window starts a new streak."""
+
+    stamps = _stored_failure_timestamps(cfg)
+    if stamps and now - max(stamps) > CONNECTIVITY_WINDOW:
+        return []
+    return stamps
 
 
 def mark_credential_invalid(session: Session, account_id: uuid.UUID) -> Account | None:
@@ -87,14 +132,15 @@ def record_connectivity_success(
     if acc is None:
         return None
     now = now or _now()
+    previous = acc.connectivity_state
     acc.connectivity_state = ConnectivityState.CONNECTED.value
     cfg = _config(acc)
-    cfg.pop(CFG_FAILURE_COUNT, None)
-    cfg.pop(CFG_FIRST_FAILURE_AT, None)
+    cfg.pop(CFG_FAILURE_TIMESTAMPS, None)
     cfg.pop(CFG_LAST_CONNECTIVITY_ERROR, None)
     cfg.pop("last_sync_error", None)
     cfg[CFG_LAST_SYNCED_AT] = now.isoformat()
     acc.config = cfg
+    _publish_connectivity_change(session, acc, previous)
     session.flush()
     return acc
 
@@ -108,47 +154,64 @@ def record_connectivity_failure(
 ) -> ConnectivityState | None:
     """Advance the breaker on a transport failure; return the resulting state.
 
-    A single failure marks the account ``degraded`` (retry in progress).  Only
-    after ``CONNECTIVITY_FAILURE_THRESHOLD`` consecutive failures spanning at
-    least ``CONNECTIVITY_WINDOW`` does it escalate to ``unreachable``.
+    ``degraded`` after a single failure. ``unreachable`` once a streak has
+    ``CONNECTIVITY_FAILURE_THRESHOLD`` failures with no adjacent gap larger
+    than ``CONNECTIVITY_WINDOW`` and a first-failure-to-now span at least that
+    window. A gap larger than the window starts a fresh streak, so intermittent
+    failures days apart never escalate.
     """
 
     acc = session.get(Account, account_id)
     if acc is None:
         return None
     now = now or _now()
+    previous = acc.connectivity_state
     cfg = _config(acc)
 
-    first: datetime | None = None
-    raw_first = cfg.get(CFG_FIRST_FAILURE_AT)
-    if raw_first:
-        try:
-            first = datetime.fromisoformat(str(raw_first))
-        except (ValueError, TypeError):
-            first = None
-
-    # The consecutive-failure counter is monotonic: a long pause between
-    # failures (e.g. a 20-minute periodic poll) must not reset it, otherwise
-    # the breaker could never reach its threshold within a realistic backoff
-    # sequence.  Only a successful round trip clears it.
-    if first is None:
-        first = now
-    count = int(cfg.get(CFG_FAILURE_COUNT, 0)) + 1
-
-    elapsed = now - first
-    if count >= CONNECTIVITY_FAILURE_THRESHOLD and elapsed >= CONNECTIVITY_WINDOW:
+    stamps = _failure_streak(cfg, now)
+    stamps.append(now)
+    if len(stamps) >= CONNECTIVITY_FAILURE_THRESHOLD and now - min(stamps) >= CONNECTIVITY_WINDOW:
         state = ConnectivityState.UNREACHABLE
     else:
         state = ConnectivityState.DEGRADED
 
     acc.connectivity_state = state.value
-    cfg[CFG_FAILURE_COUNT] = count
-    cfg[CFG_FIRST_FAILURE_AT] = first.isoformat()
+    cfg[CFG_FAILURE_TIMESTAMPS] = [stamp.isoformat() for stamp in stamps]
     cfg[CFG_LAST_CONNECTIVITY_ERROR] = safe_provider_summary(error)
     cfg[CFG_LAST_SYNCED_AT] = now.isoformat()
     acc.config = cfg
+    _publish_connectivity_change(session, acc, previous)
     session.flush()
     return state
+
+
+def recheck_unreachable(
+    session: Session, account_id: uuid.UUID, *, now: datetime | None = None
+) -> ConnectivityState | None:
+    """Bounded half-open re-check: demote a stale open breaker to degraded.
+
+    Normal periodic sync then supplies the success event that closes the
+    breaker.  Without this, an account with no foreground activity (paused or
+    IDLE-held) keeps an open breaker forever, and any retry text is a lie.
+    """
+
+    acc = session.get(Account, account_id)
+    if acc is None or acc.connectivity_state != ConnectivityState.UNREACHABLE.value:
+        return None
+    now = now or _now()
+    stamps = _stored_failure_timestamps(_config(acc))
+    if not stamps or now - max(stamps) < UNREACHABLE_RECHECK_INTERVAL:
+        return None
+    previous = acc.connectivity_state
+    acc.connectivity_state = ConnectivityState.DEGRADED.value
+    cfg = _config(acc)
+    cfg[CFG_FAILURE_TIMESTAMPS] = [
+        stamp.isoformat() for stamp in stamps if stamp >= now - CONNECTIVITY_WINDOW
+    ]
+    acc.config = cfg
+    _publish_connectivity_change(session, acc, previous)
+    session.flush()
+    return ConnectivityState.DEGRADED
 
 
 def health_fields(acc: Account) -> dict[str, Any]:
