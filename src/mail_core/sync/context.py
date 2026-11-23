@@ -134,7 +134,7 @@ def _classify_result_dict(result: dict[str, Any]) -> FailureClassification:
         except ValueError:
             return _UNKNOWN
     status = result.get("status")
-    if status == 401:
+    if status == 401 or status == "auth_failed":
         return _AUTH
     if isinstance(status, int) and 500 <= status <= 599:
         return _TRANSPORT

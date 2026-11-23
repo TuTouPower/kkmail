@@ -145,6 +145,55 @@ def _port_value(raw: str) -> int:
         raise argparse.ArgumentTypeError(f"invalid port value: {raw!r}") from None
 
 
+def _run_label_backfill(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    import uuid
+
+    from sqlalchemy import select
+
+    from mail_core.db.session import get_session_factory
+    from mail_core.mail.domain.folder_views import is_gmail_account
+    from mail_core.mail.storage.models import Account
+    from mail_core.sync.label_backfill import backfill_account
+
+    requested = None
+    if args.account_id:
+        try:
+            requested = uuid.UUID(args.account_id)
+        except ValueError:
+            parser.error(f"invalid --account-id: {args.account_id}")
+    Session = get_session_factory()
+    with Session() as session:
+        if requested is not None:
+            accounts = [session.get(Account, requested)]
+        else:
+            accounts = list(session.scalars(select(Account)).all())
+        targets = [
+            account
+            for account in accounts
+            if account is not None
+            and is_gmail_account(account)
+            and (args.force or account.label_backfill_completed_at is None)
+        ]
+    failures = 0
+    for account in targets:
+        result = backfill_account(Session, account.id, force=args.force)
+        print(
+            f"label_backfill account={account.id} status={result.status} "
+            f"folders={result.folders} upserted={result.upserted}"
+        )
+        if result.status in ("failed", "account_not_found", "lease_busy"):
+            failures += 1
+    if requested is not None and not targets:
+        with Session() as session:
+            exists = session.get(Account, requested) is not None
+        print(
+            f"label_backfill account={requested} "
+            f"status={'skipped' if exists else 'account_not_found'}"
+        )
+        return 0 if exists else 1
+    return 1 if failures else 0
+
+
 def main(argv: list[str] | None = None) -> int | None:
     from mail_core.config import ConfigError, get_config, reset_config
     from mail_core.config.loader import is_sidecar_enabled
@@ -181,6 +230,13 @@ def main(argv: list[str] | None = None) -> int | None:
         action="store_true",
         help="Read-only migration check: exit 0 when the database can start, non-zero otherwise. Performs zero writes.",
     )
+    gate.add_argument(
+        "--backfill-gmail-labels",
+        action="store_true",
+        help="One-shot backfill of historical Gmail Important label membership, then exit.",
+    )
+    parser.add_argument("--account-id", help="Limit label backfill to this account UUID.")
+    parser.add_argument("--force", action="store_true", help="Re-run label backfill even for completed accounts.")
     args = parser.parse_args(argv)
 
     if args.migrate_only or args.check_migrations:
@@ -215,6 +271,8 @@ def main(argv: list[str] | None = None) -> int | None:
     _configure_proxy_headers(enabled=args.proxy_headers, forwarded_allow_ips=args.forwarded_allow_ips)
     if not args.skip_migrations:
         run_migrations()
+    if args.backfill_gmail_labels:
+        return _run_label_backfill(args, parser)
     if not args.no_worker:
         from mail_core.worker import main as worker_main
 

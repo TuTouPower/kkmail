@@ -23,6 +23,12 @@ GMAIL_VIEW_REMOTE_IDS = frozenset(
 EXCLUDED_FROM_ALL_VIEW_ROLES = frozenset({"trash", "junk", "spam"})
 
 
+def is_gmail_account(account: object) -> bool:
+    email = str(getattr(account, "email", "")).lower()
+    config = getattr(account, "config", None) or {}
+    return email.endswith(("@gmail.com", "@googlemail.com")) or "gmail" in str(config.get("imap_host", "")).lower()
+
+
 def is_gmail_view(role: str, remote_id: str) -> bool:
     return role in VIEW_ROLES or remote_id in GMAIL_VIEW_REMOTE_IDS
 

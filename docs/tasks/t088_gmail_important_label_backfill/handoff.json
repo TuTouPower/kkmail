@@ -1,0 +1,18 @@
+{
+  "tid": "t088",
+  "attempt": 1,
+  "execution_id": "edd6b311066b4e72b9a2f91eb319ec28",
+  "status": "done",
+  "branch": "t088_gmail_important_label_backfill",
+  "base_sha": "70a7f843634b3de09b78323136efa3b4799e9514",
+  "spec_source_sha": "70a7f843634b3de09b78323136efa3b4799e9514",
+  "tests": "完整 PG 套件除 p091 的 2 条 idle watcher 回归外全绿（4 条失败中 2 条已修）；unit、定向 PG（`test_gmail_label_backfill` + CLI + 迁移）、前端 `npm test`/`build`/`lint`、桌面单测、敏感文档扫描与黑盒 E2E 全通过",
+  "blackbox": "`npm --prefix src/frontend run test:e2e` 25 passed",
+  "review": "待 reviewer 填写",
+  "review_scope": "e8e666e55663153a",
+  "pending": [
+    "p090",
+    "p091"
+  ],
+  "findings": []
+}
