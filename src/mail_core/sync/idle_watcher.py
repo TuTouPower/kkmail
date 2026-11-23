@@ -696,8 +696,11 @@ def _aware(value: datetime | None) -> datetime | None:
 
 
 def _fingerprint(account: Account, folder: Folder) -> str:
-    updated = account.updated_at.isoformat() if account.updated_at else ""
-    return f"{account.credential_ref or ''}|{updated}|{folder.id}"
+    # Stable credential identity only. Account ``updated_at`` changes on
+    # health bookkeeping after a successful connect, so including it made
+    # every reconcile rotate the IDLE seat even though credentials were
+    # unchanged (t073 churn / retry-count failures).
+    return f"{account.credential_ref or ''}|{account.provider}|{account.id}|{folder.id}"
 
 
 def _default_idle_session_factory(account: Account, folder: Folder) -> Any:
