@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { setupStubApi } from './stubApi'
+import { chooseDropdownOption } from './dropdown'
 
 test('provider forms: Google IMAP help, Microsoft OAuth and nested dialog focus on narrow screens', async ({ page }) => {
   await setupStubApi(page, { authedInitially: true })
@@ -7,8 +8,8 @@ test('provider forms: Google IMAP help, Microsoft OAuth and nested dialog focus 
   await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.getByRole('button', { name: '添加账户', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '添加账户', exact: true })
-  await dialog.getByLabel('邮箱供应商').selectOption('google')
-  await dialog.getByLabel('连接方式').selectOption('imap')
+  await chooseDropdownOption(page, dialog.getByLabel('邮箱供应商'), 'google')
+  await chooseDropdownOption(page, dialog.getByLabel('连接方式'), 'imap')
   await expect(dialog.getByLabel('IMAP 服务器')).toHaveValue('imap.gmail.com')
   const helpButton = dialog.getByRole('button', { name: '如何获取账户凭据' })
   await helpButton.click()
@@ -16,7 +17,7 @@ test('provider forms: Google IMAP help, Microsoft OAuth and nested dialog focus 
   await page.keyboard.press('Escape')
   await expect(helpButton).toBeFocused()
   await expect(dialog).toBeVisible()
-  await dialog.getByLabel('邮箱供应商').selectOption('microsoft')
+  await chooseDropdownOption(page, dialog.getByLabel('邮箱供应商'), 'microsoft')
   await expect(dialog.getByLabel('Client ID', { exact: true })).toBeVisible()
   await expect(dialog.getByLabel('IMAP 服务器')).toHaveCount(0)
   await dialog.getByLabel('Refresh Token', { exact: true }).fill('long-token'.repeat(100))
@@ -35,7 +36,7 @@ test('Microsoft browser and device login create and reauthorize accounts on narr
   await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.getByRole('button', { name: '添加账户', exact: true }).click()
   const add = page.getByRole('dialog', { name: '添加账户', exact: true })
-  await add.getByLabel('邮箱供应商').selectOption('microsoft')
+  await chooseDropdownOption(page, add.getByLabel('邮箱供应商'), 'microsoft')
   await add.getByLabel('Client ID', { exact: true }).fill('own-ms-app')
   await add.getByRole('button', { name: '使用 Microsoft 登录', exact: true }).click()
   await expect(add).toContainText('已完成 Microsoft 授权：oauth-new@outlook.com')
@@ -47,7 +48,7 @@ test('Microsoft browser and device login create and reauthorize accounts on narr
   const help = page.getByRole('dialog', { name: /Microsoft.*OAuth 登录配置/ })
   await expect(help).toContainText('Allow public client flows')
   await page.keyboard.press('Escape')
-  await edit.getByLabel('Microsoft 登录方式').selectOption('device_code')
+  await chooseDropdownOption(page, edit.getByLabel('Microsoft 登录方式'), 'device_code')
   await expect(edit.getByLabel('OAuth 回调地址（Redirect URI）')).toHaveCount(0)
   await expect(edit.getByLabel('Client Secret', { exact: true })).toHaveCount(0)
   await page.setViewportSize({ width: 320, height: 568 })
@@ -72,7 +73,7 @@ test('Microsoft device login code copy failure displays fallback notice when cli
   await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.getByRole('button', { name: '编辑账户 existing@outlook.com', exact: true }).click()
   const edit = page.getByRole('dialog', { name: '编辑账户', exact: true })
-  await edit.getByLabel('Microsoft 登录方式').selectOption('device_code')
+  await chooseDropdownOption(page, edit.getByLabel('Microsoft 登录方式'), 'device_code')
   await edit.getByRole('button', { name: '重新授权', exact: true }).click()
   await expect(edit).toContainText('ABCD-EFGH')
   await page.evaluate(() => {

@@ -100,7 +100,7 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
 
     // 3. 填入真实测试 IMAP 配置
     await page.locator('#account-email').fill(IMAP_USER)
-    await page.locator('#account-provider').selectOption('imap')
+    await chooseDropdownOption(page, page.locator('#account-provider'), 'imap')
     await page.locator('#account-imap-host').fill(IMAP_HOST)
     await page.locator('#account-imap-port').fill(IMAP_PORT)
     const sslCheckbox = page.locator('#account-imap-ssl')
@@ -446,14 +446,14 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
     const accountSelect = page.getByLabel(`移动 ${email}`)
     const accountRow = accountSelect.locator('xpath=..')
     const accountDetails = accountRow.locator('div').first()
-    await expect(accountSelect).toHaveValue(firstGroupId)
+    await expect(accountSelect).toHaveAttribute('data-select-value', firstGroupId)
 
     const moveResponse = page.waitForResponse((response) =>
       new URL(response.url()).pathname === `/api/accounts/${accountId}` && response.request().method() === 'PATCH',
     )
-    await accountSelect.selectOption(secondGroupId)
+    await chooseDropdownOption(page, accountSelect, secondGroupId)
     expect((await moveResponse).status()).toBe(200)
-    await expect(accountSelect).toHaveValue(secondGroupId)
+    await expect(accountSelect).toHaveAttribute('data-select-value', secondGroupId)
     await expect(accountDetails).toContainText(secondGroupName)
     let accounts = ((await (await page.request.get('/api/accounts?limit=500&offset=0')).json()).accounts) as Array<{ id: string; group_id: string | null }>
     expect(accounts.find((item) => item.id === accountId)?.group_id).toBe(secondGroupId)
@@ -461,9 +461,9 @@ test.describe('全栈端到端真实测试 (Full Stack E2E)', () => {
     const clearResponse = page.waitForResponse((response) =>
       new URL(response.url()).pathname === `/api/accounts/${accountId}` && response.request().method() === 'PATCH',
     )
-    await accountSelect.selectOption('')
+    await chooseDropdownOption(page, accountSelect, '')
     expect((await clearResponse).status()).toBe(200)
-    await expect(accountSelect).toHaveValue('')
+    await expect(accountSelect).toHaveAttribute('data-select-value', '')
     await expect(accountDetails).not.toContainText(secondGroupName)
     accounts = ((await (await page.request.get('/api/accounts?limit=500&offset=0')).json()).accounts) as Array<{ id: string; group_id: string | null }>
     expect(accounts.find((item) => item.id === accountId)?.group_id).toBeNull()

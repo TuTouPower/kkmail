@@ -3,7 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import AccountDialog from './settings_account_form'
 import SettingsPage from './SettingsModal'
-import { cleanup, render, changeSelect, typeInto, click, waitFor } from '../test/render'
+import { cleanup, render, changeSelect, selectOptions, typeInto, click, waitFor } from '../test/render'
 import { __resetCsrfForTests } from '../api/client'
 import { queryClient } from '../api/queries'
 
@@ -19,10 +19,10 @@ it('Google onboarding offers only IMAP app-password: no OAuth fields, Gmail pres
   const { container } = await render(<AccountDialog groups={[]} groupsAvailable onClose={vi.fn()} onSaved={vi.fn()} />)
   await changeSelect(container.querySelector('#account-vendor'), 'google')
   // Connection method is locked to IMAP app-password: it is the only option.
-  const providerSelect = container.querySelector('#account-provider') as HTMLSelectElement
-  expect(providerSelect.value).toBe('imap')
-  expect([...providerSelect.options].map(option => option.value)).toEqual(['imap'])
-  expect([...providerSelect.options].map(option => option.textContent)).toEqual(['IMAP（应用专用密码）'])
+  const providerSelect = container.querySelector('#account-provider') as HTMLElement
+  expect(providerSelect.getAttribute('data-select-value')).toBe('imap')
+  expect((await selectOptions(providerSelect)).map(option => option.value)).toEqual(['imap'])
+  expect((await selectOptions(providerSelect)).map(option => option.label)).toEqual(['IMAP（应用专用密码）'])
   // No OAuth developer fields anywhere in the Google add-account form.
   for (const id of ['account-client-id', 'account-client-secret', 'account-refresh-token', 'account-token-uri', 'account-scope', 'account-redirect-uri', 'account-client-type']) {
     expect(container.querySelector(`#${id}`)).toBeNull()
@@ -436,7 +436,7 @@ it('restores active Microsoft OAuth draft on #oauth-return in SettingsPage and A
   )
   await waitFor(() => expect(container.textContent).toContain('已完成 Microsoft 授权：restored@outlook.com'))
   expect((container.querySelector('#account-email') as HTMLInputElement).value).toBe('restored@outlook.com')
-  expect((container.querySelector('#account-group') as HTMLSelectElement).value).toBe('grp-restore')
+  expect((container.querySelector('#account-group') as HTMLElement).getAttribute('data-select-value')).toBe('grp-restore')
   expect((container.querySelector('#account-client-id') as HTMLInputElement).value).toBe('restored-client-id')
   expect(window.location.hash).toBe('')
 })

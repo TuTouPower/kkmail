@@ -27,13 +27,13 @@ p085（2026-11-23 用户实报 + 两张桌面端截图）记录：设置页下�
 
 <!-- /规范 -->
 
-- [ ] AC-001：`settings_account_form.tsx` 与 `SettingsModal.tsx` 中已确认的 10 个 `<select>` 和 2 个 `<datalist>` 调用点全部迁移到共享下拉原语；静态扫描确认两文件不再出现原生 `<select>` / `<datalist>` 元素，其余前端文件本就无此类元素。
-- [ ] AC-002：共享原语具备键盘导航（方向键/Enter/Escape）、关闭后焦点回到触发器、无障碍名称与 disabled 态；组件层测试逐项断言通过。
-- [ ] AC-003：暗色与浅色主题下，供应商、所属分组、分组筛选、租户建议、时区建议五类代表下拉展开后，弹出层背景/边框/圆角/选中高亮均解析为 `tokens.css` 语义 token（E2E 计算样式断言 + 双主题截图），不再出现浏览器/OS 默认蓝高亮。
-- [ ] AC-004：`DESIGN.md` 增补 select/dropdown（含建议输入）组件规范与所需 token；`check_css_tokens.mjs` 的深色 token 一致性检查通过。
-- [ ] AC-005：静态门禁能拦截新增原生 `<select>` / `<datalist>` 用法：对当前源码通过、对含原生控件的反例失败，且该检查纳入 `npm test` 的 css:check 链。
-- [ ] AC-006：测试覆盖五类代表下拉与双主题；`docs/blueprint/testing.md` 的 `test_cmd` 与 `blackbox_verify` 全量通过，无弱化断言或临时补丁残留。
-- [ ] AC-007：`docs/blueprint/conventions.md`、`docs/blueprint/testing.md` 与 spec `inbox_ui_and_search` 同步更新；p085 转办闭环指向 t085。
+- [x] AC-001：`settings_account_form.tsx` 与 `SettingsModal.tsx` 中已确认的 10 个 `<select>` 和 2 个 `<datalist>` 调用点全部迁移到共享下拉原语；静态扫描确认两文件不再出现原生 `<select>` / `<datalist>` 元素，其余前端文件本就无此类元素。
+- [x] AC-002：共享原语具备键盘导航（方向键/Enter/Escape）、关闭后焦点回到触发器、无障碍名称与 disabled 态；组件层测试逐项断言通过。
+- [x] AC-003：暗色与浅色主题下，供应商、所属分组、分组筛选、租户建议、时区建议五类代表下拉展开后，弹出层背景/边框/圆角/选中高亮均解析为 `tokens.css` 语义 token（E2E 计算样式断言 + 双主题截图），不再出现浏览器/OS 默认蓝高亮。
+- [x] AC-004：`DESIGN.md` 增补 select/dropdown（含建议输入）组件规范与所需 token；`check_css_tokens.mjs` 的深色 token 一致性检查通过。
+- [x] AC-005：静态门禁能拦截新增原生 `<select>` / `<datalist>` 用法：对当前源码通过、对含原生控件的反例失败，且该检查纳入 `npm test` 的 css:check 链。
+- [x] AC-006：测试覆盖五类代表下拉与双主题；`docs/blueprint/testing.md` 的 `test_cmd` 与 `blackbox_verify` 全量通过，无弱化断言或临时补丁残留。
+- [x] AC-007：`docs/blueprint/conventions.md`、`docs/blueprint/testing.md` 与 spec `inbox_ui_and_search` 同步更新；p085 转办闭环指向 t085。
 
 ### 可测试性声明
 

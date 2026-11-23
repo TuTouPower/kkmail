@@ -60,7 +60,7 @@ test('settings workspace: filters, sync preference, native modal keyboard and se
 
   await settings.getByRole('button', { name: '分组管理', exact: true }).click()
   await settings.getByRole('button', { name: '查看 工作邮箱 的账户' }).click()
-  await expect(settings.getByRole('combobox', { name: '按分组筛选' })).toHaveValue('work')
+  await expect(settings.getByRole('combobox', { name: '按分组筛选' })).toHaveAttribute('data-select-value', 'work')
   await expect(settings.locator('.settings-account-row')).toHaveCount(9)
   await settings.getByRole('button', { name: '通用', exact: true }).click()
   await settings.getByRole('button', { name: '深色', exact: true }).click()

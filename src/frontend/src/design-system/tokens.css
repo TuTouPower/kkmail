@@ -26,6 +26,14 @@
   --z-drawer: 40;
   --z-titlebar: 100;
   --z-popover: 1000;
+  --dropdown-surface: var(--surface-2);
+  --dropdown-border: var(--line-strong);
+  --dropdown-radius: var(--radius);
+  --dropdown-active: var(--selected);
+  --dropdown-hover: var(--surface-hover);
+  --dropdown-focus: var(--accent);
+  --dropdown-text: var(--text);
+  --dropdown-muted: var(--muted);
 }
 
 html[data-theme="dark"] {

@@ -46,7 +46,7 @@ python3 scripts/check_doc_sensitive.py docs --check
 npm --prefix src/frontend run test:e2e
 ```
 
-快速 E2E 包含共享 360px 几何门禁（`tests/e2e/layoutGeometry.ts` 的 `assertNoOverlap`）：`reader_toolbar.spec.ts` 用长邮箱账号断言阅读页工具栏主信息槽与操作槽矩形不相交；该 helper 与模板供后续 task 复用，禁止复制第二套实现。`mail_body_viewport.spec.ts` 复用同一 360px 模板，用固定宽度表格邮件 fixture 断言 iframe 内文档无横向溢出。`npm run css:check` 的 `check_layout_contracts.mjs` 静态守护断点单一来源与工具栏操作槽不回归绝对定位。
+快速 E2E 包含共享 360px 几何门禁（`tests/e2e/layoutGeometry.ts` 的 `assertNoOverlap`）：`reader_toolbar.spec.ts` 用长邮箱账号断言阅读页工具栏主信息槽与操作槽矩形不相交；该 helper 与模板供后续 task 复用，禁止复制第二套实现。`mail_body_viewport.spec.ts` 复用同一 360px 模板，用固定宽度表格邮件 fixture 断言 iframe 内文档无横向溢出。`npm run css:check` 的 `check_layout_contracts.mjs` 静态守护断点单一来源与工具栏操作槽不回归绝对定位；`check_native_select.mjs` 禁止应用源码新增原生 `<select>` / `<datalist>`，其正反例由同目录 node-test 覆盖，并经 `css:check` 进入 `test_cmd`（t085）。
 
 ### Electron 原生标题栏人工验证
 
@@ -80,6 +80,7 @@ Windows/Linux 原生窗口行为应在对应系统实际运行验证；无法使
 |**敏感文档防泄漏门禁**|个人邮箱/宿主路径/凭据泄漏扫描|`python3 scripts/check_doc_sensitive.py docs --check`|
 |**后端单元/集成测试**|FastAPI + PG + Worker|`scripts/run-mail-core-tests.sh run`|
 |**UI 稳定编号与引用**|快捷键、气泡浮标、复制格式与唯一性|`(cd src/frontend && npm test -t uiReference)`|
+|**原生下拉控件门禁**|禁止 `<select>` / `<datalist>`，原语 token 化|`npm --prefix src/frontend run css:check`；组件测试 `Select.test.tsx`；双主题 E2E `dropdown_theming.spec.ts`|
 |**写回收敛与统计一致性**|批次自动续跑、意图保护与孤儿恢复|`scripts/run-mail-core-tests.sh run -k test_mark_read_convergence_suite`|
 |**MIME 解析错误与前端可见性**|正文/报头/附件名解析失败、API 传递与跨邮件状态隔离|`scripts/run-mail-core-tests.sh run -k test_archive_decode_failure` 及 `(cd src/frontend && npm test -t MessageReader)`|
 

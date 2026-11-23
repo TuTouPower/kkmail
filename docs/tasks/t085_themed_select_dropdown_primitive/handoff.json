@@ -1,0 +1,15 @@
+{
+  "tid": "t085",
+  "attempt": 1,
+  "execution_id": "c8175e6f64e14f47950fad4e8e1a5981",
+  "status": "done",
+  "branch": "t085_themed_select_dropdown_primitive",
+  "base_sha": "47e44e0b48219c696f9428e682de6b064cd6e6e8",
+  "spec_source_sha": "47e44e0b48219c696f9428e682de6b064cd6e6e8",
+  "tests": "`npm test`（vitest 596/596、openapi:check、css:check 全部通过）、`npx tsc -b`、`npm run build`、`npm run lint`、`npm --prefix src/desktop test`、`check_doc_sensitive.py docs --check` 全通过",
+  "blackbox": "`npm --prefix src/frontend run test:e2e` 25 passed，含双主题 `dropdown_theming.spec.ts` 2 passed；截图落 `.scratch/t085_*_*.png`",
+  "review": "Round 1 一条 important finding 已根因修复并补回归断言；Round 2 独立复核 PASS，7/7 AC TICK-VALID",
+  "review_scope": "c0409b7a1531ea0b",
+  "pending": [],
+  "findings": []
+}
