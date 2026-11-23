@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from mail_core.accounts import enabled_account_ids
 from mail_core.mail.domain.enums import JobType, SyncStatus
+from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
 from mail_core.mail.storage.models import (
     Account,
     AccountGroup,
@@ -212,7 +213,7 @@ def resolve_sync_targets(
         folder = session.get(Folder, folder_id)
         if folder is None or folder.account_id not in acc_ids:
             raise LookupError("folder not found in account scope")
-        if folder.sync_status == SyncStatus.PAUSED.value:
+        if is_view_folder(folder) or folder.sync_status == SyncStatus.PAUSED.value:
             # Non-selectable folders are excluded from synchronization
             # everywhere else in the system: role resolution below filters
             # them out, and the execution layer completes their jobs as
@@ -238,7 +239,7 @@ def resolve_sync_targets(
             select(Folder)
             .where(Folder.account_id.in_(acc_ids))
             .where(Folder.role == "inbox")
-            .where(Folder.sync_status != SyncStatus.PAUSED.value)
+            .where(Folder.kind == CONTAINER, Folder.sync_status != SyncStatus.PAUSED.value)
         ).all():
             inbox_by_account.setdefault(f.account_id, f)
         inbox_ids = [f.id for f in inbox_by_account.values()]
@@ -255,7 +256,7 @@ def resolve_sync_targets(
                     select(Folder)
                     .where(Folder.account_id == aid)
                     .where(Folder.role == folder_role)
-                    .where(Folder.sync_status != SyncStatus.PAUSED.value)
+                    .where(Folder.kind == CONTAINER, Folder.sync_status != SyncStatus.PAUSED.value)
                 ).all()
             )
             for f in role_folders:

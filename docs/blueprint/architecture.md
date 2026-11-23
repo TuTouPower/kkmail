@@ -36,7 +36,7 @@ kkmail 是基于 `mail-core` 的现代化自托管多账号邮件客户端，采
 
 - **同步引擎与协议适配 (`src/mail_core/sync/`, `src/mail_core/providers/`)**：
 
-    - 适配器：IMAP (带 TLS 校验与特殊文件夹转义；默认 Socket 超时放宽至 60s；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务；Gmail 账号下 `\All` 与 `\Important` 等虚拟全量标签默认置为 `paused`，避免收件箱与已发送邮件全量重复拉取；RFC 6154 支持 `\All` 映射为 `all` 与 `\Flagged` 映射为 `flagged`)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放)。
+    - 适配器：IMAP (带 TLS 校验与特殊文件夹转义；默认 Socket 超时放宽至 60s；`\NonExistent` 过滤，`\Noselect` 保留为不可选择的树节点且不排邮件同步任务；Gmail 账号下 `\All` 与 `\Important` 等虚拟全量标签建模为 `kind=view` 的派生只读视图，不进入同步队列；常规 FETCH 携带 `X-GM-LABELS`，标签成员落为 `message_locations`，视图计数与列表由物理目录位置投影得到（t086）；RFC 6154 支持 `\All` 映射为 `all` 与 `\Flagged` 映射为 `flagged`)、Microsoft Graph v1.0 (well-known 收件箱别名与子目录递归；默认共享 OAuth JSON transport 对 GET/HEAD 的 503/504、网络断连与 TLS EOF 最多重试 3 次，等待按 1/2/3 秒线性递增；正数 `Retry-After` 可覆盖 503/504 等待，最高 10 秒，其他方法不重放)。
     - 并发保护与容错：基于数据库的租约锁 (`AccountSyncLease`) 与递增 fencing token；Worker 捕获瞬态网络超时（`TimeoutError`、`SSLEOFError` 等）进行指数退避重试，未达重试上限时不污染账户为 `failed` 状态。
     - 同步分批：`sync_folder_metadata` 默认单任务最大页数控制在 10 页（约 500 封），避免大目录单次长时间霸占连接与 Worker 队列。
     - 元数据保真：provider 通过 `RemoteMessageMeta.supplied_fields` 区分完整快照与部分返回字段，metadata upsert 按字段存在性应用；同页 partial/flag 按响应顺序合并，缺省字段不清空本地事实。Graph 内容字段显式空值仍可清空。
@@ -126,7 +126,7 @@ Microsoft Graph 同时提供授权码 + PKCE 和设备码流程，复用相同 `
 1. **账号健康状态机三维正交模型**：
     - 账号级单一 `sync_status`（`idle` / `running` / `failed` / `auth_failed`）彻底移除，由 `src/mail_core/accounts/health.py` 统一维护四个正交字段：`credential_state`（`valid` / `invalid`，`invalid` 时 `sync_enabled=false`）只由认证结果决定，`connectivity_state`（`connected` / `degraded` / `unreachable`）只由传输可达性决定，`sync_activity`（`idle` / `syncing`）只表示是否有同步任务在途，链路诊断写入脱敏 `last_connectivity_error`；三者互不推导、互不覆盖，OpenAPI 与前端 `AccountOut` / `AccountSummary` 契约随新四字段收敛。
     - 传输层网络抖动、超时与限流只作用于 `connectivity_state`，不得污染凭据态，也不外溢为账号认证失败或侧栏全局报警；后台静默同步故障同理不外溢。连接态熔断以连续 5 次失败且跨越 5 分钟窗口为阈值才置 `unreachable`，任一次链路成功即复位 `connected`，单次抖动只置 `degraded`。
-    - Folder 级 `folders.sync_status`（`paused` / `idle`）是独立实体，完全保留；账号健康状态变更不得触碰文件夹暂停/空闲语义。
+    - Folder 级 `folders.sync_status`（`paused` / `idle`）仅用于物理 mailbox（`kind=container`）；派生视图（`kind=view`）没有暂停语义，账号健康状态变更不得触碰文件夹状态。
 2. **Worker 统一重试调度**：
     - 协议适配器与传输层不再各自实现重试或自行判定账号状态，瞬时错误统一回归 Worker 任务框架：由 `account_failure_kind` 分类故障来源，`resolve_sync_context` 在顶层注入 `background` 标记，`reschedule_job(count_failure=True)` 保留原 job ID、递增 `failure_attempts` 并按指数退避重排，周期任务 payload 统一携带 `background`。
     - 失败是否影响账号健康状态由 Worker 框架集中裁定：后台静默任务失败不触发侧栏全局报警，认证类失败才更新 `credential_state`，链路类失败累计到熔断阈值才更新 `connectivity_state`，同步任务在途状态仅由 `sync_activity` 反映；凭据态与连接态始终正交，不因单次抖动互相污染。

@@ -27,6 +27,9 @@ _EXPORTS: dict[str, str] = {
     "query_group_inbox_stats": "queries",
     "select_display_body": "queries",
     "unified_inbox": "queries",
+    "expand_view_folder_ids": "queries",
+    "view_scope_folder_ids": "queries",
+    "view_stats": "queries",
     # search
     "SearchPage": "search",
     "search_message_ids": "search",

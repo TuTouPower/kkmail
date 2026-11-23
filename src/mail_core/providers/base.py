@@ -39,6 +39,8 @@ class RemoteMessageMeta:
     cc_addresses: tuple[str, ...] = ()
     in_reply_to: str | None = None
     references: str | None = None
+    # Gmail X-GM-LABELS captured during normal metadata fetch (empty when unsupported).
+    labels: tuple[str, ...] = ()
     # None denotes a complete snapshot; partial projections name supplied fields.
     supplied_fields: frozenset[str] | None = None
 

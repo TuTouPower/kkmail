@@ -637,11 +637,69 @@ def _fetch_flags_for_uid(c: Any, uid_str: str) -> tuple[bool, bool | None, bool 
     return False, None, None
 
 
+def _parse_gm_labels(meta_s: str) -> tuple[str, ...]:
+    match = re.search(r"\bX-GM-LABELS\s*\(", meta_s, re.IGNORECASE)
+    if match is None:
+        return ()
+    index = match.end()
+    depth = 1
+    quoted = False
+    escaped = False
+    buffer: list[str] = []
+    labels: list[str] = []
+    while index < len(meta_s) and depth:
+        char = meta_s[index]
+        if quoted:
+            if escaped:
+                buffer.append(char)
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+            else:
+                buffer.append(char)
+        elif char == '"':
+            quoted = True
+        elif char == "(":
+            depth += 1
+            buffer.append(char)
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                token = "".join(buffer).strip()
+                if token:
+                    labels.append(token)
+                break
+            buffer.append(char)
+        elif char.isspace():
+            token = "".join(buffer).strip()
+            if token:
+                labels.append(token)
+            buffer = []
+        else:
+            buffer.append(char)
+        index += 1
+    return tuple(labels)
+
+
+def _has_gm_labels(c: Any) -> bool:
+    try:
+        typ, data = c.capability()
+    except Exception:
+        return False
+    if typ != "OK":
+        return False
+    blob = b" ".join(chunk if isinstance(chunk, bytes) else str(chunk).encode() for chunk in (data or ()))
+    return b"X-GM-EXT-1" in blob.upper()
+
+
 def _parse_message_meta_from_fetch(
     flags_blob: tuple[Any, ...],
     uid_fallback: int,
     folder_remote_id: str,
     uidvalidity: int,
+    labels: tuple[str, ...] = (),
 ) -> RemoteMessageMeta | None:
     meta_bytes = flags_blob[0]
     header_bytes = flags_blob[1] if len(flags_blob) > 1 else b""
@@ -696,6 +754,7 @@ def _parse_message_meta_from_fetch(
         cc_addresses=cc_addresses,
         in_reply_to=_header_opt("In-Reply-To"),
         references=_header_opt("References"),
+        labels=labels,
     )
 
 
@@ -1035,11 +1094,11 @@ class ImapProvider:
             items: list[RemoteMessageMeta] = []
             if batch:
                 uid_spec = ",".join(str(u) for u in batch)
-                typ, fetched = c.uid(
-                    "FETCH",
-                    uid_spec,
-                    "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES)])",
-                )
+                include_labels = _has_gm_labels(c)
+                fetch_fields = "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES)])"
+                if include_labels:
+                    fetch_fields = "(UID FLAGS INTERNALDATE X-GM-LABELS BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES)])"
+                typ, fetched = c.uid("FETCH", uid_spec, fetch_fields)
                 if typ != "OK":
                     raise RuntimeError(f"UID FETCH {folder_remote_id} uids={uid_spec} failed: {typ}")
                 blobs = [blob for blob in (fetched or ()) if isinstance(blob, tuple)]
@@ -1054,7 +1113,17 @@ class ImapProvider:
                         continue
                     returned_uids.add(fetched_uid)
                     meta = _parse_message_meta_from_fetch(
-                        blob, fetched_uid, folder_remote_id, int(uidvalidity)
+                        blob,
+                        fetched_uid,
+                        folder_remote_id,
+                        int(uidvalidity),
+                        _parse_gm_labels(
+                            blob[0].decode("utf-8", errors="replace")
+                            if isinstance(blob[0], bytes)
+                            else str(blob[0])
+                        )
+                        if include_labels
+                        else (),
                     )
                     if meta is not None:
                         items.append(meta)

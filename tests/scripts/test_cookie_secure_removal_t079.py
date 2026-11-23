@@ -28,6 +28,8 @@ config/.env.example remain scanned.
 """
 
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -97,12 +99,18 @@ def test_cookie_secure_env_removed_from_live_surface():
     assert _collect_offenders() == []
 
 
-def test_cookie_secure_guard_ignores_out_of_tree_symlink(tmp_path):
-    outside = tmp_path / "outside_probe.txt"
-    outside.write_text(f"{NEEDLE}=1\n", encoding="utf-8")
-    link = ROOT / "__t079_outside_link_probe__"
+def test_cookie_secure_guard_ignores_out_of_tree_symlink():
+    # The PG runner sets TMPDIR inside .scratch, so neither pytest's tmp_path
+    # nor tempfile.mkdtemp() defaults are guaranteed to be out-of-tree.
+    outside_dir = Path(tempfile.mkdtemp(dir=Path.home()))
     try:
-        os.symlink(outside, link)
-        assert "__t079_outside_link_probe__" not in _collect_offenders()
+        outside = outside_dir / "outside_probe.txt"
+        outside.write_text(f"{NEEDLE}=1\n", encoding="utf-8")
+        link = ROOT / "__t079_outside_link_probe__"
+        try:
+            os.symlink(outside, link)
+            assert "__t079_outside_link_probe__" not in _collect_offenders()
+        finally:
+            link.unlink(missing_ok=True)
     finally:
-        link.unlink(missing_ok=True)
+        shutil.rmtree(outside_dir, ignore_errors=True)

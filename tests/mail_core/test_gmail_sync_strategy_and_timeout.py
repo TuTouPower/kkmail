@@ -62,61 +62,6 @@ def test_sync_folder_metadata_default_max_pages_is_10():
     assert sig.parameters["max_pages"].default == 10
 
 
-@pytest.mark.skipif(
-    not os.environ.get("MAIL_CORE_DATABASE_URL"),
-    reason="MAIL_CORE_DATABASE_URL not set",
-)
-def test_sync_account_folders_pauses_gmail_virtual_folders():
-    """AC-001: For Gmail accounts, All Mail and Important folders default to paused and are not enqueued."""
-    Session = get_session_factory()
-    with Session() as session:
-        account = Account(
-            email=f"test_user_{uuid.uuid4().hex[:8]}@gmail.com",
-            provider="imap",
-            sync_enabled=True,
-            config={"imap_host": "imap.gmail.com", "imap_port": 993},
-        )
-        session.add(account)
-        session.commit()
-        account_id = account.id
-
-    fake_remote_folders = [
-        RemoteFolder("INBOX", "INBOX", role="inbox", selectable=True),
-        RemoteFolder("[Gmail]", "[Gmail]", role="other", selectable=False),
-        RemoteFolder("[Gmail]/&YkBnCZCuTvY-", "[Gmail]/所有邮件", role="all", selectable=True),
-        RemoteFolder("[Gmail]/&kc2JgQ-", "[Gmail]/重要", role="important", selectable=True),
-        RemoteFolder("[Gmail]/&XfJT0ZCuTvY-", "[Gmail]/已发邮件", role="sent", selectable=True),
-    ]
-
-    mock_provider = MagicMock()
-    mock_provider.list_folder_catalog.return_value = fake_remote_folders
-
-    with patch("mail_core.sync.engine.build_provider", return_value=mock_provider):
-        res = sync_account_folders(account_id, worker_id="test-worker")
-
-    assert res["status"] == "ok"
-    assert res["folders"] == 5
-
-    with Session() as session:
-        folders = session.query(Folder).filter_by(account_id=account_id).all()
-        folder_map = {f.name: f for f in folders}
-
-        assert folder_map["INBOX"].sync_status == SyncStatus.IDLE.value
-        assert folder_map["[Gmail]/已发邮件"].sync_status == SyncStatus.IDLE.value
-        assert folder_map["[Gmail]"].sync_status == SyncStatus.PAUSED.value
-        assert folder_map["[Gmail]/所有邮件"].sync_status == SyncStatus.PAUSED.value
-        assert folder_map["[Gmail]/重要"].sync_status == SyncStatus.PAUSED.value
-
-        jobs = session.query(WorkerJob).filter_by(account_id=account_id).all()
-        enqueued_folder_ids = [str(j.payload.get("folder_id")) for j in jobs]
-
-        # INBOX and Sent should be enqueued
-        assert str(folder_map["INBOX"].id) in enqueued_folder_ids
-        assert str(folder_map["[Gmail]/已发邮件"].id) in enqueued_folder_ids
-        # Virtual folders must NOT be enqueued for metadata sync
-        assert str(folder_map["[Gmail]/所有邮件"].id) not in enqueued_folder_ids
-        assert str(folder_map["[Gmail]/重要"].id) not in enqueued_folder_ids
-
 
 @pytest.mark.skipif(
     not os.environ.get("MAIL_CORE_DATABASE_URL"),

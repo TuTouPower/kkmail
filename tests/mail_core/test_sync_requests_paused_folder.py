@@ -1,12 +1,10 @@
-"""p060: an explicit folder_id pointing at a non-selectable (PAUSED)
-folder must resolve to an empty target set, not raise folder_not_selectable.
+"""p060/t086: an explicit folder_id pointing at a non-syncable folder
+must resolve to an empty target set, not raise folder_not_selectable.
 
-Gmail virtual labels (role=all / role=important) and \\Noselect structure
-nodes are PAUSED by design (spec AC-T56-001 / AC-034): role resolution
-excludes them silently and the execution layer completes their jobs as
-"skipped". The explicit-folder branch was the one place that hard-failed
-with a 422, which the UI's routine navigation sync surfaced as a raw
-error code above the message list of a first-class folder view.
+Gmail aggregate labels are read-only derived views (``kind=view``) and
+``\\Noselect`` structure nodes remain PAUSED containers: both are excluded
+from sync targets. The explicit-folder branch was the one place that hard-
+failed with a 422, which surfaced a raw error code above a first-class view.
 
 Runs against the real PostgreSQL schema created by ``alembic upgrade head``
 (accounts/folders/sync_requests with real JSONB defaults and FK constraints).
@@ -22,6 +20,7 @@ import pytest
 from mail_core.db.session import get_session_factory
 from mail_core.mail.application.sync_requests import create_sync_request, resolve_sync_targets
 from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.domain.folder_views import CONTAINER, VIEW
 from mail_core.mail.storage.models import Account, Folder
 
 pytestmark = pytest.mark.skipif(
@@ -31,7 +30,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _seed(Session) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
-    """One Gmail account with an IDLE inbox and a PAUSED virtual folder."""
+    """One Gmail account with an IDLE inbox and a derived Important view."""
     account_id = uuid.uuid4()
     inbox_id = uuid.uuid4()
     important_id = uuid.uuid4()
@@ -47,6 +46,7 @@ def _seed(Session) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
                     remote_id="INBOX",
                     name="INBOX",
                     role="inbox",
+                    kind=CONTAINER,
                     sync_status=SyncStatus.IDLE.value,
                 ),
                 Folder(
@@ -55,7 +55,8 @@ def _seed(Session) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
                     remote_id="[Gmail]/Important",
                     name="Important",
                     role="important",
-                    sync_status=SyncStatus.PAUSED.value,
+                    kind=VIEW,
+                    sync_status=SyncStatus.IDLE.value,
                 ),
             ]
         )
@@ -63,7 +64,7 @@ def _seed(Session) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     return account_id, inbox_id, important_id
 
 
-def test_explicit_paused_virtual_folder_resolves_to_no_targets():
+def test_explicit_derived_view_resolves_to_no_targets():
     Session = get_session_factory()
     account_id, _inbox_id, important_id = _seed(Session)
     with Session() as session:

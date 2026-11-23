@@ -1,6 +1,4 @@
-"""A321: Gmail virtual-folder detection must use only the exact remote_id
-set or role (all/important) — a user label whose name merely *contains*
-"重要"/"All Mail" etc. must not be paused."""
+"""Gmail aggregate labels are derived views, never paused sync units (t086)."""
 
 from __future__ import annotations
 
@@ -8,6 +6,7 @@ import uuid
 from types import SimpleNamespace
 
 from mail_core.mail.domain.enums import SyncStatus
+from mail_core.mail.domain.folder_views import CONTAINER, VIEW
 from mail_core.mail.storage.models import Account, Folder
 from mail_core.providers.base import RemoteFolder
 from mail_core.sync import engine
@@ -65,9 +64,7 @@ class _Harness:
 
 def _run(monkeypatch, harness):
     monkeypatch.setattr(engine, "_session_factory", lambda: harness.session)
-    monkeypatch.setattr(
-        engine, "acquire_lease", lambda *_a, **_k: SimpleNamespace(fencing_token=7)
-    )
+    monkeypatch.setattr(engine, "acquire_lease", lambda *_a, **_k: SimpleNamespace(fencing_token=7))
     monkeypatch.setattr(engine, "assert_fencing", lambda *_a, **_k: None)
     monkeypatch.setattr(engine, "fail_open_targets", lambda *_a, **_k: None)
 
@@ -75,7 +72,6 @@ def _run(monkeypatch, harness):
         harness.released += 1
 
     monkeypatch.setattr(engine, "release_lease", _release)
-
     provider = SimpleNamespace(list_folders=lambda: harness.remote_folders)
     monkeypatch.setattr(engine, "build_provider", lambda *_a, **_k: provider)
 
@@ -84,9 +80,7 @@ def _run(monkeypatch, harness):
         return SimpleNamespace(status="pending")
 
     monkeypatch.setattr(engine, "enqueue_job", _enqueue)
-    return engine.sync_account_folders(
-        harness.account.id, worker_id="w-a321", store=object()
-    )
+    return engine.sync_account_folders(harness.account.id, worker_id="w-t086", store=object())
 
 
 def _gmail_account():
@@ -103,23 +97,23 @@ def _gmail_account():
     )
 
 
-def test_user_label_with_virtual_substring_is_not_paused(monkeypatch):
+def test_user_label_with_virtual_substring_stays_syncable(monkeypatch):
     account = _gmail_account()
     remote = [
         RemoteFolder("[Gmail]/重要客户", "[Gmail]/重要客户", role="other", selectable=True),
         RemoteFolder("[Gmail]/All Mail 备份", "[Gmail]/All Mail 备份", role="other", selectable=True),
     ]
     harness = _Harness(account, [], remote)
-    result = _run(monkeypatch, harness)
-    assert result["status"] == "ok"
+    assert _run(monkeypatch, harness)["status"] == "ok"
     by_remote = {f.remote_id: f for f in harness.folders}
-    assert by_remote["[Gmail]/重要客户"].sync_status == SyncStatus.IDLE.value
-    assert by_remote["[Gmail]/All Mail 备份"].sync_status == SyncStatus.IDLE.value
+    for folder in by_remote.values():
+        assert folder.kind == CONTAINER
+        assert folder.sync_status == SyncStatus.IDLE.value
     enqueued_ids = {str(j["payload"]["folder_id"]) for j in harness.enqueued}
     assert str(by_remote["[Gmail]/重要客户"].id) in enqueued_ids
 
 
-def test_exact_virtual_folders_stay_paused(monkeypatch):
+def test_exact_virtual_labels_become_idle_views_without_jobs(monkeypatch):
     account = _gmail_account()
     remote = [
         RemoteFolder("[Gmail]/All Mail", "[Gmail]/All Mail", role="other", selectable=True),
@@ -128,8 +122,9 @@ def test_exact_virtual_folders_stay_paused(monkeypatch):
         RemoteFolder("custom-important", "custom-important", role="important", selectable=True),
     ]
     harness = _Harness(account, [], remote)
-    result = _run(monkeypatch, harness)
-    assert result["status"] == "ok"
+    assert _run(monkeypatch, harness)["status"] == "ok"
+    assert len(harness.folders) == 4
     for folder in harness.folders:
-        assert folder.sync_status == SyncStatus.PAUSED.value, folder.remote_id
+        assert folder.kind == VIEW, folder.remote_id
+        assert folder.sync_status == SyncStatus.IDLE.value, folder.remote_id
     assert harness.enqueued == []
