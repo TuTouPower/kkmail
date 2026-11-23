@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
-from datetime import datetime
+import fcntl
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -25,8 +26,15 @@ from sqlalchemy.pool import NullPool
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / ".scratch" / "test_runs"
+SESSION_DIR = ROOT / ".scratch" / "test_session"
+SESSION_FILE = SESSION_DIR / "session.json"
+SESSION_LOCK = SESSION_DIR / "session.lock"
+REAPER_LOG = SESSION_DIR / "reaper.log"
 COMPOSE = ["compose", "-p", "kkmail_test", "-f", str(ROOT / "config/test_pg_compose.yaml")]
 LOG = logging.getLogger("test_pg_runtime")
+DEFAULT_SESSION_IDLE_S = 900
+DEFAULT_MAX_RUN_S = 7200
+REAPER_POLL_S = 15
 
 
 class SafetyError(RuntimeError):
@@ -179,6 +187,289 @@ def guard_database():
     return record
 
 
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def session_idle_seconds() -> int:
+    raw = os.environ.get("KKMAIL_TEST_SESSION_IDLE_S", "")
+    try:
+        value = int(raw) if raw else DEFAULT_SESSION_IDLE_S
+    except ValueError:
+        value = DEFAULT_SESSION_IDLE_S
+    return max(1, value)
+
+
+@contextlib.contextmanager
+def session_lock():
+    """Serialize all session state transitions with an advisory file lock."""
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    with SESSION_LOCK.open("a+") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def load_session():
+    try:
+        state = json.loads(SESSION_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict) or state.get("root") != str(ROOT):
+        return None
+    if not state.get("session_id") or not state.get("container_id"):
+        return None
+    return state
+
+
+def save_session(state):
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = SESSION_DIR / "session.tmp"
+    with temporary.open("w") as handle:
+        os.chmod(temporary, 0o600)
+        json.dump(state, handle, indent=2, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(SESSION_FILE)
+
+
+def _pid_alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def max_run_seconds() -> int:
+    raw = os.environ.get("KKMAIL_TEST_SESSION_MAX_RUN_S", "")
+    try:
+        value = int(raw) if raw else DEFAULT_MAX_RUN_S
+    except ValueError:
+        value = DEFAULT_MAX_RUN_S
+    return max(60, value)
+
+
+def fresh_active_runs(state, *, now=None):
+    """Active runs still younger than the hard run ceiling own the session."""
+    now = now or _utc_now()
+    active = state.get("active_runs") or {}
+    fresh = []
+    for run_id, info in active.items():
+        if not isinstance(info, dict) or not info.get("started_at"):
+            continue
+        started = datetime.fromisoformat(info["started_at"])
+        if ((now - started).total_seconds() < max_run_seconds()
+                and _pid_alive(info.get("pid"))):
+            fresh.append(run_id)
+    return fresh
+
+
+def reaper_should_close(state, *, now=None):
+    """Idle decision: a live test run always keeps its session alive."""
+    now = now or _utc_now()
+    if fresh_active_runs(state, now=now):
+        return False
+    last = datetime.fromisoformat(state["last_activity"])
+    return (now - last).total_seconds() >= session_idle_seconds()
+
+
+def session_instance_alive(state):
+    try:
+        cid, port = instance()
+    except SafetyError:
+        return False
+    return cid == state["container_id"] and port == state["port"]
+
+
+def session_status():
+    state = load_session()
+    if state is None:
+        return None
+    alive = session_instance_alive(state)
+    idle = (_utc_now() - datetime.fromisoformat(state["last_activity"])).total_seconds()
+    return {
+        "session_id": state["session_id"],
+        "container_id": state["container_id"],
+        "port": state["port"],
+        "alive": alive,
+        "idle_seconds": max(0, int(idle)),
+        "idle_timeout_seconds": session_idle_seconds(),
+        "runs": len(state.get("runs", [])),
+        "reaper_pid": state.get("reaper_pid"),
+    }
+
+
+def _clean_registered_runs(state):
+    """Best-effort cleanup of every run owned by a session, registry first."""
+    run_ids = set(state.get("runs", []))
+    if session_instance_alive(state) and RUNS.exists():
+        # Also adopt interrupted runs whose ids never reached the registry.
+        for directory in RUNS.iterdir():
+            if not directory.is_dir():
+                continue
+            try:
+                record = load_record(directory)
+            except SafetyError:
+                continue
+            if record.get("container_id") == state["container_id"] and record.get("state") != "cleaned":
+                run_ids.add(directory.name)
+    for run_id in sorted(run_ids):
+        directory = RUNS / run_id
+        if not directory.exists():
+            continue
+        try:
+            record = load_record(directory)
+            if record.get("state") != "cleaned":
+                cleanup(directory)
+        except SafetyError:
+            LOG.warning("session close skipped unsafe run cleanup run=%s", run_id)
+
+
+def close_session(reason, *, only_if_idle=False):
+    """Tear a session down: clean its databases first, then remove containers."""
+    with session_lock():
+        state = load_session()
+        if state is None:
+            return False
+        if only_if_idle and not reaper_should_close(state):
+            return False
+        if fresh_active_runs(state):
+            raise SafetyError("refusing session close: active test runs remain")
+        _clean_registered_runs(state)
+        docker(*COMPOSE, "down", "--remove-orphans")
+        SESSION_FILE.unlink(missing_ok=True)
+        LOG.info("test session closed reason=%s session=%s", reason, state["session_id"][:12])
+    reaper_pid = state.get("reaper_pid")
+    if reaper_pid and reaper_pid != os.getpid() and _pid_alive(reaper_pid):
+        try:
+            os.kill(reaper_pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    return True
+
+
+def spawn_reaper(state):
+    if _pid_alive(state.get("reaper_pid")):
+        return
+    REAPER_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with REAPER_LOG.open("ab") as log:
+        process = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "reaper"],
+            cwd=ROOT, env=os.environ.copy(), stdin=subprocess.DEVNULL,
+            stdout=log, stderr=log, start_new_session=True,
+        )
+    with session_lock():
+        current = load_session()
+        if current is None or current.get("session_id") != state["session_id"]:
+            # Session changed while the watchdog started; never adopt it.
+            try:
+                os.kill(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            return
+        current["reaper_pid"] = process.pid
+        save_session(current)
+
+
+def reaper_loop():
+    """Idle watchdog; survives transient failures, exits on session change."""
+    LOG.info("test session reaper started pid=%s", os.getpid())
+    while True:
+        time.sleep(REAPER_POLL_S)
+        try:
+            with session_lock():
+                state = load_session()
+                if state is None or state.get("reaper_pid") != os.getpid():
+                    return
+            close_session("idle", only_if_idle=True)
+        except Exception:
+            # A failed cleanup must not permanently strand a live session.
+            LOG.exception("reaper cycle failed; retrying")
+
+
+def ensure_session():
+    """Return the active session, creating one lazily when none exists."""
+    password()
+    with session_lock():
+        state = load_session()
+        if state is not None and session_instance_alive(state):
+            state["last_activity"] = _utc_now().isoformat()
+            reaper_alive = _pid_alive(state.get("reaper_pid"))
+            if not reaper_alive:
+                state["reaper_pid"] = None
+            save_session(state)
+        else:
+            state = None
+    if state is not None:
+        # spawn_reaper takes session_lock itself; never call it inside the lock.
+        if not reaper_alive:
+            spawn_reaper(state)
+        return state
+    with session_lock():
+        stale = load_session()
+        if stale is not None:
+            # Stale registry: clean what is still reachable, then discard it.
+            _clean_registered_runs(stale)
+            docker(*COMPOSE, "down", "--remove-orphans")
+            SESSION_FILE.unlink(missing_ok=True)
+        start()
+        cid, port = instance()
+        with engine(admin_url(port)).connect() as connection:
+            system_id = str(connection.scalar(text("SELECT system_identifier FROM pg_control_system()")))
+        state = {
+            "session_id": uuid.uuid4().hex,
+            "root": str(ROOT),
+            "container_id": cid,
+            "port": port,
+            "system_identifier": system_id,
+            "created_at": _utc_now().isoformat(),
+            "last_activity": _utc_now().isoformat(),
+            "runs": [],
+            "reaper_pid": None,
+        }
+        save_session(state)
+    spawn_reaper(state)
+    return state
+
+
+def touch_session():
+    with session_lock():
+        state = load_session()
+        if state is None:
+            return
+        state["last_activity"] = _utc_now().isoformat()
+        save_session(state)
+
+
+def register_run(run_id):
+    with session_lock():
+        state = load_session()
+        if state is None:
+            return
+        if run_id not in state["runs"]:
+            state["runs"].append(run_id)
+        state.setdefault("active_runs", {})[run_id] = {
+            "started_at": _utc_now().isoformat(),
+            "pid": os.getpid(),
+        }
+        save_session(state)
+
+
+def unregister_run(run_id):
+    with session_lock():
+        state = load_session()
+        if state is None:
+            return
+        if state.setdefault("active_runs", {}).pop(run_id, None) is not None:
+            save_session(state)
+
+
 def start():
     password()
     existing = docker(*COMPOSE, "ps", "-a", "-q", "postgres")
@@ -319,20 +610,16 @@ def run_environment(directory):
 
 def run(args):
     directory = None
+    record = None
     outcome_error = None
     try:
         with stage("allocate"):
-            # Gate policy (T5): a default run must have the test
-            # PostgreSQL service. If it is not up, try to start it once
-            # (start is idempotent and reuses a running instance); if it
-            # cannot be brought up, fail explicitly — never degrade
-            # silently to unit mode.
-            try:
-                instance()
-            except SafetyError:
-                LOG.warning("test PostgreSQL service not running; attempting to start it")
-                start()
+            # Gate policy (T5): a default run must have the test PostgreSQL
+            # service. ensure_session creates a session on demand and reuses a
+            # live one; failure is explicit, never a silent unit-mode downgrade.
+            ensure_session()
             directory, record = create_run()
+            register_run(record["run_id"])
             env = run_environment(directory)
             env.update(MAIL_CORE_DATABASE_URL=admin_url(record["port"]).set(database=record["database"]).render_as_string(hide_password=False),
                        KKMAIL_TEST_RUN_DIR=str(directory), MAIL_CORE_REQUIRE_DB="1", KKMAIL_TEST_MODE="full")
@@ -372,6 +659,10 @@ def run(args):
                         LOG.exception("cleanup failed; preserving the original run outcome")
                     else:
                         raise
+        if record is not None:
+            unregister_run(record["run_id"])
+        # Any invocation counts as test activity, including a failed run.
+        touch_session()
 
 
 class TestFailure(Exception):
@@ -381,7 +672,7 @@ class TestFailure(Exception):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("start", "stop", "run", "cleanup", "unit"))
+    parser.add_argument("action", choices=("run", "cleanup", "unit", "session-status", "session-end", "reaper"))
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -391,17 +682,17 @@ def main():
 
     signal.signal(signal.SIGTERM, interrupted)
     try:
-        if args.action == "start":
-            with stage("start"):
-                start()
-        elif args.action == "stop":
-            _, port = instance()
-            with engine(admin_url(port)).connect() as connection:
-                active = connection.scalar(text("SELECT count(*) FROM pg_database WHERE "
-                                                "shobj_description(oid, 'pg_database') LIKE 'kkmail-test-run:%'"))
-            if active:
-                raise SafetyError("refusing stop: owned test databases remain")
-            docker(*COMPOSE, "stop", "postgres")
+        if args.action == "session-status":
+            status = session_status()
+            if status is None:
+                print("no active test session")
+            else:
+                print(json.dumps(status, indent=2, sort_keys=True))
+        elif args.action == "session-end":
+            if not close_session("explicit"):
+                LOG.info("no active test session")
+        elif args.action == "reaper":
+            reaper_loop()
         elif args.action == "cleanup":
             if len(args.arguments) != 1:
                 raise SafetyError("cleanup requires one exact run UUID")

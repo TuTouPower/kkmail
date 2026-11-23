@@ -1,0 +1,15 @@
+{
+  "tid": "t083",
+  "attempt": 1,
+  "execution_id": "50f8c83f527b45d7a7d40e5c4deef92f",
+  "status": "done",
+  "branch": "t083_test_service_session_lifecycle",
+  "base_sha": "c8b74dd776cda47525e9cc2ef3ef8972c5bb9fd2",
+  "spec_source_sha": "c8b74dd776cda47525e9cc2ef3ef8972c5bb9fd2",
+  "tests": "后端完整 PG 套件 2202 passed / 2 skipped；`test_cmd` 全通过；唯一失败为 main 同现的环境既存用例（cookie t079 out-of-tree symlink 守卫）",
+  "blackbox": "`npm --prefix src/frontend run test:e2e` 23 passed",
+  "review": "Round 3 代码轴/测试轴均 PASS，见本报告「Review 处置」",
+  "review_scope": "354f01d3bd98f0c6",
+  "pending": [],
+  "findings": []
+}

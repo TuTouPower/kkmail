@@ -32,14 +32,14 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：无测试活动时测试服务的 postgres 与 imap 容器均不存在。
-- [ ] AC-002：执行 `run` 时测试服务按需拉起；同一会话内连续两次 `run` 复用同一组容器，容器 ID 不变，不发生重建或重启。
-- [ ] AC-003：会话内每轮 `run` 仍使用独立的一次性 owned 数据库，轮次结束清理本轮数据库；会话内容器持续运行。
-- [ ] AC-004：停止测试活动超过空闲阈值后，测试服务自动回收：会话注册表内全部 owned 数据库与未结束 run 先清理，随后 postgres 与 imap 容器销毁；无遗留 owned 数据库。
-- [ ] AC-005：`session-end` 立即完成与空闲回收相同的清理与销毁；旧的永久常驻入口移除，不再存在「启动后无限保留」路径。
-- [ ] AC-006：异常中断后再次调用能识别残留会话、完成注册表清理并建立新会话，全过程无需人工指定 run UUID。
-- [ ] AC-007：容器身份、loopback 绑定、owner role、库 comment 与专用密码守卫不削弱；业务 Compose 与业务卷未被使用，日志不打印密码。
-- [ ] AC-008：`docs/blueprint/testing.md` 与 `test_pg_runtime.py` 单测同步反映会话生命周期；`test_cmd`、`blackbox_verify` 与后端完整 PostgreSQL 套件全量通过。
+- [x] AC-001：无测试活动时测试服务的 postgres 与 imap 容器均不存在。
+- [x] AC-002：执行 `run` 时测试服务按需拉起；同一会话内连续两次 `run` 复用同一组容器，容器 ID 不变，不发生重建或重启。
+- [x] AC-003：会话内每轮 `run` 仍使用独立的一次性 owned 数据库，轮次结束清理本轮数据库；会话内容器持续运行。
+- [x] AC-004：停止测试活动超过空闲阈值后，测试服务自动回收：会话注册表内全部 owned 数据库与未结束 run 先清理，随后 postgres 与 imap 容器销毁；无遗留 owned 数据库。
+- [x] AC-005：`session-end` 立即完成与空闲回收相同的清理与销毁；旧的永久常驻入口移除，不再存在「启动后无限保留」路径。
+- [x] AC-006：异常中断后再次调用能识别残留会话、完成注册表清理并建立新会话，全过程无需人工指定 run UUID。
+- [x] AC-007：容器身份、loopback 绑定、owner role、库 comment 与专用密码守卫不削弱；业务 Compose 与业务卷未被使用，日志不打印密码。
+- [x] AC-008：`docs/blueprint/testing.md` 与 `test_pg_runtime.py` 单测同步反映会话生命周期；`test_cmd`、`blackbox_verify` 与后端完整 PostgreSQL 套件全量通过。
 
 ### 可测试性声明
 

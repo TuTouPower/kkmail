@@ -99,17 +99,17 @@ UV_CACHE_DIR=.scratch/uv_cache uv pip install --python .venv/bin/python -r requi
 启动前由操作者设置随机专用 `KKMAIL_TEST_PG_PASSWORD`。禁止复用业务 `.env` 密码。服务采用 `config/test_pg_compose.yaml`，独立 Compose project `kkmail_test`，PostgreSQL 16 仅绑定 `127.0.0.1`，默认端口 15433；端口可经 `KKMAIL_TEST_PG_PORT` 指定。不得连接业务 Compose 或挂载业务卷。
 
 ```bash
-scripts/run-mail-core-tests.sh start
-scripts/run-mail-core-tests.sh run
-scripts/run-mail-core-tests.sh unit
-scripts/run-mail-core-tests.sh stop
+scripts/run-mail-core-tests.sh run               # 按需建立会话并运行；会话内复用容器
+scripts/run-mail-core-tests.sh session-status    # 只读查看会话、容器与空闲状态
+scripts/run-mail-core-tests.sh session-end       # 立即回收会话
+scripts/run-mail-core-tests.sh unit              # 显式快速模式，不碰测试服务
 ```
 
-`start` 显式启动或复用测试服务；`run` 每轮创建唯一 `kkmail_test_<UUID>` 数据库，经生产 Alembic 升级后运行 Python 套件。容器 ID、PG cluster system identifier、数据库 comment 和仓库所有权记录必须一致，才允许迁移、fixture 删除和清理。直接 pytest 也执行保护；URL 查询参数一律拒绝。`unit` 明确报告未执行 PG 套件，不代表全量通过。
+测试服务采用会话生命周期：无测试活动时容器不存在；首次 `run` 按需拉起 postgres 与 imap，同一会话内连续运行复用同一组容器，只轮换一次性数据库。`KKMAIL_TEST_SESSION_IDLE_S`（默认 900 秒）空闲阈值到期后自动回收：先清理会话注册表内全部 owned 数据库与未结束 run，再销毁容器。异常中断后再次调用按注册表恢复，无需人工指定 run UUID。`run` 每轮创建唯一 `kkmail_test_<UUID>` 数据库，经生产 Alembic 升级后运行 Python 套件。容器 ID、PG cluster system identifier、数据库 comment 和仓库所有权记录必须一致，才允许迁移、fixture 删除和清理。直接 pytest 也执行保护；URL 查询参数一律拒绝。`unit` 明确报告未执行 PG 套件，不代表全量通过。
 
-门禁策略（T5）：默认门禁（无参数或 `run`）必须有测试 PostgreSQL。服务未启动时 `run` 自动尝试 `start` 拉起一次；仍不可用（例如无 Docker）时以退出码 2 显式失败并给出出路，绝不静默降级为 unit 模式充当基线。`MAIL_CORE_DATABASE_URL` 供应用、E2E 与定向 harness 直连使用；pytest 门禁因 fixture 会 TRUNCATE 全部表，始终只使用专用测试服务上的一次性 owned 数据库，不接受外部 URL。`unit` 仅保留为显式选择的快速模式。
+门禁策略（T5）：默认门禁（无参数或 `run`）必须有测试 PostgreSQL。无活跃会话时 `run` 按需建立会话；仍不可用（例如无 Docker）时以退出码 2 显式失败并给出出路，绝不静默降级为 unit 模式充当基线。`MAIL_CORE_DATABASE_URL` 供应用、E2E 与定向 harness 直连使用；pytest 门禁因 fixture 会 TRUNCATE 全部表，始终只使用专用测试服务上的一次性 owned 数据库，不接受外部 URL。`unit` 仅保留为显式选择的快速模式。
 
-每轮数据库、Blob、备份、临时文件和 JUnit 报告对应 `.scratch/test_runs/<UUID>/`。正常结束、断言失败、SIGINT/SIGTERM 后清理本轮子进程和数据库，不停止常驻服务；所有权记录与报告保留。阶段日志输出耗时和状态，不打印数据库 URL 或密码。强制终止后，仅允许指定确切 UUID 回收：
+每轮数据库、Blob、备份、临时文件和 JUnit 报告对应 `.scratch/test_runs/<UUID>/`，会话状态对应 `.scratch/test_session/`。正常结束、断言失败、SIGINT/SIGTERM 后清理本轮子进程和数据库，会话保持到空闲回收或显式结束；所有权记录与报告保留。阶段日志输出耗时和状态，不打印数据库 URL 或密码。强制终止后，仅允许指定确切 UUID 回收：
 
 ```bash
 scripts/run-mail-core-tests.sh cleanup <run_uuid>
