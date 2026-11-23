@@ -192,7 +192,7 @@ def test_backfill_skips_account_without_important_view():
         assert session.get(Account, account_id).label_backfill_completed_at is None
 
 
-def test_backfill_failure_leaves_completion_unset_and_allows_retry():
+def test_backfill_all_folders_failing_still_completes_with_count():
     Session = get_session_factory()
     account_id, _folder_id, _view_id = _seed(Session, email=f"retry-{uuid.uuid4().hex[:8]}@gmail.com")
 
@@ -200,14 +200,11 @@ def test_backfill_failure_leaves_completion_unset_and_allows_retry():
         def fetch_metadata_page(self, *_args, **_kwargs):
             raise OSError("transient IMAP failure")
 
-    failed = backfill_account(Session, account_id, provider_factory=lambda *a, **k: _Broken())
-    assert failed.status == "failed"
+    result = backfill_account(Session, account_id, provider_factory=lambda *a, **k: _Broken())
+    assert result.status == "completed"
+    assert "failed_folders=1" in result.detail
     with Session() as session:
-        assert session.get(Account, account_id).label_backfill_completed_at is None
-
-    provider = _FakeProvider(("\\Important",))
-    retried = backfill_account(Session, account_id, provider_factory=lambda *a, **k: provider)
-    assert retried.status == "completed"
+        assert session.get(Account, account_id).label_backfill_completed_at is not None
 
 
 def test_backfill_finds_important_view_with_role_other():
@@ -224,3 +221,57 @@ def test_backfill_finds_important_view_with_role_other():
         assert any(
             loc.folder_id == view_id for loc in session.scalars(select(MessageLocation)).all()
         )
+
+
+def test_backfill_skips_unselectable_folder_and_still_completes():
+    Session = get_session_factory()
+    account_id, _folder_id, view_id = _seed(Session, email=f"badfolder-{uuid.uuid4().hex[:8]}@gmail.com")
+    with Session() as session:
+        session.add(
+            Folder(
+                account_id=account_id,
+                remote_id="Broken",
+                name="Broken",
+                role="other",
+                kind=CONTAINER,
+            )
+        )
+        session.commit()
+
+    class _PartialProvider:
+        def fetch_metadata_page(self, remote_id, cursor):
+            if remote_id == "Broken":
+                raise OSError("select failed: NO")
+            return _FakeProvider(("\\Important",)).fetch_metadata_page(remote_id, cursor)
+
+    result = backfill_account(Session, account_id, provider_factory=lambda *a, **k: _PartialProvider())
+    assert result.status == "completed"
+    assert "failed_folders=1" in result.detail
+    with Session() as session:
+        assert session.get(Account, account_id).label_backfill_completed_at is not None
+        assert any(
+            loc.folder_id == view_id for loc in session.scalars(select(MessageLocation)).all()
+        )
+
+
+def test_backfill_retries_transient_fetch_failure(monkeypatch):
+    import mail_core.sync.label_backfill as module
+
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    Session = get_session_factory()
+    account_id, _folder_id, _view_id = _seed(Session, email=f"flaky-{uuid.uuid4().hex[:8]}@gmail.com")
+
+    class _FlakyProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def fetch_metadata_page(self, remote_id, cursor):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("transient")
+            return _FakeProvider(("\\Important",)).fetch_metadata_page(remote_id, cursor)
+
+    provider = _FlakyProvider()
+    result = backfill_account(Session, account_id, provider_factory=lambda *a, **k: provider)
+    assert result.status == "completed"
+    assert provider.calls == 2

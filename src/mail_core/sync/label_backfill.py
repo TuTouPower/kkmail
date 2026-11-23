@@ -9,6 +9,7 @@ sync, but writes no checkpoints and never creates duplicate messages.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -35,6 +36,17 @@ LOG = logging.getLogger("mail_core.label_backfill")
 
 LEASE_TTL = timedelta(seconds=120)
 OWNER_PREFIX = "label-backfill"
+FETCH_ATTEMPTS = 3
+
+
+def _fetch_page(provider: Any, remote_id: str, cursor: dict | None) -> Any:
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            return provider.fetch_metadata_page(remote_id, cursor)
+        except Exception:
+            if attempt == FETCH_ATTEMPTS:
+                raise
+            time.sleep(2 ** (attempt - 1))
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,36 +117,47 @@ def backfill_account(
             return BackfillResult(account_id, "failed", detail=str(exc))
 
     upserted = 0
+    failed_folders = 0
     try:
         for folder_id, remote_id in folders:
-            cursor = None
-            while True:
-                page = provider.fetch_metadata_page(str(remote_id), cursor)  # network
-                with session_factory() as session:
-                    heartbeat_lease(
-                        session,
-                        account_id=account_id,
-                        owner_id=owner_id,
-                        fencing_token=lease.fencing_token,
-                        ttl=LEASE_TTL,
-                    )
-                    upsert_messages(
-                        session,
-                        account_id=account_id,
-                        folder_id=folder_id,
-                        metas=list(page.items),
-                        label_view_folders={"\\Important": view_id},
-                    )
-                    session.commit()
-                upserted += len(page.items)
-                cursor = page.next_cursor
-                if page.exhausted or cursor is None:
-                    break
+            try:
+                cursor = None
+                while True:
+                    page = _fetch_page(provider, str(remote_id), cursor)  # network
+                    with session_factory() as session:
+                        heartbeat_lease(
+                            session,
+                            account_id=account_id,
+                            owner_id=owner_id,
+                            fencing_token=lease.fencing_token,
+                            ttl=LEASE_TTL,
+                        )
+                        upsert_messages(
+                            session,
+                            account_id=account_id,
+                            folder_id=folder_id,
+                            metas=list(page.items),
+                            label_view_folders={"\\Important": view_id},
+                        )
+                        session.commit()
+                    upserted += len(page.items)
+                    cursor = page.next_cursor
+                    if page.exhausted or cursor is None:
+                        break
+            except Exception as exc:
+                failed_folders += 1
+                LOG.warning(
+                    "label backfill skipped folder account=%s folder=%s: %s",
+                    account_id,
+                    remote_id,
+                    exc,
+                )
         with session_factory() as session:
             done = session.get(Account, account_id)
             done.label_backfill_completed_at = datetime.now(timezone.utc)
             session.commit()
-        return BackfillResult(account_id, "completed", len(folders), upserted)
+        detail = f"failed_folders={failed_folders}" if failed_folders else ""
+        return BackfillResult(account_id, "completed", len(folders), upserted, detail)
     except Exception as exc:
         LOG.warning("label backfill failed account=%s: %s", account_id, exc)
         return BackfillResult(account_id, "failed", len(folders), upserted, str(exc))

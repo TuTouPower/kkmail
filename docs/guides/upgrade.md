@@ -30,7 +30,7 @@ mail-core 部署的升级路径（Flask / SQLite / OutlookEmail v2 镜像路径�
       -m mail_core --skip-migrations --backfill-gmail-labels
     # 非 Docker：PYTHONPATH=src python -m mail_core --skip-migrations --backfill-gmail-labels
     ```
-    命令按账号重放带标签的 metadata 扫描，补写 `message_locations`，不新增邮件、不改写同步 checkpoint，用账号 lease 与常规同步互斥。每个账号完成后写入 `accounts.label_backfill_completed_at`；重复运行会跳过已完成账号，加 `--force` 可显式重跑且仍幂等。单账号失败不影响其它账号，修复后重跑即可续。可用 `--account-id <UUID>` 限定单个账号。
+    命令按账号重放带标签的 metadata 扫描，补写 `message_locations`，不新增邮件、不改写同步 checkpoint，用账号 lease 与常规同步互斥。每个账号完成后写入 `accounts.label_backfill_completed_at`；重复运行会跳过已完成账号，加 `--force` 可显式重跑且仍幂等。单账号失败不影响其它账号，修复后重跑即可续。可用 `--account-id <UUID>` 限定单个账号。单个目录 `SELECT` 失败会记录 `failed_folders=N` 并继续其它目录；账号仍标记完成，表示该账号所有可选目录均已尝试。
 
 ## 回滚
 
