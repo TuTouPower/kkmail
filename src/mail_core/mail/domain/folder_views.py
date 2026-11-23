@@ -20,6 +20,10 @@ GMAIL_VIEW_REMOTE_IDS = frozenset(
     }
 )
 
+IMPORTANT_VIEW_REMOTE_IDS = frozenset(
+    {"[Gmail]/Important", "[Gmail]/重要", "[Gmail]/&kc2JgQ-"}
+)
+
 EXCLUDED_FROM_ALL_VIEW_ROLES = frozenset({"trash", "junk", "spam"})
 
 

@@ -14,12 +14,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.folder_views import (
     CONTAINER,
     EXCLUDED_FROM_ALL_VIEW_ROLES,
+    IMPORTANT_VIEW_REMOTE_IDS,
     VIEW,
     is_gmail_account,
 )
@@ -50,7 +51,7 @@ def _important_view_id(session: Session, account_id: uuid.UUID) -> uuid.UUID | N
         select(Folder.id).where(
             Folder.account_id == account_id,
             Folder.kind == VIEW,
-            Folder.role == "important",
+            or_(Folder.role == "important", Folder.remote_id.in_(IMPORTANT_VIEW_REMOTE_IDS)),
         )
     )
 

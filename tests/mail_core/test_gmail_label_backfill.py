@@ -54,7 +54,7 @@ class _FakeProvider:
         )
 
 
-def _seed(Session, *, email: str, with_view: bool = True, historical: bool = True):
+def _seed(Session, *, email: str, with_view: bool = True, historical: bool = True, important_role: str = "important"):
     with Session() as session:
         account = Account(email=email, provider="imap")
         session.add(account)
@@ -82,7 +82,7 @@ def _seed(Session, *, email: str, with_view: bool = True, historical: bool = Tru
                 account_id=account.id,
                 remote_id="[Gmail]/Important",
                 name="Important",
-                role="important",
+                role=important_role,
                 kind=VIEW,
             )
             session.add(view)
@@ -208,3 +208,19 @@ def test_backfill_failure_leaves_completion_unset_and_allows_retry():
     provider = _FakeProvider(("\\Important",))
     retried = backfill_account(Session, account_id, provider_factory=lambda *a, **k: provider)
     assert retried.status == "completed"
+
+
+def test_backfill_finds_important_view_with_role_other():
+    Session = get_session_factory()
+    account_id, _folder_id, view_id = _seed(
+        Session,
+        email=f"roleother-{uuid.uuid4().hex[:8]}@gmail.com",
+        important_role="other",
+    )
+    provider = _FakeProvider(("\\Important",))
+    result = backfill_account(Session, account_id, provider_factory=lambda *a, **k: provider)
+    assert result.status == "completed"
+    with Session() as session:
+        assert any(
+            loc.folder_id == view_id for loc in session.scalars(select(MessageLocation)).all()
+        )
