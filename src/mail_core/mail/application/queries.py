@@ -11,10 +11,11 @@ from html.parser import HTMLParser
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import and_, case, cast, func, or_, select, String
+from sqlalchemy import and_, case, cast, distinct, func, or_, select, String
 from sqlalchemy.orm import Session
 
 from mail_core.mail.domain.enums import ConnectivityState, CredentialState
+from mail_core.mail.domain.folder_views import CONTAINER, EXCLUDED_FROM_ALL_VIEW_ROLES, is_view_folder
 from mail_core.mail.storage.models import Account, AccountGroup, Attachment, Folder, FolderStats, Message, MessageBody, MessageLocation
 
 _BODY_PREVIEW_SOURCE_CHARS = 4096
@@ -199,6 +200,48 @@ def get_folder_stats(session: Session, folder_id: uuid.UUID) -> FolderStats | No
     return session.get(FolderStats, folder_id)
 
 
+def view_scope_folder_ids(session: Session, folder: Folder) -> list[uuid.UUID]:
+    """Physical folders whose locations project into a derived view."""
+    if folder.role == "important":
+        return [folder.id]
+    return list(
+        session.scalars(
+            select(Folder.id).where(
+                Folder.account_id == folder.account_id,
+                Folder.kind == CONTAINER,
+                Folder.role.notin_(EXCLUDED_FROM_ALL_VIEW_ROLES),
+            )
+        )
+    )
+
+
+def expand_view_folder_ids(session: Session, folder_ids: list[uuid.UUID]) -> list[uuid.UUID]:
+    expanded: list[uuid.UUID] = []
+    for folder_id in folder_ids:
+        folder = session.get(Folder, folder_id)
+        if folder is not None and is_view_folder(folder):
+            expanded.extend(view_scope_folder_ids(session, folder))
+        else:
+            expanded.append(folder_id)
+    return list(dict.fromkeys(expanded))
+
+
+def view_stats(session: Session, folder: Folder) -> tuple[int, int]:
+    folder_ids = view_scope_folder_ids(session, folder)
+    if not folder_ids:
+        return 0, 0
+    base = (
+        select(func.count(distinct(MessageLocation.message_id)))
+        .join(Message, Message.id == MessageLocation.message_id)
+        .where(MessageLocation.folder_id.in_(folder_ids))
+    )
+    total = int(session.scalar(base) or 0)
+    unread = int(
+        session.scalar(base.where(or_(Message.is_read.is_(False), Message.is_read.is_(None)))) or 0
+    )
+    return total, unread
+
+
 def list_folder_stats_for_account(session: Session, account_id: uuid.UUID) -> list[dict[str, Any]]:
     rows = session.execute(
         select(Folder, FolderStats)
@@ -208,6 +251,13 @@ def list_folder_stats_for_account(session: Session, account_id: uuid.UUID) -> li
     ).all()
     out = []
     for folder, stats in rows:
+        if is_view_folder(folder):
+            view_total, view_unread = view_stats(session, folder)
+            total_count: int | None = view_total
+            unread_count: int | None = view_unread
+        else:
+            total_count = stats.total_count if stats else None
+            unread_count = stats.unread_count if stats else None
         out.append(
             {
                 "folder_id": str(folder.id),
@@ -216,8 +266,8 @@ def list_folder_stats_for_account(session: Session, account_id: uuid.UUID) -> li
                 "role": folder.role,
                 "sync_status": folder.sync_status,
                 "parent_remote_id": folder.parent_remote_id,
-                "total_count": stats.total_count if stats else None,
-                "unread_count": stats.unread_count if stats else None,
+                "total_count": total_count,
+                "unread_count": unread_count,
             }
         )
     return out
@@ -324,12 +374,12 @@ def unified_inbox(
             raise LookupError(f"folder {folder_id} not found")
         if account_ids is not None and folder.account_id not in account_ids:
             raise LookupError(f"folder {folder_id} does not belong to specified account")
-        folder_ids = [folder.id]
+        folder_ids = view_scope_folder_ids(session, folder) if is_view_folder(folder) else [folder.id]
     else:
         stmt = select(Folder.id).where(Folder.role == folder_role)
         if account_ids is not None:
             stmt = stmt.where(Folder.account_id.in_(account_ids))
-        folder_ids = list(session.scalars(stmt).all())
+        folder_ids = expand_view_folder_ids(session, list(session.scalars(stmt).all()))
     return list_messages_keyset(
         session,
         folder_ids=folder_ids,

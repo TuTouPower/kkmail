@@ -8,7 +8,7 @@ kkmail 的核心领域概念与数据实体术语表。各层代码、数据迁�
 |:---|:---|:---|
 |**Account**|`accounts`|邮件账户实体。包含邮箱、提供商 (`imap`/`graph`/`memory`/`stub`，与后端 `AllowedProvider` 对齐)、关联凭据引用 (`credential_ref`)、配置项与同步状态。|
 |**AccountGroup**|`account_groups`|账户分组。允许用户将多个邮箱归类整理，支持颜色与聚合展示。|
-|**Folder**|`folders`|邮件文件夹/标签。映射远端 mailbox 或 label，维护 `role`（如 `inbox`, `trash`, `other`）。|
+|**Folder**|`folders`|邮件文件夹/标签。映射远端 mailbox（`kind=container`，同步单元）或 Gmail 派生视图（`kind=view`，只读投影，不参与同步），维护 `role`（如 `inbox`, `trash`, `all`, `important`, `other`）。|
 |**FolderStats**|`folder_stats`|文件夹聚合统计。维护总邮件数 (`total_count`) 与未读邮件数 (`unread_count`)，由数据库事务/对账即时维护。|
 |**Message**|`messages`|逻辑邮件主体元数据。包含账户、远端 ID、主题、发件人、收发时间、`is_read`、`is_flagged`、附件标识等。|
 |**MessageLocation**|`message_locations`|邮件与文件夹的关联位置。一封邮件可存在于多个文件夹（如 Gmail 多标签），维护对应文件夹下的 UID。|

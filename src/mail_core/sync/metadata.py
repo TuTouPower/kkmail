@@ -13,6 +13,7 @@ from mail_core.mail.domain.enums import ArchiveState, OutboxEventType
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import (
     Account,
+    Folder,
     FolderStats,
     Message,
     MessageArchiveState,
@@ -80,6 +81,7 @@ def upsert_messages(
     account_id: uuid.UUID,
     folder_id: uuid.UUID,
     metas: list[RemoteMessageMeta],
+    label_view_folders: dict[str, uuid.UUID] | None = None,
 ) -> list[UpsertOutcome]:
     """Upsert a page of remote metadata with two batched lookups.
 
@@ -108,6 +110,16 @@ def upsert_messages(
             )
         }
     now = datetime.now(timezone.utc)
+    view_ids = set((label_view_folders or {}).values())
+    view_locs: dict[tuple[uuid.UUID, uuid.UUID], MessageLocation] = {}
+    if view_ids and existing:
+        for loc in session.scalars(
+            select(MessageLocation).where(
+                MessageLocation.folder_id.in_(view_ids),
+                MessageLocation.message_id.in_([m.id for m in existing.values()]),
+            )
+        ):
+            view_locs[(loc.message_id, loc.folder_id)] = loc
     from mail_core.sync.remote_push import get_unconverged_field_intents
 
     intents = get_unconverged_field_intents(session, account_id, remote_ids, now=now)
@@ -141,6 +153,17 @@ def upsert_messages(
                 location_created = True
             elif meta.uid is not None and loc.uid != meta.uid:
                 loc.uid = meta.uid
+        for label in meta.labels:
+            view_folder_id = (label_view_folders or {}).get(label)
+            if view_folder_id is None:
+                continue
+            key = (msg.id, view_folder_id)
+            if key in view_locs:
+                continue
+            view_loc = MessageLocation(message_id=msg.id, folder_id=view_folder_id)
+            session.add(view_loc)
+            view_locs[key] = view_loc
+            location_created = True
         changed = created or location_created
         read_changed = False
         for field in _META_FIELDS:
@@ -193,6 +216,22 @@ def messages_upserted_event(account_id: uuid.UUID, folder_id: uuid.UUID, ids: li
     )
 
 
+def _label_view_folders(session: Session, account_id: uuid.UUID) -> dict[str, uuid.UUID]:
+    from mail_core.mail.domain.folder_views import VIEW
+
+    mapping: dict[str, uuid.UUID] = {}
+    for folder in session.scalars(
+        select(Folder).where(Folder.account_id == account_id, Folder.kind == VIEW)
+    ):
+        if folder.role == "important" or folder.remote_id in (
+            "[Gmail]/Important",
+            "[Gmail]/重要",
+            "[Gmail]/&kc2JgQ-",
+        ):
+            mapping["\\Important"] = folder.id
+    return mapping
+
+
 def apply_metadata_page(
     session: Session,
     *,
@@ -201,11 +240,20 @@ def apply_metadata_page(
     fencing_token: int,
     page: MetadataPage,
     scan_generation: uuid.UUID | None = None,
+    label_view_folders: dict[str, uuid.UUID] | None = None,
 ) -> MetadataApplyResult:
     """Network I/O must happen *before* this call. Writes + cursor share one TX."""
     assert_fencing(session, account_id=account_id, fencing_token=fencing_token)
+    if label_view_folders is None:
+        label_view_folders = _label_view_folders(session, account_id)
     items = _dedupe_metas(list(page.items))
-    outcomes = upsert_messages(session, account_id=account_id, folder_id=folder_id, metas=items)
+    outcomes = upsert_messages(
+        session,
+        account_id=account_id,
+        folder_id=folder_id,
+        metas=items,
+        label_view_folders=label_view_folders,
+    )
     touched: list[uuid.UUID] = []
     touched_messages: dict[uuid.UUID, Message] = {}
     message_event_ids: list[uuid.UUID] = []

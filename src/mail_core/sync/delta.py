@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from mail_core.security.credentials import CredentialStore, get_credential_store
 from mail_core.sync.context import classify_failure, sync_context_payload
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncStatus
+from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint
 from mail_core.providers.base import DeltaChange, DeltaPage, RemoteMessageMeta
 from mail_core.providers.connection_slots import (
@@ -361,7 +362,7 @@ def sync_folder_delta(
             raise ValueError("account/folder not found")
         if not account.sync_enabled:
             return {"status": "sync_disabled"}
-        if folder.sync_status == SyncStatus.PAUSED.value:
+        if is_view_folder(folder) or folder.sync_status == SyncStatus.PAUSED.value:
             return {"status": "skipped", "reason": "folder_not_selectable"}
         cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": folder_id})
         if cp is None or not cp.full_scan_complete:

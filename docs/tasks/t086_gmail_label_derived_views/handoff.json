@@ -1,0 +1,17 @@
+{
+  "tid": "t086",
+  "attempt": 1,
+  "execution_id": "361b5ff23a674e3db02b16ff5f097ef7",
+  "status": "done",
+  "branch": "t086_gmail_label_derived_views",
+  "base_sha": "82b86fb716e34a0fe71bbc317bad75ac212f21e5",
+  "spec_source_sha": "82b86fb716e34a0fe71bbc317bad75ac212f21e5",
+  "tests": "`scripts/run-mail-core-tests.sh unit` 1686 passed、540 skipped；`scripts/run-mail-core-tests.sh run --no-cov` 2224 passed、2 skipped（含迁移单 head 与新增视图 PG 用例）；前端 `npm test`/`tsc -b`/`build`、`npm --prefix src/desktop test`、敏感文档扫描全通过",
+  "blackbox": "`npm --prefix src/frontend run test:e2e` 23 passed",
+  "review": "待 reviewer 填写",
+  "review_scope": "9a939fa42968d147",
+  "pending": [
+    "p089"
+  ],
+  "findings": []
+}

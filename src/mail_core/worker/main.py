@@ -207,6 +207,7 @@ def schedule_periodic_inbox_sync(
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import select
     from mail_core.mail.domain.enums import JobStatus, JobType, SyncStatus
+    from mail_core.mail.domain.folder_views import CONTAINER
     from mail_core.mail.storage.models import Account, Folder, SyncCheckpoint, WorkerJob
     from mail_core.sync.jobs import enqueue_job
 
@@ -223,7 +224,7 @@ def schedule_periodic_inbox_sync(
         .where(
             Account.sync_enabled.is_(True),
             Folder.role == "inbox",
-            Folder.sync_status != SyncStatus.PAUSED.value,
+            Folder.kind == CONTAINER, Folder.sync_status != SyncStatus.PAUSED.value,
         )
         .order_by(Account.id, Folder.id)
     )

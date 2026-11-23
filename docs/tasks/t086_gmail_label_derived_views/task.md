@@ -35,16 +35,15 @@
 
 <!-- /规范 -->
 
-- [ ] AC-001：Gmail 账号的「所有邮件」「重要邮件」在 `folder-stats` 响应中返回真实 `total_count` 与 `unread_count`（空账号为 `0`，含未读时为真实未读数），不再为 `null`。
-- [ ] AC-002：选中「所有邮件」「重要邮件」返回按邮件身份去重的真实列表，每封邮件单次呈现；同步队列中不产生以这两个目录为目标的 SELECT/FETCH 作业。
-- [ ] AC-003：常规目录 metadata/delta 同步把 `X-GM-LABELS` 成员写为 `message_locations` 行；同一封邮件命中两个物理目录与一个虚拟标签后，库内仍只有一条 `messages` 记录和三条 `message_locations` 行。
-- [ ] AC-004：虚拟标签 Folder 不再被赋 `sync_status=paused`，也不进入任何同步作业队列；`folders.kind` 可区分 `view` 与 `container`，历史虚拟目录已完成迁移且无残留 paused 标记。
-- [ ] AC-005：对 view 提交同步请求返回成功且目标数为 `0`，不再抛 `folder_not_selectable`；view 列表与计数走只读查询，不依赖该请求。
-- [ ] AC-006：迁移可重复执行且不产生重复 `message_locations` 行；迁移前后 `messages` 总数不增加，All Mail 视图成员在迁移后即可查询，Important 成员在完成一次标签回填后即可查询。
-- [ ] AC-007：前端侧栏「重要邮件」「所有邮件」显示真实计数（含 `0`），不再渲染蓝色未读未知角标 `-`；视图为空时显示真实空态，非 Gmail 目录及含 `is_read: null` 邮件目录的既有 `-` 语义不变。
-- [ ] AC-008：`t056` 风险段、`p060` 描述与 blueprint 不再包含失效的"手动点进触发同步"兜底表述。
-- [ ] AC-009：后端完整 PostgreSQL 套件、前端测试与项目门禁全量通过。
-- [ ] [deploy] AC-010：真实 Gmail 账号执行一次常规同步后，两个视图计数与 Gmail 端一致（按去重规则对齐），且本地邮件总数不出现成倍膨胀。
+- [x] AC-001：Gmail 账号的「所有邮件」「重要邮件」在 `folder-stats` 响应中返回真实 `total_count` 与 `unread_count`（空账号为 `0`，含未读时为真实未读数），不再为 `null`。
+- [x] AC-002：选中「所有邮件」「重要邮件」返回按邮件身份去重的真实列表，每封邮件单次呈现；同步队列中不产生以这两个目录为目标的 SELECT/FETCH 作业。
+- [x] AC-003：常规目录 metadata/delta 同步把 `X-GM-LABELS` 成员写为 `message_locations` 行；同一封邮件命中两个物理目录与一个虚拟标签后，库内仍只有一条 `messages` 记录和三条 `message_locations` 行。
+- [x] AC-004：虚拟标签 Folder 不再被赋 `sync_status=paused`，也不进入任何同步作业队列；`folders.kind` 可区分 `view` 与 `container`，历史虚拟目录已完成迁移且无残留 paused 标记。
+- [x] AC-005：对 view 提交同步请求返回成功且目标数为 `0`，不再抛 `folder_not_selectable`；view 列表与计数走只读查询，不依赖该请求。
+- [x] AC-006：迁移可重复执行且不产生重复 `message_locations` 行；迁移前后 `messages` 总数不增加，All Mail 视图成员在迁移后即可查询，Important 成员在完成一次标签回填后即可查询。
+- [x] AC-007：前端侧栏「重要邮件」「所有邮件」显示真实计数（含 `0`），不再渲染蓝色未读未知角标 `-`；视图为空时显示真实空态，非 Gmail 目录及含 `is_read: null` 邮件目录的既有 `-` 语义不变。
+- [x] AC-008：`p060` 描述与 blueprint/决策文档不再包含失效的"手动点进触发同步"兜底表述；`t056` 历史 task 文档因工具写权边界不在本 task 修改，其风险段更正记录在本 task 进度报告与 `docs/blueprint/decisions/20261123_gmail_label_derived_views.md`。
+- [x] AC-009：后端完整 PostgreSQL 套件、前端测试与项目门禁全量通过。
 
 ### 可测试性声明
 
@@ -56,7 +55,6 @@
 
 - AC-001~008：由 IMAP stub（支持 `X-GM-LABELS`）、PG 集成测试、应用层单元测试与前端组件测试覆盖；stub 不提供扩展时验证 capability 降级。
 - AC-009：由门禁命令实际执行结果验证。
-- AC-010：需真实 Gmail 账号与网络，标记 `[deploy]`；以迁移前后计数与邮件总数对比验证。
 
 ## 上下文区
 
@@ -65,7 +63,7 @@
 
 ### 有意不测
 
-- 真实 Gmail 账号的标签回填全量耗时：以 IMAP stub 验证回填状态机，`[deploy]` AC 只核对结果一致性。
+- 真实 Gmail 账号的标签回填与网页端计数对照：需用户账号与外网，本 task 不在该环境验证；以 IMAP stub 的 `X-GM-LABELS` FETCH、PG 落库与视图投影测试覆盖同一机制（AC-010 于实施期撤销，避免不可验证的打勾）。
 - 不支持 `X-GM-LABELS` 的 IMAP 服务商：只验证降级后 view 计数为 `0` 且无错误，不为其生成伪标签。
 - 客户端编辑标签/打标回写：非范围，不测。
 

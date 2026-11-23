@@ -137,6 +137,7 @@ class Folder(Base):
     remote_id: Mapped[str] = mapped_column(String(512), nullable=False)
     name: Mapped[str] = mapped_column(String(512), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'other'"))
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'container'"))
     parent_remote_id: Mapped[Optional[str]] = mapped_column(String(512))
     sync_status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default=text(f"'{SyncStatus.IDLE.value}'")

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from mail_core.mail.application.remote_ops import enqueue_remote_operation
 from mail_core.mail.domain.enums import JobType, OutboxEventType
+from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
 from mail_core.mail.storage.folder_stats import recompute_folder_stats
 from mail_core.mail.storage.models import Account, AccountGroup, Folder, Message, MessageLocation, OutboxEvent
 from mail_core.sync.jobs import enqueue_job
@@ -204,7 +205,7 @@ def _resolve_imap_trash_folder(session: Session, account_id: uuid.UUID) -> str:
             select(Folder)
             .where(Folder.account_id == account_id)
             .where(Folder.role == "trash")
-            .where(Folder.sync_status != SyncStatus.PAUSED.value)
+            .where(Folder.kind == CONTAINER, Folder.sync_status != SyncStatus.PAUSED.value)
         ).all()
     )
     if len(folders) == 1:

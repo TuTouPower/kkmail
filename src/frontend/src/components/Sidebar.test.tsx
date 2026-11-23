@@ -1284,9 +1284,9 @@ describe('<Sidebar />', () => {
       { folder_id: 'g-root', remote_id: '[Gmail]', name: '[Gmail]', role: 'other', sync_status: 'paused', unread_count: null, total_count: null, parent_remote_id: null },
       { folder_id: 'g-sent', remote_id: '[Gmail]/已发邮件', name: '[Gmail]/已发邮件', role: 'sent', unread_count: 0, total_count: 5, parent_remote_id: '[Gmail]' },
       { folder_id: 'g-drafts', remote_id: '[Gmail]/草稿', name: '[Gmail]/草稿', role: 'drafts', unread_count: 0, total_count: 2, parent_remote_id: '[Gmail]' },
-      { folder_id: 'g-all', remote_id: '[Gmail]/所有邮件', name: '[Gmail]/所有邮件', role: 'all', sync_status: 'paused', unread_count: 0, total_count: 100, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-all', remote_id: '[Gmail]/所有邮件', name: '[Gmail]/所有邮件', role: 'all', sync_status: 'idle', unread_count: 5, total_count: 100, parent_remote_id: '[Gmail]' },
       { folder_id: 'g-starred', remote_id: '[Gmail]/已加星标', name: '[Gmail]/已加星标', role: 'flagged', unread_count: 0, total_count: 10, parent_remote_id: '[Gmail]' },
-      { folder_id: 'g-important', remote_id: '[Gmail]/重要', name: '[Gmail]/重要', role: 'important', sync_status: 'paused', unread_count: 0, total_count: 20, parent_remote_id: '[Gmail]' },
+      { folder_id: 'g-important', remote_id: '[Gmail]/重要', name: '[Gmail]/重要', role: 'important', sync_status: 'idle', unread_count: 2, total_count: 20, parent_remote_id: '[Gmail]' },
       { folder_id: 'g-notes', remote_id: 'Notes', name: 'Notes', role: 'other', unread_count: 0, total_count: 1, parent_remote_id: null },
     ]
     mockApi({
@@ -1319,6 +1319,13 @@ describe('<Sidebar />', () => {
     expect(allMailRow).not.toBeNull()
     expect(allMailRow?.hasAttribute('disabled')).toBe(false)
     expect(allMailRow?.getAttribute('style')).toContain('padding-left: 48px')
+
+    // Derived views expose real unread counts; no unknown-count dash.
+    for (const [label, count] of [['所有邮件', '5'], ['重要邮件', '2']] as const) {
+      const row = folderRows.find((r) => r.querySelector('.tree-label')?.textContent?.trim() === label)
+      expect(row?.querySelector('.unread-badge-unknown')).toBeNull()
+      expect(row?.querySelector('.unread-badge')?.textContent).toBe(count)
+    }
   })
 
   it('p062: conforms to sidebar action bar ordering and toggles all folder trees with parent linkage', async () => {

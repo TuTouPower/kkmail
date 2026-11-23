@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from mail_core.security.credentials import CredentialStore, get_credential_store
 from mail_core.sync.context import sync_context_payload
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncRunStatus, SyncStatus
+from mail_core.mail.domain.folder_views import CONTAINER, VIEW, is_gmail_view, is_view_folder
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.connection_slots import (
     CAPACITY_ERRORS,
@@ -278,7 +279,11 @@ def sync_account_folders(
         }
         remote_ids = {rf.remote_id for rf in remote_folders}
         for existing in by_remote.values():
-            if existing.remote_id not in remote_ids and existing.sync_status != SyncStatus.PAUSED.value:
+            if (
+                existing.kind == CONTAINER
+                and existing.remote_id not in remote_ids
+                and existing.sync_status != SyncStatus.PAUSED.value
+            ):
                 existing.sync_status = SyncStatus.PAUSED.value
                 # The folder is gone remotely: converge its open sync-request
                 # targets to an explicit failure before it becomes
@@ -309,21 +314,9 @@ def sync_account_folders(
             # A321: virtual folders are identified ONLY by role or the
             # exact remote_id set. A name-substring heuristic would pause
             # user labels such as "[Gmail]/重要客户" forever.
-            is_gmail_virtual = is_gmail and (
-                rf.role in ("all", "important")
-                or rf.remote_id in (
-                    "[Gmail]/&YkBnCZCuTvY-",
-                    "[Gmail]/&kc2JgQ-",
-                    "[Gmail]/All Mail",
-                    "[Gmail]/Important",
-                    "[Gmail]/所有邮件",
-                    "[Gmail]/重要",
-                )
-            )
+            is_view = is_gmail and is_gmail_view(rf.role, rf.remote_id)
             default_sync_status = (
-                SyncStatus.PAUSED.value
-                if (not rf.selectable or is_gmail_virtual)
-                else SyncStatus.IDLE.value
+                SyncStatus.PAUSED.value if not rf.selectable else SyncStatus.IDLE.value
             )
             existing = by_remote.get(rf.remote_id)
             if existing is None:
@@ -332,6 +325,7 @@ def sync_account_folders(
                     remote_id=rf.remote_id,
                     name=rf.name,
                     role=rf.role,
+                    kind=VIEW if is_view else CONTAINER,
                     parent_remote_id=rf.parent_remote_id,
                     sync_status=default_sync_status,
                 )
@@ -342,18 +336,10 @@ def sync_account_folders(
                 existing.name = rf.name
                 existing.role = rf.role
                 existing.parent_remote_id = rf.parent_remote_id
-                if not rf.selectable or is_gmail_virtual:
-                    existing.sync_status = SyncStatus.PAUSED.value
-                else:
-                    # A320: every PAUSED assignment in this codebase is
-                    # system-driven (remote disappearance, \Noselect, or
-                    # Gmail virtual) — there is no manual folder pause to
-                    # preserve. A folder that is present and selectable
-                    # again revives to IDLE; the metadata enqueue below
-                    # then re-runs for it in this same discovery pass.
-                    existing.sync_status = SyncStatus.IDLE.value
+                existing.kind = VIEW if is_view else CONTAINER
+                existing.sync_status = SyncStatus.PAUSED.value if not rf.selectable else SyncStatus.IDLE.value
             folder_ids.append(existing.id)
-            if rf.selectable and existing.sync_status != SyncStatus.PAUSED.value:
+            if rf.selectable and existing.kind == CONTAINER and existing.sync_status != SyncStatus.PAUSED.value:
                 if not _should_enqueue_discovered_folder(existing.role, background=background):
                     continue
                 cp = session.get(SyncCheckpoint, {"account_id": account_id, "folder_id": existing.id})
@@ -467,6 +453,8 @@ def sync_folder_metadata(
             raise ValueError("account/folder not found")
         if not account.sync_enabled:
             return {"status": "sync_disabled"}
+        if is_view_folder(folder):
+            return {"status": "skipped", "reason": "derived_view"}
         if folder.sync_status == SyncStatus.PAUSED.value:
             return {"status": "skipped", "reason": "folder_not_selectable"}
         try:

@@ -42,6 +42,7 @@ from typing import Any, Callable
 from sqlalchemy import func, select
 
 from mail_core.mail.domain.enums import JobType, SyncStatus
+from mail_core.mail.domain.folder_views import CONTAINER, is_view_folder
 from mail_core.mail.storage.models import (
     Account,
     AppSetting,
@@ -385,7 +386,7 @@ class IdleWatcherManager:
                         Account.sync_enabled.is_(True),
                         Account.provider == "imap",
                         Folder.role == "inbox",
-                        Folder.sync_status != SyncStatus.PAUSED.value,
+                        Folder.kind == CONTAINER, Folder.sync_status != SyncStatus.PAUSED.value,
                         SyncCheckpoint.full_scan_complete.is_(True),
                     )
                 ).all()
