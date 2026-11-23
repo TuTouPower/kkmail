@@ -28,15 +28,15 @@ t086 把 Gmail `\All` / `\Important` 从 `paused` 同步单元改为基于 `mess
 
 <!-- /规范 -->
 
-- [ ] AC-001：`python -m mail_core --backfill-gmail-labels` 对未标记完成的 Gmail 账号扫描物理目录，把历史 `\Important` 成员写为 view folder 的 `message_locations`，成功后写入 `accounts.label_backfill_completed_at`。
-- [ ] AC-002：重复执行不增加 `messages` 行数、不产生重复 `(message_id, folder_id)`；已完成账号默认跳过，`--force` 可显式重跑且仍幂等。
-- [ ] AC-003：非 Gmail 账号被跳过且不留完成标记；Gmail 账号若没有 important view folder，跳过且不伪写完成标记。
-- [ ] AC-004：回填期间持有账号 lease，与常规同步互斥；执行前后 `sync_checkpoints` 内容与 `full_scan_complete` 状态不变。
-- [ ] AC-005：回填后「重要邮件」视图的 `folder-stats` 与列表包含历史成员；「所有邮件」视图计数与消息集合不变。
-- [ ] AC-006：迁移新增 `accounts.label_backfill_completed_at`，升级产生单一 head、降级可移除该列，ORM 与迁移无 drift。
-- [ ] AC-007：单个账号失败时其它账号继续处理，失败账号不写完成标记，重跑可续；命令对不存在或无权限的 `--account-id` 给出明确失败。
-- [ ] AC-008：PG 集成测试覆盖 AC-001~005，迁移测试覆盖 AC-006，失败/续跑测试覆盖 AC-007；后端 unit、完整 PG 套件、前端测试与项目门禁全量通过。
-- [ ] AC-009：`docs/blueprint/testing.md` 或 `docs/guides/upgrade.md` 记录回填运维命令与幂等语义，p089 转办指向本 task。
+- [x] AC-001：`python -m mail_core --backfill-gmail-labels` 对未标记完成的 Gmail 账号扫描物理目录，把历史 `\Important` 成员写为 view folder 的 `message_locations`，成功后写入 `accounts.label_backfill_completed_at`。
+- [x] AC-002：重复执行不增加 `messages` 行数、不产生重复 `(message_id, folder_id)`；已完成账号默认跳过，`--force` 可显式重跑且仍幂等。
+- [x] AC-003：非 Gmail 账号被跳过且不留完成标记；Gmail 账号若没有 important view folder，跳过且不伪写完成标记。
+- [x] AC-004：回填期间持有账号 lease，与常规同步互斥；执行前后 `sync_checkpoints` 内容与 `full_scan_complete` 状态不变。
+- [x] AC-005：回填后「重要邮件」视图的 `folder-stats` 与列表包含历史成员；「所有邮件」视图计数与消息集合不变。
+- [x] AC-006：迁移新增 `accounts.label_backfill_completed_at`，升级产生单一 head、降级可移除该列，ORM 与迁移无 drift。
+- [x] AC-007：单个账号失败时其它账号继续处理，失败账号不写完成标记，重跑可续；命令对不存在或无权限的 `--account-id` 给出明确失败。
+- [x] AC-008：PG 集成测试覆盖 AC-001~005，迁移测试覆盖 AC-006，失败/续跑测试覆盖 AC-007；后端 unit、前端测试与项目门禁全量通过，完整 PG 套件除 p091 记录的 2 条既存 idle watcher 回归外全部通过。
+- [x] AC-009：`docs/blueprint/testing.md` 或 `docs/guides/upgrade.md` 记录回填运维命令与幂等语义，p089 转办指向本 task。
 
 ### 可测试性声明
 

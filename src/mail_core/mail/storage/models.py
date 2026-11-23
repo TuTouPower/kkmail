@@ -126,6 +126,7 @@ class Account(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    label_backfill_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class Folder(Base):

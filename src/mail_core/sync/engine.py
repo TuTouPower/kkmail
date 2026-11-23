@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from mail_core.security.credentials import CredentialStore, get_credential_store
 from mail_core.sync.context import sync_context_payload
 from mail_core.mail.domain.enums import JobStatus, JobType, OutboxEventType, SyncPhase, SyncRunStatus, SyncStatus
-from mail_core.mail.domain.folder_views import CONTAINER, VIEW, is_gmail_view, is_view_folder
+from mail_core.mail.domain.folder_views import CONTAINER, VIEW, is_gmail_account, is_gmail_view, is_view_folder
 from mail_core.mail.storage.models import Account, Folder, Message, MessageLocation, OutboxEvent, SyncCheckpoint, SyncRun
 from mail_core.providers.connection_slots import (
     CAPACITY_ERRORS,
@@ -301,10 +301,7 @@ def sync_account_folders(
                         payload={"folder_id": str(existing.id)},
                     )
                 )
-        is_gmail = (
-            account.email.lower().endswith(("@gmail.com", "@googlemail.com"))
-            or "gmail" in str((account.config or {}).get("imap_host", "")).lower()
-        )
+        is_gmail = is_gmail_account(account)
         # A21: Sort folders so inbox is processed and enqueued first
         sorted_remote_folders = sorted(
             remote_folders,

@@ -23,6 +23,14 @@ mail-core 部署的升级路径（Flask / SQLite / OutlookEmail v2 镜像路径�
         - 非 Docker 部署：拉取代码、更新依赖 `pip install -r requirements-mail-core.txt`、构建前端 SPA 并执行 `alembic -c src/mail_core/db/alembic.ini upgrade head`，然后重启进程。
     - **数据搬迁的写入暂停与回滚恢复点**：迁移容器运行前部署先停止 api 与 worker，隔离旧写入；回滚恢复点是迁移前创建并校验的密封备份快照，快照之后产生的新写入不在恢复点内（恢复即回到快照时刻）。
 3. **确认**：`/ready` 返回 200（schema 与代码 head 一致）。
+4. **Gmail 历史 Important 标签回填（t088，一次性）**：迁移前已入库的历史邮件没有 `X-GM-LABELS` 信息，增量同步不会为旧 UID 重取标签，「重要邮件」视图会缺条目；「所有邮件」视图不受影响。升级到 head 后运行一次：
+    ```bash
+    docker compose -f docker-compose.mail-core.yml --profile distributed \
+      run --rm --no-deps --entrypoint python3 api \
+      -m mail_core --skip-migrations --backfill-gmail-labels
+    # 非 Docker：PYTHONPATH=src python -m mail_core --skip-migrations --backfill-gmail-labels
+    ```
+    命令按账号重放带标签的 metadata 扫描，补写 `message_locations`，不新增邮件、不改写同步 checkpoint，用账号 lease 与常规同步互斥。每个账号完成后写入 `accounts.label_backfill_completed_at`；重复运行会跳过已完成账号，加 `--force` 可显式重跑且仍幂等。单账号失败不影响其它账号，修复后重跑即可续。可用 `--account-id <UUID>` 限定单个账号。
 
 ## 回滚
 

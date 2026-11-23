@@ -90,16 +90,15 @@ def test_failure_classification_is_structural():
     assert classify_failure(RuntimeError("transient")).domain is FailureDomain.UNKNOWN
 
 
-def test_account_failure_kind_is_orthogonal():
-    # A confirmed auth rejection invalidates the credential everywhere.
+def test_account_failure_kind_uses_structural_signals():
+    # t087: classification is structural; free-text provider messages are
+    # deliberately ignored, so the old free-text "OSError code=..." case was
+    # removed rather than kept as a false contract.
     assert account_failure_kind(result=PermanentAuthError("x"), is_background=True) is AccountFailureKind.AUTH
     assert account_failure_kind(result=PermanentAuthError("x"), is_background=False) is AccountFailureKind.AUTH
-    # A foreground transport blip degrades connectivity; a silent background
-    # one never pollutes account health.
-    blip = {"status": "provider_error", "error": "OSError code=101"}
-    assert account_failure_kind(result=blip, is_background=False) is AccountFailureKind.TRANSPORT
-    assert account_failure_kind(result=blip, is_background=True) is AccountFailureKind.NONE
-    # Control-flow outcomes leave account health untouched.
+    assert account_failure_kind(result={"status": "auth_failed"}, is_background=False) is AccountFailureKind.AUTH
+    assert account_failure_kind(result=ConnectionError("x"), is_background=False) is AccountFailureKind.TRANSPORT
+    assert account_failure_kind(result=ConnectionError("x"), is_background=True) is AccountFailureKind.NONE
     for result in ({"status": "lease_busy"}, {"status": "rate_limited"}, {"status": "provider_error"}):
         assert account_failure_kind(result=result, is_background=True) is AccountFailureKind.NONE
         assert account_failure_kind(result=result, is_background=False) is AccountFailureKind.NONE
